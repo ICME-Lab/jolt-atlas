@@ -68,6 +68,8 @@ where
     /// Per-polynomial coefficients `ρ^i` (see [`Self::set_coefficients`]).
     pub coefficients: Vec<F>,
     pub sumcheck_claim: Option<F>,
+    /// Unique claim for this group after reduction, assigned in map order.
+    pub reduced_id: Option<OpeningId>,
 }
 
 impl<F> OpeningProofReductionSumcheckProver<F>
@@ -96,6 +98,7 @@ where
             coefficients: vec![F::one()],
             prover_state: opening.into(),
             sumcheck_claim: None,
+            reduced_id: None,
         }
     }
 
@@ -121,6 +124,7 @@ where
             coefficients: vec![F::one(); n],
             prover_state: opening.into(),
             sumcheck_claim: None,
+            reduced_id: None,
         }
     }
 
@@ -207,58 +211,70 @@ where
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for Opening<F> {
-    fn degree(&self) -> usize {
-        OPENING_SUMCHECK_DEGREE
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.0.len()
-    }
-
-    fn input_claim(&self, _: &dyn OpeningAccumulator<F>) -> F {
-        self.1
-    }
-
-    fn normalize_opening_point(&self, _: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        unimplemented!("Unused")
-    }
-
-    // ZK methods: minimal starting impls so `BatchedSumcheck::prove_zk` doesn't
-    // hit the trait's `todo!()` defaults. These are placeholders -- input claim
-    // is left as a free witness variable and the output claim is not yet bound
-    // to `eq * y_P`. Closing the loop requires the params to know the
-    // polynomial and prior sumcheck id (see
-    // wiki/jolt-atlas/book/src/underway/batched-opening-sound-verifier.md).
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> crate::subprotocols::blindfold::InputClaimConstraint {
-        crate::subprotocols::blindfold::InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(&self, _: &dyn OpeningAccumulator<F>) -> Vec<F> {
-        Vec::new()
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
-        None
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, _: &[F::Challenge]) -> Vec<F> {
-        Vec::new()
-    }
+// Both sides derive the same relation from the registered opening group.
+macro_rules! opening_reduction_params {
+    ($instance:ident) => {
+        impl<F: JoltField> SumcheckInstanceParams<F> for $instance<F> {
+            fn degree(&self) -> usize {
+                OPENING_SUMCHECK_DEGREE
+            }
+            fn num_rounds(&self) -> usize {
+                self.opening.0.len()
+            }
+            fn input_claim(&self, _: &dyn OpeningAccumulator<F>) -> F {
+                self.opening.1
+            }
+            fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+                OpeningPoint::new(challenges.to_vec())
+            }
+            #[cfg(feature = "zk")]
+            fn input_claim_constraint(
+                &self,
+            ) -> crate::subprotocols::blindfold::InputClaimConstraint {
+                use crate::subprotocols::blindfold::{InputClaimConstraint, ValueSource};
+                InputClaimConstraint::linear(
+                    self.polynomials
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            (
+                                ValueSource::Challenge(i),
+                                ValueSource::Opening(OpeningId::new(*p, self.sumcheck_id)),
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            #[cfg(feature = "zk")]
+            fn input_constraint_challenge_values(&self, _: &dyn OpeningAccumulator<F>) -> Vec<F> {
+                self.coefficients.clone()
+            }
+            #[cfg(feature = "zk")]
+            fn output_claim_constraint(
+                &self,
+            ) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
+                use crate::subprotocols::blindfold::{OutputClaimConstraint, ValueSource};
+                Some(OutputClaimConstraint::linear(vec![(
+                    ValueSource::Challenge(0),
+                    ValueSource::Opening(self.reduced_id.expect("prepared opening group")),
+                )]))
+            }
+            #[cfg(feature = "zk")]
+            fn output_constraint_challenge_values(&self, r: &[F::Challenge]) -> Vec<F> {
+                vec![EqPolynomial::<F>::mle(&self.opening.0.r, r)]
+            }
+        }
+    };
 }
+opening_reduction_params!(OpeningProofReductionSumcheckProver);
+opening_reduction_params!(OpeningProofReductionSumcheckVerifier);
 
 impl<F, T: Transcript> SumcheckInstanceProver<F, T> for OpeningProofReductionSumcheckProver<F>
 where
     F: JoltField,
 {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.opening
+        self
     }
 
     fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
@@ -279,7 +295,7 @@ where
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
         _transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
+        _sumcheck_challenges: &[F::Challenge],
     ) {
         // Cache the final sumcheck claim in the accumulator
         let claim = match &self.prover_state {
@@ -288,22 +304,15 @@ where
         };
         accumulator.cache_opening_reduction_claim(self.key(), claim);
 
-        // Also register the reduced evaluation as a standard opening so the
-        // BlindFold R1CS can reference it via `OpeningId`. The opening point
-        // is the batched-opening sumcheck's challenge vector r_sumcheck; the
-        // claim is the per-poly value P(r_sumcheck). Stored unconditionally
-        // (cheap insert); only the `--features zk` path actually consumes it
-        // via the extra constraint linking `joint_claim = sum gamma_i * y_P_i`
-        // to `y_com`.
-        use crate::field::IntoOpening;
-        let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
-        let opening_id = crate::poly::opening_proof::OpeningId::new(
-            self.polynomials[0],
-            SumcheckId::BlindFoldBatchOpening,
-        );
-        accumulator
-            .openings
-            .insert(opening_id, (opening_point, claim));
+        #[cfg(feature = "zk")]
+        if accumulator.zk_mode {
+            use crate::field::IntoOpening;
+            accumulator.append_reduced_claim_zk(
+                self.reduced_id.expect("prepared opening group"),
+                OpeningPoint::new(_sumcheck_challenges.into_opening()),
+                claim,
+            );
+        }
     }
 }
 
@@ -322,6 +331,8 @@ where
     /// Per-polynomial coefficients `ρ^i`.
     pub coefficients: Vec<F>,
     pub sumcheck_claim: Option<F>,
+    /// Unique claim for this group after reduction, assigned in map order.
+    pub reduced_id: Option<OpeningId>,
 }
 
 impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
@@ -343,6 +354,7 @@ impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
             claims,
             coefficients: vec![F::one(); n],
             sumcheck_claim: None,
+            reduced_id: None,
         }
     }
 
@@ -374,7 +386,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
     for OpeningProofReductionSumcheckVerifier<F>
 {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.opening
+        self
     }
 
     fn expected_output_claim(
@@ -392,19 +404,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
         _transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        // Mirror the prover-side insert: register an opening at
-        // `(self.polynomial, SumcheckId::BlindFoldBatchOpening)` so the
-        // BlindFold R1CS can reference it. In ZK mode the actual claim is a
-        // placeholder; the value the prover assigned is verified by BlindFold.
-        use crate::field::IntoOpening;
-        let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
-        let opening_id = crate::poly::opening_proof::OpeningId::new(
-            self.polynomials[0],
-            SumcheckId::BlindFoldBatchOpening,
-        );
-        accumulator
-            .openings
-            .insert(opening_id, (opening_point, F::zero()));
+        #[cfg(feature = "zk")]
+        if accumulator.zk_mode {
+            use crate::field::IntoOpening;
+            accumulator.append_reduced_claim_zk(
+                self.reduced_id.expect("prepared opening group"),
+                OpeningPoint::new(sumcheck_challenges.into_opening()),
+            );
+        }
+        #[cfg(not(feature = "zk"))]
+        let _ = (accumulator, sumcheck_challenges);
     }
 }
 

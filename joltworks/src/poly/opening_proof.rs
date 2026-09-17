@@ -107,6 +107,10 @@ where
     prover_opening_accumulator: Option<ProverOpeningAccumulator<F>>,
     #[cfg(feature = "zk")]
     pending_claims: Vec<F>,
+    #[cfg(feature = "zk")]
+    pending_claim_ids: Vec<OpeningId>,
+    #[cfg(feature = "zk")]
+    pub zk_stages: Vec<crate::subprotocols::blindfold::ZkVerifierStage<F>>,
     /// When true, `append_virtual` inserts new keys with placeholder claims
     /// instead of panicking. Claims are verified by BlindFold, not individually.
     pub zk_mode: bool,
@@ -234,6 +238,18 @@ where
             .values()
             .flat_map(|s| s.polynomials.iter().copied())
             .collect()
+    }
+
+    #[cfg(feature = "zk")]
+    pub(crate) fn append_reduced_claim_zk(
+        &mut self,
+        id: OpeningId,
+        point: OpeningPoint<BIG_ENDIAN, F>,
+        claim: F,
+    ) {
+        assert!(self.openings.insert(id, (point, claim)).is_none());
+        self.pending_claims.push(claim);
+        self.pending_claim_ids.push(id);
     }
 
     /// Caches an instance's reduced claim from the opening reduction sumcheck.
@@ -465,9 +481,13 @@ where
     ) {
         // In-group batching coefficient (powers per position in the group).
         let rho: F = transcript.challenge_scalar();
-        self.sumchecks
-            .values_mut()
-            .for_each(|s| s.set_coefficients(rho));
+        self.sumchecks.values_mut().enumerate().for_each(|(i, s)| {
+            s.set_coefficients(rho);
+            s.reduced_id = Some(OpeningId::new(
+                s.polynomials[0],
+                SumcheckId::BlindFoldOpeningGroup(i),
+            ));
+        });
 
         {
             // A committed polynomial nobody opened is simply left out of the
@@ -579,16 +599,18 @@ where
     {
         use crate::subprotocols::sumcheck_verifier::SumcheckInstanceParams;
 
+        self.take_pending_claims();
+        self.take_pending_claim_ids();
         let mut sumchecks = std::mem::take(&mut self.sumchecks);
         // Capture stage shape before borrowing the instances mutably.
         let max_rounds = sumchecks
             .values()
-            .map(|opening| <Opening<F> as SumcheckInstanceParams<F>>::num_rounds(&opening.opening))
+            .map(|opening| SumcheckInstanceParams::num_rounds(opening))
             .max()
             .unwrap_or(1);
         let max_degree = sumchecks
             .values()
-            .map(|opening| <Opening<F> as SumcheckInstanceParams<F>>::degree(&opening.opening))
+            .map(|opening| SumcheckInstanceParams::degree(opening))
             .max()
             .unwrap_or(1);
 
@@ -658,6 +680,12 @@ where
             &gamma_powers,
         );
 
+        let group_openings = self
+            .sumchecks
+            .values()
+            .map(|s| s.reduced_id.expect("prepared opening group"))
+            .collect();
+        let group_num_vars = self.sumchecks.values().map(|s| s.opening.0.len()).collect();
         // Drop sumchecks in background - they're no longer needed
         {
             let sumchecks = std::mem::take(&mut self.sumchecks);
@@ -670,6 +698,8 @@ where
             sumcheck_claims,
             polynomials,
             poly_coeffs,
+            group_openings,
+            group_num_vars,
         }
     }
 }
@@ -696,6 +726,39 @@ pub struct OpeningReductionState<F: JoltField> {
     pub polynomials: Vec<CommittedPoly>,
     /// … and their coefficients in the joint RLC (aligned with `polynomials`).
     pub poly_coeffs: Vec<F>,
+    pub group_openings: Vec<OpeningId>,
+    pub group_num_vars: Vec<usize>,
+}
+
+#[cfg(feature = "zk")]
+impl<F: JoltField> OpeningReductionState<F> {
+    /// Bind the hidden joint evaluation to each group's reduced claim, including
+    /// the zero padding of groups with fewer variables.
+    pub fn hidden_evaluation_relation(
+        &self,
+    ) -> (
+        crate::subprotocols::blindfold::OutputClaimConstraint,
+        Vec<F>,
+    ) {
+        let coefficients = self
+            .gamma_powers
+            .iter()
+            .zip(&self.group_num_vars)
+            .map(|(gamma, n)| {
+                let padding: F = self.r_sumcheck[..self.r_sumcheck.len() - n]
+                    .iter()
+                    .map(|r| F::one() - *r)
+                    .product();
+                *gamma * padding
+            })
+            .collect();
+        (
+            crate::subprotocols::blindfold::OutputClaimConstraint::all_weighted_openings(
+                &self.group_openings,
+            ),
+            coefficients,
+        )
+    }
 }
 
 /// Per-polynomial coefficients of the joint RLC from the instances'
@@ -778,6 +841,10 @@ where
             prover_opening_accumulator: None,
             #[cfg(feature = "zk")]
             pending_claims: Vec::new(),
+            #[cfg(feature = "zk")]
+            pending_claim_ids: Vec::new(),
+            #[cfg(feature = "zk")]
+            zk_stages: Vec::new(),
             zk_mode: false,
         }
     }
@@ -795,6 +862,11 @@ where
     #[cfg(feature = "zk")]
     pub fn take_pending_claims(&mut self) -> Vec<F> {
         std::mem::take(&mut self.pending_claims)
+    }
+
+    #[cfg(feature = "zk")]
+    pub fn take_pending_claim_ids(&mut self) -> Vec<OpeningId> {
+        std::mem::take(&mut self.pending_claim_ids)
     }
 
     pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {
@@ -860,6 +932,12 @@ where
             panic!("Tried to populate dense opening for non-existent key: {opening_id:?}");
         };
 
+        #[cfg(feature = "zk")]
+        {
+            self.pending_claims.push(claim);
+            self.pending_claim_ids.push(opening_id);
+        }
+
         let polynomial = opening_id
             .committed_poly()
             .expect("expected committed polynomial");
@@ -913,6 +991,11 @@ where
                 ),
             );
             claims.push(claim);
+            #[cfg(feature = "zk")]
+            {
+                self.pending_claims.push(claim);
+                self.pending_claim_ids.push(key);
+            }
         }
         let key = OpeningId::new(polynomials[0], sumcheck);
         self.sumchecks.insert(
@@ -970,6 +1053,11 @@ where
         } else {
             panic!("Tried to populate opening point for non-existent key: {opening_id:?}");
         }
+        #[cfg(feature = "zk")]
+        {
+            self.pending_claims.push(self.openings[&opening_id].1);
+            self.pending_claim_ids.push(opening_id);
+        }
     }
 }
 
@@ -977,6 +1065,17 @@ impl<F> VerifierOpeningAccumulator<F>
 where
     F: JoltField,
 {
+    #[cfg(feature = "zk")]
+    pub(crate) fn append_reduced_claim_zk(
+        &mut self,
+        id: OpeningId,
+        point: OpeningPoint<BIG_ENDIAN, F>,
+    ) {
+        assert!(self.openings.insert(id, (point, F::zero())).is_none());
+        self.pending_claims.push(F::zero());
+        self.pending_claim_ids.push(id);
+    }
+
     pub fn num_sumchecks(&self) -> usize {
         self.sumchecks.len()
     }
@@ -1016,7 +1115,12 @@ where
         self.sumchecks
             .values_mut()
             .zip(sumcheck_claims)
-            .for_each(|(opening, claim)| {
+            .enumerate()
+            .for_each(|(i, (opening, claim))| {
+                opening.reduced_id = Some(OpeningId::new(
+                    opening.polynomials[0],
+                    SumcheckId::BlindFoldOpeningGroup(i),
+                ));
                 opening.set_coefficients(rho);
                 opening.sumcheck_claim = Some(*claim);
             });
@@ -1024,6 +1128,35 @@ where
     }
 
     /// Verifies the batch opening reduction sumcheck (Stage 7).
+    #[cfg(feature = "zk")]
+    pub fn verify_batch_opening_sumcheck_zk<T: Transcript, C: crate::curve::JoltCurve<F = F>>(
+        &mut self,
+        proof: &crate::subprotocols::sumcheck::ZkSumcheckProof<F, C, T>,
+        transcript: &mut T,
+        commitment_width: usize,
+    ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
+        if self.sumchecks.is_empty() {
+            return Err(ProofVerifyError::InvalidOpeningProof(
+                "No registered opening groups".into(),
+            ));
+        }
+        self.prepare_for_sumcheck(&vec![F::zero(); self.sumchecks.len()], transcript)?;
+        let sumchecks = std::mem::take(&mut self.sumchecks);
+        let instances = sumchecks
+            .values()
+            .map(|s| s as &dyn SumcheckInstanceVerifier<F, T>)
+            .collect();
+        let result = BatchedSumcheck::verify_zk_with_width(
+            proof,
+            instances,
+            self,
+            transcript,
+            commitment_width,
+        );
+        self.sumchecks = sumchecks;
+        result
+    }
+
     #[tracing::instrument(
         skip_all,
         name = "VerifierOpeningAccumulator::verify_batch_opening_sumcheck"
@@ -1061,8 +1194,10 @@ where
         sumcheck_claims: &[F],
         transcript: &mut T,
     ) -> OpeningReductionState<F> {
-        // Append claims and derive per-instance gamma powers
-        transcript.append_scalars(sumcheck_claims);
+        // Claims remain hidden in native mode.
+        if !self.zk_mode {
+            transcript.append_scalars(sumcheck_claims);
+        }
         let gamma_powers: Vec<F> = transcript.challenge_scalar_powers(self.sumchecks.len());
         let (polynomials, poly_coeffs) = joint_coefficients(
             self.sumchecks
@@ -1077,6 +1212,16 @@ where
             sumcheck_claims: sumcheck_claims.to_vec(),
             polynomials,
             poly_coeffs,
+            group_openings: self
+                .sumchecks
+                .values()
+                .map(|s| s.reduced_id.expect("prepared opening group"))
+                .collect(),
+            group_num_vars: self
+                .sumchecks
+                .values()
+                .map(|s| SumcheckInstanceVerifier::<F, T>::num_rounds(s))
+                .collect(),
         }
     }
 
@@ -1261,6 +1406,8 @@ pub enum SumcheckId {
     RLC(usize),
     /// Batch opening reduction (used by BlindFold y_com constraint).
     BlindFoldBatchOpening,
+    /// A grouped reduction claim. The index is derived from sorted opening keys.
+    BlindFoldOpeningGroup(usize),
     /// Eval-shift sumcheck used in neural teleport ops
     NTEvalShift,
 }
@@ -1288,13 +1435,17 @@ impl CanonicalSerialize for SumcheckId {
             }
             Self::BlindFoldBatchOpening => 8u8.serialize_with_mode(&mut writer, compress)?,
             Self::NTEvalShift => 9u8.serialize_with_mode(&mut writer, compress)?,
+            Self::BlindFoldOpeningGroup(idx) => {
+                10u8.serialize_with_mode(&mut writer, compress)?;
+                idx.serialize_with_mode(&mut writer, compress)?;
+            }
         }
         Ok(())
     }
 
     fn serialized_size(&self, compress: Compress) -> usize {
         match self {
-            Self::NodeExecution(idx) | Self::RLC(idx) => {
+            Self::NodeExecution(idx) | Self::RLC(idx) | Self::BlindFoldOpeningGroup(idx) => {
                 1u8.serialized_size(compress) + idx.serialized_size(compress)
             }
             _ => 1u8.serialized_size(compress),
@@ -1332,6 +1483,11 @@ impl CanonicalDeserialize for SumcheckId {
             }
             8 => Ok(Self::BlindFoldBatchOpening),
             9 => Ok(Self::NTEvalShift),
+            10 => Ok(Self::BlindFoldOpeningGroup(usize::deserialize_with_mode(
+                &mut reader,
+                compress,
+                validate,
+            )?)),
             _ => Err(SerializationError::InvalidData),
         }
     }

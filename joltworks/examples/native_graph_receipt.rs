@@ -48,6 +48,14 @@ mod enabled {
     }
     fn graph(kind: &str, rows: usize) -> NativeGraph {
         assert!(rows >= 2 && rows.is_power_of_two());
+        if kind == "softmax" {
+            return NativeGraph::softmax(
+                format!("native tensor graph fixture/{kind}").into_bytes(),
+                vec![rows, 32],
+                14,
+            )
+            .unwrap();
+        }
         let (num_inputs, nodes, outputs) = match kind {
             "layout" => (
                 1,
@@ -204,6 +212,19 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/softmax") {
+            let count = g.input_shapes[0].iter().product::<usize>();
+            return vec![(0..count)
+                .map(|i| {
+                    if i % 32 > i / 32 % 32 {
+                        -(1 << 29)
+                    } else {
+                        ((i * 37 + 11) % 131072) as i32 - 65536
+                    }
+                })
+                .collect()];
+        }
+
         if g.context.ends_with(b"/layout") {
             return vec![(0..g.input_shapes[0][0])
                 .map(|i| i as i32 * 13 - 9)
@@ -299,6 +320,15 @@ mod enabled {
         inputs
     }
     fn reference(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/softmax") {
+            let values = inputs(g);
+            let x = Tensor::new(Some(&values[0]), &g.input_shapes[0]).unwrap();
+            return vec![atlas_onnx_tracer::ops::SoftmaxLastAxis { scale: 14 }
+                .f(vec![&x])
+                .data()
+                .to_vec()];
+        }
+
         let mut values = inputs(g);
         let shapes = g.tensor_shapes().unwrap();
         for n in &g.nodes {
@@ -438,7 +468,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

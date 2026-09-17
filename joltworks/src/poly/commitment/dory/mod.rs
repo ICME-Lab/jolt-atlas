@@ -35,6 +35,8 @@ mod native_clamped_lookup;
 #[cfg(feature = "zk")]
 mod native_concat;
 #[cfg(feature = "zk")]
+mod native_division;
+#[cfg(feature = "zk")]
 mod native_einsum;
 #[cfg(feature = "zk")]
 pub mod native_graph;

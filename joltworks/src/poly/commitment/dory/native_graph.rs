@@ -7,6 +7,7 @@ use super::{
     native_add::{AddRegistration, AddWitness},
     native_clamped_lookup::{ClampedLookupRegistration, ClampedLookupWitness},
     native_concat::{ConcatRegistration, ConcatWitness, Concatenation},
+    native_division::{DivisionRegistration, DivisionWitness},
     native_einsum::{Contraction, ContractionRegistration, ContractionWitness},
     native_hidden_lookup::{HiddenReadParams, HiddenReadProver, HiddenReadVerifier},
     native_layout::{Layout, LayoutRegistration, LayoutWitness},
@@ -112,9 +113,18 @@ pub struct NativeGraphConcat {
     pub axis: usize,
 }
 
+/// Exact division by a registered positive integer.
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct NativeGraphDivision {
+    pub divisor: u32,
+    /// False returns the floor quotient, true the nonnegative remainder.
+    pub remainder: bool,
+}
+
 /// Exactly one operator must be present. Its output is tensor num_inputs+i.
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct NativeGraphNode {
+    pub division: Option<NativeGraphDivision>,
     pub input: usize,
     pub mul: Option<NativeGraphMul>,
     pub add: Option<NativeGraphAdd>,
@@ -130,6 +140,7 @@ pub struct NativeGraphNode {
 impl NativeGraphNode {
     pub fn mul(left: usize, right: usize, shift: u8) -> Self {
         Self {
+            division: None,
             input: left,
             concat: None,
             max: None,
@@ -145,6 +156,7 @@ impl NativeGraphNode {
     }
     pub fn add(left: usize, right: usize) -> Self {
         Self {
+            division: None,
             input: left,
             concat: None,
             max: None,
@@ -163,6 +175,7 @@ impl NativeGraphNode {
     }
     pub fn sub(left: usize, right: usize) -> Self {
         Self {
+            division: None,
             input: left,
             concat: None,
             max: None,
@@ -181,6 +194,7 @@ impl NativeGraphNode {
     }
     pub fn sum(input: usize, axes: Vec<usize>) -> Self {
         Self {
+            division: None,
             input,
             concat: None,
             max: None,
@@ -200,6 +214,7 @@ impl NativeGraphNode {
     }
     pub fn mean_of_squares(input: usize, axes: Vec<usize>, scale: u8) -> Self {
         Self {
+            division: None,
             input,
             concat: None,
             max: None,
@@ -229,6 +244,7 @@ impl NativeGraphNode {
     }
     pub fn lookup(input: usize, table: Vec<i32>, log_chunk: u8) -> Self {
         Self {
+            division: None,
             input,
             concat: None,
             max: None,
@@ -254,6 +270,22 @@ impl NativeGraphNode {
         node.lookup.as_mut().unwrap().table_input = Some(table_input);
         node
     }
+    /// Divide a signed integer by a public positive divisor, rounding down.
+    pub fn div_floor(input: usize, divisor: u32) -> Self {
+        let mut node = Self::rsqrt(input, 0);
+        node.rsqrt = None;
+        node.division = Some(NativeGraphDivision {
+            divisor,
+            remainder: false,
+        });
+        node
+    }
+    /// The nonnegative remainder of a signed integer modulo a public divisor.
+    pub fn rem_euclid(input: usize, divisor: u32) -> Self {
+        let mut node = Self::div_floor(input, divisor);
+        node.division.as_mut().unwrap().remainder = true;
+        node
+    }
     /// Clamp a signed input to the registered table interval before lookup.
     pub fn clamped_lookup(input: usize, table: Vec<i32>, lower: i32, log_chunk: u8) -> Self {
         let mut node = Self::lookup(input, table, log_chunk);
@@ -263,6 +295,7 @@ impl NativeGraphNode {
     /// Exact Atlas reciprocal square root for a registered scale in 0..=20.
     pub fn rsqrt(input: usize, scale: u8) -> Self {
         Self {
+            division: None,
             input,
             mul: None,
             add: None,
@@ -278,6 +311,7 @@ impl NativeGraphNode {
     }
     fn layout(input: usize, kind: u8, shape: Vec<usize>, axes: Vec<usize>) -> Self {
         Self {
+            division: None,
             input,
             mul: None,
             add: None,
@@ -334,6 +368,7 @@ impl NativeGraphNode {
         input_bits: [u8; 2],
     ) -> Self {
         Self {
+            division: None,
             input: left,
             mul: None,
             add: None,
@@ -436,6 +471,64 @@ impl NativeGraph {
         Ok(graph)
     }
 
+    /// Exact Atlas periodic sine or cosine, including integer remainder,
+    /// downscaling and its rounded lookup table. Supported scales are 4..=20.
+    pub fn trig(
+        context: Vec<u8>,
+        shape: Vec<usize>,
+        scale: u8,
+        cosine: bool,
+    ) -> Result<Self, ProofVerifyError> {
+        use atlas_onnx_tracer::{
+            ops::{Cos, Op, Sin},
+            tensor::Tensor,
+        };
+        shape_bits(&shape)?;
+        if !(4..=20).contains(&scale) {
+            return Err(invalid("Unsupported periodic table scale"));
+        }
+        let divisor = common::consts::trig_period_modulus(u32::from(scale));
+        if !(2..=1 << 30).contains(&divisor) {
+            return Err(invalid("Periodic modulus exceeds the integer bound"));
+        }
+        let bits = common::consts::trig_downscale_bits(u32::from(scale));
+        if bits > u32::from(scale) {
+            return Err(invalid("Periodic downscale exceeds model scale"));
+        }
+        let factor = 1u32 << bits;
+        let count = divisor.div_ceil(factor) as usize;
+        let values = (0..count)
+            .map(|i| (i as u32 * factor) as i32)
+            .collect::<Vec<_>>();
+        let x = Tensor::new(Some(&values), &[count])
+            .map_err(|_| invalid("Invalid periodic table shape"))?;
+        let result = if cosine {
+            Cos {
+                scale: i32::from(scale),
+            }
+            .f(vec![&x])
+        } else {
+            Sin {
+                scale: i32::from(scale),
+            }
+            .f(vec![&x])
+        };
+        let mut table = result.data().to_vec();
+        table.resize(count.next_power_of_two(), 0);
+        let mut nodes = vec![NativeGraphNode::rem_euclid(0, divisor)];
+        if bits > 0 {
+            nodes.push(NativeGraphNode::div_floor(nodes.len(), factor));
+        }
+        nodes.push(NativeGraphNode::lookup(nodes.len(), table, 4));
+        let g = Self {
+            context,
+            input_shapes: vec![shape],
+            outputs: vec![nodes.len()],
+            nodes,
+        };
+        g.tensor_shapes()?;
+        Ok(g)
+    }
     pub fn num_inputs(&self) -> usize {
         self.input_shapes.len()
     }
@@ -479,8 +572,9 @@ impl NativeGraph {
                 &node.reciprocal,
                 &node.max,
                 &node.concat,
+                &node.division,
             ) {
-                (Some(m), None, None, None, None, None, None, None, None, None)
+                (Some(m), None, None, None, None, None, None, None, None, None, None)
                     if m.right < output
                         && (1..=30).contains(&m.shift)
                         && shapes[m.right] == *shape =>
@@ -488,7 +582,7 @@ impl NativeGraph {
                     consumed.insert(m.right);
                     shape.clone()
                 }
-                (None, Some(l), None, None, None, None, None, None, None, None)
+                (None, Some(l), None, None, None, None, None, None, None, None, None)
                     if matches!(l.log_chunk, 1 | 2 | 4 | 8) =>
                 {
                     if let Some(source) = l.table_input {
@@ -511,17 +605,17 @@ impl NativeGraph {
                     }
                     shape.clone()
                 }
-                (None, None, Some(a), None, None, None, None, None, None, None)
+                (None, None, Some(a), None, None, None, None, None, None, None, None)
                     if a.right < output && shapes[a.right] == *shape =>
                 {
                     consumed.insert(a.right);
                     shape.clone()
                 }
-                (None, None, None, Some(r), None, None, None, None, None, None) => {
+                (None, None, None, Some(r), None, None, None, None, None, None, None) => {
                     Reduction::new_with_count(shape, &r.axes, r.mean_scale, r.mean_count)?
                         .output_shape
                 }
-                (None, None, None, None, Some(e), None, None, None, None, None)
+                (None, None, None, None, Some(e), None, None, None, None, None, None)
                     if e.right < output =>
                 {
                     consumed.insert(e.right);
@@ -533,27 +627,32 @@ impl NativeGraph {
                     )?
                     .output_shape
                 }
-                (None, None, None, None, None, Some(scale), None, None, None, None)
+                (None, None, None, None, None, Some(scale), None, None, None, None, None)
                     if *scale <= 20 =>
                 {
                     shape.clone()
                 }
-                (None, None, None, None, None, None, Some(l), None, None, None) => {
+                (None, None, None, None, None, None, Some(l), None, None, None, None) => {
                     Layout::new(shape, l.kind, &l.shape, &l.axes)?.output_shape
                 }
-                (None, None, None, None, None, None, None, Some(scale), None, None)
+                (None, None, None, None, None, None, None, Some(scale), None, None, None)
                     if *scale <= 15 =>
                 {
                     shape.clone()
                 }
-                (None, None, None, None, None, None, None, None, Some(bits), None) => {
+                (None, None, None, None, None, None, None, None, Some(bits), None, None) => {
                     Maximum::new(shape, *bits)?.output_shape
                 }
-                (None, None, None, None, None, None, None, None, None, Some(c))
+                (None, None, None, None, None, None, None, None, None, Some(c), None)
                     if c.right < output && shapes[c.right] == *shape =>
                 {
                     consumed.insert(c.right);
                     Concatenation::new(shape, c.axis)?.output_shape
+                }
+                (None, None, None, None, None, None, None, None, None, None, Some(d))
+                    if (2..=1 << 30).contains(&d.divisor) =>
+                {
+                    shape.clone()
                 }
                 _ => {
                     return Err(invalid(
@@ -705,6 +804,24 @@ impl NativeGraph {
             layout: Layout::new(shape, l.kind, &l.shape, &l.axes).unwrap(),
         }
     }
+    fn division(&self, i: usize) -> DivisionRegistration {
+        let node = &self.nodes[i];
+        let d = node.division.as_ref().unwrap();
+        let aux = self.tensor_count() + 5 * i;
+        let output = tensor(self.num_inputs() + i);
+        DivisionRegistration {
+            tensors: [
+                tensor(node.input),
+                if d.remainder { tensor(aux) } else { output },
+                if d.remainder { output } else { tensor(aux) },
+                tensor(aux + 1),
+            ],
+            divisor: d.divisor,
+            initial: SumcheckId::NodeExecution(8 * i),
+            final_stage: SumcheckId::NodeExecution(8 * i + 1),
+            namespace: 7 * i,
+        }
+    }
     fn reciprocal(&self, i: usize) -> ReciprocalRegistration {
         let node = &self.nodes[i];
         let aux = self.tensor_count() + 5 * i;
@@ -838,6 +955,8 @@ impl NativeGraph {
                 let reg = self.reciprocal(i);
                 keys.extend(reg.tensors);
                 keys.extend(reg.indicator_keys());
+            } else if node.division.is_some() {
+                keys.extend(self.division(i).keys());
             } else {
                 let lookup = self.lookup(i, &shapes);
                 keys.extend((0..lookup.params.instruction_d).map(|d| lookup.committed_poly(d)));
@@ -876,7 +995,7 @@ impl NativeGraphStatement {
         Ok(())
     }
     fn transcript(&self) -> Blake2bTranscript {
-        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v11");
+        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v12");
         t.append_serializable(self);
         t
     }
@@ -1096,6 +1215,24 @@ impl NativeGraphWitness {
                         _ => return Err(invalid("Unexpected maximum polynomial")),
                     };
                     if polynomials.insert(id, polynomial).is_some() {
+                        return Err(invalid("Graph witness namespace collision"));
+                    }
+                }
+                arithmetic_ranges.insert(i, witness.range_values);
+            } else if let Some(d) = &node.division {
+                let reg = graph.division(i);
+                let witness = DivisionWitness::new(&values[node.input], d.divisor, d.remainder)?;
+                values.push(witness.output);
+                for (id, p) in witness.polynomials {
+                    let id = match id {
+                        CommittedPoly::DivNodeQuotient(0) => continue,
+                        CommittedPoly::DivNodeQuotient(j) => reg.tensors[j],
+                        CommittedPoly::NodeOutputRaD(j, k) => {
+                            CommittedPoly::NodeOutputRaD(reg.namespace + j, k)
+                        }
+                        _ => return Err(invalid("Unexpected division polynomial")),
+                    };
+                    if polynomials.insert(id, p).is_some() {
                         return Err(invalid("Graph witness namespace collision"));
                     }
                 }
@@ -1427,6 +1564,14 @@ impl NativeGraphProof {
                     &mut a,
                     &mut t,
                 ));
+            } else if node.division.is_some() {
+                provers.extend(graph.division(i).provers(
+                    log_rows,
+                    &arithmetic_ranges[&i],
+                    &polynomials,
+                    &mut a,
+                    &mut t,
+                )?);
             } else {
                 let l = node.lookup.as_ref().unwrap();
                 if let Some(clamp) = graph.lookup_clamp(i) {
@@ -1660,6 +1805,8 @@ impl NativeGraphProof {
                 );
             } else if node.reciprocal.is_some() {
                 verifiers.extend(graph.reciprocal(i).verifiers(log_rows, &mut a, &mut t));
+            } else if node.division.is_some() {
+                verifiers.extend(graph.division(i).verifiers(log_rows, &mut a, &mut t));
             } else {
                 let l = node.lookup.as_ref().unwrap();
                 if let Some(clamp) = graph.lookup_clamp(i) {
@@ -4849,6 +4996,305 @@ mod tests {
             assert!(cache
                 .commit(BTreeMap::from([(0, invalid), (1, data.clone())]), &pp)
                 .is_err());
+        }
+    }
+
+    fn division_graph(shape: Vec<usize>, divisor: u32) -> NativeGraph {
+        NativeGraph {
+            context: b"exact signed floor division".to_vec(),
+            input_shapes: vec![shape],
+            nodes: vec![
+                NativeGraphNode::div_floor(0, divisor),
+                NativeGraphNode::rem_euclid(0, divisor),
+            ],
+            outputs: vec![1, 2],
+        }
+    }
+    #[test]
+    fn native_graph_division_matches_atlas_floor_and_remainder_at_signed_endpoints() {
+        use atlas_onnx_tracer::{
+            ops::{Op, ScalarConstDiv},
+            tensor::{ops::nonlinearities::const_rem, Tensor},
+        };
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let values = vec![i32::MIN, i32::MIN + 1, -16385, -1, 0, 1, 16385, i32::MAX];
+        for divisor in [2, 3, 7, 16384, 2470649, 1 << 30] {
+            let x = Tensor::new(Some(&values), &[2, 4]).unwrap();
+            let q = ScalarConstDiv {
+                divisor: divisor as i32,
+            }
+            .f(vec![&x]);
+            let r = const_rem(&x, divisor as i32);
+            let (st, wi) = NativeGraphWitness::commit(
+                division_graph(vec![2, 4], divisor),
+                vec![values.clone()],
+                &pp,
+            )
+            .unwrap();
+            assert_eq!(wi.outputs(), vec![q.data().to_vec(), r.data().to_vec()]);
+            let proof = NativeGraphProof::prove(&st, wi, &pp, &gens).unwrap();
+            let mut bytes = vec![];
+            proof.serialize_compressed(&mut bytes).unwrap();
+            let proof = NativeGraphProof::deserialize_compressed(bytes.as_slice()).unwrap();
+            proof.verify(&st, &vp, &gens).unwrap();
+            let mut changed = st.clone();
+            changed.graph.nodes[0].division.as_mut().unwrap().divisor = divisor + 1;
+            assert!(proof.verify(&changed, &vp, &gens).is_err());
+        }
+        let (st, wi) =
+            NativeGraphWitness::commit(division_graph(vec![], 3), vec![vec![-1]], &pp).unwrap();
+        assert_eq!(wi.outputs(), vec![vec![-1], vec![2]]);
+        NativeGraphProof::prove(&st, wi, &pp, &gens)
+            .unwrap()
+            .verify(&st, &vp, &gens)
+            .unwrap();
+    }
+    #[test]
+    fn native_graph_division_rejects_invalid_registered_divisors() {
+        for divisor in [0, 1, (1 << 30) + 1, u32::MAX] {
+            assert!(division_graph(vec![4], divisor).tensor_shapes().is_err());
+        }
+        let mut g = division_graph(vec![4], 3);
+        g.nodes[0].rsqrt = Some(14);
+        assert!(g.tensor_shapes().is_err());
+    }
+    #[test]
+    fn native_graph_division_rejects_consistent_false_integer_witnesses() {
+        use super::super::native_division::ranges;
+        let pp = DoryScheme::setup_prover(8);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for raw in [
+            [1i64, 1, -2, 4],
+            [1, -1, 4, -2],
+            [1, 0, 1, 2],
+            [1, 0, 0, 2],
+            [1 << 31, 715827882, 2, 0],
+            [1, 1 << 31, 1 - 3 * (1 << 31), 1 + 3 * (1 << 31)],
+        ] {
+            let g = NativeGraph {
+                nodes: vec![NativeGraphNode::div_floor(0, 3)],
+                outputs: vec![1],
+                ..division_graph(vec![], 3)
+            };
+            let (mut st, mut wi) = NativeGraphWitness::commit(g, vec![vec![1]], &pp).unwrap();
+            let reg = st.graph.division(0);
+            let mut values = vec![];
+            for r in ranges(3) {
+                let j = r.tensor;
+                let field = if raw[j] < 0 {
+                    -Fr::from(raw[j].unsigned_abs())
+                } else {
+                    Fr::from(raw[j] as u64)
+                };
+                let p = MultilinearPolynomial::from(vec![field]);
+                let (c, h) = DoryScheme::commit_zk(&p, &pp);
+                st.commitments.insert(reg.tensors[j], c);
+                wi.hints.insert(reg.tensors[j], h);
+                wi.polynomials.insert(reg.tensors[j], p);
+                let column = vec![(raw[j] + r.offset as i64) as u64];
+                for d in 0..r.chunks() {
+                    let id = CommittedPoly::NodeOutputRaD(reg.namespace + j, d);
+                    let p = MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                        column
+                            .iter()
+                            .map(|v| Some(u16::from(r.digit(*v, d))))
+                            .collect(),
+                        1 << r.chunk,
+                    ));
+                    let (c, h) = DoryScheme::commit_zk(&p, &pp);
+                    st.commitments.insert(id, c);
+                    wi.hints.insert(id, h);
+                    wi.polynomials.insert(id, p);
+                }
+                values.push(column);
+            }
+            wi.arithmetic_ranges.insert(0, values);
+            if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+                assert!(
+                    proof.verify(&st, &vp, &gens).is_err(),
+                    "accepted false division {raw:?}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn native_graph_division_binds_original_hidden_producer_and_lookup_consumer() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let input = vec![-42, -3, -1, 0, 1, 5, 7, 100];
+        let g = NativeGraph {
+            context: b"division between original producers and consumers".to_vec(),
+            input_shapes: vec![vec![8]],
+            nodes: vec![
+                NativeGraphNode::add(0, 0),
+                NativeGraphNode::rem_euclid(1, 7),
+                NativeGraphNode::lookup(2, (0..8).map(|x| x * x).collect(), 2),
+            ],
+            outputs: vec![3],
+        };
+        let (st, wi) = NativeGraphWitness::commit(g.clone(), vec![input.clone()], &pp).unwrap();
+        let expected = input
+            .iter()
+            .map(|x| {
+                let y = (2 * x).rem_euclid(7);
+                y * y
+            })
+            .collect::<Vec<i32>>();
+        assert_eq!(wi.outputs(), vec![expected]);
+        NativeGraphProof::prove(&st, wi, &pp, &gens)
+            .unwrap()
+            .verify(&st, &vp, &gens)
+            .unwrap();
+        let (mut st, mut wi) = NativeGraphWitness::commit(g, vec![input], &pp).unwrap();
+        // A valid separate quotient/remainder for other hidden values cannot replace this producer.
+        let (other, other_witness) =
+            NativeGraphWitness::commit(division_graph(vec![8], 7), vec![vec![9; 8]], &pp).unwrap();
+        NativeGraphProof::prove(&other, other_witness, &pp, &gens)
+            .unwrap()
+            .verify(&other, &vp, &gens)
+            .unwrap();
+        let reg = st.graph.division(1);
+        let p = MultilinearPolynomial::from(vec![1; 8]);
+        let (c, h) = DoryScheme::commit_zk(&p, &pp);
+        st.commitments.insert(reg.tensors[1], c);
+        wi.hints.insert(reg.tensors[1], h);
+        wi.polynomials.insert(reg.tensors[1], p);
+        // Rebuild matching quotient ranges, so only the relation to the
+        // original producer can reject this otherwise bounded quotient.
+        let range = super::super::native_division::ranges(7)[1];
+        let column = vec![(1u64 << 31) + 1; 8];
+        for d in 0..range.chunks() {
+            let id = CommittedPoly::NodeOutputRaD(reg.namespace + 1, d);
+            let p = MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                column
+                    .iter()
+                    .map(|v| Some(u16::from(range.digit(*v, d))))
+                    .collect(),
+                1 << range.chunk,
+            ));
+            let (c, h) = DoryScheme::commit_zk(&p, &pp);
+            st.commitments.insert(id, c);
+            wi.hints.insert(id, h);
+            wi.polynomials.insert(id, p);
+        }
+        wi.arithmetic_ranges.get_mut(&1).unwrap()[1] = column;
+        if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+            assert!(proof.verify(&st, &vp, &gens).is_err());
+        }
+    }
+    #[test]
+    fn native_graph_trig_proves_exact_atlas_periodic_rounding_and_extremes() {
+        use atlas_onnx_tracer::{
+            ops::{Cos, Op, Sin},
+            tensor::Tensor,
+        };
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for scale in [8u8, 14, 20] {
+            for cosine in [false, true] {
+                let period = common::consts::trig_period_modulus(u32::from(scale)) as i32;
+                let values = vec![
+                    i32::MIN,
+                    -period - 1,
+                    -period,
+                    -1,
+                    0,
+                    period - 1,
+                    period,
+                    i32::MAX,
+                ];
+                let x = Tensor::new(Some(&values), &[8]).unwrap();
+                let expected = if cosine {
+                    Cos {
+                        scale: i32::from(scale),
+                    }
+                    .f(vec![&x])
+                } else {
+                    Sin {
+                        scale: i32::from(scale),
+                    }
+                    .f(vec![&x])
+                };
+                let g = NativeGraph::trig(b"exact periodic graph".to_vec(), vec![8], scale, cosine)
+                    .unwrap();
+                let (st, wi) = NativeGraphWitness::commit(g, vec![values], &pp).unwrap();
+                assert_eq!(wi.outputs(), vec![expected.data().to_vec()]);
+                let proof = NativeGraphProof::prove(&st, wi, &pp, &gens).unwrap();
+                let mut b = vec![];
+                proof.serialize_compressed(&mut b).unwrap();
+                let proof = NativeGraphProof::deserialize_compressed(b.as_slice()).unwrap();
+                proof.verify(&st, &vp, &gens).unwrap();
+                let mut wrong = st.clone();
+                wrong.graph.nodes[0].division.as_mut().unwrap().divisor += 1;
+                assert!(proof.verify(&wrong, &vp, &gens).is_err());
+                let mut wrong = st.clone();
+                wrong
+                    .graph
+                    .nodes
+                    .last_mut()
+                    .unwrap()
+                    .lookup
+                    .as_mut()
+                    .unwrap()
+                    .table[0] += 1;
+                assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            }
+        }
+    }
+    #[test]
+    fn native_graph_trig_validates_scale_and_matches_all_registered_tables() {
+        use atlas_onnx_tracer::{
+            ops::{Cos, Op, Sin},
+            tensor::Tensor,
+        };
+        for scale in [0, 3, 21, 255] {
+            assert!(NativeGraph::trig(b"invalid scale".to_vec(), vec![1], scale, true).is_err());
+        }
+        for scale in 4..=20 {
+            for cosine in [false, true] {
+                let g =
+                    NativeGraph::trig(b"periodic table".to_vec(), vec![8], scale, cosine).unwrap();
+                let divisor = g.nodes[0].division.as_ref().unwrap().divisor as i32;
+                let factor = if g.nodes.len() == 3 {
+                    g.nodes[1].division.as_ref().unwrap().divisor as i32
+                } else {
+                    1
+                };
+                let table = &g.nodes.last().unwrap().lookup.as_ref().unwrap().table;
+                let values = vec![
+                    i32::MIN,
+                    -divisor - 1,
+                    -1,
+                    0,
+                    1,
+                    divisor - 1,
+                    divisor,
+                    i32::MAX,
+                ];
+                let x = Tensor::new(Some(&values), &[8]).unwrap();
+                let expected = if cosine {
+                    Cos {
+                        scale: i32::from(scale),
+                    }
+                    .f(vec![&x])
+                } else {
+                    Sin {
+                        scale: i32::from(scale),
+                    }
+                    .f(vec![&x])
+                };
+                let actual = values
+                    .iter()
+                    .map(|x| table[(x.rem_euclid(divisor) / factor) as usize])
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, expected.data());
+                assert!(table.len() <= 1 << 16);
+            }
         }
     }
 }

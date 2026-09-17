@@ -108,23 +108,52 @@ mod enabled {
                 ],
                 vec![1, 2, 3],
             ),
+            "matrix" => (
+                2,
+                vec![
+                    NativeGraphNode::einsum(0, 1, "mk,kn->mn", 14, [16, 16]),
+                    NativeGraphNode::add(2, 2),
+                    NativeGraphNode::sum(3, vec![1]),
+                ],
+                vec![2, 4],
+            ),
+            "batched-matrix" => (
+                2,
+                vec![
+                    NativeGraphNode::einsum(0, 1, "bmk,bnk->bmn", 14, [16, 16]),
+                    NativeGraphNode::mean_of_squares(2, vec![2], 14),
+                    NativeGraphNode::sum(3, vec![0, 1, 2]),
+                ],
+                vec![2, 3, 4],
+            ),
             _ => panic!("unknown fixture"),
         };
+        let input_shapes = match kind {
+            "matrix" => vec![vec![rows, 32], vec![32, rows]],
+            "batched-matrix" => vec![vec![2, rows, 32], vec![2, 16, 32]],
+            "sum" | "mean-squares" => vec![vec![rows, 8]; num_inputs],
+            _ => vec![vec![rows]; num_inputs],
+        };
         NativeGraph {
-            context: format!("native vector graph fixture/{kind}").into_bytes(),
-            input_shapes: vec![
-                if kind == "sum" || kind == "mean-squares" {
-                    vec![rows, 8]
-                } else {
-                    vec![rows]
-                };
-                num_inputs
-            ],
+            context: format!("native tensor graph fixture/{kind}").into_bytes(),
+            input_shapes,
             nodes,
             outputs,
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/matrix") || g.context.ends_with(b"/batched-matrix") {
+            return g
+                .input_shapes
+                .iter()
+                .enumerate()
+                .map(|(side, shape)| {
+                    (0..shape.iter().product::<usize>())
+                        .map(|i| ((i * 37 + side * 11 + 17) % 65536) as i32 - 32768)
+                        .collect()
+                })
+                .collect();
+        }
         if g.context.ends_with(b"/sum") || g.context.ends_with(b"/mean-squares") {
             let patterns = if g.context.ends_with(b"/sum") {
                 vec![
@@ -170,7 +199,55 @@ mod enabled {
         let mut values = inputs(g);
         let shapes = g.tensor_shapes().unwrap();
         for n in &g.nodes {
-            let out = if let Some(m) = &n.mul {
+            let out = if let Some(e) = &n.einsum {
+                // Independent wide-integer reference. The witness uses the
+                // Atlas blocked kernel; this loop checks the complete result.
+                let left = &values[n.input];
+                let right = &values[e.right];
+                let mut output = vec![];
+                let clamp = |sum: i128| {
+                    sum.div_euclid(1i128 << e.shift)
+                        .clamp(i128::from(i32::MIN), i128::from(i32::MAX))
+                        as i32
+                };
+                if e.equation == "mk,kn->mn" {
+                    let (m, k, n) = (shapes[n.input][0], shapes[n.input][1], shapes[e.right][1]);
+                    for i in 0..m {
+                        for j in 0..n {
+                            output.push(clamp(
+                                (0..k)
+                                    .map(|h| {
+                                        i128::from(left[i * k + h]) * i128::from(right[h * n + j])
+                                    })
+                                    .sum(),
+                            ));
+                        }
+                    }
+                } else {
+                    assert_eq!(e.equation, "bmk,bnk->bmn");
+                    let (batch, m, k, n) = (
+                        shapes[n.input][0],
+                        shapes[n.input][1],
+                        shapes[n.input][2],
+                        shapes[e.right][1],
+                    );
+                    for b in 0..batch {
+                        for i in 0..m {
+                            for j in 0..n {
+                                output.push(clamp(
+                                    (0..k)
+                                        .map(|h| {
+                                            i128::from(left[(b * m + i) * k + h])
+                                                * i128::from(right[(b * n + j) * k + h])
+                                        })
+                                        .sum(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                output
+            } else if let Some(m) = &n.mul {
                 let a = Tensor::new(Some(&values[n.input]), &shapes[n.input]).unwrap();
                 let b = Tensor::new(Some(&values[m.right]), &shapes[m.right]).unwrap();
                 Mul {
@@ -224,7 +301,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

@@ -1,5 +1,5 @@
 //! Hidden exact reductions over registered tensor axes, followed by one clamp.
-//! Mean of squares also proves division by the shape-derived count and scale.
+//! Mean of squares proves division by the registered logical count and scale.
 //! Overflow outside the signed 64 bit Atlas accumulator domain is rejected.
 
 use super::native_mul::Range;
@@ -61,13 +61,16 @@ pub(super) struct Reduction {
     pub log_input: usize,
     pub log_output: usize,
     pub square: bool,
+    /// Bit width for the remainder range. The divisor need not be a power of two.
     pub shift: u8,
+    pub divisor: u64,
 }
 impl Reduction {
-    pub fn new(
+    pub fn new_with_count(
         shape: &[usize],
         axes: &[usize],
         mean_scale: Option<u8>,
+        mean_count: Option<usize>,
     ) -> Result<Self, ProofVerifyError> {
         let log_input = shape_bits(shape)?;
         if axes.iter().any(|a| *a >= shape.len()) || axes.windows(2).any(|w| w[0] >= w[1]) {
@@ -88,17 +91,26 @@ impl Reduction {
             first += bits;
         }
         let log_output = kept.len();
-        let shift = if let Some(scale) = mean_scale {
-            let total = log_input - log_output + usize::from(scale);
-            if total > 30 {
+        let physical_count = 1usize << (log_input - log_output);
+        let divisor = if let Some(scale) = mean_scale {
+            let count = mean_count.unwrap_or(physical_count);
+            if count == 0 || count > physical_count || scale > 30 {
+                return Err(invalid("Invalid logical mean count or scale"));
+            }
+            let divisor = (count as u64) << scale;
+            if divisor > 1 << 30 {
                 return Err(invalid(
                     "Mean divisor exceeds the supported Atlas remainder range",
                 ));
             }
-            total as u8
+            divisor
         } else {
-            0
+            if mean_count.is_some() {
+                return Err(invalid("A sum cannot register a mean count"));
+            }
+            1
         };
+        let shift = divisor.next_power_of_two().ilog2() as u8;
         Ok(Self {
             output_shape,
             kept,
@@ -106,14 +118,20 @@ impl Reduction {
             log_output,
             square: mean_scale.is_some(),
             shift,
+            divisor,
         })
     }
     pub fn columns(&self) -> usize {
         if self.shift == 0 {
             5
+        } else if self.has_gap() {
+            7
         } else {
             6
         }
+    }
+    fn has_gap(&self) -> bool {
+        !self.divisor.is_power_of_two()
     }
     pub fn output_index(&self, index: usize) -> usize {
         self.kept.iter().fold(0, |out, bit| {
@@ -130,6 +148,9 @@ impl Reduction {
         ];
         if self.shift > 0 {
             ranges.push(Range::new(5, usize::from(self.shift), 0));
+            if self.has_gap() {
+                ranges.push(Range::new(6, usize::from(self.shift), 0));
+            }
         }
         ranges
     }
@@ -155,7 +176,7 @@ impl ReductionWitness {
             .map(i64::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| invalid("Exact Atlas reduction accumulator exceeds signed 64 bits"))?;
-        let divisor = 1i128 << reduction.shift;
+        let divisor = i128::from(reduction.divisor);
         let mut output = vec![];
         let mut lo = vec![];
         let mut hi = vec![];
@@ -196,6 +217,14 @@ impl ReductionWitness {
         ]);
         if reduction.shift > 0 {
             range_values.push(rem.clone());
+            if reduction.has_gap() {
+                let gap = rem
+                    .iter()
+                    .map(|r| reduction.divisor - 1 - r)
+                    .collect::<Vec<_>>();
+                range_values.push(gap.clone());
+                polynomials.insert(tensor(6), MultilinearPolynomial::from(gap));
+            }
             polynomials.insert(tensor(5), MultilinearPolynomial::from(rem));
         }
         for r in reduction.ranges() {
@@ -222,8 +251,8 @@ impl ReductionWitness {
 }
 
 pub(super) struct ReductionRegistration {
-    /// Input, output, accumulator, lower gap, upper gap, optional remainder.
-    pub tensors: [CommittedPoly; 6],
+    /// Input, output, accumulator, lower gap, upper gap, remainder and remainder gap.
+    pub tensors: [CommittedPoly; 7],
     pub initial: SumcheckId,
     pub reduction_stage: SumcheckId,
     pub clamp_stage: SumcheckId,
@@ -264,16 +293,22 @@ impl ReductionRegistration {
             input: OpeningId::new(self.tensors[0], self.reduction_stage),
         }
     }
+    fn remainder_bound_params(&self) -> RemainderBoundParams {
+        RemainderBoundParams {
+            openings: [self.source(5), self.source(6)],
+            maximum: Fr::from(self.reduction.divisor - 1),
+        }
+    }
     fn clamp_params(&self, r: &[Fr], t: &mut Blake2bTranscript) -> ClampParams {
         ClampParams {
             r: r.to_vec(),
-            divisor: Fr::from(1u64 << self.reduction.shift),
+            divisor: Fr::from(self.reduction.divisor),
             gamma: [
                 t.challenge_scalar(),
                 t.challenge_scalar(),
                 t.challenge_scalar(),
             ],
-            openings: self.tensors[1..self.reduction.columns()]
+            openings: self.tensors[1..self.reduction.columns().min(6)]
                 .iter()
                 .map(|id| OpeningId::new(*id, self.clamp_stage))
                 .collect(),
@@ -321,7 +356,7 @@ impl ReductionRegistration {
         };
         let clamp = ClampProver {
             params: self.clamp_params(&r_output, t),
-            values: self.tensors[1..self.reduction.columns()]
+            values: self.tensors[1..self.reduction.columns().min(6)]
                 .iter()
                 .map(|id| polynomials[id].clone())
                 .collect(),
@@ -329,6 +364,11 @@ impl ReductionRegistration {
         };
         let mut result: Vec<Box<dyn SumcheckInstanceProver<Fr, Blake2bTranscript>>> =
             vec![Box::new(reduction), Box::new(clamp)];
+        if self.reduction.has_gap() {
+            result.push(Box::new(RemainderBoundProver {
+                params: self.remainder_bound_params(),
+            }));
+        }
         for range in self.ranges() {
             let r = if range.tensor == 0 {
                 &r_input
@@ -355,6 +395,11 @@ impl ReductionRegistration {
             Box::new(ReductionVerifier(self.reduction_params(&r_output))),
             Box::new(ClampVerifier(self.clamp_params(&r_output, t))),
         ];
+        if self.reduction.has_gap() {
+            result.push(Box::new(RemainderBoundVerifier(
+                self.remainder_bound_params(),
+            )));
+        }
         for range in self.ranges() {
             let r = if range.tensor == 0 {
                 &r_input
@@ -672,5 +717,96 @@ impl SumcheckInstanceVerifier<Fr, Blake2bTranscript> for ClampVerifier {
         for i in 0..self.0.openings.len() {
             a.append_dense(t, self.0.openings[i], r.to_vec());
         }
+    }
+}
+
+// The original remainder and gap open at the same initial random output point.
+// Both unsigned ranges and this linear identity prove 0 <= remainder < divisor.
+#[derive(Clone)]
+struct RemainderBoundParams {
+    openings: [OpeningId; 2],
+    maximum: Fr,
+}
+impl SumcheckInstanceParams<Fr> for RemainderBoundParams {
+    fn degree(&self) -> usize {
+        1
+    }
+    fn num_rounds(&self) -> usize {
+        0
+    }
+    fn input_claim(&self, _: &dyn OpeningAccumulator<Fr>) -> Fr {
+        Fr::zero()
+    }
+    fn normalize_opening_point(&self, r: &[Fr]) -> OpeningPoint<BIG_ENDIAN, Fr> {
+        r.to_vec().into()
+    }
+    fn input_claim_constraint(&self) -> InputClaimConstraint {
+        InputClaimConstraint::sum_of_products(vec![ProductTerm::single(ValueSource::Constant(0))])
+    }
+    fn input_constraint_challenge_values(&self, _: &dyn OpeningAccumulator<Fr>) -> Vec<Fr> {
+        vec![]
+    }
+    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
+        Some(OutputClaimConstraint::sum_of_products(vec![
+            ProductTerm::single(ValueSource::Opening(self.openings[0])),
+            ProductTerm::single(ValueSource::Opening(self.openings[1])),
+            ProductTerm::single(ValueSource::Challenge(0)),
+        ]))
+    }
+    fn output_constraint_challenge_values(&self, _: &[<Fr as JoltField>::Challenge]) -> Vec<Fr> {
+        vec![-self.maximum]
+    }
+}
+#[derive(allocative::Allocative)]
+struct RemainderBoundProver {
+    #[allocative(skip)]
+    params: RemainderBoundParams,
+}
+impl SumcheckInstanceProver<Fr, Blake2bTranscript> for RemainderBoundProver {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<Fr> {
+        &self.params
+    }
+    fn compute_message(&mut self, _: usize, _: Fr) -> UniPoly<Fr> {
+        unreachable!("Remainder bound has no sumcheck rounds")
+    }
+    fn ingest_challenge(&mut self, _: <Fr as JoltField>::Challenge, _: usize) {
+        unreachable!("Remainder bound has no sumcheck rounds")
+    }
+    fn cache_openings(
+        &self,
+        _: &mut ProverOpeningAccumulator<Fr>,
+        _: &mut Blake2bTranscript,
+        _: &[<Fr as JoltField>::Challenge],
+    ) {
+        // These openings were appended before constructing the batched instances.
+    }
+    #[cfg(feature = "allocative")]
+    fn update_flamegraph(&self, f: &mut allocative::FlameGraphBuilder) {
+        f.visit_root(self);
+    }
+}
+struct RemainderBoundVerifier(RemainderBoundParams);
+impl SumcheckInstanceVerifier<Fr, Blake2bTranscript> for RemainderBoundVerifier {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<Fr> {
+        &self.0
+    }
+    fn expected_output_claim(
+        &self,
+        a: &VerifierOpeningAccumulator<Fr>,
+        _: &[<Fr as JoltField>::Challenge],
+    ) -> Fr {
+        self.0
+            .openings
+            .iter()
+            .map(|id| a.get_committed_polynomial_opening(*id).1)
+            .sum::<Fr>()
+            - self.0.maximum
+    }
+    fn cache_openings(
+        &self,
+        _: &mut VerifierOpeningAccumulator<Fr>,
+        _: &mut Blake2bTranscript,
+        _: &[<Fr as JoltField>::Challenge],
+    ) {
     }
 }

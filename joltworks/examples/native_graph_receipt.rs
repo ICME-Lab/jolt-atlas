@@ -3,7 +3,7 @@
 mod enabled {
     use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
     use atlas_onnx_tracer::{
-        ops::{Add, MeanOfSquares, Mul, Op, Sigmoid, Sub, Sum},
+        ops::{Add, MeanOfSquares, Mul, Op, Rsqrt, Sigmoid, Sub, Sum},
         tensor::Tensor,
     };
     use joltworks::{
@@ -49,7 +49,24 @@ mod enabled {
     fn graph(kind: &str, rows: usize) -> NativeGraph {
         assert!(rows >= 2 && rows.is_power_of_two());
         let (num_inputs, nodes, outputs) = match kind {
-            "activation" => {
+            "rsqrt" => (
+                1,
+                vec![
+                    NativeGraphNode::rsqrt(0, 14),
+                    NativeGraphNode::mul(0, 1, 14),
+                    NativeGraphNode::sum(2, vec![0]),
+                ],
+                vec![1, 2, 3],
+            ),
+            "normalization" => (
+                1,
+                vec![
+                    NativeGraphNode::mean_of_squares(0, vec![1], 14),
+                    NativeGraphNode::rsqrt(1, 14),
+                ],
+                vec![1, 2],
+            ),
+            "activation" | "activation-narrow" => {
                 let bound = 1i32 << 17;
                 let domain = (-bound..bound).collect::<Vec<_>>();
                 let grid = Tensor::new(Some(&domain), &[domain.len()]).unwrap();
@@ -57,7 +74,12 @@ mod enabled {
                 (
                     1,
                     vec![
-                        NativeGraphNode::clamped_lookup(0, table, -bound, 4),
+                        NativeGraphNode::clamped_lookup(
+                            0,
+                            table,
+                            -bound,
+                            if kind == "activation-narrow" { 2 } else { 4 },
+                        ),
                         NativeGraphNode::mul(0, 1, 14),
                         NativeGraphNode::sum(2, vec![0]),
                     ],
@@ -146,7 +168,7 @@ mod enabled {
         let input_shapes = match kind {
             "matrix" => vec![vec![rows, 32], vec![32, rows]],
             "batched-matrix" => vec![vec![2, rows, 32], vec![2, 16, 32]],
-            "sum" | "mean-squares" => vec![vec![rows, 8]; num_inputs],
+            "sum" | "mean-squares" | "normalization" => vec![vec![rows, 8]; num_inputs],
             _ => vec![vec![rows]; num_inputs],
         };
         NativeGraph {
@@ -157,7 +179,18 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
-        if g.context.ends_with(b"/activation") {
+        if g.context.ends_with(b"/rsqrt") {
+            let values = [i32::MIN, -1, 0, 1, 2, 16384, 32768, i32::MAX];
+            return vec![(0..g.input_shapes[0][0])
+                .map(|i| values[i % values.len()])
+                .collect()];
+        }
+        if g.context.ends_with(b"/normalization") {
+            return vec![(0..g.input_shapes[0][0] * 8)
+                .map(|i| ((i * 37 + 11) % 65536) as i32 - 32768)
+                .collect()];
+        }
+        if g.context.ends_with(b"/activation") || g.context.ends_with(b"/activation-narrow") {
             let values = [
                 i32::MIN,
                 -(1 << 17) - 1,
@@ -319,10 +352,21 @@ mod enabled {
                 }
                 .data()
                 .to_vec()
+            } else if let Some(scale) = n.rsqrt {
+                let x = Tensor::new(Some(&values[n.input]), &shapes[n.input]).unwrap();
+                Rsqrt {
+                    scale: i32::from(scale),
+                }
+                .f(vec![&x])
+                .data()
+                .to_vec()
             } else if n.lookup.as_ref().unwrap().clamp_lower.is_some() {
                 // Compare the complete signed input against the actual Atlas
                 // activation kernel, independently of the clamp/index witness.
-                assert!(g.context.ends_with(b"/activation"));
+                assert!(
+                    g.context.ends_with(b"/activation")
+                        || g.context.ends_with(b"/activation-narrow")
+                );
                 let x = Tensor::new(Some(&values[n.input]), &shapes[n.input]).unwrap();
                 Sigmoid { scale: 14 }.f(vec![&x]).data().to_vec()
             } else {
@@ -337,7 +381,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

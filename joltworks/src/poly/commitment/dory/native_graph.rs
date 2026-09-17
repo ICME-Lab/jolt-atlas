@@ -5,6 +5,7 @@
 
 use super::{
     native_add::{AddRegistration, AddWitness},
+    native_einsum::{Contraction, ContractionRegistration, ContractionWitness},
     native_lookup::Lookup,
     native_mul::{MulRegistration, NativeMulWitness},
     native_reduce::{shape_bits, Reduction, ReductionRegistration, ReductionWitness},
@@ -68,6 +69,13 @@ pub struct NativeGraphReduce {
     pub mean_scale: Option<u8>,
 }
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct NativeGraphEinsum {
+    pub right: usize,
+    pub equation: String,
+    pub shift: u8,
+    pub input_bits: [u8; 2],
+}
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct NativeGraphLookup {
     pub table: Vec<i32>,
     pub log_chunk: u8,
@@ -81,11 +89,13 @@ pub struct NativeGraphNode {
     pub add: Option<NativeGraphAdd>,
     pub lookup: Option<NativeGraphLookup>,
     pub reduce: Option<NativeGraphReduce>,
+    pub einsum: Option<NativeGraphEinsum>,
 }
 impl NativeGraphNode {
     pub fn mul(left: usize, right: usize, shift: u8) -> Self {
         Self {
             input: left,
+            einsum: None,
             mul: Some(NativeGraphMul { right, shift }),
             add: None,
             lookup: None,
@@ -95,6 +105,7 @@ impl NativeGraphNode {
     pub fn add(left: usize, right: usize) -> Self {
         Self {
             input: left,
+            einsum: None,
             mul: None,
             lookup: None,
             reduce: None,
@@ -107,6 +118,7 @@ impl NativeGraphNode {
     pub fn sub(left: usize, right: usize) -> Self {
         Self {
             input: left,
+            einsum: None,
             mul: None,
             lookup: None,
             reduce: None,
@@ -119,6 +131,7 @@ impl NativeGraphNode {
     pub fn sum(input: usize, axes: Vec<usize>) -> Self {
         Self {
             input,
+            einsum: None,
             mul: None,
             add: None,
             lookup: None,
@@ -131,6 +144,7 @@ impl NativeGraphNode {
     pub fn mean_of_squares(input: usize, axes: Vec<usize>, scale: u8) -> Self {
         Self {
             input,
+            einsum: None,
             mul: None,
             add: None,
             lookup: None,
@@ -143,10 +157,34 @@ impl NativeGraphNode {
     pub fn lookup(input: usize, table: Vec<i32>, log_chunk: u8) -> Self {
         Self {
             input,
+            einsum: None,
             mul: None,
             add: None,
             lookup: Some(NativeGraphLookup { table, log_chunk }),
             reduce: None,
+        }
+    }
+    /// Bounds are signed bit widths. Their sum plus the contraction length
+    /// in bits must be at most 64, proving that every partial sum fits i64.
+    pub fn einsum(
+        left: usize,
+        right: usize,
+        equation: &str,
+        shift: u8,
+        input_bits: [u8; 2],
+    ) -> Self {
+        Self {
+            input: left,
+            mul: None,
+            add: None,
+            lookup: None,
+            reduce: None,
+            einsum: Some(NativeGraphEinsum {
+                right,
+                equation: equation.into(),
+                shift,
+                input_bits,
+            }),
         }
     }
 }
@@ -218,8 +256,14 @@ impl NativeGraph {
             }
             consumed.insert(node.input);
             let shape = &shapes[node.input];
-            let result = match (&node.mul, &node.lookup, &node.add, &node.reduce) {
-                (Some(m), None, None, None)
+            let result = match (
+                &node.mul,
+                &node.lookup,
+                &node.add,
+                &node.reduce,
+                &node.einsum,
+            ) {
+                (Some(m), None, None, None, None)
                     if m.right < output
                         && (1..=30).contains(&m.shift)
                         && shapes[m.right] == *shape =>
@@ -227,7 +271,7 @@ impl NativeGraph {
                     consumed.insert(m.right);
                     shape.clone()
                 }
-                (None, Some(l), None, None)
+                (None, Some(l), None, None, None)
                     if l.table.len() >= 2
                         && l.table.len().is_power_of_two()
                         && l.table.len().ilog2() <= 31
@@ -235,12 +279,24 @@ impl NativeGraph {
                 {
                     shape.clone()
                 }
-                (None, None, Some(a), None) if a.right < output && shapes[a.right] == *shape => {
+                (None, None, Some(a), None, None)
+                    if a.right < output && shapes[a.right] == *shape =>
+                {
                     consumed.insert(a.right);
                     shape.clone()
                 }
-                (None, None, None, Some(r)) => {
+                (None, None, None, Some(r), None) => {
                     Reduction::new(shape, &r.axes, r.mean_scale)?.output_shape
+                }
+                (None, None, None, None, Some(e)) if e.right < output => {
+                    consumed.insert(e.right);
+                    Contraction::new(
+                        &e.equation,
+                        [shape, &shapes[e.right]],
+                        e.shift,
+                        e.input_bits,
+                    )?
+                    .output_shape
                 }
                 _ => {
                     return Err(invalid(
@@ -292,9 +348,9 @@ impl NativeGraph {
                 tensor(aux + 1),
                 tensor(aux + 2),
             ],
-            initial: SumcheckId::NodeExecution(4 * i),
-            final_stage: SumcheckId::NodeExecution(4 * i + 1),
-            namespace: 6 * i,
+            initial: SumcheckId::NodeExecution(8 * i),
+            final_stage: SumcheckId::NodeExecution(8 * i + 1),
+            namespace: 7 * i,
         }
     }
     fn addition(&self, i: usize) -> AddRegistration {
@@ -309,9 +365,9 @@ impl NativeGraph {
                 tensor(aux),
                 tensor(aux + 1),
             ],
-            initial: SumcheckId::NodeExecution(4 * i),
-            final_stage: SumcheckId::NodeExecution(4 * i + 1),
-            namespace: 6 * i,
+            initial: SumcheckId::NodeExecution(8 * i),
+            final_stage: SumcheckId::NodeExecution(8 * i + 1),
+            namespace: 7 * i,
         }
     }
     fn reduction(&self, i: usize, shape: &[usize]) -> ReductionRegistration {
@@ -327,18 +383,45 @@ impl NativeGraph {
                 tensor(aux + 2),
                 tensor(aux + 3),
             ],
-            initial: SumcheckId::NodeExecution(4 * i),
-            reduction_stage: SumcheckId::NodeExecution(4 * i + 1),
-            clamp_stage: SumcheckId::NodeExecution(4 * i + 2),
-            namespace: 6 * i,
+            initial: SumcheckId::NodeExecution(8 * i),
+            reduction_stage: SumcheckId::NodeExecution(8 * i + 1),
+            clamp_stage: SumcheckId::NodeExecution(8 * i + 2),
+            namespace: 7 * i,
             reduction: Reduction::new(shape, &r.axes, r.mean_scale).unwrap(),
+        }
+    }
+    fn contraction(&self, i: usize, shapes: &[Vec<usize>]) -> ContractionRegistration {
+        let node = &self.nodes[i];
+        let e = node.einsum.as_ref().unwrap();
+        let aux = self.tensor_count() + 4 * i;
+        ContractionRegistration {
+            tensors: [
+                tensor(node.input),
+                tensor(e.right),
+                tensor(self.num_inputs() + i),
+                tensor(aux),
+                tensor(aux + 1),
+                tensor(aux + 2),
+                tensor(aux + 3),
+            ],
+            initial: std::array::from_fn(|j| SumcheckId::NodeExecution(8 * i + j)),
+            product_stages: std::array::from_fn(|j| SumcheckId::NodeExecution(8 * i + 3 + j)),
+            clamp_stage: SumcheckId::NodeExecution(8 * i + 5),
+            namespace: 7 * i,
+            contraction: Contraction::new(
+                &e.equation,
+                [&shapes[node.input], &shapes[e.right]],
+                e.shift,
+                e.input_bits,
+            )
+            .unwrap(),
         }
     }
     fn lookup(&self, i: usize) -> Lookup {
         let node = &self.nodes[i];
         let l = node.lookup.as_ref().unwrap();
         let log_k = l.table.len().ilog2() as usize;
-        let source = SumcheckId::NodeExecution(4 * i);
+        let source = SumcheckId::NodeExecution(8 * i);
         Lookup {
             params: OneHotParams::from_config_and_log_K(
                 &OneHotConfig {
@@ -349,7 +432,7 @@ impl NativeGraph {
             log_k,
             input: OpeningId::new(tensor(node.input), source),
             output: OpeningId::new(tensor(self.num_inputs() + i), source),
-            namespace: 6 * self.nodes.len() + i,
+            namespace: 7 * self.nodes.len() + i,
         }
     }
     fn required_keys(&self) -> BTreeSet<CommittedPoly> {
@@ -364,6 +447,8 @@ impl NativeGraph {
                 let registration = self.addition(i);
                 keys.extend(registration.tensors);
                 keys.extend(registration.indicator_keys());
+            } else if node.einsum.is_some() {
+                keys.extend(self.contraction(i, &shapes).keys());
             } else if node.reduce.is_some() {
                 keys.extend(self.reduction(i, &shapes[node.input]).keys());
             } else {
@@ -394,7 +479,7 @@ impl NativeGraphStatement {
         Ok(())
     }
     fn transcript(&self) -> Blake2bTranscript {
-        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v3");
+        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v4");
         t.append_serializable(self);
         t
     }
@@ -484,6 +569,27 @@ impl NativeGraphWitness {
                             CommittedPoly::NodeOutputRaD(registration.namespace + j, d)
                         }
                         _ => return Err(invalid("Unexpected addition witness polynomial")),
+                    };
+                    if polynomials.insert(id, polynomial).is_some() {
+                        return Err(invalid("Graph witness namespace collision"));
+                    }
+                }
+                arithmetic_ranges.insert(i, witness.range_values);
+            } else if let Some(e) = &node.einsum {
+                let registration = graph.contraction(i, &shapes);
+                let witness = ContractionWitness::new(
+                    [&values[node.input], &values[e.right]],
+                    &registration.contraction,
+                )?;
+                values.push(witness.output);
+                for (id, polynomial) in witness.polynomials {
+                    let id = match id {
+                        CommittedPoly::DivNodeQuotient(j) if j < 2 => continue,
+                        CommittedPoly::DivNodeQuotient(j) => registration.tensors[j],
+                        CommittedPoly::NodeOutputRaD(j, d) => {
+                            CommittedPoly::NodeOutputRaD(registration.namespace + j, d)
+                        }
+                        _ => return Err(invalid("Unexpected contraction witness polynomial")),
                     };
                     if polynomials.insert(id, polynomial).is_some() {
                         return Err(invalid("Graph witness namespace collision"));
@@ -693,6 +799,16 @@ impl NativeGraphProof {
                     &mut a,
                     &mut t,
                 ));
+            } else if node.einsum.is_some() {
+                let values = arithmetic_ranges
+                    .get(&i)
+                    .ok_or_else(|| invalid("Missing contraction witness"))?;
+                provers.extend(graph.contraction(i, &shapes).provers(
+                    values,
+                    &polynomials,
+                    &mut a,
+                    &mut t,
+                )?);
             } else if node.reduce.is_some() {
                 let values = arithmetic_ranges
                     .get(&i)
@@ -864,6 +980,8 @@ impl NativeGraphProof {
                     &mut a,
                     &mut t,
                 ));
+            } else if node.einsum.is_some() {
+                verifiers.extend(graph.contraction(i, &shapes).verifiers(&mut a, &mut t));
             } else if node.reduce.is_some() {
                 verifiers.extend(
                     graph
@@ -1390,7 +1508,14 @@ mod tests {
         let mut values = inputs;
         for node in &graph.nodes {
             let a = Tensor::new(Some(&values[node.input]), &shapes[node.input]).unwrap();
-            let out = if let Some(r) = &node.reduce {
+            let out = if let Some(e) = &node.einsum {
+                let b = Tensor::new(Some(&values[e.right]), &shapes[e.right]).unwrap();
+                atlas_onnx_tracer::ops::Einsum {
+                    equation: e.equation.clone(),
+                    scale: i32::from(e.shift),
+                }
+                .f(vec![&a, &b])
+            } else if let Some(r) = &node.reduce {
                 if let Some(scale) = r.mean_scale {
                     let count = r
                         .axes
@@ -1705,6 +1830,395 @@ mod tests {
                 assert!(
                     proof.verify(&s, &vp, &gens).is_err(),
                     "accepted false reduction {raw:?}"
+                );
+            }
+        }
+    }
+
+    fn einsum_graph(
+        shapes: Vec<Vec<usize>>,
+        equation: &str,
+        shift: u8,
+        bits: [u8; 2],
+    ) -> NativeGraph {
+        NativeGraph {
+            context: b"registered exact contraction".to_vec(),
+            input_shapes: shapes,
+            nodes: vec![NativeGraphNode::einsum(0, 1, equation, shift, bits)],
+            outputs: vec![2],
+        }
+    }
+    fn clamp_reference(sum: i128, shift: u8) -> i32 {
+        sum.div_euclid(1i128 << shift)
+            .clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32
+    }
+    #[test]
+    fn native_graph_einsum_matches_wide_matrix_reference_and_binds_registry() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let g = einsum_graph(vec![vec![2, 4], vec![4, 2]], "mk,kn->mn", 1, [32, 30]);
+        let a = vec![i32::MAX, 1, -1, -i32::MAX, i32::MIN, i32::MAX, 1, -1];
+        let b = vec![7, -7, 2, 3, -2, -3, 7, -7];
+        let mut expected = vec![];
+        for m in 0..2 {
+            for n in 0..2 {
+                expected.push(clamp_reference(
+                    (0..4)
+                        .map(|k| i128::from(a[m * 4 + k]) * i128::from(b[k * 2 + n]))
+                        .sum(),
+                    1,
+                ));
+            }
+        }
+        assert_eq!(expected, vec![2, 3, i32::MIN, i32::MAX]);
+        let (s, w) = NativeGraphWitness::commit(g.clone(), vec![a, b], &pp).unwrap();
+        assert_eq!(w.outputs(), vec![expected]);
+        let proof = NativeGraphProof::prove(&s, w, &pp, &gens).unwrap();
+        let mut bytes = vec![];
+        proof.serialize_compressed(&mut bytes).unwrap();
+        NativeGraphProof::deserialize_compressed(bytes.as_slice())
+            .unwrap()
+            .verify(&s, &vp, &gens)
+            .unwrap();
+        let mut wrong = s.clone();
+        wrong.graph.nodes[0].einsum.as_mut().unwrap().shift = 0;
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        let mut wrong = s.clone();
+        wrong.graph.nodes[0].einsum.as_mut().unwrap().input_bits = [31, 30];
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        let mut wrong = s.clone();
+        wrong.graph.nodes[0].einsum.as_mut().unwrap().equation = "mk,kn->nm".into();
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        let mut wrong = s;
+        wrong.graph.nodes[0].reduce = Some(NativeGraphReduce {
+            axes: vec![1],
+            mean_scale: None,
+        });
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        for (shapes, eq, bits) in [
+            (vec![vec![2, 4], vec![4, 2]], "mk,kn->mn", [32, 32]),
+            (vec![vec![2, 4], vec![2, 2]], "mk,kn->mn", [16, 16]),
+            (vec![vec![2, 2], vec![2, 2]], "mm,kn->mn", [16, 16]),
+            (vec![vec![2, 2], vec![2, 2]], "mk,kn->mm", [16, 16]),
+            (vec![vec![2, 2], vec![2, 2]], "mk,kn->", [16, 16]),
+            (vec![vec![2, 2], vec![2, 2]], "mk,kn,mn->mn", [16, 16]),
+            (vec![vec![2, 2], vec![2, 2]], "mk,kn->mn", [0, 16]),
+        ] {
+            assert!(
+                einsum_graph(shapes, eq, 1, bits).tensor_shapes().is_err(),
+                "accepted {eq}"
+            );
+        }
+        let mut bad = g;
+        bad.nodes[0].einsum.as_mut().unwrap().shift = 31;
+        assert!(bad.tensor_shapes().is_err());
+    }
+
+    #[test]
+    fn native_graph_einsum_batches_permutations_and_repeated_operands_compose() {
+        let pp = DoryScheme::setup_prover(12);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let g = NativeGraph {
+            context: b"batched products with reused operands".to_vec(),
+            input_shapes: vec![vec![2, 2, 4], vec![4, 2, 2]],
+            nodes: vec![
+                NativeGraphNode::einsum(0, 1, "bmk,knb->nbm", 2, [8, 8]),
+                NativeGraphNode::einsum(0, 0, "bmk,bnk->bmn", 2, [8, 8]),
+                NativeGraphNode::add(2, 3),
+                NativeGraphNode::mean_of_squares(4, vec![2], 4),
+                NativeGraphNode::sum(5, vec![0, 1, 2]),
+                NativeGraphNode::sub(6, 6),
+                NativeGraphNode::lookup(7, vec![5, 9], 1),
+            ],
+            outputs: vec![2, 3, 4, 5, 6, 8],
+        };
+        let a = (0..16).map(|i| i * 2 - 11).collect::<Vec<i32>>();
+        let b = (0..16).map(|i| 13 - i * 3).collect::<Vec<i32>>();
+        let mut first = vec![];
+        for n in 0..2 {
+            for batch in 0..2 {
+                for m in 0..2 {
+                    first.push(clamp_reference(
+                        (0..4)
+                            .map(|k| {
+                                i128::from(a[batch * 8 + m * 4 + k])
+                                    * i128::from(b[k * 4 + n * 2 + batch])
+                            })
+                            .sum(),
+                        2,
+                    ));
+                }
+            }
+        }
+        let mut gram = vec![];
+        for batch in 0..2 {
+            for m in 0..2 {
+                for n in 0..2 {
+                    gram.push(clamp_reference(
+                        (0..4)
+                            .map(|k| {
+                                i128::from(a[batch * 8 + m * 4 + k])
+                                    * i128::from(a[batch * 8 + n * 4 + k])
+                            })
+                            .sum(),
+                        2,
+                    ));
+                }
+            }
+        }
+        let reference = atlas_outputs(&g, vec![a.clone(), b.clone()]);
+        assert_eq!(reference[0], first);
+        assert_eq!(reference[1], gram);
+        let (s, w) = NativeGraphWitness::commit(g, vec![a, b], &pp).unwrap();
+        assert_eq!(w.outputs(), reference);
+        let proof = NativeGraphProof::prove(&s, w, &pp, &gens).unwrap();
+        proof.verify(&s, &vp, &gens).unwrap();
+        let mut wrong = s;
+        wrong.graph.nodes[0].einsum.as_mut().unwrap().equation = "bmk,knb->bnm".into();
+        assert!(proof.verify(&wrong, &vp, &gens).is_err());
+    }
+
+    #[test]
+    fn native_graph_einsum_scalar_outer_products_and_unit_axes() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for (shapes, eq, shift, bits, inputs, expected) in [
+            (
+                vec![vec![2, 2, 2], vec![2, 2, 2]],
+                "mkq,kqn->mn",
+                0,
+                [8, 8],
+                vec![
+                    vec![1, 2, 3, 4, 5, 6, 7, 8],
+                    vec![5, 6, 7, 8, 9, 10, 11, 12],
+                ],
+                vec![90, 100, 218, 244],
+            ),
+            (
+                vec![vec![4], vec![4]],
+                "k,k->",
+                1,
+                [8, 8],
+                vec![vec![-3, -2, 1, 0], vec![1, 1, 2, 7]],
+                vec![-2],
+            ),
+            (
+                vec![vec![2], vec![4]],
+                "i,j->ij",
+                0,
+                [8, 8],
+                vec![vec![-3, 2], vec![1, 2, 3, 4]],
+                vec![-3, -6, -9, -12, 2, 4, 6, 8],
+            ),
+            (
+                vec![vec![1, 2, 2], vec![2, 2]],
+                "amk,kn->mn",
+                0,
+                [8, 8],
+                vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]],
+                vec![19, 22, 43, 50],
+            ),
+            (
+                vec![vec![2], vec![1, 2]],
+                "m,an->abnm",
+                0,
+                [8, 8],
+                vec![vec![2, 3], vec![5, 7]],
+                vec![10, 15, 14, 21],
+            ),
+            (
+                vec![vec![1], vec![1]],
+                "k,k->",
+                30,
+                [32, 32],
+                vec![vec![i32::MIN], vec![i32::MAX]],
+                vec![i32::MIN],
+            ),
+            (
+                vec![vec![], vec![]],
+                ",->",
+                1,
+                [8, 8],
+                vec![vec![-3], vec![7]],
+                vec![-11],
+            ),
+        ] {
+            let g = einsum_graph(shapes, eq, shift, bits);
+            let (s, w) = NativeGraphWitness::commit(g, inputs, &pp).unwrap();
+            assert_eq!(w.outputs(), vec![expected], "{eq}");
+            NativeGraphProof::prove(&s, w, &pp, &gens)
+                .unwrap()
+                .verify(&s, &vp, &gens)
+                .unwrap();
+        }
+    }
+
+    fn substitute_contraction_results(
+        s: &mut NativeGraphStatement,
+        w: &mut NativeGraphWitness,
+        node: usize,
+        replacement: ContractionWitness,
+        pp: &DoryProverSetup,
+    ) {
+        let registration = s.graph.contraction(node, &s.graph.tensor_shapes().unwrap());
+        // Keep both actual operands and all their range indicators. Replace
+        // only the output, accumulator, gaps, remainder and matching ranges.
+        for (id, p) in replacement.polynomials {
+            let id = match id {
+                CommittedPoly::DivNodeQuotient(j) if j < 2 => continue,
+                CommittedPoly::NodeOutputRaD(j, _) if j < 2 => continue,
+                CommittedPoly::DivNodeQuotient(j) => registration.tensors[j],
+                CommittedPoly::NodeOutputRaD(j, d) => {
+                    CommittedPoly::NodeOutputRaD(registration.namespace + j, d)
+                }
+                _ => panic!("unexpected contraction key"),
+            };
+            let (c, h) = DoryScheme::commit_zk(&p, pp);
+            w.polynomials.insert(id, p);
+            w.hints.insert(id, h);
+            s.commitments.insert(id, c);
+        }
+        w.arithmetic_ranges.get_mut(&node).unwrap()[2..]
+            .clone_from_slice(&replacement.range_values[2..]);
+    }
+
+    #[test]
+    fn native_graph_einsum_rejects_valid_results_for_wrong_layout_and_hidden_producer() {
+        let pp = DoryScheme::setup_prover(10);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let inputs = vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]];
+        let shapes = vec![vec![2, 2]; 2];
+        let wrong_graph = einsum_graph(shapes.clone(), "km,kn->mn", 0, [8, 8]);
+        let (other_s, other_w) =
+            NativeGraphWitness::commit(wrong_graph.clone(), inputs.clone(), &pp).unwrap();
+        NativeGraphProof::prove(&other_s, other_w, &pp, &gens)
+            .unwrap()
+            .verify(&other_s, &vp, &gens)
+            .unwrap();
+        let (mut s, mut w) = NativeGraphWitness::commit(
+            einsum_graph(shapes.clone(), "mk,kn->mn", 0, [8, 8]),
+            inputs.clone(),
+            &pp,
+        )
+        .unwrap();
+        let alternative =
+            Contraction::new("km,kn->mn", [&shapes[0], &shapes[1]], 0, [8, 8]).unwrap();
+        substitute_contraction_results(
+            &mut s,
+            &mut w,
+            0,
+            ContractionWitness::new([&inputs[0], &inputs[1]], &alternative).unwrap(),
+            &pp,
+        );
+        if let Ok(proof) = NativeGraphProof::prove(&s, w, &pp, &gens) {
+            assert!(proof.verify(&s, &vp, &gens).is_err());
+        }
+        let valid = einsum_graph(shapes.clone(), "mk,kn->mn", 0, [8, 8]);
+        let (s, w) = NativeGraphWitness::commit(valid, inputs.clone(), &pp).unwrap();
+        NativeGraphProof::prove(&s, w, &pp, &gens)
+            .unwrap()
+            .verify(&s, &vp, &gens)
+            .unwrap();
+        let mut graph = einsum_graph(shapes.clone(), "mk,kn->mn", 0, [8, 8]);
+        graph.nodes = vec![
+            NativeGraphNode::add(0, 0),
+            NativeGraphNode::einsum(2, 1, "mk,kn->mn", 0, [8, 8]),
+        ];
+        graph.outputs = vec![3];
+        let (mut s, mut w) =
+            NativeGraphWitness::commit(graph, vec![vec![0; 4], inputs[1].clone()], &pp).unwrap();
+        let intended = Contraction::new("mk,kn->mn", [&shapes[0], &shapes[1]], 0, [8, 8]).unwrap();
+        substitute_contraction_results(
+            &mut s,
+            &mut w,
+            1,
+            ContractionWitness::new([&inputs[0], &inputs[1]], &intended).unwrap(),
+            &pp,
+        );
+        if let Ok(proof) = NativeGraphProof::prove(&s, w, &pp, &gens) {
+            assert!(proof.verify(&s, &vp, &gens).is_err());
+        }
+    }
+
+    #[test]
+    fn native_graph_einsum_rejects_false_integers_with_matching_commitments() {
+        let pp = DoryScheme::setup_prover(9);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        // Inputs, output, accumulator, gaps and remainder. The two scalar
+        // cases also test a contraction with no sumcheck rounds.
+        let cases: Vec<(u8, Vec<i128>, Vec<i128>, [i128; 5])> = vec![
+            (1, vec![1, 1], vec![1, 1], [0, 2, 0, 0, 2]),
+            (1, vec![1, 0], vec![1, 0], [1, 1, 0, 0, -1]),
+            (1, vec![8, 0], vec![1, 0], [4, 8, 0, 0, 0]),
+            (1, vec![-9, 0], vec![1, 0], [-5, -9, 0, 0, 1]),
+            (1, vec![1, 1], vec![1, 1], [0, 2, 0, 1, 0]),
+            (0, vec![1], vec![1], [2, 2, 0, 0, 0]),
+            (0, vec![1], vec![1], [0, 1, 0, 1, 0]),
+        ];
+        for (shift, left, right, raw) in cases {
+            let n = left.len();
+            let graph = einsum_graph(vec![vec![n]; 2], "k,k->", shift, [4, 4]);
+            let (mut s, mut w) =
+                NativeGraphWitness::commit(graph, vec![vec![0; n]; 2], &pp).unwrap();
+            let registration = s.graph.contraction(0, &s.graph.tensor_shapes().unwrap());
+            let columns = [left, right]
+                .into_iter()
+                .chain(
+                    raw[..registration.contraction.columns() - 2]
+                        .iter()
+                        .map(|v| vec![*v]),
+                )
+                .collect::<Vec<_>>();
+            let mut range_values = vec![];
+            for range in registration.contraction.ranges() {
+                let j = range.tensor;
+                let values = &columns[j];
+                let offsets = values
+                    .iter()
+                    .map(|v| (v + i128::from(range.offset)) as u64)
+                    .collect::<Vec<_>>();
+                let fields = values
+                    .iter()
+                    .map(|v| {
+                        if *v < 0 {
+                            -Fr::from((-v) as u64)
+                        } else {
+                            Fr::from(*v as u64)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut replacements =
+                    vec![(registration.tensors[j], MultilinearPolynomial::from(fields))];
+                for d in 0..range.chunks() {
+                    replacements.push((
+                        CommittedPoly::NodeOutputRaD(registration.namespace + j, d),
+                        MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                            offsets
+                                .iter()
+                                .map(|v| Some(u16::from(range.digit(*v, d))))
+                                .collect(),
+                            1 << range.chunk,
+                        )),
+                    ));
+                }
+                range_values.push(offsets);
+                for (id, p) in replacements {
+                    let (c, h) = DoryScheme::commit_zk(&p, &pp);
+                    w.polynomials.insert(id, p);
+                    w.hints.insert(id, h);
+                    s.commitments.insert(id, c);
+                }
+            }
+            w.arithmetic_ranges.insert(0, range_values);
+            if let Ok(proof) = NativeGraphProof::prove(&s, w, &pp, &gens) {
+                assert!(
+                    proof.verify(&s, &vp, &gens).is_err(),
+                    "accepted false contraction {raw:?}"
                 );
             }
         }

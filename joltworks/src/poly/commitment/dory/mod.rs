@@ -40,6 +40,8 @@ pub mod native_mul;
 pub mod native_opening;
 #[cfg(feature = "zk")]
 pub mod native_registration;
+#[cfg(feature = "zk")]
+mod native_reduce;
 mod one_hot_commit;
 mod par_routines;
 mod sparse_rlc;

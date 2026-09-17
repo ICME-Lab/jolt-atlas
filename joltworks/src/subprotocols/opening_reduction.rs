@@ -424,6 +424,40 @@ pub enum ProverOpening<F: JoltField> {
     OneHot(OneHotPolynomialProverOpening<F>),
 }
 
+// Public slice coordinates can be zero. In that case the usual Gruen shortcut
+// cannot recover q(1) from the prior claim, because the equality factor at one
+// vanishes. Compute that endpoint directly and retain the same round polynomial.
+fn gruen_linear_message<F: JoltField>(
+    eq: &GruenSplitEqPolynomial<F>,
+    q_0: F,
+    previous_claim: F,
+    coefficient: impl Fn(usize) -> F + Sync,
+) -> UniPoly<F> {
+    let bit = match eq.binding_order {
+        BindingOrder::LowToHigh => eq.w[eq.current_index - 1],
+        BindingOrder::HighToLow => eq.w[eq.current_index],
+    };
+    let eq_1 = eq.current_scalar * bit;
+    if !eq_1.is_zero() {
+        return eq.gruen_poly_deg_2(q_0, previous_claim);
+    }
+    let width = eq.E_out_current_len();
+    let half = eq.len() / 2;
+    let q_1: F = (0..half)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|j| {
+            eq.E_in_current()[j / width] * eq.E_out_current()[j % width] * coefficient(j + half)
+        })
+        .sum();
+    let eq_0 = eq.current_scalar - eq_1;
+    UniPoly::from_evals(&[
+        eq_0 * q_0,
+        eq_1 * q_1,
+        (eq_1 + eq_1 - eq_0) * (q_1 + q_1 - q_0),
+    ])
+}
+
 /// An opening (of a dense polynomial) computed by the prover.
 ///
 /// May be a batched opening, where multiple dense polynomials opened
@@ -491,7 +525,9 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
                 .sum()
         };
 
-        gruen_eq.gruen_poly_deg_2(q_0, previous_claim)
+        gruen_linear_message(gruen_eq, q_0, previous_claim, |j| {
+            polynomial.get_bound_coeff(j)
+        })
     }
 
     #[tracing::instrument(skip_all, name = "DensePolynomialProverOpening::bind")]
@@ -823,8 +859,17 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                     .sum()
             };
 
-            let gruen_univariate_evals =
-                d_gruen.gruen_poly_deg_2(gruen_eval_0, previous_claim / eq_r_address_claim);
+            if eq_r_address_claim.is_zero() {
+                // The already-bound address equality factor annihilates every
+                // remaining cycle round, independently of its coordinates.
+                return UniPoly::from_evals(&[F::zero(); 3]);
+            }
+            let gruen_univariate_evals = gruen_linear_message(
+                d_gruen,
+                gruen_eval_0,
+                previous_claim / eq_r_address_claim,
+                |j| H.get_bound_coeff(j),
+            );
 
             gruen_univariate_evals * eq_r_address_claim
         }
@@ -1478,5 +1523,37 @@ mod tests {
                 &mut verifier_tr,
             )
             .unwrap();
+    }
+    #[test]
+    fn opening_round_preserves_public_boolean_coordinates_and_zero_scale() {
+        use super::gruen_linear_message;
+        use crate::poly::{
+            multilinear_polynomial::BindingOrder, split_eq_poly::GruenSplitEqPolynomial,
+        };
+        for order in [BindingOrder::HighToLow, BindingOrder::LowToHigh] {
+            for w in [0u64, 1, 2, 7] {
+                for scale in [0u64, 1, 3] {
+                    let (w, scale, q0, q1) = (
+                        Fr::from(w),
+                        Fr::from(scale),
+                        Fr::from(7u64),
+                        Fr::from(11u64),
+                    );
+                    let eq = GruenSplitEqPolynomial::new_with_scaling(&[w], order, Some(scale));
+                    let claim = scale * ((Fr::from(1u64) - w) * q0 + w * q1);
+                    let p = gruen_linear_message(&eq, q0, claim, |j| {
+                        assert_eq!(j, 1);
+                        q1
+                    });
+                    for z in [0u64, 1, 2, 5] {
+                        let z = Fr::from(z);
+                        let expected = scale
+                            * ((Fr::from(1u64) - w) * (Fr::from(1u64) - z) + w * z)
+                            * (q0 + (q1 - q0) * z);
+                        assert_eq!(p.evaluate(&z), expected);
+                    }
+                }
+            }
+        }
     }
 }

@@ -27,7 +27,83 @@ use joltworks::{
 };
 
 type Result<T> = core::result::Result<T, SerializationError>;
-const MAGIC: &[u8; 8] = b"ATLSCP01";
+const MAGIC: &[u8; 8] = b"ATLSCP02";
+
+fn common_prefix(a: &[u8], b: &[u8]) -> usize {
+    a.iter().zip(b).take_while(|(a, b)| a == b).count()
+}
+
+// Raw identifiers share their longest byte prefix with the preceding raw
+// identifier. Advice runs do not change this state. The one-byte lengths bound
+// reconstruction independently of attacker-controlled collection counts.
+struct PrefixId {
+    bytes: [u8; 255],
+    len: usize,
+    polynomial_len: usize,
+    previous: Option<OpeningId>,
+}
+
+impl PrefixId {
+    fn new() -> Self {
+        Self {
+            bytes: [0; 255],
+            len: 0,
+            polynomial_len: 0,
+            previous: None,
+        }
+    }
+
+    fn write(&mut self, id: OpeningId, output: &mut Vec<u8>, compress: Compress) -> Result<()> {
+        let len = id.serialized_size(compress);
+        if len > self.bytes.len() {
+            return invalid();
+        }
+        let mut next = [0u8; 255];
+        id.serialize_with_mode(&mut next[..len], compress)?;
+        let prefix = common_prefix(&self.bytes[..self.len], &next[..len]);
+        output.extend_from_slice(&[prefix as u8, (len - prefix) as u8]);
+        output.extend_from_slice(&next[prefix..len]);
+        self.bytes[..len].copy_from_slice(&next[..len]);
+        self.len = len;
+        Ok(())
+    }
+
+    fn read(&mut self, input: &mut &[u8], compress: Compress) -> Result<OpeningId> {
+        let prefix = read::<u8>(input, Compress::No)? as usize;
+        let suffix = read::<u8>(input, Compress::No)? as usize;
+        let len = prefix + suffix;
+        if prefix > self.len
+            || len > self.bytes.len()
+            || suffix > input.len()
+            || (prefix < self.len && suffix > 0 && self.bytes[prefix] == input[0])
+        {
+            return invalid();
+        }
+        self.bytes[prefix..len].copy_from_slice(&input[..suffix]);
+        *input = &input[suffix..];
+        self.len = len;
+        // If the shared prefix contains the whole polynomial identifier,
+        // its validated decoded value can be reused. Only the sumcheck suffix
+        // needs parsing and canonical validation again.
+        let mut encoded = &self.bytes[..len];
+        let id: OpeningId =
+            if let Some(previous) = self.previous.filter(|_| prefix >= self.polynomial_len) {
+                encoded = &encoded[self.polynomial_len..];
+                OpeningId {
+                    polynomial: previous.polynomial,
+                    sumcheck: read_indexed_id(&mut encoded, compress)?,
+                }
+            } else {
+                read_canonical(&mut encoded, compress)?
+            };
+        if !encoded.is_empty() {
+            return invalid();
+        }
+        self.polynomial_len = len - id.sumcheck.serialized_size(compress);
+        self.previous = Some(id);
+        Ok(id)
+    }
+}
 
 fn invalid<T>() -> Result<T> {
     Err(SerializationError::InvalidData)
@@ -65,10 +141,18 @@ fn key(tag: u8, node: usize, index: usize) -> Result<OpeningId> {
     Ok(OpeningId::new(poly, SumcheckId::NodeExecution(node)))
 }
 
+#[derive(Clone, Copy)]
+struct ReductionReference<'a> {
+    node: usize,
+    value: Fr,
+    canonical: &'a [u8],
+}
+
 impl Claims<Fr> {
     fn write_compact(&self, output: &mut Vec<u8>, compress: Compress) -> Result<()> {
         (self.0.len() as u64).serialize_uncompressed(&mut *output)?;
         let mut entries = self.0.iter().peekable();
+        let mut previous_id = PrefixId::new();
         while let Some((id, (_, value))) = entries.next() {
             if let Some((tag, node, first, value)) = advice(*id, *value) {
                 output.push(tag);
@@ -97,19 +181,19 @@ impl Claims<Fr> {
                     .copy_from_slice(&(count as u64).to_le_bytes());
             } else {
                 output.push(0);
-                id.serialize_with_mode(&mut *output, compress)?;
+                previous_id.write(*id, output, compress)?;
                 value.serialize_with_mode(&mut *output, compress)?;
             }
         }
         Ok(())
     }
 
-    fn read_compact(
-        input: &mut &[u8],
+    fn read_compact<'a>(
+        input: &mut &'a [u8],
         compress: Compress,
         max_claims: usize,
         mut canonical: impl ark_serialize::Write,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Vec<ReductionReference<'a>>)> {
         let count = index(input)?;
         // Each entry consumes at least four bytes. Do not reserve from an
         // untrusted count, even when the application supplies a generous limit.
@@ -119,23 +203,31 @@ impl Claims<Fr> {
         (count as u64).serialize_uncompressed(&mut canonical)?;
         let mut entries = Vec::new();
         let mut previous_run = None;
+        let mut references: Vec<ReductionReference<'a>> = Vec::new();
+        let mut previous_id = PrefixId::new();
         while entries.len() < count {
             let tag = read::<u8>(input, Compress::No)?;
             if tag == 0 {
-                // Round-trip the identifier to reject narrowed indices on 32-bit
-                // targets. Field decoding below validates the canonical scalar.
+                let id = previous_id.read(input, compress)?;
                 let before = *input;
-                let id: OpeningId = read(input, compress)?;
-                let mut equal = EqualBytes(&before[..before.len() - input.len()]);
-                id.serialize_with_mode(&mut equal, compress)?;
-                if !equal.0.is_empty() {
-                    return invalid();
-                }
                 let value: Fr = read(input, compress)?;
                 if advice(id, value).is_some() || entries.last().is_some_and(|(p, _)| *p >= id) {
                     return invalid();
                 }
-                canonical.write_all(&before[..before.len() - input.len()])?;
+                let scalar_bytes = &before[..before.len() - input.len()];
+                if let (Some(VirtualPoly::NodeOutput(node)), SumcheckId::NodeExecution(consumer)) =
+                    (id.virtual_poly(), id.sumcheck)
+                {
+                    if consumer >= node && references.last().is_none_or(|last| last.node != node) {
+                        references.push(ReductionReference {
+                            node,
+                            value,
+                            canonical: scalar_bytes,
+                        });
+                    }
+                }
+                canonical.write_all(&previous_id.bytes[..previous_id.len])?;
+                canonical.write_all(scalar_bytes)?;
                 entries.push((id, (OpeningPoint::default(), value)));
                 previous_run = None;
             } else {
@@ -172,7 +264,24 @@ impl Claims<Fr> {
                 previous_run = last.checked_add(1).map(|next| (tag, node, next));
             }
         }
-        Ok(Self(entries.into_iter().collect()))
+        Ok((Self(entries.into_iter().collect()), references))
+    }
+
+    // A deterministic reference, not a claim that this node has one consumer.
+    // Use it only when the stored polynomial consists of exactly this scalar.
+    fn reduction_reference(&self, node: usize) -> Option<Fr> {
+        let lower = OpeningId::new(
+            VirtualPoly::NodeOutput(node),
+            SumcheckId::NodeExecution(node),
+        );
+        let (id, (_, value)) = self.0.range(lower..).next()?;
+        if id.virtual_poly() == Some(VirtualPoly::NodeOutput(node))
+            && matches!(id.sumcheck, SumcheckId::NodeExecution(_))
+        {
+            Some(*value)
+        } else {
+            None
+        }
     }
 }
 
@@ -204,6 +313,21 @@ fn read_canonical<T: CanonicalDeserialize + CanonicalSerialize>(
         return invalid();
     }
     Ok(value)
+}
+
+// Only OpeningId and SumcheckId use this helper. Their wire fields are enum
+// tags (validated by decoding) and u64-encoded usize indices. On 64-bit targets
+// these encodings are already unique. Narrower targets still round-trip to
+// reject truncated indices. Field elements and curve points never use this path.
+fn read_indexed_id<T: CanonicalDeserialize + CanonicalSerialize>(
+    input: &mut &[u8],
+    compress: Compress,
+) -> Result<T> {
+    if usize::BITS >= 64 {
+        read(input, compress)
+    } else {
+        read_canonical(input, compress)
+    }
 }
 
 // Every variable-length collection is bounded by its remaining encoded bytes
@@ -261,6 +385,65 @@ fn sumcheck<T: Transcript>(
     })?))
 }
 
+fn read_reductions(
+    input: &mut &[u8],
+    compress: Compress,
+    references: &[ReductionReference<'_>],
+    mut canonical: impl ark_serialize::Write,
+) -> Result<std::collections::BTreeMap<usize, EvalReductionProof<Fr>>> {
+    let len = index(input)?;
+    if len > input.len() / 9 {
+        return invalid();
+    }
+    (len as u64).serialize_uncompressed(&mut canonical)?;
+    let mut entries = Vec::new();
+    let mut references = references.iter().peekable();
+    for _ in 0..len {
+        let node = index(input)?;
+        if entries
+            .last()
+            .is_some_and(|(previous, _)| *previous >= node)
+        {
+            return invalid();
+        }
+        node.serialize_with_mode(&mut canonical, compress)?;
+        while references
+            .peek()
+            .is_some_and(|reference| reference.node < node)
+        {
+            references.next();
+        }
+        let reference = references.peek().filter(|reference| reference.node == node);
+        let coeffs = match read::<u8>(input, Compress::No)? {
+            0 => {
+                let before = *input;
+                let coeffs = scalars(input, compress)?;
+                if coeffs.len() == 1
+                    && reference.is_some_and(|reference| reference.value == coeffs[0])
+                {
+                    return invalid();
+                }
+                canonical.write_all(&before[..before.len() - input.len()])?;
+                coeffs
+            }
+            1 => {
+                let reference = reference.ok_or(SerializationError::InvalidData)?;
+                1u64.serialize_uncompressed(&mut canonical)?;
+                canonical.write_all(reference.canonical)?;
+                vec![reference.value]
+            }
+            _ => return invalid(),
+        };
+        entries.push((
+            node,
+            EvalReductionProof {
+                h: UniPoly { coeffs },
+            },
+        ));
+    }
+    Ok(entries.into_iter().collect())
+}
+
 fn point_size(compress: Compress) -> usize {
     match compress {
         Compress::Yes => 32,
@@ -311,22 +494,22 @@ impl<T: Transcript> ONNXProof<Fr, T, HyperKZG<Bn254>> {
             1 => Compress::Yes,
             _ => return invalid(),
         };
-        let opening_claims =
+        let (opening_claims, references) =
             Claims::read_compact(&mut bytes, compress, max_claims, &mut canonical)?;
+        let tail = bytes;
+        let proofs = read_map(&mut bytes, compress, |input| sumcheck(input, compress))?;
+        let commitments = read_vec(&mut bytes, point_size(compress), |input| {
+            read_canonical(input, compress)
+        })?;
+        canonical.write_all(&tail[..tail.len() - bytes.len()])?;
+        let eval_reduction_proofs =
+            read_reductions(&mut bytes, compress, &references, &mut canonical)?;
         let tail = bytes;
         let proof = Self {
             opening_claims,
-            proofs: read_map(&mut bytes, compress, |input| sumcheck(input, compress))?,
-            commitments: read_vec(&mut bytes, point_size(compress), |input| {
-                read_canonical(input, compress)
-            })?,
-            eval_reduction_proofs: read_map(&mut bytes, compress, |input| {
-                Ok(EvalReductionProof {
-                    h: UniPoly {
-                        coeffs: scalars(input, compress)?,
-                    },
-                })
-            })?,
+            proofs,
+            commitments,
+            eval_reduction_proofs,
             reduced_opening_proof: match read::<u8>(&mut bytes, Compress::No)? {
                 0 => None,
                 1 => Some(ReducedOpeningProof {
@@ -360,7 +543,18 @@ impl<T: Transcript> ONNXProof<Fr, T, HyperKZG<Bn254>> {
         serialize_btreemap(&self.proofs, &mut output, compress)?;
         self.commitments
             .serialize_with_mode(&mut output, compress)?;
-        serialize_btreemap(&self.eval_reduction_proofs, &mut output, compress)?;
+        (self.eval_reduction_proofs.len() as u64).serialize_uncompressed(&mut output)?;
+        for (node, proof) in &self.eval_reduction_proofs {
+            node.serialize_with_mode(&mut output, compress)?;
+            if proof.h.coeffs.len() == 1
+                && self.opening_claims.reduction_reference(*node) == Some(proof.h.coeffs[0])
+            {
+                1u8.serialize_uncompressed(&mut output)?;
+            } else {
+                0u8.serialize_uncompressed(&mut output)?;
+                proof.serialize_with_mode(&mut output, compress)?;
+            }
+        }
         self.reduced_opening_proof
             .serialize_with_mode(output, compress)
     }
@@ -410,7 +604,22 @@ mod tests {
             opening_claims: Claims(claims),
             proofs: BTreeMap::new(),
             commitments: Vec::new(),
-            eval_reduction_proofs: BTreeMap::new(),
+            eval_reduction_proofs: [
+                (2, vec![Fr::from(0u32)]),
+                (3, vec![Fr::from(7u32)]),
+                (4, vec![]),
+                (5, vec![Fr::from(0u32), Fr::from(1u32)]),
+            ]
+            .into_iter()
+            .map(|(node, coeffs)| {
+                (
+                    node,
+                    EvalReductionProof {
+                        h: UniPoly { coeffs },
+                    },
+                )
+            })
+            .collect(),
             reduced_opening_proof: None,
         }
     }
@@ -486,6 +695,7 @@ mod tests {
             let mut bytes = count.to_le_bytes().to_vec();
             bytes.extend_from_slice(body);
             Claims::read_compact(&mut bytes.as_slice(), Compress::No, 20, std::io::sink())
+                .map(|(claims, _)| claims)
         };
         let mut good = Vec::new();
         run(&mut good, 1, 17, 0, 2);
@@ -508,16 +718,19 @@ mod tests {
             assert!(decode(&split, 2).is_err());
         }
         let mut raw = vec![0];
-        key(1, 17, 0)
-            .unwrap()
-            .serialize_uncompressed(&mut raw)
+        PrefixId::new()
+            .write(key(1, 17, 0).unwrap(), &mut raw, Compress::No)
             .unwrap();
         Fr::from(0u32).serialize_uncompressed(&mut raw).unwrap();
         assert!(decode(&raw, 1).is_err());
         // A canonical full scalar is required, even for non-advice entries.
         let mut bad_scalar = vec![0];
-        OpeningId::new(VirtualPoly::NodeOutput(0), SumcheckId::Raf)
-            .serialize_uncompressed(&mut bad_scalar)
+        PrefixId::new()
+            .write(
+                OpeningId::new(VirtualPoly::NodeOutput(0), SumcheckId::Raf),
+                &mut bad_scalar,
+                Compress::No,
+            )
             .unwrap();
         bad_scalar.extend_from_slice(&[255; 32]);
         assert!(decode(&bad_scalar, 1).is_err());
@@ -545,6 +758,135 @@ mod tests {
             changed.extend_from_slice(&bytes[offset + 8..]);
             assert!(Proof::deserialize_compact(&changed, 100).is_err());
         }
+    }
+
+    #[test]
+    fn identifiers_preserve_full_width_indices_and_reject_unknown_tags() {
+        let ids = [
+            OpeningId::new(
+                VirtualPoly::NodeOutput(usize::MAX),
+                SumcheckId::NodeExecution(usize::MAX),
+            ),
+            OpeningId::new(
+                VirtualPoly::NodeOutput(usize::MAX),
+                SumcheckId::RLC(usize::MAX),
+            ),
+            OpeningId::new(
+                VirtualPoly::SoftmaxMaxIndex(usize::MAX, usize::MAX),
+                SumcheckId::Raf,
+            ),
+        ];
+        let mut bytes = Vec::new();
+        let mut writer = PrefixId::new();
+        for id in ids {
+            writer.write(id, &mut bytes, Compress::No).unwrap();
+        }
+        let mut input = bytes.as_slice();
+        let mut reader = PrefixId::new();
+        for id in ids {
+            assert_eq!(reader.read(&mut input, Compress::No).unwrap(), id);
+        }
+        assert!(input.is_empty());
+        for tag in 10..=255 {
+            assert!(read_indexed_id::<SumcheckId>(&mut &[tag][..], Compress::No).is_err());
+        }
+    }
+
+    #[test]
+    fn identifier_prefixes_are_bounded_and_maximal() {
+        let id = OpeningId::new(VirtualPoly::NodeOutput(17), SumcheckId::NodeExecution(18));
+        let next = OpeningId::new(VirtualPoly::NodeOutput(17), SumcheckId::NodeExecution(19));
+        let mut encoded = Vec::new();
+        let mut writer = PrefixId::new();
+        writer.write(id, &mut encoded, Compress::No).unwrap();
+        let boundary = encoded.len();
+        writer.write(next, &mut encoded, Compress::No).unwrap();
+        assert_eq!(encoded[boundary], 11);
+        let mut reader = PrefixId::new();
+        let mut input = encoded.as_slice();
+        assert_eq!(reader.read(&mut input, Compress::No).unwrap(), id);
+        assert_eq!(reader.read(&mut input, Compress::No).unwrap(), next);
+        assert!(input.is_empty());
+        // A shorter prefix plus an identical explicit byte aliases the same key.
+        let mut alias = encoded[boundary..].to_vec();
+        alias[0] -= 1;
+        alias[1] += 1;
+        alias.insert(2, 0);
+        let mut reader = PrefixId::new();
+        reader
+            .read(&mut &encoded[..boundary], Compress::No)
+            .unwrap();
+        assert!(reader.read(&mut alias.as_slice(), Compress::No).is_err());
+        for bytes in [&[1, 0][..], &[0, 255], &[255, 255], &[0, 0]] {
+            assert!(PrefixId::new().read(&mut &bytes[..], Compress::No).is_err());
+        }
+        // A valid identifier followed by unused bytes is not a valid record.
+        let mut extra = encoded[..boundary].to_vec();
+        extra[1] += 1;
+        extra.push(0);
+        assert!(PrefixId::new()
+            .read(&mut extra.as_slice(), Compress::No)
+            .is_err());
+    }
+
+    #[test]
+    fn reduction_references_preserve_arbitrary_proofs_and_reject_aliases() {
+        let mut proof = fixture();
+        // Even with multiple consumers, only an exact match to the first
+        // eligible claim can use a reference. No polynomial is normalized.
+        proof.opening_claims.0.insert(
+            OpeningId::new(VirtualPoly::NodeOutput(2), SumcheckId::NodeExecution(4)),
+            (OpeningPoint::default(), Fr::from(1u32)),
+        );
+        for coefficients in [
+            vec![],
+            vec![Fr::from(0u32)],
+            vec![Fr::from(1u32)],
+            vec![Fr::from(0u32); 2],
+        ] {
+            proof.eval_reduction_proofs.get_mut(&2).unwrap().h.coeffs = coefficients;
+            let bytes = proof.serialize_compact(Compress::No).unwrap();
+            let mut streamed = Vec::new();
+            let decoded =
+                Proof::deserialize_compact_with_canonical(&bytes, 100, &mut streamed).unwrap();
+            assert_eq!(streamed, canonical(&proof, Compress::No));
+            assert_eq!(canonical(&decoded, Compress::No), streamed);
+        }
+        let mut claim_bytes = Vec::new();
+        proof
+            .opening_claims
+            .write_compact(&mut claim_bytes, Compress::No)
+            .unwrap();
+        let (_, references) = Claims::read_compact(
+            &mut claim_bytes.as_slice(),
+            Compress::No,
+            100,
+            std::io::sink(),
+        )
+        .unwrap();
+        let decode = |bytes: &[u8]| {
+            read_reductions(&mut &bytes[..], Compress::No, &references, std::io::sink())
+        };
+        let record = |nodes: &[u64], tag: u8| {
+            let mut bytes = (nodes.len() as u64).to_le_bytes().to_vec();
+            for node in nodes {
+                bytes.extend_from_slice(&node.to_le_bytes());
+                bytes.push(tag);
+            }
+            bytes
+        };
+        assert!(decode(&record(&[2], 1)).is_ok());
+        for (nodes, tag) in [(vec![3], 1), (vec![2], 2), (vec![2, 2], 1), (vec![3, 2], 1)] {
+            assert!(decode(&record(&nodes, tag)).is_err());
+        }
+        let mut alias = record(&[2], 0);
+        vec![Fr::from(0u32)]
+            .serialize_uncompressed(&mut alias)
+            .unwrap();
+        assert!(decode(&alias).is_err());
+        let mut overflow = record(&[2], 0);
+        overflow.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert!(decode(&overflow).is_err());
     }
 
     #[test]

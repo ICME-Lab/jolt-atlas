@@ -73,9 +73,9 @@ pub struct NativeMulStatement {
 
 /// Private witness state, deliberately not serializable.
 pub struct NativeMulWitness {
-    polynomials: BTreeMap<CommittedPoly, MultilinearPolynomial<Fr>>,
+    pub(super) polynomials: BTreeMap<CommittedPoly, MultilinearPolynomial<Fr>>,
     hints: BTreeMap<CommittedPoly, DoryHint>,
-    range_values: Vec<Vec<u64>>,
+    pub(super) range_values: Vec<Vec<u64>>,
     output: Vec<i32>,
 }
 
@@ -93,6 +93,8 @@ struct Range {
     bits: usize,
     chunk: usize,
     offset: u64,
+    input: OpeningId,
+    namespace: usize,
 }
 impl Range {
     fn new(tensor: usize, bits: usize, offset: u64) -> Self {
@@ -107,6 +109,8 @@ impl Range {
             bits,
             chunk,
             offset,
+            input: opening(tensor, 0),
+            namespace: tensor,
         }
     }
     fn chunks(&self) -> usize {
@@ -127,7 +131,7 @@ impl Range {
                     .collect(),
                 claim: LinearClaim {
                     constant: hamming.iter().sum::<Fr>() + beta * Fr::from(self.offset),
-                    terms: vec![(opening(self.tensor, 0), beta)],
+                    terms: vec![(self.input, beta)],
                 },
             }),
             d,
@@ -136,7 +140,7 @@ impl Range {
             gammas: t.challenge_vector_optimized::<Fr>(d),
             r_address: t.challenge_vector(self.chunk),
             r_cycle: r.to_vec(),
-            polynomial_types: (0..d).map(|j| indicator(self.tensor, j)).collect(),
+            polynomial_types: (0..d).map(|j| indicator(self.namespace, j)).collect(),
             sumcheck_id: SumcheckId::Booleanity,
         }
     }
@@ -159,16 +163,106 @@ impl Range {
     }
 }
 
+fn ranges(shift: u8) -> Vec<Range> {
+    vec![
+        Range::new(0, 32, 1 << 31),
+        Range::new(1, 32, 1 << 31),
+        Range::new(2, 32, 1 << 31),
+        Range::new(3, 64, 0),
+        Range::new(4, 64, 0),
+        Range::new(5, shift as usize, 0),
+    ]
+}
+
+/// Verifier-derived identifiers in the shared graph accumulator.
+#[derive(Clone)]
+pub(super) struct MulRegistration {
+    pub tensors: [CommittedPoly; N],
+    pub initial: SumcheckId,
+    pub final_stage: SumcheckId,
+    pub namespace: usize,
+}
+impl MulRegistration {
+    fn source(&self, i: usize) -> OpeningId {
+        OpeningId::new(self.tensors[i], self.initial)
+    }
+    fn ranges(&self, shift: u8) -> Vec<Range> {
+        ranges(shift)
+            .into_iter()
+            .map(|mut r| {
+                r.input = self.source(r.tensor);
+                r.namespace = self.namespace + r.tensor;
+                r
+            })
+            .collect()
+    }
+    pub fn indicator_keys(&self, shift: u8) -> Vec<CommittedPoly> {
+        self.ranges(shift)
+            .iter()
+            .flat_map(|r| (0..r.chunks()).map(move |d| indicator(r.namespace, d)))
+            .collect()
+    }
+    fn params(&self, r: &[Fr], shift: u8, t: &mut Blake2bTranscript) -> ArithmeticParams {
+        let mut params = ArithmeticParams::new(r, shift, t);
+        params.openings = self.tensors.map(|id| OpeningId::new(id, self.final_stage));
+        params
+    }
+    pub fn provers(
+        &self,
+        shift: u8,
+        log_rows: usize,
+        values: &[Vec<u64>],
+        polynomials: &BTreeMap<CommittedPoly, MultilinearPolynomial<Fr>>,
+        a: &mut ProverOpeningAccumulator<Fr>,
+        t: &mut Blake2bTranscript,
+    ) -> Vec<Box<dyn SumcheckInstanceProver<Fr, Blake2bTranscript>>> {
+        let r: Vec<Fr> = t.challenge_vector(log_rows);
+        for i in 0..N {
+            a.append_dense(
+                t,
+                self.source(i),
+                r.clone(),
+                polynomials[&self.tensors[i]].evaluate(&r),
+            );
+        }
+        let arithmetic = ArithmeticProver {
+            params: self.params(&r, shift, t),
+            values: self.tensors.map(|id| polynomials[&id].clone()),
+            eq: MultilinearPolynomial::from(EqPolynomial::<Fr>::evals(&r)),
+        };
+        let mut result: Vec<Box<dyn SumcheckInstanceProver<Fr, Blake2bTranscript>>> =
+            vec![Box::new(arithmetic)];
+        for range in self.ranges(shift) {
+            let params = range.params(&r, t);
+            result.push(Box::new(range.prover(&values[range.tensor], params)));
+        }
+        result
+    }
+    pub fn verifiers(
+        &self,
+        shift: u8,
+        log_rows: usize,
+        a: &mut VerifierOpeningAccumulator<Fr>,
+        t: &mut Blake2bTranscript,
+    ) -> Vec<Box<dyn SumcheckInstanceVerifier<Fr, Blake2bTranscript>>> {
+        let r: Vec<Fr> = t.challenge_vector(log_rows);
+        for i in 0..N {
+            a.append_dense(t, self.source(i), r.clone());
+        }
+        let mut result: Vec<Box<dyn SumcheckInstanceVerifier<Fr, Blake2bTranscript>>> =
+            vec![Box::new(ArithmeticVerifier(self.params(&r, shift, t)))];
+        for range in self.ranges(shift) {
+            result.push(Box::new(BooleanitySumcheckVerifier::new(
+                range.params(&r, t),
+            )));
+        }
+        result
+    }
+}
+
 impl NativeMulStatement {
     fn ranges(&self) -> Vec<Range> {
-        vec![
-            Range::new(0, 32, 1 << 31),
-            Range::new(1, 32, 1 << 31),
-            Range::new(2, 32, 1 << 31),
-            Range::new(3, 64, 0),
-            Range::new(4, 64, 0),
-            Range::new(5, self.shift as usize, 0),
-        ]
+        ranges(self.shift)
     }
     fn validate(&self, max_vars: usize) -> Result<(), ProofVerifyError> {
         if !(1..=30).contains(&self.shift)
@@ -226,6 +320,34 @@ impl NativeMulWitness {
         {
             return Err(invalid("Invalid native multiplication inputs or shape"));
         }
+        let mut witness = Self::uncommitted(left, right, shift)?;
+        let mut statement = NativeMulStatement {
+            context,
+            log_rows: left.len().ilog2() as usize,
+            shift,
+            commitments: BTreeMap::new(),
+        };
+        for (id, p) in &witness.polynomials {
+            let (c, h) = DoryScheme::commit_zk(p, setup);
+            statement.commitments.insert(*id, c);
+            witness.hints.insert(*id, h);
+        }
+        statement.validate(setup.verifier.max_log_n)?;
+        Ok((statement, witness))
+    }
+
+    pub(super) fn uncommitted(
+        left: &[i32],
+        right: &[i32],
+        shift: u8,
+    ) -> Result<Self, ProofVerifyError> {
+        if left.is_empty()
+            || !left.len().is_power_of_two()
+            || left.len() != right.len()
+            || !(1..=30).contains(&shift)
+        {
+            return Err(invalid("Invalid multiplication witness shape or scale"));
+        }
         let divisor = 1i64 << shift;
         let mut output = Vec::with_capacity(left.len());
         let mut lo = Vec::with_capacity(left.len());
@@ -261,13 +383,7 @@ impl NativeMulWitness {
             (tensor(4), MultilinearPolynomial::from(hi)),
             (tensor(5), MultilinearPolynomial::from(rem)),
         ]);
-        let mut statement = NativeMulStatement {
-            context,
-            log_rows: left.len().ilog2() as usize,
-            shift,
-            commitments: BTreeMap::new(),
-        };
-        for r in statement.ranges() {
+        for r in ranges(shift) {
             for d in 0..r.chunks() {
                 let indices = range_values[r.tensor]
                     .iter()
@@ -282,22 +398,12 @@ impl NativeMulWitness {
                 );
             }
         }
-        let mut hints = BTreeMap::new();
-        for (id, p) in &polynomials {
-            let (c, h) = DoryScheme::commit_zk(p, setup);
-            statement.commitments.insert(*id, c);
-            hints.insert(*id, h);
-        }
-        statement.validate(setup.verifier.max_log_n)?;
-        Ok((
-            statement,
-            Self {
-                polynomials,
-                hints,
-                range_values,
-                output,
-            },
-        ))
+        Ok(Self {
+            polynomials,
+            hints: BTreeMap::new(),
+            range_values,
+            output,
+        })
     }
     /// Prover-side output only. This vector is never a verifier input.
     pub fn output(&self) -> &[i32] {
@@ -316,11 +422,13 @@ struct ArithmeticParams {
     r: Vec<Fr>,
     divisor: Fr,
     gamma: [Fr; 3],
+    openings: [OpeningId; N],
 }
 impl ArithmeticParams {
     fn new(r: &[Fr], shift: u8, t: &mut Blake2bTranscript) -> Self {
         Self {
             r: r.to_vec(),
+            openings: std::array::from_fn(|i| opening(i, 1)),
             divisor: Fr::from(1u64 << shift),
             gamma: [
                 t.challenge_scalar(),
@@ -389,7 +497,7 @@ impl SumcheckInstanceParams<Fr> for ArithmeticParams {
                         ValueSource::Challenge(i),
                         indices
                             .into_iter()
-                            .map(|j| ValueSource::Opening(opening(j, 1)))
+                            .map(|j| ValueSource::Opening(self.openings[j]))
                             .collect(),
                     )
                 })
@@ -446,7 +554,12 @@ impl SumcheckInstanceProver<Fr, Blake2bTranscript> for ArithmeticProver {
         r: &[<Fr as JoltField>::Challenge],
     ) {
         for i in 0..N {
-            a.append_dense(t, opening(i, 1), r.to_vec(), self.values[i].final_claim());
+            a.append_dense(
+                t,
+                self.params.openings[i],
+                r.to_vec(),
+                self.values[i].final_claim(),
+            );
         }
     }
     #[cfg(feature = "allocative")]
@@ -466,7 +579,7 @@ impl SumcheckInstanceVerifier<Fr, Blake2bTranscript> for ArithmeticVerifier {
     ) -> Fr {
         EqPolynomial::mle(r, &self.0.r)
             * self.0.evaluate(&std::array::from_fn(|j| {
-                a.get_committed_polynomial_opening(opening(j, 1)).1
+                a.get_committed_polynomial_opening(self.0.openings[j]).1
             }))
     }
     fn cache_openings(
@@ -476,7 +589,7 @@ impl SumcheckInstanceVerifier<Fr, Blake2bTranscript> for ArithmeticVerifier {
         r: &[<Fr as JoltField>::Challenge],
     ) {
         for i in 0..N {
-            a.append_dense(t, opening(i, 1), r.to_vec());
+            a.append_dense(t, self.0.openings[i], r.to_vec());
         }
     }
 }

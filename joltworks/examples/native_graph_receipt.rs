@@ -57,6 +57,16 @@ mod enabled {
             .unwrap();
         }
         let (num_inputs, nodes, outputs) = match kind {
+            "slice-concat" => (
+                1,
+                vec![
+                    NativeGraphNode::slice(0, 1, 32, 32),
+                    NativeGraphNode::slice(0, 1, 0, 32),
+                    NativeGraphNode::concat(1, 2, 1),
+                ],
+                vec![1, 2, 3],
+            ),
+
             "layout" => (
                 1,
                 vec![
@@ -197,6 +207,7 @@ mod enabled {
             _ => panic!("unknown fixture"),
         };
         let input_shapes = match kind {
+            "slice-concat" => vec![vec![rows, 64]],
             "layout" => vec![vec![rows, 1]],
             "rms-normalization" => vec![vec![rows, 8], vec![rows, 1], vec![rows, 8]],
             "matrix" => vec![vec![rows, 32], vec![32, rows]],
@@ -212,6 +223,17 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/slice-concat") {
+            let count = g.input_shapes[0].iter().product::<usize>();
+            return vec![(0..count)
+                .map(|i| match i % 32 {
+                    0 => i32::MIN,
+                    1 => i32::MAX,
+                    _ => i as i32 * 13 - 10000,
+                })
+                .collect()];
+        }
+
         if g.context.ends_with(b"/softmax") {
             let count = g.input_shapes[0].iter().product::<usize>();
             return vec![(0..count)
@@ -320,6 +342,25 @@ mod enabled {
         inputs
     }
     fn reference(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/slice-concat") {
+            let values = inputs(g);
+            let x = Tensor::new(Some(&values[0]), &g.input_shapes[0]).unwrap();
+            let a = atlas_onnx_tracer::ops::Slice {
+                axis: 1,
+                start: 32,
+                end: 64,
+            }
+            .f(vec![&x]);
+            let b = atlas_onnx_tracer::ops::Slice {
+                axis: 1,
+                start: 0,
+                end: 32,
+            }
+            .f(vec![&x]);
+            let y = atlas_onnx_tracer::ops::Concat { axis: 1 }.f(vec![&a, &b]);
+            return vec![a.data().to_vec(), b.data().to_vec(), y.data().to_vec()];
+        }
+
         if g.context.ends_with(b"/softmax") {
             let values = inputs(g);
             let x = Tensor::new(Some(&values[0]), &g.input_shapes[0]).unwrap();
@@ -468,7 +509,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

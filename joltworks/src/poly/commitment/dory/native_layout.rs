@@ -39,11 +39,13 @@ fn tensor(i: usize) -> CommittedPoly {
 pub(super) struct Layout {
     pub output_shape: Vec<usize>,
     pub input_bits: Vec<usize>,
+    pub fixed_bits: BTreeMap<usize, bool>,
     pub log_input: usize,
     pub log_output: usize,
 }
 impl Layout {
-    /// kind 0 broadcasts, 1 preserves flattened order, 2 permutes tensor axes.
+    /// Kind 0 broadcasts, 1 preserves flattened order, 2 permutes tensor axes,
+    /// and 3 selects an aligned interval on an axis.
     pub fn new(
         input: &[usize],
         kind: u8,
@@ -51,6 +53,7 @@ impl Layout {
         axes: &[usize],
     ) -> Result<Self, ProofVerifyError> {
         let log_input = shape_bits(input)?;
+        let mut fixed_bits = BTreeMap::new();
         let (output_shape, input_bits) = match kind {
             0 if axes.is_empty() && input.len() <= shape.len() => {
                 shape_bits(shape)?;
@@ -94,6 +97,39 @@ impl Layout {
                     .collect();
                 (output, bits)
             }
+            3 if shape.is_empty() && axes.len() == 3 && axes[0] < input.len() => {
+                let (axis, start, len) = (axes[0], axes[1], axes[2]);
+                if !len.is_power_of_two()
+                    || start % len != 0
+                    || start.checked_add(len).is_none_or(|end| end > input[axis])
+                {
+                    return Err(invalid(
+                        "Slice must be aligned and have power of two length",
+                    ));
+                }
+                let mut output = input.to_vec();
+                output[axis] = len;
+                let mut bits = vec![];
+                let mut destination = 0;
+                for (i, size) in input.iter().enumerate() {
+                    let width = size.ilog2() as usize;
+                    let keep = if i == axis {
+                        len.ilog2() as usize
+                    } else {
+                        width
+                    };
+                    for bit in 0..width {
+                        if bit < width - keep {
+                            fixed_bits.insert(bits.len(), (start >> (width - 1 - bit)) & 1 == 1);
+                            bits.push(0);
+                        } else {
+                            bits.push(destination);
+                            destination += 1;
+                        }
+                    }
+                }
+                (output, bits)
+            }
             _ => return Err(invalid("Invalid registered tensor layout")),
         };
         let log_output = shape_bits(&output_shape)?;
@@ -101,17 +137,33 @@ impl Layout {
         Ok(Self {
             output_shape,
             input_bits,
+            fixed_bits,
             log_input,
             log_output,
         })
     }
     pub fn input_index(&self, output: usize) -> usize {
-        self.input_bits.iter().fold(0, |index, bit| {
-            (index << 1) | ((output >> (self.log_output - 1 - bit)) & 1)
-        })
+        self.input_bits
+            .iter()
+            .enumerate()
+            .fold(0, |index, (coordinate, bit)| {
+                let value = self.fixed_bits.get(&coordinate).map_or_else(
+                    || (output >> (self.log_output - 1 - bit)) & 1,
+                    |b| usize::from(*b),
+                );
+                (index << 1) | value
+            })
     }
     fn input_point(&self, output: &[Fr]) -> Vec<Fr> {
-        self.input_bits.iter().map(|bit| output[*bit]).collect()
+        self.input_bits
+            .iter()
+            .enumerate()
+            .map(|(coordinate, bit)| {
+                self.fixed_bits
+                    .get(&coordinate)
+                    .map_or_else(|| output[*bit], |b| Fr::from(u64::from(*b)))
+            })
+            .collect()
     }
 }
 

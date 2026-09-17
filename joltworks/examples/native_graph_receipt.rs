@@ -77,6 +77,25 @@ mod enabled {
                 ],
                 vec![1, 2],
             ),
+            "row-gather" | "row-gather-wide" => {
+                let dictionary = if kind == "row-gather-wide" { 256 } else { 16 };
+                let logical = if kind == "row-gather-wide" { 251 } else { 13 };
+                (
+                    2,
+                    vec![
+                        NativeGraphNode::lookup(
+                            0,
+                            (0..dictionary)
+                                .map(|i| if i < logical { i } else { -1 })
+                                .collect(),
+                            2,
+                        ),
+                        NativeGraphNode::add(1, 1),
+                        NativeGraphNode::gather_rows(2, 3, 2),
+                    ],
+                    vec![4],
+                )
+            }
             "hidden-table" => (
                 2,
                 vec![
@@ -246,6 +265,8 @@ mod enabled {
         };
         let input_shapes = match kind {
             "hidden-table" => vec![vec![rows], vec![128]],
+            "row-gather" => vec![vec![rows, 1], vec![16, 8]],
+            "row-gather-wide" => vec![vec![rows, 1], vec![256, 1024]],
             "logical-mean" => vec![vec![rows, 1024]],
             "slice-concat" => vec![vec![rows, 64]],
             "layout" => vec![vec![rows, 1]],
@@ -279,6 +300,17 @@ mod enabled {
                     _ => 2470649,
                 })
                 .collect()];
+        }
+        if g.context.ends_with(b"/row-gather") || g.context.ends_with(b"/row-gather-wide") {
+            let dictionary = g.input_shapes[1][0];
+            let logical = if dictionary == 256 { 251 } else { 13 };
+            let count = g.input_shapes[1].iter().product::<usize>();
+            return vec![
+                (0..g.input_shapes[0][0])
+                    .map(|i| ((i * 7) % logical) as i32)
+                    .collect(),
+                (0..count).map(|i| (i % 65536) as i32 * 37 - 2000).collect(),
+            ];
         }
         if g.context.ends_with(b"/hidden-table") {
             return vec![
@@ -441,6 +473,19 @@ mod enabled {
             } else {
                 Sin { scale: 14 }.f(vec![&x])
             }
+            .data()
+            .to_vec()];
+        }
+        if g.context.ends_with(b"/row-gather") || g.context.ends_with(b"/row-gather-wide") {
+            let values = inputs(g);
+            let indices = Tensor::new(Some(&values[0]), &g.input_shapes[0]).unwrap();
+            let data = Tensor::new(Some(&values[1]), &g.input_shapes[1]).unwrap();
+            let twice = Add.f(vec![&data, &data]);
+            return vec![GatherSmall {
+                axis: 0,
+                dict_len: if g.input_shapes[1][0] == 256 { 251 } else { 13 },
+            }
+            .f(vec![&twice, &indices])
             .data()
             .to_vec()];
         }
@@ -624,7 +669,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table|division|sine|cosine ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table|division|sine|cosine|row-gather|row-gather-wide ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

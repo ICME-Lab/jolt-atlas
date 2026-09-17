@@ -49,6 +49,29 @@ mod enabled {
     fn graph(kind: &str, rows: usize) -> NativeGraph {
         assert!(rows >= 2 && rows.is_power_of_two());
         let (num_inputs, nodes, outputs) = match kind {
+            "layout" => (
+                1,
+                vec![
+                    NativeGraphNode::broadcast(0, vec![rows, 8]),
+                    NativeGraphNode::permute(1, vec![1, 0]),
+                    NativeGraphNode::reshape(2, vec![2, 4, rows]),
+                    NativeGraphNode::sum(3, vec![0, 1]),
+                    NativeGraphNode::reshape(4, vec![rows]),
+                ],
+                vec![1, 2, 3, 5],
+            ),
+            "rms-normalization" => (
+                3,
+                vec![
+                    NativeGraphNode::mean_of_squares(0, vec![1], 14),
+                    NativeGraphNode::add(3, 1),
+                    NativeGraphNode::rsqrt(4, 14),
+                    NativeGraphNode::broadcast(5, vec![rows, 8]),
+                    NativeGraphNode::mul(0, 6, 14),
+                    NativeGraphNode::mul(7, 2, 14),
+                ],
+                vec![3, 4, 5, 7, 8],
+            ),
             "rsqrt" => (
                 1,
                 vec![
@@ -166,6 +189,8 @@ mod enabled {
             _ => panic!("unknown fixture"),
         };
         let input_shapes = match kind {
+            "layout" => vec![vec![rows, 1]],
+            "rms-normalization" => vec![vec![rows, 8], vec![rows, 1], vec![rows, 8]],
             "matrix" => vec![vec![rows, 32], vec![32, rows]],
             "batched-matrix" => vec![vec![2, rows, 32], vec![2, 16, 32]],
             "sum" | "mean-squares" | "normalization" => vec![vec![rows, 8]; num_inputs],
@@ -179,6 +204,21 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/layout") {
+            return vec![(0..g.input_shapes[0][0])
+                .map(|i| i as i32 * 13 - 9)
+                .collect()];
+        }
+        if g.context.ends_with(b"/rms-normalization") {
+            let rows = g.input_shapes[0][0];
+            return vec![
+                (0..rows * 8)
+                    .map(|i| ((i * 37 + 11) % 65536) as i32 - 32768)
+                    .collect(),
+                vec![1; rows],
+                (0..rows * 8).map(|i| 16384 + (i % 32) as i32 * 3).collect(),
+            ];
+        }
         if g.context.ends_with(b"/rsqrt") {
             let values = [i32::MIN, -1, 0, 1, 2, 16384, 32768, i32::MAX];
             return vec![(0..g.input_shapes[0][0])
@@ -352,6 +392,23 @@ mod enabled {
                 }
                 .data()
                 .to_vec()
+            } else if let Some(layout) = &n.layout {
+                let mut x = Tensor::new(Some(&values[n.input]), &shapes[n.input]).unwrap();
+                match layout.kind {
+                    0 => x = x.expand(&layout.shape).unwrap(),
+                    1 => x.reshape(&layout.shape).unwrap(),
+                    2 => {
+                        let mut order = (0..layout.axes.len()).collect::<Vec<_>>();
+                        for (destination, axis) in layout.axes.iter().enumerate() {
+                            let source = order.iter().position(|a| a == axis).unwrap();
+                            x = x.move_axis(source, destination).unwrap();
+                            let moved = order.remove(source);
+                            order.insert(destination, moved);
+                        }
+                    }
+                    _ => panic!("unknown layout"),
+                }
+                x.data().to_vec()
             } else if let Some(scale) = n.rsqrt {
                 let x = Tensor::new(Some(&values[n.input]), &shapes[n.input]).unwrap();
                 Rsqrt {
@@ -381,7 +438,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

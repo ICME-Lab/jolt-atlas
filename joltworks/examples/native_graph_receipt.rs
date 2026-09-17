@@ -3,7 +3,7 @@
 mod enabled {
     use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
     use atlas_onnx_tracer::{
-        ops::{Add, MeanOfSquares, Mul, Op, Rsqrt, Sigmoid, Sub, Sum},
+        ops::{Add, GatherSmall, MeanOfSquares, Mul, Op, Rsqrt, Sigmoid, Sub, Sum},
         tensor::Tensor,
     };
     use joltworks::{
@@ -57,6 +57,14 @@ mod enabled {
             .unwrap();
         }
         let (num_inputs, nodes, outputs) = match kind {
+            "hidden-table" => (
+                2,
+                vec![
+                    NativeGraphNode::add(1, 1),
+                    NativeGraphNode::hidden_lookup(0, 2, 2),
+                ],
+                vec![3],
+            ),
             "logical-mean" => (
                 1,
                 vec![NativeGraphNode::mean_of_squares_with_count(
@@ -217,6 +225,7 @@ mod enabled {
             _ => panic!("unknown fixture"),
         };
         let input_shapes = match kind {
+            "hidden-table" => vec![vec![rows], vec![128]],
             "logical-mean" => vec![vec![rows, 1024]],
             "slice-concat" => vec![vec![rows, 64]],
             "layout" => vec![vec![rows, 1]],
@@ -234,6 +243,14 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/hidden-table") {
+            return vec![
+                (0..g.input_shapes[0][0])
+                    .map(|i| ((i * 17) % 128) as i32)
+                    .collect(),
+                (0..128).map(|i| i * 37 - 2000).collect(),
+            ];
+        }
         if g.context.ends_with(b"/logical-mean") {
             let count = g.input_shapes[0].iter().product::<usize>();
             return vec![(0..count)
@@ -365,6 +382,19 @@ mod enabled {
         inputs
     }
     fn reference(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/hidden-table") {
+            let values = inputs(g);
+            let indices = Tensor::new(Some(&values[0]), &g.input_shapes[0]).unwrap();
+            let data = Tensor::new(Some(&values[1]), &[128]).unwrap();
+            let twice = Add.f(vec![&data, &data]);
+            return vec![GatherSmall {
+                axis: 0,
+                dict_len: 128,
+            }
+            .f(vec![&twice, &indices])
+            .data()
+            .to_vec()];
+        }
         if g.context.ends_with(b"/slice-concat") {
             let values = inputs(g);
             let x = Tensor::new(Some(&values[0]), &g.input_shapes[0]).unwrap();
@@ -532,7 +562,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

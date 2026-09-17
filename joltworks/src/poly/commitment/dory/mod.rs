@@ -42,6 +42,8 @@ pub mod native_mul;
 pub mod native_opening;
 #[cfg(feature = "zk")]
 mod native_reduce;
+#[cfg(feature = "zk")]
+mod native_rsqrt;
 mod one_hot_commit;
 mod par_routines;
 mod sparse_rlc;

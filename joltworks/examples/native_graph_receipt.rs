@@ -3,7 +3,10 @@
 mod enabled {
     use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
     use atlas_onnx_tracer::{
-        ops::{Add, GatherSmall, MeanOfSquares, Mul, Op, Rsqrt, Sigmoid, Sub, Sum},
+        ops::{
+            Add, Cos, GatherSmall, MeanOfSquares, Mul, Op, Rsqrt, ScalarConstDiv, Sigmoid, Sin,
+            Sub, Sum,
+        },
         tensor::Tensor,
     };
     use joltworks::{
@@ -48,6 +51,15 @@ mod enabled {
     }
     fn graph(kind: &str, rows: usize) -> NativeGraph {
         assert!(rows >= 2 && rows.is_power_of_two());
+        if matches!(kind, "sine" | "cosine") {
+            return NativeGraph::trig(
+                format!("native tensor graph fixture/{kind}").into_bytes(),
+                vec![rows],
+                14,
+                kind == "cosine",
+            )
+            .unwrap();
+        }
         if kind == "softmax" {
             return NativeGraph::softmax(
                 format!("native tensor graph fixture/{kind}").into_bytes(),
@@ -57,6 +69,14 @@ mod enabled {
             .unwrap();
         }
         let (num_inputs, nodes, outputs) = match kind {
+            "division" => (
+                1,
+                vec![
+                    NativeGraphNode::div_floor(0, 2470649),
+                    NativeGraphNode::rem_euclid(0, 2470649),
+                ],
+                vec![1, 2],
+            ),
             "hidden-table" => (
                 2,
                 vec![
@@ -243,6 +263,23 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if [b"/division".as_slice(), b"/sine", b"/cosine"]
+            .iter()
+            .any(|suffix| g.context.ends_with(suffix))
+        {
+            return vec![(0..g.input_shapes[0][0])
+                .map(|i| match i % 8 {
+                    0 => i32::MIN,
+                    1 => i32::MAX,
+                    2 => -2470650,
+                    3 => -2470649,
+                    4 => -1,
+                    5 => 0,
+                    6 => 2470648,
+                    _ => 2470649,
+                })
+                .collect()];
+        }
         if g.context.ends_with(b"/hidden-table") {
             return vec![
                 (0..g.input_shapes[0][0])
@@ -382,6 +419,31 @@ mod enabled {
         inputs
     }
     fn reference(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if [b"/division".as_slice(), b"/sine", b"/cosine"]
+            .iter()
+            .any(|suffix| g.context.ends_with(suffix))
+        {
+            let values = inputs(g);
+            let x = Tensor::new(Some(&values[0]), &g.input_shapes[0]).unwrap();
+            if g.context.ends_with(b"/division") {
+                return vec![
+                    ScalarConstDiv { divisor: 2470649 }
+                        .f(vec![&x])
+                        .data()
+                        .to_vec(),
+                    atlas_onnx_tracer::tensor::ops::nonlinearities::const_rem(&x, 2470649)
+                        .data()
+                        .to_vec(),
+                ];
+            }
+            return vec![if g.context.ends_with(b"/cosine") {
+                Cos { scale: 14 }.f(vec![&x])
+            } else {
+                Sin { scale: 14 }.f(vec![&x])
+            }
+            .data()
+            .to_vec()];
+        }
         if g.context.ends_with(b"/hidden-table") {
             let values = inputs(g);
             let indices = Tensor::new(Some(&values[0]), &g.input_shapes[0]).unwrap();
@@ -562,7 +624,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table|division|sine|cosine ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

@@ -461,4 +461,88 @@ mod tests {
         changed.blindfold.az_r += Fr::from(1u64);
         assert!(changed.verify(&statement, &vp, &gens).is_err());
     }
+    #[test]
+    fn native_opening_proves_dense_and_sparse_at_public_boolean_coordinates() {
+        let setup = DoryScheme::setup_prover(8);
+        let vp = DoryScheme::setup_verifier(&setup);
+        let gens = DoryScheme::pedersen_generators(&setup, 16);
+        let dense = CommittedPoly::DivNodeQuotient(0);
+        let sparse = CommittedPoly::DivNodeQuotient(1);
+        let polynomials = BTreeMap::from([
+            (
+                dense,
+                MultilinearPolynomial::from((0..16).map(|i| i * 7 - 31).collect::<Vec<i32>>()),
+            ),
+            (
+                sparse,
+                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    vec![Some(0), Some(2), None, Some(1)],
+                    4,
+                )),
+            ),
+        ]);
+        for point in [
+            [0u64, 0, 0, 0],
+            [1, 0, 1, 0],
+            [0, 1, 7, 0],
+            [2, 3, 0, 5],
+            [1, 1, 1, 1],
+        ] {
+            let point = point.into_iter().map(Fr::from).collect::<Vec<_>>();
+            let mut commitments = BTreeMap::new();
+            let mut hints = BTreeMap::new();
+            for (id, poly) in &polynomials {
+                let (c, h) = DoryScheme::commit_zk(poly, &setup);
+                commitments.insert(*id, c);
+                hints.insert(*id, h);
+            }
+            let groups = vec![
+                OpeningGroup {
+                    polynomials: vec![dense],
+                    source: SumcheckId::NodeExecution(0),
+                    point: point.clone(),
+                    address_variables: None,
+                },
+                OpeningGroup {
+                    polynomials: vec![sparse],
+                    source: SumcheckId::NodeExecution(1),
+                    point,
+                    address_variables: Some(2),
+                },
+            ];
+            let mut claim_blinds = BTreeMap::new();
+            let mut claim_commitments = BTreeMap::new();
+            for g in &groups {
+                for p in &g.polynomials {
+                    let id = OpeningId::new(*p, g.source);
+                    let value = polynomials[p].evaluate(&g.point);
+                    let blind = Fr::random(&mut rand::thread_rng());
+                    claim_blinds.insert(id, blind);
+                    claim_commitments.insert(id, gens.commit(&[value], &blind));
+                }
+            }
+            let statement = NativeOpeningStatement {
+                context: b"public boolean coordinates".to_vec(),
+                commitments,
+                groups,
+                claim_commitments,
+            };
+            let proof = NativeOpeningProof::prove(
+                &statement,
+                &polynomials,
+                hints,
+                &claim_blinds,
+                &setup,
+                &gens,
+            )
+            .unwrap();
+            let mut bytes = vec![];
+            proof.serialize_compressed(&mut bytes).unwrap();
+            let proof = NativeOpeningProof::deserialize_compressed(bytes.as_slice()).unwrap();
+            proof.verify(&statement, &vp, &gens).unwrap();
+            let mut wrong = statement.clone();
+            wrong.groups[0].point[0] += Fr::from(1u64);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        }
+    }
 }

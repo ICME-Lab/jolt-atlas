@@ -3995,6 +3995,10 @@ mod tests {
         let vp = DoryScheme::setup_verifier(&pp);
         let gens = DoryScheme::pedersen_generators(&pp, 16);
         for (shape, axis, start, len) in [
+            (vec![2, 4, 8], 1, 0, 2),
+            (vec![2, 4, 8], 2, 0, 4),
+            (vec![2, 4, 8], 0, 0, 1),
+            (vec![32], 0, 10, 1),
             (vec![2, 4, 8], 1, 2, 2),
             (vec![2, 4, 8], 2, 4, 4),
             (vec![2, 4, 8], 0, 1, 1),

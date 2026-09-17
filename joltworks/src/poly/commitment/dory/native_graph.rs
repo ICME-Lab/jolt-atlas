@@ -10,6 +10,7 @@ use super::{
     native_lookup::Lookup,
     native_mul::{MulRegistration, NativeMulWitness},
     native_reduce::{shape_bits, Reduction, ReductionRegistration, ReductionWitness},
+    native_rsqrt::{RsqrtRegistration, RsqrtWitness},
     DoryCommitment, DoryHint, DoryProof, DoryProverSetup, DoryScheme, DoryVerifierSetup,
 };
 use crate::{
@@ -94,11 +95,13 @@ pub struct NativeGraphNode {
     pub lookup: Option<NativeGraphLookup>,
     pub reduce: Option<NativeGraphReduce>,
     pub einsum: Option<NativeGraphEinsum>,
+    pub rsqrt: Option<u8>,
 }
 impl NativeGraphNode {
     pub fn mul(left: usize, right: usize, shift: u8) -> Self {
         Self {
             input: left,
+            rsqrt: None,
             einsum: None,
             mul: Some(NativeGraphMul { right, shift }),
             add: None,
@@ -109,6 +112,7 @@ impl NativeGraphNode {
     pub fn add(left: usize, right: usize) -> Self {
         Self {
             input: left,
+            rsqrt: None,
             einsum: None,
             mul: None,
             lookup: None,
@@ -122,6 +126,7 @@ impl NativeGraphNode {
     pub fn sub(left: usize, right: usize) -> Self {
         Self {
             input: left,
+            rsqrt: None,
             einsum: None,
             mul: None,
             lookup: None,
@@ -135,6 +140,7 @@ impl NativeGraphNode {
     pub fn sum(input: usize, axes: Vec<usize>) -> Self {
         Self {
             input,
+            rsqrt: None,
             einsum: None,
             mul: None,
             add: None,
@@ -148,6 +154,7 @@ impl NativeGraphNode {
     pub fn mean_of_squares(input: usize, axes: Vec<usize>, scale: u8) -> Self {
         Self {
             input,
+            rsqrt: None,
             einsum: None,
             mul: None,
             add: None,
@@ -161,6 +168,7 @@ impl NativeGraphNode {
     pub fn lookup(input: usize, table: Vec<i32>, log_chunk: u8) -> Self {
         Self {
             input,
+            rsqrt: None,
             einsum: None,
             mul: None,
             add: None,
@@ -178,6 +186,18 @@ impl NativeGraphNode {
         node.lookup.as_mut().unwrap().clamp_lower = Some(lower);
         node
     }
+    /// Exact Atlas reciprocal square root for a registered scale in 0..=20.
+    pub fn rsqrt(input: usize, scale: u8) -> Self {
+        Self {
+            input,
+            mul: None,
+            add: None,
+            lookup: None,
+            reduce: None,
+            einsum: None,
+            rsqrt: Some(scale),
+        }
+    }
     /// Bounds are signed bit widths. Their sum plus the contraction length
     /// in bits must be at most 64, proving that every partial sum fits i64.
     pub fn einsum(
@@ -193,6 +213,7 @@ impl NativeGraphNode {
             add: None,
             lookup: None,
             reduce: None,
+            rsqrt: None,
             einsum: Some(NativeGraphEinsum {
                 right,
                 equation: equation.into(),
@@ -276,8 +297,9 @@ impl NativeGraph {
                 &node.add,
                 &node.reduce,
                 &node.einsum,
+                &node.rsqrt,
             ) {
-                (Some(m), None, None, None, None)
+                (Some(m), None, None, None, None, None)
                     if m.right < output
                         && (1..=30).contains(&m.shift)
                         && shapes[m.right] == *shape =>
@@ -285,7 +307,7 @@ impl NativeGraph {
                     consumed.insert(m.right);
                     shape.clone()
                 }
-                (None, Some(l), None, None, None)
+                (None, Some(l), None, None, None, None)
                     if l.table.len() >= 2
                         && l.table.len().is_power_of_two()
                         && l.table.len().ilog2() <= 31
@@ -296,16 +318,16 @@ impl NativeGraph {
                 {
                     shape.clone()
                 }
-                (None, None, Some(a), None, None)
+                (None, None, Some(a), None, None, None)
                     if a.right < output && shapes[a.right] == *shape =>
                 {
                     consumed.insert(a.right);
                     shape.clone()
                 }
-                (None, None, None, Some(r), None) => {
+                (None, None, None, Some(r), None, None) => {
                     Reduction::new(shape, &r.axes, r.mean_scale)?.output_shape
                 }
-                (None, None, None, None, Some(e)) if e.right < output => {
+                (None, None, None, None, Some(e), None) if e.right < output => {
                     consumed.insert(e.right);
                     Contraction::new(
                         &e.equation,
@@ -315,6 +337,7 @@ impl NativeGraph {
                     )?
                     .output_shape
                 }
+                (None, None, None, None, None, Some(scale)) if *scale <= 20 => shape.clone(),
                 _ => {
                     return Err(invalid(
                         "Exactly one supported operator with compatible shapes is required",
@@ -434,6 +457,24 @@ impl NativeGraph {
             .unwrap(),
         }
     }
+    fn reciprocal_square_root(&self, i: usize) -> RsqrtRegistration {
+        let node = &self.nodes[i];
+        let aux = self.tensor_count() + 4 * i;
+        RsqrtRegistration {
+            tensors: [
+                tensor(node.input),
+                tensor(self.num_inputs() + i),
+                tensor(aux),
+                tensor(aux + 1),
+                tensor(aux + 2),
+                tensor(aux + 3),
+            ],
+            scale: node.rsqrt.unwrap(),
+            initial: SumcheckId::NodeExecution(8 * i),
+            final_stage: SumcheckId::NodeExecution(8 * i + 1),
+            namespace: 7 * i,
+        }
+    }
     fn lookup_clamp(&self, i: usize) -> Option<ClampedLookupRegistration> {
         let node = &self.nodes[i];
         let l = node.lookup.as_ref()?;
@@ -491,6 +532,10 @@ impl NativeGraph {
                 keys.extend(self.contraction(i, &shapes).keys());
             } else if node.reduce.is_some() {
                 keys.extend(self.reduction(i, &shapes[node.input]).keys());
+            } else if node.rsqrt.is_some() {
+                let registration = self.reciprocal_square_root(i);
+                keys.extend(registration.tensors);
+                keys.extend(registration.indicator_keys());
             } else {
                 let lookup = self.lookup(i);
                 keys.extend((0..lookup.params.instruction_d).map(|d| lookup.committed_poly(d)));
@@ -523,7 +568,7 @@ impl NativeGraphStatement {
         Ok(())
     }
     fn transcript(&self) -> Blake2bTranscript {
-        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v5");
+        let mut t = Blake2bTranscript::new(b"Atlas/private-tensor-graph/v6");
         t.append_serializable(self);
         t
     }
@@ -642,6 +687,24 @@ impl NativeGraphWitness {
                     }
                 }
                 arithmetic_ranges.insert(i, witness.range_values);
+            } else if let Some(scale) = node.rsqrt {
+                let registration = graph.reciprocal_square_root(i);
+                let witness = RsqrtWitness::new(&values[node.input], scale)?;
+                values.push(witness.output);
+                for (id, polynomial) in witness.polynomials {
+                    let id = match id {
+                        CommittedPoly::DivNodeQuotient(0) => continue,
+                        CommittedPoly::DivNodeQuotient(j) => registration.tensors[j],
+                        CommittedPoly::NodeOutputRaD(j, d) => {
+                            CommittedPoly::NodeOutputRaD(registration.namespace + j, d)
+                        }
+                        _ => return Err(invalid("Unexpected reciprocal square root polynomial")),
+                    };
+                    if polynomials.insert(id, polynomial).is_some() {
+                        return Err(invalid("Graph witness namespace collision"));
+                    }
+                }
+                arithmetic_ranges.insert(i, witness.range_values);
             } else {
                 let l = node.lookup.as_ref().unwrap();
                 let lookup = graph.lookup(i);
@@ -736,9 +799,10 @@ impl NativeGraphProof {
         super::native_opening::NativeOpeningProof::check_generators(setup, gens)?;
         if gens.message_generators.len() <= 3
             || statement.graph.nodes.iter().enumerate().any(|(i, n)| {
-                n.lookup.is_some()
-                    && statement.graph.lookup(i).params.instruction_d + 1
-                        >= gens.message_generators.len()
+                (n.rsqrt.is_some() && gens.message_generators.len() <= 5)
+                    || (n.lookup.is_some()
+                        && statement.graph.lookup(i).params.instruction_d + 1
+                            >= gens.message_generators.len())
             })
         {
             return Err(invalid(
@@ -839,6 +903,20 @@ impl NativeGraphProof {
                     &mut a,
                     &mut t,
                 )?);
+            } else if node.rsqrt.is_some() {
+                let values = arithmetic_ranges
+                    .get(&i)
+                    .ok_or_else(|| invalid("Missing reciprocal square root witness"))?;
+                if values.len() != 6 || values.iter().any(|v| v.len() != 1 << log_rows) {
+                    return Err(invalid("Invalid reciprocal square root range witness"));
+                }
+                provers.extend(graph.reciprocal_square_root(i).provers(
+                    log_rows,
+                    values,
+                    &polynomials,
+                    &mut a,
+                    &mut t,
+                ));
             } else {
                 let l = node.lookup.as_ref().unwrap();
                 if let Some(clamp) = graph.lookup_clamp(i) {
@@ -1016,6 +1094,12 @@ impl NativeGraphProof {
                     graph
                         .reduction(i, &shapes[node.input])
                         .verifiers(&mut a, &mut t),
+                );
+            } else if node.rsqrt.is_some() {
+                verifiers.extend(
+                    graph
+                        .reciprocal_square_root(i)
+                        .verifiers(log_rows, &mut a, &mut t),
                 );
             } else {
                 let l = node.lookup.as_ref().unwrap();
@@ -2537,6 +2621,274 @@ mod tests {
                 assert!(
                     proof.verify(&st, &vp, &gens).is_err(),
                     "accepted false clamp {raw:?}"
+                );
+            }
+        }
+    }
+
+    fn rsqrt_graph(n: usize, scale: u8) -> NativeGraph {
+        NativeGraph {
+            context: b"registered reciprocal square root".to_vec(),
+            input_shapes: vec![vec![n]],
+            nodes: vec![NativeGraphNode::rsqrt(0, scale)],
+            outputs: vec![1],
+        }
+    }
+
+    fn reference_rsqrt(x: i32, scale: u8) -> i32 {
+        if x <= 0 {
+            return 0;
+        }
+        let a = 1u128 << (3 * scale);
+        let (mut low, mut high) = (0u128, 1u128 << 31);
+        while low + 1 < high {
+            let mid = (low + high) / 2;
+            if (x as u128) * mid * mid <= a {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        low as i32
+    }
+
+    #[test]
+    fn native_graph_rsqrt_matches_atlas_and_wide_integer_reference() {
+        use atlas_onnx_tracer::{
+            ops::{Op, Rsqrt},
+            tensor::Tensor,
+        };
+        let inputs = vec![
+            i32::MIN,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            3,
+            4,
+            7,
+            8,
+            9,
+            16,
+            32,
+            128,
+            512,
+            2048,
+            16383,
+            16384,
+            16385,
+            32767,
+            32768,
+            65535,
+            65536,
+            1048575,
+            1048576,
+            1048577,
+            1073741823,
+            1073741824,
+            1073741825,
+            i32::MAX - 1,
+            i32::MAX,
+            5,
+        ];
+        let x = Tensor::new(Some(&inputs), &[inputs.len()]).unwrap();
+        let pp = DoryScheme::setup_prover(13);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for scale in 0..=20 {
+            let expected = inputs
+                .iter()
+                .map(|x| reference_rsqrt(*x, scale))
+                .collect::<Vec<_>>();
+            let native = RsqrtWitness::new(&inputs, scale).unwrap();
+            assert_eq!(native.output, expected);
+            assert_eq!(
+                expected,
+                Rsqrt {
+                    scale: i32::from(scale)
+                }
+                .f(vec![&x])
+                .data()
+            );
+            if ![0, 7, 14, 20].contains(&scale) {
+                continue;
+            }
+            let (st, wi) = NativeGraphWitness::commit(
+                rsqrt_graph(inputs.len(), scale),
+                vec![inputs.clone()],
+                &pp,
+            )
+            .unwrap();
+            assert_eq!(wi.outputs()[0], expected);
+            let proof = NativeGraphProof::prove(&st, wi, &pp, &gens).unwrap();
+            let mut bytes = vec![];
+            proof.serialize_compressed(&mut bytes).unwrap();
+            let proof = NativeGraphProof::deserialize_compressed(bytes.as_slice()).unwrap();
+            proof.verify(&st, &vp, &gens).unwrap();
+            let mut wrong = st.clone();
+            wrong.graph.nodes[0].rsqrt = Some(scale + 1);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong.graph.context.push(1);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+            let mut wrong = st.clone();
+            wrong
+                .commitments
+                .remove(&st.graph.reciprocal_square_root(0).tensors[4]);
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        }
+        assert!(rsqrt_graph(8, 21).tensor_shapes().is_err());
+        assert!(RsqrtWitness::new(&[1, 2], 21).is_err());
+        let (st, wi) = NativeGraphWitness::commit(rsqrt_graph(1, 14), vec![vec![1]], &pp).unwrap();
+        let narrow = DoryScheme::pedersen_generators(&pp, 4);
+        assert!(NativeGraphProof::prove(&st, wi, &pp, &narrow).is_err());
+    }
+
+    #[test]
+    fn native_graph_rsqrt_consumes_hidden_reduction_and_proves_scalar() {
+        use atlas_onnx_tracer::{
+            ops::{MeanOfSquares, Op, Rsqrt},
+            tensor::Tensor,
+        };
+        let scale = 14;
+        let input = vec![-32768, -16384, -1, 0, 1, 8192, 16384, 32768];
+        let x = Tensor::new(Some(&input), &[8]).unwrap();
+        let mean = MeanOfSquares {
+            axes: vec![0],
+            scale,
+            count: 8,
+            padded_count: 8,
+        }
+        .f(vec![&x]);
+        let result = Rsqrt { scale }.f(vec![&mean]);
+        let g = NativeGraph {
+            context: b"hidden mean and reciprocal square root".to_vec(),
+            input_shapes: vec![vec![8]],
+            nodes: vec![
+                NativeGraphNode::mean_of_squares(0, vec![0], scale as u8),
+                NativeGraphNode::rsqrt(1, scale as u8),
+            ],
+            outputs: vec![1, 2],
+        };
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let (st, wi) = NativeGraphWitness::commit(g, vec![input], &pp).unwrap();
+        assert_eq!(wi.outputs()[0], mean.data());
+        assert_eq!(wi.outputs()[1], result.data());
+        NativeGraphProof::prove(&st, wi, &pp, &gens)
+            .unwrap()
+            .verify(&st, &vp, &gens)
+            .unwrap();
+        for x in [i32::MIN, 0, 1, i32::MAX] {
+            let (st, wi) =
+                NativeGraphWitness::commit(rsqrt_graph(1, scale as u8), vec![vec![x]], &pp)
+                    .unwrap();
+            assert_eq!(wi.outputs()[0], vec![reference_rsqrt(x, scale as u8)]);
+            NativeGraphProof::prove(&st, wi, &pp, &gens)
+                .unwrap()
+                .verify(&st, &vp, &gens)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn native_graph_rsqrt_rejects_valid_consumer_for_other_hidden_values() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let (other, ow) =
+            NativeGraphWitness::commit(rsqrt_graph(8, 14), vec![vec![4; 8]], &pp).unwrap();
+        NativeGraphProof::prove(&other, ow, &pp, &gens)
+            .unwrap()
+            .verify(&other, &vp, &gens)
+            .unwrap();
+        let g = NativeGraph {
+            context: b"bind reciprocal square root to actual producer".to_vec(),
+            input_shapes: vec![vec![8]],
+            nodes: vec![NativeGraphNode::sub(0, 0), NativeGraphNode::rsqrt(1, 14)],
+            outputs: vec![2],
+        };
+        let (mut st, mut wi) = NativeGraphWitness::commit(g, vec![vec![7; 8]], &pp).unwrap();
+        let reg = st.graph.reciprocal_square_root(1);
+        let alternate = RsqrtWitness::new(&[4; 8], 14).unwrap();
+        for (id, p) in alternate.polynomials {
+            let id = match id {
+                CommittedPoly::DivNodeQuotient(0) | CommittedPoly::NodeOutputRaD(0, _) => continue,
+                CommittedPoly::DivNodeQuotient(j) => reg.tensors[j],
+                CommittedPoly::NodeOutputRaD(j, d) => {
+                    CommittedPoly::NodeOutputRaD(reg.namespace + j, d)
+                }
+                _ => panic!("unexpected reciprocal square root polynomial"),
+            };
+            let (c, h) = DoryScheme::commit_zk(&p, &pp);
+            st.commitments.insert(id, c);
+            wi.hints.insert(id, h);
+            wi.polynomials.insert(id, p);
+        }
+        wi.arithmetic_ranges.get_mut(&1).unwrap()[1..]
+            .clone_from_slice(&alternate.range_values[1..]);
+        if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+            assert!(proof.verify(&st, &vp, &gens).is_err());
+        }
+    }
+
+    #[test]
+    fn native_graph_rsqrt_rejects_consistent_false_roots_and_ranges() {
+        use super::super::native_rsqrt::ranges;
+        let pp = DoryScheme::setup_prover(9);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        // x, y, positive, sign gap, lower gap, upper gap, at scale zero.
+        // Every column and its matching truncated range indicators are replaced.
+        // Several cases satisfy every identity and fail only a required range.
+        for raw in [
+            [4i128, 1, 1, 3, -3, 14],
+            [1, 0, 1, 0, 1, -1],
+            [1i128 << 31, 0, 1, (1i128 << 31) - 1, 1, (1i128 << 31) - 2],
+            [-(1i128 << 31) - 1, 0, 0, (1i128 << 31) + 1, 0, 0],
+            [5, 0, 2, 1, 1, 3],
+            [-1, 1, 0, 1, 0, 0],
+            [-1, 1, 1, -2, 2, -6],
+        ] {
+            let (mut st, mut wi) =
+                NativeGraphWitness::commit(rsqrt_graph(1, 0), vec![vec![1]], &pp).unwrap();
+            let reg = st.graph.reciprocal_square_root(0);
+            let mut values = vec![];
+            let mut replacements = vec![];
+            for r in ranges() {
+                let j = r.tensor;
+                let v = raw[j];
+                let field = if v < 0 {
+                    -Fr::from((-v) as u64)
+                } else {
+                    Fr::from(v as u64)
+                };
+                replacements.push((reg.tensors[j], MultilinearPolynomial::from(vec![field])));
+                let value = (v + i128::from(r.offset)) as u64;
+                values.push(vec![value]);
+                for d in 0..r.chunks() {
+                    replacements.push((
+                        CommittedPoly::NodeOutputRaD(reg.namespace + j, d),
+                        MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                            vec![Some(u16::from(r.digit(value, d)))],
+                            1 << r.chunk,
+                        )),
+                    ));
+                }
+            }
+            for (id, p) in replacements {
+                let (c, h) = DoryScheme::commit_zk(&p, &pp);
+                st.commitments.insert(id, c);
+                wi.hints.insert(id, h);
+                wi.polynomials.insert(id, p);
+            }
+            wi.arithmetic_ranges.insert(0, values);
+            if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+                assert!(
+                    proof.verify(&st, &vp, &gens).is_err(),
+                    "accepted false reciprocal root {raw:?}"
                 );
             }
         }

@@ -27,6 +27,8 @@
 #[cfg(feature = "zk")]
 pub mod equality;
 #[cfg(feature = "zk")]
+pub mod native_lookup;
+#[cfg(feature = "zk")]
 pub mod native_opening;
 mod one_hot_commit;
 mod par_routines;

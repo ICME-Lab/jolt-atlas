@@ -24,11 +24,17 @@
 //! sparsely in `O(nonzeros)` via [`DoryScheme::commit_one_hot`], bit-identical
 //! to the dense path so they still combine homomorphically.
 
+#[cfg(feature = "zk")]
+pub mod equality;
+#[cfg(feature = "zk")]
+pub mod native_opening;
 mod one_hot_commit;
 mod par_routines;
 mod sparse_rlc;
 mod transcript;
 mod types;
+#[cfg(feature = "zk")]
+mod zk;
 
 use par_routines::{ParG1Routines, ParG2Routines};
 
@@ -295,10 +301,16 @@ impl CommitmentScheme for DoryScheme {
         hints: Vec<Self::OpeningProofHint>,
         coeffs: &[Self::Field],
     ) -> Self::OpeningProofHint {
+        assert_eq!(hints.len(), coeffs.len());
+        let commit_blind = hints
+            .iter()
+            .zip(coeffs)
+            .map(|(hint, coefficient)| ArkFr(*coefficient) * hint.commit_blind)
+            .fold(<ArkFr as DoryField>::zero(), |sum, blind| sum + blind);
         let rows: Vec<Vec<ArkG1>> = hints.into_iter().map(|h| h.row_commitments).collect();
         DoryHint {
             row_commitments: sparse_rlc::combine_row_commitments(&rows, coeffs),
-            commit_blind: <ArkFr as DoryField>::zero(),
+            commit_blind,
         }
     }
 

@@ -858,7 +858,23 @@ impl NativeGraphWitness {
         inputs: Vec<Vec<i32>>,
         setup: &DoryProverSetup,
     ) -> Result<(NativeGraphStatement, Self), ProofVerifyError> {
+        Self::commit_with_public_inputs(graph, inputs, setup, &BTreeMap::new())
+    }
+    pub(super) fn commit_with_public_inputs(
+        graph: NativeGraph,
+        inputs: Vec<Vec<i32>>,
+        setup: &DoryProverSetup,
+        public: &BTreeMap<CommittedPoly, (DoryCommitment, DoryHint)>,
+    ) -> Result<(NativeGraphStatement, Self), ProofVerifyError> {
         graph.validate(setup.verifier.max_log_n)?;
+        if public
+            .keys()
+            .any(|id| !matches!(id, CommittedPoly::DivNodeQuotient(i) if *i < graph.num_inputs()))
+        {
+            return Err(invalid(
+                "Only registered public inputs may reuse commitments",
+            ));
+        }
         let shapes = graph.tensor_shapes()?;
         if inputs.len() != graph.num_inputs()
             || inputs
@@ -1106,7 +1122,10 @@ impl NativeGraphWitness {
         };
         let mut hints = BTreeMap::new();
         for (id, p) in &polynomials {
-            let (c, h) = DoryScheme::commit_zk(p, setup);
+            let (c, h) = public
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| DoryScheme::commit_zk(p, setup));
             statement.commitments.insert(*id, c);
             hints.insert(*id, h);
         }

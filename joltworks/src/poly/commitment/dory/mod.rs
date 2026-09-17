@@ -51,6 +51,8 @@ mod native_reciprocal;
 #[cfg(feature = "zk")]
 mod native_reduce;
 #[cfg(feature = "zk")]
+pub mod native_registration;
+#[cfg(feature = "zk")]
 mod native_rsqrt;
 mod one_hot_commit;
 mod par_routines;

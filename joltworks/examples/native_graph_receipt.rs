@@ -51,6 +51,14 @@ mod enabled {
     }
     fn graph(kind: &str, rows: usize) -> NativeGraph {
         assert!(rows >= 2 && rows.is_power_of_two());
+        if kind == "first-argmax" {
+            return joltworks::poly::commitment::dory::native_logic::first_argmax_with_count(
+                format!("native tensor graph fixture/{kind}").into_bytes(),
+                vec![rows, 32],
+                29,
+            )
+            .unwrap();
+        }
         if matches!(kind, "sine" | "cosine") {
             return NativeGraph::trig(
                 format!("native tensor graph fixture/{kind}").into_bytes(),
@@ -315,6 +323,21 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/first-argmax") {
+            return vec![(0..g.input_shapes[0][0] * 32)
+                .map(|i| {
+                    let row = i / 32;
+                    let column = i % 32;
+                    if row % 4 == 0 {
+                        i32::MIN
+                    } else if column == row % 32 || column == 31 {
+                        i32::MAX
+                    } else {
+                        -(column as i32)
+                    }
+                })
+                .collect()];
+        }
         if [b"/division".as_slice(), b"/sine", b"/cosine"]
             .iter()
             .any(|suffix| g.context.ends_with(suffix))
@@ -505,6 +528,16 @@ mod enabled {
         inputs
     }
     fn reference(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/first-argmax") {
+            return vec![inputs(g)[0]
+                .chunks(32)
+                .map(|row| {
+                    let maximum = row[..29].iter().max().unwrap();
+                    row[..29].iter().position(|x| x == maximum).unwrap() as i32
+                })
+                .collect()];
+        }
+
         if [b"/division".as_slice(), b"/sine", b"/cosine"]
             .iter()
             .any(|suffix| g.context.ends_with(suffix))
@@ -752,7 +785,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table|division|sine|cosine|row-gather|row-gather-wide|select|boolean-and|checked-neg|finite-select ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table|division|sine|cosine|row-gather|row-gather-wide|select|boolean-and|checked-neg|finite-select|first-argmax ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

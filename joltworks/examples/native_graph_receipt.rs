@@ -51,6 +51,34 @@ mod enabled {
     }
     fn graph(kind: &str, rows: usize) -> NativeGraph {
         assert!(rows >= 2 && rows.is_power_of_two());
+        if kind == "greedy-sequence" {
+            use joltworks::poly::commitment::dory::native_generation::{
+                append_greedy_sequence, GreedySequenceRule,
+            };
+            assert!(rows >= 4);
+            let mut g = NativeGraph {
+                context: format!("native tensor graph fixture/{kind}").into_bytes(),
+                input_shapes: vec![vec![rows], vec![rows, 4]],
+                nodes: vec![],
+                outputs: vec![],
+            };
+            let selected = append_greedy_sequence(
+                &mut g,
+                0,
+                1,
+                GreedySequenceRule {
+                    prompt_length: rows - 3,
+                    score_start_position: 0,
+                    response_length: 2,
+                    maximum_new_tokens: 3,
+                    logical_vocabulary: 3,
+                    end_token: 2,
+                },
+            )
+            .unwrap();
+            g.outputs = vec![selected];
+            return g;
+        }
         if kind == "first-argmax" {
             return joltworks::poly::commitment::dory::native_logic::first_argmax_with_count(
                 format!("native tensor graph fixture/{kind}").into_bytes(),
@@ -323,6 +351,34 @@ mod enabled {
         }
     }
     fn inputs(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/greedy-sequence") {
+            let rows = g.input_shapes[0][0];
+            let mut tokens = vec![0; rows];
+            tokens[rows - 3] = 1;
+            tokens[rows - 2] = 2;
+            let scores = (0..rows)
+                .flat_map(|row| {
+                    let index = if row == rows - 4 {
+                        1
+                    } else if row == rows - 3 {
+                        2
+                    } else {
+                        0
+                    };
+                    (0..4).map(move |col| {
+                        if col == 3 {
+                            i32::MAX
+                        } else if col == index {
+                            9
+                        } else {
+                            0
+                        }
+                    })
+                })
+                .collect();
+            return vec![tokens, scores];
+        }
+
         if g.context.ends_with(b"/first-argmax") {
             return vec![(0..g.input_shapes[0][0] * 32)
                 .map(|i| {
@@ -528,6 +584,17 @@ mod enabled {
         inputs
     }
     fn reference(g: &NativeGraph) -> Vec<Vec<i32>> {
+        if g.context.ends_with(b"/greedy-sequence") {
+            return vec![inputs(g)[1]
+                [(g.input_shapes[0][0] - 4) * 4..(g.input_shapes[0][0] - 2) * 4]
+                .chunks_exact(4)
+                .map(|row| {
+                    let maximum = row[..3].iter().max().unwrap();
+                    row[..3].iter().position(|x| x == maximum).unwrap() as i32
+                })
+                .collect()];
+        }
+
         if g.context.ends_with(b"/first-argmax") {
             return vec![inputs(g)[0]
                 .chunks(32)
@@ -785,7 +852,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table|division|sine|cosine|row-gather|row-gather-wide|select|boolean-and|checked-neg|finite-select|first-argmax ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table|division|sine|cosine|row-gather|row-gather-wide|select|boolean-and|checked-neg|finite-select|first-argmax|greedy-sequence ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

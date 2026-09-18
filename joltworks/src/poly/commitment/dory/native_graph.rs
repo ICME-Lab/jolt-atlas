@@ -49,7 +49,8 @@ use crate::{
 use ark_bn254::Fr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::Zero;
-use common::CommittedPoly;
+use common::{parallel::par_enabled, CommittedPoly};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 type SumcheckProof = ZkSumcheckProof<Fr, Bn254Curve, Blake2bTranscript>;
@@ -1141,6 +1142,16 @@ impl NativeGraphWitness {
         setup: &DoryProverSetup,
         public: &BTreeMap<CommittedPoly, (DoryCommitment, DoryHint)>,
     ) -> Result<(NativeGraphStatement, Self), ProofVerifyError> {
+        Self::commit_batched(graph, inputs, setup, public, 8)
+    }
+    fn commit_batched(
+        graph: NativeGraph,
+        inputs: Vec<Vec<i32>>,
+        setup: &DoryProverSetup,
+        public: &BTreeMap<CommittedPoly, (DoryCommitment, DoryHint)>,
+        batch_size: usize,
+    ) -> Result<(NativeGraphStatement, Self), ProofVerifyError> {
+        assert!(batch_size > 0);
         graph.validate(setup.verifier.max_log_n)?;
         if public
             .keys()
@@ -1156,28 +1167,44 @@ impl NativeGraphWitness {
             commitments: BTreeMap::new(),
         };
         let aliases = statement.graph.range_commitment_aliases()?;
-        for (id, p) in &witness.polynomials {
-            // A representative is always earlier in the ordered polynomial map.
-            // Sample a fresh blind once per distinct registered indicator, then
-            // reuse that same commitment and opening hint for its known aliases.
-            let (c, h) = if let Some(representative) = aliases.get(id) {
-                let c = statement
-                    .commitments
-                    .get(representative)
-                    .ok_or_else(|| invalid("Missing range commitment representative"))?;
-                let h = witness
-                    .hints
-                    .get(representative)
-                    .ok_or_else(|| invalid("Missing range opening representative"))?;
-                (*c, h.clone())
-            } else {
-                public
-                    .get(id)
-                    .cloned()
-                    .unwrap_or_else(|| DoryScheme::commit_zk(p, setup))
-            };
-            statement.commitments.insert(*id, c);
-            witness.hints.insert(*id, h);
+        // Commit only distinct registered polynomials, with fresh independent
+        // blinds. Batches limit the number of simultaneous temporary tables.
+        let representatives = witness
+            .polynomials
+            .iter()
+            .filter(|(id, _)| !aliases.contains_key(*id))
+            .collect::<Vec<_>>();
+        for batch in representatives.chunks(batch_size) {
+            let commitments = batch
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|(id, polynomial)| {
+                    let (commitment, hint) = public
+                        .get(*id)
+                        .cloned()
+                        .unwrap_or_else(|| DoryScheme::commit_zk(polynomial, setup));
+                    (**id, commitment, hint)
+                })
+                .collect::<Vec<_>>();
+            for (id, commitment, hint) in commitments {
+                statement.commitments.insert(id, commitment);
+                witness.hints.insert(id, hint);
+            }
+        }
+        // Alias only the graph's registered identical range indicators. The
+        // ordered maps preserve commitment and transcript order.
+        for (id, representative) in aliases {
+            let commitment = *statement
+                .commitments
+                .get(&representative)
+                .ok_or_else(|| invalid("Missing range commitment representative"))?;
+            let hint = witness
+                .hints
+                .get(&representative)
+                .ok_or_else(|| invalid("Missing range opening representative"))?
+                .clone();
+            statement.commitments.insert(id, commitment);
+            witness.hints.insert(id, hint);
         }
         statement.validate(setup.verifier.max_log_n)?;
         Ok((statement, witness))
@@ -2088,6 +2115,111 @@ impl NativeGraphProof {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_graph_commit_batches_preserve_polynomials_public_inputs_and_fresh_blinds() {
+        use dory::primitives::arithmetic::Group as _;
+        let graph = NativeGraph {
+            context: b"commitment batch parity".to_vec(),
+            input_shapes: vec![vec![8]; 2],
+            nodes: vec![NativeGraphNode::mul(0, 1, 1), NativeGraphNode::add(2, 0)],
+            outputs: vec![3],
+        };
+        let inputs = vec![vec![-5, -2, 0, 7, 1, 2, 3, 4]; 2];
+        let setup = DoryScheme::setup_prover(11);
+        let generators = DoryScheme::pedersen_generators(&setup, 16);
+        let public = BTreeMap::from([(
+            tensor(0),
+            DoryScheme::commit(&MultilinearPolynomial::from(inputs[0].clone()), &setup),
+        )]);
+        for workers in [1, 2, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for disabled in [false, true] {
+                        let _guard = disabled.then(common::parallel::ParallelFlagGuard::disabled);
+                        let (serial, serial_witness) = NativeGraphWitness::commit_batched(
+                            graph.clone(),
+                            inputs.clone(),
+                            &setup,
+                            &public,
+                            1,
+                        )
+                        .unwrap();
+                        let (parallel, witness) = NativeGraphWitness::commit_batched(
+                            graph.clone(),
+                            inputs.clone(),
+                            &setup,
+                            &public,
+                            8,
+                        )
+                        .unwrap();
+                        assert!(serial.commitments.keys().eq(parallel.commitments.keys()));
+                        assert_eq!(serial.commitments[&tensor(0)], public[&tensor(0)].0);
+                        assert_eq!(parallel.commitments[&tensor(0)], public[&tensor(0)].0);
+                        assert_eq!(witness.hints[&tensor(0)], public[&tensor(0)].1);
+                        for (id, polynomial) in &witness.polynomials {
+                            let (plain, hint) = DoryScheme::commit(polynomial, &setup);
+                            for (statement, hints) in [
+                                (&serial, &serial_witness.hints),
+                                (&parallel, &witness.hints),
+                            ] {
+                                assert_eq!(hint.row_commitments, hints[id].row_commitments);
+                                assert_eq!(
+                                    statement.commitments[id].0,
+                                    plain.0 + setup.prover.ht.scale(&hints[id].commit_blind)
+                                );
+                            }
+                            if *id != tensor(0) {
+                                assert_ne!(serial.commitments[id], parallel.commitments[id]);
+                            }
+                        }
+                        for (alias, representative) in graph.range_commitment_aliases().unwrap() {
+                            assert_eq!(
+                                parallel.commitments[&alias],
+                                parallel.commitments[&representative]
+                            );
+                            assert_eq!(witness.hints[&alias], witness.hints[&representative]);
+                        }
+                        let proof =
+                            NativeGraphProof::prove(&parallel, witness, &setup, &generators)
+                                .unwrap();
+                        proof
+                            .verify(&parallel, &DoryScheme::setup_verifier(&setup), &generators)
+                            .unwrap();
+                    }
+                });
+        }
+    }
+
+    #[test]
+    #[ignore = "Isolated witness and commitment phase, not a complete native proof"]
+    fn native_graph_commit_batch_benchmark() {
+        let batch: usize = std::env::var("NATIVE_COMMIT_BATCH")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(batch == 1 || batch == 8);
+        let graph = NativeGraph {
+            context: b"commitment batch benchmark".to_vec(),
+            input_shapes: vec![vec![64]; 2],
+            nodes: (0..64).map(|_| NativeGraphNode::mul(0, 1, 1)).collect(),
+            outputs: vec![65],
+        };
+        let inputs = vec![(0..64).map(|i| i - 32).collect::<Vec<i32>>(); 2];
+        let aliases = graph.range_commitment_aliases().unwrap();
+        let setup = DoryScheme::setup_prover(14);
+        let started = std::time::Instant::now();
+        let (statement, witness) =
+            NativeGraphWitness::commit_batched(graph, inputs, &setup, &BTreeMap::new(), batch)
+                .unwrap();
+        let seconds = started.elapsed().as_secs_f64();
+        println!("COMMIT_BENCH {{\"batch\":{},\"seconds\":{},\"workers\":{},\"distinct_commitments\":{},\"complete_proof\":false}}",
+            batch, seconds, rayon::current_num_threads(), statement.commitments.len()-aliases.len());
+        std::hint::black_box((statement, witness));
+    }
+
     #[test]
     fn native_graph_shares_only_registered_range_indicators_with_fresh_blinds() {
         let graph = NativeGraph {

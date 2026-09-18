@@ -25,12 +25,14 @@ use crate::{
 };
 use ark_bn254::Fr;
 use ark_std::Zero;
+use rayon::prelude::*;
 
 #[derive(Clone)]
 pub(super) struct HiddenReadParams {
     lookup: Lookup,
     table: OpeningId,
     r: Vec<Fr>,
+    columns: Vec<Fr>,
     gamma: Fr,
     claim: Fr,
 }
@@ -38,6 +40,7 @@ impl HiddenReadParams {
     pub fn new(
         lookup: Lookup,
         table: OpeningId,
+        columns: Vec<Fr>,
         a: &dyn OpeningAccumulator<Fr>,
         t: &mut Blake2bTranscript,
     ) -> Self {
@@ -47,6 +50,7 @@ impl HiddenReadParams {
         Self {
             lookup,
             table,
+            columns,
             r,
             gamma,
             claim,
@@ -109,19 +113,42 @@ impl HiddenReadProver {
     pub fn new(
         params: HiddenReadParams,
         indices: &[usize],
-        table: MultilinearPolynomial<Fr>,
+        table: &MultilinearPolynomial<Fr>,
     ) -> Self {
-        assert_eq!(table.len(), 1 << params.lookup.log_k);
+        assert_eq!(
+            table.len(),
+            1 << (params.lookup.log_k + params.columns.len())
+        );
+        // Project trailing coordinates without copying or materializing the
+        // full table as field elements. Only one value per dictionary row remains.
+        let values = if params.columns.is_empty() {
+            table.clone()
+        } else {
+            let eq = EqPolynomial::<Fr>::evals(&params.columns);
+            let width = eq.len();
+            let projected = (0..1 << params.lookup.log_k)
+                .into_par_iter()
+                .map(|row| {
+                    eq.iter()
+                        .enumerate()
+                        .map(|(column, weight)| {
+                            table.get_scaled_coeff(row * width + column, *weight)
+                        })
+                        .sum::<Fr>()
+                })
+                .collect::<Vec<_>>();
+            MultilinearPolynomial::from(projected)
+        };
         assert_eq!(indices.len(), 1 << params.r.len());
         let eq = EqPolynomial::<Fr>::evals(&params.r);
-        let mut weights = vec![Fr::zero(); table.len()];
+        let mut weights = vec![Fr::zero(); values.len()];
         for (index, weight) in indices.iter().zip(eq) {
             weights[*index] += weight;
         }
         Self {
             identity: IdentityPolynomial::new(params.lookup.log_k),
             params,
-            values: table,
+            values,
             weights: MultilinearPolynomial::from(weights),
         }
     }
@@ -160,7 +187,12 @@ impl SumcheckInstanceProver<Fr, Blake2bTranscript> for HiddenReadProver {
             [point.as_slice(), self.params.r.as_slice()].concat().into(),
             self.weights.final_claim(),
         );
-        a.append_dense(t, self.params.table, point, self.values.final_claim());
+        a.append_dense(
+            t,
+            self.params.table,
+            [point.as_slice(), self.params.columns.as_slice()].concat(),
+            self.values.final_claim(),
+        );
     }
 }
 
@@ -190,6 +222,10 @@ impl SumcheckInstanceVerifier<Fr, Blake2bTranscript> for HiddenReadVerifier {
             self.0.ra(),
             [point.as_slice(), self.0.r.as_slice()].concat().into(),
         );
-        a.append_dense(t, self.0.table, point);
+        a.append_dense(
+            t,
+            self.0.table,
+            [point.as_slice(), self.0.columns.as_slice()].concat(),
+        );
     }
 }

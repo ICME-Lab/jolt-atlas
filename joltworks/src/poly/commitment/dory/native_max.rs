@@ -162,7 +162,7 @@ impl MaxRegistration {
     fn source(&self, j: usize) -> OpeningId {
         OpeningId::new(self.tensors[j], self.initial)
     }
-    fn ranges(&self) -> Vec<Range> {
+    pub(super) fn ranges(&self) -> Vec<Range> {
         ranges(self.layout.bits)
             .into_iter()
             .map(|mut r| {

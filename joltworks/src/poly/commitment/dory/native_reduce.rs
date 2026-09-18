@@ -138,7 +138,7 @@ impl Reduction {
             (out << 1) | ((index >> (self.log_input - 1 - bit)) & 1)
         })
     }
-    fn ranges(&self) -> Vec<Range> {
+    pub(super) fn ranges(&self) -> Vec<Range> {
         let mut ranges = vec![
             Range::new(0, 32, 1 << 31),
             Range::new(1, 32, 1 << 31),
@@ -263,7 +263,7 @@ impl ReductionRegistration {
     fn source(&self, i: usize) -> OpeningId {
         OpeningId::new(self.tensors[i], self.initial)
     }
-    fn ranges(&self) -> Vec<Range> {
+    pub(super) fn ranges(&self) -> Vec<Range> {
         self.reduction
             .ranges()
             .into_iter()

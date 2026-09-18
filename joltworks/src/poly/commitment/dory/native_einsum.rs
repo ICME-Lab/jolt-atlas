@@ -436,7 +436,7 @@ impl ContractionRegistration {
     fn source(&self, i: usize) -> OpeningId {
         OpeningId::new(self.tensors[i], self.initial[i.min(2)])
     }
-    fn ranges(&self) -> Vec<Range> {
+    pub(super) fn ranges(&self) -> Vec<Range> {
         self.contraction
             .ranges()
             .into_iter()

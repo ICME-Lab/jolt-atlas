@@ -20,6 +20,7 @@ use dory::primitives::serialization::{
     SerializationError as DorySerializationError, Validate as DoryValidate,
 };
 use dory::{ProverSetup, VerifierSetup};
+use std::sync::Arc;
 
 use crate::transcripts::{AppendToTranscript, Transcript};
 
@@ -76,8 +77,17 @@ pub struct DoryProof(pub ArkDoryProof);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DoryHint {
-    pub(crate) row_commitments: Vec<ArkG1>,
+    pub(crate) row_commitments: Arc<Vec<ArkG1>>,
     pub(crate) commit_blind: ArkFr,
+}
+
+impl DoryHint {
+    pub(crate) fn into_parts(self) -> (Vec<ArkG1>, ArkFr) {
+        (
+            Arc::unwrap_or_clone(self.row_commitments),
+            self.commit_blind,
+        )
+    }
 }
 
 // -- Setups ------------------------------------------------------------------
@@ -199,5 +209,64 @@ impl CanonicalDeserialize for DoryProverSetup {
         )
         .map_err(map_err)?;
         Ok(Self::new(prover, verifier))
+    }
+}
+
+#[cfg(test)]
+mod shared_hint_tests {
+    use super::*;
+    use ark_bn254::{Fr, G1Projective};
+    use ark_ec::PrimeGroup;
+
+    #[test]
+    fn native_shared_hints_preserve_owned_and_borrowed_rows() {
+        let rows = vec![ArkG1(G1Projective::generator()); 16];
+        let hint = DoryHint {
+            row_commitments: rows.clone().into(),
+            commit_blind: ArkFr(Fr::from(7u64)),
+        };
+        let copied = hint.clone();
+        assert!(Arc::ptr_eq(&hint.row_commitments, &copied.row_commitments));
+        let (mut owned, blind) = copied.into_parts();
+        assert_eq!(owned, rows);
+        assert_eq!(blind, hint.commit_blind);
+        owned[0] = ArkG1(G1Projective::generator()).scale(&ArkFr(Fr::from(2u64)));
+        assert_eq!(hint.row_commitments.as_ref(), &rows);
+        let address = hint.row_commitments.as_ptr();
+        let (unique, _) = hint.into_parts();
+        assert_eq!(address, unique.as_ptr());
+        assert_eq!(unique, rows);
+    }
+
+    #[test]
+    #[ignore = "Isolated hint clone storage and time, not complete proof memory"]
+    fn native_shared_hints_benchmark() {
+        let mode = std::env::var("NATIVE_SHARED_HINT_MODE").unwrap();
+        assert!(mode == "copy" || mode == "share");
+        let hint = DoryHint {
+            row_commitments: vec![ArkG1(G1Projective::generator()); 8192].into(),
+            commit_blind: ArkFr(Fr::from(7u64)),
+        };
+        let start = std::time::Instant::now();
+        let copies = (0..512)
+            .map(|_| {
+                if mode == "copy" {
+                    DoryHint {
+                        row_commitments: hint.row_commitments.as_ref().clone().into(),
+                        commit_blind: hint.commit_blind,
+                    }
+                } else {
+                    hint.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        let seconds = start.elapsed().as_secs_f64();
+        let mut unique = std::collections::BTreeSet::new();
+        unique.insert(hint.row_commitments.as_ptr() as usize);
+        for copy in &copies {
+            unique.insert(copy.row_commitments.as_ptr() as usize);
+        }
+        println!("SHARED_HINT_BENCH {{\"mode\":\"{}\",\"seconds\":{},\"rows\":8192,\"clones\":512,\"unique_allocations\":{},\"allocated_row_bytes\":{},\"complete_proof\":false}}",mode,seconds,unique.len(),unique.len()*8192*std::mem::size_of::<ArkG1>());
+        std::hint::black_box(copies);
     }
 }

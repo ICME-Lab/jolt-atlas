@@ -371,6 +371,45 @@ impl NativeGraphWitness {
             },
         ))
     }
+
+    /// Open an original graph tensor to the same hidden evaluation required by
+    /// an external conversion proof. Its complete witness commitment must be
+    /// fixed before the derived evaluation point. The returned scalar and blind
+    /// are private conversion-prover inputs, not part of the public proof.
+    pub fn prove_tensor_boundary(
+        &self,
+        statement: &NativeGraphStatement,
+        context: &[u8],
+        tensor_id: usize,
+        conversion_commitment: [u8; 32],
+        setup: &DoryProverSetup,
+    ) -> Result<
+        (
+            super::native_boundary::NativeTensorBoundaryProof,
+            super::native_boundary::NativeBoundaryEvaluation,
+        ),
+        ProofVerifyError,
+    > {
+        let id = tensor(tensor_id);
+        let polynomial = self
+            .polynomials
+            .get(&id)
+            .ok_or_else(|| invalid("Missing original tensor witness"))?;
+        let hint = self
+            .hints
+            .get(&id)
+            .ok_or_else(|| invalid("Missing original tensor commitment hint"))?;
+        super::native_boundary::NativeTensorBoundaryProof::prove(
+            statement,
+            context,
+            tensor_id,
+            conversion_commitment,
+            polynomial,
+            hint.clone(),
+            setup,
+        )
+    }
+
     /// Prover output only, absent from the verifier's statement and proof.
     pub fn outputs(&self) -> &[Vec<i32>] {
         &self.outputs

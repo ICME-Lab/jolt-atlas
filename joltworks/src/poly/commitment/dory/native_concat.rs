@@ -127,7 +127,7 @@ pub(super) struct ConcatRegistration {
     pub layout: Concatenation,
 }
 impl ConcatRegistration {
-    fn ranges(&self) -> Vec<Range> {
+    pub(super) fn ranges(&self) -> Vec<Range> {
         (0..2)
             .map(|j| {
                 let mut r = Range::new(j, 32, 1 << 31);

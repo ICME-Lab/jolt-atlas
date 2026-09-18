@@ -190,7 +190,7 @@ impl MulRegistration {
     fn source(&self, i: usize) -> OpeningId {
         OpeningId::new(self.tensors[i], self.initial)
     }
-    fn ranges(&self, shift: u8) -> Vec<Range> {
+    pub(super) fn ranges(&self, shift: u8) -> Vec<Range> {
         ranges(shift)
             .into_iter()
             .map(|mut r| {
@@ -265,7 +265,7 @@ impl MulRegistration {
 }
 
 impl NativeMulStatement {
-    fn ranges(&self) -> Vec<Range> {
+    pub(super) fn ranges(&self) -> Vec<Range> {
         ranges(self.shift)
     }
     fn validate(&self, max_vars: usize) -> Result<(), ProofVerifyError> {

@@ -131,7 +131,7 @@ impl ClampedLookupRegistration {
     fn source(&self, i: usize) -> OpeningId {
         OpeningId::new(self.tensors[i], self.initial)
     }
-    fn ranges(&self) -> Vec<Range> {
+    pub(super) fn ranges(&self) -> Vec<Range> {
         ranges()
             .into_iter()
             .map(|mut r| {

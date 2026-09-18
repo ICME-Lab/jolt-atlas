@@ -973,6 +973,79 @@ impl NativeGraph {
             namespace: 7 * self.nodes.len() + i,
         }
     }
+    /// Repeated digit indicators of the same registered tensor may share one
+    /// hiding commitment. This map depends only on the graph, never on witness
+    /// values. Exact width, offset and digit layout must all match.
+    /// Every original range relation and opening remains in the proof.
+    pub fn range_commitment_aliases(
+        &self,
+    ) -> Result<BTreeMap<CommittedPoly, CommittedPoly>, ProofVerifyError> {
+        let shapes = self.tensor_shapes()?;
+        let mut descriptions = BTreeMap::new();
+        let mut representatives = BTreeMap::new();
+        for (i, node) in self.nodes.iter().enumerate() {
+            let ranges = if let Some(m) = &node.mul {
+                self.multiplication(i).ranges(m.shift)
+            } else if node.add.is_some() {
+                self.addition(i).ranges()
+            } else if node.einsum.is_some() {
+                self.contraction(i, &shapes).ranges()
+            } else if node.reduce.is_some() {
+                self.reduction(i, &shapes[node.input]).ranges()
+            } else if node.rsqrt.is_some() {
+                self.reciprocal_square_root(i).ranges()
+            } else if node.layout.is_some() {
+                vec![self.tensor_layout(i, &shapes[node.input]).range()]
+            } else if node.concat.is_some() {
+                self.concatenation(i, &shapes[node.input]).ranges()
+            } else if node.max.is_some() {
+                self.maximum(i, &shapes[node.input]).ranges()
+            } else if node.reciprocal.is_some() {
+                self.reciprocal(i).ranges()
+            } else if node.division.is_some() {
+                self.division(i).ranges()
+            } else {
+                let mut ranges: Vec<_> = self.hidden_table_range(i).into_iter().collect();
+                if let Some(clamp) = self.lookup_clamp(i) {
+                    ranges.extend(clamp.ranges());
+                }
+                ranges
+            };
+            for range in ranges {
+                let source = range
+                    .input
+                    .committed_poly()
+                    .ok_or_else(|| invalid("Range source must be a committed tensor"))?;
+                for digit in 0..range.chunks() {
+                    let id = CommittedPoly::NodeOutputRaD(range.namespace, digit);
+                    let description = (source, range.bits, range.chunk, range.offset, digit);
+                    if descriptions.insert(id, description).is_some() {
+                        return Err(invalid("Duplicate range indicator namespace"));
+                    }
+                    representatives
+                        .entry(description)
+                        .and_modify(|first: &mut CommittedPoly| *first = (*first).min(id))
+                        .or_insert(id);
+                }
+            }
+        }
+        Ok(descriptions
+            .into_iter()
+            .filter_map(|(id, description)| {
+                let representative = representatives[&description];
+                (id != representative).then_some((id, representative))
+            })
+            .collect())
+    }
+
+    /// Canonical commitment order derived from the registered graph alone.
+    /// A transport can omit these identifiers and reconstruct them after
+    /// checking the exact number of transmitted commitments.
+    pub fn commitment_keys(&self) -> Result<BTreeSet<CommittedPoly>, ProofVerifyError> {
+        self.tensor_shapes()?;
+        Ok(self.required_keys())
+    }
+
     fn required_keys(&self) -> BTreeSet<CommittedPoly> {
         let shapes = self.tensor_shapes().unwrap();
         let mut keys: BTreeSet<_> = (0..self.tensor_count()).map(tensor).collect();
@@ -1090,11 +1163,27 @@ impl NativeGraphWitness {
             graph,
             commitments: BTreeMap::new(),
         };
+        let aliases = statement.graph.range_commitment_aliases()?;
         for (id, p) in &witness.polynomials {
-            let (c, h) = public
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| DoryScheme::commit_zk(p, setup));
+            // A representative is always earlier in the ordered polynomial map.
+            // Sample a fresh blind once per distinct registered indicator, then
+            // reuse that same commitment and opening hint for its known aliases.
+            let (c, h) = if let Some(representative) = aliases.get(id) {
+                let c = statement
+                    .commitments
+                    .get(representative)
+                    .ok_or_else(|| invalid("Missing range commitment representative"))?;
+                let h = witness
+                    .hints
+                    .get(representative)
+                    .ok_or_else(|| invalid("Missing range opening representative"))?;
+                (*c, h.clone())
+            } else {
+                public
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| DoryScheme::commit_zk(p, setup))
+            };
             statement.commitments.insert(*id, c);
             witness.hints.insert(*id, h);
         }
@@ -1998,6 +2087,63 @@ impl NativeGraphProof {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_graph_shares_only_registered_range_indicators_with_fresh_blinds() {
+        let graph = NativeGraph {
+            context: b"shared registered ranges".to_vec(),
+            input_shapes: vec![vec![4]; 2],
+            nodes: vec![
+                NativeGraphNode::mul(0, 1, 1),
+                NativeGraphNode::add(2, 0),
+                NativeGraphNode::sub(3, 1),
+            ],
+            outputs: vec![4],
+        };
+        let aliases = graph.range_commitment_aliases().unwrap();
+        // Four repeated signed32 ranges, each with four byte indicators.
+        assert_eq!(aliases.len(), 16);
+        for (alias, representative) in &aliases {
+            assert!(representative < alias);
+            assert!(!aliases.contains_key(representative));
+        }
+        let setup = DoryScheme::setup_prover(10);
+        let generators = DoryScheme::pedersen_generators(&setup, 16);
+        let inputs = vec![vec![-5, -2, 0, 7]; 2];
+        let (first, witness) =
+            NativeGraphWitness::commit(graph.clone(), inputs.clone(), &setup).unwrap();
+        let (second, _) = NativeGraphWitness::commit(graph, inputs, &setup).unwrap();
+        for (alias, representative) in &aliases {
+            assert_eq!(first.commitments[alias], first.commitments[representative]);
+            assert_ne!(
+                first.commitments[representative],
+                second.commitments[representative]
+            );
+        }
+        // Equal private values in distinct registered tensors must not create
+        // an observable equality through commitment or randomness reuse.
+        for digit in 0..4 {
+            assert_ne!(
+                first.commitments[&CommittedPoly::NodeOutputRaD(0, digit)],
+                first.commitments[&CommittedPoly::NodeOutputRaD(1, digit)]
+            );
+        }
+        let proof = NativeGraphProof::prove(&first, witness, &setup, &generators).unwrap();
+        let mut bytes = vec![];
+        proof.serialize_compressed(&mut bytes).unwrap();
+        let proof = NativeGraphProof::deserialize_compressed(bytes.as_slice()).unwrap();
+        proof
+            .verify(&first, &DoryScheme::setup_verifier(&setup), &generators)
+            .unwrap();
+        let mut altered = first.clone();
+        let (&alias, _) = aliases.first_key_value().unwrap();
+        altered
+            .commitments
+            .insert(alias, second.commitments[&alias]);
+        assert!(proof
+            .verify(&altered, &DoryScheme::setup_verifier(&setup), &generators)
+            .is_err());
+    }
+
     use super::*;
 
     fn graph() -> NativeGraph {

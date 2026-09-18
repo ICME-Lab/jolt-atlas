@@ -74,6 +74,8 @@ use par_routines::{ParG1Routines, ParG2Routines};
 
 pub use sparse_rlc::SparseRlc;
 pub use types::{DoryCommitment, DoryHint, DoryProof, DoryProverSetup, DoryVerifierSetup};
+mod compact;
+pub use compact::CompactDoryCommitment;
 
 use std::borrow::Borrow;
 

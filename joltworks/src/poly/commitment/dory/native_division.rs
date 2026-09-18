@@ -102,7 +102,7 @@ pub(super) struct DivisionRegistration {
     pub namespace: usize,
 }
 impl DivisionRegistration {
-    fn ranges(&self) -> Vec<Range> {
+    pub(super) fn ranges(&self) -> Vec<Range> {
         ranges(self.divisor)
             .into_iter()
             .map(|mut r| {

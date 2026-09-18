@@ -5531,4 +5531,216 @@ mod tests {
             assert!(a.registered().verify(&proof, &forged, &gens).is_err());
         }
     }
+    fn logic_graph(inputs: usize, shape: Vec<usize>) -> NativeGraph {
+        NativeGraph {
+            context: b"exact integer logic".to_vec(),
+            input_shapes: vec![shape; inputs],
+            nodes: vec![],
+            outputs: vec![],
+        }
+    }
+    #[test]
+    fn native_graph_logic_select_matches_atlas_at_signed_endpoints_and_scalars() {
+        use super::super::native_logic::append_select;
+        use atlas_onnx_tracer::{
+            ops::{Iff, Op},
+            tensor::Tensor,
+        };
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for (shape, mask, a, b) in [
+            (
+                vec![2, 4],
+                vec![0, 1, 0, 1, 0, 1, 0, 1],
+                vec![i32::MIN, i32::MIN, i32::MAX, i32::MAX, -7, -7, 0, 1],
+                vec![i32::MAX, i32::MAX, i32::MIN, i32::MIN, 3, 3, -1, 0],
+            ),
+            (vec![], vec![0], vec![i32::MIN], vec![i32::MAX]),
+            (vec![], vec![1], vec![i32::MIN], vec![i32::MAX]),
+        ] {
+            let mut g = logic_graph(3, shape.clone());
+            let output = append_select(&mut g, 0, 1, 2).unwrap();
+            g.outputs = vec![output];
+            let tensors = [mask.clone(), a.clone(), b.clone()]
+                .map(|v| Tensor::new(Some(&v), &shape).unwrap());
+            let expected = Iff.f(tensors.iter().collect());
+            let (st, wi) = NativeGraphWitness::commit(g, vec![mask, a, b], &pp).unwrap();
+            assert_eq!(wi.outputs(), vec![expected.data().to_vec()]);
+            let proof = NativeGraphProof::prove(&st, wi, &pp, &gens).unwrap();
+            let mut bytes = vec![];
+            proof.serialize_compressed(&mut bytes).unwrap();
+            NativeGraphProof::deserialize_compressed(bytes.as_slice())
+                .unwrap()
+                .verify(&st, &vp, &gens)
+                .unwrap();
+            let mut wrong = st.clone();
+            wrong.graph.nodes[1].lookup.as_mut().unwrap().table = vec![0, 2];
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        }
+    }
+    #[test]
+    fn native_graph_logic_and_matches_atlas_and_rejects_non_boolean_operands() {
+        use super::super::native_logic::{append_and, append_select};
+        use atlas_onnx_tracer::{
+            ops::{And, Op},
+            tensor::Tensor,
+        };
+        let pp = DoryScheme::setup_prover(10);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let a = vec![0, 0, 1, 1];
+        let b = vec![0, 1, 0, 1];
+        let x = Tensor::new(Some(&a), &[4]).unwrap();
+        let y = Tensor::new(Some(&b), &[4]).unwrap();
+        let expected = And.f(vec![&x, &y]);
+        let mut g = logic_graph(2, vec![4]);
+        let output = append_and(&mut g, 0, 1).unwrap();
+        g.outputs = vec![output];
+        let (st, wi) = NativeGraphWitness::commit(g.clone(), vec![a, b], &pp).unwrap();
+        assert_eq!(wi.outputs(), vec![expected.data().to_vec()]);
+        NativeGraphProof::prove(&st, wi, &pp, &gens)
+            .unwrap()
+            .verify(&st, &vp, &gens)
+            .unwrap();
+        for v in [-1, 2, i32::MIN, i32::MAX] {
+            for operand in 0..2 {
+                let mut inputs = vec![vec![0; 4], vec![1; 4]];
+                inputs[operand][0] = v;
+                assert!(NativeGraphWitness::commit(g.clone(), inputs, &pp).is_err());
+            }
+        }
+        let mut g = logic_graph(3, vec![4]);
+        let output = append_select(&mut g, 0, 1, 2).unwrap();
+        g.outputs = vec![output];
+        for mask in [-1, 2] {
+            assert!(NativeGraphWitness::commit(
+                g.clone(),
+                vec![vec![mask; 4], vec![0; 4], vec![1; 4]],
+                &pp
+            )
+            .is_err());
+        }
+    }
+    #[test]
+    fn native_graph_logic_negation_proves_its_exact_domain() {
+        use super::super::native_logic::append_checked_neg;
+        use atlas_onnx_tracer::{
+            ops::{Neg, Op},
+            tensor::Tensor,
+        };
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for values in [
+            vec![
+                i32::MIN + 1,
+                -65536,
+                -1,
+                0,
+                1,
+                65536,
+                i32::MAX - 1,
+                i32::MAX,
+            ],
+            vec![0],
+        ] {
+            let shape = if values.len() == 1 { vec![] } else { vec![8] };
+            let x = Tensor::new(Some(&values), &shape).unwrap();
+            let expected = Neg.f(vec![&x]);
+            let mut g = logic_graph(1, shape);
+            let output = append_checked_neg(&mut g, 0).unwrap();
+            g.outputs = vec![output];
+            let (st, wi) = NativeGraphWitness::commit(g.clone(), vec![values], &pp).unwrap();
+            assert_eq!(wi.outputs(), vec![expected.data().to_vec()]);
+            NativeGraphProof::prove(&st, wi, &pp, &gens)
+                .unwrap()
+                .verify(&st, &vp, &gens)
+                .unwrap();
+            assert!(NativeGraphWitness::commit(
+                g.clone(),
+                vec![vec![i32::MIN; g.input_shapes[0].iter().product()]],
+                &pp
+            )
+            .is_err());
+        }
+        // Keep the clipped negation of MIN but supply valid guard indices.
+        // This tests the proved edge from the checked sum to the guard lookup.
+        let mut g = logic_graph(1, vec![]);
+        let output = append_checked_neg(&mut g, 0).unwrap();
+        g.outputs = vec![output];
+        let (mut st, mut wi) =
+            NativeGraphWitness::commit(g, vec![vec![i32::MIN + 1]], &pp).unwrap();
+        let mut prefix = st.graph.clone();
+        prefix.nodes.pop();
+        let prefix_count = prefix.tensor_count();
+        let full_count = st.graph.tensor_count();
+        let (prefix_statement, prefix_witness) =
+            NativeGraphWitness::commit(prefix, vec![vec![i32::MIN]], &pp).unwrap();
+        // All arithmetic and its ranges are honest for MIN. Only the guard
+        // lookup keeps the otherwise valid index witness for zero.
+        for (id, p) in prefix_witness.polynomials {
+            let mapped = match id {
+                CommittedPoly::DivNodeQuotient(j) if j >= prefix_count => {
+                    tensor(j + full_count - prefix_count)
+                }
+                _ => id,
+            };
+            st.commitments
+                .insert(mapped, prefix_statement.commitments[&id]);
+            wi.hints.insert(mapped, prefix_witness.hints[&id].clone());
+            wi.polynomials.insert(mapped, p);
+        }
+        wi.arithmetic_ranges = prefix_witness.arithmetic_ranges;
+        if let Ok(proof) = NativeGraphProof::prove(&st, wi, &pp, &gens) {
+            assert!(proof.verify(&st, &vp, &gens).is_err());
+        }
+    }
+    #[test]
+    fn native_graph_logic_integer_is_nan_feeds_original_boolean_consumer() {
+        use super::super::native_logic::{append_is_nan, append_select};
+        use atlas_onnx_tracer::{
+            ops::{IsNan, Op},
+            tensor::Tensor,
+        };
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let values = vec![i32::MIN, -123, -1, 0, 1, 123, i32::MAX - 1, i32::MAX];
+        let x = Tensor::new(Some(&values), &[2, 4]).unwrap();
+        let expected = IsNan {
+            out_dims: vec![2, 4],
+        }
+        .f(vec![&x]);
+        let mut g = logic_graph(3, vec![2, 4]);
+        let finite = append_is_nan(&mut g, 0).unwrap();
+        let output = append_select(&mut g, finite, 1, 2).unwrap();
+        g.outputs = vec![finite, output];
+        let (st, wi) = NativeGraphWitness::commit(
+            g,
+            vec![values.clone(), vec![i32::MIN; 8], values.clone()],
+            &pp,
+        )
+        .unwrap();
+        assert_eq!(wi.outputs(), vec![expected.data().to_vec(), values]);
+        NativeGraphProof::prove(&st, wi, &pp, &gens)
+            .unwrap()
+            .verify(&st, &vp, &gens)
+            .unwrap();
+    }
+    #[test]
+    fn native_graph_logic_blocks_reject_invalid_edges_without_mutating_graph() {
+        use super::super::native_logic::{
+            append_and, append_checked_neg, append_is_nan, append_select,
+        };
+        let mut g = logic_graph(2, vec![4]);
+        assert!(append_and(&mut g, 0, 2).is_err());
+        assert!(append_select(&mut g, 2, 0, 1).is_err());
+        assert!(append_checked_neg(&mut g, 2).is_err());
+        assert!(append_is_nan(&mut g, usize::MAX).is_err());
+        assert!(g.nodes.is_empty());
+        let output = append_and(&mut g, 0, 0).unwrap();
+        g.outputs = vec![output];
+        assert!(g.tensor_shapes().is_err()); // unused independent root
+    }
 }

@@ -68,6 +68,37 @@ mod enabled {
             )
             .unwrap();
         }
+        if matches!(
+            kind,
+            "select" | "boolean-and" | "checked-neg" | "finite-select"
+        ) {
+            use joltworks::poly::commitment::dory::native_logic::{
+                append_and, append_checked_neg, append_is_nan, append_select,
+            };
+            let count = match kind {
+                "boolean-and" => 2,
+                "checked-neg" => 1,
+                _ => 3,
+            };
+            let mut g = NativeGraph {
+                context: format!("native tensor graph fixture/{kind}").into_bytes(),
+                input_shapes: vec![vec![rows]; count],
+                nodes: vec![],
+                outputs: vec![],
+            };
+            let result = match kind {
+                "select" => append_select(&mut g, 0, 1, 2),
+                "boolean-and" => append_and(&mut g, 0, 1),
+                "checked-neg" => append_checked_neg(&mut g, 0),
+                _ => {
+                    let finite = append_is_nan(&mut g, 0).unwrap();
+                    append_select(&mut g, finite, 1, 2)
+                }
+            }
+            .unwrap();
+            g.outputs = vec![result];
+            return g;
+        }
         let (num_inputs, nodes, outputs) = match kind {
             "division" => (
                 1,
@@ -301,6 +332,29 @@ mod enabled {
                 })
                 .collect()];
         }
+        let kind = std::str::from_utf8(&g.context)
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        if matches!(
+            kind,
+            "select" | "boolean-and" | "checked-neg" | "finite-select"
+        ) {
+            let rows = g.input_shapes[0][0];
+            let signed = [i32::MIN + 1, i32::MAX, -16384, -1, 0, 1, 16384, 7];
+            let a = (0..rows).map(|i| signed[i % 8]).collect::<Vec<_>>();
+            let b = (0..rows).map(|i| signed[(i + 3) % 8]).collect::<Vec<_>>();
+            return match kind {
+                "select" => vec![(0..rows).map(|i| (i % 2) as i32).collect(), a, b],
+                "boolean-and" => vec![
+                    (0..rows).map(|i| (i % 2) as i32).collect(),
+                    (0..rows).map(|i| ((i / 2) % 2) as i32).collect(),
+                ],
+                "checked-neg" => vec![a],
+                _ => vec![a.clone(), b, a],
+            };
+        }
         if g.context.ends_with(b"/row-gather") || g.context.ends_with(b"/row-gather-wide") {
             let dictionary = g.input_shapes[1][0];
             let logical = if dictionary == 256 { 251 } else { 13 };
@@ -475,6 +529,35 @@ mod enabled {
             }
             .data()
             .to_vec()];
+        }
+        let kind = std::str::from_utf8(&g.context)
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        if matches!(
+            kind,
+            "select" | "boolean-and" | "checked-neg" | "finite-select"
+        ) {
+            use atlas_onnx_tracer::ops::{And, Iff, IsNan, Neg};
+            let values = inputs(g);
+            let tensors = values
+                .iter()
+                .map(|v| Tensor::new(Some(v), &g.input_shapes[0]).unwrap())
+                .collect::<Vec<_>>();
+            let result = match kind {
+                "select" => Iff.f(tensors.iter().collect()),
+                "boolean-and" => And.f(tensors.iter().collect()),
+                "checked-neg" => Neg.f(tensors.iter().collect()),
+                _ => {
+                    let mask = IsNan {
+                        out_dims: g.input_shapes[0].clone(),
+                    }
+                    .f(vec![&tensors[0]]);
+                    Iff.f(vec![&mask, &tensors[1], &tensors[2]])
+                }
+            };
+            return vec![result.data().to_vec()];
         }
         if g.context.ends_with(b"/row-gather") || g.context.ends_with(b"/row-gather-wide") {
             let values = inputs(g);
@@ -669,7 +752,7 @@ mod enabled {
     }
     pub fn run() {
         let args = std::env::args().collect::<Vec<_>>();
-        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table|division|sine|cosine|row-gather|row-gather-wide ROWS");
+        assert_eq!(args.len(),5,"native_graph_receipt prove|verify|prove-chain|verify-chain DIRECTORY mixed|table-chain|add-sub|residual|sum|mean-squares|matrix|batched-matrix|activation|activation-narrow|rsqrt|normalization|layout|rms-normalization|softmax|slice-concat|logical-mean|hidden-table|division|sine|cosine|row-gather|row-gather-wide|select|boolean-and|checked-neg|finite-select ROWS");
         let directory = Path::new(&args[2]);
         let kind = &args[3];
         let rows = args[4].parse::<usize>().unwrap();

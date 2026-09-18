@@ -311,6 +311,7 @@ impl CommitmentScheme for DoryScheme {
     /// commitments add: `C_joint = Σ_i γ_i · C_i`.
     ///
     /// [`build_materialized_rlc`]: crate::poly::rlc_polynomial::build_materialized_rlc
+    #[tracing::instrument(skip_all, name = "DoryScheme::combine_commitments", fields(terms = commitments.len()))]
     fn combine_commitments<C: Borrow<Self::Commitment>>(
         commitments: &[C],
         coeffs: &[Self::Field],
@@ -330,18 +331,15 @@ impl CommitmentScheme for DoryScheme {
                 .fold(<ArkGT as DoryGroup>::identity(), |acc, term| acc + term);
             return DoryCommitment(combined);
         }
-        // Borrow the known commitment type before entering Rayon. This keeps
-        // the public trait's generic Borrow bound and avoids copying GT values.
-        let terms: Vec<(&DoryCommitment, &Fr)> = commitments
-            .iter()
-            .zip(coeffs)
-            .map(|(commitment, coefficient)| (commitment.borrow(), coefficient))
-            .collect();
-        let combined = terms
-            .into_par_iter()
-            .map(|(commitment, coefficient)| ArkFr(*coefficient) * commitment.0)
-            .reduce(<ArkGT as DoryGroup>::identity, |left, right| left + right);
-        DoryCommitment(combined)
+        // PairingOutput's MSM shares bucket and doubling work across scalars.
+        // Inputs are GT commitments; their checked decoding remains unchanged.
+        // Keep the exact length assertion above: msm_unchecked truncates inputs.
+        use ark_ec::{pairing::PairingOutput, VariableBaseMSM};
+        let bases: Vec<_> = commitments.iter().map(|c| c.borrow().0 .0).collect();
+        DoryCommitment(ArkGT(
+            PairingOutput::<ark_bn254::Bn254>::msm(&bases, coeffs)
+                .expect("commitment and coefficient lengths checked above"),
+        ))
     }
 
     /// Joint tier-1 rows are linear in the polynomials: `rows = Σ_i γ_i · rows_i`
@@ -720,3 +718,6 @@ mod parallel_commitment_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod gt_msm_tests;

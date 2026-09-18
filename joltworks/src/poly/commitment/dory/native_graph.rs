@@ -1881,9 +1881,9 @@ impl NativeGraphProof {
             .zip(&state.sumcheck_claims)
             .map(|(x, y)| *x * *y)
             .sum();
-        let (pcs, eval, blind) = DoryScheme::prove_rlc_zk(
+        let (pcs, eval, blind) = DoryScheme::prove_rlc_zk_owned(
             setup,
-            &polynomials,
+            polynomials,
             &state.poly_coeffs,
             hints.into_values().collect(),
             &state.r_sumcheck,

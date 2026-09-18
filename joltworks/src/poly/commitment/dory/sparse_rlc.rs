@@ -293,40 +293,49 @@ impl MultilinearLagrange<ArkFr> for SparseRlc<'_> {
 /// Combine per-polynomial tier-1 hints into the joint's: `rows[r] = Σ_i γ_i · rows_i[r]`.
 pub fn combine_row_commitments(hints: &[Vec<ArkG1>], coeffs: &[Fr]) -> Vec<ArkG1> {
     assert_eq!(hints.len(), coeffs.len());
-    let num_rows = hints.iter().map(|h| h.len()).max().unwrap_or(0);
-    // Row r collects one term per polynomial with more than r rows. Row 0 has
-    // every polynomial (a real MSM); rows near the top belong to a handful of
-    // large polynomials. arkworks' MSM builds its own thread pools, so it must
-    // not be invoked from inside a rayon job: large rows run sequentially
-    // (each MSM parallel internally), small rows in parallel by scale-and-add.
     const MSM_THRESHOLD: usize = 64;
-    // Identity rows (gap tails, all-`None` slack chunks) contribute nothing.
-    let row_terms = |r: usize| -> (Vec<ArkG1>, Vec<ArkFr>) {
-        hints
-            .iter()
-            .zip(coeffs)
-            .filter(|(h, _)| r < h.len() && !h[r].0.is_zero())
-            .map(|(h, g)| (h[r], ArkFr(*g)))
-            .unzip()
+    let mut ordered: Vec<_> = hints.iter().zip(coeffs).collect();
+    ordered.sort_unstable_by_key(|(hint, _)| std::cmp::Reverse(hint.len()));
+    let num_rows = ordered.first().map_or(0, |(hint, _)| hint.len());
+    // A row past the 65th longest hint has at most 64 terms and never needs MSM.
+    let large_end = ordered.get(MSM_THRESHOLD).map_or(0, |(hint, _)| hint.len());
+    let active = |r: usize| {
+        let count = ordered.partition_point(|(hint, _)| hint.len() > r);
+        &ordered[..count]
     };
-    let mut rows: Vec<ArkG1> = (0..num_rows)
+    let small_row = |r: usize, terms: &[(&Vec<ArkG1>, &Fr)]| {
+        terms
+            .iter()
+            .filter(|(hint, _)| !hint[r].0.is_zero())
+            .fold(<ArkG1 as DoryGroup>::identity(), |sum, (hint, scalar)| {
+                sum + hint[r].scale(&ArkFr(**scalar))
+            })
+    };
+    let mut rows: Vec<_> = (0..num_rows)
         .into_par_iter()
+        .with_min_len(par_enabled())
         .map(|r| {
-            let (bases, scalars) = row_terms(r);
-            if bases.len() > MSM_THRESHOLD {
-                <ArkG1 as DoryGroup>::identity()
-            } else {
-                bases
+            let terms = active(r);
+            if terms.len() <= MSM_THRESHOLD
+                || terms
                     .iter()
-                    .zip(&scalars)
-                    .fold(<ArkG1 as DoryGroup>::identity(), |acc, (b, s)| {
-                        acc + b.scale(s)
-                    })
+                    .filter(|(hint, _)| !hint[r].0.is_zero())
+                    .count()
+                    <= MSM_THRESHOLD
+            {
+                small_row(r, terms)
+            } else {
+                <ArkG1 as DoryGroup>::identity()
             }
         })
         .collect();
-    for (r, row) in rows.iter_mut().enumerate() {
-        let (bases, scalars) = row_terms(r);
+    // Keep large MSM calls outside Rayon jobs, as in the original implementation.
+    for (r, row) in rows.iter_mut().take(large_end).enumerate() {
+        let (bases, scalars): (Vec<_>, Vec<_>) = active(r)
+            .iter()
+            .filter(|(hint, _)| !hint[r].0.is_zero())
+            .map(|(hint, scalar)| (hint[r], ArkFr(**scalar)))
+            .unzip();
         if bases.len() > MSM_THRESHOLD {
             *row = G1Routines::msm(&bases, &scalars);
         }
@@ -600,5 +609,163 @@ mod dense_prefix_tests {
         let seconds = start.elapsed().as_secs_f64();
         println!("DENSE_RLC_BENCH {{\"mode\":\"{}\",\"seconds\":{},\"workers\":{},\"polynomials\":1025,\"log_long_rows\":22,\"log_short_rows\":9,\"complete_proof\":false}}",mode,seconds,rayon::current_num_threads());
         std::hint::black_box(values);
+    }
+}
+
+#[cfg(test)]
+mod hint_prefix_tests {
+    use super::*;
+    use crate::transcripts::{Blake2bTranscript, Transcript};
+    use ark_ec::PrimeGroup;
+
+    fn reference(hints: &[Vec<ArkG1>], coeffs: &[Fr]) -> Vec<ArkG1> {
+        (0..hints.iter().map(Vec::len).max().unwrap_or(0))
+            .map(|r| {
+                hints
+                    .iter()
+                    .zip(coeffs)
+                    .filter(|(h, _)| r < h.len())
+                    .fold(<ArkG1 as DoryGroup>::identity(), |sum, (hint, scalar)| {
+                        sum + hint[r].scale(&ArkFr(*scalar))
+                    })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn native_hint_prefix_matches_exact_rows_and_worker_controls() {
+        let generator = ArkG1(ark_bn254::G1Projective::generator());
+        for count in [0, 1, 63, 64, 65, 97] {
+            let hints = (0..count)
+                .map(|i| {
+                    let length = if i % 7 == 0 {
+                        0
+                    } else if i == 1 {
+                        257
+                    } else {
+                        5
+                    };
+                    (0..length)
+                        .map(|r| {
+                            if (i + r) % 4 == 0 {
+                                <ArkG1 as DoryGroup>::identity()
+                            } else {
+                                generator.scale(&ArkFr(Fr::from((i + r + 1) as u64)))
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let mut transcript = Blake2bTranscript::new(b"hint prefix parity");
+            let mut coeffs = transcript.challenge_vector::<Fr>(count);
+            for i in (0..count).step_by(3) {
+                coeffs[i] = Fr::zero();
+            }
+            let expected = reference(&hints, &coeffs);
+            for workers in [1, 2, 4] {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap()
+                    .install(|| {
+                        assert_eq!(combine_row_commitments(&hints, &coeffs), expected);
+                        let _guard = common::parallel::ParallelFlagGuard::disabled();
+                        assert_eq!(combine_row_commitments(&hints, &coeffs), expected);
+                    });
+            }
+        }
+        // Force the MSM branch immediately on either side of its threshold.
+        for count in [64, 65, 66] {
+            let hints = vec![vec![generator; 3]; count];
+            let coeffs = (0..count)
+                .map(|i| Fr::from((i + 2) as u64))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                combine_row_commitments(&hints, &coeffs),
+                reference(&hints, &coeffs)
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "Isolated combination of row commitments, not complete proving"]
+    fn native_hint_prefix_benchmark() {
+        let mode = std::env::var("NATIVE_HINT_PREFIX_MODE").unwrap();
+        assert!(mode == "scan" || mode == "prefix");
+        let generator = ArkG1(ark_bn254::G1Projective::generator());
+        let mut hints = vec![(0..1 << 18)
+            .map(|r| {
+                if r % 512 == 0 {
+                    generator
+                } else {
+                    <ArkG1 as DoryGroup>::identity()
+                }
+            })
+            .collect::<Vec<_>>()];
+        hints.extend((0..1024).map(|i| {
+            (0..4)
+                .map(|r| {
+                    if (i + r) % 3 == 0 {
+                        <ArkG1 as DoryGroup>::identity()
+                    } else {
+                        generator
+                    }
+                })
+                .collect::<Vec<_>>()
+        }));
+        let mut transcript = Blake2bTranscript::new(b"hint prefix benchmark");
+        let coeffs = transcript.challenge_vector::<Fr>(hints.len());
+        let started = std::time::Instant::now();
+        let values = if mode == "scan" {
+            original_combine_row_commitments(&hints, &coeffs)
+        } else {
+            combine_row_commitments(&hints, &coeffs)
+        };
+        let seconds = started.elapsed().as_secs_f64();
+        std::hint::black_box(values);
+        println!("HINT_PREFIX_BENCH {{\"mode\":\"{}\",\"seconds\":{},\"workers\":{},\"hints\":1025,\"log_long_rows\":18,\"short_rows\":4,\"complete_proof\":false}}",mode,seconds,rayon::current_num_threads());
+    }
+
+    fn original_combine_row_commitments(hints: &[Vec<ArkG1>], coeffs: &[Fr]) -> Vec<ArkG1> {
+        assert_eq!(hints.len(), coeffs.len());
+        let num_rows = hints.iter().map(|h| h.len()).max().unwrap_or(0);
+        // Row r collects one term per polynomial with more than r rows. Row 0 has
+        // every polynomial (a real MSM); rows near the top belong to a handful of
+        // large polynomials. arkworks' MSM builds its own thread pools, so it must
+        // not be invoked from inside a rayon job: large rows run sequentially
+        // (each MSM parallel internally), small rows in parallel by scale-and-add.
+        const MSM_THRESHOLD: usize = 64;
+        // Identity rows (gap tails, all-`None` slack chunks) contribute nothing.
+        let row_terms = |r: usize| -> (Vec<ArkG1>, Vec<ArkFr>) {
+            hints
+                .iter()
+                .zip(coeffs)
+                .filter(|(h, _)| r < h.len() && !h[r].0.is_zero())
+                .map(|(h, g)| (h[r], ArkFr(*g)))
+                .unzip()
+        };
+        let mut rows: Vec<ArkG1> = (0..num_rows)
+            .into_par_iter()
+            .map(|r| {
+                let (bases, scalars) = row_terms(r);
+                if bases.len() > MSM_THRESHOLD {
+                    <ArkG1 as DoryGroup>::identity()
+                } else {
+                    bases
+                        .iter()
+                        .zip(&scalars)
+                        .fold(<ArkG1 as DoryGroup>::identity(), |acc, (b, s)| {
+                            acc + b.scale(s)
+                        })
+                }
+            })
+            .collect();
+        for (r, row) in rows.iter_mut().enumerate() {
+            let (bases, scalars) = row_terms(r);
+            if bases.len() > MSM_THRESHOLD {
+                *row = G1Routines::msm(&bases, &scalars);
+            }
+        }
+        rows
     }
 }

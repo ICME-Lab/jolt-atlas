@@ -687,11 +687,11 @@ where
             .map(|s| s.reduced_id.expect("prepared opening group"))
             .collect();
         let group_num_vars = self.sumchecks.values().map(|s| s.opening.0.len()).collect();
-        // Drop sumchecks in background - they're no longer needed
-        {
-            let sumchecks = std::mem::take(&mut self.sumchecks);
-            crate::utils::thread::drop_in_background_thread(sumchecks);
-        }
+        // Bound tables are no longer needed after extracting the joint claims.
+        // Release every cache owner before the PCS allocates its joint tables.
+        drop(std::mem::take(&mut self.sumchecks));
+        self.dense_polynomial_map.clear();
+        self.eq_cycle_map.clear();
 
         OpeningReductionState {
             r_sumcheck,
@@ -1841,5 +1841,96 @@ mod parallel_zk_message_tests {
         println!("ZK_MESSAGE_BENCH {{\"mode\":\"{}\",\"instances\":{},\"seconds\":{},\"workers\":{},\"complete_proof\":false}}",
             mode, count, result.3, rayon::current_num_threads());
         std::hint::black_box(result);
+    }
+}
+
+#[cfg(all(test, feature = "zk"))]
+mod finalized_cache_tests {
+    use super::*;
+    use crate::poly::multilinear_polynomial::PolynomialEvaluation;
+    use crate::{
+        curve::Bn254Curve,
+        poly::{commitment::pedersen::PedersenGenerators, one_hot_polynomial::OneHotPolynomial},
+        subprotocols::blindfold::BlindFoldAccumulator,
+        transcripts::Blake2bTranscript,
+    };
+    use ark_bn254::Fr;
+    use rand_core::SeedableRng;
+
+    #[test]
+    fn native_finalized_openings_release_table_owners_and_keep_claims() {
+        let mut transcript = Blake2bTranscript::new(b"finalized opening caches");
+        let mut accumulator = ProverOpeningAccumulator::<Fr>::new();
+        accumulator.zk_mode = true;
+        let cycle = vec![Fr::from(3u64); 8];
+        let address = vec![Fr::from(5u64); 2];
+        let stage = SumcheckId::NodeExecution(0);
+        let dense_id = CommittedPoly::DivNodeQuotient(0);
+        let sparse_id = CommittedPoly::NodeOutputRaD(0, 0);
+        let dense = MultilinearPolynomial::from(
+            (0..256)
+                .map(|i| Fr::from((i + 1) as u64))
+                .collect::<Vec<_>>(),
+        );
+        let sparse = MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+            (0..256)
+                .map(|i| {
+                    if i % 7 == 0 {
+                        None
+                    } else {
+                        Some((i % 4) as u16)
+                    }
+                })
+                .collect(),
+            4,
+        ));
+        accumulator.append_dense(
+            &mut transcript,
+            OpeningId::new(dense_id, stage),
+            cycle.clone(),
+            dense.evaluate(&cycle),
+        );
+        let point = [address.as_slice(), cycle.as_slice()].concat();
+        accumulator.append_sparse(
+            &mut transcript,
+            vec![sparse_id],
+            stage,
+            address,
+            cycle,
+            vec![sparse.evaluate(&point)],
+        );
+        let polynomials = BTreeMap::from([(dense_id, dense), (sparse_id, sparse)]);
+        accumulator.prepare_for_sumcheck(&polynomials, &mut transcript);
+        let dense_owners = accumulator
+            .dense_polynomial_map
+            .values()
+            .map(Arc::downgrade)
+            .collect::<Vec<_>>();
+        let eq_owners = accumulator
+            .eq_cycle_map
+            .values()
+            .map(Arc::downgrade)
+            .collect::<Vec<_>>();
+        assert!(!dense_owners.is_empty() && !eq_owners.is_empty());
+        let gens = PedersenGenerators::<Bn254Curve>::deterministic(64);
+        let mut blindfold = BlindFoldAccumulator::<Fr, Bn254Curve>::new();
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(91826);
+        let (_, challenges) = accumulator.prove_batch_opening_sumcheck_zk(
+            &mut blindfold,
+            &mut vec![],
+            &gens,
+            &mut rng,
+            &mut transcript,
+        );
+        let claims = accumulator.openings.clone();
+        let state = accumulator.finalize_batch_opening_sumcheck(challenges, &mut transcript);
+        assert_eq!(
+            state.polynomials,
+            polynomials.keys().copied().collect::<Vec<_>>()
+        );
+        assert_eq!(accumulator.openings, claims);
+        assert!(dense_owners.iter().all(|owner| owner.upgrade().is_none()));
+        assert!(eq_owners.iter().all(|owner| owner.upgrade().is_none()));
+        assert!(accumulator.sumchecks.is_empty());
     }
 }

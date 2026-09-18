@@ -648,3 +648,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(feature = "zk")]
+pub mod native_generation;

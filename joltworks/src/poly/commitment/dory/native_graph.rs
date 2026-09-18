@@ -1566,7 +1566,7 @@ impl NativeGraphProof {
         let NativeGraphWitness {
             polynomials,
             hints,
-            arithmetic_ranges,
+            mut arithmetic_ranges,
             lookup_indices,
             ..
         } = witness;
@@ -1783,7 +1783,11 @@ impl NativeGraphProof {
                     ));
                 }
             }
+            // Each operator now owns the derived tables needed by its prover.
+            // Its raw range values are no longer used by later operators.
+            arithmetic_ranges.remove(&i);
         }
+        drop(arithmetic_ranges);
         a.take_pending_claims();
         a.take_pending_claim_ids();
         let mut bf = BlindFoldAccumulator::new();
@@ -1829,6 +1833,8 @@ impl NativeGraphProof {
         } else {
             None
         };
+        // Lookup indices are needed through the indicator sumcheck only.
+        drop(lookup_indices);
         a.prepare_for_sumcheck(&polynomials, &mut t);
         let (openings, point) = a.prove_batch_opening_sumcheck_zk::<_, Bn254Curve, _>(
             &mut bf,
@@ -1859,6 +1865,9 @@ impl NativeGraphProof {
         if eval != gens.commit(&[value], &blind) {
             return Err(invalid("Graph PCS evaluation mismatch"));
         }
+        // All polynomial openings and their commitments have been proved.
+        // BlindFold consumes the scalar claims and stage data below.
+        drop(polynomials);
         let data = bf.take_stage_data();
         let native = NativeBlindFold::new(
             NativeBlindFold::prover_relations(&data),

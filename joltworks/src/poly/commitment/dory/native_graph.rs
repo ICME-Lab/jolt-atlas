@@ -481,6 +481,32 @@ impl NativeGraph {
         Ok(graph)
     }
 
+    /// Atlas integer softmax for signed32 inputs with exact, checked row
+    /// differences. Each row maximum minus each input must fit signed32.
+    /// This admits a common offset anywhere in the signed domain while
+    /// rejecting overflow in the actual Atlas centering operation.
+    pub fn softmax_with_checked_centering(
+        context: Vec<u8>,
+        shape: Vec<usize>,
+        scale: u8,
+    ) -> Result<Self, ProofVerifyError> {
+        let mut graph = Self::softmax(context, shape, scale)?;
+        graph.nodes[0].max = Some(32);
+        // Tensor 2 is the broadcast maximum and tensor 3 is its clamped
+        // difference from input 0. Recovery equals the maximum exactly iff
+        // that nonnegative difference did not overflow the signed domain.
+        graph.nodes.extend([
+            NativeGraphNode::add(0, 3),
+            NativeGraphNode::sub(9, 2),
+            // Compose two lookups to require exactly zero. Input 1 would
+            // produce -1 and fail the second lookup; other values fail first.
+            NativeGraphNode::lookup(10, vec![0, -1], 1),
+            NativeGraphNode::lookup(11, vec![0, 0], 1),
+        ]);
+        graph.tensor_shapes()?;
+        Ok(graph)
+    }
+
     /// Exact Atlas periodic sine or cosine, including integer remainder,
     /// downscaling and its rounded lookup table. Supported scales are 4..=20.
     pub fn trig(
@@ -1059,6 +1085,29 @@ impl NativeGraphWitness {
                 "Only registered public inputs may reuse commitments",
             ));
         }
+        let mut witness = Self::uncommitted(&graph, inputs)?;
+        let mut statement = NativeGraphStatement {
+            graph,
+            commitments: BTreeMap::new(),
+        };
+        for (id, p) in &witness.polynomials {
+            let (c, h) = public
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| DoryScheme::commit_zk(p, setup));
+            statement.commitments.insert(*id, c);
+            witness.hints.insert(*id, h);
+        }
+        statement.validate(setup.verifier.max_log_n)?;
+        Ok((statement, witness))
+    }
+    /// Construct the exact integer witness without setup or commitments.
+    /// This is prover data, not a proof. It permits numerical comparison and
+    /// separate measurement before committing the same witness polynomials.
+    pub fn uncommitted(
+        graph: &NativeGraph,
+        inputs: Vec<Vec<i32>>,
+    ) -> Result<Self, ProofVerifyError> {
         let shapes = graph.tensor_shapes()?;
         if inputs.len() != graph.num_inputs()
             || inputs
@@ -1350,30 +1399,13 @@ impl NativeGraphWitness {
             }
         }
         let outputs = graph.outputs.iter().map(|i| values[*i].clone()).collect();
-        let mut statement = NativeGraphStatement {
-            graph,
-            commitments: BTreeMap::new(),
-        };
-        let mut hints = BTreeMap::new();
-        for (id, p) in &polynomials {
-            let (c, h) = public
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| DoryScheme::commit_zk(p, setup));
-            statement.commitments.insert(*id, c);
-            hints.insert(*id, h);
-        }
-        statement.validate(setup.verifier.max_log_n)?;
-        Ok((
-            statement,
-            Self {
-                polynomials,
-                hints,
-                arithmetic_ranges,
-                lookup_indices,
-                outputs,
-            },
-        ))
+        Ok(Self {
+            polynomials,
+            hints: BTreeMap::new(),
+            arithmetic_ranges,
+            lookup_indices,
+            outputs,
+        })
     }
 
     /// Open an original graph tensor to the same hidden evaluation required by
@@ -5782,5 +5814,179 @@ mod tests {
         let output = append_and(&mut g, 0, 0).unwrap();
         g.outputs = vec![output];
         assert!(g.tensor_shapes().is_err()); // unused independent root
+    }
+    #[test]
+    fn native_graph_uncommitted_zero_scale_masks_match_atlas_and_prove() {
+        use atlas_onnx_tracer::{
+            ops::{Mul, Op},
+            tensor::Tensor,
+        };
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for shape in [vec![8], vec![2, 4], vec![1]] {
+            let n = shape.iter().product::<usize>();
+            let a = [i32::MIN, i32::MAX, -1, 0, 1, 46341, -46341, 7][..n].to_vec();
+            let b = [1, 1, 0, 1, 0, 1, 0, 1][..n].to_vec();
+            let ta = Tensor::new(Some(&a), &shape).unwrap();
+            let tb = Tensor::new(Some(&b), &shape).unwrap();
+            let expected = Mul { scale: 0 }.f(vec![&ta, &tb]);
+            let wide = a
+                .iter()
+                .zip(&b)
+                .map(|(x, y)| i32::try_from(i64::from(*x) * i64::from(*y)).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(expected.data(), wide);
+            let g = NativeGraph {
+                context: b"raw integer mask product".to_vec(),
+                input_shapes: vec![shape.clone(); 2],
+                nodes: vec![
+                    NativeGraphNode::lookup(1, vec![0, 2], 1),
+                    NativeGraphNode::mul(0, 2, 1),
+                ],
+                outputs: vec![3],
+            };
+            let uncommitted =
+                NativeGraphWitness::uncommitted(&g, vec![a.clone(), b.clone()]).unwrap();
+            assert!(uncommitted.hints.is_empty());
+            assert_eq!(uncommitted.outputs(), vec![wide.clone()]);
+            for bad in [-1, 2, i32::MIN, i32::MAX] {
+                assert!(
+                    NativeGraphWitness::uncommitted(&g, vec![a.clone(), vec![bad; n]]).is_err()
+                );
+            }
+            let (s, w) = NativeGraphWitness::commit(g, vec![a, b], &pp).unwrap();
+            assert_eq!(w.outputs(), vec![wide]);
+            assert!(NativeGraphProof::prove(&s, uncommitted, &pp, &gens).is_err());
+            let proof = NativeGraphProof::prove(&s, w, &pp, &gens).unwrap();
+            let mut bytes = vec![];
+            proof.serialize_compressed(&mut bytes).unwrap();
+            NativeGraphProof::deserialize_compressed(bytes.as_slice())
+                .unwrap()
+                .verify(&s, &vp, &gens)
+                .unwrap();
+            let mut wrong = s;
+            wrong.graph.nodes[0].lookup.as_mut().unwrap().table = vec![0, 1];
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        }
+    }
+
+    #[test]
+    fn native_graph_uncommitted_keeps_integer_and_shape_rejections() {
+        let mut g = einsum_graph(vec![vec![2]; 2], "a,a->a", 0, [4, 4]);
+        assert!(NativeGraphWitness::uncommitted(&g, vec![vec![8, 0], vec![1, 1]]).is_err());
+        assert!(NativeGraphWitness::uncommitted(&g, vec![vec![0], vec![1, 1]]).is_err());
+        g.nodes[0].input = 2;
+        assert!(NativeGraphWitness::uncommitted(&g, vec![vec![0; 2]; 2]).is_err());
+        let mut g = NativeGraph {
+            context: b"checked domain audit".to_vec(),
+            input_shapes: vec![vec![1]],
+            nodes: vec![],
+            outputs: vec![],
+        };
+        let output = super::super::native_logic::append_checked_neg(&mut g, 0).unwrap();
+        g.outputs = vec![output];
+        assert!(NativeGraphWitness::uncommitted(&g, vec![vec![i32::MIN]]).is_err());
+    }
+    #[test]
+    fn native_graph_checked_centering_matches_atlas_outside_signed31_domain() {
+        use atlas_onnx_tracer::{
+            ops::{Op, SoftmaxLastAxis},
+            tensor::Tensor,
+        };
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        for values in [
+            vec![i32::MIN, i32::MIN + 1],
+            vec![i32::MAX, i32::MAX - 1],
+            vec![-(1 << 30) - 31, 50],
+            vec![i32::MIN],
+        ] {
+            let shape = vec![1, values.len()];
+            let graph = NativeGraph::softmax_with_checked_centering(
+                b"checked row differences".to_vec(),
+                shape.clone(),
+                3,
+            )
+            .unwrap();
+            let tensor = Tensor::new(Some(&values), &shape).unwrap();
+            let expected = SoftmaxLastAxis { scale: 3 }.f(vec![&tensor]);
+            let (statement, witness) =
+                NativeGraphWitness::commit(graph, vec![values], &pp).unwrap();
+            assert_eq!(witness.outputs()[0], expected.data());
+            let proof = NativeGraphProof::prove(&statement, witness, &pp, &gens).unwrap();
+            let mut bytes = vec![];
+            proof.serialize_compressed(&mut bytes).unwrap();
+            NativeGraphProof::deserialize_compressed(bytes.as_slice())
+                .unwrap()
+                .verify(&statement, &vp, &gens)
+                .unwrap();
+            let mut wrong = statement;
+            wrong.graph.nodes[10].lookup.as_mut().unwrap().table = vec![0, 0];
+            assert!(proof.verify(&wrong, &vp, &gens).is_err());
+        }
+    }
+    #[test]
+    fn native_graph_checked_centering_rejects_overflow_at_both_extremes() {
+        let graph = NativeGraph::softmax_with_checked_centering(
+            b"checked overflow".to_vec(),
+            vec![1, 2],
+            3,
+        )
+        .unwrap();
+        for values in [
+            vec![i32::MIN, 0],
+            vec![i32::MIN, i32::MAX],
+            vec![-1, i32::MAX],
+        ] {
+            assert!(NativeGraphWitness::uncommitted(&graph, vec![values]).is_err());
+        }
+        for values in [vec![i32::MIN, -1], vec![0, i32::MAX]] {
+            assert!(NativeGraphWitness::uncommitted(&graph, vec![values]).is_ok());
+        }
+    }
+
+    #[test]
+    fn native_graph_checked_centering_rejects_consistent_overflow_witness() {
+        let pp = DoryScheme::setup_prover(11);
+        let vp = DoryScheme::setup_verifier(&pp);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let graph = NativeGraph::softmax_with_checked_centering(
+            b"mandatory difference guard".to_vec(),
+            vec![1, 2],
+            3,
+        )
+        .unwrap();
+        let (mut statement, mut witness) =
+            NativeGraphWitness::commit(graph, vec![vec![i32::MIN, -1]], &pp).unwrap();
+        let mut prefix = statement.graph.clone();
+        prefix.nodes.truncate(10);
+        let prefix_count = prefix.tensor_count();
+        let full_count = statement.graph.tensor_count();
+        let (prefix_statement, prefix_witness) =
+            NativeGraphWitness::commit(prefix, vec![vec![i32::MIN, 0]], &pp).unwrap();
+        // Every arithmetic column and lookup is honest for the overflowing
+        // input. Only the two zero-guard lookups retain valid zero indices.
+        for (id, polynomial) in prefix_witness.polynomials {
+            let mapped = match id {
+                CommittedPoly::DivNodeQuotient(j) if j >= prefix_count => {
+                    tensor(j + full_count - prefix_count)
+                }
+                _ => id,
+            };
+            statement
+                .commitments
+                .insert(mapped, prefix_statement.commitments[&id]);
+            witness
+                .hints
+                .insert(mapped, prefix_witness.hints[&id].clone());
+            witness.polynomials.insert(mapped, polynomial);
+        }
+        witness.arithmetic_ranges = prefix_witness.arithmetic_ranges;
+        witness.lookup_indices.extend(prefix_witness.lookup_indices);
+        if let Ok(proof) = NativeGraphProof::prove(&statement, witness, &pp, &gens) {
+            assert!(proof.verify(&statement, &vp, &gens).is_err());
+        }
     }
 }

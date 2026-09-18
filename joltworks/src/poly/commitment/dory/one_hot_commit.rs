@@ -15,6 +15,7 @@ use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
 use ark_ff::{batch_inversion, Field, Zero};
 use dory::backends::arkworks::{ArkG1, ArkG2, ArkGT, BN254};
 use dory::primitives::arithmetic::{Group as DoryGroup, PairingCurve};
+use rayon::prelude::*;
 
 /// Sum, for every row, the affine points it was assigned (`(row, point)` pairs
 /// grouped by row via `row_offsets`), returning projective row sums.
@@ -127,6 +128,44 @@ pub(super) fn one_hot_row_commitments(
     num_rows: usize,
     g1: &[G1Affine],
 ) -> Vec<ArkG1> {
+    // If a time vector spans several commitment columns, each aligned
+    // segment contributes to disjoint rows for every address. Compute those
+    // segments independently without collecting all nonzero points at once.
+    // Only one column of temporary points is live per running segment.
+    if t_len > cols {
+        assert!(t_len.is_power_of_two() && cols.is_power_of_two());
+        assert_eq!(nonzero_indices.len(), t_len);
+        assert_eq!(g1.len(), cols);
+        let segments = t_len / cols;
+        assert!(num_rows.is_multiple_of(segments));
+        let buckets = num_rows / segments;
+        let pieces = nonzero_indices
+            .par_chunks(cols)
+            .map(|indices| {
+                let mut offsets = vec![0usize; buckets + 1];
+                for k in indices.iter().flatten() {
+                    offsets[usize::from(*k) + 1] += 1;
+                }
+                for k in 0..buckets {
+                    offsets[k + 1] += offsets[k];
+                }
+                let mut fill = offsets.clone();
+                let mut points = vec![G1Affine::identity(); offsets[buckets]];
+                for (column, k) in indices.iter().enumerate() {
+                    if let Some(k) = k {
+                        let bucket = usize::from(*k);
+                        points[fill[bucket]] = g1[column];
+                        fill[bucket] += 1;
+                    }
+                }
+                batched_affine_row_sums(points, offsets)
+            })
+            .collect::<Vec<_>>();
+        return (0..num_rows)
+            .into_par_iter()
+            .map(|row| ArkG1(pieces[row % segments][row / segments]))
+            .collect();
+    }
     // Counting sort of the set entries by row.
     let mut counts = vec![0usize; num_rows + 1];
     for (t, k_opt) in nonzero_indices.iter().enumerate() {
@@ -182,6 +221,64 @@ pub(super) fn tier_2_skip_identity(
 mod tests {
     use super::*;
     use ark_std::UniformRand;
+
+    #[test]
+    fn segmented_one_hot_rows_match_direct_group_sums() {
+        let mut rng = ark_std::test_rng();
+        let mut generators = (0..64)
+            .map(|_| G1Projective::rand(&mut rng).into_affine())
+            .collect::<Vec<_>>();
+        generators[0] = G1Affine::identity();
+        generators[2] = generators[1];
+        generators[3] = -generators[1];
+        for workers in [1, 8] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for t_len in [1usize, 4, 16, 64, 256] {
+                        for cols in [1usize, 4, 16, 64] {
+                            for buckets in [1usize, 2, 16] {
+                                if buckets * t_len < cols {
+                                    continue;
+                                }
+                                let num_rows = buckets * t_len / cols;
+                                for mode in 0..3 {
+                                    let indices = (0..t_len)
+                                        .map(|t| {
+                                            if mode == 0 || (mode == 1 && t % 5 == 0) {
+                                                None
+                                            } else {
+                                                Some(((t * 7 + t / 3) % buckets) as u16)
+                                            }
+                                        })
+                                        .collect::<Vec<_>>();
+                                    let mut expected = vec![G1Projective::zero(); num_rows];
+                                    for (t, k) in indices.iter().enumerate() {
+                                        if let Some(k) = k {
+                                            let index = usize::from(*k) * t_len + t;
+                                            expected[index / cols] += generators[index % cols];
+                                        }
+                                    }
+                                    let actual = one_hot_row_commitments(
+                                        &indices,
+                                        t_len,
+                                        cols,
+                                        num_rows,
+                                        &generators[..cols],
+                                    );
+                                    assert_eq!(
+                                        actual.iter().map(|p| p.0).collect::<Vec<_>>(),
+                                        expected
+                                    );
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+    }
 
     #[test]
     fn batched_affine_sums_match_projective() {

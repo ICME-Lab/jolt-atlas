@@ -1395,8 +1395,8 @@ fn test_sigmoid_zk() {
     use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF15);
-    let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
-    let max_val = 1i32 << (ACTIVATION_TABLE_BOUND - 1);
+    let min_val = -(1i32 << (ACTIVATION_TABLE_VARS - 1));
+    let max_val = 1i32 << (ACTIVATION_TABLE_VARS - 1);
     let input = Tensor::random_range(&mut rng, &[size], min_val..max_val);
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![size]);
@@ -1421,8 +1421,8 @@ fn test_tanh_zk() {
     use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF16);
-    let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
-    let max_val = 1i32 << (ACTIVATION_TABLE_BOUND - 1);
+    let min_val = -(1i32 << (ACTIVATION_TABLE_VARS - 1));
+    let max_val = 1i32 << (ACTIVATION_TABLE_VARS - 1);
     let input = Tensor::random_range(&mut rng, &[size], min_val..max_val);
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![size]);
@@ -1447,8 +1447,8 @@ fn test_erf_zk() {
     use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF17);
-    let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
-    let max_val = 1i32 << (ACTIVATION_TABLE_BOUND - 1);
+    let min_val = -(1i32 << (ACTIVATION_TABLE_VARS - 1));
+    let max_val = 1i32 << (ACTIVATION_TABLE_VARS - 1);
     let input = Tensor::random_range(&mut rng, &[size], min_val..max_val);
     let mut builder = ModelBuilder::new();
     let i = builder.input(vec![size]);

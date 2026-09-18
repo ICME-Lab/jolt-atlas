@@ -1788,7 +1788,7 @@ impl NativeGraphProof {
         a.take_pending_claim_ids();
         let mut bf = BlindFoldAccumulator::new();
         let mut rng = rand::thread_rng();
-        let (relations, _, _) = BatchedSumcheck::prove_zk(
+        let (relations, _, _) = BatchedSumcheck::prove_zk_parallel_messages(
             provers
                 .iter_mut()
                 .map(|p| p.as_mut() as &mut dyn SumcheckInstanceProver<Fr, Blake2bTranscript>)
@@ -1811,7 +1811,7 @@ impl NativeGraphProof {
                 }
             }
             Some(
-                BatchedSumcheck::prove_zk(
+                BatchedSumcheck::prove_zk_parallel_messages(
                     provers
                         .iter_mut()
                         .map(|p| {

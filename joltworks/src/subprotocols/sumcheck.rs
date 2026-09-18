@@ -335,12 +335,68 @@ impl BatchedSumcheck {
         ProofTranscript: Transcript,
         R: rand_core::CryptoRngCore,
     >(
+        sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
+        opening_accumulator: &mut ProverOpeningAccumulator<F>,
+        blindfold_accumulator: &mut crate::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+        transcript: &mut ProofTranscript,
+        pedersen_gens: &crate::poly::commitment::pedersen::PedersenGenerators<C>,
+        rng: &mut R,
+    ) -> (ZkSumcheckProof<F, C, ProofTranscript>, Vec<F::Challenge>, F) {
+        Self::prove_zk_inner(
+            sumcheck_instances,
+            opening_accumulator,
+            blindfold_accumulator,
+            transcript,
+            pedersen_gens,
+            rng,
+            false,
+        )
+    }
+
+    /// Compute independent round messages in parallel. Callers must ensure
+    /// message computation does not acquire mutually held exclusive locks.
+    /// Challenge ingestion, transcript updates, randomness and opening caches
+    /// remain serial, including instances with shared opening-reduction state.
+    #[cfg(feature = "zk")]
+    #[tracing::instrument(skip_all, name = "BatchedSumcheck::prove_zk")]
+    pub fn prove_zk_parallel_messages<
+        F: JoltField,
+        C: crate::curve::JoltCurve<F = F>,
+        ProofTranscript: Transcript,
+        R: rand_core::CryptoRngCore,
+    >(
+        sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
+        opening_accumulator: &mut ProverOpeningAccumulator<F>,
+        blindfold_accumulator: &mut crate::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+        transcript: &mut ProofTranscript,
+        pedersen_gens: &crate::poly::commitment::pedersen::PedersenGenerators<C>,
+        rng: &mut R,
+    ) -> (ZkSumcheckProof<F, C, ProofTranscript>, Vec<F::Challenge>, F) {
+        Self::prove_zk_inner(
+            sumcheck_instances,
+            opening_accumulator,
+            blindfold_accumulator,
+            transcript,
+            pedersen_gens,
+            rng,
+            true,
+        )
+    }
+
+    #[cfg(feature = "zk")]
+    fn prove_zk_inner<
+        F: JoltField,
+        C: crate::curve::JoltCurve<F = F>,
+        ProofTranscript: Transcript,
+        R: rand_core::CryptoRngCore,
+    >(
         mut sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
         blindfold_accumulator: &mut crate::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
         transcript: &mut ProofTranscript,
         pedersen_gens: &crate::poly::commitment::pedersen::PedersenGenerators<C>,
         rng: &mut R,
+        parallel_messages: bool,
     ) -> (ZkSumcheckProof<F, C, ProofTranscript>, Vec<F::Challenge>, F) {
         use crate::poly::unipoly::UniPoly;
         use crate::subprotocols::blindfold::ZkStageData;
@@ -385,22 +441,33 @@ impl BatchedSumcheck {
                 print_current_memory_usage(label.as_str());
             }
 
-            let univariate_polys: Vec<UniPoly<F>> = sumcheck_instances
-                .iter_mut()
-                .zip(individual_claims.iter())
-                .map(|(sumcheck, previous_claim)| {
-                    let num_rounds = sumcheck.num_rounds();
-                    let offset = sumcheck.round_offset(max_num_rounds);
-                    let active = round >= offset && round < offset + num_rounds;
-                    if active {
-                        sumcheck.compute_message(round - offset, *previous_claim)
-                    } else {
-                        // Dummy round: polynomial is constant with H(0)=H(1)=previous_claim/2.
-                        let two_inv = F::from_u64(2).inverse().unwrap();
-                        UniPoly::from_coeff(vec![*previous_claim * two_inv])
-                    }
-                })
-                .collect();
+            let message = |sumcheck: &mut &mut dyn SumcheckInstanceProver<F, ProofTranscript>,
+                           previous_claim: &F| {
+                let num_rounds = sumcheck.num_rounds();
+                let offset = sumcheck.round_offset(max_num_rounds);
+                let active = round >= offset && round < offset + num_rounds;
+                if active {
+                    sumcheck.compute_message(round - offset, *previous_claim)
+                } else {
+                    let two_inv = F::from_u64(2).inverse().unwrap();
+                    UniPoly::from_coeff(vec![*previous_claim * two_inv])
+                }
+            };
+            let univariate_polys: Vec<UniPoly<F>> =
+                if parallel_messages && sumcheck_instances.len() >= 8 {
+                    sumcheck_instances
+                        .par_iter_mut()
+                        .zip(individual_claims.par_iter())
+                        .with_min_len(common::parallel::par_enabled())
+                        .map(|(sumcheck, claim)| message(sumcheck, claim))
+                        .collect()
+                } else {
+                    sumcheck_instances
+                        .iter_mut()
+                        .zip(individual_claims.iter())
+                        .map(|(sumcheck, claim)| message(sumcheck, claim))
+                        .collect()
+                };
 
             let mut batched_univariate_poly: UniPoly<F> =
                 univariate_polys.iter().zip(&batching_coeffs).fold(
@@ -425,7 +492,7 @@ impl BatchedSumcheck {
 
             individual_claims
                 .iter_mut()
-                .zip(univariate_polys.into_iter())
+                .zip(univariate_polys)
                 .for_each(|(claim, poly)| *claim = poly.evaluate(&r_j));
 
             for sumcheck in sumcheck_instances.iter_mut() {

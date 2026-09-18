@@ -291,10 +291,10 @@ impl MultilinearLagrange<ArkFr> for SparseRlc<'_> {
 }
 
 /// Combine per-polynomial tier-1 hints into the joint's: `rows[r] = Σ_i γ_i · rows_i[r]`.
-pub fn combine_row_commitments(hints: &[Vec<ArkG1>], coeffs: &[Fr]) -> Vec<ArkG1> {
+pub fn combine_row_commitments(hints: &[impl AsRef<[ArkG1]>], coeffs: &[Fr]) -> Vec<ArkG1> {
     assert_eq!(hints.len(), coeffs.len());
     const MSM_THRESHOLD: usize = 64;
-    let mut ordered: Vec<_> = hints.iter().zip(coeffs).collect();
+    let mut ordered: Vec<_> = hints.iter().map(AsRef::as_ref).zip(coeffs).collect();
     ordered.sort_unstable_by_key(|(hint, _)| std::cmp::Reverse(hint.len()));
     let num_rows = ordered.first().map_or(0, |(hint, _)| hint.len());
     // A row past the 65th longest hint has at most 64 terms and never needs MSM.
@@ -303,7 +303,7 @@ pub fn combine_row_commitments(hints: &[Vec<ArkG1>], coeffs: &[Fr]) -> Vec<ArkG1
         let count = ordered.partition_point(|(hint, _)| hint.len() > r);
         &ordered[..count]
     };
-    let small_row = |r: usize, terms: &[(&Vec<ArkG1>, &Fr)]| {
+    let small_row = |r: usize, terms: &[(&[ArkG1], &Fr)]| {
         terms
             .iter()
             .filter(|(hint, _)| !hint[r].0.is_zero())
@@ -435,7 +435,7 @@ mod tests {
             .commit::<BN254, Transparent, G1Routines>(nu, sigma, &setup.prover)
             .unwrap();
         assert_eq!(sparse_rows, dense_rows);
-        assert_eq!(combined_hint.row_commitments, dense_rows);
+        assert_eq!(*combined_hint.row_commitments, dense_rows);
 
         // End to end: sparse prove_rlc verifies against Σ γ_i C_i.
         let combined = DoryScheme::combine_commitments(&commitments, &gammas);

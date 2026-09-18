@@ -60,14 +60,13 @@ impl DoryScheme {
         let (nu, sigma) = Self::split(num_vars, Self::column_log(setup));
         let joint = SparseRlc::new(coeffs, polynomials, num_vars);
         let point = Self::dory_point(opening_point);
-        let mut hint = Self::combine_hints(hints, coeffs);
-        hint.row_commitments
-            .resize(1 << nu, <ArkG1 as DoryGroup>::identity());
+        let (mut rows, commit_blind) = Self::combine_hints(hints, coeffs).into_parts();
+        rows.resize(1 << nu, <ArkG1 as DoryGroup>::identity());
         let (proof, blind) = dory_prove::<_, BN254, ParG1Routines, ParG2Routines, _, _, dory::ZK>(
             &joint,
             &point,
-            hint.row_commitments,
-            hint.commit_blind,
+            rows,
+            commit_blind,
             nu,
             sigma,
             &setup.prover,

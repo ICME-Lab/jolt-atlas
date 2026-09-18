@@ -220,7 +220,7 @@ impl DoryScheme {
         (
             DoryCommitment(tier_2),
             DoryHint {
-                row_commitments,
+                row_commitments: row_commitments.into(),
                 commit_blind: <ArkFr as DoryField>::zero(),
             },
         )
@@ -281,7 +281,7 @@ impl CommitmentScheme for DoryScheme {
         (
             DoryCommitment(commitment),
             DoryHint {
-                row_commitments,
+                row_commitments: row_commitments.into(),
                 commit_blind,
             },
         )
@@ -343,9 +343,9 @@ impl CommitmentScheme for DoryScheme {
             .zip(coeffs)
             .map(|(hint, coefficient)| ArkFr(*coefficient) * hint.commit_blind)
             .fold(<ArkFr as DoryField>::zero(), |sum, blind| sum + blind);
-        let rows: Vec<Vec<ArkG1>> = hints.into_iter().map(|h| h.row_commitments).collect();
+        let rows: Vec<_> = hints.iter().map(|h| h.row_commitments.as_slice()).collect();
         DoryHint {
-            row_commitments: sparse_rlc::combine_row_commitments(&rows, coeffs),
+            row_commitments: sparse_rlc::combine_row_commitments(&rows, coeffs).into(),
             commit_blind,
         }
     }
@@ -368,10 +368,9 @@ impl CommitmentScheme for DoryScheme {
         let point = Self::dory_point(opening_point);
 
         let (row_commitments, commit_blind) = if hints.len() == polynomials.len() {
-            let h = Self::combine_hints(hints, coeffs);
-            let mut rows = h.row_commitments;
+            let (mut rows, blind) = Self::combine_hints(hints, coeffs).into_parts();
             rows.resize(1 << nu, <ArkG1 as DoryGroup>::identity());
-            (rows, h.commit_blind)
+            (rows, blind)
         } else {
             let (_c, rows, blind) = joint
                 .commit::<BN254, Transparent, G1Routines>(nu, sigma, &setup.prover)
@@ -416,7 +415,7 @@ impl CommitmentScheme for DoryScheme {
         let point = Self::dory_point(opening_point);
 
         let (row_commitments, commit_blind) = match hint {
-            Some(h) => (h.row_commitments, h.commit_blind),
+            Some(h) => h.into_parts(),
             None => {
                 let (_commitment, rows, blind) = ark_poly
                     .commit::<BN254, Transparent, G1Routines>(nu, sigma, &setup.prover)

@@ -1039,6 +1039,14 @@ impl NativeGraph {
             .collect())
     }
 
+    /// Canonical commitment order derived from the registered graph alone.
+    /// A transport can omit these identifiers and reconstruct them after
+    /// checking the exact number of transmitted commitments.
+    pub fn commitment_keys(&self) -> Result<BTreeSet<CommittedPoly>, ProofVerifyError> {
+        self.tensor_shapes()?;
+        Ok(self.required_keys())
+    }
+
     fn required_keys(&self) -> BTreeSet<CommittedPoly> {
         let shapes = self.tensor_shapes().unwrap();
         let mut keys: BTreeSet<_> = (0..self.tensor_count()).map(tensor).collect();

@@ -151,8 +151,15 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
         F: Mul<U, Output = F>,
     {
         if w.is_empty() {
-            // Sum-check num_rounds is 0 for zero variables, so we won't call bind() and can skip precomputation.
-            Self::default()
+            // The empty equality product is one. No variable can be bound.
+            Self {
+                current_index: 0,
+                current_scalar: F::one(),
+                w: Vec::new(),
+                E_in_vec: vec![vec![F::one()]],
+                E_out_vec: vec![vec![F::one()]],
+                binding_order,
+            }
         } else {
             Self::new_with_scaling(w, binding_order, None)
         }
@@ -602,6 +609,22 @@ mod tests {
     use super::*;
     use ark_bn254::Fr;
     use ark_std::{test_rng, One};
+
+    #[test]
+    fn empty_point_is_constant_one() {
+        for order in [BindingOrder::LowToHigh, BindingOrder::HighToLow] {
+            let split_eq = GruenSplitEqPolynomial::<Fr>::new(&[] as &[Fr], order);
+
+            assert_eq!(split_eq.get_num_vars(), 0);
+            assert_eq!(split_eq.num_challenges(), 0);
+            assert_eq!(split_eq.len(), 1);
+            assert_eq!(split_eq.get_current_scalar(), Fr::one());
+            assert_eq!(split_eq.binding_order, order);
+            assert_eq!(split_eq.E_in_current(), &[Fr::one()]);
+            assert_eq!(split_eq.E_out_current(), &[Fr::one()]);
+            assert_eq!(split_eq.merge(), DensePolynomial::new(vec![Fr::one()]));
+        }
+    }
 
     #[test]
     fn window_out_in() {

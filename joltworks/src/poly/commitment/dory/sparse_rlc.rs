@@ -9,6 +9,8 @@
 //! `L^T·M` (vector-matrix product), the evaluation, and (absent a hint) the row
 //! commitments — and all three are linear, so this type computes them straight
 //! from the one-hots in `O(Σ nonzeros)` plus `O(dense)` for the few dense polys.
+#[cfg(test)]
+use crate::poly::multilinear_polynomial::PolynomialEvaluation;
 use ark_bn254::Fr;
 use ark_ff::{One, Zero};
 use common::{parallel::par_enabled, CommittedPoly};
@@ -26,8 +28,9 @@ use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 use crate::{
+    field::OptimizedMul,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial,
         one_hot_polynomial::OneHotPolynomial,
     },
     utils::math::Math,
@@ -175,6 +178,7 @@ impl DoryPolynomial<ArkFr> for SparseRlc<'_> {
     /// bit). A sub-polynomial of `m` variables embedded at index 0 contributes
     /// `f_i(point[..m]) · Π_{j≥m} (1 − point[j])`; joltworks evaluates with the
     /// reversed convention, hence the `rev()`.
+    #[tracing::instrument(skip_all, name = "SparseRlc::evaluate")]
     fn evaluate(&self, point: &[ArkFr]) -> ArkFr {
         assert_eq!(point.len(), self.num_vars);
         let high_factor = |m: usize| -> Fr {
@@ -186,8 +190,36 @@ impl DoryPolynomial<ArkFr> for SparseRlc<'_> {
         if !self.dense.is_empty() {
             let m = self.dense.len().log_2();
             let r: Vec<Fr> = point[..m].iter().rev().map(|p| p.0).collect();
-            let dense: Vec<Fr> = self.dense.iter().map(|c| c.0).collect();
-            total += MultilinearPolynomial::from(dense).evaluate(&r) * high_factor(m);
+            // Read the joint's stored rows directly. Expanding the wrapper
+            // into a second full field vector is unnecessary for evaluation.
+            let (high, low) = r.split_at(m / 2);
+            let (high, low) = rayon::join(
+                || EqPolynomial::<Fr>::evals(high),
+                || EqPolynomial::<Fr>::evals(low),
+            );
+            let evaluate_row = |(row, weight): (&[ArkFr], &Fr)| {
+                let partial: Fr = row
+                    .iter()
+                    .zip(&low)
+                    .map(|(coefficient, weight)| weight.mul_01_optimized(coefficient.0))
+                    .sum();
+                weight.mul_01_optimized(partial)
+            };
+            let value: Fr = if m < 16 {
+                self.dense
+                    .chunks(low.len())
+                    .zip(&high)
+                    .map(evaluate_row)
+                    .sum()
+            } else {
+                self.dense
+                    .par_chunks(low.len())
+                    .zip_eq(high.par_iter())
+                    .with_min_len(par_enabled())
+                    .map(evaluate_row)
+                    .sum()
+            };
+            total += value * high_factor(m);
         }
         let one_hot_total: Fr = self
             .one_hots
@@ -767,5 +799,116 @@ mod hint_prefix_tests {
             }
         }
         rows
+    }
+}
+
+#[cfg(test)]
+mod borrowed_evaluation_tests {
+    use super::*;
+    use crate::poly::dense_mlpoly::DensePolynomial;
+
+    fn check() {
+        for log_dense in [0usize, 7, 16, 17] {
+            let polys = BTreeMap::from([
+                (
+                    CommittedPoly::DivNodeQuotient(0),
+                    MultilinearPolynomial::from(
+                        (0..1 << log_dense)
+                            .map(|i| (i % 127) as i32 - 63)
+                            .collect::<Vec<_>>(),
+                    ),
+                ),
+                (
+                    CommittedPoly::DivNodeQuotient(1),
+                    MultilinearPolynomial::LargeScalars(DensePolynomial::new(vec![
+                        Fr::from(7u64),
+                        -Fr::from(9u64),
+                    ])),
+                ),
+                (
+                    CommittedPoly::NodeOutputRaD(0, 0),
+                    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                        vec![Some(0), None, Some(3), Some(1)],
+                        4,
+                    )),
+                ),
+            ]);
+            let coefficients = vec![Fr::from(3u64), -Fr::from(5u64), Fr::from(11u64)];
+            let variables = log_dense.max(4) + 3;
+            let joint = SparseRlc::new(&coefficients, &polys, variables);
+            for boolean in [false, true] {
+                let point = (0..variables)
+                    .map(|i| {
+                        ArkFr(Fr::from(if boolean {
+                            (i % 2) as u64
+                        } else {
+                            (131 * i + 7) as u64
+                        }))
+                    })
+                    .collect::<Vec<_>>();
+                let expected: Fr = polys
+                    .values()
+                    .zip(&coefficients)
+                    .map(|(polynomial, coefficient)| {
+                        let count = polynomial.get_num_vars();
+                        let reversed = point[..count].iter().rev().map(|x| x.0).collect::<Vec<_>>();
+                        let padding: Fr = point[count..].iter().map(|x| Fr::one() - x.0).product();
+                        *coefficient * polynomial.evaluate(&reversed) * padding
+                    })
+                    .sum();
+                assert_eq!(joint.evaluate(&point), ArkFr(expected));
+            }
+        }
+        let polys = BTreeMap::new();
+        assert_eq!(
+            SparseRlc::new(&[], &polys, 0).evaluate(&[]),
+            ArkFr(Fr::zero())
+        );
+    }
+
+    #[test]
+    fn native_borrowed_joint_evaluation_matches_components_and_padding() {
+        for workers in [1, 2, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(check);
+        }
+        let _guard = common::parallel::ParallelFlagGuard::disabled();
+        check();
+    }
+
+    #[test]
+    #[ignore = "Isolated joint evaluation and process memory, not complete proving"]
+    fn native_borrowed_joint_evaluation_benchmark() {
+        let mode = std::env::var("NATIVE_BORROWED_EVALUATION_MODE").unwrap();
+        assert!(mode == "copy" || mode == "borrow");
+        let variables = 24;
+        let joint = SparseRlc {
+            num_vars: variables,
+            dense: (0..1 << variables)
+                .map(|i| ArkFr(Fr::from((i % 256) as u64)))
+                .collect(),
+            one_hots: vec![],
+        };
+        let point = (0..variables)
+            .map(|i| ArkFr(Fr::from((131 * i + 7) as u64)))
+            .collect::<Vec<_>>();
+        // These coefficients encode the low eight index bits in Dory order.
+        let expected: Fr = (0..8).map(|i| Fr::from(1u64 << i) * point[i].0).sum();
+        let reversed = point.iter().rev().map(|x| x.0).collect::<Vec<_>>();
+        let start = std::time::Instant::now();
+        for _ in 0..2 {
+            let actual = if mode == "copy" {
+                let dense: Vec<Fr> = joint.dense.iter().map(|x| x.0).collect();
+                MultilinearPolynomial::from(dense).evaluate(&reversed)
+            } else {
+                joint.evaluate(&point).0
+            };
+            assert_eq!(actual, expected);
+            std::hint::black_box(actual);
+        }
+        println!("BORROWED_EVALUATION_BENCH {{\"mode\":\"{}\",\"seconds\":{},\"evaluations\":2,\"log_coefficients\":24,\"workers\":{},\"complete_proof\":false}}",mode,start.elapsed().as_secs_f64(),rayon::current_num_threads());
     }
 }

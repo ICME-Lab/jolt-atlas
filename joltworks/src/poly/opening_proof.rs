@@ -619,14 +619,15 @@ where
             .map(|(_, opening)| opening as &mut _)
             .collect();
 
-        let (zk_proof, r_sumcheck, _final_claim) = BatchedSumcheck::prove_zk::<F, C, T, _>(
-            instances,
-            self,
-            blindfold_accumulator,
-            transcript,
-            pedersen_gens,
-            rng,
-        );
+        let (zk_proof, r_sumcheck, _final_claim) =
+            BatchedSumcheck::prove_zk_parallel_messages::<F, C, T, _>(
+                instances,
+                self,
+                blindfold_accumulator,
+                transcript,
+                pedersen_gens,
+                rng,
+            );
 
         self.sumchecks = sumchecks;
         stage_configs.push(crate::subprotocols::blindfold::StageConfig::new_chain(
@@ -1673,5 +1674,172 @@ mod guardrail_tests {
 
         let key = OpeningId::new(VirtualPoly::NodeOutput(3), SumcheckId::Raf);
         assert!(acc.openings.contains_key(&key));
+    }
+}
+
+#[cfg(all(test, feature = "zk"))]
+mod parallel_zk_message_tests {
+    use super::*;
+    use crate::{
+        curve::Bn254Curve,
+        poly::{
+            commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme},
+            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            one_hot_polynomial::OneHotPolynomial,
+        },
+        subprotocols::{
+            blindfold::BlindFoldAccumulator, sumcheck::BatchedSumcheck,
+            sumcheck_prover::SumcheckInstanceProver,
+        },
+        transcripts::{Blake2bTranscript, Transcript},
+    };
+    use ark_bn254::Fr;
+    use ark_serialize::CanonicalSerialize;
+    use rand::SeedableRng;
+    use std::time::Instant;
+
+    fn run(
+        count: usize,
+        parallel: bool,
+        expected: Option<Blake2bTranscript>,
+    ) -> (Vec<u8>, String, Blake2bTranscript, f64) {
+        let pp = DoryScheme::setup_prover(8);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let mut transcript = Blake2bTranscript::new(b"native-zk-message-parity");
+        if let Some(expected) = expected {
+            transcript.compare_to(expected);
+        }
+        let mut accumulator = ProverOpeningAccumulator::<Fr>::new();
+        accumulator.zk_mode = true;
+        let mut polynomials = BTreeMap::new();
+        for i in 0..count {
+            let log_t = [1usize, 3, 5, 8][i % 4];
+            let cycle = (0..log_t)
+                .map(|j| Fr::from((j + 2) as u64))
+                .collect::<Vec<_>>();
+            let stage = SumcheckId::NodeExecution(i);
+            if i % 2 == 0 {
+                // Repeated openings share both the exact polynomial and eq table.
+                let id = CommittedPoly::DivNodeQuotient(i % 4);
+                let poly = MultilinearPolynomial::from(
+                    (0..1usize << log_t)
+                        .map(|j| Fr::from((j + 1 + i % 4) as u64))
+                        .collect::<Vec<_>>(),
+                );
+                let claim = poly.evaluate(&cycle);
+                accumulator.append_dense(&mut transcript, OpeningId::new(id, stage), cycle, claim);
+                polynomials.insert(id, poly);
+            } else {
+                let log_k = [1usize, 2, 4][i % 3];
+                let address = (0..log_k)
+                    .map(|j| Fr::from((j + 11) as u64))
+                    .collect::<Vec<_>>();
+                let point = [address.as_slice(), cycle.as_slice()].concat();
+                let mut ids = Vec::new();
+                let mut claims = Vec::new();
+                for d in 0..1 + i % 3 {
+                    let id = CommittedPoly::NodeOutputRaD(i, d);
+                    let indices = (0..1usize << log_t)
+                        .map(|j| {
+                            if (j + d) % 7 == 0 {
+                                None
+                            } else {
+                                Some(((j * 3 + d) % (1 << log_k)) as u16)
+                            }
+                        })
+                        .collect();
+                    let poly = MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                        indices,
+                        1 << log_k,
+                    ));
+                    ids.push(id);
+                    claims.push(poly.evaluate(&point));
+                    polynomials.insert(id, poly);
+                }
+                accumulator.append_sparse(&mut transcript, ids, stage, address, cycle, claims);
+            }
+        }
+        accumulator.prepare_for_sumcheck(&polynomials, &mut transcript);
+        accumulator.take_pending_claims();
+        accumulator.take_pending_claim_ids();
+        let mut instances = std::mem::take(&mut accumulator.sumchecks);
+        assert_eq!(instances.len(), count);
+        let instances = instances
+            .values_mut()
+            .map(|p| p as &mut dyn SumcheckInstanceProver<Fr, Blake2bTranscript>)
+            .collect();
+        let mut blindfold = BlindFoldAccumulator::<Fr, Bn254Curve>::new();
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0x76543);
+        let started = Instant::now();
+        let (proof, challenges, claim) = if parallel {
+            BatchedSumcheck::prove_zk_parallel_messages(
+                instances,
+                &mut accumulator,
+                &mut blindfold,
+                &mut transcript,
+                &gens,
+                &mut rng,
+            )
+        } else {
+            BatchedSumcheck::prove_zk(
+                instances,
+                &mut accumulator,
+                &mut blindfold,
+                &mut transcript,
+                &gens,
+                &mut rng,
+            )
+        };
+        let seconds = started.elapsed().as_secs_f64();
+        let mut bytes = Vec::new();
+        proof.serialize_compressed(&mut bytes).unwrap();
+        let witness = format!(
+            "{:?}{:?}{:?}{:?}",
+            challenges,
+            claim,
+            blindfold.take_stage_data(),
+            accumulator.openings
+        );
+        // Check one subsequent challenge as well as every preceding transcript update.
+        let tail: Fr = transcript.challenge_scalar();
+        tail.serialize_compressed(&mut bytes).unwrap();
+        (bytes, witness, transcript, seconds)
+    }
+
+    #[test]
+    fn native_zk_parallel_messages_preserve_full_transcript_and_blindfold_witness() {
+        for workers in [1, 2, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for count in [1, 7, 8, 9, 24] {
+                        let serial = run(count, false, None);
+                        let parallel = run(count, true, Some(serial.2.clone()));
+                        assert_eq!(serial.0, parallel.0, "proof and following challenge");
+                        assert_eq!(serial.1, parallel.1, "every BlindFold field and opening");
+                        let _guard = common::parallel::ParallelFlagGuard::disabled();
+                        let disabled = run(count, true, Some(serial.2));
+                        assert_eq!(serial.0, disabled.0);
+                        assert_eq!(serial.1, disabled.1);
+                    }
+                });
+        }
+    }
+
+    #[test]
+    #[ignore = "Isolated opening sumcheck timing, not a complete native proof"]
+    fn native_zk_message_benchmark() {
+        let mode = std::env::var("NATIVE_ZK_MESSAGE_MODE").unwrap();
+        let count: usize = std::env::var("NATIVE_ZK_MESSAGE_INSTANCES")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(mode == "serial" || mode == "parallel");
+        let result = run(count, mode == "parallel", None);
+        println!("ZK_MESSAGE_BENCH {{\"mode\":\"{}\",\"instances\":{},\"seconds\":{},\"workers\":{},\"complete_proof\":false}}",
+            mode, count, result.3, rayon::current_num_threads());
+        std::hint::black_box(result);
     }
 }

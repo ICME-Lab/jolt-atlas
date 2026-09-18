@@ -215,7 +215,7 @@ pub(super) struct LayoutRegistration {
     pub layout: Layout,
 }
 impl LayoutRegistration {
-    fn range(&self) -> Range {
+    pub(super) fn range(&self) -> Range {
         let mut r = Range::new(0, 32, 1 << 31);
         r.namespace = self.namespace;
         r.input = OpeningId::new(self.tensors[0], self.initial);

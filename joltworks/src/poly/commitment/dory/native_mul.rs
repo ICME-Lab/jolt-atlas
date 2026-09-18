@@ -43,7 +43,8 @@ use crate::{
 use ark_bn254::Fr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::Zero;
-use common::CommittedPoly;
+use common::{parallel::par_enabled, CommittedPoly};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 type ZkProof = ZkSumcheckProof<Fr, Bn254Curve, Blake2bTranscript>;
@@ -153,7 +154,60 @@ impl Range {
         values: &[u64],
         params: BooleanitySumcheckParams<Fr>,
     ) -> BooleanitySumcheckProver<Fr> {
-        let eq = EqPolynomial::<Fr>::evals(&params.r_cycle);
+        let (g, indices) = self.tables(values, &params.r_cycle);
+        BooleanitySumcheckProver::gen(params, g, indices)
+    }
+
+    /// Exact digit histograms for the same equality polynomial. The small
+    /// tables factor its high and low address bits in big-endian order.
+    fn tables(&self, values: &[u64], point: &[Fr]) -> (Vec<Vec<Fr>>, Vec<Vec<Option<u8>>>) {
+        assert_eq!(values.len(), 1usize << point.len());
+        if values.len() <= 4096 {
+            return self.serial_tables(values, point);
+        }
+        let low_bits = point.len().div_ceil(2).max(12).min(point.len());
+        let (high, low) = point.split_at(point.len() - low_bits);
+        let high = EqPolynomial::<Fr>::evals(high);
+        let low = EqPolynomial::<Fr>::evals(low);
+        let columns: Vec<_> = (0..self.chunks())
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|d| {
+                let mut indices = vec![None; values.len()];
+                let g = indices
+                    .par_chunks_mut(low.len())
+                    .zip(values.par_chunks(low.len()))
+                    .zip(high.par_iter())
+                    .with_min_len(par_enabled())
+                    .map(|((indices, values), scale)| {
+                        let mut local = vec![Fr::zero(); 1 << self.chunk];
+                        for ((index, value), weight) in indices.iter_mut().zip(values).zip(&low) {
+                            let digit = self.digit(*value, d);
+                            *index = Some(digit);
+                            local[digit as usize] += weight;
+                        }
+                        for sum in &mut local {
+                            *sum *= scale;
+                        }
+                        local
+                    })
+                    .reduce(
+                        || vec![Fr::zero(); 1 << self.chunk],
+                        |mut left, right| {
+                            for (sum, value) in left.iter_mut().zip(right) {
+                                *sum += value;
+                            }
+                            left
+                        },
+                    );
+                (g, indices)
+            })
+            .collect();
+        columns.into_iter().unzip()
+    }
+
+    fn serial_tables(&self, values: &[u64], point: &[Fr]) -> (Vec<Vec<Fr>>, Vec<Vec<Option<u8>>>) {
+        let eq = EqPolynomial::<Fr>::evals(point);
         let mut g = vec![vec![Fr::zero(); 1 << self.chunk]; self.chunks()];
         let mut indices = vec![Vec::with_capacity(values.len()); self.chunks()];
         for (i, value) in values.iter().enumerate() {
@@ -163,7 +217,7 @@ impl Range {
                 indices[d].push(Some(k));
             }
         }
-        BooleanitySumcheckProver::gen(params, g, indices)
+        (g, indices)
     }
 }
 
@@ -796,6 +850,75 @@ mod tests {
         ops::{Mul, Op},
         tensor::Tensor,
     };
+
+    #[test]
+    fn native_range_tiles_match_all_digits_and_weights() {
+        for workers in [1, 2, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+                for log_rows in [0usize, 1, 6, 12, 13, 14, 18] {
+                    for bits in [1, 2, 4, 7, 8, 14, 16, 31, 32, 64] {
+                        let range = Range::new(0, bits, 0);
+                        let mask = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
+                        let values = (0..1usize << log_rows).map(|i| {
+                            [0, mask, 1 & mask, (i as u64).wrapping_mul(0x9e3779b97f4a7c15) & mask][i % 4]
+                        }).collect::<Vec<_>>();
+                        for boolean_point in [false, true] {
+                            let point = (0..log_rows).map(|i| {
+                                if boolean_point { Fr::from((i % 2) as u64) }
+                                else { Fr::from((i as u64 + 2) * 0x12345) }
+                            }).collect::<Vec<_>>();
+                            assert_eq!(range.tables(&values, &point), range.serial_tables(&values, &point),
+                                "workers={workers}, log_rows={log_rows}, bits={bits}, boolean={boolean_point}");
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn native_range_tiles_match_when_shared_parallelism_is_disabled() {
+        let range = Range::new(0, 32, 1 << 31);
+        let values = (0..16384).map(|i| i * 0x12345).collect::<Vec<_>>();
+        let point = (0..14).map(|i| Fr::from(i + 2)).collect::<Vec<_>>();
+        let expected = range.serial_tables(&values, &point);
+        let _guard = common::parallel::ParallelFlagGuard::disabled();
+        assert_eq!(par_enabled(), usize::MAX);
+        assert_eq!(range.tables(&values, &point), expected);
+    }
+
+    #[test]
+    #[ignore = "Isolated timing and process memory comparison; not a complete proof"]
+    fn native_range_table_benchmark() {
+        let mode = std::env::var("NATIVE_RANGE_BENCH_MODE").unwrap();
+        let log_rows: usize = std::env::var("NATIVE_RANGE_BENCH_LOG")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let range = Range::new(0, 32, 1 << 31);
+        let values = (0..1usize << log_rows)
+            .map(|i| (i as u64).wrapping_mul(0x9e3779b9) & u64::from(u32::MAX))
+            .collect::<Vec<_>>();
+        let point = (0..log_rows)
+            .map(|i| Fr::from((i as u64 + 2) * 0x12345))
+            .collect::<Vec<_>>();
+        let started = std::time::Instant::now();
+        let (g, indices) = match mode.as_str() {
+            "serial" => range.serial_tables(&values, &point),
+            "tiles" => range.tables(&values, &point),
+            _ => panic!("Unknown benchmark mode"),
+        };
+        let seconds = started.elapsed().as_secs_f64();
+        assert_eq!(indices.len(), 4);
+        for column in &g {
+            assert_eq!(column.iter().copied().sum::<Fr>(), Fr::from(1u64));
+        }
+        println!(
+            "RANGE_TABLE_BENCH {{\"mode\":\"{}\",\"log_rows\":{},\"seconds\":{},\"workers\":{},\"range_bits\":32,\"complete_proof\":false}}",
+            mode, log_rows, seconds, rayon::current_num_threads()
+        );
+        std::hint::black_box((g, indices));
+    }
 
     #[test]
     fn native_mul_matches_atlas_floor_and_clamp_after_serialization() {

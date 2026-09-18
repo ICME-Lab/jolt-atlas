@@ -25,15 +25,17 @@ use crate::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::{Blake2bTranscript, Transcript},
-    utils::errors::ProofVerifyError,
+    utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
 };
 use ark_bn254::Fr;
+#[cfg(test)]
 use ark_std::Zero;
 use atlas_onnx_tracer::{
     ops::{Einsum, Op},
     tensor::Tensor,
 };
-use common::CommittedPoly;
+use common::{parallel::par_enabled, CommittedPoly};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 type Provers = Vec<Box<dyn SumcheckInstanceProver<Fr, Blake2bTranscript>>>;
@@ -238,6 +240,23 @@ impl Contraction {
         poly: &MultilinearPolynomial<Fr>,
         r: &[Fr],
     ) -> MultilinearPolynomial<Fr> {
+        self.partial_with_scalars(side, poly, r, true)
+    }
+    fn partial_with_scalars(
+        &self,
+        side: usize,
+        poly: &MultilinearPolynomial<Fr>,
+        r: &[Fr],
+        use_small_scalars: bool,
+    ) -> MultilinearPolynomial<Fr> {
+        // Original integer inputs can use the existing small-scalar field
+        // multiplication. Bound polynomials must use their current field values.
+        let compact = match poly {
+            MultilinearPolynomial::I32Scalars(p) if use_small_scalars && !p.is_bound() => {
+                Some(p.coeffs.as_slice())
+            }
+            _ => None,
+        };
         let fixed = self.points[side]
             .iter()
             .filter_map(|p| match p {
@@ -251,18 +270,56 @@ impl Contraction {
             .enumerate()
             .filter_map(|(i, p)| matches!(p, Coordinate::Fixed(_)).then_some(i))
             .collect::<Vec<_>>();
-        let mut table = vec![Fr::zero(); 1 << self.log_shared];
-        for i in 0..poly.len() {
-            let mut shared = 0;
-            for (bit, p) in self.points[side].iter().enumerate() {
-                if let Coordinate::Shared(j) = p {
-                    shared |=
-                        ((i >> (self.log_inputs[side] - 1 - bit)) & 1) << (self.log_shared - 1 - j);
-                }
-            }
-            table[shared] +=
-                poly.get_bound_coeff(i) * weights[project(i, &positions, self.log_inputs[side])];
-        }
+        // Split the index map into two small tables. Their disjoint bits can
+        // be combined with OR, avoiding a coordinate loop per coefficient.
+        // No worker needs a separate copy of the output table.
+        let low_bits = positions.len().div_ceil(2);
+        let split = positions.len() - low_bits;
+        let offsets = |positions: &[usize]| {
+            (0..1usize << positions.len())
+                .map(|value| {
+                    positions
+                        .iter()
+                        .enumerate()
+                        .fold(0usize, |index, (bit, position)| {
+                            index
+                                | (((value >> (positions.len() - 1 - bit)) & 1)
+                                    << (self.log_inputs[side] - 1 - position))
+                        })
+                })
+                .collect::<Vec<_>>()
+        };
+        let high = offsets(&positions[..split]);
+        let low = offsets(&positions[split..]);
+        let low_mask = low.len() - 1;
+        let table = (0..1usize << self.log_shared)
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|shared| {
+                let base = self.points[side].iter().enumerate().fold(
+                    0usize,
+                    |index, (bit, coordinate)| match coordinate {
+                        Coordinate::Shared(j) => {
+                            index
+                                | (((shared >> (self.log_shared - 1 - j)) & 1)
+                                    << (self.log_inputs[side] - 1 - bit))
+                        }
+                        Coordinate::Fixed(_) => index,
+                    },
+                );
+                weights
+                    .iter()
+                    .enumerate()
+                    .map(|(fixed, weight)| {
+                        let index = base | high[fixed >> low_bits] | low[fixed & low_mask];
+                        compact.map_or_else(
+                            || poly.get_bound_coeff(index) * *weight,
+                            |coefficients| coefficients[index].field_mul(*weight),
+                        )
+                    })
+                    .sum::<Fr>()
+            })
+            .collect::<Vec<_>>();
         MultilinearPolynomial::from(table)
     }
     fn selector_table(&self, r: &[Fr]) -> MultilinearPolynomial<Fr> {
@@ -732,5 +789,166 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl Contraction {
+    fn serial_partial(
+        &self,
+        side: usize,
+        poly: &MultilinearPolynomial<Fr>,
+        r: &[Fr],
+    ) -> MultilinearPolynomial<Fr> {
+        let fixed = self.points[side]
+            .iter()
+            .filter_map(|p| match p {
+                Coordinate::Fixed(i) => Some(r[*i]),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let weights = EqPolynomial::<Fr>::evals(&fixed);
+        let positions = self.points[side]
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| matches!(p, Coordinate::Fixed(_)).then_some(i))
+            .collect::<Vec<_>>();
+        let mut table = vec![Fr::zero(); 1 << self.log_shared];
+        for i in 0..poly.len() {
+            let mut shared = 0;
+            for (bit, p) in self.points[side].iter().enumerate() {
+                if let Coordinate::Shared(j) = p {
+                    shared |=
+                        ((i >> (self.log_inputs[side] - 1 - bit)) & 1) << (self.log_shared - 1 - j);
+                }
+            }
+            table[shared] +=
+                poly.get_bound_coeff(i) * weights[project(i, &positions, self.log_inputs[side])];
+        }
+        MultilinearPolynomial::from(table)
+    }
+}
+
+#[cfg(test)]
+mod partial_index_tests {
+    use super::*;
+
+    #[test]
+    fn native_contraction_partial_indices_match_every_serial_coefficient() {
+        for workers in [1, 2, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for (equation, shapes) in [
+                        ("mk,kn->mn", [vec![64, 32], vec![32, 128]]),
+                        ("bmk,kbn->nbm", [vec![2, 16, 32], vec![32, 2, 128]]),
+                        ("m,n->nm", [vec![64], vec![128]]),
+                        ("km,nk->mn", [vec![32, 16], vec![128, 32]]),
+                        ("ab,ab->", [vec![64, 128], vec![64, 128]]),
+                        ("amk,kan->nam", [vec![2, 4, 64], vec![64, 2, 128]]),
+                        ("ab,bc->ca", [vec![256, 128], vec![128, 64]]),
+                        ("u,uv->v", [vec![1], vec![1, 8192]]),
+                        ("ab,b->a", [vec![4096, 16], vec![16]]),
+                    ] {
+                        let c = Contraction::new(equation, [&shapes[0], &shapes[1]], 1, [16, 16])
+                            .unwrap();
+                        let mut transcript = Blake2bTranscript::new(b"partial index maps");
+                        for point in [
+                            transcript.challenge_vector::<Fr>(c.log_output),
+                            (0..c.log_output)
+                                .map(|i| Fr::from((i % 2) as u64))
+                                .collect(),
+                        ] {
+                            for side in 0..2 {
+                                let p = MultilinearPolynomial::from(
+                                    (0..1usize << c.log_inputs[side])
+                                        .map(|i| ((i * 73 + i / 17) % 1021) as i32 - 511)
+                                        .collect::<Vec<_>>(),
+                                );
+                                let expected = c.serial_partial(side, &p, &point);
+                                let actual = c.partial(side, &p, &point);
+                                assert_eq!(actual.len(), expected.len());
+                                for i in 0..actual.len() {
+                                    assert_eq!(
+                                        actual.get_bound_coeff(i),
+                                        expected.get_bound_coeff(i),
+                                        "{equation}, side {side}, coefficient {i}"
+                                    );
+                                }
+                                let _guard = common::parallel::ParallelFlagGuard::disabled();
+                                let disabled = c.partial(side, &p, &point);
+                                for i in 0..actual.len() {
+                                    assert_eq!(
+                                        disabled.get_bound_coeff(i),
+                                        expected.get_bound_coeff(i)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+    }
+
+    #[test]
+    fn native_contraction_scaled_tables_preserve_bound_values_and_integer_extremes() {
+        let c = Contraction::new("ab,b->a", [&[4, 4], &[4]], 1, [16, 16]).unwrap();
+        let mut transcript = Blake2bTranscript::new(b"partial scalar representations");
+        let point = transcript.challenge_vector::<Fr>(c.log_output);
+        let values: Vec<i32> = (0..16)
+            .map(|i| [i32::MIN, -1, 0, 1, i32::MAX][i % 5])
+            .collect();
+        let original = MultilinearPolynomial::from(values.clone());
+        let field = MultilinearPolynomial::from(
+            values.iter().map(|v| Fr::from_i32(*v)).collect::<Vec<_>>(),
+        );
+        let boolean = MultilinearPolynomial::from((0..16).map(|i| i % 3 == 0).collect::<Vec<_>>());
+        let mut bound = MultilinearPolynomial::from(
+            [values.clone(), values.iter().rev().copied().collect()].concat(),
+        );
+        bound.bind_parallel(
+            transcript.challenge_scalar_optimized::<Fr>(),
+            BindingOrder::HighToLow,
+        );
+        for p in [original, field, boolean, bound] {
+            let expected = c.serial_partial(0, &p, &point);
+            for candidate in [
+                c.partial(0, &p, &point),
+                c.partial_with_scalars(0, &p, &point, false),
+            ] {
+                assert_eq!(candidate.len(), expected.len());
+                for i in 0..expected.len() {
+                    assert_eq!(candidate.get_bound_coeff(i), expected.get_bound_coeff(i));
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "Isolated contraction table construction, not a complete native proof"]
+    fn native_contraction_partial_benchmark() {
+        let mode = std::env::var("NATIVE_PARTIAL_MODE").unwrap();
+        assert!(mode == "serial" || mode == "indexed" || mode == "scaled");
+        let c =
+            Contraction::new("ab,b->a", [&[1 << 14, 1 << 10], &[1 << 10]], 1, [16, 16]).unwrap();
+        let mut transcript = Blake2bTranscript::new(b"partial table benchmark");
+        let point = transcript.challenge_vector::<Fr>(c.log_output);
+        let p = MultilinearPolynomial::from(
+            (0..1usize << c.log_inputs[0])
+                .map(|i| ((i * 73 + i / 17) % 1021) as i32 - 511)
+                .collect::<Vec<_>>(),
+        );
+        let started = std::time::Instant::now();
+        let result = match mode.as_str() {
+            "serial" => c.serial_partial(0, &p, &point),
+            "indexed" => c.partial_with_scalars(0, &p, &point, false),
+            _ => c.partial(0, &p, &point),
+        };
+        let seconds = started.elapsed().as_secs_f64();
+        println!("PARTIAL_BENCH {{\"mode\":\"{}\",\"log_rows\":24,\"seconds\":{},\"workers\":{},\"complete_proof\":false}}",
+            mode, seconds, rayon::current_num_threads());
+        std::hint::black_box(result);
     }
 }

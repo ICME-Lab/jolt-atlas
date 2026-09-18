@@ -45,6 +45,8 @@ mod native_hidden_lookup;
 #[cfg(feature = "zk")]
 mod native_layout;
 #[cfg(feature = "zk")]
+pub mod native_logic;
+#[cfg(feature = "zk")]
 pub mod native_lookup;
 #[cfg(feature = "zk")]
 mod native_max;

@@ -23,7 +23,7 @@ use dory::{
     setup::ProverSetup,
 };
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use crate::{
     poly::{
@@ -39,7 +39,7 @@ pub struct SparseRlc<'a> {
     /// Dense contributions, already combined: `dense[j] = Σ_{dense i} γ_i · f_i[j]`.
     dense: Vec<ArkFr>,
     /// One-hot contributions kept sparse: `(γ_i, f_i)`.
-    one_hots: Vec<(Fr, &'a OneHotPolynomial<Fr>)>,
+    one_hots: Vec<(Fr, Cow<'a, OneHotPolynomial<Fr>>)>,
 }
 
 impl<'a> SparseRlc<'a> {
@@ -56,7 +56,7 @@ impl<'a> SparseRlc<'a> {
         let mut one_hots = vec![];
         for ((_, poly), gamma) in polynomials.iter().zip(coeffs) {
             match poly {
-                MultilinearPolynomial::OneHot(oh) => one_hots.push((*gamma, oh)),
+                MultilinearPolynomial::OneHot(oh) => one_hots.push((*gamma, Cow::Borrowed(oh))),
                 p => dense_polys.push((*gamma, p)),
             }
         }
@@ -95,6 +95,30 @@ impl<'a> SparseRlc<'a> {
             );
         }
         Self {
+            num_vars,
+            dense,
+            one_hots,
+        }
+    }
+
+    /// Consume inputs after combining their dense contributions. The joint
+    /// keeps each sparse polynomial without cloning its tables. Dense inputs
+    /// are dropped before the opening prover allocates its working tables.
+    pub fn new_owned(
+        coeffs: &[Fr],
+        polynomials: BTreeMap<CommittedPoly, MultilinearPolynomial<Fr>>,
+        num_vars: usize,
+    ) -> SparseRlc<'static> {
+        let dense = SparseRlc::new(coeffs, &polynomials, num_vars).dense;
+        let one_hots = polynomials
+            .into_values()
+            .zip(coeffs)
+            .filter_map(|(poly, gamma)| match poly {
+                MultilinearPolynomial::OneHot(oh) => Some((*gamma, Cow::Owned(oh))),
+                _ => None,
+            })
+            .collect();
+        SparseRlc {
             num_vars,
             dense,
             one_hots,
@@ -767,5 +791,53 @@ mod hint_prefix_tests {
             }
         }
         rows
+    }
+}
+
+#[cfg(test)]
+mod owned_joint_tests {
+    use super::*;
+
+    #[test]
+    fn native_owned_joint_keeps_sparse_owners_and_matches_borrowed() {
+        let sparse = OneHotPolynomial::from_indices(vec![Some(0), None, Some(3), Some(1)], 4);
+        let owner = std::sync::Arc::downgrade(&sparse.nonzero_indices);
+        let polynomials = BTreeMap::from([
+            (
+                CommittedPoly::DivNodeQuotient(0),
+                MultilinearPolynomial::from(vec![-7i32, 3, 0, 1]),
+            ),
+            (
+                CommittedPoly::DivNodeQuotient(1),
+                MultilinearPolynomial::from(vec![Fr::from(9u64); 32]),
+            ),
+            (
+                CommittedPoly::NodeOutputRaD(0, 0),
+                MultilinearPolynomial::OneHot(sparse),
+            ),
+        ]);
+        let coefficients = [Fr::from(3u64), -Fr::from(5u64), Fr::from(7u64)];
+        let points = [
+            vec![ArkFr(Fr::zero()); 7],
+            vec![ArkFr(Fr::one()); 7],
+            (0..7)
+                .map(|i| ArkFr(Fr::from((11 * i + 3) as u64)))
+                .collect(),
+        ];
+        let borrowed = SparseRlc::new(&coefficients, &polynomials, 7);
+        let expected: Vec<_> = points.iter().map(|p| borrowed.evaluate(p)).collect();
+        drop(borrowed);
+        assert_eq!(owner.strong_count(), 1);
+        let owned = SparseRlc::new_owned(&coefficients, polynomials, 7);
+        assert_eq!(owner.strong_count(), 1);
+        assert_eq!(owned.one_hots.len(), 1);
+        assert!(matches!(&owned.one_hots[0].1, Cow::Owned(_)));
+        for (point, expected) in points.iter().zip(expected) {
+            assert_eq!(owned.evaluate(point), expected);
+        }
+        drop(owned);
+        assert!(owner.upgrade().is_none());
+        let empty = SparseRlc::new_owned(&[], BTreeMap::new(), 0);
+        assert_eq!(empty.evaluate(&[]), ArkFr(Fr::zero()));
     }
 }

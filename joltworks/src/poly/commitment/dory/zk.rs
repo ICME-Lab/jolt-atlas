@@ -56,9 +56,40 @@ impl DoryScheme {
         {
             return Err(invalid("Missing hiding commitment hints"));
         }
+        let joint = SparseRlc::new(coeffs, polynomials, opening_point.len());
+        Self::prove_joint_zk(setup, joint, coeffs, hints, opening_point, transcript)
+    }
+
+    /// Consume polynomial inputs once their dense joint has been constructed.
+    /// Callers must finish every individual opening before handing over ownership.
+    pub fn prove_rlc_zk_owned<T: Transcript>(
+        setup: &DoryProverSetup,
+        polynomials: BTreeMap<common::CommittedPoly, MultilinearPolynomial<Fr>>,
+        coeffs: &[Fr],
+        hints: Vec<DoryHint>,
+        opening_point: &[<Fr as JoltField>::Challenge],
+        transcript: &mut T,
+    ) -> Result<(DoryProof, Bn254G1, Fr), ProofVerifyError> {
+        if polynomials.is_empty()
+            || coeffs.len() != polynomials.len()
+            || hints.len() != polynomials.len()
+        {
+            return Err(invalid("Missing hiding commitment hints"));
+        }
+        let joint = SparseRlc::new_owned(coeffs, polynomials, opening_point.len());
+        Self::prove_joint_zk(setup, joint, coeffs, hints, opening_point, transcript)
+    }
+
+    fn prove_joint_zk<T: Transcript>(
+        setup: &DoryProverSetup,
+        joint: SparseRlc<'_>,
+        coeffs: &[Fr],
+        hints: Vec<DoryHint>,
+        opening_point: &[<Fr as JoltField>::Challenge],
+        transcript: &mut T,
+    ) -> Result<(DoryProof, Bn254G1, Fr), ProofVerifyError> {
         let num_vars = opening_point.len();
         let (nu, sigma) = Self::split(num_vars, Self::column_log(setup));
-        let joint = SparseRlc::new(coeffs, polynomials, num_vars);
         let point = Self::dory_point(opening_point);
         let (mut rows, commit_blind) = Self::combine_hints(hints, coeffs).into_parts();
         rows.resize(1 << nu, <ArkG1 as DoryGroup>::identity());
@@ -446,5 +477,114 @@ mod native_batch_tests {
         assert!(wrong_relation
             .verify(&proof, &input, &gens, &mut vt.clone())
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod owned_proof_tests {
+    use super::*;
+    use crate::{
+        poly::{
+            multilinear_polynomial::PolynomialEvaluation, one_hot_polynomial::OneHotPolynomial,
+        },
+        transcripts::Blake2bTranscript,
+    };
+    use common::CommittedPoly;
+
+    #[test]
+    fn native_owned_joint_proof_binds_dense_sparse_and_hiding_value() {
+        let setup = DoryScheme::setup_prover(8);
+        let verifier = DoryScheme::setup_verifier(&setup);
+        let sparse = OneHotPolynomial::from_indices(vec![Some(0), None, Some(3), Some(1)], 4);
+        let polynomials = BTreeMap::from([
+            (
+                CommittedPoly::DivNodeQuotient(0),
+                MultilinearPolynomial::from(vec![-7i32, 3, 0, 1]),
+            ),
+            (
+                CommittedPoly::NodeOutputRaD(0, 0),
+                MultilinearPolynomial::OneHot(sparse),
+            ),
+        ]);
+        let coefficients: Vec<Fr> = polynomials
+            .keys()
+            .map(|id| match id {
+                CommittedPoly::DivNodeQuotient(0) => Fr::from(3u64),
+                CommittedPoly::NodeOutputRaD(0, 0) => Fr::from(7u64),
+                _ => unreachable!(),
+            })
+            .collect();
+        let (commitments, hints): (Vec<_>, Vec<_>) = polynomials
+            .values()
+            .map(|p| DoryScheme::commit_zk(p, &setup))
+            .unzip();
+        let commitment = DoryScheme::combine_commitments(&commitments, &coefficients);
+        let mut challenges = Blake2bTranscript::new(b"owned joint point");
+        let point: Vec<<Fr as JoltField>::Challenge> = (0..6)
+            .map(|_| challenges.challenge_scalar_optimized::<Fr>())
+            .collect();
+        let mut dense = vec![0i32; 64];
+        for (i, x) in [-7, 3, 0, 1].iter().enumerate() {
+            dense[i] += 3 * x;
+        }
+        for i in [0, 14, 7] {
+            dense[i] += 7;
+        }
+        let expected = MultilinearPolynomial::from(dense).evaluate(&point);
+        let generators = DoryScheme::pedersen_generators(&setup, 4);
+        let (borrowed_proof, borrowed_value, borrowed_blind) = DoryScheme::prove_rlc_zk(
+            &setup,
+            &polynomials,
+            &coefficients,
+            hints.clone(),
+            &point,
+            &mut Blake2bTranscript::new(b"owned joint proof"),
+        )
+        .unwrap();
+        assert_eq!(
+            borrowed_value,
+            generators.commit(&[expected], &borrowed_blind)
+        );
+        let (proof, value, blind) = DoryScheme::prove_rlc_zk_owned(
+            &setup,
+            polynomials,
+            &coefficients,
+            hints,
+            &point,
+            &mut Blake2bTranscript::new(b"owned joint proof"),
+        )
+        .unwrap();
+        assert_eq!(value, generators.commit(&[expected], &blind));
+        let verify = |proof: &DoryProof, value: &Bn254G1, commitment: &DoryCommitment| {
+            DoryScheme::verify_zk(
+                proof,
+                &verifier,
+                &mut Blake2bTranscript::new(b"owned joint proof"),
+                &point,
+                value,
+                commitment,
+            )
+        };
+        assert!(verify(&borrowed_proof, &borrowed_value, &commitment).is_ok());
+        assert!(verify(&proof, &value, &commitment).is_ok());
+        assert!(verify(&proof, &value, &commitments[0]).is_err());
+        assert!(verify(
+            &proof,
+            &(value + generators.message_generators[0]),
+            &commitment
+        )
+        .is_err());
+        let mut missing = proof.clone();
+        missing.0.y_com = None;
+        assert!(verify(&missing, &value, &commitment).is_err());
+        assert!(DoryScheme::prove_rlc_zk_owned(
+            &setup,
+            BTreeMap::new(),
+            &[],
+            vec![],
+            &point,
+            &mut Blake2bTranscript::new(b"empty owned joint")
+        )
+        .is_err());
     }
 }

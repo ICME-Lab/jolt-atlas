@@ -322,11 +322,25 @@ impl CommitmentScheme for DoryScheme {
             commitments.len(),
             coeffs.len(),
         );
-        let combined = commitments
+        if commitments.len() < 128 {
+            let combined = commitments
+                .iter()
+                .zip(coeffs.iter())
+                .map(|(commitment, gamma)| ArkFr(*gamma) * commitment.borrow().0)
+                .fold(<ArkGT as DoryGroup>::identity(), |acc, term| acc + term);
+            return DoryCommitment(combined);
+        }
+        // Borrow the known commitment type before entering Rayon. This keeps
+        // the public trait's generic Borrow bound and avoids copying GT values.
+        let terms: Vec<(&DoryCommitment, &Fr)> = commitments
             .iter()
-            .zip(coeffs.iter())
-            .map(|(commitment, gamma)| ArkFr(*gamma) * commitment.borrow().0)
-            .fold(<ArkGT as DoryGroup>::identity(), |acc, term| acc + term);
+            .zip(coeffs)
+            .map(|(commitment, coefficient)| (commitment.borrow(), coefficient))
+            .collect();
+        let combined = terms
+            .into_par_iter()
+            .map(|(commitment, coefficient)| ArkFr(*coefficient) * commitment.0)
+            .reduce(<ArkGT as DoryGroup>::identity, |left, right| left + right);
         DoryCommitment(combined)
     }
 
@@ -653,3 +667,56 @@ mod tests {
 
 #[cfg(feature = "zk")]
 pub mod native_generation;
+
+#[cfg(test)]
+mod parallel_commitment_tests {
+    use super::*;
+    use ark_std::{
+        rand::{rngs::StdRng, SeedableRng},
+        UniformRand,
+    };
+
+    #[test]
+    fn parallel_combination_matches_serial_for_all_worker_counts() {
+        let setup = DoryScheme::setup_prover(8);
+        let mut bases = vec![DoryCommitment::default()];
+        for i in 1..8 {
+            let values: Vec<Fr> = (0..8).map(|j| Fr::from_u64(i * j + i)).collect();
+            bases.push(DoryScheme::commit(&MultilinearPolynomial::from(values), &setup).0);
+        }
+        let mut rng = StdRng::seed_from_u64(73);
+        for length in [0usize, 1, 7, 127, 128, 129, 256, 1024] {
+            let commitments: Vec<_> = (0..length).map(|i| bases[i % bases.len()]).collect();
+            let coefficients: Vec<_> = (0..length)
+                .map(|i| match i % 7 {
+                    0 => Fr::from_u64(0),
+                    1 => Fr::from_u64(1),
+                    2 => -Fr::from_u64(1),
+                    _ => Fr::rand(&mut rng),
+                })
+                .collect();
+            let expected = DoryCommitment(
+                commitments
+                    .iter()
+                    .zip(&coefficients)
+                    .map(|(c, s)| ArkFr(*s) * c.0)
+                    .fold(<ArkGT as DoryGroup>::identity(), |a, b| a + b),
+            );
+            for workers in [1, 2, 4] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap();
+                assert_eq!(
+                    pool.install(|| DoryScheme::combine_commitments(&commitments, &coefficients)),
+                    expected
+                );
+                let references: Vec<_> = commitments.iter().collect();
+                assert_eq!(
+                    pool.install(|| DoryScheme::combine_commitments(&references, &coefficients)),
+                    expected
+                );
+            }
+        }
+    }
+}

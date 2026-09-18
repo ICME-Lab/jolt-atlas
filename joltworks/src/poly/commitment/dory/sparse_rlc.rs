@@ -45,6 +45,7 @@ pub struct SparseRlc<'a> {
 impl<'a> SparseRlc<'a> {
     /// Build from the committed polynomial map and its RLC coefficients (same
     /// `BTreeMap` order as `build_materialized_rlc`).
+    #[tracing::instrument(skip_all, name = "SparseRlc::new")]
     pub fn new(
         coeffs: &[Fr],
         polynomials: &'a BTreeMap<CommittedPoly, MultilinearPolynomial<Fr>>,
@@ -68,19 +69,25 @@ impl<'a> SparseRlc<'a> {
             dense_len <= 1 << num_vars,
             "dense committed polynomial larger than the joint domain"
         );
-        let dense: Vec<ArkFr> = (0..dense_len)
-            .into_par_iter()
+        // Short polynomials contribute only to their prefix of the joint.
+        // Group by length and visit only overlapping input rows in each tile.
+        // This avoids scanning all polynomials for every row of the largest one.
+        dense_polys.sort_unstable_by_key(|(_, p)| std::cmp::Reverse(p.original_len()));
+        let mut dense = vec![ArkFr(Fr::zero()); dense_len];
+        dense
+            .par_chunks_mut(4096)
+            .enumerate()
             .with_min_len(par_enabled())
-            .map(|j| {
-                let mut acc = Fr::zero();
-                for (gamma, p) in &dense_polys {
-                    if j < p.original_len() {
-                        acc += *gamma * p.get_scaled_coeff(j, Fr::one());
+            .for_each(|(tile, output)| {
+                let start = tile * 4096;
+                let active = dense_polys.partition_point(|(_, p)| p.original_len() > start);
+                for (gamma, polynomial) in &dense_polys[..active] {
+                    let count = output.len().min(polynomial.original_len() - start);
+                    for (j, value) in output[..count].iter_mut().enumerate() {
+                        value.0 += polynomial.get_scaled_coeff(start + j, *gamma);
                     }
                 }
-                ArkFr(acc)
-            })
-            .collect();
+            });
         for (_, oh) in &one_hots {
             assert!(
                 oh.K * oh.nonzero_indices.len() <= 1 << num_vars,
@@ -454,5 +461,144 @@ mod tests {
             &combined,
         )
         .expect("hint-less sparse joint opening must verify");
+    }
+}
+
+#[cfg(test)]
+mod dense_prefix_tests {
+    use super::*;
+    use crate::{
+        poly::multilinear_polynomial::{BindingOrder, PolynomialBinding},
+        transcripts::{Blake2bTranscript, Transcript},
+    };
+
+    fn reference(
+        coeffs: &[Fr],
+        polynomials: &BTreeMap<CommittedPoly, MultilinearPolynomial<Fr>>,
+    ) -> Vec<ArkFr> {
+        let dense = polynomials
+            .values()
+            .zip(coeffs)
+            .filter(|(p, _)| !matches!(p, MultilinearPolynomial::OneHot(_)))
+            .collect::<Vec<_>>();
+        let length = dense
+            .iter()
+            .map(|(p, _)| p.original_len())
+            .max()
+            .unwrap_or(0);
+        (0..length)
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|j| {
+                let mut value = Fr::zero();
+                for (p, gamma) in &dense {
+                    if j < p.original_len() {
+                        value += **gamma * p.get_scaled_coeff(j, Fr::one());
+                    }
+                }
+                ArkFr(value)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn native_dense_prefix_rlc_matches_original_coefficients_and_bound_inputs() {
+        for workers in [1, 2, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut transcript = Blake2bTranscript::new(b"dense prefix parity");
+                    let mut polynomials = BTreeMap::new();
+                    for (i, length) in [1, 2, 16, 4096, 8192].into_iter().enumerate() {
+                        let values = (0..length)
+                            .map(|j| [i32::MIN, -1, 0, 1, i32::MAX][j % 5])
+                            .collect::<Vec<_>>();
+                        polynomials.insert(
+                            CommittedPoly::DivNodeQuotient(i),
+                            MultilinearPolynomial::from(values),
+                        );
+                    }
+                    polynomials.insert(
+                        CommittedPoly::DivNodeQuotient(5),
+                        MultilinearPolynomial::from(vec![u64::MAX; 16]),
+                    );
+                    polynomials.insert(
+                        CommittedPoly::DivNodeQuotient(6),
+                        MultilinearPolynomial::from(vec![i64::MIN; 32]),
+                    );
+                    polynomials.insert(
+                        CommittedPoly::DivNodeQuotient(7),
+                        MultilinearPolynomial::from(transcript.challenge_vector::<Fr>(64)),
+                    );
+                    let mut bound =
+                        MultilinearPolynomial::from((0..32).map(|i| i - 16).collect::<Vec<i32>>());
+                    bound.bind_parallel(
+                        transcript.challenge_scalar_optimized::<Fr>(),
+                        BindingOrder::HighToLow,
+                    );
+                    polynomials.insert(CommittedPoly::DivNodeQuotient(8), bound);
+                    let sparse = MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                        vec![Some(0), None, Some(3), Some(1)],
+                        4,
+                    ));
+                    polynomials.insert(CommittedPoly::NodeOutputRaD(0, 0), sparse.clone());
+                    for mut coefficients in [
+                        transcript.challenge_vector::<Fr>(polynomials.len()),
+                        vec![Fr::zero(); polynomials.len()],
+                    ] {
+                        coefficients[0] = Fr::zero();
+                        let expected = reference(&coefficients, &polynomials);
+                        assert_eq!(
+                            SparseRlc::new(&coefficients, &polynomials, 13).dense,
+                            expected
+                        );
+                        let _guard = common::parallel::ParallelFlagGuard::disabled();
+                        assert_eq!(
+                            SparseRlc::new(&coefficients, &polynomials, 13).dense,
+                            expected
+                        );
+                    }
+                    let only_sparse =
+                        BTreeMap::from([(CommittedPoly::NodeOutputRaD(0, 0), sparse)]);
+                    assert!(SparseRlc::new(&[Fr::one()], &only_sparse, 4)
+                        .dense
+                        .is_empty());
+                });
+        }
+    }
+
+    #[test]
+    #[ignore = "Isolated dense part of a joint opening, not a complete native proof"]
+    fn native_dense_prefix_rlc_benchmark() {
+        let mode = std::env::var("NATIVE_DENSE_RLC_MODE").unwrap();
+        assert!(mode == "scan" || mode == "tiles");
+        let mut polynomials = BTreeMap::new();
+        polynomials.insert(
+            CommittedPoly::DivNodeQuotient(0),
+            MultilinearPolynomial::from((0..1 << 22).map(|i| i % 101 - 50).collect::<Vec<i32>>()),
+        );
+        for i in 1..=1024 {
+            polynomials.insert(
+                CommittedPoly::DivNodeQuotient(i),
+                MultilinearPolynomial::from(
+                    (0..512)
+                        .map(|j| (j + i as i32) % 73 - 36)
+                        .collect::<Vec<i32>>(),
+                ),
+            );
+        }
+        let mut transcript = Blake2bTranscript::new(b"dense prefix benchmark");
+        let coefficients = transcript.challenge_vector::<Fr>(polynomials.len());
+        let start = std::time::Instant::now();
+        let values = if mode == "scan" {
+            reference(&coefficients, &polynomials)
+        } else {
+            SparseRlc::new(&coefficients, &polynomials, 22).dense
+        };
+        let seconds = start.elapsed().as_secs_f64();
+        println!("DENSE_RLC_BENCH {{\"mode\":\"{}\",\"seconds\":{},\"workers\":{},\"polynomials\":1025,\"log_long_rows\":22,\"log_short_rows\":9,\"complete_proof\":false}}",mode,seconds,rayon::current_num_threads());
+        std::hint::black_box(values);
     }
 }

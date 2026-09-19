@@ -45,9 +45,21 @@ impl CanonicalSerialize for CompactDoryCommitment {
         Fq6::ZERO.serialized_size(compress)
     }
 }
+// BN254 p - r = 6u^2, in little-endian limbs, where u = 4965661367192848881.
+const P_MINUS_R: [u64; 2] = [0xf83e9682e87cfd46, 0x6f4d8248eeb859fb];
+
 impl Valid for CompactDoryCommitment {
     fn check(&self) -> Result<(), SerializationError> {
-        self.0.check()
+        let x = self.0 .0 .0 .0;
+        // For nonzero x, x^r = 1 iff x^p = x^(p-r). Frobenius computes x^p
+        // exactly, while p-r has 127 bits. Zero must be rejected explicitly.
+        // Use ordinary field powering: arbitrary torus inputs need not be
+        // cyclotomic, so cyclotomic squaring would not be valid here.
+        if x != Fq12::ZERO && x.frobenius_map(1) == x.pow(P_MINUS_R) {
+            Ok(())
+        } else {
+            Err(SerializationError::InvalidData)
+        }
     }
 }
 impl CanonicalDeserialize for CompactDoryCommitment {
@@ -116,3 +128,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "compact_subgroup_tests.rs"]
+mod subgroup_tests;

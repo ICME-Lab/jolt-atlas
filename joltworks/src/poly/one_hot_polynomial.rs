@@ -1,3 +1,4 @@
+use crate::poly::compact_indices::CompactIndices;
 #[cfg(test)]
 use crate::poly::dense_mlpoly::DensePolynomial;
 use crate::{
@@ -26,7 +27,7 @@ pub struct OneHotPolynomial<F: JoltField> {
     /// In other words, the raf/waf corresponding to this
     /// ra/wa polynomial.
     /// If empty, this polynomial is 0 for all j.
-    pub nonzero_indices: Arc<Vec<Option<u16>>>,
+    pub nonzero_indices: Arc<CompactIndices<u16>>,
     /// The number of variables that have been bound over the
     /// course of sumcheck so far.
     pub num_variables_bound: usize,
@@ -50,7 +51,7 @@ impl<F: JoltField> Default for OneHotPolynomial<F> {
     fn default() -> Self {
         Self {
             K: 1,
-            nonzero_indices: Arc::new(vec![]),
+            nonzero_indices: Arc::new(CompactIndices::new(vec![], 1)),
             num_variables_bound: 0,
             G: vec![],
             H: Arc::new(RwLock::new(RaPolynomial::None)),
@@ -63,7 +64,7 @@ impl<F: JoltField> OneHotPolynomial<F> {
         assert!(K <= 1usize << u16::BITS, "K must be <= 65536 for indices");
         Self {
             K,
-            nonzero_indices: Arc::new(nonzero_indices),
+            nonzero_indices: Arc::new(CompactIndices::new(nonzero_indices, K)),
             ..Default::default()
         }
     }

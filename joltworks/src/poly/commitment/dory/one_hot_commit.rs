@@ -10,6 +10,7 @@
 //! Tier-2 pairs each row with its G2 generator; rows that received no entry
 //! are the identity and contribute nothing, so they are skipped (bucketed
 //! lookup polynomials leave whole slabs of empty rows in their gap tails).
+use crate::poly::compact_indices::IndexSlice;
 use ark_bn254::{Bn254, Fq, G1Affine, G1Projective};
 use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
 use ark_ff::{batch_inversion, Field, Zero};
@@ -121,7 +122,7 @@ pub(super) fn batched_affine_row_sums(
 /// Tier-1 row commitments of a one-hot polynomial: row `idx / cols` receives
 /// generator `g1[idx % cols]` for every set entry `idx = k*T + t`.
 pub(super) fn one_hot_row_commitments(
-    nonzero_indices: &[Option<u16>],
+    nonzero_indices: IndexSlice<'_, u16>,
     t_len: usize,
     cols: usize,
     num_rows: usize,

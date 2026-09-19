@@ -3,6 +3,7 @@
 //! This module contains the sumcheck-specific logic for the batch opening reduction protocol.
 //! The higher-level orchestration remains in `poly/opening_proof.rs`.
 
+use crate::poly::compact_indices::CompactIndices;
 use crate::{
     field::JoltField,
     poly::{
@@ -640,7 +641,7 @@ pub struct OneHotPolynomialProverOpening<F: JoltField> {
     pub K: usize,
     /// The group's `(nonzero indices, coefficient)` per polynomial.
     #[allocative(skip)]
-    polynomials: Vec<(Arc<Vec<Option<u16>>>, F)>,
+    polynomials: Vec<(Arc<CompactIndices<u16>>, F)>,
     /// `G[k] = Σ_i ρ^i·Σ_t D(t)·[idx_i(t) = k]` (Section 6.3 of Twist/Shout).
     G: Vec<F>,
     H: GroupH<F>,
@@ -689,7 +690,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                 let mut result: Vec<F> = unsafe_allocate_zero_vec(K);
                 for (p, c) in &group {
                     let single = group.len() == 1;
-                    for (j, k) in p.nonzero_indices[start..end].iter().enumerate() {
+                    for (j, k) in p.nonzero_indices.slice(start..end).iter().enumerate() {
                         if let Some(k) = k {
                             let d = D_coeffs_for_G[start + j];
                             result[*k as usize] += if single { d } else { *c * d };

@@ -248,10 +248,14 @@ impl OutputClaimConstraint {
         Some(Self::batch_inner(&refs))
     }
 
+    #[tracing::instrument(skip_all, name = "OutputClaimConstraint::batch_inner", fields(constraints = constraints.len()))]
     fn batch_inner(constraints: &[&OutputClaimConstraint]) -> Self {
         let num_instances = constraints.len();
         let mut combined_terms = Vec::new();
         let mut combined_openings = Vec::new();
+        // Membership is indexed separately from the first-occurrence order.
+        // Keep that order unchanged for the verifier constraint layout.
+        let mut seen_openings = std::collections::HashSet::new();
         let mut challenge_offset = num_instances;
 
         for (j, constraint) in constraints.iter().enumerate() {
@@ -272,7 +276,7 @@ impl OutputClaimConstraint {
             }
 
             for opening in &constraint.required_openings {
-                if !combined_openings.contains(opening) {
+                if seen_openings.insert(*opening) {
                     combined_openings.push(*opening);
                 }
             }
@@ -467,3 +471,7 @@ mod tests {
         assert_eq!(constraint.num_challenges, 1);
     }
 }
+
+#[cfg(test)]
+#[path = "opening_batch_tests.rs"]
+mod opening_batch_tests;

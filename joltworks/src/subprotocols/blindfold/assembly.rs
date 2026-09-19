@@ -35,6 +35,7 @@ pub struct NativeBlindFold<F: JoltField> {
 }
 
 impl<F: JoltField> NativeBlindFold<F> {
+    #[tracing::instrument(skip_all, name = "NativeBlindFold::new", fields(stages = relations.len()))]
     pub fn new(
         relations: Vec<ZkVerifierStage<F>>,
         extra_constraints: &[OutputClaimConstraint],

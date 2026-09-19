@@ -193,7 +193,7 @@ impl DoryScheme {
         let row_commitments = {
             let _s = tracing::span!(tracing::Level::INFO, "one_hot_tier_1").entered();
             one_hot_commit::one_hot_row_commitments(
-                &one_hot.nonzero_indices,
+                one_hot.nonzero_indices.as_slice(),
                 t_len,
                 cols,
                 num_rows,

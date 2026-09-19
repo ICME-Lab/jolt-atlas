@@ -191,9 +191,11 @@ impl<F: JoltField> ReadRafProver<F> {
     pub fn initialize(lookup_indices: &[usize], table: &[i32], params: ReadRafParams<F>) -> Self {
         let table_size = 1 << params.log_K;
         let E = EqPolynomial::evals(&params.r);
+        // Each task owns a full table. Give it at least that many rows
+        // so allocation and merging remain proportional to the input size.
         let G = lookup_indices
             .par_iter()
-            .with_min_len(par_enabled())
+            .with_min_len(common::parallel::par_enabled_with(table_size))
             .enumerate()
             .fold(
                 || unsafe_allocate_zero_vec::<F>(table_size),
@@ -620,4 +622,168 @@ where
                 running
             },
         )
+}
+
+#[cfg(test)]
+mod bounded_lookup_preparation_tests {
+    use super::*;
+    use ark_bn254::Fr;
+    use ark_std::{One, Zero};
+    use common::parallel::ParallelFlagGuard;
+    use std::time::Instant;
+
+    fn parameters(point: Vec<Fr>, log_table: usize, table: &[i32]) -> ReadRafParams<Fr> {
+        ReadRafParams {
+            r: point,
+            gamma: Fr::from(7u64),
+            rv_claim: Fr::zero(),
+            raf_claim: Fr::zero(),
+            ra_vp: VirtualPoly::NodeOutput(2),
+            ra_sid: SumcheckId::NodeExecution(0),
+            log_K: log_table,
+            table: table.to_vec(),
+        }
+    }
+
+    fn original_initialize(
+        indices: &[usize],
+        table: &[i32],
+        params: ReadRafParams<Fr>,
+    ) -> ReadRafProver<Fr> {
+        let table_size = 1 << params.log_K;
+        let equality = EqPolynomial::<Fr>::evals(&params.r);
+        let histogram = indices
+            .par_iter()
+            .with_min_len(par_enabled())
+            .enumerate()
+            .fold(
+                || unsafe_allocate_zero_vec::<Fr>(table_size),
+                |mut local, (j, &index)| {
+                    local[index] += equality[j];
+                    local
+                },
+            )
+            .reduce(
+                || unsafe_allocate_zero_vec::<Fr>(table_size),
+                |mut left, right| {
+                    for (sum, value) in left.iter_mut().zip(right) {
+                        *sum += value;
+                    }
+                    left
+                },
+            );
+        ReadRafProver {
+            int: IdentityPolynomial::new(params.log_K),
+            params,
+            val: MultilinearPolynomial::from(table.to_vec()),
+            G: MultilinearPolynomial::from(histogram),
+        }
+    }
+
+    fn direct_equality(point: &[Fr], index: usize) -> Fr {
+        point
+            .iter()
+            .enumerate()
+            .fold(Fr::one(), |weight, (bit, value)| {
+                weight
+                    * if (index >> (point.len() - bit - 1)) & 1 == 1 {
+                        *value
+                    } else {
+                        Fr::one() - value
+                    }
+            })
+    }
+
+    #[test]
+    fn lookup_initialization_matches_independent_weights() {
+        for workers in [1, 2, 8] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                for (row_bits, table_bits) in [(0, 0), (1, 4), (5, 2), (12, 8), (16, 14)] {
+                    let table: Vec<i32> = (0..1 << table_bits).map(|i| i - 31).collect();
+                    for boolean in [false, true] {
+                        let point: Vec<Fr> = (0..row_bits)
+                            .map(|i| {
+                                Fr::from(if boolean {
+                                    (i % 2) as u64
+                                } else {
+                                    (i * 13 + 3) as u64
+                                })
+                            })
+                            .collect();
+                        for pattern in 0..3 {
+                            let indices: Vec<usize> = (0..1 << row_bits)
+                                .map(|i| match pattern {
+                                    0 => 0,
+                                    1 => table.len() - 1,
+                                    _ => (i * 7919 + i / 7) % table.len(),
+                                })
+                                .collect();
+                            let mut expected = vec![Fr::zero(); table.len()];
+                            for (i, index) in indices.iter().enumerate() {
+                                expected[*index] += direct_equality(&point, i);
+                            }
+                            let params = parameters(point.clone(), table_bits, &table);
+                            let result =
+                                ReadRafProver::initialize(&indices, &table, params.clone());
+                            let original = original_initialize(&indices, &table, params);
+                            assert_eq!(result.G.coeffs(), expected);
+                            assert_eq!(original.G.coeffs(), expected);
+                            assert_eq!(result.val.coeffs(), original.val.coeffs());
+                            assert_eq!(expected.iter().sum::<Fr>(), Fr::one());
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn lookup_initialization_with_parallelism_disabled() {
+        let _guard = ParallelFlagGuard::disabled();
+        let point = vec![Fr::from(3u64); 13];
+        let table = vec![11; 16];
+        let indices: Vec<usize> = (0..8192).map(|i| i % 16).collect();
+        let params = parameters(point, 4, &table);
+        let result = ReadRafProver::initialize(&indices, &table, params.clone());
+        let original = original_initialize(&indices, &table, params);
+        assert_eq!(result.G.coeffs(), original.G.coeffs());
+    }
+
+    #[test]
+    #[ignore = "isolated lookup initialization benchmark"]
+    fn lookup_initialization_benchmark() {
+        let mode = std::env::var("NATIVE_LOOKUP_BENCH_MODE").unwrap();
+        assert!(matches!(mode.as_str(), "original" | "bounded"));
+        let row_bits = 20;
+        let table_bits = 20;
+        let point: Vec<Fr> = (0..row_bits)
+            .map(|i| Fr::from((i * 13 + 3) as u64))
+            .collect();
+        let table: Vec<i32> = (0..1 << table_bits).map(|i| i - 31).collect();
+        let indices: Vec<usize> = (0..1 << row_bits)
+            .map(|i| (i * 7919 + i / 7) % table.len())
+            .collect();
+        let params = parameters(point.clone(), table_bits, &table);
+        for sample in 0..3 {
+            let params = params.clone();
+            let start = Instant::now();
+            let result = if mode == "original" {
+                original_initialize(&indices, &table, params)
+            } else {
+                ReadRafProver::initialize(&indices, &table, params)
+            };
+            let seconds = start.elapsed().as_secs_f64();
+            assert_eq!(result.G.coeffs().iter().sum::<Fr>(), Fr::one());
+            println!(
+                "LOOKUP_BENCH mode={mode} sample={sample} rows={} table={} seconds={seconds:.9}",
+                indices.len(),
+                table.len()
+            );
+            std::hint::black_box(result);
+        }
+    }
 }

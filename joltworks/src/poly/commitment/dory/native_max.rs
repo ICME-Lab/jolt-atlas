@@ -410,8 +410,10 @@ impl SumcheckInstanceProver<Fr, Blake2bTranscript> for MaxProver {
     }
     fn ingest_challenge(&mut self, r: <Fr as JoltField>::Challenge, _: usize) {
         self.eq.bind_parallel(r, BindingOrder::HighToLow);
+        crate::subprotocols::opening_reduction::reclaim_opening_coefficients(&mut self.eq);
         for p in &mut self.values {
             p.bind_parallel(r, BindingOrder::HighToLow);
+            crate::subprotocols::opening_reduction::reclaim_opening_coefficients(p);
         }
     }
     fn cache_openings(

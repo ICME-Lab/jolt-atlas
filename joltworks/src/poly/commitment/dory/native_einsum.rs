@@ -699,9 +699,11 @@ impl SumcheckInstanceProver<Fr, Blake2bTranscript> for ContractionProver {
     fn ingest_challenge(&mut self, r: <Fr as JoltField>::Challenge, _: usize) {
         if let Some(selector) = &mut self.selector {
             selector.bind_parallel(r, BindingOrder::HighToLow);
+            crate::subprotocols::opening_reduction::reclaim_opening_coefficients(selector);
         }
         for p in &mut self.inputs {
             p.bind_parallel(r, BindingOrder::HighToLow);
+            crate::subprotocols::opening_reduction::reclaim_opening_coefficients(p);
         }
     }
     fn cache_openings(
@@ -950,5 +952,110 @@ mod partial_index_tests {
         println!("PARTIAL_BENCH {{\"mode\":\"{}\",\"log_rows\":24,\"seconds\":{},\"workers\":{},\"complete_proof\":false}}",
             mode, seconds, rayon::current_num_threads());
         std::hint::black_box(result);
+    }
+}
+
+#[cfg(test)]
+mod contraction_storage_tests {
+    use super::*;
+    use crate::poly::opening_proof::SumcheckId;
+
+    #[test]
+    fn arithmetic_storage_contraction_messages_with_and_without_selector() {
+        for log_rows in [1usize, 8, 16] {
+            for selected in [false, true] {
+                let n = 1 << log_rows;
+                let shape = if selected { vec![2, n / 2] } else { vec![n] };
+                let equation = if selected { "ab,ab->a" } else { "b,b->" };
+                // Keep the extremal operands inside the registered i64 accumulation bound.
+                let log_contract = if selected { log_rows - 1 } else { log_rows };
+                let input_bits = ((64 - log_contract) / 2).min(32) as u8;
+                let c = Contraction::new(equation, [&shape, &shape], 1, [input_bits; 2]).unwrap();
+                assert_eq!(1 << c.log_shared, n);
+                let mut transcript = Blake2bTranscript::new(b"contraction-storage-parity");
+                let output: Vec<Fr> = transcript.challenge_vector(c.log_output);
+                let minimum = -(1i64 << (input_bits - 1)) as i32;
+                let maximum = ((1i64 << (input_bits - 1)) - 1) as i32;
+                let signed: Vec<i32> = (0..n)
+                    .map(|i| [minimum, -7, 0, 1, maximum][i % 5])
+                    .collect();
+                let mut left: Vec<Fr> = signed.iter().map(|v| Fr::from_i32(*v)).collect();
+                let mut right: Vec<Fr> = left.iter().rev().copied().collect();
+                let mut selector: Vec<Fr> = (0..n)
+                    .map(|i| {
+                        // Literal Boolean coordinates, independent of the encoded challenge type.
+                        c.shared_output
+                            .iter()
+                            .map(|(bit, out)| {
+                                if (i >> (c.log_shared - 1 - bit)) & 1 == 0 {
+                                    Fr::from(1u64) - output[*out]
+                                } else {
+                                    output[*out]
+                                }
+                            })
+                            .product()
+                    })
+                    .collect();
+                let id = |i| OpeningId::new(tensor(i), SumcheckId::NodeExecution(1));
+                let mut prover = ContractionProver {
+                    params: ContractionParams {
+                        contraction: c.clone(),
+                        r_output: output.clone(),
+                        accumulator: id(2),
+                        inputs: [id(0), id(1)],
+                    },
+                    inputs: [
+                        MultilinearPolynomial::from(signed.clone()),
+                        MultilinearPolynomial::from(signed.into_iter().rev().collect::<Vec<_>>()),
+                    ],
+                    selector: selected.then(|| c.selector_table(&output)),
+                };
+                for round in 0..c.log_shared {
+                    let message = prover.compute_message(round, Fr::zero());
+                    let half = left.len() / 2;
+                    for z in [
+                        Fr::from(0u64),
+                        Fr::from(1u64),
+                        Fr::from(2u64),
+                        Fr::from(7u64),
+                    ] {
+                        let at = |v: &[Fr], i: usize| v[i] * (Fr::from(1u64) - z) + v[i + half] * z;
+                        let expected: Fr = (0..half)
+                            .map(|i| at(&left, i) * at(&right, i) * at(&selector, i))
+                            .sum();
+                        assert_eq!(
+                            message.evaluate(&z),
+                            expected,
+                            "selected {selected}, round {round}"
+                        );
+                    }
+                    let challenge = match round % 4 {
+                        0 => <Fr as JoltField>::Challenge::from(0u128),
+                        1 => <Fr as JoltField>::Challenge::from(1u128),
+                        _ => transcript.challenge_scalar_optimized::<Fr>(),
+                    };
+                    let scalar: Fr = challenge.into();
+                    #[cfg(feature = "challenge-254-bit")]
+                    if round % 4 < 2 {
+                        assert_eq!(scalar, Fr::from((round % 4) as u64));
+                    }
+                    for values in [&mut left, &mut right, &mut selector] {
+                        *values = (0..half)
+                            .map(|i| {
+                                values[i] * (Fr::from(1u64) - scalar) + values[i + half] * scalar
+                            })
+                            .collect();
+                    }
+                    prover.ingest_challenge(challenge, round);
+                    for (p, values) in prover.inputs.iter().zip([&left, &right]) {
+                        for (i, value) in values.iter().enumerate() {
+                            assert_eq!(p.get_bound_coeff(i), *value);
+                        }
+                    }
+                }
+                assert_eq!(prover.inputs[0].final_claim(), left[0]);
+                assert_eq!(prover.inputs[1].final_claim(), right[0]);
+            }
+        }
     }
 }

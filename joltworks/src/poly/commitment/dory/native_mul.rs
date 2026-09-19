@@ -601,8 +601,10 @@ impl SumcheckInstanceProver<Fr, Blake2bTranscript> for ArithmeticProver {
     }
     fn ingest_challenge(&mut self, r: <Fr as JoltField>::Challenge, _: usize) {
         self.eq.bind_parallel(r, BindingOrder::HighToLow);
+        crate::subprotocols::opening_reduction::reclaim_opening_coefficients(&mut self.eq);
         for p in &mut self.values {
             p.bind_parallel(r, BindingOrder::HighToLow);
+            crate::subprotocols::opening_reduction::reclaim_opening_coefficients(p);
         }
     }
     fn cache_openings(
@@ -1066,5 +1068,150 @@ mod tests {
         }
         assert!(NativeMulWitness::commit(vec![], &[1], &[1], 0, &pp).is_err());
         assert!(NativeMulWitness::commit(vec![], &[1], &[1], 31, &pp).is_err());
+    }
+}
+
+#[cfg(test)]
+mod arithmetic_storage_tests {
+    use super::*;
+
+    fn bind_reference(values: &[Fr], challenge: Fr) -> Vec<Fr> {
+        let half = values.len() / 2;
+        (0..half)
+            .map(|i| values[i] * (Fr::from(1u64) - challenge) + values[i + half] * challenge)
+            .collect()
+    }
+
+    #[test]
+    fn arithmetic_storage_complete_messages_and_original_openings() {
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for log_rows in [1usize, 8, 16] {
+                        let n = 1 << log_rows;
+                        let signed: Vec<i32> = (0..n)
+                            .map(|i| [i32::MIN, -1, 0, 1, i32::MAX][i % 5])
+                            .collect();
+                        let unsigned: Vec<u64> =
+                            (0..n).map(|i| [0, 1, u64::MAX, 7][i % 4]).collect();
+                        let original: [MultilinearPolynomial<Fr>; N] = std::array::from_fn(|i| {
+                            if i < 3 {
+                                MultilinearPolynomial::from(signed.clone())
+                            } else {
+                                MultilinearPolynomial::from(unsigned.clone())
+                            }
+                        });
+                        let original_fields: [Vec<Fr>; N] = std::array::from_fn(|i| {
+                            if i < 3 {
+                                signed.iter().map(|v| Fr::from_i32(*v)).collect()
+                            } else {
+                                unsigned.iter().map(|v| Fr::from(*v)).collect()
+                            }
+                        });
+                        let mut reference = original_fields.clone();
+                        let mut transcript = Blake2bTranscript::new(b"arithmetic-storage-parity");
+                        let point: Vec<Fr> = transcript.challenge_vector(log_rows);
+                        let mut equality: Vec<Fr> = (0..n)
+                            .map(|i| {
+                                point
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(j, r)| {
+                                        if (i >> (log_rows - 1 - j)) & 1 == 0 {
+                                            Fr::from(1u64) - r
+                                        } else {
+                                            *r
+                                        }
+                                    })
+                                    .product()
+                            })
+                            .collect();
+                        let gamma = [Fr::from(3u64), Fr::from(7u64), Fr::from(13u64)];
+                        let divisor = Fr::from(256u64);
+                        let mut prover = ArithmeticProver {
+                            params: ArithmeticParams {
+                                r: point,
+                                divisor,
+                                gamma,
+                                openings: std::array::from_fn(|i| opening(i, 1)),
+                            },
+                            values: original.clone(),
+                            eq: MultilinearPolynomial::from(equality.clone()),
+                        };
+                        let mut challenges = Vec::new();
+                        for round in 0..log_rows {
+                            let half = equality.len() / 2;
+                            let message = prover.compute_message(round, Fr::zero());
+                            for z in [
+                                Fr::from(0u64),
+                                Fr::from(1u64),
+                                Fr::from(2u64),
+                                Fr::from(9u64),
+                            ] {
+                                let expected: Fr = (0..half)
+                                    .map(|i| {
+                                        let at = |v: &[Fr]| {
+                                            (Fr::from(1u64) - z) * v[i] + z * v[i + half]
+                                        };
+                                        let [a, b, y, low, high, rem] =
+                                            std::array::from_fn(|j| at(&reference[j]));
+                                        at(&equality)
+                                            * (gamma[0]
+                                                * (a * b - divisor * (y - low + high) - rem)
+                                                + gamma[1] * low * (y + Fr::from(1u64 << 31))
+                                                + gamma[2] * high * (Fr::from(i32::MAX as u64) - y))
+                                    })
+                                    .sum();
+                                assert_eq!(message.evaluate(&z), expected, "round {round}");
+                            }
+                            let challenge = match round % 4 {
+                                0 => <Fr as JoltField>::Challenge::from(0u128),
+                                1 => <Fr as JoltField>::Challenge::from(1u128),
+                                _ => transcript.challenge_scalar_optimized::<Fr>(),
+                            };
+                            let scalar: Fr = challenge.into();
+                            #[cfg(feature = "challenge-254-bit")]
+                            if round % 4 < 2 {
+                                assert_eq!(scalar, Fr::from((round % 4) as u64));
+                            }
+                            challenges.push(challenge);
+                            prover.ingest_challenge(challenge, round);
+                            equality = bind_reference(&equality, scalar);
+                            for (poly, values) in prover.values.iter().zip(&mut reference) {
+                                *values = bind_reference(values, scalar);
+                                assert_eq!(poly.len(), values.len());
+                                for (i, expected) in values.iter().enumerate() {
+                                    assert_eq!(poly.get_bound_coeff(i), *expected);
+                                }
+                                assert!(matches!(poly, MultilinearPolynomial::LargeScalars(_)));
+                            }
+                        }
+                        for i in 0..N {
+                            assert_eq!(
+                                prover.values[i].final_claim(),
+                                original[i].evaluate(&challenges)
+                            );
+                            assert_eq!(original[i].len(), n);
+                            assert!(!original[i].is_bound());
+                            for j in 0..n {
+                                assert_eq!(original[i].get_bound_coeff(j), original_fields[i][j]);
+                            }
+                        }
+                        let mut accumulator = ProverOpeningAccumulator::new();
+                        prover.cache_openings(&mut accumulator, &mut transcript, &challenges);
+                        for i in 0..N {
+                            assert_eq!(
+                                accumulator
+                                    .get_committed_polynomial_opening(prover.params.openings[i])
+                                    .1,
+                                reference[i][0]
+                            );
+                        }
+                    }
+                });
+        }
     }
 }

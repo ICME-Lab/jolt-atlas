@@ -171,7 +171,9 @@ impl SumcheckInstanceProver<Fr, Blake2bTranscript> for HiddenReadProver {
     }
     fn ingest_challenge(&mut self, r: <Fr as JoltField>::Challenge, _: usize) {
         self.values.bind_parallel(r, BindingOrder::HighToLow);
+        crate::subprotocols::opening_reduction::reclaim_opening_coefficients(&mut self.values);
         self.weights.bind_parallel(r, BindingOrder::HighToLow);
+        crate::subprotocols::opening_reduction::reclaim_opening_coefficients(&mut self.weights);
         self.identity.bind_parallel(r, BindingOrder::HighToLow);
     }
     fn cache_openings(

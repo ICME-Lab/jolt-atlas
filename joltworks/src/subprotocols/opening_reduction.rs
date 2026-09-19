@@ -553,9 +553,11 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
     }
 }
 
-/// Keep a working opening polynomial on its remaining variables.
+/// Keep an owned working polynomial on its remaining variables.
+/// Its caller must only read bound coefficients and final claims afterward.
+/// Native arithmetic provers and opening reduction satisfy this contract.
 /// The original committed polynomial is retained separately for the PCS.
-fn reclaim_opening_coefficients<F: JoltField>(poly: &mut MultilinearPolynomial<F>) {
+pub(crate) fn reclaim_opening_coefficients<F: JoltField>(poly: &mut MultilinearPolynomial<F>) {
     use MultilinearPolynomial::*;
     macro_rules! take_bound {
         ($p:expr) => {{

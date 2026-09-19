@@ -6,7 +6,7 @@
 use super::DoryCommitment;
 use ark_bn254::{Fq12, Fq12Config, Fq6};
 use ark_ec::pairing::PairingOutput;
-use ark_ff::{AdditiveGroup, Field, Fp12Config};
+use ark_ff::{AdditiveGroup, CyclotomicMultSubgroup, Field, Fp12Config};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
     Write,
@@ -53,9 +53,13 @@ impl Valid for CompactDoryCommitment {
         let x = self.0 .0 .0 .0;
         // For nonzero x, x^r = 1 iff x^p = x^(p-r). Frobenius computes x^p
         // exactly, while p-r has 127 bits. Zero must be rejected explicitly.
-        // Use ordinary field powering: arbitrary torus inputs need not be
-        // cyclotomic, so cyclotomic squaring would not be valid here.
-        if x != Fq12::ZERO && x.frobenius_map(1) == x.pow(P_MINUS_R) {
+        // First establish x^(p^4-p^2+1) = 1. The BN254 order r divides
+        // p^4-p^2+1, so this gate retains every GT point and makes cyclotomic
+        // powering valid. The final equality still enforces prime order r.
+        if x != Fq12::ZERO
+            && x.frobenius_map(4) * x == x.frobenius_map(2)
+            && x.frobenius_map(1) == x.cyclotomic_exp(P_MINUS_R)
+        {
             Ok(())
         } else {
             Err(SerializationError::InvalidData)
@@ -132,3 +136,7 @@ mod tests {
 #[cfg(test)]
 #[path = "compact_subgroup_tests.rs"]
 mod subgroup_tests;
+
+#[cfg(test)]
+#[path = "compact_cyclotomic_tests.rs"]
+mod cyclotomic_tests;

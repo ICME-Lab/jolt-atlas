@@ -497,6 +497,7 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
         let mut shared_poly = shared_poly_ref.write().unwrap();
         if shared_poly.num_variables_bound <= round {
             shared_poly.poly.bind_parallel(r_j, BindingOrder::HighToLow);
+            reclaim_opening_coefficients(&mut shared_poly.poly);
             shared_poly.num_variables_bound += 1;
         }
     }
@@ -505,6 +506,49 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
         let poly_ref = self.polynomial.as_ref().unwrap();
         poly_ref.read().unwrap().poly.final_claim()
     }
+}
+
+/// Keep a working opening polynomial on its remaining variables.
+/// The original committed polynomial is retained separately for the PCS.
+fn reclaim_opening_coefficients<F: JoltField>(poly: &mut MultilinearPolynomial<F>) {
+    use MultilinearPolynomial::*;
+    macro_rules! take_bound {
+        ($p:expr) => {{
+            if $p.bound_coeffs.is_empty() {
+                return;
+            }
+            let mut values = mem::take(&mut $p.bound_coeffs);
+            values.truncate($p.len());
+            values
+        }};
+    }
+    let values = match poly {
+        LargeScalars(p) => {
+            // Reclaim large tails geometrically rather than reallocating every round.
+            if p.Z.capacity() < 4 * p.len() || p.Z.capacity() * mem::size_of::<F>() < 1 << 20 {
+                return;
+            }
+            let mut values = mem::take(&mut p.Z);
+            values.truncate(p.len());
+            values
+        }
+        BoolScalars(p) => take_bound!(p),
+        U8Scalars(p) => take_bound!(p),
+        U16Scalars(p) => take_bound!(p),
+        U32Scalars(p) => take_bound!(p),
+        U64Scalars(p) => take_bound!(p),
+        U128Scalars(p) => take_bound!(p),
+        I32Scalars(p) => take_bound!(p),
+        I64Scalars(p) => take_bound!(p),
+        I128Scalars(p) => take_bound!(p),
+        S128Scalars(p) => take_bound!(p),
+        OneHot(_) => unreachable!("opening coefficient reclamation requires a dense polynomial"),
+    };
+    let mut values = values;
+    if values.capacity() >= 4 * values.len() && values.capacity() * mem::size_of::<F>() >= 1 << 20 {
+        values.shrink_to_fit();
+    }
+    *poly = MultilinearPolynomial::from(values);
 }
 
 /// Shared state for a dense polynomial during sumcheck binding.
@@ -619,8 +663,16 @@ impl<F: JoltField> GroupH<F> {
     fn bind_parallel(&mut self, r: F::Challenge) {
         match self {
             Self::None => panic!("H not initialized"),
-            Self::Single(h) => h.bind_parallel(r, BindingOrder::HighToLow),
-            Self::Dense(h) => h.bind_parallel(r, BindingOrder::HighToLow),
+            Self::Single(h) => {
+                h.bind_parallel(r, BindingOrder::HighToLow);
+                if let RaPolynomial::RoundN(poly) = h {
+                    reclaim_opening_coefficients(poly);
+                }
+            }
+            Self::Dense(h) => {
+                h.bind_parallel(r, BindingOrder::HighToLow);
+                reclaim_opening_coefficients(h);
+            }
         }
     }
 
@@ -1469,5 +1521,213 @@ mod tests {
                 &mut verifier_tr,
             )
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod opening_capacity_tests {
+    use super::*;
+    use crate::{
+        poly::{compact_polynomial::CompactPolynomial, eq_poly::EqPolynomial},
+        transcripts::Blake2bTranscript,
+    };
+    use ark_bn254::Fr;
+
+    fn check(mut poly: MultilinearPolynomial<Fr>, mut expected: Vec<Fr>) {
+        let mut transcript = Blake2bTranscript::new(b"opening-capacity-independent");
+        let mut rounds = 0;
+        while expected.len() > 1 {
+            let r = match rounds % 4 {
+                0 => <Fr as JoltField>::Challenge::from(0u128),
+                1 => <Fr as JoltField>::Challenge::from(1u128),
+                _ => transcript.challenge_scalar_optimized::<Fr>(),
+            };
+            let n = expected.len() / 2;
+            let next: Vec<Fr> = (0..n)
+                .map(|i| expected[i] + (expected[i + n] - expected[i]) * r)
+                .collect();
+            poly.bind_parallel(r, BindingOrder::HighToLow);
+            reclaim_opening_coefficients(&mut poly);
+            assert_eq!(poly.len(), next.len());
+            assert_eq!(poly.get_num_vars(), next.len().ilog2() as usize);
+            for (i, value) in next.iter().enumerate() {
+                assert_eq!(poly.get_bound_coeff(i), *value);
+            }
+            match &poly {
+                MultilinearPolynomial::LargeScalars(p) => {
+                    assert!(
+                        p.Z.capacity() < 4 * p.len()
+                            || p.Z.capacity() * mem::size_of::<Fr>() < 1 << 20
+                    );
+                }
+                _ => panic!("bound opening retains original compact coefficients"),
+            }
+            expected = next;
+            rounds += 1;
+        }
+        assert_eq!(poly.final_claim(), expected[0]);
+    }
+
+    #[test]
+    fn opening_reclamation_preserves_every_dense_and_compact_coefficient() {
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for log_n in [1, 4, 16] {
+                        let n = 1 << log_n;
+                        let signed: Vec<i64> = (0..n)
+                            .map(|i| [i64::MIN, -7, 0, 1, i64::MAX][i % 5])
+                            .collect();
+                        let values: Vec<Fr> = signed
+                            .iter()
+                            .map(|v| {
+                                if *v < 0 {
+                                    -Fr::from(v.unsigned_abs())
+                                } else {
+                                    Fr::from(*v as u64)
+                                }
+                            })
+                            .collect();
+                        check(
+                            MultilinearPolynomial::I64Scalars(CompactPolynomial::from_coeffs(
+                                signed,
+                            )),
+                            values.clone(),
+                        );
+                        check(MultilinearPolynomial::from(values.clone()), values);
+                        let unsigned: Vec<u64> =
+                            (0..n).map(|i| [0, 1, u64::MAX, 7][i % 4]).collect();
+                        let expected = unsigned.iter().map(|v| Fr::from(*v)).collect();
+                        check(
+                            MultilinearPolynomial::U64Scalars(CompactPolynomial::from_coeffs(
+                                unsigned,
+                            )),
+                            expected,
+                        );
+                    }
+                });
+        }
+    }
+
+    #[test]
+    fn opening_reclamation_keeps_shared_opening_messages_and_final_claims() {
+        use crate::subprotocols::opening_reduction::{
+            DensePolynomialProverOpening, EqCycleState, SharedDensePolynomial,
+        };
+        let n = 1 << 16;
+        let input: Vec<i64> = (0..n).map(|i| (i % 13) as i64 - 6).collect();
+        let values: Vec<Fr> = input
+            .iter()
+            .map(|v| {
+                if *v < 0 {
+                    -Fr::from(v.unsigned_abs())
+                } else {
+                    Fr::from(*v as u64)
+                }
+            })
+            .collect();
+        let original = MultilinearPolynomial::I64Scalars(CompactPolynomial::from_coeffs(input));
+        let shared = Arc::new(RwLock::new(SharedDensePolynomial::new(original.clone())));
+        let mut transcript = Blake2bTranscript::new(b"shared-opening-capacity");
+        let points: Vec<Vec<Fr>> = (0..2).map(|_| transcript.challenge_vector(16)).collect();
+        let mut openings: Vec<_> = points
+            .iter()
+            .map(|point| DensePolynomialProverOpening {
+                polynomial: Some(shared.clone()),
+                eq_poly: Arc::new(RwLock::new(EqCycleState::new(point))),
+            })
+            .collect();
+        let mut eqs: Vec<Vec<Fr>> = points.iter().map(|p| EqPolynomial::evals(p)).collect();
+        let mut dense = values;
+        let mut claims: Vec<Fr> = eqs
+            .iter()
+            .map(|eq| eq.iter().zip(&dense).map(|(a, b)| *a * *b).sum())
+            .collect();
+        for round in 0..16 {
+            let half = dense.len() / 2;
+            for (j, opening) in openings.iter_mut().enumerate() {
+                let message = opening.compute_message(round, claims[j]);
+                for z in [
+                    Fr::from(0u64),
+                    Fr::from(1u64),
+                    Fr::from(2u64),
+                    Fr::from(7u64),
+                ] {
+                    let independent: Fr = (0..half)
+                        .map(|i| {
+                            (dense[i] + (dense[half + i] - dense[i]) * z)
+                                * (eqs[j][i] + (eqs[j][half + i] - eqs[j][i]) * z)
+                        })
+                        .sum();
+                    assert_eq!(
+                        message.evaluate(&z),
+                        independent,
+                        "round {round}, opening {j}, evaluation {z}"
+                    );
+                }
+            }
+            let r = transcript.challenge_scalar_optimized::<Fr>();
+            // Every message must use the same pre-binding shared polynomial.
+            let scalar: Fr = r.into();
+            let next_claims: Vec<Fr> = openings
+                .iter_mut()
+                .enumerate()
+                .map(|(j, opening)| opening.compute_message(round, claims[j]).evaluate(&scalar))
+                .collect();
+            for opening in &mut openings {
+                opening.bind(r, round);
+            }
+            claims = next_claims;
+            assert_eq!(shared.read().unwrap().num_variables_bound, round + 1);
+            dense = (0..half)
+                .map(|i| dense[i] + (dense[half + i] - dense[i]) * r)
+                .collect();
+            for eq in &mut eqs {
+                *eq = (0..half)
+                    .map(|i| eq[i] + (eq[half + i] - eq[i]) * r)
+                    .collect();
+            }
+        }
+        for o in openings {
+            assert_eq!(o.final_claim(), dense[0]);
+        }
+        assert_eq!(original.len(), n);
+    }
+
+    #[test]
+    #[ignore = "isolated process benchmark with explicit mode"]
+    fn opening_reclamation_benchmark() {
+        let mode = std::env::var("OPENING_MEMORY_BENCH_MODE").unwrap();
+        assert!(mode == "original" || mode == "reclaim");
+        let originals: Vec<MultilinearPolynomial<Fr>> = (0..12)
+            .map(|k| {
+                let values: Vec<i64> = (0..1usize << 22)
+                    .map(|i| (i % 97) as i64 - 48 + k)
+                    .collect();
+                MultilinearPolynomial::I64Scalars(CompactPolynomial::from_coeffs(values))
+            })
+            .collect();
+        let mut working = originals.clone();
+        let start = std::time::Instant::now();
+        let mut transcript = Blake2bTranscript::new(b"opening-memory-benchmark");
+        for _ in 0..22 {
+            let r = transcript.challenge_scalar_optimized::<Fr>();
+            working.par_iter_mut().for_each(|p| {
+                p.bind_parallel(r, BindingOrder::HighToLow);
+                if mode == "reclaim" {
+                    reclaim_opening_coefficients(p);
+                }
+            });
+        }
+        let seconds = start.elapsed().as_secs_f64();
+        let final_claim: Fr = working.iter().map(|p| p.final_claim()).sum();
+        println!("OPENING_MEMORY_BENCH mode={mode} seconds={seconds} claim={final_claim:?}");
+        assert_eq!(
+            originals.iter().map(|p| p.len()).sum::<usize>(),
+            12 * (1 << 22)
+        );
     }
 }

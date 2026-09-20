@@ -1,4 +1,5 @@
-//! Immutable lookup indices with an encoding selected by the public table size.
+//! Immutable lookup indices. Width depends on the table size and whether
+//! the vector contains absent entries; no representation choice is serialized.
 use allocative::Allocative;
 use rayon::prelude::*;
 use std::{
@@ -22,10 +23,31 @@ pub enum CompactIndices<I> {
 impl CompactIndices<u16> {
     pub fn new(indices: Vec<Option<u16>>, table_size: usize) -> Self {
         assert!((1..=65536).contains(&table_size));
-        assert!(indices
-            .iter()
-            .flatten()
-            .all(|i| usize::from(*i) < table_size));
+        let mut all_present = true;
+        for index in &indices {
+            match index {
+                Some(i) => assert!(usize::from(*i) < table_size),
+                None => all_present = false,
+            }
+        }
+        // At an encoding boundary, a fully populated vector needs no absent
+        // code. Sparse vectors retain the original representation below.
+        if all_present && matches!(table_size, 256 | 65536) {
+            let width = if table_size == 256 { 1 } else { 2 };
+            let direct = indices.len() * std::mem::size_of::<Option<u16>>();
+            let encoded = indices.len() * width + table_size * std::mem::size_of::<Option<u16>>();
+            if encoded < direct {
+                let decode = (0..table_size).map(|i| Some(i as u16)).collect();
+                if table_size == 256 {
+                    let mut rows = Vec::with_capacity(indices.len());
+                    rows.extend(indices.into_iter().map(|i| i.unwrap() as u8));
+                    return Self::Bytes { rows, decode };
+                }
+                let mut rows = Vec::with_capacity(indices.len());
+                rows.extend(indices.into_iter().map(|i| i.unwrap()));
+                return Self::Shorts { rows, decode };
+            }
+        }
         let width = if table_size < 256 {
             1
         } else if table_size < 65536 {
@@ -284,11 +306,18 @@ mod tests {
                 .build()
                 .unwrap()
                 .install(|| {
-                    for table in [2usize, 16, 256, 65536] {
-                        let rows = 8192usize;
+                    for (table, all_present) in [2usize, 16, 256, 65536]
+                        .into_iter()
+                        .flat_map(|table| [(table, false), (table, true)])
+                    {
+                        let rows = if table == 65536 && all_present {
+                            1usize << 18
+                        } else {
+                            8192usize
+                        };
                         let input: Vec<_> = (0..rows)
                             .map(|i| match i % 5 {
-                                0 => None,
+                                0 if !all_present => None,
                                 1 => Some(0),
                                 2 => Some((table - 1) as u16),
                                 _ => Some((i % table) as u16),
@@ -364,10 +393,133 @@ mod tests {
         assert!(matches!(&source,SharedIndices::Compact(x) if Arc::ptr_eq(x,&packed)));
         assert_eq!(
             packed.allocated_bytes(),
-            (1 << 17) + 257 * std::mem::size_of::<Option<u16>>()
+            (1 << 16) + 256 * std::mem::size_of::<Option<u16>>()
         );
         let small = CompactIndices::new(vec![None, Some(255)], 256);
         assert!(matches!(small, CompactIndices::Direct(_)));
+    }
+
+    #[test]
+    fn compact_indices_present_boundaries_and_sparse_fallback() {
+        for table in [1, 255, 256, 257, 65535, 65536] {
+            let n = (table * 4).max(8192);
+            let input: Vec<_> = (0..n).map(|i| Some((i % table) as u16)).collect();
+            for absent in [None, Some(0), Some(n / 2), Some(n - 1)] {
+                let mut input = input.clone();
+                if let Some(i) = absent {
+                    input[i] = None;
+                }
+                let packed = CompactIndices::new(input.clone(), table);
+                assert_eq!(packed.iter().copied().collect::<Vec<_>>(), input);
+                assert_eq!(packed.par_iter().copied().collect::<Vec<_>>(), input);
+                assert_eq!(
+                    packed.slice(1..n - 1).iter().copied().collect::<Vec<_>>(),
+                    input[1..n - 1]
+                );
+                let chunks: Vec<Vec<_>> = packed
+                    .par_chunks(257)
+                    .map(|x| x.iter().copied().collect())
+                    .collect();
+                assert_eq!(chunks.into_iter().flatten().collect::<Vec<_>>(), input);
+                if table == 256 {
+                    assert_eq!(
+                        matches!(packed, CompactIndices::Bytes { .. }),
+                        absent.is_none()
+                    );
+                }
+                if table == 65536 {
+                    assert_eq!(
+                        matches!(packed, CompactIndices::Shorts { .. }),
+                        absent.is_none()
+                    );
+                }
+                assert!(packed.allocated_bytes() <= n * std::mem::size_of::<Option<u16>>());
+            }
+            for n in [0, 1, 2] {
+                let p = CompactIndices::new(vec![Some((table - 1) as u16); n], table);
+                assert!(matches!(p, CompactIndices::Direct(_)));
+            }
+        }
+        // Presence validation cannot turn an out-of-range value into a byte.
+        for input in [vec![Some(256); 8192], vec![None, Some(256)]] {
+            assert!(std::panic::catch_unwind(|| CompactIndices::new(input, 256)).is_err());
+        }
+        // One missing row at every position must preserve None and Some(255).
+        for absent in 0..1024 {
+            let mut input = vec![Some(255); 1024];
+            input[absent] = None;
+            let p = CompactIndices::new(input.clone(), 256);
+            assert!(matches!(p, CompactIndices::Shorts { .. }));
+            assert!(p.iter().copied().eq(input.into_iter()));
+        }
+    }
+
+    #[test]
+    fn compact_indices_present_commitment_matches_independent_dense() {
+        use crate::poly::{
+            commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme},
+            dense_mlpoly::DensePolynomial,
+            multilinear_polynomial::MultilinearPolynomial,
+        };
+        use dory::{backends::arkworks::ArkFr, primitives::arithmetic::Group};
+        let table = 256;
+        let rows = 1024;
+        let input: Vec<_> = (0..rows).map(|i| Some(((i * 17) % table) as u16)).collect();
+        let packed = OneHotPolynomial::<Fr>::from_indices(input.clone(), table);
+        assert!(matches!(
+            &*packed.nonzero_indices,
+            CompactIndices::Bytes { .. }
+        ));
+        let mut direct = packed.clone();
+        direct.nonzero_indices = Arc::new(CompactIndices::Direct(input.clone()));
+        let mut dense = vec![Fr::from(0u64); table * rows];
+        for (i, k) in input.iter().enumerate() {
+            dense[usize::from(k.unwrap()) * rows + i] = Fr::from(1u64);
+        }
+        let setup = DoryScheme::setup_prover((table * rows).ilog2() as usize);
+        let reference = MultilinearPolynomial::LargeScalars(DensePolynomial::new(dense));
+        let (expected, _) = DoryScheme::commit(&reference, &setup);
+        let fixed_blind = setup.prover.ht.scale(&ArkFr(Fr::from(19u64)));
+        for p in [packed, direct] {
+            let (actual, _) = DoryScheme::commit(&MultilinearPolynomial::OneHot(p), &setup);
+            assert_eq!(actual, expected);
+            assert_eq!(actual.0 + fixed_blind, expected.0 + fixed_blind);
+        }
+    }
+
+    #[test]
+    #[ignore = "isolated matched representation benchmark"]
+    fn compact_indices_present_process_benchmark() {
+        let mode = std::env::var("PRESENT_INDEX_MODE").unwrap();
+        assert!(mode == "control" || mode == "candidate");
+        let start = Instant::now();
+        let n = 1usize << 22;
+        let mut arrays = Vec::new();
+        let mut stored = 0usize;
+        for j in 0..32 {
+            let input: Vec<_> = (0..n).map(|i| Some(((i + j) % 256) as u16)).collect();
+            let p = if mode == "control" {
+                let decode = std::iter::once(None).chain((0..256).map(Some)).collect();
+                let mut rows = Vec::with_capacity(input.len());
+                rows.extend(input.into_iter().map(|i| i.unwrap() + 1));
+                CompactIndices::Shorts { rows, decode }
+            } else {
+                CompactIndices::new(input, 256)
+            };
+            stored += p.allocated_bytes();
+            arrays.push(p);
+        }
+        let construction = start.elapsed().as_secs_f64();
+        let start = Instant::now();
+        let mut sum = 0u64;
+        for _ in 0..4 {
+            sum += arrays
+                .par_iter()
+                .map(|p| p.iter().flatten().map(|x| u64::from(*x)).sum::<u64>())
+                .sum::<u64>();
+        }
+        assert_eq!(sum, 4 * 32 * (n as u64 / 256) * (255 * 256 / 2));
+        println!("PRESENT_INDEX_BENCH mode={mode} construction={construction} scan={} stored_bytes={stored} sum={sum}", start.elapsed().as_secs_f64());
     }
 
     #[test]

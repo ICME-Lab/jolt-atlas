@@ -22,6 +22,7 @@ use dory::primitives::serialization::{
 use dory::{ProverSetup, VerifierSetup};
 
 use crate::transcripts::{AppendToTranscript, Transcript};
+use std::sync::OnceLock;
 
 // -- enum bridges between arkworks' and dory's serialization vocabularies -----
 
@@ -94,6 +95,9 @@ pub struct DoryProverSetup {
     /// Affine copy of `prover.g1_vec`, so sparse (one-hot) commits can use
     /// mixed projective+affine additions. Derived, never serialized.
     pub(crate) g1_affine: Vec<ark_bn254::G1Affine>,
+    /// Lazily derived sums for power-of-two prefixes of this setup's columns.
+    /// Each entry belongs to this exact setup and is never serialized.
+    g1_prefix_sums: Vec<OnceLock<ark_bn254::G1Projective>>,
     /// Prepared (Miller-loop-ready) copy of `prover.g2_vec`, so tier-2 pairings
     /// over a subset of rows need no per-call G2 preparation. Derived.
     pub(crate) g2_prepared: Vec<<ark_bn254::Bn254 as ark_ec::pairing::Pairing>::G2Prepared>,
@@ -114,12 +118,28 @@ impl DoryProverSetup {
                 })
                 .collect()
         };
+        let g1_prefix_sums = (0..=g1_affine.len().ilog2())
+            .map(|_| OnceLock::new())
+            .collect();
         Self {
             prover,
             verifier,
             g1_affine,
+            g1_prefix_sums,
             g2_prepared,
         }
+    }
+
+    pub(crate) fn g1_prefix_sum(&self, cols: usize) -> ark_bn254::G1Projective {
+        use ark_ff::Zero;
+        assert!(cols.is_power_of_two() && cols <= self.g1_affine.len());
+        // The initializer must not yield to nested Rayon jobs which could
+        // request this same entry while it is still being initialized.
+        *self.g1_prefix_sums[cols.ilog2() as usize].get_or_init(|| {
+            self.g1_affine[..cols]
+                .iter()
+                .fold(ark_bn254::G1Projective::zero(), |sum, g| sum + g)
+        })
     }
 }
 
@@ -199,5 +219,60 @@ impl CanonicalDeserialize for DoryProverSetup {
         )
         .map_err(map_err)?;
         Ok(Self::new(prover, verifier))
+    }
+}
+
+#[cfg(test)]
+mod prefix_sum_tests {
+    use super::*;
+    use crate::poly::commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme};
+    use ark_bn254::G1Projective;
+    use ark_ff::Zero;
+    use rayon::prelude::*;
+
+    #[test]
+    fn generator_prefix_cache_preserves_setup_identity_width_and_serialization() {
+        let setup = DoryScheme::setup_prover(12);
+        let mut before = Vec::new();
+        setup.serialize_compressed(&mut before).unwrap();
+        (0..64usize).into_par_iter().for_each(|i| {
+            let cols = 1 << (i % 7);
+            let expected = setup.g1_affine[..cols]
+                .iter()
+                .fold(G1Projective::zero(), |s, p| s + p);
+            assert_eq!(setup.g1_prefix_sum(cols), expected);
+        });
+        let cloned = setup.clone();
+        let mut changed = setup.prover.clone();
+        changed.g1_vec[0].0 += setup.g1_affine[1];
+        let other = DoryProverSetup::new(changed, setup.verifier.clone());
+        for cols in [1usize, 2, 4, 8, 16, 32, 64] {
+            assert_eq!(cloned.g1_prefix_sum(cols), setup.g1_prefix_sum(cols));
+            assert_eq!(
+                other.g1_prefix_sum(cols),
+                setup.g1_prefix_sum(cols) + setup.g1_affine[1]
+            );
+        }
+        let mut after = Vec::new();
+        setup.serialize_compressed(&mut after).unwrap();
+        assert_eq!(before, after);
+        let restored = DoryProverSetup::deserialize_compressed(after.as_slice()).unwrap();
+        assert!(restored
+            .g1_prefix_sums
+            .iter()
+            .all(|entry| entry.get().is_none()));
+        assert_eq!(restored.g1_prefix_sum(64), setup.g1_prefix_sum(64));
+    }
+
+    #[test]
+    #[should_panic]
+    fn generator_prefix_cache_rejects_non_power_of_two_width() {
+        let _ = DoryScheme::setup_prover(6).g1_prefix_sum(3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn generator_prefix_cache_rejects_width_beyond_setup() {
+        let _ = DoryScheme::setup_prover(6).g1_prefix_sum(16);
     }
 }

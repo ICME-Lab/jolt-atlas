@@ -198,6 +198,7 @@ impl DoryScheme {
                 cols,
                 num_rows,
                 &setup.g1_affine[..cols],
+                || setup.g1_prefix_sum(cols),
             )
         };
 
@@ -651,3 +652,68 @@ mod tests {
 
 #[cfg(feature = "zk")]
 pub mod native_generation;
+#[cfg(test)]
+mod recovered_commitment_tests {
+    use super::*;
+    use crate::poly::{dense_mlpoly::DensePolynomial, one_hot_polynomial::OneHotPolynomial};
+    use ark_ff::{One, Zero};
+
+    #[test]
+    fn recovered_commitments_and_hints_match_independent_dense_polynomials() {
+        let setup = DoryScheme::setup_prover(12);
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for t in [16usize, 64, 256] {
+                        let k = 4;
+                        for mode in 0..4 {
+                            let indices = (0..t)
+                                .map(|i| match mode {
+                                    0 => Some(3),
+                                    1 => Some((i % 2) as u16),
+                                    2 => Some((if i % 16 == 0 { i % k } else { 0 }) as u16),
+                                    _ => {
+                                        if i % 7 == 0 {
+                                            None
+                                        } else {
+                                            Some(0)
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            let mut coefficients = vec![Fr::zero(); k * t];
+                            for (i, address) in indices.iter().enumerate() {
+                                if let Some(address) = address {
+                                    coefficients[usize::from(*address) * t + i] = Fr::one();
+                                }
+                            }
+                            let sparse = MultilinearPolynomial::OneHot(
+                                OneHotPolynomial::from_indices(indices, k),
+                            );
+                            let dense = MultilinearPolynomial::LargeScalars(DensePolynomial::new(
+                                coefficients,
+                            ));
+                            let (expected, dense_hint) = DoryScheme::commit(&dense, &setup);
+                            let (actual, sparse_hint) = DoryScheme::commit(&sparse, &setup);
+                            assert_eq!(actual, expected);
+                            assert_eq!(sparse_hint, dense_hint);
+                            #[cfg(feature = "zk")]
+                            {
+                                let (hidden, hint) = DoryScheme::commit_zk(&sparse, &setup);
+                                assert_eq!(
+                                    hidden.0,
+                                    expected.0 + setup.prover.ht.scale(&hint.commit_blind)
+                                );
+                                assert_eq!(hint.row_commitments, dense_hint.row_commitments);
+                                let (_, repeated) = DoryScheme::commit_zk(&sparse, &setup);
+                                assert_ne!(hint.commit_blind, repeated.commit_blind);
+                            }
+                        }
+                    }
+                });
+        }
+    }
+}

@@ -127,12 +127,13 @@ pub(super) fn one_hot_row_commitments(
     cols: usize,
     num_rows: usize,
     g1: &[G1Affine],
+    generator_sum: impl Fn() -> G1Projective + Sync,
 ) -> Vec<ArkG1> {
     // If a time vector spans several commitment columns, each aligned
     // segment contributes to disjoint rows for every address. Compute those
     // segments independently without collecting all nonzero points at once.
     // Only one column of temporary points is live per running segment.
-    if t_len > cols {
+    if t_len >= cols {
         assert!(t_len.is_power_of_two() && cols.is_power_of_two());
         assert_eq!(nonzero_indices.len(), t_len);
         assert_eq!(g1.len(), cols);
@@ -143,8 +144,26 @@ pub(super) fn one_hot_row_commitments(
             .par_chunks(cols)
             .map(|indices| {
                 let mut offsets = vec![0usize; buckets + 1];
+                let mut present = 0;
                 for k in indices.iter().flatten() {
                     offsets[usize::from(*k) + 1] += 1;
+                    present += 1;
+                }
+                // A complete segment partitions exactly the public column
+                // generators. Recover a frequent row from that fixed sum.
+                // For small or uniform groups, keep the existing additions.
+                let recovered = if present == cols {
+                    offsets[1..]
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, count)| *count)
+                        .filter(|(_, count)| **count >= 32 && **count >= cols / 2)
+                        .map(|(bucket, _)| bucket)
+                } else {
+                    None
+                };
+                if let Some(bucket) = recovered {
+                    offsets[bucket + 1] = 0;
                 }
                 for k in 0..buckets {
                     offsets[k + 1] += offsets[k];
@@ -154,11 +173,22 @@ pub(super) fn one_hot_row_commitments(
                 for (column, k) in indices.iter().enumerate() {
                     if let Some(k) = k {
                         let bucket = usize::from(*k);
+                        if Some(bucket) == recovered {
+                            continue;
+                        }
                         points[fill[bucket]] = g1[column];
                         fill[bucket] += 1;
                     }
                 }
-                batched_affine_row_sums(points, offsets)
+                let mut rows = batched_affine_row_sums(points, offsets);
+                if let Some(bucket) = recovered {
+                    let mut sum = generator_sum();
+                    for row in &rows {
+                        sum -= row;
+                    }
+                    rows[bucket] = sum;
+                }
+                rows
             })
             .collect::<Vec<_>>();
         return (0..num_rows)
@@ -262,11 +292,16 @@ mod tests {
                                         }
                                     }
                                     let actual = one_hot_row_commitments(
-                                        &indices,
+                                        indices.as_slice(),
                                         t_len,
                                         cols,
                                         num_rows,
                                         &generators[..cols],
+                                        || {
+                                            generators[..cols]
+                                                .iter()
+                                                .fold(G1Projective::zero(), |sum, g| sum + g)
+                                        },
                                     );
                                     assert_eq!(
                                         actual.iter().map(|p| p.0).collect::<Vec<_>>(),
@@ -306,5 +341,311 @@ mod tests {
         for (g, e) in got.iter().zip(&expected) {
             assert_eq!(g.into_affine(), e.into_affine());
         }
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use ark_ec::PrimeGroup;
+    use ark_serialize::CanonicalSerialize;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        OnceLock,
+    };
+
+    fn bases(cols: usize) -> Vec<G1Affine> {
+        let generator = G1Projective::generator();
+        let mut point = generator;
+        let points = (0..cols)
+            .map(|_| {
+                point += generator;
+                point
+            })
+            .collect::<Vec<_>>();
+        G1Projective::normalize_batch(&points)
+    }
+
+    fn sum(gens: &[G1Affine]) -> G1Projective {
+        gens.iter().fold(G1Projective::zero(), |s, p| s + p)
+    }
+
+    fn literal(
+        indices: &[Option<u16>],
+        cols: usize,
+        buckets: usize,
+        gens: &[G1Affine],
+    ) -> Vec<ArkG1> {
+        let t_len = indices.len();
+        let mut rows = vec![ArkG1(G1Projective::zero()); buckets * t_len / cols];
+        for (t, k) in indices.iter().enumerate() {
+            if let Some(k) = k {
+                let flat = usize::from(*k) * t_len + t;
+                rows[flat / cols].0 += gens[flat % cols];
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn recovered_rows_match_literal_sums_and_original_kernel() {
+        let mut gens = bases(128);
+        gens[0] = G1Affine::identity();
+        gens[2] = gens[1];
+        gens[3] = -gens[1];
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for cols in [16, 64, 128] {
+                        for t_len in [cols / 2, cols, cols * 4] {
+                            for buckets in [2, 16, 256] {
+                                for mode in 0..5 {
+                                    let indices = (0..t_len)
+                                        .map(|t| match mode {
+                                            0 => None,
+                                            1 => Some(0),
+                                            2 => Some((t % 2) as u16),
+                                            3 => Some(
+                                                (if t % 16 == 0 {
+                                                    t % buckets
+                                                } else {
+                                                    buckets - 1
+                                                })
+                                                    as u16,
+                                            ),
+                                            _ => Some((t % buckets) as u16),
+                                        })
+                                        .collect::<Vec<_>>();
+                                    let compact = indices.clone();
+                                    let expected = literal(&indices, cols, buckets, &gens);
+                                    let cached = OnceLock::new();
+                                    let calls = AtomicUsize::new(0);
+                                    let generator_sum = || {
+                                        *cached.get_or_init(|| {
+                                            calls.fetch_add(1, Ordering::Relaxed);
+                                            sum(&gens[..cols])
+                                        })
+                                    };
+                                    let actual = one_hot_row_commitments(
+                                        compact.as_slice(),
+                                        t_len,
+                                        cols,
+                                        expected.len(),
+                                        &gens[..cols],
+                                        generator_sum,
+                                    );
+                                    assert_eq!(
+                                        actual, expected,
+                                        "cols={cols} t={t_len} k={buckets} mode={mode}"
+                                    );
+                                    assert_eq!(
+                                        actual,
+                                        original_one_hot_row_commitments(
+                                            indices.as_slice(),
+                                            t_len,
+                                            cols,
+                                            expected.len(),
+                                            &gens[..cols]
+                                        )
+                                    );
+                                    assert!(calls.load(Ordering::Relaxed) <= 1);
+                                    if t_len < cols || mode == 0 {
+                                        assert_eq!(calls.load(Ordering::Relaxed), 0);
+                                    }
+                                    if t_len >= cols && cols >= 64 && mode == 1 {
+                                        assert_eq!(calls.load(Ordering::Relaxed), 1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+    }
+
+    #[test]
+    fn recovered_rows_preserve_every_absent_position() {
+        let gens = bases(64);
+        for absent in 0..64 {
+            let mut indices = vec![Some(1); 64];
+            indices[absent] = None;
+            let actual = one_hot_row_commitments(indices.as_slice(), 64, 64, 2, &gens, || {
+                panic!("A partial segment must not use the full generator sum")
+            });
+            assert_eq!(actual, literal(&indices, 64, 2, &gens));
+        }
+    }
+
+    #[test]
+    fn recovered_rows_use_each_segments_own_presence_condition() {
+        let gens = bases(64);
+        let mut indices = vec![Some(1); 256];
+        indices[65] = None;
+        indices[193] = None;
+        let calls = AtomicUsize::new(0);
+        let actual = one_hot_row_commitments(indices.as_slice(), 256, 64, 8, &gens, || {
+            calls.fetch_add(1, Ordering::Relaxed);
+            sum(&gens)
+        });
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(actual, literal(&indices, 64, 2, &gens));
+    }
+
+    #[test]
+    #[should_panic]
+    fn recovered_rows_reject_an_address_beyond_the_matrix() {
+        let gens = bases(64);
+        let mut indices = vec![Some(0); 64];
+        indices[63] = Some(2);
+        one_hot_row_commitments(indices.as_slice(), 64, 64, 2, &gens, || sum(&gens));
+    }
+
+    #[test]
+    #[ignore = "Isolated row kernel with synthetic public bases, not complete proof time"]
+    fn recovered_rows_benchmark() {
+        use sha3::{Digest, Keccak256};
+        use std::time::Instant;
+        let mode = std::env::var("ROW_MODE").unwrap();
+        assert!(matches!(mode.as_str(), "original" | "candidate"));
+        let distribution = std::env::var("ROW_DISTRIBUTION").unwrap();
+        let cols = 1usize << 16;
+        let t_len = 1usize << 22;
+        let buckets = 256;
+        let gens = bases(cols);
+        let indices = (0..t_len)
+            .map(|t| match distribution.as_str() {
+                "constant" => Some(0),
+                "skewed" => Some((if t % 8 == 0 { t / 8 % buckets } else { 0 }) as u16),
+                "uniform" => Some((t % buckets) as u16),
+                "missing" => {
+                    if t % 17 == 0 {
+                        None
+                    } else {
+                        Some(0)
+                    }
+                }
+                _ => panic!("Unknown fixture"),
+            })
+            .collect::<Vec<_>>();
+        let cached = OnceLock::new();
+        let cache_nanos = std::sync::atomic::AtomicU64::new(0);
+        let generator_sum = || {
+            *cached.get_or_init(|| {
+                let start = Instant::now();
+                let value = sum(&gens);
+                cache_nanos.store(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                value
+            })
+        };
+        let call = || {
+            if mode == "original" {
+                original_one_hot_row_commitments(
+                    indices.as_slice(),
+                    t_len,
+                    cols,
+                    buckets * t_len / cols,
+                    &gens,
+                )
+            } else {
+                one_hot_row_commitments(
+                    indices.as_slice(),
+                    t_len,
+                    cols,
+                    buckets * t_len / cols,
+                    &gens,
+                    generator_sum,
+                )
+            }
+        };
+        let start = Instant::now();
+        let cold = call();
+        let cold_seconds = start.elapsed().as_secs_f64();
+        let mut cold_bytes = Vec::new();
+        cold.serialize_compressed(&mut cold_bytes).unwrap();
+        drop(cold);
+        let start = Instant::now();
+        let warm = call();
+        let seconds = start.elapsed().as_secs_f64();
+        let mut bytes = Vec::new();
+        warm.serialize_compressed(&mut bytes).unwrap();
+        assert_eq!(cold_bytes, bytes);
+        let digest = format!("{:x}", Keccak256::digest(&bytes));
+        println!("ROW_BENCH {{\"mode\":\"{}\",\"distribution\":\"{}\",\"rows_seconds\":{},\"cold_rows_seconds\":{},\"cache_seconds\":{},\"cache_initialized\":{},\"row_bytes\":{},\"row_digest\":\"{}\",\"cols\":{},\"t_len\":{},\"buckets\":{},\"workers\":{}}}", mode, distribution, seconds, cold_seconds, cache_nanos.load(Ordering::Relaxed) as f64 / 1e9, cached.get().is_some(), bytes.len(), digest, cols, t_len, buckets, rayon::current_num_threads());
+    }
+
+    // The exact accepted control kernel is inserted below during preparation.
+    fn original_one_hot_row_commitments(
+        nonzero_indices: &[Option<u16>],
+        t_len: usize,
+        cols: usize,
+        num_rows: usize,
+        g1: &[G1Affine],
+    ) -> Vec<ArkG1> {
+        // If a time vector spans several commitment columns, each aligned
+        // segment contributes to disjoint rows for every address. Compute those
+        // segments independently without collecting all nonzero points at once.
+        // Only one column of temporary points is live per running segment.
+        if t_len > cols {
+            assert!(t_len.is_power_of_two() && cols.is_power_of_two());
+            assert_eq!(nonzero_indices.len(), t_len);
+            assert_eq!(g1.len(), cols);
+            let segments = t_len / cols;
+            assert!(num_rows.is_multiple_of(segments));
+            let buckets = num_rows / segments;
+            let pieces = nonzero_indices
+                .par_chunks(cols)
+                .map(|indices| {
+                    let mut offsets = vec![0usize; buckets + 1];
+                    for k in indices.iter().flatten() {
+                        offsets[usize::from(*k) + 1] += 1;
+                    }
+                    for k in 0..buckets {
+                        offsets[k + 1] += offsets[k];
+                    }
+                    let mut fill = offsets.clone();
+                    let mut points = vec![G1Affine::identity(); offsets[buckets]];
+                    for (column, k) in indices.iter().enumerate() {
+                        if let Some(k) = k {
+                            let bucket = usize::from(*k);
+                            points[fill[bucket]] = g1[column];
+                            fill[bucket] += 1;
+                        }
+                    }
+                    batched_affine_row_sums(points, offsets)
+                })
+                .collect::<Vec<_>>();
+            return (0..num_rows)
+                .into_par_iter()
+                .map(|row| ArkG1(pieces[row % segments][row / segments]))
+                .collect();
+        }
+        // Counting sort of the set entries by row.
+        let mut counts = vec![0usize; num_rows + 1];
+        for (t, k_opt) in nonzero_indices.iter().enumerate() {
+            if let Some(k) = k_opt {
+                counts[(*k as usize * t_len + t) / cols + 1] += 1;
+            }
+        }
+        for r in 0..num_rows {
+            counts[r + 1] += counts[r];
+        }
+        let offsets = counts;
+        let mut fill = offsets.clone();
+        let mut points = vec![G1Affine::identity(); *offsets.last().unwrap()];
+        for (t, k_opt) in nonzero_indices.iter().enumerate() {
+            if let Some(k) = k_opt {
+                let idx = *k as usize * t_len + t;
+                let row = idx / cols;
+                points[fill[row]] = g1[idx % cols];
+                fill[row] += 1;
+            }
+        }
+        batched_affine_row_sums(points, offsets)
+            .into_iter()
+            .map(ArkG1)
+            .collect()
     }
 }

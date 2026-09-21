@@ -278,7 +278,9 @@ impl NativeGraphWitness {
             .keys()
             .any(|id| !matches!(id, CommittedPoly::DivNodeQuotient(i) if *i < graph.num_inputs))
         {
-            return Err(invalid("Only registered public inputs may reuse commitments"));
+            return Err(invalid(
+                "Only registered public inputs may reuse commitments",
+            ));
         }
         if inputs.len() != graph.num_inputs || inputs.iter().any(|v| v.len() != 1 << graph.log_rows)
         {

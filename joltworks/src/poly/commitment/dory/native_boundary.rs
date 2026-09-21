@@ -3,8 +3,8 @@
 //! prove its conversion and check this same evaluation commitment. This module
 //! alone does not prove a conversion or complete a private receipt.
 use super::{
-    native_graph::NativeGraphStatement, DoryCommitment, DoryHint,
-    DoryProof, DoryProverSetup, DoryScheme, DoryVerifierSetup,
+    native_graph::NativeGraphStatement, DoryCommitment, DoryHint, DoryProof, DoryProverSetup,
+    DoryScheme, DoryVerifierSetup,
 };
 use crate::field::JoltField;
 use crate::{

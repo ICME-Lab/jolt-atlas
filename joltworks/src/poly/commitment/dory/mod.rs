@@ -27,9 +27,9 @@
 #[cfg(feature = "zk")]
 pub mod equality;
 #[cfg(feature = "zk")]
-pub mod native_boundary;
-#[cfg(feature = "zk")]
 mod native_add;
+#[cfg(feature = "zk")]
+pub mod native_boundary;
 #[cfg(feature = "zk")]
 mod native_clamped_lookup;
 #[cfg(feature = "zk")]
@@ -49,11 +49,11 @@ pub mod native_mul;
 #[cfg(feature = "zk")]
 pub mod native_opening;
 #[cfg(feature = "zk")]
-pub mod native_registration;
-#[cfg(feature = "zk")]
 mod native_reciprocal;
 #[cfg(feature = "zk")]
 mod native_reduce;
+#[cfg(feature = "zk")]
+pub mod native_registration;
 #[cfg(feature = "zk")]
 mod native_rsqrt;
 mod one_hot_commit;

@@ -473,9 +473,14 @@ mod recovery_tests {
         for absent in 0..64 {
             let mut indices = vec![Some(1); 64];
             indices[absent] = None;
-            let actual = one_hot_row_commitments(IndexSlice::Direct(indices.as_slice()), 64, 64, 2, &gens, || {
-                panic!("A partial segment must not use the full generator sum")
-            });
+            let actual = one_hot_row_commitments(
+                IndexSlice::Direct(indices.as_slice()),
+                64,
+                64,
+                2,
+                &gens,
+                || panic!("A partial segment must not use the full generator sum"),
+            );
             assert_eq!(actual, literal(&indices, 64, 2, &gens));
         }
     }
@@ -487,10 +492,17 @@ mod recovery_tests {
         indices[65] = None;
         indices[193] = None;
         let calls = AtomicUsize::new(0);
-        let actual = one_hot_row_commitments(IndexSlice::Direct(indices.as_slice()), 256, 64, 8, &gens, || {
-            calls.fetch_add(1, Ordering::Relaxed);
-            sum(&gens)
-        });
+        let actual = one_hot_row_commitments(
+            IndexSlice::Direct(indices.as_slice()),
+            256,
+            64,
+            8,
+            &gens,
+            || {
+                calls.fetch_add(1, Ordering::Relaxed);
+                sum(&gens)
+            },
+        );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
         assert_eq!(actual, literal(&indices, 64, 2, &gens));
     }
@@ -501,7 +513,14 @@ mod recovery_tests {
         let gens = bases(64);
         let mut indices = vec![Some(0); 64];
         indices[63] = Some(2);
-        one_hot_row_commitments(IndexSlice::Direct(indices.as_slice()), 64, 64, 2, &gens, || sum(&gens));
+        one_hot_row_commitments(
+            IndexSlice::Direct(indices.as_slice()),
+            64,
+            64,
+            2,
+            &gens,
+            || sum(&gens),
+        );
     }
 
     #[test]

@@ -293,7 +293,7 @@ mod tests {
                                         }
                                     }
                                     let actual = one_hot_row_commitments(
-                                        indices.as_slice(),
+                                        IndexSlice::Direct(indices.as_slice()),
                                         t_len,
                                         cols,
                                         num_rows,
@@ -431,7 +431,7 @@ mod recovery_tests {
                                         })
                                     };
                                     let actual = one_hot_row_commitments(
-                                        compact.as_slice(),
+                                        IndexSlice::Direct(compact.as_slice()),
                                         t_len,
                                         cols,
                                         expected.len(),
@@ -473,7 +473,7 @@ mod recovery_tests {
         for absent in 0..64 {
             let mut indices = vec![Some(1); 64];
             indices[absent] = None;
-            let actual = one_hot_row_commitments(indices.as_slice(), 64, 64, 2, &gens, || {
+            let actual = one_hot_row_commitments(IndexSlice::Direct(indices.as_slice()), 64, 64, 2, &gens, || {
                 panic!("A partial segment must not use the full generator sum")
             });
             assert_eq!(actual, literal(&indices, 64, 2, &gens));
@@ -487,7 +487,7 @@ mod recovery_tests {
         indices[65] = None;
         indices[193] = None;
         let calls = AtomicUsize::new(0);
-        let actual = one_hot_row_commitments(indices.as_slice(), 256, 64, 8, &gens, || {
+        let actual = one_hot_row_commitments(IndexSlice::Direct(indices.as_slice()), 256, 64, 8, &gens, || {
             calls.fetch_add(1, Ordering::Relaxed);
             sum(&gens)
         });
@@ -501,7 +501,7 @@ mod recovery_tests {
         let gens = bases(64);
         let mut indices = vec![Some(0); 64];
         indices[63] = Some(2);
-        one_hot_row_commitments(indices.as_slice(), 64, 64, 2, &gens, || sum(&gens));
+        one_hot_row_commitments(IndexSlice::Direct(indices.as_slice()), 64, 64, 2, &gens, || sum(&gens));
     }
 
     #[test]
@@ -552,7 +552,7 @@ mod recovery_tests {
                 )
             } else {
                 one_hot_row_commitments(
-                    indices.as_slice(),
+                    IndexSlice::Direct(indices.as_slice()),
                     t_len,
                     cols,
                     buckets * t_len / cols,

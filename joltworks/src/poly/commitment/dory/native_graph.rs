@@ -1892,9 +1892,8 @@ impl NativeGraphProof {
         if eval != gens.commit(&[value], &blind) {
             return Err(invalid("Graph PCS evaluation mismatch"));
         }
-        // All polynomial openings and their commitments have been proved.
+        // The owned PCS opening consumed the polynomials and hints.
         // BlindFold consumes the scalar claims and stage data below.
-        drop(polynomials);
         let data = bf.take_stage_data();
         let native = NativeBlindFold::new(
             NativeBlindFold::prover_relations(&data),

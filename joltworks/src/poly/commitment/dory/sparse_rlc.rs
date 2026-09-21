@@ -22,7 +22,7 @@ use dory::{
     },
     setup::ProverSetup,
 };
-use rayon::prelude::*;
+use crate::par::prelude::*;
 use std::collections::BTreeMap;
 
 use crate::{

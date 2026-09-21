@@ -37,7 +37,7 @@ use joltworks::{
     poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
     utils::lookup_bits::LookupBits,
 };
-use rayon::prelude::*;
+use joltworks::par::prelude::*;
 
 /// Precomputed-witness [`LookupOperandsTrait`] helper for softmax's saturating clamp.
 ///

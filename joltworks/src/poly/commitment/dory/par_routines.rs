@@ -11,7 +11,7 @@ use dory::{
     backends::arkworks::{ArkFr, ArkG1, ArkG2, G1Routines, G2Routines},
     primitives::arithmetic::{DoryRoutines, Group},
 };
-use rayon::prelude::*;
+use crate::par::prelude::*;
 
 /// [`G1Routines`] with parallel vector operations.
 pub struct ParG1Routines;

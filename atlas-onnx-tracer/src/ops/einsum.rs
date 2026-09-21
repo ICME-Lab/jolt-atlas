@@ -305,7 +305,7 @@ pub fn einsum_i32_with_i64_rebase(
 mod gemm {
     use crate::tensor::{Tensor, TensorError};
     use common::parallel::par_enabled;
-    use rayon::prelude::*;
+    use crate::utils::parallel_utils::*;
     use std::collections::HashMap;
 
     /// Copy `src` (dims `dims`) into a contiguous buffer whose axis order is

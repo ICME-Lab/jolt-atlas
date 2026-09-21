@@ -104,7 +104,7 @@ impl DoryProverSetup {
         let projective: Vec<ark_bn254::G1Projective> = prover.g1_vec.iter().map(|g| g.0).collect();
         let g1_affine = ark_ec::CurveGroup::normalize_batch(&projective);
         let g2_prepared = {
-            use rayon::prelude::*;
+            use crate::par::prelude::*;
             prover
                 .g2_vec
                 .par_iter()

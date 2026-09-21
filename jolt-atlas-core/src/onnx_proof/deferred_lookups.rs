@@ -38,7 +38,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits, thread::drop_in_background_thread},
 };
-use rayon::prelude::*;
+use joltworks::par::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 

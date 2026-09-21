@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn bounded_g1_msm_handles_nested_row_commitments() {
         use rand::{rngs::StdRng, SeedableRng};
-        use rayon::prelude::*;
+        use crate::par::prelude::*;
         let mut rng = StdRng::seed_from_u64(12489);
         let bases = (0..17)
             .map(|_| G1Projective::rand(&mut rng).into_affine())
@@ -339,7 +339,7 @@ mod tests {
                 sum + p.mul_bigint(s.into_bigint())
             });
         for threads in [1, 8] {
-            let pool = rayon::ThreadPoolBuilder::new()
+            let pool = crate::par::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap();

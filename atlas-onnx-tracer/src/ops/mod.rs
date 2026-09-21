@@ -174,7 +174,7 @@ impl FusedIntermediates {
     /// and return them with the saturating-clamped `i32` output.
     pub(super) fn from_acc(acc: &Tensor<i64>, divisor: i64) -> (Tensor<i32>, Self) {
         use common::parallel::par_enabled;
-        use rayon::prelude::*;
+        use crate::utils::parallel_utils::*;
         let (quotient, remainder): (Vec<i64>, Vec<i32>) = acc
             .data()
             .par_iter()

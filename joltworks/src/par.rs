@@ -325,6 +325,15 @@ mod imp {
         }
 
         #[inline(always)]
+        pub fn flat_map_iter<U, F>(self, f: F) -> Par<core::iter::FlatMap<I, U, F>>
+        where
+            U: IntoIterator,
+            F: FnMut(I::Item) -> U,
+        {
+            Par(self.0.flat_map(f))
+        }
+
+        #[inline(always)]
         pub fn flatten(self) -> Par<core::iter::Flatten<I>>
         where
             I::Item: IntoIterator,

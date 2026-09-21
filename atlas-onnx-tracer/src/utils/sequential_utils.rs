@@ -33,9 +33,9 @@ pub trait IntoParallelRefMutIterator<'data> {
     fn par_iter_mut(&'data mut self) -> Self::Iter;
 }
 
-impl<T> IntoParallelIterator for Vec<T> {
-    type Item = T;
-    type Iter = std::vec::IntoIter<T>;
+impl<T: IntoIterator> IntoParallelIterator for T {
+    type Item = T::Item;
+    type Iter = T::IntoIter;
 
     fn into_par_iter(self) -> Self::Iter {
         self.into_iter()
@@ -80,6 +80,9 @@ impl<'data, T: 'data> IntoParallelRefMutIterator<'data> for [T] {
 
 /// Sequential sorting of a mutable slice.
 pub trait ParallelSliceMut<T> {
+    /// Divide a mutable slice into disjoint chunks on the calling thread.
+    fn par_chunks_mut(&mut self, size: usize) -> std::slice::ChunksMut<'_, T>;
+
     /// Sort on the calling thread.
     fn par_sort_unstable(&mut self)
     where
@@ -87,6 +90,10 @@ pub trait ParallelSliceMut<T> {
 }
 
 impl<T> ParallelSliceMut<T> for [T] {
+    fn par_chunks_mut(&mut self, size: usize) -> std::slice::ChunksMut<'_, T> {
+        self.chunks_mut(size)
+    }
+
     fn par_sort_unstable(&mut self)
     where
         T: Ord,

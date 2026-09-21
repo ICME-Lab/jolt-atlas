@@ -57,16 +57,25 @@ fn storage_all_matrices_and_layouts_match_original_builder() {
         for width in [4, 8, 16] {
             let expected = NativeBlindFold::reference_assembly(
                 stages.clone(),
-                &[extra.clone()],
+                std::slice::from_ref(&extra),
                 &challenges,
                 width,
             )
             .unwrap();
-            let prover =
-                NativeBlindFold::new(stages.clone(), &[extra.clone()], &challenges, width).unwrap();
-            let verifier =
-                NativeBlindFold::new_verifier(stages.clone(), &[extra.clone()], &challenges, width)
-                    .unwrap();
+            let prover = NativeBlindFold::new(
+                stages.clone(),
+                std::slice::from_ref(&extra),
+                &challenges,
+                width,
+            )
+            .unwrap();
+            let verifier = NativeBlindFold::new_verifier(
+                stages.clone(),
+                std::slice::from_ref(&extra),
+                &challenges,
+                width,
+            )
+            .unwrap();
             assert_eq!(format!("{:?}", prover.r1cs), expected);
             assert_eq!(format!("{:?}", verifier.inner.r1cs), expected);
             assert_eq!(prover.relations.len(), 3);

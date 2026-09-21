@@ -1,7 +1,8 @@
+#[cfg(not(feature = "affine-msm"))]
+use crate::msm::VariableBaseMSM;
 use crate::par::prelude::*;
 use crate::{
     field::JoltField,
-    msm::VariableBaseMSM,
     poly::{
         commitment::{
             commitment_scheme::CommitmentScheme,

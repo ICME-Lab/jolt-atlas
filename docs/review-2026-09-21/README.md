@@ -4,13 +4,13 @@ This index preserves the scope, source identities and validation for the Septemb
 
 ## Review queue
 
-| Unit | Topic | Code | Description |
+| Unit | Topic | Review | Description |
 |---|---|---|---|
-| 1 | Tensor correctness and commitments | [Published branch](https://github.com/ICME-Lab/jolt-atlas/tree/review/tensor-correctness) | [Review 1](reviews/01.md) |
-| 2 | Ordinary verification and encoding | [Published branch](https://github.com/ICME-Lab/jolt-atlas/tree/review/ordinary-verifier) | [Review 2](reviews/02.md) |
-| 3 | Native foundations and boundaries | [Published branch](https://github.com/ICME-Lab/jolt-atlas/tree/review/native-foundations) | [Review 3](reviews/03.md) |
-| 4 | Native tensor operators | [Published branch](https://github.com/ICME-Lab/jolt-atlas/tree/review/native-operators) | [Review 4](reviews/04.md) |
-| 5 | Table access and generation | [Published branch](https://github.com/ICME-Lab/jolt-atlas/tree/review/native-generation) | [Review 5](reviews/05.md) |
+| 1 | Tensor correctness and commitments | [#369](https://github.com/ICME-Lab/jolt-atlas/pull/369) | [Review 1](reviews/01.md) |
+| 2 | Ordinary verification and encoding | [#370](https://github.com/ICME-Lab/jolt-atlas/pull/370) | [Review 2](reviews/02.md) |
+| 3 | Native foundations and boundaries | [#371](https://github.com/ICME-Lab/jolt-atlas/pull/371) | [Review 3](reviews/03.md) |
+| 4 | Native tensor operators | [#372](https://github.com/ICME-Lab/jolt-atlas/pull/372) | [Review 4](reviews/04.md) |
+| 5 | Table access and generation | [#373](https://github.com/ICME-Lab/jolt-atlas/pull/373) | [Review 5](reviews/05.md) |
 | 6 | Native proving time and memory | [Published branch, held](https://github.com/ICME-Lab/jolt-atlas/tree/review/native-prover) | [Review 6](reviews/06.md) |
 | 7 | Native verification and encoding | [Published branch, held](https://github.com/ICME-Lab/jolt-atlas/tree/review/native-verifier) | [Review 7](reviews/07.md) |
 

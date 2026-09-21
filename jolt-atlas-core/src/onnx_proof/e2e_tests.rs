@@ -955,8 +955,11 @@ fn test_zk_constant_binding_rejects_cross_model_attack() {
     // Malicious prover runs the honest ZK prover on M' (constant = constant_mprime).
     // The resulting bundle's BlindFold witness encodes M''s constant value
     // for every consumer-opening on the constant node.
-    let (mut bundle, io) =
-        crate::onnx_proof::zk::prove_zk(&prover_pp_mprime, std::slice::from_ref(&input_data), &gens);
+    let (mut bundle, io) = crate::onnx_proof::zk::prove_zk(
+        &prover_pp_mprime,
+        std::slice::from_ref(&input_data),
+        &gens,
+    );
 
     // Sanity 1: unpatched malicious bundle is rejected — the cleartext
     // `public_node_reduced_claims` check fires first.
@@ -1851,13 +1854,17 @@ fn bench_square_zk_overhead() {
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
 
     // Warmup
-    let _ =
-        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, std::slice::from_ref(&input));
+    let _ = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
+        &prover_pp,
+        std::slice::from_ref(&input),
+    );
 
     // Standard prove
     let t0 = Instant::now();
-    let (proof, io, _) =
-        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, std::slice::from_ref(&input));
+    let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
+        &prover_pp,
+        std::slice::from_ref(&input),
+    );
     let standard_prove = t0.elapsed();
 
     // ZK prove (single pass: setup + ZK sumcheck + BlindFold)

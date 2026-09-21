@@ -1268,7 +1268,10 @@ mod tests {
         let expected: Vec<i32> = (0..16)
             .map(|i| if i % 8 == 0 { multiplier } else { 0 })
             .collect();
-        assert_eq!(model.forward(&[input.clone()])[0].inner, expected);
+        assert_eq!(
+            model.forward(std::slice::from_ref(&input))[0].inner,
+            expected
+        );
         unit_test_op(model, &[input]);
     }
 

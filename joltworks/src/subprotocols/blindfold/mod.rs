@@ -545,3 +545,7 @@ impl<F: JoltField> Constraint<F> {
 pub fn pedersen_generator_count_for_r1cs<F: JoltField>(hyrax: &HyraxParams) -> usize {
     hyrax.C
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+mod storage_reference_r1cs;

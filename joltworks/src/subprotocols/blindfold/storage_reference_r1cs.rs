@@ -364,31 +364,14 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
         oc_blocks: Vec<Vec<OpeningId>>,
         opening_aliases: BTreeMap<OpeningId, OpeningId>,
     ) -> Self {
-        Self::new_with_extra_owned(
-            stage_configs.to_vec(),
-            extra_constraints.to_vec(),
-            baked.clone(),
-            oc_blocks,
-            opening_aliases,
-        )
-    }
-
-    /// Consume relation storage when the caller no longer needs it.
-    pub fn new_with_extra_owned(
-        stage_configs: Vec<StageConfig>,
-        extra_constraints: Vec<OutputClaimConstraint>,
-        baked: BakedPublicInputs<F>,
-        oc_blocks: Vec<Vec<OpeningId>>,
-        opening_aliases: BTreeMap<OpeningId, OpeningId>,
-    ) -> Self {
         Self {
             constraints: Vec::new(),
             next_var: 1,
-            stage_configs,
-            extra_constraints,
+            stage_configs: stage_configs.to_vec(),
+            extra_constraints: extra_constraints.to_vec(),
             extra_output_vars: Vec::new(),
             extra_blinding_vars: Vec::new(),
-            baked,
+            baked: baked.clone(),
             oc_blocks,
             opening_aliases,
             row_width: None,
@@ -504,9 +487,9 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
         let witness_start = self.next_var;
         self.next_var = witness_start + hyrax_R_coeff * hyrax_C;
 
-        let stage_configs = std::mem::take(&mut self.stage_configs);
-        let extra_constraints = std::mem::take(&mut self.extra_constraints);
-        let baked = std::mem::take(&mut self.baked);
+        let stage_configs = self.stage_configs.clone();
+        let extra_constraints = self.extra_constraints.clone();
+        let baked = self.baked.clone();
         let layout = compute_witness_layout(&stage_configs, &extra_constraints);
 
         // Pre-allocate opening variables in the dedicated output claims region.
@@ -699,7 +682,8 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
         let noncoeff_region_start =
             witness_start + hyrax_R_coeff * hyrax_C + output_claims_rows * hyrax_C;
         let noncoeff_count = self.next_var - noncoeff_region_start;
-        let mut hyrax = compute_hyrax_params(&stage_configs, noncoeff_count, output_claims_rows);
+        let mut hyrax =
+            compute_hyrax_params(&self.stage_configs, noncoeff_count, output_claims_rows);
         hyrax.C = hyrax_C;
         hyrax.R_prime = (hyrax.R_coeff + output_claims_rows + noncoeff_count.div_ceil(hyrax_C))
             .next_power_of_two();
@@ -709,7 +693,7 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
         let mut b = SparseR1CSMatrix::new(num_constraints, num_vars);
         let mut c = SparseR1CSMatrix::new(num_constraints, num_vars);
 
-        for (row, constraint) in self.constraints.into_iter().enumerate() {
+        for (row, constraint) in self.constraints.iter().enumerate() {
             for term in &constraint.a.terms {
                 a.push(row, term.var.index(), term.coeff);
             }
@@ -727,8 +711,8 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
             c,
             num_vars,
             num_constraints,
-            stage_configs,
-            extra_constraints,
+            stage_configs: self.stage_configs,
+            extra_constraints: self.extra_constraints,
             extra_output_vars: self.extra_output_vars,
             extra_blinding_vars: self.extra_blinding_vars,
             hyrax,
@@ -801,305 +785,5 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
         }
 
         r1cs_acc.aux_vars
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::subprotocols::blindfold::witness::{BlindFoldWitness, RoundWitness, StageWitness};
-    use crate::subprotocols::blindfold::BakedPublicInputs;
-    use ark_bn254::Fr;
-
-    #[test]
-    fn test_single_round_constraint_satisfaction() {
-        type F = Fr;
-
-        let c0 = F::from_u64(40);
-        let c1 = F::from_u64(10);
-        let c2 = F::from_u64(15);
-        let c3 = F::from_u64(5);
-        let initial_claim = F::from_u64(110);
-        let r = F::from_u64(7);
-
-        let round = RoundWitness::new(vec![c0, c1, c2, c3], r);
-        let configs = [super::super::StageConfig::new(1, 3)];
-        let witness = BlindFoldWitness::new(initial_claim, vec![StageWitness::new(vec![round])]);
-
-        let baked = BakedPublicInputs::from_witness(&witness, &configs);
-        let builder = VerifierR1CSBuilder::<F>::new(&configs, &baked);
-        let r1cs = builder.build();
-
-        let z = witness.assign(&r1cs);
-        r1cs.check_satisfaction(&z).unwrap();
-    }
-
-    #[test]
-    fn test_multi_round_chaining() {
-        type F = Fr;
-
-        let c0_1 = F::from_u64(20);
-        let c1_1 = F::from_u64(5);
-        let c2_1 = F::from_u64(7);
-        let c3_1 = F::from_u64(3);
-        let initial_claim = F::from_u64(55);
-        let r1 = F::from_u64(3);
-
-        let round1 = RoundWitness::new(vec![c0_1, c1_1, c2_1, c3_1], r1);
-        let next1 = round1.evaluate(r1);
-
-        let c0_2 = F::from_u64(85);
-        let c1_2 = F::from_u64(4);
-        let c2_2 = F::from_u64(3);
-        let c3_2 = F::from_u64(2);
-        let r2 = F::from_u64(5);
-
-        let round2 = RoundWitness::new(vec![c0_2, c1_2, c2_2, c3_2], r2);
-
-        let claim2 = F::from_u64(2) * c0_2 + c1_2 + c2_2 + c3_2;
-        assert_eq!(claim2, next1, "Round 2 claim should equal round 1 output");
-
-        let configs = [super::super::StageConfig::new(2, 3)];
-        let witness =
-            BlindFoldWitness::new(initial_claim, vec![StageWitness::new(vec![round1, round2])]);
-
-        let baked = BakedPublicInputs::from_witness(&witness, &configs);
-        let builder = VerifierR1CSBuilder::<F>::new(&configs, &baked);
-        let r1cs = builder.build();
-
-        // 2 constraints per round (sum + eval), 2 rounds = 4
-        assert_eq!(r1cs.num_constraints, 4);
-
-        let z = witness.assign(&r1cs);
-        match r1cs.check_satisfaction(&z) {
-            Ok(()) => {}
-            Err(row) => panic!("Constraint {row} failed"),
-        }
-    }
-
-    #[test]
-    fn test_constraint_count() {
-        type F = Fr;
-
-        // Build dummy baked values for 120 rounds, 1 chain
-        let configs: Vec<_> = (0..6)
-            .map(|_| super::super::StageConfig::new(20, 3))
-            .collect();
-
-        let baked = BakedPublicInputs {
-            challenges: vec![F::from_u64(1); 120],
-            initial_claims: vec![F::from_u64(0)],
-            ..Default::default()
-        };
-
-        let builder = VerifierR1CSBuilder::<F>::new(&configs, &baked);
-        let r1cs = builder.build();
-
-        // 2 constraints per round, 120 rounds = 240
-        assert_eq!(r1cs.num_constraints, 240);
-        assert_eq!(r1cs.hyrax.C, 4);
-        assert_eq!(r1cs.hyrax.R_coeff, 128);
-    }
-
-    #[test]
-    fn test_invalid_witness_fails() {
-        type F = Fr;
-
-        let c0 = F::from_u64(40);
-        let c1 = F::from_u64(10);
-        let c2 = F::from_u64(5);
-        let c3 = F::from_u64(5);
-        let initial_claim = F::from_u64(200); // Doesn't match coefficients
-        let r = F::from_u64(3);
-
-        let round = RoundWitness::with_claimed_sum(vec![c0, c1, c2, c3], r, F::from_u64(200));
-        let configs = [super::super::StageConfig::new(1, 3)];
-        let witness = BlindFoldWitness::new(initial_claim, vec![StageWitness::new(vec![round])]);
-
-        let baked = BakedPublicInputs::from_witness(&witness, &configs);
-        let builder = VerifierR1CSBuilder::<F>::new(&configs, &baked);
-        let r1cs = builder.build();
-
-        let z = witness.assign(&r1cs);
-        assert!(
-            r1cs.check_satisfaction(&z).is_err(),
-            "R1CS should NOT be satisfied with invalid witness"
-        );
-    }
-
-    #[test]
-    fn test_uniskip_constraint_satisfaction() {
-        type F = Fr;
-
-        let power_sums = vec![4, 0, 10, 0];
-        let configs = [super::super::StageConfig::new_uniskip(3, power_sums)];
-
-        let c0 = F::from_u64(5);
-        let c1 = F::from_u64(7);
-        let c2 = F::from_u64(3);
-        let c3 = F::from_u64(9);
-        let initial_claim = F::from_u64(50); // 4*5 + 10*3 = 50
-        let r = F::from_u64(2);
-
-        let round = RoundWitness::new(vec![c0, c1, c2, c3], r);
-        let witness = BlindFoldWitness::new(initial_claim, vec![StageWitness::new(vec![round])]);
-
-        let baked = BakedPublicInputs::from_witness(&witness, &configs);
-        let builder = VerifierR1CSBuilder::<F>::new(&configs, &baked);
-        let r1cs = builder.build();
-
-        let z = witness.assign(&r1cs);
-        match r1cs.check_satisfaction(&z) {
-            Ok(()) => {}
-            Err(row) => panic!("Constraint {row} failed"),
-        }
-    }
-
-    #[test]
-    fn test_uniskip_invalid_witness_fails() {
-        type F = Fr;
-
-        let power_sums = vec![4, 0, 10, 0];
-        let configs = [super::super::StageConfig::new_uniskip(3, power_sums)];
-
-        let c0 = F::from_u64(5);
-        let c1 = F::from_u64(7);
-        let c2 = F::from_u64(3);
-        let c3 = F::from_u64(9);
-        let r = F::from_u64(2);
-
-        let round = RoundWitness::with_claimed_sum(vec![c0, c1, c2, c3], r, F::from_u64(100));
-
-        let baked = BakedPublicInputs {
-            challenges: vec![r],
-            initial_claims: vec![F::from_u64(100)], // Correct initial_claim = 100 but coeffs give 50
-            ..Default::default()
-        };
-
-        let builder = VerifierR1CSBuilder::<F>::new(&configs, &baked);
-        let r1cs = builder.build();
-
-        let witness = BlindFoldWitness::new(F::from_u64(100), vec![StageWitness::new(vec![round])]);
-        let z = witness.assign(&r1cs);
-        assert!(
-            r1cs.check_satisfaction(&z).is_err(),
-            "R1CS should NOT be satisfied with invalid uni-skip witness"
-        );
-    }
-
-    #[test]
-    fn test_final_output_constraint_single_eval() {
-        use crate::subprotocols::blindfold::witness::FinalOutputWitness;
-
-        type F = Fr;
-
-        let config = super::super::StageConfig::new(1, 3).with_final_output(1);
-        let c0 = F::from_u64(40);
-        let c1 = F::from_u64(5);
-        let c2 = F::from_u64(10);
-        let c3 = F::from_u64(5);
-        let initial_claim = F::from_u64(100);
-        let r = F::from_u64(3);
-
-        let round = RoundWitness::new(vec![c0, c1, c2, c3], r);
-        let final_claim = round.evaluate(r);
-
-        let alpha = F::from_u64(1);
-        let y = final_claim;
-
-        let fout_witness = FinalOutputWitness::linear(vec![alpha], vec![y]);
-        let stage = StageWitness::with_final_output(vec![round], fout_witness);
-        let witness = BlindFoldWitness::new(initial_claim, vec![stage]);
-
-        let baked = BakedPublicInputs::from_witness(&witness, std::slice::from_ref(&config));
-        let builder = VerifierR1CSBuilder::<F>::new(std::slice::from_ref(&config), &baked);
-        let r1cs = builder.build();
-
-        // 2 round constraints + 1 final output = 3
-        assert_eq!(r1cs.num_constraints, 3);
-
-        let z = witness.assign(&r1cs);
-        match r1cs.check_satisfaction(&z) {
-            Ok(()) => {}
-            Err(row) => panic!("Constraint {row} failed"),
-        }
-    }
-
-    #[test]
-    fn test_final_output_constraint_multiple_evals() {
-        use crate::subprotocols::blindfold::witness::FinalOutputWitness;
-
-        type F = Fr;
-
-        let config = super::super::StageConfig::new(1, 3).with_final_output(3);
-        let c0 = F::from_u64(40);
-        let c1 = F::from_u64(5);
-        let c2 = F::from_u64(10);
-        let c3 = F::from_u64(5);
-        let initial_claim = F::from_u64(100);
-        let r = F::from_u64(3);
-
-        let round = RoundWitness::new(vec![c0, c1, c2, c3], r);
-        let final_claim = round.evaluate(r);
-
-        let alpha0 = F::from_u64(2);
-        let alpha1 = F::from_u64(3);
-        let alpha2 = F::from_u64(5);
-        let y0 = F::from_u64(10);
-        let y1 = F::from_u64(20);
-        let partial_sum = alpha0 * y0 + alpha1 * y1;
-        let y2 = (final_claim - partial_sum) * alpha2.inverse().unwrap();
-
-        let fout_witness =
-            FinalOutputWitness::linear(vec![alpha0, alpha1, alpha2], vec![y0, y1, y2]);
-        let stage = StageWitness::with_final_output(vec![round], fout_witness);
-        let witness = BlindFoldWitness::new(initial_claim, vec![stage]);
-
-        let baked = BakedPublicInputs::from_witness(&witness, std::slice::from_ref(&config));
-        let builder = VerifierR1CSBuilder::<F>::new(std::slice::from_ref(&config), &baked);
-        let r1cs = builder.build();
-
-        // 2 round constraints + 1 final output = 3 (single constraint for all evals!)
-        assert_eq!(r1cs.num_constraints, 3);
-
-        let z = witness.assign(&r1cs);
-        match r1cs.check_satisfaction(&z) {
-            Ok(()) => {}
-            Err(row) => panic!("Constraint {row} failed"),
-        }
-    }
-
-    #[test]
-    fn test_final_output_constraint_invalid_fails() {
-        use crate::subprotocols::blindfold::witness::FinalOutputWitness;
-
-        type F = Fr;
-
-        let config = super::super::StageConfig::new(1, 3).with_final_output(1);
-        let c0 = F::from_u64(40);
-        let c1 = F::from_u64(5);
-        let c2 = F::from_u64(10);
-        let c3 = F::from_u64(5);
-        let initial_claim = F::from_u64(100);
-        let r = F::from_u64(3);
-
-        let round = RoundWitness::new(vec![c0, c1, c2, c3], r);
-        let final_claim = round.evaluate(r);
-
-        let alpha = F::from_u64(1);
-        let y = final_claim + F::from_u64(1); // Wrong value!
-
-        let fout_witness = FinalOutputWitness::linear(vec![alpha], vec![y]);
-        let stage = StageWitness::with_final_output(vec![round], fout_witness);
-        let witness = BlindFoldWitness::new(initial_claim, vec![stage]);
-
-        let baked = BakedPublicInputs::from_witness(&witness, std::slice::from_ref(&config));
-        let builder = VerifierR1CSBuilder::<F>::new(std::slice::from_ref(&config), &baked);
-        let r1cs = builder.build();
-
-        let z = witness.assign(&r1cs);
-        assert!(
-            r1cs.check_satisfaction(&z).is_err(),
-            "R1CS should NOT be satisfied with invalid final output"
-        );
     }
 }

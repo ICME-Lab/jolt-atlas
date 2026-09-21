@@ -53,10 +53,13 @@ fn transcript(
         return Err(invalid("Boundary requires a registered context"));
     }
     graph.graph.validate(usize::BITS as usize)?;
-    if tensor_id >= graph.graph.num_inputs + graph.graph.nodes.len() {
+    if tensor >= graph.graph.num_inputs + graph.graph.nodes.len() {
         return Err(invalid("Boundary tensor is outside the registered graph"));
     }
     let variables = graph.graph.log_rows;
+    if variables > max_vars {
+        return Err(invalid("Boundary tensor exceeds setup"));
+    }
     let shape = vec![1 << variables];
     let commitment = *graph
         .commitments

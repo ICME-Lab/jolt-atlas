@@ -351,7 +351,10 @@ impl Model {
     /// whether the shadow should undo fixed-point scaling.
     fn is_raw_shadow_constant(&self, idx: usize) -> bool {
         self.graph.nodes.values().any(|node| {
-            if matches!(node.operator, Operator::GatherSmall(_) | Operator::GatherLarge(_)) {
+            if matches!(
+                node.operator,
+                Operator::GatherSmall(_) | Operator::GatherLarge(_)
+            ) {
                 return node.inputs.get(1) == Some(&idx);
             }
             if let Operator::Mul(mul) = &node.operator

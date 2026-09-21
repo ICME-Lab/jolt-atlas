@@ -286,7 +286,7 @@ mod tests {
             assert_eq!(shadow.f64_outputs[&output], expected);
             // The regular shadows receive the same integer inputs expressed
             // in real units, unlike the original-weight shadow above.
-            let factor = 2_f64.powi(args.scale as i32);
+            let factor = 2_f64.powi(args.scale);
             let dequantized: Vec<f64> = floats.iter().map(|v| v / factor).collect();
             let integer_input = Tensor::new(Some(&values), &dims).unwrap();
             let real_input = Tensor::new(Some(&dequantized), &dims).unwrap();
@@ -300,7 +300,10 @@ mod tests {
                 model.trace_with_shadow_isolated(&[integer_input], &[real_input], args.scale),
             ] {
                 assert_eq!(regular.f64_outputs[&output], expected_real);
-                assert_eq!(regular.i32_outputs[&output], shadow.f64_outputs[&output].map(|v| v as i32));
+                assert_eq!(
+                    regular.i32_outputs[&output],
+                    shadow.f64_outputs[&output].map(|v| v as i32)
+                );
             }
         }
     }

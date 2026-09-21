@@ -48,7 +48,7 @@ impl NativeRegisteredGraph {
         statement: &NativeGraphStatement,
         generators: &PedersenGenerators<Bn254Curve>,
     ) -> Result<(), ProofVerifyError> {
-        self.graph.validate(self.setup.0.max_log_n)?;
+        self.graph.tensor_shapes()?;
         if encoded(&statement.graph)? != encoded(&self.graph)? {
             return Err(invalid("Proof graph differs from the registered model"));
         }
@@ -76,9 +76,9 @@ impl NativeGraphPreprocessing {
         public_inputs: BTreeMap<usize, Vec<i32>>,
         setup: &DoryProverSetup,
     ) -> Result<Self, ProofVerifyError> {
-        graph.validate(setup.verifier.max_log_n)?;
+        graph.tensor_shapes()?;
         if graph
-            .log_rows
+            .max_log_rows()?
             .checked_add(8)
             .is_none_or(|n| n > setup.verifier.max_log_n)
         {
@@ -87,10 +87,11 @@ impl NativeGraphPreprocessing {
         let mut commitments = BTreeMap::new();
         let mut expected = BTreeMap::new();
         for (&id, values) in &public_inputs {
-            if id >= graph.num_inputs {
-                return Err(invalid("Registered public input is not an input tensor"));
-            }
-            if values.len() != 1 << graph.log_rows {
+            let shape = graph
+                .input_shapes
+                .get(id)
+                .ok_or_else(|| invalid("Registered public input is not an input tensor"))?;
+            if values.len() != shape.iter().product::<usize>() {
                 return Err(invalid("Registered public parameter shape mismatch"));
             }
             // These parameters are public. Deterministic commitments make
@@ -127,7 +128,7 @@ impl NativeGraphPreprocessing {
             ));
         }
         let expected =
-            (0..self.registered.graph.num_inputs).filter(|i| !self.values.contains_key(i));
+            (0..self.registered.graph.num_inputs()).filter(|i| !self.values.contains_key(i));
         if !expected.eq(private_inputs.keys().copied()) {
             return Err(invalid("Provide exactly the unregistered private inputs"));
         }
@@ -146,11 +147,14 @@ impl NativeGraphPreprocessing {
 mod tests {
     use super::super::native_graph::NativeGraphNode;
     use super::*;
+    use atlas_onnx_tracer::{
+        ops::{Add, MeanOfSquares, Mul, Op, Rsqrt},
+        tensor::Tensor,
+    };
     fn graph() -> NativeGraph {
         NativeGraph {
             context: b"registered public parameters".to_vec(),
-            log_rows: 2,
-            num_inputs: 2,
+            input_shapes: vec![vec![4]; 2],
             nodes: vec![NativeGraphNode::mul(0, 1, 1)],
             outputs: vec![2],
         }
@@ -249,5 +253,59 @@ mod tests {
                 &DoryScheme::setup_prover(12)
             )
             .is_err());
+    }
+    #[test]
+    fn native_registration_proves_normalization_with_logical_count_and_fixed_parameters() {
+        let pp = DoryScheme::setup_prover(18);
+        let gens = DoryScheme::pedersen_generators(&pp, 16);
+        let graph = NativeGraph {
+            context: b"registered normalization component".to_vec(),
+            input_shapes: vec![vec![1, 1024], vec![1, 1], vec![1, 1024]],
+            nodes: vec![
+                NativeGraphNode::mean_of_squares_with_count(0, vec![1], 14, 896),
+                NativeGraphNode::add(3, 1),
+                NativeGraphNode::rsqrt(4, 14),
+                NativeGraphNode::broadcast(5, vec![1, 1024]),
+                NativeGraphNode::mul(0, 6, 14),
+                NativeGraphNode::mul(7, 2, 14),
+            ],
+            outputs: vec![8],
+        };
+        let weight = (0..1024)
+            .map(|i| if i < 896 { 16384 + i % 17 } else { 0 })
+            .collect::<Vec<i32>>();
+        let cache = NativeGraphPreprocessing::new(
+            graph,
+            BTreeMap::from([(1, vec![1]), (2, weight.clone())]),
+            &pp,
+        )
+        .unwrap();
+        let x = (0..1024)
+            .map(|i| if i < 896 { i * 37 - 16000 } else { 0 })
+            .collect::<Vec<i32>>();
+        let input = Tensor::new(Some(&x), &[1, 1024]).unwrap();
+        let mean = MeanOfSquares {
+            axes: vec![1],
+            scale: 14,
+            count: 896,
+            padded_count: 1024,
+        }
+        .f(vec![&input]);
+        let epsilon = Tensor::new(Some(&[1]), &[1, 1]).unwrap();
+        let adjusted = Add.f(vec![&mean, &epsilon]);
+        let inv = Rsqrt { scale: 14 }
+            .f(vec![&adjusted])
+            .expand(&[1, 1024])
+            .unwrap();
+        let normalized = Mul { scale: 14 }.f(vec![&input, &inv]);
+        let weight = Tensor::new(Some(&weight), &[1, 1024]).unwrap();
+        let expected = Mul { scale: 14 }.f(vec![&normalized, &weight]);
+        let (st, wi) = cache.commit(BTreeMap::from([(0, x)]), &pp).unwrap();
+        assert_eq!(wi.outputs(), vec![expected.data().to_vec()]);
+        let proof = NativeGraphProof::prove(&st, wi, &pp, &gens).unwrap();
+        cache.registered().verify(&proof, &st, &gens).unwrap();
+        let mut wrong = cache.registered().clone();
+        wrong.public_inputs.insert(1, wrong.public_inputs[&2]);
+        assert!(wrong.verify(&proof, &st, &gens).is_err());
     }
 }

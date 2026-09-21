@@ -3,8 +3,8 @@
 //! prove its conversion and check this same evaluation commitment. This module
 //! alone does not prove a conversion or complete a private receipt.
 use super::{
-    native_graph::NativeGraphStatement, DoryCommitment, DoryHint, DoryProof, DoryProverSetup,
-    DoryScheme, DoryVerifierSetup,
+    native_graph::NativeGraphStatement, native_reduce::shape_bits, DoryCommitment, DoryHint,
+    DoryProof, DoryProverSetup, DoryScheme, DoryVerifierSetup,
 };
 use crate::field::JoltField;
 use crate::{
@@ -52,15 +52,15 @@ fn transcript(
     if context.is_empty() {
         return Err(invalid("Boundary requires a registered context"));
     }
-    graph.graph.validate(usize::BITS as usize)?;
-    if tensor >= graph.graph.num_inputs + graph.graph.nodes.len() {
-        return Err(invalid("Boundary tensor is outside the registered graph"));
-    }
-    let variables = graph.graph.log_rows;
+    let shapes = graph.graph.tensor_shapes()?;
+    let shape = shapes
+        .get(tensor)
+        .ok_or_else(|| invalid("Boundary tensor does not exist"))?
+        .clone();
+    let variables = shape_bits(&shape)?;
     if variables > max_vars {
         return Err(invalid("Boundary tensor exceeds setup"));
     }
-    let shape = vec![1 << variables];
     let commitment = *graph
         .commitments
         .get(&CommittedPoly::DivNodeQuotient(tensor))
@@ -179,11 +179,10 @@ mod tests {
         let pp = DoryScheme::setup_prover(12);
         let vp = DoryScheme::setup_verifier(&pp);
         let gens = DoryScheme::pedersen_generators(&pp, 16);
-        for input in [vec![0, 1], vec![0, 1, 1, 0]] {
+        for input in [vec![1], vec![0, 1, 1, 0]] {
             let graph = NativeGraph {
                 context: b"registered model".to_vec(),
-                log_rows: input.len().ilog2() as usize,
-                num_inputs: 1,
+                input_shapes: vec![vec![input.len()]],
                 nodes: vec![NativeGraphNode::lookup(0, vec![11, -7], 1)],
                 outputs: vec![1],
             };
@@ -230,16 +229,16 @@ mod tests {
         }
     }
     #[test]
-    fn boundary_binds_prior_commitment_and_rejects_invalid_identifiers() {
+    fn boundary_binds_prior_commitment_and_rejects_uncommitted_witness() {
         let pp = DoryScheme::setup_prover(12);
         let vp = DoryScheme::setup_verifier(&pp);
         let graph = NativeGraph {
             context: b"registered source".to_vec(),
-            log_rows: 2,
-            num_inputs: 1,
+            input_shapes: vec![vec![4]],
             nodes: vec![NativeGraphNode::lookup(0, vec![4, 5], 1)],
             outputs: vec![1],
         };
+        let loose = NativeGraphWitness::uncommitted(&graph, vec![vec![0, 1, 0, 1]]).unwrap();
         let (statement, witness) =
             NativeGraphWitness::commit(graph, vec![vec![0, 1, 0, 1]], &pp).unwrap();
         let a =
@@ -249,6 +248,9 @@ mod tests {
             NativeTensorBoundaryProof::evaluation_point(&statement, b"boundary", 1, [2; 32], &vp)
                 .unwrap();
         assert_ne!(a, b);
+        assert!(loose
+            .prove_tensor_boundary(&statement, b"boundary", 1, [1; 32], &pp)
+            .is_err());
         assert!(witness
             .prove_tensor_boundary(&statement, b"", 1, [1; 32], &pp)
             .is_err());

@@ -829,8 +829,8 @@ mod hint_prefix_tests {
 #[cfg(test)]
 mod borrowed_evaluation_tests {
     use super::*;
-    use crate::poly::multilinear_polynomial::PolynomialEvaluation;
     use crate::poly::dense_mlpoly::DensePolynomial;
+    use crate::poly::multilinear_polynomial::PolynomialEvaluation;
 
     fn check() {
         for log_dense in [0usize, 7, 16, 17] {

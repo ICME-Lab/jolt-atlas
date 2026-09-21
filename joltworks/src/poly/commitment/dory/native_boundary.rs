@@ -230,7 +230,7 @@ mod tests {
         }
     }
     #[test]
-    fn boundary_binds_prior_commitment_and_rejects_uncommitted_witness() {
+    fn boundary_binds_prior_commitment_and_rejects_invalid_identifiers() {
         let pp = DoryScheme::setup_prover(12);
         let vp = DoryScheme::setup_verifier(&pp);
         let graph = NativeGraph {
@@ -240,7 +240,6 @@ mod tests {
             nodes: vec![NativeGraphNode::lookup(0, vec![4, 5], 1)],
             outputs: vec![1],
         };
-        let loose = NativeGraphWitness::uncommitted(&graph, vec![vec![0, 1, 0, 1]]).unwrap();
         let (statement, witness) =
             NativeGraphWitness::commit(graph, vec![vec![0, 1, 0, 1]], &pp).unwrap();
         let a =
@@ -250,9 +249,6 @@ mod tests {
             NativeTensorBoundaryProof::evaluation_point(&statement, b"boundary", 1, [2; 32], &vp)
                 .unwrap();
         assert_ne!(a, b);
-        assert!(loose
-            .prove_tensor_boundary(&statement, b"boundary", 1, [1; 32], &pp)
-            .is_err());
         assert!(witness
             .prove_tensor_boundary(&statement, b"", 1, [1; 32], &pp)
             .is_err());

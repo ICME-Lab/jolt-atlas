@@ -337,17 +337,20 @@ mod imp {
             Par(self.0.enumerate())
         }
 
-        /// rayon's `zip_eq` (panics on length mismatch). Serial: a plain zip;
-        /// callers guarantee equal lengths.
+        /// Match Rayon by rejecting unequal lengths before iteration.
         #[inline(always)]
         pub fn zip_eq<U: IntoParallelIterator>(
             self,
             other: U,
         ) -> Par<core::iter::Zip<I, <U::Iter as IntoSerial>::Iter>>
         where
+            I: ExactSizeIterator,
             U::Iter: IntoSerial,
+            <U::Iter as IntoSerial>::Iter: ExactSizeIterator,
         {
-            Par(self.0.zip(other.into_par_iter().into_serial()))
+            let other = other.into_par_iter().into_serial();
+            assert_eq!(self.0.len(), other.len(), "zip_eq requires equal lengths");
+            Par(self.0.zip(other))
         }
 
         /// rayon's `fold(identity, op)`: produces per-chunk accumulators. With
@@ -618,5 +621,27 @@ mod tests {
         scope(|s| s.spawn(|_| value = 9));
         assert_eq!(value, 9);
         assert_eq!(current_num_threads(), 1);
+    }
+}
+
+#[cfg(test)]
+mod zip_eq_tests {
+    use super::prelude::*;
+
+    #[test]
+    fn equal_lengths_preserve_pairs() {
+        for length in [0, 1, 9] {
+            let actual: Vec<_> = (0..length).into_par_iter().zip_eq(0..length).collect();
+            assert_eq!(actual, (0..length).map(|i| (i, i)).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn unequal_lengths_panic_before_consumption() {
+        for (left, right) in [(0, 1), (1, 0), (2, 3), (3, 2)] {
+            assert!(std::panic::catch_unwind(|| {
+                let _pairs = (0..left).into_par_iter().zip_eq(0..right);
+            }).is_err());
+        }
     }
 }

@@ -307,7 +307,7 @@ where
     ONNXProof::deserialize_compressed(bytes)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "onnx-import"))]
 mod tests {
     use super::*;
     use crate::onnx_proof::{

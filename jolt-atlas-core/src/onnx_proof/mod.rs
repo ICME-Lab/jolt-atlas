@@ -47,7 +47,7 @@ mod verifier;
 #[cfg(feature = "zk")]
 pub mod zk;
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "onnx-import", feature = "zk")))]
 mod e2e_tests;
 #[cfg(test)]
 mod soundness_tests;

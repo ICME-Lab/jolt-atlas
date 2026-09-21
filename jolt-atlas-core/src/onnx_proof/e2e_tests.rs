@@ -1,22 +1,30 @@
 use crate::onnx_proof::{
-    proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+    AtlasProverPreprocessing, AtlasSharedPreprocessing,
     AtlasVerifierPreprocessing, ONNXProof,
 };
 use ark_bn254::{Bn254, Fr};
 use atlas_onnx_tracer::{
-    model::{trace::ModelExecutionIO, Model, RunArgs},
     tensor::Tensor,
 };
+#[cfg(feature = "onnx-import")]
 use common::consts::MODEL_SCALE;
+#[cfg(feature = "onnx-import")]
+use crate::onnx_proof::proof_serialization::serialize_proof;
+#[cfg(feature = "onnx-import")]
+use atlas_onnx_tracer::model::{trace::ModelExecutionIO, Model, RunArgs};
 use joltworks::{
     poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
     transcripts::Blake2bTranscript,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
+#[cfg(feature = "onnx-import")]
 use serde_json::Value;
-use std::{collections::HashMap, fs::File, io::Read, time::Instant};
+#[cfg(feature = "onnx-import")]
+use std::{collections::HashMap, fs::File, io::Read};
+use std::time::Instant;
 
 // Fixed-point scale factor: 2^8 = 256
+#[cfg(feature = "onnx-import")]
 const SCALE: i32 = 256;
 
 /// Configuration for test prove-and-verify workflows.
@@ -30,6 +38,7 @@ const SCALE: i32 = 256;
 ///     .print_timing()
 ///     .debug_info());
 /// ```
+#[cfg(feature = "onnx-import")]
 #[derive(Clone, Debug, Default)]
 struct TestConfig {
     print_model: bool,
@@ -38,6 +47,7 @@ struct TestConfig {
     print_proof_size: bool,
 }
 
+#[cfg(feature = "onnx-import")]
 impl TestConfig {
     fn new() -> Self {
         Self::default()
@@ -65,6 +75,7 @@ impl TestConfig {
 }
 
 /// Run the prove-and-verify workflow, returning the execution IO.
+#[cfg(feature = "onnx-import")]
 fn prove_and_verify(
     model_dir: &str,
     inputs: &[Tensor<i32>],
@@ -112,6 +123,7 @@ fn prove_and_verify(
 
 #[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_gpt2() {
     let working_dir = "../atlas-onnx-tracer/models/gpt2/";
     let mut rng = StdRng::seed_from_u64(42);
@@ -152,6 +164,7 @@ fn test_gpt2() {
 
 #[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_gpt2_dory() {
     let working_dir = "../atlas-onnx-tracer/models/gpt2/";
     let mut rng = StdRng::seed_from_u64(42);
@@ -203,6 +216,7 @@ fn test_gpt2_dory() {
 #[cfg(feature = "zk")]
 #[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_gpt2_zk() {
     // Bounded local rayon pool for the ZK calls only. Caps thread count
     // and bumps stack size to dodge two macOS-only issues without
@@ -259,6 +273,7 @@ fn test_gpt2_zk() {
 
 #[ignore = "requires BGE ONNX model download (run scripts/download_bge_small_en_v1_5.py first)"]
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_bge_small_en_v1_5() {
     let working_dir = "../atlas-onnx-tracer/models/bge-small-en-v1.5/";
     let mut rng = StdRng::seed_from_u64(43);
@@ -293,6 +308,7 @@ fn test_bge_small_en_v1_5() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_nanoGPT() {
     let working_dir = "../atlas-onnx-tracer/models/nanoGPT/";
     let mut rng = StdRng::seed_from_u64(0x1096);
@@ -312,6 +328,7 @@ fn test_nanoGPT() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_transformer() {
     let working_dir = "../atlas-onnx-tracer/models/transformer/";
     let mut rng = StdRng::seed_from_u64(0x1096);
@@ -328,6 +345,7 @@ fn test_transformer() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_minigpt() {
     let working_dir = "../atlas-onnx-tracer/models/minigpt/";
     let mut rng = StdRng::seed_from_u64(0x42);
@@ -351,6 +369,7 @@ fn test_minigpt() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_microgpt() {
     let working_dir = "../atlas-onnx-tracer/models/microgpt/";
     let mut rng = StdRng::seed_from_u64(0x42);
@@ -374,6 +393,7 @@ fn test_microgpt() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_layernorm_head() {
     let working_dir = "../atlas-onnx-tracer/models/layernorm_head/";
     let mut rng = StdRng::seed_from_u64(0x8096);
@@ -390,6 +410,7 @@ fn test_layernorm_head() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_multihead_attention() {
     let working_dir = "../atlas-onnx-tracer/models/multihead_attention/";
     let mut rng = StdRng::seed_from_u64(0x1013);
@@ -409,6 +430,7 @@ fn test_multihead_attention() {
 // the tracer optimizes it and no Concat nodes remain in traced model.
 // So we keep a simpler .onnx model to ensure the concat node remains.
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_concat_transformer_block_e2e() {
     let working_dir = "../atlas-onnx-tracer/models/concat_transformer_block/";
     let mut rng = StdRng::seed_from_u64(0xC07CA7);
@@ -429,6 +451,7 @@ fn test_concat_transformer_block_e2e() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_self_attention_layer() {
     let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";
     let mut rng = StdRng::seed_from_u64(0x1003);
@@ -446,6 +469,7 @@ fn test_self_attention_layer() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_sum_axes() {
     let working_dir = "../atlas-onnx-tracer/models/sum_axes_test/";
     let mut rng = StdRng::seed_from_u64(0x923);
@@ -460,6 +484,7 @@ fn test_sum_axes() {
 
 #[ignore = "hzkg fails when all coeffs are zero"]
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_sum_independent() {
     let working_dir = "../atlas-onnx-tracer/models/sum_independent/";
     let mut rng = StdRng::seed_from_u64(0x923);
@@ -473,6 +498,7 @@ fn test_sum_independent() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_sum_operations_e2e() {
     // Test 1D sum along axis 0
     let working_dir = "../atlas-onnx-tracer/models/sum_1d_axis0/";
@@ -521,6 +547,7 @@ fn test_sum_operations_e2e() {
 
 #[ignore = "hzkg fails when all coeffs are zero"]
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_layernorm_partial_head() {
     let working_dir = "../atlas-onnx-tracer/models/layernorm_partial_head/";
     let input_data = vec![SCALE; 16 * 16];
@@ -534,6 +561,7 @@ fn test_layernorm_partial_head() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_article_classification() {
     let working_dir = "../atlas-onnx-tracer/models/article_classification/";
 
@@ -598,6 +626,7 @@ fn test_article_classification() {
 
 #[ignore = "hzkg fails when all coeffs are zero"]
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_add_sub_mul() {
     let working_dir = "../atlas-onnx-tracer/models/test_add_sub_mul/";
 
@@ -616,6 +645,7 @@ fn test_add_sub_mul() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_rsqrt() {
     let working_dir = "../atlas-onnx-tracer/models/rsqrt/";
 
@@ -635,6 +665,7 @@ fn test_rsqrt() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_perceptron() {
     let working_dir = "../atlas-onnx-tracer/models/perceptron/";
     let input = Tensor::construct(vec![1, 2, 3, 4], vec![1, 4]);
@@ -652,6 +683,7 @@ fn test_perceptron() {
 
 #[ignore = "hzkg fails when all coeffs are zero"]
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_broadcast() {
     let working_dir = "../atlas-onnx-tracer/models/broadcast/";
     let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
@@ -669,6 +701,7 @@ fn test_broadcast() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_reshape() {
     let working_dir = "../atlas-onnx-tracer/models/reshape/";
     let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
@@ -684,6 +717,7 @@ fn test_reshape() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_moveaxis() {
     let working_dir = "../atlas-onnx-tracer/models/moveaxis/";
     let input_vector: Vec<i32> = (1..=64).collect();
@@ -700,6 +734,7 @@ fn test_moveaxis() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_slice_e2e() {
     let working_dir = "../atlas-onnx-tracer/models/slice/";
     let input_vector: Vec<i32> = (1..=64).collect();
@@ -715,6 +750,7 @@ fn test_slice_e2e() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_gather() {
     let working_dir = "../atlas-onnx-tracer/models/gather/";
     let mut rng = StdRng::seed_from_u64(0x100);
@@ -730,6 +766,7 @@ fn test_gather() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_tanh() {
     let working_dir = "../atlas-onnx-tracer/models/tanh/";
     let input_vector = vec![10, 40, 70, 100];
@@ -744,6 +781,7 @@ fn test_tanh() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_erf() {
     let working_dir = "../atlas-onnx-tracer/models/erf/";
     let input_vector = vec![10, 40, 70, 100];
@@ -758,6 +796,7 @@ fn test_erf() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_sigmoid() {
     let working_dir = "../atlas-onnx-tracer/models/sigmoid_encoder/";
     let mut rng = StdRng::seed_from_u64(0x100);
@@ -772,6 +811,7 @@ fn test_sigmoid() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_positional_encoding_trig() {
     let working_dir = "../atlas-onnx-tracer/models/positional_encoding/";
 
@@ -792,6 +832,7 @@ fn test_positional_encoding_trig() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_mlp_square() {
     let working_dir = "../atlas-onnx-tracer/models/mlp_square/";
     let input_vector = vec![
@@ -811,6 +852,7 @@ fn test_mlp_square() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_mlp_square_4layer() {
     let working_dir = "../atlas-onnx-tracer/models/mlp_square_4layer/";
     let input_vector = vec![
@@ -1888,6 +1930,7 @@ fn bench_square_zk_overhead() {
 }
 
 #[test]
+#[cfg(feature = "onnx-import")]
 fn test_imported_reshape_preserves_padding_layout() {
     for (name, dims, output_dims) in [
         ("merge", vec![2, 3, 4], vec![6, 4]),

@@ -498,7 +498,7 @@ impl RunArgs {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "onnx-import"))]
 mod tests {
     use super::*;
 

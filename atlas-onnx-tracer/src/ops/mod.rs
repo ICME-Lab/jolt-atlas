@@ -173,8 +173,8 @@ impl FusedIntermediates {
     /// Split `acc` into `(quotient, remainder)` by Euclidean division by `divisor`
     /// and return them with the saturating-clamped `i32` output.
     pub(super) fn from_acc(acc: &Tensor<i64>, divisor: i64) -> (Tensor<i32>, Self) {
-        use common::parallel::par_enabled;
         use crate::utils::parallel_utils::*;
+        use common::parallel::par_enabled;
         let (quotient, remainder): (Vec<i64>, Vec<i32>) = acc
             .data()
             .par_iter()

@@ -60,6 +60,7 @@ use super::{
 };
 use atlas_onnx_tracer::{model::trace::Trace, model::Model, node::ComputationNode};
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
+use joltworks::par::prelude::*;
 use joltworks::subprotocols::booleanity::{LinearClaim, LinearTerm};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -85,7 +86,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::thread::unsafe_allocate_zero_vec,
 };
-use joltworks::par::prelude::*;
 
 /// Address width of the output range check (`out + 2^31 ∈ [0, 2^32)`).
 pub const OUT_LOG_K: usize = 32;

@@ -6,12 +6,12 @@
 //! reduce-and-fold rounds they scale vectors of `2^σ` G1 *and* G2 points, so
 //! they dominate the evaluation proof on a multi-core prover. These wrappers
 //! run them element-wise in parallel and delegate the MSM to the backend.
+use crate::par::prelude::*;
 use common::parallel::par_enabled;
 use dory::{
     backends::arkworks::{ArkFr, ArkG1, ArkG2, G1Routines, G2Routines},
     primitives::arithmetic::{DoryRoutines, Group},
 };
-use crate::par::prelude::*;
 
 /// [`G1Routines`] with parallel vector operations.
 pub struct ParG1Routines;

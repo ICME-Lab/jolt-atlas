@@ -26,6 +26,7 @@ use crate::onnx_proof::{
     ProofId, ProofType, Prover, Verifier,
 };
 use atlas_onnx_tracer::node::ComputationNode;
+use joltworks::par::prelude::*;
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{OpeningAccumulator, OpeningPoint},
@@ -38,7 +39,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits, thread::drop_in_background_thread},
 };
-use joltworks::par::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 

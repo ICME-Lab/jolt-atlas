@@ -325,8 +325,8 @@ mod tests {
 
     #[test]
     fn bounded_g1_msm_handles_nested_row_commitments() {
-        use rand::{rngs::StdRng, SeedableRng};
         use crate::par::prelude::*;
+        use rand::{rngs::StdRng, SeedableRng};
         let mut rng = StdRng::seed_from_u64(12489);
         let bases = (0..17)
             .map(|_| G1Projective::rand(&mut rng).into_affine())

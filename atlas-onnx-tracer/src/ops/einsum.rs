@@ -304,8 +304,8 @@ pub fn einsum_i32_with_i64_rebase(
 /// result is permuted into the output's letter order.
 mod gemm {
     use crate::tensor::{Tensor, TensorError};
-    use common::parallel::par_enabled;
     use crate::utils::parallel_utils::*;
+    use common::parallel::par_enabled;
     use std::collections::HashMap;
 
     /// Copy `src` (dims `dims`) into a contiguous buffer whose axis order is

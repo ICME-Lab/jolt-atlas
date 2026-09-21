@@ -16,8 +16,8 @@ use crate::{
     utils::errors::ProofVerifyError,
 };
 
-use ark_serialize::*;
 use crate::par::prelude::*;
+use ark_serialize::*;
 use std::marker::PhantomData;
 
 /// Implements the standard technique for batching parallel sumchecks to reduce

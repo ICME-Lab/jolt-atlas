@@ -32,12 +32,12 @@ use common::{
     parallel::par_enabled,
     CommittedPoly, VirtualPoly,
 };
+use joltworks::par::prelude::*;
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
     utils::lookup_bits::LookupBits,
 };
-use joltworks::par::prelude::*;
 
 /// Precomputed-witness [`LookupOperandsTrait`] helper for softmax's saturating clamp.
 ///

@@ -839,7 +839,7 @@ mod borrowed_evaluation_tests {
                     CommittedPoly::DivNodeQuotient(0),
                     MultilinearPolynomial::from(
                         (0..1 << log_dense)
-                            .map(|i| (i % 127) as i32 - 63)
+                            .map(|i| (i % 127) - 63)
                             .collect::<Vec<_>>(),
                     ),
                 ),

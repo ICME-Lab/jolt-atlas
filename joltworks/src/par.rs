@@ -641,7 +641,8 @@ mod zip_eq_tests {
         for (left, right) in [(0, 1), (1, 0), (2, 3), (3, 2)] {
             assert!(std::panic::catch_unwind(|| {
                 let _pairs = (0..left).into_par_iter().zip_eq(0..right);
-            }).is_err());
+            })
+            .is_err());
         }
     }
 }

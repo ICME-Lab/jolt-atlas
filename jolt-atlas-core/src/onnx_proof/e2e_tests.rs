@@ -1,17 +1,14 @@
-use crate::onnx_proof::{
-    AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    AtlasVerifierPreprocessing, ONNXProof,
-};
-use ark_bn254::{Bn254, Fr};
-use atlas_onnx_tracer::{
-    tensor::Tensor,
-};
-#[cfg(feature = "onnx-import")]
-use common::consts::MODEL_SCALE;
 #[cfg(feature = "onnx-import")]
 use crate::onnx_proof::proof_serialization::serialize_proof;
+use crate::onnx_proof::{
+    AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,
+};
+use ark_bn254::{Bn254, Fr};
 #[cfg(feature = "onnx-import")]
 use atlas_onnx_tracer::model::{trace::ModelExecutionIO, Model, RunArgs};
+use atlas_onnx_tracer::tensor::Tensor;
+#[cfg(feature = "onnx-import")]
+use common::consts::MODEL_SCALE;
 use joltworks::{
     poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
     transcripts::Blake2bTranscript,
@@ -19,9 +16,9 @@ use joltworks::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 #[cfg(feature = "onnx-import")]
 use serde_json::Value;
+use std::time::Instant;
 #[cfg(feature = "onnx-import")]
 use std::{collections::HashMap, fs::File, io::Read};
-use std::time::Instant;
 
 // Fixed-point scale factor: 2^8 = 256
 #[cfg(feature = "onnx-import")]

@@ -34,6 +34,23 @@ pub struct NativeBlindFold<F: JoltField> {
     output_values: Vec<Vec<F>>,
 }
 
+/// Verification needs the assembled relation, but no witness-construction data.
+pub struct NativeBlindFoldVerifier<F: JoltField> {
+    inner: NativeBlindFold<F>,
+}
+
+impl<F: JoltField> NativeBlindFoldVerifier<F> {
+    pub fn verify<C: JoltCurve<F = F>, T: Transcript>(
+        &self,
+        proof: &BlindFoldProof<F, C>,
+        input: &BlindFoldVerifierInput<C>,
+        gens: &PedersenGenerators<C>,
+        transcript: &mut T,
+    ) -> Result<(), ProofVerifyError> {
+        self.inner.verify(proof, input, gens, transcript)
+    }
+}
+
 impl<F: JoltField> NativeBlindFold<F> {
     #[tracing::instrument(skip_all, name = "NativeBlindFold::new", fields(stages = relations.len()))]
     pub fn new(
@@ -41,6 +58,28 @@ impl<F: JoltField> NativeBlindFold<F> {
         extra_constraints: &[OutputClaimConstraint],
         extra_challenges: &[F],
         width: usize,
+    ) -> Result<Self, ProofVerifyError> {
+        Self::assemble(relations, extra_constraints, extra_challenges, width, true)
+    }
+
+    /// Assemble the same matrices while releasing stage data after batching.
+    pub fn new_verifier(
+        relations: Vec<ZkVerifierStage<F>>,
+        extra_constraints: &[OutputClaimConstraint],
+        extra_challenges: &[F],
+        width: usize,
+    ) -> Result<NativeBlindFoldVerifier<F>, ProofVerifyError> {
+        Ok(NativeBlindFoldVerifier {
+            inner: Self::assemble(relations, extra_constraints, extra_challenges, width, false)?,
+        })
+    }
+
+    fn assemble(
+        relations: Vec<ZkVerifierStage<F>>,
+        extra_constraints: &[OutputClaimConstraint],
+        extra_challenges: &[F],
+        width: usize,
+        retain_witness: bool,
     ) -> Result<Self, ProofVerifyError> {
         if relations.is_empty() || !width.is_power_of_two() {
             return Err(invalid("Empty native relation or invalid commitment width"));
@@ -51,7 +90,9 @@ impl<F: JoltField> NativeBlindFold<F> {
         let mut outputs = Vec::new();
         let mut input_values = Vec::new();
         let mut output_values = Vec::new();
-        for s in &relations {
+        let mut retained_relations = Vec::new();
+        let mut blocks = Vec::new();
+        for s in relations {
             let n = s.batching_coefficients.len();
             if s.num_rounds == 0
                 || s.num_rounds != s.challenges.len()
@@ -87,10 +128,14 @@ impl<F: JoltField> NativeBlindFold<F> {
             if iv.len() != input.num_challenges || ov.len() != output.num_challenges {
                 return Err(invalid("Native relation challenge count mismatch"));
             }
+            if retain_witness {
+                inputs.push(input.clone());
+                outputs.push(output.clone());
+            }
             configs.push(
                 StageConfig::new_chain(s.num_rounds, s.degree)
-                    .with_input_constraint(input.clone())
-                    .with_constraint(output.clone()),
+                    .with_input_constraint(input)
+                    .with_constraint(output),
             );
             baked
                 .challenges
@@ -99,10 +144,14 @@ impl<F: JoltField> NativeBlindFold<F> {
             baked.initial_claims.push(F::zero());
             baked.input_constraint_challenges.extend_from_slice(&iv);
             baked.output_constraint_challenges.extend_from_slice(&ov);
-            inputs.push(input);
-            outputs.push(output);
-            input_values.push(iv);
-            output_values.push(ov);
+            if retain_witness {
+                input_values.push(iv);
+                output_values.push(ov);
+                blocks.push(s.output_claim_ids.clone());
+                retained_relations.push(s);
+            } else {
+                blocks.push(s.output_claim_ids);
+            }
         }
         if extra_constraints
             .iter()
@@ -113,14 +162,10 @@ impl<F: JoltField> NativeBlindFold<F> {
             return Err(invalid("Native extra relation challenge count mismatch"));
         }
         baked.extra_constraint_challenges = extra_challenges.to_vec();
-        let blocks = relations
-            .iter()
-            .map(|s| s.output_claim_ids.clone())
-            .collect();
-        let r1cs = VerifierR1CSBuilder::new_with_extra(
-            &configs,
-            extra_constraints,
-            &baked,
+        let r1cs = VerifierR1CSBuilder::new_with_extra_owned(
+            configs,
+            extra_constraints.to_vec(),
+            baked,
             blocks,
             BTreeMap::new(),
         )
@@ -128,7 +173,7 @@ impl<F: JoltField> NativeBlindFold<F> {
         .build();
         Ok(Self {
             r1cs,
-            relations,
+            relations: retained_relations,
             inputs,
             outputs,
             input_values,
@@ -365,3 +410,7 @@ mod tests {
         assert!(w.W[offset..offset + 8].iter().all(|v| !v.is_zero()));
     }
 }
+
+#[cfg(test)]
+#[path = "storage_tests.rs"]
+mod storage_tests;

@@ -2050,6 +2050,7 @@ impl NativeGraphProof {
             &mut t,
             gens.message_generators.len(),
         )?;
+        drop(verifiers);
         if let Some(proof) = &self.indicators {
             let mut verifiers: Vec<Verifier> = vec![];
             for (i, node) in graph.nodes.iter().enumerate() {
@@ -2091,7 +2092,7 @@ impl NativeGraphProof {
             .map(|g| Bn254G1(g.0))
             .ok_or_else(|| invalid("Missing hidden graph evaluation"))?;
         DoryScheme::verify_zk(&self.pcs, setup, &mut t, &state.r_sumcheck, &eval, &joint)?;
-        let native = NativeBlindFold::new(
+        let native = NativeBlindFold::new_verifier(
             a.zk_stages,
             &[relation],
             &coefficients,

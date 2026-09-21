@@ -1,0 +1,1968 @@
+﻿2026-09-21T16:43:25.7880725Z Current runner version: '2.337.0'
+2026-09-21T16:43:25.7896957Z ##[group]Runner Image Provisioner
+2026-09-21T16:43:25.7897483Z Hosted Compute Agent
+2026-09-21T16:43:25.7897829Z Version: 20260828.587
+2026-09-21T16:43:25.7898267Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-21T16:43:25.7898708Z Build Date: 2026-08-28T16:44:25Z
+2026-09-21T16:43:25.7899176Z Worker ID: {04ed4538-fac3-40e4-936d-a91911c5f976}
+2026-09-21T16:43:25.7899616Z Azure Region: centralus
+2026-09-21T16:43:25.7900120Z ##[endgroup]
+2026-09-21T16:43:25.7900931Z ##[group]Operating System
+2026-09-21T16:43:25.7901326Z Ubuntu
+2026-09-21T16:43:25.7901679Z 24.04.5
+2026-09-21T16:43:25.7902005Z LTS
+2026-09-21T16:43:25.7902324Z ##[endgroup]
+2026-09-21T16:43:25.7902705Z ##[group]Runner Image
+2026-09-21T16:43:25.7903063Z Image: ubuntu-24.04
+2026-09-21T16:43:25.7903425Z Version: 20260907.300.1
+2026-09-21T16:43:25.7904212Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260907.300/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-21T16:43:25.7905123Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260907.300
+2026-09-21T16:43:25.7905747Z ##[endgroup]
+2026-09-21T16:43:25.7906452Z ##[group]GITHUB_TOKEN Permissions
+2026-09-21T16:43:25.7907588Z Contents: read
+2026-09-21T16:43:25.7907926Z Metadata: read
+2026-09-21T16:43:25.7908378Z ##[endgroup]
+2026-09-21T16:43:25.7909655Z Secret source: Actions
+2026-09-21T16:43:25.7910400Z Cache mode: write
+2026-09-21T16:43:25.7910823Z Prepare workflow directory
+2026-09-21T16:43:25.8148231Z Prepare all required actions
+2026-09-21T16:43:25.8178834Z Getting action download info
+2026-09-21T16:43:26.0604804Z Download action repository 'actions/checkout@v3' (SHA:a37ce9120846195fa4ece8f58b268e6043cb2f26)
+2026-09-21T16:43:26.3029276Z Download action repository 'actions-rust-lang/setup-rust-toolchain@v1' (SHA:166cdcfd11aee3cb47222f9ddb555ce30ddb9659)
+2026-09-21T16:43:26.4977361Z Download action repository 'taiki-e/install-action@nextest' (SHA:e88e69ecdb9658bd172693dcdc2c84e7f0ab6a11)
+2026-09-21T16:43:27.2390730Z Getting action download info
+2026-09-21T16:43:27.3535217Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-09-21T16:43:28.2320345Z Complete job name: Clippy & Test (zk)
+2026-09-21T16:43:28.2854353Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-21T16:43:28.2860649Z ##[group]Run actions/checkout@v3
+2026-09-21T16:43:28.2861238Z with:
+2026-09-21T16:43:28.2861685Z   repository: ICME-Lab/jolt-atlas
+2026-09-21T16:43:28.2865688Z   token: ***
+2026-09-21T16:43:28.2866136Z   ssh-strict: true
+2026-09-21T16:43:28.2866607Z   persist-credentials: true
+2026-09-21T16:43:28.2867105Z   clean: true
+2026-09-21T16:43:28.2867592Z   sparse-checkout-cone-mode: true
+2026-09-21T16:43:28.2868129Z   fetch-depth: 1
+2026-09-21T16:43:28.2868573Z   fetch-tags: false
+2026-09-21T16:43:28.2869030Z   lfs: false
+2026-09-21T16:43:28.2869469Z   submodules: false
+2026-09-21T16:43:28.2869931Z   set-safe-directory: true
+2026-09-21T16:43:28.2870578Z   allow-unsafe-pr-checkout: false
+2026-09-21T16:43:28.2871178Z env:
+2026-09-21T16:43:28.2871602Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:28.2872100Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:28.2872587Z ##[endgroup]
+2026-09-21T16:43:28.3460380Z (node:1917) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-21T16:43:28.3462299Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-21T16:43:28.3532252Z Syncing repository: ICME-Lab/jolt-atlas
+2026-09-21T16:43:28.3533638Z ##[group]Getting Git version info
+2026-09-21T16:43:28.3534348Z Working directory is '/home/runner/work/jolt-atlas/jolt-atlas'
+2026-09-21T16:43:28.3535659Z [command]/usr/bin/git version
+2026-09-21T16:43:28.3577080Z git version 2.55.0
+2026-09-21T16:43:28.3588847Z ##[endgroup]
+2026-09-21T16:43:28.3597651Z Temporarily overriding HOME='/home/runner/work/_temp/64d7cd72-9bb3-43a3-a66a-a334fffa6b85' before making global git config changes
+2026-09-21T16:43:28.3599697Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-21T16:43:28.3601471Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/jolt-atlas/jolt-atlas
+2026-09-21T16:43:28.3774957Z Deleting the contents of '/home/runner/work/jolt-atlas/jolt-atlas'
+2026-09-21T16:43:28.3784193Z ##[group]Initializing the repository
+2026-09-21T16:43:28.3785196Z [command]/usr/bin/git init /home/runner/work/jolt-atlas/jolt-atlas
+2026-09-21T16:43:28.4895497Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-21T16:43:28.4896939Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-21T16:43:28.4898021Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-21T16:43:28.4899029Z hint: call:
+2026-09-21T16:43:28.4899621Z hint:
+2026-09-21T16:43:28.4900307Z hint: 	git config --global init.defaultBranch <name>
+2026-09-21T16:43:28.4901021Z hint:
+2026-09-21T16:43:28.4901632Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-21T16:43:28.4902815Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-21T16:43:28.4903522Z hint:
+2026-09-21T16:43:28.4904034Z hint: 	git branch -m <name>
+2026-09-21T16:43:28.4904509Z hint:
+2026-09-21T16:43:28.4905140Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-21T16:43:28.4906140Z Initialized empty Git repository in /home/runner/work/jolt-atlas/jolt-atlas/.git/
+2026-09-21T16:43:28.4907911Z [command]/usr/bin/git remote add origin https://github.com/ICME-Lab/jolt-atlas
+2026-09-21T16:43:28.5479929Z ##[endgroup]
+2026-09-21T16:43:28.5480865Z ##[group]Disabling automatic garbage collection
+2026-09-21T16:43:28.5483113Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-21T16:43:28.6064579Z ##[endgroup]
+2026-09-21T16:43:28.6065664Z ##[group]Setting up auth
+2026-09-21T16:43:28.6068515Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-21T16:43:28.6091775Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-21T16:43:28.6380764Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-21T16:43:28.6401833Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-21T16:43:28.6569820Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-21T16:43:28.6753704Z ##[endgroup]
+2026-09-21T16:43:28.6754514Z ##[group]Fetching the repository
+2026-09-21T16:43:28.6758861Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --progress --no-recurse-submodules --depth=1 origin +7e276c466b413ea39a9c0ca65eee830b49cfa6ed:refs/remotes/pull/370/merge
+2026-09-21T16:43:29.0821175Z remote: Enumerating objects: 544, done.        
+2026-09-21T16:43:29.0821605Z remote: Counting objects:   0% (1/544)        
+2026-09-21T16:43:29.0821942Z remote: Counting objects:   1% (6/544)        
+2026-09-21T16:43:29.0822262Z remote: Counting objects:   2% (11/544)        
+2026-09-21T16:43:29.0822585Z remote: Counting objects:   3% (17/544)        
+2026-09-21T16:43:29.0822908Z remote: Counting objects:   4% (22/544)        
+2026-09-21T16:43:29.0823219Z remote: Counting objects:   5% (28/544)        
+2026-09-21T16:43:29.0823541Z remote: Counting objects:   6% (33/544)        
+2026-09-21T16:43:29.0823796Z remote: Counting objects:   7% (39/544)        
+2026-09-21T16:43:29.0824215Z remote: Counting objects:   8% (44/544)        
+2026-09-21T16:43:29.0824423Z remote: Counting objects:   9% (49/544)        
+2026-09-21T16:43:29.0824633Z remote: Counting objects:  10% (55/544)        
+2026-09-21T16:43:29.0824846Z remote: Counting objects:  11% (60/544)        
+2026-09-21T16:43:29.0825048Z remote: Counting objects:  12% (66/544)        
+2026-09-21T16:43:29.0825284Z remote: Counting objects:  13% (71/544)        
+2026-09-21T16:43:29.0825489Z remote: Counting objects:  14% (77/544)        
+2026-09-21T16:43:29.0825691Z remote: Counting objects:  15% (82/544)        
+2026-09-21T16:43:29.0825893Z remote: Counting objects:  16% (88/544)        
+2026-09-21T16:43:29.0826097Z remote: Counting objects:  17% (93/544)        
+2026-09-21T16:43:29.0826301Z remote: Counting objects:  18% (98/544)        
+2026-09-21T16:43:29.0826510Z remote: Counting objects:  19% (104/544)        
+2026-09-21T16:43:29.0826723Z remote: Counting objects:  20% (109/544)        
+2026-09-21T16:43:29.0826937Z remote: Counting objects:  21% (115/544)        
+2026-09-21T16:43:29.0827143Z remote: Counting objects:  22% (120/544)        
+2026-09-21T16:43:29.0827348Z remote: Counting objects:  23% (126/544)        
+2026-09-21T16:43:29.0827555Z remote: Counting objects:  24% (131/544)        
+2026-09-21T16:43:29.0827760Z remote: Counting objects:  25% (136/544)        
+2026-09-21T16:43:29.0827964Z remote: Counting objects:  26% (142/544)        
+2026-09-21T16:43:29.0828176Z remote: Counting objects:  27% (147/544)        
+2026-09-21T16:43:29.0828436Z remote: Counting objects:  28% (153/544)        
+2026-09-21T16:43:29.0828714Z remote: Counting objects:  29% (158/544)        
+2026-09-21T16:43:29.0828919Z remote: Counting objects:  30% (164/544)        
+2026-09-21T16:43:29.0829127Z remote: Counting objects:  31% (169/544)        
+2026-09-21T16:43:29.0829332Z remote: Counting objects:  32% (175/544)        
+2026-09-21T16:43:29.0829536Z remote: Counting objects:  33% (180/544)        
+2026-09-21T16:43:29.0829743Z remote: Counting objects:  34% (185/544)        
+2026-09-21T16:43:29.0829948Z remote: Counting objects:  35% (191/544)        
+2026-09-21T16:43:29.0830339Z remote: Counting objects:  36% (196/544)        
+2026-09-21T16:43:29.0830543Z remote: Counting objects:  37% (202/544)        
+2026-09-21T16:43:29.0830913Z remote: Counting objects:  38% (207/544)        
+2026-09-21T16:43:29.0831117Z remote: Counting objects:  39% (213/544)        
+2026-09-21T16:43:29.0831321Z remote: Counting objects:  40% (218/544)        
+2026-09-21T16:43:29.0831526Z remote: Counting objects:  41% (224/544)        
+2026-09-21T16:43:29.0831732Z remote: Counting objects:  42% (229/544)        
+2026-09-21T16:43:29.0831937Z remote: Counting objects:  43% (234/544)        
+2026-09-21T16:43:29.0832144Z remote: Counting objects:  44% (240/544)        
+2026-09-21T16:43:29.0832348Z remote: Counting objects:  45% (245/544)        
+2026-09-21T16:43:29.0832554Z remote: Counting objects:  46% (251/544)        
+2026-09-21T16:43:29.0832761Z remote: Counting objects:  47% (256/544)        
+2026-09-21T16:43:29.0832969Z remote: Counting objects:  48% (262/544)        
+2026-09-21T16:43:29.0833201Z remote: Counting objects:  49% (267/544)        
+2026-09-21T16:43:29.0833405Z remote: Counting objects:  50% (272/544)        
+2026-09-21T16:43:29.0833614Z remote: Counting objects:  51% (278/544)        
+2026-09-21T16:43:29.0833818Z remote: Counting objects:  52% (283/544)        
+2026-09-21T16:43:29.0834022Z remote: Counting objects:  53% (289/544)        
+2026-09-21T16:43:29.0834227Z remote: Counting objects:  54% (294/544)        
+2026-09-21T16:43:29.0834430Z remote: Counting objects:  55% (300/544)        
+2026-09-21T16:43:29.0834634Z remote: Counting objects:  56% (305/544)        
+2026-09-21T16:43:29.0834840Z remote: Counting objects:  57% (311/544)        
+2026-09-21T16:43:29.0835045Z remote: Counting objects:  58% (316/544)        
+2026-09-21T16:43:29.0835249Z remote: Counting objects:  59% (321/544)        
+2026-09-21T16:43:29.0835452Z remote: Counting objects:  60% (327/544)        
+2026-09-21T16:43:29.0835743Z remote: Counting objects:  61% (332/544)        
+2026-09-21T16:43:29.0835948Z remote: Counting objects:  62% (338/544)        
+2026-09-21T16:43:29.0836151Z remote: Counting objects:  63% (343/544)        
+2026-09-21T16:43:29.0836372Z remote: Counting objects:  64% (349/544)        
+2026-09-21T16:43:29.0836577Z remote: Counting objects:  65% (354/544)        
+2026-09-21T16:43:29.0836782Z remote: Counting objects:  66% (360/544)        
+2026-09-21T16:43:29.0836985Z remote: Counting objects:  67% (365/544)        
+2026-09-21T16:43:29.0837190Z remote: Counting objects:  68% (370/544)        
+2026-09-21T16:43:29.0837395Z remote: Counting objects:  69% (376/544)        
+2026-09-21T16:43:29.0837601Z remote: Counting objects:  70% (381/544)        
+2026-09-21T16:43:29.0837804Z remote: Counting objects:  71% (387/544)        
+2026-09-21T16:43:29.0838008Z remote: Counting objects:  72% (392/544)        
+2026-09-21T16:43:29.0838215Z remote: Counting objects:  73% (398/544)        
+2026-09-21T16:43:29.0838424Z remote: Counting objects:  74% (403/544)        
+2026-09-21T16:43:29.0838627Z remote: Counting objects:  75% (408/544)        
+2026-09-21T16:43:29.0838832Z remote: Counting objects:  76% (414/544)        
+2026-09-21T16:43:29.0839039Z remote: Counting objects:  77% (419/544)        
+2026-09-21T16:43:29.0839243Z remote: Counting objects:  78% (425/544)        
+2026-09-21T16:43:29.0839447Z remote: Counting objects:  79% (430/544)        
+2026-09-21T16:43:29.0839651Z remote: Counting objects:  80% (436/544)        
+2026-09-21T16:43:29.0839854Z remote: Counting objects:  81% (441/544)        
+2026-09-21T16:43:29.0840136Z remote: Counting objects:  82% (447/544)        
+2026-09-21T16:43:29.0840353Z remote: Counting objects:  83% (452/544)        
+2026-09-21T16:43:29.0840565Z remote: Counting objects:  84% (457/544)        
+2026-09-21T16:43:29.0840778Z remote: Counting objects:  85% (463/544)        
+2026-09-21T16:43:29.0840991Z remote: Counting objects:  86% (468/544)        
+2026-09-21T16:43:29.0841208Z remote: Counting objects:  87% (474/544)        
+2026-09-21T16:43:29.0841418Z remote: Counting objects:  88% (479/544)        
+2026-09-21T16:43:29.0841630Z remote: Counting objects:  89% (485/544)        
+2026-09-21T16:43:29.0841934Z remote: Counting objects:  90% (490/544)        
+2026-09-21T16:43:29.0842144Z remote: Counting objects:  91% (496/544)        
+2026-09-21T16:43:29.0842356Z remote: Counting objects:  92% (501/544)        
+2026-09-21T16:43:29.0842567Z remote: Counting objects:  93% (506/544)        
+2026-09-21T16:43:29.0842778Z remote: Counting objects:  94% (512/544)        
+2026-09-21T16:43:29.0842990Z remote: Counting objects:  95% (517/544)        
+2026-09-21T16:43:29.0843200Z remote: Counting objects:  96% (523/544)        
+2026-09-21T16:43:29.0843412Z remote: Counting objects:  97% (528/544)        
+2026-09-21T16:43:29.0843623Z remote: Counting objects:  98% (534/544)        
+2026-09-21T16:43:29.0843833Z remote: Counting objects:  99% (539/544)        
+2026-09-21T16:43:29.0844055Z remote: Counting objects: 100% (544/544)        
+2026-09-21T16:43:29.0844283Z remote: Counting objects: 100% (544/544), done.        
+2026-09-21T16:43:29.0844515Z remote: Compressing objects:   0% (1/494)        
+2026-09-21T16:43:29.0844742Z remote: Compressing objects:   1% (5/494)        
+2026-09-21T16:43:29.0844967Z remote: Compressing objects:   2% (10/494)        
+2026-09-21T16:43:29.0845192Z remote: Compressing objects:   3% (15/494)        
+2026-09-21T16:43:29.0845416Z remote: Compressing objects:   4% (20/494)        
+2026-09-21T16:43:29.0845636Z remote: Compressing objects:   5% (25/494)        
+2026-09-21T16:43:29.0845855Z remote: Compressing objects:   6% (30/494)        
+2026-09-21T16:43:29.0846073Z remote: Compressing objects:   7% (35/494)        
+2026-09-21T16:43:29.0846294Z remote: Compressing objects:   8% (40/494)        
+2026-09-21T16:43:29.0846514Z remote: Compressing objects:   9% (45/494)        
+2026-09-21T16:43:29.0846733Z remote: Compressing objects:  10% (50/494)        
+2026-09-21T16:43:29.0847042Z remote: Compressing objects:  11% (55/494)        
+2026-09-21T16:43:29.0847262Z remote: Compressing objects:  12% (60/494)        
+2026-09-21T16:43:29.0847479Z remote: Compressing objects:  13% (65/494)        
+2026-09-21T16:43:29.0847701Z remote: Compressing objects:  14% (70/494)        
+2026-09-21T16:43:29.0847922Z remote: Compressing objects:  15% (75/494)        
+2026-09-21T16:43:29.0848138Z remote: Compressing objects:  16% (80/494)        
+2026-09-21T16:43:29.0848361Z remote: Compressing objects:  17% (84/494)        
+2026-09-21T16:43:29.0848580Z remote: Compressing objects:  18% (89/494)        
+2026-09-21T16:43:29.0848800Z remote: Compressing objects:  19% (94/494)        
+2026-09-21T16:43:29.0849015Z remote: Compressing objects:  20% (99/494)        
+2026-09-21T16:43:29.0849238Z remote: Compressing objects:  21% (104/494)        
+2026-09-21T16:43:29.0849467Z remote: Compressing objects:  22% (109/494)        
+2026-09-21T16:43:29.0849689Z remote: Compressing objects:  23% (114/494)        
+2026-09-21T16:43:29.0849919Z remote: Compressing objects:  24% (119/494)        
+2026-09-21T16:43:29.0850293Z remote: Compressing objects:  25% (124/494)        
+2026-09-21T16:43:29.0850517Z remote: Compressing objects:  26% (129/494)        
+2026-09-21T16:43:29.0850740Z remote: Compressing objects:  27% (134/494)        
+2026-09-21T16:43:29.0850962Z remote: Compressing objects:  28% (139/494)        
+2026-09-21T16:43:29.0851183Z remote: Compressing objects:  29% (144/494)        
+2026-09-21T16:43:29.0851403Z remote: Compressing objects:  30% (149/494)        
+2026-09-21T16:43:29.0851625Z remote: Compressing objects:  31% (154/494)        
+2026-09-21T16:43:29.0851846Z remote: Compressing objects:  32% (159/494)        
+2026-09-21T16:43:29.0852070Z remote: Compressing objects:  33% (164/494)        
+2026-09-21T16:43:29.0852292Z remote: Compressing objects:  34% (168/494)        
+2026-09-21T16:43:29.0852512Z remote: Compressing objects:  35% (173/494)        
+2026-09-21T16:43:29.0852738Z remote: Compressing objects:  36% (178/494)        
+2026-09-21T16:43:29.0852958Z remote: Compressing objects:  37% (183/494)        
+2026-09-21T16:43:29.0853177Z remote: Compressing objects:  38% (188/494)        
+2026-09-21T16:43:29.0853489Z remote: Compressing objects:  39% (193/494)        
+2026-09-21T16:43:29.0853710Z remote: Compressing objects:  40% (198/494)        
+2026-09-21T16:43:29.0853928Z remote: Compressing objects:  41% (203/494)        
+2026-09-21T16:43:29.0854148Z remote: Compressing objects:  42% (208/494)        
+2026-09-21T16:43:29.0854367Z remote: Compressing objects:  43% (213/494)        
+2026-09-21T16:43:29.0854585Z remote: Compressing objects:  44% (218/494)        
+2026-09-21T16:43:29.0854804Z remote: Compressing objects:  45% (223/494)        
+2026-09-21T16:43:29.0855022Z remote: Compressing objects:  46% (228/494)        
+2026-09-21T16:43:29.0855240Z remote: Compressing objects:  47% (233/494)        
+2026-09-21T16:43:29.0855458Z remote: Compressing objects:  48% (238/494)        
+2026-09-21T16:43:29.0855679Z remote: Compressing objects:  49% (243/494)        
+2026-09-21T16:43:29.0855896Z remote: Compressing objects:  50% (247/494)        
+2026-09-21T16:43:29.0856113Z remote: Compressing objects:  51% (252/494)        
+2026-09-21T16:43:29.0856334Z remote: Compressing objects:  52% (257/494)        
+2026-09-21T16:43:29.1655307Z remote: Compressing objects:  53% (262/494)        
+2026-09-21T16:43:29.1655743Z remote: Compressing objects:  54% (267/494)        
+2026-09-21T16:43:29.1656031Z remote: Compressing objects:  55% (272/494)        
+2026-09-21T16:43:29.1656259Z remote: Compressing objects:  56% (277/494)        
+2026-09-21T16:43:29.1656480Z remote: Compressing objects:  57% (282/494)        
+2026-09-21T16:43:29.1656693Z remote: Compressing objects:  58% (287/494)        
+2026-09-21T16:43:29.1656908Z remote: Compressing objects:  59% (292/494)        
+2026-09-21T16:43:29.1657124Z remote: Compressing objects:  60% (297/494)        
+2026-09-21T16:43:29.1657486Z remote: Compressing objects:  61% (302/494)        
+2026-09-21T16:43:29.1657700Z remote: Compressing objects:  62% (307/494)        
+2026-09-21T16:43:29.1657914Z remote: Compressing objects:  63% (312/494)        
+2026-09-21T16:43:29.1658126Z remote: Compressing objects:  64% (317/494)        
+2026-09-21T16:43:29.1658346Z remote: Compressing objects:  65% (322/494)        
+2026-09-21T16:43:29.1658558Z remote: Compressing objects:  66% (327/494)        
+2026-09-21T16:43:29.1658770Z remote: Compressing objects:  67% (331/494)        
+2026-09-21T16:43:29.1658980Z remote: Compressing objects:  68% (336/494)        
+2026-09-21T16:43:29.1659191Z remote: Compressing objects:  69% (341/494)        
+2026-09-21T16:43:29.1659401Z remote: Compressing objects:  70% (346/494)        
+2026-09-21T16:43:29.1659613Z remote: Compressing objects:  71% (351/494)        
+2026-09-21T16:43:29.1659822Z remote: Compressing objects:  72% (356/494)        
+2026-09-21T16:43:29.1660139Z remote: Compressing objects:  73% (361/494)        
+2026-09-21T16:43:29.1660358Z remote: Compressing objects:  74% (366/494)        
+2026-09-21T16:43:29.1660567Z remote: Compressing objects:  75% (371/494)        
+2026-09-21T16:43:29.1660776Z remote: Compressing objects:  76% (376/494)        
+2026-09-21T16:43:29.1660987Z remote: Compressing objects:  77% (381/494)        
+2026-09-21T16:43:29.1661198Z remote: Compressing objects:  78% (386/494)        
+2026-09-21T16:43:29.1661409Z remote: Compressing objects:  79% (391/494)        
+2026-09-21T16:43:29.1661623Z remote: Compressing objects:  80% (396/494)        
+2026-09-21T16:43:29.1661833Z remote: Compressing objects:  81% (401/494)        
+2026-09-21T16:43:29.1662044Z remote: Compressing objects:  82% (406/494)        
+2026-09-21T16:43:29.1662255Z remote: Compressing objects:  83% (411/494)        
+2026-09-21T16:43:29.1662463Z remote: Compressing objects:  84% (415/494)        
+2026-09-21T16:43:29.1662673Z remote: Compressing objects:  85% (420/494)        
+2026-09-21T16:43:29.1662882Z remote: Compressing objects:  86% (425/494)        
+2026-09-21T16:43:29.1663100Z remote: Compressing objects:  87% (430/494)        
+2026-09-21T16:43:29.1663323Z remote: Compressing objects:  88% (435/494)        
+2026-09-21T16:43:29.1663533Z remote: Compressing objects:  89% (440/494)        
+2026-09-21T16:43:29.1663852Z remote: Compressing objects:  90% (445/494)        
+2026-09-21T16:43:29.1664065Z remote: Compressing objects:  91% (450/494)        
+2026-09-21T16:43:29.1664275Z remote: Compressing objects:  92% (455/494)        
+2026-09-21T16:43:29.1664488Z remote: Compressing objects:  93% (460/494)        
+2026-09-21T16:43:29.1664696Z remote: Compressing objects:  94% (465/494)        
+2026-09-21T16:43:29.1664907Z remote: Compressing objects:  95% (470/494)        
+2026-09-21T16:43:29.1665117Z remote: Compressing objects:  96% (475/494)        
+2026-09-21T16:43:29.1665327Z remote: Compressing objects:  97% (480/494)        
+2026-09-21T16:43:29.1665536Z remote: Compressing objects:  98% (485/494)        
+2026-09-21T16:43:29.1665750Z remote: Compressing objects:  99% (490/494)        
+2026-09-21T16:43:29.1665960Z remote: Compressing objects: 100% (494/494)        
+2026-09-21T16:43:29.1666189Z remote: Compressing objects: 100% (494/494), done.        
+2026-09-21T16:43:29.1918673Z Receiving objects:   0% (1/544)
+2026-09-21T16:43:29.1923610Z Receiving objects:   1% (6/544)
+2026-09-21T16:43:29.2110786Z Receiving objects:   2% (11/544)
+2026-09-21T16:43:29.2112428Z Receiving objects:   3% (17/544)
+2026-09-21T16:43:29.2113670Z Receiving objects:   4% (22/544)
+2026-09-21T16:43:29.4667913Z Receiving objects:   5% (28/544)
+2026-09-21T16:43:29.4669392Z Receiving objects:   6% (33/544)
+2026-09-21T16:43:29.4672484Z Receiving objects:   7% (39/544)
+2026-09-21T16:43:29.4672775Z Receiving objects:   8% (44/544)
+2026-09-21T16:43:29.4674313Z Receiving objects:   9% (49/544)
+2026-09-21T16:43:29.4674699Z Receiving objects:  10% (55/544)
+2026-09-21T16:43:29.4676265Z Receiving objects:  11% (60/544)
+2026-09-21T16:43:29.4677069Z Receiving objects:  12% (66/544)
+2026-09-21T16:43:29.4893395Z Receiving objects:  13% (71/544)
+2026-09-21T16:43:29.4923244Z Receiving objects:  14% (77/544)
+2026-09-21T16:43:29.4930778Z Receiving objects:  15% (82/544)
+2026-09-21T16:43:29.5094244Z Receiving objects:  16% (88/544)
+2026-09-21T16:43:29.5161430Z Receiving objects:  17% (93/544)
+2026-09-21T16:43:29.5677131Z Receiving objects:  18% (98/544)
+2026-09-21T16:43:29.6172276Z Receiving objects:  19% (104/544)
+2026-09-21T16:43:29.6172891Z Receiving objects:  20% (109/544)
+2026-09-21T16:43:29.6235140Z Receiving objects:  21% (115/544)
+2026-09-21T16:43:29.6252894Z Receiving objects:  22% (120/544)
+2026-09-21T16:43:29.6255646Z Receiving objects:  23% (126/544)
+2026-09-21T16:43:29.6262075Z Receiving objects:  24% (131/544)
+2026-09-21T16:43:29.6270959Z Receiving objects:  25% (136/544)
+2026-09-21T16:43:29.6271377Z Receiving objects:  26% (142/544)
+2026-09-21T16:43:29.6271807Z Receiving objects:  27% (147/544)
+2026-09-21T16:43:29.6272406Z Receiving objects:  28% (153/544)
+2026-09-21T16:43:29.6283924Z Receiving objects:  29% (158/544)
+2026-09-21T16:43:29.6300817Z Receiving objects:  30% (164/544)
+2026-09-21T16:43:29.6304979Z Receiving objects:  31% (169/544)
+2026-09-21T16:43:29.6307661Z Receiving objects:  32% (175/544)
+2026-09-21T16:43:29.6308752Z Receiving objects:  33% (180/544)
+2026-09-21T16:43:29.6309834Z Receiving objects:  34% (185/544)
+2026-09-21T16:43:29.6310279Z Receiving objects:  35% (191/544)
+2026-09-21T16:43:29.6312411Z Receiving objects:  36% (196/544)
+2026-09-21T16:43:29.6312856Z Receiving objects:  37% (202/544)
+2026-09-21T16:43:29.6326450Z Receiving objects:  38% (207/544)
+2026-09-21T16:43:29.6326727Z Receiving objects:  39% (213/544)
+2026-09-21T16:43:29.6327018Z Receiving objects:  40% (218/544)
+2026-09-21T16:43:29.6328653Z Receiving objects:  41% (224/544)
+2026-09-21T16:43:29.6330540Z Receiving objects:  42% (229/544)
+2026-09-21T16:43:29.6341193Z Receiving objects:  43% (234/544)
+2026-09-21T16:43:29.6341529Z Receiving objects:  44% (240/544)
+2026-09-21T16:43:29.6341792Z Receiving objects:  45% (245/544)
+2026-09-21T16:43:29.6342073Z Receiving objects:  46% (251/544)
+2026-09-21T16:43:29.6342315Z Receiving objects:  47% (256/544)
+2026-09-21T16:43:29.6342629Z Receiving objects:  48% (262/544)
+2026-09-21T16:43:29.6342877Z Receiving objects:  49% (267/544)
+2026-09-21T16:43:29.6343364Z Receiving objects:  50% (272/544)
+2026-09-21T16:43:29.6351345Z Receiving objects:  51% (278/544)
+2026-09-21T16:43:29.6353917Z Receiving objects:  52% (283/544)
+2026-09-21T16:43:29.6360236Z Receiving objects:  53% (289/544)
+2026-09-21T16:43:29.6383739Z Receiving objects:  54% (294/544)
+2026-09-21T16:43:29.6385782Z Receiving objects:  55% (300/544)
+2026-09-21T16:43:29.6388327Z Receiving objects:  56% (305/544)
+2026-09-21T16:43:29.6392472Z Receiving objects:  57% (311/544)
+2026-09-21T16:43:29.6395962Z Receiving objects:  58% (316/544)
+2026-09-21T16:43:29.6399107Z Receiving objects:  59% (321/544)
+2026-09-21T16:43:29.6401827Z Receiving objects:  60% (327/544)
+2026-09-21T16:43:29.6405140Z Receiving objects:  61% (332/544)
+2026-09-21T16:43:29.6407775Z Receiving objects:  62% (338/544)
+2026-09-21T16:43:29.6413535Z Receiving objects:  63% (343/544)
+2026-09-21T16:43:29.6415083Z Receiving objects:  64% (349/544)
+2026-09-21T16:43:29.6420382Z Receiving objects:  65% (354/544)
+2026-09-21T16:43:29.6421580Z Receiving objects:  66% (360/544)
+2026-09-21T16:43:29.6430868Z Receiving objects:  67% (365/544)
+2026-09-21T16:43:29.6435488Z Receiving objects:  68% (370/544)
+2026-09-21T16:43:29.6436144Z Receiving objects:  69% (376/544)
+2026-09-21T16:43:29.6437835Z Receiving objects:  70% (381/544)
+2026-09-21T16:43:29.6439493Z Receiving objects:  71% (387/544)
+2026-09-21T16:43:29.6443605Z Receiving objects:  72% (392/544)
+2026-09-21T16:43:29.6443987Z Receiving objects:  73% (398/544)
+2026-09-21T16:43:29.6444518Z Receiving objects:  74% (403/544)
+2026-09-21T16:43:29.6445250Z Receiving objects:  75% (408/544)
+2026-09-21T16:43:29.6446866Z Receiving objects:  76% (414/544)
+2026-09-21T16:43:29.6447299Z Receiving objects:  77% (419/544)
+2026-09-21T16:43:29.6447786Z Receiving objects:  78% (425/544)
+2026-09-21T16:43:29.6448605Z Receiving objects:  79% (430/544)
+2026-09-21T16:43:29.6449363Z Receiving objects:  80% (436/544)
+2026-09-21T16:43:29.6452315Z Receiving objects:  81% (441/544)
+2026-09-21T16:43:29.6453387Z Receiving objects:  82% (447/544)
+2026-09-21T16:43:29.6458523Z Receiving objects:  83% (452/544)
+2026-09-21T16:43:29.6462383Z Receiving objects:  84% (457/544)
+2026-09-21T16:43:29.6464588Z Receiving objects:  85% (463/544)
+2026-09-21T16:43:29.6468838Z Receiving objects:  86% (468/544)
+2026-09-21T16:43:29.6476152Z Receiving objects:  87% (474/544)
+2026-09-21T16:43:29.6481044Z Receiving objects:  88% (479/544)
+2026-09-21T16:43:29.6482984Z Receiving objects:  89% (485/544)
+2026-09-21T16:43:29.6500973Z Receiving objects:  90% (490/544)
+2026-09-21T16:43:29.6501291Z Receiving objects:  91% (496/544)
+2026-09-21T16:43:29.6501567Z Receiving objects:  92% (501/544)
+2026-09-21T16:43:29.6506153Z Receiving objects:  93% (506/544)
+2026-09-21T16:43:29.6507133Z Receiving objects:  94% (512/544)
+2026-09-21T16:43:29.6509447Z Receiving objects:  95% (517/544)
+2026-09-21T16:43:29.6510155Z Receiving objects:  96% (523/544)
+2026-09-21T16:43:29.6511555Z Receiving objects:  97% (528/544)
+2026-09-21T16:43:29.6556810Z Receiving objects:  98% (534/544)
+2026-09-21T16:43:29.6558055Z remote: Total 544 (delta 58), reused 285 (delta 36), pack-reused 0 (from 0)        
+2026-09-21T16:43:29.6563773Z Receiving objects:  99% (539/544)
+2026-09-21T16:43:29.6564345Z Receiving objects: 100% (544/544)
+2026-09-21T16:43:29.6564833Z Receiving objects: 100% (544/544), 14.37 MiB | 30.84 MiB/s, done.
+2026-09-21T16:43:29.6568874Z Resolving deltas:   0% (0/58)
+2026-09-21T16:43:29.6569396Z Resolving deltas:   1% (1/58)
+2026-09-21T16:43:29.6582608Z Resolving deltas:   3% (2/58)
+2026-09-21T16:43:29.6603790Z Resolving deltas:   5% (3/58)
+2026-09-21T16:43:29.6604554Z Resolving deltas:   6% (4/58)
+2026-09-21T16:43:29.6604821Z Resolving deltas:   8% (5/58)
+2026-09-21T16:43:29.6605050Z Resolving deltas:  10% (6/58)
+2026-09-21T16:43:29.6605287Z Resolving deltas:  13% (8/58)
+2026-09-21T16:43:29.6605506Z Resolving deltas:  15% (9/58)
+2026-09-21T16:43:29.6605728Z Resolving deltas:  17% (10/58)
+2026-09-21T16:43:29.6605957Z Resolving deltas:  18% (11/58)
+2026-09-21T16:43:29.6606392Z Resolving deltas:  20% (12/58)
+2026-09-21T16:43:29.6606610Z Resolving deltas:  22% (13/58)
+2026-09-21T16:43:29.6606854Z Resolving deltas:  24% (14/58)
+2026-09-21T16:43:29.6607073Z Resolving deltas:  25% (15/58)
+2026-09-21T16:43:29.6607291Z Resolving deltas:  27% (16/58)
+2026-09-21T16:43:29.6607509Z Resolving deltas:  29% (17/58)
+2026-09-21T16:43:29.6607726Z Resolving deltas:  31% (18/58)
+2026-09-21T16:43:29.6607944Z Resolving deltas:  32% (19/58)
+2026-09-21T16:43:29.6608147Z Resolving deltas:  34% (20/58)
+2026-09-21T16:43:29.6608355Z Resolving deltas:  36% (21/58)
+2026-09-21T16:43:29.6608561Z Resolving deltas:  37% (22/58)
+2026-09-21T16:43:29.6608763Z Resolving deltas:  39% (23/58)
+2026-09-21T16:43:29.6608970Z Resolving deltas:  41% (24/58)
+2026-09-21T16:43:29.6609124Z Resolving deltas:  43% (25/58)
+2026-09-21T16:43:29.6609257Z Resolving deltas:  44% (26/58)
+2026-09-21T16:43:29.6609391Z Resolving deltas:  46% (27/58)
+2026-09-21T16:43:29.6609525Z Resolving deltas:  48% (28/58)
+2026-09-21T16:43:29.6609658Z Resolving deltas:  50% (29/58)
+2026-09-21T16:43:29.6609789Z Resolving deltas:  51% (30/58)
+2026-09-21T16:43:29.6609930Z Resolving deltas:  53% (31/58)
+2026-09-21T16:43:29.6610253Z Resolving deltas:  55% (32/58)
+2026-09-21T16:43:29.6610494Z Resolving deltas:  56% (33/58)
+2026-09-21T16:43:29.6610703Z Resolving deltas:  58% (34/58)
+2026-09-21T16:43:29.6610910Z Resolving deltas:  60% (35/58)
+2026-09-21T16:43:29.6611115Z Resolving deltas:  62% (36/58)
+2026-09-21T16:43:29.6611327Z Resolving deltas:  63% (37/58)
+2026-09-21T16:43:29.6611540Z Resolving deltas:  65% (38/58)
+2026-09-21T16:43:29.6611740Z Resolving deltas:  67% (39/58)
+2026-09-21T16:43:29.6611937Z Resolving deltas:  68% (40/58)
+2026-09-21T16:43:29.6612147Z Resolving deltas:  70% (41/58)
+2026-09-21T16:43:29.6612522Z Resolving deltas:  72% (42/58)
+2026-09-21T16:43:29.6612732Z Resolving deltas:  74% (43/58)
+2026-09-21T16:43:29.6612932Z Resolving deltas:  75% (44/58)
+2026-09-21T16:43:29.6613130Z Resolving deltas:  77% (45/58)
+2026-09-21T16:43:29.6613326Z Resolving deltas:  79% (46/58)
+2026-09-21T16:43:29.6613492Z Resolving deltas:  81% (47/58)
+2026-09-21T16:43:29.6613625Z Resolving deltas:  82% (48/58)
+2026-09-21T16:43:29.6613757Z Resolving deltas:  84% (49/58)
+2026-09-21T16:43:29.6613888Z Resolving deltas:  86% (50/58)
+2026-09-21T16:43:29.6614023Z Resolving deltas:  87% (51/58)
+2026-09-21T16:43:29.6614156Z Resolving deltas:  89% (52/58)
+2026-09-21T16:43:29.6614287Z Resolving deltas:  91% (53/58)
+2026-09-21T16:43:29.6614418Z Resolving deltas:  93% (54/58)
+2026-09-21T16:43:29.6614551Z Resolving deltas:  94% (55/58)
+2026-09-21T16:43:29.6614734Z Resolving deltas:  96% (56/58)
+2026-09-21T16:43:29.6614956Z Resolving deltas:  98% (57/58)
+2026-09-21T16:43:29.6615152Z Resolving deltas: 100% (58/58)
+2026-09-21T16:43:29.6615296Z Resolving deltas: 100% (58/58), done.
+2026-09-21T16:43:29.7975230Z From https://github.com/ICME-Lab/jolt-atlas
+2026-09-21T16:43:29.7978359Z  * [new ref]         7e276c466b413ea39a9c0ca65eee830b49cfa6ed -> pull/370/merge
+2026-09-21T16:43:29.7979564Z ##[endgroup]
+2026-09-21T16:43:29.7979877Z ##[group]Determining the checkout info
+2026-09-21T16:43:29.7981707Z ##[endgroup]
+2026-09-21T16:43:29.7982043Z ##[group]Checking out the ref
+2026-09-21T16:43:29.7984739Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/370/merge
+2026-09-21T16:43:29.8917301Z Note: switching to 'refs/remotes/pull/370/merge'.
+2026-09-21T16:43:29.8917505Z 
+2026-09-21T16:43:29.8917627Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-21T16:43:29.8917891Z changes and commit them, and you can discard any commits you make in this
+2026-09-21T16:43:29.8918150Z state without impacting any branches by switching back to a branch.
+2026-09-21T16:43:29.8918308Z 
+2026-09-21T16:43:29.8918440Z If you want to create a new branch to retain commits you create, you may
+2026-09-21T16:43:29.8918693Z do so (now or later) by using -c with the switch command. Example:
+2026-09-21T16:43:29.8918831Z 
+2026-09-21T16:43:29.8918901Z   git switch -c <new-branch-name>
+2026-09-21T16:43:29.8919156Z 
+2026-09-21T16:43:29.8919219Z Or undo this operation with:
+2026-09-21T16:43:29.8919311Z 
+2026-09-21T16:43:29.8919362Z   git switch -
+2026-09-21T16:43:29.8919432Z 
+2026-09-21T16:43:29.8919548Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-21T16:43:29.8919715Z 
+2026-09-21T16:43:29.8919905Z HEAD is now at 7e276c4 Merge b70711b0499dec29badc4d70152c2521b86ed91f into 0b28a6baff0ee3bf499726c0d3e63d703f3b007b
+2026-09-21T16:43:29.8931076Z ##[endgroup]
+2026-09-21T16:43:29.8969696Z [command]/usr/bin/git log -1 --format='%H'
+2026-09-21T16:43:29.8985729Z '7e276c466b413ea39a9c0ca65eee830b49cfa6ed'
+2026-09-21T16:43:29.9241597Z ##[group]Run actions-rust-lang/setup-rust-toolchain@v1
+2026-09-21T16:43:29.9241807Z with:
+2026-09-21T16:43:29.9241921Z   components: clippy
+2026-09-21T16:43:29.9242047Z   cache: true
+2026-09-21T16:43:29.9242162Z   cache-on-failure: true
+2026-09-21T16:43:29.9242285Z   cache-bin: true
+2026-09-21T16:43:29.9242404Z   cache-provider: github
+2026-09-21T16:43:29.9242533Z   cache-all-crates: false
+2026-09-21T16:43:29.9242668Z   cache-workspace-crates: false
+2026-09-21T16:43:29.9242806Z   cache-save-if: true
+2026-09-21T16:43:29.9242922Z   cache-targets: true
+2026-09-21T16:43:29.9243033Z   matcher: true
+2026-09-21T16:43:29.9243150Z   rustflags: -D warnings
+2026-09-21T16:43:29.9243270Z   override: true
+2026-09-21T16:43:29.9243379Z env:
+2026-09-21T16:43:29.9243483Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:29.9243607Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:29.9243733Z ##[endgroup]
+2026-09-21T16:43:29.9281243Z ##[start-action display=Unbork mac;id=__actions-rust-lang_setup-rust-toolchain.__run]
+2026-09-21T16:43:29.9291502Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-21T16:43:29.9312955Z ##[start-action display=Run : construct rustup command line;id=__actions-rust-lang_setup-rust-toolchain.flags]
+2026-09-21T16:43:29.9336116Z ##[group]Run : construct rustup command line
+2026-09-21T16:43:29.9336342Z [36;1m: construct rustup command line[0m
+2026-09-21T16:43:29.9336610Z [36;1mecho "targets=$(for t in ${_srt_targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-09-21T16:43:29.9336976Z [36;1mecho "components=$(for c in ${_srt_components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-09-21T16:43:29.9337249Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-09-21T16:43:29.9368529Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-21T16:43:29.9368719Z env:
+2026-09-21T16:43:29.9368832Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:29.9368978Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:29.9369105Z   _srt_targets: 
+2026-09-21T16:43:29.9369230Z   _srt_components: clippy
+2026-09-21T16:43:29.9369357Z ##[endgroup]
+2026-09-21T16:43:29.9453769Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=14]
+2026-09-21T16:43:29.9456682Z ##[start-action display=Setting Environment Variables;id=__actions-rust-lang_setup-rust-toolchain.__run_2]
+2026-09-21T16:43:29.9466791Z ##[group]Run if [[ ! -v CARGO_INCREMENTAL ]]; then
+2026-09-21T16:43:29.9467006Z [36;1mif [[ ! -v CARGO_INCREMENTAL ]]; then[0m
+2026-09-21T16:43:29.9467182Z [36;1m  echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV[0m
+2026-09-21T16:43:29.9467340Z [36;1mfi[0m
+2026-09-21T16:43:29.9467468Z [36;1mif [[ ! -v CARGO_PROFILE_DEV_DEBUG ]]; then[0m
+2026-09-21T16:43:29.9467655Z [36;1m  echo "CARGO_PROFILE_DEV_DEBUG=0" >> $GITHUB_ENV[0m
+2026-09-21T16:43:29.9467819Z [36;1mfi[0m
+2026-09-21T16:43:29.9467941Z [36;1mif [[ ! -v CARGO_TERM_COLOR ]]; then[0m
+2026-09-21T16:43:29.9468126Z [36;1m  echo "CARGO_TERM_COLOR=always" >> $GITHUB_ENV[0m
+2026-09-21T16:43:29.9468292Z [36;1mfi[0m
+2026-09-21T16:43:29.9468409Z [36;1mif [[ ! -v RUST_BACKTRACE ]]; then[0m
+2026-09-21T16:43:29.9468580Z [36;1m  echo "RUST_BACKTRACE=short" >> $GITHUB_ENV[0m
+2026-09-21T16:43:29.9468734Z [36;1mfi[0m
+2026-09-21T16:43:29.9468879Z [36;1mif [[ ( ! -v RUSTFLAGS ) && $_srt_NEW_RUSTFLAGS != "" ]]; then[0m
+2026-09-21T16:43:29.9469100Z [36;1m  echo "RUSTFLAGS=$_srt_NEW_RUSTFLAGS" >> $GITHUB_ENV[0m
+2026-09-21T16:43:29.9469270Z [36;1mfi[0m
+2026-09-21T16:43:29.9469395Z [36;1m# Enable faster sparse index on nightly[0m
+2026-09-21T16:43:29.9469594Z [36;1m# The value is ignored on stable and causes no problems[0m
+2026-09-21T16:43:29.9469887Z [36;1m# https://internals.rust-lang.org/t/call-for-testing-cargo-sparse-registry/16862[0m
+2026-09-21T16:43:29.9470357Z [36;1mif [[ ! -v CARGO_UNSTABLE_SPARSE_REGISTRY ]]; then[0m
+2026-09-21T16:43:29.9470723Z [36;1m  echo "CARGO_UNSTABLE_SPARSE_REGISTRY=true" >> $GITHUB_ENV[0m
+2026-09-21T16:43:29.9470904Z [36;1mfi[0m
+2026-09-21T16:43:29.9471049Z [36;1mif [[ ! -v CARGO_REGISTRIES_CRATES_IO_PROTOCOL ]]; then[0m
+2026-09-21T16:43:29.9471278Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse" >> $GITHUB_ENV[0m
+2026-09-21T16:43:29.9471477Z [36;1mfi[0m
+2026-09-21T16:43:29.9496046Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-21T16:43:29.9496226Z env:
+2026-09-21T16:43:29.9496336Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:29.9496470Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:29.9496603Z   _srt_NEW_RUSTFLAGS: -D warnings
+2026-09-21T16:43:29.9496741Z ##[endgroup]
+2026-09-21T16:43:29.9542468Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=8]
+2026-09-21T16:43:29.9543760Z ##[start-action display=Install Rust Problem Matcher;id=__actions-rust-lang_setup-rust-toolchain.__run_3]
+2026-09-21T16:43:29.9555648Z ##[group]Run echo "::add-matcher::/home/runner/work/_actions/actions-rust-lang/setup-rust-toolchain/v1/rust.json"
+2026-09-21T16:43:29.9556059Z [36;1mecho "::add-matcher::/home/runner/work/_actions/actions-rust-lang/setup-rust-toolchain/v1/rust.json"[0m
+2026-09-21T16:43:29.9580240Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-21T16:43:29.9580420Z env:
+2026-09-21T16:43:29.9580531Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:29.9580660Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:29.9580786Z   CARGO_INCREMENTAL: 0
+2026-09-21T16:43:29.9580909Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-21T16:43:29.9581041Z   RUST_BACKTRACE: short
+2026-09-21T16:43:29.9581171Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-21T16:43:29.9581333Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-21T16:43:29.9581484Z ##[endgroup]
+2026-09-21T16:43:29.9636390Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=9]
+2026-09-21T16:43:29.9638255Z ##[start-action display=Install rustup, if needed;id=__actions-rust-lang_setup-rust-toolchain.__run_4]
+2026-09-21T16:43:29.9647960Z ##[group]Run if ! command -v rustup &> /dev/null ; then
+2026-09-21T16:43:29.9648175Z [36;1mif ! command -v rustup &> /dev/null ; then[0m
+2026-09-21T16:43:29.9648528Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --default-toolchain none -y[0m
+2026-09-21T16:43:29.9648844Z [36;1m[0m
+2026-09-21T16:43:29.9648994Z [36;1m  # Resolve the correct CARGO_HOME path depending on OS[0m
+2026-09-21T16:43:29.9649195Z [36;1m  if [[ "$RUNNER_OS" == "Windows" ]]; then[0m
+2026-09-21T16:43:29.9649430Z [36;1m    echo "${CARGO_HOME:-$USERPROFILE/.cargo}/bin" | sed 's|/|\\|g' >> $GITHUB_PATH[0m
+2026-09-21T16:43:29.9649649Z [36;1m  else[0m
+2026-09-21T16:43:29.9649801Z [36;1m    echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH[0m
+2026-09-21T16:43:29.9650141Z [36;1m  fi[0m
+2026-09-21T16:43:29.9650255Z [36;1mfi[0m
+2026-09-21T16:43:29.9674242Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-21T16:43:29.9674421Z env:
+2026-09-21T16:43:29.9674533Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:29.9674671Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:29.9674799Z   CARGO_INCREMENTAL: 0
+2026-09-21T16:43:29.9674926Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-21T16:43:29.9675059Z   RUST_BACKTRACE: short
+2026-09-21T16:43:29.9675193Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-21T16:43:29.9675357Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-21T16:43:29.9675513Z   RUNNER_OS: Linux
+2026-09-21T16:43:29.9675628Z ##[endgroup]
+2026-09-21T16:43:29.9718892Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=8]
+2026-09-21T16:43:29.9721880Z ##[start-action display=rustup toolchain install stable;id=__actions-rust-lang_setup-rust-toolchain.__run_5]
+2026-09-21T16:43:29.9732625Z ##[group]Run # Check if value is set
+2026-09-21T16:43:29.9732816Z [36;1m# Check if value is set[0m
+2026-09-21T16:43:29.9733076Z [36;1mif [[ -n "$_srt_rust_src_dir" ]][0m
+2026-09-21T16:43:29.9733229Z [36;1mthen[0m
+2026-09-21T16:43:29.9733370Z [36;1m  # If value is set the directory must exist[0m
+2026-09-21T16:43:29.9733551Z [36;1m  if [[ -d "$_srt_rust_src_dir" ]][0m
+2026-09-21T16:43:29.9733697Z [36;1m  then[0m
+2026-09-21T16:43:29.9733816Z [36;1m    cd "$_srt_rust_src_dir"[0m
+2026-09-21T16:43:29.9733952Z [36;1m  else[0m
+2026-09-21T16:43:29.9734131Z [36;1m    echo "'rust-src-dir' does not point to an existing directory" >&2[0m
+2026-09-21T16:43:29.9734390Z [36;1m    echo "The value of 'rust-src-dir' is: ${_srt_rust_src_dir}" >&2[0m
+2026-09-21T16:43:29.9734587Z [36;1m    exit 1[0m
+2026-09-21T16:43:29.9734700Z [36;1m  fi[0m
+2026-09-21T16:43:29.9734806Z [36;1mfi[0m
+2026-09-21T16:43:29.9734997Z [36;1mif [[ -z "$_srt_toolchain" && ( -f "rust-toolchain" || -f "rust-toolchain.toml") ]][0m
+2026-09-21T16:43:29.9735214Z [36;1mthen[0m
+2026-09-21T16:43:29.9735355Z [36;1m  # Install the toolchain as specified in the file[0m
+2026-09-21T16:43:29.9735589Z [36;1m  # rustup show is the old way that implicitly installed a toolchain[0m
+2026-09-21T16:43:29.9735915Z [36;1m  # rustup toolchain install is the new explicit way[0m
+2026-09-21T16:43:29.9736177Z [36;1m  # https://github.com/rust-lang/rustup/issues/3635#issuecomment-2343511297[0m
+2026-09-21T16:43:29.9736444Z [36;1m  rustup show active-toolchain || rustup toolchain install[0m
+2026-09-21T16:43:29.9736650Z [36;1m  if [[ -n $_srt_components ]]; then[0m
+2026-09-21T16:43:29.9736834Z [36;1m    rustup component add ${_srt_components//,/ }[0m
+2026-09-21T16:43:29.9736999Z [36;1m  fi[0m
+2026-09-21T16:43:29.9737121Z [36;1m  if [[ -n $_srt_targets ]]; then[0m
+2026-09-21T16:43:29.9737289Z [36;1m    rustup target add ${_srt_targets//,/ }[0m
+2026-09-21T16:43:29.9737445Z [36;1m  fi[0m
+2026-09-21T16:43:29.9737550Z [36;1melse[0m
+2026-09-21T16:43:29.9737667Z [36;1m  if [[ -z "$_srt_toolchain" ]][0m
+2026-09-21T16:43:29.9737808Z [36;1m  then[0m
+2026-09-21T16:43:29.9737931Z [36;1m    _srt_toolchain=stable[0m
+2026-09-21T16:43:29.9738068Z [36;1m  fi[0m
+2026-09-21T16:43:29.9738301Z [36;1m  rustup toolchain install ${_srt_toolchain//,/ }  --component clippy --profile minimal --no-self-update[0m
+2026-09-21T16:43:29.9738587Z [36;1m  # Take the last element from the list[0m
+2026-09-21T16:43:29.9738761Z [36;1m  if [[ "$_srt_override" == "true" ]][0m
+2026-09-21T16:43:29.9738913Z [36;1m  then[0m
+2026-09-21T16:43:29.9739050Z [36;1m    rustup override set ${_srt_toolchain//*,/ }[0m
+2026-09-21T16:43:29.9739214Z [36;1m  fi[0m
+2026-09-21T16:43:29.9739318Z [36;1mfi[0m
+2026-09-21T16:43:29.9764111Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-21T16:43:29.9764290Z env:
+2026-09-21T16:43:29.9764405Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:29.9764538Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:29.9764667Z   CARGO_INCREMENTAL: 0
+2026-09-21T16:43:29.9764796Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-21T16:43:29.9764930Z   RUST_BACKTRACE: short
+2026-09-21T16:43:29.9765067Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-21T16:43:29.9765232Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-21T16:43:29.9765397Z   _srt_toolchain: 
+2026-09-21T16:43:29.9765512Z   _srt_targets: 
+2026-09-21T16:43:29.9765627Z   _srt_components: clippy
+2026-09-21T16:43:29.9765755Z   _srt_override: true
+2026-09-21T16:43:29.9765874Z   _srt_rust_src_dir: 
+2026-09-21T16:43:29.9765992Z ##[endgroup]
+2026-09-21T16:43:30.0250202Z info: syncing channel updates for 1.95-x86_64-unknown-linux-gnu
+2026-09-21T16:43:30.2666917Z info: latest update on 2026-04-16 for version 1.95.0 (59807616e 2026-04-14)
+2026-09-21T16:43:30.2669787Z info: downloading 7 components
+2026-09-21T16:43:37.9846480Z warn: the missing active toolchain `1.95-x86_64-unknown-linux-gnu` has been auto-installed
+2026-09-21T16:43:37.9847109Z warn: auto-installation is deprecated for most `rustup` commands
+2026-09-21T16:43:37.9847541Z warn: scripts relying on this behavior in `rustup` may stop working in the future
+2026-09-21T16:43:37.9848363Z warn: to install the active toolchain, use `rustup install` instead
+2026-09-21T16:43:37.9848793Z warn: see <https://github.com/rust-lang/rustup/issues/4836> for more info
+2026-09-21T16:43:37.9849356Z 1.95-x86_64-unknown-linux-gnu (overridden by '/home/runner/work/jolt-atlas/jolt-atlas/rust-toolchain.toml')
+2026-09-21T16:43:38.0265881Z info: component clippy is up to date
+2026-09-21T16:43:38.0293490Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=8057]
+2026-09-21T16:43:38.0296042Z ##[start-action display=Print installed versions;id=__actions-rust-lang_setup-rust-toolchain.versions]
+2026-09-21T16:43:38.0313370Z ##[group]Run echo "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT
+2026-09-21T16:43:38.0313671Z [36;1mecho "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT[0m
+2026-09-21T16:43:38.0313871Z [36;1mrustc --version --verbose[0m
+2026-09-21T16:43:38.0314054Z [36;1mecho "cargo-version=$(cargo --version)" >> $GITHUB_OUTPUT[0m
+2026-09-21T16:43:38.0314282Z [36;1mcargo --version --verbose[0m
+2026-09-21T16:43:38.0314544Z [36;1mecho "rustup-version=$(rustup --version)" >> $GITHUB_OUTPUT[0m
+2026-09-21T16:43:38.0314956Z [36;1mrustup --version[0m
+2026-09-21T16:43:38.0315297Z [36;1m[0m
+2026-09-21T16:43:38.0315656Z [36;1m_srt_DATE=$(rustc --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-09-21T16:43:38.0316067Z [36;1m_srt_HASH=$(rustc --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-09-21T16:43:38.0316465Z [36;1mecho "cachekey=$(echo $_srt_DATE$_srt_HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-09-21T16:43:38.0346055Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-21T16:43:38.0346313Z env:
+2026-09-21T16:43:38.0346551Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:38.0346768Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:38.0346967Z   CARGO_INCREMENTAL: 0
+2026-09-21T16:43:38.0360936Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-21T16:43:38.0361102Z   RUST_BACKTRACE: short
+2026-09-21T16:43:38.0361267Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-21T16:43:38.0361438Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-21T16:43:38.0361598Z ##[endgroup]
+2026-09-21T16:43:38.0796367Z rustc 1.95.0 (59807616e 2026-04-14)
+2026-09-21T16:43:38.0796875Z binary: rustc
+2026-09-21T16:43:38.0797165Z commit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860
+2026-09-21T16:43:38.0797493Z commit-date: 2026-04-14
+2026-09-21T16:43:38.0797665Z host: x86_64-unknown-linux-gnu
+2026-09-21T16:43:38.0797807Z release: 1.95.0
+2026-09-21T16:43:38.0798029Z LLVM version: 22.1.2
+2026-09-21T16:43:38.1222693Z cargo 1.95.0 (f2d3ce0bd 2026-03-21)
+2026-09-21T16:43:38.1222922Z release: 1.95.0
+2026-09-21T16:43:38.1223085Z commit-hash: f2d3ce0bd7f24a49f8f72d9000448f8838c4e850
+2026-09-21T16:43:38.1223277Z commit-date: 2026-03-21
+2026-09-21T16:43:38.1223420Z host: x86_64-unknown-linux-gnu
+2026-09-21T16:43:38.1223569Z libgit2: 1.9.2 (sys:0.20.4 vendored)
+2026-09-21T16:43:38.1223801Z libcurl: 8.15.0-DEV (sys:0.4.83+curl-8.15.0 vendored ssl:OpenSSL/3.5.4)
+2026-09-21T16:43:38.1224008Z ssl: OpenSSL 3.5.4 30 Sep 2025
+2026-09-21T16:43:38.1224162Z os: Ubuntu 24.4.0 (noble) [64-bit]
+2026-09-21T16:43:38.1250486Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-09-21T16:43:38.1413319Z info: the currently active `rustc` version is `rustc 1.95.0 (59807616e 2026-04-14)`
+2026-09-21T16:43:38.1449022Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-09-21T16:43:38.1449329Z rustup 1.29.1 (d95a37b6a 2026-08-13)
+2026-09-21T16:43:38.1610391Z info: the currently active `rustc` version is `rustc 1.95.0 (59807616e 2026-04-14)`
+2026-09-21T16:43:38.2047276Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.versions;outcome=success;conclusion=success;duration_ms=175]
+2026-09-21T16:43:38.2049328Z ##[start-action display=Downgrade registry access protocol when needed;id=__actions-rust-lang_setup-rust-toolchain.__run_6]
+2026-09-21T16:43:38.2063365Z ##[group]Run # Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-09-21T16:43:38.2063695Z [36;1m# Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL[0m
+2026-09-21T16:43:38.2063988Z [36;1m# On versions 1.66, 1.67, and 1.68.0-nightly the value "sparse" is still unstable.[0m
+2026-09-21T16:43:38.2064310Z [36;1m# https://github.com/dtolnay/rust-toolchain/pull/69#discussion_r1107268108[0m
+2026-09-21T16:43:38.2064636Z [36;1m# If we detect an incompatible value, set it to "git" which is always supported.[0m
+2026-09-21T16:43:38.2065030Z [36;1mif [[ "rustc 1.95.0 (59807616e 2026-04-14)" =~ ^rustc\ (1\.6[67]\.|1\.68\.0-nightly) && "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL}" == "sparse" ]]; then[0m
+2026-09-21T16:43:38.2065373Z [36;1m  echo "Downgrade cargo registry protocol to git"[0m
+2026-09-21T16:43:38.2065600Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git" >> $GITHUB_ENV[0m
+2026-09-21T16:43:38.2065793Z [36;1mfi[0m
+2026-09-21T16:43:38.2094643Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-21T16:43:38.2094829Z env:
+2026-09-21T16:43:38.2094942Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:38.2095192Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:38.2095321Z   CARGO_INCREMENTAL: 0
+2026-09-21T16:43:38.2095448Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-21T16:43:38.2095580Z   RUST_BACKTRACE: short
+2026-09-21T16:43:38.2095717Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-21T16:43:38.2095880Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-21T16:43:38.2096040Z ##[endgroup]
+2026-09-21T16:43:38.2143690Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=9]
+2026-09-21T16:43:38.2145132Z ##[start-action display=Setup Rust Caching;id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache]
+2026-09-21T16:43:38.2173744Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-09-21T16:43:38.2173957Z with:
+2026-09-21T16:43:38.2174077Z   cache-on-failure: true
+2026-09-21T16:43:38.2174211Z   cache-bin: true
+2026-09-21T16:43:38.2174329Z   cache-provider: github
+2026-09-21T16:43:38.2174467Z   cache-all-crates: false
+2026-09-21T16:43:38.2174604Z   cache-workspace-crates: false
+2026-09-21T16:43:38.2174742Z   cache-targets: true
+2026-09-21T16:43:38.2174859Z   save-if: true
+2026-09-21T16:43:38.2174973Z   prefix-key: v0-rust
+2026-09-21T16:43:38.2175093Z   add-job-id-key: true
+2026-09-21T16:43:38.2175227Z   add-rust-environment-hash-key: true
+2026-09-21T16:43:38.2175375Z   lookup-only: false
+2026-09-21T16:43:38.2175495Z   cmd-format: {0}
+2026-09-21T16:43:38.2175604Z env:
+2026-09-21T16:43:38.2175716Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:38.2175845Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:38.2175972Z   CARGO_INCREMENTAL: 0
+2026-09-21T16:43:38.2176098Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-21T16:43:38.2176229Z   RUST_BACKTRACE: short
+2026-09-21T16:43:38.2176360Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-21T16:43:38.2176520Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-21T16:43:38.2176676Z ##[endgroup]
+2026-09-21T16:43:38.3877920Z (node:2137) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-21T16:43:38.3878380Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-21T16:43:38.6236929Z ##[group]Cache Configuration
+2026-09-21T16:43:38.6243982Z Cache Provider:
+2026-09-21T16:43:38.6247532Z     github
+2026-09-21T16:43:38.6247710Z Workspaces:
+2026-09-21T16:43:38.6247936Z     /home/runner/work/jolt-atlas/jolt-atlas
+2026-09-21T16:43:38.6248209Z Cache Paths:
+2026-09-21T16:43:38.6248406Z     /home/runner/.cargo/bin
+2026-09-21T16:43:38.6248634Z     /home/runner/.cargo/.crates.toml
+2026-09-21T16:43:38.6248882Z     /home/runner/.cargo/.crates2.json
+2026-09-21T16:43:38.6249121Z     /home/runner/.cargo/registry
+2026-09-21T16:43:38.6249337Z     /home/runner/.cargo/git
+2026-09-21T16:43:38.6249568Z     /home/runner/work/jolt-atlas/jolt-atlas/target
+2026-09-21T16:43:38.6249816Z Restore Key:
+2026-09-21T16:43:38.6250568Z     v0-rust-clippy-and-test-Linux-x64-d2c91432
+2026-09-21T16:43:38.6250817Z Cache Key:
+2026-09-21T16:43:38.6251049Z     v0-rust-clippy-and-test-Linux-x64-d2c91432-d4895fcf
+2026-09-21T16:43:38.6251318Z .. Prefix:
+2026-09-21T16:43:38.6251517Z   - v0-rust-clippy-and-test-Linux-x64
+2026-09-21T16:43:38.6251758Z .. Environment considered:
+2026-09-21T16:43:38.6251951Z   - Rust Versions:
+2026-09-21T16:43:38.6252134Z     - 1.95.0 x86_64-unknown-linux-gnu 59807616e1fa2540724bfbac14d7976d7e4a3860
+2026-09-21T16:43:38.6252398Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-21T16:43:38.6252648Z     - 1.95.0 x86_64-unknown-linux-gnu 59807616e1fa2540724bfbac14d7976d7e4a3860
+2026-09-21T16:43:38.6252845Z   - CARGO_INCREMENTAL
+2026-09-21T16:43:38.6252975Z   - CARGO_PROFILE_DEV_DEBUG
+2026-09-21T16:43:38.6253121Z   - CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-09-21T16:43:38.6253310Z   - CARGO_TERM_COLOR
+2026-09-21T16:43:38.6253514Z   - CARGO_UNSTABLE_SPARSE_REGISTRY
+2026-09-21T16:43:38.6253870Z   - RUST_BACKTRACE
+2026-09-21T16:43:38.6254037Z   - RUSTFLAGS
+2026-09-21T16:43:38.6254444Z .. Lockfiles considered:
+2026-09-21T16:43:38.6254713Z   - /home/runner/work/jolt-atlas/jolt-atlas/atlas-onnx-tracer/Cargo.toml
+2026-09-21T16:43:38.6255047Z   - /home/runner/work/jolt-atlas/jolt-atlas/Cargo.lock
+2026-09-21T16:43:38.6255324Z   - /home/runner/work/jolt-atlas/jolt-atlas/Cargo.toml
+2026-09-21T16:43:38.6255635Z   - /home/runner/work/jolt-atlas/jolt-atlas/common/Cargo.toml
+2026-09-21T16:43:38.6256061Z   - /home/runner/work/jolt-atlas/jolt-atlas/jolt-atlas-core/Cargo.toml
+2026-09-21T16:43:38.6256445Z   - /home/runner/work/jolt-atlas/jolt-atlas/joltworks/Cargo.toml
+2026-09-21T16:43:38.6256814Z   - /home/runner/work/jolt-atlas/jolt-atlas/rust-toolchain.toml
+2026-09-21T16:43:38.6257352Z ##[endgroup]
+2026-09-21T16:43:38.6257457Z 
+2026-09-21T16:43:38.6257543Z ... Restoring cache ...
+2026-09-21T16:43:38.7451324Z No cache found.
+2026-09-21T16:43:38.7532872Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=538]
+2026-09-21T16:43:38.7571770Z ##[group]Run cargo clippy -p jolt-atlas-core --all-targets --features zk
+2026-09-21T16:43:38.7572064Z [36;1mcargo clippy -p jolt-atlas-core --all-targets --features zk[0m
+2026-09-21T16:43:38.7601168Z shell: /usr/bin/bash -e {0}
+2026-09-21T16:43:38.7601305Z env:
+2026-09-21T16:43:38.7601418Z   RUSTFLAGS: -D warnings
+2026-09-21T16:43:38.7601549Z   CARGO_TERM_COLOR: always
+2026-09-21T16:43:38.7601676Z   CARGO_INCREMENTAL: 0
+2026-09-21T16:43:38.7601800Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-21T16:43:38.7601935Z   RUST_BACKTRACE: short
+2026-09-21T16:43:38.7602070Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-21T16:43:38.7602232Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-21T16:43:38.7602390Z   CACHE_ON_FAILURE: true
+2026-09-21T16:43:38.7602516Z ##[endgroup]
+2026-09-21T16:43:38.8154154Z [1m[92m    Updating[0m git repository `https://github.com/facebookexperimental/allocative`
+2026-09-21T16:43:39.2431520Z [1m[92m    Updating[0m git repository `https://github.com/a16z/arkworks-algebra`
+2026-09-21T16:43:39.9991721Z [1m[92m    Updating[0m crates.io index
+2026-09-21T16:43:40.0521898Z [1m[92m    Updating[0m git repository `https://github.com/sonos/tract/`
+2026-09-21T16:43:44.4304223Z [1m[92m Downloading[0m crates ...
+2026-09-21T16:43:44.4999553Z [1m[92m  Downloaded[0m adler2 v2.0.1
+2026-09-21T16:43:44.5119744Z [1m[92m  Downloaded[0m anymap3 v1.0.1
+2026-09-21T16:43:44.5273414Z [1m[92m  Downloaded[0m ahash v0.8.12
+2026-09-21T16:43:44.5296906Z [1m[92m  Downloaded[0m allocator-api2 v0.2.21
+2026-09-21T16:43:44.5421317Z [1m[92m  Downloaded[0m arrayvec v0.7.6
+2026-09-21T16:43:44.5447806Z [1m[92m  Downloaded[0m enum-ordinalize-derive v4.3.2
+2026-09-21T16:43:44.5459933Z [1m[92m  Downloaded[0m anymap2 v0.13.0
+2026-09-21T16:43:44.5488741Z [1m[92m  Downloaded[0m futures-executor v0.3.32
+2026-09-21T16:43:44.5502871Z [1m[92m  Downloaded[0m ark-std v0.5.0
+2026-09-21T16:43:44.5535289Z [1m[92m  Downloaded[0m liquid-derive v0.26.10
+2026-09-21T16:43:44.5551598Z [1m[92m  Downloaded[0m anyhow v1.0.101
+2026-09-21T16:43:44.5585149Z [1m[92m  Downloaded[0m bincode_derive v2.0.1
+2026-09-21T16:43:44.5596909Z [1m[92m  Downloaded[0m bit-set v0.5.3
+2026-09-21T16:43:44.5607625Z [1m[92m  Downloaded[0m bincode v1.3.3
+2026-09-21T16:43:44.5657341Z [1m[92m  Downloaded[0m minimal-lexical v0.2.1
+2026-09-21T16:43:44.5696120Z [1m[92m  Downloaded[0m derive-new v0.5.9
+2026-09-21T16:43:44.5708406Z [1m[92m  Downloaded[0m block-buffer v0.10.4
+2026-09-21T16:43:44.5719218Z [1m[92m  Downloaded[0m monostate-impl v0.1.18
+2026-09-21T16:43:44.5728777Z [1m[92m  Downloaded[0m monostate v0.1.18
+2026-09-21T16:43:44.5746304Z [1m[92m  Downloaded[0m maybe-rayon v0.1.1
+2026-09-21T16:43:44.5754538Z [1m[92m  Downloaded[0m crypto-common v0.1.7
+2026-09-21T16:43:44.5764853Z [1m[92m  Downloaded[0m cfg-if v1.0.4
+2026-09-21T16:43:44.5776866Z [1m[92m  Downloaded[0m derive_builder_macro v0.20.2
+2026-09-21T16:43:44.5784684Z [1m[92m  Downloaded[0m memmap2 v0.9.10
+2026-09-21T16:43:44.5802157Z [1m[92m  Downloaded[0m memory-stats v1.2.0
+2026-09-21T16:43:44.5890812Z [1m[92m  Downloaded[0m rand_chacha v0.3.1
+2026-09-21T16:43:44.5904098Z [1m[92m  Downloaded[0m primal-check v0.3.4
+2026-09-21T16:43:44.5913099Z [1m[92m  Downloaded[0m autocfg v1.5.0
+2026-09-21T16:43:44.5929406Z [1m[92m  Downloaded[0m lazy_static v1.5.0
+2026-09-21T16:43:44.5960187Z [1m[92m  Downloaded[0m fnv v1.0.7
+2026-09-21T16:43:44.5969563Z [1m[92m  Downloaded[0m crossbeam-deque v0.8.6
+2026-09-21T16:43:44.5981772Z [1m[92m  Downloaded[0m matchers v0.2.0
+2026-09-21T16:43:44.5999899Z [1m[92m  Downloaded[0m futures-core v0.3.32
+2026-09-21T16:43:44.6012147Z [1m[92m  Downloaded[0m dyn-hash v0.2.2
+2026-09-21T16:43:44.6024607Z [1m[92m  Downloaded[0m castaway v0.2.4
+2026-09-21T16:43:44.6036983Z [1m[92m  Downloaded[0m enum-ordinalize v4.3.2
+2026-09-21T16:43:44.6045648Z [1m[92m  Downloaded[0m num-conv v0.2.0
+2026-09-21T16:43:44.6053928Z [1m[92m  Downloaded[0m digest v0.10.7
+2026-09-21T16:43:44.6068540Z [1m[92m  Downloaded[0m byteorder v1.5.0
+2026-09-21T16:43:44.6081170Z [1m[92m  Downloaded[0m dary_heap v0.3.8
+2026-09-21T16:43:44.6090195Z [1m[92m  Downloaded[0m dyn-clone v1.0.20
+2026-09-21T16:43:44.6108178Z [1m[92m  Downloaded[0m downcast-rs v1.2.1
+2026-09-21T16:43:44.6120332Z [1m[92m  Downloaded[0m keccak v0.1.6
+2026-09-21T16:43:44.6132343Z [1m[92m  Downloaded[0m errno v0.3.14
+2026-09-21T16:43:44.6146228Z [1m[92m  Downloaded[0m tinyvec_macros v0.1.1
+2026-09-21T16:43:44.6153896Z [1m[92m  Downloaded[0m macro_rules_attribute-proc_macro v0.2.2
+2026-09-21T16:43:44.6160981Z [1m[92m  Downloaded[0m liquid v0.26.11
+2026-09-21T16:43:44.6178451Z [1m[92m  Downloaded[0m thiserror-impl v2.0.18
+2026-09-21T16:43:44.6192919Z [1m[92m  Downloaded[0m rawpointer v0.2.1
+2026-09-21T16:43:44.6202008Z [1m[92m  Downloaded[0m thiserror-impl v1.0.69
+2026-09-21T16:43:44.6213657Z [1m[92m  Downloaded[0m derive_builder_core v0.20.2
+2026-09-21T16:43:44.6229204Z [1m[92m  Downloaded[0m nom-language v0.1.0
+2026-09-21T16:43:44.6237266Z [1m[92m  Downloaded[0m fixedbitset v0.5.7
+2026-09-21T16:43:44.6255724Z [1m[92m  Downloaded[0m time-core v0.1.8
+2026-09-21T16:43:44.6268042Z [1m[92m  Downloaded[0m tracing-chrome v0.7.2
+2026-09-21T16:43:44.6281012Z [1m[92m  Downloaded[0m iana-time-zone v0.1.65
+2026-09-21T16:43:44.6304196Z [1m[92m  Downloaded[0m base64 v0.13.1
+2026-09-21T16:43:44.6330822Z [1m[92m  Downloaded[0m transpose v0.2.3
+2026-09-21T16:43:44.6342377Z [1m[92m  Downloaded[0m scan_fmt v0.2.6
+2026-09-21T16:43:44.6351146Z [1m[92m  Downloaded[0m matrixmultiply v0.3.10
+2026-09-21T16:43:44.6379209Z [1m[92m  Downloaded[0m percent-encoding v2.3.2
+2026-09-21T16:43:44.6387045Z [1m[92m  Downloaded[0m miniz_oxide v0.8.9
+2026-09-21T16:43:44.6412240Z [1m[92m  Downloaded[0m time-macros v0.2.27
+2026-09-21T16:43:44.6430704Z [1m[92m  Downloaded[0m tracing-attributes v0.1.31
+2026-09-21T16:43:44.6453249Z [1m[92m  Downloaded[0m scopeguard v1.2.0
+2026-09-21T16:43:44.6463202Z [1m[92m  Downloaded[0m pastey v0.1.1
+2026-09-21T16:43:44.6482158Z [1m[92m  Downloaded[0m tinyvec v1.10.0
+2026-09-21T16:43:44.6501951Z [1m[92m  Downloaded[0m ucd-trie v0.1.7
+2026-09-21T16:43:44.6514308Z [1m[92m  Downloaded[0m num-derive v0.4.2
+2026-09-21T16:43:44.6530650Z [1m[92m  Downloaded[0m version_check v0.9.5
+2026-09-21T16:43:44.6545155Z [1m[92m  Downloaded[0m zeroize_derive v1.4.3
+2026-09-21T16:43:44.6579751Z [1m[92m  Downloaded[0m tracing-serde v0.2.0
+2026-09-21T16:43:44.6580207Z [1m[92m  Downloaded[0m itertools v0.10.5
+2026-09-21T16:43:44.6615169Z [1m[92m  Downloaded[0m paste v1.0.15
+2026-09-21T16:43:44.6643646Z [1m[92m  Downloaded[0m thiserror v2.0.18
+2026-09-21T16:43:44.6695788Z [1m[92m  Downloaded[0m xattr v1.6.1
+2026-09-21T16:43:44.6711065Z [1m[92m  Downloaded[0m futures-util v0.3.32
+2026-09-21T16:43:44.6814572Z [1m[92m  Downloaded[0m tracing-log v0.2.0
+2026-09-21T16:43:44.6824809Z [1m[92m  Downloaded[0m chrono v0.4.43
+2026-09-21T16:43:44.6873760Z [1m[92m  Downloaded[0m time v0.3.47
+2026-09-21T16:43:44.6981955Z [1m[92m  Downloaded[0m zmij v1.0.21
+2026-09-21T16:43:44.6996153Z [1m[92m  Downloaded[0m pin-project-lite v0.2.16
+2026-09-21T16:43:44.7039526Z [1m[92m  Downloaded[0m smallvec v1.15.1
+2026-09-21T16:43:44.7056887Z [1m[92m  Downloaded[0m semver v1.0.27
+2026-09-21T16:43:44.7076040Z [1m[92m  Downloaded[0m tracing-subscriber v0.3.22
+2026-09-21T16:43:44.7137289Z [1m[92m  Downloaded[0m rand_core v0.6.4
+2026-09-21T16:43:44.7148618Z [1m[92m  Downloaded[0m walkdir v2.5.0
+2026-09-21T16:43:44.7162376Z [1m[92m  Downloaded[0m unicode-segmentation v1.12.0
+2026-09-21T16:43:44.7184079Z [1m[92m  Downloaded[0m sha2 v0.10.9
+2026-09-21T16:43:44.7202704Z [1m[92m  Downloaded[0m serde_derive v1.0.228
+2026-09-21T16:43:44.7225290Z [1m[92m  Downloaded[0m parking_lot_core v0.9.12
+2026-09-21T16:43:44.7240821Z [1m[92m  Downloaded[0m papergrid v0.17.0
+2026-09-21T16:43:44.7282584Z [1m[92m  Downloaded[0m tar v0.4.44
+2026-09-21T16:43:44.7304070Z [1m[92m  Downloaded[0m sharded-slab v0.1.7
+2026-09-21T16:43:44.7332837Z [1m[92m  Downloaded[0m serde_core v1.0.228
+2026-09-21T16:43:44.7352319Z [1m[92m  Downloaded[0m ryu v1.0.23
+2026-09-21T16:43:44.7375657Z [1m[92m  Downloaded[0m rayon-core v1.13.0
+2026-09-21T16:43:44.7401983Z [1m[92m  Downloaded[0m rand_distr v0.4.3
+2026-09-21T16:43:44.7424302Z [1m[92m  Downloaded[0m rand v0.8.5
+2026-09-21T16:43:44.7450840Z [1m[92m  Downloaded[0m unicode-normalization-alignments v0.1.12
+2026-09-21T16:43:44.7471826Z [1m[92m  Downloaded[0m num-bigint v0.4.6
+2026-09-21T16:43:44.7504647Z [1m[92m  Downloaded[0m typenum v1.19.0
+2026-09-21T16:43:44.7524680Z [1m[92m  Downloaded[0m serde v1.0.228
+2026-09-21T16:43:44.7549595Z [1m[92m  Downloaded[0m proc-macro2 v1.0.106
+2026-09-21T16:43:44.7575431Z [1m[92m  Downloaded[0m rand v0.9.2
+2026-09-21T16:43:44.7607867Z [1m[92m  Downloaded[0m unicode-normalization v0.1.25
+2026-09-21T16:43:44.7635082Z [1m[92m  Downloaded[0m scc v2.4.0
+2026-09-21T16:43:44.7669557Z [1m[92m  Downloaded[0m nom v8.0.0
+2026-09-21T16:43:44.7710421Z [1m[92m  Downloaded[0m pest v2.8.6
+2026-09-21T16:43:44.7745997Z [1m[92m  Downloaded[0m serde_json v1.0.149
+2026-09-21T16:43:44.7800580Z [1m[92m  Downloaded[0m regex v1.12.3
+2026-09-21T16:43:44.7842130Z [1m[92m  Downloaded[0m rayon v1.11.0
+2026-09-21T16:43:44.7915171Z [1m[92m  Downloaded[0m proc-macro-error-attr2 v2.0.0
+2026-09-21T16:43:44.7930230Z [1m[92m  Downloaded[0m tabled v0.20.0
+2026-09-21T16:43:44.8073871Z [1m[92m  Downloaded[0m ndarray v0.16.1
+2026-09-21T16:43:44.8169583Z [1m[92m  Downloaded[0m zerocopy v0.8.39
+2026-09-21T16:43:44.8336299Z [1m[92m  Downloaded[0m unicode-width v0.2.2
+2026-09-21T16:43:44.8374949Z [1m[92m  Downloaded[0m syn v2.0.116
+2026-09-21T16:43:44.8447845Z [1m[92m  Downloaded[0m syn v1.0.109
+2026-09-21T16:43:44.8512109Z [1m[92m  Downloaded[0m rustfft v6.4.1
+2026-09-21T16:43:44.8580621Z [1m[92m  Downloaded[0m pest_meta v2.8.6
+2026-09-21T16:43:44.8597344Z [1m[92m  Downloaded[0m unicode_categories v0.1.1
+2026-09-21T16:43:44.8609216Z [1m[92m  Downloaded[0m zerocopy-derive v0.8.39
+2026-09-21T16:43:44.8676231Z [1m[92m  Downloaded[0m regex-syntax v0.8.9
+2026-09-21T16:43:44.8721712Z [1m[92m  Downloaded[0m rustix v1.1.3
+2026-09-21T16:43:44.8909577Z [1m[92m  Downloaded[0m libc v0.2.182
+2026-09-21T16:43:44.9190295Z [1m[92m  Downloaded[0m num-traits v0.2.19
+2026-09-21T16:43:44.9210515Z [1m[92m  Downloaded[0m nom v7.1.3
+2026-09-21T16:43:44.9248317Z [1m[92m  Downloaded[0m proc-macro-error2 v2.0.1
+2026-09-21T16:43:44.9276498Z [1m[92m  Downloaded[0m tracing v0.1.44
+2026-09-21T16:43:44.9386569Z [1m[92m  Downloaded[0m spm_precompiled v0.1.4
+2026-09-21T16:43:44.9439016Z [1m[92m  Downloaded[0m pest_derive v2.8.6
+2026-09-21T16:43:44.9456319Z [1m[92m  Downloaded[0m regex-automata v0.4.14
+2026-09-21T16:43:44.9555334Z [1m[92m  Downloaded[0m parking_lot v0.12.5
+2026-09-21T16:43:44.9573531Z [1m[92m  Downloaded[0m pest_generator v2.8.6
+2026-09-21T16:43:44.9585263Z [1m[92m  Downloaded[0m onig_sys v69.9.1
+2026-09-21T16:43:44.9717968Z [1m[92m  Downloaded[0m once_cell v1.21.3
+2026-09-21T16:43:44.9736007Z [1m[92m  Downloaded[0m num-rational v0.4.2
+2026-09-21T16:43:44.9745135Z [1m[92m  Downloaded[0m tokenizers v0.21.4
+2026-09-21T16:43:44.9806263Z [1m[92m  Downloaded[0m strum_macros v0.26.4
+2026-09-21T16:43:44.9823111Z [1m[92m  Downloaded[0m strength_reduce v0.2.4
+2026-09-21T16:43:44.9833009Z [1m[92m  Downloaded[0m static_assertions v1.1.0
+2026-09-21T16:43:44.9843579Z [1m[92m  Downloaded[0m simd-adler32 v0.3.8
+2026-09-21T16:43:44.9856926Z [1m[92m  Downloaded[0m shlex v1.3.0
+2026-09-21T16:43:44.9865977Z [1m[92m  Downloaded[0m linux-raw-sys v0.11.0
+2026-09-21T16:43:45.0244720Z [1m[92m  Downloaded[0m safetensors v0.6.2
+2026-09-21T16:43:45.0254173Z [1m[92m  Downloaded[0m rustversion v1.0.22
+2026-09-21T16:43:45.0274353Z [1m[92m  Downloaded[0m pkg-config v0.3.32
+2026-09-21T16:43:45.0285762Z [1m[92m  Downloaded[0m sha3 v0.10.8
+2026-09-21T16:43:45.0316531Z [1m[92m  Downloaded[0m num-complex v0.4.6
+2026-09-21T16:43:45.0327355Z [1m[92m  Downloaded[0m rand_core v0.9.5
+2026-09-21T16:43:45.0336800Z [1m[92m  Downloaded[0m libm v0.2.16
+2026-09-21T16:43:45.0417367Z [1m[92m  Downloaded[0m itertools v0.13.0
+2026-09-21T16:43:45.0466525Z [1m[92m  Downloaded[0m itertools v0.12.1
+2026-09-21T16:43:45.0514193Z [1m[92m  Downloaded[0m hashbrown v0.15.5
+2026-09-21T16:43:45.0549324Z [1m[92m  Downloaded[0m esaxx-rs v0.1.10
+2026-09-21T16:43:45.0573706Z [1m[92m  Downloaded[0m thiserror v1.0.69
+2026-09-21T16:43:45.0613137Z [1m[92m  Downloaded[0m tabled_derive v0.11.0
+2026-09-21T16:43:45.0622090Z [1m[92m  Downloaded[0m string-interner v0.15.0
+2026-09-21T16:43:45.0637832Z [1m[92m  Downloaded[0m slab v0.4.12
+2026-09-21T16:43:45.0646444Z [1m[92m  Downloaded[0m sdd v3.0.10
+2026-09-21T16:43:45.0663078Z [1m[92m  Downloaded[0m rand_chacha v0.9.0
+2026-09-21T16:43:45.0670967Z [1m[92m  Downloaded[0m prost-derive v0.11.9
+2026-09-21T16:43:45.0679324Z [1m[92m  Downloaded[0m prost v0.11.9
+2026-09-21T16:43:45.0693064Z [1m[92m  Downloaded[0m ppv-lite86 v0.2.21
+2026-09-21T16:43:45.0701723Z [1m[92m  Downloaded[0m onig v6.5.1
+2026-09-21T16:43:45.0716904Z [1m[92m  Downloaded[0m itertools v0.14.0
+2026-09-21T16:43:45.0765424Z [1m[92m  Downloaded[0m hashbrown v0.14.5
+2026-09-21T16:43:45.0798243Z [1m[92m  Downloaded[0m aho-corasick v1.1.4
+2026-09-21T16:43:45.0834428Z [1m[92m  Downloaded[0m num-integer v0.1.46
+2026-09-21T16:43:45.0845104Z [1m[92m  Downloaded[0m memchr v2.8.0
+2026-09-21T16:43:45.0892139Z [1m[92m  Downloaded[0m derive_more-impl v2.1.1
+2026-09-21T16:43:45.0928953Z [1m[92m  Downloaded[0m cc v1.2.56
+2026-09-21T16:43:45.0949456Z [1m[92m  Downloaded[0m zeroize v1.8.2
+2026-09-21T16:43:45.0958148Z [1m[92m  Downloaded[0m virtue v0.0.18
+2026-09-21T16:43:45.0975396Z [1m[92m  Downloaded[0m unicode-ident v1.0.24
+2026-09-21T16:43:45.0994410Z [1m[92m  Downloaded[0m tracing-core v0.1.36
+2026-09-21T16:43:45.1012918Z [1m[92m  Downloaded[0m unty v0.0.4
+2026-09-21T16:43:45.1019692Z [1m[92m  Downloaded[0m serial_test v3.3.1
+2026-09-21T16:43:45.1029050Z [1m[92m  Downloaded[0m liquid-core v0.26.11
+2026-09-21T16:43:45.1062048Z [1m[92m  Downloaded[0m derive_more v2.1.1
+2026-09-21T16:43:45.1156169Z [1m[92m  Downloaded[0m testing_table v0.3.0
+2026-09-21T16:43:45.1161887Z [1m[92m  Downloaded[0m strum v0.26.3
+2026-09-21T16:43:45.1167238Z [1m[92m  Downloaded[0m strsim v0.11.1
+2026-09-21T16:43:45.1176259Z [1m[92m  Downloaded[0m serial_test_derive v3.3.1
+2026-09-21T16:43:45.1181756Z [1m[92m  Downloaded[0m rustc_version v0.4.1
+2026-09-21T16:43:45.1190359Z [1m[92m  Downloaded[0m half v2.7.1
+2026-09-21T16:43:45.1209163Z [1m[92m  Downloaded[0m bincode v2.0.1
+2026-09-21T16:43:45.1246535Z [1m[92m  Downloaded[0m getrandom v0.3.4
+2026-09-21T16:43:45.1271044Z [1m[92m  Downloaded[0m dory-pcs v0.4.0
+2026-09-21T16:43:45.1296507Z [1m[92m  Downloaded[0m darling_core v0.20.11
+2026-09-21T16:43:45.1333932Z [1m[92m  Downloaded[0m compact_str v0.9.0
+2026-09-21T16:43:45.1356673Z [1m[92m  Downloaded[0m bytes v1.11.1
+2026-09-21T16:43:45.1386679Z [1m[92m  Downloaded[0m log v0.4.29
+2026-09-21T16:43:45.1404163Z [1m[92m  Downloaded[0m env_logger v0.10.2
+2026-09-21T16:43:45.1424602Z [1m[92m  Downloaded[0m crc32fast v1.5.0
+2026-09-21T16:43:45.1437647Z [1m[92m  Downloaded[0m bytecount v0.6.9
+2026-09-21T16:43:45.1451684Z [1m[92m  Downloaded[0m num-iter v0.1.45
+2026-09-21T16:43:45.1458095Z [1m[92m  Downloaded[0m nu-ansi-term v0.50.3
+2026-09-21T16:43:45.1474848Z [1m[92m  Downloaded[0m liquid-lib v0.26.11
+2026-09-21T16:43:45.1501911Z [1m[92m  Downloaded[0m thread_local v1.1.9
+2026-09-21T16:43:45.1512427Z [1m[92m  Downloaded[0m subtle v2.6.1
+2026-09-21T16:43:45.1520390Z [1m[92m  Downloaded[0m macro_rules_attribute v0.2.2
+2026-09-21T16:43:45.1530625Z [1m[92m  Downloaded[0m inventory v0.3.21
+2026-09-21T16:43:45.1545666Z [1m[92m  Downloaded[0m getrandom v0.2.17
+2026-09-21T16:43:45.1566245Z [1m[92m  Downloaded[0m flate2 v1.1.9
+2026-09-21T16:43:45.1601078Z [1m[92m  Downloaded[0m educe v0.6.0
+2026-09-21T16:43:45.1659207Z [1m[92m  Downloaded[0m crossbeam-utils v0.8.21
+2026-09-21T16:43:45.1677767Z [1m[92m  Downloaded[0m bitflags v2.11.0
+2026-09-21T16:43:45.1707851Z [1m[92m  Downloaded[0m lock_api v0.4.14
+2026-09-21T16:43:45.1716403Z [1m[92m  Downloaded[0m kstring v2.0.2
+2026-09-21T16:43:45.1727136Z [1m[92m  Downloaded[0m darling v0.20.11
+2026-09-21T16:43:45.1761798Z [1m[92m  Downloaded[0m crossbeam-epoch v0.9.18
+2026-09-21T16:43:45.1778484Z [1m[92m  Downloaded[0m colored v2.2.0
+2026-09-21T16:43:45.1797109Z [1m[92m  Downloaded[0m find-msvc-tools v0.1.9
+2026-09-21T16:43:45.1807898Z [1m[92m  Downloaded[0m same-file v1.0.6
+2026-09-21T16:43:45.1817488Z [1m[92m  Downloaded[0m rayon-cond v0.4.0
+2026-09-21T16:43:45.1824716Z [1m[92m  Downloaded[0m num v0.4.3
+2026-09-21T16:43:45.1831213Z [1m[92m  Downloaded[0m ident_case v1.0.1
+2026-09-21T16:43:45.1836718Z [1m[92m  Downloaded[0m generic-array v0.14.7
+2026-09-21T16:43:45.1845988Z [1m[92m  Downloaded[0m either v1.15.0
+2026-09-21T16:43:45.1855685Z [1m[92m  Downloaded[0m ctor v0.1.26
+2026-09-21T16:43:45.1862058Z [1m[92m  Downloaded[0m cpufeatures v0.2.17
+2026-09-21T16:43:45.1871266Z [1m[92m  Downloaded[0m derive_builder v0.20.2
+2026-09-21T16:43:45.1907213Z [1m[92m  Downloaded[0m blake2 v0.10.6
+2026-09-21T16:43:45.1925614Z [1m[92m  Downloaded[0m filetime v0.2.27
+2026-09-21T16:43:45.1936759Z [1m[92m  Downloaded[0m deranged v0.5.6
+2026-09-21T16:43:45.1945929Z [1m[92m  Downloaded[0m darling_macro v0.20.11
+2026-09-21T16:43:45.1950203Z [1m[92m  Downloaded[0m futures-task v0.3.32
+2026-09-21T16:43:45.1958101Z [1m[92m  Downloaded[0m bit-vec v0.6.3
+2026-09-21T16:43:45.1966459Z [1m[92m  Downloaded[0m quote v1.0.44
+2026-09-21T16:43:45.1985334Z [1m[92m  Downloaded[0m powerfmt v0.2.0
+2026-09-21T16:43:45.1992816Z [1m[92m  Downloaded[0m maplit v1.0.2
+2026-09-21T16:43:45.1999335Z [1m[92m  Downloaded[0m itoa v1.0.17
+2026-09-21T16:43:45.2009133Z [1m[92m  Downloaded[0m heck v0.5.0
+2026-09-21T16:43:45.2017822Z [1m[92m  Downloaded[0m dory-derive v0.3.0
+2026-09-21T16:43:45.3138857Z [1m[92m   Compiling[0m proc-macro2 v1.0.106
+2026-09-21T16:43:45.3139418Z [1m[92m   Compiling[0m unicode-ident v1.0.24
+2026-09-21T16:43:45.3140530Z [1m[92m   Compiling[0m quote v1.0.44
+2026-09-21T16:43:45.3140871Z [1m[92m   Compiling[0m autocfg v1.5.0
+2026-09-21T16:43:45.3671388Z [1m[92m    Checking[0m cfg-if v1.0.4
+2026-09-21T16:43:45.3865867Z [1m[92m   Compiling[0m libm v0.2.16
+2026-09-21T16:43:45.4325753Z [1m[92m   Compiling[0m libc v0.2.182
+2026-09-21T16:43:45.5041779Z [1m[92m   Compiling[0m serde_core v1.0.228
+2026-09-21T16:43:45.5199915Z [1m[92m   Compiling[0m zerocopy v0.8.39
+2026-09-21T16:43:45.6881332Z [1m[92m   Compiling[0m serde v1.0.228
+2026-09-21T16:43:45.8739587Z [1m[92m   Compiling[0m num-traits v0.2.19
+2026-09-21T16:43:45.9343631Z [1m[92m   Compiling[0m syn v2.0.116
+2026-09-21T16:43:46.1122739Z [1m[92m   Compiling[0m version_check v0.9.5
+2026-09-21T16:43:46.2691543Z [1m[92m    Checking[0m either v1.15.0
+2026-09-21T16:43:46.3541432Z [1m[92m    Checking[0m memchr v2.8.0
+2026-09-21T16:43:46.5881335Z [1m[92m    Checking[0m once_cell v1.21.3
+2026-09-21T16:43:46.7848747Z [1m[92m   Compiling[0m getrandom v0.3.4
+2026-09-21T16:43:46.8138684Z [1m[92m    Checking[0m num-integer v0.1.46
+2026-09-21T16:43:46.9251828Z [1m[92m   Compiling[0m syn v1.0.109
+2026-09-21T16:43:47.0798213Z [1m[92m    Checking[0m aho-corasick v1.1.4
+2026-09-21T16:43:47.5601489Z [1m[92m    Checking[0m regex-syntax v0.8.9
+2026-09-21T16:43:48.1672870Z [1m[92m   Compiling[0m ucd-trie v0.1.7
+2026-09-21T16:43:48.2771482Z [1m[92m   Compiling[0m pest v2.8.6
+2026-09-21T16:43:48.4191404Z [1m[92m    Checking[0m regex-automata v0.4.14
+2026-09-21T16:43:49.0642105Z [1m[92m   Compiling[0m ahash v0.8.12
+2026-09-21T16:43:49.1388629Z [1m[92m   Compiling[0m num-conv v0.2.0
+2026-09-21T16:43:49.1551827Z [1m[92m   Compiling[0m serde_derive v1.0.228
+2026-09-21T16:43:49.1821004Z [1m[92m   Compiling[0m zerocopy-derive v0.8.39
+2026-09-21T16:43:49.7021552Z [1m[92m   Compiling[0m time-core v0.1.8
+2026-09-21T16:43:49.7641686Z [1m[92m   Compiling[0m time-macros v0.2.27
+2026-09-21T16:43:49.8248407Z [1m[92m   Compiling[0m pest_meta v2.8.6
+2026-09-21T16:43:50.4008713Z [1m[92m   Compiling[0m pest_generator v2.8.6
+2026-09-21T16:43:50.8742928Z [1m[92m    Checking[0m smallvec v1.15.1
+2026-09-21T16:43:51.0054593Z [1m[92m   Compiling[0m crossbeam-utils v0.8.21
+2026-09-21T16:43:51.1271411Z [1m[92m   Compiling[0m pest_derive v2.8.6
+2026-09-21T16:43:51.1359607Z [1m[92m   Compiling[0m liquid-derive v0.26.10
+2026-09-21T16:43:51.2416466Z [1m[92m   Compiling[0m find-msvc-tools v0.1.9
+2026-09-21T16:43:51.3612231Z [1m[92m    Checking[0m itoa v1.0.17
+2026-09-21T16:43:51.4162026Z [1m[92m   Compiling[0m shlex v1.3.0
+2026-09-21T16:43:51.5011264Z [1m[92m   Compiling[0m cc v1.2.56
+2026-09-21T16:43:52.3411594Z [1m[92m    Checking[0m ppv-lite86 v0.2.21
+2026-09-21T16:43:52.5141572Z [1m[92m    Checking[0m log v0.4.29
+2026-09-21T16:43:52.5837078Z [1m[92m   Compiling[0m powerfmt v0.2.0
+2026-09-21T16:43:52.6721585Z [1m[92m   Compiling[0m typenum v1.19.0
+2026-09-21T16:43:52.8061497Z [1m[92m   Compiling[0m deranged v0.5.6
+2026-09-21T16:43:53.1021507Z [1m[92m    Checking[0m crossbeam-epoch v0.9.18
+2026-09-21T16:43:53.1822164Z [1m[92m    Checking[0m regex v1.12.3
+2026-09-21T16:43:53.2391683Z [1m[92m   Compiling[0m generic-array v0.14.7
+2026-09-21T16:43:53.3031710Z [1m[92m    Checking[0m getrandom v0.2.17
+2026-09-21T16:43:53.3610930Z [1m[92m   Compiling[0m anyhow v1.0.101
+2026-09-21T16:43:53.4451542Z [1m[92m    Checking[0m lazy_static v1.5.0
+2026-09-21T16:43:53.4729000Z [1m[92m   Compiling[0m static_assertions v1.1.0
+2026-09-21T16:43:53.4884593Z [1m[92m   Compiling[0m rayon-core v1.13.0
+2026-09-21T16:43:53.5601542Z [1m[92m   Compiling[0m time v0.3.47
+2026-09-21T16:43:53.5687962Z [1m[92m   Compiling[0m kstring v2.0.2
+2026-09-21T16:43:53.7161788Z [1m[92m    Checking[0m rand_core v0.6.4
+2026-09-21T16:43:53.8151401Z [1m[92m    Checking[0m crossbeam-deque v0.8.6
+2026-09-21T16:43:53.9891636Z [1m[92m   Compiling[0m itertools v0.14.0
+2026-09-21T16:43:54.2682057Z [1m[92m   Compiling[0m parking_lot_core v0.9.12
+2026-09-21T16:43:54.3611921Z [1m[92m   Compiling[0m anymap2 v0.13.0
+2026-09-21T16:43:54.4341377Z [1m[92m   Compiling[0m zmij v1.0.21
+2026-09-21T16:43:54.9011679Z [1m[92m    Checking[0m rand_chacha v0.3.1
+2026-09-21T16:43:54.9742013Z [1m[92m    Checking[0m num-complex v0.4.6
+2026-09-21T16:43:54.9857264Z [1m[92m   Compiling[0m matrixmultiply v0.3.10
+2026-09-21T16:43:55.0605930Z [1m[92m   Compiling[0m tinyvec_macros v0.1.1
+2026-09-21T16:43:55.1023537Z [1m[92m   Compiling[0m liquid-core v0.26.11
+2026-09-21T16:43:55.1668181Z [1m[92m    Checking[0m scopeguard v1.2.0
+2026-09-21T16:43:55.1952331Z [1m[92m   Compiling[0m percent-encoding v2.3.2
+2026-09-21T16:43:55.2462060Z [1m[92m   Compiling[0m unicode-segmentation v1.12.0
+2026-09-21T16:43:55.2761753Z [1m[92m   Compiling[0m serde_json v1.0.149
+2026-09-21T16:43:55.3531781Z [1m[92m    Checking[0m lock_api v0.4.14
+2026-09-21T16:43:55.4531551Z [1m[92m   Compiling[0m tinyvec v1.10.0
+2026-09-21T16:43:55.4741574Z [1m[92m    Checking[0m rand v0.8.5
+2026-09-21T16:43:55.6611706Z [1m[92m    Checking[0m rayon v1.11.0
+2026-09-21T16:43:55.9171612Z [1m[92m    Checking[0m rawpointer v0.2.1
+2026-09-21T16:43:55.9641489Z [1m[92m   Compiling[0m same-file v1.0.6
+2026-09-21T16:43:56.0221696Z [1m[92m   Compiling[0m liquid-lib v0.26.11
+2026-09-21T16:43:56.6895663Z [1m[92m   Compiling[0m walkdir v2.5.0
+2026-09-21T16:43:56.9752023Z [1m[92m    Checking[0m parking_lot v0.12.5
+2026-09-21T16:43:57.0641566Z [1m[92m   Compiling[0m liquid v0.26.11
+2026-09-21T16:43:57.2732138Z [1m[92m   Compiling[0m unicode-normalization v0.1.25
+2026-09-21T16:43:57.3231664Z [1m[92m    Checking[0m crypto-common v0.1.7
+2026-09-21T16:43:57.3701550Z [1m[92m    Checking[0m block-buffer v0.10.4
+2026-09-21T16:43:57.4241400Z [1m[92m    Checking[0m hashbrown v0.14.5
+2026-09-21T16:43:57.5212183Z [1m[92m    Checking[0m nom v8.0.0
+2026-09-21T16:43:57.8061616Z [1m[92m    Checking[0m subtle v2.6.1
+2026-09-21T16:43:57.8571320Z [1m[92m    Checking[0m bitflags v2.11.0
+2026-09-21T16:43:58.0302056Z [1m[92m    Checking[0m digest v0.10.7
+2026-09-21T16:43:58.3418199Z [1m[92m   Compiling[0m half v2.7.1
+2026-09-21T16:43:58.4751580Z [1m[92m    Checking[0m string-interner v0.15.0
+2026-09-21T16:43:58.5751982Z [1m[92m    Checking[0m ndarray v0.16.1
+2026-09-21T16:43:58.5901655Z [1m[92m   Compiling[0m tract-linalg v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:43:58.8722039Z [1m[92m    Checking[0m scan_fmt v0.2.6
+2026-09-21T16:43:59.0531948Z [1m[92m    Checking[0m num-bigint v0.4.6
+2026-09-21T16:43:59.0922043Z [1m[92m    Checking[0m nom-language v0.1.0
+2026-09-21T16:43:59.1044809Z [1m[92m    Checking[0m itertools v0.12.1
+2026-09-21T16:43:59.1590987Z [1m[92m   Compiling[0m rustix v1.1.3
+2026-09-21T16:43:59.3001851Z [1m[92m    Checking[0m dyn-hash v0.2.2
+2026-09-21T16:43:59.3251519Z [1m[92m    Checking[0m downcast-rs v1.2.1
+2026-09-21T16:43:59.3901607Z [1m[92m    Checking[0m strength_reduce v0.2.4
+2026-09-21T16:43:59.4971350Z [1m[92m    Checking[0m dyn-clone v1.0.20
+2026-09-21T16:43:59.5721570Z [1m[92m    Checking[0m maplit v1.0.2
+2026-09-21T16:43:59.8581801Z [1m[92m    Checking[0m transpose v0.2.3
+2026-09-21T16:44:00.0852200Z [1m[92m    Checking[0m tract-data v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:44:00.3871993Z [1m[92m   Compiling[0m derive-new v0.5.9
+2026-09-21T16:44:00.5993211Z [1m[92m    Checking[0m primal-check v0.3.4
+2026-09-21T16:44:00.6030731Z [1m[92m   Compiling[0m paste v1.0.15
+2026-09-21T16:44:00.6301257Z [1m[92m   Compiling[0m allocative v0.3.4 (https://github.com/facebookexperimental/allocative?rev=85b773d85d526d068ce94724ff7a7b81203fc95e#85b773d8)
+2026-09-21T16:44:00.6581663Z [1m[92m   Compiling[0m pastey v0.1.1
+2026-09-21T16:44:00.6847297Z [1m[92m    Checking[0m byteorder v1.5.0
+2026-09-21T16:44:00.7396767Z [1m[92m   Compiling[0m crc32fast v1.5.0
+2026-09-21T16:44:00.7751487Z [1m[92m    Checking[0m bit-vec v0.6.3
+2026-09-21T16:44:00.8278310Z [1m[92m    Checking[0m linux-raw-sys v0.11.0
+2026-09-21T16:44:00.8881508Z [1m[92m    Checking[0m bit-set v0.5.3
+2026-09-21T16:44:00.9712691Z [1m[92m    Checking[0m rustfft v6.4.1
+2026-09-21T16:44:01.4890600Z [1m[92m    Checking[0m ark-std v0.5.0
+2026-09-21T16:44:01.5229194Z [1m[92m   Compiling[0m ctor v0.1.26
+2026-09-21T16:44:01.6993343Z [1m[92m   Compiling[0m allocative_derive v0.3.3 (https://github.com/facebookexperimental/allocative?rev=85b773d85d526d068ce94724ff7a7b81203fc95e#85b773d8)
+2026-09-21T16:44:01.7152683Z [1m[92m   Compiling[0m ark-serialize-derive v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-21T16:44:01.8465458Z [1m[92m    Checking[0m pin-project-lite v0.2.16
+2026-09-21T16:44:01.8681037Z [1m[92m    Checking[0m arrayvec v0.7.6
+2026-09-21T16:44:01.9258041Z [1m[92m    Checking[0m inventory v0.3.21
+2026-09-21T16:44:01.9477989Z [1m[92m    Checking[0m adler2 v2.0.1
+2026-09-21T16:44:01.9785746Z [1m[92m    Checking[0m simd-adler32 v0.3.8
+2026-09-21T16:44:01.9844154Z [1m[92m    Checking[0m anymap3 v1.0.1
+2026-09-21T16:44:02.0311289Z [1m[92m    Checking[0m miniz_oxide v0.8.9
+2026-09-21T16:44:02.2639159Z [1m[92m    Checking[0m ark-serialize v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-21T16:44:02.3498135Z [1m[92m    Checking[0m xattr v1.6.1
+2026-09-21T16:44:02.5825060Z [1m[92m   Compiling[0m enum-ordinalize-derive v4.3.2
+2026-09-21T16:44:02.7963993Z [1m[92m    Checking[0m tracing-core v0.1.36
+2026-09-21T16:44:02.8235627Z [1m[92m    Checking[0m filetime v0.2.27
+2026-09-21T16:44:02.9130854Z [1m[92m    Checking[0m tar v0.4.44
+2026-09-21T16:44:02.9417337Z [1m[92m   Compiling[0m enum-ordinalize v4.3.2
+2026-09-21T16:44:03.0203091Z [1m[92m    Checking[0m flate2 v1.1.9
+2026-09-21T16:44:03.1278327Z [1m[92m    Checking[0m safetensors v0.6.2
+2026-09-21T16:44:03.1623477Z [1m[92m   Compiling[0m zeroize_derive v1.4.3
+2026-09-21T16:44:03.2325388Z [1m[92m   Compiling[0m educe v0.6.0
+2026-09-21T16:44:03.3581951Z [1m[92m    Checking[0m zeroize v1.8.2
+2026-09-21T16:44:03.3955822Z [1m[92m   Compiling[0m ark-ff-asm v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-21T16:44:03.5521857Z [1m[92m   Compiling[0m tracing-attributes v0.1.31
+2026-09-21T16:44:03.6160695Z [1m[92m   Compiling[0m ark-ff-macros v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-21T16:44:03.8941083Z [1m[92m    Checking[0m itertools v0.13.0
+2026-09-21T16:44:04.1032990Z [1m[92m   Compiling[0m rustversion v1.0.22
+2026-09-21T16:44:04.1899279Z [1m[92m    Checking[0m allocator-api2 v0.2.21
+2026-09-21T16:44:04.3159607Z [1m[92m    Checking[0m hashbrown v0.15.5
+2026-09-21T16:44:04.5362152Z [1m[92m    Checking[0m tracing v0.1.44
+2026-09-21T16:44:04.5393463Z [1m[92m   Compiling[0m fnv v1.0.7
+2026-09-21T16:44:04.5655394Z [1m[92m   Compiling[0m ident_case v1.0.1
+2026-09-21T16:44:04.5812987Z [1m[92m    Checking[0m ark-ff v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-21T16:44:04.5991857Z [1m[92m   Compiling[0m strsim v0.11.1
+2026-09-21T16:44:04.7441871Z [1m[92m   Compiling[0m darling_core v0.20.11
+2026-09-21T16:44:04.8369120Z [1m[92m    Checking[0m tracing-log v0.2.0
+2026-09-21T16:44:04.8848545Z [1m[92m    Checking[0m tracing-serde v0.2.0
+2026-09-21T16:44:05.1002311Z [1m[92m    Checking[0m sharded-slab v0.1.7
+2026-09-21T16:44:05.3225721Z [1m[92m   Compiling[0m itertools v0.10.5
+2026-09-21T16:44:05.8933691Z [1m[92m    Checking[0m matchers v0.2.0
+2026-09-21T16:44:05.9225383Z [1m[92m   Compiling[0m proc-macro-error-attr2 v2.0.0
+2026-09-21T16:44:05.9511559Z [1m[92m    Checking[0m thread_local v1.1.9
+2026-09-21T16:44:06.0075323Z [1m[92m   Compiling[0m thiserror v2.0.18
+2026-09-21T16:44:06.0329018Z [1m[92m   Compiling[0m heck v0.5.0
+2026-09-21T16:44:06.1081624Z [1m[92m    Checking[0m unicode-width v0.2.2
+2026-09-21T16:44:06.1195217Z [1m[92m    Checking[0m nu-ansi-term v0.50.3
+2026-09-21T16:44:06.2121613Z [1m[92m    Checking[0m tracing-subscriber v0.3.22
+2026-09-21T16:44:06.2254359Z [1m[92m   Compiling[0m proc-macro-error2 v2.0.1
+2026-09-21T16:44:06.3149057Z [1m[92m   Compiling[0m prost-derive v0.11.9
+2026-09-21T16:44:06.8198609Z [1m[92m   Compiling[0m darling_macro v0.20.11
+2026-09-21T16:44:06.8496287Z [1m[92m    Checking[0m rand_distr v0.4.3
+2026-09-21T16:44:06.9742121Z [1m[92m   Compiling[0m thiserror-impl v2.0.18
+2026-09-21T16:44:07.0227290Z [1m[92m    Checking[0m bytes v1.11.1
+2026-09-21T16:44:07.2103770Z [1m[92m    Checking[0m slab v0.4.12
+2026-09-21T16:44:07.2626084Z [1m[92m    Checking[0m futures-core v0.3.32
+2026-09-21T16:44:07.3141423Z [1m[92m    Checking[0m bytecount v0.6.9
+2026-09-21T16:44:07.3387384Z [1m[92m    Checking[0m futures-task v0.3.32
+2026-09-21T16:44:07.3834372Z [1m[92m   Compiling[0m pkg-config v0.3.32
+2026-09-21T16:44:07.6232522Z [1m[92m   Compiling[0m thiserror v1.0.69
+2026-09-21T16:44:07.6867001Z [1m[92m   Compiling[0m onig_sys v69.9.1
+2026-09-21T16:44:07.7500937Z [1m[92m    Checking[0m futures-util v0.3.32
+2026-09-21T16:44:07.7771814Z [1m[92m    Checking[0m papergrid v0.17.0
+2026-09-21T16:44:08.1658875Z [1m[92m    Checking[0m prost v0.11.9
+2026-09-21T16:44:08.2776924Z [1m[92m   Compiling[0m darling v0.20.11
+2026-09-21T16:44:08.2976417Z [1m[92m    Checking[0m tracing-chrome v0.7.2
+2026-09-21T16:44:08.3502911Z [1m[92m   Compiling[0m tabled_derive v0.11.0
+2026-09-21T16:44:08.7356002Z [1m[92m    Checking[0m testing_table v0.3.0
+2026-09-21T16:44:08.7638063Z [1m[92m    Checking[0m num-rational v0.4.2
+2026-09-21T16:44:08.7711624Z [1m[92m   Compiling[0m thiserror-impl v1.0.69
+2026-09-21T16:44:08.8799626Z [1m[92m    Checking[0m memmap2 v0.9.10
+2026-09-21T16:44:08.9521622Z [1m[92m    Checking[0m sdd v3.0.10
+2026-09-21T16:44:09.0540307Z [1m[92m    Checking[0m iana-time-zone v0.1.65
+2026-09-21T16:44:09.1021424Z [1m[92m    Checking[0m chrono v0.4.43
+2026-09-21T16:44:09.1095650Z [1m[92m    Checking[0m ark-poly v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-21T16:44:09.4552146Z [1m[92m    Checking[0m scc v2.4.0
+2026-09-21T16:44:09.4742093Z [1m[92m    Checking[0m ark-ec v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-21T16:44:09.6441888Z [1m[92m    Checking[0m tabled v0.20.0
+2026-09-21T16:44:10.1152140Z [1m[92m    Checking[0m tract-core v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:44:10.1406328Z [1m[92m    Checking[0m futures-executor v0.3.32
+2026-09-21T16:44:10.1938519Z [1m[92m    Checking[0m common v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/common)
+2026-09-21T16:44:10.4583029Z [1m[92m   Compiling[0m derive_builder_core v0.20.2
+2026-09-21T16:44:10.5652232Z [1m[92m    Checking[0m ark-bn254 v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-21T16:44:10.7924866Z [1m[92m    Checking[0m blake2 v0.10.6
+2026-09-21T16:44:10.9549302Z [1m[92m    Checking[0m maybe-rayon v0.1.1
+2026-09-21T16:44:10.9958889Z [1m[92m    Checking[0m colored v2.2.0
+2026-09-21T16:44:11.0941760Z [1m[92m    Checking[0m env_logger v0.10.2
+2026-09-21T16:44:11.1112102Z [1m[92m    Checking[0m bincode v1.3.3
+2026-09-21T16:44:11.1831938Z [1m[92m   Compiling[0m dory-derive v0.3.0
+2026-09-21T16:44:11.2853304Z [1m[92m   Compiling[0m derive_more-impl v2.1.1
+2026-09-21T16:44:11.3791556Z [1m[92m   Compiling[0m serial_test_derive v3.3.1
+2026-09-21T16:44:11.6451852Z [1m[92m    Checking[0m rand_core v0.9.5
+2026-09-21T16:44:11.7201681Z [1m[92m    Checking[0m num-iter v0.1.45
+2026-09-21T16:44:11.8501987Z [1m[92m    Checking[0m minimal-lexical v0.2.1
+2026-09-21T16:44:11.9441824Z [1m[92m    Checking[0m keccak v0.1.6
+2026-09-21T16:44:12.0091516Z [1m[92m   Compiling[0m virtue v0.0.18
+2026-09-21T16:44:12.3271799Z [1m[92m   Compiling[0m esaxx-rs v0.1.10
+2026-09-21T16:44:12.3631538Z [1m[92m   Compiling[0m bincode_derive v2.0.1
+2026-09-21T16:44:12.3891547Z [1m[92m    Checking[0m sha3 v0.10.8
+2026-09-21T16:44:12.4751374Z [1m[92m    Checking[0m nom v7.1.3
+2026-09-21T16:44:12.6842003Z [1m[92m    Checking[0m derive_more v2.1.1
+2026-09-21T16:44:12.7091904Z [1m[92m    Checking[0m num v0.4.3
+2026-09-21T16:44:12.7361526Z [1m[92m    Checking[0m rand_chacha v0.9.0
+2026-09-21T16:44:12.8211398Z [1m[92m    Checking[0m serial_test v3.3.1
+2026-09-21T16:44:12.8831162Z [1m[92m    Checking[0m dory-pcs v0.4.0
+2026-09-21T16:44:13.1891347Z [1m[92m   Compiling[0m derive_builder_macro v0.20.2
+2026-09-21T16:44:13.2471852Z [1m[92m    Checking[0m jolt-optimizations v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-21T16:44:13.3191925Z [1m[92m   Compiling[0m strum_macros v0.26.4
+2026-09-21T16:44:13.3511051Z [1m[92m    Checking[0m castaway v0.2.4
+2026-09-21T16:44:13.3821804Z [1m[92m   Compiling[0m monostate-impl v0.1.18
+2026-09-21T16:44:13.5221423Z [1m[92m   Compiling[0m num-derive v0.4.2
+2026-09-21T16:44:13.5471763Z [1m[92m    Checking[0m memory-stats v1.2.0
+2026-09-21T16:44:13.5861322Z [1m[92m    Checking[0m ryu v1.0.23
+2026-09-21T16:44:13.6371554Z [1m[92m    Checking[0m strum v0.26.3
+2026-09-21T16:44:13.6611480Z [1m[92m   Compiling[0m macro_rules_attribute-proc_macro v0.2.2
+2026-09-21T16:44:13.8562588Z [1m[92m    Checking[0m unty v0.0.4
+2026-09-21T16:44:13.9111539Z [1m[92m    Checking[0m base64 v0.13.1
+2026-09-21T16:44:14.0011151Z [1m[92m    Checking[0m fixedbitset v0.5.7
+2026-09-21T16:44:14.0061267Z [1m[92m    Checking[0m spm_precompiled v0.1.4
+2026-09-21T16:44:14.0771743Z [1m[92m    Checking[0m bincode v2.0.1
+2026-09-21T16:44:14.0839923Z [1m[92m    Checking[0m macro_rules_attribute v0.2.2
+2026-09-21T16:44:14.1192298Z [1m[92m    Checking[0m compact_str v0.9.0
+2026-09-21T16:44:14.3192651Z [1m[92m    Checking[0m monostate v0.1.18
+2026-09-21T16:44:14.3461478Z [1m[92m    Checking[0m derive_builder v0.20.2
+2026-09-21T16:44:14.3802036Z [1m[92m    Checking[0m onig v6.5.1
+2026-09-21T16:44:14.4177975Z [1m[92m    Checking[0m rand v0.9.2
+2026-09-21T16:44:14.5892020Z [1m[92m    Checking[0m rayon-cond v0.4.0
+2026-09-21T16:44:14.6119867Z [1m[92m    Checking[0m dary_heap v0.3.8
+2026-09-21T16:44:14.6601538Z [1m[92m    Checking[0m unicode-normalization-alignments v0.1.12
+2026-09-21T16:44:14.6808978Z [1m[92m    Checking[0m unicode_categories v0.1.1
+2026-09-21T16:44:14.8380504Z [1m[92m    Checking[0m tract-nnef v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:44:14.8381317Z [1m[92m    Checking[0m tract-hir v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:44:14.8718010Z [1m[92m    Checking[0m tokenizers v0.21.4
+2026-09-21T16:44:15.5772674Z [1m[92m    Checking[0m tract-pulse-opl v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:44:15.6773581Z [1m[92m    Checking[0m tract-pulse v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:44:15.8442100Z [1m[92m    Checking[0m tract-extra v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:44:15.9052274Z [1m[92m    Checking[0m tract-onnx-opl v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:44:16.0514026Z [1m[92m    Checking[0m tract-onnx v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-21T16:44:16.8913570Z [1m[92m    Checking[0m atlas-onnx-tracer v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/atlas-onnx-tracer)
+2026-09-21T16:44:18.1277236Z [1m[92m    Checking[0m joltworks v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/joltworks)
+2026-09-21T16:44:21.2083860Z [1m[92m    Checking[0m jolt-atlas-core v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/jolt-atlas-core)
+2026-09-21T16:44:21.3894159Z [1m[91merror[E0432][0m[1m: unresolved imports `crate::onnx_proof::neural_teleport::division::TeleportDivisionVerifier`, `crate::onnx_proof::neural_teleport::range_and_onehot`[0m
+2026-09-21T16:44:21.3919846Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:637:17
+2026-09-21T16:44:21.3926804Z     [1m[94m|[0m
+2026-09-21T16:44:21.3927516Z [1m[94m637[0m [1m[94m|[0m                 division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
+2026-09-21T16:44:21.3928334Z     [1m[94m|[0m                 [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m  [1m[91m^^^^^^^^^^^^^^^^[0m [1m[91mcould not find `range_and_onehot` in `neural_teleport`[0m
+2026-09-21T16:44:21.3928849Z     [1m[94m|[0m                 [1m[91m|[0m
+2026-09-21T16:44:21.3929445Z     [1m[94m|[0m                 [1m[91mno `TeleportDivisionVerifier` in `onnx_proof::neural_teleport::division`[0m
+2026-09-21T16:44:21.3930224Z 
+2026-09-21T16:44:21.3930668Z [1m[91merror[E0432][0m[1m: unresolved import `crate::onnx_proof::clamp_lookups::ClampTable`[0m
+2026-09-21T16:44:21.3931720Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:742:36
+2026-09-21T16:44:21.3932568Z     [1m[94m|[0m
+2026-09-21T16:44:21.3933081Z [1m[94m742[0m [1m[94m|[0m         clamp_lookups::{is_scalar, ClampTable, SaturatingAccClampOperands, CLAMP_LOG_K},
+2026-09-21T16:44:21.3933809Z     [1m[94m|[0m                                    [1m[91m^^^^^^^^^^[0m [1m[91mno `ClampTable` in `onnx_proof::clamp_lookups`[0m
+2026-09-21T16:44:21.3934122Z 
+2026-09-21T16:44:21.3943266Z [1m[91merror[E0432][0m[1m: unresolved imports `crate::onnx_proof::neural_teleport::division::TeleportDivisionParams`, `crate::onnx_proof::neural_teleport::division::TeleportDivisionProver`, `crate::onnx_proof::neural_teleport::range_and_onehot`[0m
+2026-09-21T16:44:21.3945325Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:884:28
+2026-09-21T16:44:21.3946133Z     [1m[94m|[0m
+2026-09-21T16:44:21.3946602Z [1m[94m884[0m [1m[94m|[0m                 division::{TeleportDivisionParams, TeleportDivisionProver},
+2026-09-21T16:44:21.3947500Z     [1m[94m|[0m                            [1m[91m^^^^^^^^^^^^^^^^^^^^^^[0m  [1m[91m^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mno `TeleportDivisionProver` in `onnx_proof::neural_teleport::division`[0m
+2026-09-21T16:44:21.3948088Z     [1m[94m|[0m                            [1m[91m|[0m
+2026-09-21T16:44:21.3948646Z     [1m[94m|[0m                            [1m[91mno `TeleportDivisionParams` in `onnx_proof::neural_teleport::division`[0m
+2026-09-21T16:44:21.3949247Z [1m[94m885[0m [1m[94m|[0m                 range_and_onehot::NeuralTeleportRangeOneHot,
+2026-09-21T16:44:21.3949812Z     [1m[94m|[0m                 [1m[91m^^^^^^^^^^^^^^^^[0m [1m[91mcould not find `range_and_onehot` in `neural_teleport`[0m
+2026-09-21T16:44:21.3950312Z 
+2026-09-21T16:44:21.3950828Z [1m[91merror[E0432][0m[1m: unresolved import `crate::onnx_proof::clamp_lookups::ClampTable`[0m
+2026-09-21T16:44:21.3951676Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1264:36
+2026-09-21T16:44:21.3952451Z      [1m[94m|[0m
+2026-09-21T16:44:21.3952947Z [1m[94m1264[0m [1m[94m|[0m         clamp_lookups::{is_scalar, ClampTable, SaturatingAccClampOperands, CLAMP_LOG_K},
+2026-09-21T16:44:21.3953647Z      [1m[94m|[0m                                    [1m[91m^^^^^^^^^^[0m [1m[91mno `ClampTable` in `onnx_proof::clamp_lookups`[0m
+2026-09-21T16:44:21.3953949Z 
+2026-09-21T16:44:21.5035927Z [1m[91merror[0m[1m: unused import: `utils::quantize::scale_to_multiplier`[0m
+2026-09-21T16:44:21.5037297Z ##[error]  [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:15:5
+2026-09-21T16:44:21.5038491Z    [1m[94m|[0m
+2026-09-21T16:44:21.5038891Z [1m[94m15[0m [1m[94m|[0m     utils::quantize::scale_to_multiplier,
+2026-09-21T16:44:21.5039367Z    [1m[94m|[0m     [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:21.5039710Z    [1m[94m|[0m
+2026-09-21T16:44:21.5040199Z    [1m[94m= [0m[1mnote[0m: `-D unused-imports` implied by `-D warnings`
+2026-09-21T16:44:21.5040672Z    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(unused_imports)]`
+2026-09-21T16:44:21.5041002Z 
+2026-09-21T16:44:22.1249712Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1251366Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:328:13
+2026-09-21T16:44:22.1253884Z     [1m[94m|[0m
+2026-09-21T16:44:22.1254208Z [1m[94m328[0m [1m[94m|[0m         let [ra, hw, b] =
+2026-09-21T16:44:22.1254631Z     [1m[94m|[0m             [1m[91m^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1254882Z 
+2026-09-21T16:44:22.1267939Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1268973Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:421:13
+2026-09-21T16:44:22.1270635Z     [1m[94m|[0m
+2026-09-21T16:44:22.1271084Z [1m[94m421[0m [1m[94m|[0m         let [ra, hw, b] =
+2026-09-21T16:44:22.1271889Z     [1m[94m|[0m             [1m[91m^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1272157Z 
+2026-09-21T16:44:22.1281591Z [1m[91merror[E0107][0m[1m: struct takes 0 generic arguments but 1 generic argument was supplied[0m
+2026-09-21T16:44:22.1282638Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:488:23
+2026-09-21T16:44:22.1283484Z     [1m[94m|[0m
+2026-09-21T16:44:22.1291309Z [1m[94m488[0m [1m[94m|[0m         let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1292174Z     [1m[94m|[0m                       [1m[91m^^^^^^^^^^^^^^^^^^[0m[1m[94m------------------------[0m [1m[94mhelp: remove the unnecessary generics[0m
+2026-09-21T16:44:22.1293120Z     [1m[94m|[0m                       [1m[91m|[0m
+2026-09-21T16:44:22.1293695Z     [1m[94m|[0m                       [1m[91mexpected 0 generic arguments[0m
+2026-09-21T16:44:22.1294144Z     [1m[94m|[0m
+2026-09-21T16:44:22.1294574Z [1m[92mnote[0m: struct defined here, with 0 generic parameters
+2026-09-21T16:44:22.1295160Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+2026-09-21T16:44:22.1295641Z     [1m[94m|[0m
+2026-09-21T16:44:22.1296207Z [1m[94m233[0m [1m[94m|[0m pub struct RangeCheckEncoding {
+2026-09-21T16:44:22.1296621Z     [1m[94m|[0m            [1m[92m^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1296850Z 
+2026-09-21T16:44:22.1297225Z [1m[91merror[E0061][0m[1m: this function takes 2 arguments but 1 argument was supplied[0m
+2026-09-21T16:44:22.1298112Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:488:23
+2026-09-21T16:44:22.1299135Z     [1m[94m|[0m
+2026-09-21T16:44:22.1299728Z [1m[94m488[0m [1m[94m|[0m         let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1301017Z     [1m[94m|[0m                       [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[1m[94m------[0m [1m[94margument #2 of type `&onnx_proof::range_checking::range_check_operands::RangeCheckOperands<_>` is missing[0m
+2026-09-21T16:44:22.1301689Z     [1m[94m|[0m
+2026-09-21T16:44:22.1301956Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1302385Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+2026-09-21T16:44:22.1302744Z     [1m[94m|[0m
+2026-09-21T16:44:22.1303077Z [1m[94m246[0m [1m[94m|[0m     pub fn new<H: RangeCheckingOperandsTrait>(
+2026-09-21T16:44:22.1303434Z     [1m[94m|[0m            [1m[92m^^^[0m
+2026-09-21T16:44:22.1303807Z [1m[94m247[0m [1m[94m|[0m         computation_node: &ComputationNode,
+2026-09-21T16:44:22.1304239Z [1m[94m248[0m [1m[94m|[0m         rc_op: &RangeCheckOperands<H>,
+2026-09-21T16:44:22.1304640Z     [1m[94m|[0m         [1m[94m-----------------------------[0m
+2026-09-21T16:44:22.1304980Z [1m[96mhelp[0m: provide the argument
+2026-09-21T16:44:22.1305230Z     [1m[94m|[0m
+2026-09-21T16:44:22.1305771Z [1m[94m488[0m [1m[94m| [0m        let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node[92m, /* rc_op */[0m);
+2026-09-21T16:44:22.1306381Z     [1m[94m|[0m                                                                           [92m+++++++++++++[0m
+2026-09-21T16:44:22.1306623Z 
+2026-09-21T16:44:22.1307010Z [1m[91merror[E0107][0m[1m: struct takes 0 generic arguments but 1 generic argument was supplied[0m
+2026-09-21T16:44:22.1307893Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:491:24
+2026-09-21T16:44:22.1308707Z     [1m[94m|[0m
+2026-09-21T16:44:22.1309178Z [1m[94m491[0m [1m[94m|[0m         let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1309898Z     [1m[94m|[0m                        [1m[91m^^^^^^^^^^^^^^^^^^[0m[1m[94m------------------------[0m [1m[94mhelp: remove the unnecessary generics[0m
+2026-09-21T16:44:22.1310810Z     [1m[94m|[0m                        [1m[91m|[0m
+2026-09-21T16:44:22.1311196Z     [1m[94m|[0m                        [1m[91mexpected 0 generic arguments[0m
+2026-09-21T16:44:22.1311528Z     [1m[94m|[0m
+2026-09-21T16:44:22.1311832Z [1m[92mnote[0m: struct defined here, with 0 generic parameters
+2026-09-21T16:44:22.1312285Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+2026-09-21T16:44:22.1312647Z     [1m[94m|[0m
+2026-09-21T16:44:22.1312943Z [1m[94m233[0m [1m[94m|[0m pub struct RangeCheckEncoding {
+2026-09-21T16:44:22.1313314Z     [1m[94m|[0m            [1m[92m^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1313508Z 
+2026-09-21T16:44:22.1313866Z [1m[91merror[E0061][0m[1m: this function takes 2 arguments but 1 argument was supplied[0m
+2026-09-21T16:44:22.1314842Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:491:24
+2026-09-21T16:44:22.1315636Z     [1m[94m|[0m
+2026-09-21T16:44:22.1316117Z [1m[94m491[0m [1m[94m|[0m         let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1317131Z     [1m[94m|[0m                        [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[1m[94m------[0m [1m[94margument #2 of type `&onnx_proof::range_checking::range_check_operands::RangeCheckOperands<_>` is missing[0m
+2026-09-21T16:44:22.1317811Z     [1m[94m|[0m
+2026-09-21T16:44:22.1318074Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1318496Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+2026-09-21T16:44:22.1318862Z     [1m[94m|[0m
+2026-09-21T16:44:22.1319196Z [1m[94m246[0m [1m[94m|[0m     pub fn new<H: RangeCheckingOperandsTrait>(
+2026-09-21T16:44:22.1319581Z     [1m[94m|[0m            [1m[92m^^^[0m
+2026-09-21T16:44:22.1323012Z [1m[94m247[0m [1m[94m|[0m         computation_node: &ComputationNode,
+2026-09-21T16:44:22.1323983Z [1m[94m248[0m [1m[94m|[0m         rc_op: &RangeCheckOperands<H>,
+2026-09-21T16:44:22.1324376Z     [1m[94m|[0m         [1m[94m-----------------------------[0m
+2026-09-21T16:44:22.1324703Z [1m[96mhelp[0m: provide the argument
+2026-09-21T16:44:22.1324953Z     [1m[94m|[0m
+2026-09-21T16:44:22.1325502Z [1m[94m491[0m [1m[94m| [0m        let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node[92m, /* rc_op */[0m);
+2026-09-21T16:44:22.1326103Z     [1m[94m|[0m                                                                            [92m+++++++++++++[0m
+2026-09-21T16:44:22.1326348Z 
+2026-09-21T16:44:22.1326764Z [1m[91merror[E0107][0m[1m: struct takes 0 generic arguments but 1 generic argument was supplied[0m
+2026-09-21T16:44:22.1327639Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:581:28
+2026-09-21T16:44:22.1328474Z     [1m[94m|[0m
+2026-09-21T16:44:22.1328962Z [1m[94m581[0m [1m[94m|[0m             let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1329685Z     [1m[94m|[0m                            [1m[91m^^^^^^^^^^^^^^^^^^[0m[1m[94m-------------------------[0m [1m[94mhelp: remove the unnecessary generics[0m
+2026-09-21T16:44:22.1330369Z     [1m[94m|[0m                            [1m[91m|[0m
+2026-09-21T16:44:22.1330755Z     [1m[94m|[0m                            [1m[91mexpected 0 generic arguments[0m
+2026-09-21T16:44:22.1331075Z     [1m[94m|[0m
+2026-09-21T16:44:22.1331379Z [1m[92mnote[0m: struct defined here, with 0 generic parameters
+2026-09-21T16:44:22.1331857Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+2026-09-21T16:44:22.1332213Z     [1m[94m|[0m
+2026-09-21T16:44:22.1332508Z [1m[94m233[0m [1m[94m|[0m pub struct RangeCheckEncoding {
+2026-09-21T16:44:22.1332882Z     [1m[94m|[0m            [1m[92m^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1333071Z 
+2026-09-21T16:44:22.1333431Z [1m[91merror[E0061][0m[1m: this function takes 2 arguments but 1 argument was supplied[0m
+2026-09-21T16:44:22.1334403Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:581:28
+2026-09-21T16:44:22.1335160Z     [1m[94m|[0m
+2026-09-21T16:44:22.1335655Z [1m[94m581[0m [1m[94m|[0m             let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1336674Z     [1m[94m|[0m                            [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[1m[94m------[0m [1m[94margument #2 of type `&onnx_proof::range_checking::range_check_operands::RangeCheckOperands<_>` is missing[0m
+2026-09-21T16:44:22.1337330Z     [1m[94m|[0m
+2026-09-21T16:44:22.1337594Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1338020Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+2026-09-21T16:44:22.1338371Z     [1m[94m|[0m
+2026-09-21T16:44:22.1338858Z [1m[94m246[0m [1m[94m|[0m     pub fn new<H: RangeCheckingOperandsTrait>(
+2026-09-21T16:44:22.1339247Z     [1m[94m|[0m            [1m[92m^^^[0m
+2026-09-21T16:44:22.1339630Z [1m[94m247[0m [1m[94m|[0m         computation_node: &ComputationNode,
+2026-09-21T16:44:22.1340217Z [1m[94m248[0m [1m[94m|[0m         rc_op: &RangeCheckOperands<H>,
+2026-09-21T16:44:22.1340622Z     [1m[94m|[0m         [1m[94m-----------------------------[0m
+2026-09-21T16:44:22.1340964Z [1m[96mhelp[0m: provide the argument
+2026-09-21T16:44:22.1341232Z     [1m[94m|[0m
+2026-09-21T16:44:22.1341789Z [1m[94m581[0m [1m[94m| [0m            let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node[92m, /* rc_op */[0m);
+2026-09-21T16:44:22.1342420Z     [1m[94m|[0m                                                                                 [92m+++++++++++++[0m
+2026-09-21T16:44:22.1342679Z 
+2026-09-21T16:44:22.1343054Z [1m[91merror[E0107][0m[1m: struct takes 0 generic arguments but 1 generic argument was supplied[0m
+2026-09-21T16:44:22.1343854Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:722:22
+2026-09-21T16:44:22.1344605Z     [1m[94m|[0m
+2026-09-21T16:44:22.1345088Z [1m[94m722[0m [1m[94m|[0m         let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1345823Z     [1m[94m|[0m                      [1m[91m^^^^^^^^^^^^^^^^^^[0m[1m[94m------------------------------[0m [1m[94mhelp: remove the unnecessary generics[0m
+2026-09-21T16:44:22.1346337Z     [1m[94m|[0m                      [1m[91m|[0m
+2026-09-21T16:44:22.1346709Z     [1m[94m|[0m                      [1m[91mexpected 0 generic arguments[0m
+2026-09-21T16:44:22.1347026Z     [1m[94m|[0m
+2026-09-21T16:44:22.1347332Z [1m[92mnote[0m: struct defined here, with 0 generic parameters
+2026-09-21T16:44:22.1347788Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+2026-09-21T16:44:22.1348164Z     [1m[94m|[0m
+2026-09-21T16:44:22.1348460Z [1m[94m233[0m [1m[94m|[0m pub struct RangeCheckEncoding {
+2026-09-21T16:44:22.1348834Z     [1m[94m|[0m            [1m[92m^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1349023Z 
+2026-09-21T16:44:22.1349364Z [1m[91merror[E0061][0m[1m: this function takes 2 arguments but 1 argument was supplied[0m
+2026-09-21T16:44:22.1350352Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:722:22
+2026-09-21T16:44:22.1351111Z     [1m[94m|[0m
+2026-09-21T16:44:22.1351596Z [1m[94m722[0m [1m[94m|[0m         let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1352621Z     [1m[94m|[0m                      [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[1m[94m------[0m [1m[94margument #2 of type `&onnx_proof::range_checking::range_check_operands::RangeCheckOperands<_>` is missing[0m
+2026-09-21T16:44:22.1353278Z     [1m[94m|[0m
+2026-09-21T16:44:22.1353538Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1353970Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+2026-09-21T16:44:22.1354510Z     [1m[94m|[0m
+2026-09-21T16:44:22.1354835Z [1m[94m246[0m [1m[94m|[0m     pub fn new<H: RangeCheckingOperandsTrait>(
+2026-09-21T16:44:22.1355204Z     [1m[94m|[0m            [1m[92m^^^[0m
+2026-09-21T16:44:22.1355578Z [1m[94m247[0m [1m[94m|[0m         computation_node: &ComputationNode,
+2026-09-21T16:44:22.1356004Z [1m[94m248[0m [1m[94m|[0m         rc_op: &RangeCheckOperands<H>,
+2026-09-21T16:44:22.1356399Z     [1m[94m|[0m         [1m[94m-----------------------------[0m
+2026-09-21T16:44:22.1356732Z [1m[96mhelp[0m: provide the argument
+2026-09-21T16:44:22.1356991Z     [1m[94m|[0m
+2026-09-21T16:44:22.1357555Z [1m[94m722[0m [1m[94m| [0m        let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node[92m, /* rc_op */[0m);
+2026-09-21T16:44:22.1358346Z     [1m[94m|[0m                                                                                [92m+++++++++++++[0m
+2026-09-21T16:44:22.1358608Z 
+2026-09-21T16:44:22.1358899Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1359602Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:723:13
+2026-09-21T16:44:22.1360508Z     [1m[94m|[0m
+2026-09-21T16:44:22.1361788Z [1m[94m723[0m [1m[94m|[0m         let [a, b, c] =
+2026-09-21T16:44:22.1362221Z     [1m[94m|[0m             [1m[91m^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1362455Z 
+2026-09-21T16:44:22.1363102Z [1m[91merror[E0277][0m[1m: the trait bound `onnx_proof::clamp_lookups::SaturatingAccClampOperands: std::default::Default` is not satisfied[0m
+2026-09-21T16:44:22.1364205Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:761:13
+2026-09-21T16:44:22.1365073Z     [1m[94m|[0m
+2026-09-21T16:44:22.1365447Z [1m[94m761[0m [1m[94m|[0m             OpLookupProvider::new(node.clone());
+2026-09-21T16:44:22.1366978Z     [1m[94m|[0m             [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mthe trait `std::default::Default` is not implemented for `onnx_proof::clamp_lookups::SaturatingAccClampOperands`[0m
+2026-09-21T16:44:22.1367582Z     [1m[94m|[0m
+2026-09-21T16:44:22.1368018Z [1m[92mnote[0m: required by a bound in `onnx_proof::op_lookups::OpLookupProvider::<H>::new`
+2026-09-21T16:44:22.1368535Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/op_lookups/mod.rs:231:12
+2026-09-21T16:44:22.1368878Z     [1m[94m|[0m
+2026-09-21T16:44:22.1369231Z [1m[94m229[0m [1m[94m|[0m     pub fn new(computation_node: ComputationNode) -> Self
+2026-09-21T16:44:22.1369766Z     [1m[94m|[0m            [1m[94m---[0m [1m[94mrequired by a bound in this associated function[0m
+2026-09-21T16:44:22.1370338Z [1m[94m230[0m [1m[94m|[0m     where
+2026-09-21T16:44:22.1370645Z [1m[94m231[0m [1m[94m|[0m         H: Default,
+2026-09-21T16:44:22.1371189Z     [1m[94m|[0m            [1m[92m^^^^^^^[0m [1m[92mrequired by this bound in `OpLookupProvider::<H>::new`[0m
+2026-09-21T16:44:22.1371924Z [1m[96mhelp[0m: consider annotating `onnx_proof::clamp_lookups::SaturatingAccClampOperands` with `#[derive(Default)]`
+2026-09-21T16:44:22.1372579Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/clamp_lookups/mod.rs:183:1
+2026-09-21T16:44:22.1372926Z     [1m[94m|[0m
+2026-09-21T16:44:22.1373172Z [1m[94m183[0m [92m+ #[derive(Default)][0m
+2026-09-21T16:44:22.1373573Z [1m[94m184[0m [1m[94m|[0m pub(crate) struct SaturatingAccClampOperands {
+2026-09-21T16:44:22.1373920Z     [1m[94m|[0m
+2026-09-21T16:44:22.1374032Z 
+2026-09-21T16:44:22.1374320Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1375200Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:781:13
+2026-09-21T16:44:22.1376062Z     [1m[94m|[0m
+2026-09-21T16:44:22.1376627Z [1m[94m781[0m [1m[94m|[0m         let [ra, hw, b] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+2026-09-21T16:44:22.1377885Z     [1m[94m|[0m             [1m[91m^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1378358Z 
+2026-09-21T16:44:22.1378733Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1379521Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:829:13
+2026-09-21T16:44:22.1380496Z     [1m[94m|[0m
+2026-09-21T16:44:22.1381052Z [1m[94m829[0m [1m[94m|[0m         let [ra, hw, boolean] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+2026-09-21T16:44:22.1381660Z     [1m[94m|[0m             [1m[91m^^^^^^^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1381969Z 
+2026-09-21T16:44:22.1502476Z [1m[91merror[E0061][0m[1m: this function takes 3 arguments but 4 arguments were supplied[0m
+2026-09-21T16:44:22.1504015Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:921:26
+2026-09-21T16:44:22.1504916Z     [1m[94m|[0m
+2026-09-21T16:44:22.1505600Z [1m[94m921[0m [1m[94m|[0m             let mut sc = <$Prover>::initialize(
+2026-09-21T16:44:22.1506030Z     [1m[94m|[0m                          [1m[91m^^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1506338Z [1m[94m...[0m
+2026-09-21T16:44:22.1521875Z [1m[94m925[0m [1m[94m|[0m                 &mut prover.transcript,
+2026-09-21T16:44:22.1522782Z     [1m[94m|[0m                 [1m[94m----------------------[0m [1m[94munexpected argument #4 of type `&mut joltworks::transcripts::Blake2bTranscript`[0m
+2026-09-21T16:44:22.1523325Z [1m[94m...[0m
+2026-09-21T16:44:22.1523755Z [1m[94m940[0m [1m[94m|[0m             prove_lookup!(CosParams::<F>, CosProver::<F>);
+2026-09-21T16:44:22.1524343Z     [1m[94m|[0m             [1m[94m---------------------------------------------[0m [1m[94min this macro invocation[0m
+2026-09-21T16:44:22.1524776Z     [1m[94m|[0m
+2026-09-21T16:44:22.1525059Z [1m[92mnote[0m: expected `&Tensor<i32>`, found `&Trace`
+2026-09-21T16:44:22.1525469Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:922:17
+2026-09-21T16:44:22.1525814Z     [1m[94m|[0m
+2026-09-21T16:44:22.1526097Z [1m[94m922[0m [1m[94m|[0m                 &prover.trace,
+2026-09-21T16:44:22.1526492Z     [1m[94m|[0m                 [1m[92m^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1526769Z [1m[94m...[0m
+2026-09-21T16:44:22.1527158Z [1m[94m940[0m [1m[94m|[0m             prove_lookup!(CosParams::<F>, CosProver::<F>);
+2026-09-21T16:44:22.1527727Z     [1m[94m|[0m             [1m[94m---------------------------------------------[0m [1m[94min this macro invocation[0m
+2026-09-21T16:44:22.1528391Z     [1m[94m= [0m[1mnote[0m: expected reference `&atlas_onnx_tracer::[1m[35mtensor::Tensor<i32>[0m`
+2026-09-21T16:44:22.1528974Z                found reference `&atlas_onnx_tracer::[1m[35mmodel::trace::Trace[0m`
+2026-09-21T16:44:22.1529402Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1529789Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/ops/cos.rs:369:12
+2026-09-21T16:44:22.1532065Z     [1m[94m|[0m
+2026-09-21T16:44:22.1532351Z [1m[94m369[0m [1m[94m|[0m     pub fn initialize(
+2026-09-21T16:44:22.1532682Z     [1m[94m|[0m            [1m[92m^^^^^^^^^^[0m
+2026-09-21T16:44:22.1533048Z [1m[94m370[0m [1m[94m|[0m         downscaled: &Tensor<i32>,
+2026-09-21T16:44:22.1533410Z     [1m[94m|[0m         [1m[94m------------------------[0m
+2026-09-21T16:44:22.1534046Z     [1m[94m= [0m[1mnote[0m: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-21T16:44:22.1534469Z 
+2026-09-21T16:44:22.1535003Z [1m[91merror[E0277][0m[1m: the trait bound `(CosProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied[0m
+2026-09-21T16:44:22.1536060Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:928:17
+2026-09-21T16:44:22.1536898Z     [1m[94m|[0m
+2026-09-21T16:44:22.1537167Z [1m[94m928[0m [1m[94m|[0m                 &mut sc,
+2026-09-21T16:44:22.1537571Z     [1m[94m|[0m                 [1m[91m^^^^^^^[0m [1m[91munsatisfied trait bound[0m
+2026-09-21T16:44:22.1538197Z [1m[94m...[0m
+2026-09-21T16:44:22.1538616Z [1m[94m940[0m [1m[94m|[0m             prove_lookup!(CosParams::<F>, CosProver::<F>);
+2026-09-21T16:44:22.1539187Z     [1m[94m|[0m             [1m[94m---------------------------------------------[0m [1m[94min this macro invocation[0m
+2026-09-21T16:44:22.1539611Z     [1m[94m|[0m
+2026-09-21T16:44:22.1541091Z     [1m[94m= [0m[1mhelp[0m: the trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<ark_ff::fields::models::fp::Fp<ark_ff::fields::models::fp::montgomery_backend::MontBackend<ark_bn254::FrConfig, 4>, 4>, joltworks::transcripts::Blake2bTranscript>` is not implemented for `(CosProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)`
+2026-09-21T16:44:22.1542624Z     [1m[94m= [0m[1mhelp[0m: the following other types implement trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`:
+2026-09-21T16:44:22.1543699Z               `joltworks::subprotocols::blindfold::spartan::BlindFoldSpartanProver<'_, F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1544676Z               `joltworks::subprotocols::booleanity::BooleanitySumcheckProver<F, I>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1545677Z               `joltworks::subprotocols::hamming_booleanity::HammingBooleanitySumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1546711Z               `joltworks::subprotocols::hamming_weight::HammingWeightSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1547678Z               `joltworks::subprotocols::identity_range_check::IdentityRCProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, FS>`
+2026-09-21T16:44:22.1548712Z               `joltworks::subprotocols::opening_reduction::OpeningProofReductionSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1549765Z               `joltworks::subprotocols::ps_shout::ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, FS>`
+2026-09-21T16:44:22.1550873Z               `joltworks::subprotocols::ra_virtual::RaSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1551446Z             and 27 others
+2026-09-21T16:44:22.1552199Z     [1m[94m= [0m[1mnote[0m: required for the cast from `&mut (CosProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)` to `&mut dyn SumcheckInstanceProver<Fp<MontBackend<FrConfig, 4>, 4>, ...>`
+2026-09-21T16:44:22.1553447Z     [1m[94m= [0m[1mnote[0m: the full name for the type has been written to '/home/runner/work/jolt-atlas/jolt-atlas/target/debug/deps/jolt_atlas_core-de915d5e35089812.long-type-14826561289993171557.txt'
+2026-09-21T16:44:22.1554369Z     [1m[94m= [0m[1mnote[0m: consider using `--verbose` to print the full type name to the console
+2026-09-21T16:44:22.1555125Z     [1m[94m= [0m[1mnote[0m: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-21T16:44:22.1555560Z 
+2026-09-21T16:44:22.1555925Z [1m[91merror[E0061][0m[1m: this function takes 3 arguments but 4 arguments were supplied[0m
+2026-09-21T16:44:22.1556765Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:921:26
+2026-09-21T16:44:22.1557543Z     [1m[94m|[0m
+2026-09-21T16:44:22.1557936Z [1m[94m921[0m [1m[94m|[0m             let mut sc = <$Prover>::initialize(
+2026-09-21T16:44:22.1558356Z     [1m[94m|[0m                          [1m[91m^^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1558652Z [1m[94m...[0m
+2026-09-21T16:44:22.1558959Z [1m[94m925[0m [1m[94m|[0m                 &mut prover.transcript,
+2026-09-21T16:44:22.1559870Z     [1m[94m|[0m                 [1m[94m----------------------[0m [1m[94munexpected argument #4 of type `&mut joltworks::transcripts::Blake2bTranscript`[0m
+2026-09-21T16:44:22.1562407Z [1m[94m...[0m
+2026-09-21T16:44:22.1562822Z [1m[94m944[0m [1m[94m|[0m             prove_lookup!(SinParams::<F>, SinProver::<F>);
+2026-09-21T16:44:22.1563410Z     [1m[94m|[0m             [1m[94m---------------------------------------------[0m [1m[94min this macro invocation[0m
+2026-09-21T16:44:22.1563829Z     [1m[94m|[0m
+2026-09-21T16:44:22.1564112Z [1m[92mnote[0m: expected `&Tensor<i32>`, found `&Trace`
+2026-09-21T16:44:22.1564498Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:922:17
+2026-09-21T16:44:22.1564809Z     [1m[94m|[0m
+2026-09-21T16:44:22.1565098Z [1m[94m922[0m [1m[94m|[0m                 &prover.trace,
+2026-09-21T16:44:22.1565451Z     [1m[94m|[0m                 [1m[92m^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1565894Z [1m[94m...[0m
+2026-09-21T16:44:22.1566289Z [1m[94m944[0m [1m[94m|[0m             prove_lookup!(SinParams::<F>, SinProver::<F>);
+2026-09-21T16:44:22.1566861Z     [1m[94m|[0m             [1m[94m---------------------------------------------[0m [1m[94min this macro invocation[0m
+2026-09-21T16:44:22.1567530Z     [1m[94m= [0m[1mnote[0m: expected reference `&atlas_onnx_tracer::[1m[35mtensor::Tensor<i32>[0m`
+2026-09-21T16:44:22.1568086Z                found reference `&atlas_onnx_tracer::[1m[35mmodel::trace::Trace[0m`
+2026-09-21T16:44:22.1568503Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1568909Z    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/ops/sin.rs:363:12
+2026-09-21T16:44:22.1569230Z     [1m[94m|[0m
+2026-09-21T16:44:22.1569488Z [1m[94m363[0m [1m[94m|[0m     pub fn initialize(
+2026-09-21T16:44:22.1569816Z     [1m[94m|[0m            [1m[92m^^^^^^^^^^[0m
+2026-09-21T16:44:22.1570349Z [1m[94m364[0m [1m[94m|[0m         downscaled: &Tensor<i32>,
+2026-09-21T16:44:22.1570722Z     [1m[94m|[0m         [1m[94m------------------------[0m
+2026-09-21T16:44:22.1571359Z     [1m[94m= [0m[1mnote[0m: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-21T16:44:22.1572167Z 
+2026-09-21T16:44:22.1572680Z [1m[91merror[E0277][0m[1m: the trait bound `(SinProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied[0m
+2026-09-21T16:44:22.1573657Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:928:17
+2026-09-21T16:44:22.1574434Z     [1m[94m|[0m
+2026-09-21T16:44:22.1574687Z [1m[94m928[0m [1m[94m|[0m                 &mut sc,
+2026-09-21T16:44:22.1575083Z     [1m[94m|[0m                 [1m[91m^^^^^^^[0m [1m[91munsatisfied trait bound[0m
+2026-09-21T16:44:22.1575414Z [1m[94m...[0m
+2026-09-21T16:44:22.1575814Z [1m[94m944[0m [1m[94m|[0m             prove_lookup!(SinParams::<F>, SinProver::<F>);
+2026-09-21T16:44:22.1576395Z     [1m[94m|[0m             [1m[94m---------------------------------------------[0m [1m[94min this macro invocation[0m
+2026-09-21T16:44:22.1576805Z     [1m[94m|[0m
+2026-09-21T16:44:22.1578174Z     [1m[94m= [0m[1mhelp[0m: the trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<ark_ff::fields::models::fp::Fp<ark_ff::fields::models::fp::montgomery_backend::MontBackend<ark_bn254::FrConfig, 4>, 4>, joltworks::transcripts::Blake2bTranscript>` is not implemented for `(SinProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)`
+2026-09-21T16:44:22.1580111Z     [1m[94m= [0m[1mhelp[0m: the following other types implement trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`:
+2026-09-21T16:44:22.1581042Z               `joltworks::subprotocols::blindfold::spartan::BlindFoldSpartanProver<'_, F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1582048Z               `joltworks::subprotocols::booleanity::BooleanitySumcheckProver<F, I>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1583311Z               `joltworks::subprotocols::hamming_booleanity::HammingBooleanitySumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1584350Z               `joltworks::subprotocols::hamming_weight::HammingWeightSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1585334Z               `joltworks::subprotocols::identity_range_check::IdentityRCProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, FS>`
+2026-09-21T16:44:22.1586385Z               `joltworks::subprotocols::opening_reduction::OpeningProofReductionSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1587597Z               `joltworks::subprotocols::ps_shout::ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, FS>`
+2026-09-21T16:44:22.1588569Z               `joltworks::subprotocols::ra_virtual::RaSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.1589149Z             and 27 others
+2026-09-21T16:44:22.1589912Z     [1m[94m= [0m[1mnote[0m: required for the cast from `&mut (SinProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)` to `&mut dyn SumcheckInstanceProver<Fp<MontBackend<FrConfig, 4>, 4>, ...>`
+2026-09-21T16:44:22.1591460Z     [1m[94m= [0m[1mnote[0m: the full name for the type has been written to '/home/runner/work/jolt-atlas/jolt-atlas/target/debug/deps/jolt_atlas_core-de915d5e35089812.long-type-6872732140088185393.txt'
+2026-09-21T16:44:22.1592354Z     [1m[94m= [0m[1mnote[0m: consider using `--verbose` to print the full type name to the console
+2026-09-21T16:44:22.1593104Z     [1m[94m= [0m[1mnote[0m: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-21T16:44:22.1593510Z 
+2026-09-21T16:44:22.1593898Z [1m[91merror[E0107][0m[1m: struct takes 0 generic arguments but 1 generic argument was supplied[0m
+2026-09-21T16:44:22.1594739Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1006:18
+2026-09-21T16:44:22.1595484Z      [1m[94m|[0m
+2026-09-21T16:44:22.1595999Z [1m[94m1006[0m [1m[94m|[0m     let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1596727Z      [1m[94m|[0m                  [1m[91m^^^^^^^^^^^^^^^^^^[0m[1m[94m------------------------------[0m [1m[94mhelp: remove the unnecessary generics[0m
+2026-09-21T16:44:22.1597234Z      [1m[94m|[0m                  [1m[91m|[0m
+2026-09-21T16:44:22.1597609Z      [1m[94m|[0m                  [1m[91mexpected 0 generic arguments[0m
+2026-09-21T16:44:22.1597926Z      [1m[94m|[0m
+2026-09-21T16:44:22.1598244Z [1m[92mnote[0m: struct defined here, with 0 generic parameters
+2026-09-21T16:44:22.1598706Z     [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+2026-09-21T16:44:22.1599058Z      [1m[94m|[0m
+2026-09-21T16:44:22.1599350Z [1m[94m 233[0m [1m[94m|[0m pub struct RangeCheckEncoding {
+2026-09-21T16:44:22.1599718Z      [1m[94m|[0m            [1m[92m^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1599904Z 
+2026-09-21T16:44:22.1600427Z [1m[91merror[E0061][0m[1m: this function takes 2 arguments but 1 argument was supplied[0m
+2026-09-21T16:44:22.1601225Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1006:18
+2026-09-21T16:44:22.1601964Z      [1m[94m|[0m
+2026-09-21T16:44:22.1602467Z [1m[94m1006[0m [1m[94m|[0m     let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1603489Z      [1m[94m|[0m                  [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[1m[94m------[0m [1m[94margument #2 of type `&onnx_proof::range_checking::range_check_operands::RangeCheckOperands<_>` is missing[0m
+2026-09-21T16:44:22.1604350Z      [1m[94m|[0m
+2026-09-21T16:44:22.1604613Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1605050Z     [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+2026-09-21T16:44:22.1605400Z      [1m[94m|[0m
+2026-09-21T16:44:22.1605723Z [1m[94m 246[0m [1m[94m|[0m     pub fn new<H: RangeCheckingOperandsTrait>(
+2026-09-21T16:44:22.1606094Z      [1m[94m|[0m            [1m[92m^^^[0m
+2026-09-21T16:44:22.1606470Z [1m[94m 247[0m [1m[94m|[0m         computation_node: &ComputationNode,
+2026-09-21T16:44:22.1606889Z [1m[94m 248[0m [1m[94m|[0m         rc_op: &RangeCheckOperands<H>,
+2026-09-21T16:44:22.1607282Z      [1m[94m|[0m         [1m[94m-----------------------------[0m
+2026-09-21T16:44:22.1607645Z [1m[96mhelp[0m: provide the argument
+2026-09-21T16:44:22.1607904Z      [1m[94m|[0m
+2026-09-21T16:44:22.1608621Z [1m[94m1006[0m [1m[94m| [0m    let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node[92m, /* rc_op */[0m);
+2026-09-21T16:44:22.1609266Z      [1m[94m|[0m                                                                            [92m+++++++++++++[0m
+2026-09-21T16:44:22.1609522Z 
+2026-09-21T16:44:22.1609808Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1610675Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1007:9
+2026-09-21T16:44:22.1611487Z      [1m[94m|[0m
+2026-09-21T16:44:22.1611955Z [1m[94m1007[0m [1m[94m|[0m     let [mut a, mut b, mut c] = joltworks::subprotocols::shout::ra_onehot_provers(
+2026-09-21T16:44:22.1612492Z      [1m[94m|[0m         [1m[91m^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1612734Z 
+2026-09-21T16:44:22.1613012Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1613683Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1093:9
+2026-09-21T16:44:22.1614369Z      [1m[94m|[0m
+2026-09-21T16:44:22.1614846Z [1m[94m1093[0m [1m[94m|[0m     let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+2026-09-21T16:44:22.1615379Z      [1m[94m|[0m         [1m[91m^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1615616Z 
+2026-09-21T16:44:22.1615897Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1616591Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1226:9
+2026-09-21T16:44:22.1617276Z      [1m[94m|[0m
+2026-09-21T16:44:22.1617746Z [1m[94m1226[0m [1m[94m|[0m     let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+2026-09-21T16:44:22.1618289Z      [1m[94m|[0m         [1m[91m^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1618534Z 
+2026-09-21T16:44:22.1692934Z [1m[91merror[E0599][0m[1m: no function or associated item named `with_precomputed` found for struct `onnx_proof::clamp_lookups::SaturatingAccClampOperands` in the current scope[0m
+2026-09-21T16:44:22.1694763Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1289:37
+2026-09-21T16:44:22.1695762Z      [1m[94m|[0m
+2026-09-21T16:44:22.1696538Z [1m[94m1289[0m [1m[94m|[0m         SaturatingAccClampOperands::with_precomputed(quotient),
+2026-09-21T16:44:22.1697452Z      [1m[94m|[0m                                     [1m[91m^^^^^^^^^^^^^^^^[0m [1m[91mfunction or associated item not found in `onnx_proof::clamp_lookups::SaturatingAccClampOperands`[0m
+2026-09-21T16:44:22.1698040Z      [1m[94m|[0m
+2026-09-21T16:44:22.1698419Z     [1m[94m::: [0mjolt-atlas-core/src/onnx_proof/clamp_lookups/mod.rs:183:1
+2026-09-21T16:44:22.1698772Z      [1m[94m|[0m
+2026-09-21T16:44:22.1699114Z [1m[94m 183[0m [1m[94m|[0m pub(crate) struct SaturatingAccClampOperands {
+2026-09-21T16:44:22.1699817Z      [1m[94m|[0m [1m[94m--------------------------------------------[0m [1m[94mfunction or associated item `with_precomputed` not found for this struct[0m
+2026-09-21T16:44:22.1700678Z      [1m[94m|[0m
+2026-09-21T16:44:22.1701704Z [1m[92mnote[0m: if you're trying to build a new `onnx_proof::clamp_lookups::SaturatingAccClampOperands`, consider using `onnx_proof::clamp_lookups::SaturatingAccClampOperands::for_node` which returns `onnx_proof::clamp_lookups::SaturatingAccClampOperands`
+2026-09-21T16:44:22.1702760Z     [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/clamp_lookups/mod.rs:194:5
+2026-09-21T16:44:22.1703109Z      [1m[94m|[0m
+2026-09-21T16:44:22.1703474Z [1m[94m 194[0m [1m[94m|[0m     pub(crate) fn for_node(node: &ComputationNode) -> Self {
+2026-09-21T16:44:22.1703961Z      [1m[94m|[0m     [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1704203Z 
+2026-09-21T16:44:22.1705488Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1706573Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1307:9
+2026-09-21T16:44:22.1707386Z      [1m[94m|[0m
+2026-09-21T16:44:22.1707911Z [1m[94m1307[0m [1m[94m|[0m     let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+2026-09-21T16:44:22.1708461Z      [1m[94m|[0m         [1m[91m^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1708712Z 
+2026-09-21T16:44:22.1708991Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1709663Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1362:9
+2026-09-21T16:44:22.1710521Z      [1m[94m|[0m
+2026-09-21T16:44:22.1711041Z [1m[94m1362[0m [1m[94m|[0m     let [mut ra, mut hw, mut boolean] = joltworks::subprotocols::shout::ra_onehot_provers(
+2026-09-21T16:44:22.1711624Z      [1m[94m|[0m         [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1711886Z 
+2026-09-21T16:44:22.1719866Z [1m[91merror[E0107][0m[1m: struct takes 0 generic arguments but 1 generic argument was supplied[0m
+2026-09-21T16:44:22.1720861Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1449:19
+2026-09-21T16:44:22.1721634Z      [1m[94m|[0m
+2026-09-21T16:44:22.1722137Z [1m[94m1449[0m [1m[94m|[0m     let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1722834Z      [1m[94m|[0m                   [1m[91m^^^^^^^^^^^^^^^^^^[0m[1m[94m------------------------[0m [1m[94mhelp: remove the unnecessary generics[0m
+2026-09-21T16:44:22.1723339Z      [1m[94m|[0m                   [1m[91m|[0m
+2026-09-21T16:44:22.1723719Z      [1m[94m|[0m                   [1m[91mexpected 0 generic arguments[0m
+2026-09-21T16:44:22.1724044Z      [1m[94m|[0m
+2026-09-21T16:44:22.1724353Z [1m[92mnote[0m: struct defined here, with 0 generic parameters
+2026-09-21T16:44:22.1724824Z     [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+2026-09-21T16:44:22.1725190Z      [1m[94m|[0m
+2026-09-21T16:44:22.1725485Z [1m[94m 233[0m [1m[94m|[0m pub struct RangeCheckEncoding {
+2026-09-21T16:44:22.1725856Z      [1m[94m|[0m            [1m[92m^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1726055Z 
+2026-09-21T16:44:22.1728048Z [1m[91merror[E0061][0m[1m: this function takes 2 arguments but 1 argument was supplied[0m
+2026-09-21T16:44:22.1738325Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1449:19
+2026-09-21T16:44:22.1739096Z      [1m[94m|[0m
+2026-09-21T16:44:22.1739595Z [1m[94m1449[0m [1m[94m|[0m     let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1740730Z      [1m[94m|[0m                   [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[1m[94m------[0m [1m[94margument #2 of type `&onnx_proof::range_checking::range_check_operands::RangeCheckOperands<_>` is missing[0m
+2026-09-21T16:44:22.1741420Z      [1m[94m|[0m
+2026-09-21T16:44:22.1741844Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1742255Z     [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+2026-09-21T16:44:22.1742597Z      [1m[94m|[0m
+2026-09-21T16:44:22.1742927Z [1m[94m 246[0m [1m[94m|[0m     pub fn new<H: RangeCheckingOperandsTrait>(
+2026-09-21T16:44:22.1743296Z      [1m[94m|[0m            [1m[92m^^^[0m
+2026-09-21T16:44:22.1743659Z [1m[94m 247[0m [1m[94m|[0m         computation_node: &ComputationNode,
+2026-09-21T16:44:22.1744082Z [1m[94m 248[0m [1m[94m|[0m         rc_op: &RangeCheckOperands<H>,
+2026-09-21T16:44:22.1744466Z      [1m[94m|[0m         [1m[94m-----------------------------[0m
+2026-09-21T16:44:22.1744794Z [1m[96mhelp[0m: provide the argument
+2026-09-21T16:44:22.1745043Z      [1m[94m|[0m
+2026-09-21T16:44:22.1745718Z [1m[94m1449[0m [1m[94m| [0m    let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node[92m, /* rc_op */[0m);
+2026-09-21T16:44:22.1746338Z      [1m[94m|[0m                                                                       [92m+++++++++++++[0m
+2026-09-21T16:44:22.1746594Z 
+2026-09-21T16:44:22.1746981Z [1m[91merror[E0107][0m[1m: struct takes 0 generic arguments but 1 generic argument was supplied[0m
+2026-09-21T16:44:22.1747803Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1456:20
+2026-09-21T16:44:22.1748535Z      [1m[94m|[0m
+2026-09-21T16:44:22.1749000Z [1m[94m1456[0m [1m[94m|[0m     let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1749682Z      [1m[94m|[0m                    [1m[91m^^^^^^^^^^^^^^^^^^[0m[1m[94m------------------------[0m [1m[94mhelp: remove the unnecessary generics[0m
+2026-09-21T16:44:22.1750332Z      [1m[94m|[0m                    [1m[91m|[0m
+2026-09-21T16:44:22.1750695Z      [1m[94m|[0m                    [1m[91mexpected 0 generic arguments[0m
+2026-09-21T16:44:22.1751018Z      [1m[94m|[0m
+2026-09-21T16:44:22.1751345Z [1m[92mnote[0m: struct defined here, with 0 generic parameters
+2026-09-21T16:44:22.1751797Z     [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+2026-09-21T16:44:22.1752140Z      [1m[94m|[0m
+2026-09-21T16:44:22.1752427Z [1m[94m 233[0m [1m[94m|[0m pub struct RangeCheckEncoding {
+2026-09-21T16:44:22.1752785Z      [1m[94m|[0m            [1m[92m^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1752977Z 
+2026-09-21T16:44:22.1753319Z [1m[91merror[E0061][0m[1m: this function takes 2 arguments but 1 argument was supplied[0m
+2026-09-21T16:44:22.1754162Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1456:20
+2026-09-21T16:44:22.1754989Z      [1m[94m|[0m
+2026-09-21T16:44:22.1755450Z [1m[94m1456[0m [1m[94m|[0m     let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1756448Z      [1m[94m|[0m                    [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[1m[94m------[0m [1m[94margument #2 of type `&onnx_proof::range_checking::range_check_operands::RangeCheckOperands<_>` is missing[0m
+2026-09-21T16:44:22.1757103Z      [1m[94m|[0m
+2026-09-21T16:44:22.1757372Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1757805Z     [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+2026-09-21T16:44:22.1758247Z      [1m[94m|[0m
+2026-09-21T16:44:22.1758572Z [1m[94m 246[0m [1m[94m|[0m     pub fn new<H: RangeCheckingOperandsTrait>(
+2026-09-21T16:44:22.1758941Z      [1m[94m|[0m            [1m[92m^^^[0m
+2026-09-21T16:44:22.1759321Z [1m[94m 247[0m [1m[94m|[0m         computation_node: &ComputationNode,
+2026-09-21T16:44:22.1759754Z [1m[94m 248[0m [1m[94m|[0m         rc_op: &RangeCheckOperands<H>,
+2026-09-21T16:44:22.1761128Z      [1m[94m|[0m         [1m[94m-----------------------------[0m
+2026-09-21T16:44:22.1761471Z [1m[96mhelp[0m: provide the argument
+2026-09-21T16:44:22.1761732Z      [1m[94m|[0m
+2026-09-21T16:44:22.1762418Z [1m[94m1456[0m [1m[94m| [0m    let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node[92m, /* rc_op */[0m);
+2026-09-21T16:44:22.1763016Z      [1m[94m|[0m                                                                        [92m+++++++++++++[0m
+2026-09-21T16:44:22.1763260Z 
+2026-09-21T16:44:22.1763639Z [1m[91merror[E0107][0m[1m: struct takes 0 generic arguments but 1 generic argument was supplied[0m
+2026-09-21T16:44:22.1764514Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1550:24
+2026-09-21T16:44:22.1765266Z      [1m[94m|[0m
+2026-09-21T16:44:22.1765767Z [1m[94m1550[0m [1m[94m|[0m         let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1766500Z      [1m[94m|[0m                        [1m[91m^^^^^^^^^^^^^^^^^^[0m[1m[94m-------------------------[0m [1m[94mhelp: remove the unnecessary generics[0m
+2026-09-21T16:44:22.1767213Z      [1m[94m|[0m                        [1m[91m|[0m
+2026-09-21T16:44:22.1767614Z      [1m[94m|[0m                        [1m[91mexpected 0 generic arguments[0m
+2026-09-21T16:44:22.1767942Z      [1m[94m|[0m
+2026-09-21T16:44:22.1768253Z [1m[92mnote[0m: struct defined here, with 0 generic parameters
+2026-09-21T16:44:22.1768729Z     [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+2026-09-21T16:44:22.1769101Z      [1m[94m|[0m
+2026-09-21T16:44:22.1769397Z [1m[94m 233[0m [1m[94m|[0m pub struct RangeCheckEncoding {
+2026-09-21T16:44:22.1769754Z      [1m[94m|[0m            [1m[92m^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1769942Z 
+2026-09-21T16:44:22.1770430Z [1m[91merror[E0061][0m[1m: this function takes 2 arguments but 1 argument was supplied[0m
+2026-09-21T16:44:22.1771187Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1550:24
+2026-09-21T16:44:22.1772078Z      [1m[94m|[0m
+2026-09-21T16:44:22.1772597Z [1m[94m1550[0m [1m[94m|[0m         let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+2026-09-21T16:44:22.1773634Z      [1m[94m|[0m                        [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[1m[94m------[0m [1m[94margument #2 of type `&onnx_proof::range_checking::range_check_operands::RangeCheckOperands<_>` is missing[0m
+2026-09-21T16:44:22.1774305Z      [1m[94m|[0m
+2026-09-21T16:44:22.1774570Z [1m[92mnote[0m: associated function defined here
+2026-09-21T16:44:22.1774999Z     [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+2026-09-21T16:44:22.1775368Z      [1m[94m|[0m
+2026-09-21T16:44:22.1775700Z [1m[94m 246[0m [1m[94m|[0m     pub fn new<H: RangeCheckingOperandsTrait>(
+2026-09-21T16:44:22.1776084Z      [1m[94m|[0m            [1m[92m^^^[0m
+2026-09-21T16:44:22.1776471Z [1m[94m 247[0m [1m[94m|[0m         computation_node: &ComputationNode,
+2026-09-21T16:44:22.1776907Z [1m[94m 248[0m [1m[94m|[0m         rc_op: &RangeCheckOperands<H>,
+2026-09-21T16:44:22.1777305Z      [1m[94m|[0m         [1m[94m-----------------------------[0m
+2026-09-21T16:44:22.1777636Z [1m[96mhelp[0m: provide the argument
+2026-09-21T16:44:22.1777893Z      [1m[94m|[0m
+2026-09-21T16:44:22.1778467Z [1m[94m1550[0m [1m[94m| [0m        let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node[92m, /* rc_op */[0m);
+2026-09-21T16:44:22.1779126Z      [1m[94m|[0m                                                                             [92m+++++++++++++[0m
+2026-09-21T16:44:22.1779375Z 
+2026-09-21T16:44:22.1779664Z [1m[91merror[E0527][0m[1m: pattern requires 3 elements but array has 2[0m
+2026-09-21T16:44:22.1780485Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1551:13
+2026-09-21T16:44:22.1781246Z      [1m[94m|[0m
+2026-09-21T16:44:22.1781826Z [1m[94m1551[0m [1m[94m|[0m         let [mut ra_sc, mut hw_sc, mut bool_sc] = joltworks::subprotocols::shout::ra_onehot_provers(
+2026-09-21T16:44:22.1782445Z      [1m[94m|[0m             [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mexpected 2 elements[0m
+2026-09-21T16:44:22.1782876Z 
+2026-09-21T16:44:22.1856463Z [1m[91merror[E0061][0m[1m: this method takes 2 arguments but 1 argument was supplied[0m
+2026-09-21T16:44:22.1857366Z ##[error]    [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:1961:28
+2026-09-21T16:44:22.1858205Z      [1m[94m|[0m
+2026-09-21T16:44:22.1858587Z [1m[94m1961[0m [1m[94m|[0m         prover.accumulator.prepare_for_sumcheck(&poly_map);
+2026-09-21T16:44:22.1859228Z      [1m[94m|[0m                            [1m[91m^^^^^^^^^^^^^^^^^^^^[0m[1m[94m-----------[0m [1m[94margument #2 of type `&mut _` is missing[0m
+2026-09-21T16:44:22.1859667Z      [1m[94m|[0m
+2026-09-21T16:44:22.1859906Z [1m[92mnote[0m: method defined here
+2026-09-21T16:44:22.1860371Z     [1m[94m--> [0mjoltworks/src/poly/opening_proof.rs:461:12
+2026-09-21T16:44:22.1860674Z      [1m[94m|[0m
+2026-09-21T16:44:22.1861213Z [1m[94m 461[0m [1m[94m|[0m     pub fn prepare_for_sumcheck<T: Transcript>(
+2026-09-21T16:44:22.1861644Z      [1m[94m|[0m            [1m[92m^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-21T16:44:22.1861978Z [1m[96mhelp[0m: provide the argument
+2026-09-21T16:44:22.1862233Z      [1m[94m|[0m
+2026-09-21T16:44:22.1862698Z [1m[94m1961[0m [1m[94m| [0m        prover.accumulator.prepare_for_sumcheck(&poly_map[92m, /* transcript */[0m);
+2026-09-21T16:44:22.1863289Z      [1m[94m|[0m                                                          [92m++++++++++++++++++[0m
+2026-09-21T16:44:22.1863533Z 
+2026-09-21T16:44:22.3732994Z [1m[91merror[E0277][0m[1m: the trait bound `(CosProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied[0m
+2026-09-21T16:44:22.3734639Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:928:17
+2026-09-21T16:44:22.3735703Z     [1m[94m|[0m
+2026-09-21T16:44:22.3736071Z [1m[94m928[0m [1m[94m|[0m                 &mut sc,
+2026-09-21T16:44:22.3736610Z     [1m[94m|[0m                 [1m[91m^^^^^^^[0m [1m[91munsatisfied trait bound[0m
+2026-09-21T16:44:22.3737052Z [1m[94m...[0m
+2026-09-21T16:44:22.3737664Z [1m[94m940[0m [1m[94m|[0m             prove_lookup!(CosParams::<F>, CosProver::<F>);
+2026-09-21T16:44:22.3738312Z     [1m[94m|[0m             [1m[94m---------------------------------------------[0m [1m[94min this macro invocation[0m
+2026-09-21T16:44:22.3738802Z     [1m[94m|[0m
+2026-09-21T16:44:22.3740269Z     [1m[94m= [0m[1mhelp[0m: the trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<ark_ff::fields::models::fp::Fp<ark_ff::fields::models::fp::montgomery_backend::MontBackend<ark_bn254::FrConfig, 4>, 4>, joltworks::transcripts::Blake2bTranscript>` is not implemented for `(CosProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)`
+2026-09-21T16:44:22.3741894Z     [1m[94m= [0m[1mhelp[0m: the following other types implement trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`:
+2026-09-21T16:44:22.3742903Z               `joltworks::subprotocols::blindfold::spartan::BlindFoldSpartanProver<'_, F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3743955Z               `joltworks::subprotocols::booleanity::BooleanitySumcheckProver<F, I>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3745054Z               `joltworks::subprotocols::hamming_booleanity::HammingBooleanitySumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3746171Z               `joltworks::subprotocols::hamming_weight::HammingWeightSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3747211Z               `joltworks::subprotocols::identity_range_check::IdentityRCProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, FS>`
+2026-09-21T16:44:22.3748311Z               `joltworks::subprotocols::opening_reduction::OpeningProofReductionSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3749648Z               `joltworks::subprotocols::ps_shout::ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, FS>`
+2026-09-21T16:44:22.3750823Z               `joltworks::subprotocols::ra_virtual::RaSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3751487Z             and 27 others
+2026-09-21T16:44:22.3752332Z     [1m[94m= [0m[1mnote[0m: required for the cast from `&mut (CosProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)` to `&mut dyn SumcheckInstanceProver<Fp<MontBackend<FrConfig, 4>, 4>, ...>`
+2026-09-21T16:44:22.3753872Z     [1m[94m= [0m[1mnote[0m: the full name for the type has been written to '/home/runner/work/jolt-atlas/jolt-atlas/target/debug/deps/jolt_atlas_core-533156c42241803e.long-type-15765670219325485950.txt'
+2026-09-21T16:44:22.3754872Z     [1m[94m= [0m[1mnote[0m: consider using `--verbose` to print the full type name to the console
+2026-09-21T16:44:22.3755746Z     [1m[94m= [0m[1mnote[0m: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-21T16:44:22.3756366Z 
+2026-09-21T16:44:22.3766547Z [1m[91merror[E0277][0m[1m: the trait bound `(SinProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied[0m
+2026-09-21T16:44:22.3767902Z ##[error]   [1m[94m--> [0mjolt-atlas-core/src/onnx_proof/zk.rs:928:17
+2026-09-21T16:44:22.3768796Z     [1m[94m|[0m
+2026-09-21T16:44:22.3769165Z [1m[94m928[0m [1m[94m|[0m                 &mut sc,
+2026-09-21T16:44:22.3769661Z     [1m[94m|[0m                 [1m[91m^^^^^^^[0m [1m[91munsatisfied trait bound[0m
+2026-09-21T16:44:22.3770243Z [1m[94m...[0m
+2026-09-21T16:44:22.3770792Z [1m[94m944[0m [1m[94m|[0m             prove_lookup!(SinParams::<F>, SinProver::<F>);
+2026-09-21T16:44:22.3771476Z     [1m[94m|[0m             [1m[94m---------------------------------------------[0m [1m[94min this macro invocation[0m
+2026-09-21T16:44:22.3772003Z     [1m[94m|[0m
+2026-09-21T16:44:22.3773333Z     [1m[94m= [0m[1mhelp[0m: the trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<ark_ff::fields::models::fp::Fp<ark_ff::fields::models::fp::montgomery_backend::MontBackend<ark_bn254::FrConfig, 4>, 4>, joltworks::transcripts::Blake2bTranscript>` is not implemented for `(SinProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)`
+2026-09-21T16:44:22.3775006Z     [1m[94m= [0m[1mhelp[0m: the following other types implement trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`:
+2026-09-21T16:44:22.3776014Z               `joltworks::subprotocols::blindfold::spartan::BlindFoldSpartanProver<'_, F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3777088Z               `joltworks::subprotocols::booleanity::BooleanitySumcheckProver<F, I>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3778187Z               `joltworks::subprotocols::hamming_booleanity::HammingBooleanitySumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3779298Z               `joltworks::subprotocols::hamming_weight::HammingWeightSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3780487Z               `joltworks::subprotocols::identity_range_check::IdentityRCProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, FS>`
+2026-09-21T16:44:22.3781593Z               `joltworks::subprotocols::opening_reduction::OpeningProofReductionSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3782959Z               `joltworks::subprotocols::ps_shout::ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, FS>`
+2026-09-21T16:44:22.3784019Z               `joltworks::subprotocols::ra_virtual::RaSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+2026-09-21T16:44:22.3784732Z             and 27 others
+2026-09-21T16:44:22.3785580Z     [1m[94m= [0m[1mnote[0m: required for the cast from `&mut (SinProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)` to `&mut dyn SumcheckInstanceProver<Fp<MontBackend<FrConfig, 4>, 4>, ...>`
+2026-09-21T16:44:22.3786915Z     [1m[94m= [0m[1mnote[0m: the full name for the type has been written to '/home/runner/work/jolt-atlas/jolt-atlas/target/debug/deps/jolt_atlas_core-533156c42241803e.long-type-15176375040136438305.txt'
+2026-09-21T16:44:22.3788121Z     [1m[94m= [0m[1mnote[0m: consider using `--verbose` to print the full type name to the console
+2026-09-21T16:44:22.3788983Z     [1m[94m= [0m[1mnote[0m: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-21T16:44:22.3789555Z 
+2026-09-21T16:44:22.7098333Z [1mSome errors have detailed explanations: E0061, E0107, E0277, E0432, E0527, E0599.[0m
+2026-09-21T16:44:22.7098978Z [1mFor more information about an error, try `rustc --explain E0061`.[0m
+2026-09-21T16:44:22.7155226Z [1m[91merror[0m: could not compile `jolt-atlas-core` (lib) due to 39 previous errors
+2026-09-21T16:44:22.7155824Z [1m[33mwarning[0m: build failed, waiting for other jobs to finish...
+2026-09-21T16:44:23.0377488Z [1m[91merror[0m: could not compile `jolt-atlas-core` (lib test) due to 39 previous errors
+2026-09-21T16:44:23.0891875Z ##[error]Process completed with exit code 101.
+2026-09-21T16:44:23.1015865Z Post job cleanup.
+2026-09-21T16:44:23.1017921Z ##[start-action display=Setup Rust Caching;id=__f2152167-ca72-478a-94e8-3c18f58eaee6.__Swatinem_rust-cache]
+2026-09-21T16:44:23.1056345Z Post job cleanup.
+2026-09-21T16:44:23.2751200Z ##[group]Cache Configuration
+2026-09-21T16:44:23.2751564Z Cache Provider:
+2026-09-21T16:44:23.2751756Z     github
+2026-09-21T16:44:23.2751923Z Workspaces:
+2026-09-21T16:44:23.2752131Z     /home/runner/work/jolt-atlas/jolt-atlas
+2026-09-21T16:44:23.2752382Z Cache Paths:
+2026-09-21T16:44:23.2752571Z     /home/runner/.cargo/bin
+2026-09-21T16:44:23.2752792Z     /home/runner/.cargo/.crates.toml
+2026-09-21T16:44:23.2753042Z     /home/runner/.cargo/.crates2.json
+2026-09-21T16:44:23.2753280Z     /home/runner/.cargo/registry
+2026-09-21T16:44:23.2753507Z     /home/runner/.cargo/git
+2026-09-21T16:44:23.2753756Z     /home/runner/work/jolt-atlas/jolt-atlas/target
+2026-09-21T16:44:23.2754016Z Restore Key:
+2026-09-21T16:44:23.2754348Z     v0-rust-clippy-and-test-Linux-x64-d2c91432
+2026-09-21T16:44:23.2754615Z Cache Key:
+2026-09-21T16:44:23.2754846Z     v0-rust-clippy-and-test-Linux-x64-d2c91432-d4895fcf
+2026-09-21T16:44:23.2755159Z .. Prefix:
+2026-09-21T16:44:23.2755364Z   - v0-rust-clippy-and-test-Linux-x64
+2026-09-21T16:44:23.2755620Z .. Environment considered:
+2026-09-21T16:44:23.2755833Z   - Rust Versions:
+2026-09-21T16:44:23.2756123Z     - 1.95.0 x86_64-unknown-linux-gnu 59807616e1fa2540724bfbac14d7976d7e4a3860
+2026-09-21T16:44:23.2756562Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-21T16:44:23.2756979Z     - 1.95.0 x86_64-unknown-linux-gnu 59807616e1fa2540724bfbac14d7976d7e4a3860
+2026-09-21T16:44:23.2757297Z   - CARGO_INCREMENTAL
+2026-09-21T16:44:23.2757497Z   - CARGO_PROFILE_DEV_DEBUG
+2026-09-21T16:44:23.2757722Z   - CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-09-21T16:44:23.2757960Z   - CARGO_TERM_COLOR
+2026-09-21T16:44:23.2758162Z   - CARGO_UNSTABLE_SPARSE_REGISTRY
+2026-09-21T16:44:23.2758388Z   - RUST_BACKTRACE
+2026-09-21T16:44:23.2758576Z   - RUSTFLAGS
+2026-09-21T16:44:23.2758756Z .. Lockfiles considered:
+2026-09-21T16:44:23.2759052Z   - /home/runner/work/jolt-atlas/jolt-atlas/atlas-onnx-tracer/Cargo.toml
+2026-09-21T16:44:23.2759825Z   - /home/runner/work/jolt-atlas/jolt-atlas/Cargo.lock
+2026-09-21T16:44:23.2760298Z   - /home/runner/work/jolt-atlas/jolt-atlas/Cargo.toml
+2026-09-21T16:44:23.2760628Z   - /home/runner/work/jolt-atlas/jolt-atlas/common/Cargo.toml
+2026-09-21T16:44:23.2761004Z   - /home/runner/work/jolt-atlas/jolt-atlas/jolt-atlas-core/Cargo.toml
+2026-09-21T16:44:23.2761393Z   - /home/runner/work/jolt-atlas/jolt-atlas/joltworks/Cargo.toml
+2026-09-21T16:44:23.2761760Z   - /home/runner/work/jolt-atlas/jolt-atlas/rust-toolchain.toml
+2026-09-21T16:44:23.2762292Z ##[endgroup]
+2026-09-21T16:44:23.2762396Z 
+2026-09-21T16:44:23.2766903Z (node:5584) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-21T16:44:23.2767374Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-21T16:44:24.7625330Z ... Cleaning /home/runner/work/jolt-atlas/jolt-atlas/target ...
+2026-09-21T16:44:24.7734095Z ... Cleaning cargo registry (cache-all-crates: false) ...
+2026-09-21T16:44:25.1652118Z ... Cleaning cargo/bin ...
+2026-09-21T16:44:25.1670742Z ... Cleaning cargo git cache ...
+2026-09-21T16:44:25.1678103Z ... Saving cache ...
+2026-09-21T16:44:25.1804517Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/jolt-atlas/jolt-atlas --files-from manifest.txt --use-compress-program zstdmt
+2026-09-21T16:44:27.2369254Z Sent 0 of 261866414 (0.0%), 0.0 MBs/sec
+2026-09-21T16:44:28.1709651Z Sent 261866414 of 261866414 (100.0%), 129.1 MBs/sec
+2026-09-21T16:44:28.3813086Z ##[end-action id=__f2152167-ca72-478a-94e8-3c18f58eaee6.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=5279]
+2026-09-21T16:44:28.3854503Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-21T16:44:28.3855179Z Post job cleanup.
+2026-09-21T16:44:28.4289836Z (node:5617) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-21T16:44:28.4290376Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-21T16:44:28.4307001Z [command]/usr/bin/git version
+2026-09-21T16:44:28.4332242Z git version 2.55.0
+2026-09-21T16:44:28.4353023Z Temporarily overriding HOME='/home/runner/work/_temp/9b7d3366-07f7-4012-aa8f-ac4a7845a666' before making global git config changes
+2026-09-21T16:44:28.4353813Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-21T16:44:28.4355658Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/jolt-atlas/jolt-atlas
+2026-09-21T16:44:28.4379533Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-21T16:44:28.4401191Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-21T16:44:28.4567327Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-21T16:44:28.4586170Z http.https://github.com/.extraheader
+2026-09-21T16:44:28.4592960Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-09-21T16:44:28.4614558Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-21T16:44:28.4873595Z Cleaning up orphan processes
+2026-09-21T16:44:28.5052232Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v3. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

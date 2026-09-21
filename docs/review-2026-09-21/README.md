@@ -80,6 +80,14 @@ New native relations have their own rejection examples: different registered wei
 
 These comparisons are retained evidence from the original PRs. Each review description gives its own control and limitations. Values in different rows do not share one baseline, and the ratios must not be multiplied. The fully assembled branches have not received a new complete-model timing comparison.
 
+## Publication status
+
+Final GitHub readback confirms exactly five open PRs by the author, #369–#373. All 67 originals are closed with replacement links. Their original branch names and heads remain unchanged, including #292's base for the still-open #366. The attributed PR retains its original head and base. The [publication readback](publication-readback.json) and [closure receipts](publication.json) preserve these checks.
+
+Repository CI observed at `2026-09-21T16:51:00.521249+00:00` is still running. Formatting and WebAssembly jobs pass for all five replacements. The ZK jobs on #369 and #370 fail in the recorded experimental dispatcher. Their 41 primary diagnostic records match the local core Clippy records at `0b28a6ba` after normalizing two equivalent type-name qualifications; no added diagnostic remains against the tested unchanged round-two base. The raw spelling differences, raw job logs and exact normalization are retained. The remaining default/model jobs and the ZK jobs for #371–#373 are pending at this observation. See [CI status](ci-after-publication.json) and [diagnostic comparison](ci-zk-diagnostics-comparison.json).
+
+This publication does not claim a green complete-workspace ZK test job. The selected local Linux results above retain their exact source and feature scopes.
+
 ## Repeating a check
 
 Use a fresh clone and check out the immutable head in `branches.json`. Install Rust 1.95.0, set `RUSTFLAGS=-D warnings`, `RAYON_NUM_THREADS=8`, `RUST_TEST_THREADS=4`, `CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0`, and run the commands in the linked summary. The test profile keeps optimization and debug assertions. Use a separate Cargo target directory for each source tree, or clean all local workspace packages before switching sources.

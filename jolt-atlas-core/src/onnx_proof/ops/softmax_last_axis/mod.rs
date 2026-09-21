@@ -27,16 +27,13 @@ use crate::{
                 max::{MaxIndicatorParams, MaxIndicatorProver, MaxIndicatorVerifier},
                 rc::{SoftmaxRCProvider, SoftmaxRaEncoding},
                 recip_mult::{RecipMultParams, RecipMultProver, RecipMultVerifier},
-                significance_clamp::SoftmaxSignificanceClampOperands,
+                significance_clamp::{softmax_clamp_lookup_bits, SoftmaxSignificanceClampOperands},
             },
             OperatorProofTrait,
         },
         ProofId, ProofType, Prover, Verifier,
     },
-    utils::{
-        compute_lookup_indices_from_operands,
-        opening_access::{AccOpeningAccessor, Target},
-    },
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -58,7 +55,7 @@ use atlas_onnx_tracer::{
     utils::quantize::scale_to_multiplier,
 };
 use common::{
-    consts::{MODEL_SCALE, XLEN},
+    consts::{MODEL_SCALE, SOFTMAX_CLAMP_LOG_K},
     CommittedPoly, VirtualPoly,
 };
 use joltworks::{
@@ -153,7 +150,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
                 CommittedPoly::SoftmaxRemainderRaD as fn(usize, usize) -> _,
             ),
             (log_scale, CommittedPoly::SoftmaxExpRemainderRaD),
-            (XLEN, CommittedPoly::SoftmaxClampRaD),
+            (SOFTMAX_CLAMP_LOG_K, CommittedPoly::SoftmaxClampRaD),
             (log_hi, CommittedPoly::SoftmaxZHiRaD),
             (log_lo, CommittedPoly::SoftmaxZLoRaD),
         ] {
@@ -234,13 +231,11 @@ impl SoftmaxLastAxisProver {
         let z = softmax_z(&self.trace.x, &self.trace.max_k, last_dim);
         let z_tensor = Tensor::new(Some(&z), &[z.len()])
             .expect("softmax_z tensor construction")
-            .padded_next_power_of_two()
-            .map(|v| v as i64);
-        let significance_clamp_indices: Vec<usize> =
-            compute_lookup_indices_from_operands(&[&z_tensor.map(|v| v as i32)], false)
-                .iter()
-                .map(|&x| x.into())
-                .collect();
+            .padded_next_power_of_two();
+        let significance_clamp_indices: Vec<usize> = softmax_clamp_lookup_bits(&z_tensor)
+            .iter()
+            .map(|&x| x.into())
+            .collect();
 
         // ── Pipeline ────────────────────────────────────────────────────
 
@@ -672,7 +667,7 @@ impl SoftmaxLastAxisProver {
             SoftmaxSignificanceClampOperands::new(z_tensor),
         );
         let (significance_clamp_prover, _) = significance_clamp_provider
-            .read_raf_prove::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
+            .read_raf_prove::<F, T, SoftmaxClampTable<SOFTMAX_CLAMP_LOG_K>, SOFTMAX_CLAMP_LOG_K>(
                 &prover.trace,
                 &mut prover.accumulator,
                 &mut prover.transcript,
@@ -1073,7 +1068,10 @@ impl SoftmaxLastAxisVerifier {
         let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
         let significance_clamp_verifier = significance_clamp_provider
-            .read_raf_verify::<F, T, SoftmaxClampTable<XLEN>, XLEN>(accumulator, transcript);
+            .read_raf_verify::<F, T, SoftmaxClampTable<SOFTMAX_CLAMP_LOG_K>, SOFTMAX_CLAMP_LOG_K>(
+                accumulator,
+                transcript,
+            );
 
         let scale_bits = self.scale.ilog2() as i32;
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits);
@@ -1242,6 +1240,24 @@ mod tests {
         ];
         let input = Tensor::new(Some(&data), &input_shape).unwrap();
         let model = softmax_last_axis_model(&input_shape, scale);
+        unit_test_op(model, &[input]);
+    }
+
+    /// `z = max_k - x` spans the full i32 range when a row holds both a near-`i32::MAX` logit
+    /// and a near-`i32::MIN` one (two stacked additive masks saturate to `i32::MIN`). This needs
+    /// 33 bits; at a 32-bit lookup address it wrapped negative, the clamp mapped it to `0`, and
+    /// the masked position came out with full softmax weight.
+    #[test]
+    fn test_softmax_z_exceeds_i32() {
+        let input_shape = vec![1, 2];
+        let data: Vec<i32> = vec![i32::MAX, i32::MIN];
+        let input = Tensor::new(Some(&data), &input_shape).unwrap();
+        let model = softmax_last_axis_model(&input_shape, common::consts::MODEL_SCALE as u32);
+        let multiplier = 1 << common::consts::MODEL_SCALE;
+        assert_eq!(
+            model.forward(std::slice::from_ref(&input))[0].inner,
+            [multiplier, 0]
+        );
         unit_test_op(model, &[input]);
     }
 

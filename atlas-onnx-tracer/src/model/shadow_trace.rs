@@ -244,7 +244,13 @@ impl Model {
                 .iter()
                 .map(|&idx| f64_outputs.get(&idx).unwrap())
                 .collect();
-            let f64_out = shadow_f64(&node.operator, f64_input_tensors, scale);
+            let f64_out = if let Operator::Constant(c) = &node.operator
+                && self.is_raw_shadow_constant(*node_idx)
+            {
+                c.0.map(|v| v as f64)
+            } else {
+                shadow_f64(&node.operator, f64_input_tensors, scale)
+            };
 
             // ── Compute metrics ─────────────────────────────────────────
             let op_name = op_variant_name(&node.operator);
@@ -299,7 +305,13 @@ impl Model {
                 .iter()
                 .map(|&idx| f64_outputs.get(&idx).unwrap())
                 .collect();
-            let f64_out = shadow_f64(&node.operator, f64_input_tensors, scale);
+            let f64_out = if let Operator::Constant(c) = &node.operator
+                && self.is_raw_shadow_constant(*node_idx)
+            {
+                c.0.map(|v| v as f64)
+            } else {
+                shadow_f64(&node.operator, f64_input_tensors, scale)
+            };
 
             // ── i32 path: re-quantize the shadow's inputs, not QUANT's own history ──
             //
@@ -334,6 +346,33 @@ impl Model {
         }
     }
 
+    /// Constants used as gather addresses or unscaled multiplication masks
+    /// carry exact integers. Their role, not their numerical magnitude, decides
+    /// whether the shadow should undo fixed-point scaling.
+    fn is_raw_shadow_constant(&self, idx: usize) -> bool {
+        self.graph.nodes.values().any(|node| {
+            if matches!(node.operator, Operator::GatherSmall(_) | Operator::GatherLarge(_)) {
+                return node.inputs.get(1) == Some(&idx);
+            }
+            if let Operator::Mul(mul) = &node.operator
+                && mul.scale == 0
+            {
+                return node.inputs.iter().any(|&input| {
+                    let source = &self.graph.nodes[&input];
+                    let source_idx = if matches!(source.operator, Operator::Broadcast(_)) {
+                        source.inputs[0]
+                    } else {
+                        input
+                    };
+                    source_idx == idx
+                        && matches!(&self.graph.nodes[&idx].operator,
+                            Operator::Constant(c) if c.0.data().iter().all(|&v| v == 0 || v == 1))
+                });
+            }
+            false
+        })
+    }
+
     /// Whether node `idx`'s output carries raw/discrete (not fixed-point-scaled) values, and so
     /// must not be re-quantized. Traces back through value-preserving ops (shape ops, Gather's
     /// dict operand, and `ScalarConstDiv` by a rebase divisor — same check `shadow_f64` uses) to
@@ -345,7 +384,8 @@ impl Model {
                 // A constant baked into the graph as an unscaled boolean mask (all values
                 // exactly 0 or 1) — as opposed to a legitimately scaled real constant.
                 Operator::Constant(c) => {
-                    return c.0.data().iter().all(|&v| v == 0 || v == 1);
+                    return self.is_raw_shadow_constant(idx)
+                        || c.0.data().iter().all(|&v| v == 0 || v == 1);
                 }
                 Operator::Identity(_)
                 | Operator::Reshape(_)

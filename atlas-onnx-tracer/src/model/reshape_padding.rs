@@ -254,7 +254,7 @@ mod tests {
         assert!(plan(&[2, 4, 8], &[8, 8]).is_none());
     }
     #[test]
-    fn imported_reshape_preserves_forward_and_original_shadow() {
+    fn imported_reshape_preserves_forward_and_all_shadows() {
         use crate::model::{Model, RunArgs};
         for (name, dims) in [
             ("merge", vec![2, 3, 4]),
@@ -284,6 +284,24 @@ mod tests {
                 Tensor::new(Some(&floats), &model.graph.original_output_dims[&output]).unwrap();
             expected.pad_next_power_of_two();
             assert_eq!(shadow.f64_outputs[&output], expected);
+            // The regular shadows receive the same integer inputs expressed
+            // in real units, unlike the original-weight shadow above.
+            let factor = 2_f64.powi(args.scale as i32);
+            let dequantized: Vec<f64> = floats.iter().map(|v| v / factor).collect();
+            let integer_input = Tensor::new(Some(&values), &dims).unwrap();
+            let real_input = Tensor::new(Some(&dequantized), &dims).unwrap();
+            let expected_real = expected.map(|v| v / factor);
+            for regular in [
+                model.trace_with_shadow(
+                    std::slice::from_ref(&integer_input),
+                    std::slice::from_ref(&real_input),
+                    args.scale,
+                ),
+                model.trace_with_shadow_isolated(&[integer_input], &[real_input], args.scale),
+            ] {
+                assert_eq!(regular.f64_outputs[&output], expected_real);
+                assert_eq!(regular.i32_outputs[&output], shadow.f64_outputs[&output].map(|v| v as i32));
+            }
         }
     }
 }

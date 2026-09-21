@@ -48,7 +48,7 @@ impl NativeRegisteredGraph {
         statement: &NativeGraphStatement,
         generators: &PedersenGenerators<Bn254Curve>,
     ) -> Result<(), ProofVerifyError> {
-        self.graph.validate(self.setup.max_log_n)?;
+        self.graph.validate(self.setup.0.max_log_n)?;
         if encoded(&statement.graph)? != encoded(&self.graph)? {
             return Err(invalid("Proof graph differs from the registered model"));
         }

@@ -956,7 +956,7 @@ fn test_zk_constant_binding_rejects_cross_model_attack() {
     // The resulting bundle's BlindFold witness encodes M''s constant value
     // for every consumer-opening on the constant node.
     let (mut bundle, io) =
-        crate::onnx_proof::zk::prove_zk(&prover_pp_mprime, &[input_data.clone()], &gens);
+        crate::onnx_proof::zk::prove_zk(&prover_pp_mprime, std::slice::from_ref(&input_data), &gens);
 
     // Sanity 1: unpatched malicious bundle is rejected — the cleartext
     // `public_node_reduced_claims` check fires first.
@@ -1059,7 +1059,7 @@ fn test_zk_rejects_rebound_input_for_square_model() {
 
     // Honest proof for input x.
     let (bundle, mut io) =
-        crate::onnx_proof::zk::prove_zk(&prover_pp, &[input_data.clone()], &gens);
+        crate::onnx_proof::zk::prove_zk(&prover_pp, std::slice::from_ref(&input_data), &gens);
 
     // Sanity: the honest bundle verifies against the honest io.
     crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens)
@@ -1852,12 +1852,12 @@ fn bench_square_zk_overhead() {
 
     // Warmup
     let _ =
-        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &[input.clone()]);
+        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, std::slice::from_ref(&input));
 
     // Standard prove
     let t0 = Instant::now();
     let (proof, io, _) =
-        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &[input.clone()]);
+        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, std::slice::from_ref(&input));
     let standard_prove = t0.elapsed();
 
     // ZK prove (single pass: setup + ZK sumcheck + BlindFold)
@@ -1866,7 +1866,7 @@ fn bench_square_zk_overhead() {
     >::deterministic(32);
     let t0 = Instant::now();
     let (bundle, io_zk) =
-        crate::onnx_proof::zk::prove_zk(&prover_pp, &[input.clone()], &bench_gens);
+        crate::onnx_proof::zk::prove_zk(&prover_pp, std::slice::from_ref(&input), &bench_gens);
     let zk_prove = t0.elapsed();
 
     // Standard verify

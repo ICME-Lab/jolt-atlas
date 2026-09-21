@@ -887,34 +887,6 @@ impl SoftmaxLastAxisVerifier {
         provider.append_advice(VirtualPoly::SoftmaxRecipMultRemainder);
     }
 
-    /// Cache the remainder polynomial in the ZK pipeline.
-    ///
-    /// In ZK mode the verifier does not see the claim value (it is private and
-    /// Pedersen-committed by the prover). This method mirrors [`cache_R`] but:
-    /// - inserts an explicit `(r0, F::zero())` placeholder at the same `OpeningId`
-    ///   so subsequent stage-1 verifiers that read this opening get an explicit
-    ///   placeholder (rather than relying on the accumulator's permissive
-    ///   `zk_mode` fallback), and
-    /// - absorbs the Pedersen commitment into the transcript (the prover side
-    ///   appends the same commitment in `prove_softmax_zk`).
-    #[cfg(feature = "zk")]
-    pub(crate) fn cache_R_zk<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        commitment: &impl ark_serialize::CanonicalSerialize,
-    ) {
-        use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
-        let accessor = AccOpeningAccessor::new(&*accumulator, &self.computation_node);
-        let r0 = accessor.get_reduced_opening().0;
-        let opening_id = OpeningId::new(
-            VirtualPoly::SoftmaxRecipMultRemainder(self.idx()),
-            SumcheckId::NodeExecution(self.idx()),
-        );
-        accumulator.openings.insert(opening_id, (r0, F::zero()));
-        transcript.append_serializable(commitment);
-    }
-
     /// Build stage 1 verifier instances. The caller drives the actual sumcheck.
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::build_stage1_verifiers", skip_all)]
     pub(crate) fn build_stage1_verifiers<F: JoltField, T: Transcript>(
@@ -957,29 +929,6 @@ impl SoftmaxLastAxisVerifier {
         let r = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let mut provider = accessor.into_provider(transcript, r);
         provider.append_advice(VirtualPoly::SoftmaxExpRemainder);
-    }
-
-    /// Cache the exp-remainder polynomial in the ZK pipeline.
-    ///
-    /// Same shape as [`cache_R_zk`]: insert an explicit `(r1, F::zero())`
-    /// placeholder for the private `SoftmaxExpRemainder` opening and absorb
-    /// the Pedersen commitment from the bundle into the transcript.
-    #[cfg(feature = "zk")]
-    pub(crate) fn cache_r_exp_zk<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        commitment: &impl ark_serialize::CanonicalSerialize,
-    ) {
-        use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
-        let accessor = AccOpeningAccessor::new(&*accumulator, &self.computation_node);
-        let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
-        let opening_id = OpeningId::new(
-            VirtualPoly::SoftmaxExpRemainder(self.idx()),
-            SumcheckId::NodeExecution(self.idx()),
-        );
-        accumulator.openings.insert(opening_id, (r1, F::zero()));
-        transcript.append_serializable(commitment);
     }
 
     /// Build stage 2 verifier instances.

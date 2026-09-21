@@ -460,7 +460,7 @@ fn evaluate_concat_selector<F: JoltField>(
         .iter()
         .chain(output_raw_dims)
         .all(|d| d.is_power_of_two())
-        && offset % input_dims[axis] == 0
+        && offset.is_multiple_of(input_dims[axis])
     {
         let input_bits: usize = input_dims.iter().map(|d| d.log_2()).sum();
         let output_bits: usize = output_raw_dims.iter().map(|d| d.log_2()).sum();

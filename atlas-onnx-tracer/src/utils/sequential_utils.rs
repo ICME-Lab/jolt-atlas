@@ -129,6 +129,7 @@ impl<I: Iterator> IndexedParallelIterator for I {}
 // Iterator types used by the tensor facade.
 /// Owned iterator aliases.
 pub mod vec {
+    /// Sequential owned vector iterator.
     pub type IntoIter<T> = std::vec::IntoIter<T>;
 }
 

@@ -369,7 +369,7 @@ fn evaluate_slice_selector<F: JoltField>(
         .iter()
         .chain(output_raw_dims)
         .all(|d| d.is_power_of_two())
-        && start % output_raw_dims[axis] == 0
+        && start.is_multiple_of(output_raw_dims[axis])
     {
         let input_bits: usize = input_raw_dims.iter().map(|d| d.log_2()).sum();
         let output_bits: usize = output_raw_dims.iter().map(|d| d.log_2()).sum();

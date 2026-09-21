@@ -2732,7 +2732,8 @@ mod tests {
         let gens = DoryScheme::pedersen_generators(&pp, 16);
         // Inputs, output, accumulator, gaps and remainder. The two scalar
         // cases also test a contraction with no sumcheck rounds.
-        let cases: Vec<(u8, Vec<i128>, Vec<i128>, [i128; 5])> = vec![
+        type ContractionCase = (u8, Vec<i128>, Vec<i128>, [i128; 5]);
+        let cases: Vec<ContractionCase> = vec![
             (1, vec![1, 1], vec![1, 1], [0, 2, 0, 0, 2]),
             (1, vec![1, 0], vec![1, 0], [1, 1, 0, 0, -1]),
             (1, vec![8, 0], vec![1, 0], [4, 8, 0, 0, 0]),

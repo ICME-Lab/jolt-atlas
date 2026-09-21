@@ -720,7 +720,7 @@ mod tests {
             let z_field = z.iter().map(|x| (*x).into()).collect::<Vec<Fr>>();
             for side in 0..2 {
                 let data = (0..1 << c.log_inputs[side])
-                    .map(|i| (i % 17) as i32 - 8)
+                    .map(|i| (i % 17) - 8)
                     .collect::<Vec<_>>();
                 let p = MultilinearPolynomial::from(data);
                 let partial = c.partial(side, &p, &r);

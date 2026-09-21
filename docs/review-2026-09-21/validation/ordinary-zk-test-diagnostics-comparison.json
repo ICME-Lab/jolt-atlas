@@ -1,0 +1,9 @@
+{
+  "control_head": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+  "candidate_head": "d190e1419f5f1231818e69253cab5b7dda3d7165",
+  "control_count": 39,
+  "candidate_count": 39,
+  "added": [],
+  "removed": [],
+  "note": "Primary diagnostics from core lib ZK tests, default prerequisite versus serial candidate. Raw logs retain complete feature configurations."
+}

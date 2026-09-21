@@ -1,0 +1,4 @@
+    Checking common v0.1.0 (/root/atlas-consolidation/generation-ci-v2/common)
+    Checking atlas-onnx-tracer v0.1.0 (/root/atlas-consolidation/generation-ci-v2/atlas-onnx-tracer)
+    Checking joltworks v0.1.0 (/root/atlas-consolidation/generation-ci-v2/joltworks)
+    Finished `dev` profile [unoptimized] target(s) in 18.94s

@@ -1,0 +1,4 @@
+    Checking common v0.1.0 (/root/atlas-consolidation/verifier-ci-final/common)
+    Checking atlas-onnx-tracer v0.1.0 (/root/atlas-consolidation/verifier-ci-final/atlas-onnx-tracer)
+    Checking joltworks v0.1.0 (/root/atlas-consolidation/verifier-ci-final/joltworks)
+    Finished `dev` profile [unoptimized] target(s) in 19.91s

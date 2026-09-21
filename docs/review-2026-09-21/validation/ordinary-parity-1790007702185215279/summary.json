@@ -1,0 +1,79 @@
+{
+  "source_head": "b70711b0499dec29badc4d70152c2521b86ed91f",
+  "authenticated_files": 450,
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "run",
+        "--profile",
+        "test",
+        "-p",
+        "jolt-atlas-core",
+        "--example",
+        "verifier_feature_parity",
+        "--",
+        "/root/atlas-consolidation/logs/ordinary-parity-1790007702185215279/parallel"
+      ],
+      "exit_code": 0,
+      "seconds": 74.45186114311218
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "run",
+        "--profile",
+        "test",
+        "-p",
+        "jolt-atlas-core",
+        "--example",
+        "verifier_feature_parity",
+        "--no-default-features",
+        "--",
+        "/root/atlas-consolidation/logs/ordinary-parity-1790007702185215279/serial"
+      ],
+      "exit_code": 0,
+      "seconds": 50.17069697380066
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "run",
+        "--profile",
+        "test",
+        "-p",
+        "jolt-atlas-core",
+        "--example",
+        "verifier_feature_parity",
+        "--no-default-features",
+        "--features",
+        "affine-msm,check-fixed-tables",
+        "--",
+        "/root/atlas-consolidation/logs/ordinary-parity-1790007702185215279/optional"
+      ],
+      "exit_code": 0,
+      "seconds": 46.91304063796997
+    }
+  ],
+  "proof_hashes": {
+    "parallel": {
+      "proof.bin": "5496c3b55a4618865fe01585fd103be18c29d02a10c78c25790f07c213015b38",
+      "compact.bin": "4c8da86288e40aa793bb6b94f2d7af3094400fa713a28ef0caa9a5f7d4e960ee",
+      "io.json": "d7da78774f31683e55b4adbd0bae508797ec7a39e2d54b856179759b6037bf5d"
+    },
+    "serial": {
+      "proof.bin": "5496c3b55a4618865fe01585fd103be18c29d02a10c78c25790f07c213015b38",
+      "compact.bin": "4c8da86288e40aa793bb6b94f2d7af3094400fa713a28ef0caa9a5f7d4e960ee",
+      "io.json": "d7da78774f31683e55b4adbd0bae508797ec7a39e2d54b856179759b6037bf5d"
+    },
+    "optional": {
+      "proof.bin": "5496c3b55a4618865fe01585fd103be18c29d02a10c78c25790f07c213015b38",
+      "compact.bin": "4c8da86288e40aa793bb6b94f2d7af3094400fa713a28ef0caa9a5f7d4e960ee",
+      "io.json": "d7da78774f31683e55b4adbd0bae508797ec7a39e2d54b856179759b6037bf5d"
+    }
+  },
+  "identical": true
+}

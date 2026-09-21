@@ -1,0 +1,16 @@
+{
+  "correctness": "correctness-ci-v2",
+  "ordinary": "ordinary-ci-final",
+  "foundation": "foundation-ci-final",
+  "operators": "operators-ci-final",
+  "generation": "generation-ci-v2",
+  "prover": "prover-ci-final-v2",
+  "verifier": "verifier-ci-final",
+  "additional": [
+    "baseline-ci-v2",
+    "foundation-core-zk-final",
+    "ordinary-backends-v2",
+    "ordinary-parity-1790007702185215279",
+    "ordinary-fixed-tables-final"
+  ]
+}

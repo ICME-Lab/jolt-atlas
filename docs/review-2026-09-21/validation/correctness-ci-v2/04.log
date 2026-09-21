@@ -1,0 +1,419 @@
+   Compiling common v0.1.0 (/root/atlas-consolidation/correctness-ci-v2/common)
+   Compiling atlas-onnx-tracer v0.1.0 (/root/atlas-consolidation/correctness-ci-v2/atlas-onnx-tracer)
+   Compiling joltworks v0.1.0 (/root/atlas-consolidation/correctness-ci-v2/joltworks)
+   Compiling jolt-atlas-core v0.1.0 (/root/atlas-consolidation/correctness-ci-v2/jolt-atlas-core)
+   Compiling jolt-atlas v0.1.0 (/root/atlas-consolidation/correctness-ci-v2)
+    Finished `test` profile [optimized] target(s) in 1m 23s
+     Running unittests src/lib.rs (/root/atlas-consolidation/target/debug/deps/atlas_onnx_tracer-2c1a754b6a05e6aa)
+
+running 71 tests
+test model::clamp_width::tests::width_rounding ... ok
+test model::test::tests::test_mlp_like ... ok
+test model::test::tests::test_simple_add ... ok
+test model::tests::test_load_reshape_model ... ok
+test model::reshape_padding::tests::compatible_padding_keeps_zero_copy_reshape ... ok
+test model::tests::test_load_reshape_model_with_padding ... ok
+test model::tests::test_load_slice_model ... ok
+test model::reshape_padding::tests::imported_reshape_preserves_forward_and_all_shadows ... ok
+test ops::cos::tests::test_cos_precision_stats ... ok
+test ops::sigmoid::tests::test_sigmoid_precision_stats ... ok
+test ops::erf::tests::test_erf_precision_stats ... ok
+test ops::softmax::scale_tests::largest_supported_scale_preserves_equal_probabilities ... ok
+test ops::softmax::scale_tests::unsupported_scale_is_rejected_in_release_too - should panic ... ok
+test ops::softmax::scale_tests::zero_scale_is_rejected - should panic ... ok
+test ops::sin::tests::test_sin_precision_stats ... ok
+test tensor::tests::tensor_clone ... ok
+test tensor::tests::tensor_eq ... ok
+test ops::tanh::tests::test_tanh_precision_stats ... ok
+test tensor::tests::tensor_slice ... ok
+test tensor::tests::test_crop_to_dims ... ok
+test tensor::tests::test_einsum_anm_bm_ba ... ok
+test tensor::tests::test_einsum_bmk_kbn_mbn ... ok
+test tensor::tests::test_einsum_dimension_mismatch_error ... ok
+test tensor::tests::test_einsum_elementwise_mul ... ok
+test tensor::tests::test_einsum_bmk_kbn_mbn_attention_value ... ok
+test tensor::tests::test_einsum_full_contraction_shared ... ok
+test tensor::tests::test_einsum_full_contraction_no_shared ... ok
+test tensor::tests::test_einsum_ij_jk_ik ... ok
+test tensor::tests::test_einsum_ik_jk_ij ... ok
+test ops::einsum::gemm::tests::gemm_path_matches_generic_kernel ... ok
+test tensor::tests::test_einsum_k_nk_n ... ok
+test tensor::tests::test_einsum_matmul_vs_transposed_matmul ... ok
+test tensor::tests::test_einsum_matvec ... ok
+test tensor::tests::test_einsum_matvec_extra_dim ... ok
+test tensor::tests::test_einsum_mbk_nbk_bmn ... ok
+test tensor::tests::test_einsum_mk_k_ma ... ok
+test tensor::tests::test_einsum_mbk_nbk_bmn_multihead_attention ... ok
+test tensor::tests::test_einsum_mk_kn_mn_1x1 ... ok
+test tensor::tests::test_einsum_mk_kn_mn_basic ... ok
+test tensor::tests::test_einsum_mk_kn_mn_rectangular ... ok
+test tensor::tests::test_einsum_mk_kn_mn_identity ... ok
+test tensor::tests::test_einsum_mk_n_ma ... ok
+test tensor::tests::test_einsum_mk_kn_mn_square ... ok
+test tensor::tests::test_einsum_row_dot ... ok
+test tensor::tests::test_einsum_scalar_dot ... ok
+test tensor::tests::test_einsum_single_element ... ok
+test tensor::tests::test_einsum_mk_kn_mn_gpt_projection ... ok
+test tensor::tests::test_einsum_wrong_input_count_error ... ok
+test tensor::tests::test_einsum_three_inputs ... ok
+test tensor::tests::test_einsum_zeros ... ok
+test tensor::tests::test_matmul_padding_workflow ... ok
+test tensor::tests::test_pad_to_dims ... ok
+test tensor::tests::test_tensor ... ok
+test utils::dims::tests::test_map_next_power_of_two_for_slice ... ok
+test utils::dims::tests::test_map_next_power_of_two_for_vec ... ok
+test utils::dims::tests::test_pad_next_power_of_two ... ok
+test utils::dims::tests::test_pad_to ... ok
+test utils::f32::tests::f32_cmp ... ok
+test utils::f32::tests::f32_eq ... ok
+test utils::f32::tests::f32_hash ... ok
+test utils::parallel_utils::sequential::tests::borrowed_and_owned_iteration_stays_on_the_calling_thread ... ok
+test utils::parallel_utils::sequential::tests::mutable_iteration_and_sort_match_standard_iterators ... ok
+test utils::parser::tests::test_process_broadcast_inputs_all_inputs_mismatch ... ok
+test utils::parser::tests::test_process_broadcast_inputs_matching_shapes ... ok
+test utils::parser::tests::test_process_broadcast_inputs_multiple_inputs_mixed ... ok
+test utils::parser::tests::test_process_broadcast_inputs_shape_mismatch ... ok
+test utils::pretty_print::tests::test_pretty_print_empty_graph ... ok
+test utils::pretty_print::tests::test_pretty_print_simple_graph ... ok
+test utils::quantize::tests::extreme_negative_masks_keep_integer_headroom ... ok
+test utils::quantize::tests::additive_mask_dominates_a_larger_masked_score ... ok
+test model::reshape_padding::tests::reshape_moves_padding_between_groups ... ok
+
+test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (/root/atlas-consolidation/target/debug/deps/common-07e0aa7dc3260532)
+
+running 5 tests
+test consts::softmax::tests::matches_known_values ... ok
+test consts::trig::tests::trig_period_modulus_at_scale_8 ... ok
+test parallel::tests::parallel_flag_guard_disables_and_restores ... ok
+test parallel::tests::parallel_flag_guard_is_reference_counted ... ok
+test parallel::tests::parallel_flag_guard_restores_previous_value ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/root/atlas-consolidation/target/debug/deps/jolt_atlas-0c13ea9090dc8aa1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/root/atlas-consolidation/target/debug/deps/jolt_atlas_core-a2a700bb37b3b9d7)
+
+running 146 tests
+test onnx_proof::e2e_tests::test_add_sub_mul ... ignored, hzkg fails when all coeffs are zero
+test onnx_proof::e2e_tests::test_bge_small_en_v1_5 ... ignored, requires BGE ONNX model download (run scripts/download_bge_small_en_v1_5.py first)
+test onnx_proof::e2e_tests::test_broadcast ... ignored, hzkg fails when all coeffs are zero
+test onnx_proof::e2e_tests::test_gather ... ok
+test onnx_proof::e2e_tests::test_gpt2 ... ignored, requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)
+test onnx_proof::e2e_tests::test_gpt2_dory ... ignored, requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)
+test onnx_proof::e2e_tests::test_erf ... ok
+test onnx_proof::e2e_tests::test_input_binding_changes_transcript ... ok
+test onnx_proof::e2e_tests::test_imported_reshape_preserves_padding_layout ... ok
+test onnx_proof::e2e_tests::test_layernorm_partial_head ... ignored, hzkg fails when all coeffs are zero
+test onnx_proof::e2e_tests::test_article_classification ... ok
+test onnx_proof::e2e_tests::test_concat_transformer_block_e2e ... ok
+test onnx_proof::e2e_tests::test_layernorm_head ... ok
+test onnx_proof::e2e_tests::test_mlp_square ... ok
+test onnx_proof::e2e_tests::test_moveaxis ... ok
+test onnx_proof::e2e_tests::test_mlp_square_4layer ... ok
+test onnx_proof::e2e_tests::test_microgpt ... ok
+test onnx_proof::e2e_tests::test_perceptron ... ok
+test onnx_proof::e2e_tests::test_positional_encoding_trig ... ok
+test onnx_proof::e2e_tests::test_reshape ... ok
+test onnx_proof::e2e_tests::test_rsqrt ... ok
+test onnx_proof::e2e_tests::test_multihead_attention ... ok
+test onnx_proof::e2e_tests::test_sigmoid ... ok
+test onnx_proof::e2e_tests::test_slice_e2e ... ok
+test onnx_proof::e2e_tests::test_sum_axes ... ok
+test onnx_proof::e2e_tests::test_sum_independent ... ignored, hzkg fails when all coeffs are zero
+test onnx_proof::e2e_tests::test_sum_operations_e2e ... ok
+test onnx_proof::e2e_tests::test_tanh ... ok
+test onnx_proof::e2e_tests::test_minigpt ... ok
+test onnx_proof::ops::add::tests::test_add ... ok
+test onnx_proof::ops::add::tests::test_add_non_power_of_two_input_len ... ok
+test onnx_proof::ops::add::tests::test_add_saturating_overflow ... ok
+test onnx_proof::ops::add::tests::test_add_scalar_saturates ... ok
+test onnx_proof::ops::add::tests::test_add_small_tensors ... ok
+test onnx_proof::ops::broadcast::tests::test_broadcast ... ok
+test onnx_proof::ops::broadcast::tests::test_broadcast_non_power_of_two_input_len ... ignored, TODO: non-power-of-two broadcast path not fully validated yet
+test onnx_proof::e2e_tests::test_self_attention_layer ... ok
+test onnx_proof::ops::clamp::tests::test_clamp_near_i32_max_saturates_correctly ... ok
+test onnx_proof::ops::clamp::tests::test_clamp_non_power_of_two_input_len ... ok
+test onnx_proof::ops::clamp::tests::test_clamp_saturating_range ... ok
+test onnx_proof::ops::concat::tests::test_concat_arbitrary_shapes ... ok
+test onnx_proof::ops::concat::tests::test_concat_multi_input_shapes ... ok
+test onnx_proof::ops::concat::tests::test_concat_power_of_two_shapes ... ok
+test onnx_proof::ops::concat::tests::test_concat_single_input_identity ... ok
+test onnx_proof::ops::cos::tests::test_cos_non_power_of_two_input_len ... ignored, TODO: non-power-of-two cos path not fully validated yet
+test onnx_proof::ops::cos::tests::test_cos_periodic_boundary_inputs ... ok
+test onnx_proof::ops::cos::tests::test_cos_random_inputs ... ok
+test onnx_proof::ops::clamp::tests::test_clamp ... ok
+test onnx_proof::e2e_tests::test_transformer ... ok
+test onnx_proof::ops::cube::tests::test_cube_non_power_of_two_input_len ... ok
+test onnx_proof::ops::cube::tests::test_cube_saturating_clamp_negative ... ok
+test onnx_proof::ops::cube::tests::test_cube_saturating_clamp_positive ... ok
+test onnx_proof::e2e_tests::test_nanoGPT ... ok
+test onnx_proof::ops::div::tests::test_div_non_power_of_two_input_len ... ignored, non-power-of-two path not fully supported yet
+test onnx_proof::ops::einsum::bmk_rhs_mbn::tests::test_bmk_bkn_mbn ... ok
+test onnx_proof::ops::einsum::bmk_rhs_mbn::tests::test_bmk_bkn_mbn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::bmk_rhs_mbn::tests::test_bmk_kbn_mbn ... ok
+test onnx_proof::ops::einsum::bmk_rhs_mbn::tests::test_bmk_kbn_mbn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::k_nk_n::tests::test_k_nk_n ... ok
+test onnx_proof::ops::einsum::k_nk_n::tests::test_k_nk_n_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::m_an_a1nm::tests::test_m_an_a1nm ... ok
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_bnk_bmn ... ok
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_bnk_bmn_batch_size_one ... ok
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_bnk_bmn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_nbk_bmn ... ok
+test onnx_proof::ops::cube::tests::test_cube ... ok
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_nbk_bmn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_nbk_bmn_batch_size_one ... ok
+test onnx_proof::ops::einsum::mk_kn_mn::tests::test_mk_kn_mn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::mk_kn_mn::tests::test_mk_kn_mn_saturating_clamp_negative ... ok
+test onnx_proof::ops::einsum::mk_kn_mn::tests::test_mk_kn_mn_saturating_clamp_positive ... ok
+test onnx_proof::ops::einsum::rbmk_rbnk_bmn::tests::test_abmk_abnk_abmn ... ok
+test onnx_proof::ops::einsum::rbmk_rbnk_bmn::tests::test_acbmk_kcn_cbmn ... ok
+test onnx_proof::ops::einsum::rbmk_rbnk_bmn::tests::test_cbmk_cbkn_amn ... ok
+test onnx_proof::ops::einsum::mk_kn_mn::tests::test_mk_kn_mn ... ok
+test onnx_proof::ops::erf::tests::test_erf_non_power_of_two_input_len ... ignored, TODO: non-power-of-two erf path not fully validated yet
+test onnx_proof::ops::eval_reduction::tests::eval_reduction_adds_reduced_evaluations ... ok
+test onnx_proof::ops::eval_reduction::tests::eval_reduction_single_opening_is_propagated ... ok
+test onnx_proof::ops::eval_reduction::tests::eval_reduction_verifier_single_opening_is_propagated ... ok
+test onnx_proof::ops::eval_reduction::tests::iop_runs_in_isolation_after_output_claim ... ok
+test onnx_proof::ops::eval_reduction::tests::verify_iop_runs_in_isolation_after_verify_output_claim ... ok
+test onnx_proof::ops::gather::tests::test_gather ... ok
+test onnx_proof::ops::div::tests::test_div_by_tensor ... ok
+test onnx_proof::ops::gather::tests::test_gather_non_power_of_two_input_len ... ignored, TODO: non-power-of-two gather path not fully validated yet
+test onnx_proof::ops::gather::tests::test_gather_large_path ... ok
+test onnx_proof::ops::iff::tests::test_iff ... ok
+test onnx_proof::ops::iff::tests::test_iff_non_power_of_two_input_len ... ignored, TODO: non-power-of-two iff path not fully validated yet
+test onnx_proof::ops::input::tests::test_input_non_power_of_two_input_len ... ok
+test onnx_proof::ops::mean_of_squares::tests::test_mean_of_squares ... ok
+test onnx_proof::ops::mean_of_squares::tests::test_mean_of_squares_non_pow2_count ... ok
+test onnx_proof::ops::mean_of_squares::tests::test_mean_of_squares_saturating_clamp ... ok
+test onnx_proof::ops::mean_of_squares::tests::test_mean_of_squares_scalar ... ok
+test onnx_proof::ops::moveaxis::tests::test_moveaxis ... ok
+test onnx_proof::ops::moveaxis::tests::test_moveaxis_non_power_of_two_input_len ... ignored, TODO: non-power-of-two moveaxis path not fully validated yet
+test onnx_proof::ops::gather::tests::test_gather_small_path ... ok
+test onnx_proof::ops::erf::tests::test_erf ... ok
+test onnx_proof::ops::mul::tests::test_mul_saturating_clamp_negative ... ok
+test onnx_proof::ops::mul::tests::test_mul_saturating_clamp_positive ... ok
+test onnx_proof::ops::neg::tests::test_neg ... ok
+test onnx_proof::ops::neg::tests::test_neg_non_power_of_two_input_len ... ok
+test onnx_proof::ops::mul::tests::test_mul_non_power_of_two_input_len ... ok
+test onnx_proof::ops::relu::tests::test_relu_non_power_of_two_input_len ... ok
+test onnx_proof::ops::reshape::tests::test_reshape ... ok
+test onnx_proof::ops::reshape::tests::test_reshape_non_power_of_two_input_len ... ok
+test onnx_proof::ops::div::tests::test_div_by_const ... ok
+test onnx_proof::ops::rsqrt::tests::test_rsqrt_non_power_of_two_input_len ... ignored, non-power-of-two path not fully supported yet
+test onnx_proof::ops::relu::tests::test_relu ... ok
+test onnx_proof::ops::scalar_const_div::tests::test_scalar_const_div ... ok
+test onnx_proof::ops::scalar_const_div::tests::test_scalar_const_div_non_power_of_two_input_len ... ignored, non-power-of-two path not fully supported yet
+test onnx_proof::ops::sigmoid::tests::test_sigmoid ... ok
+test onnx_proof::ops::sigmoid::tests::test_sigmoid_non_power_of_two_input_len ... ignored, TODO: non-power-of-two sigmoid path not fully validated yet
+test onnx_proof::ops::sin::tests::test_sin_non_power_of_two_input_len ... ignored, TODO: non-power-of-two sin path not fully validated yet
+test onnx_proof::ops::mul::tests::test_mul ... ok
+test onnx_proof::ops::sin::tests::test_sin_periodic_boundary_inputs ... ok
+test onnx_proof::ops::slice::tests::test_slice_arbitrary_shapes ... ok
+test onnx_proof::ops::softmax_last_axis::tests::test_softmax_after_additive_attention_mask ... ok
+test onnx_proof::ops::softmax_last_axis::tests::test_softmax_last_axis ... ignored, built for scale=12; only runs when MODEL_SCALE is compiled to 12
+test onnx_proof::ops::softmax_last_axis::tests::test_softmax_model_scale ... ok
+test onnx_proof::ops::softmax_last_axis::tests::test_softmax_z_exceeds_i32 ... ok
+test onnx_proof::ops::rsqrt::tests::test_rsqrt ... ok
+test onnx_proof::ops::square::tests::test_square ... ok
+test onnx_proof::ops::rsqrt::tests::test_rsqrt_scale_12 ... ok
+test onnx_proof::ops::square::tests::test_square_non_power_of_two_input_len ... ok
+test onnx_proof::ops::square::tests::test_square_saturating_clamp ... ok
+test onnx_proof::ops::sub::tests::test_sub_non_power_of_two_input_len ... ok
+test onnx_proof::ops::sub::tests::test_sub_scalar_saturates ... ok
+test onnx_proof::ops::sub::tests::test_sub_small_tensors ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_0_1d ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_0_2d ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_1_1d ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_1_2d ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_non_power_of_two_input_len ... ignored, TODO: non-power-of-two sum(axis) path not fully validated yet
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_saturating_overflow ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_scalar_saturating_overflow ... ok
+test onnx_proof::ops::sub::tests::test_sub ... ok
+test onnx_proof::ops::tanh::tests::test_tanh_non_power_of_two_input_len ... ignored, non-power-of-two path not fully supported yet
+test onnx_proof::ops::sub::tests::test_sub_saturating_overflow ... ok
+test onnx_proof::soundness_tests::soundness_fanout_nodeoutput_openings_should_be_reduced ... ok
+test onnx_proof::soundness_tests::soundness_same_consumer_duplicate_operand_should_track_both ... ok
+test onnx_proof::soundness_tests::soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected - should panic ... ok
+test onnx_proof::soundness_tests::soundness_sub_virtual_operand_attack_is_rejected - should panic ... ok
+test utils::dims::tests::test_m_an_a1nm_pattern_normalizes_to_shared_family ... ok
+test utils::dims::tests::test_rbmk_rbnk_bmn_patterns_normalize_to_shared_family ... ok
+test onnx_proof::ops::sin::tests::test_sin_random_inputs ... ok
+test onnx_proof::ops::tanh::tests::test_tanh ... ok
+test onnx_proof::proof_serialization::tests::test_proof_serialization_roundtrip_transformer ... ok
+
+test result: ok. 119 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 96.32s
+
+     Running unittests src/lib.rs (/root/atlas-consolidation/target/debug/deps/joltworks-6d26d3d220bf55c0)
+
+running 161 tests
+test curve::tests::bounded_g1_msm_rejects_mismatched_lengths - should panic ... ok
+test curve::tests::test_g1_msm ... ok
+test curve::tests::test_g1_operations ... ok
+test field::ark::tests::implicit_montgomery_conversion ... ok
+test field::tracked_ark::tests::test_if_trackers_are_working ... ok
+test curve::tests::test_pairing_bilinearity ... ok
+test lookup_tables::and::test::mle_linearity ... ok
+test lookup_tables::and::test::mle_random ... ok
+test lookup_tables::and::test::mle_full_hypercube ... ok
+test lookup_tables::and::test::read_raf ... ok
+test lookup_tables::clamp::test::mle_full_hypercube ... ok
+test curve::tests::bounded_g1_msm_matches_direct_scalar_multiplication ... ok
+test lookup_tables::clamp::test::mle_random ... ok
+test lookup_tables::clamp::test::mle_linearity ... ok
+test lookup_tables::clamp::test::read_raf ... ok
+test lookup_tables::or::test::mle_full_hypercube ... ok
+test lookup_tables::or::test::mle_linearity ... ok
+test lookup_tables::or::test::mle_random ... ok
+test lookup_tables::and::test::prefix_suffix ... ok
+test lookup_tables::or::test::read_raf ... ok
+test lookup_tables::relu::test::mle_full_hypercube ... ok
+test lookup_tables::relu::test::mle_linearity ... ok
+test lookup_tables::relu::test::mle_random ... ok
+test lookup_tables::relu::test::prefix_suffix ... ok
+test lookup_tables::relu::test::read_raf ... ok
+test lookup_tables::or::test::prefix_suffix ... ok
+test lookup_tables::right_shift::test::mle_linearity ... ok
+test lookup_tables::right_shift::test::mle_full_hypercube ... ok
+test lookup_tables::right_shift::test::mle_random ... ok
+test lookup_tables::right_shift::test::read_raf ... ok
+test curve::tests::bounded_g1_msm_handles_nested_row_commitments ... ok
+test lookup_tables::unsigned_abs::test::mle_linearity ... ok
+test lookup_tables::unsigned_abs::test::mle_random ... ok
+test lookup_tables::unsigned_abs::test::mle_full_hypercube ... ok
+test lookup_tables::unsigned_abs::test::read_raf ... ok
+test lookup_tables::unsigned_abs::test::test_unsigned_abs_table ... ok
+test lookup_tables::right_shift::test::prefix_suffix ... ok
+test lookup_tables::unsigned_less_than::test::mle_linearity ... ok
+test lookup_tables::unsigned_less_than::test::mle_random ... ok
+test lookup_tables::unsigned_abs::test::prefix_suffix ... ok
+test lookup_tables::unsigned_less_than::test::mle_full_hypercube ... ok
+test lookup_tables::unsigned_less_than::test::read_raf ... ok
+test lookup_tables::xor::test::mle_linearity ... ok
+test lookup_tables::xor::test::mle_random ... ok
+test lookup_tables::xor::test::mle_full_hypercube ... ok
+test lookup_tables::xor::test::read_raf ... ok
+test poly::commitment::dory::one_hot_commit::tests::batched_affine_sums_match_projective ... ok
+test lookup_tables::clamp::test::prefix_suffix ... ok
+test poly::commitment::dory::tests::combine_matches_overlap_rlc ... ok
+test lookup_tables::xor::test::prefix_suffix ... ok
+test lookup_tables::unsigned_less_than::test::prefix_suffix ... ok
+test poly::commitment::dory::tests::sparse_one_hot_commit_matches_dense ... ok
+test poly::commitment::dory::tests::dory_scheme_round_trip ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_batch_3dense_3oh ... ok
+test poly::commitment::dory::tests::dory_native_round_trip ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_batch_dense_diff ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_batch_dense_oh ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_batch_one_hot_commit ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_eval ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_one_hot_commit ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_one_hot_commit_2 ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_one_hot_commit_with_none_indices ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_one_hot_empty ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_large ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_small ... ok
+test poly::commitment::pedersen::tests::test_blinding_generator_independent ... ok
+test poly::commitment::pedersen::tests::test_commitment_homomorphism ... ok
+test poly::commitment::pedersen::tests::test_pedersen_commit_verify ... ok
+test poly::dense_mlpoly::tests::check_memoized_chis ... ok
+test poly::dense_mlpoly::tests::compare_random_evaluations ... ok
+test poly::dense_mlpoly::tests::evaluation ... ok
+test poly::eq_plus_one_poly::tests::test_eq_prefix_suffix ... ok
+test poly::commitment::hyperkzg::tests::test_hyperkzg_srs_file_roundtrip ... ok
+test poly::commitment::dory::sparse_rlc::tests::sparse_rlc_matches_dense_and_verifies ... ok
+test poly::identity_poly::tests::identity_poly ... ok
+test poly::identity_poly::tests::identity_poly_prefix_suffix_decomposition ... ok
+test poly::identity_poly::tests::operand_poly ... ok
+test poly::identity_poly::tests::operand_poly_boolean_hypercube ... ok
+test poly::identity_poly::tests::operand_poly_prefix_suffix_decomposition ... ok
+test poly::identity_poly::tests::unmap_address_poly ... ok
+test poly::identity_poly::tests::unmap_address_poly_evaluate ... ok
+test poly::lagrange_poly::tests::basis_properties_and_monomials ... ok
+test poly::lagrange_poly::tests::closed_form_n1 ... ok
+test poly::lagrange_poly::tests::closed_form_n2 ... ok
+test poly::lagrange_poly::tests::closed_form_n3 ... ok
+test poly::lagrange_poly::tests::evaluate_many_matches_pointwise ... ok
+test poly::lagrange_poly::tests::integer_helpers_and_power_sums ... ok
+test poly::lagrange_poly::tests::interpolate_roundtrip_and_monomials ... ok
+test poly::lagrange_poly::tests::lagrange_kernel_matches_evals_and_nodes ... ok
+test poly::lagrange_poly::tests::shift_coeffs_match_shifted_eval ... ok
+test poly::lagrange_poly::tests::shift_coeffs_match_shifted_eval_n9 ... ok
+test poly::lt_poly::tests::test_bind_high_to_low_works ... ok
+test poly::lt_poly::tests::test_bind_low_to_high_works ... ok
+test poly::multilinear_polynomial::tests::test_poly_to_field_elements ... ok
+test poly::one_hot_polynomial::tests::evaluate_K_equals_T ... ok
+test poly::one_hot_polynomial::tests::evaluate_K_greater_than_T ... ok
+test poly::one_hot_polynomial::tests::evaluate_K_less_than_T ... ok
+test poly::one_hot_polynomial::tests::sumcheck_K_equals_T ... ok
+test poly::one_hot_polynomial::tests::sumcheck_K_greater_than_T ... ok
+test poly::one_hot_polynomial::tests::sumcheck_K_less_than_T ... ok
+test poly::opening_proof::guardrail_tests::append_virtual_node_output_raf_rejected_after_reduction - should panic ... ok
+test poly::opening_proof::guardrail_tests::append_virtual_panics_after_reduction - should panic ... ok
+test poly::opening_proof::guardrail_tests::get_node_output_opening_panics_before_reduction - should panic ... ok
+test poly::signed_identity_poly::tests::signed_identity_poly_prefix_suffix_decomposition ... ok
+test poly::signed_identity_poly::tests::signed_identity_poly_sumcheck ... ok
+test poly::signed_identity_poly::tests::signed_operand_poly_prefix_suffix_decomposition ... ok
+test poly::signed_identity_poly::tests::test_signed_identity_poly_evaluation ... ok
+test poly::signed_identity_poly::tests::test_signed_operand_poly_evaluation ... ok
+test poly::signed_identity_poly::tests::test_signed_operand_poly_random_evaluations ... ok
+test poly::split_eq_poly::tests::bind_high_low ... ok
+test poly::split_eq_poly::tests::bind_low_high ... ok
+test poly::split_eq_poly::tests::e_vec_always_has_one_at_index_zero ... ok
+test poly::split_eq_poly::tests::evals_cached_starts_with_one ... ok
+test poly::split_eq_poly::tests::window_bit_accounting_invariants ... ok
+test poly::split_eq_poly::tests::window_out_in ... ok
+test poly::split_eq_poly::tests::window_size_one_matches_current ... ok
+test poly::unipoly::tests::test_divide_poly ... ok
+test poly::unipoly::tests::test_from_coeff_all_zeros_is_zero_poly ... ok
+test poly::unipoly::tests::test_from_coeff_trims_leading_zeros ... ok
+test poly::unipoly::tests::test_from_evals_cubic ... ok
+test poly::unipoly::tests::test_from_evals_edge_cases ... ok
+test poly::unipoly::tests::test_from_evals_quad ... ok
+test poly::unipoly::tests::test_from_evals_toom ... ok
+test poly::unipoly::tests::test_from_linear_times_quadratic_with_hint ... ok
+test poly::unipoly::tests::test_mul_unipoly_matches_expected_coefficients ... ok
+test poly::unipoly::tests::test_mul_unipoly_normalizes_trailing_zeros ... ok
+test subprotocols::booleanity::tests::test_small_bool_sumcheck ... ok
+test subprotocols::evaluation_reduction::tests::correctly_groups_by_variable ... ok
+test subprotocols::evaluation_reduction::tests::eval_reduction_2to1_happy_path ... ok
+test subprotocols::evaluation_reduction::tests::eval_reduction_2to1_rejects_tampered_h ... ok
+test subprotocols::evaluation_reduction::tests::eval_reduction_2to1_transcript_mismatch_changes_reduced_instance ... ok
+test subprotocols::evaluation_reduction::tests::eval_reduction_compute_l_matches_expected ... ok
+test subprotocols::evaluation_reduction::tests::eval_reduction_nto1 ... ok
+test subprotocols::evaluation_reduction::tests::eval_reduction_single_opening_is_propagated ... ok
+test poly::eq_poly::tests::test_evals_cached ... ok
+test subprotocols::evaluation_reduction::tests::test_h_computation ... ok
+test subprotocols::evaluation_reduction::tests::test_l_evaluation ... ok
+test subprotocols::hamming_booleanity::tests::test_hamming_booleanity_sumcheck ... ok
+test subprotocols::mles_product_sum::tests::optimized_product_sum_matches_naive_16_mles ... ok
+test subprotocols::mles_product_sum::tests::optimized_product_sum_matches_naive_2_mles ... ok
+test subprotocols::mles_product_sum::tests::optimized_product_sum_matches_naive_32_mles ... ok
+test subprotocols::mles_product_sum::tests::optimized_product_sum_matches_naive_4_mles ... ok
+test subprotocols::mles_product_sum::tests::optimized_product_sum_matches_naive_5_mles ... ok
+test subprotocols::mles_product_sum::tests::optimized_product_sum_matches_naive_8_mles ... ok
+test subprotocols::mles_product_sum::tests::sum_of_products_evals_d16_matches_sum_of_individual_products ... ok
+test subprotocols::mles_product_sum::tests::sum_of_products_evals_d4_matches_sum_of_individual_products ... ok
+test subprotocols::mles_product_sum::tests::sum_of_products_evals_d8_matches_sum_of_individual_products ... ok
+test poly::eq_poly::tests::test_evals ... ok
+test subprotocols::opening_reduction::tests::test_3_dense ... ok
+test subprotocols::opening_reduction::tests::test_3_dense_oh ... ok
+test subprotocols::opening_reduction::tests::test_mix ... ok
+test subprotocols::ra_virtual::tests::test_ra_exponentiation ... ok
+test subprotocols::ra_virtual::tests::test_ra_d8 ... ok
+test transcripts::blake2b::tests::test_challenge_scalar_128_bits ... ok
+test transcripts::blake2b::tests::test_challenge_special_trivial ... ok
+test subprotocols::ra_virtual::tests::test_ra_tanh ... ok
+test utils::gaussian_elimination::tests::test_gauss ... ok
+test utils::tests::interleave_uninterleave_bits ... ok
+test transcripts::keccak::tests::test_challenge_scalar_128_bits ... ok
+test poly::commitment::hyperkzg::kzg::test::kzg_commit_prove_verify ... ok
+test subprotocols::evaluation_reduction::tests::h_restr_l_matches_expected ... ok
+
+test result: ok. 161 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.97s
+

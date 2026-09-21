@@ -1,0 +1,669 @@
+{
+  "frozen_at": "2026-09-21T14:25:53.566530+00:00",
+  "base": "cfcffb05dcc76599f4e5b3d01c6e13f5fa653e13",
+  "originals": [
+    {
+      "number": 365,
+      "title": "Reclaim owned arithmetic buffers after binding",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/365",
+      "baseRefName": "perf/native-arithmetic-prerequisites",
+      "headRefName": "perf/native-arithmetic-storage",
+      "headRefOid": "b2b6459fca5ca3e09132c91e2009f60a8a844692"
+    },
+    {
+      "number": 364,
+      "title": "Validate cyclotomic membership before faster compact GT checks",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/364",
+      "baseRefName": "perf/compact-gt-subgroup-check",
+      "headRefName": "perf/checked-cyclotomic-subgroups",
+      "headRefOid": "d1f23cfd88db1b3380923a44c27e4afa07af0a81"
+    },
+    {
+      "number": 363,
+      "title": "Reduce retained memory for immutable lookup indices",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/363",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/compact-lookup-indices",
+      "headRefOid": "7455985239ac1f6629a21eb5de51c67aca973dba"
+    },
+    {
+      "number": 362,
+      "title": "Reclaim working polynomial buffers during opening reduction",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/362",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/opening-buffer-reclamation",
+      "headRefOid": "9834459b7b3f347ba6d432cd1f09cf9cde07d369"
+    },
+    {
+      "number": 361,
+      "title": "Use a shorter exact subgroup check for compact GT points",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/361",
+      "baseRefName": "perf/ordered-opening-deduplication",
+      "headRefName": "perf/compact-gt-subgroup-check",
+      "headRefOid": "bcd3fe76c6da60409c7aac45cba463b51e80671a"
+    },
+    {
+      "number": 360,
+      "title": "Bound temporary tables during lookup preparation",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/360",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/bounded-lookup-preparation",
+      "headRefOid": "39a523d83bc0e2ecf4bab5cae5a02d2aee9f98f7"
+    },
+    {
+      "number": 359,
+      "title": "Avoid quadratic opening scans in BlindFold batching",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/359",
+      "baseRefName": "perf/dory-target-group-msm",
+      "headRefName": "perf/ordered-opening-deduplication",
+      "headRefOid": "bbcc441a6ae6a2ebec3055275a155c5fb5a1707c"
+    },
+    {
+      "number": 358,
+      "title": "Release dense polynomial inputs after joint construction",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/358",
+      "baseRefName": "perf/release-opening-caches",
+      "headRefName": "perf/owned-joint-inputs",
+      "headRefOid": "ad4759e3770e8b607417917240a1cebd7a88722a"
+    },
+    {
+      "number": 357,
+      "title": "Evaluate joint dense values without a full vector copy",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/357",
+      "baseRefName": "perf/release-opening-caches",
+      "headRefName": "perf/borrowed-joint-evaluation",
+      "headRefOid": "4b3d01c7a41b51f4649df16ab337094f70a57dba"
+    },
+    {
+      "number": 356,
+      "title": "Evaluate compact polynomial rows without nested scheduling",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/356",
+      "baseRefName": "perf/release-opening-caches",
+      "headRefName": "perf/local-row-evaluations",
+      "headRefOid": "744521a9684c7cef773d59d0440283c448902a0b"
+    },
+    {
+      "number": 355,
+      "title": "Use target-group MSM for large Dory commitment sums",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/355",
+      "baseRefName": "perf/parallel-dory-combinations",
+      "headRefName": "perf/dory-target-group-msm",
+      "headRefOid": "3cbd6234d7fbe43c29b8964874f2cbe755e522ee"
+    },
+    {
+      "number": 354,
+      "title": "Release finalized opening tables before PCS allocation",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/354",
+      "baseRefName": "perf/shared-opening-hints",
+      "headRefName": "perf/release-opening-caches",
+      "headRefOid": "cef3f9d6b6dc315117ed3c472729f27f97384845"
+    },
+    {
+      "number": 353,
+      "title": "Share immutable rows across cloned Dory hints",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/353",
+      "baseRefName": "perf/active-row-hint-prefixes",
+      "headRefName": "perf/shared-opening-hints",
+      "headRefOid": "f8db0be2d5abfe4cb55c58460dc14216786003b1"
+    },
+    {
+      "number": 352,
+      "title": "Combine row commitments from active hint prefixes",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/352",
+      "baseRefName": "perf/dense-joint-prefixes",
+      "headRefName": "perf/active-row-hint-prefixes",
+      "headRefOid": "bfe7b95985ff90e0211ca05444b41814b5de913d"
+    },
+    {
+      "number": 351,
+      "title": "Build dense joint polynomials from overlapping prefixes",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/351",
+      "baseRefName": "perf/tiled-indicator-evaluation",
+      "headRefName": "perf/dense-joint-prefixes",
+      "headRefOid": "040bd963617234fadcecf5b6827c6d8a7ab1c5d3"
+    },
+    {
+      "number": 350,
+      "title": "Commit native polynomials in bounded parallel batches",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/350",
+      "baseRefName": "perf/native-prover-buffer-lifetimes",
+      "headRefName": "perf/native-commitment-batches",
+      "headRefOid": "f320774a8468699ebe1a6e68961f9775fefc7d6b"
+    },
+    {
+      "number": 349,
+      "title": "Release consumed native prover buffers before later stages",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/349",
+      "baseRefName": "perf/parallel-zk-round-messages",
+      "headRefName": "perf/native-prover-buffer-lifetimes",
+      "headRefOid": "968eca2c401494623fc1e815bafcfb0c7a0042a0"
+    },
+    {
+      "number": 348,
+      "title": "Construct native contraction tables with small index maps",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/348",
+      "baseRefName": "perf/tiled-native-range-tables",
+      "headRefName": "perf/native-contraction-tables",
+      "headRefOid": "06fac80d6dbe40b0cfd14a58f8f770bb92f06e36"
+    },
+    {
+      "number": 347,
+      "title": "Evaluate sparse indicators with tiled equality weights",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/347",
+      "baseRefName": "perf/tiled-native-range-tables",
+      "headRefName": "perf/tiled-indicator-evaluation",
+      "headRefOid": "6bc0275457e81e1d55d8df1925b7b547c0c241e4"
+    },
+    {
+      "number": 346,
+      "title": "Compute independent ZK sumcheck messages in parallel",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/346",
+      "baseRefName": "perf/tiled-native-range-tables",
+      "headRefName": "perf/parallel-zk-round-messages",
+      "headRefOid": "397338eb08212e6349e609bca4dad680a3d1be91"
+    },
+    {
+      "number": 345,
+      "title": "Reduce native range table memory with tiled histograms",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/345",
+      "baseRefName": "perf/native-shared-range-commitments",
+      "headRefName": "perf/tiled-native-range-tables",
+      "headRefOid": "e94b30b2fc1bb9996727cf7f607bd1a99ebf1a28"
+    },
+    {
+      "number": 344,
+      "title": "Parallelize large Dory commitment combinations",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/344",
+      "baseRefName": "perf/native-shared-range-commitments",
+      "headRefName": "perf/parallel-dory-combinations",
+      "headRefOid": "44de4a9fe07da654eee339ed86822ef7d96fdd13"
+    },
+    {
+      "number": 343,
+      "title": "Share native range commitments and add checked compact GT transport",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/343",
+      "baseRefName": "feat/native-greedy-sequences",
+      "headRefName": "perf/native-shared-range-commitments",
+      "headRefOid": "28a3116437032da3d5433f11104f64b1e0c4a4b5"
+    },
+    {
+      "number": 339,
+      "title": "Prove shifted greedy selection and stopping over hidden tensors",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/339",
+      "baseRefName": "feat/native-tensor-boundaries",
+      "headRefName": "feat/native-greedy-sequences",
+      "headRefOid": "c634d95847ee02b9049891c70fe6e20bae2bcc22"
+    },
+    {
+      "number": 338,
+      "title": "Open original hidden graph tensors at external boundaries",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/338",
+      "baseRefName": "perf/one-hot-row-segments",
+      "headRefName": "feat/native-tensor-boundaries",
+      "headRefOid": "33e70b43e31ee65e943cd9873fad90c332bf4edf"
+    },
+    {
+      "number": 337,
+      "title": "Compute one-hot commitments in bounded row segments",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/337",
+      "baseRefName": "feat/native-first-maximum",
+      "headRefName": "perf/one-hot-row-segments",
+      "headRefOid": "59fe05a99607b1252b2baa35530805b927497a80"
+    },
+    {
+      "number": 336,
+      "title": "Prove the first maximum index over a logical tensor prefix",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/336",
+      "baseRefName": "fix/nested-msm-pools",
+      "headRefName": "feat/native-first-maximum",
+      "headRefOid": "bc75d22ff010f2daeaa84550c41b524b38ca38df"
+    },
+    {
+      "number": 335,
+      "title": "Avoid nested worker pools in BN254 G1 commitments",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/335",
+      "baseRefName": "feat/native-checked-witness",
+      "headRefName": "fix/nested-msm-pools",
+      "headRefOid": "698338c7eedae822c2a949a82676ff351da1e4b5"
+    },
+    {
+      "number": 334,
+      "title": "Validate native integer witnesses and exact softmax centering",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/334",
+      "baseRefName": "feat/native-integer-logic",
+      "headRefName": "feat/native-checked-witness",
+      "headRefOid": "82dd3f3ee37d9e2ab0833999b9d380724712d73c"
+    },
+    {
+      "number": 333,
+      "title": "Lower integer masks and selection into native graph proofs",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/333",
+      "baseRefName": "feat/native-row-gathers",
+      "headRefName": "feat/native-integer-logic",
+      "headRefOid": "c4c4fcf199f6a75f04d267a789e89c49d2b305ff"
+    },
+    {
+      "number": 332,
+      "title": "Project columns before proving committed row gathers",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/332",
+      "baseRefName": "feat/native-integer-division",
+      "headRefName": "feat/native-row-gathers",
+      "headRefOid": "59285a2af52e5c9b3882f18038ca4405456a993d"
+    },
+    {
+      "number": 331,
+      "title": "Prove exact integer division and periodic tables",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/331",
+      "baseRefName": "feat/native-committed-tables",
+      "headRefName": "feat/native-integer-division",
+      "headRefOid": "c2fd689e248358c731ffbd9076399af08bdf0dcf"
+    },
+    {
+      "number": 330,
+      "title": "Prove lookups into original committed tensor tables",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/330",
+      "baseRefName": "feat/native-public-parameters",
+      "headRefName": "feat/native-committed-tables",
+      "headRefOid": "a21d3177e9e6ab6ef8b85bad4677cfb35079d358"
+    },
+    {
+      "number": 329,
+      "title": "Register public parameters for reusable native graph proofs",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/329",
+      "baseRefName": "feat/native-logical-mean",
+      "headRefName": "feat/native-public-parameters",
+      "headRefOid": "6c996e1e63e9476da5f8a7802c9f7ad8281a74c1"
+    },
+    {
+      "number": 328,
+      "title": "Preserve logical divisors in native means of squares",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/328",
+      "baseRefName": "feat/native-tensor-slices",
+      "headRefName": "feat/native-logical-mean",
+      "headRefOid": "03977b3c9f27f6717e3cdae78515edc106f31943"
+    },
+    {
+      "number": 327,
+      "title": "Prove native hidden slices and concatenation",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/327",
+      "baseRefName": "feat/native-integer-softmax",
+      "headRefName": "feat/native-tensor-slices",
+      "headRefOid": "6647fafb4fbdd7cb7f0e94cc20bcab5bb421de84"
+    },
+    {
+      "number": 326,
+      "title": "Prove exact native integer softmax",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/326",
+      "baseRefName": "feat/native-tensor-layouts",
+      "headRefName": "feat/native-integer-softmax",
+      "headRefOid": "ccda1af39743ebd63997b6da2982db6b28cb8fb7"
+    },
+    {
+      "number": 325,
+      "title": "Prove hidden tensor broadcasts and layout changes",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/325",
+      "baseRefName": "feat/native-reciprocal-square-root",
+      "headRefName": "feat/native-tensor-layouts",
+      "headRefOid": "8be4a48e83fecee8ba2387466dee98627789fd55"
+    },
+    {
+      "number": 324,
+      "title": "Prove exact native reciprocal square roots",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/324",
+      "baseRefName": "feat/native-clamped-lookups",
+      "headRefName": "feat/native-reciprocal-square-root",
+      "headRefOid": "6a9db03932edffea9d1a10dde330f3cf1c91fa33"
+    },
+    {
+      "number": 323,
+      "title": "Prove signed clamping before private table lookups",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/323",
+      "baseRefName": "feat/native-tensor-contractions",
+      "headRefName": "feat/native-clamped-lookups",
+      "headRefOid": "0a7b207bb85d77a84972e6f7d721cdfaa09940ea"
+    },
+    {
+      "number": 322,
+      "title": "Prove exact matrix and tensor contractions with bounded operands",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/322",
+      "baseRefName": "feat/native-tensor-reductions",
+      "headRefName": "feat/native-tensor-contractions",
+      "headRefOid": "742001d0ddb52f2877dbff3ae6f3bb651208c6cc"
+    },
+    {
+      "number": 321,
+      "title": "Prove exact tensor sums and means of squares",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/321",
+      "baseRefName": "feat/native-clamped-arithmetic",
+      "headRefName": "feat/native-tensor-reductions",
+      "headRefOid": "be716a4404fb2e9718c6fa632e94ac2fb4f5a81e"
+    },
+    {
+      "number": 320,
+      "title": "Prove clamped addition and subtraction in native graphs",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/320",
+      "baseRefName": "feat/native-private-graphs",
+      "headRefName": "feat/native-clamped-arithmetic",
+      "headRefOid": "f04bf1dd36cd5005bb0b8222e6815972a043bdfd"
+    },
+    {
+      "number": 319,
+      "title": "Share hidden tensor commitments across registered graph proofs",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/319",
+      "baseRefName": "feat/native-integer-rescaling",
+      "headRefName": "feat/native-private-graphs",
+      "headRefOid": "5a26a89cfb786f1233fa464975b5378169b55a92"
+    },
+    {
+      "number": 318,
+      "title": "Prove exact integer multiplication with rescaling and clamping",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/318",
+      "baseRefName": "feat/native-private-lookups",
+      "headRefName": "feat/native-integer-rescaling",
+      "headRefOid": "61ac2436c61c76af25d06f7da4d35ddb1bb1a536"
+    },
+    {
+      "number": 317,
+      "title": "Bind private table relations to hiding tensor commitments",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/317",
+      "baseRefName": "feat/native-private-openings",
+      "headRefName": "feat/native-private-lookups",
+      "headRefOid": "18241b3fdccb946bd483e2eb3ef8447d113e0b5e"
+    },
+    {
+      "number": 316,
+      "title": "Add native hiding openings and derived BlindFold constraints",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/316",
+      "baseRefName": "perf/round-2",
+      "headRefName": "feat/native-private-openings",
+      "headRefOid": "9d9ee88e1f7e5e19da10e433d7ff748b7eb5517f"
+    },
+    {
+      "number": 315,
+      "title": "Compact ordinary Atlas proofs with bounded decoding",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/315",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/compact-softmax-claims",
+      "headRefOid": "b80c74bf533db7ca8c36909a18aaf27bb502043e"
+    },
+    {
+      "number": 314,
+      "title": "Add optional affine MSM for serial BN254 verification",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/314",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/affine-verifier-msm",
+      "headRefOid": "ec9ded3d55079c841e3a3453c42eb741f60d2242"
+    },
+    {
+      "number": 313,
+      "title": "Reuse softmax tables and derive commitment sizes directly",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/313",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/shared-softmax-tables",
+      "headRefOid": "79455edb6439d3557e94490412291c1c6bec5646"
+    },
+    {
+      "number": 312,
+      "title": "Evaluate broadcast selectors directly",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/312",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/direct-broadcast-verification",
+      "headRefOid": "c865b2a573c58569e61a157be46e6f497323c700"
+    },
+    {
+      "number": 311,
+      "title": "Embed validated fixed activation tables for verifier guests",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/311",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/fixed-activation-tables",
+      "headRefOid": "4d7b8324be388e22c5b40faa20ebeb144c00232a"
+    },
+    {
+      "number": 310,
+      "title": "Evaluate reduction interpolation with a shared Lagrange basis",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/310",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/direct-reduction-interpolation",
+      "headRefOid": "e7f090564995b7b32283aaaf7e51c73cd82466a8"
+    },
+    {
+      "number": 309,
+      "title": "Share activation tables and evaluations during verification",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/309",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/shared-activation-verifier",
+      "headRefOid": "8718b9923500a77136c110de2e16847e7bbdafd1"
+    },
+    {
+      "number": 308,
+      "title": "Build clamp buckets without scanning constant weights",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/308",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/clamp-bucket-metadata",
+      "headRefOid": "86378ec0977fe19269e8b8f86a5e7158bfbd7541"
+    },
+    {
+      "number": 302,
+      "title": "Evaluate equality factors with one field product",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/302",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/equality-factor-product",
+      "headRefOid": "bb4c7e87dd678e2533e31ad49efd9a61d20cb209"
+    },
+    {
+      "number": 301,
+      "title": "Interpolate linear polynomials directly",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/301",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/linear-interpolation",
+      "headRefOid": "e52b16e040db4723c8cb227d57cc97cadb4d519f"
+    },
+    {
+      "number": 300,
+      "title": "Reuse equality weights when verifying softmax max indicators",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/300",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/softmax-indicator-evaluation",
+      "headRefOid": "26c18315044dd096da5814caaa3c57395bbb3222"
+    },
+    {
+      "number": 299,
+      "title": "Evaluate aligned concat selectors without tensor tables",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/299",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/concat-selector-evaluation",
+      "headRefOid": "7fefdef956eff3bb138bbb1b45ea4e5a7485fe31"
+    },
+    {
+      "number": 298,
+      "title": "Evaluate aligned slice selectors without tensor tables",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/298",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/slice-selector-evaluation",
+      "headRefOid": "40f99419c2e7cbdad6b6dc490dd51578200a5688"
+    },
+    {
+      "number": 297,
+      "title": "Evaluate unpadded reshape selectors without materializing tensors",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/297",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/reshape-selector-evaluation",
+      "headRefOid": "6d2e47dd0d582dc1b8cc39310049c782fda02a17"
+    },
+    {
+      "number": 296,
+      "title": "Evaluate univariate polynomials with Horner rule",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/296",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/unipoly-horner",
+      "headRefOid": "8f23c44a62aa276c3228edac722f50534d008655"
+    },
+    {
+      "number": 295,
+      "title": "Batch HyperKZG commitment combination into one MSM",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/295",
+      "baseRefName": "perf/round-2",
+      "headRefName": "perf/hyperkzg-commitment-msm",
+      "headRefOid": "8a11975ddc47ebf388a3edad7c2e47e3902558a7"
+    },
+    {
+      "number": 294,
+      "title": "Allow serial Atlas verification without ONNX import",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/294",
+      "baseRefName": "perf/round-2",
+      "headRefName": "build/serial-atlas-verifier",
+      "headRefOid": "478f36c7b04025891996a6dadb3eca68959164ad"
+    },
+    {
+      "number": 293,
+      "title": "Preserve logical element order across padded reshapes",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/293",
+      "baseRefName": "perf/round-2",
+      "headRefName": "fix/reshape-padding-layout",
+      "headRefOid": "a78b7a5c83ae0dca71e671658c8aaea87d5e75bb"
+    },
+    {
+      "number": 292,
+      "title": "Restore headroom for additive attention masks",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/292",
+      "baseRefName": "perf/round-2",
+      "headRefName": "fix/attention-mask-sentinel",
+      "headRefOid": "5f0024556c04cb3d1880273f90aede18691f7faa"
+    },
+    {
+      "number": 368,
+      "title": "Reduce retained storage during native BlindFold verification",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/368",
+      "baseRefName": "perf/ordered-opening-deduplication",
+      "headRefName": "perf/blindfold-verifier-storage",
+      "headRefOid": "3deadf84856bf127c39e011ce5c2da88b2229cca"
+    }
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "Fix padded tensor semantics and commitment execution",
+      "prs": [
+        292,
+        293,
+        335
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Reduce ordinary verifier work and compact HyperKZG proofs",
+      "prs": [
+        294,
+        295,
+        296,
+        297,
+        298,
+        299,
+        300,
+        301,
+        302,
+        308,
+        309,
+        310,
+        311,
+        312,
+        313,
+        314,
+        315
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Add registered native BlindFold graph proofs and tensor boundaries",
+      "prs": [
+        316,
+        317,
+        318,
+        319,
+        329,
+        338
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Prove exact native tensor arithmetic and layouts",
+      "prs": [
+        320,
+        321,
+        322,
+        323,
+        324,
+        325,
+        326,
+        327,
+        328
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Prove committed table access and greedy generation",
+      "prs": [
+        330,
+        331,
+        332,
+        333,
+        334,
+        336,
+        339
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Reduce native proving time and retained memory",
+      "prs": [
+        337,
+        345,
+        346,
+        347,
+        348,
+        349,
+        350,
+        351,
+        352,
+        353,
+        354,
+        356,
+        357,
+        358,
+        360,
+        362,
+        363,
+        365
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Reduce native verification and checked decoding cost",
+      "prs": [
+        343,
+        344,
+        355,
+        359,
+        361,
+        364,
+        368
+      ]
+    }
+  ],
+  "split_changes": {
+    "343": "Shared range commitments are in native-prover; checked transport is in native-verifier.",
+    "344": "Activation-test repair is in tensor-correctness; parallel verification is in native-verifier.",
+    "366": "Attributed centering commit is included in tensor-correctness. Its separate PR and original base branch are preserved.",
+    "329": "Vector registration is in native-foundations; tensor registration and the normalization example are in native-operators.",
+    "338": "Vector boundaries are in native-foundations; scalar/tensor coverage is in native-operators; the uncommitted-witness control is in native-generation with its constructor."
+  },
+  "additional_attributed_commits": [
+    {
+      "pr": 366,
+      "source": "b979c8d55054e28f80d2acb2f40433e0038d95f3",
+      "author": "AntoineF4C5",
+      "replacement_commit": "bc055cf"
+    }
+  ],
+  "supplement": "PR 368 captured after original inventory, with two source commits preserved in native-verifier."
+}

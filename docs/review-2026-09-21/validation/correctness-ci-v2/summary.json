@@ -1,0 +1,98 @@
+{
+  "archive_sha256": "4b6f645cf48b4e27578246915645501fc920b5d0bfb0b0d04d954292f00eb9c7",
+  "patch_sha256": "77f78f920c77dc7887a4c5473cda2d29ed8f413502510a64412247b37e524087",
+  "source_head": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+  "authenticated_files": 437,
+  "source": "/root/atlas-consolidation/correctness-ci-v2",
+  "workers": 8,
+  "toolchain": "1.95.0",
+  "environment": {
+    "RUSTFLAGS": "-D warnings",
+    "CARGO_TARGET_DIR": "/root/atlas-consolidation/target",
+    "RAYON_NUM_THREADS": "8"
+  },
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.1683392524719238,
+      "log": "00.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "--workspace",
+        "--all-targets"
+      ],
+      "exit_code": 0,
+      "seconds": 17.417752265930176,
+      "log": "01.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "check",
+        "-p",
+        "jolt-atlas-core",
+        "--all-targets",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 101,
+      "seconds": 14.861408233642578,
+      "log": "02.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "-p",
+        "jolt-atlas-core",
+        "--all-targets",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 101,
+      "seconds": 13.506046056747437,
+      "log": "03.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "--workspace",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 185.6278691291809,
+      "log": "04.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "jolt-atlas-core",
+        "--lib",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 101,
+      "seconds": 33.1172821521759,
+      "log": "05.log"
+    }
+  ],
+  "local_crates_cleaned": true
+}

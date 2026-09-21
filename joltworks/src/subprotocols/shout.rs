@@ -659,6 +659,10 @@ mod bounded_lookup_preparation_tests {
             gamma: Fr::from(7u64),
             rv_claim: Fr::zero(),
             raf_claim: Fr::zero(),
+            #[cfg(feature = "zk")]
+            rv_source: OpeningId::new(VirtualPoly::NodeOutput(0), SumcheckId::NodeExecution(0)),
+            #[cfg(feature = "zk")]
+            raf_source: OpeningId::new(VirtualPoly::NodeOutput(1), SumcheckId::NodeExecution(0)),
             ra_vp: VirtualPoly::NodeOutput(2),
             ra_sid: SumcheckId::NodeExecution(0),
             log_K: log_table,

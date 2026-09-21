@@ -9,13 +9,15 @@ use atlas_onnx_tracer::model::{trace::ModelExecutionIO, Model, RunArgs};
 use atlas_onnx_tracer::tensor::Tensor;
 #[cfg(feature = "onnx-import")]
 use common::consts::MODEL_SCALE;
-use joltworks::{
-    poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
-    transcripts::Blake2bTranscript,
-};
-use rand::{rngs::StdRng, Rng, SeedableRng};
+#[cfg(feature = "onnx-import")]
+use joltworks::poly::commitment::dory::DoryScheme;
+use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
+#[cfg(feature = "onnx-import")]
+use rand::Rng;
+use rand::{rngs::StdRng, SeedableRng};
 #[cfg(feature = "onnx-import")]
 use serde_json::Value;
+#[cfg(feature = "onnx-import")]
 use std::time::Instant;
 #[cfg(feature = "onnx-import")]
 use std::{collections::HashMap, fs::File, io::Read};

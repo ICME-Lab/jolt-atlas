@@ -33,12 +33,21 @@ pub trait IntoParallelRefMutIterator<'data> {
     fn par_iter_mut(&'data mut self) -> Self::Iter;
 }
 
-impl<T: IntoIterator> IntoParallelIterator for T {
-    type Item = T::Item;
-    type Iter = T::IntoIter;
+impl<T> IntoParallelIterator for Vec<T> {
+    type Item = T;
+    type Iter = std::vec::IntoIter<T>;
 
     fn into_par_iter(self) -> Self::Iter {
         self.into_iter()
+    }
+}
+
+impl IntoParallelIterator for std::ops::Range<usize> {
+    type Item = usize;
+    type Iter = Self;
+
+    fn into_par_iter(self) -> Self::Iter {
+        self
     }
 }
 
@@ -160,5 +169,11 @@ mod tests {
         borrowed.for_each(|v| *v += 1);
         values.par_sort_unstable();
         assert_eq!(values, [-9, 1, 7, 15]);
+
+        let mut values = (0usize..5).into_par_iter().collect::<Vec<_>>();
+        values.par_chunks_mut(2).enumerate().for_each(|(i, chunk)| {
+            chunk.iter_mut().for_each(|value| *value += 10 * i);
+        });
+        assert_eq!(values, [0, 1, 12, 13, 24]);
     }
 }

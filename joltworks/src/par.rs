@@ -34,8 +34,8 @@ mod imp {
 
     /// `rayon::iter::repeat_n`: a producer of `n` clones of `elem`.
     #[inline(always)]
-    pub fn repeat_n<T: Clone>(elem: T, n: usize) -> Par<core::iter::Take<core::iter::Repeat<T>>> {
-        Par(core::iter::repeat(elem).take(n))
+    pub fn repeat_n<T: Clone>(elem: T, n: usize) -> Par<core::iter::RepeatN<T>> {
+        Par(core::iter::repeat_n(elem, n))
     }
 
     /// `rayon::join`: run both closures, serially, left then right.
@@ -538,14 +538,12 @@ mod imp {
 
         #[inline(always)]
         pub fn any<F: FnMut(I::Item) -> bool>(self, f: F) -> bool {
-            let mut f = f;
-            self.0.into_iter().any(|x| f(x))
+            self.0.into_iter().any(f)
         }
 
         #[inline(always)]
         pub fn all<F: FnMut(I::Item) -> bool>(self, f: F) -> bool {
-            let mut f = f;
-            self.0.into_iter().all(|x| f(x))
+            self.0.into_iter().all(f)
         }
 
         #[inline(always)]

@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 
 pub mod clamp_lookups;
 pub mod clamp_split;
+pub mod compact;
 pub mod deferred_lookups;
 pub mod fused_rebase;
 pub mod global_clamp;
@@ -46,7 +47,7 @@ mod verifier;
 #[cfg(feature = "zk")]
 pub mod zk;
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "onnx-import", feature = "zk")))]
 mod e2e_tests;
 #[cfg(test)]
 mod soundness_tests;

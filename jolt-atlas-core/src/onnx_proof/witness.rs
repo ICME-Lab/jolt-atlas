@@ -19,7 +19,9 @@ use crate::{
     onnx_proof::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits},
         neural_teleport::{division::compute_division, n_bits_to_usize},
-        ops::rsqrt::rsqrt_dividend,
+        ops::{
+            rsqrt::rsqrt_dividend, softmax_last_axis::significance_clamp::softmax_clamp_lookup_bits,
+        },
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
             RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
@@ -39,10 +41,14 @@ use atlas_onnx_tracer::{
     utils::quantize::scale_to_multiplier,
 };
 use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, TRIG_PERIOD_MODULUS, XLEN},
+    consts::{
+        ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, SOFTMAX_CLAMP_LOG_K, TRIG_PERIOD_MODULUS,
+        XLEN,
+    },
     parallel::par_enabled,
     CommittedPoly,
 };
+use joltworks::par::prelude::*;
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
@@ -50,7 +56,6 @@ use joltworks::{
     subprotocols,
     utils::{lookup_bits::LookupBits, math::Math},
 };
-use rayon::prelude::*;
 
 /// Builds a one-hot RaD witness for any of the range-checking operand types.
 ///
@@ -562,8 +567,8 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let operand = Tensor::new(Some(&z), &[z.len()])
                     .expect("softmax_z tensor construction")
                     .padded_next_power_of_two();
-                let lookup_indices = compute_lookup_indices_from_operands(&[&operand], false);
-                build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
+                let lookup_bits = softmax_clamp_lookup_bits(&operand);
+                build_one_hot_rad_witness(&lookup_bits, *d, SOFTMAX_CLAMP_LOG_K)
             }
             CommittedPoly::RescaleRemainderRaD(node_idx, d) => {
                 // Fused rescaling remainder `R = acc mod 2^S ∈ [0, 2^S)`, padded

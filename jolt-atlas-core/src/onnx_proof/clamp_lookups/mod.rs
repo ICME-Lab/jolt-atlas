@@ -32,6 +32,7 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
+use joltworks::par::prelude::*;
 use joltworks::{
     field::JoltField,
     poly::{
@@ -45,7 +46,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
-use rayon::prelude::*;
 
 /// Widest address of the saturating-clamp lookup table (an i64 accumulation).
 /// Individual nodes use `node.sat_clamp_bits ∈ {40, 48, 56, 64}` (see

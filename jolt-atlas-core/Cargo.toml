@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+default = ["parallel", "onnx-import"]
+parallel = ["dep:rayon", "joltworks/parallel", "atlas-onnx-tracer/parallel"]
+onnx-import = ["atlas-onnx-tracer/onnx-import"]
+fixed-tables = []
+check-fixed-tables = ["fixed-tables"]
+affine-msm = ["joltworks/affine-msm"]
 zk = ["joltworks/zk"]
 
 [dependencies]
@@ -28,7 +34,7 @@ serde_json.workspace = true
 bincode.workspace = true
 
 # Parallel Processing
-rayon.workspace = true
+rayon = { workspace = true, optional = true }
 
 # Randomness
 rand.workspace = true

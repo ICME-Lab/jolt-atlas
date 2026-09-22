@@ -60,6 +60,7 @@ use super::{
 };
 use atlas_onnx_tracer::{model::trace::Trace, model::Model, node::ComputationNode};
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
+use joltworks::par::prelude::*;
 use joltworks::subprotocols::booleanity::{LinearClaim, LinearTerm};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -85,7 +86,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::thread::unsafe_allocate_zero_vec,
 };
-use rayon::prelude::*;
 
 /// Address width of the output range check (`out + 2^31 ∈ [0, 2^32)`).
 pub const OUT_LOG_K: usize = 32;
@@ -393,7 +393,7 @@ fn compute_g<F: JoltField>(chunks: &[Vec<Option<u8>>], r_cycle: &[F]) -> Vec<Vec
     chunks
         .par_iter()
         .map(|idx| {
-            let num_chunks = rayon::current_num_threads()
+            let num_chunks = joltworks::par::current_num_threads()
                 .next_power_of_two()
                 .min(idx.len());
             let chunk_size = (idx.len() / num_chunks).max(1);

@@ -1,3 +1,6 @@
+#[cfg(not(feature = "affine-msm"))]
+use crate::msm::VariableBaseMSM;
+use crate::par::prelude::*;
 use crate::{
     field::JoltField,
     poly::{
@@ -17,7 +20,6 @@ use ark_ec::CurveGroup;
 use common::parallel::par_enabled;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use rayon::prelude::*;
 use std::{borrow::Borrow, sync::Arc};
 
 impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
@@ -92,11 +94,17 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
         commitments: &[C],
         coeffs: &[Self::Field],
     ) -> Self::Commitment {
-        let combined_commitment: ark_bn254::G1Projective = commitments
-            .iter()
-            .zip(coeffs.iter())
-            .map(|(commitment, coeff)| commitment.borrow().0 * coeff)
-            .sum();
+        assert_eq!(
+            commitments.len(),
+            coeffs.len(),
+            "commitments and coefficients must have the same length"
+        );
+        let bases: Vec<_> = commitments.iter().map(|c| c.borrow().0).collect();
+        #[cfg(feature = "affine-msm")]
+        let combined_commitment = crate::msm::bn254_affine::msm(&bases, coeffs);
+        #[cfg(not(feature = "affine-msm"))]
+        let combined_commitment = ark_bn254::G1Projective::msm_field_elements(&bases, coeffs)
+            .expect("commitments and coefficients must have the same length");
         HyperKZGCommitment(combined_commitment.into_affine())
     }
 

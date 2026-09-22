@@ -1,6 +1,6 @@
+use crate::par::prelude::*;
 use allocative::Allocative;
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 use std::ops::Index;
 
 use crate::field::JoltField;
@@ -30,7 +30,7 @@ impl<F: JoltField> ExpandingTable<F> {
     /// Initializes an `ExpandingTable` with the given `capacity`.
     #[tracing::instrument(skip_all, name = "ExpandingTable::new")]
     pub fn new(capacity: usize, binding_order: BindingOrder) -> Self {
-        let (values, scratch_space) = rayon::join(
+        let (values, scratch_space) = crate::par::join(
             || unsafe_allocate_zero_vec(capacity),
             || match binding_order {
                 BindingOrder::LowToHigh => Vec::with_capacity(0),
@@ -99,7 +99,7 @@ impl<F: JoltField> Index<usize> for ExpandingTable<F> {
 
 impl<'data, F: JoltField> IntoParallelIterator for &'data ExpandingTable<F> {
     type Item = &'data F;
-    type Iter = rayon::slice::Iter<'data, F>;
+    type Iter = crate::par::slice::Iter<'data, F>;
 
     fn into_par_iter(self) -> Self::Iter {
         self.values[..self.len].into_par_iter()

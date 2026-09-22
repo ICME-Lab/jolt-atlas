@@ -117,6 +117,7 @@ pub struct LayerData<'a> {
 }
 
 /// Inputs and outputs of a model execution.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelExecutionIO {
     /// Input tensors provided to the model.
     pub inputs: Vec<Tensor<i32>>,

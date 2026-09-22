@@ -10,7 +10,11 @@ pub mod clamp_width;
 /// Functions for executing models and tracing intermediate outputs.
 pub mod execute;
 /// Functions for loading models from ONNX files.
+#[cfg(feature = "onnx-import")]
 pub mod load;
+#[cfg(feature = "onnx-import")]
+mod reshape_padding;
+#[cfg(feature = "onnx-import")]
 pub mod shadow_trace;
 pub mod test;
 pub mod trace;
@@ -48,6 +52,7 @@ impl Model {
     /// let model = Model::load("path/to/model.onnx", &run_args);
     /// ```
     #[tracing::instrument(name = "Model::load", skip_all)]
+    #[cfg(feature = "onnx-import")]
     pub fn load(path: &str, run_args: &RunArgs) -> Self {
         Self::load_onnx_model(path, run_args)
     }
@@ -108,6 +113,7 @@ impl Model {
     ///
     /// Panics if the ONNX file cannot be loaded, the model cannot be made runnable,
     /// or the forward pass fails.
+    #[cfg(feature = "onnx-import")]
     pub fn run_tract_forward(
         path: &str,
         run_args: &RunArgs,
@@ -341,11 +347,13 @@ pub struct ComputationGraph {
     /// Indices of output nodes
     pub outputs: Vec<usize>,
     /// Original (unpadded) dimensions for input nodes, indexed by node index
-    /// Only populated when padding is enabled
-    pub original_input_dims: HashMap<usize, Vec<usize>>,
+    /// Populated when padding is enabled. Ordered maps give stable serialization
+    /// and do not require an OS entropy source during guest decoding.
+    pub original_input_dims: BTreeMap<usize, Vec<usize>>,
     /// Original (unpadded) dimensions for output nodes, indexed by node index
-    /// Only populated when padding is enabled
-    pub original_output_dims: HashMap<usize, Vec<usize>>,
+    /// Populated when padding is enabled. Ordered maps give stable serialization
+    /// and do not require an OS entropy source during guest decoding.
+    pub original_output_dims: BTreeMap<usize, Vec<usize>>,
 }
 
 impl ComputationGraph {
@@ -490,7 +498,7 @@ impl RunArgs {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "onnx-import"))]
 mod tests {
     use super::*;
 

@@ -9,6 +9,7 @@
 //! `L^T·M` (vector-matrix product), the evaluation, and (absent a hint) the row
 //! commitments — and all three are linear, so this type computes them straight
 //! from the one-hots in `O(Σ nonzeros)` plus `O(dense)` for the few dense polys.
+use crate::par::prelude::*;
 use ark_bn254::Fr;
 use ark_ff::{One, Zero};
 use common::{parallel::par_enabled, CommittedPoly};
@@ -22,7 +23,6 @@ use dory::{
     },
     setup::ProverSetup,
 };
-use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 use crate::{

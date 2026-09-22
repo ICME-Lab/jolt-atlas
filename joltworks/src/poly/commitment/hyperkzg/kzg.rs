@@ -1,5 +1,6 @@
 use crate::field::JoltField;
 use crate::msm::VariableBaseMSM;
+use crate::par::prelude::*;
 use crate::poly::multilinear_polynomial::MultilinearPolynomial;
 use crate::poly::unipoly::UniPoly;
 use crate::utils::errors::ProofVerifyError;
@@ -10,7 +11,6 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{One, UniformRand, Zero};
 use common::parallel::par_enabled;
 use rand_core::{CryptoRng, RngCore};
-use rayon::prelude::*;
 use std::borrow::Borrow;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ impl<P: Pairing> SRS<P> {
         let g1_table = FixedBase::get_window_table(scalar_bits, g1_window_size, g1);
         let g2_table = FixedBase::get_window_table(scalar_bits, g2_window_size, g2);
 
-        let (g1_powers_projective, g2_powers_projective) = rayon::join(
+        let (g1_powers_projective, g2_powers_projective) = crate::par::join(
             || {
                 let beta_powers: Vec<P::ScalarField> = (0..=num_g1_powers)
                     .scan(beta, |acc, _| {
@@ -65,7 +65,7 @@ impl<P: Pairing> SRS<P> {
             },
         );
 
-        let (g1_powers, g2_powers) = rayon::join(
+        let (g1_powers, g2_powers) = crate::par::join(
             || P::G1::normalize_batch(&g1_powers_projective),
             || P::G2::normalize_batch(&g2_powers_projective),
         );

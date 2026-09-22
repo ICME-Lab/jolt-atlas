@@ -17,8 +17,8 @@
 
 use crate::curve::{JoltCurve, JoltGroupElement};
 use crate::field::JoltField;
+use crate::par::prelude::*;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use rayon::prelude::*;
 
 use super::r1cs::VerifierR1CS;
 use super::BlindFoldVerifyError;
@@ -153,7 +153,7 @@ impl<F: JoltField, C: JoltCurve<F = F>> RelaxedR1CSInstance<F, C> {
             w_other.push(c2);
         }
 
-        let (w_folded, e_folded) = rayon::join(
+        let (w_folded, e_folded) = crate::par::join(
             || {
                 w_self
                     .par_iter()

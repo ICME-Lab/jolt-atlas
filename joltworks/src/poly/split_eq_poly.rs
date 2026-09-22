@@ -4,9 +4,9 @@
 use common::parallel::par_enabled;
 use std::ops::Mul;
 
+use crate::par::prelude::*;
 use allocative::Allocative;
 use ark_ff::Zero;
-use rayon::prelude::*;
 
 use super::{dense_mlpoly::DensePolynomial, multilinear_polynomial::BindingOrder};
 use crate::{
@@ -105,7 +105,7 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
                 let (w_out, w_in) = wprime.split_at(m);
                 // evals_cached returns (n+1) tables where index k = eq over k vars.
                 // E_*_vec[0] = [1] already.
-                let (E_out_vec, E_in_vec) = rayon::join(
+                let (E_out_vec, E_in_vec) = crate::par::join(
                     || EqPolynomial::evals_cached(w_out),
                     || EqPolynomial::evals_cached(w_in),
                 );
@@ -127,7 +127,7 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
                 let (w_in, w_out) = wprime.split_at(m);
                 // evals_cached_rev returns (n+1) tables where index k = eq over k vars.
                 // E_*_vec[0] = [1] already.
-                let (E_in_vec, E_out_vec) = rayon::join(
+                let (E_in_vec, E_out_vec) = crate::par::join(
                     || EqPolynomial::evals_cached_rev(w_in),
                     || EqPolynomial::evals_cached_rev(w_out),
                 );

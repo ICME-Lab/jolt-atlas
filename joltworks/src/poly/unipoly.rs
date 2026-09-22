@@ -4,13 +4,13 @@ use std::cmp::Ordering;
 use std::iter::zip;
 use std::ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Sub};
 
+use crate::par::prelude::*;
 use crate::poly::lagrange_poly::LagrangeHelper;
 use crate::transcripts::{AppendToTranscript, Transcript};
 use crate::utils::gaussian_elimination::gaussian_elimination;
 use allocative::Allocative;
 use ark_serialize::*;
 use rand_core::{CryptoRng, RngCore};
-use rayon::prelude::*;
 
 use super::multilinear_polynomial::MultilinearPolynomial;
 use crate::utils::small_scalar::SmallScalar;
@@ -54,6 +54,9 @@ impl<F: JoltField> UniPoly<F> {
     /// Interpolate a polynomial from its evaluations at the points 0, 1, 2, ..., n-1.
     pub fn from_evals(evals: &[F]) -> Self {
         match evals.len() {
+            // The values at zero and one determine the slope directly. Keep
+            // from_coeff's trimming behavior for constant and zero polynomials.
+            2 => Self::from_coeff(vec![evals[0], evals[1] - evals[0]]),
             3 => Self::from_evals_degree2(evals[0], evals[1], evals[2]),
             4 => Self::from_evals_degree3(evals[0], evals[1], evals[2], evals[3]),
             _ => {
@@ -230,17 +233,11 @@ impl<F: JoltField> UniPoly<F> {
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        let mut eval = coeffs[0];
-        let mut power = (*r).into();
-        for i in 1..coeffs.len() {
-            eval += power * coeffs[i];
-
-            #[allow(clippy::assign_op_pattern)]
-            {
-                power = power * *r;
-            }
-        }
-        eval
+        let (&leading, remaining) = coeffs.split_last().expect("empty polynomial");
+        remaining
+            .iter()
+            .rev()
+            .fold(leading, |value, coefficient| value * *r + coefficient)
     }
 
     #[tracing::instrument(skip_all, name = "UniPoly::eval_as_univariate")]
@@ -523,13 +520,13 @@ impl<F: JoltField> CompressedUniPoly<F> {
             linear_term -= self.coeffs_except_linear_term[i];
         }
 
-        let mut running_point: F = (*x).into();
-        let mut running_sum = self.coeffs_except_linear_term[0] + *x * linear_term;
-        for i in 1..self.coeffs_except_linear_term.len() {
-            running_point = running_point * x;
-            running_sum += self.coeffs_except_linear_term[i] * running_point;
-        }
-        running_sum
+        // Horner evaluation keeps every multiplication against the challenge,
+        // avoiding both its powers and full field products with those powers.
+        let higher_terms = self.coeffs_except_linear_term[1..]
+            .iter()
+            .rev()
+            .fold(F::zero(), |value, coefficient| (value + coefficient) * x);
+        (higher_terms + linear_term) * x + self.coeffs_except_linear_term[0]
     }
 
     pub fn degree(&self) -> usize {
@@ -599,6 +596,71 @@ mod tests {
     use num::Zero;
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
+
+    #[test]
+    fn horner_evaluation_matches_power_basis() {
+        type Challenge = <Fr as JoltField>::Challenge;
+        let mut rng = ChaCha20Rng::from_seed([19; 32]);
+        for length in [1, 2, 3, 4, 8, 17, 64] {
+            for leading_zero in [false, true] {
+                let mut coeffs: Vec<Fr> = (0..length).map(|_| Fr::random(&mut rng)).collect();
+                if leading_zero {
+                    *coeffs.last_mut().unwrap() = Fr::from(0u64);
+                }
+                for raw in [0, 1, 2, u128::MAX, rng.next_u64() as u128] {
+                    let challenge = Challenge::from(raw);
+                    let point: Fr = challenge.into();
+                    let mut power = Fr::from(1u64);
+                    let mut expected = Fr::from(0u64);
+                    for coefficient in &coeffs {
+                        expected += *coefficient * power;
+                        power *= point;
+                    }
+                    assert_eq!(UniPoly::eval_with_coeffs(&coeffs, &challenge), expected);
+                    assert_eq!(UniPoly::eval_with_coeffs(&coeffs, &point), expected);
+
+                    // An arbitrary hint also tests reconstruction of a nonzero
+                    // omitted linear term when only a constant is transmitted.
+                    let compressed = CompressedUniPoly {
+                        coeffs_except_linear_term: coeffs.clone(),
+                    };
+                    let hint = Fr::random(&mut rng);
+                    let decompressed = compressed.decompress(&hint);
+                    let mut power = Fr::from(1u64);
+                    let mut expected = Fr::from(0u64);
+                    for coefficient in &decompressed.coeffs {
+                        expected += *coefficient * power;
+                        power *= point;
+                    }
+                    assert_eq!(compressed.eval_from_hint(&hint, &challenge), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn linear_interpolation_matches_vandermonde() {
+        let mut rng = ChaCha20Rng::from_seed([29; 32]);
+        let mut cases = vec![
+            [Fr::from(0u64), Fr::from(0u64)],
+            [Fr::from(42u64), Fr::from(42u64)],
+            [Fr::from(0u64), Fr::from(1u64)],
+            [Fr::from(1u64), Fr::from(0u64)],
+        ];
+        cases.extend((0..128).map(|_| [Fr::random(&mut rng), Fr::random(&mut rng)]));
+        for values in cases {
+            let expected = UniPoly::from_coeff(UniPoly::vandermonde_interpolation(&values));
+            let actual = UniPoly::from_evals(&values);
+            assert_eq!(actual, expected);
+            let mut actual_bytes = Vec::new();
+            let mut expected_bytes = Vec::new();
+            actual.serialize_compressed(&mut actual_bytes).unwrap();
+            expected.serialize_compressed(&mut expected_bytes).unwrap();
+            assert_eq!(actual_bytes, expected_bytes);
+            assert_eq!(actual.eval_at_zero(), values[0]);
+            assert_eq!(actual.eval_at_one(), values[1]);
+        }
+    }
 
     #[test]
     fn test_from_evals_toom() {

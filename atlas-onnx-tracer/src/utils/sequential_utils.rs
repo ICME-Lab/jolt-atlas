@@ -1,23 +1,35 @@
 //! Iterator fallback for targets without a worker pool.
 
+/// Sequential replacement for owned parallel iteration.
 pub trait IntoParallelIterator {
+    /// Item yielded by the iterator.
     type Item;
+    /// Sequential iterator type.
     type Iter: Iterator<Item = Self::Item>;
 
+    /// Iterate on the calling thread.
     fn into_par_iter(self) -> Self::Iter;
 }
 
+/// Sequential replacement for shared parallel iteration.
 pub trait IntoParallelRefIterator<'data> {
+    /// Sequential iterator type.
     type Iter: Iterator<Item = Self::Item>;
+    /// Item yielded by the iterator.
     type Item: 'data;
 
+    /// Iterate on the calling thread.
     fn par_iter(&'data self) -> Self::Iter;
 }
 
+/// Sequential replacement for mutable parallel iteration.
 pub trait IntoParallelRefMutIterator<'data> {
+    /// Sequential iterator type.
     type Iter: Iterator<Item = Self::Item>;
+    /// Item yielded by the iterator.
     type Item: 'data;
 
+    /// Iterate on the calling thread.
     fn par_iter_mut(&'data mut self) -> Self::Iter;
 }
 
@@ -27,6 +39,15 @@ impl<T> IntoParallelIterator for Vec<T> {
 
     fn into_par_iter(self) -> Self::Iter {
         self.into_iter()
+    }
+}
+
+impl IntoParallelIterator for std::ops::Range<usize> {
+    type Item = usize;
+    type Iter = Self;
+
+    fn into_par_iter(self) -> Self::Iter {
+        self
     }
 }
 
@@ -66,13 +87,22 @@ impl<'data, T: 'data> IntoParallelRefMutIterator<'data> for [T] {
     }
 }
 
+/// Sequential sorting of a mutable slice.
 pub trait ParallelSliceMut<T> {
+    /// Divide a mutable slice into disjoint chunks on the calling thread.
+    fn par_chunks_mut(&mut self, size: usize) -> std::slice::ChunksMut<'_, T>;
+
+    /// Sort on the calling thread.
     fn par_sort_unstable(&mut self)
     where
         T: Ord;
 }
 
 impl<T> ParallelSliceMut<T> for [T] {
+    fn par_chunks_mut(&mut self, size: usize) -> std::slice::ChunksMut<'_, T> {
+        self.chunks_mut(size)
+    }
+
     fn par_sort_unstable(&mut self)
     where
         T: Ord,
@@ -81,7 +111,9 @@ impl<T> ParallelSliceMut<T> for [T] {
     }
 }
 
+/// Iterator helper that accepts a parallel chunk hint.
 pub trait ParallelIterator: Iterator + Sized {
+    /// Ignore a parallel chunk hint.
     fn with_min_len(self, _min: usize) -> Self {
         self
     }
@@ -89,16 +121,21 @@ pub trait ParallelIterator: Iterator + Sized {
 
 impl<I: Iterator> ParallelIterator for I {}
 
+/// Marker for iterators used by the tensor facade.
 pub trait IndexedParallelIterator: ParallelIterator {}
 
 impl<I: Iterator> IndexedParallelIterator for I {}
 
 // Iterator types used by the tensor facade.
+/// Owned iterator aliases.
 pub mod vec {
+    /// Sequential owned vector iterator.
     pub type IntoIter<T> = std::vec::IntoIter<T>;
 }
 
+/// Borrowed iterator aliases.
 pub mod slice {
+    /// Mutable slice iterator.
     pub type IterMut<'a, T> = std::slice::IterMut<'a, T>;
 }
 
@@ -133,5 +170,11 @@ mod tests {
         borrowed.for_each(|v| *v += 1);
         values.par_sort_unstable();
         assert_eq!(values, [-9, 1, 7, 15]);
+
+        let mut values = (0usize..5).into_par_iter().collect::<Vec<_>>();
+        values.par_chunks_mut(2).enumerate().for_each(|(i, chunk)| {
+            chunk.iter_mut().for_each(|value| *value += 10 * i);
+        });
+        assert_eq!(values, [0, 1, 12, 13, 24]);
     }
 }

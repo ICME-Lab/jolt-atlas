@@ -27,16 +27,13 @@ use crate::{
                 max::{MaxIndicatorParams, MaxIndicatorProver, MaxIndicatorVerifier},
                 rc::{SoftmaxRCProvider, SoftmaxRaEncoding},
                 recip_mult::{RecipMultParams, RecipMultProver, RecipMultVerifier},
-                significance_clamp::SoftmaxSignificanceClampOperands,
+                significance_clamp::{softmax_clamp_lookup_bits, SoftmaxSignificanceClampOperands},
             },
             OperatorProofTrait,
         },
         ProofId, ProofType, Prover, Verifier,
     },
-    utils::{
-        compute_lookup_indices_from_operands,
-        opening_access::{AccOpeningAccessor, Target},
-    },
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -49,7 +46,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::{
         softmax::{
-            generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z,
+            exp_lut_sizes, generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z,
             SoftmaxLastAxisTrace,
         },
         SoftmaxLastAxis,
@@ -58,7 +55,7 @@ use atlas_onnx_tracer::{
     utils::quantize::scale_to_multiplier,
 };
 use common::{
-    consts::{MODEL_SCALE, XLEN},
+    consts::{MODEL_SCALE, SOFTMAX_CLAMP_LOG_K},
     CommittedPoly, VirtualPoly,
 };
 use joltworks::{
@@ -126,11 +123,16 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
+        let lut = verifier
+            .softmax_tables
+            .entry(scale)
+            .or_insert_with(|| VerifierLookupTableData::new(scale));
         let (stage3, onehots) = sm.verify(
             &mut verifier.accumulator,
             &mut verifier.transcript,
             verifier.proofs,
             scale_bits,
+            lut,
         )?;
         for instance in stage3 {
             verifier.defer(DeferredBatch::SoftmaxStage3, instance);
@@ -141,9 +143,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let log_scale = self.scale as usize;
-        let decomp = generate_exp_lut_decomposed(scale_to_multiplier(self.scale) as i32);
-        let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
-        let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
+        let (hi_size, lo_size) = exp_lut_sizes(scale_to_multiplier(self.scale) as i32);
+        let log_hi = hi_size.next_power_of_two().log_2();
+        let log_lo = lo_size.log_2();
         let idx = node.idx;
 
         let mut polys = vec![];
@@ -153,7 +155,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
                 CommittedPoly::SoftmaxRemainderRaD as fn(usize, usize) -> _,
             ),
             (log_scale, CommittedPoly::SoftmaxExpRemainderRaD),
-            (XLEN, CommittedPoly::SoftmaxClampRaD),
+            (SOFTMAX_CLAMP_LOG_K, CommittedPoly::SoftmaxClampRaD),
             (log_hi, CommittedPoly::SoftmaxZHiRaD),
             (log_lo, CommittedPoly::SoftmaxZLoRaD),
         ] {
@@ -234,13 +236,11 @@ impl SoftmaxLastAxisProver {
         let z = softmax_z(&self.trace.x, &self.trace.max_k, last_dim);
         let z_tensor = Tensor::new(Some(&z), &[z.len()])
             .expect("softmax_z tensor construction")
-            .padded_next_power_of_two()
-            .map(|v| v as i64);
-        let significance_clamp_indices: Vec<usize> =
-            compute_lookup_indices_from_operands(&[&z_tensor.map(|v| v as i32)], false)
-                .iter()
-                .map(|&x| x.into())
-                .collect();
+            .padded_next_power_of_two();
+        let significance_clamp_indices: Vec<usize> = softmax_clamp_lookup_bits(&z_tensor)
+            .iter()
+            .map(|&x| x.into())
+            .collect();
 
         // ── Pipeline ────────────────────────────────────────────────────
 
@@ -315,6 +315,7 @@ impl SoftmaxLastAxisVerifier {
         transcript: &mut T,
         proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
         scale_bits: i32,
+        lut: &VerifierLookupTableData,
     ) -> Result<
         (
             Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>,
@@ -332,8 +333,6 @@ impl SoftmaxLastAxisVerifier {
             transcript,
         )?;
 
-        let lut = VerifierLookupTableData::new(self.scale);
-
         self.cache_r_exp(accumulator, transcript);
         self.run_stage(
             ProofType::SoftmaxStage2,
@@ -347,7 +346,7 @@ impl SoftmaxLastAxisVerifier {
 
         // Stage 3 / 4 are deferred (see the prover); their verifiers are
         // built here and handed back to the caller via `deferred`.
-        let stage3 = self.build_stage3_verifiers(accumulator, transcript, &lut);
+        let stage3 = self.build_stage3_verifiers(accumulator, transcript, lut);
         // The operand link only needs claims appended during construction.
         self.operand_link(accumulator)?;
         let onehots = vec![
@@ -672,7 +671,7 @@ impl SoftmaxLastAxisProver {
             SoftmaxSignificanceClampOperands::new(z_tensor),
         );
         let (significance_clamp_prover, _) = significance_clamp_provider
-            .read_raf_prove::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
+            .read_raf_prove::<F, T, SoftmaxClampTable<SOFTMAX_CLAMP_LOG_K>, SOFTMAX_CLAMP_LOG_K>(
                 &prover.trace,
                 &mut prover.accumulator,
                 &mut prover.transcript,
@@ -1073,7 +1072,10 @@ impl SoftmaxLastAxisVerifier {
         let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
         let significance_clamp_verifier = significance_clamp_provider
-            .read_raf_verify::<F, T, SoftmaxClampTable<XLEN>, XLEN>(accumulator, transcript);
+            .read_raf_verify::<F, T, SoftmaxClampTable<SOFTMAX_CLAMP_LOG_K>, SOFTMAX_CLAMP_LOG_K>(
+                accumulator,
+                transcript,
+            );
 
         let scale_bits = self.scale.ilog2() as i32;
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits);
@@ -1245,6 +1247,66 @@ mod tests {
         unit_test_op(model, &[input]);
     }
 
+    /// `z = max_k - x` spans the full i32 range when a row holds both a near-`i32::MAX` logit
+    /// and a near-`i32::MIN` one (two stacked additive masks saturate to `i32::MIN`). This needs
+    /// 33 bits; at a 32-bit lookup address it wrapped negative, the clamp mapped it to `0`, and
+    /// the masked position came out with full softmax weight.
+    #[test]
+    fn test_softmax_z_exceeds_i32() {
+        let input_shape = vec![1, 2];
+        let data: Vec<i32> = vec![i32::MAX, i32::MIN];
+        let input = Tensor::new(Some(&data), &input_shape).unwrap();
+        let model = softmax_last_axis_model(&input_shape, common::consts::MODEL_SCALE as u32);
+        let multiplier = 1 << common::consts::MODEL_SCALE;
+        assert_eq!(
+            model.forward(std::slice::from_ref(&input))[0].inner,
+            [multiplier, 0]
+        );
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_softmax_after_additive_attention_mask() {
+        use atlas_onnx_tracer::utils::quantize::quantize_float;
+        let scale = common::consts::MODEL_SCALE as i32;
+        let multiplier = 1 << scale;
+        let mask_value = quantize_float(f64::NEG_INFINITY, scale);
+        let mut b = ModelBuilder::with_scale(scale as u32);
+        let input = b.input(vec![2, 8]);
+        let masks: Vec<i32> = (0..16)
+            .map(|i| if i % 8 == 0 { 0 } else { mask_value })
+            .collect();
+        let mask = b.constant(Tensor::new(Some(&masks), &[2, 8]).unwrap());
+        let masked = b.add(input, mask);
+        let output = b.softmax_last_axis(masked);
+        b.mark_output(output);
+        let model = b.build();
+        let scores: Vec<i32> = (0..16)
+            .map(|i| if i % 8 == 0 { 0 } else { 20 * multiplier })
+            .collect();
+        let input = Tensor::new(Some(&scores), &[2, 8]).unwrap();
+        let expected: Vec<i32> = (0..16)
+            .map(|i| if i % 8 == 0 { multiplier } else { 0 })
+            .collect();
+        assert_eq!(
+            model.forward(std::slice::from_ref(&input))[0].inner,
+            expected
+        );
+        unit_test_op(model, &[input]);
+    }
+
+    #[test]
+    fn test_repeated_softmax() {
+        let mut builder = ModelBuilder::with_scale(common::consts::MODEL_SCALE as u32);
+        let input = builder.input(vec![2, 8]);
+        let first = builder.softmax_last_axis(input);
+        let second = builder.softmax_last_axis(first);
+        builder.mark_output(second);
+        let values: Vec<i32> = (0..16).map(|i| i * 100).collect();
+        let input = Tensor::new(Some(&values), &[2, 8]).unwrap();
+        unit_test_op(builder.build(), &[input]);
+    }
+
     #[test]
     fn test_softmax_model_scale() {
         run_softmax_scale_test(common::consts::MODEL_SCALE as u32);
@@ -1258,11 +1320,10 @@ mod tests {
         //
         // Layout: 4 attention heads, 8×8 causal attention matrix each.
         // Upper-triangular entries (future tokens) use the causal-mask sentinel
-        // produced by quantize_float for -inf masks: -(11 << 12) = -45056
-        // (`mask_sentinel_magnitude(12)` = 11). Masked sat_diff then fits in
-        // sat_diff_rc_bits(12) = 20 bits (fixture max 56888 < 2^20).
+        // produced by quantize_float for -inf masks, with integer headroom.
+        // The generic significance clamp handles the resulting large gaps.
         // Non-masked scores range roughly [-25000, 50000] in fixed-point.
-        const M: i32 = -45_056; // causal attention mask (-(11 << scale), scale=12)
+        const M: i32 = -(1 << 30);
         #[rustfmt::skip]
         const GPT2_ATTN_SCORES: &[i32] = &[
             // Head 0 — moderate range (GPT-2 heads 0 + 2)

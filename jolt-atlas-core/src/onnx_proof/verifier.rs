@@ -46,6 +46,11 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
         crate::onnx_proof::deferred_lookups::DeferredBatch,
         Vec<Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>>,
     >,
+    /// Fixed activation tables shared by deferred verifier instances.
+    pub(crate) activation_tables: super::ops::activation_clamped::ActivationTableCache<F>,
+    /// Exponential tables reused by softmax nodes at the same scale.
+    pub(crate) softmax_tables:
+        BTreeMap<i32, super::ops::softmax_last_axis::VerifierLookupTableData>,
     /// One-hot checks to verify right after their parent batch.
     pub deferred_onehots: Vec<crate::onnx_proof::deferred_lookups::DeferredOneHot>,
 }
@@ -66,6 +71,8 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
             deferred: Vec::new(),
             deferred_batches: BTreeMap::new(),
             deferred_onehots: Vec::new(),
+            activation_tables: Default::default(),
+            softmax_tables: BTreeMap::new(),
         }
     }
 

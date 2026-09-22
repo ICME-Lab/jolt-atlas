@@ -6,6 +6,7 @@
 //! over the full 2^(2*XLEN) lookup table.
 
 use self::{and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix, xor::XorPrefix};
+use crate::par::prelude::*;
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     lookup_tables::prefixes::{
@@ -38,7 +39,6 @@ use crate::{
 use common::parallel::par_enabled;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
-use rayon::prelude::*;
 use std::{
     fmt::Display,
     ops::{Index, IndexMut},

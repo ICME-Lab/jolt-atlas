@@ -53,6 +53,7 @@ use atlas_onnx_tracer::{
     ops::{mean_of_squares::mos_divisor, MeanOfSquares, Operator},
 };
 use common::{consts::XLEN, parallel::par_enabled, CommittedPoly, VirtualPoly};
+use joltworks::par::prelude::*;
 use joltworks::{
     field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
@@ -74,7 +75,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use rayon::prelude::*;
 
 const DEGREE: usize = 3;
 

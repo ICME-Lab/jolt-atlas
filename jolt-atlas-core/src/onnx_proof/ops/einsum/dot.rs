@@ -42,6 +42,7 @@ use atlas_onnx_tracer::{
     tensor::Tensor,
 };
 use common::parallel::par_enabled;
+use joltworks::par::prelude::*;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -60,7 +61,6 @@ use joltworks::{
     },
     transcripts::Transcript,
 };
-use rayon::prelude::*;
 
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{

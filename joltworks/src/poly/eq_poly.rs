@@ -1,8 +1,8 @@
 use crate::field::JoltField;
+use crate::par::prelude::*;
 use crate::poly::opening_proof::{Endianness, OpeningPoint};
 use crate::utils::{math::Math, thread::unsafe_allocate_zero_vec};
 use common::parallel::par_enabled;
-use rayon::prelude::*;
 use std::{
     marker::PhantomData,
     ops::{Mul, Sub},
@@ -31,7 +31,11 @@ impl<F: JoltField> EqPolynomial<F> {
         x.par_iter()
             .zip(y.par_iter())
             .with_min_len(par_enabled())
-            .map(|(x_i, y_i)| *x_i * *y_i + (F::one() - *x_i) * (F::one() - *y_i))
+            .map(|(x_i, y_i)| {
+                let xy = *x_i * *y_i;
+                // x*y + (1-x)*(1-y) = 1-x-y+2*x*y.
+                (F::one() - *x_i - *y_i) + xy + xy
+            })
             .product()
     }
 
@@ -48,13 +52,19 @@ impl<F: JoltField> EqPolynomial<F> {
             x.r.par_iter()
                 .zip(y.r.par_iter())
                 .with_min_len(par_enabled())
-                .map(|(x_i, y_i)| *x_i * y_i + (F::one() - x_i) * (F::one() - y_i))
+                .map(|(x_i, y_i)| {
+                    let xy = *x_i * y_i;
+                    (F::one() - x_i - y_i) + xy + xy
+                })
                 .product()
         } else {
             x.r.par_iter()
                 .zip(y.r.par_iter().rev())
                 .with_min_len(par_enabled())
-                .map(|(x_i, y_i)| *x_i * y_i + (F::one() - x_i) * (F::one() - y_i))
+                .map(|(x_i, y_i)| {
+                    let xy = *x_i * y_i;
+                    (F::one() - x_i - y_i) + xy + xy
+                })
                 .product()
         }
     }
@@ -256,8 +266,54 @@ impl<F: JoltField> EqPolynomial<F> {
 mod tests {
     use super::*;
     use ark_bn254::Fr;
-    use ark_std::test_rng;
+    use ark_std::{test_rng, One, Zero};
     use std::time::Instant;
+
+    #[test]
+    fn test_mle_matches_two_product_formula() {
+        use crate::poly::opening_proof::{BIG_ENDIAN, LITTLE_ENDIAN};
+        let mut rng = test_rng();
+        for len in [0, 1, 2, 7, 16, 23, 64] {
+            for _ in 0..16 {
+                let x: Vec<Fr> = (0..len).map(|_| Fr::random(&mut rng)).collect();
+                let y: Vec<Fr> = (0..len).map(|_| Fr::random(&mut rng)).collect();
+                let c: Vec<_> = (0..len)
+                    .map(|_| <Fr as JoltField>::Challenge::random(&mut rng))
+                    .collect();
+                let cf: Vec<Fr> = c.iter().copied().map(Into::into).collect();
+                let reference = |a: &[Fr], b: &[Fr]| -> Fr {
+                    a.iter()
+                        .zip(b)
+                        .map(|(a, b)| *a * b + (Fr::one() - a) * (Fr::one() - b))
+                        .product()
+                };
+                assert_eq!(EqPolynomial::<Fr>::mle(&x, &y), reference(&x, &y));
+                assert_eq!(EqPolynomial::<Fr>::mle(&x, &c), reference(&x, &cf));
+                assert_eq!(EqPolynomial::<Fr>::mle(&c, &y), reference(&cf, &y));
+                assert_eq!(EqPolynomial::<Fr>::mle(&c, &c), reference(&cf, &cf));
+                let xb = OpeningPoint::<BIG_ENDIAN, Fr>::new(x.clone());
+                let yb = OpeningPoint::<BIG_ENDIAN, Fr>::new(y.clone());
+                let yl = OpeningPoint::<LITTLE_ENDIAN, Fr>::new(y.iter().copied().rev().collect());
+                assert_eq!(EqPolynomial::<Fr>::mle_endian(&xb, &yb), reference(&x, &y));
+                assert_eq!(EqPolynomial::<Fr>::mle_endian(&xb, &yl), reference(&x, &y));
+                assert_eq!(EqPolynomial::<Fr>::mle_endian(&yl, &xb), reference(&y, &x));
+            }
+        }
+        for a in [Fr::zero(), Fr::one(), -Fr::one()] {
+            for b in [Fr::zero(), Fr::one(), -Fr::one()] {
+                assert_eq!(
+                    EqPolynomial::<Fr>::mle(&[a], &[b]),
+                    a * b + (Fr::one() - a) * (Fr::one() - b)
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_mle_rejects_different_lengths() {
+        EqPolynomial::<Fr>::mle(&[Fr::one()], &[] as &[Fr]);
+    }
 
     #[test]
     /// Test that the results of running `evals_serial`, `evals_parallel`, and `evals_serial_cached`

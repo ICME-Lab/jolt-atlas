@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+default = ["parallel"]
+parallel = ["dep:rayon", "dep:jolt-optimizations", "dory/cache", "atlas-onnx-tracer/parallel"]
+affine-msm = []
 monitor = ["dep:sysinfo"]
 allocative = ["dep:inferno"]
 challenge-254-bit = []
@@ -26,10 +29,9 @@ ark-serialize.workspace = true
 ark-std.workspace = true
 sha3 = "0.10.8"
 blake2 = "0.10"
-jolt-optimizations = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-dory = { package = "dory-pcs", version = "0.4.0", features = [
+jolt-optimizations = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", optional = true }
+dory = { package = "dory-pcs", version = "0.4.0", default-features = false, features = [
     "backends",
-    "cache",
     "disk-persistence",
 ] }
 
@@ -39,7 +41,7 @@ num-derive.workspace = true
 num-traits.workspace = true
 
 # Parallel Processing
-rayon.workspace = true
+rayon = { workspace = true, optional = true }
 
 # Randomness
 rand.workspace = true

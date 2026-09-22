@@ -164,13 +164,7 @@ impl<F: JoltField> BroadcastVerifier<F> {
             .output_dims;
         let output_dims = &params.computation_node.output_dims;
 
-        let mut broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
-
-        let (r_input, r_broadcast) =
-            split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
-
-        broadcast_tensor.pad_next_power_of_two();
-        let eval_I = MultilinearPolynomial::from(broadcast_tensor).evaluate(&r_broadcast);
+        let (r_input, eval_I) = broadcast_opening(input_dims, output_dims, &params.r_output);
 
         Self {
             params,
@@ -202,6 +196,18 @@ impl<F: JoltField> BroadcastVerifier<F> {
 
         Ok(())
     }
+}
+
+/// The broadcast selector is one on every Boolean point. The supported
+/// dimensions are powers of two, so padding does not introduce zero entries.
+fn broadcast_opening<F: JoltField>(
+    input_dims: &[usize],
+    output_dims: &[usize],
+    r_output: &[F],
+) -> (Vec<F>, F) {
+    let broadcast_dims = get_broadcast_dims(input_dims, output_dims);
+    let (r_input, _) = split_broadcast_vars(output_dims, &broadcast_dims, r_output);
+    (r_input, F::one())
 }
 
 /// Builds a unit tensor used for broadcast operation
@@ -281,6 +287,41 @@ mod tests {
         let res = b.broadcast(i, output_shape.to_vec());
         b.mark_output(res);
         b.build()
+    }
+
+    #[test]
+    fn broadcast_opening_matches_dense_selector() {
+        use super::*;
+        use ark_bn254::Fr;
+        use ark_std::UniformRand;
+
+        let mut rng = StdRng::seed_from_u64(0xBADC0DE);
+        for (input, output) in [
+            (vec![], vec![]),
+            (vec![1], vec![1]),
+            (vec![4], vec![8, 4]),
+            (vec![1, 4], vec![4, 4]),
+            (vec![4, 1], vec![4, 8]),
+            (vec![1, 1, 4], vec![2, 4, 4]),
+            (vec![1, 4, 1], vec![2, 4, 8]),
+            (vec![1, 1], vec![128, 256]),
+        ] {
+            let num_vars = output.iter().map(|n| n.log_2()).sum();
+            for point in [
+                vec![Fr::from(0u64); num_vars],
+                vec![Fr::from(1u64); num_vars],
+                (0..num_vars).map(|_| Fr::rand(&mut rng)).collect(),
+            ] {
+                let mut dense = build_broadcast_tensor(&input, &output);
+                let (expected_input, r_selector) =
+                    split_broadcast_vars(&output, dense.dims(), &point);
+                dense.pad_next_power_of_two();
+                let expected = MultilinearPolynomial::from(dense).evaluate(&r_selector);
+                let (actual_input, actual) = broadcast_opening(&input, &output, &point);
+                assert_eq!(actual_input, expected_input);
+                assert_eq!(actual, expected);
+            }
+        }
     }
 
     #[test]

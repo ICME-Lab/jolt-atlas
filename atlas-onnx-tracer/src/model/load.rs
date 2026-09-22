@@ -210,7 +210,7 @@ impl Model {
     ///
     /// # Returns
     /// A vector of internal node indices representing the graph outputs
-    fn collect_outputs(
+    pub(super) fn collect_outputs(
         model: &Graph<TypedFact, Box<dyn TypedOp>>,
         mapper: &NodeIndexMapper,
     ) -> Vec<usize> {
@@ -227,7 +227,7 @@ impl Model {
     ///
     /// # Returns
     /// A vector of node indices that are input nodes
-    fn collect_input_nodes(nodes: &BTreeMap<usize, ComputationNode>) -> Vec<usize> {
+    pub(super) fn collect_input_nodes(nodes: &BTreeMap<usize, ComputationNode>) -> Vec<usize> {
         nodes
             .iter()
             .filter_map(|(idx, node)| match node.operator {
@@ -382,8 +382,8 @@ pub struct ModelLoader<'a> {
     mapper: Option<NodeIndexMapper>,
     inputs: Option<Vec<usize>>,
     outputs: Option<Vec<usize>>,
-    original_input_dims: HashMap<usize, Vec<usize>>,
-    original_output_dims: HashMap<usize, Vec<usize>>,
+    original_input_dims: BTreeMap<usize, Vec<usize>>,
+    original_output_dims: BTreeMap<usize, Vec<usize>>,
 }
 
 impl<'a> ModelLoader<'a> {
@@ -398,8 +398,8 @@ impl<'a> ModelLoader<'a> {
             mapper: None,
             inputs: None,
             outputs: None,
-            original_input_dims: HashMap::new(),
-            original_output_dims: HashMap::new(),
+            original_input_dims: BTreeMap::new(),
+            original_output_dims: BTreeMap::new(),
         }
     }
 
@@ -533,6 +533,9 @@ impl<'a> ModelLoader<'a> {
             }
         }
 
+        let reshape_plans = super::reshape_padding::plans(nodes);
+        let mapping = super::reshape_padding::remapping(nodes, &reshape_plans);
+
         // Pad all nodes: constant tensors, operator-internal shapes, and output dimensions
         for node in nodes.values_mut() {
             // Pad constant tensors
@@ -557,6 +560,25 @@ impl<'a> ModelLoader<'a> {
             // Pad output dimensions for all nodes
             node.output_dims = Model::pad_dims_to_power_of_2(&node.output_dims);
         }
+
+        super::reshape_padding::lower(nodes, reshape_plans, &mapping);
+        for index in self
+            .inputs
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .chain(self.outputs.as_mut().unwrap())
+        {
+            *index = mapping[index];
+        }
+        self.original_input_dims = std::mem::take(&mut self.original_input_dims)
+            .into_iter()
+            .map(|(i, d)| (mapping[&i], d))
+            .collect();
+        self.original_output_dims = std::mem::take(&mut self.original_output_dims)
+            .into_iter()
+            .map(|(i, d)| (mapping[&i], d))
+            .collect();
 
         self
     }

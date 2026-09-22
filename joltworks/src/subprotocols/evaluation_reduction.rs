@@ -189,7 +189,11 @@ impl<F: JoltField> EvalReductionInstance<F> {
         }
 
         for (i, (_, claim)) in self.openings.iter().enumerate() {
-            let eval_at_i = proof.h.evaluate(&F::from_u32(i as u32));
+            let eval_at_i = match i {
+                0 => proof.h.eval_at_zero(),
+                1 => proof.h.eval_at_one(),
+                _ => proof.h.evaluate(&F::from_u32(i as u32)),
+            };
             if eval_at_i != *claim {
                 return Err(ProofVerifyError::InvalidOpeningProof(format!(
                     "h does not match opening claim at t={i}: expected h({i}) = {claim}, got {eval_at_i}"
@@ -211,11 +215,65 @@ impl<F: JoltField> EvalReductionInstance<F> {
 }
 
 fn eval_on_l<F: JoltField, Ref: AsRef<[F]>>(ri_vec: &[Ref], x: F) -> Vec<F> {
+    let Some(first) = ri_vec.first() else {
+        return Vec::new();
+    };
+    let n = first.as_ref().len();
+    assert!(n > 0, "empty interpolation grid");
+    assert!(ri_vec.iter().all(|row| row.as_ref().len() == n));
+    if n <= 2 {
+        return ri_vec
+            .iter()
+            .map(|row| {
+                let values = row.as_ref();
+                match n {
+                    0 => F::zero(),
+                    1 => values[0],
+                    _ => values[0] + (values[1] - values[0]) * x,
+                }
+            })
+            .collect();
+    }
+
+    // Each coordinate interpolates on the same integer grid 0..n. Evaluate
+    // its Lagrange basis once, without constructing coefficient polynomials.
+    // Prefix/suffix products also work when x is one of the grid points.
+    let mut prefix = Vec::with_capacity(n);
+    let mut product = F::one();
+    let mut factorial = F::one();
+    for i in 0..n {
+        prefix.push(product);
+        product *= x - F::from_u64(i as u64);
+        if i > 0 {
+            factorial *= F::from_u64(i as u64);
+        }
+    }
+    let mut inverse_factorials = vec![F::zero(); n];
+    inverse_factorials[n - 1] = factorial
+        .inverse()
+        .expect("interpolation grid exceeds field characteristic");
+    for i in (1..n).rev() {
+        inverse_factorials[i - 1] = inverse_factorials[i] * F::from_u64(i as u64);
+    }
+    let mut weights = vec![F::zero(); n];
+    let mut suffix = F::one();
+    for i in (0..n).rev() {
+        let weight = prefix[i] * suffix * inverse_factorials[i] * inverse_factorials[n - 1 - i];
+        weights[i] = if (n - 1 - i) % 2 == 0 {
+            weight
+        } else {
+            -weight
+        };
+        suffix *= x - F::from_u64(i as u64);
+    }
     ri_vec
         .iter()
-        .map(|r_i| {
-            let variable_poly = UniPoly::from_evals(r_i.as_ref());
-            variable_poly.evaluate(&x)
+        .map(|row| {
+            row.as_ref()
+                .iter()
+                .zip(&weights)
+                .map(|(value, weight)| *value * *weight)
+                .sum()
         })
         .collect()
 }
@@ -695,5 +753,30 @@ mod tests {
         let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
         let reduced_verifier = instance.verify(&proof, &mut verifier_tr).unwrap();
         assert_eq!(reduced_verifier, reduced);
+    }
+}
+
+#[cfg(test)]
+mod direct_interpolation_tests {
+    use super::*;
+    use ark_bn254::Fr;
+    use rand::{rngs::StdRng, SeedableRng};
+
+    #[test]
+    fn shared_basis_matches_coefficient_interpolation() {
+        let mut rng = StdRng::seed_from_u64(90210);
+        for n in [1, 2, 3, 4, 5, 8, 24, 48] {
+            let rows: Vec<Vec<Fr>> = (0..3)
+                .map(|_| (0..n).map(|_| Fr::random(&mut rng)).collect())
+                .collect();
+            let polynomials: Vec<_> = rows.iter().map(|row| UniPoly::from_evals(row)).collect();
+            let mut points = vec![Fr::random(&mut rng), Fr::random(&mut rng)];
+            points.extend((0..n).map(|i| Fr::from_u64(i as u64)));
+            for point in points {
+                let expected: Vec<_> = polynomials.iter().map(|p| p.evaluate(&point)).collect();
+                assert_eq!(eval_on_l(&rows, point), expected, "grid size {n}");
+            }
+        }
+        assert!(eval_on_l::<Fr, Vec<Fr>>(&[], Fr::from_u64(1)).is_empty());
     }
 }

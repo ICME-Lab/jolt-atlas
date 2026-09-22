@@ -26,7 +26,7 @@ use super::{Claims, ONNXProof, ReducedOpeningProof};
 // BTreeMap helpers
 // ---------------------------------------------------------------------------
 
-fn serialize_btreemap<W, K, V>(
+pub(super) fn serialize_btreemap<W, K, V>(
     map: &BTreeMap<K, V>,
     writer: &mut W,
     compress: Compress,
@@ -307,7 +307,7 @@ where
     ONNXProof::deserialize_compressed(bytes)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "onnx-import"))]
 mod tests {
     use super::*;
     use crate::onnx_proof::{

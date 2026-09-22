@@ -1,3 +1,4 @@
+use crate::par::prelude::*;
 use crate::{
     field::{JoltField, MulTrunc},
     lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
@@ -19,7 +20,6 @@ use crate::{
 use ark_std::Zero;
 use common::parallel::par_enabled;
 use common::VirtualPoly;
-use rayon::prelude::*;
 
 /// Verifier-side RAF data for unary ops (ReLU, UnsignedAbs).
 ///
@@ -354,10 +354,13 @@ pub mod tests {
         MultilinearPolynomial::from(
             lookup_indices
                 .iter()
-                .map(|&i| match XLEN {
-                    32 => i as u32 as i32 as i64,
-                    64 => i as i64,
-                    _ => unimplemented!(),
+                // Sign-extend the low `XLEN` bits, matching `ClampBoundedTable::materialize_entry`.
+                .map(|&i| {
+                    if XLEN == 64 {
+                        i as i64
+                    } else {
+                        ((i << (64 - XLEN)) as i64) >> (64 - XLEN)
+                    }
                 })
                 .collect::<Vec<_>>(),
         )

@@ -94,12 +94,12 @@ pub fn softmax_last_axis_decomposed(
     decomp
         .lut_hi
         .resize(decomp.lut_hi.len().next_power_of_two(), 0);
-    let z_bound = (decomp.lut_hi.len() * decomp.base) as i32;
+    let z_bound = (decomp.lut_hi.len() * decomp.base) as i64;
 
     // Pre-allocate all witness vectors.
     let mut max_k = Vec::with_capacity(num_slices);
     let mut argmax_k = Vec::with_capacity(num_slices);
-    let mut z = vec![0i32; total];
+    let mut z = vec![0i64; total];
     let mut exp_q = vec![0i32; total];
     let mut exp_sum_q = Vec::with_capacity(num_slices);
     let mut inv_sum = Vec::with_capacity(num_slices);
@@ -126,10 +126,13 @@ pub fn softmax_last_axis_decomposed(
         argmax_k.push(argmax);
 
         // 3. z and exp_q via DECOMPOSED lookup
+        // `mv - x` needs 33 bits (a `max_k` near `i32::MAX` against an attention mask near
+        // `i32::MIN`), so `z` is accumulated in i64.
+        let mv = i64::from(mv);
         let mut sum_exp: i32 = 0;
         for j in 0..last_dim {
             let idx = offset + j;
-            z[idx] = mv - data[idx]; // ≥ 0
+            z[idx] = mv - i64::from(data[idx]); // ≥ 0
 
             // Saturate to sub-table range: z_c = min(z, z_bound - 1)
             // where z_bound = K_hi * B.  For values beyond the table,
@@ -232,21 +235,24 @@ pub struct ExpLutDecomposed {
     pub log2_base: u32,
 }
 
+/// Return the unpadded high-table length and the power-of-two low-table
+/// length without evaluating the exponential function at every table entry.
+pub fn exp_lut_sizes(scale: i32) -> (usize, usize) {
+    let sf = scale as f64;
+    let needed = (sf * (2.0 * sf).ln()).ceil() as usize + 2;
+    let log2_b = ((needed as f64).log2() / 2.0).ceil() as u32;
+    let base = 1usize << log2_b;
+    (needed / base + 2, base)
+}
+
 /// Generate decomposed exp sub-tables for the given scale.
 ///
 /// The base B is chosen as the power-of-two closest to √(active_range)
 /// to minimize total sub-table entries.
 pub fn generate_exp_lut_decomposed(scale: i32) -> ExpLutDecomposed {
     let sf = scale as f64;
-    // Same cutoff as flat LUT: exp(-i/S)*S < 0.5
-    let needed = (sf * (2.0 * sf).ln()).ceil() as usize + 2;
-
-    // Pick B ≈ √needed, rounded up to next power-of-two
-    let log2_b = ((needed as f64).log2() / 2.0).ceil() as u32;
-    let base = 1usize << log2_b;
-
-    // LUT_hi: indexed by z_hi = z / B
-    let hi_size = needed / base + 2;
+    let (hi_size, base) = exp_lut_sizes(scale);
+    let log2_b = base.trailing_zeros();
     let mut lut_hi = Vec::with_capacity(hi_size);
     for h in 0..hi_size {
         let val = (sf * (-(h as f64 * base as f64) / sf).exp()).round();
@@ -272,10 +278,10 @@ pub fn generate_exp_lut_decomposed(scale: i32) -> ExpLutDecomposed {
 /// the flat `[F*N]` input. Used by softmax's saturating-clamp lookup
 /// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::significance_clamp`) to re-derive the
 /// pre-clamp witness without re-running the full decomposed trace.
-pub fn softmax_z(x: &[i32], max_k: &[i32], last_dim: usize) -> Vec<i32> {
+pub fn softmax_z(x: &[i32], max_k: &[i32], last_dim: usize) -> Vec<i64> {
     x.iter()
         .enumerate()
-        .map(|(idx, &xi)| max_k[idx / last_dim] - xi)
+        .map(|(idx, &xi)| i64::from(max_k[idx / last_dim]) - i64::from(xi))
         .collect()
 }
 
@@ -304,5 +310,39 @@ mod scale_tests {
     fn zero_scale_is_rejected() {
         let input = Tensor::new(Some(&[0i32, 0]), &[1, 2]).unwrap();
         softmax_last_axis_decomposed(&input, 0);
+    }
+}
+
+#[cfg(test)]
+mod lut_size_tests {
+    use super::*;
+
+    #[test]
+    fn exp_lut_sizes_match_reference() {
+        for scale in [1, 2, 3, 8, 31, 128, 1000, 4096, 8192, 16384, 32768] {
+            // Independently reconstruct the original table generator, including
+            // its floating point cutoff and rounding at each entry.
+            let sf = scale as f64;
+            let needed = (sf * (2.0 * sf).ln()).ceil() as usize + 2;
+            let log2_b = ((needed as f64).log2() / 2.0).ceil() as u32;
+            let base = 1usize << log2_b;
+            let hi_size = needed / base + 2;
+            let high: Vec<i32> = (0..hi_size)
+                .map(|h| {
+                    (sf * (-(h as f64 * base as f64) / sf).exp())
+                        .round()
+                        .max(0.0) as i32
+                })
+                .collect();
+            let low: Vec<i32> = (0..base)
+                .map(|l| (sf * (-(l as f64) / sf).exp()).round().max(0.0) as i32)
+                .collect();
+            let actual = generate_exp_lut_decomposed(scale);
+            assert_eq!(exp_lut_sizes(scale), (high.len(), low.len()));
+            assert_eq!(actual.lut_hi, high);
+            assert_eq!(actual.lut_lo, low);
+            assert_eq!(actual.base, base);
+            assert_eq!(actual.log2_base, log2_b);
+        }
     }
 }

@@ -12,6 +12,7 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
 };
 use common::{parallel::par_enabled, VirtualPoly};
+use joltworks::par::prelude::*;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -30,7 +31,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::math::Math,
 };
-use rayon::prelude::*;
 
 const DEGREE_BOUND: usize = 1;
 

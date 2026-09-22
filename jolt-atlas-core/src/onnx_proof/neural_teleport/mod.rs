@@ -7,6 +7,8 @@
 
 pub mod cos;
 pub mod division;
+#[cfg(any(test, feature = "fixed-tables"))]
+pub(crate) mod fixed_tables;
 pub mod sin;
 pub mod trig_downscale;
 pub mod utils;

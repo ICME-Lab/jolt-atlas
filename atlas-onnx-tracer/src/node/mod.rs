@@ -5,6 +5,7 @@ use crate::utils::dims::UsizeDimsExt;
 use serde::{Deserialize, Serialize};
 
 /// Node-specific handler functions and utilities.
+#[cfg(feature = "onnx-import")]
 pub mod handlers;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

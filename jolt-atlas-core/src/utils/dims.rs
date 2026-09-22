@@ -11,8 +11,8 @@
 //! - Extracting and storing dimension information for efficient constraint generation
 
 use atlas_onnx_tracer::{model::Model, node::ComputationNode, ops::Operator};
+use joltworks::par::prelude::*;
 use joltworks::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
-use rayon::prelude::*;
 
 /// Convert a row-major linear index into coordinates for the given dimensions.
 pub fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {

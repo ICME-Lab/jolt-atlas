@@ -21,6 +21,7 @@ use atlas_onnx_tracer::{
     ops::Reshape,
 };
 use common::parallel::par_enabled;
+use joltworks::par::prelude::*;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -47,7 +48,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use rayon::prelude::*;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
     #[tracing::instrument(skip_all, name = "Reshape::prove")]
@@ -146,6 +146,33 @@ pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
     selector
 }
 
+/// Evaluate the reshape selector without materializing it when neither shape
+/// needs padding. In that case flat indices are unchanged, so its multilinear
+/// extension is just the equality polynomial at the two opening points.
+fn evaluate_reshape_selector<F: JoltField + ChallengeFieldOps<F>>(
+    input_raw_dims: &[usize],
+    output_raw_dims: &[usize],
+    r_output: &[F],
+    r_input: &[F],
+) -> F {
+    if input_raw_dims
+        .iter()
+        .chain(output_raw_dims)
+        .all(|d| d.is_power_of_two())
+    {
+        let input_len: usize = input_raw_dims.iter().product();
+        let output_len: usize = output_raw_dims.iter().product();
+        assert_eq!(
+            input_len, output_len,
+            "Reshape selector requires equal raw element counts"
+        );
+        assert_eq!(r_output.len(), input_len.log_2());
+        return EqPolynomial::mle(r_output, r_input);
+    }
+    let selector = build_reshape_selectors(input_raw_dims, output_raw_dims, r_output);
+    MultilinearPolynomial::from(selector).evaluate(r_input)
+}
+
 /// Static metadata for the reshape selector sumcheck.
 #[derive(Clone)]
 pub struct ReshapeSumcheckParams<F: JoltField> {
@@ -233,12 +260,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
 
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let selector = build_reshape_selectors(
+        let selector_claim = evaluate_reshape_selector(
             &self.input_raw_dims,
             &self.output_raw_dims,
             &self.r_output.r,
-        );
-        let selector_claim = MultilinearPolynomial::from(selector).evaluate(
             &self
                 .normalize_opening_point(&sumcheck_challenges.into_opening())
                 .r,
@@ -359,12 +384,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
         let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
 
         let input_claim = accessor.get_nodeio(Target::Input(0)).1;
-        let selector = build_reshape_selectors(
+        let selector_claim = evaluate_reshape_selector(
             &self.params.input_raw_dims,
             &self.params.output_raw_dims,
             &self.params.r_output.r,
-        );
-        let selector_claim = MultilinearPolynomial::from(selector).evaluate(
             &self
                 .params
                 .normalize_opening_point(&sumcheck_challenges.into_opening())
@@ -403,6 +426,67 @@ mod tests {
         let res = b.reshape(i, output_shape.to_vec());
         b.mark_output(res);
         b.build()
+    }
+
+    #[test]
+    fn selector_evaluation_matches_materialized_table() {
+        use super::{build_reshape_selectors, evaluate_reshape_selector};
+        use ark_bn254::Fr;
+        use joltworks::{
+            field::JoltField,
+            poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            utils::math::Math,
+        };
+        let mut rng = StdRng::seed_from_u64(0x53454c454354);
+        for (input, output) in [
+            (vec![1], vec![1, 1]),
+            (vec![16], vec![4, 4]),
+            (vec![2, 4, 8], vec![8, 8]),
+            (vec![1, 16, 1], vec![4, 1, 4]),
+            (vec![2, 3], vec![6]),
+            (vec![3, 4], vec![2, 6]),
+            (vec![10, 10], vec![20, 5]),
+        ] {
+            let variables = input
+                .iter()
+                .map(|d: &usize| d.next_power_of_two())
+                .product::<usize>()
+                .log_2();
+            for boolean in [false, true] {
+                let output_point: Vec<Fr> = (0..variables)
+                    .map(|i| {
+                        if boolean {
+                            Fr::from((i % 2) as u64)
+                        } else {
+                            Fr::random(&mut rng)
+                        }
+                    })
+                    .collect();
+                let input_point: Vec<Fr> = (0..variables)
+                    .map(|i| {
+                        if boolean {
+                            Fr::from((i % 3 == 0) as u64)
+                        } else {
+                            Fr::random(&mut rng)
+                        }
+                    })
+                    .collect();
+                let table = build_reshape_selectors(&input, &output, &output_point);
+                let expected = MultilinearPolynomial::from(table).evaluate(&input_point);
+                assert_eq!(
+                    evaluate_reshape_selector(&input, &output, &output_point, &input_point),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn selector_rejects_wrong_point_dimension() {
+        use ark_bn254::Fr;
+        // Equal point lengths alone do not establish the tensor domain.
+        super::evaluate_reshape_selector::<Fr>(&[16], &[4, 4], &[], &[]);
     }
 
     #[test]

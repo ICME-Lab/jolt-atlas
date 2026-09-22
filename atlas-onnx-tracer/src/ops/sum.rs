@@ -1,5 +1,5 @@
-use rayon::prelude::*;
-use tract_onnx::prelude::tract_itertools::Itertools;
+use crate::utils::parallel_utils::*;
+use itertools::Itertools;
 
 use crate::{
     ops::{Op, Sum},

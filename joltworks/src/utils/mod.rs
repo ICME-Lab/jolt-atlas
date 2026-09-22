@@ -1,7 +1,7 @@
 use crate::field::{ChallengeFieldOps, JoltField};
 use common::parallel::par_enabled;
 
-use rayon::prelude::*;
+use crate::par::prelude::*;
 
 pub mod accumulation;
 pub mod counters;

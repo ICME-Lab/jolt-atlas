@@ -1,12 +1,12 @@
+use crate::utils::parallel_utils::*;
 use crate::{
     ops::FusedIntermediates,
     ops::{Einsum, Op},
     tensor::{Tensor, TensorError},
 };
 use common::parallel::par_enabled;
-use rayon::prelude::*;
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
-use tract_onnx::prelude::tract_itertools::Itertools;
 
 impl Op for Einsum {
     #[tracing::instrument(name = "Einsum::f", skip_all)]
@@ -304,8 +304,8 @@ pub fn einsum_i32_with_i64_rebase(
 /// result is permuted into the output's letter order.
 mod gemm {
     use crate::tensor::{Tensor, TensorError};
+    use crate::utils::parallel_utils::*;
     use common::parallel::par_enabled;
-    use rayon::prelude::*;
     use std::collections::HashMap;
 
     /// Copy `src` (dims `dims`) into a contiguous buffer whose axis order is

@@ -4,7 +4,7 @@
 //! without needing to load from ONNX files.
 
 use crate::{node::ComputationNode, ops::*, tensor::Tensor};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use super::{ComputationGraph, Model};
 
@@ -513,8 +513,8 @@ impl ModelBuilder {
                 nodes: self.nodes,
                 inputs: self.inputs,
                 outputs: self.outputs,
-                original_input_dims: HashMap::new(),
-                original_output_dims: HashMap::new(),
+                original_input_dims: BTreeMap::new(),
+                original_output_dims: BTreeMap::new(),
             },
             scale: self.scale as i32,
         }

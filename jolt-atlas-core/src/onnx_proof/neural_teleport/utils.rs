@@ -5,17 +5,11 @@
 use super::{n_bits_to_usize, usize_to_n_bits};
 use atlas_onnx_tracer::{tensor::Tensor, utils::quantize::scale_to_multiplier};
 use common::parallel::par_enabled;
+use joltworks::par::prelude::*;
 use joltworks::{
     field::{FieldChallengeOps, JoltField},
     poly::eq_poly::EqPolynomial,
     utils::thread::unsafe_allocate_zero_vec,
-};
-use rayon::{
-    iter::{
-        IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
-        ParallelIterator,
-    },
-    slice::ParallelSlice,
 };
 
 /// Compute one-hot read-address evaluations from signed n-bit two's-complement values.
@@ -78,7 +72,7 @@ where
     F: JoltField + FieldChallengeOps<U>,
 {
     let e = EqPolynomial::evals(r);
-    let num_threads = rayon::current_num_threads();
+    let num_threads = joltworks::par::current_num_threads();
     let chunk_size = indices_usize.len().div_ceil(num_threads);
 
     let partial_results: Vec<Vec<F>> = indices_usize

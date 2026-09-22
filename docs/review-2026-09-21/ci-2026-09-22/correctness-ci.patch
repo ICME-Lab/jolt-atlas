@@ -1,0 +1,14 @@
+diff --git a/.github/workflows/rust.yml b/.github/workflows/rust.yml
+index 91c4699..076b82a 100644
+--- a/.github/workflows/rust.yml
++++ b/.github/workflows/rust.yml
+@@ -41,6 +41,9 @@ jobs:
+           - name: zk
+             clippy_args: -p jolt-atlas-core --all-targets --features zk
+             test_args: -p jolt-atlas-core --features zk
++          - name: native-zk
++            clippy_args: -p joltworks --all-targets --features zk
++            test_args: -p joltworks --features zk
+     steps:
+       - uses: actions/checkout@v3
+       - uses: actions-rust-lang/setup-rust-toolchain@v1

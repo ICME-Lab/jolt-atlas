@@ -2,6 +2,14 @@
 
 This index preserves the scope, source identities and validation for the September 21 consolidation. There are seven review units. The first five are opened together; the final two remain published branches until earlier reviews merge.
 
+## Main targets, September 22
+
+All five open PRs now target `main`, after [#288](https://github.com/ICME-Lab/jolt-atlas/pull/288) was squash-merged. The review prerequisites remain #369 before #370/#371, then #371 before #372 and #372 before #373. Their comparisons with main include prerequisite changes until those merge. The held performance reviews also plan to target main when opened.
+
+Main at `e6cadf160dc8b6fa8b7a183ff24ce71b6ef84518` has exactly the same Git tree as the tested round-two base `cfcffb05dcc76599f4e5b3d01c6e13f5fa653e13`. A merge records that squash history in the correctness branch, then prerequisite merges carry it through the six dependent branches. All seven branch trees are unchanged. The existing source validation remains applicable; no new runtime tests or performance measurements were run for this history and target update.
+
+The [retarget record](retarget-2026-09-22/README.md) gives old/new heads, source-tree identities and GitHub readback. Earlier dated publication/validation JSON files remain historical snapshots. The dependency diagram below describes review order and included code; all five GitHub targets are main.
+
 ## Review queue
 
 | Unit | Topic | Review | Description |
@@ -19,7 +27,7 @@ The first five units are the active review queue. Units 6 and 7 remain available
 ## Dependencies
 
 ```text
-perf/round-2
+main
   tensor-correctness
     ordinary-verifier
     native-foundations

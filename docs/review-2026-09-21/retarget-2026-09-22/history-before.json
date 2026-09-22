@@ -1,0 +1,40 @@
+{
+  "main": "e6cadf160dc8b6fa8b7a183ff24ce71b6ef84518",
+  "branches": [
+    {
+      "branch": "review/tensor-correctness",
+      "head": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+      "tree": "b4297441d21bcf0e814b4969386b69c734311f2e"
+    },
+    {
+      "branch": "review/ordinary-verifier",
+      "head": "b70711b0499dec29badc4d70152c2521b86ed91f",
+      "tree": "ab339bc1a7c7191e27fdd498265564006dcc3644"
+    },
+    {
+      "branch": "review/native-foundations",
+      "head": "0a7de79f358c86ddad43c21cc2431086e82296f3",
+      "tree": "fb0a98b8e597187d4f50795f58a88ea81af4b455"
+    },
+    {
+      "branch": "review/native-operators",
+      "head": "fb1b116c00b97e0a6855bb8517e4f93b33561bb4",
+      "tree": "09525a6700858d381004ba1bfc98a8eb00b3a610"
+    },
+    {
+      "branch": "review/native-generation",
+      "head": "02163ea6302999fc84fb49468c4a064ad3f4466d",
+      "tree": "8f8d83daeae8574bebb1b345e9044b4555f9a45b"
+    },
+    {
+      "branch": "review/native-prover",
+      "head": "6d3e3a24daf3a120baa05711e8ebac28d801daa9",
+      "tree": "f986f813cfc418694f8abda20d92eb5d4a711cdf"
+    },
+    {
+      "branch": "review/native-verifier",
+      "head": "2e415e2a8bfd71678b7b62766a149b259dc166ce",
+      "tree": "78a95c1e45294bc94cf30f8dd2ac066f6b1d28c3"
+    }
+  ]
+}

@@ -2,8 +2,11 @@
 
 ## Status and review base
 
-This is an implementation plan. The ONNX integration is not implemented by
-this document, and the experimental ONNX ZK tests still fail.
+The first implementation is in
+[`onnx_proof::native`](../jolt-atlas-core/src/onnx_proof/native.rs).
+It translates a supported subset of Atlas integer models into registered
+native graphs. The broader integration plan below remains incomplete, and
+the experimental HyperKZG dispatcher still has its separate failures.
 
 The branch starts at native verifier PR [#375](https://github.com/ICME-Lab/jolt-atlas/pull/375),
 commit `f26127dc1978acdc02a89b3318b0e8779603bf5d`. It targets `main`, with
@@ -12,8 +15,75 @@ commit `f26127dc1978acdc02a89b3318b0e8779603bf5d`. It targets `main`, with
 merge. The ordinary verifier PR #370 is a separate path.
 
 Review the new work against the pinned prerequisite, rather than attributing
-its native relations and optimizations to this integration. The initial
-commit adds only this plan. No additional performance result is claimed.
+its native relations and optimizations to this integration. The first commit
+added the plan; the following implementation ports model translation and
+registered input handling. No additional performance result is claimed.
+
+## Implemented subset
+
+`NativeModel::new` translates a tracer `Model` without private values. It
+validates topology, arity, declared dimensions and external input ordering.
+The registration binds the input order and original tensor map through the
+graph context. `tensor_id` exposes the original-to-native mapping for boundary
+proofs. `preprocess` registers constants once, and `commit` accepts private
+inputs in the original model order with fresh hiding commitments.
+
+| Operators | Supported domain |
+|---|---|
+| Input, Constant | Exact tensor shapes, public constants and private runtime inputs |
+| Add, Sub | Equal shapes with the Atlas saturating integer operation |
+| Mul, Square | Equal shapes, floor rescaling at shifts 1 through 30, then clamping |
+| Sum, MeanOfSquares | Ordered distinct axes, checked logical and padded counts, native integer bounds |
+| Rsqrt | Scales 0 through 20, including zero output for nonpositive inputs |
+| ScalarConstDiv | Positive divisors from 2 through 2^30, floor division |
+| Identity, Broadcast, Reshape, MoveAxis | Exact native layout constraints |
+| Slice, Concat | Aligned slices supported by native layouts; two equal-shaped concat operands |
+| SoftmaxLastAxis | Scales 1 through 15, bounded row size and exact checked centering |
+| Sin, Cos | Scales 4 through 20 with the native periodic lookup relation |
+
+Dimensions must be positive powers of two, with at most 2^30 elements per
+tensor. Scalars are also supported. Implicit input padding and output
+cropping reject when they would change the external tensor dimensions.
+Unused native input tensors reject under the existing graph contract.
+Unsupported operators and domains return errors. In particular, this port
+does not yet import contractions, gathers, general activation tables or
+generation. It does not support a complete transformer export yet.
+
+Use `NativeGraphProof::prove` with the returned statement and witness, then
+`NativeRegisteredGraph::verify` against independently authenticated setup.
+The returned proof attests to a committed execution. It does not claim that
+a hidden input or output equals a separately supplied public value. Such a
+claim still needs its tensor boundary relation. The experimental `prove_zk`
+and `verify_zk` APIs and their public IO tests are unchanged.
+
+The construction sequence uses the existing native proof types:
+
+```rust
+let translated = NativeModel::new(&model, context)?;
+let input_tensor_ids = translated.input_tensor_ids().to_vec();
+let setup = DoryScheme::setup_prover(translated.graph().max_log_rows()? + 8);
+let generators = DoryScheme::pedersen_generators(&setup, 64);
+let cache = translated.preprocess(&setup)?;
+let (statement, witness) = cache.commit(&private_inputs, &setup)?;
+// Create any required original-tensor boundary proofs before consuming witness.
+let proof = NativeGraphProof::prove(&statement, witness, &setup, &generators)?;
+cache.registered().verify(&proof, &statement, &generators)?;
+```
+
+This illustrates the prover and initial check. A separate receiver uses its
+authenticated registration and generators. The tests additionally round-trip
+the proof, statement and registration through checked canonical serialization.
+
+The first port adapts the graph assembler and registered proof flow from
+[zkARc's model driver](https://github.com/ICME-Lab/zkARc/blob/c03a60d843647e6dcc439a2d8a23ab0d8f211e3e/native-atlas/model-causal-generation/main.rs).
+It removes export parsing, fixed model counts, application contexts and private
+execution dependencies from registration. Application assertions become
+checked frontend errors. Numerical proof operations remain the existing native
+relations from the prerequisite PRs.
+
+The required `Native ONNX BlindFold` CI job checks the core's ZK targets and
+runs the new frontend tests. The old dispatcher suite continues to run in its
+existing informational job. Adding this frontend does not repair that suite.
 
 ## Problem and intended result
 

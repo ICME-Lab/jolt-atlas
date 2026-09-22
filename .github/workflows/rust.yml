@@ -54,6 +54,20 @@ jobs:
       - name: Run tests
         run: cargo nextest run ${{ matrix.variant.test_args }}
 
+  native-onnx-zk:
+    name: Native ONNX BlindFold
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+      - name: Check native frontend and core targets
+        run: cargo clippy -p jolt-atlas-core --all-targets --features zk
+      - uses: taiki-e/install-action@nextest
+      - name: Run native frontend proof and rejection tests
+        run: cargo nextest run -p jolt-atlas-core --features zk -E 'test(onnx_proof::native::tests::)'
+
   experimental-onnx-zk:
     name: Experimental ONNX ZK (informational)
     runs-on: ubuntu-latest

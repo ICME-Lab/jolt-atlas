@@ -20,8 +20,10 @@ use dory::primitives::serialization::{
     SerializationError as DorySerializationError, Validate as DoryValidate,
 };
 use dory::{ProverSetup, VerifierSetup};
+use std::sync::Arc;
 
 use crate::transcripts::{AppendToTranscript, Transcript};
+use std::sync::OnceLock;
 
 // -- enum bridges between arkworks' and dory's serialization vocabularies -----
 
@@ -76,8 +78,17 @@ pub struct DoryProof(pub ArkDoryProof);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DoryHint {
-    pub(crate) row_commitments: Vec<ArkG1>,
+    pub(crate) row_commitments: Arc<Vec<ArkG1>>,
     pub(crate) commit_blind: ArkFr,
+}
+
+impl DoryHint {
+    pub(crate) fn into_parts(self) -> (Vec<ArkG1>, ArkFr) {
+        (
+            Arc::unwrap_or_clone(self.row_commitments),
+            self.commit_blind,
+        )
+    }
 }
 
 // -- Setups ------------------------------------------------------------------
@@ -94,6 +105,9 @@ pub struct DoryProverSetup {
     /// Affine copy of `prover.g1_vec`, so sparse (one-hot) commits can use
     /// mixed projective+affine additions. Derived, never serialized.
     pub(crate) g1_affine: Vec<ark_bn254::G1Affine>,
+    /// Lazily derived sums for power-of-two prefixes of this setup's columns.
+    /// Each entry belongs to this exact setup and is never serialized.
+    g1_prefix_sums: Vec<OnceLock<ark_bn254::G1Projective>>,
     /// Prepared (Miller-loop-ready) copy of `prover.g2_vec`, so tier-2 pairings
     /// over a subset of rows need no per-call G2 preparation. Derived.
     pub(crate) g2_prepared: Vec<<ark_bn254::Bn254 as ark_ec::pairing::Pairing>::G2Prepared>,
@@ -114,12 +128,28 @@ impl DoryProverSetup {
                 })
                 .collect()
         };
+        let g1_prefix_sums = (0..=g1_affine.len().ilog2())
+            .map(|_| OnceLock::new())
+            .collect();
         Self {
             prover,
             verifier,
             g1_affine,
+            g1_prefix_sums,
             g2_prepared,
         }
+    }
+
+    pub(crate) fn g1_prefix_sum(&self, cols: usize) -> ark_bn254::G1Projective {
+        use ark_ff::Zero;
+        assert!(cols.is_power_of_two() && cols <= self.g1_affine.len());
+        // The initializer must not yield to nested Rayon jobs which could
+        // request this same entry while it is still being initialized.
+        *self.g1_prefix_sums[cols.ilog2() as usize].get_or_init(|| {
+            self.g1_affine[..cols]
+                .iter()
+                .fold(ark_bn254::G1Projective::zero(), |sum, g| sum + g)
+        })
     }
 }
 
@@ -199,5 +229,119 @@ impl CanonicalDeserialize for DoryProverSetup {
         )
         .map_err(map_err)?;
         Ok(Self::new(prover, verifier))
+    }
+}
+
+#[cfg(test)]
+mod prefix_sum_tests {
+    use super::*;
+    use crate::poly::commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme};
+    use ark_bn254::G1Projective;
+    use ark_ff::Zero;
+    use rayon::prelude::*;
+
+    #[test]
+    fn generator_prefix_cache_preserves_setup_identity_width_and_serialization() {
+        let setup = DoryScheme::setup_prover(12);
+        let mut before = Vec::new();
+        setup.serialize_compressed(&mut before).unwrap();
+        (0..64usize).into_par_iter().for_each(|i| {
+            let cols = 1 << (i % 7);
+            let expected = setup.g1_affine[..cols]
+                .iter()
+                .fold(G1Projective::zero(), |s, p| s + p);
+            assert_eq!(setup.g1_prefix_sum(cols), expected);
+        });
+        let cloned = setup.clone();
+        let mut changed = setup.prover.clone();
+        changed.g1_vec[0].0 += setup.g1_affine[1];
+        let other = DoryProverSetup::new(changed, setup.verifier.clone());
+        for cols in [1usize, 2, 4, 8, 16, 32, 64] {
+            assert_eq!(cloned.g1_prefix_sum(cols), setup.g1_prefix_sum(cols));
+            assert_eq!(
+                other.g1_prefix_sum(cols),
+                setup.g1_prefix_sum(cols) + setup.g1_affine[1]
+            );
+        }
+        let mut after = Vec::new();
+        setup.serialize_compressed(&mut after).unwrap();
+        assert_eq!(before, after);
+        let restored = DoryProverSetup::deserialize_compressed(after.as_slice()).unwrap();
+        assert!(restored
+            .g1_prefix_sums
+            .iter()
+            .all(|entry| entry.get().is_none()));
+        assert_eq!(restored.g1_prefix_sum(64), setup.g1_prefix_sum(64));
+    }
+
+    #[test]
+    #[should_panic]
+    fn generator_prefix_cache_rejects_non_power_of_two_width() {
+        let _ = DoryScheme::setup_prover(6).g1_prefix_sum(3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn generator_prefix_cache_rejects_width_beyond_setup() {
+        let _ = DoryScheme::setup_prover(6).g1_prefix_sum(16);
+    }
+}
+
+#[cfg(test)]
+mod shared_hint_tests {
+    use super::*;
+    use ark_bn254::{Fr, G1Projective};
+    use ark_ec::PrimeGroup;
+
+    #[test]
+    fn native_shared_hints_preserve_owned_and_borrowed_rows() {
+        let rows = vec![ArkG1(G1Projective::generator()); 16];
+        let hint = DoryHint {
+            row_commitments: rows.clone().into(),
+            commit_blind: ArkFr(Fr::from(7u64)),
+        };
+        let copied = hint.clone();
+        assert!(Arc::ptr_eq(&hint.row_commitments, &copied.row_commitments));
+        let (mut owned, blind) = copied.into_parts();
+        assert_eq!(owned, rows);
+        assert_eq!(blind, hint.commit_blind);
+        owned[0] = ArkG1(G1Projective::generator()).scale(&ArkFr(Fr::from(2u64)));
+        assert_eq!(hint.row_commitments.as_ref(), &rows);
+        let address = hint.row_commitments.as_ptr();
+        let (unique, _) = hint.into_parts();
+        assert_eq!(address, unique.as_ptr());
+        assert_eq!(unique, rows);
+    }
+
+    #[test]
+    #[ignore = "Isolated hint clone storage and time, not complete proof memory"]
+    fn native_shared_hints_benchmark() {
+        let mode = std::env::var("NATIVE_SHARED_HINT_MODE").unwrap();
+        assert!(mode == "copy" || mode == "share");
+        let hint = DoryHint {
+            row_commitments: vec![ArkG1(G1Projective::generator()); 8192].into(),
+            commit_blind: ArkFr(Fr::from(7u64)),
+        };
+        let start = std::time::Instant::now();
+        let copies = (0..512)
+            .map(|_| {
+                if mode == "copy" {
+                    DoryHint {
+                        row_commitments: hint.row_commitments.as_ref().clone().into(),
+                        commit_blind: hint.commit_blind,
+                    }
+                } else {
+                    hint.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        let seconds = start.elapsed().as_secs_f64();
+        let mut unique = std::collections::BTreeSet::new();
+        unique.insert(hint.row_commitments.as_ptr() as usize);
+        for copy in &copies {
+            unique.insert(copy.row_commitments.as_ptr() as usize);
+        }
+        println!("SHARED_HINT_BENCH {{\"mode\":\"{}\",\"seconds\":{},\"rows\":8192,\"clones\":512,\"unique_allocations\":{},\"allocated_row_bytes\":{},\"complete_proof\":false}}",mode,seconds,unique.len(),unique.len()*8192*std::mem::size_of::<ArkG1>());
+        std::hint::black_box(copies);
     }
 }

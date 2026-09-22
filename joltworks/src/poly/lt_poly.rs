@@ -89,26 +89,24 @@ fn lt_evals<F: JoltField>(r: &OpeningPoint<BIG_ENDIAN, F>) -> Vec<F> {
 #[cfg(test)]
 mod tests {
     use ark_bn254::Fr;
+    type Challenge = <Fr as crate::field::JoltField>::Challenge;
 
-    use crate::{
-        field::challenge::MontU128Challenge,
-        poly::{
-            multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{OpeningPoint, BIG_ENDIAN},
-        },
+    use crate::poly::{
+        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialEvaluation},
+        opening_proof::{OpeningPoint, BIG_ENDIAN},
     };
 
     use super::{lt_evals, LtPolynomial};
 
     #[test]
     fn test_bind_low_to_high_works() {
-        let r_cycle = OpeningPoint::new([9, 5, 7, 1].map(MontU128Challenge::from).to_vec());
+        let r_cycle = OpeningPoint::new([9, 5, 7, 1].map(Challenge::from).to_vec());
         let mut lt_poly = LtPolynomial::<Fr>::new(&r_cycle);
         let lt_poly_gt: MultilinearPolynomial<Fr> = lt_evals(&r_cycle).into();
-        let r0 = MontU128Challenge::from(2);
-        let r1 = MontU128Challenge::from(6);
-        let r2 = MontU128Challenge::from(3);
-        let r3 = MontU128Challenge::from(9);
+        let r0 = Challenge::from(2);
+        let r1 = Challenge::from(6);
+        let r2 = Challenge::from(3);
+        let r3 = Challenge::from(9);
         let r = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![r3, r2, r1, r0]);
 
         lt_poly.bind(r0, BindingOrder::LowToHigh);
@@ -121,13 +119,13 @@ mod tests {
 
     #[test]
     fn test_bind_high_to_low_works() {
-        let r_cycle = OpeningPoint::new([9, 5, 7, 1].map(MontU128Challenge::from).to_vec());
+        let r_cycle = OpeningPoint::new([9, 5, 7, 1].map(Challenge::from).to_vec());
         let mut lt_poly = LtPolynomial::<Fr>::new(&r_cycle);
         let lt_poly_gt: MultilinearPolynomial<Fr> = lt_evals(&r_cycle).into();
-        let r0 = MontU128Challenge::from(2);
-        let r1 = MontU128Challenge::from(6);
-        let r2 = MontU128Challenge::from(3);
-        let r3 = MontU128Challenge::from(9);
+        let r0 = Challenge::from(2);
+        let r1 = Challenge::from(6);
+        let r2 = Challenge::from(3);
+        let r3 = Challenge::from(9);
         let r = OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![r0, r1, r2, r3]);
 
         lt_poly.bind(r0, BindingOrder::HighToLow);

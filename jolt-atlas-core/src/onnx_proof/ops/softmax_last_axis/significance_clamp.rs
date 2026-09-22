@@ -6,6 +6,11 @@
 //! `r_cycle`/`r_cycle_source` are overridden accordingly. `z` is always `>= 0` by construction, so
 //! no offset trick is needed: this maps directly onto `ClampBoundedTable`'s floor-at-0 domain.
 //!
+//! The lookup address is [`SOFTMAX_CLAMP_LOG_K`] bits wide, not `XLEN`: `z` is a difference of two i32s
+//! and reaches 33 bits (a `max_k` near `i32::MAX` against an attention mask near `i32::MIN`), so
+//! a 32-bit address would wrap it negative and the clamp would map it to `0` — i.e. a masked
+//! position would get full softmax weight.
+//!
 //! The read-raf sumcheck's `rv_claim` is defined as `z_hi(r2)*base + z_lo(r2)` (computed
 //! directly from the already-cached `SoftmaxZHi`/`SoftmaxZLo` claims — see `cache_z_hi_lo` in
 //! `mod.rs`), rather than needing its own separate `z_c` witness/claim. This proves
@@ -16,15 +21,15 @@
 //! `operand_link` in `mod.rs`.
 
 use crate::{
-    onnx_proof::op_lookups::{DefaultLookupOperands, LookupOperandsTrait},
-    utils::opening_access::AccOpeningAccessor,
+    onnx_proof::op_lookups::LookupOperandsTrait, utils::opening_access::AccOpeningAccessor,
 };
 use atlas_onnx_tracer::{
     model::trace::Trace, node::ComputationNode, ops::softmax::generate_exp_lut_decomposed,
     tensor::Tensor, utils::quantize::scale_to_multiplier,
 };
 use common::{
-    consts::{MODEL_SCALE, XLEN},
+    consts::{MODEL_SCALE, SOFTMAX_CLAMP_LOG_K},
+    parallel::par_enabled,
     CommittedPoly, VirtualPoly,
 };
 use joltworks::{
@@ -32,6 +37,7 @@ use joltworks::{
     poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
     utils::lookup_bits::LookupBits,
 };
+use rayon::prelude::*;
 
 /// Precomputed-witness [`LookupOperandsTrait`] helper for softmax's saturating clamp.
 ///
@@ -52,7 +58,7 @@ impl SoftmaxSignificanceClampOperands {
 }
 
 impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
-    const LOG_K: usize = XLEN;
+    const LOG_K: usize = SOFTMAX_CLAMP_LOG_K;
 
     fn rv_claim<F: JoltField>(
         node: &ComputationNode,
@@ -105,6 +111,19 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
     }
 
     fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
-        DefaultLookupOperands.lookup_bits(witness)
+        softmax_clamp_lookup_bits(witness)
     }
+}
+
+/// Lookup indices for softmax's saturating clamp: each `z`, bit-cast to its [`SOFTMAX_CLAMP_LOG_K`]-bit
+/// address. Shared with `witness.rs`'s `SoftmaxClampRaD` witness generation.
+///
+/// Deliberately not the 32-bit `DefaultLookupOperands::lookup_bits`: `z = max_k - x` is a
+/// difference of two i32s and needs 33 bits.
+pub(crate) fn softmax_clamp_lookup_bits(z: &Tensor<i64>) -> Vec<LookupBits> {
+    z.data()
+        .par_iter()
+        .with_min_len(par_enabled())
+        .map(|&v| LookupBits::new(v as u64, SOFTMAX_CLAMP_LOG_K))
+        .collect()
 }

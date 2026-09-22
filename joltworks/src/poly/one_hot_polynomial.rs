@@ -1,3 +1,4 @@
+use crate::poly::compact_indices::CompactIndices;
 #[cfg(test)]
 use crate::poly::dense_mlpoly::DensePolynomial;
 use crate::{
@@ -26,7 +27,7 @@ pub struct OneHotPolynomial<F: JoltField> {
     /// In other words, the raf/waf corresponding to this
     /// ra/wa polynomial.
     /// If empty, this polynomial is 0 for all j.
-    pub nonzero_indices: Arc<Vec<Option<u16>>>,
+    pub nonzero_indices: Arc<CompactIndices<u16>>,
     /// The number of variables that have been bound over the
     /// course of sumcheck so far.
     pub num_variables_bound: usize,
@@ -50,7 +51,7 @@ impl<F: JoltField> Default for OneHotPolynomial<F> {
     fn default() -> Self {
         Self {
             K: 1,
-            nonzero_indices: Arc::new(vec![]),
+            nonzero_indices: Arc::new(CompactIndices::new(vec![], 1)),
             num_variables_bound: 0,
             G: vec![],
             H: Arc::new(RwLock::new(RaPolynomial::None)),
@@ -63,7 +64,7 @@ impl<F: JoltField> OneHotPolynomial<F> {
         assert!(K <= 1usize << u16::BITS, "K must be <= 65536 for indices");
         Self {
             K,
-            nonzero_indices: Arc::new(nonzero_indices),
+            nonzero_indices: Arc::new(CompactIndices::new(nonzero_indices, K)),
             ..Default::default()
         }
     }
@@ -85,6 +86,35 @@ impl<F: JoltField> OneHotPolynomial<F> {
         );
         let (r_address, r_cycle) = r.split_at(self.K.log_2());
         let eq_r_address = EqPolynomial::evals(r_address);
+        if self.K <= 256 && self.nonzero_indices.len() > 4096 {
+            // Accumulate row weights by address inside each tile. This computes
+            // the same multilinear evaluation without expanding one field
+            // element per row or multiplying once per row.
+            let low_bits = r_cycle.len().div_ceil(2).max(12).min(r_cycle.len());
+            let (high, low) = r_cycle.split_at(r_cycle.len() - low_bits);
+            let eq_high = EqPolynomial::<F>::evals(high);
+            let eq_low = EqPolynomial::<F>::evals(low);
+            return self
+                .nonzero_indices
+                .par_chunks(eq_low.len())
+                .zip(eq_high.par_iter())
+                .with_min_len(par_enabled())
+                .map(|(indices, high_weight)| {
+                    let mut histogram = vec![F::zero(); self.K];
+                    for (index, weight) in indices.iter().zip(&eq_low) {
+                        if let Some(index) = index {
+                            histogram[*index as usize] += *weight;
+                        }
+                    }
+                    let partial: F = histogram
+                        .iter()
+                        .zip(&eq_r_address)
+                        .map(|(weight, value)| *weight * value)
+                        .sum();
+                    partial * high_weight
+                })
+                .sum();
+        }
         let poly = MultilinearPolynomial::from(
             self.nonzero_indices
                 .par_iter()
@@ -271,5 +301,132 @@ mod tests {
     #[test]
     fn evaluate_K_greater_than_T() {
         evaluate_test::<6, 5>();
+    }
+}
+
+#[cfg(test)]
+mod tiled_evaluation_tests {
+    use super::*;
+    use ark_bn254::Fr;
+    use ark_std::Zero;
+    use rand::{Rng, SeedableRng};
+
+    fn expanded<C>(poly: &OneHotPolynomial<Fr>, point: &[C]) -> Fr
+    where
+        C: Copy + Send + Sync + Into<Fr> + ChallengeFieldOps<Fr>,
+        Fr: std::ops::Mul<C, Output = Fr> + FieldChallengeOps<C>,
+    {
+        let (address, cycle) = point.split_at(poly.K.log_2());
+        let address = EqPolynomial::<Fr>::evals(address);
+        let dense = MultilinearPolynomial::from(
+            poly.nonzero_indices
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|index| index.map_or(Fr::zero(), |i| address[i as usize]))
+                .collect::<Vec<_>>(),
+        );
+        dense.evaluate(cycle)
+    }
+
+    #[test]
+    fn native_indicator_tiled_evaluation_matches_expansion_and_boolean_entries() {
+        for workers in [1, 2, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(3971);
+                    for log_k in [0usize, 1, 4, 8, 9] {
+                        for log_t in [0usize, 6, 12, 13, 16] {
+                            let k = 1usize << log_k;
+                            let mut indices: Vec<_> = (0..1usize << log_t)
+                                .map(|i| {
+                                    if i % 7 == 0 {
+                                        None
+                                    } else {
+                                        Some(rng.gen_range(0..k) as u16)
+                                    }
+                                })
+                                .collect();
+                            if indices.len() > 1 {
+                                indices[1] = Some((k - 1) as u16);
+                            }
+                            let poly = OneHotPolynomial::<Fr>::from_indices(indices, k);
+                            let point: Vec<_> = (0..log_k + log_t)
+                                .map(|_| <Fr as JoltField>::Challenge::random(&mut rng))
+                                .collect();
+                            let expected = expanded(&poly, &point);
+                            assert_eq!(poly.evaluate(&point), expected);
+                            let field_point: Vec<Fr> =
+                                point.iter().copied().map(Into::into).collect();
+                            assert_eq!(poly.evaluate(&field_point), expected);
+                            {
+                                let _guard = common::parallel::ParallelFlagGuard::disabled();
+                                assert_eq!(poly.evaluate(&point), expected);
+                            }
+                            for row in [
+                                0,
+                                (poly.nonzero_indices.len() - 1).min(1),
+                                poly.nonzero_indices.len() - 1,
+                            ] {
+                                for address in [0, k - 1] {
+                                    let bits = (0..log_k)
+                                        .rev()
+                                        .map(|b| Fr::from(((address >> b) & 1) as u64))
+                                        .chain(
+                                            (0..log_t)
+                                                .rev()
+                                                .map(|b| Fr::from(((row >> b) & 1) as u64)),
+                                        )
+                                        .collect::<Vec<_>>();
+                                    let expected = Fr::from(u64::from(
+                                        poly.nonzero_indices[row] == Some(address as u16),
+                                    ));
+                                    assert_eq!(poly.evaluate(&bits), expected);
+                                }
+                            }
+                        }
+                    }
+                    let poly = OneHotPolynomial::<Fr>::from_indices(vec![None; 8192], 256);
+                    assert_eq!(poly.evaluate(&vec![Fr::from(3u64); 21]), Fr::zero());
+                });
+        }
+    }
+
+    #[test]
+    #[ignore = "Isolated indicator evaluation, not complete native proving"]
+    fn native_indicator_evaluation_benchmark() {
+        let mode = std::env::var("NATIVE_INDICATOR_MODE").unwrap();
+        assert!(mode == "expanded" || mode == "tiled");
+        let log_t: usize = std::env::var("NATIVE_INDICATOR_LOG_ROWS")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let poly = OneHotPolynomial::<Fr>::from_indices(
+            (0..1usize << log_t)
+                .map(|i| {
+                    if i % 17 == 0 {
+                        None
+                    } else {
+                        Some(((i * 73 + i / 509) & 255) as u16)
+                    }
+                })
+                .collect(),
+            256,
+        );
+        let point = (0..log_t + 8)
+            .map(|i| Fr::from((i + 3) as u64))
+            .collect::<Vec<_>>();
+        let started = std::time::Instant::now();
+        let result = if mode == "expanded" {
+            expanded(&poly, &point)
+        } else {
+            poly.evaluate(&point)
+        };
+        let seconds = started.elapsed().as_secs_f64();
+        println!("INDICATOR_BENCH {{\"mode\":\"{}\",\"log_rows\":{},\"seconds\":{},\"workers\":{},\"complete_proof\":false}}",
+            mode, log_t, seconds, rayon::current_num_threads());
+        std::hint::black_box(result);
     }
 }

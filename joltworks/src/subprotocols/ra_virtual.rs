@@ -44,6 +44,8 @@ pub struct RaSumcheckParams<F: JoltField> {
     pub r_cycle: OpeningPoint<BIG_ENDIAN, F>,
     pub one_hot_params: OneHotParams,
     pub ra_claim: F,
+    /// The preceding hidden read-access claim, fixed by the caller.
+    pub ra_source: OpeningId,
     /// Polynomial types for opening accumulator
     pub polynomial_types: Vec<CommittedPoly>,
 }
@@ -67,7 +69,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RaSumcheckParams<F> {
 
     #[cfg(feature = "zk")]
     fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
+        InputClaimConstraint::direct(self.ra_source)
     }
 
     #[cfg(feature = "zk")]
@@ -343,6 +345,10 @@ mod tests {
             r_address: OpeningPoint::<BIG_ENDIAN, Fr>::new(r_address),
             one_hot_params: one_hot_params.clone(),
             ra_claim,
+            ra_source: OpeningId::new(
+                common::VirtualPoly::NodeOutput(0),
+                SumcheckId::NodeExecution(0),
+            ),
             polynomial_types: vec![
                 CommittedPoly::NodeOutputRaD(0, 0),
                 CommittedPoly::NodeOutputRaD(0, 1),

@@ -24,11 +24,51 @@
 //! sparsely in `O(nonzeros)` via [`DoryScheme::commit_one_hot`], bit-identical
 //! to the dense path so they still combine homomorphically.
 
+#[cfg(feature = "zk")]
+pub mod equality;
+#[cfg(feature = "zk")]
+mod native_add;
+#[cfg(feature = "zk")]
+pub mod native_boundary;
+#[cfg(feature = "zk")]
+mod native_clamped_lookup;
+#[cfg(feature = "zk")]
+mod native_concat;
+#[cfg(feature = "zk")]
+mod native_division;
+#[cfg(feature = "zk")]
+mod native_einsum;
+#[cfg(feature = "zk")]
+pub mod native_graph;
+#[cfg(feature = "zk")]
+mod native_hidden_lookup;
+#[cfg(feature = "zk")]
+mod native_layout;
+#[cfg(feature = "zk")]
+pub mod native_logic;
+#[cfg(feature = "zk")]
+pub mod native_lookup;
+#[cfg(feature = "zk")]
+mod native_max;
+#[cfg(feature = "zk")]
+pub mod native_mul;
+#[cfg(feature = "zk")]
+pub mod native_opening;
+#[cfg(feature = "zk")]
+mod native_reciprocal;
+#[cfg(feature = "zk")]
+mod native_reduce;
+#[cfg(feature = "zk")]
+pub mod native_registration;
+#[cfg(feature = "zk")]
+mod native_rsqrt;
 mod one_hot_commit;
 mod par_routines;
 mod sparse_rlc;
 mod transcript;
 mod types;
+#[cfg(feature = "zk")]
+mod zk;
 
 use par_routines::{ParG1Routines, ParG2Routines};
 
@@ -153,11 +193,12 @@ impl DoryScheme {
         let row_commitments = {
             let _s = tracing::span!(tracing::Level::INFO, "one_hot_tier_1").entered();
             one_hot_commit::one_hot_row_commitments(
-                &one_hot.nonzero_indices,
+                one_hot.nonzero_indices.as_slice(),
                 t_len,
                 cols,
                 num_rows,
                 &setup.g1_affine[..cols],
+                || setup.g1_prefix_sum(cols),
             )
         };
 
@@ -178,7 +219,7 @@ impl DoryScheme {
         (
             DoryCommitment(tier_2),
             DoryHint {
-                row_commitments,
+                row_commitments: row_commitments.into(),
                 commit_blind: <ArkFr as DoryField>::zero(),
             },
         )
@@ -239,7 +280,7 @@ impl CommitmentScheme for DoryScheme {
         (
             DoryCommitment(commitment),
             DoryHint {
-                row_commitments,
+                row_commitments: row_commitments.into(),
                 commit_blind,
             },
         )
@@ -295,10 +336,16 @@ impl CommitmentScheme for DoryScheme {
         hints: Vec<Self::OpeningProofHint>,
         coeffs: &[Self::Field],
     ) -> Self::OpeningProofHint {
-        let rows: Vec<Vec<ArkG1>> = hints.into_iter().map(|h| h.row_commitments).collect();
+        assert_eq!(hints.len(), coeffs.len());
+        let commit_blind = hints
+            .iter()
+            .zip(coeffs)
+            .map(|(hint, coefficient)| ArkFr(*coefficient) * hint.commit_blind)
+            .fold(<ArkFr as DoryField>::zero(), |sum, blind| sum + blind);
+        let rows: Vec<_> = hints.iter().map(|h| h.row_commitments.as_slice()).collect();
         DoryHint {
-            row_commitments: sparse_rlc::combine_row_commitments(&rows, coeffs),
-            commit_blind: <ArkFr as DoryField>::zero(),
+            row_commitments: sparse_rlc::combine_row_commitments(&rows, coeffs).into(),
+            commit_blind,
         }
     }
 
@@ -320,10 +367,9 @@ impl CommitmentScheme for DoryScheme {
         let point = Self::dory_point(opening_point);
 
         let (row_commitments, commit_blind) = if hints.len() == polynomials.len() {
-            let h = Self::combine_hints(hints, coeffs);
-            let mut rows = h.row_commitments;
+            let (mut rows, blind) = Self::combine_hints(hints, coeffs).into_parts();
             rows.resize(1 << nu, <ArkG1 as DoryGroup>::identity());
-            (rows, h.commit_blind)
+            (rows, blind)
         } else {
             let (_c, rows, blind) = joint
                 .commit::<BN254, Transparent, G1Routines>(nu, sigma, &setup.prover)
@@ -368,7 +414,7 @@ impl CommitmentScheme for DoryScheme {
         let point = Self::dory_point(opening_point);
 
         let (row_commitments, commit_blind) = match hint {
-            Some(h) => (h.row_commitments, h.commit_blind),
+            Some(h) => h.into_parts(),
             None => {
                 let (_commitment, rows, blind) = ark_poly
                     .commit::<BN254, Transparent, G1Routines>(nu, sigma, &setup.prover)
@@ -600,5 +646,73 @@ mod tests {
             sparse_commitment, dense_commitment,
             "sparse one-hot commitment must equal the dense expansion's commitment",
         );
+    }
+}
+
+#[cfg(feature = "zk")]
+pub mod native_generation;
+#[cfg(test)]
+mod recovered_commitment_tests {
+    use super::*;
+    use crate::poly::{dense_mlpoly::DensePolynomial, one_hot_polynomial::OneHotPolynomial};
+    use ark_ff::{One, Zero};
+
+    #[test]
+    fn recovered_commitments_and_hints_match_independent_dense_polynomials() {
+        let setup = DoryScheme::setup_prover(12);
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for t in [16usize, 64, 256] {
+                        let k = 4;
+                        for mode in 0..4 {
+                            let indices = (0..t)
+                                .map(|i| match mode {
+                                    0 => Some(3),
+                                    1 => Some((i % 2) as u16),
+                                    2 => Some((if i % 16 == 0 { i % k } else { 0 }) as u16),
+                                    _ => {
+                                        if i % 7 == 0 {
+                                            None
+                                        } else {
+                                            Some(0)
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            let mut coefficients = vec![Fr::zero(); k * t];
+                            for (i, address) in indices.iter().enumerate() {
+                                if let Some(address) = address {
+                                    coefficients[usize::from(*address) * t + i] = Fr::one();
+                                }
+                            }
+                            let sparse = MultilinearPolynomial::OneHot(
+                                OneHotPolynomial::from_indices(indices, k),
+                            );
+                            let dense = MultilinearPolynomial::LargeScalars(DensePolynomial::new(
+                                coefficients,
+                            ));
+                            let (expected, dense_hint) = DoryScheme::commit(&dense, &setup);
+                            let (actual, sparse_hint) = DoryScheme::commit(&sparse, &setup);
+                            assert_eq!(actual, expected);
+                            assert_eq!(sparse_hint, dense_hint);
+                            #[cfg(feature = "zk")]
+                            {
+                                let (hidden, hint) = DoryScheme::commit_zk(&sparse, &setup);
+                                assert_eq!(
+                                    hidden.0,
+                                    expected.0 + setup.prover.ht.scale(&hint.commit_blind)
+                                );
+                                assert_eq!(hint.row_commitments, dense_hint.row_commitments);
+                                let (_, repeated) = DoryScheme::commit_zk(&sparse, &setup);
+                                assert_ne!(hint.commit_blind, repeated.commit_blind);
+                            }
+                        }
+                    }
+                });
+        }
     }
 }

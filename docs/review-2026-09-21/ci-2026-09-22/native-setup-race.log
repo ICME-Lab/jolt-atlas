@@ -1,0 +1,768 @@
+﻿2026-09-22T11:17:27.1725383Z Current runner version: '2.337.0'
+2026-09-22T11:17:27.1742315Z ##[group]Runner Image Provisioner
+2026-09-22T11:17:27.1742949Z Hosted Compute Agent
+2026-09-22T11:17:27.1743325Z Version: 20260828.587
+2026-09-22T11:17:27.1743959Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-22T11:17:27.1744599Z Build Date: 2026-08-28T16:44:25Z
+2026-09-22T11:17:27.1745021Z Worker ID: {a7ef32d4-5e34-4891-90e9-d5d9464f2ae4}
+2026-09-22T11:17:27.1745479Z Azure Region: centralus
+2026-09-22T11:17:27.1745859Z ##[endgroup]
+2026-09-22T11:17:27.1746710Z ##[group]Operating System
+2026-09-22T11:17:27.1747194Z Ubuntu
+2026-09-22T11:17:27.1747522Z 24.04.5
+2026-09-22T11:17:27.1747881Z LTS
+2026-09-22T11:17:27.1748222Z ##[endgroup]
+2026-09-22T11:17:27.1748570Z ##[group]Runner Image
+2026-09-22T11:17:27.1749012Z Image: ubuntu-24.04
+2026-09-22T11:17:27.1749372Z Version: 20260907.300.1
+2026-09-22T11:17:27.1750212Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260907.300/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-22T11:17:27.1751138Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260907.300
+2026-09-22T11:17:27.1751875Z ##[endgroup]
+2026-09-22T11:17:27.1752565Z ##[group]GITHUB_TOKEN Permissions
+2026-09-22T11:17:27.1753999Z Contents: read
+2026-09-22T11:17:27.1754370Z Metadata: read
+2026-09-22T11:17:27.1754713Z ##[endgroup]
+2026-09-22T11:17:27.1756170Z Secret source: Actions
+2026-09-22T11:17:27.1756742Z Cache mode: write
+2026-09-22T11:17:27.1757248Z Prepare workflow directory
+2026-09-22T11:17:27.2011681Z Prepare all required actions
+2026-09-22T11:17:27.2045064Z Getting action download info
+2026-09-22T11:17:27.4506652Z Download action repository 'actions/checkout@v7.0.1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-09-22T11:17:27.5400952Z Download action repository 'actions-rust-lang/setup-rust-toolchain@v1' (SHA:166cdcfd11aee3cb47222f9ddb555ce30ddb9659)
+2026-09-22T11:17:27.7388201Z Download action repository 'taiki-e/install-action@nextest' (SHA:e88e69ecdb9658bd172693dcdc2c84e7f0ab6a11)
+2026-09-22T11:17:28.2151516Z Getting action download info
+2026-09-22T11:17:28.3199786Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-09-22T11:17:28.9605699Z Complete job name: Clippy & Test (zk)
+2026-09-22T11:17:29.0153927Z ##[group]Run actions/checkout@v7.0.1
+2026-09-22T11:17:29.0154763Z with:
+2026-09-22T11:17:29.0155324Z   repository: ICME-Lab/jolt-atlas
+2026-09-22T11:17:29.0159992Z   token: ***
+2026-09-22T11:17:29.0160541Z   ssh-strict: true
+2026-09-22T11:17:29.0161103Z   ssh-user: git
+2026-09-22T11:17:29.0161678Z   persist-credentials: true
+2026-09-22T11:17:29.0162296Z   clean: true
+2026-09-22T11:17:29.0162872Z   sparse-checkout-cone-mode: true
+2026-09-22T11:17:29.0163534Z   fetch-depth: 1
+2026-09-22T11:17:29.0164188Z   fetch-tags: false
+2026-09-22T11:17:29.0164758Z   show-progress: true
+2026-09-22T11:17:29.0165332Z   lfs: false
+2026-09-22T11:17:29.0165858Z   submodules: false
+2026-09-22T11:17:29.0166462Z   set-safe-directory: true
+2026-09-22T11:17:29.0167115Z   allow-unsafe-pr-checkout: false
+2026-09-22T11:17:29.0167848Z env:
+2026-09-22T11:17:29.0168378Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:29.0168990Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:29.0169592Z ##[endgroup]
+2026-09-22T11:17:29.0974278Z Syncing repository: ICME-Lab/jolt-atlas
+2026-09-22T11:17:29.0975978Z ##[group]Getting Git version info
+2026-09-22T11:17:29.0976838Z Working directory is '/home/runner/work/jolt-atlas/jolt-atlas'
+2026-09-22T11:17:29.0978068Z [command]/usr/bin/git version
+2026-09-22T11:17:29.1038865Z git version 2.55.0
+2026-09-22T11:17:29.1052335Z ##[endgroup]
+2026-09-22T11:17:29.1058354Z Temporarily overriding HOME='/home/runner/work/_temp/fc47ec67-3b69-40c3-8ad0-b1a37eb52d8a' before making global git config changes
+2026-09-22T11:17:29.1060351Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-22T11:17:29.1062241Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/jolt-atlas/jolt-atlas
+2026-09-22T11:17:29.1099647Z Deleting the contents of '/home/runner/work/jolt-atlas/jolt-atlas'
+2026-09-22T11:17:29.1101629Z ##[group]Determining repository object format
+2026-09-22T11:17:29.1103089Z ##[endgroup]
+2026-09-22T11:17:29.1104340Z ##[group]Initializing the repository
+2026-09-22T11:17:29.1105633Z [command]/usr/bin/git init /home/runner/work/jolt-atlas/jolt-atlas
+2026-09-22T11:17:29.1207597Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-22T11:17:29.1208909Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-22T11:17:29.1210031Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-22T11:17:29.1211357Z hint: call:
+2026-09-22T11:17:29.1211947Z hint:
+2026-09-22T11:17:29.1212913Z hint: 	git config --global init.defaultBranch <name>
+2026-09-22T11:17:29.1214223Z hint:
+2026-09-22T11:17:29.1215323Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-22T11:17:29.1217131Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-22T11:17:29.1218540Z hint:
+2026-09-22T11:17:29.1219345Z hint: 	git branch -m <name>
+2026-09-22T11:17:29.1220249Z hint:
+2026-09-22T11:17:29.1221443Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-22T11:17:29.1223912Z Initialized empty Git repository in /home/runner/work/jolt-atlas/jolt-atlas/.git/
+2026-09-22T11:17:29.1226482Z [command]/usr/bin/git remote add origin https://github.com/ICME-Lab/jolt-atlas
+2026-09-22T11:17:29.1258097Z ##[endgroup]
+2026-09-22T11:17:29.1259556Z ##[group]Disabling automatic garbage collection
+2026-09-22T11:17:29.1260866Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-22T11:17:29.1283928Z ##[endgroup]
+2026-09-22T11:17:29.1285333Z ##[group]Setting up auth
+2026-09-22T11:17:29.1286332Z Removing SSH command configuration
+2026-09-22T11:17:29.1287776Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-22T11:17:29.1312413Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-22T11:17:29.1605442Z Removing HTTP extra header
+2026-09-22T11:17:29.1609393Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-22T11:17:29.1634911Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-22T11:17:29.1802691Z Removing includeIf entries pointing to credentials config files
+2026-09-22T11:17:29.1805558Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-22T11:17:29.1830151Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-22T11:17:29.2006702Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-22T11:17:29.2039005Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/jolt-atlas/jolt-atlas/.git.path /home/runner/work/_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config
+2026-09-22T11:17:29.2076955Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/jolt-atlas/jolt-atlas/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config
+2026-09-22T11:17:29.2088672Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config
+2026-09-22T11:17:29.2121906Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config
+2026-09-22T11:17:29.2139783Z ##[endgroup]
+2026-09-22T11:17:29.2141305Z ##[group]Fetching the repository
+2026-09-22T11:17:29.2145066Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +31a666cf6ab84bdab37b9b4094769832fce12fbd:refs/remotes/pull/374/merge
+2026-09-22T11:17:30.2765006Z From https://github.com/ICME-Lab/jolt-atlas
+2026-09-22T11:17:30.2766260Z  * [new ref]         31a666cf6ab84bdab37b9b4094769832fce12fbd -> pull/374/merge
+2026-09-22T11:17:30.2769301Z ##[endgroup]
+2026-09-22T11:17:30.2769695Z ##[group]Determining the checkout info
+2026-09-22T11:17:30.2770179Z ##[endgroup]
+2026-09-22T11:17:30.2773652Z [command]/usr/bin/git sparse-checkout disable
+2026-09-22T11:17:30.2813558Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-22T11:17:30.2834465Z ##[group]Checking out the ref
+2026-09-22T11:17:30.2836632Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/374/merge
+2026-09-22T11:17:30.3798726Z Note: switching to 'refs/remotes/pull/374/merge'.
+2026-09-22T11:17:30.3799088Z 
+2026-09-22T11:17:30.3799310Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-22T11:17:30.3799752Z changes and commit them, and you can discard any commits you make in this
+2026-09-22T11:17:30.3800078Z state without impacting any branches by switching back to a branch.
+2026-09-22T11:17:30.3800294Z 
+2026-09-22T11:17:30.3800485Z If you want to create a new branch to retain commits you create, you may
+2026-09-22T11:17:30.3800797Z do so (now or later) by using -c with the switch command. Example:
+2026-09-22T11:17:30.3800961Z 
+2026-09-22T11:17:30.3801052Z   git switch -c <new-branch-name>
+2026-09-22T11:17:30.3801172Z 
+2026-09-22T11:17:30.3801261Z Or undo this operation with:
+2026-09-22T11:17:30.3801381Z 
+2026-09-22T11:17:30.3801455Z   git switch -
+2026-09-22T11:17:30.3801578Z 
+2026-09-22T11:17:30.3801762Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-22T11:17:30.3801961Z 
+2026-09-22T11:17:30.3802201Z HEAD is now at 31a666c Merge 30fbef7b4dc00479c1f0d9ae10c6ea1e07081c61 into e6cadf160dc8b6fa8b7a183ff24ce71b6ef84518
+2026-09-22T11:17:30.3809569Z ##[endgroup]
+2026-09-22T11:17:30.3844644Z [command]/usr/bin/git log -1 --format=%H
+2026-09-22T11:17:30.3863563Z 31a666cf6ab84bdab37b9b4094769832fce12fbd
+2026-09-22T11:17:30.4180559Z ##[group]Run actions-rust-lang/setup-rust-toolchain@v1
+2026-09-22T11:17:30.4180795Z with:
+2026-09-22T11:17:30.4180950Z   components: clippy
+2026-09-22T11:17:30.4181106Z   cache: true
+2026-09-22T11:17:30.4181267Z   cache-on-failure: true
+2026-09-22T11:17:30.4181471Z   cache-bin: true
+2026-09-22T11:17:30.4181628Z   cache-provider: github
+2026-09-22T11:17:30.4181834Z   cache-all-crates: false
+2026-09-22T11:17:30.4182012Z   cache-workspace-crates: false
+2026-09-22T11:17:30.4182189Z   cache-save-if: true
+2026-09-22T11:17:30.4182345Z   cache-targets: true
+2026-09-22T11:17:30.4182497Z   matcher: true
+2026-09-22T11:17:30.4182651Z   rustflags: -D warnings
+2026-09-22T11:17:30.4182821Z   override: true
+2026-09-22T11:17:30.4182966Z env:
+2026-09-22T11:17:30.4183109Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:30.4183270Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:30.4183432Z ##[endgroup]
+2026-09-22T11:17:30.4223088Z ##[start-action display=Unbork mac;id=__actions-rust-lang_setup-rust-toolchain.__run]
+2026-09-22T11:17:30.4233903Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-22T11:17:30.4256134Z ##[start-action display=Run : construct rustup command line;id=__actions-rust-lang_setup-rust-toolchain.flags]
+2026-09-22T11:17:30.4284667Z ##[group]Run : construct rustup command line
+2026-09-22T11:17:30.4284934Z [36;1m: construct rustup command line[0m
+2026-09-22T11:17:30.4285259Z [36;1mecho "targets=$(for t in ${_srt_targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-09-22T11:17:30.4285686Z [36;1mecho "components=$(for c in ${_srt_components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-09-22T11:17:30.4286176Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-09-22T11:17:30.4317816Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-22T11:17:30.4318048Z env:
+2026-09-22T11:17:30.4318198Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:30.4318375Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:30.4318538Z   _srt_targets: 
+2026-09-22T11:17:30.4318688Z   _srt_components: clippy
+2026-09-22T11:17:30.4318852Z ##[endgroup]
+2026-09-22T11:17:30.4404919Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=14]
+2026-09-22T11:17:30.4408659Z ##[start-action display=Setting Environment Variables;id=__actions-rust-lang_setup-rust-toolchain.__run_2]
+2026-09-22T11:17:30.4423131Z ##[group]Run if [[ ! -v CARGO_INCREMENTAL ]]; then
+2026-09-22T11:17:30.4423388Z [36;1mif [[ ! -v CARGO_INCREMENTAL ]]; then[0m
+2026-09-22T11:17:30.4423609Z [36;1m  echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV[0m
+2026-09-22T11:17:30.4423990Z [36;1mfi[0m
+2026-09-22T11:17:30.4424159Z [36;1mif [[ ! -v CARGO_PROFILE_DEV_DEBUG ]]; then[0m
+2026-09-22T11:17:30.4424390Z [36;1m  echo "CARGO_PROFILE_DEV_DEBUG=0" >> $GITHUB_ENV[0m
+2026-09-22T11:17:30.4424596Z [36;1mfi[0m
+2026-09-22T11:17:30.4424757Z [36;1mif [[ ! -v CARGO_TERM_COLOR ]]; then[0m
+2026-09-22T11:17:30.4424981Z [36;1m  echo "CARGO_TERM_COLOR=always" >> $GITHUB_ENV[0m
+2026-09-22T11:17:30.4425181Z [36;1mfi[0m
+2026-09-22T11:17:30.4425337Z [36;1mif [[ ! -v RUST_BACKTRACE ]]; then[0m
+2026-09-22T11:17:30.4425552Z [36;1m  echo "RUST_BACKTRACE=short" >> $GITHUB_ENV[0m
+2026-09-22T11:17:30.4425746Z [36;1mfi[0m
+2026-09-22T11:17:30.4425934Z [36;1mif [[ ( ! -v RUSTFLAGS ) && $_srt_NEW_RUSTFLAGS != "" ]]; then[0m
+2026-09-22T11:17:30.4426196Z [36;1m  echo "RUSTFLAGS=$_srt_NEW_RUSTFLAGS" >> $GITHUB_ENV[0m
+2026-09-22T11:17:30.4426409Z [36;1mfi[0m
+2026-09-22T11:17:30.4426574Z [36;1m# Enable faster sparse index on nightly[0m
+2026-09-22T11:17:30.4426817Z [36;1m# The value is ignored on stable and causes no problems[0m
+2026-09-22T11:17:30.4427161Z [36;1m# https://internals.rust-lang.org/t/call-for-testing-cargo-sparse-registry/16862[0m
+2026-09-22T11:17:30.4427490Z [36;1mif [[ ! -v CARGO_UNSTABLE_SPARSE_REGISTRY ]]; then[0m
+2026-09-22T11:17:30.4427899Z [36;1m  echo "CARGO_UNSTABLE_SPARSE_REGISTRY=true" >> $GITHUB_ENV[0m
+2026-09-22T11:17:30.4428118Z [36;1mfi[0m
+2026-09-22T11:17:30.4428299Z [36;1mif [[ ! -v CARGO_REGISTRIES_CRATES_IO_PROTOCOL ]]; then[0m
+2026-09-22T11:17:30.4428578Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse" >> $GITHUB_ENV[0m
+2026-09-22T11:17:30.4428817Z [36;1mfi[0m
+2026-09-22T11:17:30.4454702Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-22T11:17:30.4454925Z env:
+2026-09-22T11:17:30.4455070Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:30.4455237Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:30.4455409Z   _srt_NEW_RUSTFLAGS: -D warnings
+2026-09-22T11:17:30.4455594Z ##[endgroup]
+2026-09-22T11:17:30.4502479Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=9]
+2026-09-22T11:17:30.4504227Z ##[start-action display=Install Rust Problem Matcher;id=__actions-rust-lang_setup-rust-toolchain.__run_3]
+2026-09-22T11:17:30.4520163Z ##[group]Run echo "::add-matcher::/home/runner/work/_actions/actions-rust-lang/setup-rust-toolchain/v1/rust.json"
+2026-09-22T11:17:30.4520630Z [36;1mecho "::add-matcher::/home/runner/work/_actions/actions-rust-lang/setup-rust-toolchain/v1/rust.json"[0m
+2026-09-22T11:17:30.4545823Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-22T11:17:30.4546041Z env:
+2026-09-22T11:17:30.4546186Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:30.4546353Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:30.4546517Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:17:30.4546678Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:17:30.4546846Z   RUST_BACKTRACE: short
+2026-09-22T11:17:30.4547016Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:17:30.4547335Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:17:30.4547525Z ##[endgroup]
+2026-09-22T11:17:30.4625987Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=12]
+2026-09-22T11:17:30.4628360Z ##[start-action display=Install rustup, if needed;id=__actions-rust-lang_setup-rust-toolchain.__run_4]
+2026-09-22T11:17:30.4642490Z ##[group]Run if ! command -v rustup &> /dev/null ; then
+2026-09-22T11:17:30.4642753Z [36;1mif ! command -v rustup &> /dev/null ; then[0m
+2026-09-22T11:17:30.4643163Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --default-toolchain none -y[0m
+2026-09-22T11:17:30.4643525Z [36;1m[0m
+2026-09-22T11:17:30.4643885Z [36;1m  # Resolve the correct CARGO_HOME path depending on OS[0m
+2026-09-22T11:17:30.4644141Z [36;1m  if [[ "$RUNNER_OS" == "Windows" ]]; then[0m
+2026-09-22T11:17:30.4644422Z [36;1m    echo "${CARGO_HOME:-$USERPROFILE/.cargo}/bin" | sed 's|/|\\|g' >> $GITHUB_PATH[0m
+2026-09-22T11:17:30.4644686Z [36;1m  else[0m
+2026-09-22T11:17:30.4644873Z [36;1m    echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH[0m
+2026-09-22T11:17:30.4645089Z [36;1m  fi[0m
+2026-09-22T11:17:30.4645231Z [36;1mfi[0m
+2026-09-22T11:17:30.4670199Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-22T11:17:30.4670422Z env:
+2026-09-22T11:17:30.4670568Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:30.4670735Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:30.4670898Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:17:30.4671059Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:17:30.4671227Z   RUST_BACKTRACE: short
+2026-09-22T11:17:30.4671397Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:17:30.4671597Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:17:30.4671787Z   RUNNER_OS: Linux
+2026-09-22T11:17:30.4671936Z ##[endgroup]
+2026-09-22T11:17:30.4717289Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=8]
+2026-09-22T11:17:30.4720571Z ##[start-action display=rustup toolchain install stable;id=__actions-rust-lang_setup-rust-toolchain.__run_5]
+2026-09-22T11:17:30.4735907Z ##[group]Run # Check if value is set
+2026-09-22T11:17:30.4736136Z [36;1m# Check if value is set[0m
+2026-09-22T11:17:30.4736442Z [36;1mif [[ -n "$_srt_rust_src_dir" ]][0m
+2026-09-22T11:17:30.4736625Z [36;1mthen[0m
+2026-09-22T11:17:30.4736795Z [36;1m  # If value is set the directory must exist[0m
+2026-09-22T11:17:30.4737010Z [36;1m  if [[ -d "$_srt_rust_src_dir" ]][0m
+2026-09-22T11:17:30.4737192Z [36;1m  then[0m
+2026-09-22T11:17:30.4737343Z [36;1m    cd "$_srt_rust_src_dir"[0m
+2026-09-22T11:17:30.4737513Z [36;1m  else[0m
+2026-09-22T11:17:30.4737730Z [36;1m    echo "'rust-src-dir' does not point to an existing directory" >&2[0m
+2026-09-22T11:17:30.4738038Z [36;1m    echo "The value of 'rust-src-dir' is: ${_srt_rust_src_dir}" >&2[0m
+2026-09-22T11:17:30.4738274Z [36;1m    exit 1[0m
+2026-09-22T11:17:30.4738424Z [36;1m  fi[0m
+2026-09-22T11:17:30.4738562Z [36;1mfi[0m
+2026-09-22T11:17:30.4738792Z [36;1mif [[ -z "$_srt_toolchain" && ( -f "rust-toolchain" || -f "rust-toolchain.toml") ]][0m
+2026-09-22T11:17:30.4739050Z [36;1mthen[0m
+2026-09-22T11:17:30.4739228Z [36;1m  # Install the toolchain as specified in the file[0m
+2026-09-22T11:17:30.4739504Z [36;1m  # rustup show is the old way that implicitly installed a toolchain[0m
+2026-09-22T11:17:30.4739774Z [36;1m  # rustup toolchain install is the new explicit way[0m
+2026-09-22T11:17:30.4740079Z [36;1m  # https://github.com/rust-lang/rustup/issues/3635#issuecomment-2343511297[0m
+2026-09-22T11:17:30.4740385Z [36;1m  rustup show active-toolchain || rustup toolchain install[0m
+2026-09-22T11:17:30.4740626Z [36;1m  if [[ -n $_srt_components ]]; then[0m
+2026-09-22T11:17:30.4740845Z [36;1m    rustup component add ${_srt_components//,/ }[0m
+2026-09-22T11:17:30.4741044Z [36;1m  fi[0m
+2026-09-22T11:17:30.4741198Z [36;1m  if [[ -n $_srt_targets ]]; then[0m
+2026-09-22T11:17:30.4741502Z [36;1m    rustup target add ${_srt_targets//,/ }[0m
+2026-09-22T11:17:30.4741693Z [36;1m  fi[0m
+2026-09-22T11:17:30.4741836Z [36;1melse[0m
+2026-09-22T11:17:30.4741991Z [36;1m  if [[ -z "$_srt_toolchain" ]][0m
+2026-09-22T11:17:30.4742168Z [36;1m  then[0m
+2026-09-22T11:17:30.4742324Z [36;1m    _srt_toolchain=stable[0m
+2026-09-22T11:17:30.4742494Z [36;1m  fi[0m
+2026-09-22T11:17:30.4742766Z [36;1m  rustup toolchain install ${_srt_toolchain//,/ }  --component clippy --profile minimal --no-self-update[0m
+2026-09-22T11:17:30.4743083Z [36;1m  # Take the last element from the list[0m
+2026-09-22T11:17:30.4743290Z [36;1m  if [[ "$_srt_override" == "true" ]][0m
+2026-09-22T11:17:30.4743473Z [36;1m  then[0m
+2026-09-22T11:17:30.4743644Z [36;1m    rustup override set ${_srt_toolchain//*,/ }[0m
+2026-09-22T11:17:30.4744020Z [36;1m  fi[0m
+2026-09-22T11:17:30.4744155Z [36;1mfi[0m
+2026-09-22T11:17:30.4769793Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-22T11:17:30.4770019Z env:
+2026-09-22T11:17:30.4770163Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:30.4770330Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:30.4770492Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:17:30.4770650Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:17:30.4770815Z   RUST_BACKTRACE: short
+2026-09-22T11:17:30.4770987Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:17:30.4771185Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:17:30.4771383Z   _srt_toolchain: 
+2026-09-22T11:17:30.4771531Z   _srt_targets: 
+2026-09-22T11:17:30.4771681Z   _srt_components: clippy
+2026-09-22T11:17:30.4771842Z   _srt_override: true
+2026-09-22T11:17:30.4771994Z   _srt_rust_src_dir: 
+2026-09-22T11:17:30.4772145Z ##[endgroup]
+2026-09-22T11:17:30.5910641Z info: syncing channel updates for 1.95-x86_64-unknown-linux-gnu
+2026-09-22T11:17:30.9747955Z info: latest update on 2026-04-16 for version 1.95.0 (59807616e 2026-04-14)
+2026-09-22T11:17:30.9749619Z info: downloading 7 components
+2026-09-22T11:17:38.6390874Z warn: the missing active toolchain `1.95-x86_64-unknown-linux-gnu` has been auto-installed
+2026-09-22T11:17:38.6391385Z warn: auto-installation is deprecated for most `rustup` commands
+2026-09-22T11:17:38.6391753Z warn: scripts relying on this behavior in `rustup` may stop working in the future
+2026-09-22T11:17:38.6392316Z warn: to install the active toolchain, use `rustup install` instead
+2026-09-22T11:17:38.6392607Z warn: see <https://github.com/rust-lang/rustup/issues/4836> for more info
+2026-09-22T11:17:38.6393079Z 1.95-x86_64-unknown-linux-gnu (overridden by '/home/runner/work/jolt-atlas/jolt-atlas/rust-toolchain.toml')
+2026-09-22T11:17:38.6802724Z info: component clippy is up to date
+2026-09-22T11:17:38.6828539Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=8210]
+2026-09-22T11:17:38.6830841Z ##[start-action display=Print installed versions;id=__actions-rust-lang_setup-rust-toolchain.versions]
+2026-09-22T11:17:38.6848069Z ##[group]Run echo "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT
+2026-09-22T11:17:38.6848395Z [36;1mecho "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT[0m
+2026-09-22T11:17:38.6848599Z [36;1mrustc --version --verbose[0m
+2026-09-22T11:17:38.6848786Z [36;1mecho "cargo-version=$(cargo --version)" >> $GITHUB_OUTPUT[0m
+2026-09-22T11:17:38.6848997Z [36;1mcargo --version --verbose[0m
+2026-09-22T11:17:38.6849187Z [36;1mecho "rustup-version=$(rustup --version)" >> $GITHUB_OUTPUT[0m
+2026-09-22T11:17:38.6849386Z [36;1mrustup --version[0m
+2026-09-22T11:17:38.6849516Z [36;1m[0m
+2026-09-22T11:17:38.6849790Z [36;1m_srt_DATE=$(rustc --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-09-22T11:17:38.6850138Z [36;1m_srt_HASH=$(rustc --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-09-22T11:17:38.6850420Z [36;1mecho "cachekey=$(echo $_srt_DATE$_srt_HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-09-22T11:17:38.6879226Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-22T11:17:38.6879533Z env:
+2026-09-22T11:17:38.6879646Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:38.6879776Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:38.6879903Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:17:38.6880029Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:17:38.6880168Z   RUST_BACKTRACE: short
+2026-09-22T11:17:38.6880315Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:17:38.6880480Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:17:38.6880639Z ##[endgroup]
+2026-09-22T11:17:38.7291999Z rustc 1.95.0 (59807616e 2026-04-14)
+2026-09-22T11:17:38.7292227Z binary: rustc
+2026-09-22T11:17:38.7292389Z commit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860
+2026-09-22T11:17:38.7292572Z commit-date: 2026-04-14
+2026-09-22T11:17:38.7292712Z host: x86_64-unknown-linux-gnu
+2026-09-22T11:17:38.7292939Z release: 1.95.0
+2026-09-22T11:17:38.7293293Z LLVM version: 22.1.2
+2026-09-22T11:17:38.7704647Z cargo 1.95.0 (f2d3ce0bd 2026-03-21)
+2026-09-22T11:17:38.7704952Z release: 1.95.0
+2026-09-22T11:17:38.7705229Z commit-hash: f2d3ce0bd7f24a49f8f72d9000448f8838c4e850
+2026-09-22T11:17:38.7705515Z commit-date: 2026-03-21
+2026-09-22T11:17:38.7705731Z host: x86_64-unknown-linux-gnu
+2026-09-22T11:17:38.7705956Z libgit2: 1.9.2 (sys:0.20.4 vendored)
+2026-09-22T11:17:38.7706282Z libcurl: 8.15.0-DEV (sys:0.4.83+curl-8.15.0 vendored ssl:OpenSSL/3.5.4)
+2026-09-22T11:17:38.7706605Z ssl: OpenSSL 3.5.4 30 Sep 2025
+2026-09-22T11:17:38.7706827Z os: Ubuntu 24.4.0 (noble) [64-bit]
+2026-09-22T11:17:38.7734546Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-09-22T11:17:38.7896301Z info: the currently active `rustc` version is `rustc 1.95.0 (59807616e 2026-04-14)`
+2026-09-22T11:17:38.7931641Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-09-22T11:17:38.7932087Z rustup 1.29.1 (d95a37b6a 2026-08-13)
+2026-09-22T11:17:38.8092083Z info: the currently active `rustc` version is `rustc 1.95.0 (59807616e 2026-04-14)`
+2026-09-22T11:17:38.8514616Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.versions;outcome=success;conclusion=success;duration_ms=168]
+2026-09-22T11:17:38.8516599Z ##[start-action display=Downgrade registry access protocol when needed;id=__actions-rust-lang_setup-rust-toolchain.__run_6]
+2026-09-22T11:17:38.8530438Z ##[group]Run # Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-09-22T11:17:38.8530773Z [36;1m# Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL[0m
+2026-09-22T11:17:38.8531069Z [36;1m# On versions 1.66, 1.67, and 1.68.0-nightly the value "sparse" is still unstable.[0m
+2026-09-22T11:17:38.8531399Z [36;1m# https://github.com/dtolnay/rust-toolchain/pull/69#discussion_r1107268108[0m
+2026-09-22T11:17:38.8531715Z [36;1m# If we detect an incompatible value, set it to "git" which is always supported.[0m
+2026-09-22T11:17:38.8532129Z [36;1mif [[ "rustc 1.95.0 (59807616e 2026-04-14)" =~ ^rustc\ (1\.6[67]\.|1\.68\.0-nightly) && "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL}" == "sparse" ]]; then[0m
+2026-09-22T11:17:38.8532497Z [36;1m  echo "Downgrade cargo registry protocol to git"[0m
+2026-09-22T11:17:38.8532733Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git" >> $GITHUB_ENV[0m
+2026-09-22T11:17:38.8532934Z [36;1mfi[0m
+2026-09-22T11:17:38.8562485Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-22T11:17:38.8562677Z env:
+2026-09-22T11:17:38.8562794Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:38.8562932Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:38.8563062Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:17:38.8563192Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:17:38.8563328Z   RUST_BACKTRACE: short
+2026-09-22T11:17:38.8563463Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:17:38.8563629Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:17:38.8563950Z ##[endgroup]
+2026-09-22T11:17:38.8610657Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=9]
+2026-09-22T11:17:38.8612202Z ##[start-action display=Setup Rust Caching;id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache]
+2026-09-22T11:17:38.8642551Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-09-22T11:17:38.8642762Z with:
+2026-09-22T11:17:38.8642880Z   cache-on-failure: true
+2026-09-22T11:17:38.8643014Z   cache-bin: true
+2026-09-22T11:17:38.8643134Z   cache-provider: github
+2026-09-22T11:17:38.8643262Z   cache-all-crates: false
+2026-09-22T11:17:38.8643399Z   cache-workspace-crates: false
+2026-09-22T11:17:38.8643538Z   cache-targets: true
+2026-09-22T11:17:38.8643653Z   save-if: true
+2026-09-22T11:17:38.8643980Z   prefix-key: v0-rust
+2026-09-22T11:17:38.8644100Z   add-job-id-key: true
+2026-09-22T11:17:38.8644236Z   add-rust-environment-hash-key: true
+2026-09-22T11:17:38.8644386Z   lookup-only: false
+2026-09-22T11:17:38.8644506Z   cmd-format: {0}
+2026-09-22T11:17:38.8644615Z env:
+2026-09-22T11:17:38.8644725Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:38.8644853Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:38.8644990Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:17:38.8645114Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:17:38.8645250Z   RUST_BACKTRACE: short
+2026-09-22T11:17:38.8645382Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:17:38.8645546Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:17:38.8645704Z ##[endgroup]
+2026-09-22T11:17:39.0327337Z (node:2189) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-22T11:17:39.0327803Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-22T11:17:39.3242634Z ##[group]Cache Configuration
+2026-09-22T11:17:39.3243273Z Cache Provider:
+2026-09-22T11:17:39.3243587Z     github
+2026-09-22T11:17:39.3244034Z Workspaces:
+2026-09-22T11:17:39.3244226Z     /home/runner/work/jolt-atlas/jolt-atlas
+2026-09-22T11:17:39.3244464Z Cache Paths:
+2026-09-22T11:17:39.3244636Z     /home/runner/.cargo/bin
+2026-09-22T11:17:39.3244840Z     /home/runner/.cargo/.crates.toml
+2026-09-22T11:17:39.3245109Z     /home/runner/.cargo/.crates2.json
+2026-09-22T11:17:39.3245339Z     /home/runner/.cargo/registry
+2026-09-22T11:17:39.3245552Z     /home/runner/.cargo/git
+2026-09-22T11:17:39.3245776Z     /home/runner/work/jolt-atlas/jolt-atlas/target
+2026-09-22T11:17:39.3246022Z Restore Key:
+2026-09-22T11:17:39.3246610Z     v0-rust-clippy-and-test-Linux-x64-d2c91432
+2026-09-22T11:17:39.3246861Z Cache Key:
+2026-09-22T11:17:39.3247073Z     v0-rust-clippy-and-test-Linux-x64-d2c91432-cc57eb6b
+2026-09-22T11:17:39.3247332Z .. Prefix:
+2026-09-22T11:17:39.3247535Z   - v0-rust-clippy-and-test-Linux-x64
+2026-09-22T11:17:39.3247778Z .. Environment considered:
+2026-09-22T11:17:39.3247980Z   - Rust Versions:
+2026-09-22T11:17:39.3248285Z     - 1.95.0 x86_64-unknown-linux-gnu 59807616e1fa2540724bfbac14d7976d7e4a3860
+2026-09-22T11:17:39.3248844Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-22T11:17:39.3249347Z     - 1.95.0 x86_64-unknown-linux-gnu 59807616e1fa2540724bfbac14d7976d7e4a3860
+2026-09-22T11:17:39.3249938Z   - CARGO_INCREMENTAL
+2026-09-22T11:17:39.3250267Z   - CARGO_PROFILE_DEV_DEBUG
+2026-09-22T11:17:39.3250625Z   - CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-09-22T11:17:39.3250971Z   - CARGO_TERM_COLOR
+2026-09-22T11:17:39.3251284Z   - CARGO_UNSTABLE_SPARSE_REGISTRY
+2026-09-22T11:17:39.3251677Z   - RUST_BACKTRACE
+2026-09-22T11:17:39.3251986Z   - RUSTFLAGS
+2026-09-22T11:17:39.3252399Z .. Lockfiles considered:
+2026-09-22T11:17:39.3252812Z   - /home/runner/work/jolt-atlas/jolt-atlas/atlas-onnx-tracer/Cargo.toml
+2026-09-22T11:17:39.3253322Z   - /home/runner/work/jolt-atlas/jolt-atlas/Cargo.lock
+2026-09-22T11:17:39.3253908Z   - /home/runner/work/jolt-atlas/jolt-atlas/Cargo.toml
+2026-09-22T11:17:39.3254393Z   - /home/runner/work/jolt-atlas/jolt-atlas/common/Cargo.toml
+2026-09-22T11:17:39.3254892Z   - /home/runner/work/jolt-atlas/jolt-atlas/jolt-atlas-core/Cargo.toml
+2026-09-22T11:17:39.3255377Z   - /home/runner/work/jolt-atlas/jolt-atlas/joltworks/Cargo.toml
+2026-09-22T11:17:39.3256083Z   - /home/runner/work/jolt-atlas/jolt-atlas/rust-toolchain.toml
+2026-09-22T11:17:39.3256624Z ##[endgroup]
+2026-09-22T11:17:39.3256718Z 
+2026-09-22T11:17:39.3256820Z ... Restoring cache ...
+2026-09-22T11:17:39.4677385Z Cache hit for: v0-rust-clippy-and-test-Linux-x64-d2c91432-cc57eb6b
+2026-09-22T11:17:40.6711096Z Received 134217728 of 512117659 (26.2%), 124.6 MBs/sec
+2026-09-22T11:17:41.6715596Z Received 385875968 of 512117659 (75.3%), 181.5 MBs/sec
+2026-09-22T11:17:42.3472432Z Received 512117659 of 512117659 (100.0%), 180.8 MBs/sec
+2026-09-22T11:17:42.3472812Z Cache Size: ~488 MB (512117659 B)
+2026-09-22T11:17:42.3581045Z [command]/usr/bin/tar -xf /home/runner/work/_temp/c0e9175b-911d-49ca-856c-7e75f4e616b4/cache.tzst -P -C /home/runner/work/jolt-atlas/jolt-atlas --use-compress-program unzstd
+2026-09-22T11:17:45.1952974Z Cache restored successfully
+2026-09-22T11:17:45.2154172Z Restored from cache key "v0-rust-clippy-and-test-Linux-x64-d2c91432-cc57eb6b" full match: true.
+2026-09-22T11:17:45.2280619Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=6366]
+2026-09-22T11:17:45.2324509Z ##[group]Run cargo clippy -p joltworks --all-targets --features zk
+2026-09-22T11:17:45.2324807Z [36;1mcargo clippy -p joltworks --all-targets --features zk[0m
+2026-09-22T11:17:45.2355350Z shell: /usr/bin/bash -e {0}
+2026-09-22T11:17:45.2355497Z env:
+2026-09-22T11:17:45.2355618Z   RUSTFLAGS: -D warnings
+2026-09-22T11:17:45.2355757Z   CARGO_TERM_COLOR: always
+2026-09-22T11:17:45.2355892Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:17:45.2356027Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:17:45.2356170Z   RUST_BACKTRACE: short
+2026-09-22T11:17:45.2356312Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:17:45.2356484Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:17:45.2356654Z   CACHE_ON_FAILURE: true
+2026-09-22T11:17:45.2356787Z ##[endgroup]
+2026-09-22T11:17:45.7166135Z [1m[92m    Updating[0m crates.io index
+2026-09-22T11:17:46.7211051Z [1m[92m    Checking[0m either v1.15.0
+2026-09-22T11:17:46.7227944Z [1m[92m    Checking[0m aho-corasick v1.1.4
+2026-09-22T11:17:46.7243622Z [1m[92m   Compiling[0m ahash v0.8.12
+2026-09-22T11:17:46.7959408Z [1m[92m    Checking[0m rayon v1.11.0
+2026-09-22T11:17:46.7960254Z [1m[92m    Checking[0m itertools v0.12.1
+2026-09-22T11:17:46.9666998Z [1m[92m    Checking[0m hashbrown v0.14.5
+2026-09-22T11:17:47.1286204Z [1m[92m    Checking[0m regex-automata v0.4.14
+2026-09-22T11:17:47.2545262Z [1m[92m    Checking[0m string-interner v0.15.0
+2026-09-22T11:17:47.3585213Z [1m[92m    Checking[0m itertools v0.14.0
+2026-09-22T11:17:47.5035024Z [1m[92m    Checking[0m itertools v0.13.0
+2026-09-22T11:17:48.0076059Z [1m[92m    Checking[0m ark-std v0.5.0
+2026-09-22T11:17:48.0418685Z [1m[92m    Checking[0m ark-serialize v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:17:48.1290315Z [1m[92m    Checking[0m maybe-rayon v0.1.1
+2026-09-22T11:17:48.1505330Z [1m[92m    Checking[0m itertools v0.10.5
+2026-09-22T11:17:48.2297440Z [1m[92m    Checking[0m ark-ff v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:17:48.5162928Z [1m[92m    Checking[0m regex v1.12.3
+2026-09-22T11:17:48.5163851Z [1m[92m    Checking[0m matchers v0.2.0
+2026-09-22T11:17:48.5536466Z [1m[92m    Checking[0m tracing-subscriber v0.3.22
+2026-09-22T11:17:48.6755021Z [1m[92m    Checking[0m scan_fmt v0.2.6
+2026-09-22T11:17:48.7195229Z [1m[92m    Checking[0m tract-data v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:48.7435203Z [1m[92m    Checking[0m liquid-core v0.26.11
+2026-09-22T11:17:49.1812201Z [1m[92m    Checking[0m tracing-chrome v0.7.2
+2026-09-22T11:17:49.2576365Z [1m[92m    Checking[0m common v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/common)
+2026-09-22T11:17:49.2994772Z [1m[92m    Checking[0m tract-linalg v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:49.3255872Z [1m[92m    Checking[0m liquid-lib v0.26.11
+2026-09-22T11:17:49.8669533Z [1m[92m    Checking[0m tract-core v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:49.9223526Z [1m[92m    Checking[0m liquid v0.26.11
+2026-09-22T11:17:51.7149324Z [1m[92m    Checking[0m ark-poly v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:17:51.9834640Z [1m[92m    Checking[0m ark-ec v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:17:52.7095186Z [1m[92m    Checking[0m ark-bn254 v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:17:52.8420814Z [1m[92m    Checking[0m dory-pcs v0.4.0
+2026-09-22T11:17:52.8421964Z [1m[92m    Checking[0m jolt-optimizations v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:17:53.1345375Z [1m[92m    Checking[0m tract-nnef v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:53.1346220Z [1m[92m    Checking[0m tract-hir v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:53.8540339Z [1m[92m    Checking[0m tract-pulse-opl v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:53.9514294Z [1m[92m    Checking[0m tract-pulse v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:54.1101823Z [1m[92m    Checking[0m tract-extra v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:54.1681880Z [1m[92m    Checking[0m tract-onnx-opl v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:54.3074831Z [1m[92m    Checking[0m tract-onnx v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:17:55.0590518Z [1m[92m    Checking[0m atlas-onnx-tracer v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/atlas-onnx-tracer)
+2026-09-22T11:17:56.2630427Z [1m[92m    Checking[0m joltworks v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/joltworks)
+2026-09-22T11:18:02.0839365Z [1m[92m    Finished[0m `dev` profile [unoptimized] target(s) in 16.80s
+2026-09-22T11:18:02.1131748Z ##[group]Run taiki-e/install-action@nextest
+2026-09-22T11:18:02.1132018Z with:
+2026-09-22T11:18:02.1132188Z   tool: nextest
+2026-09-22T11:18:02.1132371Z   checksum: true
+2026-09-22T11:18:02.1132560Z   fallback: cargo-binstall
+2026-09-22T11:18:02.1132769Z env:
+2026-09-22T11:18:02.1132940Z   RUSTFLAGS: -D warnings
+2026-09-22T11:18:02.1133155Z   CARGO_TERM_COLOR: always
+2026-09-22T11:18:02.1133365Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:18:02.1133570Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:18:02.1133919Z   RUST_BACKTRACE: short
+2026-09-22T11:18:02.1134140Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:18:02.1134415Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:18:02.1134682Z   CACHE_ON_FAILURE: true
+2026-09-22T11:18:02.1134903Z ##[endgroup]
+2026-09-22T11:18:02.1139906Z ##[start-action display=Run bail() {;id=__taiki-e_install-action.__run]
+2026-09-22T11:18:02.1156916Z ##[group]Run bail() {
+2026-09-22T11:18:02.1157178Z [36;1mbail() {[0m
+2026-09-22T11:18:02.1157455Z [36;1m  printf '::error::install-action: %s\n' "$*"[0m
+2026-09-22T11:18:02.1157738Z [36;1m  exit 1[0m
+2026-09-22T11:18:02.1157916Z [36;1m}[0m
+2026-09-22T11:18:02.1158245Z [36;1m# If /bin/sh is dash, environment variable containing % is not imported, but is fine[0m
+2026-09-22T11:18:02.1158748Z [36;1m# because it also means that it will not be exposed to subprocess.[0m
+2026-09-22T11:18:02.1159153Z [36;1mif /usr/bin/env | grep -Eq '^BASH_FUNC_'; then[0m
+2026-09-22T11:18:02.1159665Z [36;1m  bail 'bash function injection via BASH_FUNC_ environment variable is not allowed for security reasons'[0m
+2026-09-22T11:18:02.1160137Z [36;1mfi[0m
+2026-09-22T11:18:02.1160344Z [36;1mif ! command -v bash >/dev/null; then[0m
+2026-09-22T11:18:02.1160665Z [36;1m  if grep -Eq '^ID=alpine' /etc/os-release; then[0m
+2026-09-22T11:18:02.1161079Z [36;1m    printf '::group::Install packages required for install-action (bash)\n'[0m
+2026-09-22T11:18:02.1161630Z [36;1m    # NB: sync with apk_install in main.sh[0m
+2026-09-22T11:18:02.1161926Z [36;1m    if command -v sudo >/dev/null; then[0m
+2026-09-22T11:18:02.1162214Z [36;1m      sudo apk --no-cache add bash[0m
+2026-09-22T11:18:02.1162502Z [36;1m    elif command -v doas >/dev/null; then[0m
+2026-09-22T11:18:02.1162794Z [36;1m      doas apk --no-cache add bash[0m
+2026-09-22T11:18:02.1163044Z [36;1m    else[0m
+2026-09-22T11:18:02.1163243Z [36;1m      apk --no-cache add bash[0m
+2026-09-22T11:18:02.1163478Z [36;1m    fi[0m
+2026-09-22T11:18:02.1163677Z [36;1m    printf '::endgroup::\n'[0m
+2026-09-22T11:18:02.1164011Z [36;1m  else[0m
+2026-09-22T11:18:02.1164217Z [36;1m    bail 'this action requires bash'[0m
+2026-09-22T11:18:02.1164472Z [36;1m  fi[0m
+2026-09-22T11:18:02.1164706Z [36;1mfi[0m
+2026-09-22T11:18:02.1164965Z [36;1mbash --noprofile --norc "${GITHUB_ACTION_PATH:?}/main.sh"[0m
+2026-09-22T11:18:02.1165974Z shell: /usr/bin/env -u ENV -u BASH_ENV -u CDPATH -u SHELLOPTS -u BASHOPTS /bin/sh -eu {0}
+2026-09-22T11:18:02.1166363Z env:
+2026-09-22T11:18:02.1166544Z   RUSTFLAGS: -D warnings
+2026-09-22T11:18:02.1166761Z   CARGO_TERM_COLOR: always
+2026-09-22T11:18:02.1166973Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:18:02.1167184Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:18:02.1167408Z   RUST_BACKTRACE: short
+2026-09-22T11:18:02.1167627Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:18:02.1167898Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:18:02.1168169Z   CACHE_ON_FAILURE: true
+2026-09-22T11:18:02.1168376Z   INPUT_TOOL: nextest
+2026-09-22T11:18:02.1168571Z   INPUT_CHECKSUM: true
+2026-09-22T11:18:02.1168780Z   INPUT_FALLBACK: cargo-binstall
+2026-09-22T11:18:02.1171362Z   DEFAULT_GITHUB_TOKEN: ***
+2026-09-22T11:18:02.1171631Z   ACTION_USER_AGENT: taiki-e/install-action (nextest)
+2026-09-22T11:18:02.1171914Z   RUNNER_OS: Linux
+2026-09-22T11:18:02.1172104Z   RUNNER_ARCH: X64
+2026-09-22T11:18:02.1172291Z ##[endgroup]
+2026-09-22T11:18:02.1281086Z info: host platform: x86_64_linux
+2026-09-22T11:18:02.1468469Z info: installing cargo-nextest@latest
+2026-09-22T11:18:02.1617868Z info: downloading https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.145/cargo-nextest-0.9.145-x86_64-unknown-linux-gnu.tar.gz
+2026-09-22T11:18:02.4207770Z info: verifying sha256 checksum for cargo-nextest-0.9.145-x86_64-unknown-linux-gnu.tar.gz
+2026-09-22T11:18:02.6098661Z info: cargo-nextest installed at /home/runner/.cargo/bin/cargo-nextest
+2026-09-22T11:18:02.6101308Z + cargo-nextest nextest --version
+2026-09-22T11:18:02.6123364Z cargo-nextest 0.9.145 (00af4550e 2026-09-16)
+2026-09-22T11:18:02.6123613Z release: 0.9.145
+2026-09-22T11:18:02.6123954Z commit-hash: 00af4550ec3b3b9f0e574b897b06acb95d325ba2
+2026-09-22T11:18:02.6124165Z commit-date: 2026-09-16
+2026-09-22T11:18:02.6124313Z host: x86_64-unknown-linux-gnu
+2026-09-22T11:18:02.6127164Z 
+2026-09-22T11:18:02.6136115Z ##[end-action id=__taiki-e_install-action.__run;outcome=success;conclusion=success;duration_ms=499]
+2026-09-22T11:18:02.6140404Z ##[start-action display=Run Set-StrictMode -Version Latest;id=__taiki-e_install-action.__run_2]
+2026-09-22T11:18:02.6142754Z ##[end-action id=__taiki-e_install-action.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-22T11:18:02.6160213Z ##[group]Run cargo nextest run -p joltworks --features zk
+2026-09-22T11:18:02.6160465Z [36;1mcargo nextest run -p joltworks --features zk[0m
+2026-09-22T11:18:02.6189772Z shell: /usr/bin/bash -e {0}
+2026-09-22T11:18:02.6189912Z env:
+2026-09-22T11:18:02.6190028Z   RUSTFLAGS: -D warnings
+2026-09-22T11:18:02.6190162Z   CARGO_TERM_COLOR: always
+2026-09-22T11:18:02.6190295Z   CARGO_INCREMENTAL: 0
+2026-09-22T11:18:02.6190424Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-09-22T11:18:02.6190562Z   RUST_BACKTRACE: short
+2026-09-22T11:18:02.6190698Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-09-22T11:18:02.6190869Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-09-22T11:18:02.6191029Z   CACHE_ON_FAILURE: true
+2026-09-22T11:18:02.6191295Z ##[endgroup]
+2026-09-22T11:18:03.0707548Z [1m[92m   Compiling[0m either v1.15.0
+2026-09-22T11:18:03.0733618Z [1m[92m   Compiling[0m aho-corasick v1.1.4
+2026-09-22T11:18:03.0741292Z [1m[92m   Compiling[0m ahash v0.8.12
+2026-09-22T11:18:03.1715320Z [1m[92m   Compiling[0m rayon v1.11.0
+2026-09-22T11:18:03.1762395Z [1m[92m   Compiling[0m itertools v0.12.1
+2026-09-22T11:18:03.2224194Z [1m[92m   Compiling[0m hashbrown v0.14.5
+2026-09-22T11:18:03.6605056Z [1m[92m   Compiling[0m string-interner v0.15.0
+2026-09-22T11:18:03.8046112Z [1m[92m   Compiling[0m regex-automata v0.4.14
+2026-09-22T11:18:04.2585224Z [1m[92m   Compiling[0m itertools v0.14.0
+2026-09-22T11:18:04.8205269Z [1m[92m   Compiling[0m ark-std v0.5.0
+2026-09-22T11:18:04.8705522Z [1m[92m   Compiling[0m ark-serialize v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:18:05.0475253Z [1m[92m   Compiling[0m itertools v0.13.0
+2026-09-22T11:18:05.3367687Z [1m[92m   Compiling[0m maybe-rayon v0.1.1
+2026-09-22T11:18:05.3615841Z [1m[92m   Compiling[0m itertools v0.10.5
+2026-09-22T11:18:06.1175225Z [1m[92m   Compiling[0m regex v1.12.3
+2026-09-22T11:18:06.2657714Z [1m[92m   Compiling[0m ark-ff v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:18:06.9235412Z [1m[92m   Compiling[0m scan_fmt v0.2.6
+2026-09-22T11:18:07.1975399Z [1m[92m   Compiling[0m tract-data v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:07.4275784Z [1m[92m   Compiling[0m liquid-core v0.26.11
+2026-09-22T11:18:12.9405360Z [1m[92m   Compiling[0m tract-linalg v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:13.1005178Z [1m[92m   Compiling[0m liquid-lib v0.26.11
+2026-09-22T11:18:17.0935484Z [1m[92m   Compiling[0m tract-core v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:19.3555427Z [1m[92m   Compiling[0m liquid v0.26.11
+2026-09-22T11:18:20.3866245Z [1m[92m   Compiling[0m ark-poly v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:18:21.5817493Z [1m[92m   Compiling[0m matchers v0.2.0
+2026-09-22T11:18:21.6395051Z [1m[92m   Compiling[0m tracing-subscriber v0.3.22
+2026-09-22T11:18:23.4833636Z [1m[92m   Compiling[0m ark-ec v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:18:24.6276192Z [1m[92m   Compiling[0m tracing-chrome v0.7.2
+2026-09-22T11:18:25.0367567Z [1m[92m   Compiling[0m ark-bn254 v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:18:25.2775455Z [1m[92m   Compiling[0m common v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/common)
+2026-09-22T11:18:25.4246333Z [1m[92m   Compiling[0m tract-nnef v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:26.0765181Z [1m[92m   Compiling[0m tract-hir v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:27.8695502Z [1m[92m   Compiling[0m tract-pulse-opl v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:35.5075721Z [1m[92m   Compiling[0m tract-pulse v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:41.3035758Z [1m[92m   Compiling[0m tract-extra v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:44.3705421Z [1m[92m   Compiling[0m tract-onnx-opl v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:44.9712036Z [1m[92m   Compiling[0m tract-onnx v0.22.1-pre (https://github.com/sonos/tract/#c484b3ee)
+2026-09-22T11:18:46.1373941Z [1m[92m   Compiling[0m dory-pcs v0.4.0
+2026-09-22T11:18:54.1296037Z [1m[92m   Compiling[0m atlas-onnx-tracer v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/atlas-onnx-tracer)
+2026-09-22T11:19:03.4595588Z [1m[92m   Compiling[0m jolt-optimizations v0.5.0 (https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#76bb3a45)
+2026-09-22T11:19:11.9465405Z [1m[92m   Compiling[0m joltworks v0.1.0 (/home/runner/work/jolt-atlas/jolt-atlas/joltworks)
+2026-09-22T11:20:39.9266042Z [1m[92m    Finished[0m `test` profile [optimized] target(s) in 2m 36s
+2026-09-22T11:20:39.9483374Z ────────────
+2026-09-22T11:20:39.9484191Z [32;1m Nextest run[0m ID [1m3f6ce95c-ccfa-408b-8ffe-80d0061e27c6[0m with nextest profile: [1mdefault[0m
+2026-09-22T11:20:39.9484902Z [32;1m    Starting[0m [1m331[0m tests across [1m1[0m binary ([1m15[0m tests [33;1mskipped[0m)
+2026-09-22T11:20:39.9540666Z [32;1m        PASS[0m [   0.005s] (  1/331) [35;1mjoltworks[0m [36mcurve::tests[0m[36m::[0m[34;1mtest_g1_msm[0m
+2026-09-22T11:20:39.9567474Z [32;1m        PASS[0m [   0.008s] (  2/331) [35;1mjoltworks[0m [36mcurve::tests[0m[36m::[0m[34;1mbounded_g1_msm_rejects_mismatched_lengths[0m
+2026-09-22T11:20:39.9594744Z [32;1m        PASS[0m [   0.005s] (  3/331) [35;1mjoltworks[0m [36mcurve::tests[0m[36m::[0m[34;1mtest_g1_operations[0m
+2026-09-22T11:20:39.9644541Z [32;1m        PASS[0m [   0.004s] (  4/331) [35;1mjoltworks[0m [36mfield::ark::tests[0m[36m::[0m[34;1mimplicit_montgomery_conversion[0m
+2026-09-22T11:20:39.9678089Z [32;1m        PASS[0m [   0.011s] (  5/331) [35;1mjoltworks[0m [36mcurve::tests[0m[36m::[0m[34;1mtest_pairing_bilinearity[0m
+2026-09-22T11:20:39.9689057Z [32;1m        PASS[0m [   0.005s] (  6/331) [35;1mjoltworks[0m [36mfield::tracked_ark::tests[0m[36m::[0m[34;1mtest_if_trackers_are_working[0m
+2026-09-22T11:20:39.9935560Z [32;1m        PASS[0m [   0.024s] (  7/331) [35;1mjoltworks[0m [36mlookup_tables::and::test[0m[36m::[0m[34;1mmle_linearity[0m
+2026-09-22T11:20:40.0017242Z [32;1m        PASS[0m [   0.008s] (  8/331) [35;1mjoltworks[0m [36mlookup_tables::and::test[0m[36m::[0m[34;1mmle_random[0m
+2026-09-22T11:20:40.0190191Z [32;1m        PASS[0m [   0.051s] (  9/331) [35;1mjoltworks[0m [36mlookup_tables::and::test[0m[36m::[0m[34;1mmle_full_hypercube[0m
+2026-09-22T11:20:40.0448125Z [32;1m        PASS[0m [   0.096s] ( 10/331) [35;1mjoltworks[0m [36mcurve::tests[0m[36m::[0m[34;1mbounded_g1_msm_matches_direct_scalar_multiplication[0m
+2026-09-22T11:20:40.0465483Z [32;1m        PASS[0m [   0.026s] ( 11/331) [35;1mjoltworks[0m [36mlookup_tables::and::test[0m[36m::[0m[34;1mread_raf[0m
+2026-09-22T11:20:40.0824696Z [32;1m        PASS[0m [   0.035s] ( 12/331) [35;1mjoltworks[0m [36mlookup_tables::clamp::test[0m[36m::[0m[34;1mmle_linearity[0m
+2026-09-22T11:20:40.0984690Z [32;1m        PASS[0m [   0.017s] ( 13/331) [35;1mjoltworks[0m [36mlookup_tables::clamp::test[0m[36m::[0m[34;1mmle_random[0m
+2026-09-22T11:20:40.1367984Z [32;1m        PASS[0m [   0.092s] ( 14/331) [35;1mjoltworks[0m [36mlookup_tables::clamp::test[0m[36m::[0m[34;1mmle_full_hypercube[0m
+2026-09-22T11:20:40.2073041Z [32;1m        PASS[0m [   0.070s] ( 15/331) [35;1mjoltworks[0m [36mlookup_tables::clamp::test[0m[36m::[0m[34;1mread_raf[0m
+2026-09-22T11:20:40.2184531Z [32;1m        PASS[0m [   0.216s] ( 16/331) [35;1mjoltworks[0m [36mlookup_tables::and::test[0m[36m::[0m[34;1mprefix_suffix[0m
+2026-09-22T11:20:40.2504875Z [32;1m        PASS[0m [   0.030s] ( 17/331) [35;1mjoltworks[0m [36mlookup_tables::or::test[0m[36m::[0m[34;1mmle_linearity[0m
+2026-09-22T11:20:40.2625015Z [32;1m        PASS[0m [   0.053s] ( 18/331) [35;1mjoltworks[0m [36mlookup_tables::or::test[0m[36m::[0m[34;1mmle_full_hypercube[0m
+2026-09-22T11:20:40.2664673Z [32;1m        PASS[0m [   0.015s] ( 19/331) [35;1mjoltworks[0m [36mlookup_tables::or::test[0m[36m::[0m[34;1mmle_random[0m
+2026-09-22T11:20:40.2864076Z [32;1m        PASS[0m [   0.022s] ( 20/331) [35;1mjoltworks[0m [36mlookup_tables::or::test[0m[36m::[0m[34;1mread_raf[0m
+2026-09-22T11:20:40.3725165Z [32;1m        PASS[0m [   0.085s] ( 21/331) [35;1mjoltworks[0m [36mlookup_tables::relu::test[0m[36m::[0m[34;1mmle_full_hypercube[0m
+2026-09-22T11:20:40.3855155Z [32;1m        PASS[0m [   0.013s] ( 22/331) [35;1mjoltworks[0m [36mlookup_tables::relu::test[0m[36m::[0m[34;1mmle_linearity[0m
+2026-09-22T11:20:40.3969251Z [32;1m        PASS[0m [   0.013s] ( 23/331) [35;1mjoltworks[0m [36mlookup_tables::relu::test[0m[36m::[0m[34;1mmle_random[0m
+2026-09-22T11:20:40.5250223Z [32;1m        PASS[0m [   0.264s] ( 24/331) [35;1mjoltworks[0m [36mlookup_tables::or::test[0m[36m::[0m[34;1mprefix_suffix[0m
+2026-09-22T11:20:40.5356079Z [32;1m        PASS[0m [   0.011s] ( 25/331) [35;1mjoltworks[0m [36mlookup_tables::relu::test[0m[36m::[0m[34;1mread_raf[0m
+2026-09-22T11:20:40.5647268Z [32;1m        PASS[0m [   0.028s] ( 26/331) [35;1mjoltworks[0m [36mlookup_tables::right_shift::test[0m[36m::[0m[34;1mmle_full_hypercube[0m
+2026-09-22T11:20:40.5677640Z [32;1m        PASS[0m [   0.171s] ( 27/331) [35;1mjoltworks[0m [36mlookup_tables::relu::test[0m[36m::[0m[34;1mprefix_suffix[0m
+2026-09-22T11:20:40.5709654Z [32;1m        PASS[0m [   0.007s] ( 28/331) [35;1mjoltworks[0m [36mlookup_tables::right_shift::test[0m[36m::[0m[34;1mmle_linearity[0m
+2026-09-22T11:20:40.5775098Z [32;1m        PASS[0m [   0.008s] ( 29/331) [35;1mjoltworks[0m [36mlookup_tables::right_shift::test[0m[36m::[0m[34;1mmle_random[0m
+2026-09-22T11:20:40.5875187Z [32;1m        PASS[0m [   0.010s] ( 30/331) [35;1mjoltworks[0m [36mlookup_tables::right_shift::test[0m[36m::[0m[34;1mread_raf[0m
+2026-09-22T11:20:40.6395041Z [32;1m        PASS[0m [   0.052s] ( 31/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_abs::test[0m[36m::[0m[34;1mmle_full_hypercube[0m
+2026-09-22T11:20:40.6474838Z [32;1m        PASS[0m [   0.008s] ( 32/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_abs::test[0m[36m::[0m[34;1mmle_linearity[0m
+2026-09-22T11:20:40.6565081Z [32;1m        PASS[0m [   0.009s] ( 33/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_abs::test[0m[36m::[0m[34;1mmle_random[0m
+2026-09-22T11:20:40.7017915Z [32;1m        PASS[0m [   0.753s] ( 34/331) [35;1mjoltworks[0m [36mcurve::tests[0m[36m::[0m[34;1mbounded_g1_msm_handles_nested_row_commitments[0m
+2026-09-22T11:20:40.7124698Z [32;1m        PASS[0m [   0.011s] ( 35/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_abs::test[0m[36m::[0m[34;1mread_raf[0m
+2026-09-22T11:20:40.7172305Z [32;1m        PASS[0m [   0.005s] ( 36/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_abs::test[0m[36m::[0m[34;1mtest_unsigned_abs_table[0m
+2026-09-22T11:20:40.7309398Z [32;1m        PASS[0m [   0.160s] ( 37/331) [35;1mjoltworks[0m [36mlookup_tables::right_shift::test[0m[36m::[0m[34;1mprefix_suffix[0m
+2026-09-22T11:20:40.7538915Z [32;1m        PASS[0m [   0.023s] ( 38/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_less_than::test[0m[36m::[0m[34;1mmle_linearity[0m
+2026-09-22T11:20:40.7637047Z [32;1m        PASS[0m [   0.010s] ( 39/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_less_than::test[0m[36m::[0m[34;1mmle_random[0m
+2026-09-22T11:20:40.8465431Z [32;1m        PASS[0m [   0.129s] ( 40/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_less_than::test[0m[36m::[0m[34;1mmle_full_hypercube[0m
+2026-09-22T11:20:40.8758521Z [32;1m        PASS[0m [   0.029s] ( 41/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_less_than::test[0m[36m::[0m[34;1mread_raf[0m
+2026-09-22T11:20:40.8910320Z [32;1m        PASS[0m [   0.237s] ( 42/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_abs::test[0m[36m::[0m[34;1mprefix_suffix[0m
+2026-09-22T11:20:40.9114048Z [32;1m        PASS[0m [   0.020s] ( 43/331) [35;1mjoltworks[0m [36mlookup_tables::xor::test[0m[36m::[0m[34;1mmle_linearity[0m
+2026-09-22T11:20:40.9252960Z [32;1m        PASS[0m [   0.014s] ( 44/331) [35;1mjoltworks[0m [36mlookup_tables::xor::test[0m[36m::[0m[34;1mmle_random[0m
+2026-09-22T11:20:40.9525404Z [32;1m        PASS[0m [   0.075s] ( 45/331) [35;1mjoltworks[0m [36mlookup_tables::xor::test[0m[36m::[0m[34;1mmle_full_hypercube[0m
+2026-09-22T11:20:40.9728802Z [32;1m        PASS[0m [   0.022s] ( 46/331) [35;1mjoltworks[0m [36mlookup_tables::xor::test[0m[36m::[0m[34;1mread_raf[0m
+2026-09-22T11:20:41.0082917Z [32;1m        PASS[0m [   0.245s] ( 47/331) [35;1mjoltworks[0m [36mlookup_tables::unsigned_less_than::test[0m[36m::[0m[34;1mprefix_suffix[0m
+2026-09-22T11:20:41.0640423Z [32;1m        PASS[0m [   0.091s] ( 48/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::equality::tests[0m[36m::[0m[34;1mhidden_edge_proof_binds_values_and_registered_context[0m
+2026-09-22T11:20:41.0877911Z [32;1m        PASS[0m [   0.990s] ( 49/331) [35;1mjoltworks[0m [36mlookup_tables::clamp::test[0m[36m::[0m[34;1mprefix_suffix[0m
+2026-09-22T11:20:41.2013256Z [32;1m        PASS[0m [   0.276s] ( 50/331) [35;1mjoltworks[0m [36mlookup_tables::xor::test[0m[36m::[0m[34;1mprefix_suffix[0m
+2026-09-22T11:20:41.2522328Z [32;1m        PASS[0m [   0.244s] ( 51/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::native_boundary::tests[0m[36m::[0m[34;1mboundary_binds_prior_commitment_and_rejects_uncommitted_witness[0m
+2026-09-22T11:20:41.2615059Z [32;1m        PASS[0m [   0.008s] ( 52/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::native_einsum::partial_index_tests[0m[36m::[0m[34;1mnative_contraction_scaled_tables_preserve_bound_values_and_integer_extremes[0m
+2026-09-22T11:20:41.2674910Z [32;1m        PASS[0m [   0.006s] ( 53/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::native_einsum::tests[0m[36m::[0m[34;1mnative_einsum_partial_tables_match_full_openings_without_product_expansion[0m
+2026-09-22T11:20:41.3558361Z [32;1m        PASS[0m [   0.152s] ( 54/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::native_einsum::partial_index_tests[0m[36m::[0m[34;1mnative_contraction_partial_indices_match_every_serial_coefficient[0m
+2026-09-22T11:20:41.3631369Z [31;1m        FAIL[0m [   0.094s] ( 55/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::native_generation::tests[0m[36m::[0m[34;1mgreedy_sequence_projects_only_required_score_rows[0m
+2026-09-22T11:20:41.3632800Z [31;1m [0m [31;1mstdout[0m [31;1m───[0m
+2026-09-22T11:20:41.3633129Z 
+2026-09-22T11:20:41.3633331Z     running 1 test
+2026-09-22T11:20:41.3634064Z     test poly::commitment::dory::native_generation::tests::greedy_sequence_projects_only_required_score_rows ... FAILED
+2026-09-22T11:20:41.3634629Z 
+2026-09-22T11:20:41.3634821Z     failures:
+2026-09-22T11:20:41.3635042Z 
+2026-09-22T11:20:41.3635232Z     failures:
+2026-09-22T11:20:41.3635741Z         poly::commitment::dory::native_generation::tests::greedy_sequence_projects_only_required_score_rows
+2026-09-22T11:20:41.3636242Z 
+2026-09-22T11:20:41.3636625Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 345 filtered out; finished in 0.08s
+2026-09-22T11:20:41.3637197Z     [0m
+2026-09-22T11:20:41.3637551Z [31;1m [0m [31;1mstderr[0m [31;1m───[0m
+2026-09-22T11:20:41.3637853Z 
+2026-09-22T11:20:41.3638953Z     [0m[31;1mthread 'poly::commitment::dory::native_generation::tests::greedy_sequence_projects_only_required_score_rows' (3749) panicked at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dory-pcs-0.4.0/src/lib.rs:167:17:[0m
+2026-09-22T11:20:41.3640875Z     [31;1mFailed to load setup from disk: Invalid or missing URS file: Failed to deserialize verifier setup: Invalid data: the input buffer contained invalid data[0m
+2026-09-22T11:20:41.3641653Z     stack backtrace:
+2026-09-22T11:20:41.3641984Z        0: __rustc::rust_begin_unwind
+2026-09-22T11:20:41.3642359Z        1: core::panicking::panic_fmt
+2026-09-22T11:20:41.3642730Z        2: dory_pcs::setup
+2026-09-22T11:20:41.3643379Z        3: <joltworks::poly::commitment::dory::DoryScheme as joltworks::poly::commitment::commitment_scheme::CommitmentScheme>::setup_prover
+2026-09-22T11:20:41.3644433Z        4: joltworks::poly::commitment::dory::native_generation::tests::greedy_sequence_projects_only_required_score_rows
+2026-09-22T11:20:41.3645079Z        5: core::ops::function::FnOnce::call_once
+2026-09-22T11:20:41.3645714Z     note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.[0m
+2026-09-22T11:20:41.3646332Z 
+2026-09-22T11:20:41.3646712Z [31;1m  Cancelling[0m due to [31;1mtest failure[0m: [1m3[0m tests still running
+2026-09-22T11:20:41.4316220Z [32;1m        PASS[0m [   0.344s] ( 56/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::native_einsum::contraction_storage_tests[0m[36m::[0m[34;1marithmetic_storage_contraction_messages_with_and_without_selector[0m
+2026-09-22T11:20:42.3215687Z [32;1m        PASS[0m [   1.255s] ( 57/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::native_boundary::tests[0m[36m::[0m[34;1mboundary_opens_original_graph_tensors_and_hides_values[0m
+2026-09-22T11:20:47.6260931Z [32;1m        PASS[0m [   6.273s] ( 58/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::native_generation::tests[0m[36m::[0m[34;1mgreedy_sequence_proves_shift_ties_padding_and_stopping[0m
+2026-09-22T11:20:47.6261631Z ────────────
+2026-09-22T11:20:47.6262007Z [31;1m     Summary[0m [   7.678s] [1m58[0m/[1m331[0m tests run: [1m57[0m [32;1mpassed[0m, [1m1[0m [31;1mfailed[0m, [1m15[0m [33;1mskipped[0m
+2026-09-22T11:20:47.6262717Z [31;1m        FAIL[0m [   0.094s] ( 55/331) [35;1mjoltworks[0m [36mpoly::commitment::dory::native_generation::tests[0m[36m::[0m[34;1mgreedy_sequence_projects_only_required_score_rows[0m
+2026-09-22T11:20:47.6263463Z [33;1mwarning[0m: [1m273[0m/[1m331[0m tests were not run due to [33;1mtest failure[0m (run with [1m--no-fail-fast[0m to run all tests, or run with [1m--max-fail[0m)
+2026-09-22T11:20:47.6277174Z [31;1merror[0m: test run failed
+2026-09-22T11:20:47.6299289Z ##[error]Process completed with exit code 100.
+2026-09-22T11:20:47.6422879Z Post job cleanup.
+2026-09-22T11:20:47.6425179Z ##[start-action display=Setup Rust Caching;id=__18f59c0d-8d41-49d8-8d12-93f35b9e24c0.__Swatinem_rust-cache]
+2026-09-22T11:20:47.6450752Z Post job cleanup.
+2026-09-22T11:20:47.8174201Z Cache up-to-date.
+2026-09-22T11:20:47.8176423Z (node:4216) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-22T11:20:47.8177112Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-22T11:20:47.8279265Z ##[end-action id=__18f59c0d-8d41-49d8-8d12-93f35b9e24c0.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=185]
+2026-09-22T11:20:47.8321197Z Post job cleanup.
+2026-09-22T11:20:47.8880595Z [command]/usr/bin/git version
+2026-09-22T11:20:47.8910404Z git version 2.55.0
+2026-09-22T11:20:47.8931704Z Temporarily overriding HOME='/home/runner/work/_temp/d638454e-d668-4e75-818e-fac31a86c7c1' before making global git config changes
+2026-09-22T11:20:47.8932712Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-22T11:20:47.8935270Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/jolt-atlas/jolt-atlas
+2026-09-22T11:20:47.8959529Z Removing SSH command configuration
+2026-09-22T11:20:47.8963506Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-22T11:20:47.8991120Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-22T11:20:47.9163888Z Removing HTTP extra header
+2026-09-22T11:20:47.9166911Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-22T11:20:47.9190295Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-22T11:20:47.9354258Z Removing includeIf entries pointing to credentials config files
+2026-09-22T11:20:47.9358064Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-22T11:20:47.9379504Z includeif.gitdir:/home/runner/work/jolt-atlas/jolt-atlas/.git.path
+2026-09-22T11:20:47.9380227Z includeif.gitdir:/home/runner/work/jolt-atlas/jolt-atlas/.git/worktrees/*.path
+2026-09-22T11:20:47.9380562Z includeif.gitdir:/github/workspace/.git.path
+2026-09-22T11:20:47.9380768Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-22T11:20:47.9385480Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/jolt-atlas/jolt-atlas/.git.path
+2026-09-22T11:20:47.9403933Z /home/runner/work/_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config
+2026-09-22T11:20:47.9410925Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/jolt-atlas/jolt-atlas/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-a1643a8c\-6980\-40e5\-a69d\-9e19be65d059\.config
+2026-09-22T11:20:47.9441848Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/jolt-atlas/jolt-atlas/.git/worktrees/*.path
+2026-09-22T11:20:47.9459632Z /home/runner/work/_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config
+2026-09-22T11:20:47.9465840Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/jolt-atlas/jolt-atlas/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-a1643a8c\-6980\-40e5\-a69d\-9e19be65d059\.config
+2026-09-22T11:20:47.9489523Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-09-22T11:20:47.9506106Z /github/runner_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config
+2026-09-22T11:20:47.9510653Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-a1643a8c\-6980\-40e5\-a69d\-9e19be65d059\.config
+2026-09-22T11:20:47.9532891Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-22T11:20:47.9548993Z /github/runner_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config
+2026-09-22T11:20:47.9553496Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-a1643a8c\-6980\-40e5\-a69d\-9e19be65d059\.config
+2026-09-22T11:20:47.9577591Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-22T11:20:47.9741669Z Removing credentials config '/home/runner/work/_temp/git-credentials-a1643a8c-6980-40e5-a69d-9e19be65d059.config'
+2026-09-22T11:20:47.9874701Z Cleaning up orphan processes

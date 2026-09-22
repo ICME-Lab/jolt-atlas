@@ -17,6 +17,13 @@ Rust 1.95.0, strict warnings, eight Rayon workers and four test workers on the r
 
 The common native suite was run before the final workflow split; its native commands and Rust sources are identical. The documentation source includes the final workflow and iterator fixes. The source JSON and patches pin both tested trees. The difference in library counts reflects the common correctness changes already present in #369.
 
-The seven implementation branches change only `.github/workflows/rust.yml` in this follow-up. Their earlier native validation retains its exact Rust source scope. The documentation PR also contains the two iterator changes and this updated archive.
+The seven implementation branches change only `.github/workflows/rust.yml` and `.config/nextest.toml` in this follow-up. Their earlier native validation retains its exact Rust source scope. The documentation PR also contains the two iterator changes and this updated archive.
 
 `validation/` contains the complete logs and command summaries. `collected.json` authenticates all eight files against hashes read from the producing host. CI reruns on GitHub establish current per-PR workflow status; these local results do not claim completion of the experimental dispatcher or a new performance gain.
+
+
+## Dory setup cache race
+
+The new native CI job exposed a separate runner failure on #374. `greedy_sequence_projects_only_required_score_rows` read an incomplete Dory setup and failed with `Failed to deserialize verifier setup`. Dory 0.4 writes directly into its shared setup file. Nextest launches tests in separate processes, so an in-process test lock cannot protect readers from another test creating that file. The original failing GitHub log is preserved as `native-setup-race.log`.
+
+`.config/nextest.toml` puts the `joltworks` and `jolt-atlas-core` tests in a shared group with `max-threads = 1`. Every test still runs, and other packages can run concurrently. This fixes scheduling around the dependency’s shared disk cache; it does not implement a general lock for unrelated application processes. This configuration is propagated to all eight review branches. GitHub reruns exercise it on fresh runners.

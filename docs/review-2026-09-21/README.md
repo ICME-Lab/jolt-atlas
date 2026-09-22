@@ -10,6 +10,14 @@ Main at `e6cadf160dc8b6fa8b7a183ff24ce71b6ef84518` has exactly the same Git tree
 
 The [retarget record](retarget-2026-09-22/README.md) gives old/new heads, source-tree identities and GitHub readback. Earlier dated publication/validation JSON files remain historical snapshots. The dependency diagram below describes review order and included code; all GitHub targets are main.
 
+## CI coverage, September 22
+
+The main `Clippy & Test (zk)` job now checks and tests `joltworks --features zk`, which contains native BlindFold. The old ONNX ZK commands remain in a separate **Experimental ONNX ZK (informational)** job. It attempts strict Clippy and the complete test suite, reports their outcomes, and remains visibly failed when either fails. It is non-blocking. This is a CI scope change and does not repair or complete the experimental dispatcher. No test is deleted or marked ignored, and no proof relation is changed.
+
+The workflow uses a current checkout action. The documentation branch also carries the two existing opening-map iterator lint fixes needed by strict native Clippy; they already appear in the common correctness branch. Consequently #376 now includes CI coverage and those lint fixes alongside the archive. The seven implementation branches change only their workflow files in this follow-up. Their recorded Rust source validation remains applicable.
+
+Fresh Linux checks on the common base pass strict native Clippy, all 191 native tests and one documentation test. The documentation branch separately passes strict native Clippy, 188 native tests and one documentation test. GitHub reruns cover each new workflow head. The [CI record](ci-2026-09-22/README.md) distinguishes the native checks from the known experimental failures.
+
 ## Review queue
 
 | Unit | Topic | Review | Description |

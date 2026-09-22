@@ -1,0 +1,48 @@
+[
+  {
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "clean",
+      "-p",
+      "common",
+      "-p",
+      "atlas-onnx-tracer",
+      "-p",
+      "joltworks",
+      "-p",
+      "jolt-atlas-core",
+      "-p",
+      "jolt-atlas"
+    ],
+    "exit_code": 0,
+    "seconds": 0.2652461528778076
+  },
+  {
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "clippy",
+      "-p",
+      "joltworks",
+      "--all-targets",
+      "--features",
+      "zk"
+    ],
+    "exit_code": 0,
+    "seconds": 15.164312601089478
+  },
+  {
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "test",
+      "-p",
+      "joltworks",
+      "--features",
+      "zk"
+    ],
+    "exit_code": 0,
+    "seconds": 71.84407663345337
+  }
+]

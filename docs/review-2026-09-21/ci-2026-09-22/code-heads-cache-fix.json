@@ -1,0 +1,58 @@
+[
+  {
+    "branch": "review/tensor-correctness",
+    "before": "4f9e529f203b969726c5d48fea8a4e6c4303f870",
+    "head": "b811e0d89eddfcea65fd63fc62849fd32ecee8e5",
+    "changed_files": [
+      ".config/nextest.toml"
+    ]
+  },
+  {
+    "branch": "review/ordinary-verifier",
+    "before": "5f7e93e290bd0233c6d1e71f63463c75d6b83af4",
+    "head": "cd065383f5414bb17b2da6a53a8598373c15844d",
+    "changed_files": [
+      ".config/nextest.toml"
+    ]
+  },
+  {
+    "branch": "review/native-foundations",
+    "before": "1efdc1614e6620c55abb1acdb2ec7f49b1e7e81c",
+    "head": "8efd0d18d062492d88de5c0d3b5fef5f901c1a65",
+    "changed_files": [
+      ".config/nextest.toml"
+    ]
+  },
+  {
+    "branch": "review/native-operators",
+    "before": "2bda623f33cfd6b80a5d44129fcc771c3b20d52d",
+    "head": "cac6e3ebaeceddfe9c3352fbdd1ac42240c0dc16",
+    "changed_files": [
+      ".config/nextest.toml"
+    ]
+  },
+  {
+    "branch": "review/native-generation",
+    "before": "b1004cf50609c918889381dcd0286f5983c06662",
+    "head": "25eb0d43128ff269b41748c4f50e375842204fff",
+    "changed_files": [
+      ".config/nextest.toml"
+    ]
+  },
+  {
+    "branch": "review/native-prover",
+    "before": "30fbef7b4dc00479c1f0d9ae10c6ea1e07081c61",
+    "head": "51fe77674ee16638c852b5b6b63458d5d52772ff",
+    "changed_files": [
+      ".config/nextest.toml"
+    ]
+  },
+  {
+    "branch": "review/native-verifier",
+    "before": "ece14059e68879f62900988e12d54a7b59e39ecd",
+    "head": "f26127dc1978acdc02a89b3318b0e8779603bf5d",
+    "changed_files": [
+      ".config/nextest.toml"
+    ]
+  }
+]

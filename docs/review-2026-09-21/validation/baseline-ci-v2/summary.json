@@ -1,0 +1,32 @@
+{
+  "archive_sha256": "4b6f645cf48b4e27578246915645501fc920b5d0bfb0b0d04d954292f00eb9c7",
+  "patch_sha256": "98400a944981997eec308b88a730fbee4a549181a06e72d275540e53fa0a5909",
+  "source_head": "cfcffb05dcc76599f4e5b3d01c6e13f5fa653e13",
+  "authenticated_files": 433,
+  "source": "/root/atlas-consolidation/baseline-ci-v2",
+  "workers": 8,
+  "toolchain": "1.95.0",
+  "environment": {
+    "RUSTFLAGS": "-D warnings",
+    "CARGO_TARGET_DIR": "/root/atlas-consolidation/target",
+    "RAYON_NUM_THREADS": "8"
+  },
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "check",
+        "-p",
+        "jolt-atlas-core",
+        "--all-targets",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 101,
+      "seconds": 14.664252281188965,
+      "log": "00.log"
+    }
+  ],
+  "local_crates_cleaned": true
+}

@@ -1,0 +1,74 @@
+{
+  "baseline": 50,
+  "candidate": 41,
+  "added": [],
+  "removed": [
+    {
+      "diagnostic": [
+        "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+        "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1398:30"
+      ],
+      "count": 1
+    },
+    {
+      "diagnostic": [
+        "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+        "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1399:28"
+      ],
+      "count": 1
+    },
+    {
+      "diagnostic": [
+        "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+        "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1424:30"
+      ],
+      "count": 1
+    },
+    {
+      "diagnostic": [
+        "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+        "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1425:28"
+      ],
+      "count": 1
+    },
+    {
+      "diagnostic": [
+        "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+        "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1450:30"
+      ],
+      "count": 1
+    },
+    {
+      "diagnostic": [
+        "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+        "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1451:28"
+      ],
+      "count": 1
+    },
+    {
+      "diagnostic": [
+        "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+        "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1395:9"
+      ],
+      "count": 1
+    },
+    {
+      "diagnostic": [
+        "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+        "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1421:9"
+      ],
+      "count": 1
+    },
+    {
+      "diagnostic": [
+        "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+        "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1447:9"
+      ],
+      "count": 1
+    }
+  ],
+  "base": "cfcffb05dcc76599f4e5b3d01c6e13f5fa653e13",
+  "candidate_head": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+  "command": "cargo +1.95.0 check -p jolt-atlas-core --all-targets --features zk",
+  "notes": "Cleaned all local crates between sequential source switches; RUSTFLAGS=-D warnings. Compare primary error title and exact source location, preserve raw diagnostics."
+}

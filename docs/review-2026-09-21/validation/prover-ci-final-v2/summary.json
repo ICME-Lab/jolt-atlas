@@ -1,0 +1,98 @@
+{
+  "archive_sha256": "443db75ac2ca1cac347b3ae2910539d2dc2718828c55ebfa5a418957c63d3415",
+  "patch_sha256": "861620aa1ac9333273dd03d889c4a7c81915db1688c0d4fb2bf15728125827b0",
+  "source_head": "6d3e3a24daf3a120baa05711e8ebac28d801daa9",
+  "authenticated_files": 466,
+  "source": "/root/atlas-consolidation/prover-ci-final-v2",
+  "workers": 8,
+  "toolchain": "1.95.0",
+  "environment": {
+    "RUSTFLAGS": "-D warnings",
+    "CARGO_TARGET_DIR": "/root/atlas-consolidation/target",
+    "RAYON_NUM_THREADS": "8"
+  },
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.569664716720581,
+      "log": "00.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 74.39945602416992,
+      "log": "01.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 0,
+      "seconds": 239.61521172523499,
+      "log": "02.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "-p",
+        "joltworks",
+        "--all-targets",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 0,
+      "seconds": 19.17543625831604,
+      "log": "03.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "--workspace",
+        "--all-targets"
+      ],
+      "exit_code": 0,
+      "seconds": 15.964087009429932,
+      "log": "04.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--features",
+        "jolt-atlas-core/zk"
+      ],
+      "exit_code": 0,
+      "seconds": 16.816768884658813,
+      "log": "05.log"
+    }
+  ],
+  "local_crates_cleaned": true
+}

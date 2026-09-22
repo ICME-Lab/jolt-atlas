@@ -1,0 +1,4 @@
+   Compiling joltworks v0.1.0 (/root/atlas-consolidation/ordinary-parity-1790007702185215279/joltworks)
+   Compiling jolt-atlas-core v0.1.0 (/root/atlas-consolidation/ordinary-parity-1790007702185215279/jolt-atlas-core)
+    Finished `test` profile [optimized] target(s) in 46.09s
+     Running `/root/atlas-consolidation/target/debug/examples/verifier_feature_parity /root/atlas-consolidation/logs/ordinary-parity-1790007702185215279/optional`

@@ -1,0 +1,71 @@
+   Compiling common v0.1.0 (/root/atlas-consolidation/ordinary-ci-final/common)
+   Compiling atlas-onnx-tracer v0.1.0 (/root/atlas-consolidation/ordinary-ci-final/atlas-onnx-tracer)
+    Finished `test` profile [optimized] target(s) in 6.12s
+     Running unittests src/lib.rs (/root/atlas-consolidation/target/debug/deps/atlas_onnx_tracer-a3ed8b5b422b3d66)
+
+running 62 tests
+test model::clamp_width::tests::width_rounding ... ok
+test model::test::tests::test_mlp_like ... ok
+test model::test::tests::test_simple_add ... ok
+test ops::sigmoid::tests::test_sigmoid_precision_stats ... ok
+test ops::cos::tests::test_cos_precision_stats ... ok
+test ops::softmax::lut_size_tests::exp_lut_sizes_match_reference ... ok
+test ops::softmax::scale_tests::largest_supported_scale_preserves_equal_probabilities ... ok
+test ops::erf::tests::test_erf_precision_stats ... ok
+test ops::softmax::scale_tests::unsupported_scale_is_rejected_in_release_too - should panic ... ok
+test ops::softmax::scale_tests::zero_scale_is_rejected - should panic ... ok
+test tensor::tests::tensor_clone ... ok
+test tensor::tests::tensor_eq ... ok
+test tensor::tests::tensor_slice ... ok
+test ops::sin::tests::test_sin_precision_stats ... ok
+test tensor::tests::test_crop_to_dims ... ok
+test tensor::tests::test_einsum_anm_bm_ba ... ok
+test tensor::tests::test_einsum_bmk_kbn_mbn ... ok
+test tensor::tests::test_einsum_dimension_mismatch_error ... ok
+test tensor::tests::test_einsum_bmk_kbn_mbn_attention_value ... ok
+test tensor::tests::test_einsum_elementwise_mul ... ok
+test tensor::tests::test_einsum_full_contraction_no_shared ... ok
+test tensor::tests::test_einsum_full_contraction_shared ... ok
+test tensor::tests::test_einsum_ij_jk_ik ... ok
+test tensor::tests::test_einsum_ik_jk_ij ... ok
+test tensor::tests::test_einsum_k_nk_n ... ok
+test tensor::tests::test_einsum_matmul_vs_transposed_matmul ... ok
+test tensor::tests::test_einsum_matvec ... ok
+test tensor::tests::test_einsum_matvec_extra_dim ... ok
+test tensor::tests::test_einsum_mbk_nbk_bmn ... ok
+test tensor::tests::test_einsum_mk_k_ma ... ok
+test tensor::tests::test_einsum_mbk_nbk_bmn_multihead_attention ... ok
+test tensor::tests::test_einsum_mk_kn_mn_1x1 ... ok
+test tensor::tests::test_einsum_mk_kn_mn_basic ... ok
+test tensor::tests::test_einsum_mk_kn_mn_identity ... ok
+test ops::tanh::tests::test_tanh_precision_stats ... ok
+test tensor::tests::test_einsum_mk_kn_mn_rectangular ... ok
+test tensor::tests::test_einsum_mk_kn_mn_square ... ok
+test tensor::tests::test_einsum_mk_n_ma ... ok
+test tensor::tests::test_einsum_row_dot ... ok
+test tensor::tests::test_einsum_scalar_dot ... ok
+test tensor::tests::test_einsum_single_element ... ok
+test ops::einsum::gemm::tests::gemm_path_matches_generic_kernel ... ok
+test tensor::tests::test_einsum_three_inputs ... ok
+test tensor::tests::test_einsum_wrong_input_count_error ... ok
+test tensor::tests::test_einsum_zeros ... ok
+test tensor::tests::test_matmul_padding_workflow ... ok
+test tensor::tests::test_pad_to_dims ... ok
+test tensor::tests::test_tensor ... ok
+test utils::dims::tests::test_map_next_power_of_two_for_slice ... ok
+test utils::dims::tests::test_map_next_power_of_two_for_vec ... ok
+test utils::dims::tests::test_pad_next_power_of_two ... ok
+test utils::dims::tests::test_pad_to ... ok
+test utils::f32::tests::f32_cmp ... ok
+test utils::f32::tests::f32_eq ... ok
+test utils::f32::tests::f32_hash ... ok
+test utils::parallel_utils::sequential::tests::borrowed_and_owned_iteration_stays_on_the_calling_thread ... ok
+test utils::parallel_utils::sequential::tests::mutable_iteration_and_sort_match_standard_iterators ... ok
+test utils::pretty_print::tests::test_pretty_print_empty_graph ... ok
+test utils::pretty_print::tests::test_pretty_print_simple_graph ... ok
+test utils::quantize::tests::additive_mask_dominates_a_larger_masked_score ... ok
+test utils::quantize::tests::extreme_negative_masks_keep_integer_headroom ... ok
+test tensor::tests::test_einsum_mk_kn_mn_gpt_projection ... ok
+
+test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

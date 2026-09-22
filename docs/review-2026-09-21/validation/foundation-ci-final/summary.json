@@ -1,0 +1,98 @@
+{
+  "archive_sha256": "1ae2a76adc633aa91659a97140a395a6fb1273eedc71386992d19ed7486f388b",
+  "patch_sha256": "b472ffec52e86fe520d9de27a0bb76d714c12c83b0d50bab2f80456f718ad46a",
+  "source_head": "0a7de79f358c86ddad43c21cc2431086e82296f3",
+  "authenticated_files": 449,
+  "source": "/root/atlas-consolidation/foundation-ci-final",
+  "workers": 8,
+  "toolchain": "1.95.0",
+  "environment": {
+    "RUSTFLAGS": "-D warnings",
+    "CARGO_TARGET_DIR": "/root/atlas-consolidation/target",
+    "RAYON_NUM_THREADS": "8"
+  },
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.1181647777557373,
+      "log": "00.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 67.37647461891174,
+      "log": "01.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 0,
+      "seconds": 75.53416013717651,
+      "log": "02.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "-p",
+        "joltworks",
+        "--all-targets",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 0,
+      "seconds": 16.10878086090088,
+      "log": "03.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "--workspace",
+        "--all-targets"
+      ],
+      "exit_code": 0,
+      "seconds": 16.00976300239563,
+      "log": "04.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--features",
+        "jolt-atlas-core/zk"
+      ],
+      "exit_code": 0,
+      "seconds": 15.862693309783936,
+      "log": "05.log"
+    }
+  ],
+  "local_crates_cleaned": true
+}

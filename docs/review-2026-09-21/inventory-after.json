@@ -1,0 +1,55 @@
+{
+  "checked_at": "2026-09-21T16:51:11.339070+00:00",
+  "prs": [
+    {
+      "baseRefName": "review/native-operators",
+      "headRefName": "review/native-generation",
+      "headRefOid": "02163ea6302999fc84fb49468c4a064ad3f4466d",
+      "number": 373,
+      "state": "OPEN",
+      "title": "Prove committed table access and greedy generation",
+      "updatedAt": "2026-09-21T16:44:32Z",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/373"
+    },
+    {
+      "baseRefName": "review/native-foundations",
+      "headRefName": "review/native-operators",
+      "headRefOid": "fb1b116c00b97e0a6855bb8517e4f93b33561bb4",
+      "number": 372,
+      "state": "OPEN",
+      "title": "Prove exact native tensor arithmetic and layouts",
+      "updatedAt": "2026-09-21T16:44:30Z",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/372"
+    },
+    {
+      "baseRefName": "review/tensor-correctness",
+      "headRefName": "review/native-foundations",
+      "headRefOid": "0a7de79f358c86ddad43c21cc2431086e82296f3",
+      "number": 371,
+      "state": "OPEN",
+      "title": "Add registered native BlindFold graph proofs and tensor boundaries",
+      "updatedAt": "2026-09-21T16:44:28Z",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/371"
+    },
+    {
+      "baseRefName": "review/tensor-correctness",
+      "headRefName": "review/ordinary-verifier",
+      "headRefOid": "b70711b0499dec29badc4d70152c2521b86ed91f",
+      "number": 370,
+      "state": "OPEN",
+      "title": "Reduce ordinary verifier work and compact HyperKZG proofs",
+      "updatedAt": "2026-09-21T16:44:26Z",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/370"
+    },
+    {
+      "baseRefName": "perf/round-2",
+      "headRefName": "review/tensor-correctness",
+      "headRefOid": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+      "number": 369,
+      "state": "OPEN",
+      "title": "Fix padded tensor semantics and commitment execution",
+      "updatedAt": "2026-09-21T16:43:15Z",
+      "url": "https://github.com/ICME-Lab/jolt-atlas/pull/369"
+    }
+  ]
+}

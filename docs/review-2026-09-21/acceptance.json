@@ -1,0 +1,34 @@
+{
+  "ready_for_publication": true,
+  "checked_at": "2026-09-21T16:40:48.067167+00:00",
+  "heads": {
+    "tensor-correctness": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+    "ordinary-verifier": "b70711b0499dec29badc4d70152c2521b86ed91f",
+    "native-foundations": "0a7de79f358c86ddad43c21cc2431086e82296f3",
+    "native-operators": "fb1b116c00b97e0a6855bb8517e4f93b33561bb4",
+    "native-generation": "02163ea6302999fc84fb49468c4a064ad3f4466d",
+    "native-prover": "6d3e3a24daf3a120baa05711e8ebac28d801daa9",
+    "native-verifier": "2e415e2a8bfd71678b7b62766a149b259dc166ce"
+  },
+  "selection": {
+    "correctness": "correctness-ci-v2",
+    "ordinary": "ordinary-ci-final",
+    "foundation": "foundation-ci-final",
+    "operators": "operators-ci-final",
+    "generation": "generation-ci-v2",
+    "prover": "prover-ci-final-v2",
+    "verifier": "verifier-ci-final",
+    "additional": [
+      "baseline-ci-v2",
+      "foundation-core-zk-final",
+      "ordinary-backends-v2",
+      "ordinary-parity-1790007702185215279",
+      "ordinary-fixed-tables-final"
+    ]
+  },
+  "limitations": [
+    "Experimental ONNX ZK dispatcher has recorded compile/runtime failures; native API tests have their own passing scope.",
+    "Performance observations are preserved component comparisons, not a newly measured complete-model consolidation result.",
+    "Ordinary matrix and final backend cleanup heads are distinguished with exact diff and supplementary final-head checks."
+  ]
+}

@@ -1,0 +1,5 @@
+    Checking common v0.1.0 (/root/atlas-ci-20260922/correctness/common)
+    Checking dory-pcs v0.4.0
+    Checking atlas-onnx-tracer v0.1.0 (/root/atlas-ci-20260922/correctness/atlas-onnx-tracer)
+    Checking joltworks v0.1.0 (/root/atlas-ci-20260922/correctness/joltworks)
+    Finished `dev` profile [unoptimized] target(s) in 15.05s

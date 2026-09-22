@@ -1,0 +1,156 @@
+{
+  "archive_sha256": "f9378f30dcc21b35ddc1b36e62e4a78cea780679373bcbf6c39d0d0bc337724b",
+  "patch_sha256": "10ac3012ee394d215b2ae30f4ad28fcd8feb848cbd7cc73d4bdcce8fb9ce26d7",
+  "source_head": "d190e1419f5f1231818e69253cab5b7dda3d7165",
+  "authenticated_files": 450,
+  "source": "/root/atlas-consolidation/ordinary-ci-final",
+  "workers": 8,
+  "toolchain": "1.95.0",
+  "environment": {
+    "RUSTFLAGS": "-D warnings",
+    "CARGO_TARGET_DIR": "/root/atlas-consolidation/target",
+    "RAYON_NUM_THREADS": "8"
+  },
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.3689720630645752,
+      "log": "00.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 65.36860489845276,
+      "log": "01.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "jolt-atlas-core",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 183.45609617233276,
+      "log": "02.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 41.136754512786865,
+      "log": "03.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "jolt-atlas-core",
+        "--lib",
+        "--no-default-features"
+      ],
+      "exit_code": 0,
+      "seconds": 282.33562445640564,
+      "log": "04.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib",
+        "--no-default-features",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 0,
+      "seconds": 36.38250708580017,
+      "log": "05.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "jolt-atlas-core",
+        "--lib",
+        "--no-default-features",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 101,
+      "seconds": 22.33463478088379,
+      "log": "06.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "atlas-onnx-tracer",
+        "--no-default-features",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 6.2336273193359375,
+      "log": "07.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "--workspace",
+        "--all-targets"
+      ],
+      "exit_code": 0,
+      "seconds": 17.02068305015564,
+      "log": "08.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "-p",
+        "jolt-atlas-core",
+        "--all-targets",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 101,
+      "seconds": 17.068941116333008,
+      "log": "09.log"
+    }
+  ],
+  "local_crates_cleaned": true
+}

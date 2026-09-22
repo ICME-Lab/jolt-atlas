@@ -1,0 +1,12 @@
+   Compiling common v0.1.0 (/root/atlas-consolidation/ordinary-fixed-tables-final/common)
+   Compiling atlas-onnx-tracer v0.1.0 (/root/atlas-consolidation/ordinary-fixed-tables-final/atlas-onnx-tracer)
+   Compiling joltworks v0.1.0 (/root/atlas-consolidation/ordinary-fixed-tables-final/joltworks)
+   Compiling jolt-atlas-core v0.1.0 (/root/atlas-consolidation/ordinary-fixed-tables-final/jolt-atlas-core)
+    Finished `test` profile [optimized] target(s) in 46.04s
+     Running unittests src/lib.rs (/root/atlas-consolidation/target/debug/deps/jolt_atlas_core-fdd59831ea643eeb)
+
+running 1 test
+test onnx_proof::neural_teleport::fixed_tables::tests::fixed_tables_match_every_reference_entry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.03s
+

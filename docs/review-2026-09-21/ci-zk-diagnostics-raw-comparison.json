@@ -1,0 +1,297 @@
+{
+  "checked_at": "2026-09-21T16:48:30.847396+00:00",
+  "base": "cfcffb05dcc76599f4e5b3d01c6e13f5fa653e13",
+  "scope": "Compare every primary title and source location. CI and local command/configuration differences remain in raw logs; do not infer identical warning counts.",
+  "prs": {
+    "369": {
+      "ci_primary_diagnostics": 41,
+      "unchanged_round_two_base_primary_diagnostics": 50,
+      "added_over_base": [
+        [
+          [
+            "error[E0277]: the trait bound `onnx_proof::clamp_lookups::SaturatingAccClampOperands: std::default::Default` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:761:13"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0599]: no function or associated item named `with_precomputed` found for struct `onnx_proof::clamp_lookups::SaturatingAccClampOperands` in the current scope",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:1289:37"
+          ],
+          1
+        ]
+      ],
+      "removed_from_base": [
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1398:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1399:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1424:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1425:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1450:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1451:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1395:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1421:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1447:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0277]: the trait bound `SaturatingAccClampOperands: Default` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:761:13"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0599]: no function or associated item named `with_precomputed` found for struct `SaturatingAccClampOperands` in the current scope",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:1289:37"
+          ],
+          1
+        ]
+      ],
+      "added_over_correctness_core_test": [
+        [
+          [
+            "error[E0277]: the trait bound `onnx_proof::clamp_lookups::SaturatingAccClampOperands: std::default::Default` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:761:13"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0277]: the trait bound `(CosProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:928:17"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0277]: the trait bound `(SinProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:928:17"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0599]: no function or associated item named `with_precomputed` found for struct `onnx_proof::clamp_lookups::SaturatingAccClampOperands` in the current scope",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:1289:37"
+          ],
+          1
+        ]
+      ],
+      "removed_from_correctness_core_test": [
+        [
+          [
+            "error[E0277]: the trait bound `SaturatingAccClampOperands: Default` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:761:13"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0599]: no function or associated item named `with_precomputed` found for struct `SaturatingAccClampOperands` in the current scope",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:1289:37"
+          ],
+          1
+        ]
+      ]
+    },
+    "370": {
+      "ci_primary_diagnostics": 41,
+      "unchanged_round_two_base_primary_diagnostics": 50,
+      "added_over_base": [
+        [
+          [
+            "error[E0277]: the trait bound `onnx_proof::clamp_lookups::SaturatingAccClampOperands: std::default::Default` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:761:13"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0599]: no function or associated item named `with_precomputed` found for struct `onnx_proof::clamp_lookups::SaturatingAccClampOperands` in the current scope",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:1289:37"
+          ],
+          1
+        ]
+      ],
+      "removed_from_base": [
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1398:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1399:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1424:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1425:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1450:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1451:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1395:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1421:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1447:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0277]: the trait bound `SaturatingAccClampOperands: Default` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:761:13"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0599]: no function or associated item named `with_precomputed` found for struct `SaturatingAccClampOperands` in the current scope",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:1289:37"
+          ],
+          1
+        ]
+      ],
+      "added_over_correctness_core_test": [
+        [
+          [
+            "error[E0277]: the trait bound `onnx_proof::clamp_lookups::SaturatingAccClampOperands: std::default::Default` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:761:13"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0277]: the trait bound `(CosProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:928:17"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0277]: the trait bound `(SinProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:928:17"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0599]: no function or associated item named `with_precomputed` found for struct `onnx_proof::clamp_lookups::SaturatingAccClampOperands` in the current scope",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:1289:37"
+          ],
+          1
+        ]
+      ],
+      "removed_from_correctness_core_test": [
+        [
+          [
+            "error[E0277]: the trait bound `SaturatingAccClampOperands: Default` is not satisfied",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:761:13"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0599]: no function or associated item named `with_precomputed` found for struct `SaturatingAccClampOperands` in the current scope",
+            "jolt-atlas-core/src/onnx_proof/zk.rs:1289:37"
+          ],
+          1
+        ]
+      ]
+    }
+  }
+}

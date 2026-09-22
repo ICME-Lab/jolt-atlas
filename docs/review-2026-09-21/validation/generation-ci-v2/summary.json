@@ -1,0 +1,72 @@
+{
+  "archive_sha256": "a520b780f5f5019aa4c07f0cb4f5186dae1e3a37dc42671a98f4c94aa8ee617f",
+  "patch_sha256": "68285a79aa2f95ed8673b8b592a765d204651479eaddd71c25583a47877a52e8",
+  "source_head": "02163ea6302999fc84fb49468c4a064ad3f4466d",
+  "authenticated_files": 465,
+  "source": "/root/atlas-consolidation/generation-ci-v2",
+  "workers": 8,
+  "toolchain": "1.95.0",
+  "environment": {
+    "RUSTFLAGS": "-D warnings",
+    "CARGO_TARGET_DIR": "/root/atlas-consolidation/target",
+    "RAYON_NUM_THREADS": "8"
+  },
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.7199394702911377,
+      "log": "00.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 68.88585758209229,
+      "log": "01.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 0,
+      "seconds": 233.6983482837677,
+      "log": "02.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "-p",
+        "joltworks",
+        "--all-targets",
+        "--features",
+        "zk"
+      ],
+      "exit_code": 0,
+      "seconds": 19.074310302734375,
+      "log": "03.log"
+    }
+  ],
+  "local_crates_cleaned": true
+}

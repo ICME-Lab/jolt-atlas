@@ -1,0 +1,708 @@
+[
+  {
+    "branch": "review/tensor-correctness",
+    "head": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+    "library_matrix_head": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+    "base": "perf/round-2",
+    "base_head": "cfcffb05dcc76599f4e5b3d01c6e13f5fa653e13",
+    "validation_directory": "validation/correctness-ci-v2",
+    "tests": [
+      {
+        "passed": 71,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 119,
+        "failed": 0,
+        "ignored": 27
+      },
+      {
+        "passed": 161,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "commands": [
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "check",
+          "-p",
+          "jolt-atlas-core",
+          "--all-targets",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 101
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "-p",
+          "jolt-atlas-core",
+          "--all-targets",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 101
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "--workspace",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "jolt-atlas-core",
+          "--lib",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 101
+      }
+    ]
+  },
+  {
+    "branch": "review/ordinary-verifier",
+    "head": "b70711b0499dec29badc4d70152c2521b86ed91f",
+    "library_matrix_head": "d190e1419f5f1231818e69253cab5b7dda3d7165",
+    "base": "review/tensor-correctness",
+    "base_head": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+    "validation_directory": "validation/ordinary-ci-final",
+    "tests": [
+      {
+        "passed": 174,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 143,
+        "failed": 0,
+        "ignored": 27
+      },
+      {
+        "passed": 176,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 117,
+        "failed": 0,
+        "ignored": 20
+      },
+      {
+        "passed": 206,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 62,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "commands": [
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "jolt-atlas-core",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib",
+          "--no-default-features"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "jolt-atlas-core",
+          "--lib",
+          "--no-default-features"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "jolt-atlas-core",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 101
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "atlas-onnx-tracer",
+          "--no-default-features",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "-p",
+          "jolt-atlas-core",
+          "--all-targets",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 101
+      }
+    ],
+    "supplemental_validation_directories": [
+      "validation/ordinary-backends-v2",
+      "validation/ordinary-parity-1790007702185215279",
+      "validation/ordinary-fixed-tables-final"
+    ],
+    "scope": "Library matrix predates the two-file backend/iterator cleanup. Final head has separate backend tests, strict lint, complete proof parity and fixed-table reference validation. The exact diff is included."
+  },
+  {
+    "branch": "review/native-foundations",
+    "head": "0a7de79f358c86ddad43c21cc2431086e82296f3",
+    "library_matrix_head": "0a7de79f358c86ddad43c21cc2431086e82296f3",
+    "base": "review/tensor-correctness",
+    "base_head": "0b28a6baff0ee3bf499726c0d3e63d703f3b007b",
+    "validation_directory": "validation/foundation-ci-final",
+    "tests": [
+      {
+        "passed": 162,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 213,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "commands": [
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "-p",
+          "joltworks",
+          "--all-targets",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--features",
+          "jolt-atlas-core/zk"
+        ],
+        "exit_code": 0
+      }
+    ]
+  },
+  {
+    "branch": "review/native-operators",
+    "head": "fb1b116c00b97e0a6855bb8517e4f93b33561bb4",
+    "library_matrix_head": "fb1b116c00b97e0a6855bb8517e4f93b33561bb4",
+    "base": "review/native-foundations",
+    "base_head": "0a7de79f358c86ddad43c21cc2431086e82296f3",
+    "validation_directory": "validation/operators-ci-final",
+    "tests": [
+      {
+        "passed": 163,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 259,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "commands": [
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "-p",
+          "joltworks",
+          "--all-targets",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--features",
+          "jolt-atlas-core/zk"
+        ],
+        "exit_code": 0
+      }
+    ]
+  },
+  {
+    "branch": "review/native-generation",
+    "head": "02163ea6302999fc84fb49468c4a064ad3f4466d",
+    "library_matrix_head": "02163ea6302999fc84fb49468c4a064ad3f4466d",
+    "base": "review/native-operators",
+    "base_head": "fb1b116c00b97e0a6855bb8517e4f93b33561bb4",
+    "validation_directory": "validation/generation-ci-v2",
+    "tests": [
+      {
+        "passed": 163,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 295,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "commands": [
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "-p",
+          "joltworks",
+          "--all-targets",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      }
+    ]
+  },
+  {
+    "branch": "review/native-prover",
+    "head": "6d3e3a24daf3a120baa05711e8ebac28d801daa9",
+    "library_matrix_head": "6d3e3a24daf3a120baa05711e8ebac28d801daa9",
+    "base": "review/native-generation",
+    "base_head": "02163ea6302999fc84fb49468c4a064ad3f4466d",
+    "validation_directory": "validation/prover-ci-final-v2",
+    "tests": [
+      {
+        "passed": 188,
+        "failed": 0,
+        "ignored": 11
+      },
+      {
+        "passed": 331,
+        "failed": 0,
+        "ignored": 15
+      }
+    ],
+    "commands": [
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "-p",
+          "joltworks",
+          "--all-targets",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--features",
+          "jolt-atlas-core/zk"
+        ],
+        "exit_code": 0
+      }
+    ]
+  },
+  {
+    "branch": "review/native-verifier",
+    "head": "2e415e2a8bfd71678b7b62766a149b259dc166ce",
+    "library_matrix_head": "2e415e2a8bfd71678b7b62766a149b259dc166ce",
+    "base": "review/native-prover",
+    "base_head": "6d3e3a24daf3a120baa05711e8ebac28d801daa9",
+    "validation_directory": "validation/verifier-ci-final",
+    "tests": [
+      {
+        "passed": 203,
+        "failed": 0,
+        "ignored": 14
+      },
+      {
+        "passed": 353,
+        "failed": 0,
+        "ignored": 19
+      }
+    ],
+    "commands": [
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "test",
+          "-p",
+          "joltworks",
+          "--lib",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "-p",
+          "joltworks",
+          "--all-targets",
+          "--features",
+          "zk"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "+1.95.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--features",
+          "jolt-atlas-core/zk"
+        ],
+        "exit_code": 0
+      }
+    ]
+  }
+]

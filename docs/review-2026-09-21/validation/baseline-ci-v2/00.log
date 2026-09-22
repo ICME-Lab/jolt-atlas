@@ -1,0 +1,715 @@
+    Checking common v0.1.0 (/root/atlas-consolidation/baseline-ci-v2/common)
+    Checking atlas-onnx-tracer v0.1.0 (/root/atlas-consolidation/baseline-ci-v2/atlas-onnx-tracer)
+    Checking joltworks v0.1.0 (/root/atlas-consolidation/baseline-ci-v2/joltworks)
+    Checking jolt-atlas-core v0.1.0 (/root/atlas-consolidation/baseline-ci-v2/jolt-atlas-core)
+error[E0432]: unresolved imports `crate::onnx_proof::neural_teleport::division::TeleportDivisionVerifier`, `crate::onnx_proof::neural_teleport::range_and_onehot`
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:637:17
+    |
+637 |                 division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^ could not find `range_and_onehot` in `neural_teleport`
+    |                 |
+    |                 no `TeleportDivisionVerifier` in `onnx_proof::neural_teleport::division`
+
+error[E0432]: unresolved import `crate::onnx_proof::clamp_lookups::ClampTable`
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:742:36
+    |
+742 |         clamp_lookups::{is_scalar, ClampTable, SaturatingAccClampOperands, CLAMP_LOG_K},
+    |                                    ^^^^^^^^^^ no `ClampTable` in `onnx_proof::clamp_lookups`
+
+error[E0432]: unresolved imports `crate::onnx_proof::neural_teleport::division::TeleportDivisionParams`, `crate::onnx_proof::neural_teleport::division::TeleportDivisionProver`, `crate::onnx_proof::neural_teleport::range_and_onehot`
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:884:28
+    |
+884 |                 division::{TeleportDivisionParams, TeleportDivisionProver},
+    |                            ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^ no `TeleportDivisionProver` in `onnx_proof::neural_teleport::division`
+    |                            |
+    |                            no `TeleportDivisionParams` in `onnx_proof::neural_teleport::division`
+885 |                 range_and_onehot::NeuralTeleportRangeOneHot,
+    |                 ^^^^^^^^^^^^^^^^ could not find `range_and_onehot` in `neural_teleport`
+
+error[E0432]: unresolved import `crate::onnx_proof::clamp_lookups::ClampTable`
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1264:36
+     |
+1264 |         clamp_lookups::{is_scalar, ClampTable, SaturatingAccClampOperands, CLAMP_LOG_K},
+     |                                    ^^^^^^^^^^ no `ClampTable` in `onnx_proof::clamp_lookups`
+
+error: unused import: `utils::quantize::scale_to_multiplier`
+  --> jolt-atlas-core/src/onnx_proof/zk.rs:15:5
+   |
+15 |     utils::quantize::scale_to_multiplier,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope
+    --> jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1398:30
+     |
+1398 |     let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
+     |                              ^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: common/src/consts/activation.rs:8:1
+     |
+   8 | pub const ACTIVATION_TABLE_VARS: usize = ACTIVATION_BOUND + 1;
+     | -------------------------------------- similarly named constant `ACTIVATION_TABLE_VARS` defined here
+     |
+help: a constant with a similar name exists
+     |
+1398 -     let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
+1398 +     let min_val = -(1i32 << (ACTIVATION_TABLE_VARS - 1));
+     |
+
+error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope
+    --> jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1399:28
+     |
+1399 |     let max_val = 1i32 << (ACTIVATION_TABLE_BOUND - 1);
+     |                            ^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: common/src/consts/activation.rs:8:1
+     |
+   8 | pub const ACTIVATION_TABLE_VARS: usize = ACTIVATION_BOUND + 1;
+     | -------------------------------------- similarly named constant `ACTIVATION_TABLE_VARS` defined here
+     |
+help: a constant with a similar name exists
+     |
+1399 -     let max_val = 1i32 << (ACTIVATION_TABLE_BOUND - 1);
+1399 +     let max_val = 1i32 << (ACTIVATION_TABLE_VARS - 1);
+     |
+
+error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope
+    --> jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1424:30
+     |
+1424 |     let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
+     |                              ^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: common/src/consts/activation.rs:8:1
+     |
+   8 | pub const ACTIVATION_TABLE_VARS: usize = ACTIVATION_BOUND + 1;
+     | -------------------------------------- similarly named constant `ACTIVATION_TABLE_VARS` defined here
+     |
+help: a constant with a similar name exists
+     |
+1424 -     let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
+1424 +     let min_val = -(1i32 << (ACTIVATION_TABLE_VARS - 1));
+     |
+
+error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope
+    --> jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1425:28
+     |
+1425 |     let max_val = 1i32 << (ACTIVATION_TABLE_BOUND - 1);
+     |                            ^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: common/src/consts/activation.rs:8:1
+     |
+   8 | pub const ACTIVATION_TABLE_VARS: usize = ACTIVATION_BOUND + 1;
+     | -------------------------------------- similarly named constant `ACTIVATION_TABLE_VARS` defined here
+     |
+help: a constant with a similar name exists
+     |
+1425 -     let max_val = 1i32 << (ACTIVATION_TABLE_BOUND - 1);
+1425 +     let max_val = 1i32 << (ACTIVATION_TABLE_VARS - 1);
+     |
+
+error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope
+    --> jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1450:30
+     |
+1450 |     let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
+     |                              ^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: common/src/consts/activation.rs:8:1
+     |
+   8 | pub const ACTIVATION_TABLE_VARS: usize = ACTIVATION_BOUND + 1;
+     | -------------------------------------- similarly named constant `ACTIVATION_TABLE_VARS` defined here
+     |
+help: a constant with a similar name exists
+     |
+1450 -     let min_val = -(1i32 << (ACTIVATION_TABLE_BOUND - 1));
+1450 +     let min_val = -(1i32 << (ACTIVATION_TABLE_VARS - 1));
+     |
+
+error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope
+    --> jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1451:28
+     |
+1451 |     let max_val = 1i32 << (ACTIVATION_TABLE_BOUND - 1);
+     |                            ^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: common/src/consts/activation.rs:8:1
+     |
+   8 | pub const ACTIVATION_TABLE_VARS: usize = ACTIVATION_BOUND + 1;
+     | -------------------------------------- similarly named constant `ACTIVATION_TABLE_VARS` defined here
+     |
+help: a constant with a similar name exists
+     |
+1451 -     let max_val = 1i32 << (ACTIVATION_TABLE_BOUND - 1);
+1451 +     let max_val = 1i32 << (ACTIVATION_TABLE_VARS - 1);
+     |
+
+error: unused import: `common::consts::ACTIVATION_TABLE_VARS`
+    --> jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1395:9
+     |
+1395 |     use common::consts::ACTIVATION_TABLE_VARS;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unused import: `common::consts::ACTIVATION_TABLE_VARS`
+    --> jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1421:9
+     |
+1421 |     use common::consts::ACTIVATION_TABLE_VARS;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unused import: `common::consts::ACTIVATION_TABLE_VARS`
+    --> jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1447:9
+     |
+1447 |     use common::consts::ACTIVATION_TABLE_VARS;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0527]: pattern requires 3 elements but array has 2
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:328:13
+    |
+328 |         let [ra, hw, b] =
+    |             ^^^^^^^^^^^ expected 2 elements
+
+error[E0527]: pattern requires 3 elements but array has 2
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:421:13
+    |
+421 |         let [ra, hw, b] =
+    |             ^^^^^^^^^^^ expected 2 elements
+
+error[E0107]: struct takes 0 generic arguments but 1 generic argument was supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:488:23
+    |
+488 |         let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+    |                       ^^^^^^^^^^^^^^^^^^------------------------ help: remove the unnecessary generics
+    |                       |
+    |                       expected 0 generic arguments
+    |
+note: struct defined here, with 0 generic parameters
+   --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+    |
+233 | pub struct RangeCheckEncoding {
+    |            ^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:488:23
+    |
+488 |         let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------ argument #2 of type `&RangeCheckOperands<_>` is missing
+    |
+note: associated function defined here
+   --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+    |
+246 |     pub fn new<H: RangeCheckingOperandsTrait>(
+    |            ^^^
+247 |         computation_node: &ComputationNode,
+248 |         rc_op: &RangeCheckOperands<H>,
+    |         -----------------------------
+help: provide the argument
+    |
+488 |         let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node, /* rc_op */);
+    |                                                                           +++++++++++++
+
+error[E0107]: struct takes 0 generic arguments but 1 generic argument was supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:491:24
+    |
+491 |         let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+    |                        ^^^^^^^^^^^^^^^^^^------------------------ help: remove the unnecessary generics
+    |                        |
+    |                        expected 0 generic arguments
+    |
+note: struct defined here, with 0 generic parameters
+   --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+    |
+233 | pub struct RangeCheckEncoding {
+    |            ^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:491:24
+    |
+491 |         let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------ argument #2 of type `&RangeCheckOperands<_>` is missing
+    |
+note: associated function defined here
+   --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+    |
+246 |     pub fn new<H: RangeCheckingOperandsTrait>(
+    |            ^^^
+247 |         computation_node: &ComputationNode,
+248 |         rc_op: &RangeCheckOperands<H>,
+    |         -----------------------------
+help: provide the argument
+    |
+491 |         let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node, /* rc_op */);
+    |                                                                            +++++++++++++
+
+error[E0107]: struct takes 0 generic arguments but 1 generic argument was supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:581:28
+    |
+581 |             let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+    |                            ^^^^^^^^^^^^^^^^^^------------------------- help: remove the unnecessary generics
+    |                            |
+    |                            expected 0 generic arguments
+    |
+note: struct defined here, with 0 generic parameters
+   --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+    |
+233 | pub struct RangeCheckEncoding {
+    |            ^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:581:28
+    |
+581 |             let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------ argument #2 of type `&RangeCheckOperands<_>` is missing
+    |
+note: associated function defined here
+   --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+    |
+246 |     pub fn new<H: RangeCheckingOperandsTrait>(
+    |            ^^^
+247 |         computation_node: &ComputationNode,
+248 |         rc_op: &RangeCheckOperands<H>,
+    |         -----------------------------
+help: provide the argument
+    |
+581 |             let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node, /* rc_op */);
+    |                                                                                 +++++++++++++
+
+error[E0107]: struct takes 0 generic arguments but 1 generic argument was supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:722:22
+    |
+722 |         let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+    |                      ^^^^^^^^^^^^^^^^^^------------------------------ help: remove the unnecessary generics
+    |                      |
+    |                      expected 0 generic arguments
+    |
+note: struct defined here, with 0 generic parameters
+   --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+    |
+233 | pub struct RangeCheckEncoding {
+    |            ^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:722:22
+    |
+722 |         let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------ argument #2 of type `&RangeCheckOperands<_>` is missing
+    |
+note: associated function defined here
+   --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+    |
+246 |     pub fn new<H: RangeCheckingOperandsTrait>(
+    |            ^^^
+247 |         computation_node: &ComputationNode,
+248 |         rc_op: &RangeCheckOperands<H>,
+    |         -----------------------------
+help: provide the argument
+    |
+722 |         let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node, /* rc_op */);
+    |                                                                                +++++++++++++
+
+error[E0527]: pattern requires 3 elements but array has 2
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:723:13
+    |
+723 |         let [a, b, c] =
+    |             ^^^^^^^^^ expected 2 elements
+
+error[E0277]: the trait bound `SaturatingAccClampOperands: Default` is not satisfied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:761:13
+    |
+761 |             OpLookupProvider::new(node.clone());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `SaturatingAccClampOperands`
+    |
+note: required by a bound in `OpLookupProvider::<H>::new`
+   --> jolt-atlas-core/src/onnx_proof/op_lookups/mod.rs:231:12
+    |
+229 |     pub fn new(computation_node: ComputationNode) -> Self
+    |            --- required by a bound in this associated function
+230 |     where
+231 |         H: Default,
+    |            ^^^^^^^ required by this bound in `OpLookupProvider::<H>::new`
+help: consider annotating `SaturatingAccClampOperands` with `#[derive(Default)]`
+   --> jolt-atlas-core/src/onnx_proof/clamp_lookups/mod.rs:183:1
+    |
+183 + #[derive(Default)]
+184 | pub(crate) struct SaturatingAccClampOperands {
+    |
+
+error[E0527]: pattern requires 3 elements but array has 2
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:781:13
+    |
+781 |         let [ra, hw, b] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+    |             ^^^^^^^^^^^ expected 2 elements
+
+error[E0527]: pattern requires 3 elements but array has 2
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:829:13
+    |
+829 |         let [ra, hw, boolean] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+    |             ^^^^^^^^^^^^^^^^^ expected 2 elements
+
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:921:26
+    |
+921 |             let mut sc = <$Prover>::initialize(
+    |                          ^^^^^^^^^^^^^^^^^^^^^
+...
+925 |                 &mut prover.transcript,
+    |                 ---------------------- unexpected argument #4 of type `&mut Blake2bTranscript`
+...
+940 |             prove_lookup!(CosParams::<F>, CosProver::<F>);
+    |             --------------------------------------------- in this macro invocation
+    |
+note: expected `&Tensor<i32>`, found `&Trace`
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:922:17
+    |
+922 |                 &prover.trace,
+    |                 ^^^^^^^^^^^^^
+...
+940 |             prove_lookup!(CosParams::<F>, CosProver::<F>);
+    |             --------------------------------------------- in this macro invocation
+    = note: expected reference `&Tensor<i32>`
+               found reference `&atlas_onnx_tracer::model::trace::Trace`
+note: associated function defined here
+   --> jolt-atlas-core/src/onnx_proof/ops/cos.rs:371:12
+    |
+371 |     pub fn initialize(
+    |            ^^^^^^^^^^
+372 |         downscaled: &Tensor<i32>,
+    |         ------------------------
+    = note: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `(CosProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:928:17
+    |
+928 |                 &mut sc,
+    |                 ^^^^^^^ unsatisfied trait bound
+...
+940 |             prove_lookup!(CosParams::<F>, CosProver::<F>);
+    |             --------------------------------------------- in this macro invocation
+    |
+    = help: the trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<ark_ff::fields::models::fp::Fp<ark_ff::fields::models::fp::montgomery_backend::MontBackend<FrConfig, 4>, 4>, Blake2bTranscript>` is not implemented for `(CosProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)`
+    = help: the following other types implement trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`:
+              `AddProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `BlindFoldSpartanProver<'_, F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `BooleanitySumcheckProver<F, I>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `ConcatSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `CosProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `CubeProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `DivProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `EinsumDotProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+            and 27 others
+    = note: required for the cast from `&mut (CosProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)` to `&mut dyn SumcheckInstanceProver<Fp<MontBackend<FrConfig, 4>, 4>, ...>`
+    = note: the full name for the type has been written to '/root/atlas-consolidation/target/debug/deps/jolt_atlas_core-eff0d65f1797964a.long-type-13944642962877978299.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+    = note: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:921:26
+    |
+921 |             let mut sc = <$Prover>::initialize(
+    |                          ^^^^^^^^^^^^^^^^^^^^^
+...
+925 |                 &mut prover.transcript,
+    |                 ---------------------- unexpected argument #4 of type `&mut Blake2bTranscript`
+...
+944 |             prove_lookup!(SinParams::<F>, SinProver::<F>);
+    |             --------------------------------------------- in this macro invocation
+    |
+note: expected `&Tensor<i32>`, found `&Trace`
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:922:17
+    |
+922 |                 &prover.trace,
+    |                 ^^^^^^^^^^^^^
+...
+944 |             prove_lookup!(SinParams::<F>, SinProver::<F>);
+    |             --------------------------------------------- in this macro invocation
+    = note: expected reference `&Tensor<i32>`
+               found reference `&atlas_onnx_tracer::model::trace::Trace`
+note: associated function defined here
+   --> jolt-atlas-core/src/onnx_proof/ops/sin.rs:365:12
+    |
+365 |     pub fn initialize(
+    |            ^^^^^^^^^^
+366 |         downscaled: &Tensor<i32>,
+    |         ------------------------
+    = note: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `(SinProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:928:17
+    |
+928 |                 &mut sc,
+    |                 ^^^^^^^ unsatisfied trait bound
+...
+944 |             prove_lookup!(SinParams::<F>, SinProver::<F>);
+    |             --------------------------------------------- in this macro invocation
+    |
+    = help: the trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<ark_ff::fields::models::fp::Fp<ark_ff::fields::models::fp::montgomery_backend::MontBackend<FrConfig, 4>, 4>, Blake2bTranscript>` is not implemented for `(SinProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)`
+    = help: the following other types implement trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`:
+              `AddProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `BlindFoldSpartanProver<'_, F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `BooleanitySumcheckProver<F, I>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `ConcatSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `CosProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `CubeProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `DivProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `EinsumDotProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+            and 27 others
+    = note: required for the cast from `&mut (SinProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)` to `&mut dyn SumcheckInstanceProver<Fp<MontBackend<FrConfig, 4>, 4>, ...>`
+    = note: the full name for the type has been written to '/root/atlas-consolidation/target/debug/deps/jolt_atlas_core-eff0d65f1797964a.long-type-9487018084234499753.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+    = note: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0107]: struct takes 0 generic arguments but 1 generic argument was supplied
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1006:18
+     |
+1006 |     let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+     |                  ^^^^^^^^^^^^^^^^^^------------------------------ help: remove the unnecessary generics
+     |                  |
+     |                  expected 0 generic arguments
+     |
+note: struct defined here, with 0 generic parameters
+    --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+     |
+ 233 | pub struct RangeCheckEncoding {
+     |            ^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1006:18
+     |
+1006 |     let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------ argument #2 of type `&RangeCheckOperands<_>` is missing
+     |
+note: associated function defined here
+    --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+     |
+ 246 |     pub fn new<H: RangeCheckingOperandsTrait>(
+     |            ^^^
+ 247 |         computation_node: &ComputationNode,
+ 248 |         rc_op: &RangeCheckOperands<H>,
+     |         -----------------------------
+help: provide the argument
+     |
+1006 |     let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node, /* rc_op */);
+     |                                                                            +++++++++++++
+
+error[E0527]: pattern requires 3 elements but array has 2
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1007:9
+     |
+1007 |     let [mut a, mut b, mut c] = joltworks::subprotocols::shout::ra_onehot_provers(
+     |         ^^^^^^^^^^^^^^^^^^^^^ expected 2 elements
+
+error[E0527]: pattern requires 3 elements but array has 2
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1093:9
+     |
+1093 |     let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^ expected 2 elements
+
+error[E0527]: pattern requires 3 elements but array has 2
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1226:9
+     |
+1226 |     let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^ expected 2 elements
+
+error[E0599]: no function or associated item named `with_precomputed` found for struct `SaturatingAccClampOperands` in the current scope
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1289:37
+     |
+1289 |         SaturatingAccClampOperands::with_precomputed(quotient),
+     |                                     ^^^^^^^^^^^^^^^^ function or associated item not found in `SaturatingAccClampOperands`
+     |
+    ::: jolt-atlas-core/src/onnx_proof/clamp_lookups/mod.rs:183:1
+     |
+ 183 | pub(crate) struct SaturatingAccClampOperands {
+     | -------------------------------------------- function or associated item `with_precomputed` not found for this struct
+     |
+note: if you're trying to build a new `SaturatingAccClampOperands`, consider using `SaturatingAccClampOperands::for_node` which returns `SaturatingAccClampOperands`
+    --> jolt-atlas-core/src/onnx_proof/clamp_lookups/mod.rs:194:5
+     |
+ 194 |     pub(crate) fn for_node(node: &ComputationNode) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0527]: pattern requires 3 elements but array has 2
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1307:9
+     |
+1307 |     let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^ expected 2 elements
+
+error[E0527]: pattern requires 3 elements but array has 2
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1362:9
+     |
+1362 |     let [mut ra, mut hw, mut boolean] = joltworks::subprotocols::shout::ra_onehot_provers(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected 2 elements
+
+error[E0107]: struct takes 0 generic arguments but 1 generic argument was supplied
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1449:19
+     |
+1449 |     let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+     |                   ^^^^^^^^^^^^^^^^^^------------------------ help: remove the unnecessary generics
+     |                   |
+     |                   expected 0 generic arguments
+     |
+note: struct defined here, with 0 generic parameters
+    --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+     |
+ 233 | pub struct RangeCheckEncoding {
+     |            ^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1449:19
+     |
+1449 |     let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------ argument #2 of type `&RangeCheckOperands<_>` is missing
+     |
+note: associated function defined here
+    --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+     |
+ 246 |     pub fn new<H: RangeCheckingOperandsTrait>(
+     |            ^^^
+ 247 |         computation_node: &ComputationNode,
+ 248 |         rc_op: &RangeCheckOperands<H>,
+     |         -----------------------------
+help: provide the argument
+     |
+1449 |     let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node, /* rc_op */);
+     |                                                                       +++++++++++++
+
+error[E0107]: struct takes 0 generic arguments but 1 generic argument was supplied
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1456:20
+     |
+1456 |     let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+     |                    ^^^^^^^^^^^^^^^^^^------------------------ help: remove the unnecessary generics
+     |                    |
+     |                    expected 0 generic arguments
+     |
+note: struct defined here, with 0 generic parameters
+    --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+     |
+ 233 | pub struct RangeCheckEncoding {
+     |            ^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1456:20
+     |
+1456 |     let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------ argument #2 of type `&RangeCheckOperands<_>` is missing
+     |
+note: associated function defined here
+    --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+     |
+ 246 |     pub fn new<H: RangeCheckingOperandsTrait>(
+     |            ^^^
+ 247 |         computation_node: &ComputationNode,
+ 248 |         rc_op: &RangeCheckOperands<H>,
+     |         -----------------------------
+help: provide the argument
+     |
+1456 |     let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node, /* rc_op */);
+     |                                                                        +++++++++++++
+
+error[E0107]: struct takes 0 generic arguments but 1 generic argument was supplied
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1550:24
+     |
+1550 |         let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+     |                        ^^^^^^^^^^^^^^^^^^------------------------- help: remove the unnecessary generics
+     |                        |
+     |                        expected 0 generic arguments
+     |
+note: struct defined here, with 0 generic parameters
+    --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:233:12
+     |
+ 233 | pub struct RangeCheckEncoding {
+     |            ^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1550:24
+     |
+1550 |         let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------ argument #2 of type `&RangeCheckOperands<_>` is missing
+     |
+note: associated function defined here
+    --> jolt-atlas-core/src/onnx_proof/range_checking/mod.rs:246:12
+     |
+ 246 |     pub fn new<H: RangeCheckingOperandsTrait>(
+     |            ^^^
+ 247 |         computation_node: &ComputationNode,
+ 248 |         rc_op: &RangeCheckOperands<H>,
+     |         -----------------------------
+help: provide the argument
+     |
+1550 |         let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node, /* rc_op */);
+     |                                                                             +++++++++++++
+
+error[E0527]: pattern requires 3 elements but array has 2
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1551:13
+     |
+1551 |         let [mut ra_sc, mut hw_sc, mut bool_sc] = joltworks::subprotocols::shout::ra_onehot_provers(
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected 2 elements
+
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+    --> jolt-atlas-core/src/onnx_proof/zk.rs:1961:28
+     |
+1961 |         prover.accumulator.prepare_for_sumcheck(&poly_map);
+     |                            ^^^^^^^^^^^^^^^^^^^^----------- argument #2 of type `&mut _` is missing
+     |
+note: method defined here
+    --> joltworks/src/poly/opening_proof.rs:461:12
+     |
+ 461 |     pub fn prepare_for_sumcheck<T: Transcript>(
+     |            ^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+     |
+1961 |         prover.accumulator.prepare_for_sumcheck(&poly_map, /* transcript */);
+     |                                                          ++++++++++++++++++
+
+error[E0277]: the trait bound `(CosProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:928:17
+    |
+928 |                 &mut sc,
+    |                 ^^^^^^^ unsatisfied trait bound
+...
+940 |             prove_lookup!(CosParams::<F>, CosProver::<F>);
+    |             --------------------------------------------- in this macro invocation
+    |
+    = help: the trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<ark_ff::fields::models::fp::Fp<ark_ff::fields::models::fp::montgomery_backend::MontBackend<FrConfig, 4>, 4>, Blake2bTranscript>` is not implemented for `(CosProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)`
+    = help: the following other types implement trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`:
+              `AddProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `BlindFoldSpartanProver<'_, F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `BooleanitySumcheckProver<F, I>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `ConcatSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `CosProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `CubeProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `DivProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `EinsumDotProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+            and 27 others
+    = note: required for the cast from `&mut (CosProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)` to `&mut dyn SumcheckInstanceProver<Fp<MontBackend<FrConfig, 4>, 4>, ...>`
+    = note: the full name for the type has been written to '/root/atlas-consolidation/target/debug/deps/jolt_atlas_core-03e27cef1557b1f5.long-type-1916044542886210191.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+    = note: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `(SinProver<Fp<..., 4>>, ...): SumcheckInstanceProver<..., ...>` is not satisfied
+   --> jolt-atlas-core/src/onnx_proof/zk.rs:928:17
+    |
+928 |                 &mut sc,
+    |                 ^^^^^^^ unsatisfied trait bound
+...
+944 |             prove_lookup!(SinParams::<F>, SinProver::<F>);
+    |             --------------------------------------------- in this macro invocation
+    |
+    = help: the trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<ark_ff::fields::models::fp::Fp<ark_ff::fields::models::fp::montgomery_backend::MontBackend<FrConfig, 4>, 4>, Blake2bTranscript>` is not implemented for `(SinProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)`
+    = help: the following other types implement trait `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`:
+              `AddProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `BlindFoldSpartanProver<'_, F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `BooleanitySumcheckProver<F, I>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `ConcatSumcheckProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `CosProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `CubeProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `DivProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+              `EinsumDotProver<F>` implements `joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>`
+            and 27 others
+    = note: required for the cast from `&mut (SinProver<Fp<MontBackend<FrConfig, 4>, 4>>, Vec<usize>)` to `&mut dyn SumcheckInstanceProver<Fp<MontBackend<FrConfig, 4>, 4>, ...>`
+    = note: the full name for the type has been written to '/root/atlas-consolidation/target/debug/deps/jolt_atlas_core-03e27cef1557b1f5.long-type-16216121770371807567.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+    = note: this error originates in the macro `prove_lookup` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+Some errors have detailed explanations: E0061, E0107, E0277, E0432, E0527, E0599.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `jolt-atlas-core` (lib) due to 39 previous errors
+warning: build failed, waiting for other jobs to finish...
+Some errors have detailed explanations: E0061, E0107, E0277, E0425, E0432, E0527, E0599.
+error: could not compile `jolt-atlas-core` (lib test) due to 48 previous errors

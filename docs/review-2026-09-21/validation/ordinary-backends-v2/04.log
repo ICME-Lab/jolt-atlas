@@ -1,0 +1,5 @@
+    Checking common v0.1.0 (/root/atlas-consolidation/ordinary-backends-v2/common)
+    Checking atlas-onnx-tracer v0.1.0 (/root/atlas-consolidation/ordinary-backends-v2/atlas-onnx-tracer)
+    Checking joltworks v0.1.0 (/root/atlas-consolidation/ordinary-backends-v2/joltworks)
+    Checking jolt-atlas-core v0.1.0 (/root/atlas-consolidation/ordinary-backends-v2/jolt-atlas-core)
+    Finished `dev` profile [unoptimized] target(s) in 13.87s

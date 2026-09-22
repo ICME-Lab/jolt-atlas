@@ -1,0 +1,151 @@
+{
+  "checked_at": "2026-09-21T16:48:56.072863+00:00",
+  "base": "cfcffb05dcc76599f4e5b3d01c6e13f5fa653e13",
+  "scope": "Compare every primary title and source location, normalizing only onnx_proof::clamp_lookups::SaturatingAccClampOperands to SaturatingAccClampOperands and std::default::Default to Default. Raw spelling differences are preserved separately. CI/local command differences remain in raw logs.",
+  "prs": {
+    "369": {
+      "ci_primary_diagnostics": 41,
+      "unchanged_round_two_base_primary_diagnostics": 50,
+      "added_over_base": [],
+      "removed_from_base": [
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1398:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1399:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1424:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1425:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1450:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1451:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1395:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1421:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1447:9"
+          ],
+          1
+        ]
+      ],
+      "added_over_correctness_core_clippy": [],
+      "removed_from_correctness_core_clippy": []
+    },
+    "370": {
+      "ci_primary_diagnostics": 41,
+      "unchanged_round_two_base_primary_diagnostics": 50,
+      "added_over_base": [],
+      "removed_from_base": [
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1398:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1399:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1424:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1425:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1450:30"
+          ],
+          1
+        ],
+        [
+          [
+            "error[E0425]: cannot find value `ACTIVATION_TABLE_BOUND` in this scope",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1451:28"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1395:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1421:9"
+          ],
+          1
+        ],
+        [
+          [
+            "error: unused import: `common::consts::ACTIVATION_TABLE_VARS`",
+            "jolt-atlas-core/src/onnx_proof/e2e_tests.rs:1447:9"
+          ],
+          1
+        ]
+      ],
+      "added_over_correctness_core_clippy": [],
+      "removed_from_correctness_core_clippy": []
+    }
+  }
+}

@@ -1,0 +1,181 @@
+   Compiling common v0.1.0 (/root/atlas-consolidation/ordinary-ci-final/common)
+   Compiling atlas-onnx-tracer v0.1.0 (/root/atlas-consolidation/ordinary-ci-final/atlas-onnx-tracer)
+   Compiling joltworks v0.1.0 (/root/atlas-consolidation/ordinary-ci-final/joltworks)
+   Compiling jolt-atlas-core v0.1.0 (/root/atlas-consolidation/ordinary-ci-final/jolt-atlas-core)
+    Finished `test` profile [optimized] target(s) in 1m 23s
+     Running unittests src/lib.rs (/root/atlas-consolidation/target/debug/deps/jolt_atlas_core-e1b69953fd4fb38e)
+
+running 170 tests
+test onnx_proof::compact::tests::identifier_prefixes_are_bounded_and_maximal ... ok
+test onnx_proof::compact::tests::identifiers_preserve_full_width_indices_and_reject_unknown_tags ... ok
+test onnx_proof::compact::tests::exact_legacy_roundtrip_both_modes_and_claim_limits ... ok
+test onnx_proof::compact::tests::rejects_duplicate_or_reordered_tail_maps_and_writer_failure ... ok
+test onnx_proof::compact::tests::rejects_noncanonical_and_overflowing_runs ... ok
+test onnx_proof::e2e_tests::test_add_sub_mul ... ignored, hzkg fails when all coeffs are zero
+test onnx_proof::compact::tests::reduction_references_preserve_arbitrary_proofs_and_reject_aliases ... ok
+test onnx_proof::e2e_tests::test_bge_small_en_v1_5 ... ignored, requires BGE ONNX model download (run scripts/download_bge_small_en_v1_5.py first)
+test onnx_proof::e2e_tests::test_broadcast ... ignored, hzkg fails when all coeffs are zero
+test onnx_proof::compact::tests::rejects_bad_framing_and_truncation_without_panicking ... ok
+test onnx_proof::e2e_tests::test_erf ... ok
+test onnx_proof::compact::tests::complete_softmax_proof_verifies_and_tampering_rejects ... ok
+test onnx_proof::e2e_tests::test_gpt2 ... ignored, requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)
+test onnx_proof::e2e_tests::test_gpt2_dory ... ignored, requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)
+test onnx_proof::e2e_tests::test_gather ... ok
+test onnx_proof::e2e_tests::test_input_binding_changes_transcript ... ok
+test onnx_proof::e2e_tests::test_article_classification ... ok
+test onnx_proof::e2e_tests::test_layernorm_partial_head ... ignored, hzkg fails when all coeffs are zero
+test onnx_proof::e2e_tests::test_imported_reshape_preserves_padding_layout ... ok
+test onnx_proof::e2e_tests::test_concat_transformer_block_e2e ... ok
+test onnx_proof::e2e_tests::test_mlp_square ... ok
+test onnx_proof::e2e_tests::test_mlp_square_4layer ... ok
+test onnx_proof::e2e_tests::test_moveaxis ... ok
+test onnx_proof::e2e_tests::test_layernorm_head ... ok
+test onnx_proof::e2e_tests::test_microgpt ... ok
+test onnx_proof::e2e_tests::test_perceptron ... ok
+test onnx_proof::e2e_tests::test_multihead_attention ... ok
+test onnx_proof::e2e_tests::test_reshape ... ok
+test onnx_proof::e2e_tests::test_rsqrt ... ok
+test onnx_proof::e2e_tests::test_positional_encoding_trig ... ok
+test onnx_proof::e2e_tests::test_minigpt ... ok
+test onnx_proof::e2e_tests::test_sigmoid ... ok
+test onnx_proof::e2e_tests::test_slice_e2e ... ok
+test onnx_proof::e2e_tests::test_sum_independent ... ignored, hzkg fails when all coeffs are zero
+test onnx_proof::e2e_tests::test_sum_axes ... ok
+test onnx_proof::e2e_tests::test_sum_operations_e2e ... ok
+test onnx_proof::e2e_tests::test_tanh ... ok
+test onnx_proof::global_clamp::bucket_membership_tests::clamp_buckets_contain_exactly_the_required_vector_clamps ... ok
+test onnx_proof::global_clamp::bucket_membership_tests::incomplete_sum_does_not_enter_a_bucket ... ok
+test onnx_proof::neural_teleport::fixed_tables::tests::fixed_tables_match_every_reference_entry ... ok
+test onnx_proof::e2e_tests::test_self_attention_layer ... ok
+test onnx_proof::ops::activation_clamped::cache_tests::activation_cache_matches_dense_tables ... ok
+test onnx_proof::ops::add::tests::test_add ... ok
+test onnx_proof::ops::add::tests::test_add_non_power_of_two_input_len ... ok
+test onnx_proof::ops::activation_clamped::cache_tests::repeated_and_mixed_activation_proof ... ok
+test onnx_proof::ops::add::tests::test_add_scalar_saturates ... ok
+test onnx_proof::ops::add::tests::test_add_small_tensors ... ok
+test onnx_proof::ops::broadcast::tests::broadcast_opening_matches_dense_selector ... ok
+test onnx_proof::ops::broadcast::tests::test_broadcast ... ok
+test onnx_proof::ops::broadcast::tests::test_broadcast_non_power_of_two_input_len ... ignored, TODO: non-power-of-two broadcast path not fully validated yet
+test onnx_proof::ops::add::tests::test_add_saturating_overflow ... ok
+test onnx_proof::ops::clamp::tests::test_clamp_near_i32_max_saturates_correctly ... ok
+test onnx_proof::ops::clamp::tests::test_clamp_non_power_of_two_input_len ... ok
+test onnx_proof::ops::clamp::tests::test_clamp_saturating_range ... ok
+test onnx_proof::ops::concat::tests::selector_evaluation_matches_materialized_table ... ok
+test onnx_proof::ops::concat::tests::selector_rejects_wrong_point_dimension - should panic ... ok
+test onnx_proof::ops::concat::tests::test_concat_arbitrary_shapes ... ok
+test onnx_proof::ops::concat::tests::test_concat_multi_input_shapes ... ok
+test onnx_proof::ops::concat::tests::test_concat_power_of_two_shapes ... ok
+test onnx_proof::ops::concat::tests::test_concat_single_input_identity ... ok
+test onnx_proof::ops::cos::tests::test_cos_non_power_of_two_input_len ... ignored, TODO: non-power-of-two cos path not fully validated yet
+test onnx_proof::e2e_tests::test_transformer ... ok
+test onnx_proof::ops::cos::tests::test_cos_periodic_boundary_inputs ... ok
+test onnx_proof::ops::clamp::tests::test_clamp ... ok
+test onnx_proof::ops::cos::tests::test_cos_random_inputs ... ok
+test onnx_proof::ops::cube::tests::test_cube ... ok
+test onnx_proof::ops::cube::tests::test_cube_saturating_clamp_negative ... ok
+test onnx_proof::ops::cube::tests::test_cube_non_power_of_two_input_len ... ok
+test onnx_proof::ops::cube::tests::test_cube_saturating_clamp_positive ... ok
+test onnx_proof::ops::div::tests::test_div_non_power_of_two_input_len ... ignored, non-power-of-two path not fully supported yet
+test onnx_proof::e2e_tests::test_nanoGPT ... ok
+test onnx_proof::ops::einsum::bmk_rhs_mbn::tests::test_bmk_bkn_mbn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::bmk_rhs_mbn::tests::test_bmk_bkn_mbn ... ok
+test onnx_proof::ops::einsum::bmk_rhs_mbn::tests::test_bmk_kbn_mbn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::bmk_rhs_mbn::tests::test_bmk_kbn_mbn ... ok
+test onnx_proof::ops::einsum::k_nk_n::tests::test_k_nk_n_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::k_nk_n::tests::test_k_nk_n ... ok
+test onnx_proof::ops::einsum::m_an_a1nm::tests::test_m_an_a1nm ... ok
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_bnk_bmn_batch_size_one ... ok
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_bnk_bmn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_bnk_bmn ... ok
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_nbk_bmn ... ok
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_nbk_bmn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::mbk_rhs_bmn::tests::test_mbk_nbk_bmn_batch_size_one ... ok
+test onnx_proof::ops::einsum::mk_kn_mn::tests::test_mk_kn_mn_non_power_of_two_input_len ... ignored, TODO: non-power-of-two einsum path not fully validated yet
+test onnx_proof::ops::einsum::mk_kn_mn::tests::test_mk_kn_mn_saturating_clamp_negative ... ok
+test onnx_proof::ops::einsum::mk_kn_mn::tests::test_mk_kn_mn_saturating_clamp_positive ... ok
+test onnx_proof::ops::einsum::rbmk_rbnk_bmn::tests::test_abmk_abnk_abmn ... ok
+test onnx_proof::ops::einsum::rbmk_rbnk_bmn::tests::test_acbmk_kcn_cbmn ... ok
+test onnx_proof::ops::einsum::rbmk_rbnk_bmn::tests::test_cbmk_cbkn_amn ... ok
+test onnx_proof::ops::einsum::mk_kn_mn::tests::test_mk_kn_mn ... ok
+test onnx_proof::ops::erf::tests::test_erf_non_power_of_two_input_len ... ignored, TODO: non-power-of-two erf path not fully validated yet
+test onnx_proof::ops::eval_reduction::tests::eval_reduction_adds_reduced_evaluations ... ok
+test onnx_proof::ops::eval_reduction::tests::eval_reduction_single_opening_is_propagated ... ok
+test onnx_proof::ops::eval_reduction::tests::eval_reduction_verifier_single_opening_is_propagated ... ok
+test onnx_proof::ops::eval_reduction::tests::iop_runs_in_isolation_after_output_claim ... ok
+test onnx_proof::ops::eval_reduction::tests::verify_iop_runs_in_isolation_after_verify_output_claim ... ok
+test onnx_proof::ops::div::tests::test_div_by_const ... ok
+test onnx_proof::ops::gather::tests::test_gather ... ok
+test onnx_proof::ops::gather::tests::test_gather_non_power_of_two_input_len ... ignored, TODO: non-power-of-two gather path not fully validated yet
+test onnx_proof::ops::gather::tests::test_gather_small_path ... ok
+test onnx_proof::ops::gather::tests::test_gather_large_path ... ok
+test onnx_proof::ops::iff::tests::test_iff_non_power_of_two_input_len ... ignored, TODO: non-power-of-two iff path not fully validated yet
+test onnx_proof::ops::input::tests::test_input_non_power_of_two_input_len ... ok
+test onnx_proof::ops::iff::tests::test_iff ... ok
+test onnx_proof::ops::mean_of_squares::tests::test_mean_of_squares_non_pow2_count ... ok
+test onnx_proof::ops::mean_of_squares::tests::test_mean_of_squares ... ok
+test onnx_proof::ops::mean_of_squares::tests::test_mean_of_squares_scalar ... ok
+test onnx_proof::ops::moveaxis::tests::test_moveaxis ... ok
+test onnx_proof::ops::moveaxis::tests::test_moveaxis_non_power_of_two_input_len ... ignored, TODO: non-power-of-two moveaxis path not fully validated yet
+test onnx_proof::ops::mean_of_squares::tests::test_mean_of_squares_saturating_clamp ... ok
+test onnx_proof::ops::mul::tests::test_mul_non_power_of_two_input_len ... ok
+test onnx_proof::ops::erf::tests::test_erf ... ok
+test onnx_proof::ops::mul::tests::test_mul_saturating_clamp_negative ... ok
+test onnx_proof::ops::neg::tests::test_neg ... ok
+test onnx_proof::ops::mul::tests::test_mul_saturating_clamp_positive ... ok
+test onnx_proof::ops::neg::tests::test_neg_non_power_of_two_input_len ... ok
+test onnx_proof::ops::relu::tests::test_relu_non_power_of_two_input_len ... ok
+test onnx_proof::ops::reshape::tests::selector_evaluation_matches_materialized_table ... ok
+test onnx_proof::ops::reshape::tests::selector_rejects_wrong_point_dimension - should panic ... ok
+test onnx_proof::ops::reshape::tests::test_reshape ... ok
+test onnx_proof::ops::reshape::tests::test_reshape_non_power_of_two_input_len ... ok
+test onnx_proof::ops::div::tests::test_div_by_tensor ... ok
+test onnx_proof::ops::rsqrt::tests::test_rsqrt_non_power_of_two_input_len ... ignored, non-power-of-two path not fully supported yet
+test onnx_proof::ops::mul::tests::test_mul ... ok
+test onnx_proof::ops::relu::tests::test_relu ... ok
+test onnx_proof::ops::scalar_const_div::tests::test_scalar_const_div_non_power_of_two_input_len ... ignored, non-power-of-two path not fully supported yet
+test onnx_proof::ops::scalar_const_div::tests::test_scalar_const_div ... ok
+test onnx_proof::ops::sigmoid::tests::test_sigmoid_non_power_of_two_input_len ... ignored, TODO: non-power-of-two sigmoid path not fully validated yet
+test onnx_proof::ops::sin::tests::test_sin_non_power_of_two_input_len ... ignored, TODO: non-power-of-two sin path not fully validated yet
+test onnx_proof::ops::sin::tests::test_sin_periodic_boundary_inputs ... ok
+test onnx_proof::ops::rsqrt::tests::test_rsqrt_scale_12 ... ok
+test onnx_proof::ops::slice::tests::selector_evaluation_matches_materialized_table ... ok
+test onnx_proof::ops::slice::tests::selector_rejects_wrong_point_dimension - should panic ... ok
+test onnx_proof::ops::sigmoid::tests::test_sigmoid ... ok
+test onnx_proof::ops::softmax_last_axis::max::tests::indicator_evaluation_matches_dense_and_sparse_definitions ... ok
+test onnx_proof::ops::rsqrt::tests::test_rsqrt ... ok
+test onnx_proof::ops::softmax_last_axis::max::tests::indicator_rejects_out_of_range_index - should panic ... ok
+test onnx_proof::ops::softmax_last_axis::max::tests::indicator_rejects_wrong_row_count - should panic ... ok
+test onnx_proof::ops::slice::tests::test_slice_arbitrary_shapes ... ok
+test onnx_proof::ops::softmax_last_axis::tests::test_softmax_last_axis ... ignored, built for scale=12; only runs when MODEL_SCALE is compiled to 12
+test onnx_proof::ops::softmax_last_axis::tests::test_softmax_model_scale ... ok
+test onnx_proof::ops::softmax_last_axis::tests::test_softmax_after_additive_attention_mask ... ok
+test onnx_proof::ops::softmax_last_axis::tests::test_repeated_softmax ... ok
+test onnx_proof::ops::softmax_last_axis::tests::test_softmax_z_exceeds_i32 ... ok
+test onnx_proof::ops::square::tests::test_square_saturating_clamp ... ok
+test onnx_proof::ops::square::tests::test_square_non_power_of_two_input_len ... ok
+test onnx_proof::ops::sub::tests::test_sub_non_power_of_two_input_len ... ok
+test onnx_proof::ops::square::tests::test_square ... ok
+test onnx_proof::ops::sub::tests::test_sub ... ok
+test onnx_proof::ops::sub::tests::test_sub_saturating_overflow ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_0_1d ... ok
+test onnx_proof::ops::sub::tests::test_sub_scalar_saturates ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_0_2d ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_1_1d ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_non_power_of_two_input_len ... ignored, TODO: non-power-of-two sum(axis) path not fully validated yet
+test onnx_proof::ops::sub::tests::test_sub_small_tensors ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_1_2d ... ok
+test onnx_proof::ops::sum::axis::tests::test_sum_scalar_saturating_overflow ... ok
+test onnx_proof::ops::tanh::tests::test_tanh_non_power_of_two_input_len ... ignored, non-power-of-two path not fully supported yet
+test onnx_proof::ops::sum::axis::tests::test_sum_axis_saturating_overflow ... ok
+test onnx_proof::ops::sin::tests::test_sin_random_inputs ... ok
+test onnx_proof::soundness_tests::soundness_fanout_nodeoutput_openings_should_be_reduced ... ok
+test onnx_proof::soundness_tests::soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected - should panic ... ok
+test onnx_proof::soundness_tests::soundness_sub_virtual_operand_attack_is_rejected - should panic ... ok
+test utils::dims::tests::test_m_an_a1nm_pattern_normalizes_to_shared_family ... ok
+test utils::dims::tests::test_rbmk_rbnk_bmn_patterns_normalize_to_shared_family ... ok
+test onnx_proof::soundness_tests::soundness_same_consumer_duplicate_operand_should_track_both ... ok
+test onnx_proof::ops::tanh::tests::test_tanh ... ok
+test onnx_proof::proof_serialization::tests::test_proof_serialization_roundtrip_transformer ... ok
+
+test result: ok. 143 passed; 0 failed; 27 ignored; 0 measured; 0 filtered out; finished in 99.14s
+

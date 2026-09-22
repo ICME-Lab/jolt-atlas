@@ -1,0 +1,8 @@
+{
+  "manifest_entries_verified": 131,
+  "documentation_files": 132,
+  "authored_text_diff_check": "passed",
+  "raw_evidence_diff_check": 2,
+  "raw_evidence_note": "Original logs and patch context retain exact whitespace; full output preserved in raw-evidence-whitespace.log.",
+  "outside_documentation": []
+}

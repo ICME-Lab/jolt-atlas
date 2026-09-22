@@ -1,0 +1,87 @@
+{
+  "archive_sha256": "f9378f30dcc21b35ddc1b36e62e4a78cea780679373bcbf6c39d0d0bc337724b",
+  "patch_sha256": "0630460493bc472d71a26cc663abf8ec3c26704f3c5d0476016e1b3ad6df92a9",
+  "source_head": "b70711b0499dec29badc4d70152c2521b86ed91f",
+  "authenticated_files": 450,
+  "source": "/root/atlas-consolidation/ordinary-backends-v2",
+  "workers": 8,
+  "toolchain": "1.95.0",
+  "environment": {
+    "RUSTFLAGS": "-D warnings",
+    "CARGO_TARGET_DIR": "/root/atlas-consolidation/target",
+    "RAYON_NUM_THREADS": "8"
+  },
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.1686749458312988,
+      "log": "00.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "check",
+        "-p",
+        "jolt-atlas-core",
+        "--no-default-features",
+        "--lib"
+      ],
+      "exit_code": 0,
+      "seconds": 10.951164960861206,
+      "log": "01.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "--workspace",
+        "--all-targets"
+      ],
+      "exit_code": 0,
+      "seconds": 16.718103885650635,
+      "log": "02.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "joltworks",
+        "--lib",
+        "--no-default-features",
+        "--features",
+        "affine-msm"
+      ],
+      "exit_code": 0,
+      "seconds": 39.13883876800537,
+      "log": "03.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "clippy",
+        "-p",
+        "jolt-atlas-core",
+        "--lib",
+        "--no-default-features",
+        "--features",
+        "affine-msm,check-fixed-tables"
+      ],
+      "exit_code": 0,
+      "seconds": 13.957885026931763,
+      "log": "04.log"
+    }
+  ],
+  "local_crates_cleaned": true
+}

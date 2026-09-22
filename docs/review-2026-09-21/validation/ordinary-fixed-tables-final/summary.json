@@ -1,0 +1,34 @@
+{
+  "archive_sha256": "f9378f30dcc21b35ddc1b36e62e4a78cea780679373bcbf6c39d0d0bc337724b",
+  "patch_sha256": "0630460493bc472d71a26cc663abf8ec3c26704f3c5d0476016e1b3ad6df92a9",
+  "source_head": "b70711b0499dec29badc4d70152c2521b86ed91f",
+  "authenticated_files": 450,
+  "source": "/root/atlas-consolidation/ordinary-fixed-tables-final",
+  "workers": 8,
+  "toolchain": "1.95.0",
+  "environment": {
+    "RUSTFLAGS": "-D warnings",
+    "CARGO_TARGET_DIR": "/root/atlas-consolidation/target",
+    "RAYON_NUM_THREADS": "8"
+  },
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "+1.95.0",
+        "test",
+        "-p",
+        "jolt-atlas-core",
+        "--lib",
+        "--no-default-features",
+        "--features",
+        "affine-msm,check-fixed-tables",
+        "fixed_tables_match_every_reference_entry"
+      ],
+      "exit_code": 0,
+      "seconds": 46.15721416473389,
+      "log": "00.log"
+    }
+  ],
+  "local_crates_cleaned": true
+}

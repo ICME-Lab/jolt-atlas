@@ -17,3 +17,5 @@ pub mod rlc_polynomial;
 pub mod signed_identity_poly;
 pub mod split_eq_poly;
 pub mod unipoly;
+
+pub mod compact_indices;

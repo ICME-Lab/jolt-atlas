@@ -3,6 +3,7 @@
 //! This module contains the sumcheck-specific logic for the batch opening reduction protocol.
 //! The higher-level orchestration remains in `poly/opening_proof.rs`.
 
+use crate::poly::compact_indices::CompactIndices;
 use crate::{
     field::JoltField,
     poly::{
@@ -68,6 +69,8 @@ where
     /// Per-polynomial coefficients `ρ^i` (see [`Self::set_coefficients`]).
     pub coefficients: Vec<F>,
     pub sumcheck_claim: Option<F>,
+    /// Unique claim for this group after reduction, assigned in map order.
+    pub reduced_id: Option<OpeningId>,
 }
 
 impl<F> OpeningProofReductionSumcheckProver<F>
@@ -96,6 +99,7 @@ where
             coefficients: vec![F::one()],
             prover_state: opening.into(),
             sumcheck_claim: None,
+            reduced_id: None,
         }
     }
 
@@ -121,6 +125,7 @@ where
             coefficients: vec![F::one(); n],
             prover_state: opening.into(),
             sumcheck_claim: None,
+            reduced_id: None,
         }
     }
 
@@ -207,58 +212,70 @@ where
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for Opening<F> {
-    fn degree(&self) -> usize {
-        OPENING_SUMCHECK_DEGREE
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.0.len()
-    }
-
-    fn input_claim(&self, _: &dyn OpeningAccumulator<F>) -> F {
-        self.1
-    }
-
-    fn normalize_opening_point(&self, _: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        unimplemented!("Unused")
-    }
-
-    // ZK methods: minimal starting impls so `BatchedSumcheck::prove_zk` doesn't
-    // hit the trait's `todo!()` defaults. These are placeholders -- input claim
-    // is left as a free witness variable and the output claim is not yet bound
-    // to `eq * y_P`. Closing the loop requires the params to know the
-    // polynomial and prior sumcheck id (see
-    // wiki/jolt-atlas/book/src/underway/batched-opening-sound-verifier.md).
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> crate::subprotocols::blindfold::InputClaimConstraint {
-        crate::subprotocols::blindfold::InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(&self, _: &dyn OpeningAccumulator<F>) -> Vec<F> {
-        Vec::new()
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(
-        &self,
-    ) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
-        None
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, _: &[F::Challenge]) -> Vec<F> {
-        Vec::new()
-    }
+// Both sides derive the same relation from the registered opening group.
+macro_rules! opening_reduction_params {
+    ($instance:ident) => {
+        impl<F: JoltField> SumcheckInstanceParams<F> for $instance<F> {
+            fn degree(&self) -> usize {
+                OPENING_SUMCHECK_DEGREE
+            }
+            fn num_rounds(&self) -> usize {
+                self.opening.0.len()
+            }
+            fn input_claim(&self, _: &dyn OpeningAccumulator<F>) -> F {
+                self.opening.1
+            }
+            fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+                OpeningPoint::new(challenges.to_vec())
+            }
+            #[cfg(feature = "zk")]
+            fn input_claim_constraint(
+                &self,
+            ) -> crate::subprotocols::blindfold::InputClaimConstraint {
+                use crate::subprotocols::blindfold::{InputClaimConstraint, ValueSource};
+                InputClaimConstraint::linear(
+                    self.polynomials
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            (
+                                ValueSource::Challenge(i),
+                                ValueSource::Opening(OpeningId::new(*p, self.sumcheck_id)),
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            #[cfg(feature = "zk")]
+            fn input_constraint_challenge_values(&self, _: &dyn OpeningAccumulator<F>) -> Vec<F> {
+                self.coefficients.clone()
+            }
+            #[cfg(feature = "zk")]
+            fn output_claim_constraint(
+                &self,
+            ) -> Option<crate::subprotocols::blindfold::OutputClaimConstraint> {
+                use crate::subprotocols::blindfold::{OutputClaimConstraint, ValueSource};
+                Some(OutputClaimConstraint::linear(vec![(
+                    ValueSource::Challenge(0),
+                    ValueSource::Opening(self.reduced_id.expect("prepared opening group")),
+                )]))
+            }
+            #[cfg(feature = "zk")]
+            fn output_constraint_challenge_values(&self, r: &[F::Challenge]) -> Vec<F> {
+                vec![EqPolynomial::<F>::mle(&self.opening.0.r, r)]
+            }
+        }
+    };
 }
+opening_reduction_params!(OpeningProofReductionSumcheckProver);
+opening_reduction_params!(OpeningProofReductionSumcheckVerifier);
 
 impl<F, T: Transcript> SumcheckInstanceProver<F, T> for OpeningProofReductionSumcheckProver<F>
 where
     F: JoltField,
 {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.opening
+        self
     }
 
     fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
@@ -279,7 +296,7 @@ where
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
         _transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
+        _sumcheck_challenges: &[F::Challenge],
     ) {
         // Cache the final sumcheck claim in the accumulator
         let claim = match &self.prover_state {
@@ -288,22 +305,15 @@ where
         };
         accumulator.cache_opening_reduction_claim(self.key(), claim);
 
-        // Also register the reduced evaluation as a standard opening so the
-        // BlindFold R1CS can reference it via `OpeningId`. The opening point
-        // is the batched-opening sumcheck's challenge vector r_sumcheck; the
-        // claim is the per-poly value P(r_sumcheck). Stored unconditionally
-        // (cheap insert); only the `--features zk` path actually consumes it
-        // via the extra constraint linking `joint_claim = sum gamma_i * y_P_i`
-        // to `y_com`.
-        use crate::field::IntoOpening;
-        let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
-        let opening_id = crate::poly::opening_proof::OpeningId::new(
-            self.polynomials[0],
-            SumcheckId::BlindFoldBatchOpening,
-        );
-        accumulator
-            .openings
-            .insert(opening_id, (opening_point, claim));
+        #[cfg(feature = "zk")]
+        if accumulator.zk_mode {
+            use crate::field::IntoOpening;
+            accumulator.append_reduced_claim_zk(
+                self.reduced_id.expect("prepared opening group"),
+                OpeningPoint::new(_sumcheck_challenges.into_opening()),
+                claim,
+            );
+        }
     }
 }
 
@@ -322,6 +332,8 @@ where
     /// Per-polynomial coefficients `ρ^i`.
     pub coefficients: Vec<F>,
     pub sumcheck_claim: Option<F>,
+    /// Unique claim for this group after reduction, assigned in map order.
+    pub reduced_id: Option<OpeningId>,
 }
 
 impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
@@ -343,6 +355,7 @@ impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
             claims,
             coefficients: vec![F::one(); n],
             sumcheck_claim: None,
+            reduced_id: None,
         }
     }
 
@@ -374,7 +387,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
     for OpeningProofReductionSumcheckVerifier<F>
 {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.opening
+        self
     }
 
     fn expected_output_claim(
@@ -392,19 +405,16 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
         _transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        // Mirror the prover-side insert: register an opening at
-        // `(self.polynomial, SumcheckId::BlindFoldBatchOpening)` so the
-        // BlindFold R1CS can reference it. In ZK mode the actual claim is a
-        // placeholder; the value the prover assigned is verified by BlindFold.
-        use crate::field::IntoOpening;
-        let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
-        let opening_id = crate::poly::opening_proof::OpeningId::new(
-            self.polynomials[0],
-            SumcheckId::BlindFoldBatchOpening,
-        );
-        accumulator
-            .openings
-            .insert(opening_id, (opening_point, F::zero()));
+        #[cfg(feature = "zk")]
+        if accumulator.zk_mode {
+            use crate::field::IntoOpening;
+            accumulator.append_reduced_claim_zk(
+                self.reduced_id.expect("prepared opening group"),
+                OpeningPoint::new(sumcheck_challenges.into_opening()),
+            );
+        }
+        #[cfg(not(feature = "zk"))]
+        let _ = (accumulator, sumcheck_challenges);
     }
 }
 
@@ -413,6 +423,40 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 pub enum ProverOpening<F: JoltField> {
     Dense(DensePolynomialProverOpening<F>),
     OneHot(OneHotPolynomialProverOpening<F>),
+}
+
+// Public slice coordinates can be zero. In that case the usual Gruen shortcut
+// cannot recover q(1) from the prior claim, because the equality factor at one
+// vanishes. Compute that endpoint directly and retain the same round polynomial.
+fn gruen_linear_message<F: JoltField>(
+    eq: &GruenSplitEqPolynomial<F>,
+    q_0: F,
+    previous_claim: F,
+    coefficient: impl Fn(usize) -> F + Sync,
+) -> UniPoly<F> {
+    let bit = match eq.binding_order {
+        BindingOrder::LowToHigh => eq.w[eq.current_index - 1],
+        BindingOrder::HighToLow => eq.w[eq.current_index],
+    };
+    let eq_1 = eq.current_scalar * bit;
+    if !eq_1.is_zero() {
+        return eq.gruen_poly_deg_2(q_0, previous_claim);
+    }
+    let width = eq.E_out_current_len();
+    let half = eq.len() / 2;
+    let q_1: F = (0..half)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|j| {
+            eq.E_in_current()[j / width] * eq.E_out_current()[j % width] * coefficient(j + half)
+        })
+        .sum();
+    let eq_0 = eq.current_scalar - eq_1;
+    UniPoly::from_evals(&[
+        eq_0 * q_0,
+        eq_1 * q_1,
+        (eq_1 + eq_1 - eq_0) * (q_1 + q_1 - q_0),
+    ])
 }
 
 /// An opening (of a dense polynomial) computed by the prover.
@@ -482,7 +526,9 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
                 .sum()
         };
 
-        gruen_eq.gruen_poly_deg_2(q_0, previous_claim)
+        gruen_linear_message(gruen_eq, q_0, previous_claim, |j| {
+            polynomial.get_bound_coeff(j)
+        })
     }
 
     #[tracing::instrument(skip_all, name = "DensePolynomialProverOpening::bind")]
@@ -497,6 +543,7 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
         let mut shared_poly = shared_poly_ref.write().unwrap();
         if shared_poly.num_variables_bound <= round {
             shared_poly.poly.bind_parallel(r_j, BindingOrder::HighToLow);
+            reclaim_opening_coefficients(&mut shared_poly.poly);
             shared_poly.num_variables_bound += 1;
         }
     }
@@ -505,6 +552,51 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
         let poly_ref = self.polynomial.as_ref().unwrap();
         poly_ref.read().unwrap().poly.final_claim()
     }
+}
+
+/// Keep an owned working polynomial on its remaining variables.
+/// Its caller must only read bound coefficients and final claims afterward.
+/// Native arithmetic provers and opening reduction satisfy this contract.
+/// The original committed polynomial is retained separately for the PCS.
+pub(crate) fn reclaim_opening_coefficients<F: JoltField>(poly: &mut MultilinearPolynomial<F>) {
+    use MultilinearPolynomial::*;
+    macro_rules! take_bound {
+        ($p:expr) => {{
+            if $p.bound_coeffs.is_empty() {
+                return;
+            }
+            let mut values = mem::take(&mut $p.bound_coeffs);
+            values.truncate($p.len());
+            values
+        }};
+    }
+    let values = match poly {
+        LargeScalars(p) => {
+            // Reclaim large tails geometrically rather than reallocating every round.
+            if p.Z.capacity() < 4 * p.len() || p.Z.capacity() * mem::size_of::<F>() < 1 << 20 {
+                return;
+            }
+            let mut values = mem::take(&mut p.Z);
+            values.truncate(p.len());
+            values
+        }
+        BoolScalars(p) => take_bound!(p),
+        U8Scalars(p) => take_bound!(p),
+        U16Scalars(p) => take_bound!(p),
+        U32Scalars(p) => take_bound!(p),
+        U64Scalars(p) => take_bound!(p),
+        U128Scalars(p) => take_bound!(p),
+        I32Scalars(p) => take_bound!(p),
+        I64Scalars(p) => take_bound!(p),
+        I128Scalars(p) => take_bound!(p),
+        S128Scalars(p) => take_bound!(p),
+        OneHot(_) => unreachable!("opening coefficient reclamation requires a dense polynomial"),
+    };
+    let mut values = values;
+    if values.capacity() >= 4 * values.len() && values.capacity() * mem::size_of::<F>() >= 1 << 20 {
+        values.shrink_to_fit();
+    }
+    *poly = MultilinearPolynomial::from(values);
 }
 
 /// Shared state for a dense polynomial during sumcheck binding.
@@ -619,8 +711,16 @@ impl<F: JoltField> GroupH<F> {
     fn bind_parallel(&mut self, r: F::Challenge) {
         match self {
             Self::None => panic!("H not initialized"),
-            Self::Single(h) => h.bind_parallel(r, BindingOrder::HighToLow),
-            Self::Dense(h) => h.bind_parallel(r, BindingOrder::HighToLow),
+            Self::Single(h) => {
+                h.bind_parallel(r, BindingOrder::HighToLow);
+                if let RaPolynomial::RoundN(poly) = h {
+                    reclaim_opening_coefficients(poly);
+                }
+            }
+            Self::Dense(h) => {
+                h.bind_parallel(r, BindingOrder::HighToLow);
+                reclaim_opening_coefficients(h);
+            }
         }
     }
 
@@ -640,7 +740,7 @@ pub struct OneHotPolynomialProverOpening<F: JoltField> {
     pub K: usize,
     /// The group's `(nonzero indices, coefficient)` per polynomial.
     #[allocative(skip)]
-    polynomials: Vec<(Arc<Vec<Option<u16>>>, F)>,
+    polynomials: Vec<(Arc<CompactIndices<u16>>, F)>,
     /// `G[k] = Σ_i ρ^i·Σ_t D(t)·[idx_i(t) = k]` (Section 6.3 of Twist/Shout).
     G: Vec<F>,
     H: GroupH<F>,
@@ -689,7 +789,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                 let mut result: Vec<F> = unsafe_allocate_zero_vec(K);
                 for (p, c) in &group {
                     let single = group.len() == 1;
-                    for (j, k) in p.nonzero_indices[start..end].iter().enumerate() {
+                    for (j, k) in p.nonzero_indices.slice(start..end).iter().enumerate() {
                         if let Some(k) = k {
                             let d = D_coeffs_for_G[start + j];
                             result[*k as usize] += if single { d } else { *c * d };
@@ -814,8 +914,17 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                     .sum()
             };
 
-            let gruen_univariate_evals =
-                d_gruen.gruen_poly_deg_2(gruen_eval_0, previous_claim / eq_r_address_claim);
+            if eq_r_address_claim.is_zero() {
+                // The already-bound address equality factor annihilates every
+                // remaining cycle round, independently of its coordinates.
+                return UniPoly::from_evals(&[F::zero(); 3]);
+            }
+            let gruen_univariate_evals = gruen_linear_message(
+                d_gruen,
+                gruen_eval_0,
+                previous_claim / eq_r_address_claim,
+                |j| H.get_bound_coeff(j),
+            );
 
             gruen_univariate_evals * eq_r_address_claim
         }
@@ -1469,5 +1578,245 @@ mod tests {
                 &mut verifier_tr,
             )
             .unwrap();
+    }
+    #[test]
+    fn opening_round_preserves_public_boolean_coordinates_and_zero_scale() {
+        use super::gruen_linear_message;
+        use crate::poly::{
+            multilinear_polynomial::BindingOrder, split_eq_poly::GruenSplitEqPolynomial,
+        };
+        for order in [BindingOrder::HighToLow, BindingOrder::LowToHigh] {
+            for w in [0u64, 1, 2, 7] {
+                for scale in [0u64, 1, 3] {
+                    let (w, scale, q0, q1) = (
+                        Fr::from(w),
+                        Fr::from(scale),
+                        Fr::from(7u64),
+                        Fr::from(11u64),
+                    );
+                    let eq = GruenSplitEqPolynomial::new_with_scaling(&[w], order, Some(scale));
+                    let claim = scale * ((Fr::from(1u64) - w) * q0 + w * q1);
+                    let p = gruen_linear_message(&eq, q0, claim, |j| {
+                        assert_eq!(j, 1);
+                        q1
+                    });
+                    for z in [0u64, 1, 2, 5] {
+                        let z = Fr::from(z);
+                        let expected = scale
+                            * ((Fr::from(1u64) - w) * (Fr::from(1u64) - z) + w * z)
+                            * (q0 + (q1 - q0) * z);
+                        assert_eq!(p.evaluate(&z), expected);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod opening_capacity_tests {
+    use super::*;
+    use crate::{
+        poly::{compact_polynomial::CompactPolynomial, eq_poly::EqPolynomial},
+        transcripts::Blake2bTranscript,
+    };
+    use ark_bn254::Fr;
+
+    fn check(mut poly: MultilinearPolynomial<Fr>, mut expected: Vec<Fr>) {
+        let mut transcript = Blake2bTranscript::new(b"opening-capacity-independent");
+        let mut rounds = 0;
+        while expected.len() > 1 {
+            let r = match rounds % 4 {
+                0 => <Fr as JoltField>::Challenge::from(0u128),
+                1 => <Fr as JoltField>::Challenge::from(1u128),
+                _ => transcript.challenge_scalar_optimized::<Fr>(),
+            };
+            let n = expected.len() / 2;
+            let next: Vec<Fr> = (0..n)
+                .map(|i| expected[i] + (expected[i + n] - expected[i]) * r)
+                .collect();
+            poly.bind_parallel(r, BindingOrder::HighToLow);
+            reclaim_opening_coefficients(&mut poly);
+            assert_eq!(poly.len(), next.len());
+            assert_eq!(poly.get_num_vars(), next.len().ilog2() as usize);
+            for (i, value) in next.iter().enumerate() {
+                assert_eq!(poly.get_bound_coeff(i), *value);
+            }
+            match &poly {
+                MultilinearPolynomial::LargeScalars(p) => {
+                    assert!(
+                        p.Z.capacity() < 4 * p.len()
+                            || p.Z.capacity() * mem::size_of::<Fr>() < 1 << 20
+                    );
+                }
+                _ => panic!("bound opening retains original compact coefficients"),
+            }
+            expected = next;
+            rounds += 1;
+        }
+        assert_eq!(poly.final_claim(), expected[0]);
+    }
+
+    #[test]
+    fn opening_reclamation_preserves_every_dense_and_compact_coefficient() {
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for log_n in [1, 4, 16] {
+                        let n = 1 << log_n;
+                        let signed: Vec<i64> = (0..n)
+                            .map(|i| [i64::MIN, -7, 0, 1, i64::MAX][i % 5])
+                            .collect();
+                        let values: Vec<Fr> = signed
+                            .iter()
+                            .map(|v| {
+                                if *v < 0 {
+                                    -Fr::from(v.unsigned_abs())
+                                } else {
+                                    Fr::from(*v as u64)
+                                }
+                            })
+                            .collect();
+                        check(
+                            MultilinearPolynomial::I64Scalars(CompactPolynomial::from_coeffs(
+                                signed,
+                            )),
+                            values.clone(),
+                        );
+                        check(MultilinearPolynomial::from(values.clone()), values);
+                        let unsigned: Vec<u64> =
+                            (0..n).map(|i| [0, 1, u64::MAX, 7][i % 4]).collect();
+                        let expected = unsigned.iter().map(|v| Fr::from(*v)).collect();
+                        check(
+                            MultilinearPolynomial::U64Scalars(CompactPolynomial::from_coeffs(
+                                unsigned,
+                            )),
+                            expected,
+                        );
+                    }
+                });
+        }
+    }
+
+    #[test]
+    fn opening_reclamation_keeps_shared_opening_messages_and_final_claims() {
+        use crate::subprotocols::opening_reduction::{
+            DensePolynomialProverOpening, EqCycleState, SharedDensePolynomial,
+        };
+        let n = 1 << 16;
+        let input: Vec<i64> = (0..n).map(|i| (i % 13) as i64 - 6).collect();
+        let values: Vec<Fr> = input
+            .iter()
+            .map(|v| {
+                if *v < 0 {
+                    -Fr::from(v.unsigned_abs())
+                } else {
+                    Fr::from(*v as u64)
+                }
+            })
+            .collect();
+        let original = MultilinearPolynomial::I64Scalars(CompactPolynomial::from_coeffs(input));
+        let shared = Arc::new(RwLock::new(SharedDensePolynomial::new(original.clone())));
+        let mut transcript = Blake2bTranscript::new(b"shared-opening-capacity");
+        let points: Vec<Vec<Fr>> = (0..2).map(|_| transcript.challenge_vector(16)).collect();
+        let mut openings: Vec<_> = points
+            .iter()
+            .map(|point| DensePolynomialProverOpening {
+                polynomial: Some(shared.clone()),
+                eq_poly: Arc::new(RwLock::new(EqCycleState::new(point))),
+            })
+            .collect();
+        let mut eqs: Vec<Vec<Fr>> = points.iter().map(|p| EqPolynomial::evals(p)).collect();
+        let mut dense = values;
+        let mut claims: Vec<Fr> = eqs
+            .iter()
+            .map(|eq| eq.iter().zip(&dense).map(|(a, b)| *a * *b).sum())
+            .collect();
+        for round in 0..16 {
+            let half = dense.len() / 2;
+            for (j, opening) in openings.iter_mut().enumerate() {
+                let message = opening.compute_message(round, claims[j]);
+                for z in [
+                    Fr::from(0u64),
+                    Fr::from(1u64),
+                    Fr::from(2u64),
+                    Fr::from(7u64),
+                ] {
+                    let independent: Fr = (0..half)
+                        .map(|i| {
+                            (dense[i] + (dense[half + i] - dense[i]) * z)
+                                * (eqs[j][i] + (eqs[j][half + i] - eqs[j][i]) * z)
+                        })
+                        .sum();
+                    assert_eq!(
+                        message.evaluate(&z),
+                        independent,
+                        "round {round}, opening {j}, evaluation {z}"
+                    );
+                }
+            }
+            let r = transcript.challenge_scalar_optimized::<Fr>();
+            // Every message must use the same pre-binding shared polynomial.
+            let scalar: Fr = r.into();
+            let next_claims: Vec<Fr> = openings
+                .iter_mut()
+                .enumerate()
+                .map(|(j, opening)| opening.compute_message(round, claims[j]).evaluate(&scalar))
+                .collect();
+            for opening in &mut openings {
+                opening.bind(r, round);
+            }
+            claims = next_claims;
+            assert_eq!(shared.read().unwrap().num_variables_bound, round + 1);
+            dense = (0..half)
+                .map(|i| dense[i] + (dense[half + i] - dense[i]) * r)
+                .collect();
+            for eq in &mut eqs {
+                *eq = (0..half)
+                    .map(|i| eq[i] + (eq[half + i] - eq[i]) * r)
+                    .collect();
+            }
+        }
+        for o in openings {
+            assert_eq!(o.final_claim(), dense[0]);
+        }
+        assert_eq!(original.len(), n);
+    }
+
+    #[test]
+    #[ignore = "isolated process benchmark with explicit mode"]
+    fn opening_reclamation_benchmark() {
+        let mode = std::env::var("OPENING_MEMORY_BENCH_MODE").unwrap();
+        assert!(mode == "original" || mode == "reclaim");
+        let originals: Vec<MultilinearPolynomial<Fr>> = (0..12)
+            .map(|k| {
+                let values: Vec<i64> = (0..1usize << 22)
+                    .map(|i| (i % 97) as i64 - 48 + k)
+                    .collect();
+                MultilinearPolynomial::I64Scalars(CompactPolynomial::from_coeffs(values))
+            })
+            .collect();
+        let mut working = originals.clone();
+        let start = std::time::Instant::now();
+        let mut transcript = Blake2bTranscript::new(b"opening-memory-benchmark");
+        for _ in 0..22 {
+            let r = transcript.challenge_scalar_optimized::<Fr>();
+            working.par_iter_mut().for_each(|p| {
+                p.bind_parallel(r, BindingOrder::HighToLow);
+                if mode == "reclaim" {
+                    reclaim_opening_coefficients(p);
+                }
+            });
+        }
+        let seconds = start.elapsed().as_secs_f64();
+        let final_claim: Fr = working.iter().map(|p| p.final_claim()).sum();
+        println!("OPENING_MEMORY_BENCH mode={mode} seconds={seconds} claim={final_claim:?}");
+        assert_eq!(
+            originals.iter().map(|p| p.len()).sum::<usize>(),
+            12 * (1 << 22)
+        );
     }
 }

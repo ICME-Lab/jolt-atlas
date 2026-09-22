@@ -343,6 +343,7 @@ pub struct VerifierR1CSBuilder<F: JoltField> {
     /// Alias map from the opening accumulator: aliased OpeningId → canonical OpeningId.
     /// Used to ensure aliased IDs reuse the same R1CS variable as their canonical target.
     opening_aliases: BTreeMap<OpeningId, OpeningId>,
+    row_width: Option<usize>,
 }
 
 struct RoundVariables {
@@ -363,17 +364,42 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
         oc_blocks: Vec<Vec<OpeningId>>,
         opening_aliases: BTreeMap<OpeningId, OpeningId>,
     ) -> Self {
+        Self::new_with_extra_owned(
+            stage_configs.to_vec(),
+            extra_constraints.to_vec(),
+            baked.clone(),
+            oc_blocks,
+            opening_aliases,
+        )
+    }
+
+    /// Consume relation storage when the caller no longer needs it.
+    pub fn new_with_extra_owned(
+        stage_configs: Vec<StageConfig>,
+        extra_constraints: Vec<OutputClaimConstraint>,
+        baked: BakedPublicInputs<F>,
+        oc_blocks: Vec<Vec<OpeningId>>,
+        opening_aliases: BTreeMap<OpeningId, OpeningId>,
+    ) -> Self {
         Self {
             constraints: Vec::new(),
             next_var: 1,
-            stage_configs: stage_configs.to_vec(),
-            extra_constraints: extra_constraints.to_vec(),
+            stage_configs,
+            extra_constraints,
             extra_output_vars: Vec::new(),
             extra_blinding_vars: Vec::new(),
-            baked: baked.clone(),
+            baked,
             oc_blocks,
             opening_aliases,
+            row_width: None,
         }
+    }
+
+    /// Match the width used to commit output claims in the sumcheck transcript.
+    pub fn with_row_width(mut self, width: usize) -> Self {
+        assert!(width.is_power_of_two());
+        self.row_width = Some(width);
+        self
     }
 
     fn resolve_alias(&self, mut key: OpeningId) -> OpeningId {
@@ -466,7 +492,10 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
             .map(|c| c.poly_degree + 1)
             .max()
             .unwrap_or(1);
-        let hyrax_C = max_coeffs.next_power_of_two();
+        let hyrax_C = self
+            .row_width
+            .unwrap_or_else(|| max_coeffs.next_power_of_two());
+        assert!(hyrax_C >= max_coeffs);
         let hyrax_R_coeff = if total_rounds == 0 {
             1
         } else {
@@ -475,9 +504,9 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
         let witness_start = self.next_var;
         self.next_var = witness_start + hyrax_R_coeff * hyrax_C;
 
-        let stage_configs = self.stage_configs.clone();
-        let extra_constraints = self.extra_constraints.clone();
-        let baked = self.baked.clone();
+        let stage_configs = std::mem::take(&mut self.stage_configs);
+        let extra_constraints = std::mem::take(&mut self.extra_constraints);
+        let baked = std::mem::take(&mut self.baked);
         let layout = compute_witness_layout(&stage_configs, &extra_constraints);
 
         // Pre-allocate opening variables in the dedicated output claims region.
@@ -491,8 +520,16 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
         let mut oc_block_offset = 0;
         for block in &self.oc_blocks {
             for (pos_in_block, id) in block.iter().enumerate() {
-                if !global_opening_vars.contains_key(id) {
-                    let var = Variable::new(oc_region_start + oc_block_offset + pos_in_block);
+                let var = Variable::new(oc_region_start + oc_block_offset + pos_in_block);
+                if let Some(previous) = global_opening_vars.get(id) {
+                    // Repeated claims occupy distinct committed slots. Bind every
+                    // occurrence to the variable used by the verifier relation.
+                    self.constraints.push(Constraint::new(
+                        LinearCombination::variable(var),
+                        LinearCombination::constant(F::one()),
+                        LinearCombination::variable(*previous),
+                    ));
+                } else {
                     global_opening_vars.insert(*id, var);
                     output_claims_opening_ids.push(*id);
                 }
@@ -662,14 +699,17 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
         let noncoeff_region_start =
             witness_start + hyrax_R_coeff * hyrax_C + output_claims_rows * hyrax_C;
         let noncoeff_count = self.next_var - noncoeff_region_start;
-        let hyrax = compute_hyrax_params(&self.stage_configs, noncoeff_count, output_claims_rows);
+        let mut hyrax = compute_hyrax_params(&stage_configs, noncoeff_count, output_claims_rows);
+        hyrax.C = hyrax_C;
+        hyrax.R_prime = (hyrax.R_coeff + output_claims_rows + noncoeff_count.div_ceil(hyrax_C))
+            .next_power_of_two();
         let num_vars = witness_start + hyrax.R_prime * hyrax.C;
 
         let mut a = SparseR1CSMatrix::new(num_constraints, num_vars);
         let mut b = SparseR1CSMatrix::new(num_constraints, num_vars);
         let mut c = SparseR1CSMatrix::new(num_constraints, num_vars);
 
-        for (row, constraint) in self.constraints.iter().enumerate() {
+        for (row, constraint) in self.constraints.into_iter().enumerate() {
             for term in &constraint.a.terms {
                 a.push(row, term.var.index(), term.coeff);
             }
@@ -687,8 +727,8 @@ impl<F: JoltField> VerifierR1CSBuilder<F> {
             c,
             num_vars,
             num_constraints,
-            stage_configs: self.stage_configs,
-            extra_constraints: self.extra_constraints,
+            stage_configs,
+            extra_constraints,
             extra_output_vars: self.extra_output_vars,
             extra_blinding_vars: self.extra_blinding_vars,
             hyrax,

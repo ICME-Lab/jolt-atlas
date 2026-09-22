@@ -1,0 +1,10 @@
+# Dory 0.4 writes its setup directly into a shared cache file. Nextest runs
+# tests in separate processes, so in-process test locks cannot protect a cold
+# cache from concurrent readers and writers. These packages use that cache
+# through both direct Dory calls and the ONNX proof helpers.
+[test-groups]
+dory-setup-cache = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(joltworks) | package(jolt-atlas-core)'
+test-group = 'dory-setup-cache'

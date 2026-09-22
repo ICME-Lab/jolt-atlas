@@ -1,6 +1,7 @@
+use crate::poly::compact_indices::SharedIndices;
 use common::parallel::par_enabled;
 use rayon::prelude::*;
-use std::{fmt::Debug, iter::zip, mem, sync::Arc};
+use std::{fmt::Debug, iter::zip, mem};
 
 use allocative::Allocative;
 
@@ -28,10 +29,10 @@ pub enum RaPolynomial<I: Into<usize> + Copy + Default + Send + Sync + 'static, F
 }
 
 impl<I: Into<usize> + Copy + Default + Send + Sync + 'static, F: JoltField> RaPolynomial<I, F> {
-    pub fn new(lookup_indices: Arc<Vec<Option<I>>>, eq_evals: Vec<F>) -> Self {
+    pub fn new(lookup_indices: impl Into<SharedIndices<I>>, eq_evals: Vec<F>) -> Self {
         Self::Round1(RaPolynomialRound1 {
             F: eq_evals,
-            lookup_indices,
+            lookup_indices: lookup_indices.into(),
         })
     }
 
@@ -169,7 +170,7 @@ pub struct RaPolynomialRound1<I: Into<usize> + Copy + Default + Send + Sync + 's
 {
     // Index `x` stores `eq(x, r)`.
     F: Vec<F>,
-    lookup_indices: Arc<Vec<Option<I>>>,
+    lookup_indices: SharedIndices<I>,
 }
 
 impl<I: Into<usize> + Copy + Default + Send + Sync + 'static, F: JoltField>
@@ -216,7 +217,7 @@ pub struct RaPolynomialRound2<I: Into<usize> + Copy + Default + Send + Sync + 's
     F_0: Vec<F>,
     // Index `x` stores `eq(x, r_address_chunk_i) * eq(1, r0)`.
     F_1: Vec<F>,
-    lookup_indices: Arc<Vec<Option<I>>>,
+    lookup_indices: SharedIndices<I>,
     r0: F::Challenge,
     binding_order: BindingOrder,
 }
@@ -299,7 +300,7 @@ pub struct RaPolynomialRound3<I: Into<usize> + Copy + Default + Send + Sync + 's
     F_10: Vec<F>,
     // Index `x` stores `eq(x, r_address_chunk_i) * eq(11, r0 r1)`.
     F_11: Vec<F>,
-    lookup_indices: Arc<Vec<Option<I>>>,
+    lookup_indices: SharedIndices<I>,
     r1: F::Challenge,
     binding_order: BindingOrder,
 }

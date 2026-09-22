@@ -1,0 +1,16 @@
+{
+  "source_revision": "c03a60d843647e6dcc439a2d8a23ab0d8f211e3e",
+  "sources": {
+    "main.rs": "5274dd5ef28b9987d4367abeb9dc7fdb568f88cd50290a4cb11001295a2d45fe",
+    "proof.rs": "ee0fb1fb5f434adde41e520dd8198a8c4cbd3ae1baab8f3e095843ccaa9da983"
+  },
+  "ported": "Graph assembly, operator lowering and registered public constant/private input flow",
+  "new": "Model API validation, deterministic interface binding, explicit supported domains, proof and rejection tests",
+  "not_ported": [
+    "application export parser",
+    "fixed model sizes",
+    "generation",
+    "prompt/action/SMT consumers",
+    "implicit padding/cropping"
+  ]
+}

@@ -39,6 +39,8 @@ pub mod witness;
 
 #[cfg(test)]
 mod malicious_prover;
+#[cfg(feature = "zk")]
+pub mod native;
 mod preprocessing;
 mod prover;
 mod types;

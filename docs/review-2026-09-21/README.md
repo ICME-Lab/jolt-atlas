@@ -1,14 +1,14 @@
 # Atlas review consolidation
 
-This index preserves the scope, source identities and validation for the September 21 consolidation. There are seven review units. The first five are opened together; the final two remain published branches until earlier reviews merge.
+This index preserves the scope, source identities and validation for the September 21 consolidation. All seven implementation review units are now open as PRs. The accompanying documentation change preserves their review descriptions, original measurements and validation evidence.
 
 ## Main targets, September 22
 
-All five open PRs now target `main`, after [#288](https://github.com/ICME-Lab/jolt-atlas/pull/288) was squash-merged. The review prerequisites remain #369 before #370/#371, then #371 before #372 and #372 before #373. Their comparisons with main include prerequisite changes until those merge. The held performance reviews also plan to target main when opened.
+All seven implementation PRs target `main`, after [#288](https://github.com/ICME-Lab/jolt-atlas/pull/288) was squash-merged. The review prerequisites remain #369 before #370/#371, then #371 before #372 and #372 before #373. Their comparisons with main include prerequisite changes until those merge. The remaining order is #373 before #374 (native proving), then #374 before #375 (native verification). The documentation branch also targets main and can be reviewed independently.
 
 Main at `e6cadf160dc8b6fa8b7a183ff24ce71b6ef84518` has exactly the same Git tree as the tested round-two base `cfcffb05dcc76599f4e5b3d01c6e13f5fa653e13`. A merge records that squash history in the correctness branch, then prerequisite merges carry it through the six dependent branches. All seven branch trees are unchanged. The existing source validation remains applicable; no new runtime tests or performance measurements were run for this history and target update.
 
-The [retarget record](retarget-2026-09-22/README.md) gives old/new heads, source-tree identities and GitHub readback. Earlier dated publication/validation JSON files remain historical snapshots. The dependency diagram below describes review order and included code; all five GitHub targets are main.
+The [retarget record](retarget-2026-09-22/README.md) gives old/new heads, source-tree identities and GitHub readback. Earlier dated publication/validation JSON files remain historical snapshots. The dependency diagram below describes review order and included code; all GitHub targets are main.
 
 ## Review queue
 
@@ -19,10 +19,10 @@ The [retarget record](retarget-2026-09-22/README.md) gives old/new heads, source
 | 3 | Native foundations and boundaries | [#371](https://github.com/ICME-Lab/jolt-atlas/pull/371) | [Review 3](reviews/03.md) |
 | 4 | Native tensor operators | [#372](https://github.com/ICME-Lab/jolt-atlas/pull/372) | [Review 4](reviews/04.md) |
 | 5 | Table access and generation | [#373](https://github.com/ICME-Lab/jolt-atlas/pull/373) | [Review 5](reviews/05.md) |
-| 6 | Native proving time and memory | [Published branch, held](https://github.com/ICME-Lab/jolt-atlas/tree/review/native-prover) | [Review 6](reviews/06.md) |
-| 7 | Native verification and encoding | [Published branch, held](https://github.com/ICME-Lab/jolt-atlas/tree/review/native-verifier) | [Review 7](reviews/07.md) |
+| 6 | Native proving time and memory | [#374](https://github.com/ICME-Lab/jolt-atlas/pull/374) | [Review 6](reviews/06.md) |
+| 7 | Native verification and encoding | [#375](https://github.com/ICME-Lab/jolt-atlas/pull/375) | [Review 7](reviews/07.md) |
 
-The first five units are the active review queue. Units 6 and 7 remain available for review as branches and will become PRs when earlier reviews merge. [Commit review map](commits.md) lists the component changes in order.
+All seven implementation units are in the active review queue. The additional documentation review covers this index and the evidence archive, without introducing another implementation group. [Commit review map](commits.md) lists the component changes in order.
 
 ## Dependencies
 
@@ -33,8 +33,8 @@ main
     native-foundations
       native-operators
         native-generation
-          native-prover (held)
-            native-verifier (held)
+          native-prover (#374)
+            native-verifier (#375)
 ```
 
 Each code branch has a separate review description with its actual base, classified changes, concrete correctness examples and original measurements. Recorded performance comparisons have different controls. No cumulative performance improvement is claimed for the assembled branches.
@@ -90,7 +90,9 @@ These comparisons are retained evidence from the original PRs. Each review descr
 
 ## Publication status
 
-Final GitHub readback confirms exactly five open PRs by the author, #369–#373. All 67 originals are closed with replacement links. Their original branch names and heads remain unchanged, including #292's base for the still-open #366. The attributed PR retains its original head and base. The [publication readback](publication-readback.json) and [closure receipts](publication.json) preserve these checks.
+On September 22, the native prover and verifier branches were opened as #374 and #375 at the user’s request. Both target main and retain their previously validated source trees. The records branch now includes the merged main ancestry, with a comparison restricted to `docs/review-2026-09-21/`. Its review covers documentation and evidence only. No new runtime tests or performance measurements were needed to publish these existing branches.
+
+The September 21 GitHub readback confirmed exactly five open PRs by the author, #369–#373. All 67 originals are closed with replacement links. Their original branch names and heads remain unchanged, including #292's base for the still-open #366. The attributed PR retains its original head and base. The [publication readback](publication-readback.json) and [closure receipts](publication.json) preserve these checks.
 
 Repository CI observed at `2026-09-21T16:51:00.521249+00:00` is still running. Formatting and WebAssembly jobs pass for all five replacements. The ZK jobs on #369 and #370 fail in the recorded experimental dispatcher. Their 41 primary diagnostic records match the local core Clippy records at `0b28a6ba` after normalizing two equivalent type-name qualifications; no added diagnostic remains against the tested unchanged round-two base. The raw spelling differences, raw job logs and exact normalization are retained. The remaining default/model jobs and the ZK jobs for #371–#373 are pending at this observation. See [CI status](ci-after-publication.json) and [diagnostic comparison](ci-zk-diagnostics-comparison.json).
 

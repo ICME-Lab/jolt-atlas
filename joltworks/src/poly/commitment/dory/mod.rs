@@ -24,11 +24,51 @@
 //! sparsely in `O(nonzeros)` via [`DoryScheme::commit_one_hot`], bit-identical
 //! to the dense path so they still combine homomorphically.
 
+#[cfg(feature = "zk")]
+pub mod equality;
+#[cfg(feature = "zk")]
+mod native_add;
+#[cfg(feature = "zk")]
+pub mod native_boundary;
+#[cfg(feature = "zk")]
+mod native_clamped_lookup;
+#[cfg(feature = "zk")]
+mod native_concat;
+#[cfg(feature = "zk")]
+mod native_division;
+#[cfg(feature = "zk")]
+mod native_einsum;
+#[cfg(feature = "zk")]
+pub mod native_graph;
+#[cfg(feature = "zk")]
+mod native_hidden_lookup;
+#[cfg(feature = "zk")]
+mod native_layout;
+#[cfg(feature = "zk")]
+pub mod native_logic;
+#[cfg(feature = "zk")]
+pub mod native_lookup;
+#[cfg(feature = "zk")]
+mod native_max;
+#[cfg(feature = "zk")]
+pub mod native_mul;
+#[cfg(feature = "zk")]
+pub mod native_opening;
+#[cfg(feature = "zk")]
+mod native_reciprocal;
+#[cfg(feature = "zk")]
+mod native_reduce;
+#[cfg(feature = "zk")]
+pub mod native_registration;
+#[cfg(feature = "zk")]
+mod native_rsqrt;
 mod one_hot_commit;
 mod par_routines;
 mod sparse_rlc;
 mod transcript;
 mod types;
+#[cfg(feature = "zk")]
+mod zk;
 
 use par_routines::{ParG1Routines, ParG2Routines};
 
@@ -295,10 +335,16 @@ impl CommitmentScheme for DoryScheme {
         hints: Vec<Self::OpeningProofHint>,
         coeffs: &[Self::Field],
     ) -> Self::OpeningProofHint {
+        assert_eq!(hints.len(), coeffs.len());
+        let commit_blind = hints
+            .iter()
+            .zip(coeffs)
+            .map(|(hint, coefficient)| ArkFr(*coefficient) * hint.commit_blind)
+            .fold(<ArkFr as DoryField>::zero(), |sum, blind| sum + blind);
         let rows: Vec<Vec<ArkG1>> = hints.into_iter().map(|h| h.row_commitments).collect();
         DoryHint {
             row_commitments: sparse_rlc::combine_row_commitments(&rows, coeffs),
-            commit_blind: <ArkFr as DoryField>::zero(),
+            commit_blind,
         }
     }
 
@@ -602,3 +648,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(feature = "zk")]
+pub mod native_generation;

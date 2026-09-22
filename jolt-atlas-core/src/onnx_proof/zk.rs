@@ -1,4 +1,9 @@
-//! ZK proving and verification for ONNX neural network computations.
+//! Experimental ZK dispatcher for ONNX neural network computations.
+//!
+//! This dispatcher does not implement a complete private ONNX or Qwen proof.
+//! Several current operator paths are unsupported, inputs and outputs are
+//! public, and verifier relations still need migration to native assembly.
+//! Use the native Dory component APIs for the separately validated relations.
 //!
 //! This module provides `prove_zk` and `verify_zk` functions that run the
 //! proof pipeline in a single pass with BlindFold zero-knowledge proofs.
@@ -12,7 +17,6 @@ use atlas_onnx_tracer::{
     model::trace::{ModelExecutionIO, Trace},
     ops::Operator,
     tensor::Tensor,
-    utils::quantize::scale_to_multiplier,
 };
 use common::VirtualPoly;
 use joltworks::{
@@ -325,9 +329,9 @@ fn verify_gather_large_zk(
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
         let encoding = GatherRaEncoding::new(node);
-        let [ra, hw, b] =
+        let [ra, b] =
             joltworks::subprotocols::shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
-        verify_zk_sumcheck_instances(zk_proof, vec![ra, hw, b], accumulator, transcript)?;
+        verify_zk_sumcheck_instances(zk_proof, vec![ra, b], accumulator, transcript)?;
         *zk_proof_idx += 1;
     }
 
@@ -403,7 +407,7 @@ fn verify_relu_zk(
     {
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
-        let provider = OpLookupProvider::new(node.clone());
+        let provider: OpLookupProvider = OpLookupProvider::new(node.clone());
         let v = provider
             .read_raf_verify::<F, T, ReluTable<{ common::consts::XLEN }>, { common::consts::XLEN }>(
                 accumulator,
@@ -417,10 +421,10 @@ fn verify_relu_zk(
     {
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
-        let encoding = OpLookupEncoding::new(node);
-        let [ra, hw, b] =
+        let encoding: OpLookupEncoding = OpLookupEncoding::new(node);
+        let [ra, b] =
             joltworks::subprotocols::shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
-        verify_zk_sumcheck_instances(zk_proof, vec![ra, hw, b], accumulator, transcript)?;
+        verify_zk_sumcheck_instances(zk_proof, vec![ra, b], accumulator, transcript)?;
         *zk_proof_idx += 1;
     }
 
@@ -439,7 +443,7 @@ fn verify_rsqrt_zk(
         ops::rsqrt::RsqrtVerifier,
         range_checking::{
             range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
-            RangeCheckEncoding, RangeCheckProvider,
+            RangeCheckProvider,
         },
     };
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
@@ -485,10 +489,10 @@ fn verify_rsqrt_zk(
     {
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
-        let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+        let div_enc = RangeCheckProvider::<RiRangeCheckOperands>::new(node).encoding();
         let [d_ra, d_bool] =
             joltworks::subprotocols::shout::ra_onehot_verifiers(&div_enc, accumulator, transcript);
-        let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+        let sqrt_enc = RangeCheckProvider::<RsRangeCheckOperands>::new(node).encoding();
         let [s_ra, s_bool] =
             joltworks::subprotocols::shout::ra_onehot_verifiers(&sqrt_enc, accumulator, transcript);
         verify_zk_sumcheck_instances(
@@ -514,9 +518,7 @@ fn verify_div_zk(
     use crate::{
         onnx_proof::{
             ops::div::DivVerifier,
-            range_checking::{
-                range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
-            },
+            range_checking::{range_check_operands::DivRangeCheckOperands, RangeCheckProvider},
         },
         utils::opening_access::AccOpeningAccessor,
     };
@@ -578,7 +580,7 @@ fn verify_div_zk(
                 *proof_node_idx, node.idx,
                 "ZK sumcheck proof order mismatch"
             );
-            let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
+            let encoding = RangeCheckProvider::<DivRangeCheckOperands>::new(node).encoding();
             let [ra_v, bool_v] = joltworks::subprotocols::shout::ra_onehot_verifiers(
                 &encoding,
                 accumulator,
@@ -611,182 +613,34 @@ fn verify_neural_teleport_zk(
     )
 }
 
-/// Verify Cos/Sin ZK proof: custom flow mirroring prove_cos_sin_zk.
-///
-/// STALE: the non-zk `Cos`/`Sin` flow no longer has a division sumcheck, a
-/// `VirtualPoly::TeleportQuotient` hop, or the `range_and_onehot`/`NeuralTeleportRangeOneHot`
-/// module (deleted — its `prove_range_and_onehot`/`verify_range_and_onehot` were folded
-/// directly into `Cos`/`Sin::prove`/`verify`, see `ops/cos.rs`/`ops/sin.rs`). This function
-/// still references all three and will not compile as-is. A correct fix isn't just a
-/// reference swap: the replacement (`cache_teleport_quotient_prove`/
-/// `cache_teleport_input_claim_prove` and `verify_teleport_input_claim`) does cleartext
-/// transcript writes and a cleartext claim-equality check, which isn't zk-safe (claim values
-/// should stay hidden behind Pedersen commitments under BlindFold, not be compared in the
-/// clear). Needs a proper zk-safe redesign before this can be un-broken; not attempted here.
+/// Reject until the current downscale, quotient and remainder relations have
+/// hidden constraints. The ordinary path's scalar comparisons cannot be used
+/// for private claims.
 fn verify_cos_sin_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    model: &atlas_onnx_tracer::model::Model,
-    bundle: &ZkProofBundle,
-    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
-    transcript: &mut T,
-    zk_proof_idx: &mut usize,
+    _node: &atlas_onnx_tracer::node::ComputationNode,
+    _model: &atlas_onnx_tracer::model::Model,
+    _bundle: &ZkProofBundle,
+    _accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    _transcript: &mut T,
+    _zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
-    use crate::{
-        onnx_proof::{
-            neural_teleport::{
-                division::TeleportDivisionVerifier, range_and_onehot::NeuralTeleportRangeOneHot,
-            },
-            range_checking::{
-                range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
-                RangeCheckProvider,
-            },
-        },
-        utils::opening_access::AccOpeningAccessor,
-    };
-    use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly};
-    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-
-    let tau = TRIG_PERIOD_MODULUS as i32;
-
-    // 1. Division sumcheck (from transcript)
-    {
-        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*pid, node.idx);
-        let v = TeleportDivisionVerifier::new_from_transcript(node.clone(), tau, transcript);
-        verify_zk_sumcheck_instances(zk_proof, vec![Box::new(v)], accumulator, transcript)?;
-        *zk_proof_idx += 1;
-    }
-
-    // 2. Lookup sumcheck
-    {
-        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*pid, node.idx);
-        let vi = create_verifier_instances(node, accumulator, model, transcript);
-        verify_zk_sumcheck_instances(zk_proof, vi, accumulator, transcript)?;
-        *zk_proof_idx += 1;
-    }
-
-    // 3. Verify quotient binding
-    {
-        let accessor = AccOpeningAccessor::new(&mut *accumulator, node);
-        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
-        let mut provider = accessor.into_provider(transcript, teleport_q.0.clone());
-        provider.append_advice(CommittedPoly::TeleportNodeQuotient);
-    }
-
-    // 4. Eval reduction
-    verify_zk_eval_reduction(node, bundle, accumulator, transcript)?;
-
-    // 5. Range+onehot
-    {
-        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*pid, node.idx);
-        let rc_prov = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let rc_v = rc_prov
-            .read_raf_verify::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
-                accumulator,
-                transcript,
-            );
-        macro_rules! verify_ra {
-            ($op:expr) => {{
-                let enc = NeuralTeleportRangeOneHot::<F, T>::ra_encoding($op, node);
-                let ra = joltworks::subprotocols::shout::ra_onehot_verifiers(
-                    &enc,
-                    &*accumulator,
-                    transcript,
-                );
-                let mut inst: Vec<
-                    Box<
-                        dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<
-                            F,
-                            T,
-                        >,
-                    >,
-                > = vec![Box::new(rc_v)];
-                inst.extend(ra);
-                verify_zk_sumcheck_instances(zk_proof, inst, accumulator, transcript)
-            }};
-        }
-        match &node.operator {
-            Operator::Cos(op) => verify_ra!(op)?,
-            Operator::Sin(op) => verify_ra!(op)?,
-            _ => unreachable!(),
-        };
-        *zk_proof_idx += 1;
-    }
-
-    // 6. Hamming-weight
-    {
-        let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(*pid, node.idx);
-        let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-        let [a, b, c] =
-            joltworks::subprotocols::shout::ra_onehot_verifiers(&rc_enc, accumulator, transcript);
-        verify_zk_sumcheck_instances(zk_proof, vec![a, b, c], accumulator, transcript)?;
-        *zk_proof_idx += 1;
-    }
-
-    Ok(())
+    Err(ProofVerifyError::InvalidOpeningProof(
+        "Native Cos/Sin requires hidden downscale, quotient and remainder constraints".into(),
+    ))
 }
 
 /// Verify the fused-rescaling pre-stages (mirror of `prove_fused_rebase_pre_zk`):
 /// remainder advice, clamp read-raf lookup, clamp one-hot batch.
 fn verify_fused_rebase_pre_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    bundle: &ZkProofBundle,
-    accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
-    transcript: &mut T,
-    zk_proof_idx: &mut usize,
+    _node: &atlas_onnx_tracer::node::ComputationNode,
+    _bundle: &ZkProofBundle,
+    _accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+    _transcript: &mut T,
+    _zk_proof_idx: &mut usize,
 ) -> Result<(), ProofVerifyError> {
-    use crate::onnx_proof::{
-        clamp_lookups::{is_scalar, ClampTable, SaturatingAccClampOperands, CLAMP_LOG_K},
-        op_lookups::{OpLookupEncoding, OpLookupProvider},
-    };
-
-    // Mirror of the prover-side panic; see `prove_fused_rebase_pre_zk`.
-    if is_scalar(node) {
-        unimplemented!("ZK verification not yet implemented for scalar fused-rescale nodes");
-    }
-
-    crate::onnx_proof::fused_rebase::cache_remainder_verify(node, accumulator, transcript);
-
-    // Clamp read-raf lookup.
-    {
-        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(
-            *proof_node_idx, node.idx,
-            "ZK sumcheck proof order mismatch"
-        );
-        let provider: OpLookupProvider<SaturatingAccClampOperands> =
-            OpLookupProvider::new(node.clone());
-        let execution_verifier =
-            provider.read_raf_verify::<F, T, ClampTable, CLAMP_LOG_K>(accumulator, transcript);
-        verify_zk_sumcheck_instances(
-            zk_proof,
-            vec![Box::new(execution_verifier)],
-            accumulator,
-            transcript,
-        )?;
-        *zk_proof_idx += 1;
-    }
-
-    // Clamp one-hot batch.
-    {
-        let (proof_node_idx, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
-        assert_eq!(
-            *proof_node_idx, node.idx,
-            "ZK sumcheck proof order mismatch"
-        );
-        let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::new(node);
-        let [ra, hw, b] = joltworks::subprotocols::shout::ra_onehot_verifiers(
-            &encoding,
-            &*accumulator,
-            transcript,
-        );
-        verify_zk_sumcheck_instances(zk_proof, vec![ra, hw, b], accumulator, transcript)?;
-        *zk_proof_idx += 1;
-    }
-    Ok(())
+    Err(ProofVerifyError::InvalidOpeningProof(
+        "Native fused rescaling requires the registered deferred clamp proof".into(),
+    ))
 }
 
 /// Verify the fused-rescaling post-stages (mirror of `prove_fused_rebase_post_zk`):
@@ -826,12 +680,12 @@ fn verify_fused_rebase_post_zk(
             "ZK sumcheck proof order mismatch"
         );
         let encoding = RescaleRemainderRaEncoding::new(node.idx, bits);
-        let [ra, hw, boolean] = joltworks::subprotocols::shout::ra_onehot_verifiers(
+        let [ra, boolean] = joltworks::subprotocols::shout::ra_onehot_verifiers(
             &encoding,
             &*accumulator,
             transcript,
         );
-        verify_zk_sumcheck_instances(zk_proof, vec![ra, hw, boolean], accumulator, transcript)?;
+        verify_zk_sumcheck_instances(zk_proof, vec![ra, boolean], accumulator, transcript)?;
         *zk_proof_idx += 1;
     }
     Ok(())
@@ -859,165 +713,20 @@ fn prove_neural_teleport_zk(
     )
 }
 
-/// Prove Cos/Sin with ZK: custom flow (division from transcript, then lookup,
-/// then quotient binding, then eval reduction, then range+onehot).
-///
-/// STALE: see the matching note on `verify_cos_sin_zk` — this mirrors a division sumcheck,
-/// a `VirtualPoly::TeleportQuotient` hop, and the deleted `range_and_onehot` module, none of
-/// which exist on the non-zk side anymore, and the replacement isn't a simple reference swap
-/// since it needs zk-safe (not cleartext) claim handling. Not attempted here.
+/// The current Cos/Sin relations have no native private prover yet.
 #[expect(clippy::too_many_arguments)]
 fn prove_cos_sin_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    prover: &mut Prover<F, T>,
-    model: &atlas_onnx_tracer::model::Model,
-    pedersen_gens: &PedersenGenerators<C>,
-    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
-    stage_configs: &mut Vec<StageConfig>,
-    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
-    eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
-    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+    _node: &atlas_onnx_tracer::node::ComputationNode,
+    _prover: &mut Prover<F, T>,
+    _model: &atlas_onnx_tracer::model::Model,
+    _pedersen_gens: &PedersenGenerators<C>,
+    _blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    _stage_configs: &mut Vec<StageConfig>,
+    _eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+    _eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
+    _zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) {
-    use crate::{
-        onnx_proof::{
-            neural_teleport::{
-                division::{TeleportDivisionParams, TeleportDivisionProver},
-                range_and_onehot::NeuralTeleportRangeOneHot,
-            },
-            range_checking::{
-                range_check_operands::TeleportRangeCheckOperands, RangeCheckEncoding,
-                RangeCheckProvider,
-            },
-        },
-        utils::opening_access::AccOpeningAccessor,
-    };
-    use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly};
-    use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-
-    let tau = TRIG_PERIOD_MODULUS as i32;
-
-    // 1. Division sumcheck (r_node_output from transcript)
-    let div_params =
-        TeleportDivisionParams::<F>::new_from_transcript(node.clone(), &mut prover.transcript, tau);
-    let mut div_sc = TeleportDivisionProver::new(&prover.trace, div_params);
-    let div_proof = run_zk_sumcheck(
-        &mut div_sc,
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, div_proof));
-
-    // 2. Lookup sumcheck
-    macro_rules! prove_lookup {
-        ($Params:ty, $Prover:ty) => {{
-            let params = <$Params>::new(
-                node.clone(),
-                &model.graph,
-                &prover.accumulator,
-                &mut prover.transcript,
-            );
-            let mut sc = <$Prover>::initialize(
-                &prover.trace,
-                params,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-            let proof = run_zk_sumcheck(
-                &mut sc,
-                prover,
-                blindfold_accumulator,
-                stage_configs,
-                pedersen_gens,
-            );
-            zk_sumcheck_proofs.push((node.idx, proof));
-        }};
-    }
-    match &node.operator {
-        Operator::Cos(_) => {
-            use crate::onnx_proof::ops::cos::{CosParams, CosProver};
-            prove_lookup!(CosParams::<F>, CosProver::<F>);
-        }
-        Operator::Sin(_) => {
-            use crate::onnx_proof::ops::sin::{SinParams, SinProver};
-            prove_lookup!(SinParams::<F>, SinProver::<F>);
-        }
-        _ => unreachable!(),
-    }
-
-    // 3. Bind TeleportNodeQuotient as committed poly
-    {
-        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-        let teleport_q = accessor.get_advice(VirtualPoly::TeleportQuotient);
-        let mut provider = accessor.into_provider(&mut prover.transcript, teleport_q.0.clone());
-        provider.append_advice(CommittedPoly::TeleportNodeQuotient, teleport_q.1);
-    }
-
-    // 4. Eval reduction
-    prove_zk_eval_reduction(
-        node,
-        prover,
-        pedersen_gens,
-        eval_reduction_proofs,
-        eval_reduction_h_commitments,
-    );
-
-    // 5-6. Range+onehot and hamming-weight
-    macro_rules! prove_range_onehot {
-        ($op:expr) => {{
-            let indices =
-                NeuralTeleportRangeOneHot::<F, T>::lookup_indices($op, node, &prover.trace);
-            let enc = NeuralTeleportRangeOneHot::<F, T>::ra_encoding($op, node);
-            let rc_prov = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-            let (rc_sc, rc_idx) = rc_prov
-                .read_raf_prove::<F, T, UnsignedLessThanTable<{ common::consts::XLEN }>>(
-                    &prover.trace,
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-            let ra = joltworks::subprotocols::shout::ra_onehot_provers(
-                &enc,
-                &indices,
-                &prover.accumulator,
-                &mut prover.transcript,
-            );
-            let mut inst: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![Box::new(rc_sc)];
-            inst.extend(ra);
-            let refs: Vec<&mut dyn SumcheckInstanceProver<F, T>> =
-                inst.iter_mut().map(|v| &mut **v as _).collect();
-            let p = run_zk_batched_sumcheck(
-                refs,
-                prover,
-                blindfold_accumulator,
-                stage_configs,
-                pedersen_gens,
-            );
-            zk_sumcheck_proofs.push((node.idx, p));
-            rc_idx
-        }};
-    }
-    let rc_indices = match &node.operator {
-        Operator::Cos(op) => prove_range_onehot!(op),
-        Operator::Sin(op) => prove_range_onehot!(op),
-        _ => unreachable!(),
-    };
-
-    let rc_enc = RangeCheckEncoding::<TeleportRangeCheckOperands>::new(node);
-    let [mut a, mut b, mut c] = joltworks::subprotocols::shout::ra_onehot_provers(
-        &rc_enc,
-        &rc_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let hw = run_zk_batched_sumcheck(
-        vec![&mut *a, &mut *b, &mut *c],
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, hw));
+    unimplemented!("Native Cos/Sin requires hidden downscale, quotient and remainder constraints")
 }
 
 /// Stubbed: the sat_diff-based ZK proving pipeline this mirrored no longer matches
@@ -1090,14 +799,14 @@ fn prove_gather_large_zk(
     let encoding = GatherRaEncoding::new(node);
     let lookup_indices =
         crate::onnx_proof::ops::gather::large::gather_lookup_indices(node, &prover.trace);
-    let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+    let [mut ra, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
         &encoding,
         &lookup_indices,
         &prover.accumulator,
         &mut prover.transcript,
     );
     let oh_proof = run_zk_batched_sumcheck(
-        vec![&mut *ra, &mut *hw, &mut *b],
+        vec![&mut *ra, &mut *b],
         prover,
         blindfold_accumulator,
         stage_configs,
@@ -1205,7 +914,7 @@ fn prove_relu_zk(
     );
 
     // 2. Execution sumcheck (ps_shout read-raf)
-    let provider = OpLookupProvider::new(node.clone());
+    let provider: OpLookupProvider = OpLookupProvider::new(node.clone());
     let (mut exec_sc, lookup_indices) = provider
         .read_raf_prove::<F, T, ReluTable<{ common::consts::XLEN }>, { common::consts::XLEN }>(
             &prover.trace,
@@ -1222,15 +931,15 @@ fn prove_relu_zk(
     zk_sumcheck_proofs.push((node.idx, exec_proof));
 
     // 3. One-hot batch (Ra, HammingWeight, Booleanity)
-    let encoding = OpLookupEncoding::new(node);
-    let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
+    let encoding: OpLookupEncoding = OpLookupEncoding::new(node);
+    let [mut ra, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
         &encoding,
         &lookup_indices,
         &prover.accumulator,
         &mut prover.transcript,
     );
     let oh_proof = run_zk_batched_sumcheck(
-        vec![&mut *ra, &mut *hw, &mut *b],
+        vec![&mut *ra, &mut *b],
         prover,
         blindfold_accumulator,
         stage_configs,
@@ -1239,87 +948,17 @@ fn prove_relu_zk(
     zk_sumcheck_proofs.push((node.idx, oh_proof));
 }
 
-/// Prove the fused-rescaling pre-stages for a fused arithmetic node (einsum /
-/// `Mul` / `Square` / `Cube` with `scale > 0`), mirroring
-/// `fused_rebase::prove_pre`: append the `RescaleRemainder` advice, then
-/// discharge `output = SatClamp(rescaled)` via the 64-bit clamp read-raf
-/// lookup and its one-hot checks. Must run *before* the operator's arithmetic
-/// sumcheck so `fused_rebase::fused_input_claim` can read the
-/// `ClampAcc`/`RescaleRemainder` advices. Both advice appends are
-/// transcript-quiet in ZK mode; their values enter the proof via the baked
-/// initial claims of the following stages (prover-supplied, like every
-/// chain-start initial claim in this pipeline — the same treatment the Tanh
-/// `DummyClampedTanhInput` advice gets), not as committed BlindFold output
-/// claims. Binding them with a real `InputClaimConstraint` is future work
-/// alongside the other baked-claim bindings.
+/// The deferred clamp and remainder relations must be implemented together.
+/// The obsolete scalar claim path cannot supply a private native proof.
 fn prove_fused_rebase_pre_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    prover: &mut Prover<F, T>,
-    pedersen_gens: &PedersenGenerators<C>,
-    blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
-    stage_configs: &mut Vec<StageConfig>,
-    zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
+    _node: &atlas_onnx_tracer::node::ComputationNode,
+    _prover: &mut Prover<F, T>,
+    _pedersen_gens: &PedersenGenerators<C>,
+    _blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
+    _stage_configs: &mut Vec<StageConfig>,
+    _zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
 ) -> atlas_onnx_tracer::tensor::Tensor<i32> {
-    use crate::onnx_proof::{
-        clamp_lookups::{is_scalar, ClampTable, SaturatingAccClampOperands, CLAMP_LOG_K},
-        op_lookups::{OpLookupEncoding, OpLookupProvider},
-    };
-
-    // Scalar fused nodes open `rescaled`/`R` in the clear and are checked by
-    // the verifier directly (`fused_rebase::verify_post`); that cleartext
-    // check has no ZK counterpart yet. Fail loudly rather than prove an
-    // unbound clamp.
-    if is_scalar(node) {
-        unimplemented!("ZK proving not yet implemented for scalar fused-rescale nodes");
-    }
-
-    // Quotient + remainder from one accumulation pass; the remainder is
-    // returned so `prove_fused_rebase_post_zk` can reuse it.
-    let crate::onnx_proof::fused_rebase::RebaseIntermediates {
-        quotient,
-        remainder,
-    } = crate::onnx_proof::fused_rebase::rebase_intermediates(node, &prover.trace);
-
-    // Remainder advice at the reduced output point.
-    crate::onnx_proof::fused_rebase::cache_remainder_prove(node, prover, &remainder);
-
-    // Clamp read-raf lookup: output = SatClamp(acc); acc appended as ClampAcc.
-    let provider = OpLookupProvider::with_helper(
-        node.clone(),
-        SaturatingAccClampOperands::with_precomputed(quotient),
-    );
-    let (mut exec_sc, lookup_indices) = provider.read_raf_prove::<F, T, ClampTable, CLAMP_LOG_K>(
-        &prover.trace,
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    let exec_proof = run_zk_sumcheck(
-        &mut exec_sc,
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, exec_proof));
-
-    // Clamp one-hot batch (Ra, HammingWeight, Booleanity) over `ClampRaD`.
-    let encoding = OpLookupEncoding::<SaturatingAccClampOperands>::new(node);
-    let [mut ra, mut hw, mut b] = joltworks::subprotocols::shout::ra_onehot_provers(
-        &encoding,
-        &lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let oh_proof = run_zk_batched_sumcheck(
-        vec![&mut *ra, &mut *hw, &mut *b],
-        prover,
-        blindfold_accumulator,
-        stage_configs,
-        pedersen_gens,
-    );
-    zk_sumcheck_proofs.push((node.idx, oh_proof));
-
-    remainder
+    unimplemented!("Native fused rescaling requires the registered deferred clamp proof")
 }
 
 /// Prove the fused-rescaling post-stages, mirroring
@@ -1359,14 +998,14 @@ fn prove_fused_rebase_post_zk(
 
     // Remainder one-hot batch over `RescaleRemainderRaD`.
     let encoding = RescaleRemainderRaEncoding::new(node.idx, bits);
-    let [mut ra, mut hw, mut boolean] = joltworks::subprotocols::shout::ra_onehot_provers(
+    let [mut ra, mut boolean] = joltworks::subprotocols::shout::ra_onehot_provers(
         &encoding,
         &lookup_indices,
         &prover.accumulator,
         &mut prover.transcript,
     );
     let ra_proof = run_zk_batched_sumcheck(
-        vec![&mut *ra, &mut *hw, &mut *boolean],
+        vec![&mut *ra, &mut *boolean],
         prover,
         blindfold_accumulator,
         stage_configs,
@@ -1391,7 +1030,7 @@ fn prove_rsqrt_zk(
         ops::rsqrt::{RsqrtParams, RsqrtProver},
         range_checking::{
             range_check_operands::{RiRangeCheckOperands, RsRangeCheckOperands},
-            RangeCheckEncoding, RangeCheckProvider,
+            RangeCheckProvider,
         },
     };
     use joltworks::lookup_tables::unsigned_less_than::UnsignedLessThanTable;
@@ -1446,14 +1085,14 @@ fn prove_rsqrt_zk(
     zk_sumcheck_proofs.push((node.idx, rc_proof));
 
     // 4. Six one-hot instances (3 per range check) batched together
-    let div_enc = RangeCheckEncoding::<RiRangeCheckOperands>::new(node);
+    let div_enc = RangeCheckProvider::<RiRangeCheckOperands>::new(node).encoding();
     let [div_ra, div_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
         &div_enc,
         &div_rc_idx,
         &prover.accumulator,
         &mut prover.transcript,
     );
-    let sqrt_enc = RangeCheckEncoding::<RsRangeCheckOperands>::new(node);
+    let sqrt_enc = RangeCheckProvider::<RsRangeCheckOperands>::new(node).encoding();
     let [sqrt_ra, sqrt_bool] = joltworks::subprotocols::shout::ra_onehot_provers(
         &sqrt_enc,
         &sqrt_rc_idx,
@@ -1489,9 +1128,7 @@ fn prove_div_zk(
     use crate::{
         onnx_proof::{
             ops::div::{DivParams, DivProver},
-            range_checking::{
-                range_check_operands::DivRangeCheckOperands, RangeCheckEncoding, RangeCheckProvider,
-            },
+            range_checking::{range_check_operands::DivRangeCheckOperands, RangeCheckProvider},
         },
         utils::opening_access::AccOpeningAccessor,
     };
@@ -1547,15 +1184,15 @@ fn prove_div_zk(
         );
         zk_sumcheck_proofs.push((node.idx, rc_proof));
 
-        let encoding = RangeCheckEncoding::<DivRangeCheckOperands>::new(node);
-        let [mut ra_sc, mut hw_sc, mut bool_sc] = joltworks::subprotocols::shout::ra_onehot_provers(
+        let encoding = RangeCheckProvider::<DivRangeCheckOperands>::new(node).encoding();
+        let [mut ra_sc, mut bool_sc] = joltworks::subprotocols::shout::ra_onehot_provers(
             &encoding,
             &lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         );
         let onehot_proof = run_zk_batched_sumcheck(
-            vec![&mut *ra_sc, &mut *hw_sc, &mut *bool_sc],
+            vec![&mut *ra_sc, &mut *bool_sc],
             prover,
             blindfold_accumulator,
             stage_configs,
@@ -1958,7 +1595,9 @@ pub fn prove_zk(
     let mut joint_opening_point: Option<Vec<<F as joltworks::field::JoltField>::Challenge>> = None;
     let mut batch_opening_zk_sumcheck = None;
     if !poly_map.is_empty() {
-        prover.accumulator.prepare_for_sumcheck(&poly_map);
+        prover
+            .accumulator
+            .prepare_for_sumcheck(&poly_map, &mut prover.transcript);
         let mut rng = rand::thread_rng();
         let (zk_acc_proof, r_sumcheck_acc) = prover
             .accumulator

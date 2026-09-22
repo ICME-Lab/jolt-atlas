@@ -287,7 +287,7 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
 
         // Compute quadratic coefficients via generic split-eq fold (handles both E_in cases).
         let quadratic_coeffs: [F; DEGREE_BOUND - 1] = B
-            .par_fold_out_in_unreduced::<9, { DEGREE_BOUND - 1 }>(&|k_prime| {
+            .par_fold_out_in_unreduced::<{ DEGREE_BOUND - 1 }>(&|k_prime| {
                 let coeffs = (0..self.params.d)
                     .into_par_iter()
                     .with_min_len(par_enabled())
@@ -313,22 +313,22 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
                                 [eval_0, eval_infty]
                             })
                             .fold_with(
-                                [F::Unreduced::<5>::zero(); DEGREE_BOUND - 1],
+                                [F::UnreducedMulU64::zero(); DEGREE_BOUND - 1],
                                 |running, new| {
                                     [
-                                        running[0] + new[0].as_unreduced_ref(),
-                                        running[1] + new[1].as_unreduced_ref(),
+                                        running[0] + new[0].to_unreduced(),
+                                        running[1] + new[1].to_unreduced(),
                                     ]
                                 },
                             )
                             .reduce(
-                                || [F::Unreduced::zero(); DEGREE_BOUND - 1],
+                                || [F::UnreducedMulU64::zero(); DEGREE_BOUND - 1],
                                 |running, new| [running[0] + new[0], running[1] + new[1]],
                             );
 
                         [
-                            self.params.gammas[i] * F::from_barrett_reduce(inner_sum[0]),
-                            self.params.gammas[i] * F::from_barrett_reduce(inner_sum[1]),
+                            self.params.gammas[i] * F::reduce_mul_u64(inner_sum[0]),
+                            self.params.gammas[i] * F::reduce_mul_u64(inner_sum[1]),
                         ]
                     })
                     .reduce(
@@ -358,10 +358,10 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
         // `[c, e, l]`: constant and quadratic coefficients of the Booleanity
         // quadratic, and the constant term of the linear check.
         let lin_c = &self.lin_c;
-        let coeffs: [F; 3] = D_poly.par_fold_out_in_unreduced::<9, 3>(&|j_prime| {
+        let coeffs: [F; 3] = D_poly.par_fold_out_in_unreduced::<3>(&|j_prime| {
             // Accumulate in unreduced form to minimize per-term reductions
-            let mut acc_c = F::Unreduced::<9>::zero();
-            let mut acc_e = F::Unreduced::<9>::zero();
+            let mut acc_c = F::UnreducedProductAccum::zero();
+            let mut acc_e = F::UnreducedProductAccum::zero();
             let mut acc_l = F::zero();
             for (i, (h, gamma)) in zip(&self.H, &self.params.gammas).enumerate() {
                 let h_0 = h.get_bound_coeff(2 * j_prime);
@@ -371,12 +371,12 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
                 // Compute gamma * h0, then a single unreduced multiply by (h0 - 1)
                 let g_h0 = *gamma * h_0;
                 let h0_minus_one = h_0 - F::one();
-                let c_unr = g_h0.mul_unreduced::<9>(h0_minus_one);
+                let c_unr = g_h0.mul_to_product_accum(h0_minus_one);
                 acc_c += c_unr;
 
                 // Compute gamma * b, then a single unreduced multiply by b
                 let g_b = *gamma * b;
-                let e_unr = g_b.mul_unreduced::<9>(b);
+                let e_unr = g_b.mul_to_product_accum(b);
                 acc_e += e_unr;
 
                 if let Some(c) = lin_c.get(i) {
@@ -384,8 +384,8 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
                 }
             }
             [
-                F::from_montgomery_reduce::<9>(acc_c),
-                F::from_montgomery_reduce::<9>(acc_e),
+                F::reduce_product_accum(acc_c),
+                F::reduce_product_accum(acc_e),
                 acc_l,
             ]
         });

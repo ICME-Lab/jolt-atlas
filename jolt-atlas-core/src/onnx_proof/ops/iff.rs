@@ -194,7 +194,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IffProver<F> 
             b_operand,
             ..
         } = self;
-        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<9, 2>(&|g| {
+        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<2>(&|g| {
             let mask0 = mask_operand.get_bound_coeff(2 * g);
             let mask1 = mask_operand.get_bound_coeff(2 * g + 1);
             let mask_inf = mask1 - mask0;

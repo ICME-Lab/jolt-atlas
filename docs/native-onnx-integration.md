@@ -84,6 +84,8 @@ relations from the prerequisite PRs.
 The required `Native ONNX BlindFold` CI job checks the core's ZK targets and
 runs the new frontend tests. The old dispatcher suite continues to run in its
 existing informational job. Adding this frontend does not repair that suite.
+The [Linux validation record](native-onnx-validation/README.md) includes the
+proof tests, rejection controls, exact source identities and original logs.
 
 ## Problem and intended result
 

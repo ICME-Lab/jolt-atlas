@@ -1,0 +1,21 @@
+   Compiling common v0.1.0 (/root/native-onnx-port-direct-20260922/source/common)
+   Compiling atlas-onnx-tracer v0.1.0 (/root/native-onnx-port-direct-20260922/source/atlas-onnx-tracer)
+   Compiling joltworks v0.1.0 (/root/native-onnx-port-direct-20260922/source/joltworks)
+   Compiling jolt-atlas-core v0.1.0 (/root/native-onnx-port-direct-20260922/source/jolt-atlas-core)
+    Finished `test` profile [optimized] target(s) in 1m 49s
+     Running unittests src/lib.rs (/root/atlas-consolidation/target/debug/deps/jolt_atlas_core-47b91386ad1ca687)
+
+running 10 tests
+test onnx_proof::native::tests::actual_normalization_proof_roundtrips_and_rejects_substitutions ... ok
+test onnx_proof::native::tests::actual_softmax_proof_retains_auxiliary_constraints ... ok
+test onnx_proof::native::tests::arithmetic_and_integer_boundaries_match_atlas ... ok
+test onnx_proof::native::tests::commit_rejects_wrong_input_count_shape_and_storage ... ok
+test onnx_proof::native::tests::inlined_softmax_and_periodic_functions_match_atlas ... ok
+test onnx_proof::native::tests::input_order_is_preserved_and_bound_in_registration ... ok
+test onnx_proof::native::tests::layouts_match_atlas_with_scalars_and_negative_concat_axis ... ok
+test onnx_proof::native::tests::malformed_models_fail_without_a_private_witness ... ok
+test onnx_proof::native::tests::normalization_graph_preserves_all_intermediates ... ok
+test onnx_proof::native::tests::unsupported_scales_and_reduction_counts_are_rejected ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 5.74s
+

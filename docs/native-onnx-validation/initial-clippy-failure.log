@@ -1,0 +1,44 @@
+    Checking common v0.1.0 (/root/native-onnx-port-direct-20260922/source/common)
+    Checking atlas-onnx-tracer v0.1.0 (/root/native-onnx-port-direct-20260922/source/atlas-onnx-tracer)
+    Checking joltworks v0.1.0 (/root/native-onnx-port-direct-20260922/source/joltworks)
+    Checking jolt-atlas-core v0.1.0 (/root/native-onnx-port-direct-20260922/source/jolt-atlas-core)
+error: missing documentation for an associated function
+  --> jolt-atlas-core/src/onnx_proof/native.rs:93:5
+   |
+93 |     pub fn new(model: &Model, context: Vec<u8>) -> Result<Self, ProofVerifyError> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D missing-docs` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(missing_docs)]`
+
+error: missing documentation for a method
+   --> jolt-atlas-core/src/onnx_proof/native.rs:226:5
+    |
+226 |     pub fn graph(&self) -> &NativeGraph {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a method
+   --> jolt-atlas-core/src/onnx_proof/native.rs:230:5
+    |
+230 |     pub fn tensor_id(&self, model_node: usize) -> Option<usize> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a method
+   --> jolt-atlas-core/src/onnx_proof/native.rs:410:5
+    |
+410 |     pub fn registered(&self) -> &NativeRegisteredGraph {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a method
+   --> jolt-atlas-core/src/onnx_proof/native.rs:414:5
+    |
+414 | /     pub fn commit(
+415 | |         &self,
+416 | |         inputs: &[Tensor<i32>],
+417 | |         setup: &DoryProverSetup,
+418 | |     ) -> Result<(NativeGraphStatement, NativeGraphWitness), ProofVerifyError> {
+    | |_____________________________________________________________________________^
+
+error: could not compile `jolt-atlas-core` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `jolt-atlas-core` (lib test) due to 5 previous errors

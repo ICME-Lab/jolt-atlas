@@ -1,0 +1,9 @@
+{
+  "archive_sha256": "0b550ecf028e686ac2a679b45cc42d694cf88b46bc18650441df4bbac28b43fe",
+  "authenticated_evidence_files": 14,
+  "matched_source_files": 476,
+  "excluded_after_test_documentation": [
+    "docs/native-onnx-integration.md"
+  ],
+  "mismatches": []
+}

@@ -1,0 +1,33 @@
+[
+  {
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "clippy",
+      "-p",
+      "jolt-atlas-core",
+      "--all-targets",
+      "--features",
+      "zk"
+    ],
+    "exit_code": 0,
+    "seconds": 6.333414316177368
+  },
+  {
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "test",
+      "-p",
+      "jolt-atlas-core",
+      "--features",
+      "zk",
+      "--lib",
+      "onnx_proof::native::tests::",
+      "--",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "seconds": 115.81892442703247
+  }
+]

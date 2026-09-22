@@ -10,8 +10,8 @@ use crate::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         one_hot_polynomial::OneHotPolynomial,
         opening_proof::{
-            Opening, OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN,
+            Opening, OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator,
+            SumcheckId, VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         ra_poly::RaPolynomial,
         split_eq_poly::GruenSplitEqPolynomial,
@@ -45,18 +45,28 @@ use std::{
 /// Degree of the sumcheck round polynomials in opening reduction.
 pub const OPENING_SUMCHECK_DEGREE: usize = 2;
 
-/// Prover state for a single opening in the batch opening reduction sumcheck.
+/// Prover state for one *group* of openings in the batch opening reduction
+/// sumcheck: the polynomials appended together at one point (one dense
+/// polynomial, or the one-hot chunks of a lookup). The group is reduced as a
+/// single instance on the polynomial `Σ_i ρ^i·P_i` (with `ρ` drawn when the
+/// batch starts), so the reduction costs one instance per group rather than
+/// one per polynomial.
 #[derive(Clone, Allocative)]
 pub struct OpeningProofReductionSumcheckProver<F>
 where
     F: JoltField,
 {
     pub prover_state: ProverOpening<F>,
-    /// Represents the polynomial opened.
-    pub polynomial: CommittedPoly,
+    /// The polynomials of the group, in append order.
+    pub polynomials: Vec<CommittedPoly>,
     /// The ID of the sumcheck these openings originated from
     pub sumcheck_id: SumcheckId,
+    /// (point, `Σ_i coefficients[i]·claims[i]`)
     pub opening: Opening<F>,
+    /// Per-polynomial claims at the point.
+    pub claims: Vec<F>,
+    /// Per-polynomial coefficients `ρ^i` (see [`Self::set_coefficients`]).
+    pub coefficients: Vec<F>,
     pub sumcheck_claim: Option<F>,
 }
 
@@ -79,33 +89,62 @@ where
             eq_poly,
         };
         Self {
-            polynomial,
+            polynomials: vec![polynomial],
             sumcheck_id,
             opening: (opening_point.into(), claim),
+            claims: vec![claim],
+            coefficients: vec![F::one()],
             prover_state: opening.into(),
             sumcheck_claim: None,
         }
     }
 
     pub fn new_one_hot<U>(
-        polynomial: CommittedPoly,
+        polynomials: Vec<CommittedPoly>,
         sumcheck_id: SumcheckId,
         eq_address: Arc<RwLock<EqAddressState<F>>>,
         eq_cycle: Arc<RwLock<EqCycleState<F>>>,
         opening_point: Vec<U>,
-        claim: F,
+        claims: Vec<F>,
     ) -> Self
     where
         U: Copy + Send + Sync + Into<F>,
     {
+        assert_eq!(polynomials.len(), claims.len());
         let opening = OneHotPolynomialProverOpening::new(eq_address, eq_cycle);
+        let n = polynomials.len();
         Self {
-            polynomial,
+            polynomials,
             sumcheck_id,
-            opening: (opening_point.into(), claim),
+            opening: (opening_point.into(), claims.iter().copied().sum()),
+            claims,
+            coefficients: vec![F::one(); n],
             prover_state: opening.into(),
             sumcheck_claim: None,
         }
+    }
+
+    /// The instance's key: the first polynomial's opening id.
+    pub fn key(&self) -> OpeningId {
+        OpeningId::new(self.polynomials[0], self.sumcheck_id)
+    }
+
+    /// Fix the in-group coefficients to `ρ^i` and the batched input claim.
+    pub fn set_coefficients(&mut self, rho: F) {
+        let mut c = F::one();
+        self.coefficients = (0..self.polynomials.len())
+            .map(|_| {
+                let x = c;
+                c *= rho;
+                x
+            })
+            .collect();
+        self.opening.1 = self
+            .coefficients
+            .iter()
+            .zip(&self.claims)
+            .map(|(c, v)| *c * *v)
+            .sum();
     }
 
     #[tracing::instrument(skip_all, name = "OpeningProofReductionSumcheck::prepare_sumcheck")]
@@ -115,40 +154,45 @@ where
         shared_dense_polynomials: &HashMap<CommittedPoly, Arc<RwLock<SharedDensePolynomial<F>>>>,
     ) {
         #[cfg(test)]
-        // #[cfg(any(test, feature = "test-feature"))]
         {
             use crate::poly::multilinear_polynomial::PolynomialEvaluation;
-            let poly = polynomials_map.get(&self.polynomial).unwrap();
-            debug_assert_eq!(
-                poly.evaluate(&self.opening.0.r),
-                self.opening.1,
-                "Evaluation mismatch for {:?} {:?}",
-                self.sumcheck_id,
-                self.polynomial,
-            );
-            let num_vars = poly.get_num_vars();
-            let opening_point_len = self.opening.0.len();
-            debug_assert_eq!(
-                num_vars,
-                opening_point_len,
-                "{:?} has {num_vars} variables but opening point from {:?} has length {opening_point_len}",
-                self.polynomial,
-                self.sumcheck_id,
-            );
+            for (poly_id, claim) in self.polynomials.iter().zip(&self.claims) {
+                let poly = polynomials_map.get(poly_id).unwrap();
+                debug_assert_eq!(
+                    poly.evaluate(&self.opening.0.r),
+                    *claim,
+                    "Evaluation mismatch for {:?} {:?}",
+                    self.sumcheck_id,
+                    poly_id,
+                );
+                let num_vars = poly.get_num_vars();
+                let opening_point_len = self.opening.0.len();
+                debug_assert_eq!(
+                    num_vars,
+                    opening_point_len,
+                    "{:?} has {num_vars} variables but opening point from {:?} has length {opening_point_len}",
+                    poly_id,
+                    self.sumcheck_id,
+                );
+            }
         }
 
         match &mut self.prover_state {
             ProverOpening::Dense(opening) => {
-                let poly = shared_dense_polynomials.get(&self.polynomial).unwrap();
+                let poly = shared_dense_polynomials.get(&self.polynomials[0]).unwrap();
                 opening.polynomial = Some(poly.clone());
             }
             ProverOpening::OneHot(opening) => {
-                let poly = polynomials_map.get(&self.polynomial).unwrap();
-                if let MultilinearPolynomial::OneHot(one_hot) = poly {
-                    opening.initialize(one_hot.clone());
-                } else {
-                    panic!("Unexpected non-one-hot polynomial")
-                }
+                let group: Vec<(OneHotPolynomial<F>, F)> = self
+                    .polynomials
+                    .iter()
+                    .zip(&self.coefficients)
+                    .map(|(id, c)| match polynomials_map.get(id).unwrap() {
+                        MultilinearPolynomial::OneHot(one_hot) => (one_hot.clone(), *c),
+                        _ => panic!("Unexpected non-one-hot polynomial"),
+                    })
+                    .collect();
+                opening.initialize(group);
             }
         };
     }
@@ -242,7 +286,7 @@ where
             ProverOpening::Dense(opening) => opening.final_claim(),
             ProverOpening::OneHot(opening) => opening.final_claim(),
         };
-        accumulator.cache_opening_reduction_claim(self.polynomial, claim);
+        accumulator.cache_opening_reduction_claim(self.key(), claim);
 
         // Also register the reduced evaluation as a standard opening so the
         // BlindFold R1CS can reference it via `OpeningId`. The opening point
@@ -254,7 +298,7 @@ where
         use crate::field::IntoOpening;
         let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
         let opening_id = crate::poly::opening_proof::OpeningId::new(
-            self.polynomial,
+            self.polynomials[0],
             SumcheckId::BlindFoldBatchOpening,
         );
         accumulator
@@ -263,27 +307,66 @@ where
     }
 }
 
-/// Verifier state for a single opening in the batch opening reduction sumcheck.
+/// Verifier state for one group of openings in the batch opening reduction sumcheck.
 pub struct OpeningProofReductionSumcheckVerifier<F>
 where
     F: JoltField,
 {
-    /// Represents the polynomial opened.
-    pub polynomial: CommittedPoly,
+    /// The polynomials of the group, in append order.
+    pub polynomials: Vec<CommittedPoly>,
+    /// The ID of the sumcheck these openings originated from
+    pub sumcheck_id: SumcheckId,
     opening: Opening<F>,
+    /// Per-polynomial claims at the point.
+    pub claims: Vec<F>,
+    /// Per-polynomial coefficients `ρ^i`.
+    pub coefficients: Vec<F>,
     pub sumcheck_claim: Option<F>,
 }
 
 impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
-    pub fn new<U>(polynomial: CommittedPoly, opening_point: Vec<U>, input_claim: F) -> Self
+    pub fn new<U>(
+        polynomials: Vec<CommittedPoly>,
+        sumcheck_id: SumcheckId,
+        opening_point: Vec<U>,
+        claims: Vec<F>,
+    ) -> Self
     where
         U: Copy + Send + Sync + Into<F>,
     {
+        assert_eq!(polynomials.len(), claims.len());
+        let n = polynomials.len();
         Self {
-            polynomial,
-            opening: (opening_point.into(), input_claim),
+            polynomials,
+            sumcheck_id,
+            opening: (opening_point.into(), claims.iter().copied().sum()),
+            claims,
+            coefficients: vec![F::one(); n],
             sumcheck_claim: None,
         }
+    }
+
+    /// The instance's key: the first polynomial's opening id.
+    pub fn key(&self) -> OpeningId {
+        OpeningId::new(self.polynomials[0], self.sumcheck_id)
+    }
+
+    /// Fix the in-group coefficients to `ρ^i` and the batched input claim.
+    pub fn set_coefficients(&mut self, rho: F) {
+        let mut c = F::one();
+        self.coefficients = (0..self.polynomials.len())
+            .map(|_| {
+                let x = c;
+                c *= rho;
+                x
+            })
+            .collect();
+        self.opening.1 = self
+            .coefficients
+            .iter()
+            .zip(&self.claims)
+            .map(|(c, v)| *c * *v)
+            .sum();
     }
 }
 
@@ -316,7 +399,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
         use crate::field::IntoOpening;
         let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
         let opening_id = crate::poly::opening_proof::OpeningId::new(
-            self.polynomial,
+            self.polynomials[0],
             SumcheckId::BlindFoldBatchOpening,
         );
         accumulator
@@ -506,10 +589,61 @@ impl<F: JoltField> EqCycleState<F> {
 ///   \sum eq(k, r_address) * eq(j, r_cycle) * ra(k, j)
 /// so we use a simplified version of the prover algorithm for the
 /// Booleanity sumcheck described in Section 6.3 of the Twist/Shout paper.
+/// The `H` polynomial of a one-hot opening group during the cycle rounds.
+#[derive(Clone, Allocative)]
+enum GroupH<F: JoltField> {
+    None,
+    /// A single polynomial: the lazily materialized `ra(r_address, ·)`.
+    Single(RaPolynomial<u16, F>),
+    /// A group: the dense `Σ_i ρ^i·ra_i(r_address, ·)`.
+    Dense(MultilinearPolynomial<F>),
+}
+
+impl<F: JoltField> GroupH<F> {
+    fn len(&self) -> usize {
+        match self {
+            Self::None => panic!("H not initialized"),
+            Self::Single(h) => h.len(),
+            Self::Dense(h) => h.len(),
+        }
+    }
+
+    fn get_bound_coeff(&self, j: usize) -> F {
+        match self {
+            Self::None => panic!("H not initialized"),
+            Self::Single(h) => h.get_bound_coeff(j),
+            Self::Dense(h) => h.get_bound_coeff(j),
+        }
+    }
+
+    fn bind_parallel(&mut self, r: F::Challenge) {
+        match self {
+            Self::None => panic!("H not initialized"),
+            Self::Single(h) => h.bind_parallel(r, BindingOrder::HighToLow),
+            Self::Dense(h) => h.bind_parallel(r, BindingOrder::HighToLow),
+        }
+    }
+
+    fn final_claim(&self) -> F {
+        match self {
+            Self::None => panic!("H not initialized"),
+            Self::Single(h) => h.final_claim(),
+            Self::Dense(h) => h.final_claim(),
+        }
+    }
+}
+
 #[derive(Clone, Allocative)]
 pub struct OneHotPolynomialProverOpening<F: JoltField> {
     pub log_T: usize,
-    pub polynomial: OneHotPolynomial<F>,
+    /// Address-space size shared by the group.
+    pub K: usize,
+    /// The group's `(nonzero indices, coefficient)` per polynomial.
+    #[allocative(skip)]
+    polynomials: Vec<(Arc<Vec<Option<u16>>>, F)>,
+    /// `G[k] = Σ_i ρ^i·Σ_t D(t)·[idx_i(t) = k]` (Section 6.3 of Twist/Shout).
+    G: Vec<F>,
+    H: GroupH<F>,
     pub eq_address_state: Arc<RwLock<EqAddressState<F>>>,
     pub eq_cycle_state: Arc<RwLock<EqCycleState<F>>>,
 }
@@ -522,39 +656,50 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
     ) -> Self {
         Self {
             log_T: 0,
-            polynomial: OneHotPolynomial::default(),
+            K: 1,
+            polynomials: Vec::new(),
+            G: Vec::new(),
+            H: GroupH::None,
             eq_address_state,
             eq_cycle_state,
         }
     }
 
+    /// Initialize with the group's polynomials and their coefficients.
     #[tracing::instrument(skip_all, name = "OneHotPolynomialProverOpening::initialize")]
-    pub fn initialize(&mut self, mut polynomial: OneHotPolynomial<F>) {
-        let nonzero_indices = &polynomial.nonzero_indices;
-        let T = nonzero_indices.len();
+    pub fn initialize(&mut self, group: Vec<(OneHotPolynomial<F>, F)>) {
+        let K = group[0].0.K;
+        let T = group[0].0.nonzero_indices.len();
+        for (p, _) in &group {
+            assert_eq!(p.K, K, "one-hot group: mismatched K");
+            assert_eq!(p.nonzero_indices.len(), T, "one-hot group: mismatched T");
+        }
         let num_chunks = rayon::current_num_threads().next_power_of_two().min(T);
         let chunk_size = (T / num_chunks).max(1);
 
         let eq = self.eq_cycle_state.read().unwrap();
         let D_coeffs_for_G = &eq.D.merge();
 
-        // Compute G as described in Section 6.3
-        let G = nonzero_indices
-            .par_chunks(chunk_size)
-            .enumerate()
-            .map(|(chunk_index, chunk)| {
-                let mut result = unsafe_allocate_zero_vec(polynomial.K);
-                let mut j = chunk_index * chunk_size;
-                for k in chunk {
-                    if let Some(k) = k {
-                        result[*k as usize] += D_coeffs_for_G[j];
+        // Compute G as described in Section 6.3, summed over the group.
+        let G = (0..num_chunks)
+            .into_par_iter()
+            .map(|chunk_index| {
+                let start = chunk_index * chunk_size;
+                let end = (start + chunk_size).min(T);
+                let mut result: Vec<F> = unsafe_allocate_zero_vec(K);
+                for (p, c) in &group {
+                    let single = group.len() == 1;
+                    for (j, k) in p.nonzero_indices[start..end].iter().enumerate() {
+                        if let Some(k) = k {
+                            let d = D_coeffs_for_G[start + j];
+                            result[*k as usize] += if single { d } else { *c * d };
+                        }
                     }
-                    j += 1;
                 }
                 result
             })
             .reduce(
-                || unsafe_allocate_zero_vec(polynomial.K),
+                || unsafe_allocate_zero_vec(K),
                 |mut running, new| {
                     running
                         .par_iter_mut()
@@ -565,22 +710,25 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                 },
             );
 
-        polynomial.G = G;
-        self.polynomial = polynomial;
+        self.G = G;
+        self.K = K;
         self.log_T = T.log_2();
+        self.polynomials = group
+            .into_iter()
+            .map(|(p, c)| (p.nonzero_indices.clone(), c))
+            .collect();
     }
 
     #[tracing::instrument(skip_all, name = "OneHotPolynomialProverOpening::compute_message")]
     pub fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
         let shared_eq_address = self.eq_address_state.read().unwrap();
         let shared_eq_cycle = self.eq_cycle_state.read().unwrap();
-        let polynomial = &self.polynomial;
 
-        if round < polynomial.K.log_2() {
-            let num_unbound_address_variables = polynomial.K.log_2() - round;
+        if round < self.K.log_2() {
+            let num_unbound_address_variables = self.K.log_2() - round;
             let B = &shared_eq_address.B;
             let F = &shared_eq_address.F;
-            let G = &polynomial.G;
+            let G = &self.G;
 
             let unreduced_univariate_poly_evals = (0..B.len() / 2)
                 .into_par_iter()
@@ -632,7 +780,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
             let B = &shared_eq_address.B;
             let d_gruen = &shared_eq_cycle.D;
             let eq_r_address_claim = B.final_claim();
-            let H = &polynomial.H.read().unwrap();
+            let H = &self.H;
 
             let gruen_eval_0 = if d_gruen.E_in_current_len() == 1 {
                 let unreduced_gruen_eval_0 = (0..d_gruen.len() / 2)
@@ -677,13 +825,13 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
     pub fn bind(&mut self, r: F::Challenge, round: usize) {
         let mut shared_eq_address = self.eq_address_state.write().unwrap();
         let mut shared_eq_cycle = self.eq_cycle_state.write().unwrap();
-        let polynomial = &mut self.polynomial;
+        let log_K = self.K.log_2();
         let num_variables_bound =
             shared_eq_address.num_variables_bound + shared_eq_cycle.num_variables_bound;
 
         // Bind shared state if not already bound
         if num_variables_bound <= round {
-            if round < polynomial.K.log_2() {
+            if round < log_K {
                 shared_eq_address
                     .B
                     .bind_parallel(r, BindingOrder::HighToLow);
@@ -697,28 +845,40 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
         }
 
         // For the first two log T rounds we want to use F still
-        if round == polynomial.K.log_2() - 1 {
-            let nonzero_indices = &polynomial.nonzero_indices;
-
-            let mut lock = polynomial.H.write().unwrap();
-            if matches!(*lock, RaPolynomial::None) {
-                *lock =
-                    RaPolynomial::new(nonzero_indices.clone(), shared_eq_address.F.clone_values());
+        if round == log_K - 1 {
+            if matches!(self.H, GroupH::None) {
+                let f = shared_eq_address.F.clone_values();
+                self.H = if self.polynomials.len() == 1 {
+                    GroupH::Single(RaPolynomial::new(self.polynomials[0].0.clone(), f))
+                } else {
+                    let polys = &self.polynomials;
+                    let T = polys[0].0.len();
+                    let h: Vec<F> = (0..T)
+                        .into_par_iter()
+                        .with_min_len(par_enabled())
+                        .map(|t| {
+                            polys.iter().fold(F::zero(), |acc, (idx, c)| match idx[t] {
+                                Some(k) => acc + *c * f[k as usize],
+                                None => acc,
+                            })
+                        })
+                        .collect();
+                    GroupH::Dense(MultilinearPolynomial::from(h))
+                };
             }
 
-            let g = mem::take(&mut polynomial.G);
+            let g = mem::take(&mut self.G);
             drop_in_background_thread(g);
-        } else if round >= polynomial.K.log_2() {
+        } else if round >= log_K {
             // Bind H for subsequent T rounds
-            let mut H = polynomial.H.write().unwrap();
-            if H.len().log_2() == self.log_T + polynomial.K.log_2() - round {
-                H.bind_parallel(r, BindingOrder::HighToLow);
+            if self.H.len().log_2() == self.log_T + log_K - round {
+                self.H.bind_parallel(r);
             }
         }
     }
 
     pub fn final_claim(&self) -> F {
-        self.polynomial.H.read().unwrap().final_claim()
+        self.H.final_claim()
     }
 }
 
@@ -817,7 +977,7 @@ mod tests {
         // Prepare sumcheck
         let polynomial_map = BTreeMap::from_iter(all_polys);
 
-        prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map);
+        prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map, &mut prover_tr);
 
         // Run sumcheck
         let (accumulator_sumcheck_proof, r_sumcheck_acc) =
@@ -829,7 +989,7 @@ mod tests {
         let sumcheck_claims: Vec<Fr> = state.sumcheck_claims.clone();
 
         // Build RLC
-        let rlc = build_materialized_rlc(&state.gamma_powers, &polynomial_map);
+        let rlc = build_materialized_rlc(&state.poly_coeffs, &polynomial_map);
 
         // Prove
         let eval_proof: HyperKZGProof<Bn254> =
@@ -857,7 +1017,9 @@ mod tests {
         });
 
         // Prepare - populate sumcheck claims
-        verifier_opening_accumulator.prepare_for_sumcheck(&sumcheck_claims);
+        verifier_opening_accumulator
+            .prepare_for_sumcheck(&sumcheck_claims, &mut verifier_tr)
+            .unwrap();
 
         // Verify sumcheck
         let r_sumcheck = verifier_opening_accumulator
@@ -1012,7 +1174,7 @@ mod tests {
         // Prepare sumcheck
         let polynomial_map = BTreeMap::from_iter(all_polys);
 
-        prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map);
+        prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map, &mut prover_tr);
 
         // Run sumcheck
         let (accumulator_sumcheck_proof, r_sumcheck_acc) =
@@ -1024,7 +1186,7 @@ mod tests {
         let sumcheck_claims: Vec<Fr> = state.sumcheck_claims.clone();
 
         // Build RLC
-        let rlc = build_materialized_rlc(&state.gamma_powers, &polynomial_map);
+        let rlc = build_materialized_rlc(&state.poly_coeffs, &polynomial_map);
 
         // Prove
         let eval_proof: HyperKZGProof<Bn254> =
@@ -1061,7 +1223,9 @@ mod tests {
         });
 
         // Prepare - populate sumcheck claims
-        verifier_opening_accumulator.prepare_for_sumcheck(&sumcheck_claims);
+        verifier_opening_accumulator
+            .prepare_for_sumcheck(&sumcheck_claims, &mut verifier_tr)
+            .unwrap();
 
         // Verify sumcheck
         let r_sumcheck = verifier_opening_accumulator
@@ -1217,7 +1381,7 @@ mod tests {
         // Prepare sumcheck
         let polynomial_map = BTreeMap::from_iter(all_polys);
 
-        prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map);
+        prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map, &mut prover_tr);
 
         // Run sumcheck
         let (accumulator_sumcheck_proof, r_sumcheck_acc) =
@@ -1229,7 +1393,7 @@ mod tests {
         let sumcheck_claims: Vec<Fr> = state.sumcheck_claims.clone();
 
         // Build RLC
-        let rlc = build_materialized_rlc(&state.gamma_powers, &polynomial_map);
+        let rlc = build_materialized_rlc(&state.poly_coeffs, &polynomial_map);
 
         // Prove
         let eval_proof: HyperKZGProof<Bn254> =
@@ -1266,7 +1430,9 @@ mod tests {
         });
 
         // Prepare - populate sumcheck claims
-        verifier_opening_accumulator.prepare_for_sumcheck(&sumcheck_claims);
+        verifier_opening_accumulator
+            .prepare_for_sumcheck(&sumcheck_claims, &mut verifier_tr)
+            .unwrap();
 
         // Verify sumcheck
         let r_sumcheck = verifier_opening_accumulator

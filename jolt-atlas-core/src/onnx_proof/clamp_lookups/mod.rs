@@ -19,10 +19,12 @@
 //! The one-hot read-address checks are over a 64-bit address, so the decomposition has
 //! `64 / log_k_chunk` committed chunks ([`CommittedPoly::ClampRaD`]).
 
-use super::op_lookups::{
-    DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
+use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupProvider};
+use crate::onnx_proof::{
+    clamp_split::NodeSplit,
+    deferred_lookups::{ProverLookupJob, VerifierLookupJob},
+    ProofId, Prover, Verifier,
 };
-use crate::onnx_proof::{ProofId, ProofType, Prover, Verifier};
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
@@ -32,7 +34,6 @@ use atlas_onnx_tracer::{
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
-    lookup_tables::clamp::SaturationTable,
     poly::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::{
@@ -40,20 +41,15 @@ use joltworks::{
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
     },
-    subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-    },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 use rayon::prelude::*;
 
-/// Address width of the saturating-clamp lookup table.
-///
-/// The accumulation is widened to `i64` before clamping, so the table is indexed
-/// by all 64 bits of the (two's-complement) accumulation value.
+/// Widest address of the saturating-clamp lookup table (an i64 accumulation).
+/// Individual nodes use `node.sat_clamp_bits ∈ {40, 48, 56, 64}` (see
+/// `atlas_onnx_tracer::model::clamp_width`); this is the default / upper bound.
 pub const CLAMP_LOG_K: usize = 64;
 
 /// Whether `node`'s (padded) output is a single element (`log_T = 0`).
@@ -86,7 +82,7 @@ pub fn recover_small_int<F: JoltField>(x: F) -> Option<i64> {
 }
 
 /// Opening id for a node's accumulation (`ClampAcc`) polynomial.
-fn acc_opening_id(node_idx: usize) -> OpeningId {
+pub(crate) fn acc_opening_id(node_idx: usize) -> OpeningId {
     OpeningId::new(
         VirtualPoly::ClampAcc(node_idx),
         SumcheckId::NodeExecution(node_idx),
@@ -102,6 +98,10 @@ fn acc_opening_id(node_idx: usize) -> OpeningId {
 /// The padding (to the next power of two) matches the node-output MLE domain, so
 /// the accumulation and output polynomials share the same `log_T`.
 pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+    // Fused rescale ops: the trace already holds the pre-clamp quotient.
+    if let Some(cached) = trace.fused_intermediates(node.idx) {
+        return cached.quotient.padded_next_power_of_two();
+    }
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let raw = match &node.operator {
         Operator::Add(_) | Operator::Sub(_) => {
@@ -180,18 +180,21 @@ pub fn verify_append_acc<F, T>(
 
 /// [`LookupOperandsTrait`] helper for the 64-bit accumulator-sourced saturating clamp, backed
 /// by [`SaturationTable`].
-#[derive(Default)]
 pub(crate) struct SaturatingAccClampOperands {
     /// Set by fused callers (`fused_rebase`) that already computed the pre-clamp
     /// intermediate, to avoid re-deriving it. `None` re-executes via
     /// [`clamp_intermediate`].
     precomputed: Option<Tensor<i64>>,
+    /// Lookup address width for this node (`node.sat_clamp_bits`).
+    log_k: usize,
 }
 
 impl SaturatingAccClampOperands {
-    pub(crate) fn with_precomputed(t: Tensor<i64>) -> Self {
+    /// Helper for `node`, using its statically derived clamp width.
+    pub(crate) fn for_node(node: &ComputationNode) -> Self {
         Self {
-            precomputed: Some(t),
+            precomputed: None,
+            log_k: node.sat_clamp_bits,
         }
     }
 }
@@ -235,19 +238,25 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
             .unwrap_or_else(|| clamp_intermediate(node, trace))
     }
 
-    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
-        clamp_lookup_bits(witness)
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
+        clamp_lookup_bits(witness, self.log_k)
+    }
+
+    fn log_k(&self) -> usize {
+        self.log_k
     }
 }
 
-/// 64-bit clamp lookup indices: each i64 accumulation value, bit-cast to the `u64` address into
+/// Clamp lookup indices: each i64 accumulation value's low `bits` bits (its
+/// two's-complement encoding at the node's clamp width — see
+/// `atlas_onnx_tracer::model::clamp_width`), the address into
 /// [`SaturationTable`]. Shared with `witness.rs`'s `ClampRaD` witness generation.
-pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>) -> Vec<LookupBits> {
+pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>, bits: usize) -> Vec<LookupBits> {
     intermediate
         .data()
         .par_iter()
         .with_min_len(par_enabled())
-        .map(|&v| LookupBits::new(v as u64, CLAMP_LOG_K))
+        .map(|&v| LookupBits::new(v as u64, bits))
         .collect()
 }
 
@@ -256,107 +265,83 @@ pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>) -> Vec<LookupBits> {
 // MeanOfSquares
 // ---------------------------------------------------------------------------
 
-/// Prove `output = SatClamp(acc)` for a non-scalar node: the clamp read-raf
-/// lookup ([`ProofType::Execution`]) plus the read-address one-hot checks
-/// ([`ProofType::RaOneHotChecks`]). The accumulation `acc` is appended as the
-/// lookup `raf`; `intermediate` optionally provides it precomputed (see
+/// Prove `output = SatClamp(acc)` for a non-scalar node. The accumulation
+/// `acc` is appended as the lookup `raf` claim here (so the node's own
+/// sumcheck can consume it); the clamp itself is *deferred* — the node's
+/// split witness (see [`clamp_split`](crate::onnx_proof::clamp_split)) is
+/// registered on the prover and proven after the node loop by
+/// [`deferred_lookups::prove_all`](crate::onnx_proof::deferred_lookups::prove_all)
+/// as part of batched sumchecks across all nodes. Returns no per-node proofs.
+/// `intermediate` optionally provides the precomputed accumulation (see
 /// [`prove_append_acc`]).
 pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
     intermediate: Option<Tensor<i64>>,
 ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-    let helper = match intermediate {
-        Some(t) => SaturatingAccClampOperands::with_precomputed(t),
-        None => SaturatingAccClampOperands::default(),
-    };
-    let provider = OpLookupProvider::with_helper(node.clone(), helper);
-    let (mut execution_sumcheck, lookup_indices) = provider
-        .read_raf_prove::<F, T, SaturationTable, CLAMP_LOG_K>(
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-    let (execution_proof, _) = Sumcheck::prove(
-        &mut execution_sumcheck,
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-
-    let encoding = provider.encoding();
-    let [ra_prover, hw_prover, bool_prover] = shout::ra_onehot_provers(
-        &encoding,
-        &lookup_indices,
-        &prover.accumulator,
-        &mut prover.transcript,
-    );
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![ra_prover, hw_prover, bool_prover];
-    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-
-    vec![
-        (ProofId(node.idx, ProofType::Execution), execution_proof),
-        (
-            ProofId(node.idx, ProofType::RaOneHotChecks),
-            ra_one_hot_proof,
-        ),
-    ]
+    let witness = intermediate.unwrap_or_else(|| clamp_intermediate(node, &prover.trace));
+    let provider =
+        OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node));
+    provider.append_witness_claim_for(&witness, &mut prover.accumulator, &mut prover.transcript);
+    if crate::onnx_proof::clamp_split::exact_output_prover(
+        prover.preprocessing.model(),
+        &prover.trace,
+        node.idx,
+    ) {
+        // Public unsaturated output: the verifier checks `ClampAcc == out`.
+        return Vec::new();
+    }
+    let output = Trace::layer_data(&prover.trace, node)
+        .output
+        .padded_next_power_of_two();
+    let split = NodeSplit::new(witness.data(), output.data());
+    prover.deferred.push(ProverLookupJob::Clamp {
+        node: node.clone(),
+        split,
+    });
+    Vec::new()
 }
 
-/// Verifier counterpart of [`prove_clamp_lookup`].
+/// Verifier counterpart of [`prove_clamp_lookup`]: appends the `raf` opening
+/// and registers the deferred lookup for
+/// [`deferred_lookups::verify_all`](crate::onnx_proof::deferred_lookups::verify_all).
 pub fn verify_clamp_lookup<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    let provider: OpLookupProvider<SaturatingAccClampOperands> =
-        OpLookupProvider::new(node.clone());
-    let execution_verifier = provider.read_raf_verify::<F, T, SaturationTable, CLAMP_LOG_K>(
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    let execution_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::Execution))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    Sumcheck::verify(
-        execution_proof,
-        &execution_verifier,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    let encoding = provider.encoding();
-    let [ra_verifier, hw_verifier, bool_verifier] =
-        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
-    let ra_one_hot_proof = verifier
-        .proofs
-        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-    BatchedSumcheck::verify(
-        ra_one_hot_proof,
-        vec![&*ra_verifier, &*hw_verifier, &*bool_verifier],
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    let provider =
+        OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node));
+    provider.append_witness_claim_verifier(&mut verifier.accumulator, &mut verifier.transcript);
+    if crate::onnx_proof::clamp_split::exact_output_verifier(
+        verifier.preprocessing.model(),
+        verifier.io,
+        node.idx,
+    ) {
+        let acc = verifier
+            .accumulator
+            .get_virtual_polynomial_opening(acc_opening_id(node.idx))
+            .1;
+        let out = verifier.accumulator.get_node_output_opening(node.idx).1;
+        if acc != out {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "output node {}: unsaturated public output must equal the pre-clamp accumulation",
+                node.idx
+            )));
+        }
+        return Ok(());
+    }
+    verifier
+        .deferred
+        .push(VerifierLookupJob::Clamp { node: node.clone() });
     Ok(())
 }
 
-/// The committed one-hot decomposition polynomials a clamped node must commit to
-/// (empty for scalar nodes, which prove the clamp directly).
-pub fn clamp_committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
-    if is_scalar(node) {
-        return Vec::new();
-    }
-    let d = OpLookupEncoding::<SaturatingAccClampOperands>::new(node)
-        .one_hot_params()
-        .instruction_d;
-    (0..d)
-        .map(|i| CommittedPoly::ClampRaD(node.idx, i))
-        .collect()
+/// A clamped node commits **no** per-node polynomials: its clamp one-hots live
+/// in a packed bucket (see [`global_clamp`](crate::onnx_proof::global_clamp)),
+/// whose chunks are listed at the model level by
+/// `global_clamp::bucket_committed_polys`.
+pub fn clamp_committed_polys(_node: &ComputationNode) -> Vec<CommittedPoly> {
+    Vec::new()
 }
 
 /// Verify a scalar node's clamp directly: `output_claim == SatClamp(combined)`,

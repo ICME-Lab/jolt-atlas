@@ -466,7 +466,7 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
     let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
     let encoding = rc_operands.get_encoding(node);
 
-    let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
+    let [ra_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
         &encoding,
         &lookup_indices,
         &prover.accumulator,
@@ -474,7 +474,7 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
     );
 
     let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![ra_sumcheck, hw_sumcheck, bool_sumcheck];
+        vec![ra_sumcheck, bool_sumcheck];
     let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
         instances.iter_mut().map(|v| &mut **v as _).collect(),
         &mut prover.accumulator,
@@ -516,11 +516,11 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         .ok_or(ProofVerifyError::MissingProof(node.idx))?;
     let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
     let encoding = rc_operands.get_encoding(node);
-    let [ra_sumcheck, hw_sumcheck, bool_sumcheck] =
+    let [ra_sumcheck, bool_sumcheck] =
         shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
     BatchedSumcheck::verify(
         ra_one_hot_proof,
-        vec![&*ra_sumcheck, &*hw_sumcheck, &*bool_sumcheck],
+        vec![&*ra_sumcheck, &*bool_sumcheck],
         &mut verifier.accumulator,
         &mut verifier.transcript,
     )?;

@@ -229,6 +229,7 @@ where
 /// This struct encapsulates the information needed to perform one-hot-encoding checks for
 /// operations that produce remainders (Div, Rsqrt, Tanh). It implements the
 /// [`RaOneHotEncoding`] trait to integrate with the one-hot checking protocol.
+#[derive(Clone)]
 pub struct RangeCheckEncoding {
     /// Computation node index
     pub node_idx: usize,

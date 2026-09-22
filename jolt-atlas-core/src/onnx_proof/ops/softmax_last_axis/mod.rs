@@ -14,6 +14,7 @@
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
 
 use crate::{
+    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
         op_lookups::OpLookupProvider,
         ops::{
@@ -125,12 +126,17 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
-        sm.verify(
+        let (stage3, onehots) = sm.verify(
             &mut verifier.accumulator,
             &mut verifier.transcript,
             verifier.proofs,
             scale_bits,
-        )
+        )?;
+        for instance in stage3 {
+            verifier.defer(DeferredBatch::SoftmaxStage3, instance);
+        }
+        verifier.deferred_onehots.extend(onehots);
+        Ok(())
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
@@ -249,15 +255,32 @@ impl SoftmaxLastAxisProver {
         // z_hi/z_lo need to be cached fresh at r2 (established by stage 2's exp_mult instance).
         self.cache_z_hi_lo(prover);
 
-        let stage_3_proof = self.stage3(prover, &lut_data, &r_exp_indices, z_tensor);
-
-        let stage_4_proof = self.stage4(prover, &lut_data, &significance_clamp_indices);
+        // Stage 3 (exp-digit lookups + significance-clamp read-raf) is built
+        // now — its challenges are drawn and its claims appended here — and
+        // proven after the node loop in the `SoftmaxStage3` batch; stage 4 (the
+        // one-hot checks) follows that batch.
+        let log_hi = lut_data.table_hi.len().log_2();
+        let log_lo = lut_data.table_lo.len().log_2();
+        for instance in self.build_stage3_instances(prover, &lut_data, &r_exp_indices, z_tensor) {
+            prover.defer(DeferredBatch::SoftmaxStage3, instance);
+        }
+        let idx = self.idx();
+        prover.deferred_onehots.push((
+            DeferredOneHot::SoftmaxExpHi(idx, log_hi),
+            lut_data.z_hi_indices,
+        ));
+        prover.deferred_onehots.push((
+            DeferredOneHot::SoftmaxExpLo(idx, log_lo),
+            lut_data.z_lo_indices,
+        ));
+        prover.deferred_onehots.push((
+            DeferredOneHot::SoftmaxClamp(self.computation_node.clone()),
+            significance_clamp_indices,
+        ));
 
         vec![
             (ProofId(self.idx(), ProofType::SoftmaxStage1), stage_1_proof),
             (ProofId(self.idx(), ProofType::SoftmaxStage2), stage_2_proof),
-            (ProofId(self.idx(), ProofType::SoftmaxStage3), stage_3_proof),
-            (ProofId(self.idx(), ProofType::SoftmaxStage4), stage_4_proof),
         ]
     }
 }
@@ -282,14 +305,23 @@ impl SoftmaxLastAxisVerifier {
     }
 
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::verify", skip_all)]
-    /// Run the full verification pipeline (non-ZK).
+    /// Run the inline part of the verification pipeline (non-ZK): stages 1–2
+    /// verified here; the stage-3 verifiers and stage-4 one-hot jobs are
+    /// returned for the caller to defer (see `deferred_lookups`).
+    #[allow(clippy::type_complexity)]
     pub(crate) fn verify<F: JoltField, T: Transcript>(
         &mut self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
         proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
         scale_bits: i32,
-    ) -> Result<(), ProofVerifyError> {
+    ) -> Result<
+        (
+            Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>,
+            Vec<DeferredOneHot>,
+        ),
+        ProofVerifyError,
+    > {
         self.cache_exp_sum(accumulator, transcript)?;
         self.cache_R(accumulator, transcript);
         self.run_stage(
@@ -313,24 +345,18 @@ impl SoftmaxLastAxisVerifier {
 
         self.cache_z_hi_lo(accumulator, transcript);
 
-        self.run_stage(
-            ProofType::SoftmaxStage3,
-            self.build_stage3_verifiers(accumulator, transcript, &lut),
-            proofs,
-            accumulator,
-            transcript,
-        )?;
-
+        // Stage 3 / 4 are deferred (see the prover); their verifiers are
+        // built here and handed back to the caller via `deferred`.
+        let stage3 = self.build_stage3_verifiers(accumulator, transcript, &lut);
+        // The operand link only needs claims appended during construction.
         self.operand_link(accumulator)?;
-
-        self.run_stage(
-            ProofType::SoftmaxStage4,
-            self.build_stage4_verifiers(accumulator, transcript, &lut),
-            proofs,
-            accumulator,
-            transcript,
-        )?;
-        Ok(())
+        let onehots = vec![
+            DeferredOneHot::SoftmaxExpHi(self.idx(), lut.table_hi.len().log_2()),
+            DeferredOneHot::SoftmaxExpLo(self.idx(), lut.table_lo.len().log_2()),
+            DeferredOneHot::SoftmaxClamp(self.computation_node.clone()),
+        ];
+        let _ = proofs;
+        Ok((stage3, onehots))
     }
 
     /// Drive a single batched-sumcheck stage given pre-built verifier instances.
@@ -561,7 +587,7 @@ impl SoftmaxLastAxisProver {
             identity_rangecheck_prover(&provider, r_exp_lookup_bits, &mut prover.accumulator);
 
         let encoding = SoftmaxRaEncoding::remainder(self.idx(), prover.preprocessing.scale());
-        let [R_ra_prover, R_hw_prover, R_bool_prover] = shout::ra_onehot_provers(
+        let [R_ra_prover, R_bool_prover] = shout::ra_onehot_provers(
             &encoding,
             r_indices,
             &prover.accumulator,
@@ -573,7 +599,6 @@ impl SoftmaxLastAxisProver {
             Box::new(max_indicator_prover),
             Box::new(exp_r_rc_prover),
             R_ra_prover,
-            R_hw_prover,
             R_bool_prover,
         ]
     }
@@ -593,6 +618,7 @@ impl SoftmaxLastAxisProver {
         provider.append_advice(VirtualPoly::SoftmaxZLo, z_lo_eval);
     }
 
+    #[allow(dead_code)]
     #[tracing::instrument(name = "SoftmaxLastAxisProver::stage3", skip_all)]
     fn stage3<F: JoltField, T: Transcript>(
         &mut self,
@@ -653,7 +679,7 @@ impl SoftmaxLastAxisProver {
             );
 
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), prover.preprocessing.scale());
-        let [exp_r_ra_prover, exp_r_hw_prover, exp_r_bool_prover] = shout::ra_onehot_provers(
+        let [exp_r_ra_prover, exp_r_bool_prover] = shout::ra_onehot_provers(
             &encoding,
             r_exp_indices,
             &prover.accumulator,
@@ -665,11 +691,11 @@ impl SoftmaxLastAxisProver {
             lo_prover,
             Box::new(significance_clamp_prover),
             exp_r_ra_prover,
-            exp_r_hw_prover,
             exp_r_bool_prover,
         ]
     }
 
+    #[allow(dead_code)]
     fn stage4<F: JoltField, T: Transcript>(
         &mut self,
         prover: &mut Prover<F, T>,
@@ -683,6 +709,7 @@ impl SoftmaxLastAxisProver {
 
     /// Build stage 4 sumcheck instances: exp-digit one-hot checks plus the saturating-clamp
     /// lookup's one-hot checks.
+    #[allow(dead_code)]
     pub(crate) fn build_stage4_instances<F: JoltField, T: Transcript>(
         &mut self,
         prover: &mut Prover<F, T>,
@@ -690,7 +717,7 @@ impl SoftmaxLastAxisProver {
         significance_clamp_indices: &[usize],
     ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut_data.table_hi.len().log_2());
-        let [hi_ra_prover, hi_hw_prover, hi_bool_prover] = shout::ra_onehot_provers(
+        let [hi_ra_prover, hi_bool_prover] = shout::ra_onehot_provers(
             &encoding,
             &lut_data.z_hi_indices,
             &prover.accumulator,
@@ -698,7 +725,7 @@ impl SoftmaxLastAxisProver {
         );
 
         let encoding = SoftmaxRaEncoding::exp_lo(self.idx(), lut_data.table_lo.len().log_2());
-        let [lo_ra_prover, lo_hw_prover, lo_bool_prover] = shout::ra_onehot_provers(
+        let [lo_ra_prover, lo_bool_prover] = shout::ra_onehot_provers(
             &encoding,
             &lut_data.z_lo_indices,
             &prover.accumulator,
@@ -708,7 +735,7 @@ impl SoftmaxLastAxisProver {
         let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
         let encoding = significance_clamp_provider.encoding();
-        let [significance_clamp_ra_prover, significance_clamp_hw_prover, significance_clamp_bool_prover] =
+        let [significance_clamp_ra_prover, significance_clamp_bool_prover] =
             shout::ra_onehot_provers(
                 &encoding,
                 significance_clamp_indices,
@@ -718,13 +745,10 @@ impl SoftmaxLastAxisProver {
 
         vec![
             hi_ra_prover,
-            hi_hw_prover,
             hi_bool_prover,
             lo_ra_prover,
-            lo_hw_prover,
             lo_bool_prover,
             significance_clamp_ra_prover,
-            significance_clamp_hw_prover,
             significance_clamp_bool_prover,
         ]
     }
@@ -995,7 +1019,7 @@ impl SoftmaxLastAxisVerifier {
         let exp_r_rc_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
 
         let encoding = SoftmaxRaEncoding::remainder(self.idx(), scale_bits);
-        let [R_ra_verifier, R_hw_verifier, R_bool_verifier] =
+        let [R_ra_verifier, R_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
         vec![
@@ -1003,7 +1027,6 @@ impl SoftmaxLastAxisVerifier {
             Box::new(max_indicator_verifier),
             Box::new(exp_r_rc_verifier),
             R_ra_verifier,
-            R_hw_verifier,
             R_bool_verifier,
         ]
     }
@@ -1054,7 +1077,7 @@ impl SoftmaxLastAxisVerifier {
 
         let scale_bits = self.scale.ilog2() as i32;
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits);
-        let [r_exp_ra_verifier, r_exp_hw_verifier, r_exp_bool_verifier] =
+        let [r_exp_ra_verifier, r_exp_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
         vec![
@@ -1062,7 +1085,6 @@ impl SoftmaxLastAxisVerifier {
             lo_verifier,
             Box::new(significance_clamp_verifier),
             r_exp_ra_verifier,
-            r_exp_hw_verifier,
             r_exp_bool_verifier,
         ]
     }
@@ -1100,6 +1122,7 @@ impl SoftmaxLastAxisVerifier {
     }
 
     /// Build stage 4 verifier instances.
+    #[allow(dead_code)]
     #[tracing::instrument(name = "SoftmaxLastAxisVerifier::build_stage4_verifiers", skip_all)]
     pub(crate) fn build_stage4_verifiers<F: JoltField, T: Transcript>(
         &self,
@@ -1108,28 +1131,25 @@ impl SoftmaxLastAxisVerifier {
         lut: &VerifierLookupTableData,
     ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut.table_hi.len().log_2());
-        let [hi_ra_verifier, hi_hw_verifier, hi_bool_verifier] =
+        let [hi_ra_verifier, hi_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
         let encoding = SoftmaxRaEncoding::exp_lo(self.idx(), lut.table_lo.len().log_2());
-        let [lo_ra_verifier, lo_hw_verifier, lo_bool_verifier] =
+        let [lo_ra_verifier, lo_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
         let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
             OpLookupProvider::new(self.computation_node.clone());
         let encoding = significance_clamp_provider.encoding();
-        let [significance_clamp_ra_verifier, significance_clamp_hw_verifier, significance_clamp_bool_verifier] =
+        let [significance_clamp_ra_verifier, significance_clamp_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);
 
         vec![
             hi_ra_verifier,
-            hi_hw_verifier,
             hi_bool_verifier,
             lo_ra_verifier,
-            lo_hw_verifier,
             lo_bool_verifier,
             significance_clamp_ra_verifier,
-            significance_clamp_hw_verifier,
             significance_clamp_bool_verifier,
         ]
     }

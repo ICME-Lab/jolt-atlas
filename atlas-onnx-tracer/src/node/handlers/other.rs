@@ -72,6 +72,7 @@ fn handle_const(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         operator: Operator::Constant(Constant(result_tensor)),
         inputs: vec![],
         output_dims: hctx.output_dims.clone(),
+        sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
     });
     builder.finish()
 }

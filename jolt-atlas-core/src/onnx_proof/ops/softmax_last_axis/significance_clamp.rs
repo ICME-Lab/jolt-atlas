@@ -104,7 +104,7 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
             .expect("SoftmaxSignificanceClampOperands::witness called without a precomputed z (verifier-only helper)")
     }
 
-    fn lookup_bits(witness: &Tensor<i64>) -> Vec<LookupBits> {
-        DefaultLookupOperands::lookup_bits(witness)
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
+        DefaultLookupOperands.lookup_bits(witness)
     }
 }

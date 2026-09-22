@@ -17,7 +17,7 @@
 
 use crate::{
     onnx_proof::{
-        clamp_lookups::{clamp_intermediate, clamp_lookup_bits, CLAMP_LOG_K},
+        clamp_lookups::{clamp_intermediate, clamp_lookup_bits},
         neural_teleport::{division::compute_division, n_bits_to_usize},
         ops::rsqrt::rsqrt_dividend,
         range_checking::range_check_operands::{
@@ -81,7 +81,7 @@ fn build_range_check_rad_witness<F: JoltField, H: RangeCheckingOperandsTrait>(
 ///
 /// This pattern appears in every operand type that decomposes lookup indices across multiple
 /// dimensions (NodeOutputRaD, DivRangeCheckRaD, SqrtRangeCheckRaD, etc.).
-fn build_one_hot_rad_witness<F: JoltField>(
+pub(crate) fn build_one_hot_rad_witness<F: JoltField>(
     lookup_indices: &[LookupBits],
     d: usize,
     log_k: usize,
@@ -166,19 +166,22 @@ pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::T
                     if clamp_bits.is_none() {
                         match try_rebase_intermediates(node, trace) {
                             Some(ints) => {
-                                clamp_bits = Some(clamp_lookup_bits(&ints.quotient));
+                                clamp_bits =
+                                    Some(clamp_lookup_bits(&ints.quotient, node.sat_clamp_bits));
                                 remainder_indices = Some(
                                     ints.remainder.data().iter().map(|&v| v as usize).collect(),
                                 );
                             }
                             // Add/Sub/Sum: clamp only, no fused rescale.
                             None => {
-                                clamp_bits =
-                                    Some(clamp_lookup_bits(&clamp_intermediate(node, trace)));
+                                clamp_bits = Some(clamp_lookup_bits(
+                                    &clamp_intermediate(node, trace),
+                                    node.sat_clamp_bits,
+                                ));
                             }
                         }
                     }
-                    build_one_hot_rad_witness(clamp_bits.as_ref().unwrap(), *d, CLAMP_LOG_K)
+                    build_one_hot_rad_witness(clamp_bits.as_ref().unwrap(), *d, node.sat_clamp_bits)
                 }
                 CommittedPoly::RescaleRemainderRaD(_, d) => {
                     let bits = rebase_bits(&node.operator)
@@ -188,7 +191,9 @@ pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::T
                             .expect("RescaleRemainderRaD requested for a non-rescaling operator");
                         remainder_indices =
                             Some(ints.remainder.data().iter().map(|&v| v as usize).collect());
-                        clamp_bits.get_or_insert_with(|| clamp_lookup_bits(&ints.quotient));
+                        clamp_bits.get_or_insert_with(|| {
+                            clamp_lookup_bits(&ints.quotient, node.sat_clamp_bits)
+                        });
                     }
                     build_onehot_witness(remainder_indices.as_ref().unwrap(), bits as usize, *d)
                 }
@@ -305,13 +310,19 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let input = &layer_data.operands[0];
                 build_activation_small_rad_witness(input, *d)
             }
+            CommittedPoly::GlobalClampRaD(..)
+            | CommittedPoly::GlobalRemainderRaD(..)
+            | CommittedPoly::GlobalClampOutRaD(..)
+            | CommittedPoly::GlobalClampSlackRaD(..) => {
+                unreachable!("packed clamp bucket witnesses are built at the model level")
+            }
             CommittedPoly::ClampRaD(node_idx, d) => {
                 // Saturating Add/Sub: the lookup index is the pre-clamp i64
                 // accumulation, recovered by re-executing the binop.
                 let computation_node = &model.graph.nodes[node_idx];
                 let intermediate = clamp_intermediate(computation_node, trace);
-                let lookup_bits = clamp_lookup_bits(&intermediate);
-                build_one_hot_rad_witness(&lookup_bits, *d, CLAMP_LOG_K)
+                let lookup_bits = clamp_lookup_bits(&intermediate, computation_node.sat_clamp_bits);
+                build_one_hot_rad_witness(&lookup_bits, *d, computation_node.sat_clamp_bits)
             }
             CommittedPoly::DivNodeQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];

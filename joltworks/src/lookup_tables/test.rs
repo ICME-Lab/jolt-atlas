@@ -206,7 +206,7 @@ fn prefix_suffix_test_inner<
 
                 r.push(F::from_u64(rng.next_u64()));
 
-                if r.len() % 2 == 0 {
+                if r.len().is_multiple_of(2) {
                     Prefixes::update_checkpoints::<XLEN, F, F>(
                         &mut prefix_checkpoints,
                         r[r.len() - 2],

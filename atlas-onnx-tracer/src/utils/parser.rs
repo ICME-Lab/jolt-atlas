@@ -383,6 +383,7 @@ impl<'a> GraphParser<'a> {
                     }),
                     inputs: vec![*input_idx],
                     output_dims: output_dims.to_vec(),
+                    sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
                 };
                 new_nodes.push(broadcast_node);
                 *input_idx = broadcast_idx;

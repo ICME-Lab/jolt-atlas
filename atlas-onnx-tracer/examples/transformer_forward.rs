@@ -14,5 +14,5 @@ fn main() {
         .collect();
     let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
 
-    let _trace = transformer.trace(&[input.clone()]);
+    let _trace = transformer.trace(std::slice::from_ref(&input));
 }

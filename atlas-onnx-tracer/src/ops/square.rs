@@ -1,5 +1,5 @@
 use crate::{
-    ops::{Op, Square},
+    ops::{FusedIntermediates, Op, Square},
     tensor::Tensor,
 };
 use common::parallel::par_enabled;
@@ -16,6 +16,18 @@ impl Op for Square {
         // Fused: i64 accumulate, floor-rescale by `1 << scale`, saturating clamp
         // to i32. Replaces Square + its ScalarConstDiv rebase node .
         super::floor_rebase_clamp_i32(&square_acc_i64(inputs[0]), self.scale)
+    }
+
+    fn f_with_intermediates(
+        &self,
+        inputs: Vec<&Tensor<i32>>,
+    ) -> (Tensor<i32>, Option<FusedIntermediates>) {
+        if self.scale == 0 {
+            return (self.f(inputs), None);
+        }
+        let (out, ints) =
+            FusedIntermediates::from_acc(&square_acc_i64(inputs[0]), 1i64 << self.scale);
+        (out, Some(ints))
     }
 
     fn requires_shape_equality(&self) -> bool {

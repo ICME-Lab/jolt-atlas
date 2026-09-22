@@ -1,5 +1,5 @@
 use crate::{
-    ops::{Mul, Op},
+    ops::{FusedIntermediates, Mul, Op},
     tensor::Tensor,
 };
 
@@ -16,6 +16,17 @@ impl Op for Mul {
         // Fused: i64 accumulate, floor-rescale by `1 << scale`, saturating clamp
         // to i32. Replaces Mul + its ScalarConstDiv rebase node .
         super::floor_rebase_clamp_i32(&mul_acc_i64(&inputs), self.scale)
+    }
+
+    fn f_with_intermediates(
+        &self,
+        inputs: Vec<&Tensor<i32>>,
+    ) -> (Tensor<i32>, Option<FusedIntermediates>) {
+        if self.scale == 0 {
+            return (self.f(inputs), None);
+        }
+        let (out, ints) = FusedIntermediates::from_acc(&mul_acc_i64(&inputs), 1i64 << self.scale);
+        (out, Some(ints))
     }
 
     fn requires_shape_equality(&self) -> bool {

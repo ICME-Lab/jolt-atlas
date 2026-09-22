@@ -2,14 +2,18 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{model::Model, node::ComputationNode, tensor::Tensor};
+use crate::{model::Model, node::ComputationNode, ops::FusedIntermediates, tensor::Tensor};
 use std::{collections::BTreeMap, ops::Index};
 
 impl Model {
     #[tracing::instrument(name = "Model::trace", skip_all)]
     /// Execute the graph and capture every node's output tensor.
     pub fn trace(&self, inputs: &[Tensor<i32>]) -> Trace {
-        Trace::new(self.execute_graph(inputs))
+        let (node_outputs, fused_intermediates) = self.execute_graph_with_intermediates(inputs);
+        Trace {
+            node_outputs,
+            fused_intermediates,
+        }
     }
 }
 
@@ -18,12 +22,27 @@ impl Model {
 pub struct Trace {
     /// Map from node index to its output tensor.
     pub node_outputs: BTreeMap<usize, Tensor<i32>>,
+    /// Pre-clamp quotient + rescale remainder of every fused rescale node,
+    /// captured during execution so the prover need not re-run the
+    /// accumulation. May be empty for traces built via [`Trace::new`]; the
+    /// prover then falls back to re-execution.
+    #[serde(default)]
+    pub fused_intermediates: BTreeMap<usize, FusedIntermediates>,
 }
 
 impl Trace {
-    /// Create a trace from a map of node indices to their outputs.
+    /// Create a trace from a map of node indices to their outputs (no cached
+    /// fused intermediates).
     pub fn new(node_outputs: BTreeMap<usize, Tensor<i32>>) -> Self {
-        Self { node_outputs }
+        Self {
+            node_outputs,
+            fused_intermediates: BTreeMap::new(),
+        }
+    }
+
+    /// The cached [`FusedIntermediates`] of a fused rescale node, if captured.
+    pub fn fused_intermediates(&self, node_idx: usize) -> Option<&FusedIntermediates> {
+        self.fused_intermediates.get(&node_idx)
     }
 
     /// Build a trace view of a specific node/layer -> its inputs and output.

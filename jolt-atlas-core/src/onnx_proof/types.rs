@@ -71,6 +71,32 @@ pub enum ProofType {
     /// (right-shift) lookup (the Cos/Sin table lookup itself stays under
     /// `Execution`, batched with the downscale read-raf).
     TrigDownscaleRaChecks = 13,
+    /// All clamp buckets' interior/saturated split sumchecks, proven as one
+    /// batched sumcheck after the node loop (stored under `DEFERRED_PROOF_IDX`;
+    /// see `clamp_split`).
+    DeferredClampSplit = 14,
+    /// All clamp buckets' chunk-value / Hamming and Booleanity checks, batched.
+    DeferredClampChunkChecks = 15,
+    /// All nodes' fused rescale-remainder range checks, batched.
+    DeferredRemainderRC = 16,
+    /// All nodes' rescale-remainder one-hot checks, batched.
+    DeferredRemainderRaChecks = 17,
+    /// All clamped-activation nodes' small-table execution sumchecks, batched.
+    DeferredActivationExec = 18,
+    /// All clamped-activation nodes' activation-clamp read-rafs, batched.
+    DeferredActivationClamp = 19,
+    /// All clamped-activation nodes' small-table one-hot checks, batched.
+    DeferredActivationSmallRaChecks = 20,
+    /// All operand range checks (MeanOfSquares / Rsqrt), batched.
+    DeferredRangeCheck = 21,
+    /// All operand range checks' one-hot checks, batched.
+    DeferredRangeCheckRaChecks = 22,
+    /// All clamped-activation nodes' clamp one-hot checks, batched.
+    DeferredActivationClampRaChecks = 23,
+    /// All softmax nodes' stage-3 lookups (exp digits, significance clamp), batched.
+    DeferredSoftmaxStage3 = 24,
+    /// All softmax nodes' stage-4 one-hot checks, batched.
+    DeferredSoftmaxRaChecks = 25,
 }
 
 impl TryFrom<u8> for ProofType {
@@ -92,6 +118,18 @@ impl TryFrom<u8> for ProofType {
             11 => Ok(Self::RescaleRemainderRaChecks),
             12 => Ok(Self::RescaleArith),
             13 => Ok(Self::TrigDownscaleRaChecks),
+            14 => Ok(Self::DeferredClampSplit),
+            15 => Ok(Self::DeferredClampChunkChecks),
+            16 => Ok(Self::DeferredRemainderRC),
+            17 => Ok(Self::DeferredRemainderRaChecks),
+            18 => Ok(Self::DeferredActivationExec),
+            19 => Ok(Self::DeferredActivationClamp),
+            20 => Ok(Self::DeferredActivationSmallRaChecks),
+            21 => Ok(Self::DeferredRangeCheck),
+            22 => Ok(Self::DeferredRangeCheckRaChecks),
+            23 => Ok(Self::DeferredActivationClampRaChecks),
+            24 => Ok(Self::DeferredSoftmaxStage3),
+            25 => Ok(Self::DeferredSoftmaxRaChecks),
             _ => Err(SerializationError::InvalidData),
         }
     }

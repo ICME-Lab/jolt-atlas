@@ -1,0 +1,28 @@
+{
+  "recorded_at": "2026-09-22T11:00:50.349837+00:00",
+  "pr": {
+    "baseRefName": "main",
+    "body": "# Document consolidated Atlas reviews and validation evidence\n\nThe consolidated implementation PRs span several dependent branches and retain measurements from distinct experiments. This documentation adds a central review index, a map from all 67 original PRs to seven implementation groups, and the source identities and validation evidence needed to assess each claim.\n\n**Topic** review documentation across the Atlas contribution groups. **Type** Documentation and reproducibility records. **PR target** `main`. **Prerequisites** None for merging the documentation. The documented code follows #369 before #370/#371, then #371, #372, #373, #374 and #375 in order along the native path.\n\n## Contents\n\n- [Review index](https://github.com/ICME-Lab/jolt-atlas/blob/review/consolidation-records/docs/review-2026-09-21/README.md) and seven descriptions, with concrete changes, explicit benchmark controls, measurements and limitations.\n- Original PR and commit maps, preserved source heads, component review order, and publication receipts.\n- Exact Linux commands, logs and file identities, including ordinary proof parity across feature configurations and the known experimental ONNX ZK failures.\n- History alignment records after the round-two squash merge, and SHA-256 checksums for the archived files.\n\n## Review scope\n\nAll changed files are under `docs/review-2026-09-21/`. The archive includes small proof fixtures and scripts used to authenticate the recorded checks. It changes no runtime source, tests, dependencies or CI configuration and can merge independently of the implementation PRs.\n\nPerformance numbers retain their individual baselines and workload boundaries. They are not a new benchmark of the combined branches, and gains from separate controls must not be multiplied. Dated CI snapshots are historical observations, not a claim that current CI is green. The known experimental ONNX dispatcher limitations remain explicit.\n\n## Validation\n\n- Confirmed that the main target is an ancestor and the complete PR file comparison contains only documentation and evidence.\n- Verified the evidence manifest and refreshed checksums after updating the index and review descriptions.\n- Confirmed that #374 and #375 target main at the previously validated code heads. Their Linux tests retain their original source and feature scope.\n- No new runtime test or benchmark was run for this documentation change.\n",
+    "headRefName": "review/consolidation-records",
+    "headRefOid": "b33b6b0fece7124b7476926e2e3fdaa98e02168b",
+    "isDraft": false,
+    "labels": [
+      {
+        "id": "LA_kwDOPifFd88AAAACIaGT2A",
+        "name": "documentation",
+        "description": "Improvements or additions to documentation",
+        "color": "0075ca"
+      },
+      {
+        "id": "LA_kwDOPifFd88AAAACZV8_zQ",
+        "name": "chore",
+        "description": "",
+        "color": "d79130"
+      }
+    ],
+    "number": 376,
+    "state": "OPEN",
+    "title": "Document consolidated Atlas reviews and validation evidence",
+    "url": "https://github.com/ICME-Lab/jolt-atlas/pull/376"
+  }
+}

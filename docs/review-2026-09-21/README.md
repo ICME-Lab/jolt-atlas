@@ -21,6 +21,7 @@ The [retarget record](retarget-2026-09-22/README.md) gives old/new heads, source
 | 5 | Table access and generation | [#373](https://github.com/ICME-Lab/jolt-atlas/pull/373) | [Review 5](reviews/05.md) |
 | 6 | Native proving time and memory | [#374](https://github.com/ICME-Lab/jolt-atlas/pull/374) | [Review 6](reviews/06.md) |
 | 7 | Native verification and encoding | [#375](https://github.com/ICME-Lab/jolt-atlas/pull/375) | [Review 7](reviews/07.md) |
+| Docs | Review index and validation evidence | [#376](https://github.com/ICME-Lab/jolt-atlas/pull/376) | [Documentation review](reviews/08.md) |
 
 All seven implementation units are in the active review queue. The additional documentation review covers this index and the evidence archive, without introducing another implementation group. [Commit review map](commits.md) lists the component changes in order.
 
@@ -90,7 +91,7 @@ These comparisons are retained evidence from the original PRs. Each review descr
 
 ## Publication status
 
-On September 22, the native prover and verifier branches were opened as #374 and #375 at the user’s request. Both target main and retain their previously validated source trees. The records branch now includes the merged main ancestry, with a comparison restricted to `docs/review-2026-09-21/`. Its review covers documentation and evidence only. No new runtime tests or performance measurements were needed to publish these existing branches.
+On September 22, the native prover and verifier branches were opened as #374 and #375 at the user’s request. Both target main and retain their previously validated source trees. The records branch now includes the merged main ancestry, with a comparison restricted to `docs/review-2026-09-21/`. Its documentation and evidence review is #376. There are eight open reviews in total, all targeting main. No new runtime tests or performance measurements were needed to publish these existing branches.
 
 The September 21 GitHub readback confirmed exactly five open PRs by the author, #369–#373. All 67 originals are closed with replacement links. Their original branch names and heads remain unchanged, including #292's base for the still-open #366. The attributed PR retains its original head and base. The [publication readback](publication-readback.json) and [closure receipts](publication.json) preserve these checks.
 

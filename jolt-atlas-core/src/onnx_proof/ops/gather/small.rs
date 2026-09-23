@@ -181,7 +181,7 @@ pub(crate) fn build_stage2_verifiers<F: JoltField>(
     let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
     let indices = graph.nodes.get(&computation_node.inputs[1]).unwrap();
 
-    let num_words = dict.output_dims[gather_op.axis];
+    let num_words = dict.raw_or_padded_output_dims()[gather_op.axis];
     let num_lookups = indices.pow2_padded_num_output_elements();
 
     let hb_params = ra_hamming_bool_params::<F>(
@@ -292,7 +292,7 @@ pub(crate) fn build_stage3_verifier<F: JoltField>(
     let graph = &verifier.preprocessing.model.graph;
     let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
 
-    let num_words = dict.output_dims[gather_op.axis];
+    let num_words = dict.raw_or_padded_output_dims()[gather_op.axis];
 
     let hw_params = ra_hamming_weight_params::<F>(
         computation_node,
@@ -320,7 +320,7 @@ pub(crate) fn build_stage2_verifiers_zk<F: JoltField>(
     };
     let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
     let indices = graph.nodes.get(&computation_node.inputs[1]).unwrap();
-    let num_words = dict.output_dims[gather_op.axis];
+    let num_words = dict.raw_or_padded_output_dims()[gather_op.axis];
     let num_lookups = indices.pow2_padded_num_output_elements();
 
     let hb_params =
@@ -351,7 +351,7 @@ pub(crate) fn build_stage3_verifier_zk<F: JoltField>(
         panic!("Expected GatherSmall operator")
     };
     let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
-    let num_words = dict.output_dims[gather_op.axis];
+    let num_words = dict.raw_or_padded_output_dims()[gather_op.axis];
     let hw_params =
         ra_hamming_weight_params::<F>(computation_node, num_words, accumulator, transcript);
     HammingWeightSumcheckVerifier::new(hw_params)

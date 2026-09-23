@@ -176,13 +176,12 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
         for stage in &self.stages {
             match stage {
                 Stage::SimpleOp { operator } => {
-                    builder.add_node(ComputationNode {
-                        idx: builder.idx(node_offset),
-                        operator: operator.clone(),
-                        inputs: self.hctx.internal_input_indices.clone(),
-                        output_dims: self.hctx.output_dims.clone(),
-                        sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-                    });
+                    builder.add_node(ComputationNode::new(
+                        builder.idx(node_offset),
+                        operator.clone(),
+                        self.hctx.internal_input_indices.clone(),
+                        self.hctx.output_dims.clone(),
+                    ));
                     current_output_idx = Some(builder.idx(node_offset));
                     node_offset += 1;
                 }
@@ -191,13 +190,12 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
                         Some(idx) => vec![idx],
                         None => self.hctx.internal_input_indices.clone(),
                     };
-                    builder.add_node(ComputationNode {
-                        idx: builder.idx(node_offset),
-                        operator: operator.clone(),
+                    builder.add_node(ComputationNode::new(
+                        builder.idx(node_offset),
+                        operator.clone(),
                         inputs,
-                        output_dims: self.hctx.output_dims.clone(),
-                        sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-                    });
+                        self.hctx.output_dims.clone(),
+                    ));
                     current_output_idx = Some(builder.idx(node_offset));
                     node_offset += 1;
                 }
@@ -209,24 +207,22 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
                         Some(idx) => vec![idx],
                         None => self.hctx.internal_input_indices.clone(),
                     };
-                    builder.add_node(ComputationNode {
-                        idx: builder.idx(node_offset),
-                        operator: operator.clone(),
+                    builder.add_node(ComputationNode::new(
+                        builder.idx(node_offset),
+                        operator.clone(),
                         inputs,
-                        output_dims: output_dims.clone(),
-                        sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-                    });
+                        output_dims.clone(),
+                    ));
                     current_output_idx = Some(builder.idx(node_offset));
                     node_offset += 1;
                 }
                 Stage::Constant { tensor } => {
-                    builder.add_node(ComputationNode {
-                        idx: builder.idx(node_offset),
-                        operator: Operator::Constant(Constant(tensor.clone())),
-                        inputs: vec![],
-                        output_dims: self.hctx.output_dims.clone(),
-                        sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-                    });
+                    builder.add_node(ComputationNode::new(
+                        builder.idx(node_offset),
+                        Operator::Constant(Constant(tensor.clone())),
+                        vec![],
+                        self.hctx.output_dims.clone(),
+                    ));
                     current_output_idx = Some(builder.idx(node_offset));
                     node_offset += 1;
                 }
@@ -234,13 +230,12 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
                     let prev_idx =
                         current_output_idx.expect("DivByPrevious requires a previous node");
                     let prev_prev_idx = builder.idx(node_offset - 2);
-                    builder.add_node(ComputationNode {
-                        idx: builder.idx(node_offset),
-                        operator: Operator::Div(Default::default()),
-                        inputs: vec![prev_prev_idx, prev_idx],
-                        output_dims: self.hctx.output_dims.clone(),
-                        sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-                    });
+                    builder.add_node(ComputationNode::new(
+                        builder.idx(node_offset),
+                        Operator::Div(Default::default()),
+                        vec![prev_prev_idx, prev_idx],
+                        self.hctx.output_dims.clone(),
+                    ));
                     current_output_idx = Some(builder.idx(node_offset));
                     node_offset += 1;
                 }
@@ -249,13 +244,12 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
                         current_output_idx.expect("DivByConstant requires a previous node");
                     let output_dims = self.hctx.output_dims.clone();
 
-                    builder.add_node(ComputationNode {
-                        idx: builder.idx(node_offset),
-                        operator: Operator::ScalarConstDiv(ScalarConstDiv { divisor: *value }),
-                        inputs: vec![prev_idx],
+                    builder.add_node(ComputationNode::new(
+                        builder.idx(node_offset),
+                        Operator::ScalarConstDiv(ScalarConstDiv { divisor: *value }),
+                        vec![prev_idx],
                         output_dims,
-                        sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-                    });
+                    ));
                     current_output_idx = Some(builder.idx(node_offset));
                     node_offset += 1;
                 }
@@ -267,13 +261,12 @@ impl<'a, 'b> HandlerBuilder<'a, 'b> {
             let prev_idx = current_output_idx.expect("Rebase requires a previous node");
             let output_dims = self.hctx.output_dims.clone();
 
-            builder.add_node(ComputationNode {
-                idx: builder.idx(node_offset),
-                operator: Operator::ScalarConstDiv(ScalarConstDiv { divisor: factor }),
-                inputs: vec![prev_idx],
+            builder.add_node(ComputationNode::new(
+                builder.idx(node_offset),
+                Operator::ScalarConstDiv(ScalarConstDiv { divisor: factor }),
+                vec![prev_idx],
                 output_dims,
-                sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-            });
+            ));
         }
 
         builder.finish()

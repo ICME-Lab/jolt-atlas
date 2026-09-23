@@ -30,7 +30,7 @@ fn handle_gather(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         hctx.node.op().name().to_string(),
     );
 
-    let dict_len = hctx.internal_input_nodes[0].output_dims[op.axis];
+    let dict_len = hctx.internal_input_nodes[0].raw_or_padded_output_dims()[op.axis];
 
     let operator = if dict_len.next_power_of_two() <= 65536 {
         Operator::GatherSmall(GatherSmall {

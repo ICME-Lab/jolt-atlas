@@ -373,18 +373,17 @@ impl<'a> GraphParser<'a> {
         for input_idx in input_indices.iter_mut() {
             let input_node = ctx.nodes.get(input_idx).expect("Input node must exist");
 
-            if input_node.output_dims != output_dims {
+            if input_node.raw_or_padded_output_dims() != output_dims {
                 // Insert a broadcast node
                 let broadcast_idx = node_idx + added_nodes;
-                let broadcast_node = ComputationNode {
-                    idx: broadcast_idx,
-                    operator: Operator::Broadcast(crate::ops::Broadcast {
+                let broadcast_node = ComputationNode::new(
+                    broadcast_idx,
+                    Operator::Broadcast(crate::ops::Broadcast {
                         shape: output_dims.to_vec(),
                     }),
-                    inputs: vec![*input_idx],
-                    output_dims: output_dims.to_vec(),
-                    sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-                };
+                    vec![*input_idx],
+                    output_dims.to_vec(),
+                );
                 new_nodes.push(broadcast_node);
                 *input_idx = broadcast_idx;
                 added_nodes += 1;
@@ -885,7 +884,10 @@ mod tests {
 
         assert_eq!(broadcast_nodes.len(), 1);
         assert_eq!(broadcast_nodes[0].inputs, vec![0]);
-        assert_eq!(broadcast_nodes[0].output_dims, vec![3, 4, 5]);
+        assert_eq!(
+            broadcast_nodes[0].raw_or_padded_output_dims(),
+            vec![3, 4, 5]
+        );
         assert_eq!(internal_input_indices[0], broadcast_nodes[0].idx);
     }
 

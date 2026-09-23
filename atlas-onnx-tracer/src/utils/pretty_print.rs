@@ -59,7 +59,7 @@ impl From<&ComputationNode> for NodeRow {
         };
 
         let output_dims = node
-            .output_dims
+            .raw_or_padded_output_dims()
             .iter()
             .map(|d| d.to_string())
             .collect::<Vec<_>>()
@@ -189,23 +189,11 @@ mod tests {
         let mut nodes = BTreeMap::new();
         nodes.insert(
             0,
-            ComputationNode {
-                idx: 0,
-                operator: Operator::Input(Default::default()),
-                inputs: vec![],
-                output_dims: vec![1, 2],
-                sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-            },
+            ComputationNode::new(0, Operator::Input(Default::default()), vec![], vec![1, 2]),
         );
         nodes.insert(
             1,
-            ComputationNode {
-                idx: 1,
-                operator: Operator::Add(Default::default()),
-                inputs: vec![0],
-                output_dims: vec![1, 2],
-                sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-            },
+            ComputationNode::new(1, Operator::Add(Default::default()), vec![0], vec![1, 2]),
         );
 
         let graph = ComputationGraph {

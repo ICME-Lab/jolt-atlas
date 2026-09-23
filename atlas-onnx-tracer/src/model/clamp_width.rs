@@ -118,7 +118,7 @@ fn einsum_acc_bound(
             return u128::MAX;
         };
         for (j, c) in inputs_eq[i].chars().enumerate() {
-            if let Some(&d) = input.output_dims.get(j) {
+            if let Some(&d) = input.raw_or_padded_output_dims().get(j) {
                 sizes.insert(c, d);
             }
         }
@@ -146,7 +146,7 @@ pub fn clamp_value_bound(
             let n: u128 = s
                 .axes
                 .iter()
-                .map(|&a| *input.output_dims.get(a).unwrap_or(&1) as u128)
+                .map(|&a| *input.raw_or_padded_output_dims().get(a).unwrap_or(&1) as u128)
                 .product::<u128>()
                 .max(1);
             n * I32_MAG

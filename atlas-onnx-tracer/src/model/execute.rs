@@ -108,10 +108,10 @@ impl Model {
 
                     // Pad input to match the padded node dimensions
                     let node = self.graph.nodes.get(&input_node_idx).unwrap();
-                    let padded_dims = &node.output_dims;
+                    let padded_dims = node.raw_or_padded_output_dims();
                     let mut padded_tensor = input_tensor.clone();
                     padded_tensor
-                        .pad_to_dims(padded_dims)
+                        .pad_to_dims(&padded_dims)
                         .expect("Failed to pad input tensor");
                     padded_tensor
                 } else {

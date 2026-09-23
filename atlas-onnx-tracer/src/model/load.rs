@@ -521,7 +521,7 @@ impl<'a> ModelLoader<'a> {
         for &input_idx in inputs {
             if let Some(node) = nodes.get(&input_idx) {
                 self.original_input_dims
-                    .insert(input_idx, node.output_dims.clone());
+                    .insert(input_idx, node.raw_or_padded_output_dims());
             }
         }
 
@@ -529,7 +529,7 @@ impl<'a> ModelLoader<'a> {
         for &output_idx in outputs {
             if let Some(node) = nodes.get(&output_idx) {
                 self.original_output_dims
-                    .insert(output_idx, node.output_dims.clone());
+                    .insert(output_idx, node.raw_or_padded_output_dims());
             }
         }
 
@@ -558,7 +558,7 @@ impl<'a> ModelLoader<'a> {
             }
 
             // Pad output dimensions for all nodes
-            node.output_dims = Model::pad_dims_to_power_of_2(&node.output_dims);
+            node.pad_output_dims_to_power_of_2();
         }
 
         super::reshape_padding::lower(nodes, reshape_plans, &mapping);

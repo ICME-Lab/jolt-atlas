@@ -172,9 +172,9 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
             .nodes
             .get(&computation_node.inputs[0])
             .expect("Reshape node should have one input")
-            .output_dims
+            .raw_or_padded_output_dims()
             .clone();
-        let output_raw_dims = computation_node.output_dims.clone();
+        let output_raw_dims = computation_node.raw_or_padded_output_dims();
         Self {
             computation_node,
             r_output,

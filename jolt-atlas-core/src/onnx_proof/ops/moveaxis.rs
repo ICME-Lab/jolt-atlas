@@ -77,7 +77,7 @@ impl<F: JoltField> MoveAxisProver<F> {
     /// Initialize the prover with parameters, computing the permuted input challenges.
     pub fn initialize(params: MoveAxisParams<F>) -> Self {
         let r_input = permute_challenge_groups::<F>(
-            &params.computation_node.output_dims,
+            &params.computation_node.raw_or_padded_output_dims(),
             &params.r_output,
             &params.computation_node.operator,
         );
@@ -117,7 +117,7 @@ impl<F: JoltField> MoveAxisVerifier<F> {
         let params = MoveAxisParams::new(computation_node, accumulator);
 
         let r_input = permute_challenge_groups::<F>(
-            &params.computation_node.output_dims,
+            &params.computation_node.raw_or_padded_output_dims(),
             &params.r_output,
             &params.computation_node.operator,
         );

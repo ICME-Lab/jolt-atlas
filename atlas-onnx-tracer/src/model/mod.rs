@@ -316,13 +316,13 @@ impl Model {
                 Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
                 Operator::GatherSmall(_) => {
                     let input_nodes = self.get_input_nodes(node);
-                    let num_words = input_nodes[0].output_dims[0];
+                    let num_words = input_nodes[0].raw_or_padded_output_dims()[0];
                     let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                     log_2(num_words) + log_2(num_indices)
                 }
                 Operator::GatherLarge(_) => {
                     let input_nodes = self.get_input_nodes(node);
-                    let num_words = input_nodes[0].output_dims[0].next_power_of_two();
+                    let num_words = input_nodes[0].raw_or_padded_output_dims()[0].next_power_of_two();
                     let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                     log_2(num_words) + log_2(num_indices)
                 }
@@ -544,7 +544,7 @@ mod tests {
 
         // Verify all node output dims are powers of 2
         for (idx, node) in &model.graph.nodes {
-            for &dim in &node.output_dims {
+            for dim in node.raw_or_padded_output_dims() {
                 assert_eq!(
                     dim,
                     dim.next_power_of_two(),

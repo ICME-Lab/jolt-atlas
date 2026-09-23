@@ -56,12 +56,12 @@ impl RbmkRbnkBmnVariant {
             "abmk,abnk->abmn" => Self::AbmkAbnkAbmn {
                 log_a: {
                     assert!(
-                        computation_node.output_dims.len() == 4,
+                        computation_node.raw_or_padded_output_dims().len() == 4,
                         "abmk,abnk->abmn expects a rank-4 output"
                     );
                     assert_eq!(
                         einsum_dims.left_operand()[0],
-                        computation_node.output_dims[0] * computation_node.output_dims[1],
+                        computation_node.raw_or_padded_output_dims()[0] * computation_node.raw_or_padded_output_dims()[1],
                         "abmk,abnk->abmn requires flattening contiguous a,b axes into the retained batch pack"
                     );
                     assert_eq!(
@@ -69,45 +69,45 @@ impl RbmkRbnkBmnVariant {
                         einsum_dims.left_operand()[0],
                         "abmk,abnk->abmn requires both operands to share the same retained batch pack"
                     );
-                    computation_node.output_dims[0].log_2()
+                    computation_node.raw_or_padded_output_dims()[0].log_2()
                 },
-                log_b: computation_node.output_dims[1].log_2(),
-                log_m: computation_node.output_dims[2].log_2(),
-                log_n: computation_node.output_dims[3].log_2(),
+                log_b: computation_node.raw_or_padded_output_dims()[1].log_2(),
+                log_m: computation_node.raw_or_padded_output_dims()[2].log_2(),
+                log_n: computation_node.raw_or_padded_output_dims()[3].log_2(),
                 log_k: einsum_dims.left_operand()[2].log_2(),
             },
             "acbmk,kcn->cbmn" => Self::AcbmkKcnCbmn {
                 log_a: {
                     assert!(
-                        computation_node.output_dims.len() == 4,
+                        computation_node.raw_or_padded_output_dims().len() == 4,
                         "acbmk,kcn->cbmn expects a rank-4 output"
                     );
                     assert_eq!(
                         einsum_dims.left_operand()[1],
-                        computation_node.output_dims[0] * computation_node.output_dims[1],
+                        computation_node.raw_or_padded_output_dims()[0] * computation_node.raw_or_padded_output_dims()[1],
                         "acbmk,kcn->cbmn requires flattening contiguous c,b axes into the retained batch pack"
                     );
                     assert_eq!(
                         einsum_dims.right_operand()[1],
-                        computation_node.output_dims[0],
+                        computation_node.raw_or_padded_output_dims()[0],
                         "acbmk,kcn->cbmn requires the right operand c axis to match the output c axis"
                     );
                     einsum_dims.left_operand()[0].log_2()
                 },
-                log_c: computation_node.output_dims[0].log_2(),
-                log_b: computation_node.output_dims[1].log_2(),
-                log_m: computation_node.output_dims[2].log_2(),
-                log_n: computation_node.output_dims[3].log_2(),
+                log_c: computation_node.raw_or_padded_output_dims()[0].log_2(),
+                log_b: computation_node.raw_or_padded_output_dims()[1].log_2(),
+                log_m: computation_node.raw_or_padded_output_dims()[2].log_2(),
+                log_n: computation_node.raw_or_padded_output_dims()[3].log_2(),
                 log_k: einsum_dims.left_operand()[3].log_2(),
             },
             "cbmk,cbkn->amn" => Self::CbmkCbknAmn {
                 log_cb: {
                     assert!(
-                        computation_node.output_dims.len() == 3,
+                        computation_node.raw_or_padded_output_dims().len() == 3,
                         "cbmk,cbkn->amn expects a rank-3 output"
                     );
                     assert!(
-                        computation_node.output_dims[0] == 1,
+                        computation_node.raw_or_padded_output_dims()[0] == 1,
                         "cbmk,cbkn->amn is interpreted as cbmk,cbkn->1mn in the current tracer"
                     );
                     assert_eq!(
@@ -117,8 +117,12 @@ impl RbmkRbnkBmnVariant {
                     );
                     einsum_dims.left_operand()[0].log_2()
                 },
-                log_m: computation_node.output_dims[computation_node.output_dims.len() - 2].log_2(),
-                log_n: computation_node.output_dims[computation_node.output_dims.len() - 1].log_2(),
+                log_m: computation_node.raw_or_padded_output_dims()
+                    [computation_node.raw_or_padded_output_dims().len() - 2]
+                    .log_2(),
+                log_n: computation_node.raw_or_padded_output_dims()
+                    [computation_node.raw_or_padded_output_dims().len() - 1]
+                    .log_2(),
                 log_k: einsum_dims.left_operand()[2].log_2(),
             },
             other => panic!("unexpected rbmk_rbnk_bmn equation: {other}"),

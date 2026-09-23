@@ -84,8 +84,8 @@ pub(crate) fn plans(nodes: &BTreeMap<usize, ComputationNode>) -> BTreeMap<usize,
         .iter()
         .filter_map(|(&idx, node)| {
             if let Operator::Reshape(_) = node.operator {
-                let input = &nodes[&node.inputs[0]].output_dims;
-                plan(input, &node.output_dims).map(|p| (idx, p))
+                let input = nodes[&node.inputs[0]].raw_or_padded_output_dims();
+                plan(&input, &node.raw_or_padded_output_dims()).map(|p| (idx, p))
             } else {
                 None
             }
@@ -217,11 +217,10 @@ mod tests {
         let plans = plans(&nodes);
         let mapping = remapping(&nodes, &plans);
         for n in nodes.values_mut() {
-            n.output_dims
-                .iter_mut()
-                .for_each(|d| *d = d.next_power_of_two());
+            n.pad_output_dims_to_power_of_2();
+            let dims = n.raw_or_padded_output_dims();
             if let Operator::Reshape(r) = &mut n.operator {
-                r.shape = n.output_dims.clone();
+                r.shape = dims;
             }
         }
         lower(&mut nodes, plans, &mapping);

@@ -429,7 +429,9 @@ impl Model {
                 assert_eq!(tensor.dims(), original_dims.as_slice());
                 let node = self.graph.nodes.get(&idx).unwrap();
                 let mut padded = tensor.clone();
-                padded.pad_to_dims(&node.output_dims).expect("pad failed");
+                padded
+                    .pad_to_dims(&node.raw_or_padded_output_dims())
+                    .expect("pad failed");
                 outputs.insert(idx, padded);
             } else {
                 outputs.insert(idx, tensor.clone());
@@ -517,11 +519,11 @@ impl Model {
             // The decomposed constant may be padded to power-of-2 dims.
             // Pad the original f64 constant to match.
             let graph_node = &self.graph.nodes[&graph_idx];
-            let target_dims = &graph_node.output_dims;
+            let target_dims = graph_node.raw_or_padded_output_dims();
             let mut padded: Tensor<f64> = tract_const;
             if padded.dims() != target_dims.as_slice() {
                 padded
-                    .pad_to_dims(target_dims)
+                    .pad_to_dims(&target_dims)
                     .expect("failed to pad original constant");
             }
             map.insert(graph_idx, padded);

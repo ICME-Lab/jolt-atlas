@@ -428,7 +428,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .map(|&index| Some(index as u16))
                     .collect();
                 let input_dict = &model.graph.nodes.get(&computation_node.inputs[0]).unwrap();
-                let num_words = input_dict.raw_or_padded_output_dims()[0];
+                let num_words = input_dict.padded_output_dims()[0];
                 MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
                     non_zero_addresses,
                     num_words,
@@ -559,7 +559,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 // `z = max_k - x` value (no offset, `z >= 0` always).
                 let node = &model.graph.nodes[node_idx];
                 let &last_dim = node
-                    .raw_or_padded_output_dims()
+                    .padded_output_dims()
                     .last()
                     .expect("softmax node must have at least one output dimension");
                 let st = softmax_last_axis_full_trace(node, trace);

@@ -19,9 +19,8 @@ pub struct ComputationNode {
     pub operator: Operator,
     /// Indices of upstream nodes whose outputs feed this node.
     pub inputs: Vec<usize>,
-    /// Dimensions (shape) of the tensor produced by this node.
-    ///
-    /// Read through [`ComputationNode::raw_or_padded_output_dims`].
+    /// Dimensions (shape) of the tensor produced by this node, as the ONNX
+    /// graph declares them.
     output_dims: Vec<usize>,
     /// Address width (bits) of this node's saturating-clamp lookup, if it has
     /// one: the two's-complement width that provably holds the pre-clamp value.
@@ -77,33 +76,61 @@ impl ComputationNode {
         self.output_dims.iter().product()
     }
 
-    /// This node's output dimensions exactly as stored, raw or padded.
-    ///
-    /// The name is the honest one, because which of the two you get depends on
-    /// where the caller sits in the loading pipeline. Nodes are built with the
-    /// shape the ONNX graph declares, and [`ModelLoader::pad`] later rounds
-    /// every stored dimension up to a power of two in place — and only when
-    /// [`RunArgs::pad_to_power_of_2`] is set. Callers that run before that
-    /// pass, such as the operator handlers, the original-dimension capture and
-    /// the reshape planner, observe raw dimensions; callers after it observe
-    /// padded ones, unless padding was never requested.
-    ///
-    /// No caller should have to care. Each call site is to be resolved to a
-    /// definite raw or padded reading, at which point this accessor goes away.
-    ///
-    /// [`ModelLoader::pad`]: crate::model::load::ModelLoader::pad
-    /// [`RunArgs::pad_to_power_of_2`]: crate::model::RunArgs::pad_to_power_of_2
-    pub fn raw_or_padded_output_dims(&self) -> Vec<usize> {
+    /// Shape of this node's output tensor, as the ONNX graph declares it.
+    pub fn raw_output_dims(&self) -> Vec<usize> {
         self.output_dims.clone()
+    }
+
+    /// Shape of this node's output tensor over the power-of-two domain the
+    /// proof is defined on: every raw dimension rounded up to a power of two.
+    pub fn padded_output_dims(&self) -> Vec<usize> {
+        self.output_dims.map_next_power_of_two()
     }
 
     /// Returns true if the output of this node is a scalar (i.e., has exactly one element).
     pub fn is_scalar(&self) -> bool {
         self.num_output_elements() == 1
     }
+}
 
-    /// Rounds every stored output dimension up to the next power of two.
-    pub(crate) fn pad_output_dims_to_power_of_2(&mut self) {
-        self.output_dims = self.output_dims.map_next_power_of_two();
+#[cfg(test)]
+mod tests {
+    use super::ComputationNode;
+    use crate::ops::Operator;
+
+    fn node(dims: &[usize]) -> ComputationNode {
+        ComputationNode::new(
+            0,
+            Operator::Input(Default::default()),
+            vec![],
+            dims.to_vec(),
+        )
+    }
+
+    #[test]
+    fn padding_rounds_each_dimension_up_independently() {
+        assert_eq!(node(&[3, 5]).padded_output_dims(), vec![4, 8]);
+        assert_eq!(node(&[2, 3, 4]).padded_output_dims(), vec![2, 4, 4]);
+        assert_eq!(node(&[7]).padded_output_dims(), vec![8]);
+    }
+
+    #[test]
+    fn padding_leaves_powers_of_two_alone() {
+        assert_eq!(node(&[4, 16]).padded_output_dims(), vec![4, 16]);
+        assert_eq!(node(&[1, 1]).padded_output_dims(), vec![1, 1]);
+        assert_eq!(node(&[]).padded_output_dims(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn raw_dimensions_are_returned_unchanged() {
+        assert_eq!(node(&[3, 5]).raw_output_dims(), vec![3, 5]);
+        assert_eq!(node(&[4, 16]).raw_output_dims(), vec![4, 16]);
+    }
+
+    #[test]
+    fn element_counts_follow_their_domain() {
+        let n = node(&[3, 5]);
+        assert_eq!(n.num_output_elements(), 15);
+        assert_eq!(n.pow2_padded_num_output_elements(), 32);
     }
 }

@@ -133,7 +133,7 @@ fn handle_cast(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         .nodes
         .get(&hctx.internal_input_indices[0])
         .expect("Input node not found");
-    assert_eq!(input_node.raw_or_padded_output_dims(), hctx.output_dims);
+    assert_eq!(input_node.raw_output_dims(), hctx.output_dims);
 
     match dt {
         DatumType::Bool

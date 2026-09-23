@@ -428,6 +428,27 @@ fn test_concat_transformer_block_e2e() {
     );
 }
 
+// The same model with padding on: its final concat produces 32 + 16 + 32 = 80
+// columns, so the output is padded while each operand already is a power of
+// two. No other concat test covers that combination.
+#[test]
+fn test_concat_transformer_block_padded_e2e() {
+    let working_dir = "../atlas-onnx-tracer/models/concat_transformer_block/";
+    let mut rng = StdRng::seed_from_u64(0xC07CA7);
+
+    let heads: Vec<_> = (0..5)
+        .map(|_| Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16)))
+        .collect();
+
+    let io = prove_and_verify(
+        working_dir,
+        &heads,
+        &RunArgs::default(),
+        TestConfig::new().print_timing().print_model(),
+    );
+    assert_eq!(io.outputs[0].dims(), &[1, 4, 80]);
+}
+
 #[test]
 fn test_self_attention_layer() {
     let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";

@@ -59,7 +59,7 @@ impl From<&ComputationNode> for NodeRow {
         };
 
         let output_dims = node
-            .raw_or_padded_output_dims()
+            .padded_output_dims()
             .iter()
             .map(|d| d.to_string())
             .collect::<Vec<_>>()

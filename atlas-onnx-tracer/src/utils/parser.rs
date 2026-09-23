@@ -373,7 +373,7 @@ impl<'a> GraphParser<'a> {
         for input_idx in input_indices.iter_mut() {
             let input_node = ctx.nodes.get(input_idx).expect("Input node must exist");
 
-            if input_node.raw_or_padded_output_dims() != output_dims {
+            if input_node.raw_output_dims() != output_dims {
                 // Insert a broadcast node
                 let broadcast_idx = node_idx + added_nodes;
                 let broadcast_node = ComputationNode::new(
@@ -884,10 +884,7 @@ mod tests {
 
         assert_eq!(broadcast_nodes.len(), 1);
         assert_eq!(broadcast_nodes[0].inputs, vec![0]);
-        assert_eq!(
-            broadcast_nodes[0].raw_or_padded_output_dims(),
-            vec![3, 4, 5]
-        );
+        assert_eq!(broadcast_nodes[0].raw_output_dims(), vec![3, 4, 5]);
         assert_eq!(internal_input_indices[0], broadcast_nodes[0].idx);
     }
 

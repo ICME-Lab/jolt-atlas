@@ -168,13 +168,23 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_output = accessor.get_reduced_opening().0;
-        let input_raw_dims = graph
-            .nodes
-            .get(&computation_node.inputs[0])
-            .expect("Reshape node should have one input")
-            .raw_or_padded_output_dims()
-            .clone();
-        let output_raw_dims = computation_node.raw_or_padded_output_dims();
+        // The tensors' physical shape. Temporary: goes with the padding toggle.
+        let dims = |node: &ComputationNode| {
+            if graph.has_padded_tensors() {
+                node.padded_output_dims()
+            } else {
+                node.raw_output_dims()
+            }
+        };
+        // A padded graph lowers reshapes into gather nodes that perform the
+        // permutation, so the selector's remap must stay the identity there.
+        let input_raw_dims = dims(
+            graph
+                .nodes
+                .get(&computation_node.inputs[0])
+                .expect("Reshape node should have one input"),
+        );
+        let output_raw_dims = dims(&computation_node);
         Self {
             computation_node,
             r_output,

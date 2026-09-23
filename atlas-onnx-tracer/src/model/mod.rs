@@ -316,13 +316,13 @@ impl Model {
                 Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
                 Operator::GatherSmall(_) => {
                     let input_nodes = self.get_input_nodes(node);
-                    let num_words = input_nodes[0].raw_or_padded_output_dims()[0];
+                    let num_words = input_nodes[0].padded_output_dims()[0];
                     let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                     log_2(num_words) + log_2(num_indices)
                 }
                 Operator::GatherLarge(_) => {
                     let input_nodes = self.get_input_nodes(node);
-                    let num_words = input_nodes[0].raw_or_padded_output_dims()[0].next_power_of_two();
+                    let num_words = input_nodes[0].padded_output_dims()[0];
                     let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                     log_2(num_words) + log_2(num_indices)
                 }
@@ -345,11 +345,18 @@ pub struct ComputationGraph {
     ///
     /// Only populated when padding is enabled; read through
     /// [`ComputationGraph::raw_model_input_dims`], which covers both cases.
+    ///
+    /// TODO: redundant now that nodes store raw dimensions, but its emptiness
+    /// still backs [`ComputationGraph::has_padded_tensors`]. Will be removed
+    /// with the padding toggle.
     original_input_dims: HashMap<usize, Vec<usize>>,
     /// Original (unpadded) dimensions for output nodes, indexed by node index.
     ///
     /// Only populated when padding is enabled; read through
     /// [`ComputationGraph::raw_model_output_dims`], which covers both cases.
+    ///
+    /// TODO: redundant now that nodes store raw dimensions. Will be removed
+    /// with the padding toggle.
     original_output_dims: HashMap<usize, Vec<usize>>,
 }
 
@@ -406,11 +413,22 @@ impl ComputationGraph {
         self.raw_boundary_dims(&self.original_output_dims, idx)
     }
 
+    /// Whether this graph's constant tensors were physically padded to
+    /// power-of-two dimensions when it was loaded.
+    ///
+    /// Tensors flowing through the graph must match those constants, so this
+    /// decides whether an input tensor is padded before execution. Temporary:
+    /// it goes with the padding toggle, once constants are stored unpadded and
+    /// expanded at the point of use.
+    pub fn has_padded_tensors(&self) -> bool {
+        !self.original_input_dims.is_empty()
+    }
+
     fn raw_boundary_dims(&self, recorded: &HashMap<usize, Vec<usize>>, idx: usize) -> Vec<usize> {
         recorded
             .get(&idx)
             .cloned()
-            .unwrap_or_else(|| self.nodes[&idx].raw_or_padded_output_dims())
+            .unwrap_or_else(|| self.nodes[&idx].raw_output_dims())
     }
 
     /// Get references to the input nodes of a given node.
@@ -593,16 +611,5 @@ mod tests {
             !model.graph.original_output_dims.is_empty(),
             "Padded model should have original output dims stored"
         );
-
-        // Verify all node output dims are powers of 2
-        for (idx, node) in &model.graph.nodes {
-            for dim in node.raw_or_padded_output_dims() {
-                assert_eq!(
-                    dim,
-                    dim.next_power_of_two(),
-                    "Node {idx} has non-power-of-2 dimension: {dim}"
-                );
-            }
-        }
     }
 }

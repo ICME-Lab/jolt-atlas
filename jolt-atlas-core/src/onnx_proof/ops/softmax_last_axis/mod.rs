@@ -379,7 +379,7 @@ impl SoftmaxLastAxisVerifier {
 
 impl SoftmaxLastAxisProver {
     pub(crate) fn new(node: &ComputationNode, trace: SoftmaxLastAxisTrace, scale: i32) -> Self {
-        let output_dims = node.raw_or_padded_output_dims();
+        let output_dims = node.padded_output_dims();
         let (&n, leading_dims) = output_dims
             .split_last()
             .expect("softmax node must have at least one output dimension");
@@ -764,7 +764,7 @@ impl SoftmaxLastAxisVerifier {
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Self {
-        let output_dims = node.raw_or_padded_output_dims();
+        let output_dims = node.padded_output_dims();
         let (&n, leading_dims) = output_dims
             .split_last()
             .expect("softmax node must have at least one output dimension");

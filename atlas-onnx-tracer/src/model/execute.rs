@@ -104,12 +104,15 @@ impl Model {
                 raw_dims
             );
 
-            // Pad up to the node's stored dimensions; a no-op when unpadded
+            // Match the constants this graph holds, which are padded only when
+            // it was loaded with padding enabled
             let node = self.graph.nodes.get(&input_node_idx).unwrap();
             let mut tensor_to_store = input_tensor.clone();
-            tensor_to_store
-                .pad_to_dims(&node.raw_or_padded_output_dims())
-                .expect("Failed to pad input tensor");
+            if self.graph.has_padded_tensors() {
+                tensor_to_store
+                    .pad_to_dims(&node.padded_output_dims())
+                    .expect("Failed to pad input tensor");
+            }
 
             node_outputs.insert(input_node_idx, tensor_to_store);
         }

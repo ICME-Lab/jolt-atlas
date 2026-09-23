@@ -341,15 +341,35 @@ pub struct ComputationGraph {
     pub inputs: Vec<usize>,
     /// Indices of output nodes
     pub outputs: Vec<usize>,
-    /// Original (unpadded) dimensions for input nodes, indexed by node index
-    /// Only populated when padding is enabled
-    pub original_input_dims: HashMap<usize, Vec<usize>>,
-    /// Original (unpadded) dimensions for output nodes, indexed by node index
-    /// Only populated when padding is enabled
-    pub original_output_dims: HashMap<usize, Vec<usize>>,
+    /// Original (unpadded) dimensions for input nodes, indexed by node index.
+    ///
+    /// Only populated when padding is enabled; read through
+    /// [`ComputationGraph::raw_model_input_dims`], which covers both cases.
+    original_input_dims: HashMap<usize, Vec<usize>>,
+    /// Original (unpadded) dimensions for output nodes, indexed by node index.
+    ///
+    /// Only populated when padding is enabled; read through
+    /// [`ComputationGraph::raw_model_output_dims`], which covers both cases.
+    original_output_dims: HashMap<usize, Vec<usize>>,
 }
 
 impl ComputationGraph {
+    /// Construct a graph whose nodes carry their dimensions unpadded, so that
+    /// no pre-padding dimensions need recording.
+    pub fn new(
+        nodes: BTreeMap<usize, ComputationNode>,
+        inputs: Vec<usize>,
+        outputs: Vec<usize>,
+    ) -> Self {
+        Self {
+            nodes,
+            inputs,
+            outputs,
+            original_input_dims: HashMap::new(),
+            original_output_dims: HashMap::new(),
+        }
+    }
+
     /// Get a reference to a node by its index.
     ///
     /// # Arguments
@@ -359,6 +379,38 @@ impl ComputationGraph {
     /// An `Option` containing a reference to the `ComputationNode` if it exists, or `None` if it does not.
     pub fn get_node(&self, idx: usize) -> Option<&ComputationNode> {
         self.nodes.get(&idx)
+    }
+
+    /// Dimensions the model declares for its `i`-th input tensor, before any
+    /// power-of-two padding.
+    ///
+    /// `i` counts the model's inputs, not node indices: input `1` is the
+    /// second tensor the model takes, whatever node produces it. When padding
+    /// is disabled nothing was recorded, and the node's own dimensions are
+    /// already the unpadded ones.
+    ///
+    /// # Panics
+    /// Panics if `i` is not one of the model's inputs.
+    pub fn raw_model_input_dims(&self, i: usize) -> Vec<usize> {
+        let idx = self.inputs[i];
+        self.raw_boundary_dims(&self.original_input_dims, idx)
+    }
+
+    /// Dimensions the model declares for its `i`-th output tensor, before any
+    /// power-of-two padding. See [`Self::raw_model_input_dims`].
+    ///
+    /// # Panics
+    /// Panics if `i` is not one of the model's outputs.
+    pub fn raw_model_output_dims(&self, i: usize) -> Vec<usize> {
+        let idx = self.outputs[i];
+        self.raw_boundary_dims(&self.original_output_dims, idx)
+    }
+
+    fn raw_boundary_dims(&self, recorded: &HashMap<usize, Vec<usize>>, idx: usize) -> Vec<usize> {
+        recorded
+            .get(&idx)
+            .cloned()
+            .unwrap_or_else(|| self.nodes[&idx].raw_or_padded_output_dims())
     }
 
     /// Get references to the input nodes of a given node.

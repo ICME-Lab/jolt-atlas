@@ -169,17 +169,11 @@ impl ComputationGraph {
 mod tests {
     use super::*;
     use crate::ops::Operator;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_pretty_print_empty_graph() {
-        let graph = ComputationGraph {
-            nodes: BTreeMap::new(),
-            inputs: vec![],
-            outputs: vec![],
-            original_input_dims: HashMap::new(),
-            original_output_dims: HashMap::new(),
-        };
+        let graph = ComputationGraph::new(BTreeMap::new(), vec![], vec![]);
         let output = graph.pretty_print();
         assert!(output.contains("No nodes in graph"));
     }
@@ -196,13 +190,7 @@ mod tests {
             ComputationNode::new(1, Operator::Add(Default::default()), vec![0], vec![1, 2]),
         );
 
-        let graph = ComputationGraph {
-            nodes,
-            inputs: vec![0],
-            outputs: vec![1],
-            original_input_dims: HashMap::new(),
-            original_output_dims: HashMap::new(),
-        };
+        let graph = ComputationGraph::new(nodes, vec![0], vec![1]);
 
         let output = graph.pretty_print();
         assert!(output.contains("Node ID"));

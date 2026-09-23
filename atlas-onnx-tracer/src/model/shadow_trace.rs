@@ -425,17 +425,13 @@ impl Model {
     ) {
         for (i, tensor) in inputs.iter().enumerate() {
             let idx = self.graph.inputs[i];
-            if let Some(original_dims) = self.graph.original_input_dims.get(&idx) {
-                assert_eq!(tensor.dims(), original_dims.as_slice());
-                let node = self.graph.nodes.get(&idx).unwrap();
-                let mut padded = tensor.clone();
-                padded
-                    .pad_to_dims(&node.raw_or_padded_output_dims())
-                    .expect("pad failed");
-                outputs.insert(idx, padded);
-            } else {
-                outputs.insert(idx, tensor.clone());
-            }
+            assert_eq!(tensor.dims(), self.graph.raw_model_input_dims(i).as_slice());
+            let node = self.graph.nodes.get(&idx).unwrap();
+            let mut padded = tensor.clone();
+            padded
+                .pad_to_dims(&node.raw_or_padded_output_dims())
+                .expect("pad failed");
+            outputs.insert(idx, padded);
         }
     }
 

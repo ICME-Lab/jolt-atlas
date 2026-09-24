@@ -61,6 +61,16 @@ mod tests {
         check(&[9], &[3, 3]);
     }
 
+    /// Padding each dimension separately can leave the two padded domains
+    /// different sizes: `[3, 5]` pads to 4x8 = 32 while `[15]` pads to 16.
+    #[test]
+    fn reshape_between_unequal_padded_domains() {
+        check(&[3, 5], &[15]);
+        check(&[15], &[3, 5]);
+        check(&[3, 3, 5], &[45]);
+        check(&[45], &[3, 3, 5]);
+    }
+
     #[test]
     fn unpadded_input_stays_unpadded() {
         let values: Vec<i32> = (1..=6).collect();

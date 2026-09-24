@@ -67,13 +67,12 @@ fn handle_const(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
 
     // Constants have no inputs, use builder directly for this special case
     let mut builder = DecompositionBuilder::new(hctx.ctx, 1);
-    builder.add_node(ComputationNode {
-        idx: builder.idx(0),
-        operator: Operator::Constant(Constant(result_tensor)),
-        inputs: vec![],
-        output_dims: hctx.output_dims.clone(),
-        sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-    });
+    builder.add_node(ComputationNode::new(
+        builder.idx(0),
+        Operator::Constant(Constant(result_tensor)),
+        vec![],
+        hctx.output_dims.clone(),
+    ));
     builder.finish()
 }
 
@@ -134,7 +133,7 @@ fn handle_cast(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
         .nodes
         .get(&hctx.internal_input_indices[0])
         .expect("Input node not found");
-    assert_eq!(input_node.output_dims, hctx.output_dims);
+    assert_eq!(input_node.raw_output_dims(), hctx.output_dims);
 
     match dt {
         DatumType::Bool

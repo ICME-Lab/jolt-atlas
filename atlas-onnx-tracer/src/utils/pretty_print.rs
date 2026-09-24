@@ -39,7 +39,9 @@ impl From<&ComputationNode> for NodeRow {
                 format!("axis: {}, dict_len: {}", op.axis, op.dict_len)
             }
             Operator::MoveAxis(op) => format!("src: {} → dst: {}", op.source, op.destination),
-            Operator::Reshape(op) => format!("shape: {:?}", op.shape),
+            Operator::Reshape(op) => {
+                format!("{:?} → {:?}", op.input_shape, op.output_shape)
+            }
             Operator::Rsqrt(op) => format!("scale: {}", op.scale),
             Operator::Sigmoid(op) => format!("scale: {}", op.scale),
             Operator::Slice(op) => format!("axis: {}, {}..{}", op.axis, op.start, op.end),
@@ -59,7 +61,7 @@ impl From<&ComputationNode> for NodeRow {
         };
 
         let output_dims = node
-            .output_dims
+            .padded_output_dims()
             .iter()
             .map(|d| d.to_string())
             .collect::<Vec<_>>()
@@ -169,17 +171,11 @@ impl ComputationGraph {
 mod tests {
     use super::*;
     use crate::ops::Operator;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_pretty_print_empty_graph() {
-        let graph = ComputationGraph {
-            nodes: BTreeMap::new(),
-            inputs: vec![],
-            outputs: vec![],
-            original_input_dims: HashMap::new(),
-            original_output_dims: HashMap::new(),
-        };
+        let graph = ComputationGraph::new(BTreeMap::new(), vec![], vec![]);
         let output = graph.pretty_print();
         assert!(output.contains("No nodes in graph"));
     }
@@ -189,32 +185,14 @@ mod tests {
         let mut nodes = BTreeMap::new();
         nodes.insert(
             0,
-            ComputationNode {
-                idx: 0,
-                operator: Operator::Input(Default::default()),
-                inputs: vec![],
-                output_dims: vec![1, 2],
-                sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-            },
+            ComputationNode::new(0, Operator::Input(Default::default()), vec![], vec![1, 2]),
         );
         nodes.insert(
             1,
-            ComputationNode {
-                idx: 1,
-                operator: Operator::Add(Default::default()),
-                inputs: vec![0],
-                output_dims: vec![1, 2],
-                sat_clamp_bits: crate::model::clamp_width::CLAMP_WIDTH_MAX,
-            },
+            ComputationNode::new(1, Operator::Add(Default::default()), vec![0], vec![1, 2]),
         );
 
-        let graph = ComputationGraph {
-            nodes,
-            inputs: vec![0],
-            outputs: vec![1],
-            original_input_dims: HashMap::new(),
-            original_output_dims: HashMap::new(),
-        };
+        let graph = ComputationGraph::new(nodes, vec![0], vec![1]);
 
         let output = graph.pretty_print();
         assert!(output.contains("Node ID"));

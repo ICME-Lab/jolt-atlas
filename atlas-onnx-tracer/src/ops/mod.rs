@@ -142,7 +142,7 @@ define_operators! {
         Mul { scale: i32 },
         Neg,
         ReLU,
-        Reshape { shape:Vec<usize> },
+        Reshape { input_shape: Vec<usize>, output_shape: Vec<usize> },
         Rsqrt { scale: i32 },
         ScalarConstDiv {divisor: i32},
         Sigmoid { scale: i32 },

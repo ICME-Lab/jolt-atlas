@@ -125,12 +125,9 @@ pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
         .map(|d| d.next_power_of_two())
         .collect();
     let input_padded_len: usize = input_padded_dims.iter().product();
-    let output_padded_len: usize = output_padded_dims.iter().product();
-    assert_eq!(
-        input_padded_len, output_padded_len,
-        "Reshape selector requires equal padded domain sizes"
-    );
 
+    // The two padded domains need not be the same size: the sum runs over the
+    // input's, and `r_output` indexes the output's.
     // Selector values are zero on padding cells by default.
     let mut selector = vec![F::zero(); input_padded_len];
     let eq_evals = EqPolynomial::evals(r_output);
@@ -172,9 +169,8 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
             .nodes
             .get(&computation_node.inputs[0])
             .expect("Reshape node should have one input")
-            .output_dims
-            .clone();
-        let output_raw_dims = computation_node.output_dims.clone();
+            .raw_output_dims();
+        let output_raw_dims = computation_node.raw_output_dims();
         Self {
             computation_node,
             r_output,
@@ -198,9 +194,13 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
         OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
     }
 
+    /// The sum runs over the input's padded domain, which a reshape between
+    /// differently-padded shapes makes larger than the output's.
     fn num_rounds(&self) -> usize {
-        self.computation_node
-            .pow2_padded_num_output_elements()
+        self.input_raw_dims
+            .iter()
+            .map(|d| d.next_power_of_two())
+            .product::<usize>()
             .log_2()
     }
 
@@ -260,13 +260,19 @@ pub struct ReshapeSumcheckProver<F: JoltField> {
 impl<F: JoltField> ReshapeSumcheckProver<F> {
     /// Initialize reshape prover state from trace tensors and prepared parameters.
     pub fn initialize(trace: &Trace, params: ReshapeSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
             panic!("Expected one operand for Reshape operation")
         };
 
         let input_mle = MultilinearPolynomial::from(input.padded_next_power_of_two());
-        let selector = build_reshape_selectors(input.dims(), output.dims(), &params.r_output.r);
+        // The same raw shapes the verifier uses; the tensors' own dimensions are
+        // padded and would give a different selector.
+        let selector = build_reshape_selectors(
+            &params.input_raw_dims,
+            &params.output_raw_dims,
+            &params.r_output.r,
+        );
         let selector_mle = MultilinearPolynomial::from(selector);
         assert_eq!(input_mle.len(), selector_mle.len());
 
@@ -431,5 +437,21 @@ mod tests {
         let input = Tensor::<i32>::random_small(&mut rng, &input_shape);
         let model = reshape_model(&input_shape, &output_shape);
         unit_test_op(model, &[input]);
+    }
+
+    /// Padding each dimension separately can leave the two padded domains
+    /// different sizes: `[3, 5]` pads to 4x8 = 32 while `[15]` pads to 16.
+    #[test]
+    fn test_reshape_unequal_padded_domains() {
+        let mut rng = StdRng::seed_from_u64(0x99B);
+        for (input_shape, output_shape) in [
+            (vec![3, 5], vec![15]),
+            (vec![15], vec![3, 5]),
+            (vec![3, 3, 5], vec![45]),
+        ] {
+            let input = Tensor::<i32>::random_small(&mut rng, &input_shape);
+            let model = reshape_model(&input_shape, &output_shape);
+            unit_test_op(model, &[input]);
+        }
     }
 }

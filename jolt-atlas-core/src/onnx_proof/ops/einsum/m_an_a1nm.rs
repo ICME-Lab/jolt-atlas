@@ -50,23 +50,23 @@ impl<F: JoltField> MAnA1nmParams<F> {
             "MAnA1nmParams only supports the m,an->abnm source equation"
         );
         assert!(
-            computation_node.output_dims.len() == 4,
+            computation_node.padded_output_dims().len() == 4,
             "m,an->a1nm expects a rank-4 output"
         );
         assert!(
-            computation_node.output_dims[1] == 1,
+            computation_node.padded_output_dims()[1] == 1,
             "m,an->abnm is interpreted as m,an->a1nm in the current tracer"
         );
         assert_eq!(
             einsum_dims.left_operand(),
-            &[computation_node.output_dims[3]],
+            &[computation_node.padded_output_dims()[3]],
             "m,an->a1nm requires the left operand to be the trailing m axis"
         );
         assert_eq!(
             einsum_dims.right_operand(),
             &[
-                computation_node.output_dims[0],
-                computation_node.output_dims[2]
+                computation_node.padded_output_dims()[0],
+                computation_node.padded_output_dims()[2]
             ],
             "m,an->a1nm requires the right operand to align with the output a and n axes"
         );

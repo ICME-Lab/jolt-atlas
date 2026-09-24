@@ -346,33 +346,15 @@ impl Model {
         }
     }
 
-    /// Constants used as gather addresses or unscaled multiplication masks
-    /// carry exact integers. Their role, not their numerical magnitude, decides
-    /// whether the shadow should undo fixed-point scaling.
+    /// Constants used as gather addresses carry exact integers. Their role, not
+    /// their numerical magnitude, decides whether the shadow should undo
+    /// fixed-point scaling.
     fn is_raw_shadow_constant(&self, idx: usize) -> bool {
         self.graph.nodes.values().any(|node| {
-            if matches!(
+            matches!(
                 node.operator,
                 Operator::GatherSmall(_) | Operator::GatherLarge(_)
-            ) {
-                return node.inputs.get(1) == Some(&idx);
-            }
-            if let Operator::Mul(mul) = &node.operator
-                && mul.scale == 0
-            {
-                return node.inputs.iter().any(|&input| {
-                    let source = &self.graph.nodes[&input];
-                    let source_idx = if matches!(source.operator, Operator::Broadcast(_)) {
-                        source.inputs[0]
-                    } else {
-                        input
-                    };
-                    source_idx == idx
-                        && matches!(&self.graph.nodes[&idx].operator,
-                            Operator::Constant(c) if c.0.data().iter().all(|&v| v == 0 || v == 1))
-                });
-            }
-            false
+            ) && node.inputs.get(1) == Some(&idx)
         })
     }
 
@@ -425,15 +407,15 @@ impl Model {
     ) {
         for (i, tensor) in inputs.iter().enumerate() {
             let idx = self.graph.inputs[i];
-            if let Some(original_dims) = self.graph.original_input_dims.get(&idx) {
-                assert_eq!(tensor.dims(), original_dims.as_slice());
-                let node = self.graph.nodes.get(&idx).unwrap();
-                let mut padded = tensor.clone();
-                padded.pad_to_dims(&node.output_dims).expect("pad failed");
-                outputs.insert(idx, padded);
-            } else {
-                outputs.insert(idx, tensor.clone());
+            assert_eq!(tensor.dims(), self.graph.raw_model_input_dims(i).as_slice());
+            let node = self.graph.nodes.get(&idx).unwrap();
+            let mut padded = tensor.clone();
+            if self.graph.has_padded_tensors() {
+                padded
+                    .pad_to_dims(&node.padded_output_dims())
+                    .expect("pad failed");
             }
+            outputs.insert(idx, padded);
         }
     }
 
@@ -454,7 +436,7 @@ impl Model {
     ) -> OriginalF64Constants {
         use tract_onnx::tract_hir::ops::konst::Const;
 
-        let (typed_model, symbol_values) = Self::load_onnx_using_tract(path, run_args);
+        let (typed_model, _symbol_values) = Self::load_onnx_using_tract(path, run_args);
 
         // Collect Tract Const tensors in graph node order → our Tensor<f64>
         let mut tract_f64_consts: Vec<Tensor<f64>> = Vec::new();
@@ -468,24 +450,14 @@ impl Model {
             }
         }
 
-        // Recover the original constant identities before padding adds gather
-        // indices and masks. Those generated constants have exact integer values.
-        let (mut nodes, mapper) = Self::nodes_from_graph(&typed_model, run_args, &symbol_values);
-        let mut inputs = Self::collect_input_nodes(&nodes);
-        let mut outputs = Self::collect_outputs(&typed_model, &mapper);
-        Self::prune_unused_nodes(&mut nodes, &mut inputs, &mut outputs);
-        let mapping = if run_args.pad_to_power_of_2 {
-            let plans = super::reshape_padding::plans(&nodes);
-            super::reshape_padding::remapping(&nodes, &plans)
-        } else {
-            nodes.keys().map(|&i| (i, i)).collect()
-        };
-        let const_node_indices: Vec<usize> = nodes
+        // Collect decomposed Constant node indices in graph order
+        let const_node_indices: Vec<usize> = self
+            .graph
+            .nodes
             .iter()
             .filter(|(_, n)| matches!(n.operator, Operator::Constant(_)))
-            .map(|(&idx, _)| mapping[&idx])
+            .map(|(&idx, _)| idx)
             .collect();
-        drop(nodes);
 
         assert_eq!(
             tract_f64_consts.len(),
@@ -495,33 +467,17 @@ impl Model {
             const_node_indices.len(),
         ); // TODO: Account for removed constants from Pow operators (square, cube)
 
-        let original_indices: std::collections::BTreeSet<_> =
-            const_node_indices.iter().copied().collect();
-        let mut map: BTreeMap<usize, Tensor<f64>> = self
-            .graph
-            .nodes
-            .iter()
-            .filter_map(|(&idx, node)| {
-                if original_indices.contains(&idx) {
-                    return None;
-                }
-                if let Operator::Constant(c) = &node.operator {
-                    Some((idx, c.0.map(|v| v as f64)))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let mut map = BTreeMap::new();
         for (tract_const, &graph_idx) in tract_f64_consts.into_iter().zip(const_node_indices.iter())
         {
             // The decomposed constant may be padded to power-of-2 dims.
             // Pad the original f64 constant to match.
             let graph_node = &self.graph.nodes[&graph_idx];
-            let target_dims = &graph_node.output_dims;
+            let target_dims = graph_node.padded_output_dims();
             let mut padded: Tensor<f64> = tract_const;
             if padded.dims() != target_dims.as_slice() {
                 padded
-                    .pad_to_dims(target_dims)
+                    .pad_to_dims(&target_dims)
                     .expect("failed to pad original constant");
             }
             map.insert(graph_idx, padded);
@@ -666,8 +622,15 @@ fn shadow_f64(op: &Operator, inputs: Vec<&Tensor<f64>>, scale: Scale) -> Tensor<
         // ── Shape manipulation ──────────────────────────────────────────
         Operator::Broadcast(b) => inputs[0].expand(&b.shape).unwrap(),
         Operator::Reshape(r) => {
-            let mut t = inputs[0].clone();
-            t.reshape(&r.shape).unwrap();
+            // Mirrors `Reshape::f`: crop to the declared input shape so the
+            // reshape sees only real elements, then pad the result back out.
+            let padded = inputs[0].dims() != r.input_shape;
+            let ranges: Vec<_> = r.input_shape.iter().map(|&d| 0..d).collect();
+            let mut t = inputs[0].get_slice(&ranges).unwrap();
+            t.reshape(&r.output_shape).unwrap();
+            if padded {
+                t.pad_next_power_of_two();
+            }
             t
         }
         Operator::MoveAxis(m) => inputs[0]

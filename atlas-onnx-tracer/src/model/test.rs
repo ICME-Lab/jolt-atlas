@@ -4,7 +4,7 @@
 //! without needing to load from ONNX files.
 
 use crate::{node::ComputationNode, ops::*, tensor::Tensor};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use super::{ComputationGraph, Model};
 
@@ -83,7 +83,7 @@ impl ModelBuilder {
     /// Add an identity (passthrough) node.
     pub fn identity(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(id, Operator::Identity(Identity), vec![input], output_dims);
         self.insert_node(node)
     }
@@ -91,7 +91,7 @@ impl ModelBuilder {
     /// Add a ReLU activation node.
     pub fn relu(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(id, Operator::ReLU(ReLU), vec![input], output_dims);
         self.insert_node(node)
     }
@@ -99,7 +99,7 @@ impl ModelBuilder {
     /// Add an addition node.
     pub fn add(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&a].output_dims.clone();
+        let output_dims = self.nodes[&a].raw_output_dims();
         let node = ComputationNode::new(id, Operator::Add(Add), vec![a, b], output_dims);
         self.insert_node(node)
     }
@@ -107,7 +107,7 @@ impl ModelBuilder {
     /// Add a subtraction node.
     pub fn sub(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&a].output_dims.clone();
+        let output_dims = self.nodes[&a].raw_output_dims();
         let node = ComputationNode::new(id, Operator::Sub(Sub), vec![a, b], output_dims);
         self.insert_node(node)
     }
@@ -115,7 +115,7 @@ impl ModelBuilder {
     /// Add a negation node.
     pub fn neg(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(id, Operator::Neg(Neg), vec![input], output_dims);
         self.insert_node(node)
     }
@@ -123,7 +123,7 @@ impl ModelBuilder {
     /// Add a bitwise AND node.
     pub fn and(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&a].output_dims.clone();
+        let output_dims = self.nodes[&a].raw_output_dims();
         let node = ComputationNode::new(id, Operator::And(And), vec![a, b], output_dims);
         self.insert_node(node)
     }
@@ -131,7 +131,7 @@ impl ModelBuilder {
     /// Add a Clamp node (clamps values into `[-2^bound_log, 2^bound_log - 1]`).
     pub fn clamp(&mut self, input: Wire, bound_log: usize) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Clamp(Clamp { bound_log }),
@@ -144,7 +144,7 @@ impl ModelBuilder {
     /// Add a multiplication node.
     pub fn mul(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&a].output_dims.clone();
+        let output_dims = self.nodes[&a].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Mul(Mul {
@@ -159,7 +159,7 @@ impl ModelBuilder {
     /// Add a division node.
     pub fn div(&mut self, a: Wire, b: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&a].output_dims.clone();
+        let output_dims = self.nodes[&a].raw_output_dims();
         let node = ComputationNode::new(id, Operator::Div(Div), vec![a, b], output_dims);
         self.insert_node(node)
     }
@@ -167,7 +167,7 @@ impl ModelBuilder {
     /// Add a scalar constant division node.
     pub fn scalar_const_div(&mut self, a: Wire, divisor: i32) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&a].output_dims.clone();
+        let output_dims = self.nodes[&a].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::ScalarConstDiv(ScalarConstDiv { divisor }),
@@ -180,7 +180,7 @@ impl ModelBuilder {
     /// Add a reciprocal square root (rsqrt) node.
     pub fn rsqrt(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Rsqrt(Rsqrt {
@@ -195,7 +195,7 @@ impl ModelBuilder {
     /// Add a Iff node.
     pub fn iff(&mut self, condition: Wire, true_branch: Wire, false_branch: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&true_branch].output_dims.clone();
+        let output_dims = self.nodes[&true_branch].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Iff(Iff),
@@ -222,7 +222,7 @@ impl ModelBuilder {
     /// Add a moveaxis node (transpose an axis from source to destination position).
     pub fn moveaxis(&mut self, input: Wire, source: usize, destination: usize) -> Wire {
         let id = self.alloc();
-        let input_dims = self.nodes[&input].output_dims.clone();
+        let input_dims = self.nodes[&input].raw_output_dims();
         let mut output_dims = input_dims.clone();
 
         let dim = output_dims.remove(source);
@@ -260,7 +260,8 @@ impl ModelBuilder {
         let node = ComputationNode::new(
             id,
             Operator::Reshape(Reshape {
-                shape: new_shape.clone(),
+                input_shape: self.nodes[&input].raw_output_dims(),
+                output_shape: new_shape.clone(),
             }),
             vec![input],
             new_shape,
@@ -283,7 +284,7 @@ impl ModelBuilder {
         output_dims: Vec<usize>,
     ) -> Wire {
         let id = self.alloc();
-        let input_dims = &self.nodes[&input].output_dims;
+        let input_dims = self.nodes[&input].raw_output_dims();
         let count: usize = axes.iter().map(|&ax| input_dims[ax]).product();
         let padded_count: usize = axes
             .iter()
@@ -306,7 +307,7 @@ impl ModelBuilder {
     /// Add a (fused, rescaling) square node.
     pub fn square(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Square(Square {
@@ -321,7 +322,7 @@ impl ModelBuilder {
     /// Add a cube node.
     pub fn cube(&mut self, input: Wire, scale: i32) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node =
             ComputationNode::new(id, Operator::Cube(Cube { scale }), vec![input], output_dims);
         self.insert_node(node)
@@ -336,7 +337,7 @@ impl ModelBuilder {
         output_dims: Vec<usize>,
     ) -> Wire {
         let id = self.alloc();
-        let dict_len = self.nodes[&data].output_dims[axis];
+        let dict_len = self.nodes[&data].raw_output_dims()[axis];
         let operator = if dict_len.next_power_of_two() <= 65536 {
             Operator::GatherSmall(GatherSmall { axis, dict_len })
         } else {
@@ -350,7 +351,7 @@ impl ModelBuilder {
     pub fn concat(&mut self, inputs: &[Wire], axis: isize) -> Wire {
         assert!(!inputs.is_empty(), "Concat expects at least one input wire");
         let id = self.alloc();
-        let first_dims = self.nodes[&inputs[0]].output_dims.clone();
+        let first_dims = self.nodes[&inputs[0]].raw_output_dims();
         let rank = first_dims.len();
 
         let axis_norm = if axis < 0 {
@@ -362,7 +363,7 @@ impl ModelBuilder {
 
         let mut output_dims = first_dims;
         for input in inputs.iter().skip(1) {
-            let input_dims = &self.nodes[input].output_dims;
+            let input_dims = self.nodes[input].raw_output_dims();
             assert_eq!(
                 input_dims.len(),
                 rank,
@@ -393,7 +394,7 @@ impl ModelBuilder {
     /// Add a slice node over one axis.
     pub fn slice(&mut self, input: Wire, axis: usize, start: usize, end: usize) -> Wire {
         let id = self.alloc();
-        let input_dims = self.nodes[&input].output_dims.clone();
+        let input_dims = self.nodes[&input].raw_output_dims();
         assert!(axis < input_dims.len(), "Slice axis out of bounds");
         assert!(start <= end, "Slice start must be <= end");
         assert!(end <= input_dims[axis], "Slice end out of bounds");
@@ -414,7 +415,7 @@ impl ModelBuilder {
     /// Uses the builder's scale (set via `with_scale`) as log2 fixed-point scale.
     pub fn softmax_last_axis(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::SoftmaxLastAxis(SoftmaxLastAxis {
@@ -429,7 +430,7 @@ impl ModelBuilder {
     /// Add a hyperbolic tangent (tanh) activation node.
     pub fn tanh(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Tanh(Tanh {
@@ -444,7 +445,7 @@ impl ModelBuilder {
     /// Add a cosine activation node.
     pub fn cos(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Cos(Cos {
@@ -459,7 +460,7 @@ impl ModelBuilder {
     /// Add a sine activation node.
     pub fn sin(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Sin(Sin {
@@ -474,7 +475,7 @@ impl ModelBuilder {
     /// Add an error function (erf) activation node.
     pub fn erf(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Erf(Erf {
@@ -489,7 +490,7 @@ impl ModelBuilder {
     /// Add a sigmoid activation node.
     pub fn sigmoid(&mut self, input: Wire) -> Wire {
         let id = self.alloc();
-        let output_dims = self.nodes[&input].output_dims.clone();
+        let output_dims = self.nodes[&input].raw_output_dims();
         let node = ComputationNode::new(
             id,
             Operator::Sigmoid(Sigmoid {
@@ -509,13 +510,7 @@ impl ModelBuilder {
     /// Build and consume the builder, returning the constructed `Model`.
     pub fn build(self) -> Model {
         Model {
-            graph: ComputationGraph {
-                nodes: self.nodes,
-                inputs: self.inputs,
-                outputs: self.outputs,
-                original_input_dims: HashMap::new(),
-                original_output_dims: HashMap::new(),
-            },
+            graph: ComputationGraph::new(self.nodes, self.inputs, self.outputs),
             scale: self.scale as i32,
         }
     }

@@ -161,8 +161,8 @@ impl<F: JoltField> BroadcastVerifier<F> {
             .nodes
             .get(&params.computation_node.inputs[0])
             .expect("Broadcast node should have an input")
-            .output_dims;
-        let output_dims = &params.computation_node.output_dims;
+            .padded_output_dims();
+        let output_dims = &params.computation_node.padded_output_dims();
 
         let mut broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
 

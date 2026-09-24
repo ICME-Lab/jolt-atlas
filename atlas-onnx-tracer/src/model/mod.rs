@@ -11,7 +11,6 @@ pub mod clamp_width;
 pub mod execute;
 /// Functions for loading models from ONNX files.
 pub mod load;
-mod reshape_padding;
 pub mod shadow_trace;
 pub mod test;
 pub mod trace;
@@ -316,13 +315,13 @@ impl Model {
                 Operator::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
                 Operator::GatherSmall(_) => {
                     let input_nodes = self.get_input_nodes(node);
-                    let num_words = input_nodes[0].output_dims[0];
+                    let num_words = input_nodes[0].padded_output_dims()[0];
                     let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                     log_2(num_words) + log_2(num_indices)
                 }
                 Operator::GatherLarge(_) => {
                     let input_nodes = self.get_input_nodes(node);
-                    let num_words = input_nodes[0].output_dims[0].next_power_of_two();
+                    let num_words = input_nodes[0].padded_output_dims()[0];
                     let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                     log_2(num_words) + log_2(num_indices)
                 }
@@ -341,15 +340,26 @@ pub struct ComputationGraph {
     pub inputs: Vec<usize>,
     /// Indices of output nodes
     pub outputs: Vec<usize>,
-    /// Original (unpadded) dimensions for input nodes, indexed by node index
-    /// Only populated when padding is enabled
-    pub original_input_dims: HashMap<usize, Vec<usize>>,
-    /// Original (unpadded) dimensions for output nodes, indexed by node index
-    /// Only populated when padding is enabled
-    pub original_output_dims: HashMap<usize, Vec<usize>>,
+    /// Whether this graph's tensors were physically padded to power-of-two
+    /// dimensions when it was loaded.
+    padded: bool,
 }
 
 impl ComputationGraph {
+    /// Construct a graph whose tensors are not physically padded.
+    pub fn new(
+        nodes: BTreeMap<usize, ComputationNode>,
+        inputs: Vec<usize>,
+        outputs: Vec<usize>,
+    ) -> Self {
+        Self {
+            nodes,
+            inputs,
+            outputs,
+            padded: false,
+        }
+    }
+
     /// Get a reference to a node by its index.
     ///
     /// # Arguments
@@ -359,6 +369,37 @@ impl ComputationGraph {
     /// An `Option` containing a reference to the `ComputationNode` if it exists, or `None` if it does not.
     pub fn get_node(&self, idx: usize) -> Option<&ComputationNode> {
         self.nodes.get(&idx)
+    }
+
+    /// Dimensions the model declares for its `i`-th input tensor, before any
+    /// power-of-two padding.
+    ///
+    /// `i` counts the model's inputs, not node indices: input `1` is the
+    /// second tensor the model takes, whatever node produces it.
+    ///
+    /// # Panics
+    /// Panics if `i` is not one of the model's inputs.
+    pub fn raw_model_input_dims(&self, i: usize) -> Vec<usize> {
+        self.nodes[&self.inputs[i]].raw_output_dims()
+    }
+
+    /// Dimensions the model declares for its `i`-th output tensor, before any
+    /// power-of-two padding. See [`Self::raw_model_input_dims`].
+    ///
+    /// # Panics
+    /// Panics if `i` is not one of the model's outputs.
+    pub fn raw_model_output_dims(&self, i: usize) -> Vec<usize> {
+        self.nodes[&self.outputs[i]].raw_output_dims()
+    }
+
+    /// Whether this graph's tensors were physically padded to power-of-two
+    /// dimensions when it was loaded.
+    ///
+    /// Tensors flowing through the graph must match the padded constants, so
+    /// this decides whether an input tensor is padded before execution. It goes
+    /// away once every operator is padding-safe and no tensor is padded at all.
+    pub(crate) fn has_padded_tensors(&self) -> bool {
+        self.padded
     }
 
     /// Get references to the input nodes of a given node.
@@ -532,23 +573,65 @@ mod tests {
         assert!(!model.graph.inputs.is_empty());
         assert!(!model.graph.outputs.is_empty());
 
-        // Verify that padding metadata is populated
         assert!(
-            !model.graph.original_input_dims.is_empty(),
-            "Padded model should have original input dims stored"
+            model.graph.has_padded_tensors(),
+            "model loaded with padding enabled should record it"
         );
-        assert!(
-            !model.graph.original_output_dims.is_empty(),
-            "Padded model should have original output dims stored"
-        );
+    }
 
-        // Verify all node output dims are powers of 2
-        for (idx, node) in &model.graph.nodes {
-            for &dim in &node.output_dims {
+    /// Imported reshapes whose padding moves must agree across the integer
+    /// forward pass and all three shadow modes.
+    #[test]
+    fn imported_reshape_preserves_forward_and_all_shadows() {
+        for (name, dims) in [
+            ("merge", vec![2, 3, 4]),
+            ("split", vec![6, 4]),
+            ("unequal", vec![3, 3]),
+        ] {
+            let path = format!(
+                "{}/tests/fixtures/reshape-{name}.onnx",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let args = RunArgs::default();
+            let model = Model::load(&path, &args);
+            let values: Vec<i32> = (0..dims.iter().product::<usize>())
+                .map(|i| i as i32 - 9)
+                .collect();
+            let input = Tensor::new(Some(&values), &dims).unwrap();
+            assert_eq!(model.forward(&[input])[0].inner, values);
+
+            let originals = model.load_original_f64_constants(&path, &args);
+            let floats: Vec<f64> = values.iter().map(|&v| v as f64).collect();
+            let shadow = model.trace_with_true_f64_shadow(
+                &[Tensor::new(Some(&floats), &dims).unwrap()],
+                &originals,
+                args.scale,
+            );
+            let output = model.graph.outputs[0];
+            let mut expected =
+                Tensor::new(Some(&floats), &model.graph.raw_model_output_dims(0)).unwrap();
+            expected.pad_next_power_of_two();
+            assert_eq!(shadow.f64_outputs[&output], expected);
+
+            // The regular shadows receive the same integer inputs expressed
+            // in real units, unlike the original-weight shadow above.
+            let factor = 2_f64.powi(args.scale);
+            let dequantized: Vec<f64> = floats.iter().map(|v| v / factor).collect();
+            let integer_input = Tensor::new(Some(&values), &dims).unwrap();
+            let real_input = Tensor::new(Some(&dequantized), &dims).unwrap();
+            let expected_real = expected.map(|v| v / factor);
+            for regular in [
+                model.trace_with_shadow(
+                    std::slice::from_ref(&integer_input),
+                    std::slice::from_ref(&real_input),
+                    args.scale,
+                ),
+                model.trace_with_shadow_isolated(&[integer_input], &[real_input], args.scale),
+            ] {
+                assert_eq!(regular.f64_outputs[&output], expected_real);
                 assert_eq!(
-                    dim,
-                    dim.next_power_of_two(),
-                    "Node {idx} has non-power-of-2 dimension: {dim}"
+                    regular.i32_outputs[&output],
+                    shadow.f64_outputs[&output].map(|v| v as i32)
                 );
             }
         }

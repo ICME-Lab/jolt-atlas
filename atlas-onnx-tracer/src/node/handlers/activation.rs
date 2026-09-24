@@ -119,7 +119,7 @@ fn handle_softmax(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
     assert!(axes.len() == 1, "Softmax must have exactly one axis");
 
     // Determine the rank of the input tensor so we can verify last-axis.
-    let input_rank = hctx.internal_input_nodes[0].output_dims.len();
+    let input_rank = hctx.internal_input_nodes[0].raw_output_dims().len();
     let axis = axes[0];
     assert_eq!(
         axis,

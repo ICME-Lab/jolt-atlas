@@ -93,31 +93,26 @@ impl Model {
         for (i, input_tensor) in inputs.iter().enumerate() {
             let input_node_idx = self.graph.inputs[i];
 
-            // Check if this model has padding enabled
-            let tensor_to_store =
-                if let Some(original_dims) = self.graph.original_input_dims.get(&input_node_idx) {
-                    // Verify input matches original (unpadded) dimensions
-                    assert_eq!(
-                        input_tensor.dims(),
-                        original_dims.as_slice(),
-                        "Input tensor {} has dims {:?}, expected {:?}",
-                        i,
-                        input_tensor.dims(),
-                        original_dims
-                    );
+            // Verify input matches the dimensions the model declares for it
+            let raw_dims = self.graph.raw_model_input_dims(i);
+            assert_eq!(
+                input_tensor.dims(),
+                raw_dims.as_slice(),
+                "Input tensor {} has dims {:?}, expected {:?}",
+                i,
+                input_tensor.dims(),
+                raw_dims
+            );
 
-                    // Pad input to match the padded node dimensions
-                    let node = self.graph.nodes.get(&input_node_idx).unwrap();
-                    let padded_dims = &node.output_dims;
-                    let mut padded_tensor = input_tensor.clone();
-                    padded_tensor
-                        .pad_to_dims(padded_dims)
-                        .expect("Failed to pad input tensor");
-                    padded_tensor
-                } else {
-                    // No padding, use tensor as-is
-                    input_tensor.clone()
-                };
+            // Match the constants this graph holds, which are padded only when
+            // it was loaded with padding enabled
+            let node = self.graph.nodes.get(&input_node_idx).unwrap();
+            let mut tensor_to_store = input_tensor.clone();
+            if self.graph.has_padded_tensors() {
+                tensor_to_store
+                    .pad_to_dims(&node.padded_output_dims())
+                    .expect("Failed to pad input tensor");
+            }
 
             node_outputs.insert(input_node_idx, tensor_to_store);
         }
@@ -142,17 +137,17 @@ impl Model {
         self.graph
             .outputs
             .iter()
-            .map(|&node_idx| {
+            .enumerate()
+            .map(|(i, &node_idx)| {
                 let tensor = node_outputs.get(&node_idx).unwrap();
-                match self.graph.original_output_dims.get(&node_idx) {
-                    Some(original_dims) if original_dims.as_slice() != tensor.dims() => {
-                        let ranges: Vec<_> = original_dims.iter().map(|&d| 0..d).collect();
-                        tensor
-                            .get_slice(&ranges)
-                            .expect("failed to crop padded output to original dims")
-                    }
-                    _ => tensor.clone(),
+                let raw_dims = self.graph.raw_model_output_dims(i);
+                if raw_dims.as_slice() == tensor.dims() {
+                    return tensor.clone();
                 }
+                let ranges: Vec<_> = raw_dims.iter().map(|&d| 0..d).collect();
+                tensor
+                    .get_slice(&ranges)
+                    .expect("failed to crop padded output to original dims")
             })
             .collect()
     }

@@ -33,10 +33,14 @@ pub fn handlers() -> HashMap<&'static str, OpHandlerFn> {
 
 /// Reshape: Changes tensor dimensions without changing data.
 fn handle_reshape(hctx: &mut HandlerContext) -> Vec<ComputationNode> {
-    let shape = hctx.output_dims.clone();
+    let input_shape = hctx.internal_input_nodes[0].raw_output_dims();
+    let output_shape = hctx.output_dims.clone();
 
     HandlerBuilder::new(hctx)
-        .simple_op(Operator::Reshape(Reshape { shape }))
+        .simple_op(Operator::Reshape(Reshape {
+            input_shape,
+            output_shape,
+        }))
         .build()
 }
 

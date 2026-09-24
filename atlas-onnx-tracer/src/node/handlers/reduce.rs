@@ -58,7 +58,7 @@ fn handle_reduce_mean_of_squares(hctx: &mut HandlerContext) -> Vec<ComputationNo
     let scale = hctx.run_args.scale;
 
     // N = product of the reduced-axis sizes (the mean denominator).
-    let input_dims = &hctx.internal_input_nodes[0].output_dims;
+    let input_dims = hctx.internal_input_nodes[0].raw_output_dims();
     let count: usize = axes.iter().map(|&ax| input_dims[ax]).product();
     let padded_count: usize = axes
         .iter()

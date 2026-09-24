@@ -125,9 +125,9 @@ impl<F: JoltField> SliceSumcheckParams<F> {
             .nodes
             .get(&computation_node.inputs[0])
             .expect("Slice node should have one input")
-            .output_dims
+            .raw_output_dims()
             .clone();
-        let output_raw_dims = computation_node.output_dims.clone();
+        let output_raw_dims = computation_node.raw_output_dims();
         validate_slice_shapes(&input_raw_dims, &output_raw_dims, axis, start, end);
         Self {
             computation_node,

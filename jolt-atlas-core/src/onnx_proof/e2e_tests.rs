@@ -1938,3 +1938,31 @@ fn test_imported_reshape_preserves_padding_layout() {
         assert!(proof.verify(&vp, &wrong, None).is_err());
     }
 }
+
+/// Evidence for this commit's node-count claim; removed in the next one.
+///
+/// Qwen is the only model the gather lowering affected. Run against the
+/// previous commit it reports 2460 nodes and 195 reshapes; here it reports
+/// 2172 and 147, the 48 lowered reshapes having cost 6 extra nodes each.
+#[ignore = "requires the Qwen ONNX model (run scripts/download_qwen.py first)"]
+#[test]
+fn qwen_node_count() {
+    let run_args = RunArgs::new([
+        ("batch_size", 1),
+        ("sequence_length", 4),
+        ("past_sequence_length", 0),
+    ])
+    .set_scale(MODEL_SCALE as i32);
+    let model = Model::load("../atlas-onnx-tracer/models/qwen/network.onnx", &run_args);
+    let reshapes = model
+        .graph
+        .nodes
+        .values()
+        .filter(|n| matches!(n.operator, atlas_onnx_tracer::ops::Operator::Reshape(_)))
+        .count();
+    println!(
+        "Qwen: nodes={} reshapes={}",
+        model.graph.nodes.len(),
+        reshapes
+    );
+}

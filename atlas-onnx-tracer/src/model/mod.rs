@@ -11,7 +11,6 @@ pub mod clamp_width;
 pub mod execute;
 /// Functions for loading models from ONNX files.
 pub mod load;
-mod reshape_padding;
 pub mod shadow_trace;
 pub mod test;
 pub mod trace;
@@ -399,7 +398,7 @@ impl ComputationGraph {
     /// Tensors flowing through the graph must match the padded constants, so
     /// this decides whether an input tensor is padded before execution. It goes
     /// away once every operator is padding-safe and no tensor is padded at all.
-    pub fn has_padded_tensors(&self) -> bool {
+    pub(crate) fn has_padded_tensors(&self) -> bool {
         self.padded
     }
 
@@ -578,5 +577,63 @@ mod tests {
             model.graph.has_padded_tensors(),
             "model loaded with padding enabled should record it"
         );
+    }
+
+    /// Imported reshapes whose padding moves must agree across the integer
+    /// forward pass and all three shadow modes.
+    #[test]
+    fn imported_reshape_preserves_forward_and_all_shadows() {
+        for (name, dims) in [
+            ("merge", vec![2, 3, 4]),
+            ("split", vec![6, 4]),
+            ("unequal", vec![3, 3]),
+        ] {
+            let path = format!(
+                "{}/tests/fixtures/reshape-{name}.onnx",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let args = RunArgs::default();
+            let model = Model::load(&path, &args);
+            let values: Vec<i32> = (0..dims.iter().product::<usize>())
+                .map(|i| i as i32 - 9)
+                .collect();
+            let input = Tensor::new(Some(&values), &dims).unwrap();
+            assert_eq!(model.forward(&[input])[0].inner, values);
+
+            let originals = model.load_original_f64_constants(&path, &args);
+            let floats: Vec<f64> = values.iter().map(|&v| v as f64).collect();
+            let shadow = model.trace_with_true_f64_shadow(
+                &[Tensor::new(Some(&floats), &dims).unwrap()],
+                &originals,
+                args.scale,
+            );
+            let output = model.graph.outputs[0];
+            let mut expected =
+                Tensor::new(Some(&floats), &model.graph.raw_model_output_dims(0)).unwrap();
+            expected.pad_next_power_of_two();
+            assert_eq!(shadow.f64_outputs[&output], expected);
+
+            // The regular shadows receive the same integer inputs expressed
+            // in real units, unlike the original-weight shadow above.
+            let factor = 2_f64.powi(args.scale);
+            let dequantized: Vec<f64> = floats.iter().map(|v| v / factor).collect();
+            let integer_input = Tensor::new(Some(&values), &dims).unwrap();
+            let real_input = Tensor::new(Some(&dequantized), &dims).unwrap();
+            let expected_real = expected.map(|v| v / factor);
+            for regular in [
+                model.trace_with_shadow(
+                    std::slice::from_ref(&integer_input),
+                    std::slice::from_ref(&real_input),
+                    args.scale,
+                ),
+                model.trace_with_shadow_isolated(&[integer_input], &[real_input], args.scale),
+            ] {
+                assert_eq!(regular.f64_outputs[&output], expected_real);
+                assert_eq!(
+                    regular.i32_outputs[&output],
+                    shadow.f64_outputs[&output].map(|v| v as i32)
+                );
+            }
+        }
     }
 }

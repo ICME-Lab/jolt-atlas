@@ -260,7 +260,8 @@ impl ModelBuilder {
         let node = ComputationNode::new(
             id,
             Operator::Reshape(Reshape {
-                shape: new_shape.clone(),
+                input_shape: self.nodes[&input].raw_output_dims(),
+                output_shape: new_shape.clone(),
             }),
             vec![input],
             new_shape,

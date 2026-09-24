@@ -211,7 +211,7 @@ impl Model {
     ///
     /// # Returns
     /// A vector of internal node indices representing the graph outputs
-    pub(super) fn collect_outputs(
+    fn collect_outputs(
         model: &Graph<TypedFact, Box<dyn TypedOp>>,
         mapper: &NodeIndexMapper,
     ) -> Vec<usize> {
@@ -228,7 +228,7 @@ impl Model {
     ///
     /// # Returns
     /// A vector of node indices that are input nodes
-    pub(super) fn collect_input_nodes(nodes: &BTreeMap<usize, ComputationNode>) -> Vec<usize> {
+    fn collect_input_nodes(nodes: &BTreeMap<usize, ComputationNode>) -> Vec<usize> {
         nodes
             .iter()
             .filter_map(|(idx, node)| match node.operator {
@@ -517,10 +517,7 @@ impl<'a> ModelLoader<'a> {
             "collect_outputs must be called first"
         );
 
-        let reshape_plans = super::reshape_padding::plans(nodes);
-        let mapping = super::reshape_padding::remapping(nodes, &reshape_plans);
-
-        // Pad all nodes: constant tensors, operator-internal shapes, and output dimensions
+        // Pad all nodes: constant tensors and operator-internal shapes
         for node in nodes.values_mut() {
             // Pad constant tensors
             if let Operator::Constant(constant) = &mut node.operator {
@@ -532,9 +529,6 @@ impl<'a> ModelLoader<'a> {
                 Operator::Broadcast(broadcast) => {
                     broadcast.shape = Model::pad_dims_to_power_of_2(&broadcast.shape);
                 }
-                Operator::Reshape(reshape) => {
-                    reshape.shape = Model::pad_dims_to_power_of_2(&reshape.shape);
-                }
                 Operator::IsNan(is_nan) => {
                     is_nan.out_dims = Model::pad_dims_to_power_of_2(&is_nan.out_dims);
                 }
@@ -542,16 +536,6 @@ impl<'a> ModelLoader<'a> {
             }
         }
 
-        super::reshape_padding::lower(nodes, reshape_plans, &mapping);
-        for index in self
-            .inputs
-            .as_mut()
-            .unwrap()
-            .iter_mut()
-            .chain(self.outputs.as_mut().unwrap())
-        {
-            *index = mapping[index];
-        }
         self.padded = true;
 
         self

@@ -168,23 +168,12 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_output = accessor.get_reduced_opening().0;
-        // The tensors' physical shape. Temporary: goes with the padding toggle.
-        let dims = |node: &ComputationNode| {
-            if graph.has_padded_tensors() {
-                node.padded_output_dims()
-            } else {
-                node.raw_output_dims()
-            }
-        };
-        // A padded graph lowers reshapes into gather nodes that perform the
-        // permutation, so the selector's remap must stay the identity there.
-        let input_raw_dims = dims(
-            graph
-                .nodes
-                .get(&computation_node.inputs[0])
-                .expect("Reshape node should have one input"),
-        );
-        let output_raw_dims = dims(&computation_node);
+        let input_raw_dims = graph
+            .nodes
+            .get(&computation_node.inputs[0])
+            .expect("Reshape node should have one input")
+            .raw_output_dims();
+        let output_raw_dims = computation_node.raw_output_dims();
         Self {
             computation_node,
             r_output,
@@ -270,13 +259,19 @@ pub struct ReshapeSumcheckProver<F: JoltField> {
 impl<F: JoltField> ReshapeSumcheckProver<F> {
     /// Initialize reshape prover state from trace tensors and prepared parameters.
     pub fn initialize(trace: &Trace, params: ReshapeSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
             panic!("Expected one operand for Reshape operation")
         };
 
         let input_mle = MultilinearPolynomial::from(input.padded_next_power_of_two());
-        let selector = build_reshape_selectors(input.dims(), output.dims(), &params.r_output.r);
+        // The same raw shapes the verifier uses; the tensors' own dimensions are
+        // padded and would give a different selector.
+        let selector = build_reshape_selectors(
+            &params.input_raw_dims,
+            &params.output_raw_dims,
+            &params.r_output.r,
+        );
         let selector_mle = MultilinearPolynomial::from(selector);
         assert_eq!(input_mle.len(), selector_mle.len());
 

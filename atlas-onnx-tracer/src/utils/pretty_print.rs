@@ -39,7 +39,9 @@ impl From<&ComputationNode> for NodeRow {
                 format!("axis: {}, dict_len: {}", op.axis, op.dict_len)
             }
             Operator::MoveAxis(op) => format!("src: {} → dst: {}", op.source, op.destination),
-            Operator::Reshape(op) => format!("shape: {:?}", op.shape),
+            Operator::Reshape(op) => {
+                format!("{:?} → {:?}", op.input_shape, op.output_shape)
+            }
             Operator::Rsqrt(op) => format!("scale: {}", op.scale),
             Operator::Sigmoid(op) => format!("scale: {}", op.scale),
             Operator::Slice(op) => format!("axis: {}, {}..{}", op.axis, op.start, op.end),

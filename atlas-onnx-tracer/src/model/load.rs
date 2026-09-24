@@ -20,10 +20,11 @@ impl Model {
     /// This is the main entry point for loading ONNX models.
     /// Uses a fluent builder pattern that makes each loading step explicit.
     ///
-    /// If `run_args.pad_to_power_of_2` is true, all constant tensors and node output
-    /// dimensions will be padded to the next power of 2 (e.g., [3, 7, 15, 8] → [4, 8, 16, 8]).
-    /// The original input and output dimensions are preserved for proper handling during
-    /// execution (inputs will be padded, outputs will be unpadded).
+    /// If `run_args.pad_to_power_of_2` is true, constant tensors and the shapes
+    /// operators hold internally are padded to the next power of 2 (e.g.
+    /// [3, 7, 15, 8] → [4, 8, 16, 8]). Nodes keep their declared dimensions, so
+    /// inputs are padded and outputs unpadded when execution crosses that
+    /// boundary.
     pub fn load_onnx_model(path: &str, run_args: &RunArgs) -> Self {
         let mut loader = ModelLoader::new(path, run_args)
             .load_onnx_using_tract()
@@ -382,8 +383,7 @@ pub struct ModelLoader<'a> {
     mapper: Option<NodeIndexMapper>,
     inputs: Option<Vec<usize>>,
     outputs: Option<Vec<usize>>,
-    original_input_dims: HashMap<usize, Vec<usize>>,
-    original_output_dims: HashMap<usize, Vec<usize>>,
+    padded: bool,
 }
 
 impl<'a> ModelLoader<'a> {
@@ -398,8 +398,7 @@ impl<'a> ModelLoader<'a> {
             mapper: None,
             inputs: None,
             outputs: None,
-            original_input_dims: HashMap::new(),
-            original_output_dims: HashMap::new(),
+            padded: false,
         }
     }
 
@@ -493,12 +492,13 @@ impl<'a> ModelLoader<'a> {
     }
 
     #[tracing::instrument(name = "ModelLoader::pad", skip_all)]
-    /// Pads all constant tensors and node output dimensions to the next power of 2.
+    /// Pads all constant tensors to the next power of 2.
     ///
     /// This step:
-    /// - Stores original input and output dimensions for later use during execution
     /// - Pads all Constant operator tensors using Tensor::pad_next_power_of_two()
-    /// - Updates all node output_dims to their padded equivalents
+    /// - Pads the shapes `Broadcast`, `Reshape` and `IsNan` hold internally
+    /// - Lowers reshapes whose real elements move once padding is interleaved
+    /// - Records that this graph's tensors are padded
     ///
     /// # Panics
     /// Panics if parse_nodes, collect_input_nodes, or collect_outputs have not been called.
@@ -508,30 +508,14 @@ impl<'a> ModelLoader<'a> {
             .nodes
             .as_mut()
             .expect("parse_nodes must be called first");
-        let inputs = self
-            .inputs
-            .as_ref()
-            .expect("collect_input_nodes must be called first");
-        let outputs = self
-            .outputs
-            .as_ref()
-            .expect("collect_outputs must be called first");
-
-        // Store original input dimensions
-        for &input_idx in inputs {
-            if let Some(node) = nodes.get(&input_idx) {
-                self.original_input_dims
-                    .insert(input_idx, node.raw_output_dims());
-            }
-        }
-
-        // Store original output dimensions
-        for &output_idx in outputs {
-            if let Some(node) = nodes.get(&output_idx) {
-                self.original_output_dims
-                    .insert(output_idx, node.raw_output_dims());
-            }
-        }
+        assert!(
+            self.inputs.is_some(),
+            "collect_input_nodes must be called first"
+        );
+        assert!(
+            self.outputs.is_some(),
+            "collect_outputs must be called first"
+        );
 
         let reshape_plans = super::reshape_padding::plans(nodes);
         let mapping = super::reshape_padding::remapping(nodes, &reshape_plans);
@@ -568,14 +552,7 @@ impl<'a> ModelLoader<'a> {
         {
             *index = mapping[index];
         }
-        self.original_input_dims = std::mem::take(&mut self.original_input_dims)
-            .into_iter()
-            .map(|(i, d)| (mapping[&i], d))
-            .collect();
-        self.original_output_dims = std::mem::take(&mut self.original_output_dims)
-            .into_iter()
-            .map(|(i, d)| (mapping[&i], d))
-            .collect();
+        self.padded = true;
 
         self
     }
@@ -591,8 +568,7 @@ impl<'a> ModelLoader<'a> {
                 nodes: self.nodes.expect("parse_nodes must be called"),
                 inputs: self.inputs.expect("collect_input_nodes must be called"),
                 outputs: self.outputs.expect("collect_outputs must be called"),
-                original_input_dims: self.original_input_dims,
-                original_output_dims: self.original_output_dims,
+                padded: self.padded,
             },
             scale: self.run_args.scale,
         }

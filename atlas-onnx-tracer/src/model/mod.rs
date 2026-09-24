@@ -341,28 +341,13 @@ pub struct ComputationGraph {
     pub inputs: Vec<usize>,
     /// Indices of output nodes
     pub outputs: Vec<usize>,
-    /// Original (unpadded) dimensions for input nodes, indexed by node index.
-    ///
-    /// Only populated when padding is enabled; read through
-    /// [`ComputationGraph::raw_model_input_dims`], which covers both cases.
-    ///
-    /// TODO: redundant now that nodes store raw dimensions, but its emptiness
-    /// still backs [`ComputationGraph::has_padded_tensors`]. Will be removed
-    /// with the padding toggle.
-    original_input_dims: HashMap<usize, Vec<usize>>,
-    /// Original (unpadded) dimensions for output nodes, indexed by node index.
-    ///
-    /// Only populated when padding is enabled; read through
-    /// [`ComputationGraph::raw_model_output_dims`], which covers both cases.
-    ///
-    /// TODO: redundant now that nodes store raw dimensions. Will be removed
-    /// with the padding toggle.
-    original_output_dims: HashMap<usize, Vec<usize>>,
+    /// Whether this graph's tensors were physically padded to power-of-two
+    /// dimensions when it was loaded.
+    padded: bool,
 }
 
 impl ComputationGraph {
-    /// Construct a graph whose nodes carry their dimensions unpadded, so that
-    /// no pre-padding dimensions need recording.
+    /// Construct a graph whose tensors are not physically padded.
     pub fn new(
         nodes: BTreeMap<usize, ComputationNode>,
         inputs: Vec<usize>,
@@ -372,8 +357,7 @@ impl ComputationGraph {
             nodes,
             inputs,
             outputs,
-            original_input_dims: HashMap::new(),
-            original_output_dims: HashMap::new(),
+            padded: false,
         }
     }
 
@@ -392,15 +376,12 @@ impl ComputationGraph {
     /// power-of-two padding.
     ///
     /// `i` counts the model's inputs, not node indices: input `1` is the
-    /// second tensor the model takes, whatever node produces it. When padding
-    /// is disabled nothing was recorded, and the node's own dimensions are
-    /// already the unpadded ones.
+    /// second tensor the model takes, whatever node produces it.
     ///
     /// # Panics
     /// Panics if `i` is not one of the model's inputs.
     pub fn raw_model_input_dims(&self, i: usize) -> Vec<usize> {
-        let idx = self.inputs[i];
-        self.raw_boundary_dims(&self.original_input_dims, idx)
+        self.nodes[&self.inputs[i]].raw_output_dims()
     }
 
     /// Dimensions the model declares for its `i`-th output tensor, before any
@@ -409,26 +390,17 @@ impl ComputationGraph {
     /// # Panics
     /// Panics if `i` is not one of the model's outputs.
     pub fn raw_model_output_dims(&self, i: usize) -> Vec<usize> {
-        let idx = self.outputs[i];
-        self.raw_boundary_dims(&self.original_output_dims, idx)
+        self.nodes[&self.outputs[i]].raw_output_dims()
     }
 
-    /// Whether this graph's constant tensors were physically padded to
-    /// power-of-two dimensions when it was loaded.
+    /// Whether this graph's tensors were physically padded to power-of-two
+    /// dimensions when it was loaded.
     ///
-    /// Tensors flowing through the graph must match those constants, so this
-    /// decides whether an input tensor is padded before execution. Temporary:
-    /// it goes with the padding toggle, once constants are stored unpadded and
-    /// expanded at the point of use.
+    /// Tensors flowing through the graph must match the padded constants, so
+    /// this decides whether an input tensor is padded before execution. It goes
+    /// away once every operator is padding-safe and no tensor is padded at all.
     pub fn has_padded_tensors(&self) -> bool {
-        !self.original_input_dims.is_empty()
-    }
-
-    fn raw_boundary_dims(&self, recorded: &HashMap<usize, Vec<usize>>, idx: usize) -> Vec<usize> {
-        recorded
-            .get(&idx)
-            .cloned()
-            .unwrap_or_else(|| self.nodes[&idx].raw_output_dims())
+        self.padded
     }
 
     /// Get references to the input nodes of a given node.
@@ -602,14 +574,9 @@ mod tests {
         assert!(!model.graph.inputs.is_empty());
         assert!(!model.graph.outputs.is_empty());
 
-        // Verify that padding metadata is populated
         assert!(
-            !model.graph.original_input_dims.is_empty(),
-            "Padded model should have original input dims stored"
-        );
-        assert!(
-            !model.graph.original_output_dims.is_empty(),
-            "Padded model should have original output dims stored"
+            model.graph.has_padded_tensors(),
+            "model loaded with padding enabled should record it"
         );
     }
 }

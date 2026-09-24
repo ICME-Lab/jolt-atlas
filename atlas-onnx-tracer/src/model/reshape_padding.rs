@@ -279,7 +279,7 @@ mod tests {
             );
             let output = model.graph.outputs[0];
             let mut expected =
-                Tensor::new(Some(&floats), &model.graph.original_output_dims[&output]).unwrap();
+                Tensor::new(Some(&floats), &model.graph.raw_model_output_dims(0)).unwrap();
             expected.pad_next_power_of_two();
             assert_eq!(shadow.f64_outputs[&output], expected);
             // The regular shadows receive the same integer inputs expressed

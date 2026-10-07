@@ -879,4 +879,164 @@ mod tests {
             "Tampered e_combined_row should fail E Hyrax check: {result:?}"
         );
     }
+
+    /// A sumcheck's final claim must be handed to the PCS. In ZK both sides are
+    /// hidden, so the hand-off goes through a commitment. The intended chain:
+    ///
+    /// 1. Sumcheck: one round `g(X) = 40 + 5X + 10X^2 + 5X^3` from the claim
+    ///    100 (`g(0) + g(1) = 100`), challenge 3, final claim `g(3) = 280`.
+    /// 2. Stage output constraint: final claim = hidden claim `id`.
+    /// 3. Extra constraint: witness variable `y` = claim `id`.
+    /// 4. Eval commitment `C = g_0 * y + h * beta`. In a real proof `C` is the
+    ///    hiding PCS opening's `y_com`, which the PCS proves seals `P(r)`;
+    ///    here it is built directly.
+    ///
+    /// Links 1-3 are R1CS constraints, checked by Spartan against the committed
+    /// witness. Link 4 is a group equation the R1CS cannot express: the
+    /// verifier only checks that values revealed by the prover open the folded
+    /// `C`, and never that they are the witness's `y` and `beta`. A fix would
+    /// put `y` alone in a reserved witness row with `beta` as its blind, so the
+    /// verifier can use `C` as that row's commitment in the Hyrax opening.
+    ///
+    /// `sealed` is the value inside `C`; `reveal_shift` is added to the
+    /// revealed folded value.
+    fn prove_with_eval_commitment(
+        sealed: Fr,
+        reveal_shift: Fr,
+    ) -> Result<(), BlindFoldVerifyError> {
+        use crate::poly::opening_proof::{OpeningId, SumcheckId};
+        use crate::subprotocols::blindfold::{
+            output_constraint::OutputClaimConstraint,
+            witness::{ExtraConstraintWitness, FinalOutputWitness},
+        };
+        use common::CommittedPoly;
+        use std::collections::BTreeMap;
+        type F = Fr;
+        let mut rng = thread_rng();
+
+        let id = OpeningId::new(
+            CommittedPoly::DivNodeQuotient(0),
+            SumcheckId::NodeExecution(0),
+        );
+        // Link 2: the stage's final claim is the hidden claim `id`.
+        let configs = [StageConfig::new(1, 3).with_constraint(OutputClaimConstraint::direct(id))];
+        let round = RoundWitness::new(
+            vec![
+                F::from_u64(40),
+                F::from_u64(5),
+                F::from_u64(10),
+                F::from_u64(5),
+            ],
+            F::from_u64(3),
+        );
+        let v = F::from_u64(280);
+        let beta = F::random(&mut rng);
+        let blindfold_witness = BlindFoldWitness::with_extra_constraints(
+            vec![F::from_u64(100)],
+            vec![StageWitness::with_final_output(
+                vec![round],
+                FinalOutputWitness::general(vec![], vec![v]),
+            )],
+            vec![ExtraConstraintWitness {
+                output_value: v,
+                blinding: beta,
+                challenge_values: vec![],
+                opening_values: vec![v],
+            }],
+        );
+        let baked = BakedPublicInputs::from_witness(&blindfold_witness, &configs);
+        // Link 3: `y` = claim `id`. The builder also allocates a variable for
+        // `beta`, which no constraint uses.
+        let r1cs = VerifierR1CSBuilder::<F>::new_with_extra(
+            &configs,
+            &[OutputClaimConstraint::direct(id)],
+            &baked,
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .build();
+        let gens = PedersenGenerators::<Bn254Curve>::deterministic(r1cs.hyrax.C);
+        let z = blindfold_witness.assign(&r1cs);
+        r1cs.check_satisfaction(&z).unwrap();
+        let witness = &z[1..];
+
+        // Commit the witness rows exactly as `make_test_instance` does.
+        let hyrax = &r1cs.hyrax;
+        let mut w_row_blindings = vec![F::zero(); hyrax.R_prime];
+        let mut round_commitments = Vec::new();
+        for round_idx in 0..hyrax.total_rounds {
+            let start = round_idx * hyrax.C;
+            let blinding = F::random(&mut rng);
+            round_commitments.push(gens.commit(&witness[start..start + hyrax.C], &blinding));
+            w_row_blindings[round_idx] = blinding;
+        }
+        let mut noncoeff_row_commitments = Vec::new();
+        for row in 0..hyrax.total_noncoeff_rows() {
+            let start = hyrax.R_coeff * hyrax.C + row * hyrax.C;
+            let end = (start + hyrax.C).min(witness.len());
+            let blinding = F::random(&mut rng);
+            noncoeff_row_commitments.push(gens.commit(&witness[start..end], &blinding));
+            w_row_blindings[hyrax.R_coeff + row] = blinding;
+        }
+
+        // Link 4: the public eval commitment, standing in for the PCS's `y_com`.
+        let eval_commitment = gens.commit(&[sealed], &beta);
+        let (real_instance, real_witness) = RelaxedR1CSInstance::<F, Bn254Curve>::new_non_relaxed(
+            witness,
+            r1cs.num_constraints,
+            hyrax.C,
+            round_commitments,
+            Vec::new(),
+            noncoeff_row_commitments,
+            vec![eval_commitment],
+            w_row_blindings,
+        );
+
+        let bases = Some((gens.message_generators[0], gens.blinding_generator));
+        let prover = BlindFoldProver::new(&gens, &r1cs, bases);
+        let verifier = BlindFoldVerifier::new(&gens, &r1cs, bases);
+        let mut proof = prover.prove(
+            &real_instance,
+            &real_witness,
+            &z,
+            &mut KeccakTranscript::new(b"eval_binding"),
+        );
+        let output_var = r1cs.extra_output_vars[0];
+        println!(
+            "witness y = {}, sealed = {}, revealed folded y* = {} + {}",
+            z[output_var.index()],
+            sealed,
+            proof.folded_eval_outputs[0],
+            reveal_shift
+        );
+        // The prover computed `y*` from its folded witness, but the verifier
+        // only checks it against `C + r * C'`. Folding adds `sealed - y`
+        // unscaled, so shifting `y*` by that difference satisfies the check.
+        proof.folded_eval_outputs[0] += reveal_shift;
+        let input = BlindFoldVerifierInput {
+            round_commitments: real_instance.round_commitments.clone(),
+            output_claims_row_commitments: real_instance.output_claims_row_commitments.clone(),
+            eval_commitments: real_instance.eval_commitments.clone(),
+        };
+        verifier.verify(&proof, &input, &mut KeccakTranscript::new(b"eval_binding"))
+    }
+
+    #[test]
+    fn eval_commitment_is_not_bound_to_witness() {
+        let (correct, wrong) = (Fr::from_u64(280), Fr::from_u64(281));
+        // Honest: C seals the sumcheck's final claim 280.
+        assert!(prove_with_eval_commitment(correct, Fr::zero()).is_ok());
+        // C seals 281 but the witness holds 280; the honest prover's revealed
+        // value does not open the folded commitment.
+        assert!(matches!(
+            prove_with_eval_commitment(wrong, Fr::zero()),
+            Err(BlindFoldVerifyError::EvalCommitmentMismatch)
+        ));
+        // Same mismatch, but the prover reveals a value consistent with 281.
+        // Nothing ties the revealed value to the witness, so this verifies:
+        // the sumcheck proves 280 while the commitment handed to the PCS
+        // seals 281. Once link 4 is enforced, this must become an error.
+        // SHOULD ERROR
+        assert!(prove_with_eval_commitment(wrong, Fr::from_u64(1)).is_ok());
+    }
 }

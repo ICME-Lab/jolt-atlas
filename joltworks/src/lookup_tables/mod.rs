@@ -100,6 +100,8 @@ pub mod and;
 /// Clamps the input to a specified range: floor-at-0 (`SoftmaxClampTable`) or natively
 /// symmetric (`ClampTable`/`SaturationTable`/`ActivationClampTable`), via one generic `ClampSpec`.
 pub mod clamp;
+/// Single-operand, const-bound less-than comparison lookup table (`x < K`).
+pub mod less_than_const;
 /// Bitwise OR lookup table.
 pub mod or;
 /// ReLU (Rectified Linear Unit) activation lookup table.

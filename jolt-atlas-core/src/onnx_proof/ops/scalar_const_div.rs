@@ -1,37 +1,34 @@
 use crate::{
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
-    utils::opening_access::{AccOpeningAccessor, Target},
+    onnx_proof::{
+        ops::OperatorProofTrait,
+        range_checking::{
+            range_check_operands::{RangeCheckOperands, ScalarConstDivRangeCheckOperands},
+            RangeCheckProvider,
+        },
+        ProofId, ProofType, Prover, Verifier,
+    },
+    utils::{
+        adjusted_remainder,
+        opening_access::{AccOpeningAccessor, Target},
+    },
 };
 use atlas_onnx_tracer::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::{Operator, ScalarConstDiv},
-    tensor::Tensor,
 };
-use common::CommittedPoly;
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
+use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use joltworks::{
-    field::{IntoOpening, JoltField},
-    poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN, LITTLE_ENDIAN,
-        },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
-    },
+    field::JoltField,
+    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
+    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
     subprotocols::{
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
+        shout::{self, RaOneHotEncoding},
+        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
+    utils::errors::ProofVerifyError,
 };
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDiv {
@@ -41,18 +38,50 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDiv {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let mut results = Vec::new();
+        // Plumbing: cache the remainder's claim.
+        cache_remainder_prover(node, prover);
 
-        // Execution proof
-        let params = ScalarConstDivParams::new(node.clone(), &prover.accumulator);
-        let mut exec_sumcheck = ScalarConstDivProver::initialize(&prover.trace, params);
-        let (proof, _) = Sumcheck::prove(
-            &mut exec_sumcheck,
+        // Range check `0 <= R < b`.
+        let rangecheck_provider = RangeCheckProvider::<ScalarConstDivRangeCheckOperands>::new(node);
+        let (mut rangecheck_sumcheck, lookup_indices) = rangecheck_provider
+            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+        let (rangecheck_proof, _) = Sumcheck::prove(
+            &mut rangecheck_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-        results.push((ProofId(node.idx, ProofType::Execution), proof));
-        results
+
+        // The range check's read-address one-hot correctness checks.
+        let rc_operands = RangeCheckOperands::<ScalarConstDivRangeCheckOperands>::new(node);
+        let encoding = rc_operands.get_encoding(node);
+        let [ra_sumcheck, hw_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
+            &encoding,
+            &lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+            vec![ra_sumcheck, hw_sumcheck, bool_sumcheck];
+        let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
+            instances.iter_mut().map(|v| &mut **v as _).collect(),
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+
+        // Plumbing: derive `a`'s input claim from `q` (this node's own output) and `R`.
+        cache_input_claim_prover(node, prover);
+
+        vec![
+            (ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof),
+            (
+                ProofId(node.idx, ProofType::RaOneHotChecks),
+                ra_one_hot_proof,
+            ),
+        ]
     }
 
     #[tracing::instrument(skip_all, name = "ScalarConstDiv::verify")]
@@ -61,272 +90,145 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDiv {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        // Execution verification
-        let proof = verifier
+        // Plumbing: cache the remainder's claim.
+        cache_remainder_verifier(node, verifier);
+
+        // Range check `0 <= R < b`.
+        let rangecheck_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
+            .get(&ProofId(node.idx, ProofType::RangeCheck))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let exec_sumcheck = ScalarConstDivVerifier::new(node.clone(), &verifier.accumulator);
+        let rangecheck_provider = RangeCheckProvider::<ScalarConstDivRangeCheckOperands>::new(node);
+        let rangecheck_verifier = rangecheck_provider
+            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+                &mut verifier.accumulator,
+                &mut verifier.transcript,
+            );
         Sumcheck::verify(
-            proof,
-            &exec_sumcheck,
+            rangecheck_proof,
+            &rangecheck_verifier,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
+
+        // The range check's read-address one-hot correctness checks.
+        let ra_one_hot_proof = verifier
+            .proofs
+            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        let rc_operands = RangeCheckOperands::<ScalarConstDivRangeCheckOperands>::new(node);
+        let encoding = rc_operands.get_encoding(node);
+        let [ra_sumcheck, hw_sumcheck, bool_sumcheck] =
+            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+        BatchedSumcheck::verify(
+            ra_one_hot_proof,
+            vec![&*ra_sumcheck, &*hw_sumcheck, &*bool_sumcheck],
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
+
+        // Plumbing: derive and verify `a`'s input claim from `q` and `R`.
+        verify_input_claim(node, verifier)?;
 
         Ok(())
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let polys = vec![CommittedPoly::ScalarConstDivNodeRemainder(node.idx)];
-        polys
+        let rc_operands = RangeCheckOperands::<ScalarConstDivRangeCheckOperands>::new(node);
+        let d = rc_operands
+            .get_encoding(node)
+            .one_hot_params()
+            .instruction_d;
+        (0..d)
+            .map(|i| CommittedPoly::ScalarConstDivRangeCheckRaD(node.idx, i))
+            .collect()
     }
 }
 
-const DEGREE_BOUND: usize = 2;
+/// Caches the remainder's claim (`VirtualPoly::ScalarConstDivRemainder`) at the node's
+/// reduced output-opening point, by directly evaluating the honest remainder tensor —
+/// no sumcheck needed, `R` is constrained only via [`cache_input_claim_prover`] and the
+/// range check.
+fn cache_remainder_prover<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    prover: &mut Prover<F, T>,
+) {
+    let Operator::ScalarConstDiv(op) = &node.operator else {
+        panic!("Expected ScalarConstDiv operator at node {}", node.idx);
+    };
+    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+    let [left_operand] = operands[..] else {
+        panic!("Expected one operand for ScalarConstDiv operation")
+    };
+    let remainder = left_operand.map(|x| adjusted_remainder(x, op.divisor));
 
-/// Parameters for proving division by a scalar constant.
-///
-/// For division a/b where b is a constant, proves a = b*q + R where R is the remainder.
-/// This is more efficient than general division since the divisor is known.
-#[derive(Clone)]
-pub struct ScalarConstDivParams<F: JoltField> {
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
-    scalar_const_divisor: i32,
+    let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+    let (r_node_output, _) = accessor.get_reduced_opening();
+    let eval = MultilinearPolynomial::from(remainder).evaluate(&r_node_output.r);
+    accessor
+        .into_provider(&mut prover.transcript, r_node_output)
+        .append_advice(VirtualPoly::ScalarConstDivRemainder, eval);
 }
 
-impl<F: JoltField> ScalarConstDivParams<F> {
-    /// Create new scalar constant division parameters from a computation node and opening accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let r_node_output = accessor.get_reduced_opening().0;
-        let Operator::ScalarConstDiv(scalar_const_div) = &computation_node.operator else {
-            panic!("Expected ScalarConstDiv operator")
-        };
-        Self {
-            r_node_output,
-            scalar_const_divisor: scalar_const_div.divisor,
-            computation_node,
-        }
-    }
+/// Verifier counterpart of [`cache_remainder_prover`].
+fn cache_remainder_verifier<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    verifier: &mut Verifier<'_, F, T>,
+) {
+    let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
+    let (r_node_output, _) = accessor.get_reduced_opening();
+    accessor
+        .into_provider(&mut verifier.transcript, r_node_output)
+        .append_advice(VirtualPoly::ScalarConstDivRemainder);
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for ScalarConstDivParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
+/// Derives the node's input claim `a = b·q + R` from `q` (this node's own reduced output
+/// claim) and the remainder claim `R`, caching it as `Target::Input(0)`. Holds identically
+/// as multilinear polynomials, so this is pure field arithmetic — no sumcheck needed. Must
+/// run after [`cache_remainder_prover`].
+fn cache_input_claim_prover<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    prover: &mut Prover<F, T>,
+) {
+    let Operator::ScalarConstDiv(op) = &node.operator else {
+        panic!("Expected ScalarConstDiv operator at node {}", node.idx);
+    };
+    let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+    let (r_node_output, q_claim) = accessor.get_reduced_opening();
+    let r_claim = accessor.get_advice(VirtualPoly::ScalarConstDivRemainder).1;
+    let a_claim = F::from_i32(op.divisor) * q_claim + r_claim;
 
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        let q_claim = accessor.get_reduced_opening().1;
-        q_claim * F::from_i32(self.scalar_const_divisor)
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.computation_node
-            .pow2_padded_num_output_elements()
-            .log_2()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
-    // output = eq_eval * (left_operand - R_claim)
-    //        = eq_eval * left + (-eq_eval) * R
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        use crate::utils::opening_access::OpeningIdBuilder;
-        let builder = OpeningIdBuilder::new(&self.computation_node);
-        let left_id = builder.nodeio(Target::Input(0));
-        let r_id = builder.advice(CommittedPoly::ScalarConstDivNodeRemainder);
-        Some(OutputClaimConstraint::sum_of_products(vec![
-            ProductTerm::scaled(
-                ValueSource::Challenge(0),
-                vec![ValueSource::Opening(left_id)],
-            ),
-            ProductTerm::scaled(ValueSource::Challenge(1), vec![ValueSource::Opening(r_id)]),
-        ]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let r_node_output_prime: Vec<F> = self
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime);
-        vec![eq_eval, -eq_eval]
-    }
+    accessor
+        .into_provider(&mut prover.transcript, r_node_output)
+        .append_nodeio(Target::Input(0), a_claim);
 }
 
-/// Prover state for scalar constant division sumcheck protocol.
-///
-/// Maintains the equality polynomial, operand polynomial, and remainder R
-/// needed to prove the division relation: operand = divisor * q + R where divisor is constant.
-pub struct ScalarConstDivProver<F: JoltField> {
-    params: ScalarConstDivParams<F>,
-    eq_r_node_output: GruenSplitEqPolynomial<F>,
-    left_operand: MultilinearPolynomial<F>,
-    R: MultilinearPolynomial<F>,
-}
+/// Verifier counterpart of [`cache_input_claim_prover`]: independently recomputes `b·q + R`
+/// and checks it against the prover's claimed `Target::Input(0)`.
+fn verify_input_claim<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    verifier: &mut Verifier<'_, F, T>,
+) -> Result<(), ProofVerifyError> {
+    let Operator::ScalarConstDiv(op) = &node.operator else {
+        panic!("Expected ScalarConstDiv operator at node {}", node.idx);
+    };
+    let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
+    let (r_node_output, q_claim) = accessor.get_reduced_opening();
 
-impl<F: JoltField> ScalarConstDivProver<F> {
-    /// Initialize the prover with trace data and parameters.
-    #[tracing::instrument(skip_all)]
-    pub fn initialize(trace: &Trace, params: ScalarConstDivParams<F>) -> Self {
-        let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
-        let [left_operand] = operands[..] else {
-            panic!("Expected one operands for ScalarConstDiv operation")
-        };
-        let b = params.scalar_const_divisor;
-        let R_tensor = {
-            let data: Vec<i32> = left_operand
-                .iter()
-                .map(|&a| {
-                    let mut R = a % b;
-                    if (R < 0 && b > 0) || R > 0 && b < 0 {
-                        R += b
-                    }
-                    R
-                })
-                .collect();
-            Tensor::<i32>::construct(data, left_operand.dims().to_vec())
-        };
-        let left_operand = MultilinearPolynomial::from(left_operand.clone());
-        let R = MultilinearPolynomial::from(R_tensor);
-        Self {
-            params,
-            eq_r_node_output,
-            left_operand,
-            R,
-        }
+    let mut provider = accessor.into_provider(&mut verifier.transcript, r_node_output);
+    provider.append_nodeio(Target::Input(0));
+    let r_claim = provider.get_advice(VirtualPoly::ScalarConstDivRemainder).1;
+    let expected = F::from_i32(op.divisor) * q_claim + r_claim;
+    let input_claim = provider.get_nodeio(Target::Input(0)).1;
+
+    if input_claim != expected {
+        return Err(ProofVerifyError::InvalidOpeningProof(
+            "ScalarConstDiv input claim does not match b*q + R derived from the quotient and \
+             remainder claims"
+                .to_string(),
+        ));
     }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDivProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self {
-            eq_r_node_output,
-            left_operand,
-            R,
-            ..
-        } = self;
-        let [q_constant] = eq_r_node_output.par_fold_out_in_unreduced::<9, 1>(&|g| {
-            let lo0 = left_operand.get_bound_coeff(2 * g);
-            let R0 = R.get_bound_coeff(2 * g);
-            let c0 = lo0 - R0;
-            [c0]
-        });
-        eq_r_node_output.gruen_poly_deg_2(q_constant, previous_claim)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.eq_r_node_output.bind(r_j);
-        self.left_operand
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.R.bind_parallel(r_j, BindingOrder::LowToHigh);
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-
-        provider.append_nodeio(Target::Input(0), self.left_operand.final_claim());
-        provider.append_advice(
-            CommittedPoly::ScalarConstDivNodeRemainder,
-            self.R.final_claim(),
-        );
-    }
-}
-
-/// Verifier for scalar constant division sumcheck protocol.
-///
-/// Verifies that the prover's sumcheck messages are consistent with the claimed
-/// division by scalar constant output and the division relation.
-pub struct ScalarConstDivVerifier<F: JoltField> {
-    params: ScalarConstDivParams<F>,
-}
-
-impl<F: JoltField> ScalarConstDivVerifier<F> {
-    /// Create a new verifier for the scalar constant division operation.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Self {
-        let params = ScalarConstDivParams::new(computation_node, accumulator);
-        Self { params }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConstDivVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-
-        let r_node_output = &self.params.r_node_output.r;
-        let r_node_output_prime = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
-
-        let R_claim = accessor
-            .get_advice(CommittedPoly::ScalarConstDivNodeRemainder)
-            .1;
-        let left_operand_claim = accessor.get_nodeio(Target::Input(0)).1;
-
-        eq_eval * (left_operand_claim - R_claim)
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-        provider.append_nodeio(Target::Input(0));
-        provider.append_advice(CommittedPoly::ScalarConstDivNodeRemainder);
-    }
+    Ok(())
 }
 
 #[cfg(test)]

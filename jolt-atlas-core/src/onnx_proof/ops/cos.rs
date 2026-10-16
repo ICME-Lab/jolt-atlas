@@ -7,13 +7,13 @@ use crate::{
                 cache_teleport_quotient_verify, compute_division, verify_teleport_input_claim,
             },
             trig_downscale::{
-                cache_downscaled_prove, cache_downscaled_verify, TrigDownscaleOperands,
+                cache_downscaled_prove, cache_downscaled_verify, TeleportRangeCheckOperands,
+                TrigDownscaleOperands,
             },
             utils::compute_ra_evals_from_usize_indices,
         },
         op_lookups::{OpLookupEncoding, OpLookupProvider},
         ops::OperatorProofTrait,
-        range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckProvider},
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::AccOpeningAccessor,
@@ -37,7 +37,7 @@ use joltworks::subprotocols::blindfold::{
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
-    lookup_tables::{right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable},
+    lookup_tables::{less_than_const::TrigLessThanConstTable, right_shift::RightShiftTable},
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
@@ -105,9 +105,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         let (cos_exec, cos_lookup_indices) =
             CosProver::initialize(&downscaled, params, &mut prover.accumulator);
 
-        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let (rangecheck_exec, rc_lookup_indices) = rc_provider
-            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+        let rc_provider: OpLookupProvider<TeleportRangeCheckOperands> =
+            OpLookupProvider::new(node.clone());
+        let (rangecheck_exec, _) = rc_provider
+            .read_raf_prove::<F, T, TrigLessThanConstTable<XLEN>, XLEN>(
                 &prover.trace,
                 &mut prover.accumulator,
                 &mut prover.transcript,
@@ -125,11 +126,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         );
         results.push((ProofId(node.idx, ProofType::Execution), exec_proof));
 
-        // Stage 2: batch every one-hot correctness triple together — downscale, Cos,
-        // and the range-check.
+        // Stage 2: batch every one-hot correctness triple together — downscale and Cos. The
+        // range-check shares downscale's `TrigDownscaleRa`/`RaD` (same remainder, same batched
+        // rounds above), so it has no one-hot triple of its own.
         let dsc_encoding = dsc_provider.encoding();
         let cos_encoding = CosRaEncoding::new(node);
-        let rc_encoding = rc_provider.encoding();
 
         let mut onehot_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = Vec::new();
         onehot_instances.extend(shout::ra_onehot_provers(
@@ -141,12 +142,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         onehot_instances.extend(shout::ra_onehot_provers(
             &cos_encoding,
             &cos_lookup_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        ));
-        onehot_instances.extend(shout::ra_onehot_provers(
-            &rc_encoding,
-            &rc_lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         ));
@@ -198,11 +193,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
             &mut verifier.transcript,
         );
 
-        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let rangecheck_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
+        let rc_provider: OpLookupProvider<TeleportRangeCheckOperands> =
+            OpLookupProvider::new(node.clone());
+        let rangecheck_verifier = rc_provider
+            .read_raf_verify::<F, T, TrigLessThanConstTable<XLEN>, XLEN>(
+                &mut verifier.accumulator,
+                &mut verifier.transcript,
+            );
 
         let exec_proof = verifier
             .proofs
@@ -215,11 +212,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
             &mut verifier.transcript,
         )?;
 
-        // Stage 2: batch every one-hot correctness triple together — downscale, Cos,
-        // and the range-check.
+        // Stage 2: batch every one-hot correctness triple together — downscale and Cos. The
+        // range-check shares downscale's `TrigDownscaleRa`/`RaD`, so it has no triple of its own.
         let dsc_encoding = dsc_provider.encoding();
         let cos_encoding = CosRaEncoding::new(node);
-        let rc_encoding = rc_provider.encoding();
 
         let onehot_proof = verifier
             .proofs
@@ -233,11 +229,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         ));
         onehot_verifiers.extend(shout::ra_onehot_verifiers(
             &cos_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        ));
-        onehot_verifiers.extend(shout::ra_onehot_verifiers(
-            &rc_encoding,
             &verifier.accumulator,
             &mut verifier.transcript,
         ));
@@ -257,16 +248,14 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let cos_encoding = CosRaEncoding::new(node);
-        let rc_encoding = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node).encoding();
         let dsc_encoding: OpLookupEncoding<TrigDownscaleOperands> =
             OpLookupProvider::<TrigDownscaleOperands>::new(node.clone()).encoding();
         let cos_d = cos_encoding.one_hot_params().instruction_d;
-        let rc_d = rc_encoding.one_hot_params().instruction_d;
         let dsc_d = dsc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];
+        // The range-check shares downscale's `TrigDownscaleRaD` — no separate committed poly.
         polys.extend((0..dsc_d).map(|i| CommittedPoly::TrigDownscaleRaD(node.idx, i)));
         polys.extend((0..cos_d).map(|i| CommittedPoly::CosRaD(node.idx, i)));
-        polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
         polys
     }
 }

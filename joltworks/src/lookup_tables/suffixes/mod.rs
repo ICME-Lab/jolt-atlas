@@ -19,6 +19,7 @@ use crate::{
             ActivationHZeroMulLWordSuffix, ClampHZeroMulLWordSuffix, SatClampHZeroMulLWordSuffix,
             SoftmaxClampHZeroMulLWordSuffix,
         },
+        less_than_const::TrigLessThanConstSuffix,
         lower_msb_upper_eqo_low::LowerMsbUpperEqoLowSuffix,
         neg_relu::NegReluSuffix,
         not_lower_msb_upper_eqz::NotLowerMsbUpperEqzSuffix,
@@ -45,6 +46,8 @@ pub mod hone_mul_lword;
 pub mod hzero_mul_lword;
 /// Less-than comparison suffix implementation.
 pub mod less_than;
+/// Const-bound less-than comparison suffix implementation (single-operand, `x < K`).
+pub mod less_than_const;
 /// `m * upper_eqo * low` suffix implementation, used in `sat_clamp` decomposition.
 pub mod lower_msb_upper_eqo_low;
 /// Negated ReLU suffix (Relu(-x)): `neg_relu(x) = max(-x, 0)`.
@@ -141,6 +144,8 @@ impl_sparse_dense_suffix!(
     SoftmaxClampHZeroMulLWord   : SoftmaxClampHZeroMulLWordSuffix,  // `higher_all_zero(bits) * lower_word(bits)`, used by softmax's saturating-clamp table.
 
     TrigRightShift               : TrigRightShiftSuffix,            // Value of the high bits of an unsigned input, right-shifted by `TRIG_DOWNSCALE_BITS`, used by `RightShiftTable`.
+
+    TrigLessThanConst            : TrigLessThanConstSuffix,         // `x < TRIG_PERIOD_MODULUS` restricted to the suffix's bit window, used by `LessThanConstTable`.
 );
 
 /// Type alias for suffix evaluation results in the field.

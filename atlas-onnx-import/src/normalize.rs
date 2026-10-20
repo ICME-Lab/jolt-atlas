@@ -60,9 +60,10 @@ pub fn resolve_const_operands(g: &mut IGraph, idx: usize) -> Result<(), ImportEr
     };
     match node.op.as_str() {
         "Squeeze" | "Unsqueeze" | "ReduceSum" | "ReduceMean"
-            if g.nodes[idx].as_ref().expect("live").inputs.len() > 1 => {
-                input_to_ints_attr(g, idx, 1, "axes")?;
-            }
+            if g.nodes[idx].as_ref().expect("live").inputs.len() > 1 =>
+        {
+            input_to_ints_attr(g, idx, 1, "axes")?;
+        }
         "Slice" => {
             let n = g.nodes[idx].as_ref().expect("live").inputs.len();
             if n > 1 {
@@ -76,10 +77,9 @@ pub fn resolve_const_operands(g: &mut IGraph, idx: usize) -> Result<(), ImportEr
                 input_to_ints_attr(g, idx, 1, "starts")?;
             }
         }
-        "Split"
-            if g.nodes[idx].as_ref().expect("live").inputs.len() > 1 => {
-                input_to_ints_attr(g, idx, 1, "split")?;
-            }
+        "Split" if g.nodes[idx].as_ref().expect("live").inputs.len() > 1 => {
+            input_to_ints_attr(g, idx, 1, "split")?;
+        }
         _ => {}
     }
     Ok(())

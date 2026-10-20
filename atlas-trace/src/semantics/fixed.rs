@@ -34,7 +34,11 @@ pub fn floor_div(a: i32, b: i32) -> i32 {
     debug_assert!(b != 0);
     let q = a.wrapping_div(b);
     let r = a.wrapping_rem(b);
-    if r != 0 && ((r < 0) != (b < 0)) { q - 1 } else { q }
+    if r != 0 && ((r < 0) != (b < 0)) {
+        q - 1
+    } else {
+        q
+    }
 }
 
 /// Floor modulus: remainder with the sign of the divisor (non-negative for
@@ -42,7 +46,11 @@ pub fn floor_div(a: i32, b: i32) -> i32 {
 pub fn rem_floor(a: i32, m: i32) -> i32 {
     debug_assert!(m != 0);
     let r = a % m;
-    if r != 0 && ((r < 0) != (m < 0)) { r + m } else { r }
+    if r != 0 && ((r < 0) != (m < 0)) {
+        r + m
+    } else {
+        r
+    }
 }
 
 /// Reciprocal square root of a quantized value: `⌊√⌊S³ / x⌋⌋`, with

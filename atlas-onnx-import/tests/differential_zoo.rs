@@ -102,7 +102,9 @@ fn run_one(name: &str, tolerance: Option<i32>) -> Result<i32, String> {
         InputKind::RawInt => {
             // Safe small indices for any dictionary in the zoo.
             let max_index = smallest_dict(&imported) as i32;
-            (0..len).map(|_| rng.gen_range(0..max_index.max(1))).collect()
+            (0..len)
+                .map(|_| rng.gen_range(0..max_index.max(1)))
+                .collect()
         }
         InputKind::Scaled => {
             let s = 1i32 << 14;
@@ -307,7 +309,10 @@ fn run_big(name: &str, tol: i32) -> Result<i32, String> {
     };
     let old = OldModel::load(path.to_str().expect("utf8"), &run_args);
     let old_out = old.forward(&old_inputs);
-    let new_out = imported.model.forward(&new_inputs).map_err(|e| e.to_string())?;
+    let new_out = imported
+        .model
+        .forward(&new_inputs)
+        .map_err(|e| e.to_string())?;
 
     let mut max_diff = 0i32;
     for (o, n) in old_out.iter().zip(&new_out) {
@@ -377,7 +382,10 @@ fn debug_qwen_landmarks() {
     let name = "qwen";
     let dir = zoo_dir().join(name);
     let path = dir.join("network.onnx");
-    let opts = LoadOptions { bindings: bindings(), ..Default::default() };
+    let opts = LoadOptions {
+        bindings: bindings(),
+        ..Default::default()
+    };
     let imported = atlas_onnx_import::load(&path, &opts).unwrap();
     let s = 1i32 << 14;
 
@@ -399,51 +407,88 @@ fn debug_qwen_landmarks() {
         OldTensor::new(Some(&mask_scaled), &[1, seq]).unwrap(),
     ];
 
-    let run_args = RunArgs { variables: bindings(), scale: 14, pad_to_power_of_2: true };
+    let run_args = RunArgs {
+        variables: bindings(),
+        scale: 14,
+        pad_to_power_of_2: true,
+    };
     let old = OldModel::load(path.to_str().unwrap(), &run_args);
     let old_trace = old.trace(&old_inputs);
     let new_trace = imported.model.trace(&new_inputs).unwrap();
 
     // Collect per-kind occurrence lists on both sides (topological order).
-    let kinds = ["Einsum", "MeanOfSquares", "Rsqrt", "Softmax", "Sin", "Cos", "Sigmoid", "Iff", "GatherLarge"];
+    let kinds = [
+        "Einsum",
+        "MeanOfSquares",
+        "Rsqrt",
+        "Softmax",
+        "Sin",
+        "Cos",
+        "Sigmoid",
+        "Iff",
+        "GatherLarge",
+    ];
     for kind in kinds {
-        let old_nodes: Vec<usize> = old.graph.nodes.values().filter(|n| {
-            let tag = match &n.operator {
-                Operator::Einsum(_) => "Einsum",
-                Operator::MeanOfSquares(_) => "MeanOfSquares",
-                Operator::Rsqrt(_) => "Rsqrt",
-                Operator::SoftmaxLastAxis(_) => "Softmax",
-                Operator::Sin(_) => "Sin",
-                Operator::Cos(_) => "Cos",
-                Operator::Sigmoid(_) => "Sigmoid",
-                Operator::Iff(_) => "Iff",
-                Operator::GatherLarge(_) => "GatherLarge",
-                _ => "",
-            };
-            tag == kind
-        }).map(|n| n.idx).collect();
-        let new_nodes: Vec<usize> = imported.model.graph().nodes.iter().enumerate().filter(|(_, n)| {
-            let tag = match &n.op {
-                atlas_trace::Op::Einsum(_) => "Einsum",
-                atlas_trace::Op::MeanOfSquares(_) => "MeanOfSquares",
-                atlas_trace::Op::Rsqrt(_) => "Rsqrt",
-                atlas_trace::Op::SoftmaxLastAxis(_) => "Softmax",
-                atlas_trace::Op::Sin(_) => "Sin",
-                atlas_trace::Op::Cos(_) => "Cos",
-                atlas_trace::Op::Sigmoid(_) => "Sigmoid",
-                atlas_trace::Op::Iff(_) => "Iff",
-                atlas_trace::Op::GatherLarge(_) => "GatherLarge",
-                _ => "",
-            };
-            tag == kind
-        }).map(|(i, _)| i).collect();
+        let old_nodes: Vec<usize> = old
+            .graph
+            .nodes
+            .values()
+            .filter(|n| {
+                let tag = match &n.operator {
+                    Operator::Einsum(_) => "Einsum",
+                    Operator::MeanOfSquares(_) => "MeanOfSquares",
+                    Operator::Rsqrt(_) => "Rsqrt",
+                    Operator::SoftmaxLastAxis(_) => "Softmax",
+                    Operator::Sin(_) => "Sin",
+                    Operator::Cos(_) => "Cos",
+                    Operator::Sigmoid(_) => "Sigmoid",
+                    Operator::Iff(_) => "Iff",
+                    Operator::GatherLarge(_) => "GatherLarge",
+                    _ => "",
+                };
+                tag == kind
+            })
+            .map(|n| n.idx)
+            .collect();
+        let new_nodes: Vec<usize> = imported
+            .model
+            .graph()
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| {
+                let tag = match &n.op {
+                    atlas_trace::Op::Einsum(_) => "Einsum",
+                    atlas_trace::Op::MeanOfSquares(_) => "MeanOfSquares",
+                    atlas_trace::Op::Rsqrt(_) => "Rsqrt",
+                    atlas_trace::Op::SoftmaxLastAxis(_) => "Softmax",
+                    atlas_trace::Op::Sin(_) => "Sin",
+                    atlas_trace::Op::Cos(_) => "Cos",
+                    atlas_trace::Op::Sigmoid(_) => "Sigmoid",
+                    atlas_trace::Op::Iff(_) => "Iff",
+                    atlas_trace::Op::GatherLarge(_) => "GatherLarge",
+                    _ => "",
+                };
+                tag == kind
+            })
+            .map(|(i, _)| i)
+            .collect();
         println!("{kind}: old x{} new x{}", old_nodes.len(), new_nodes.len());
         for occ in 0..old_nodes.len().min(new_nodes.len()).min(3) {
             let o = &old_trace.node_outputs[&old_nodes[occ]];
             let n = new_trace.output(atlas_trace::NodeId(new_nodes[occ] as u32));
             let len = o.data().len().min(n.data().len());
-            let max: i32 = o.data()[..len].iter().zip(&n.data()[..len]).map(|(&a, &b)| (a - b).abs()).max().unwrap_or(0);
-            println!("  occ{occ}: old dims {:?} new dims {:?} max-diff(first {len}) {max}", o.dims(), n.dims());
+            let max: i32 = o.data()[..len]
+                .iter()
+                .zip(&n.data()[..len])
+                .map(|(&a, &b)| (a - b).abs())
+                .max()
+                .unwrap_or(0);
+            println!(
+                "  occ{occ}: old dims {:?} new dims {:?} max-diff(first {len}) {max}",
+                o.dims(),
+                n.dims()
+            );
         }
     }
 }
@@ -455,7 +500,10 @@ fn debug_qwen_first_divergence() {
     use atlas_onnx_tracer::ops::Operator;
     let dir = zoo_dir().join("qwen");
     let path = dir.join("network.onnx");
-    let opts = LoadOptions { bindings: bindings(), ..Default::default() };
+    let opts = LoadOptions {
+        bindings: bindings(),
+        ..Default::default()
+    };
     let imported = atlas_onnx_import::load(&path, &opts).unwrap();
     let s = 1i32 << 14;
     let seq = 16usize;
@@ -471,7 +519,11 @@ fn debug_qwen_first_divergence() {
         OldTensor::new(Some(&pos_scaled), &[1, seq]).unwrap(),
         OldTensor::new(Some(&vec![s; seq]), &[1, seq]).unwrap(),
     ];
-    let run_args = RunArgs { variables: bindings(), scale: 14, pad_to_power_of_2: true };
+    let run_args = RunArgs {
+        variables: bindings(),
+        scale: 14,
+        pad_to_power_of_2: true,
+    };
     let old = OldModel::load(path.to_str().unwrap(), &run_args);
     let old_trace = old.trace(&old_inputs);
     let new_trace = imported.model.trace(&new_inputs).unwrap();
@@ -480,34 +532,73 @@ fn debug_qwen_first_divergence() {
     // against the new trace by matching tensors with equal data lengths and
     // minimal diff — instead simpler: dump old chain values' stats and new
     // counterparts found by op kind occurrence.
-    let old_mos: Vec<usize> = old.graph.nodes.values().filter(|n| matches!(n.operator, Operator::MeanOfSquares(_))).map(|n| n.idx).collect();
+    let old_mos: Vec<usize> = old
+        .graph
+        .nodes
+        .values()
+        .filter(|n| matches!(n.operator, Operator::MeanOfSquares(_)))
+        .map(|n| n.idx)
+        .collect();
     let target = old_mos[1];
     // Walk up 6 levels from the old MoS input.
     let mut frontier = vec![(old.graph.nodes[&target].inputs[0], 0usize)];
     while let Some((idx, d)) = frontier.pop() {
-        if d > 5 { continue; }
+        if d > 5 {
+            continue;
+        }
         let n = &old.graph.nodes[&idx];
         let out = &old_trace.node_outputs[&idx];
         let sum: i64 = out.data().iter().map(|&v| v as i64).sum();
-        println!("{:indent$}old node {idx} {:?} dims {:?} sum {sum}", "", op_tag(&n.operator), out.dims(), indent = d * 2);
-        for &i in &n.inputs { frontier.push((i, d + 1)); }
+        println!(
+            "{:indent$}old node {idx} {:?} dims {:?} sum {sum}",
+            "",
+            op_tag(&n.operator),
+            out.dims(),
+            indent = d * 2
+        );
+        for &i in &n.inputs {
+            frontier.push((i, d + 1));
+        }
     }
     // New side: find the second MoS and do the same.
-    let new_mos: Vec<usize> = imported.model.graph().nodes.iter().enumerate().filter(|(_, n)| matches!(n.op, atlas_trace::Op::MeanOfSquares(_))).map(|(i, _)| i).collect();
+    let new_mos: Vec<usize> = imported
+        .model
+        .graph()
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| matches!(n.op, atlas_trace::Op::MeanOfSquares(_)))
+        .map(|(i, _)| i)
+        .collect();
     let t2 = new_mos[1];
     let mut frontier = vec![(imported.model.graph().nodes[t2].inputs[0], 0usize)];
     while let Some((id, d)) = frontier.pop() {
-        if d > 5 { continue; }
+        if d > 5 {
+            continue;
+        }
         let n = &imported.model.graph().nodes[id.index()];
         let out = new_trace.output(id);
         let sum: i64 = out.data().iter().map(|&v| v as i64).sum();
-        println!("{:indent$}new node {} {} dims {:?} sum {sum}", "", id.index(), n.op, out.dims(), indent = d * 2);
-        for &i in &n.inputs { frontier.push((i, d + 1)); }
+        println!(
+            "{:indent$}new node {} {} dims {:?} sum {sum}",
+            "",
+            id.index(),
+            n.op,
+            out.dims(),
+            indent = d * 2
+        );
+        for &i in &n.inputs {
+            frontier.push((i, d + 1));
+        }
     }
 }
 
 fn op_tag(op: &atlas_onnx_tracer::ops::Operator) -> String {
-    format!("{op:?}").split(['(', '{']).next().unwrap_or("?").to_string()
+    format!("{op:?}")
+        .split(['(', '{'])
+        .next()
+        .unwrap_or("?")
+        .to_string()
 }
 
 /// Debug: elementwise-compare qwen o_proj inputs under layout mapping.
@@ -517,7 +608,10 @@ fn debug_qwen_oproj() {
     use atlas_onnx_tracer::ops::Operator;
     let dir = zoo_dir().join("qwen");
     let path = dir.join("network.onnx");
-    let opts = LoadOptions { bindings: bindings(), ..Default::default() };
+    let opts = LoadOptions {
+        bindings: bindings(),
+        ..Default::default()
+    };
     let imported = atlas_onnx_import::load(&path, &opts).unwrap();
     let s = 1i32 << 14;
     let seq = 16usize;
@@ -533,7 +627,11 @@ fn debug_qwen_oproj() {
         OldTensor::new(Some(&pos_scaled), &[1, seq]).unwrap(),
         OldTensor::new(Some(&vec![s; seq]), &[1, seq]).unwrap(),
     ];
-    let run_args = RunArgs { variables: bindings(), scale: 14, pad_to_power_of_2: true };
+    let run_args = RunArgs {
+        variables: bindings(),
+        scale: 14,
+        pad_to_power_of_2: true,
+    };
     let old = OldModel::load(path.to_str().unwrap(), &run_args);
     let old_trace = old.trace(&old_inputs);
     let new_trace = imported.model.trace(&new_inputs).unwrap();
@@ -564,8 +662,12 @@ fn debug_qwen_oproj() {
 
     // Also compare the o_proj weights: old node 92 const [2,8,64,1024] vs
     // new node 256 const [1024,1024] (row = g*512 + h*64 + d).
-    let Operator::Constant(ow) = &old.graph.nodes[&92].operator else { panic!() };
-    let atlas_trace::Op::Constant(nw) = &imported.model.graph().nodes[256].op else { panic!() };
+    let Operator::Constant(ow) = &old.graph.nodes[&92].operator else {
+        panic!()
+    };
+    let atlas_trace::Op::Constant(nw) = &imported.model.graph().nodes[256].op else {
+        panic!()
+    };
     let mut wmax = 0i32;
     for g in 0..2 {
         for h in 0..8 {
@@ -599,7 +701,10 @@ fn debug_qwen_padding_invariance() {
         Tensor::new(pos_scaled.clone(), &[1, seq]).unwrap(),
     ];
 
-    let mut opts = LoadOptions { bindings: bindings(), ..Default::default() };
+    let mut opts = LoadOptions {
+        bindings: bindings(),
+        ..Default::default()
+    };
     opts.pad_pow2 = false;
     let unpadded = atlas_onnx_import::load(&path, &opts).unwrap();
     opts.pad_pow2 = true;
@@ -617,8 +722,16 @@ fn debug_qwen_padding_invariance() {
     println!("new pipeline padded-vs-unpadded max diff: {max}");
 
     // And the old pipeline's self-consistency.
-    let run_args_u = RunArgs { variables: bindings(), scale: 14, pad_to_power_of_2: false };
-    let run_args_p = RunArgs { variables: bindings(), scale: 14, pad_to_power_of_2: true };
+    let run_args_u = RunArgs {
+        variables: bindings(),
+        scale: 14,
+        pad_to_power_of_2: false,
+    };
+    let run_args_p = RunArgs {
+        variables: bindings(),
+        scale: 14,
+        pad_to_power_of_2: true,
+    };
     let old_inputs = vec![
         OldTensor::new(Some(&ids), &[1, seq]).unwrap(),
         OldTensor::new(Some(&pos_scaled), &[1, seq]).unwrap(),
@@ -660,7 +773,10 @@ fn debug_qwen_first_pad_divergence() {
         Tensor::new(vec![1i32; seq], &[1, seq]).unwrap(),
         Tensor::new(pos_scaled, &[1, seq]).unwrap(),
     ];
-    let mut opts = LoadOptions { bindings: bindings(), ..Default::default() };
+    let mut opts = LoadOptions {
+        bindings: bindings(),
+        ..Default::default()
+    };
     opts.pad_pow2 = false;
     let unpadded = atlas_onnx_import::load(&path, &opts).unwrap();
     opts.pad_pow2 = true;
@@ -689,7 +805,12 @@ fn debug_qwen_first_pad_divergence() {
             // Print its operand ops for context.
             for &inp in &node.inputs {
                 let n = &unpadded.model.graph().nodes[inp.index()];
-                println!("  operand {}: {} dims {:?}", inp.index(), n.op, n.output_dims);
+                println!(
+                    "  operand {}: {} dims {:?}",
+                    inp.index(),
+                    n.op,
+                    n.output_dims
+                );
             }
             return;
         }

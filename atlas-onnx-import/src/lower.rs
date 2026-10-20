@@ -46,7 +46,11 @@ pub struct Lowered {
 
 /// Scalars are rank-1 `[1]` in the atlas IR.
 fn lower_dims(dims: &[usize]) -> Vec<usize> {
-    if dims.is_empty() { vec![1] } else { dims.to_vec() }
+    if dims.is_empty() {
+        vec![1]
+    } else {
+        dims.to_vec()
+    }
 }
 
 struct Lowerer<'g> {
@@ -82,20 +86,15 @@ impl<'g> Lowerer<'g> {
         };
         let data = quantize_const(konst, self.scale, &e.name)?;
         let dims = lower_dims(&konst.dims);
-        let tensor = Tensor::new(data, &dims).map_err(|err| {
-            ImportError::Malformed(format!("constant {}: {err}", e.name))
-        })?;
+        let tensor = Tensor::new(data, &dims)
+            .map_err(|err| ImportError::Malformed(format!("constant {}: {err}", e.name)))?;
         let id = self.push(Op::Constant(op::Constant(tensor)), vec![], dims);
         self.edge_to_node.insert(edge, id);
         Ok(id)
     }
 
     /// Resolve an operand and broadcast it to `target` dims if needed.
-    fn resolve_broadcast(
-        &mut self,
-        edge: EdgeId,
-        target: &[usize],
-    ) -> Result<NodeId, ImportError> {
+    fn resolve_broadcast(&mut self, edge: EdgeId, target: &[usize]) -> Result<NodeId, ImportError> {
         let id = self.resolve(edge)?;
         let dims = lower_dims(self.g.dims(edge).unwrap_or(&[]));
         if dims == target {
@@ -180,18 +179,13 @@ impl<'g> Lowerer<'g> {
                     }),
                 )?
             }
-            "atlas.Broadcast" => direct(
-                self,
-                Op::Broadcast(op::Broadcast { shape: out.clone() }),
-            )?,
+            "atlas.Broadcast" => direct(self, Op::Broadcast(op::Broadcast { shape: out.clone() }))?,
             "Reshape" => direct(self, Op::Reshape(op::Reshape { shape: out.clone() }))?,
             "Concat" => {
                 let rank = out.len();
-                let axis = crate::shape_fns::norm_axis(
-                    node.attr_int("axis").ok_or_else(unlowered)?,
-                    rank,
-                )
-                .map_err(attr_err)?;
+                let axis =
+                    crate::shape_fns::norm_axis(node.attr_int("axis").ok_or_else(unlowered)?, rank)
+                        .map_err(attr_err)?;
                 direct(self, Op::Concat(op::Concat { axis }))?
             }
             "atlas.Slice" => {
@@ -239,11 +233,9 @@ impl<'g> Lowerer<'g> {
             }
             "Softmax" => {
                 let rank = out.len();
-                let axis = crate::shape_fns::norm_axis(
-                    node.attr_int("axis").ok_or_else(unlowered)?,
-                    rank,
-                )
-                .map_err(attr_err)?;
+                let axis =
+                    crate::shape_fns::norm_axis(node.attr_int("axis").ok_or_else(unlowered)?, rank)
+                        .map_err(attr_err)?;
                 if axis != rank - 1 {
                     return Err(attr_err(format!(
                         "softmax axis {axis} of rank {rank}; transpose so the softmax axis is last"
@@ -294,9 +286,7 @@ impl<'g> Lowerer<'g> {
                         "einsum {eq:?} is outside the canonical set {CANONICAL_EINSUMS:?}"
                     )));
                 }
-                let equation = eq
-                    .parse::<op::EinsumEq>()
-                    .map_err(attr_err)?;
+                let equation = eq.parse::<op::EinsumEq>().map_err(attr_err)?;
                 direct(self, Op::Einsum(op::Einsum { equation }))?
             }
             _ => return Err(unlowered()),
@@ -330,9 +320,7 @@ pub fn lower(
                 .iter()
                 .find(|d| &d.name == name)
                 .cloned()
-                .ok_or_else(|| {
-                    ImportError::Malformed(format!("input {name} has no descriptor"))
-                })
+                .ok_or_else(|| ImportError::Malformed(format!("input {name} has no descriptor")))
         })
         .collect::<Result<_, _>>()?;
 

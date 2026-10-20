@@ -68,11 +68,7 @@ pub fn quantize_float(x: f64, scale: Scale, tensor_name: &str) -> Result<i32, Im
 
 /// Quantize a whole constant tensor by its dtype: floats scale by `2^s`,
 /// integers and bools stay raw.
-pub fn quantize_const(
-    t: &ConstTensor,
-    scale: Scale,
-    name: &str,
-) -> Result<Vec<i32>, ImportError> {
+pub fn quantize_const(t: &ConstTensor, scale: Scale, name: &str) -> Result<Vec<i32>, ImportError> {
     match &t.data {
         ConstData::F32(v) => v
             .iter()
@@ -118,7 +114,10 @@ mod tests {
     fn positive_saturation_and_errors() {
         // > 1e6 saturates to max_value/2.
         let v = quantize_float(3.4e38, s(14), "t").unwrap();
-        assert_eq!(v, ((i32::MAX as f64 / 16384.0).round() / 2.0 * 16384.0) as i32);
+        assert_eq!(
+            v,
+            ((i32::MAX as f64 / 16384.0).round() / 2.0 * 16384.0) as i32
+        );
         // In (max_value, 1e6]: hard error.
         assert!(quantize_float(500_000.0, s(14), "t").is_err());
         assert!(quantize_float(-500_000.0, s(14), "t").is_err());

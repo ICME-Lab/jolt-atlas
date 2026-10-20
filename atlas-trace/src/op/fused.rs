@@ -55,7 +55,10 @@ impl OpSpec for Mul {
             return Ok(Eval::plain(a.zip_map(b, |x, y| x.wrapping_mul(y))?));
         }
         let acc = a.zip_map(b, |x, y| x as i64 * y as i64)?;
-        Ok(rebase_eval(acc, self.rebase_divisor(ctx.scale).expect("rebase on")))
+        Ok(rebase_eval(
+            acc,
+            self.rebase_divisor(ctx.scale).expect("rebase on"),
+        ))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -88,7 +91,10 @@ impl OpSpec for Square {
             return Ok(Eval::plain(x.map(|v| v.wrapping_mul(v))));
         }
         let acc = x.map(|v| v as i64 * v as i64);
-        Ok(rebase_eval(acc, self.rebase_divisor(ctx.scale).expect("rebase on")))
+        Ok(rebase_eval(
+            acc,
+            self.rebase_divisor(ctx.scale).expect("rebase on"),
+        ))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -126,7 +132,10 @@ impl OpSpec for Cube {
             let v = v as i64;
             v * v * v
         });
-        Ok(rebase_eval(acc, self.rebase_divisor(ctx.scale).expect("rebase on")))
+        Ok(rebase_eval(
+            acc,
+            self.rebase_divisor(ctx.scale).expect("rebase on"),
+        ))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -163,7 +172,10 @@ impl OpSpec for MeanOfSquares {
             let v = v as i64;
             v * v
         });
-        Ok(rebase_eval(acc, self.rebase_divisor(ctx.scale).expect("always fused")))
+        Ok(rebase_eval(
+            acc,
+            self.rebase_divisor(ctx.scale).expect("always fused"),
+        ))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {

@@ -9,8 +9,16 @@ pub fn broadcast(a: &[usize], b: &[usize]) -> Result<Vec<usize>, String> {
     let rank = a.len().max(b.len());
     let mut out = vec![0usize; rank];
     for i in 0..rank {
-        let da = if i < rank - a.len() { 1 } else { a[i - (rank - a.len())] };
-        let db = if i < rank - b.len() { 1 } else { b[i - (rank - b.len())] };
+        let da = if i < rank - a.len() {
+            1
+        } else {
+            a[i - (rank - a.len())]
+        };
+        let db = if i < rank - b.len() {
+            1
+        } else {
+            b[i - (rank - b.len())]
+        };
         out[i] = match (da, db) {
             (x, y) if x == y => x,
             (1, y) => y,
@@ -210,7 +218,10 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
             let (lead, tail) = x.dims.split_at(axis.min(x.dims.len()));
             one(
                 x.dtype,
-                vec![lead.iter().product::<usize>().max(1), tail.iter().product::<usize>().max(1)],
+                vec![
+                    lead.iter().product::<usize>().max(1),
+                    tail.iter().product::<usize>().max(1),
+                ],
             )
         }
         "Transpose" => {
@@ -226,7 +237,10 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
         }
         "Concat" => {
             let first = info(0)?.clone();
-            let axis = norm_axis(node.attr_int("axis").ok_or("missing axis")?, first.dims.len())?;
+            let axis = norm_axis(
+                node.attr_int("axis").ok_or("missing axis")?,
+                first.dims.len(),
+            )?;
             let mut dims = first.dims.clone();
             dims[axis] = 0;
             for i in 0..node.inputs.len() {
@@ -369,7 +383,9 @@ pub fn reshape_dims(input: &[usize], target: &[i64]) -> Result<Vec<usize>, Strin
         out[i] = total / known;
     }
     if out.iter().product::<usize>() != total {
-        return Err(format!("Reshape {input:?} -> {out:?} changes element count"));
+        return Err(format!(
+            "Reshape {input:?} -> {out:?} changes element count"
+        ));
     }
     Ok(out)
 }
@@ -378,10 +394,7 @@ pub fn reshape_dims(input: &[usize], target: &[i64]) -> Result<Vec<usize>, Strin
 pub type SliceParams = (Vec<usize>, Vec<i64>, Vec<i64>, Vec<i64>, Vec<usize>);
 
 /// Slice parameter resolution with ONNX clamping semantics.
-pub fn slice_params(
-    node: &INode,
-    input_dims: &[usize],
-) -> Result<SliceParams, String> {
+pub fn slice_params(node: &INode, input_dims: &[usize]) -> Result<SliceParams, String> {
     let starts = node.attr_ints("starts").ok_or("Slice missing starts")?;
     let ends = node.attr_ints("ends").ok_or("Slice missing ends")?;
     let axes: Vec<usize> = match node.attr_ints("axes") {
@@ -401,9 +414,7 @@ pub fn slice_params(
     let mut dims = input_dims.to_vec();
     let mut starts_out = Vec::new();
     let mut ends_out = Vec::new();
-    for (((&start, &end), &axis), &step) in
-        starts.iter().zip(ends).zip(&axes).zip(&steps)
-    {
+    for (((&start, &end), &axis), &step) in starts.iter().zip(ends).zip(&axes).zip(&steps) {
         if step != 1 {
             return Err(format!("Slice step {step} unsupported (only 1)"));
         }

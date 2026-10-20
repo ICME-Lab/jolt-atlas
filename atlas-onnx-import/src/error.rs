@@ -60,7 +60,9 @@ pub enum ImportError {
         reason: String,
     },
     /// A graph-input dimension that needs a binding was not supplied.
-    #[error("input {input}: dimension {dim} ({dim_param:?}) has no binding; pass it in LoadOptions")]
+    #[error(
+        "input {input}: dimension {dim} ({dim_param:?}) has no binding; pass it in LoadOptions"
+    )]
     UnboundDim {
         /// Graph input name.
         input: String,

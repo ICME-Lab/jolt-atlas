@@ -349,10 +349,7 @@ impl IGraph {
 }
 
 /// Decode a `TensorProto` into a [`ConstTensor`].
-pub fn decode_tensor(
-    t: &proto::TensorProto,
-    model_dir: &Path,
-) -> Result<ConstTensor, ImportError> {
+pub fn decode_tensor(t: &proto::TensorProto, model_dir: &Path) -> Result<ConstTensor, ImportError> {
     use proto::tensor_proto::DataType;
 
     if t.segment.is_some() {
@@ -367,10 +364,8 @@ pub fn decode_tensor(
         .dims
         .iter()
         .map(|&d| {
-            usize::try_from(d).map_err(|_| ImportError::Malformed(format!(
-                "tensor {}: negative dim {d}",
-                t.name
-            )))
+            usize::try_from(d)
+                .map_err(|_| ImportError::Malformed(format!("tensor {}: negative dim {d}", t.name)))
         })
         .collect::<Result<_, _>>()?;
     let expected = checked_element_count(&dims)

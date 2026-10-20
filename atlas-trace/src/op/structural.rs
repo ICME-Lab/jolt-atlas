@@ -284,7 +284,9 @@ impl fmt::Display for Slice {
 
 impl OpSpec for Slice {
     fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        Ok(Eval::plain(inputs[0].slice(self.axis, self.start, self.end)?))
+        Ok(Eval::plain(
+            inputs[0].slice(self.axis, self.start, self.end)?,
+        ))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -398,10 +400,7 @@ impl OpSpec for Concat {
 }
 
 /// Shared gather kernel: embedding lookup on axis 0.
-fn gather_eval(
-    dict: &Tensor<i32>,
-    indices: &Tensor<i32>,
-) -> Result<Tensor<i32>, KernelError> {
+fn gather_eval(dict: &Tensor<i32>, indices: &Tensor<i32>) -> Result<Tensor<i32>, KernelError> {
     let dict_rows = dict.dims()[0];
     let row: usize = dict.dims()[1..].iter().product();
     let mut out = Vec::with_capacity(indices.len() * row);

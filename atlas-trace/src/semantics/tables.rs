@@ -399,8 +399,7 @@ mod tests {
             let size = (((modulus - 1) >> downshift) + 1) as usize;
             assert_eq!(t.entries.len(), size);
             for v in 0..size {
-                let expected =
-                    ((s_reduced * f(v as f64 / s_reduced)).round() as i32) << downshift;
+                let expected = ((s_reduced * f(v as f64 / s_reduced)).round() as i32) << downshift;
                 let got = t.entries[v];
                 assert!(
                     (got - expected).abs() <= 1 << downshift,

@@ -88,7 +88,14 @@ mod tests {
         for i in 0..500 {
             check(i as f64 * 0.61803398875); // golden-ratio stride, hits all quadrants
         }
-        for &t in &[0.0, 1e-9, std::f64::consts::FRAC_PI_2, std::f64::consts::PI, 100.0, 314.159] {
+        for &t in &[
+            0.0,
+            1e-9,
+            std::f64::consts::FRAC_PI_2,
+            std::f64::consts::PI,
+            100.0,
+            314.159,
+        ] {
             check(t);
         }
     }

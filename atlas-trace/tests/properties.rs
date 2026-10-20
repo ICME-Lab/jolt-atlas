@@ -10,9 +10,7 @@
 
 use proptest::prelude::*;
 
-use atlas_trace::{
-    CompileOptions, Graph, Model, Node, NodeId, Op, Scale, SemVersion, Tensor, op,
-};
+use atlas_trace::{CompileOptions, Graph, Model, Node, NodeId, Op, Scale, SemVersion, Tensor, op};
 
 const SCALE: u8 = 14;
 

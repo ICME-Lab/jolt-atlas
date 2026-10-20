@@ -169,14 +169,20 @@ mod tests {
     use crate::id::{Scale, SemVersion};
     use crate::op::TableCache;
 
-    fn eval(input: Tensor<i32>, active_len: Option<usize>, scale: u8) -> (Tensor<i32>, SoftmaxWitness) {
+    fn eval(
+        input: Tensor<i32>,
+        active_len: Option<usize>,
+        scale: u8,
+    ) -> (Tensor<i32>, SoftmaxWitness) {
         let cache = TableCache::default();
         let ctx = EvalCtx {
             scale: Scale::new(scale).unwrap(),
             version: SemVersion::V1,
             tables: &cache,
         };
-        let out = SoftmaxLastAxis { active_len }.eval(&[&input], &ctx).unwrap();
+        let out = SoftmaxLastAxis { active_len }
+            .eval(&[&input], &ctx)
+            .unwrap();
         let NodeAux::Softmax(w) = out.aux.unwrap() else {
             panic!()
         };
@@ -212,10 +218,7 @@ mod tests {
             );
             // softmax_q·S + R = exp_q·inv_sum.
             let k = idx / 4;
-            assert_eq!(
-                out.data()[idx] * s + w.r[idx],
-                w.exp_q[idx] * w.inv_sum[k]
-            );
+            assert_eq!(out.data()[idx] * s + w.r[idx], w.exp_q[idx] * w.inv_sum[k]);
         }
         // Probabilities approximately sum to S per row.
         for k in 0..2 {

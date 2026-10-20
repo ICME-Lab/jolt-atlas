@@ -71,8 +71,7 @@ fn binary_numeric(
             data: ConstData::F32(x.iter().zip(y).map(|(&p, &q)| ff(p, q)).collect()),
         }),
         (ConstData::I64(x), ConstData::I64(y)) => {
-            let v: Result<Vec<i64>, String> =
-                x.iter().zip(y).map(|(&p, &q)| fi(p, q)).collect();
+            let v: Result<Vec<i64>, String> = x.iter().zip(y).map(|(&p, &q)| fi(p, q)).collect();
             Ok(ConstTensor {
                 dtype: if a.dtype == DType::I32 && b.dtype == DType::I32 {
                     DType::I32
@@ -213,9 +212,24 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
             };
             out(cast(t)?)
         }
-        "Add" => out(binary_numeric(k(0)?, k(1)?, |a, b| a + b, |a, b| Ok(a + b))?),
-        "Sub" => out(binary_numeric(k(0)?, k(1)?, |a, b| a - b, |a, b| Ok(a - b))?),
-        "Mul" => out(binary_numeric(k(0)?, k(1)?, |a, b| a * b, |a, b| Ok(a * b))?),
+        "Add" => out(binary_numeric(
+            k(0)?,
+            k(1)?,
+            |a, b| a + b,
+            |a, b| Ok(a + b),
+        )?),
+        "Sub" => out(binary_numeric(
+            k(0)?,
+            k(1)?,
+            |a, b| a - b,
+            |a, b| Ok(a - b),
+        )?),
+        "Mul" => out(binary_numeric(
+            k(0)?,
+            k(1)?,
+            |a, b| a * b,
+            |a, b| Ok(a * b),
+        )?),
         "Div" => out(binary_numeric(
             k(0)?,
             k(1)?,
@@ -229,16 +243,11 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                 }
             },
         )?),
-        "Pow" => out(binary_numeric(
-            k(0)?,
-            k(1)?,
-            f32::powf,
-            |a, b| {
-                u32::try_from(b)
-                    .map(|e| a.pow(e))
-                    .map_err(|_| "negative integer exponent".to_string())
-            },
-        )?),
+        "Pow" => out(binary_numeric(k(0)?, k(1)?, f32::powf, |a, b| {
+            u32::try_from(b)
+                .map(|e| a.pow(e))
+                .map_err(|_| "negative integer exponent".to_string())
+        })?),
         "Equal" => out(compare(k(0)?, k(1)?, |a, b| a == b, |a, b| a == b)?),
         "LessOrEqual" => out(compare(k(0)?, k(1)?, |a, b| a <= b, |a, b| a <= b)?),
         "Less" => out(compare(k(0)?, k(1)?, |a, b| a < b, |a, b| a < b)?),
@@ -327,10 +336,12 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         }
         "Concat" => {
             let first = k(0)?;
-            let axis = norm_axis(node.attr_int("axis").ok_or("missing axis")?, first.dims.len())?;
-            let parts: Vec<&ConstTensor> = (0..node.inputs.len())
-                .map(k)
-                .collect::<Result<_, _>>()?;
+            let axis = norm_axis(
+                node.attr_int("axis").ok_or("missing axis")?,
+                first.dims.len(),
+            )?;
+            let parts: Vec<&ConstTensor> =
+                (0..node.inputs.len()).map(k).collect::<Result<_, _>>()?;
             let mut dims = first.dims.clone();
             dims[axis] = parts.iter().map(|p| p.dims[axis]).sum();
             let outer: usize = first.dims[..axis].iter().product();

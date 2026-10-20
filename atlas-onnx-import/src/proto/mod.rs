@@ -31,12 +31,8 @@ pub fn load_model(path: &Path) -> Result<ModelProto, ImportError> {
 /// The raw little-endian payload of a tensor, resolving the ONNX
 /// external-data convention (weights in side files, resolved relative to the
 /// model's directory; absolute paths and `..` traversal are rejected).
-pub fn tensor_payload(
-    tensor: &TensorProto,
-    model_dir: &Path,
-) -> Result<Vec<u8>, ImportError> {
-    let external = tensor.data_location
-        == tensor_proto::DataLocation::External as i32;
+pub fn tensor_payload(tensor: &TensorProto, model_dir: &Path) -> Result<Vec<u8>, ImportError> {
+    let external = tensor.data_location == tensor_proto::DataLocation::External as i32;
     if !external {
         return Ok(tensor.raw_data.to_vec());
     }
@@ -69,7 +65,10 @@ pub fn tensor_payload(
     })?;
 
     let rel = PathBuf::from(location);
-    if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir))
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
     {
         return Err(ImportError::ExternalData {
             tensor: tensor.name.clone(),
@@ -91,15 +90,18 @@ pub fn tensor_payload(
         None => Vec::new(),
     };
     match length {
-        Some(_) => file.read_exact(&mut buf).map_err(|source| ImportError::Io {
-            path: full.display().to_string(),
-            source,
-        })?,
-        None => {
-            file.read_to_end(&mut buf).map_err(|source| ImportError::Io {
+        Some(_) => file
+            .read_exact(&mut buf)
+            .map_err(|source| ImportError::Io {
                 path: full.display().to_string(),
                 source,
-            })?;
+            })?,
+        None => {
+            file.read_to_end(&mut buf)
+                .map_err(|source| ImportError::Io {
+                    path: full.display().to_string(),
+                    source,
+                })?;
         }
     }
     Ok(buf)

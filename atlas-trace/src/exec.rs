@@ -61,15 +61,13 @@ impl Model {
                     .iter()
                     .map(|&input| &outputs[input.index()])
                     .collect();
-                let eval = node
-                    .op
-                    .spec()
-                    .eval(&operand_refs, &ctx)
-                    .map_err(|source| ExecError::Kernel {
+                let eval = node.op.spec().eval(&operand_refs, &ctx).map_err(|source| {
+                    ExecError::Kernel {
                         node: id,
                         op: node.op.to_string(),
                         source,
-                    })?;
+                    }
+                })?;
                 if let Some(a) = eval.aux {
                     aux.insert(id, a);
                 }

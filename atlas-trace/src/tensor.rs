@@ -386,8 +386,16 @@ pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>, ShapeErro
     let rank = a.len().max(b.len());
     let mut out = vec![0usize; rank];
     for i in 0..rank {
-        let da = if i < rank - a.len() { 1 } else { a[i - (rank - a.len())] };
-        let db = if i < rank - b.len() { 1 } else { b[i - (rank - b.len())] };
+        let da = if i < rank - a.len() {
+            1
+        } else {
+            a[i - (rank - a.len())]
+        };
+        let db = if i < rank - b.len() {
+            1
+        } else {
+            b[i - (rank - b.len())]
+        };
         out[i] = match (da, db) {
             (x, y) if x == y => x,
             (1, y) => y,
@@ -425,11 +433,7 @@ fn copy_strided<T: Copy>(src: &[T], dst: &mut [T], src_dims: &[usize], dst_dims:
     let mut coords = vec![0usize; outer_dims.len()];
     let mut src_off = 0;
     loop {
-        let dst_off: usize = coords
-            .iter()
-            .zip(&dst_strides)
-            .map(|(&c, &s)| c * s)
-            .sum();
+        let dst_off: usize = coords.iter().zip(&dst_strides).map(|(&c, &s)| c * s).sum();
         dst[dst_off..dst_off + inner].copy_from_slice(&src[src_off..src_off + inner]);
         src_off += inner;
         // Increment outer coordinates.
@@ -460,11 +464,7 @@ fn copy_strided_crop<T: Copy>(src: &[T], dst: &mut [T], src_dims: &[usize], dst_
     let mut coords = vec![0usize; outer_dims.len()];
     let mut dst_off = 0;
     loop {
-        let src_off: usize = coords
-            .iter()
-            .zip(&src_strides)
-            .map(|(&c, &s)| c * s)
-            .sum();
+        let src_off: usize = coords.iter().zip(&src_strides).map(|(&c, &s)| c * s).sum();
         dst[dst_off..dst_off + inner].copy_from_slice(&src[src_off..src_off + inner]);
         dst_off += inner;
         let mut axis = outer_dims.len();
@@ -509,7 +509,11 @@ mod random {
 
     impl<T: Element> Tensor<T> {
         /// Random boolean-valued (0/1) tensor, mapped through `f`.
-        pub fn random_bool_mapped(rng: &mut impl Rng, dims: &[usize], f: impl Fn(bool) -> T) -> Self {
+        pub fn random_bool_mapped(
+            rng: &mut impl Rng,
+            dims: &[usize],
+            f: impl Fn(bool) -> T,
+        ) -> Self {
             let data = (0..dims.iter().product::<usize>())
                 .map(|_| f(rng.r#gen::<bool>()))
                 .collect();

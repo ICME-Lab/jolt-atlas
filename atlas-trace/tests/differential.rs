@@ -19,9 +19,7 @@ use atlas_onnx_tracer::{
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::collections::{BTreeMap, HashMap};
 
-use atlas_trace::{
-    CompileOptions, Graph, Model, Node, NodeId, Op, Scale, SemVersion, Tensor, op,
-};
+use atlas_trace::{CompileOptions, Graph, Model, Node, NodeId, Op, Scale, SemVersion, Tensor, op};
 
 const SCALE: u8 = 14;
 
@@ -55,7 +53,11 @@ impl OldBuilder {
 
     fn constant(&mut self, data: &[i32], dims: &[usize]) -> usize {
         let t = OldTensor::new(Some(data), dims).unwrap();
-        self.push(Operator::Constant(old_ops::Constant(t)), vec![], dims.to_vec())
+        self.push(
+            Operator::Constant(old_ops::Constant(t)),
+            vec![],
+            dims.to_vec(),
+        )
     }
 
     fn build(self, outputs: Vec<usize>) -> OldModel {
@@ -119,9 +121,9 @@ fn convert_op(operator: &Operator, output_dims: &[usize]) -> Op {
             rebase: c.scale != 0,
         }),
         Operator::Div(_) => Op::Div(op::Div),
-        Operator::ScalarConstDiv(d) => Op::ScalarConstDiv(op::ScalarConstDiv {
-            divisor: d.divisor,
-        }),
+        Operator::ScalarConstDiv(d) => {
+            Op::ScalarConstDiv(op::ScalarConstDiv { divisor: d.divisor })
+        }
         Operator::Einsum(e) => Op::Einsum(op::Einsum {
             equation: e.equation.parse().unwrap(),
         }),
@@ -133,9 +135,9 @@ fn convert_op(operator: &Operator, output_dims: &[usize]) -> Op {
             count: m.count,
             padded_count: m.padded_count,
         }),
-        Operator::SoftmaxLastAxis(_) => Op::SoftmaxLastAxis(op::SoftmaxLastAxis {
-            active_len: None,
-        }),
+        Operator::SoftmaxLastAxis(_) => {
+            Op::SoftmaxLastAxis(op::SoftmaxLastAxis { active_len: None })
+        }
         Operator::Rsqrt(_) => Op::Rsqrt(op::Rsqrt),
         Operator::Tanh(_) => Op::Tanh(op::Tanh),
         Operator::Sigmoid(_) => Op::Sigmoid(op::Sigmoid),
@@ -295,7 +297,11 @@ fn exact_class_elementwise_and_fused() {
         vec![square],
         dims.clone(),
     );
-    let div = b.push(Operator::Div(old_ops::Div), vec![cube, divisor], dims.clone());
+    let div = b.push(
+        Operator::Div(old_ops::Div),
+        vec![cube, divisor],
+        dims.clone(),
+    );
     let scd = b.push(
         Operator::ScalarConstDiv(old_ops::ScalarConstDiv { divisor: -3 }),
         vec![div],
@@ -306,8 +312,16 @@ fn exact_class_elementwise_and_fused() {
         vec![scd],
         dims.clone(),
     );
-    let iff = b.push(Operator::Iff(old_ops::Iff), vec![mask, clamp, x], dims.clone());
-    let and = b.push(Operator::And(old_ops::And), vec![mask, boolean], dims.clone());
+    let iff = b.push(
+        Operator::Iff(old_ops::Iff),
+        vec![mask, clamp, x],
+        dims.clone(),
+    );
+    let and = b.push(
+        Operator::And(old_ops::And),
+        vec![mask, boolean],
+        dims.clone(),
+    );
     let isnan = b.push(
         Operator::IsNan(old_ops::IsNan {
             out_dims: dims.clone(),
@@ -443,15 +457,31 @@ fn table_class_within_one_ulp() {
     let dims = vec![64];
     let x = b.input(&dims);
     let s = SCALE as i32;
-    let tanh = b.push(Operator::Tanh(old_ops::Tanh { scale: s }), vec![x], dims.clone());
+    let tanh = b.push(
+        Operator::Tanh(old_ops::Tanh { scale: s }),
+        vec![x],
+        dims.clone(),
+    );
     let sigmoid = b.push(
         Operator::Sigmoid(old_ops::Sigmoid { scale: s }),
         vec![x],
         dims.clone(),
     );
-    let erf = b.push(Operator::Erf(old_ops::Erf { scale: s }), vec![x], dims.clone());
-    let sin = b.push(Operator::Sin(old_ops::Sin { scale: s }), vec![x], dims.clone());
-    let cos = b.push(Operator::Cos(old_ops::Cos { scale: s }), vec![x], dims.clone());
+    let erf = b.push(
+        Operator::Erf(old_ops::Erf { scale: s }),
+        vec![x],
+        dims.clone(),
+    );
+    let sin = b.push(
+        Operator::Sin(old_ops::Sin { scale: s }),
+        vec![x],
+        dims.clone(),
+    );
+    let cos = b.push(
+        Operator::Cos(old_ops::Cos { scale: s }),
+        vec![x],
+        dims.clone(),
+    );
     let old = b.build(vec![tanh, sigmoid, erf, sin, cos]);
     let new = compile_new(&old);
 

@@ -188,15 +188,15 @@ fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
             .iter()
             .map(|&id| graph.node(id).output_dims.as_slice())
             .collect();
-        let inferred = node
-            .op
-            .spec()
-            .infer_shape(&input_dims)
-            .map_err(|source| CompileError::Shape {
-                node: NodeId(i as u32),
-                op: node.op.to_string(),
-                source,
-            })?;
+        let inferred =
+            node.op
+                .spec()
+                .infer_shape(&input_dims)
+                .map_err(|source| CompileError::Shape {
+                    node: NodeId(i as u32),
+                    op: node.op.to_string(),
+                    source,
+                })?;
         if inferred != node.output_dims {
             return Err(CompileError::ShapeMismatch {
                 node: NodeId(i as u32),
@@ -267,11 +267,7 @@ fn annotate_clamp_widths(graph: &Graph, scale: Scale) -> Vec<NodeMeta> {
                 input_consts,
             };
             NodeMeta {
-                sat_clamp_bits: node
-                    .op
-                    .spec()
-                    .clamp_bound(&ctx)
-                    .map(ClampWidth::for_bound),
+                sat_clamp_bits: node.op.spec().clamp_bound(&ctx).map(ClampWidth::for_bound),
             }
         })
         .collect()

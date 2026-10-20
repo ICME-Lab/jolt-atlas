@@ -127,7 +127,10 @@ fn reshape_family(g: &mut IGraph) -> Result<usize, ImportError> {
         let Some(node) = g.nodes[idx].as_ref() else {
             continue;
         };
-        if !matches!(node.op.as_str(), "Squeeze" | "Unsqueeze" | "Flatten" | "Reshape") {
+        if !matches!(
+            node.op.as_str(),
+            "Squeeze" | "Unsqueeze" | "Flatten" | "Reshape"
+        ) {
             continue;
         }
         let shape = dims_of(g, node.outputs[0]);
@@ -156,11 +159,8 @@ fn split_to_slices(g: &mut IGraph) -> Result<usize, ImportError> {
         }
         let input = node.inputs[0];
         let in_dims = dims_of(g, input);
-        let axis = crate::shape_fns::norm_axis(
-            node.attr_int("axis").unwrap_or(0),
-            in_dims.len(),
-        )
-        .map_err(|reason| ImportError::Pass {
+        let axis = crate::shape_fns::norm_axis(node.attr_int("axis").unwrap_or(0), in_dims.len())
+            .map_err(|reason| ImportError::Pass {
             pass: "split_to_slices",
             node: node.name.clone(),
             reason,
@@ -201,15 +201,11 @@ fn pow_to_square_cube(g: &mut IGraph) -> Result<usize, ImportError> {
             continue;
         }
         let name = node.name.clone();
-        let exponent = node
-            .inputs
-            .get(1)
-            .and_then(|&e| g.konst(e))
-            .and_then(|k| {
-                k.scalar_f32()
-                    .map(|f| f as f64)
-                    .or_else(|| k.scalar_i64().map(|i| i as f64))
-            });
+        let exponent = node.inputs.get(1).and_then(|&e| g.konst(e)).and_then(|k| {
+            k.scalar_f32()
+                .map(|f| f as f64)
+                .or_else(|| k.scalar_i64().map(|i| i as f64))
+        });
         let op = match exponent {
             Some(2.0) => "atlas.Square",
             Some(3.0) => "atlas.Cube",
@@ -254,12 +250,13 @@ fn norm_fusion(g: &mut IGraph) -> Result<usize, ImportError> {
         let eps = node.attr_float("epsilon").unwrap_or(1e-5);
         let x_dims = dims_of(g, x);
         let rank = x_dims.len();
-        let axis = crate::shape_fns::norm_axis(node.attr_int("axis").unwrap_or(-1), rank)
-            .map_err(|reason| ImportError::Pass {
+        let axis = crate::shape_fns::norm_axis(node.attr_int("axis").unwrap_or(-1), rank).map_err(
+            |reason| ImportError::Pass {
                 pass: "norm_fusion",
                 node: name.clone(),
                 reason,
-            })?;
+            },
+        )?;
         if axis != rank - 1 {
             return Err(ImportError::Pass {
                 pass: "norm_fusion",
@@ -286,10 +283,7 @@ fn norm_fusion(g: &mut IGraph) -> Result<usize, ImportError> {
             g.push_node(INode {
                 name: format!("{}/{}", name, op),
                 op: op.into(),
-                attrs: attrs
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v))
-                    .collect(),
+                attrs: attrs.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
                 inputs,
                 outputs: vec![output],
             });
@@ -591,7 +585,11 @@ fn matmul_gemm_to_einsum(g: &mut IGraph) -> Result<usize, ImportError> {
         let out = node.outputs[0];
         let is_gemm = node.op == "Gemm";
         let (mut a, mut b) = (node.inputs[0], node.inputs[1]);
-        let bias = if is_gemm { node.inputs.get(2).copied() } else { None };
+        let bias = if is_gemm {
+            node.inputs.get(2).copied()
+        } else {
+            None
+        };
 
         if is_gemm {
             let node = g.nodes[idx].as_ref().expect("live");
@@ -669,8 +667,7 @@ fn matmul_gemm_to_einsum(g: &mut IGraph) -> Result<usize, ImportError> {
                 format!("{lhs},{rhs}->mn")
             }
             (r, s) if r == s && (3..=5).contains(&r) => {
-                let batch_letters: String =
-                    batch[..r - 2].iter().map(|&c| c as char).collect();
+                let batch_letters: String = batch[..r - 2].iter().map(|&c| c as char).collect();
                 let lhs = if a_swapped { "km" } else { "mk" };
                 let rhs = if b_swapped { "nk" } else { "kn" };
                 format!("{batch_letters}{lhs},{batch_letters}{rhs}->{batch_letters}mn")
@@ -857,7 +854,8 @@ fn slice_through_projection(g: &mut IGraph) -> Result<usize, ImportError> {
                 let bk = g.konst(b_edge).expect("checked");
                 let Some(b_vals) = bk.as_f32s() else { continue };
                 let b_len = bk.len();
-                if !b_len.is_multiple_of(*bk.dims.last().unwrap_or(&1)) || *bk.dims.last().unwrap_or(&0) < end
+                if !b_len.is_multiple_of(*bk.dims.last().unwrap_or(&1))
+                    || *bk.dims.last().unwrap_or(&0) < end
                 {
                     continue;
                 }
@@ -1121,7 +1119,9 @@ fn repeat_to_gather(g: &mut IGraph) -> Result<usize, ImportError> {
             outputs: vec![m1],
         });
 
-        let indices: Vec<i64> = (0..group as i64).flat_map(|gi| std::iter::repeat_n(gi, r)).collect();
+        let indices: Vec<i64> = (0..group as i64)
+            .flat_map(|gi| std::iter::repeat_n(gi, r))
+            .collect();
         let idx_edge = g.fresh_edge(
             &format!("{name}/repeat_idx"),
             TensorInfo {
@@ -1177,10 +1177,7 @@ fn cast_policy(g: &mut IGraph) -> Result<usize, ImportError> {
         if node.op != "Cast" {
             continue;
         }
-        let src = g
-            .info(node.inputs[0])
-            .map(|i| i.dtype)
-            .expect("analyzed");
+        let src = g.info(node.inputs[0]).map(|i| i.dtype).expect("analyzed");
         let dst = g.info(node.outputs[0]).map(|i| i.dtype).expect("analyzed");
         let node = g.nodes[idx].as_mut().expect("live");
         node.attrs.clear();

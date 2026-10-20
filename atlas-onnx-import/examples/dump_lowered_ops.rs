@@ -63,7 +63,10 @@ fn main() {
         *ops.entry(key).or_default() += 1;
     }
 
-    println!("== lowered ops ({} nodes) ==", imported.model.graph().nodes.len());
+    println!(
+        "== lowered ops ({} nodes) ==",
+        imported.model.graph().nodes.len()
+    );
     for (op, count) in &ops {
         println!("  {op:<24} x{count}");
     }

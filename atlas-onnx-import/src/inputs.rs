@@ -95,9 +95,11 @@ fn classify_int_input(g: &IGraph, edge: EdgeId, name: &str) -> Result<InputKind,
                 match node.op.as_str() {
                     "Gather" if pos == 1 => used_as_index = true,
                     "Cast"
-                        if g.info(node.outputs[0]).is_some_and(|i| i.dtype == DType::F32) => {
-                            used_as_float = true;
-                        }
+                        if g.info(node.outputs[0])
+                            .is_some_and(|i| i.dtype == DType::F32) =>
+                    {
+                        used_as_float = true;
+                    }
                     "Unsqueeze" | "Squeeze" | "Reshape" | "Flatten" | "Identity" | "Slice"
                     | "Expand" | "Tile" | "Transpose" | "Concat" => {
                         frontier.extend(node.outputs.iter().copied());

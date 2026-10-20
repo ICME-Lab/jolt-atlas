@@ -125,8 +125,8 @@ fn analyze_full_zoo() {
             .map(|o| o.version)
             .unwrap_or(13);
         let result = (|| -> Result<usize, String> {
-            let mut g = graph::from_proto(&model, &dir, &standard_bindings())
-                .map_err(|e| e.to_string())?;
+            let mut g =
+                graph::from_proto(&model, &dir, &standard_bindings()).map_err(|e| e.to_string())?;
             normalize::normalize(&mut g, opset).map_err(|e| e.to_string())?;
             analyze::analyze(&mut g).map_err(|e| e.to_string())?;
             analyze::dce(&mut g);
@@ -177,7 +177,10 @@ fn import_full_zoo() {
         let expected_reject = EXPECTED_REJECTED.contains(&name.as_str());
         match atlas_onnx_import::load(&dir.join("network.onnx"), &opts) {
             Ok(m) if expected_reject => {
-                println!("UNEXPECTED OK {name}: {} nodes — update the test", m.model.graph().nodes.len());
+                println!(
+                    "UNEXPECTED OK {name}: {} nodes — update the test",
+                    m.model.graph().nodes.len()
+                );
                 failures.push(name);
             }
             Ok(m) => {
@@ -203,7 +206,12 @@ fn debug_gpt2_split_chain() {
     use atlas_onnx_import::{analyze, normalize, passes};
     let dir = zoo_dir().join("gpt2");
     let model = proto::load_model(&dir.join("network.onnx")).unwrap();
-    let opset = model.opset_import.iter().find(|o| o.domain.is_empty()).map(|o| o.version).unwrap_or(13);
+    let opset = model
+        .opset_import
+        .iter()
+        .find(|o| o.domain.is_empty())
+        .map(|o| o.version)
+        .unwrap_or(13);
     let mut g = graph::from_proto(&model, &dir, &standard_bindings()).unwrap();
     normalize::normalize(&mut g, opset).unwrap();
     analyze::analyze(&mut g).unwrap();
@@ -214,19 +222,39 @@ fn debug_gpt2_split_chain() {
         if n.op == "atlas.Slice" {
             let (s, e) = (n.attr_int("start").unwrap(), n.attr_int("end").unwrap());
             if !((e - s) as usize).is_power_of_two() {
-                println!("slice {} {}..{} axis {:?}", n.name, s, e, n.attr_int("axis"));
+                println!(
+                    "slice {} {}..{} axis {:?}",
+                    n.name,
+                    s,
+                    e,
+                    n.attr_int("axis")
+                );
                 let mut edge = n.inputs[0];
                 for _ in 0..6 {
                     match g.producer(edge) {
                         Some((_, p)) => {
-                            println!("  <- {} ({}) inputs {:?}", p.name, p.op,
-                                p.inputs.iter().map(|&i| {
-                                    let e = g.edge(i);
-                                    format!("{}{}", e.name, if e.konst.is_some() {"[const]"} else {""})
-                                }).collect::<Vec<_>>());
+                            println!(
+                                "  <- {} ({}) inputs {:?}",
+                                p.name,
+                                p.op,
+                                p.inputs
+                                    .iter()
+                                    .map(|&i| {
+                                        let e = g.edge(i);
+                                        format!(
+                                            "{}{}",
+                                            e.name,
+                                            if e.konst.is_some() { "[const]" } else { "" }
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            );
                             edge = p.inputs[0];
                         }
-                        None => { println!("  <- (input/const edge {})", g.edge(edge).name); break; }
+                        None => {
+                            println!("  <- (input/const edge {})", g.edge(edge).name);
+                            break;
+                        }
                     }
                 }
                 break;
@@ -243,23 +271,34 @@ fn debug_mask_chain() {
     let model_name = std::env::var("MODEL").unwrap_or_else(|_| "gpt2".into());
     let dir = zoo_dir().join(&model_name);
     let model = proto::load_model(&dir.join("network.onnx")).unwrap();
-    let opset = model.opset_import.iter().find(|o| o.domain.is_empty()).map(|o| o.version).unwrap_or(13);
+    let opset = model
+        .opset_import
+        .iter()
+        .find(|o| o.domain.is_empty())
+        .map(|o| o.version)
+        .unwrap_or(13);
     let mut g = graph::from_proto(&model, &dir, &standard_bindings()).unwrap();
     normalize::normalize(&mut g, opset).unwrap();
     analyze::analyze(&mut g).unwrap();
     analyze::dce(&mut g);
     for &input in g.inputs.clone().iter() {
         let name = g.edge(input).name.clone();
-        if !name.contains("mask") && !name.contains("position") { continue; }
+        if !name.contains("mask") && !name.contains("position") {
+            continue;
+        }
         println!("== {model_name} input {name}");
         // BFS consumers to depth 5.
         let mut frontier = vec![(input, 0usize)];
         while let Some((e, depth)) = frontier.pop() {
-            if depth > 4 { continue; }
+            if depth > 4 {
+                continue;
+            }
             for (_, n) in g.live_nodes() {
                 if n.inputs.contains(&e) {
                     println!("{:indent$}-> {} ({})", "", n.name, n.op, indent = depth * 2);
-                    for &o in &n.outputs { frontier.push((o, depth + 1)); }
+                    for &o in &n.outputs {
+                        frontier.push((o, depth + 1));
+                    }
                 }
             }
         }

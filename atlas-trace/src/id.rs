@@ -10,9 +10,7 @@ use crate::error::GraphError;
 /// Nodes are stored densely in a `Vec`; a `NodeId` is the index into that
 /// `Vec`. Graphs are topologically ordered by construction: a node may only
 /// reference inputs with a strictly smaller `NodeId`.
-#[derive(
-    Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize,
-)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
 
 impl NodeId {

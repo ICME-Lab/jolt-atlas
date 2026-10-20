@@ -105,7 +105,10 @@ impl FromStr for EinsumEq {
         for operand in &inputs {
             for (i, c) in operand.iter().enumerate() {
                 if operand[..i].contains(c) {
-                    return Err(format!("letter '{}' repeated within one operand", *c as char));
+                    return Err(format!(
+                        "letter '{}' repeated within one operand",
+                        *c as char
+                    ));
                 }
             }
         }
@@ -266,7 +269,10 @@ impl fmt::Display for Einsum {
 impl OpSpec for Einsum {
     fn eval(&self, inputs: &[&Tensor<i32>], ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
         let acc = einsum_acc_i64(&self.equation, inputs)?;
-        Ok(rebase_eval(acc, self.rebase_divisor(ctx.scale).expect("fused")))
+        Ok(rebase_eval(
+            acc,
+            self.rebase_divisor(ctx.scale).expect("fused"),
+        ))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -364,8 +370,8 @@ fn const_operand_row_sum_max(w: &Tensor<i32>, letters: &[u8], output: &[u8]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::op::TableCache;
     use crate::id::SemVersion;
+    use crate::op::TableCache;
 
     fn ctx(cache: &TableCache) -> EvalCtx<'_> {
         EvalCtx {
@@ -413,9 +419,7 @@ mod tests {
     fn batched_contraction_shape() {
         let eq: EinsumEq = "abmk,abnk->abmn".parse().unwrap();
         let op = Einsum { equation: eq };
-        let shape = op
-            .infer_shape(&[&[2, 3, 4, 5], &[2, 3, 6, 5]])
-            .unwrap();
+        let shape = op.infer_shape(&[&[2, 3, 4, 5], &[2, 3, 6, 5]]).unwrap();
         assert_eq!(shape, vec![2, 3, 4, 6]);
         // Conflicting letter size errors out.
         assert!(op.infer_shape(&[&[2, 3, 4, 5], &[2, 3, 6, 7]]).is_err());

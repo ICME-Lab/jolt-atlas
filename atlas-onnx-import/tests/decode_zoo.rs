@@ -33,20 +33,8 @@ fn decode_one(dir: &Path) -> Result<(usize, usize), String> {
 #[test]
 fn decode_small_models() {
     for name in [
-        "perceptron",
-        "mlp_square",
-        "tanh",
-        "erf",
-        "gather",
-        "slice",
-        "reshape",
-        "broadcast",
-        "moveaxis",
-        "rsqrt",
-        "sum_2d_axis1",
-        "test_add_sub_mul",
-        "layernorm_head",
-        "self_attention_layer",
+        "op_gauntlet",
+        "microgpt",
         "multihead_attention",
         "transformer",
         "nanoGPT",
@@ -154,15 +142,15 @@ fn analyze_full_zoo() {
 /// Gate 3: end-to-end import (decode → passes → lower → compile).
 ///
 /// Two fixtures are EXPECTED to be rejected: their padded execution cannot
-/// be made coherent (`slice` extracts a non-power-of-two extent;
-/// `concat_transformer_block` concatenates extents whose paddings do not
-/// add up). The old crate accepted both and silently produced trace tensors
-/// whose dims disagree with the declared padded dims — the same latent bug
-/// class as its qwen repeat_kv scramble. The new pipeline fails loudly.
+/// be made coherent (`reject_slice` extracts a non-power-of-two extent;
+/// `reject_concat` concatenates extents whose paddings do not add up).
+/// The retired tracer accepted such graphs and silently produced trace
+/// tensors whose dims disagree with the declared padded dims; this pipeline
+/// fails loudly.
 #[test]
 #[ignore]
 fn import_full_zoo() {
-    const EXPECTED_REJECTED: &[&str] = &["slice", "concat_transformer_block"];
+    const EXPECTED_REJECTED: &[&str] = &["reject_slice", "reject_concat"];
     let mut failures = vec![];
     for entry in std::fs::read_dir(zoo_dir()).expect("zoo dir") {
         let dir = entry.expect("entry").path();
@@ -197,110 +185,4 @@ fn import_full_zoo() {
         }
     }
     assert!(failures.is_empty(), "failed: {failures:?}");
-}
-
-/// Debug: print the producer chain feeding gpt2's QKV split.
-#[test]
-#[ignore]
-fn debug_gpt2_split_chain() {
-    use atlas_onnx_import::{analyze, normalize, passes};
-    let dir = zoo_dir().join("gpt2");
-    let model = proto::load_model(&dir.join("network.onnx")).unwrap();
-    let opset = model
-        .opset_import
-        .iter()
-        .find(|o| o.domain.is_empty())
-        .map(|o| o.version)
-        .unwrap_or(13);
-    let mut g = graph::from_proto(&model, &dir, &standard_bindings()).unwrap();
-    normalize::normalize(&mut g, opset).unwrap();
-    analyze::analyze(&mut g).unwrap();
-    analyze::dce(&mut g);
-    passes::run_all(&mut g).unwrap();
-    // Find a non-pow2 atlas.Slice and walk its producers.
-    for (_, n) in g.live_nodes() {
-        if n.op == "atlas.Slice" {
-            let (s, e) = (n.attr_int("start").unwrap(), n.attr_int("end").unwrap());
-            if !((e - s) as usize).is_power_of_two() {
-                println!(
-                    "slice {} {}..{} axis {:?}",
-                    n.name,
-                    s,
-                    e,
-                    n.attr_int("axis")
-                );
-                let mut edge = n.inputs[0];
-                for _ in 0..6 {
-                    match g.producer(edge) {
-                        Some((_, p)) => {
-                            println!(
-                                "  <- {} ({}) inputs {:?}",
-                                p.name,
-                                p.op,
-                                p.inputs
-                                    .iter()
-                                    .map(|&i| {
-                                        let e = g.edge(i);
-                                        format!(
-                                            "{}{}",
-                                            e.name,
-                                            if e.konst.is_some() { "[const]" } else { "" }
-                                        )
-                                    })
-                                    .collect::<Vec<_>>()
-                            );
-                            edge = p.inputs[0];
-                        }
-                        None => {
-                            println!("  <- (input/const edge {})", g.edge(edge).name);
-                            break;
-                        }
-                    }
-                }
-                break;
-            }
-        }
-    }
-}
-
-/// Debug: print the consumer chains of int inputs for a model.
-#[test]
-#[ignore]
-fn debug_mask_chain() {
-    use atlas_onnx_import::{analyze, normalize};
-    let model_name = std::env::var("MODEL").unwrap_or_else(|_| "gpt2".into());
-    let dir = zoo_dir().join(&model_name);
-    let model = proto::load_model(&dir.join("network.onnx")).unwrap();
-    let opset = model
-        .opset_import
-        .iter()
-        .find(|o| o.domain.is_empty())
-        .map(|o| o.version)
-        .unwrap_or(13);
-    let mut g = graph::from_proto(&model, &dir, &standard_bindings()).unwrap();
-    normalize::normalize(&mut g, opset).unwrap();
-    analyze::analyze(&mut g).unwrap();
-    analyze::dce(&mut g);
-    for &input in g.inputs.clone().iter() {
-        let name = g.edge(input).name.clone();
-        if !name.contains("mask") && !name.contains("position") {
-            continue;
-        }
-        println!("== {model_name} input {name}");
-        // BFS consumers to depth 5.
-        let mut frontier = vec![(input, 0usize)];
-        while let Some((e, depth)) = frontier.pop() {
-            if depth > 4 {
-                continue;
-            }
-            for (_, n) in g.live_nodes() {
-                if n.inputs.contains(&e) {
-                    println!("{:indent$}-> {} ({})", "", n.name, n.op, indent = depth * 2);
-                    for &o in &n.outputs {
-                        frontier.push((o, depth + 1));
-                    }
-                }
-            }
-        }
-    }
 }

@@ -666,11 +666,39 @@ fn matmul_gemm_to_einsum(g: &mut IGraph) -> Result<usize, ImportError> {
                 let rhs = if b_swapped { "nk" } else { "kn" };
                 format!("{lhs},{rhs}->mn")
             }
-            (r, s) if r == s && (3..=5).contains(&r) => {
+            (r, s) if r == s && (3..=4).contains(&r) => {
+                // Batched forms normalize to a contraction-last RHS
+                // ("…nk"), the one layout family the proof system supports
+                // (`rbmk,rbnk->bmn`). An RHS that arrives in `…kn` layout
+                // (no transpose to absorb, e.g. attention·V) gets an
+                // explicit MoveAxis — a cheap structural node — instead of
+                // its own einsum layout.
+                if a_swapped {
+                    return Err(ImportError::Pass {
+                        pass: "matmul_gemm_to_einsum",
+                        node: name,
+                        reason: "batched matmul with transposed LHS unsupported".into(),
+                    });
+                }
+                if !b_swapped {
+                    let mut t_dims = b_dims.clone();
+                    t_dims.swap(r - 2, r - 1);
+                    let t = g.fresh_edge(&format!("{name}/rhsT"), f32_info(&t_dims));
+                    g.push_node(INode {
+                        name: format!("{name}/rhsT"),
+                        op: "atlas.MoveAxis".into(),
+                        attrs: [
+                            ("source".to_string(), Attr::Int((r - 2) as i64)),
+                            ("destination".to_string(), Attr::Int((r - 1) as i64)),
+                        ]
+                        .into(),
+                        inputs: vec![b],
+                        outputs: vec![t],
+                    });
+                    b = t;
+                }
                 let batch_letters: String = batch[..r - 2].iter().map(|&c| c as char).collect();
-                let lhs = if a_swapped { "km" } else { "mk" };
-                let rhs = if b_swapped { "nk" } else { "kn" };
-                format!("{batch_letters}{lhs},{batch_letters}{rhs}->{batch_letters}mn")
+                format!("{batch_letters}mk,{batch_letters}nk->{batch_letters}mn")
             }
             _ => {
                 return Err(ImportError::Pass {

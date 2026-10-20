@@ -22,14 +22,7 @@ use crate::{
 
 /// Einsum equations the proof layer supports. The matmul pass only emits
 /// these; the gate makes that a checked invariant rather than a convention.
-const CANONICAL_EINSUMS: &[&str] = &[
-    "mk,kn->mn",
-    "mk,nk->mn",
-    "amk,akn->amn",
-    "amk,ank->amn",
-    "abmk,abkn->abmn",
-    "abmk,abnk->abmn",
-];
+const CANONICAL_EINSUMS: &[&str] = &["mk,kn->mn", "mk,nk->mn", "amk,ank->amn", "abmk,abnk->abmn"];
 
 /// Gather dictionaries up to this many (power-of-two-rounded) rows prove
 /// with the small-table path; larger ones use the large path. Old-crate

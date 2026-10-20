@@ -292,10 +292,20 @@ fn extract_k_nk_n_dims(computation_node: &ComputationNode, model: &Model) -> Ein
     let [a_idx, b_idx] = computation_node.inputs[..] else {
         panic!("Expected exactly two inputs for k,nk->n operation")
     };
-    let _a_node = &model[a_idx];
+    let a_node = &model[a_idx];
     let b_node = &model[b_idx];
     let n = b_node.output_dims[0];
     let k = b_node.output_dims[1];
+    // The k,nk->n layout is strictly vector-matrix: it folds only the k axis,
+    // so a left operand with m > 1 rows would feed m*k coefficients into a
+    // log(k)-round sumcheck. Fail here, at dispatch, rather than deep inside
+    // the dot engine.
+    assert_eq!(
+        a_node.output_dims.iter().product::<usize>(),
+        k,
+        "mk,nk->mn is only provable with m == 1 (vector-matrix); got left dims {:?}",
+        a_node.output_dims
+    );
     EinsumDims::new(vec![k], vec![n, k], vec![n])
 }
 

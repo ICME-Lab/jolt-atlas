@@ -75,14 +75,15 @@ fn main() {
 
     let mut rng = StdRng::seed_from_u64(42);
     let vocab_size: i32 = 50257;
+    // ONNX input order: [input_ids, attention_mask, position_ids], all raw
+    // integers (see examples/gpt2.rs).
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
     let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq_len]).unwrap();
+    let attention_mask_data: Vec<i32> = vec![1; seq_len];
+    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
     let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
     let position_ids = Tensor::from_slice(&position_ids_data, &[1, seq_len]).unwrap();
-    let scale = run_args.scale;
-    let attention_mask_data: Vec<i32> = vec![1 << scale; seq_len];
-    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
-    let inputs = [input_ids, position_ids, attention_mask];
+    let inputs = [input_ids, attention_mask, position_ids];
 
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);

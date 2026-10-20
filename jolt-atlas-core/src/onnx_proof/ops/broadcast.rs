@@ -12,7 +12,7 @@ use atlas_onnx_tracer::{
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
         },
@@ -104,20 +104,14 @@ impl<F: JoltField> BroadcastProver<F> {
         let (r_input, _r_broadcast) =
             split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
 
-        let mut operand = operand.clone();
-        operand.pad_next_power_of_two();
-        let claim_A = MultilinearPolynomial::from(operand.clone()).evaluate(&r_input);
+        let claim_A = operand.evaluate_mle(&r_input);
 
         #[cfg(test)]
         {
             // Ensure the broadcast tensor is correctly built,
             // Tensors are correctly padded, and the spliting of r_input/r_broadcast is correct
-            let mut output = output.clone();
-            output.pad_next_power_of_two();
-            let claim_O = MultilinearPolynomial::from(output.clone()).evaluate(&params.r_output);
-            let mut broadcast_tensor = broadcast_tensor;
-            broadcast_tensor.pad_next_power_of_two();
-            let eval_I = MultilinearPolynomial::from(broadcast_tensor).evaluate(&_r_broadcast);
+            let claim_O = output.evaluate_mle(&params.r_output);
+            let eval_I = broadcast_tensor.evaluate_mle(&_r_broadcast);
             assert_eq!(claim_O, claim_A * eval_I);
         }
 
@@ -164,13 +158,12 @@ impl<F: JoltField> BroadcastVerifier<F> {
             .output_dims;
         let output_dims = &params.computation_node.output_dims;
 
-        let mut broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
+        let broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
 
         let (r_input, r_broadcast) =
             split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
 
-        broadcast_tensor.pad_next_power_of_two();
-        let eval_I = MultilinearPolynomial::from(broadcast_tensor).evaluate(&r_broadcast);
+        let eval_I = broadcast_tensor.evaluate_mle(&r_broadcast);
 
         Self {
             params,

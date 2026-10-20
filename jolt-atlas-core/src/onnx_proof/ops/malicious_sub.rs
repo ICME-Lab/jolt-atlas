@@ -20,10 +20,8 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
 };
 use joltworks::{
-    field::JoltField,
-    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
+    field::JoltField, poly::multilinear_polynomial::EvaluateMle,
+    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
 };
 
 /// Run the malicious Sub prover for a single node.
@@ -50,11 +48,8 @@ pub fn malicious_sub_prove<F: JoltField, T: Transcript>(
     let [left, right] = operands[..] else {
         panic!("Expected two operands for Sub operation")
     };
-    let forged_left = MultilinearPolynomial::from(left.padded_next_power_of_two())
-        .evaluate(&opening_point.r)
-        + F::one();
-    let right_claim =
-        MultilinearPolynomial::from(right.padded_next_power_of_two()).evaluate(&opening_point.r);
+    let forged_left = left.evaluate_mle(&opening_point.r) + F::one();
+    let right_claim = right.evaluate_mle(&opening_point.r);
     let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
         .into_provider(&mut prover.transcript, opening_point);
     provider.append_nodeio(Target::Input(0), forged_left);

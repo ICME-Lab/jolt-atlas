@@ -503,6 +503,51 @@ impl<F: JoltField> From<Vec<i32>> for MultilinearPolynomial<F> {
     }
 }
 
+/// Read-only MLE evaluation of borrowed small-scalar data.
+///
+/// Use this instead of `MultilinearPolynomial::from(x.clone()).evaluate(r)`:
+/// evaluation never mutates the coefficients, so the clone is pure waste.
+pub trait EvaluateMle {
+    /// Evaluates the multilinear extension of this data at `r`.
+    /// The data length must be `1 << r.len()` (already power-of-two padded).
+    fn evaluate_mle<F, C>(&self, r: &[C]) -> F
+    where
+        F: JoltField + FieldChallengeOps<C>,
+        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>;
+}
+
+impl<T: SmallScalar> EvaluateMle for [T] {
+    fn evaluate_mle<F, C>(&self, r: &[C]) -> F
+    where
+        F: JoltField + FieldChallengeOps<C>,
+        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
+    {
+        super::compact_polynomial::evaluate_mle(self, r)
+    }
+}
+
+/// For tensors, the MLE is over the power-of-two padded data. When the tensor
+/// is already padded (its element count equals `1 << r.len()`, which for
+/// tensors implies every dimension is a power of two) the data is evaluated
+/// in place with no copy; otherwise it is zero-padded into a scratch tensor
+/// first, matching `MultilinearPolynomial::from(t.padded_next_power_of_two())`.
+impl<T: SmallScalar + atlas_onnx_tracer::tensor::TensorType + Send + Sync> EvaluateMle
+    for Tensor<T>
+{
+    fn evaluate_mle<F, C>(&self, r: &[C]) -> F
+    where
+        F: JoltField + FieldChallengeOps<C>,
+        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
+    {
+        if self.len() == 1 << r.len() {
+            super::compact_polynomial::evaluate_mle(self.data(), r)
+        } else {
+            let padded = self.padded_next_power_of_two();
+            super::compact_polynomial::evaluate_mle(padded.data(), r)
+        }
+    }
+}
+
 impl<F: JoltField> From<Tensor<i32>> for MultilinearPolynomial<F> {
     fn from(coeffs: Tensor<i32>) -> Self {
         let poly = CompactPolynomial::from_coeffs(coeffs.inner);

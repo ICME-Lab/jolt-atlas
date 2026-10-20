@@ -24,7 +24,7 @@ use joltworks::{
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+            BindingOrder, EvaluateMle, MultilinearPolynomial, PolynomialBinding,
         },
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
@@ -79,10 +79,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
         let [left, right] = operands[..] else {
             panic!("Expected two operands for Sub operation")
         };
-        let left_claim =
-            MultilinearPolynomial::from(left.padded_next_power_of_two()).evaluate(&opening_point.r);
-        let right_claim = MultilinearPolynomial::from(right.padded_next_power_of_two())
-            .evaluate(&opening_point.r);
+        let left_claim = left.evaluate_mle(&opening_point.r);
+        let right_claim = right.evaluate_mle(&opening_point.r);
         let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
             .into_provider(&mut prover.transcript, opening_point);
         provider.append_nodeio(Target::Input(0), left_claim);

@@ -21,7 +21,7 @@ use common::{
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
     },
     transcripts::Transcript,
@@ -105,7 +105,7 @@ pub fn cache_downscaled_prove<F: JoltField, T: Transcript>(
     let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
     let (r_node_output, _) = accessor.get_reduced_opening();
     let downscaled = remainder.map(|v| v >> TRIG_DOWNSCALE_BITS);
-    let eval = MultilinearPolynomial::from(downscaled.clone()).evaluate(&r_node_output.r);
+    let eval = downscaled.evaluate_mle(&r_node_output.r);
     let mut provider = accessor.into_provider(&mut prover.transcript, r_node_output);
     provider.append_advice(VirtualPoly::TrigDownscaled, eval);
     downscaled

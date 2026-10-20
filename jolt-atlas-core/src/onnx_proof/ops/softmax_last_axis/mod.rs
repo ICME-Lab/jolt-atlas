@@ -64,7 +64,7 @@ use common::{
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::OpeningPoint,
     },
     subprotocols::{
@@ -448,7 +448,7 @@ impl SoftmaxLastAxisProver {
         let r0 = accessor.get_reduced_opening().0;
         let log_f = self.F_N[0].log_2();
         let r_lead = r0.split_at(log_f).0;
-        let eval = MultilinearPolynomial::from(self.trace.exp_sum_q.clone()).evaluate(&r_lead.r);
+        let eval = self.trace.exp_sum_q.evaluate_mle(&r_lead.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r_lead);
         provider.append_advice(VirtualPoly::SoftmaxExpSum, eval);
     }
@@ -457,7 +457,7 @@ impl SoftmaxLastAxisProver {
     pub(crate) fn cache_R<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r0 = accessor.get_reduced_opening().0;
-        let eval = MultilinearPolynomial::from(self.trace.R.clone()).evaluate(&r0.r);
+        let eval = self.trace.R.evaluate_mle(&r0.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r0);
         provider.append_advice(VirtualPoly::SoftmaxRecipMultRemainder, eval);
     }
@@ -525,8 +525,7 @@ impl SoftmaxLastAxisProver {
     pub(crate) fn cache_r_exp<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
-        let eval =
-            MultilinearPolynomial::from(self.trace.decomposed_exp.r_exp.clone()).evaluate(&r1.r);
+        let eval = self.trace.decomposed_exp.r_exp.evaluate_mle(&r1.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r1);
         provider.append_advice(VirtualPoly::SoftmaxExpRemainder, eval);
     }
@@ -557,7 +556,7 @@ impl SoftmaxLastAxisProver {
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let r1_k = r1.split_at(log_f).0;
 
-        let max_k_eval = MultilinearPolynomial::from(self.trace.max_k.clone()).evaluate(&r1_k.r);
+        let max_k_eval = self.trace.max_k.evaluate_mle(&r1_k.r);
         let max_indicator_params = MaxIndicatorParams::new(
             self.computation_node.clone(),
             self.F_N,
@@ -609,10 +608,8 @@ impl SoftmaxLastAxisProver {
     pub(crate) fn cache_z_hi_lo<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r2 = accessor.get_advice(VirtualPoly::SoftmaxExpHi).0;
-        let z_hi_eval =
-            MultilinearPolynomial::from(self.trace.decomposed_exp.z_hi.clone()).evaluate(&r2.r);
-        let z_lo_eval =
-            MultilinearPolynomial::from(self.trace.decomposed_exp.z_lo.clone()).evaluate(&r2.r);
+        let z_hi_eval = self.trace.decomposed_exp.z_hi.evaluate_mle(&r2.r);
+        let z_lo_eval = self.trace.decomposed_exp.z_lo.evaluate_mle(&r2.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r2);
         provider.append_advice(VirtualPoly::SoftmaxZHi, z_hi_eval);
         provider.append_advice(VirtualPoly::SoftmaxZLo, z_lo_eval);
@@ -1002,7 +999,7 @@ impl SoftmaxLastAxisVerifier {
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let r1_k = r1.split_at(log_f).0;
 
-        let max_k_eval = MultilinearPolynomial::from(self.max_k.clone()).evaluate(&r1_k.r);
+        let max_k_eval = self.max_k.evaluate_mle(&r1_k.r);
         let max_indicator_verifier = MaxIndicatorVerifier::new(
             self.computation_node.clone(),
             self.F_N,
@@ -1106,7 +1103,7 @@ impl SoftmaxLastAxisVerifier {
         let r2 = accessor.get_advice(VirtualPoly::SoftmaxExpHi).0;
         let r2_lead = r2.split_at(log_f).0;
 
-        let max_k_eval = MultilinearPolynomial::from(self.max_k.clone()).evaluate(&r2_lead.r);
+        let max_k_eval = self.max_k.evaluate_mle(&r2_lead.r);
 
         let z_eval = accessor.get_advice(VirtualPoly::SoftmaxClampWitness).1;
 

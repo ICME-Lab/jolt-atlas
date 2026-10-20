@@ -85,195 +85,19 @@ pub mod node {
     }
 }
 
-/// Operator types and proof-spec kernels, old-shaped.
+/// Operator re-exports, old-shaped.
 pub mod ops {
     pub use atlas_trace::op::*;
     pub use atlas_trace::trace::FusedIntermediates;
-    use atlas_trace::Tensor;
 
     /// The operator enum (the atlas-trace one, under its old name).
     pub type Operator = atlas_trace::Op;
-
-    /// Rebase width `S` (in bits) of a node's fused rescaling division, or
-    /// `None` when the operator does not fuse a power-of-two rescale
-    /// (`MeanOfSquares` divides by `count·2^S` and takes its own path).
-    pub fn rebase_bits(node: &super::node::ComputationNode) -> Option<i32> {
-        match &node.operator {
-            Operator::Einsum(_) => Some(node.scale),
-            Operator::Mul(m) => Some(if m.rebase { node.scale } else { 0 }),
-            Operator::Square(s) => Some(if s.rebase { node.scale } else { 0 }),
-            Operator::Cube(c) => Some(if c.rebase { node.scale * 2 } else { 0 }),
-            _ => None,
-        }
-    }
-
-    /// Pre-clamp `i64` accumulation of a binary saturating Add/Sub — the
-    /// clamp lookup index the prover re-derives.
-    pub fn sat_binop_intermediate(
-        operator: &Operator,
-        lhs: &Tensor<i32>,
-        rhs: &Tensor<i32>,
-    ) -> Tensor<i64> {
-        let combine: fn(i64, i64) -> i64 = match operator {
-            Operator::Add(_) => |a, b| a + b,
-            Operator::Sub(_) => |a, b| a - b,
-            other => panic!("sat_binop_intermediate: expected Add or Sub, got {other}"),
-        };
-        lhs.zip_map(rhs, |a, b| combine(a as i64, b as i64))
-            .expect("sat_binop_intermediate: operand dims must match")
-    }
-
-    /// Mean-of-squares helpers (the divisor is `count·2^scale`, not a power
-    /// of two).
-    pub mod mean_of_squares {
-        use atlas_trace::op::{EvalCtx, MeanOfSquares, Op, TableCache};
-        use atlas_trace::{NodeAux, Scale, SemVersion, Tensor};
-
-        /// Fused divisor `D = count·2^scale`.
-        pub fn mos_divisor(op: &MeanOfSquares, scale: i32) -> i64 {
-            (1i64 << scale) * op.count as i64
-        }
-
-        /// Re-execute the fused mean-of-squares to recover the rescaling
-        /// remainder `R = Σx² mod D` (used where the trace is out of reach).
-        pub fn mos_remainder(
-            op: &MeanOfSquares,
-            operands: &[&Tensor<i32>],
-            scale: i32,
-        ) -> Tensor<i32> {
-            let cache = TableCache::default();
-            let ctx = EvalCtx {
-                scale: Scale::new(scale as u8).expect("scale in range"),
-                version: SemVersion::V1,
-                tables: &cache,
-            };
-            let eval = Op::MeanOfSquares(op.clone())
-                .spec()
-                .eval(operands, &ctx)
-                .expect("mean-of-squares re-execution");
-            match eval.aux {
-                Some(NodeAux::Fused(f)) => f.remainder,
-                _ => unreachable!("mean-of-squares always produces fused intermediates"),
-            }
-        }
-    }
-
-    /// Sum accumulation (proof-spec kernel, re-exported).
-    pub mod sum {
-        pub use atlas_trace::op::sum_axes_i64;
-    }
-
-    /// Softmax proof-spec surface, old-shaped.
-    pub mod softmax {
-        pub use atlas_trace::semantics::tables::ExpLutDecomposed;
-        use atlas_trace::{Scale, SemVersion};
-
-        /// Softmax exp sub-tables for a fixed-point `multiplier` (`2^scale`)
-        /// — deterministic integer generation via `atlas_trace::semantics`.
-        pub fn generate_exp_lut_decomposed(multiplier: i32) -> ExpLutDecomposed {
-            let scale = Scale::new(multiplier.trailing_zeros() as u8)
-                .expect("softmax multiplier must be 2^s with s in 1..=15");
-            assert!(
-                multiplier.is_positive() && multiplier.count_ones() == 1,
-                "softmax multiplier must be a power of two, got {multiplier}"
-            );
-            atlas_trace::semantics::tables::exp_lut_decomposed(scale, SemVersion::V1)
-        }
-
-        /// Decomposed-exp witness fields, old-shaped.
-        #[derive(Debug, Clone)]
-        pub struct DecomposedExpWitness {
-            /// The exp sub-tables.
-            pub lut: ExpLutDecomposed,
-            /// High digits of the saturated centered logits.
-            pub z_hi: Vec<i32>,
-            /// Low digits.
-            pub z_lo: Vec<i32>,
-            /// `LUT_hi[z_hi]`.
-            pub exp_hi: Vec<i32>,
-            /// `LUT_lo[z_lo]`.
-            pub exp_lo: Vec<i32>,
-            /// `exp_hi·exp_lo − exp_q·S ∈ [0, S)`.
-            pub r_exp: Vec<i32>,
-        }
-
-        /// Full softmax witness, old-shaped (built from the trace-captured
-        /// [`atlas_trace::SoftmaxWitness`] — nothing is re-executed).
-        #[derive(Debug, Clone)]
-        #[allow(non_snake_case)]
-        pub struct SoftmaxLastAxisTrace {
-            /// Multiplier `S = 2^scale`.
-            pub scale: i64,
-            /// Input logits, flat.
-            pub x: Vec<i32>,
-            /// Per-row max.
-            pub max_k: Vec<i32>,
-            /// Per-row argmax.
-            pub argmax_k: Vec<usize>,
-            /// LUT exponentials.
-            pub exp_q: Vec<i32>,
-            /// Per-row exp sums.
-            pub exp_sum_q: Vec<i32>,
-            /// `⌊S²/exp_sum_q⌋` per row.
-            pub inv_sum: Vec<i32>,
-            /// `exp_q·inv_sum − softmax_q·S ∈ [0, S)`.
-            pub R: Vec<i32>,
-            /// Decomposed exp sub-witness.
-            pub decomposed_exp: DecomposedExpWitness,
-        }
-
-        impl SoftmaxLastAxisTrace {
-            /// Build the old shape from a trace-captured witness.
-            pub fn from_witness(w: &atlas_trace::SoftmaxWitness) -> Self {
-                SoftmaxLastAxisTrace {
-                    scale: w.scale,
-                    x: w.x.clone(),
-                    max_k: w.max_k.clone(),
-                    argmax_k: w.argmax_k.clone(),
-                    exp_q: w.exp_q.clone(),
-                    exp_sum_q: w.exp_sum_q.clone(),
-                    inv_sum: w.inv_sum.clone(),
-                    R: w.r.clone(),
-                    decomposed_exp: DecomposedExpWitness {
-                        lut: generate_exp_lut_decomposed(w.scale as i32),
-                        z_hi: w.z_hi.clone(),
-                        z_lo: w.z_lo.clone(),
-                        exp_hi: w.exp_hi.clone(),
-                        exp_lo: w.exp_lo.clone(),
-                        r_exp: w.r_exp.clone(),
-                    },
-                }
-            }
-        }
-
-        /// `z[k,j] = max_k[k] - x[k,j]` over flat rows of width `last_dim`.
-        pub fn softmax_z(x: &[i32], max_k: &[i32], last_dim: usize) -> Vec<i32> {
-            x.iter()
-                .enumerate()
-                .map(|(idx, &xi)| max_k[idx / last_dim] - xi)
-                .collect()
-        }
-    }
 }
 
 /// Tensor re-export (old path shape).
 pub mod tensor {
     pub use atlas_trace::tensor::Element;
     pub use atlas_trace::Tensor;
-}
-
-/// Quantization helpers, old-shaped.
-pub mod utils {
-    /// Old `utils::quantize` surface.
-    pub mod quantize {
-        /// log2 fixed-point scale (the old crate's alias).
-        pub type Scale = i32;
-
-        /// `2^scale` as f64 (old helper; prefer integer paths).
-        pub fn scale_to_multiplier(scale: Scale) -> f64 {
-            (1i64 << scale) as f64
-        }
-    }
 }
 
 /// Model, graph, trace, and analysis views, old-shaped.

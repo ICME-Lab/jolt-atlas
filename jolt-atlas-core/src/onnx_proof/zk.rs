@@ -9,7 +9,6 @@ use crate::compat::{
     model::trace::{ModelExecutionIO, Trace},
     ops::Operator,
     tensor::Tensor,
-    utils::quantize::scale_to_multiplier,
 };
 use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
 use ark_bn254::{Bn254, Fr};

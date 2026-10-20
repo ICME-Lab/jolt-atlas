@@ -45,15 +45,7 @@ use joltworks::{
 };
 use std::collections::BTreeMap;
 
-use crate::compat::{
-    node::ComputationNode,
-    ops::{
-        softmax::{generate_exp_lut_decomposed, softmax_z, SoftmaxLastAxisTrace},
-        SoftmaxLastAxis,
-    },
-    tensor::Tensor,
-    utils::quantize::scale_to_multiplier,
-};
+use crate::compat::{node::ComputationNode, ops::SoftmaxLastAxis, tensor::Tensor};
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,
@@ -74,6 +66,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits, math::Math},
 };
+pub use witness::{generate_exp_lut_decomposed, softmax_z, SoftmaxLastAxisTrace};
 
 /// exp_sum(r0_k) = sum_{k,j} eq(r0_k, k) * exp_q[k,j]
 pub mod exp_sum;
@@ -87,6 +80,8 @@ pub mod rc;
 pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
 pub mod significance_clamp;
+/// Softmax witness view and exp-LUT materialization.
+pub mod witness;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::prove")]
@@ -109,7 +104,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
              use a power-of-two softmax axis",
             self.active_len
         );
-        let scale = scale_to_multiplier(node.scale) as i32;
+        let scale = 1i32 << node.scale;
         let witness = prover
             .trace
             .softmax_witness(node.idx)
@@ -129,7 +124,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
         );
         let scale_bits = verifier.preprocessing.scale();
-        let scale = scale_to_multiplier(node.scale) as i32;
+        let scale = 1i32 << node.scale;
         let mut sm = SoftmaxLastAxisVerifier::new(
             node,
             scale,
@@ -151,7 +146,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
         let log_scale = node.scale as usize;
-        let decomp = generate_exp_lut_decomposed(scale_to_multiplier(node.scale) as i32);
+        let decomp = generate_exp_lut_decomposed(1i32 << node.scale);
         let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
         let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
         let idx = node.idx;

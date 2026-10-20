@@ -23,7 +23,7 @@ use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupProv
 use crate::compat::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
-    ops::{sat_binop_intermediate, sum::sum_axes_i64, Operator},
+    ops::Operator,
     tensor::Tensor,
 };
 use crate::onnx_proof::{
@@ -31,6 +31,7 @@ use crate::onnx_proof::{
     deferred_lookups::{ProverLookupJob, VerifierLookupJob},
     ProofId, Prover, Verifier,
 };
+use atlas_trace::op::sum_axes_i64;
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
@@ -97,6 +98,22 @@ pub(crate) fn acc_opening_id(node_idx: usize) -> OpeningId {
 ///
 /// The padding (to the next power of two) matches the node-output MLE domain, so
 /// the accumulation and output polynomials share the same `log_T`.
+/// Pre-clamp `i64` accumulation of a binary saturating Add/Sub — the clamp
+/// lookup index the prover re-derives.
+fn sat_binop_intermediate(
+    operator: &Operator,
+    lhs: &Tensor<i32>,
+    rhs: &Tensor<i32>,
+) -> Tensor<i64> {
+    let combine: fn(i64, i64) -> i64 = match operator {
+        Operator::Add(_) => |a, b| a + b,
+        Operator::Sub(_) => |a, b| a - b,
+        other => panic!("sat_binop_intermediate: expected Add or Sub, got {other}"),
+    };
+    lhs.zip_map(rhs, |a, b| combine(a as i64, b as i64))
+        .expect("sat_binop_intermediate: operand dims must match")
+}
+
 pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
     // Fused rescale ops: the trace already holds the pre-clamp quotient.
     if let Some(cached) = trace.fused_intermediates(node.idx) {

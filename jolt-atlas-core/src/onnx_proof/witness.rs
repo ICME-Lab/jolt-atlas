@@ -18,10 +18,7 @@
 use crate::compat::{
     model::{trace::Trace, Model},
     node::ComputationNode,
-    ops::{
-        softmax::{generate_exp_lut_decomposed, softmax_z, SoftmaxLastAxisTrace},
-        Operator,
-    },
+    ops::Operator,
     tensor::Tensor,
 };
 use crate::{
@@ -29,6 +26,7 @@ use crate::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits},
         neural_teleport::{division::compute_division, n_bits_to_usize},
         ops::rsqrt::rsqrt_dividend,
+        ops::softmax_last_axis::{generate_exp_lut_decomposed, softmax_z, SoftmaxLastAxisTrace},
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
             RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,

@@ -36,7 +36,7 @@ use std::array;
 use crate::compat::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
-    ops::{mean_of_squares::mos_divisor, MeanOfSquares, Operator},
+    ops::{MeanOfSquares, Operator},
 };
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
@@ -77,6 +77,36 @@ use joltworks::{
 use rayon::prelude::*;
 
 const DEGREE: usize = 3;
+
+/// Fused divisor `D = count·2^scale` (the semantic count, not the padded one).
+pub fn mos_divisor(op: &MeanOfSquares, scale: i32) -> i64 {
+    (1i64 << scale) * op.count as i64
+}
+
+/// Re-execute the fused mean-of-squares to recover the rescaling remainder
+/// `R = Σx² mod D` (used where the trace is out of reach).
+pub fn mos_remainder(
+    op: &MeanOfSquares,
+    operands: &[&crate::compat::tensor::Tensor<i32>],
+    scale: i32,
+) -> crate::compat::tensor::Tensor<i32> {
+    use atlas_trace::op::{EvalCtx, Op, TableCache};
+    use atlas_trace::{NodeAux, Scale, SemVersion};
+    let cache = TableCache::default();
+    let ctx = EvalCtx {
+        scale: Scale::new(scale as u8).expect("scale in range"),
+        version: SemVersion::V1,
+        tables: &cache,
+    };
+    let eval = Op::MeanOfSquares(op.clone())
+        .spec()
+        .eval(operands, &ctx)
+        .expect("mean-of-squares re-execution");
+    match eval.aux {
+        Some(NodeAux::Fused(f)) => f.remainder,
+        _ => unreachable!("mean-of-squares always produces fused intermediates"),
+    }
+}
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
     #[tracing::instrument(skip_all, name = "MeanOfSquares::prove")]

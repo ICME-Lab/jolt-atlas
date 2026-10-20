@@ -21,7 +21,6 @@
 //! Scalar nodes (`log_T = 0`) skip the one-hot reductions and open `rescaled` and
 //! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
 
-pub use crate::compat::ops::rebase_bits as compat_rebase_bits;
 use crate::compat::{model::trace::Trace, node::ComputationNode, ops::Operator, tensor::Tensor};
 use crate::{
     onnx_proof::{
@@ -53,13 +52,26 @@ use joltworks::{
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 
-/// Rebase width `S` (in bits) of a node's fused rescaling division, or
-/// `None` if the operator does not fuse a rescale.
+/// Rebase width `S` (in bits) of a node's fused rescaling division at the
+/// model's log2 `scale`, or `None` when the operator does not fuse a
+/// power-of-two rescale (`MeanOfSquares` divides by `count·2^S` and takes its
+/// own path).
 ///
 /// `Mul`/`Square` are at scale `2S` and rebase by `2^S`; `Cube` is at scale
 /// `3S` and rebases by `2^(2S)`; einsum is a (sum of) products at scale `2S`.
+pub fn op_rebase_bits(op: &Operator, scale: i32) -> Option<i32> {
+    match op {
+        Operator::Einsum(_) => Some(scale),
+        Operator::Mul(m) => Some(if m.rebase { scale } else { 0 }),
+        Operator::Square(s) => Some(if s.rebase { scale } else { 0 }),
+        Operator::Cube(c) => Some(if c.rebase { scale * 2 } else { 0 }),
+        _ => None,
+    }
+}
+
+/// [`op_rebase_bits`] of a node view (which carries the model scale).
 pub fn rebase_bits(node: &ComputationNode) -> Option<i32> {
-    compat_rebase_bits(node)
+    op_rebase_bits(&node.operator, node.scale)
 }
 
 /// Whether a node fuses the rescaling division (`bits > 0`).

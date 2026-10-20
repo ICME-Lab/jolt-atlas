@@ -11,7 +11,7 @@ use joltworks::{
 };
 use num::integer::Roots;
 
-use crate::compat::ops::mean_of_squares::{mos_divisor, mos_remainder};
+use crate::onnx_proof::ops::mean_of_squares::{mos_divisor, mos_remainder};
 use crate::{
     onnx_proof::{neural_teleport::division::compute_division, range_checking::RangeCheckEncoding},
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},

@@ -5,11 +5,11 @@
 //! a batch eq-poly (bound first, [`EqSchedule::High`]); the last is a plain dot
 //! product ([`EqSchedule::None`]).
 
+use crate::compat::{node::ComputationNode, tensor::Tensor};
 use crate::{
     onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
-use atlas_onnx_tracer::{node::ComputationNode, tensor::Tensor};
 use common::parallel::par_enabled;
 use joltworks::{
     field::{IntoOpening, JoltField},
@@ -49,10 +49,11 @@ enum RbmkRbnkBmnVariant {
 
 impl RbmkRbnkBmnVariant {
     fn from_node(computation_node: &ComputationNode, einsum_dims: &EinsumDims) -> Self {
-        let atlas_onnx_tracer::ops::Operator::Einsum(einsum) = &computation_node.operator else {
+        let crate::compat::ops::Operator::Einsum(einsum) = &computation_node.operator else {
             panic!("Expected Einsum operator")
         };
-        match einsum.equation.as_str() {
+        let equation = einsum.equation.to_string();
+        match equation.as_str() {
             "abmk,abnk->abmn" => Self::AbmkAbnkAbmn {
                 log_a: {
                     assert!(
@@ -119,6 +120,34 @@ impl RbmkRbnkBmnVariant {
                 },
                 log_m: computation_node.output_dims[computation_node.output_dims.len() - 2].log_2(),
                 log_n: computation_node.output_dims[computation_node.output_dims.len() - 1].log_2(),
+                log_k: einsum_dims.left_operand()[2].log_2(),
+            },
+            // atlas-onnx-import's rank-3 batched matmul: `amk,ank->amn` is
+            // `abmk,abnk->abmn` with a retained batch pack of (1, a), so it
+            // reuses that variant with log_a = 0 (the variant only ever uses
+            // the pack as log_a + log_b, and the flattened operand layouts
+            // are identical).
+            "amk,ank->amn" => Self::AbmkAbnkAbmn {
+                log_a: 0,
+                log_b: {
+                    assert!(
+                        computation_node.output_dims.len() == 3,
+                        "amk,ank->amn expects a rank-3 output"
+                    );
+                    assert_eq!(
+                        einsum_dims.left_operand()[0],
+                        einsum_dims.right_operand()[0],
+                        "amk,ank->amn requires both operands to share the batch axis"
+                    );
+                    assert_eq!(
+                        einsum_dims.left_operand()[0],
+                        computation_node.output_dims[0],
+                        "amk,ank->amn requires the operand batch axis to match the output"
+                    );
+                    computation_node.output_dims[0].log_2()
+                },
+                log_m: computation_node.output_dims[1].log_2(),
+                log_n: computation_node.output_dims[2].log_2(),
                 log_k: einsum_dims.left_operand()[2].log_2(),
             },
             other => panic!("unexpected rbmk_rbnk_bmn equation: {other}"),
@@ -531,8 +560,8 @@ impl<F: JoltField> EinsumLayout<F> for RbmkRbnkBmnLayout {
 
 #[cfg(test)]
 mod tests {
+    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn abmk_abnk_abmn_model(
@@ -568,20 +597,32 @@ mod tests {
         builder.build()
     }
 
-    fn cbmk_cbkn_amn_model(
-        rng: &mut StdRng,
-        c: usize,
-        b: usize,
-        m: usize,
-        k: usize,
-        n: usize,
-    ) -> Model {
+    fn amk_ank_amn_model(rng: &mut StdRng, a: usize, m: usize, k: usize, n: usize) -> Model {
         let mut builder = ModelBuilder::new();
-        let left = builder.input(vec![c, b, m, k]);
-        let right = builder.constant(Tensor::random_small(rng, &[c, b, k, n]));
-        let out = builder.einsum("cbmk,cbkn->amn", vec![left, right], vec![1, m, n]);
+        let left = builder.input(vec![a, m, k]);
+        let right = builder.constant(Tensor::random_small(rng, &[a, n, k]));
+        let out = builder.einsum("amk,ank->amn", vec![left, right], vec![a, m, n]);
         builder.mark_output(out);
         builder.build()
+    }
+
+    #[test]
+    fn test_amk_ank_amn() {
+        let mut rng = StdRng::seed_from_u64(2);
+        let model = amk_ank_amn_model(&mut rng, 4, 4, 8, 8);
+        let input = Tensor::<i32>::random_small(&mut rng, &[4, 4, 8]);
+        unit_test_op(model, &[input]);
+    }
+
+    /// The shape Qwen's repeat_kv lowering emits: batch 1 and a contraction
+    /// axis of length 1 (an outer product), i.e. zero eq-pack and zero k
+    /// sumcheck variables.
+    #[test]
+    fn test_amk_ank_amn_qwen_shape() {
+        let mut rng = StdRng::seed_from_u64(3);
+        let model = amk_ank_amn_model(&mut rng, 1, 32, 1, 16);
+        let input = Tensor::<i32>::random_small(&mut rng, &[1, 32, 1]);
+        unit_test_op(model, &[input]);
     }
 
     #[test]
@@ -597,14 +638,6 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
         let model = acbmk_kcn_cbmn_model(&mut rng, 2, 2, 2, 4, 4, 8);
         let input = Tensor::<i32>::random_small(&mut rng, &[2, 2, 2, 4, 4]);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    fn test_cbmk_cbkn_amn() {
-        let mut rng = StdRng::seed_from_u64(2);
-        let model = cbmk_cbkn_amn_model(&mut rng, 2, 2, 4, 4, 8);
-        let input = Tensor::<i32>::random_small(&mut rng, &[2, 2, 4, 4]);
         unit_test_op(model, &[input]);
     }
 }

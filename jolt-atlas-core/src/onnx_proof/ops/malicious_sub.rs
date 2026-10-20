@@ -11,13 +11,13 @@
 //! rejects the attack. Used exclusively by
 //! [`MaliciousONNXProof`](crate::onnx_proof::malicious_prover).
 
+use crate::compat::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+};
 use crate::{
     onnx_proof::{clamp_lookups::prove_clamp_lookup, ProofId, Prover},
     utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
 };
 use joltworks::{
     field::JoltField, poly::multilinear_polynomial::EvaluateMle,

@@ -1,12 +1,12 @@
+use crate::compat::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::Mul,
+};
 use crate::{
     impl_fused_rescale_proof_api,
     onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Mul,
 };
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -141,8 +141,8 @@ impl<F: JoltField> MulProver<F> {
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Mul operation")
         };
-        let left_operand = MultilinearPolynomial::from(left_operand.padded_next_power_of_two());
-        let right_operand = MultilinearPolynomial::from(right_operand.padded_next_power_of_two());
+        let left_operand = MultilinearPolynomial::from(left_operand.padded_pow2());
+        let right_operand = MultilinearPolynomial::from(right_operand.padded_pow2());
         Self {
             params,
             eq_r_node_output,
@@ -263,11 +263,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MulVerifier
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn mul_model(rng: &mut StdRng, T: usize) -> Model {
@@ -304,10 +304,10 @@ mod tests {
     fn saturating_mul_model(input_value: i32, const_value: i32, t: usize) -> (Model, Tensor<i32>) {
         let mut b = ModelBuilder::new();
         let i = b.input(vec![t]);
-        let c = b.constant(Tensor::new(Some(&vec![const_value; t]), &[t]).unwrap());
+        let c = b.constant(Tensor::from_slice(&vec![const_value; t], &[t]).unwrap());
         let res = b.mul(i, c);
         b.mark_output(res);
-        let input = Tensor::new(Some(&vec![input_value; t]), &[t]).unwrap();
+        let input = Tensor::from_slice(&vec![input_value; t], &[t]).unwrap();
         (b.build(), input)
     }
 

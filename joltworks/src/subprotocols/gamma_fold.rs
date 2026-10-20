@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::tensor::Tensor;
+use atlas_trace::Tensor;
 use common::parallel::par_enabled;
 use common::VirtualPolynomial;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -96,7 +96,7 @@ impl<F: JoltField> GammaFoldProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Self {
-        let tensor = MultilinearPolynomial::from(tensor_values.padded_next_power_of_two());
+        let tensor = MultilinearPolynomial::from(tensor_values.padded_pow2());
         let claim = tensor.dot_product(&weight_values);
         let weights = MultilinearPolynomial::from(weight_values);
         accumulator.append_virtual(

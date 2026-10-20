@@ -1,5 +1,5 @@
 //! Module for constructing malicious provers for ONNX proof experiments. Contains a variant of the main prover that generates proofs for tampered traces, as well as a variant of the sumcheck prover that allows the caller to control how openings are cached (for attack experiments).
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::{
         trace::{ModelExecutionIO, Trace},
         Model,
@@ -159,7 +159,7 @@ impl MaliciousONNXProof {
             .node_outputs
             .get_mut(&sub_node.idx)
             .expect("trace should contain output for Sub node");
-        output.inner.fill(0);
+        output.data_mut().fill(0);
     }
 
     /// Iterate over computation graph in reverse topological order.

@@ -1,14 +1,14 @@
-use crate::utils::{
-    dims::{coord_to_linear, linear_to_coord},
-    opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::{
         trace::{LayerData, Trace},
         ComputationGraph,
     },
     node::ComputationNode,
     ops::{Concat, Operator},
+};
+use crate::utils::{
+    dims::{coord_to_linear, linear_to_coord},
+    opening_access::{AccOpeningAccessor, Target},
 };
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
@@ -122,7 +122,7 @@ impl<F: JoltField> ConcatSumcheckParams<F> {
             .map(|input_node| input_node.output_dims.clone())
             .collect::<Vec<_>>();
         let output_raw_dims = computation_node.output_dims.clone();
-        let axis = normalize_axis(concat_op.axis, output_raw_dims.len());
+        let axis = concat_op.axis; // already normalized to a non-negative index
         validate_concat_shapes(
             &input_raw_dims
                 .iter()
@@ -241,7 +241,7 @@ impl<F: JoltField> ConcatSumcheckProver<F> {
             "Concat input shape count mismatch"
         );
 
-        let output_padded_len = output.padded_next_power_of_two().len();
+        let output_padded_len = output.padded_pow2().len();
         let max_input_domain_len = 1usize << params.max_input_num_vars;
         assert!(
             max_input_domain_len <= output_padded_len,
@@ -252,7 +252,7 @@ impl<F: JoltField> ConcatSumcheckProver<F> {
             .iter()
             .enumerate()
             .map(|(input_idx, input_tensor)| {
-                let input_padded = input_tensor.padded_next_power_of_two();
+                let input_padded = input_tensor.padded_pow2();
                 let input_num_vars = input_padded.len().log_2();
                 let extended_input = extend_input_to_max_domain(
                     input_padded.data(),
@@ -487,17 +487,6 @@ fn build_concat_selector<F: JoltField>(
     selector
 }
 
-/// Normalizes an ONNX-style axis (possibly negative) to a canonical `[0, rank)` axis.
-fn normalize_axis(axis: isize, rank: usize) -> usize {
-    let rank_i = rank as isize;
-    let normalized = if axis < 0 { axis + rank_i } else { axis };
-    assert!(
-        normalized >= 0 && normalized < rank_i,
-        "Concat axis {axis} out of range for rank {rank}"
-    );
-    normalized as usize
-}
-
 /// Validates concat shape rules.
 fn validate_concat_shapes(inputs_dims: &[&[usize]], out_dims: &[usize], axis: usize) {
     assert!(!inputs_dims.is_empty(), "Concat expects at least one input");
@@ -536,11 +525,11 @@ fn axis_offset(raw_input_dims: &[Vec<usize>], input_idx: usize, axis: usize) -> 
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn concat_model(input_shapes: Vec<Vec<usize>>, axis: isize) -> Model {

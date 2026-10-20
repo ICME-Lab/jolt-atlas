@@ -13,7 +13,7 @@ zk = []
 [dependencies]
 # Internal
 common.workspace = true
-atlas-onnx-tracer.workspace = true
+atlas-trace.workspace = true
 
 # Serialization
 serde.workspace = true

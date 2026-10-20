@@ -1,11 +1,11 @@
-use crate::{
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
-    utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Iff,
+};
+use crate::{
+    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -308,8 +308,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IffVerifier
 
 #[cfg(test)]
 mod tests {
+    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn iff_model(rng: &mut StdRng, T: usize) -> Model {

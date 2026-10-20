@@ -10,7 +10,7 @@
 //! - Normalizing multi-dimensional sum operations to 2D representations
 //! - Extracting and storing dimension information for efficient constraint generation
 
-use atlas_onnx_tracer::{model::Model, node::ComputationNode, ops::Operator};
+use crate::compat::{model::Model, node::ComputationNode, ops::Operator};
 use joltworks::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
 use rayon::prelude::*;
 
@@ -227,6 +227,15 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
     ),
     /* **************** rbmk,rbnk->bmn **************** */
     (
+        // atlas-onnx-import's 3-D batched form (RHS contraction-last):
+        // treated as rbmk,rbnk->bmn with r = 1.
+        "amk,ank->amn",
+        EinsumConfig {
+            equation: "rbmk,rbnk->bmn",
+            dims_extractor: extract_amk_ank_amn_dims,
+        },
+    ),
+    (
         "abmk,abnk->abmn",
         EinsumConfig {
             equation: "rbmk,rbnk->bmn",
@@ -283,10 +292,20 @@ fn extract_k_nk_n_dims(computation_node: &ComputationNode, model: &Model) -> Ein
     let [a_idx, b_idx] = computation_node.inputs[..] else {
         panic!("Expected exactly two inputs for k,nk->n operation")
     };
-    let _a_node = &model[a_idx];
+    let a_node = &model[a_idx];
     let b_node = &model[b_idx];
     let n = b_node.output_dims[0];
     let k = b_node.output_dims[1];
+    // The k,nk->n layout is strictly vector-matrix: it folds only the k axis,
+    // so a left operand with m > 1 rows would feed m*k coefficients into a
+    // log(k)-round sumcheck. Fail here, at dispatch, rather than deep inside
+    // the dot engine.
+    assert_eq!(
+        a_node.output_dims.iter().product::<usize>(),
+        k,
+        "mk,nk->mn is only provable with m == 1 (vector-matrix); got left dims {:?}",
+        a_node.output_dims
+    );
     EinsumDims::new(vec![k], vec![n, k], vec![n])
 }
 
@@ -387,6 +406,19 @@ fn extract_mbk_bkn_amn_dims(computation_node: &ComputationNode, model: &Model) -
     let bk = b * k;
 
     EinsumDims::new(vec![m, bk], vec![bk, n], vec![m, n])
+}
+
+fn extract_amk_ank_amn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
+    let [a_idx, b_idx] = computation_node.inputs[..] else {
+        panic!("Expected exactly two inputs for amk,ank->amn operation")
+    };
+    let a_node = &model[a_idx];
+    let b_node = &model[b_idx];
+    let a = a_node.output_dims[0];
+    let m = a_node.output_dims[1];
+    let k = a_node.output_dims[2];
+    let n = b_node.output_dims[1];
+    EinsumDims::new(vec![a, m, k], vec![a, n, k], vec![a, m, n])
 }
 
 fn extract_abmk_abnk_abmn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {

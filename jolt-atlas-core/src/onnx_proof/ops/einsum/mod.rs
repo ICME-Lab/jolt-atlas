@@ -1,5 +1,10 @@
 use std::sync::Arc;
 
+use crate::compat::{
+    model::{trace::Trace, Model},
+    node::ComputationNode,
+    ops::{Einsum, Operator},
+};
 use crate::{
     onnx_proof::{
         clamp_lookups::is_scalar,
@@ -19,11 +24,6 @@ use crate::{
         ProofId, ProofType,
     },
     utils::dims::{lookup_einsum_config, EinsumDims},
-};
-use atlas_onnx_tracer::{
-    model::{trace::Trace, Model},
-    node::ComputationNode,
-    ops::{Einsum, Operator},
 };
 use common::CommittedPoly;
 use joltworks::{
@@ -73,7 +73,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let fused = fused_rebase::fuses_rebase(&node.operator);
+        let fused = fused_rebase::fuses_rebase(node);
 
         // The fused einsum proves `Σ_k L·R = rescaled·2^S + R` (division) and
         // `output = SatClamp(rescaled)` (clamp), both handled by the shared
@@ -120,7 +120,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        let fused = fused_rebase::fuses_rebase(&node.operator);
+        let fused = fused_rebase::fuses_rebase(node);
 
         // Mirror the prover: remainder advice + clamp, then the matmul, then the
         // remainder range-check (or the scalar clear checks).
@@ -156,11 +156,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     }
 }
 
-/// Returns the raw ONNX einsum equation for a computation node, panicking if the
-/// node is not an Einsum operator.
-fn einsum_equation(computation_node: &ComputationNode) -> &str {
+/// Returns the canonical einsum equation of a node, panicking if the node is
+/// not an Einsum operator.
+fn einsum_equation(computation_node: &ComputationNode) -> String {
     match &computation_node.operator {
-        Operator::Einsum(Einsum { equation, .. }) => equation.as_str(),
+        Operator::Einsum(Einsum { equation, .. }) => equation.to_string(),
         _ => panic!("Unexpected operator"),
     }
 }
@@ -199,7 +199,7 @@ impl EinsumProver {
         computation_node: ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Box<dyn SumcheckInstanceProver<F, T>> {
-        let config = lookup_einsum_config(einsum_equation(&computation_node));
+        let config = lookup_einsum_config(&einsum_equation(&computation_node));
         let einsum_dims = (config.dims_extractor)(&computation_node, model);
         if let Some(layout) = einsum_layout::<F>(config.equation, &computation_node, &einsum_dims) {
             let params = EinsumDotParams::new(computation_node, layout, accumulator);
@@ -225,7 +225,7 @@ impl EinsumVerifier {
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Box<dyn SumcheckInstanceVerifier<F, T>> {
-        let config = lookup_einsum_config(einsum_equation(&computation_node));
+        let config = lookup_einsum_config(&einsum_equation(&computation_node));
         let einsum_dims = (config.dims_extractor)(&computation_node, model);
         if let Some(layout) = einsum_layout::<F>(config.equation, &computation_node, &einsum_dims) {
             return Box::new(EinsumDotVerifier::new(

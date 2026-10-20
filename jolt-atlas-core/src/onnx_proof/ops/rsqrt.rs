@@ -1,3 +1,8 @@
+use crate::compat::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::{Operator, Rsqrt},
+};
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
@@ -11,11 +16,6 @@ use crate::{
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{Operator, Rsqrt},
 };
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
@@ -52,10 +52,11 @@ use joltworks::{
 /// The fused kernel computes `output = ⌊√⌊S³ / x̂⌋⌋`, so `S³` is the dividend that
 /// both the division and square-root relations are built around.
 pub fn rsqrt_dividend(node: &ComputationNode) -> i64 {
-    let Operator::Rsqrt(op) = &node.operator else {
-        panic!("rsqrt_dividend called on a non-Rsqrt node");
-    };
-    1i64 << (3 * op.scale)
+    assert!(
+        matches!(node.operator, Operator::Rsqrt(_)),
+        "rsqrt_dividend called on a non-Rsqrt node"
+    );
+    1i64 << (3 * node.scale)
 }
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
@@ -598,11 +599,11 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use rand::{rngs::StdRng, SeedableRng};
 
     /// Upper bound on the random quantized inputs; positive so the division is well-defined.

@@ -15,6 +15,15 @@
 //! different types of committed polynomials (e.g., node outputs, division quotients, range check
 //! addresses, etc.).
 
+use crate::compat::{
+    model::{trace::Trace, Model},
+    node::ComputationNode,
+    ops::{
+        softmax::{generate_exp_lut_decomposed, softmax_z, SoftmaxLastAxisTrace},
+        Operator,
+    },
+    tensor::Tensor,
+};
 use crate::{
     onnx_proof::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits},
@@ -27,16 +36,6 @@ use crate::{
         },
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
-};
-use atlas_onnx_tracer::{
-    model::{trace::Trace, Model},
-    node::ComputationNode,
-    ops::{
-        softmax::{generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z},
-        Operator, SoftmaxLastAxis,
-    },
-    tensor::{ops::nonlinearities, Tensor},
-    utils::quantize::scale_to_multiplier,
 };
 use common::{
     consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, TRIG_PERIOD_MODULUS, XLEN},
@@ -105,7 +104,8 @@ fn build_activation_small_rad_witness<F: JoltField>(
     input: &Tensor<i32>,
     d: usize,
 ) -> MultilinearPolynomial<F> {
-    let clamped = nonlinearities::clamp(input, ACTIVATION_BOUND);
+    let bound = 1i32 << ACTIVATION_BOUND;
+    let clamped = input.map(|x| x.clamp(-bound, bound - 1));
     let lookup_indices: Vec<usize> = clamped
         .par_iter()
         .with_min_len(par_enabled())
@@ -184,7 +184,7 @@ pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::T
                     build_one_hot_rad_witness(clamp_bits.as_ref().unwrap(), *d, node.sat_clamp_bits)
                 }
                 CommittedPoly::RescaleRemainderRaD(_, d) => {
-                    let bits = rebase_bits(&node.operator)
+                    let bits = rebase_bits(node)
                         .expect("RescaleRemainderRaD requested for a non-rescaling operator");
                     if remainder_indices.is_none() {
                         let ints = try_rebase_intermediates(node, trace)
@@ -274,7 +274,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
-                    .map(|tensor| tensor.padded_next_power_of_two())
+                    .map(|tensor| tensor.padded_pow2())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
                 let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
@@ -286,7 +286,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
-                    .map(|tensor| tensor.padded_next_power_of_two())
+                    .map(|tensor| tensor.padded_pow2())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
                 let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
@@ -298,7 +298,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
-                    .map(|tensor| tensor.padded_next_power_of_two())
+                    .map(|tensor| tensor.padded_pow2())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
                 let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
@@ -435,7 +435,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     panic!("Expected GatherLarge operator for GatherRaD committed polynomial");
                 };
                 let layer_data = Trace::layer_data(trace, computation_node);
-                let indexes = layer_data.operands[1].padded_next_power_of_two();
+                let indexes = layer_data.operands[1].padded_pow2();
                 let lookup_indices: Vec<usize> = indexes
                     .data()
                     .par_iter()
@@ -559,9 +559,9 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .expect("softmax node must have at least one output dimension");
                 let st = softmax_last_axis_full_trace(node, trace);
                 let z = softmax_z(&st.x, &st.max_k, last_dim);
-                let operand = Tensor::new(Some(&z), &[z.len()])
+                let operand = Tensor::from_slice(&z, &[z.len()])
                     .expect("softmax_z tensor construction")
-                    .padded_next_power_of_two();
+                    .padded_pow2();
                 let lookup_indices = compute_lookup_indices_from_operands(&[&operand], false);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
@@ -570,7 +570,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 // to the node-output cycle domain . Shared by einsum, Mul,
                 // Square, Cube via the per-operator re-execution dispatch.
                 let node = &model.graph.nodes[node_idx];
-                let bits = crate::onnx_proof::fused_rebase::rebase_bits(&node.operator)
+                let bits = crate::onnx_proof::fused_rebase::rebase_bits(node)
                     .expect("RescaleRemainderRaD requested for a non-rescaling operator");
                 let r = crate::onnx_proof::fused_rebase::rebase_remainder(node, trace);
                 let lookup_indices: Vec<usize> = r.data().iter().map(|&v| v as usize).collect();
@@ -580,30 +580,23 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
     }
 }
 
-/// Extracts the scale from a `SoftmaxLastAxis` node.
+/// The softmax node's log2 scale (the model's global scale).
 fn softmax_op_scale(node: &ComputationNode) -> i32 {
-    match &node.operator {
-        Operator::SoftmaxLastAxis(SoftmaxLastAxis { scale }) => *scale,
-        other => panic!(
-            "Expected SoftmaxLastAxis at node {}, got {other:?}",
-            node.idx
-        ),
-    }
+    assert!(
+        matches!(node.operator, Operator::SoftmaxLastAxis(_)),
+        "Expected SoftmaxLastAxis at node {}",
+        node.idx
+    );
+    node.scale
 }
 
-/// Re-runs the decomposed softmax trace for a `SoftmaxLastAxis` node.
-///
-/// Returns the full [`SoftmaxLastAxisTrace`] from which the individual lookup
-/// indices (R, r_exp, z_hi, z_lo) can be extracted.
-fn softmax_last_axis_full_trace(
-    node: &ComputationNode,
-    trace: &Trace,
-) -> atlas_onnx_tracer::ops::softmax::SoftmaxLastAxisTrace {
-    let scale = softmax_op_scale(node);
-    let layer_data = Trace::layer_data(trace, node);
-    let input = &layer_data.operands[0];
-    let multiplier = scale_to_multiplier(scale) as i32;
-    softmax_last_axis_decomposed(input, multiplier).1
+/// The softmax node's full witness, captured in the trace at execution time
+/// (the old pipeline re-ran the decomposed softmax here).
+fn softmax_last_axis_full_trace(node: &ComputationNode, trace: &Trace) -> SoftmaxLastAxisTrace {
+    let w = trace
+        .softmax_witness(node.idx)
+        .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx));
+    SoftmaxLastAxisTrace::from_witness(w)
 }
 
 /// Build a one-hot RaD witness for an identity range-check or Shout ra

@@ -5,15 +5,15 @@
 //! Sumcheck round polynomials are Pedersen-committed instead of sent in the clear,
 //! and a BlindFold proof (Nova folding + Spartan) verifies constraint consistency.
 
-use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
-use ark_bn254::{Bn254, Fr};
-use ark_std::{One, Zero};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::trace::{ModelExecutionIO, Trace},
     ops::Operator,
     tensor::Tensor,
     utils::quantize::scale_to_multiplier,
 };
+use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
+use ark_bn254::{Bn254, Fr};
+use ark_std::{One, Zero};
 use common::VirtualPoly;
 use joltworks::{
     curve::Bn254Curve,
@@ -189,13 +189,13 @@ fn run_zk_batched_sumcheck(
 
 /// Run ZK eval reduction for a node: commit h polynomial via Pedersen.
 fn prove_zk_eval_reduction(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &mut Prover<F, T>,
     pedersen_gens: &PedersenGenerators<C>,
     eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
     eval_reduction_h_commitments: &mut BTreeMap<usize, joltworks::curve::Bn254G1>,
 ) {
-    use atlas_onnx_tracer::model::trace::{LayerData, Trace};
+    use crate::compat::model::trace::{LayerData, Trace};
     use joltworks::subprotocols::evaluation_reduction::EvalReductionProtocol;
 
     let node_idx = node.idx;
@@ -215,7 +215,7 @@ fn prove_zk_eval_reduction(
         operands: _,
         output,
     } = Trace::layer_data(&prover.trace, node);
-    let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+    let output_mle = MultilinearPolynomial::from(output.padded_pow2());
 
     let (proof, reduced, h_com) = EvalReductionProtocol::prove_zk::<F, C, _>(
         &openings,
@@ -237,7 +237,7 @@ fn prove_zk_eval_reduction(
 
 /// Verify ZK eval reduction for a node: absorb h commitment, skip claim checks.
 fn verify_zk_eval_reduction(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -288,7 +288,7 @@ fn verify_zk_sumcheck_instances(
 /// written against — same treatment as Erf/Sigmoid/Tanh's zk stubs after their proving-method
 /// swap). Not implemented for the new design; only touch if the user asks for real zk support.
 fn verify_softmax_zk(
-    _node: &atlas_onnx_tracer::node::ComputationNode,
+    _node: &crate::compat::node::ComputationNode,
     _pp: &AtlasVerifierPreprocessing<F, PCS>,
     _bundle: &ZkProofBundle,
     _accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
@@ -300,8 +300,8 @@ fn verify_softmax_zk(
 
 /// Verify GatherLarge ZK proof.
 fn verify_gather_large_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    model: &atlas_onnx_tracer::model::Model,
+    node: &crate::compat::node::ComputationNode,
+    model: &crate::compat::model::Model,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -336,8 +336,8 @@ fn verify_gather_large_zk(
 
 /// Verify GatherSmall ZK proof.
 fn verify_gather_small_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    model: &atlas_onnx_tracer::model::Model,
+    node: &crate::compat::node::ComputationNode,
+    model: &crate::compat::model::Model,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -387,7 +387,7 @@ fn verify_gather_small_zk(
 
 /// Verify Relu ZK proof: default flow mirroring prove_relu_zk.
 fn verify_relu_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -429,7 +429,7 @@ fn verify_relu_zk(
 
 /// Verify Rsqrt ZK proof: custom flow mirroring prove_rsqrt_zk.
 fn verify_rsqrt_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -505,7 +505,7 @@ fn verify_rsqrt_zk(
 
 /// Verify Div operator ZK proof: custom flow mirroring prove_div_zk.
 fn verify_div_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -598,8 +598,8 @@ fn verify_div_zk(
 /// Erf/Sigmoid/Tanh verification migrated to the `activation_clamped` flow; see the
 /// matching stub on [`prove_neural_teleport_zk`] for why this isn't implemented.
 fn verify_neural_teleport_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    _model: &atlas_onnx_tracer::model::Model,
+    node: &crate::compat::node::ComputationNode,
+    _model: &crate::compat::model::Model,
     _bundle: &ZkProofBundle,
     _accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     _transcript: &mut T,
@@ -624,8 +624,8 @@ fn verify_neural_teleport_zk(
 /// should stay hidden behind Pedersen commitments under BlindFold, not be compared in the
 /// clear). Needs a proper zk-safe redesign before this can be un-broken; not attempted here.
 fn verify_cos_sin_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
-    model: &atlas_onnx_tracer::model::Model,
+    node: &crate::compat::node::ComputationNode,
+    model: &crate::compat::model::Model,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -732,7 +732,7 @@ fn verify_cos_sin_zk(
 /// Verify the fused-rescaling pre-stages (mirror of `prove_fused_rebase_pre_zk`):
 /// remainder advice, clamp read-raf lookup, clamp one-hot batch.
 fn verify_fused_rebase_pre_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -792,7 +792,7 @@ fn verify_fused_rebase_pre_zk(
 /// Verify the fused-rescaling post-stages (mirror of `prove_fused_rebase_post_zk`):
 /// remainder identity range check, remainder one-hot batch.
 fn verify_fused_rebase_post_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     bundle: &ZkProofBundle,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -803,7 +803,7 @@ fn verify_fused_rebase_post_zk(
     };
     use joltworks::subprotocols::identity_range_check::identity_rangecheck_verifier;
 
-    let bits = rebase_bits(&node.operator).expect("fused op");
+    let bits = rebase_bits(node).expect("fused op");
 
     // Remainder identity range check.
     {
@@ -843,9 +843,9 @@ fn verify_fused_rebase_post_zk(
 /// compile issues on this branch, so this is left as a stub rather than reimplemented).
 #[expect(clippy::too_many_arguments)]
 fn prove_neural_teleport_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     _prover: &mut Prover<F, T>,
-    _model: &atlas_onnx_tracer::model::Model,
+    _model: &crate::compat::model::Model,
     _pedersen_gens: &PedersenGenerators<C>,
     _blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
     _stage_configs: &mut Vec<StageConfig>,
@@ -868,9 +868,9 @@ fn prove_neural_teleport_zk(
 /// since it needs zk-safe (not cleartext) claim handling. Not attempted here.
 #[expect(clippy::too_many_arguments)]
 fn prove_cos_sin_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &mut Prover<F, T>,
-    model: &atlas_onnx_tracer::model::Model,
+    model: &crate::compat::model::Model,
     pedersen_gens: &PedersenGenerators<C>,
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
     stage_configs: &mut Vec<StageConfig>,
@@ -1027,7 +1027,7 @@ fn prove_cos_sin_zk(
 /// swap). Not implemented for the new design; only touch if the user asks for real zk support.
 #[expect(clippy::too_many_arguments)]
 fn prove_softmax_zk(
-    _node: &atlas_onnx_tracer::node::ComputationNode,
+    _node: &crate::compat::node::ComputationNode,
     _prover: &mut Prover<F, T>,
     _pedersen_gens: &PedersenGenerators<C>,
     _blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
@@ -1044,9 +1044,9 @@ fn prove_softmax_zk(
 /// Prove GatherLarge with ZK: default flow (eval reduction, execution + shout one-hot).
 #[expect(clippy::too_many_arguments)]
 fn prove_gather_large_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &mut Prover<F, T>,
-    model: &atlas_onnx_tracer::model::Model,
+    model: &crate::compat::model::Model,
     pedersen_gens: &PedersenGenerators<C>,
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
     stage_configs: &mut Vec<StageConfig>,
@@ -1109,9 +1109,9 @@ fn prove_gather_large_zk(
 /// Prove GatherSmall with ZK: default flow (eval reduction, execution, HB+bool batch, HW).
 #[expect(clippy::too_many_arguments)]
 fn prove_gather_small_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &mut Prover<F, T>,
-    model: &atlas_onnx_tracer::model::Model,
+    model: &crate::compat::model::Model,
     pedersen_gens: &PedersenGenerators<C>,
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
     stage_configs: &mut Vec<StageConfig>,
@@ -1183,7 +1183,7 @@ fn prove_gather_small_zk(
 /// Prove Relu with ZK: default flow (eval reduction, then execution + one-hot).
 #[expect(clippy::too_many_arguments)]
 fn prove_relu_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &mut Prover<F, T>,
     pedersen_gens: &PedersenGenerators<C>,
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
@@ -1253,13 +1253,13 @@ fn prove_relu_zk(
 /// claims. Binding them with a real `InputClaimConstraint` is future work
 /// alongside the other baked-claim bindings.
 fn prove_fused_rebase_pre_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &mut Prover<F, T>,
     pedersen_gens: &PedersenGenerators<C>,
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
     stage_configs: &mut Vec<StageConfig>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
-) -> atlas_onnx_tracer::tensor::Tensor<i32> {
+) -> crate::compat::tensor::Tensor<i32> {
     use crate::onnx_proof::{
         clamp_lookups::{is_scalar, ClampTable, SaturatingAccClampOperands, CLAMP_LOG_K},
         op_lookups::{OpLookupEncoding, OpLookupProvider},
@@ -1328,20 +1328,20 @@ fn prove_fused_rebase_pre_zk(
 /// *after* the operator's arithmetic sumcheck. `remainder` is the padded
 /// tensor returned by `prove_fused_rebase_pre_zk`.
 fn prove_fused_rebase_post_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &mut Prover<F, T>,
     pedersen_gens: &PedersenGenerators<C>,
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
     stage_configs: &mut Vec<StageConfig>,
     zk_sumcheck_proofs: &mut Vec<NodeZkProof>,
-    remainder: &atlas_onnx_tracer::tensor::Tensor<i32>,
+    remainder: &crate::compat::tensor::Tensor<i32>,
 ) {
     use crate::onnx_proof::fused_rebase::{
         rebase_bits, remainder_lookup_bits, RescaleRemainderRCProvider, RescaleRemainderRaEncoding,
     };
     use joltworks::subprotocols::identity_range_check::identity_rangecheck_prover;
 
-    let bits = rebase_bits(&node.operator).expect("fused op");
+    let bits = rebase_bits(node).expect("fused op");
     let lookup_bits = remainder_lookup_bits(remainder, bits);
     let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
 
@@ -1378,7 +1378,7 @@ fn prove_fused_rebase_post_zk(
 /// Prove Rsqrt with ZK: custom flow (execution from transcript, eval reduction, range checks).
 #[expect(clippy::too_many_arguments)]
 fn prove_rsqrt_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &mut Prover<F, T>,
     pedersen_gens: &PedersenGenerators<C>,
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
@@ -1477,7 +1477,7 @@ fn prove_rsqrt_zk(
 /// Prove Div operator with ZK: custom flow with execution sumcheck before eval reduction.
 #[expect(clippy::too_many_arguments)]
 fn prove_div_zk(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &mut Prover<F, T>,
     pedersen_gens: &PedersenGenerators<C>,
     blindfold_accumulator: &mut joltworks::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
@@ -1889,7 +1889,7 @@ pub fn prove_zk(
                 // clamp stages before the arithmetic sumcheck (its input
                 // claim reads the `ClampAcc`/`RescaleRemainder` advices),
                 // remainder range-check stages after.
-                let fused = crate::onnx_proof::fused_rebase::fuses_rebase(&node.operator);
+                let fused = crate::onnx_proof::fused_rebase::fuses_rebase(node);
                 let fused_remainder = fused.then(|| {
                     prove_fused_rebase_pre_zk(
                         node,
@@ -2238,8 +2238,8 @@ pub fn prove_zk(
             }
             let node = &model[node_idx];
             let expected_value: F = match &node.operator {
-                atlas_onnx_tracer::ops::Operator::Constant(c) => c.0.evaluate_mle(&opening_point.r),
-                atlas_onnx_tracer::ops::Operator::Input(_) => {
+                crate::compat::ops::Operator::Constant(c) => c.0.evaluate_mle(&opening_point.r),
+                crate::compat::ops::Operator::Input(_) => {
                     let input_pos = io
                         .input_indices
                         .iter()
@@ -2368,8 +2368,7 @@ pub fn prove_zk(
     for (_, node) in pp.model().nodes().iter() {
         if matches!(
             node.operator,
-            atlas_onnx_tracer::ops::Operator::Constant(_)
-                | atlas_onnx_tracer::ops::Operator::Input(_)
+            crate::compat::ops::Operator::Constant(_) | crate::compat::ops::Operator::Input(_)
         ) {
             if let Some(reduced) = prover.accumulator.reduced_evaluations.get(&node.idx) {
                 public_node_reduced_claims.insert(node.idx, reduced.claim);
@@ -2518,8 +2517,7 @@ fn verify_zk_with_pcs_capture_and_extract(
     use joltworks::field::IntoOpening;
     let r_node_output_field: Vec<F> = r_node_output.clone().into_opening();
     let expected_output_claim =
-        MultilinearPolynomial::from(io.outputs[0].padded_next_power_of_two())
-            .evaluate(&r_node_output_field);
+        MultilinearPolynomial::from(io.outputs[0].padded_pow2()).evaluate(&r_node_output_field);
 
     if expected_output_claim != bundle.output_claim {
         return Err(ProofVerifyError::InvalidOpeningProof(
@@ -2650,7 +2648,7 @@ fn verify_zk_with_pcs_capture_and_extract(
                     let r_field: Vec<F> = reduced.r.clone();
                     let expected_claim = match &node.operator {
                         Operator::Constant(c) => {
-                            MultilinearPolynomial::from(c.0.clone().padded_next_power_of_two())
+                            MultilinearPolynomial::from(c.0.clone().padded_pow2())
                                 .evaluate(&r_field)
                         }
                         Operator::Input(_) => {
@@ -2664,10 +2662,8 @@ fn verify_zk_with_pcs_capture_and_extract(
                                         node.idx
                                     ))
                                 })?;
-                            MultilinearPolynomial::from(
-                                io.inputs[input_pos].padded_next_power_of_two(),
-                            )
-                            .evaluate(&r_field)
+                            MultilinearPolynomial::from(io.inputs[input_pos].padded_pow2())
+                                .evaluate(&r_field)
                         }
                         _ => unreachable!(),
                     };
@@ -2757,7 +2753,7 @@ fn verify_zk_with_pcs_capture_and_extract(
                 verify_zk_eval_reduction(node, bundle, &mut accumulator, &mut transcript)?;
 
                 // Mirror of the prover-side fused-rescale staging.
-                let fused = crate::onnx_proof::fused_rebase::fuses_rebase(&node.operator);
+                let fused = crate::onnx_proof::fused_rebase::fuses_rebase(node);
                 if fused {
                     verify_fused_rebase_pre_zk(
                         node,
@@ -3081,9 +3077,9 @@ fn verify_zk_with_pcs_capture_and_extract(
 /// Create the ZK sumcheck prover instance for a node.
 /// Returns `None` for operators with no sumcheck (Input, Identity, etc.).
 fn create_prover_instance(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     prover: &Prover<F, T>,
-    model: &atlas_onnx_tracer::model::Model,
+    model: &crate::compat::model::Model,
 ) -> Option<Box<dyn SumcheckInstanceProver<F, T>>> {
     match &node.operator {
         Operator::Square(_) => {
@@ -3191,9 +3187,9 @@ fn create_prover_instance(
 
 /// Create verifier sumcheck instances for a node (for IOP transcript replay).
 fn create_verifier_instances(
-    node: &atlas_onnx_tracer::node::ComputationNode,
+    node: &crate::compat::node::ComputationNode,
     accumulator: &mut joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
-    model: &atlas_onnx_tracer::model::Model,
+    model: &crate::compat::model::Model,
     transcript: &mut T,
 ) -> Vec<Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>> {
     match &node.operator {

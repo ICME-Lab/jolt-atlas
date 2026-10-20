@@ -20,16 +20,16 @@
 //! `64 / log_k_chunk` committed chunks ([`CommittedPoly::ClampRaD`]).
 
 use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupProvider};
-use crate::onnx_proof::{
-    clamp_split::NodeSplit,
-    deferred_lookups::{ProverLookupJob, VerifierLookupJob},
-    ProofId, Prover, Verifier,
-};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::{sat_binop_intermediate, sum::sum_axes_i64, Operator},
     tensor::Tensor,
+};
+use crate::onnx_proof::{
+    clamp_split::NodeSplit,
+    deferred_lookups::{ProverLookupJob, VerifierLookupJob},
+    ProofId, Prover, Verifier,
 };
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -49,7 +49,7 @@ use rayon::prelude::*;
 
 /// Widest address of the saturating-clamp lookup table (an i64 accumulation).
 /// Individual nodes use `node.sat_clamp_bits ∈ {40, 48, 56, 64}` (see
-/// `atlas_onnx_tracer::model::clamp_width`); this is the default / upper bound.
+/// `crate::compat::model::clamp_width`); this is the default / upper bound.
 pub const CLAMP_LOG_K: usize = 64;
 
 /// Whether `node`'s (padded) output is a single element (`log_T = 0`).
@@ -100,7 +100,7 @@ pub(crate) fn acc_opening_id(node_idx: usize) -> OpeningId {
 pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
     // Fused rescale ops: the trace already holds the pre-clamp quotient.
     if let Some(cached) = trace.fused_intermediates(node.idx) {
-        return cached.quotient.padded_next_power_of_two();
+        return cached.quotient.padded_pow2();
     }
     let LayerData { operands, .. } = Trace::layer_data(trace, node);
     let raw = match &node.operator {
@@ -120,22 +120,15 @@ pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tenso
                     operands.len()
                 )
             };
-            sum_axes_i64(operand, &s.axes).expect("clamp lookup: sum_axes_i64")
+            sum_axes_i64(operand, &s.axes)
         }
-        // Einsum / Mul / Square / Cube: the pre-clamp value is the floor-rebased
-        // accumulation `rescaled = acc >> S` . The remainder of the
-        // division is range-checked separately (see [`super::fused_rebase`]);
-        // here we only discharge the saturating clamp `output = SatClamp(rescaled)`.
-        Operator::Einsum(op) => atlas_onnx_tracer::ops::einsum::einsum_intermediate(op, &operands),
-        Operator::Mul(op) => atlas_onnx_tracer::ops::mul::mul_intermediate(op, &operands),
-        Operator::Square(op) => atlas_onnx_tracer::ops::square::square_intermediate(op, &operands),
-        Operator::Cube(op) => atlas_onnx_tracer::ops::cube::cube_intermediate(op, &operands),
-        Operator::MeanOfSquares(op) => {
-            atlas_onnx_tracer::ops::mean_of_squares::mos_intermediate(op, &operands)
-        }
-        other => panic!("clamp lookup: unsupported operator {other:?}"),
+        // Einsum / Mul / Square / Cube / MeanOfSquares: the pre-clamp value
+        // is always captured in the trace (handled by the cache hit above).
+        other => panic!(
+            "clamp lookup: unsupported operator {other} (fused ops must carry trace intermediates)"
+        ),
     };
-    raw.padded_next_power_of_two()
+    raw.padded_pow2()
 }
 
 /// Append the accumulation (`ClampAcc`) opening at the node output point `r`,
@@ -249,7 +242,7 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
 
 /// Clamp lookup indices: each i64 accumulation value's low `bits` bits (its
 /// two's-complement encoding at the node's clamp width — see
-/// `atlas_onnx_tracer::model::clamp_width`), the address into
+/// `crate::compat::model::clamp_width`), the address into
 /// [`SaturationTable`]. Shared with `witness.rs`'s `ClampRaD` witness generation.
 pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>, bits: usize) -> Vec<LookupBits> {
     intermediate
@@ -291,9 +284,7 @@ pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
         // Public unsaturated output: the verifier checks `ClampAcc == out`.
         return Vec::new();
     }
-    let output = Trace::layer_data(&prover.trace, node)
-        .output
-        .padded_next_power_of_two();
+    let output = Trace::layer_data(&prover.trace, node).output.padded_pow2();
     let split = NodeSplit::new(witness.data(), output.data());
     prover.deferred.push(ProverLookupJob::Clamp {
         node: node.clone(),

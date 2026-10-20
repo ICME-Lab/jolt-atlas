@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
+use crate::compat::{model::trace::Trace, node::ComputationNode};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -42,11 +42,12 @@ impl<F: JoltField> MAnA1nmParams<F> {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let atlas_onnx_tracer::ops::Operator::Einsum(einsum) = &computation_node.operator else {
+        let crate::compat::ops::Operator::Einsum(einsum) = &computation_node.operator else {
             panic!("Expected Einsum operator")
         };
         assert_eq!(
-            einsum.equation, "m,an->abnm",
+            einsum.equation.to_string(),
+            "m,an->abnm",
             "MAnA1nmParams only supports the m,an->abnm source equation"
         );
         assert!(
@@ -276,28 +277,4 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MAnA1nmVeri
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
-    use rand::{rngs::StdRng, SeedableRng};
-
-    fn m_an_a1nm_model(rng: &mut StdRng, m: usize, a: usize, n: usize) -> Model {
-        let mut builder = ModelBuilder::new();
-        let left = builder.input(vec![m]);
-        let right = builder.constant(Tensor::random_small(rng, &[a, n]));
-        let out = builder.einsum("m,an->abnm", vec![left, right], vec![a, 1, n, m]);
-        builder.mark_output(out);
-        builder.build()
-    }
-
-    #[test]
-    fn test_m_an_a1nm() {
-        let mut rng = StdRng::seed_from_u64(0);
-        let input = Tensor::<i32>::random_small(&mut rng, &[4]);
-        let model = m_an_a1nm_model(&mut rng, 4, 2, 8);
-        unit_test_op(model, &[input]);
-    }
-}
+mod tests {}

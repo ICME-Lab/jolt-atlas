@@ -1,8 +1,4 @@
-use crate::{
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
-    utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::{
         trace::{LayerData, Trace},
         ComputationGraph,
@@ -10,6 +6,10 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
     ops::Operator,
     tensor::Tensor,
+};
+use crate::{
+    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use common::parallel::par_enabled;
 use common::VirtualPoly;
@@ -188,7 +188,7 @@ impl<F: JoltField> GatherProver<F> {
         let (r_index, r_word) = params.r_node_output.r.split_at(params.lookup_vars);
         assert_eq!(r_word.len(), word_dim.log_2());
 
-        let padded_indexes = indexes.padded_next_power_of_two();
+        let padded_indexes = indexes.padded_pow2();
         let index_claim = padded_indexes.evaluate_mle(r_index);
 
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
@@ -434,10 +434,8 @@ pub(crate) fn fold_dictionary<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
+    use crate::compat::{model::test::ModelBuilder, model::Model, ops::Operator, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::test::ModelBuilder, model::Model, ops::Operator, tensor::Tensor,
-    };
     use rand::{rngs::StdRng, SeedableRng};
 
     fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usize) -> Model {

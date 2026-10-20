@@ -33,6 +33,11 @@
 
 use std::array;
 
+use crate::compat::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::{mean_of_squares::mos_divisor, MeanOfSquares, Operator},
+};
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
@@ -46,11 +51,6 @@ use crate::{
         ProofId, ProofType,
     },
     utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{mean_of_squares::mos_divisor, MeanOfSquares, Operator},
 };
 use common::{consts::XLEN, parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -160,7 +160,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
             verify_scalar_clamp(rescaled_claim, output_claim, "MeanOfSquares")?;
 
             let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder).1;
-            verify_scalar_remainder(r_claim, mos_divisor(self))?;
+            verify_scalar_remainder(r_claim, mos_divisor(self, node.scale))?;
         } else {
             let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node);
             let rc_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
@@ -239,7 +239,7 @@ impl<F: JoltField> MeanOfSquaresReductionParams<F> {
             "mean-of-squares reduction requires a power-of-two padded reduced count, got {}",
             op.padded_count
         );
-        let divisor = mos_divisor(op);
+        let divisor = mos_divisor(op, computation_node.scale);
         let log_reduced = op.padded_count.log_2();
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_node_output = accessor.get_reduced_opening().0;
@@ -295,7 +295,7 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
         let [operand] = operands[..] else {
             panic!("Expected one operand for MeanOfSquares operation")
         };
-        let operand = MultilinearPolynomial::from(operand.padded_next_power_of_two());
+        let operand = MultilinearPolynomial::from(operand.padded_pow2());
         assert_eq!(
             operand.get_num_vars(),
             params.log_retained + params.log_reduced,
@@ -423,11 +423,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use rand::{rngs::StdRng, SeedableRng};
 
     /// `[m, n]` input, reduce the last axis (size `n`, a power of two) → `[m, 1]`.
@@ -476,7 +476,7 @@ mod tests {
     fn test_mean_of_squares_saturating_clamp() {
         let (m, n) = (1 << 1, 1 << 4);
         let big = (1 << 20) + 1;
-        let input = Tensor::new(Some(&vec![big; m * n]), &[m, n]).unwrap();
+        let input = Tensor::from_slice(&vec![big; m * n], &[m, n]).unwrap();
         unit_test_op(mos_model(m, n), &[input]);
     }
 }

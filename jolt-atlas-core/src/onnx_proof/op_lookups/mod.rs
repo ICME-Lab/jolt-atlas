@@ -5,13 +5,13 @@
 //! verifies correct reads from lookup tables and combines multiple claims using
 //! gamma batching for efficiency.
 
-use crate::utils::compute_lookup_indices_from_operands;
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Operator,
     tensor::Tensor,
 };
+use crate::utils::compute_lookup_indices_from_operands;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use joltworks::{
     config::OneHotParams,
@@ -198,7 +198,7 @@ impl LookupOperandsTrait for DefaultLookupOperands {
             output: _,
             operands,
         } = Trace::layer_data(trace, node);
-        operands[0].padded_next_power_of_two().map(|v| v as i64)
+        operands[0].padded_pow2().map(|v| v as i64)
     }
 
     fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {

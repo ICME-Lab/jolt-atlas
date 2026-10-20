@@ -8,14 +8,14 @@ use super::{
     types::{Claims, ProofId, ProverDebugInfo},
     AtlasSharedPreprocessing, ONNXProof, ReducedOpeningProof,
 };
-use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::{
         trace::{LayerData, ModelExecutionIO, Trace},
         Model,
     },
     node::ComputationNode,
 };
+use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
 use common::{parallel::ParallelFlagGuard, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,

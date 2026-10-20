@@ -1,5 +1,5 @@
+use crate::compat::node::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPoly;
 use joltworks::{
     field::JoltField,

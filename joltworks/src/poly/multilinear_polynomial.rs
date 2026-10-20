@@ -6,7 +6,6 @@ use crate::{
 use allocative::Allocative;
 use ark_ff::biginteger::S128;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Valid};
-use atlas_onnx_tracer::tensor::Tensor;
 use common::parallel::par_enabled;
 use rayon::prelude::*;
 use strum_macros::EnumIter;
@@ -526,14 +525,7 @@ impl<T: SmallScalar> EvaluateMle for [T] {
     }
 }
 
-/// For tensors, the MLE is over the power-of-two padded data. When the tensor
-/// is already padded (its element count equals `1 << r.len()`, which for
-/// tensors implies every dimension is a power of two) the data is evaluated
-/// in place with no copy; otherwise it is zero-padded into a scratch tensor
-/// first, matching `MultilinearPolynomial::from(t.padded_next_power_of_two())`.
-impl<T: SmallScalar + atlas_onnx_tracer::tensor::TensorType + Send + Sync> EvaluateMle
-    for Tensor<T>
-{
+impl<T: SmallScalar + atlas_trace::tensor::Element> EvaluateMle for atlas_trace::Tensor<T> {
     fn evaluate_mle<F, C>(&self, r: &[C]) -> F
     where
         F: JoltField + FieldChallengeOps<C>,
@@ -542,25 +534,23 @@ impl<T: SmallScalar + atlas_onnx_tracer::tensor::TensorType + Send + Sync> Evalu
         if self.len() == 1 << r.len() {
             super::compact_polynomial::evaluate_mle(self.data(), r)
         } else {
-            let padded = self.padded_next_power_of_two();
+            let padded = self.padded_pow2();
             super::compact_polynomial::evaluate_mle(padded.data(), r)
         }
     }
 }
 
-impl<F: JoltField> From<Tensor<i32>> for MultilinearPolynomial<F> {
-    fn from(coeffs: Tensor<i32>) -> Self {
-        let poly = CompactPolynomial::from_coeffs(coeffs.inner);
-        Self::I32Scalars(poly)
-    }
-}
-impl<F: JoltField> From<Tensor<u32>> for MultilinearPolynomial<F> {
-    fn from(coeffs: Tensor<u32>) -> Self {
-        let poly = CompactPolynomial::from_coeffs(coeffs.inner);
-        Self::U32Scalars(poly)
+impl<F: JoltField> From<atlas_trace::Tensor<i32>> for MultilinearPolynomial<F> {
+    fn from(coeffs: atlas_trace::Tensor<i32>) -> Self {
+        Self::I32Scalars(CompactPolynomial::from_coeffs(coeffs.into_data()))
     }
 }
 
+impl<F: JoltField> From<atlas_trace::Tensor<u32>> for MultilinearPolynomial<F> {
+    fn from(coeffs: atlas_trace::Tensor<u32>) -> Self {
+        Self::U32Scalars(CompactPolynomial::from_coeffs(coeffs.into_data()))
+    }
+}
 impl<F: JoltField> From<Vec<i64>> for MultilinearPolynomial<F> {
     fn from(coeffs: Vec<i64>) -> Self {
         let poly = CompactPolynomial::from_coeffs(coeffs);

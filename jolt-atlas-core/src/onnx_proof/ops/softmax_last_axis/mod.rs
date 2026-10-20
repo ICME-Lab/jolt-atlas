@@ -45,13 +45,10 @@ use joltworks::{
 };
 use std::collections::BTreeMap;
 
-use atlas_onnx_tracer::{
+use crate::compat::{
     node::ComputationNode,
     ops::{
-        softmax::{
-            generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z,
-            SoftmaxLastAxisTrace,
-        },
+        softmax::{generate_exp_lut_decomposed, softmax_z, SoftmaxLastAxisTrace},
         SoftmaxLastAxis,
     },
     tensor::Tensor,
@@ -99,12 +96,25 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         debug_assert_eq!(
-            self.scale, MODEL_SCALE as i32,
+            node.scale, MODEL_SCALE as i32,
             "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
         );
-        let scale = scale_to_multiplier(self.scale) as i32;
-        let softmax_input = prover.trace.operand_tensors(node)[0];
-        let trace = softmax_last_axis_decomposed(softmax_input, scale).1;
+        // The masked (non-full-row) softmax needs a selector polynomial in
+        // these sumchecks; until that lands, only full rows are provable —
+        // the same capability the old pipeline actually had.
+        let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+        assert!(
+            self.active_len.is_none_or(|n| n == last_dim),
+            "masked softmax (active_len {:?} of {last_dim}) is not yet provable; \
+             use a power-of-two softmax axis",
+            self.active_len
+        );
+        let scale = scale_to_multiplier(node.scale) as i32;
+        let witness = prover
+            .trace
+            .softmax_witness(node.idx)
+            .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx));
+        let trace = SoftmaxLastAxisTrace::from_witness(witness);
         SoftmaxLastAxisProver::new(node, trace, scale).prove(prover)
     }
 
@@ -115,11 +125,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         debug_assert_eq!(
-            self.scale, MODEL_SCALE as i32,
+            node.scale, MODEL_SCALE as i32,
             "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
         );
         let scale_bits = verifier.preprocessing.scale();
-        let scale = scale_to_multiplier(self.scale) as i32;
+        let scale = scale_to_multiplier(node.scale) as i32;
         let mut sm = SoftmaxLastAxisVerifier::new(
             node,
             scale,
@@ -140,8 +150,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let log_scale = self.scale as usize;
-        let decomp = generate_exp_lut_decomposed(scale_to_multiplier(self.scale) as i32);
+        let log_scale = node.scale as usize;
+        let decomp = generate_exp_lut_decomposed(scale_to_multiplier(node.scale) as i32);
         let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
         let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
         let idx = node.idx;
@@ -232,9 +242,9 @@ impl SoftmaxLastAxisProver {
         // `max_indicator_prover`) — by the time stage 3 runs, `self.trace.x` is empty.
         let last_dim = self.F_N[1];
         let z = softmax_z(&self.trace.x, &self.trace.max_k, last_dim);
-        let z_tensor = Tensor::new(Some(&z), &[z.len()])
+        let z_tensor = Tensor::from_slice(&z, &[z.len()])
             .expect("softmax_z tensor construction")
-            .padded_next_power_of_two()
+            .padded_pow2()
             .map(|v| v as i64);
         let significance_clamp_indices: Vec<usize> =
             compute_lookup_indices_from_operands(&[&z_tensor.map(|v| v as i32)], false)
@@ -1214,7 +1224,7 @@ impl VerifierLookupTableData {
 
 #[cfg(test)]
 mod tests {
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
@@ -1237,7 +1247,7 @@ mod tests {
             10, 20, 30, 40, 50, 60, 5, 15,
             25, 35, 45, 55, 8, 18, 28, 38,
         ];
-        let input = Tensor::new(Some(&data), &input_shape).unwrap();
+        let input = Tensor::from_slice(&data, &input_shape).unwrap();
         let model = softmax_last_axis_model(&input_shape, scale);
         unit_test_op(model, &[input]);
     }
@@ -1304,7 +1314,7 @@ mod tests {
              -8241,-10310,-12414, -5334, -1045, -8036,-10493,-12577,
         ];
         let input_shape = vec![4, 8, 8];
-        let input = Tensor::new(Some(GPT2_ATTN_SCORES), &input_shape).unwrap();
+        let input = Tensor::from_slice(GPT2_ATTN_SCORES, &input_shape).unwrap();
         let model = softmax_last_axis_model(&input_shape, 12);
         unit_test_op(model, &[input]);
     }

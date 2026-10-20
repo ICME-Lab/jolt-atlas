@@ -11,13 +11,10 @@ use crate::{
         fused_rebase,
         ops::{
             einsum::{
-                bmk_rhs_mbn::{BmkRhs, BmkRhsMbnLayout},
+                abmk_abnk_abmn::AbmkAbnkAbmnLayout,
                 dot::{EinsumDotParams, EinsumDotProver, EinsumDotVerifier, EinsumLayout},
                 k_nk_n::KNkNLayout,
-                m_an_a1nm::{MAnA1nmParams, MAnA1nmProver, MAnA1nmVerifier},
-                mbk_rhs_bmn::{MbkRhs, MbkRhsBmnLayout},
                 mk_kn_mn::MkKnMnLayout,
-                rbmk_rbnk_bmn::RbmkRbnkBmnLayout,
             },
             OperatorProofTrait, Prover, Verifier,
         },
@@ -38,33 +35,22 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-/// `bmk,?->mbn` layouts (`bmk,bkn->mbn`, `bmk,kbn->mbn`).
-pub mod bmk_rhs_mbn;
+/// `abmk,abnk->abmn` layout (batched matmul; also covers `amk,ank->amn`).
+pub mod abmk_abnk_abmn;
 /// Shared sumcheck engine for einsum contraction patterns.
 pub mod dot;
 /// `k,nk->n` layout (vector-matrix multiply).
 pub mod k_nk_n;
-/// Family for outer-product / broadcast pattern: m,an->a1nm
-pub mod m_an_a1nm;
-/// `mbk,?->bmn` layouts (`mbk,bnk->bmn`, `mbk,nbk->bmn`).
-pub mod mbk_rhs_bmn;
 /// `mk,kn->mn` layout (matrix-matrix multiply).
 pub mod mk_kn_mn;
-/// `rbmk,rbnk->bmn`-family layouts (shared retained/reduced batch-pack patterns).
-pub mod rbmk_rbnk_bmn;
 
-// Qwen einsum pattern coverage:
-//
-// Normalized through EINSUM_REGISTRY into existing provers:
-// - amk,kn->amn
-// - amk,kn->mn
-// - mk,kn->amn
-// - m,an->abnm   (canonicalized as m,an->a1nm)
-//
-// Routed through the shared rbmk,rbnk->bmn prover family:
-// - abmk,abnk->abmn
-// - acbmk,kcn->cbmn
-// - cbmk,cbkn->amn
+// atlas-onnx-import lowers every einsum to one of four canonical full-letter
+// equations (`CANONICAL_EINSUMS` in its lower.rs); EINSUM_REGISTRY maps each
+// onto one of the three layouts above:
+// - mk,kn->mn       → mk_kn_mn
+// - mk,nk->mn       → k_nk_n   (vector-matrix; m == 1 enforced at dispatch)
+// - amk,ank->amn    → abmk_abnk_abmn (batch pack 1×a)
+// - abmk,abnk->abmn → abmk_abnk_abmn
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     #[tracing::instrument(skip_all, name = "Einsum::prove")]
@@ -165,30 +151,24 @@ fn einsum_equation(computation_node: &ComputationNode) -> String {
     }
 }
 
-/// Build the [`EinsumLayout`] for a canonical equation handled by the shared
-/// [`dot`] engine, or `None` for patterns with a bespoke prover (e.g. `m,an->a1nm`).
+/// Build the [`EinsumLayout`] for a canonical equation; every registered
+/// equation is handled by the shared [`dot`] engine.
 fn einsum_layout<F: JoltField>(
     equation: &str,
-    computation_node: &ComputationNode,
     einsum_dims: &EinsumDims,
-) -> Option<Arc<dyn EinsumLayout<F>>> {
-    let layout: Arc<dyn EinsumLayout<F>> = match equation {
+) -> Arc<dyn EinsumLayout<F>> {
+    match equation {
         "mk,kn->mn" => Arc::new(MkKnMnLayout::new(einsum_dims)),
         "k,nk->n" => Arc::new(KNkNLayout::new(einsum_dims)),
-        "bmk,kbn->mbn" => Arc::new(BmkRhsMbnLayout::new(einsum_dims, BmkRhs::Kbn)),
-        "bmk,bkn->mbn" => Arc::new(BmkRhsMbnLayout::new(einsum_dims, BmkRhs::Bkn)),
-        "mbk,nbk->bmn" => Arc::new(MbkRhsBmnLayout::new(einsum_dims, MbkRhs::Nbk)),
-        "mbk,bnk->bmn" => Arc::new(MbkRhsBmnLayout::new(einsum_dims, MbkRhs::Bnk)),
-        "rbmk,rbnk->bmn" => Arc::new(RbmkRbnkBmnLayout::new(computation_node, einsum_dims)),
-        _ => return None,
-    };
-    Some(layout)
+        "abmk,abnk->abmn" => Arc::new(AbmkAbnkAbmnLayout::new(einsum_dims)),
+        other => panic!("unexpected canonical einsum equation: {other}"),
+    }
 }
 
 /// Prover dispatcher for the Einsum contraction (matmul) sumcheck.
 ///
-/// Contraction patterns route through the shared [`dot`] engine via their
-/// [`EinsumLayout`]; `m,an->a1nm` has a bespoke (zero-round) prover.
+/// Every contraction pattern routes through the shared [`dot`] engine via its
+/// [`EinsumLayout`].
 pub struct EinsumProver;
 
 impl EinsumProver {
@@ -201,17 +181,9 @@ impl EinsumProver {
     ) -> Box<dyn SumcheckInstanceProver<F, T>> {
         let config = lookup_einsum_config(&einsum_equation(&computation_node));
         let einsum_dims = (config.dims_extractor)(&computation_node, model);
-        if let Some(layout) = einsum_layout::<F>(config.equation, &computation_node, &einsum_dims) {
-            let params = EinsumDotParams::new(computation_node, layout, accumulator);
-            return Box::new(EinsumDotProver::initialize(trace, params));
-        }
-        match config.equation {
-            "m,an->a1nm" => {
-                let params = MAnA1nmParams::new(computation_node, einsum_dims, accumulator);
-                Box::new(MAnA1nmProver::initialize(trace, params))
-            }
-            other => panic!("unexpected equation: {other}"),
-        }
+        let layout = einsum_layout::<F>(config.equation, &einsum_dims);
+        let params = EinsumDotParams::new(computation_node, layout, accumulator);
+        Box::new(EinsumDotProver::initialize(trace, params))
     }
 }
 
@@ -227,20 +199,11 @@ impl EinsumVerifier {
     ) -> Box<dyn SumcheckInstanceVerifier<F, T>> {
         let config = lookup_einsum_config(&einsum_equation(&computation_node));
         let einsum_dims = (config.dims_extractor)(&computation_node, model);
-        if let Some(layout) = einsum_layout::<F>(config.equation, &computation_node, &einsum_dims) {
-            return Box::new(EinsumDotVerifier::new(
-                computation_node,
-                layout,
-                accumulator,
-            ));
-        }
-        match config.equation {
-            "m,an->a1nm" => Box::new(MAnA1nmVerifier::new(
-                computation_node,
-                einsum_dims,
-                accumulator,
-            )),
-            other => panic!("unexpected equation: {other}"),
-        }
+        let layout = einsum_layout::<F>(config.equation, &einsum_dims);
+        Box::new(EinsumDotVerifier::new(
+            computation_node,
+            layout,
+            accumulator,
+        ))
     }
 }

@@ -12,5 +12,4 @@ prost = "0.13"
 thiserror.workspace = true
 
 [dev-dependencies]
-atlas-onnx-tracer.workspace = true
 rand = { workspace = true, default-features = true }

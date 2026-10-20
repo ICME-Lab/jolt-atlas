@@ -3,7 +3,7 @@
 //!
 //! ```sh
 //! cargo run -p atlas-onnx-import --example dump_lowered_ops -- \
-//!     atlas-onnx-tracer/models/gpt2/network.onnx batch_size=1 sequence_length=16 past_sequence_length=0
+//!     models/gpt2/network.onnx batch_size=1 sequence_length=16 past_sequence_length=0
 //! ```
 
 use std::collections::BTreeMap;

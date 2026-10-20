@@ -16,7 +16,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("nanoGPT");
-    let working_dir = "atlas-onnx-tracer/models/nanoGPT/";
+    let working_dir = "models/nanoGPT/";
     let mut rng = StdRng::seed_from_u64(0x1096);
     let input_data: Vec<i32> = (0..64)
         .map(|_| (1 << 5) + rng.gen_range(-20..=20))

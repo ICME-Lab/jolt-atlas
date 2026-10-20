@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn test_proof_serialization_roundtrip_transformer() {
         // --- Setup ---
-        let working_dir = "../atlas-onnx-tracer/models/transformer/";
+        let working_dir = "../models/transformer/";
         let model = Model::load(&format!("{working_dir}network.onnx"), &RunArgs::default());
 
         let pp = AtlasSharedPreprocessing::preprocess(model);

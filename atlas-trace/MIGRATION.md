@@ -1,6 +1,15 @@
 # Migrating `jolt-atlas-core` from `atlas-onnx-tracer` to `atlas-trace`
 
-`atlas-trace` + `atlas-onnx-import` replace `atlas-onnx-tracer` end to end.
+> **Status: DONE.** `jolt-atlas-core` runs on `atlas-trace` +
+> `atlas-onnx-import` through the transitional facade
+> (`jolt-atlas-core/src/compat.rs`), and `atlas-onnx-tracer` has been
+> deleted from the workspace (tract is gone from the lockfile). The zoo
+> lives at `models/`. Remaining follow-ups: dissolve the facade in favor of
+> direct `atlas_trace` types, land the softmax `active_len` selector
+> polynomial (masked softmax is rejected at proving time until then), and
+> repair the pre-existing `zk`-feature bitrot.
+
+`atlas-trace` + `atlas-onnx-import` replaced `atlas-onnx-tracer` end to end.
 Validation status (differential suites in both crates' `tests/`):
 
 - **Bit-exact against the old pipeline** on every model in the zoo —

@@ -8,7 +8,6 @@ zk = ["joltworks/zk"]
 
 [dependencies]
 # Internal
-atlas-onnx-tracer.workspace = true
 atlas-trace = { workspace = true, features = ["test-util"] }
 atlas-onnx-import.workspace = true
 common.workspace = true

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use atlas_onnx_import::{graph, proto};
 
 fn zoo_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../atlas-onnx-tracer/models")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../models")
 }
 
 fn standard_bindings() -> HashMap<String, usize> {

@@ -24,7 +24,7 @@ use crate::{
 };
 use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use atlas_onnx_tracer::tensor::Tensor;
+use atlas_trace::Tensor;
 
 /// Public instance for one N-to-1 evaluation reduction round.
 #[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
@@ -73,7 +73,7 @@ impl<F: JoltField> EvalReductionWitness<F> {
     /// then interpreting it as the coefficient vector of an MLE.
     pub fn from_tensor(tensor: &Tensor<i32>) -> Self {
         Self {
-            mle: MultilinearPolynomial::from(tensor.padded_next_power_of_two()),
+            mle: MultilinearPolynomial::from(tensor.padded_pow2()),
         }
     }
 }

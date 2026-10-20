@@ -34,9 +34,9 @@ use jolt_atlas_core::onnx_proof::{
 use std::{env, fs, path::Path};
 use tokenizers::Tokenizer;
 
-const MODEL_PATH: &str = "atlas-onnx-tracer/models/qwen/network.onnx";
-const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/qwen/tokenizer.json";
-const SHARED_PP_CACHE_PATH: &str = "atlas-onnx-tracer/models/qwen/shared_preprocessing.bin";
+const MODEL_PATH: &str = "models/qwen/network.onnx";
+const TOKENIZER_PATH: &str = "models/qwen/tokenizer.json";
+const SHARED_PP_CACHE_PATH: &str = "models/qwen/shared_preprocessing.bin";
 /// Same default as `qwen_quant_error_analysis`'s `setup(...)` call, so the two examples are
 /// directly comparable out of the box.
 const DEFAULT_PROMPT: &str = "The quick brown fox jumps over the lazy dog";

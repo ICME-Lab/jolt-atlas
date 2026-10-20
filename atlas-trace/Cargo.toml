@@ -12,7 +12,7 @@ rayon = { workspace = true, optional = true }
 rand = { workspace = true, default-features = true, optional = true }
 
 [dev-dependencies]
-atlas-onnx-tracer.workspace = true
+atlas-trace = { path = ".", features = ["test-util"] }
 proptest = "1.5"
 libm = "0.2"
 rand = { workspace = true, default-features = true }

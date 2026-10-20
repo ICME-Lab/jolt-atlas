@@ -1,10 +1,12 @@
-use crate::compat::{
-    model::{trace::ModelExecutionIO, Model, RunArgs},
-    tensor::Tensor,
-};
-use crate::onnx_proof::{
-    proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    AtlasVerifierPreprocessing, ONNXProof,
+use crate::{
+    compat::{
+        model::{trace::ModelExecutionIO, Model, RunArgs},
+        tensor::Tensor,
+    },
+    onnx_proof::{
+        proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+        AtlasVerifierPreprocessing, ONNXProof,
+    },
 };
 use ark_bn254::{Bn254, Fr};
 use common::consts::MODEL_SCALE;
@@ -646,8 +648,7 @@ fn test_zk_rejects_rebound_input_for_square_model() {
 /// prover-known opening points).
 #[test]
 fn test_input_binding_changes_transcript() {
-    use crate::compat::model::trace::ModelExecutionIO;
-    use crate::onnx_proof::append_inputs_to_transcript;
+    use crate::{compat::model::trace::ModelExecutionIO, onnx_proof::append_inputs_to_transcript};
     use joltworks::transcripts::{Blake2bTranscript, Transcript};
 
     let io = |vals: &[i32]| ModelExecutionIO {

@@ -19,6 +19,7 @@ members = [
     "jolt-atlas-core",
     "atlas-onnx-tracer",
     "atlas-trace",
+    "atlas-onnx-import",
     "common",
     "joltworks",
 ]
@@ -27,6 +28,7 @@ members = [
 # Internal
 atlas-onnx-tracer = { path = "./atlas-onnx-tracer" }
 atlas-trace = { path = "./atlas-trace" }
+atlas-onnx-import = { path = "./atlas-onnx-import" }
 common = { path = "./common" }
 joltworks = { path = "./joltworks" }
 

@@ -72,6 +72,12 @@ pub trait ReadRafProvider<F: JoltField>: Clone + Send + Sync + Sized {
     /// Returns the opening claim for the rv claim
     fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
 
+    /// Required hidden source identities; proof bytes cannot choose these.
+    #[cfg(feature = "zk")]
+    fn rv_claim_source(&self) -> OpeningId;
+    #[cfg(feature = "zk")]
+    fn raf_claim_source(&self) -> OpeningId;
+
     /// Returns the opening claim for the raf claim
     fn raf_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
 
@@ -94,6 +100,10 @@ pub struct ReadRafParams<F: JoltField> {
     gamma: F,
     rv_claim: F,
     raf_claim: F,
+    #[cfg(feature = "zk")]
+    rv_source: OpeningId,
+    #[cfg(feature = "zk")]
+    raf_source: OpeningId,
     ra_vp: VirtualPoly,
     ra_sid: SumcheckId,
     log_K: usize,
@@ -117,6 +127,10 @@ impl<F: JoltField> ReadRafParams<F> {
             gamma,
             rv_claim: provider.rv_claim(accumulator),
             raf_claim: provider.raf_claim(accumulator),
+            #[cfg(feature = "zk")]
+            rv_source: provider.rv_claim_source(),
+            #[cfg(feature = "zk")]
+            raf_source: provider.raf_claim_source(),
             ra_vp,
             ra_sid,
             log_K: provider.log_K(),
@@ -144,7 +158,13 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
 
     #[cfg(feature = "zk")]
     fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
+        InputClaimConstraint::sum_of_products(vec![
+            ProductTerm::single(ValueSource::Opening(self.rv_source)),
+            ProductTerm::scaled(
+                ValueSource::Challenge(0),
+                vec![ValueSource::Opening(self.raf_source)],
+            ),
+        ])
     }
 
     #[cfg(feature = "zk")]
@@ -152,7 +172,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
         &self,
         _accumulator: &dyn OpeningAccumulator<F>,
     ) -> Vec<F> {
-        Vec::new()
+        vec![self.gamma]
     }
 
     // output = ra_claim * (val_claim + gamma * int_claim)
@@ -461,6 +481,7 @@ pub fn ra_onehot_params<F: JoltField>(
         r_cycle: r_cycle_ra,
         one_hot_params,
         ra_claim,
+        ra_source: encoding.ra_source(),
         polynomial_types,
     };
     (ra_params, booleanity_params)

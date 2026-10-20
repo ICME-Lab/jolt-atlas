@@ -64,6 +64,18 @@ pub struct ExpReadRafProvider {
 }
 
 impl<F: JoltField> ReadRafProvider<F> for ExpReadRafProvider {
+    #[cfg(feature = "zk")]
+    fn rv_claim_source(&self) -> joltworks::poly::opening_proof::OpeningId {
+        crate::utils::opening_access::OpeningIdBuilder::new(&self.node)
+            .advice(|idx| self.digit.rv_vp(idx))
+    }
+
+    #[cfg(feature = "zk")]
+    fn raf_claim_source(&self) -> joltworks::poly::opening_proof::OpeningId {
+        crate::utils::opening_access::OpeningIdBuilder::new(&self.node)
+            .advice(|idx| self.digit.raf_vp(idx))
+    }
+
     fn log_K(&self) -> usize {
         self.table_size.log_2()
     }

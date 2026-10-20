@@ -6,6 +6,14 @@ use super::general::MODEL_SCALE;
 /// [`softmax_clamp_bound`].
 pub const SOFTMAX_CLAMP_BOUND: usize = softmax_clamp_bound(MODEL_SCALE as u32);
 
+/// Address width of softmax's saturating-clamp lookup.
+///
+/// `z = max_k - x` is a difference of two i32s, so it spans `[0, 2^32 - 1]` and needs 33 bits —
+/// a 32-bit address would wrap the largest `z` negative and the clamp would map it to `0`, i.e.
+/// a masked position would come out with full softmax weight. The read-raf sumcheck requires a
+/// multiple of 8 (`joltworks::subprotocols::ps_shout::phase_schedule`), so 33 rounds up to 40.
+pub const SOFTMAX_CLAMP_LOG_K: usize = 40;
+
 /// Compile-time derivation of [`SOFTMAX_CLAMP_BOUND`] for an arbitrary `scale`, mirroring
 /// `atlas_onnx_tracer::ops::softmax::generate_exp_lut_decomposed`'s arithmetic in fixed-point
 /// integers (that function needs non-const `f64::ln`, so can't run in `const` context; since its

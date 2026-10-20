@@ -91,7 +91,10 @@ pub fn sample_random_satisfying_pair<F: JoltField, C: JoltCurve<F = F>, R: Crypt
 
     // OC region: fill with random values
     let oc_start = R_coeff * hyrax_C;
-    for i in 0..r1cs.output_claims_opening_ids.len() {
+    // Blocks are independently padded to complete commitment rows. Unique
+    // opening IDs are not contiguous positions when there is padding or a
+    // repeated opening. Mask every occupied row, including all later blocks.
+    for i in 0..oc_rows * hyrax_C {
         W[oc_start + i] = F::random(rng);
     }
 

@@ -5,6 +5,8 @@
 //! sends Pedersen commitments. Sumcheck verification is encoded into a small R1CS
 //! circuit and proved via Nova folding + Spartan.
 
+#[cfg(feature = "zk")]
+pub mod assembly;
 pub mod folding;
 pub mod layout;
 pub mod output_constraint;
@@ -65,6 +67,22 @@ pub struct ZkStageData<F: JoltField, C: JoltCurve<F = F>> {
     pub output_claims: Vec<(OpeningId, F)>,
     pub output_claims_blindings: Vec<F>,
     pub output_claims_commitments: Vec<C::G1>,
+}
+
+/// Public sumcheck relation reconstructed by the verifier. Never deserialize
+/// this structure from a proof. Operator parameters and the transcript supply it.
+#[derive(Clone, Debug)]
+pub struct ZkVerifierStage<F: JoltField> {
+    pub num_rounds: usize,
+    pub degree: usize,
+    pub challenges: Vec<F::Challenge>,
+    pub batching_coefficients: Vec<F>,
+    pub input_constraints: Vec<InputClaimConstraint>,
+    pub input_constraint_challenge_values: Vec<Vec<F>>,
+    pub input_claim_scaling_exponents: Vec<usize>,
+    pub output_constraints: Vec<Option<OutputClaimConstraint>>,
+    pub constraint_challenge_values: Vec<Vec<F>>,
+    pub output_claim_ids: Vec<OpeningId>,
 }
 
 /// ZK data for a uni-skip first round.

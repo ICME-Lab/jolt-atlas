@@ -92,6 +92,17 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
+        if w.is_empty() {
+            // The equality polynomial over no variables is the empty product,
+            // one. Its optional scale must survive sparse opening reduction.
+            return Self {
+                current_scalar: scaling_factor.unwrap_or(F::one()),
+                binding_order,
+                E_in_vec: vec![vec![F::one()]],
+                E_out_vec: vec![vec![F::one()]],
+                ..Self::default()
+            };
+        }
         match binding_order {
             BindingOrder::LowToHigh => {
                 let m = w.len() / 2;
@@ -150,12 +161,7 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
-        if w.is_empty() {
-            // Sum-check num_rounds is 0 for zero variables, so we won't call bind() and can skip precomputation.
-            Self::default()
-        } else {
-            Self::new_with_scaling(w, binding_order, None)
-        }
+        Self::new_with_scaling(w, binding_order, None)
     }
 
     pub fn get_num_vars(&self) -> usize {
@@ -617,6 +623,24 @@ mod tests {
         assert_eq!(split_eq.E_out_current_len(), 1 << 8);
         assert_eq!(e_prime_out.len(), split_eq.E_out_current().len());
         assert_eq!(e_prime_in.len(), split_eq.E_in_current().len());
+    }
+
+    #[test]
+    fn empty_equality_preserves_identity_and_scale() {
+        let point: Vec<Fr> = vec![];
+        for order in [BindingOrder::LowToHigh, BindingOrder::HighToLow] {
+            let plain = GruenSplitEqPolynomial::<Fr>::new(&point, order);
+            assert_eq!(
+                plain.merge(),
+                DensePolynomial::new(EqPolynomial::evals(&point))
+            );
+            assert_eq!(plain.get_current_scalar(), Fr::from(1u64));
+            for scale in [Fr::from(0u64), Fr::from(7u64)] {
+                let scaled = GruenSplitEqPolynomial::new_with_scaling(&point, order, Some(scale));
+                assert_eq!(scaled.merge(), DensePolynomial::new(vec![scale]));
+                assert_eq!(scaled.get_num_vars(), 0);
+            }
+        }
     }
 
     #[test]

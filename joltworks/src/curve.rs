@@ -76,7 +76,7 @@ pub trait JoltCurve: Clone + Sync + Send + 'static {
 
 use ark_bn254::{Bn254, Fq12, Fr, G1Affine, G1Projective, G2Affine, G2Projective};
 use ark_ec::{pairing::Pairing, AdditiveGroup, AffineRepr, CurveGroup, VariableBaseMSM};
-use ark_ff::{One, Zero};
+use ark_ff::{One, PrimeField, Zero};
 use ark_std::UniformRand;
 use std::ops::MulAssign;
 
@@ -244,8 +244,31 @@ impl JoltCurve for Bn254Curve {
 
     #[inline]
     fn g1_affine_msm(bases: &[G1Affine], scalars: &[Fr]) -> Self::G1 {
-        debug_assert_eq!(bases.len(), scalars.len());
-        Bn254G1(VariableBaseMSM::msm(bases, scalars).expect("msm length mismatch"))
+        assert_eq!(bases.len(), scalars.len(), "msm length mismatch");
+        // The dependency's full-width WNAF path creates a new Rayon pool
+        // for each chunk. Nested row commitments can recursively steal other
+        // rows while waiting on those pools and exhaust a worker's stack.
+        // Canonical scalars satisfy s = low + 2^128 * high exactly. The two
+        // existing unsigned MSM kernels use only the caller's pool.
+        let (low, high): (Vec<u128>, Vec<u128>) = scalars
+            .iter()
+            .map(|s| {
+                let limbs = s.into_bigint().0;
+                (
+                    u128::from(limbs[0]) | (u128::from(limbs[1]) << 64),
+                    u128::from(limbs[2]) | (u128::from(limbs[3]) << 64),
+                )
+            })
+            .unzip();
+        let serial = bases.len() <= 128;
+        let low_sum =
+            ark_ec::scalar_mul::variable_base::msm_u128::<G1Projective>(bases, &low, serial);
+        let mut high_sum =
+            ark_ec::scalar_mul::variable_base::msm_u128::<G1Projective>(bases, &high, serial);
+        for _ in 0..128 {
+            high_sum.double_in_place();
+        }
+        Bn254G1(low_sum + high_sum)
     }
 
     fn g2_msm(bases: &[Self::G2], scalars: &[Fr]) -> Self::G2 {
@@ -264,6 +287,75 @@ mod tests {
     use super::*;
     use ark_std::UniformRand;
     use rand::thread_rng;
+
+    #[test]
+    fn bounded_g1_msm_matches_direct_scalar_multiplication() {
+        use rand::{rngs::StdRng, SeedableRng};
+        let mut rng = StdRng::seed_from_u64(78123);
+        for n in [0, 1, 2, 16, 17, 64, 128, 129, 257] {
+            let mut bases = (0..n)
+                .map(|_| G1Projective::rand(&mut rng).into_affine())
+                .collect::<Vec<_>>();
+            if n > 0 {
+                bases[0] = G1Affine::zero();
+            }
+            if n > 2 {
+                bases[2] = -bases[1];
+            }
+            let mut scalars = (0..n).map(|_| Fr::rand(&mut rng)).collect::<Vec<_>>();
+            let boundary = [
+                Fr::zero(),
+                Fr::one(),
+                -Fr::one(),
+                Fr::from(u128::MAX),
+                Fr::from(u128::MAX) + Fr::one(),
+            ];
+            for (s, value) in scalars.iter_mut().zip(boundary) {
+                *s = value;
+            }
+            let expected = bases
+                .iter()
+                .zip(&scalars)
+                .fold(G1Projective::zero(), |sum, (p, s)| {
+                    sum + p.mul_bigint(s.into_bigint())
+                });
+            assert_eq!(Bn254Curve::g1_affine_msm(&bases, &scalars).0, expected);
+        }
+    }
+
+    #[test]
+    fn bounded_g1_msm_handles_nested_row_commitments() {
+        use rand::{rngs::StdRng, SeedableRng};
+        use rayon::prelude::*;
+        let mut rng = StdRng::seed_from_u64(12489);
+        let bases = (0..17)
+            .map(|_| G1Projective::rand(&mut rng).into_affine())
+            .collect::<Vec<_>>();
+        let scalars = (0..17).map(|_| Fr::rand(&mut rng)).collect::<Vec<_>>();
+        let expected = bases
+            .iter()
+            .zip(&scalars)
+            .fold(G1Projective::zero(), |sum, (p, s)| {
+                sum + p.mul_bigint(s.into_bigint())
+            });
+        for threads in [1, 8] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                (0..512).into_par_iter().for_each(|_| {
+                    assert_eq!(Bn254Curve::g1_affine_msm(&bases, &scalars).0, expected);
+                })
+            });
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "msm length mismatch")]
+    fn bounded_g1_msm_rejects_mismatched_lengths() {
+        Bn254Curve::g1_affine_msm(&[G1Affine::generator()], &[]);
+    }
 
     #[test]
     fn test_g1_operations() {

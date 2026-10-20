@@ -260,6 +260,9 @@ impl<const XLEN: usize> ClampSpec for ActivationClampTable<XLEN> {
 /// Clamps softmax's `z = max_k - x` (always non-negative by construction) to
 /// `[0, 2^SOFTMAX_CLAMP_BOUND - 1]` at model scale [`common::consts::MODEL_SCALE`]
 /// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::significance_clamp`).
+///
+/// Instantiated at [`common::consts::SOFTMAX_CLAMP_LOG_K`]: `z` is a difference of two i32s, so
+/// it needs 33 bits.
 pub type SoftmaxClampTable<const XLEN: usize> = ClampBoundedTable<XLEN, SOFTMAX_CLAMP_BOUND, false>;
 
 impl<const XLEN: usize> ClampSpec for SoftmaxClampTable<XLEN> {
@@ -284,14 +287,15 @@ mod test {
         subprotocols::ps_shout::unary::tests::test_read_raf_sumcheck,
     };
     use ark_bn254::Fr;
-    use common::consts::XLEN;
+    use common::consts::{SOFTMAX_CLAMP_LOG_K, XLEN};
 
     #[test]
     fn prefix_suffix() {
         prefix_suffix_test_unary::<XLEN, Fr, ClampTable<XLEN>>();
         prefix_suffix_test_unary::<LARGE_XLEN, Fr, SaturationTable>();
         prefix_suffix_test_unary::<XLEN, Fr, ActivationClampTable<XLEN>>();
-        prefix_suffix_test_unary::<XLEN, Fr, SoftmaxClampTable<XLEN>>();
+        prefix_suffix_test_unary::<SOFTMAX_CLAMP_LOG_K, Fr, SoftmaxClampTable<SOFTMAX_CLAMP_LOG_K>>(
+        );
     }
 
     #[test]
@@ -300,7 +304,7 @@ mod test {
         // `ActivationClampTable`/`SoftmaxClampTable`'s bounds are derived from `MODEL_SCALE`
         // and can reach 16 (e.g. at `MODEL_SCALE=12`), leaving no headroom against a 16-bit
         // `XLEN` here (`XLEN-BOUND-1` underflows) — exercised instead via
-        // `mle_random`/`mle_linearity`/`prefix_suffix` at the real `XLEN=32`.
+        // `mle_random`/`mle_linearity`/`prefix_suffix` at their real widths.
     }
 
     #[test]
@@ -308,7 +312,7 @@ mod test {
         signed_lookup_table_mle_random_test::<Fr, ClampTable<XLEN>>();
         signed_lookup_table_mle_random_test::<Fr, SaturationTable>();
         signed_lookup_table_mle_random_test::<Fr, ActivationClampTable<XLEN>>();
-        signed_lookup_table_mle_random_test::<Fr, SoftmaxClampTable<XLEN>>();
+        signed_lookup_table_mle_random_test::<Fr, SoftmaxClampTable<SOFTMAX_CLAMP_LOG_K>>();
     }
 
     #[test]
@@ -316,7 +320,11 @@ mod test {
         lookup_table_mle_linearity_test::<XLEN, Fr, ClampTable<XLEN>>();
         lookup_table_mle_linearity_test::<LARGE_XLEN, Fr, SaturationTable>();
         lookup_table_mle_linearity_test::<XLEN, Fr, ActivationClampTable<XLEN>>();
-        lookup_table_mle_linearity_test::<XLEN, Fr, SoftmaxClampTable<XLEN>>();
+        lookup_table_mle_linearity_test::<
+            SOFTMAX_CLAMP_LOG_K,
+            Fr,
+            SoftmaxClampTable<SOFTMAX_CLAMP_LOG_K>,
+        >();
     }
 
     #[test]
@@ -324,6 +332,6 @@ mod test {
         test_read_raf_sumcheck::<ClampTable<XLEN>, XLEN>();
         test_read_raf_sumcheck::<SaturationTable, LARGE_XLEN>();
         test_read_raf_sumcheck::<ActivationClampTable<XLEN>, XLEN>();
-        test_read_raf_sumcheck::<SoftmaxClampTable<XLEN>, XLEN>();
+        test_read_raf_sumcheck::<SoftmaxClampTable<SOFTMAX_CLAMP_LOG_K>, SOFTMAX_CLAMP_LOG_K>();
     }
 }

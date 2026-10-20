@@ -26,6 +26,9 @@ use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use atlas_onnx_tracer::tensor::Tensor;
 
+#[cfg(feature = "zk")]
+pub mod hidden;
+
 /// Public instance for one N-to-1 evaluation reduction round.
 #[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
 pub struct EvalReductionInstance<F: JoltField> {

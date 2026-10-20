@@ -6,10 +6,8 @@ use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_onnx_tracer::{node::ComputationNode, ops::Constant};
 
 use joltworks::{
-    field::JoltField,
-    poly::multilinear_polynomial::EvaluateMle,
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
+    field::JoltField, poly::multilinear_polynomial::EvaluateMle,
+    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 

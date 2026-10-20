@@ -4,10 +4,8 @@ use crate::{
 };
 use atlas_onnx_tracer::{node::ComputationNode, ops::Input};
 use joltworks::{
-    field::JoltField,
-    poly::multilinear_polynomial::EvaluateMle,
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
+    field::JoltField, poly::multilinear_polynomial::EvaluateMle,
+    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 

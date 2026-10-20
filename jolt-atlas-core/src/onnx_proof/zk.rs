@@ -2238,9 +2238,7 @@ pub fn prove_zk(
             }
             let node = &model[node_idx];
             let expected_value: F = match &node.operator {
-                atlas_onnx_tracer::ops::Operator::Constant(c) => {
-                    c.0.evaluate_mle(&opening_point.r)
-                }
+                atlas_onnx_tracer::ops::Operator::Constant(c) => c.0.evaluate_mle(&opening_point.r),
                 atlas_onnx_tracer::ops::Operator::Input(_) => {
                     let input_pos = io
                         .input_indices

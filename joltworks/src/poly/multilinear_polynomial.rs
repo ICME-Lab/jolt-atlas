@@ -531,7 +531,9 @@ impl<T: SmallScalar> EvaluateMle for [T] {
 /// tensors implies every dimension is a power of two) the data is evaluated
 /// in place with no copy; otherwise it is zero-padded into a scratch tensor
 /// first, matching `MultilinearPolynomial::from(t.padded_next_power_of_two())`.
-impl<T: SmallScalar + atlas_onnx_tracer::tensor::TensorType + Send + Sync> EvaluateMle for Tensor<T> {
+impl<T: SmallScalar + atlas_onnx_tracer::tensor::TensorType + Send + Sync> EvaluateMle
+    for Tensor<T>
+{
     fn evaluate_mle<F, C>(&self, r: &[C]) -> F
     where
         F: JoltField + FieldChallengeOps<C>,

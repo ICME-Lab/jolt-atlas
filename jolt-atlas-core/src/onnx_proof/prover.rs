@@ -127,7 +127,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
         // Sample challenge from verifier over the power-of-two padded output domain
         let r_node_output = prover.transcript.challenge_vector_optimized::<F>(
-            output_computation_node.pow2_padded_num_output_elements().log_2(),
+            output_computation_node
+                .pow2_padded_num_output_elements()
+                .log_2(),
         );
 
         // Evaluate output polynomial at r_node_output

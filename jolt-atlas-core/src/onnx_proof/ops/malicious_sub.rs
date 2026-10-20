@@ -20,10 +20,8 @@ use atlas_onnx_tracer::{
     node::ComputationNode,
 };
 use joltworks::{
-    field::JoltField,
-    poly::multilinear_polynomial::EvaluateMle,
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
+    field::JoltField, poly::multilinear_polynomial::EvaluateMle,
+    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
 };
 
 /// Run the malicious Sub prover for a single node.

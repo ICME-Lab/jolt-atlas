@@ -21,6 +21,8 @@
 
 #![warn(missing_docs)]
 
+#[cfg(any(test, feature = "test-util"))]
+pub mod builder;
 pub mod error;
 mod exec;
 pub mod graph;
@@ -31,6 +33,8 @@ pub mod semantics;
 pub mod tensor;
 pub mod trace;
 
+#[cfg(any(test, feature = "test-util"))]
+pub use builder::GraphBuilder;
 pub use graph::{Graph, Node};
 pub use id::{NodeId, Scale, SemVersion};
 pub use model::{ClampWidth, CompileOptions, Model, NodeMeta};

@@ -554,6 +554,36 @@ impl<F: JoltField> From<Tensor<i32>> for MultilinearPolynomial<F> {
         Self::I32Scalars(poly)
     }
 }
+
+// ---- atlas-trace tensors (migration target; the impls above retire with
+// atlas-onnx-tracer) ----
+
+impl<T: SmallScalar + atlas_trace::tensor::Element> EvaluateMle for atlas_trace::Tensor<T> {
+    fn evaluate_mle<F, C>(&self, r: &[C]) -> F
+    where
+        F: JoltField + FieldChallengeOps<C>,
+        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
+    {
+        if self.len() == 1 << r.len() {
+            super::compact_polynomial::evaluate_mle(self.data(), r)
+        } else {
+            let padded = self.padded_pow2();
+            super::compact_polynomial::evaluate_mle(padded.data(), r)
+        }
+    }
+}
+
+impl<F: JoltField> From<atlas_trace::Tensor<i32>> for MultilinearPolynomial<F> {
+    fn from(coeffs: atlas_trace::Tensor<i32>) -> Self {
+        Self::I32Scalars(CompactPolynomial::from_coeffs(coeffs.into_data()))
+    }
+}
+
+impl<F: JoltField> From<atlas_trace::Tensor<u32>> for MultilinearPolynomial<F> {
+    fn from(coeffs: atlas_trace::Tensor<u32>) -> Self {
+        Self::U32Scalars(CompactPolynomial::from_coeffs(coeffs.into_data()))
+    }
+}
 impl<F: JoltField> From<Tensor<u32>> for MultilinearPolynomial<F> {
     fn from(coeffs: Tensor<u32>) -> Self {
         let poly = CompactPolynomial::from_coeffs(coeffs.inner);

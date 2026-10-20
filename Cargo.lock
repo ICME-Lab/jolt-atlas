@@ -1336,6 +1336,7 @@ dependencies = [
  "ark-serialize",
  "ark-std",
  "atlas-onnx-tracer",
+ "atlas-trace",
  "blake2",
  "common",
  "derive_more",

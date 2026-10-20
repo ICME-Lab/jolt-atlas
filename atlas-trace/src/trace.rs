@@ -1,6 +1,7 @@
 //! The execution trace: the prover-facing output of running a model.
 
 use std::collections::BTreeMap;
+use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
 
@@ -85,10 +86,77 @@ pub struct Trace {
     pub version: SemVersion,
 }
 
+/// Operands and output of a single node, as traced.
+#[derive(Debug, Clone)]
+pub struct LayerData<'a> {
+    /// The node's output tensor.
+    pub output: &'a Tensor<i32>,
+    /// The node's operand tensors, in operand order.
+    pub operands: Vec<&'a Tensor<i32>>,
+}
+
+/// Inputs and outputs of a model execution (the public IO the verifier
+/// binds). Tensors are as stored in the trace: padded, uncropped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelExecutionIO {
+    /// Input tensors, in graph-input order.
+    pub inputs: Vec<Tensor<i32>>,
+    /// Output tensors, in graph-output order.
+    pub outputs: Vec<Tensor<i32>>,
+    /// Node indices of the inputs.
+    pub input_indices: Vec<usize>,
+    /// Node indices of the outputs.
+    pub output_indices: Vec<usize>,
+}
+
 impl Trace {
     /// The output tensor of a node.
     pub fn output(&self, id: NodeId) -> &Tensor<i32> {
         &self.node_outputs[id.index()]
+    }
+
+    /// Operands and output of the node `id` (operands resolved through the
+    /// node's input ids).
+    pub fn layer_data<'a>(&'a self, id: NodeId, node: &crate::graph::Node) -> LayerData<'a> {
+        LayerData {
+            output: self.output(id),
+            operands: self.operand_tensors(node),
+        }
+    }
+
+    /// The operand tensors feeding `node`, in operand order.
+    pub fn operand_tensors(&self, node: &crate::graph::Node) -> Vec<&Tensor<i32>> {
+        node.inputs
+            .iter()
+            .map(|&id| &self.node_outputs[id.index()])
+            .collect()
+    }
+
+    /// Operand tensors with per-dimension power-of-two padding applied.
+    pub fn padded_operand_tensors(&self, node: &crate::graph::Node) -> Vec<Tensor<i32>> {
+        self.operand_tensors(node)
+            .into_iter()
+            .map(Tensor::padded_pow2)
+            .collect()
+    }
+
+    /// The public IO of this execution.
+    pub fn io(&self, model: &crate::model::Model) -> ModelExecutionIO {
+        let graph = model.graph();
+        ModelExecutionIO {
+            inputs: graph
+                .inputs
+                .iter()
+                .map(|&id| self.node_outputs[id.index()].clone())
+                .collect(),
+            outputs: graph
+                .outputs
+                .iter()
+                .map(|&id| self.node_outputs[id.index()].clone())
+                .collect(),
+            input_indices: graph.inputs.iter().map(|id| id.index()).collect(),
+            output_indices: graph.outputs.iter().map(|id| id.index()).collect(),
+        }
     }
 
     /// The fused-rescale intermediates of a node, if it is a fused op.
@@ -105,5 +173,13 @@ impl Trace {
             NodeAux::Softmax(w) => Some(w),
             NodeAux::Fused(_) => None,
         }
+    }
+}
+
+impl Index<NodeId> for Trace {
+    type Output = Tensor<i32>;
+
+    fn index(&self, id: NodeId) -> &Self::Output {
+        &self.node_outputs[id.index()]
     }
 }

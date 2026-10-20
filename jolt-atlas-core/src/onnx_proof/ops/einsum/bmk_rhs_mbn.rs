@@ -5,11 +5,11 @@
 //! one difference is captured by [`BmkRhs`]. The batch eq-poly is bound *last*
 //! ([`EqSchedule::Low`]). See issue #193.
 
+use crate::compat::tensor::Tensor;
 use crate::{
     onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
     utils::dims::{transpose_flat_matrix, EinsumDims},
 };
-use atlas_onnx_tracer::tensor::Tensor;
 use joltworks::{
     field::JoltField,
     poly::{
@@ -144,8 +144,8 @@ impl<F: JoltField> EinsumLayout<F> for BmkRhsMbnLayout {
 
 #[cfg(test)]
 mod tests {
+    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn bmk_bkn_mbn_model(rng: &mut StdRng, b: usize, m: usize, k: usize, n: usize) -> Model {

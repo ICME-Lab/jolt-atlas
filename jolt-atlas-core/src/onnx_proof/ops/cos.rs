@@ -1,3 +1,12 @@
+use crate::compat::{
+    model::{
+        trace::{LayerData, Trace},
+        ComputationGraph,
+    },
+    node::ComputationNode,
+    ops::Cos,
+    tensor::Tensor,
+};
 use crate::{
     onnx_proof::{
         neural_teleport::{
@@ -17,15 +26,6 @@ use crate::{
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::AccOpeningAccessor,
-};
-use atlas_onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::ComputationNode,
-    ops::Cos,
-    tensor::Tensor,
 };
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
@@ -58,9 +58,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
-};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
     fn prove(
@@ -69,10 +67,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         assert_eq!(
-            self.scale, MODEL_SCALE as i32,
+            node.scale, MODEL_SCALE as i32,
             "Cos teleportation proving is only calibrated for MODEL_SCALE={MODEL_SCALE} \
              (got {})",
-            self.scale
+            node.scale
         );
         let mut results = Vec::new();
 
@@ -169,11 +167,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        if self.scale != MODEL_SCALE as i32 {
+        if node.scale != MODEL_SCALE as i32 {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "Cos teleportation verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} \
                      (got {})",
-                self.scale
+                node.scale
             )));
         }
         // Plumbing: cache the quotient's claim.
@@ -589,11 +587,11 @@ impl RaOneHotEncoding for CosRaEncoding {
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use rand::{rngs::StdRng, SeedableRng};
 
     use common::consts::TRIG_PERIOD_MODULUS;
@@ -618,7 +616,7 @@ mod tests {
     #[test]
     fn test_cos_periodic_boundary_inputs() {
         let m = TRIG_PERIOD_MODULUS as i32;
-        let input = Tensor::new(Some(&[-m - 1, -m, -1, 0, 1, m - 1, m, m + 1]), &[8]).unwrap();
+        let input = Tensor::from_slice(&[-m - 1, -m, -1, 0, 1, m - 1, m, m + 1], &[8]).unwrap();
         let model = cos_model(&[8]);
         unit_test_op(model, &[input]);
     }

@@ -5,8 +5,8 @@
 //! `verify` delegates to.
 
 use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
+use crate::compat::model::{trace::ModelExecutionIO, Model};
 use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
-use atlas_onnx_tracer::model::{trace::ModelExecutionIO, Model};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
@@ -119,7 +119,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 .log_2(),
         );
         let expected_output_claim =
-            MultilinearPolynomial::from(verifier.io.outputs[0].padded_next_power_of_two())
+            MultilinearPolynomial::from(verifier.io.outputs[0].padded_pow2())
                 .evaluate(&r_node_output);
 
         let output_opening_id = OpeningId::new(

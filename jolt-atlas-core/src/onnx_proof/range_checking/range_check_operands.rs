@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{
+use crate::compat::{
     node::ComputationNode,
     ops::{MeanOfSquares, Operator},
     tensor::Tensor,
@@ -11,11 +11,11 @@ use joltworks::{
 };
 use num::integer::Roots;
 
+use crate::compat::ops::mean_of_squares::{mos_divisor, mos_remainder};
 use crate::{
     onnx_proof::{neural_teleport::division::compute_division, range_checking::RangeCheckEncoding},
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
-use atlas_onnx_tracer::ops::mean_of_squares::{mos_divisor, mos_remainder};
 
 /// Common fields shared by all range-checking operand types.
 ///
@@ -143,7 +143,8 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
         let Operator::Rsqrt(inner) = &node.operator else {
             panic!("Expected Rsqrt operator");
         };
-        Self { scale: inner.scale }
+        let _ = inner;
+        Self { scale: node.scale }
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
@@ -186,7 +187,8 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
         let Operator::Rsqrt(inner) = &node.operator else {
             panic!("Expected Sqrt operator");
         };
-        Self { scale: inner.scale }
+        let _ = inner;
+        Self { scale: node.scale }
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
@@ -256,6 +258,8 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
 pub struct MeanOfSquaresRangeCheckOperands {
     /// The mean of squares operator
     op: MeanOfSquares,
+    /// The model's log2 fixed-point scale.
+    scale: i32,
 }
 
 impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
@@ -264,7 +268,10 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
             Operator::MeanOfSquares(op) => op.clone(),
             other => panic!("MeanOfSquares range check: unexpected operator {other:?}"),
         };
-        Self { op }
+        Self {
+            op,
+            scale: node.scale,
+        }
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
@@ -279,8 +286,8 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
 
     fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
         let operand_refs: Vec<&Tensor<i32>> = operand_tensors.iter().collect();
-        let remainder = mos_remainder(&self.op, &operand_refs);
-        let divisor_i32 = mean_of_squares_divisor_i32(&self.op);
+        let remainder = mos_remainder(&self.op, &operand_refs, self.scale);
+        let divisor_i32 = mean_of_squares_divisor_i32(&self.op, self.scale);
         let bound = Tensor::construct(vec![divisor_i32], vec![1])
             .expand(remainder.dims())
             .unwrap();
@@ -290,7 +297,10 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
     fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
         let left_claim = claims[0];
 
-        (left_claim, F::from_i32(i32_divisor(mos_divisor(&self.op))))
+        (
+            left_claim,
+            F::from_i32(i32_divisor(mos_divisor(&self.op, self.scale))),
+        )
     }
 
     fn rad_poly(index: usize, d: usize) -> CommittedPoly {
@@ -300,8 +310,8 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
 
 /// The fused mean-of-squares divisor `D = N·2^S` as an `i32` (the range-check
 /// value domain), recovered from the operator's stored count + scale.
-fn mean_of_squares_divisor_i32(op: &atlas_onnx_tracer::ops::MeanOfSquares) -> i32 {
-    i32_divisor(mos_divisor(op))
+fn mean_of_squares_divisor_i32(op: &crate::compat::ops::MeanOfSquares, scale: i32) -> i32 {
+    i32_divisor(mos_divisor(op, scale))
 }
 
 fn i32_divisor(divisor: i64) -> i32 {

@@ -1,11 +1,11 @@
-use crate::{
-    onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
-    utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Neg,
+};
+use crate::{
+    onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -58,8 +58,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Neg {
         let [operand] = operands[..] else {
             panic!("Expected one operand for Neg operation")
         };
-        let operand_claim = MultilinearPolynomial::from(operand.padded_next_power_of_two())
-            .evaluate(&opening_point.r);
+        let operand_claim =
+            MultilinearPolynomial::from(operand.padded_pow2()).evaluate(&opening_point.r);
 
         let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
             .into_provider(&mut prover.transcript, opening_point);
@@ -189,7 +189,7 @@ impl<F: JoltField> NegProver<F> {
         let [operand] = operands[..] else {
             panic!("Expected one operand for Neg operation")
         };
-        let operand = MultilinearPolynomial::from(operand.padded_next_power_of_two());
+        let operand = MultilinearPolynomial::from(operand.padded_pow2());
         Self {
             params,
             eq_r_node_output,
@@ -296,11 +296,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for NegVerifier
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn neg_model(T: usize) -> Model {

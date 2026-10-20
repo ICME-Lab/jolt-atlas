@@ -1,10 +1,10 @@
 //! `k,nk->n` layout (matrix-vector multiply) for the einsum [`dot`](super::dot) engine.
 
+use crate::compat::tensor::Tensor;
 use crate::{
     onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
-use atlas_onnx_tracer::tensor::Tensor;
 use common::parallel::par_enabled;
 use joltworks::{
     field::JoltField,
@@ -88,8 +88,8 @@ impl<F: JoltField> EinsumLayout<F> for KNkNLayout {
 
 #[cfg(test)]
 mod tests {
+    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn matvec_model(rng: &mut StdRng, k: usize, n: usize) -> Model {

@@ -6,7 +6,7 @@ description = "Deterministic fixed-point IR, semantics, and trace engine for jol
 license-file = "../LICENSE"
 
 [dependencies]
-serde = { workspace = true, default-features = true }
+serde = { workspace = true, default-features = true, features = ["rc"] }
 thiserror.workspace = true
 rayon = { workspace = true, optional = true }
 rand = { workspace = true, default-features = true, optional = true }

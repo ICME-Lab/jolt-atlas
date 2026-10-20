@@ -11,6 +11,7 @@ mod activation;
 mod einsum;
 mod fused;
 mod linear;
+pub use linear::sum_axes_i64;
 mod softmax;
 mod structural;
 
@@ -138,7 +139,7 @@ pub trait OpSpec: fmt::Display {
 
 /// Memoized activation tables for one `(scale, version)` pair. Generation is
 /// deterministic, so this is purely an optimization; the executor owns one
-/// per model.
+/// per model. Cloning yields a fresh (empty) cache.
 #[derive(Default)]
 pub struct TableCache {
     cells: [OnceLock<ActivationTable>; 5],
@@ -162,6 +163,12 @@ impl TableCache {
     pub fn exp_lut(&self, scale: Scale, version: SemVersion) -> &ExpLutDecomposed {
         self.exp
             .get_or_init(|| tables::exp_lut_decomposed(scale, version))
+    }
+}
+
+impl Clone for TableCache {
+    fn clone(&self) -> Self {
+        TableCache::default()
     }
 }
 
@@ -261,8 +268,9 @@ macro_rules! define_ops {
 define_ops! {
     /// Graph input placeholder; the executor substitutes the supplied tensor.
     Input,
-    /// Embedded constant tensor (quantized weights or raw integers).
-    Constant(Tensor<i32>),
+    /// Embedded constant tensor (quantized weights or raw integers),
+    /// behind `Arc` so cloning an `Op` never deep-copies weights.
+    Constant(std::sync::Arc<Tensor<i32>>),
     /// Pass-through.
     Identity,
     /// Saturating element-wise addition (i64 accumulate, clamp to i32).

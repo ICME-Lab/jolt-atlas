@@ -109,7 +109,7 @@ impl fmt::Display for Constant {
 
 impl OpSpec for Constant {
     fn eval(&self, _inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        Ok(Eval::plain(self.0.clone()))
+        Ok(Eval::plain((*self.0).clone()))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -127,7 +127,7 @@ impl OpSpec for Constant {
     }
 
     fn apply_padding(&mut self, _ctx: &PadCtx<'_>) -> Result<(), String> {
-        self.0 = self.0.padded_pow2();
+        self.0 = std::sync::Arc::new(self.0.padded_pow2());
         Ok(())
     }
 }

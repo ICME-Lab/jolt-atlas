@@ -16,5 +16,6 @@
 )]
 #![warn(missing_docs)]
 
+pub mod compat;
 pub mod onnx_proof;
 pub mod utils;

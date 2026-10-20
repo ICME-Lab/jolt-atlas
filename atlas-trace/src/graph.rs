@@ -117,3 +117,31 @@ impl Graph {
         &self.nodes[id.index()]
     }
 }
+
+impl Node {
+    /// Total output elements at the declared dims.
+    pub fn num_output_elements(&self) -> usize {
+        self.output_dims.iter().product()
+    }
+
+    /// Total output elements after per-dimension power-of-two padding.
+    pub fn pow2_padded_num_output_elements(&self) -> usize {
+        self.output_dims
+            .iter()
+            .map(|d| d.next_power_of_two())
+            .product()
+    }
+
+    /// Whether the node produces a single element.
+    pub fn is_scalar(&self) -> bool {
+        self.num_output_elements() == 1
+    }
+}
+
+impl std::ops::Index<NodeId> for Graph {
+    type Output = Node;
+
+    fn index(&self, id: NodeId) -> &Node {
+        &self.nodes[id.index()]
+    }
+}

@@ -51,11 +51,11 @@ fn main() {
         .expect("failed to build ZK rayon pool");
     eprintln!("[bench] zk_pool threads = {zk_num_threads}");
 
-    use atlas_onnx_tracer::{
+    use common::utils::logging::setup_tracing;
+    use jolt_atlas_core::compat::{
         model::{Model, RunArgs},
         tensor::Tensor,
     };
-    use common::utils::logging::setup_tracing;
     use jolt_atlas_core::onnx_proof::{
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
         Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
@@ -76,12 +76,12 @@ fn main() {
     let mut rng = StdRng::seed_from_u64(42);
     let vocab_size: i32 = 50257;
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
-    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq_len]).unwrap();
     let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
-    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
+    let position_ids = Tensor::from_slice(&position_ids_data, &[1, seq_len]).unwrap();
     let scale = run_args.scale;
     let attention_mask_data: Vec<i32> = vec![1 << scale; seq_len];
-    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
     let inputs = [input_ids, position_ids, attention_mask];
 
     let pp = AtlasSharedPreprocessing::preprocess(model);

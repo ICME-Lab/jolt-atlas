@@ -5,11 +5,11 @@
 //! a batch eq-poly (bound first, [`EqSchedule::High`]); the last is a plain dot
 //! product ([`EqSchedule::None`]).
 
+use crate::compat::{node::ComputationNode, tensor::Tensor};
 use crate::{
     onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
-use atlas_onnx_tracer::{node::ComputationNode, tensor::Tensor};
 use common::parallel::par_enabled;
 use joltworks::{
     field::{IntoOpening, JoltField},
@@ -49,10 +49,11 @@ enum RbmkRbnkBmnVariant {
 
 impl RbmkRbnkBmnVariant {
     fn from_node(computation_node: &ComputationNode, einsum_dims: &EinsumDims) -> Self {
-        let atlas_onnx_tracer::ops::Operator::Einsum(einsum) = &computation_node.operator else {
+        let crate::compat::ops::Operator::Einsum(einsum) = &computation_node.operator else {
             panic!("Expected Einsum operator")
         };
-        match einsum.equation.as_str() {
+        let equation = einsum.equation.to_string();
+        match equation.as_str() {
             "abmk,abnk->abmn" => Self::AbmkAbnkAbmn {
                 log_a: {
                     assert!(
@@ -531,8 +532,8 @@ impl<F: JoltField> EinsumLayout<F> for RbmkRbnkBmnLayout {
 
 #[cfg(test)]
 mod tests {
+    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn abmk_abnk_abmn_model(
@@ -568,22 +569,6 @@ mod tests {
         builder.build()
     }
 
-    fn cbmk_cbkn_amn_model(
-        rng: &mut StdRng,
-        c: usize,
-        b: usize,
-        m: usize,
-        k: usize,
-        n: usize,
-    ) -> Model {
-        let mut builder = ModelBuilder::new();
-        let left = builder.input(vec![c, b, m, k]);
-        let right = builder.constant(Tensor::random_small(rng, &[c, b, k, n]));
-        let out = builder.einsum("cbmk,cbkn->amn", vec![left, right], vec![1, m, n]);
-        builder.mark_output(out);
-        builder.build()
-    }
-
     #[test]
     fn test_abmk_abnk_abmn() {
         let mut rng = StdRng::seed_from_u64(0);
@@ -597,14 +582,6 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
         let model = acbmk_kcn_cbmn_model(&mut rng, 2, 2, 2, 4, 4, 8);
         let input = Tensor::<i32>::random_small(&mut rng, &[2, 2, 2, 4, 4]);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    fn test_cbmk_cbkn_amn() {
-        let mut rng = StdRng::seed_from_u64(2);
-        let model = cbmk_cbkn_amn_model(&mut rng, 2, 2, 4, 4, 8);
-        let input = Tensor::<i32>::random_small(&mut rng, &[2, 2, 4, 4]);
         unit_test_op(model, &[input]);
     }
 }

@@ -1,3 +1,4 @@
+use common::utils::logging::setup_tracing;
 /// Run with tracing:
 /// ```bash
 /// # Chrome Tracing JSON output (view in chrome://tracing)
@@ -11,11 +12,10 @@
 /// ```bash
 /// python scripts/download_bge_small_en_v1_5.py
 /// ```
-use atlas_onnx_tracer::{
+use jolt_atlas_core::compat::{
     model::{Model, RunArgs},
     tensor::Tensor,
 };
-use common::utils::logging::setup_tracing;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
@@ -44,11 +44,14 @@ fn main() {
 
     // Input 0: input_ids — random token IDs used as Gather indices
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
-    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq_len]).unwrap();
 
     // Input 1: attention_mask — all 1s (attend everywhere), in BERT-style binary form.
     let attention_mask_data: Vec<i32> = vec![1; seq_len];
-    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
+
+    // Input 2: token_type_ids — all zeros (single segment).
+    let token_type_ids = Tensor::from_slice(&vec![0i32; seq_len], &[1, seq_len]).unwrap();
 
     tracing::info!("Loaded model and generated input data");
     let pp = AtlasSharedPreprocessing::preprocess(model);
@@ -57,7 +60,7 @@ fn main() {
     let timing = std::time::Instant::now();
     let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(
         &prover_preprocessing,
-        &[input_ids, attention_mask],
+        &[input_ids, attention_mask, token_type_ids],
     );
     println!("Proof generation took {:.2?}", timing.elapsed());
 

@@ -15,13 +15,13 @@
 //! digit-split identity itself. `z` still needs tying back to the real input, done by
 //! `operand_link` in `mod.rs`.
 
+use crate::compat::{
+    model::trace::Trace, node::ComputationNode, ops::softmax::generate_exp_lut_decomposed,
+    tensor::Tensor, utils::quantize::scale_to_multiplier,
+};
 use crate::{
     onnx_proof::op_lookups::{DefaultLookupOperands, LookupOperandsTrait},
     utils::opening_access::AccOpeningAccessor,
-};
-use atlas_onnx_tracer::{
-    model::trace::Trace, node::ComputationNode, ops::softmax::generate_exp_lut_decomposed,
-    tensor::Tensor, utils::quantize::scale_to_multiplier,
 };
 use common::{
     consts::{MODEL_SCALE, XLEN},

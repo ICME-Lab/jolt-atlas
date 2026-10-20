@@ -91,6 +91,12 @@ impl<T: Element> Tensor<T> {
         &self.data
     }
 
+    /// Mutable access to the flat data (element values only — the shape
+    /// invariant cannot be broken through a slice).
+    pub fn data_mut(&mut self) -> &mut [T] {
+        &mut self.data
+    }
+
     /// Consume the tensor, returning its flat data.
     pub fn into_data(self) -> Vec<T> {
         self.data
@@ -127,6 +133,29 @@ impl<T: Element> Tensor<T> {
     /// Element at a coordinate.
     pub fn get(&self, coords: &[usize]) -> T {
         self.data[self.flat_index(coords)]
+    }
+
+    /// Iterate the flat row-major elements.
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.data.iter()
+    }
+
+    /// Parallel iterator over the flat row-major elements.
+    #[cfg(feature = "rayon")]
+    pub fn par_iter(&self) -> rayon::slice::Iter<'_, T> {
+        use rayon::prelude::*;
+        self.data.par_iter()
+    }
+
+    /// Construct from owned data and dims, panicking on length mismatch
+    /// (test/ergonomic constructor; prefer [`Tensor::new`]).
+    pub fn construct(data: Vec<T>, dims: Vec<usize>) -> Self {
+        Self::new(data, &dims).expect("tensor data length must match dims")
+    }
+
+    /// Construct by copying from a slice.
+    pub fn from_slice(data: &[T], dims: &[usize]) -> Result<Self, ShapeError> {
+        Self::new(data.to_vec(), dims)
     }
 
     /// Apply `f` to every element.
@@ -339,6 +368,22 @@ impl<T: Element> Tensor<T> {
     }
 }
 
+impl<T: Element> std::ops::Deref for Tensor<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.data
+    }
+}
+
+impl<T: Element> std::ops::Index<usize> for Tensor<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &T {
+        &self.data[index]
+    }
+}
+
 /// Concatenate tensors along `axis`. All inputs must agree on every other
 /// dimension.
 pub fn concat<T: Element>(inputs: &[&Tensor<T>], axis: usize) -> Result<Tensor<T>, ShapeError> {
@@ -484,10 +529,27 @@ fn copy_strided_crop<T: Copy>(src: &[T], dst: &mut [T], src_dims: &[usize], dst_
 
 #[cfg(feature = "test-util")]
 mod random {
-    use super::{Element, Tensor};
-    use rand::Rng;
+    use super::Tensor;
+    use rand::{Rng, RngCore};
 
     impl Tensor<i32> {
+        /// Random full-range i32 tensor (old-crate draw pattern, so seeded
+        /// tests keep their vectors).
+        pub fn random(rng: &mut impl RngCore, dims: &[usize]) -> Self {
+            let data = (0..dims.iter().product::<usize>())
+                .map(|_| rng.next_u32() as i32)
+                .collect();
+            Tensor::new(data, dims).expect("length matches by construction")
+        }
+
+        /// Random i8-range tensor (old-crate draw pattern).
+        pub fn random_small(rng: &mut impl RngCore, dims: &[usize]) -> Self {
+            let data = (0..dims.iter().product::<usize>())
+                .map(|_| rng.next_u32() as i8 as i32)
+                .collect();
+            Tensor::new(data, dims).expect("length matches by construction")
+        }
+
         /// Random tensor with elements uniform in `range`.
         pub fn random_range(
             rng: &mut impl Rng,
@@ -500,22 +562,10 @@ mod random {
             Tensor::new(data, dims).expect("length matches by construction")
         }
 
-        /// Random tensor over the full "small value" range `-2^scale..2^scale`.
-        pub fn random_small(rng: &mut impl Rng, dims: &[usize], scale: u32) -> Self {
-            let bound = 1i32 << scale;
-            Self::random_range(rng, dims, -bound..bound)
-        }
-    }
-
-    impl<T: Element> Tensor<T> {
-        /// Random boolean-valued (0/1) tensor, mapped through `f`.
-        pub fn random_bool_mapped(
-            rng: &mut impl Rng,
-            dims: &[usize],
-            f: impl Fn(bool) -> T,
-        ) -> Self {
+        /// Random 0/1 tensor (old-crate draw pattern).
+        pub fn random_boolean(rng: &mut impl RngCore, dims: &[usize]) -> Self {
             let data = (0..dims.iter().product::<usize>())
-                .map(|_| f(rng.r#gen::<bool>()))
+                .map(|_| (rng.next_u32() % 2) as i32)
                 .collect();
             Tensor::new(data, dims).expect("length matches by construction")
         }

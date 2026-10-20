@@ -1,3 +1,4 @@
+use common::utils::logging::setup_tracing;
 /// Run with tracing:
 /// ```bash
 /// # Chrome Tracing JSON output (view in chrome://tracing)
@@ -6,8 +7,7 @@
 /// # Terminal output with timing
 /// cargo run --example nanoGPT -- --trace-terminal
 /// ```
-use atlas_onnx_tracer::{model::Model, tensor::Tensor};
-use common::utils::logging::setup_tracing;
+use jolt_atlas_core::compat::{model::Model, tensor::Tensor};
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
@@ -21,7 +21,7 @@ fn main() {
     let input_data: Vec<i32> = (0..64)
         .map(|_| (1 << 5) + rng.gen_range(-20..=20))
         .collect();
-    let input = Tensor::new(Some(&input_data), &[1, 64]).unwrap();
+    let input = Tensor::from_slice(&input_data, &[1, 64]).unwrap();
     let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
 
     tracing::info!("Loaded model and generated input data");

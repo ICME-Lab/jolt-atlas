@@ -212,7 +212,11 @@ fn trig_table(scale: Scale, sin: bool) -> ActivationTable {
         "trig downshift {downshift} must be below scale {scale}"
     );
     let reduced_log = scale.log2() - downshift;
-    let size = (((modulus - 1) >> downshift) + 1) as usize;
+    // Table size is the power of two covering the reduced modulus: runtime
+    // lookups stay below `((modulus-1) >> downshift) + 1`, but the committed
+    // table the prover materializes is power-of-two sized, and its tail
+    // entries follow the same generation rule.
+    let size = (modulus.next_power_of_two() >> downshift) as usize;
     let s_reduced = 1i64 << reduced_log;
 
     let entries = (0..size)
@@ -396,7 +400,7 @@ mod tests {
                 panic!("wrong index rule");
             };
             let s_reduced = (1u32 << (14 - downshift)) as f64;
-            let size = (((modulus - 1) >> downshift) + 1) as usize;
+            let size = (modulus.next_power_of_two() >> downshift) as usize;
             assert_eq!(t.entries.len(), size);
             for v in 0..size {
                 let expected = ((s_reduced * f(v as f64 / s_reduced)).round() as i32) << downshift;

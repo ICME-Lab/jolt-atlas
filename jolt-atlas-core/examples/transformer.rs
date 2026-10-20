@@ -1,5 +1,5 @@
-use atlas_onnx_tracer::{model::Model, tensor::Tensor};
 use common::utils::logging::setup_tracing;
+use jolt_atlas_core::compat::{model::Model, tensor::Tensor};
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
@@ -13,7 +13,7 @@ fn main() {
     let input_data: Vec<i32> = (0..64 * 64)
         .map(|_| (1 << 7) + rng.gen_range(-50..=50))
         .collect();
-    let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
+    let input = Tensor::from_slice(&input_data, &[1, 64, 64]).unwrap();
     let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
 
     tracing::info!("Loaded model and generated input data");

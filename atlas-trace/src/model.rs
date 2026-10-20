@@ -90,7 +90,7 @@ pub struct IoDims {
 }
 
 /// A compiled, analyzed, immutable model.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Model {
     graph: Graph,
     scale: Scale,
@@ -163,6 +163,16 @@ impl Model {
     /// A node together with its analysis results.
     pub fn node(&self, id: NodeId) -> (&Node, &NodeMeta) {
         (self.graph.node(id), &self.meta[id.index()])
+    }
+
+    /// The graph-input node ids.
+    pub fn inputs(&self) -> &[NodeId] {
+        &self.graph.inputs
+    }
+
+    /// The graph-output node ids.
+    pub fn outputs(&self) -> &[NodeId] {
+        &self.graph.outputs
     }
 
     /// Iterate nodes in topological order with ids and analysis results.
@@ -257,7 +267,7 @@ fn annotate_clamp_widths(graph: &Graph, scale: Scale) -> Vec<NodeMeta> {
                 .inputs
                 .iter()
                 .map(|&id| match &graph.node(id).op {
-                    Op::Constant(c) => Some(&c.0),
+                    Op::Constant(c) => Some(c.0.as_ref()),
                     _ => None,
                 })
                 .collect();
@@ -271,6 +281,14 @@ fn annotate_clamp_widths(graph: &Graph, scale: Scale) -> Vec<NodeMeta> {
             }
         })
         .collect()
+}
+
+impl std::ops::Index<NodeId> for Model {
+    type Output = crate::graph::Node;
+
+    fn index(&self, id: NodeId) -> &crate::graph::Node {
+        self.graph.node(id)
+    }
 }
 
 #[cfg(test)]

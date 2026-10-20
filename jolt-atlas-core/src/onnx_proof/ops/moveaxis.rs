@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{
+use crate::compat::{
     node::ComputationNode,
     ops::{MoveAxis, Operator},
 };
@@ -184,8 +184,8 @@ fn permute_challenge_groups<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
+    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn moveaxis_model(input_shape: &[usize], source: usize, destination: usize) -> Model {

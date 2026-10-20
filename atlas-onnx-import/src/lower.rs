@@ -81,7 +81,11 @@ impl<'g> Lowerer<'g> {
         let dims = lower_dims(&konst.dims);
         let tensor = Tensor::new(data, &dims)
             .map_err(|err| ImportError::Malformed(format!("constant {}: {err}", e.name)))?;
-        let id = self.push(Op::Constant(op::Constant(tensor)), vec![], dims);
+        let id = self.push(
+            Op::Constant(op::Constant(std::sync::Arc::new(tensor))),
+            vec![],
+            dims,
+        );
         self.edge_to_node.insert(edge, id);
         Ok(id)
     }

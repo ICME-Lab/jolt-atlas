@@ -43,7 +43,11 @@ impl GraphBuilder {
     /// Add a constant tensor node.
     pub fn constant(&mut self, tensor: Tensor<i32>) -> NodeId {
         let dims = tensor.dims().to_vec();
-        self.push_with_dims(Op::Constant(op::Constant(tensor)), &[], dims)
+        self.push_with_dims(
+            Op::Constant(op::Constant(std::sync::Arc::new(tensor))),
+            &[],
+            dims,
+        )
     }
 
     /// Add a node; its output dims are inferred from its operands.

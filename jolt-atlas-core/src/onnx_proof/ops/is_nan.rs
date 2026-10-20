@@ -1,8 +1,8 @@
+use crate::compat::{node::ComputationNode, ops::IsNan};
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{node::ComputationNode, ops::IsNan};
 use joltworks::{
     field::JoltField, poly::multilinear_polynomial::EvaluateMle,
     subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,

@@ -3,7 +3,7 @@
 //! This module centralizes helper functions used by activation ops, and periodic functions.
 
 use super::{n_bits_to_usize, usize_to_n_bits};
-use atlas_onnx_tracer::{tensor::Tensor, utils::quantize::scale_to_multiplier};
+use crate::compat::tensor::Tensor;
 use common::parallel::par_enabled;
 use joltworks::{
     field::{FieldChallengeOps, JoltField},
@@ -44,27 +44,26 @@ where
 /// Build a signed two's-complement lookup table for a unary activation.
 ///
 /// The table domain is `[-2^(n-1), 2^(n-1))` encoded in two's complement, and
-/// outputs are quantized at the model scale `2^scale` — matching the op, which
-/// evaluates the activation at `scale_to_multiplier(scale)`.
-/// Each lookup to the table at index `x` corresponds to the activation of `x * τ`.
+/// outputs are quantized at the model scale `2^scale`. Entries come from the
+/// deterministic integer tables in [`atlas_trace::semantics`] — the same
+/// functions the tracer's kernels look up, so prover tables and trace values
+/// agree bit for bit by construction.
 pub fn materialize_signed_activation_table(
     log_table_size: usize,
     tau: i32,
     scale: i32,
-    activation: fn(&Tensor<i32>, f64) -> Tensor<i32>,
+    kind: atlas_trace::semantics::tables::TableKind,
 ) -> Vec<i32> {
-    let table_size = 1 << log_table_size;
-    let indices: Vec<i32> = (0..table_size)
-        .map(|i| {
-            usize_to_n_bits(i, log_table_size)
-                .checked_mul(tau)
-                .expect("overflow in activation table index")
-        })
-        .collect();
-    let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])
-        .expect("failed to build activation LUT input tensor");
-    let result = activation(&indices_tensor, scale_to_multiplier(scale));
-    result.data().to_vec()
+    assert_eq!(tau, 1, "scaled activation tables are materialized per-op");
+    let table = atlas_trace::semantics::tables::table(
+        kind,
+        atlas_trace::Scale::new(scale as u8).expect("scale in range"),
+        atlas_trace::SemVersion::V1,
+    );
+    let table_size = 1usize << log_table_size;
+    (0..table_size)
+        .map(|i| table.lookup(usize_to_n_bits(i, log_table_size)))
+        .collect()
 }
 
 /// Compute one-hot read-address evaluations from already-computed non-negative indices.

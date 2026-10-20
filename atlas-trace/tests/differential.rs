@@ -104,9 +104,9 @@ fn convert(old: &OldModel) -> Graph {
 fn convert_op(operator: &Operator, output_dims: &[usize]) -> Op {
     match operator {
         Operator::Input(_) => Op::Input(op::Input),
-        Operator::Constant(c) => Op::Constant(op::Constant(
+        Operator::Constant(c) => Op::Constant(op::Constant(std::sync::Arc::new(
             Tensor::new(c.0.data().to_vec(), c.0.dims()).unwrap(),
-        )),
+        ))),
         Operator::Identity(_) => Op::Identity(op::Identity),
         Operator::Add(_) => Op::Add(op::Add),
         Operator::Sub(_) => Op::Sub(op::Sub),

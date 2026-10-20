@@ -21,6 +21,8 @@
 //! Scalar nodes (`log_T = 0`) skip the one-hot reductions and open `rescaled` and
 //! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
 
+pub use crate::compat::ops::rebase_bits as compat_rebase_bits;
+use crate::compat::{model::trace::Trace, node::ComputationNode, ops::Operator, tensor::Tensor};
 use crate::{
     onnx_proof::{
         clamp_lookups::{
@@ -31,19 +33,6 @@ use crate::{
         ProofId, Prover, Verifier,
     },
     utils::opening_access::AccOpeningAccessor,
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{
-        cube::{cube_intermediate_and_remainder, cube_remainder},
-        einsum::{einsum_intermediate_and_remainder, einsum_remainder},
-        mean_of_squares::{mos_intermediate_and_remainder, mos_remainder},
-        mul::{mul_intermediate_and_remainder, mul_remainder},
-        square::{square_intermediate_and_remainder, square_remainder},
-        Operator,
-    },
-    tensor::Tensor,
 };
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -64,27 +53,21 @@ use joltworks::{
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 
-/// Rebase width `S` (in bits) of an operator's fused rescaling division, or
+/// Rebase width `S` (in bits) of a node's fused rescaling division, or
 /// `None` if the operator does not fuse a rescale.
 ///
-/// `Mul`/`Square` are at scale `2S` and rebase by `2^S`; `Cube` is at scale `3S`
-/// and rebases by `2^(2S)`; einsum is a (sum of) products at scale `2S`.
-pub fn rebase_bits(op: &Operator) -> Option<i32> {
-    match op {
-        Operator::Einsum(e) => Some(e.scale),
-        Operator::Mul(m) => Some(m.scale),
-        Operator::Square(s) => Some(s.scale),
-        Operator::Cube(c) => Some(c.scale * 2),
-        _ => None,
-    }
+/// `Mul`/`Square` are at scale `2S` and rebase by `2^S`; `Cube` is at scale
+/// `3S` and rebases by `2^(2S)`; einsum is a (sum of) products at scale `2S`.
+pub fn rebase_bits(node: &ComputationNode) -> Option<i32> {
+    compat_rebase_bits(node)
 }
 
 /// Whether a node fuses the rescaling division (`bits > 0`).
 ///
 /// A `bits == 0` op is a raw product (no rebase, no clamp) — e.g. the
 /// building-block `Mul`/`Square` used inside decompositions.
-pub fn fuses_rebase(op: &Operator) -> bool {
-    rebase_bits(op).is_some_and(|b| b > 0)
+pub fn fuses_rebase(node: &ComputationNode) -> bool {
+    rebase_bits(node).is_some_and(|b| b > 0)
 }
 
 /// Both fused-rescale intermediates — the pre-clamp quotient `rescaled = acc div D`
@@ -108,24 +91,11 @@ pub(crate) fn try_rebase_intermediates(
     node: &ComputationNode,
     trace: &Trace,
 ) -> Option<RebaseIntermediates> {
-    if let Some(cached) = trace.fused_intermediates(node.idx) {
-        return Some(RebaseIntermediates {
-            quotient: cached.quotient.padded_next_power_of_two(),
-            remainder: cached.remainder.padded_next_power_of_two(),
-        });
-    }
-    let LayerData { operands, .. } = Trace::layer_data(trace, node);
-    let (quotient, remainder) = match &node.operator {
-        Operator::Einsum(op) => einsum_intermediate_and_remainder(op, &operands),
-        Operator::Mul(op) => mul_intermediate_and_remainder(op, &operands),
-        Operator::Square(op) => square_intermediate_and_remainder(op, &operands),
-        Operator::Cube(op) => cube_intermediate_and_remainder(op, &operands),
-        Operator::MeanOfSquares(op) => mos_intermediate_and_remainder(op, &operands),
-        _ => return None,
-    };
+    // The executor always captures fused intermediates; nothing re-executes.
+    let cached = trace.fused_intermediates(node.idx)?;
     Some(RebaseIntermediates {
-        quotient: quotient.padded_next_power_of_two(),
-        remainder: remainder.padded_next_power_of_two(),
+        quotient: cached.quotient.padded_pow2(),
+        remainder: cached.remainder.padded_pow2(),
     })
 }
 
@@ -133,7 +103,7 @@ pub(crate) fn try_rebase_intermediates(
 /// node fuses a rescale.
 pub(crate) fn rebase_intermediates(node: &ComputationNode, trace: &Trace) -> RebaseIntermediates {
     try_rebase_intermediates(node, trace)
-        .unwrap_or_else(|| panic!("fused_rebase: unsupported operator {:?}", node.operator))
+        .unwrap_or_else(|| panic!("fused_rebase: unsupported operator {}", node.operator))
 }
 
 /// The operator's rescaling remainder `R = acc mod D`, padded to the node-output
@@ -143,19 +113,16 @@ pub(crate) fn rebase_intermediates(node: &ComputationNode, trace: &Trace) -> Reb
 ///
 /// Prefer [`rebase_intermediates`] when the quotient is needed too — this re-runs the full accumulation for the remainder alone.
 pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<i32> {
-    if let Some(cached) = trace.fused_intermediates(node.idx) {
-        return cached.remainder.padded_next_power_of_two();
-    }
-    let LayerData { operands, .. } = Trace::layer_data(trace, node);
-    let remainder = match &node.operator {
-        Operator::Einsum(op) => einsum_remainder(op, &operands),
-        Operator::Mul(op) => mul_remainder(op, &operands),
-        Operator::Square(op) => square_remainder(op, &operands),
-        Operator::Cube(op) => cube_remainder(op, &operands),
-        Operator::MeanOfSquares(op) => mos_remainder(op, &operands),
-        other => panic!("fused_rebase: unsupported operator {other:?}"),
-    };
-    remainder.padded_next_power_of_two()
+    trace
+        .fused_intermediates(node.idx)
+        .unwrap_or_else(|| {
+            panic!(
+                "fused_rebase: node {} ({}) has no trace intermediates",
+                node.idx, node.operator
+            )
+        })
+        .remainder
+        .padded_pow2()
 }
 
 /// Human-readable operator name for scalar-clamp error messages.
@@ -180,7 +147,7 @@ pub fn fused_input_claim<F: JoltField>(
     node: &ComputationNode,
 ) -> F {
     let accessor = AccOpeningAccessor::new(accumulator, node);
-    match rebase_bits(&node.operator) {
+    match rebase_bits(node) {
         Some(bits) if bits > 0 => {
             let rescaled = accessor.get_advice(VirtualPoly::ClampAcc).1;
             let remainder = accessor.get_advice(VirtualPoly::RescaleRemainder).1;
@@ -246,7 +213,7 @@ pub fn prove_remainder_rc<F: JoltField, T: Transcript>(
     prover: &mut Prover<F, T>,
     remainder: &Tensor<i32>,
 ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-    let bits = rebase_bits(&node.operator).expect("fused op");
+    let bits = rebase_bits(node).expect("fused op");
     let lookup_bits = remainder_lookup_bits(remainder, bits);
     // Deferred: proven after the node loop as part of the batched remainder
     // range check + one-hot checks (see `deferred_lookups`).
@@ -279,7 +246,7 @@ pub fn verify_post<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    let bits = rebase_bits(&node.operator).expect("fused op");
+    let bits = rebase_bits(node).expect("fused op");
 
     if is_scalar(node) {
         let accessor = AccOpeningAccessor::new(&verifier.accumulator, node);

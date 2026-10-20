@@ -1,4 +1,4 @@
-use atlas_onnx_tracer::{node::ComputationNode, ops::Sum};
+use crate::compat::{node::ComputationNode, ops::Sum};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     self,
@@ -30,8 +30,8 @@ pub mod axis;
 /// Create a Sum prover instance for the ZK pipeline.
 pub fn create_sum_prover<F: JoltField, T: Transcript>(
     node: &ComputationNode,
-    model: &atlas_onnx_tracer::model::Model,
-    trace: &atlas_onnx_tracer::model::trace::Trace,
+    model: &crate::compat::model::Model,
+    trace: &crate::compat::model::trace::Trace,
     accumulator: &joltworks::poly::opening_proof::ProverOpeningAccumulator<F>,
 ) -> Box<dyn joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>> {
     let sum_config = utils::dims::sum_config(node, model);
@@ -42,7 +42,7 @@ pub fn create_sum_prover<F: JoltField, T: Transcript>(
 /// Create a Sum verifier instance for the ZK pipeline.
 pub fn create_sum_verifier<F: JoltField, T: Transcript>(
     node: &ComputationNode,
-    model: &atlas_onnx_tracer::model::Model,
+    model: &crate::compat::model::Model,
     accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
 ) -> Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>> {
     let sum_config = utils::dims::sum_config(node, model);

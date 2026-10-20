@@ -310,14 +310,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compat::{
+        model::{Model, RunArgs},
+        tensor::Tensor,
+    };
     use crate::onnx_proof::{
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     };
     use ark_bn254::{Bn254, Fr};
-    use atlas_onnx_tracer::{
-        model::{Model, RunArgs},
-        tensor::Tensor,
-    };
     use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
@@ -337,7 +337,7 @@ mod tests {
         let input_data: Vec<i32> = (0..64 * 64)
             .map(|_| (1 << 7) + rng.gen_range(-50..=50))
             .collect();
-        let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
+        let input = Tensor::from_slice(&input_data, &[1, 64, 64]).unwrap();
 
         // --- Prove ---
         let (proof, io, _debug_info) = TestProof::prove(&prover_pp, &[input]);

@@ -3,13 +3,13 @@ use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
 };
 
+use crate::compat::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+};
 use crate::utils::{
     dims::{SumAxis, SumConfig},
     opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
 };
 use common::{parallel::par_enabled, VirtualPoly};
 use joltworks::{
@@ -325,11 +325,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn sum_model<const AXIS: usize>(m: usize, n: usize) -> Model {
@@ -389,7 +389,7 @@ mod tests {
                 }
             })
             .collect();
-        let input = Tensor::<i32>::new(Some(&data), &[m, n]).unwrap();
+        let input = Tensor::<i32>::from_slice(&data, &[m, n]).unwrap();
         let model = sum_model::<1>(m, n);
         unit_test_op(model, &[input]);
     }
@@ -401,7 +401,7 @@ mod tests {
         let m = 64;
         let n = 1;
         let data = vec![i32::MAX / 2; m * n];
-        let input = Tensor::<i32>::new(Some(&data), &[m, n]).unwrap();
+        let input = Tensor::<i32>::from_slice(&data, &[m, n]).unwrap();
         let model = sum_model::<0>(m, n);
         unit_test_op(model, &[input]);
     }

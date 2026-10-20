@@ -119,7 +119,10 @@ impl fmt::Display for Sum {
 }
 
 /// Reduce `input` over `axes` in `i64`, collapsing each reduced axis to 1.
-pub(super) fn sum_axes_i64(input: &Tensor<i32>, axes: &[usize]) -> Tensor<i64> {
+///
+/// Public because the pre-clamp Sum accumulation is part of the proof spec:
+/// the prover recovers the saturating-clamp lookup index from it.
+pub fn sum_axes_i64(input: &Tensor<i32>, axes: &[usize]) -> Tensor<i64> {
     sum_map_i64(input, axes, |v| v as i64)
 }
 

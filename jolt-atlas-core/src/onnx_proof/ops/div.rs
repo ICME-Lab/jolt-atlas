@@ -1,3 +1,9 @@
+use crate::compat::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    ops::Div,
+    tensor::Tensor,
+};
 use crate::{
     onnx_proof::{
         ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
@@ -8,12 +14,6 @@ use crate::{
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Div,
-    tensor::Tensor,
 };
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
@@ -530,11 +530,11 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use rand::{rngs::StdRng, SeedableRng};
 
     const SCALE: i32 = 8;
@@ -572,7 +572,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x888);
         let model = recip_model(T);
         let mut input = Tensor::<i32>::random_range(&mut rng, &[T], 1..SCALE * SCALE);
-        input.iter_mut().for_each(|v| {
+        input.data_mut().iter_mut().for_each(|v| {
             if *v == 0 {
                 *v = 1
             }
@@ -586,7 +586,7 @@ mod tests {
         let t = 1000;
         let mut rng = StdRng::seed_from_u64(0x889);
         let mut input = Tensor::<i32>::random_range(&mut rng, &[t], 1..SCALE * SCALE);
-        input.iter_mut().for_each(|v| {
+        input.data_mut().iter_mut().for_each(|v| {
             if *v == 0 {
                 *v = 1
             }

@@ -21,7 +21,7 @@ use joltworks::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial},
         opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
     },
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
@@ -125,16 +125,13 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             output,
         } = Trace::layer_data(&prover.trace, output_computation_node);
 
-        // Pad output tensor to power of 2 with 0 for MLE constructions
-        let output = output.padded_next_power_of_two();
-
-        // Sample challenge from verifier
-        let r_node_output = prover
-            .transcript
-            .challenge_vector_optimized::<F>(output.len().log_2());
+        // Sample challenge from verifier over the power-of-two padded output domain
+        let r_node_output = prover.transcript.challenge_vector_optimized::<F>(
+            output_computation_node.pow2_padded_num_output_elements().log_2(),
+        );
 
         // Evaluate output polynomial at r_node_output
-        let output_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
+        let output_claim = output.evaluate_mle(&r_node_output);
 
         let output_opening_id = OpeningId::new(
             VirtualPoly::NodeOutput(output_computation_node.idx),

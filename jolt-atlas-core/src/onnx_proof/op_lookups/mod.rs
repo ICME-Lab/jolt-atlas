@@ -18,7 +18,7 @@ use joltworks::{
     field::JoltField,
     lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN,
@@ -508,7 +508,7 @@ fn append_raf_claims_prover<F, H>(
 {
     let r_cycle =
         <OpLookupProvider<H> as RafShoutProvider<F>>::r_cycle(provider, opening_accumulator);
-    let claim = MultilinearPolynomial::from(witness.data().to_vec()).evaluate(&r_cycle.r);
+    let claim = witness.evaluate_mle(&r_cycle.r);
     let exec_id = H::witness_opening_id(&provider.computation_node);
     opening_accumulator.append_virtual(transcript, exec_id, r_cycle, claim);
 }

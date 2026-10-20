@@ -2209,7 +2209,7 @@ pub fn prove_zk(
     {
         use common::VirtualPoly;
         use joltworks::{
-            poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            poly::multilinear_polynomial::EvaluateMle,
             subprotocols::blindfold::{
                 output_constraint::{OutputClaimConstraint, ValueSource},
                 witness::ExtraConstraintWitness,
@@ -2239,8 +2239,7 @@ pub fn prove_zk(
             let node = &model[node_idx];
             let expected_value: F = match &node.operator {
                 atlas_onnx_tracer::ops::Operator::Constant(c) => {
-                    MultilinearPolynomial::from(c.0.clone().padded_next_power_of_two())
-                        .evaluate(&opening_point.r)
+                    c.0.evaluate_mle(&opening_point.r)
                 }
                 atlas_onnx_tracer::ops::Operator::Input(_) => {
                     let input_pos = io
@@ -2248,8 +2247,7 @@ pub fn prove_zk(
                         .iter()
                         .position(|&i| i == node_idx)
                         .expect("Input node must be in io.input_indices");
-                    MultilinearPolynomial::from(io.inputs[input_pos].padded_next_power_of_two())
-                        .evaluate(&opening_point.r)
+                    io.inputs[input_pos].evaluate_mle(&opening_point.r)
                 }
                 _ => continue,
             };
@@ -2933,7 +2931,7 @@ fn verify_zk_with_pcs_capture_and_extract(
     {
         use common::VirtualPoly;
         use joltworks::{
-            poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            poly::multilinear_polynomial::EvaluateMle,
             subprotocols::blindfold::output_constraint::{OutputClaimConstraint, ValueSource},
         };
         let model = pp.shared.model();
@@ -2953,10 +2951,7 @@ fn verify_zk_with_pcs_capture_and_extract(
             }
             let node = &model[node_idx];
             let expected_value: F = match &node.operator {
-                Operator::Constant(c) => {
-                    MultilinearPolynomial::from(c.0.clone().padded_next_power_of_two())
-                        .evaluate(&opening_point.r)
-                }
+                Operator::Constant(c) => c.0.evaluate_mle(&opening_point.r),
                 Operator::Input(_) => {
                     let input_pos = io
                         .input_indices
@@ -2967,8 +2962,7 @@ fn verify_zk_with_pcs_capture_and_extract(
                                 "Input node {node_idx} missing from io.input_indices",
                             ))
                         })?;
-                    MultilinearPolynomial::from(io.inputs[input_pos].padded_next_power_of_two())
-                        .evaluate(&opening_point.r)
+                    io.inputs[input_pos].evaluate_mle(&opening_point.r)
                 }
                 _ => continue,
             };

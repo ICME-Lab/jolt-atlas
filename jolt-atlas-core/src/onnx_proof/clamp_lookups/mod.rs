@@ -35,7 +35,7 @@ use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN,
@@ -159,7 +159,7 @@ where
 {
     let intermediate = intermediate.unwrap_or_else(|| clamp_intermediate(node, trace));
     let r = accumulator.get_node_output_opening(node.idx).0;
-    let acc_claim = MultilinearPolynomial::from(intermediate.data().to_vec()).evaluate(&r.r);
+    let acc_claim = intermediate.evaluate_mle(&r.r);
     accumulator.append_virtual(transcript, acc_opening_id(node.idx), r, acc_claim);
     intermediate
 }

@@ -2,7 +2,7 @@ use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN,
@@ -158,12 +158,12 @@ impl<F: JoltField> MAnA1nmProver<F> {
 
         let split_at_m = params.r_node_output.r.len().saturating_sub(log_m);
         let (r_prefix, r_m) = params.r_node_output.split_at(split_at_m);
-        let left_claim = MultilinearPolynomial::from(left_operand.clone()).evaluate(&r_m.r);
+        let left_claim = left_operand.evaluate_mle(&r_m.r);
 
         let (r_a, r_bn) = r_prefix.split_at(log_a);
         let (_, r_n) = r_bn.split_at(r_bn.r.len().saturating_sub(log_n));
         let r_right = [r_a.r.as_slice(), r_n.r.as_slice()].concat();
-        let right_claim = MultilinearPolynomial::from(right_operand.clone()).evaluate(&r_right);
+        let right_claim = right_operand.evaluate_mle(&r_right);
 
         debug_assert_eq!(r_m.r.len(), log_m);
 

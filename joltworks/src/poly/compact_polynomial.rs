@@ -1,6 +1,7 @@
+use super::eq_poly::EqPolynomial;
 use super::multilinear_polynomial::{BindingOrder, PolynomialBinding};
 use crate::{
-    field::{JoltField, OptimizedMul},
+    field::{ChallengeFieldOps, FieldChallengeOps, JoltField, OptimizedMul},
     utils::{math::Math, small_scalar::SmallScalar},
 };
 use allocative::Allocative;
@@ -65,47 +66,7 @@ impl<T: SmallScalar, F: JoltField> CompactPolynomial<T, F> {
     }
 
     pub fn split_eq_evaluate(&self, r_len: usize, eq_one: &[F], eq_two: &[F]) -> F {
-        const PARALLEL_THRESHOLD: usize = 16;
-        if r_len < PARALLEL_THRESHOLD {
-            self.evaluate_split_eq_serial(eq_one, eq_two)
-        } else {
-            self.evaluate_split_eq_parallel(eq_one, eq_two)
-        }
-    }
-
-    fn evaluate_split_eq_parallel(&self, eq_one: &[F], eq_two: &[F]) -> F {
-        let eval: F = (0..eq_one.len())
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|x1| {
-                let partial_sum = (0..eq_two.len())
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|x2| {
-                        let idx = x1 * eq_two.len() + x2;
-                        // field_mul now already checks for 0 and 1 optimisation
-                        // via Jolfield mul_64 method
-                        self.coeffs[idx].field_mul(eq_two[x2])
-                    })
-                    .reduce(|| F::zero(), |acc, val| acc + val);
-                OptimizedMul::mul_01_optimized(partial_sum, eq_one[x1])
-            })
-            .reduce(|| F::zero(), |acc, val| acc + val);
-        eval
-    }
-    fn evaluate_split_eq_serial(&self, eq_one: &[F], eq_two: &[F]) -> F {
-        let eval: F = (0..eq_one.len())
-            .map(|x1| {
-                let partial_sum = (0..eq_two.len())
-                    .map(|x2| {
-                        let idx = x1 * eq_two.len() + x2;
-                        self.coeffs[idx].field_mul(eq_two[x2])
-                    })
-                    .fold(F::zero(), |acc, val| acc + val);
-                OptimizedMul::mul_01_optimized(partial_sum, eq_one[x1])
-            })
-            .fold(F::zero(), |acc, val| acc + val);
-        eval
+        split_eq_evaluate_coeffs(&self.coeffs, r_len, eq_one, eq_two)
     }
 
     // Faster evaluation based on
@@ -375,4 +336,92 @@ impl<T: SmallScalar, F: JoltField> Index<usize> for CompactPolynomial<T, F> {
     fn index(&self, _index: usize) -> &T {
         &(self.coeffs[_index])
     }
+}
+
+/// Evaluates the multilinear extension of `coeffs` at `r` by the split-eq
+/// method, without taking ownership of the coefficients.
+///
+/// `eq_one` indexes the high-order (first) variables of `r` and `eq_two` the
+/// low-order remainder, so `coeffs.len()` must equal `eq_one.len() * eq_two.len()`.
+pub fn split_eq_evaluate_coeffs<T: SmallScalar, F: JoltField>(
+    coeffs: &[T],
+    r_len: usize,
+    eq_one: &[F],
+    eq_two: &[F],
+) -> F {
+    const PARALLEL_THRESHOLD: usize = 16;
+    if r_len < PARALLEL_THRESHOLD {
+        split_eq_evaluate_serial(coeffs, eq_one, eq_two)
+    } else {
+        split_eq_evaluate_parallel(coeffs, eq_one, eq_two)
+    }
+}
+
+fn split_eq_evaluate_parallel<T: SmallScalar, F: JoltField>(
+    coeffs: &[T],
+    eq_one: &[F],
+    eq_two: &[F],
+) -> F {
+    let eval: F = (0..eq_one.len())
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|x1| {
+            let partial_sum = (0..eq_two.len())
+                .into_par_iter()
+                .with_min_len(par_enabled())
+                .map(|x2| {
+                    let idx = x1 * eq_two.len() + x2;
+                    // field_mul now already checks for 0 and 1 optimisation
+                    // via Jolfield mul_64 method
+                    coeffs[idx].field_mul(eq_two[x2])
+                })
+                .reduce(|| F::zero(), |acc, val| acc + val);
+            OptimizedMul::mul_01_optimized(partial_sum, eq_one[x1])
+        })
+        .reduce(|| F::zero(), |acc, val| acc + val);
+    eval
+}
+
+fn split_eq_evaluate_serial<T: SmallScalar, F: JoltField>(
+    coeffs: &[T],
+    eq_one: &[F],
+    eq_two: &[F],
+) -> F {
+    let eval: F = (0..eq_one.len())
+        .map(|x1| {
+            let partial_sum = (0..eq_two.len())
+                .map(|x2| {
+                    let idx = x1 * eq_two.len() + x2;
+                    coeffs[idx].field_mul(eq_two[x2])
+                })
+                .fold(F::zero(), |acc, val| acc + val);
+            OptimizedMul::mul_01_optimized(partial_sum, eq_one[x1])
+        })
+        .fold(F::zero(), |acc, val| acc + val);
+    eval
+}
+
+/// Evaluates the multilinear extension of `coeffs` at `r` without cloning the
+/// coefficients into a [`MultilinearPolynomial`](super::multilinear_polynomial::MultilinearPolynomial).
+///
+/// Equivalent to `MultilinearPolynomial::from(coeffs.to_vec()).evaluate(r)`:
+/// evaluation is read-only, so borrowed coefficients suffice. `coeffs.len()`
+/// must equal `1 << r.len()` (i.e. the data is already power-of-two padded).
+pub fn evaluate_mle<T, F, C>(coeffs: &[T], r: &[C]) -> F
+where
+    T: SmallScalar,
+    F: JoltField + FieldChallengeOps<C>,
+    C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
+{
+    assert_eq!(
+        coeffs.len(),
+        1 << r.len(),
+        "evaluate_mle: {} coefficients but {} variables",
+        coeffs.len(),
+        r.len()
+    );
+    let m = r.len() / 2;
+    let (r2, r1) = r.split_at(m);
+    let (eq_one, eq_two) = rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
+    split_eq_evaluate_coeffs(coeffs, r.len(), &eq_one, &eq_two)
 }

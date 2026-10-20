@@ -50,7 +50,7 @@ use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
             BIG_ENDIAN,
@@ -313,7 +313,7 @@ pub(crate) fn cache_remainder_prove<F: JoltField, T: Transcript>(
 ) {
     let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
     let r0 = accessor.get_reduced_opening().0;
-    let eval = MultilinearPolynomial::from(remainder.clone()).evaluate(&r0.r);
+    let eval = remainder.evaluate_mle(&r0.r);
     let mut provider = accessor.into_provider(&mut prover.transcript, r0);
     provider.append_advice(VirtualPoly::RescaleRemainder, eval);
 }

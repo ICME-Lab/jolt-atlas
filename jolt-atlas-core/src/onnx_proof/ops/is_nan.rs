@@ -5,7 +5,7 @@ use crate::{
 use atlas_onnx_tracer::{node::ComputationNode, ops::IsNan};
 use joltworks::{
     field::JoltField,
-    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+    poly::multilinear_polynomial::EvaluateMle,
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
@@ -21,7 +21,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for IsNan {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
         let (opening_point, _claim) = accessor.get_reduced_opening();
         let operand = prover.trace.operand_tensors(node)[0];
-        let operand_claim = MultilinearPolynomial::from(operand.clone()).evaluate(&opening_point.r);
+        let operand_claim = operand.evaluate_mle(&opening_point.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, opening_point);
         provider.append_nodeio(Target::Input(0), operand_claim);
         vec![]

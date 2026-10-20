@@ -23,7 +23,8 @@ use joltworks::{
         eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+            BindingOrder, EvaluateMle, MultilinearPolynomial, PolynomialBinding,
+            PolynomialEvaluation,
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
@@ -188,7 +189,7 @@ impl<F: JoltField> GatherProver<F> {
         assert_eq!(r_word.len(), word_dim.log_2());
 
         let padded_indexes = indexes.padded_next_power_of_two();
-        let index_claim = MultilinearPolynomial::from(padded_indexes.clone()).evaluate(r_index);
+        let index_claim = padded_indexes.evaluate_mle(r_index);
 
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
             .into_provider(transcript, OpeningPoint::new(r_index.to_vec()));

@@ -5,7 +5,7 @@ use crate::{
 use atlas_onnx_tracer::{node::ComputationNode, ops::Input};
 use joltworks::{
     field::JoltField,
-    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+    poly::multilinear_polynomial::EvaluateMle,
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
@@ -32,14 +32,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
         // Check input_claim == IO.evaluate_input(r_input)
         let (r_node_input, input_claim) =
             AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
-        let input = verifier.io.inputs[verifier
+        let input = &verifier.io.inputs[verifier
             .io
             .input_indices
             .iter()
             .position(|&idx| idx == node.idx)
-            .unwrap()]
-        .padded_next_power_of_two();
-        let expected_claim = MultilinearPolynomial::from(input).evaluate(&r_node_input.r);
+            .unwrap()];
+        let expected_claim = input.evaluate_mle(&r_node_input.r);
         if expected_claim != input_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Input claim does not match expected claim".to_string(),

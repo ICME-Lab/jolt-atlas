@@ -1,5 +1,5 @@
 use crate::{
-    field::{JoltField, MulTrunc},
+    field::JoltField,
     lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
     poly::{
         identity_poly::OperandSide,
@@ -74,13 +74,13 @@ impl<F: JoltField> RafProverState<F> for BinaryRafPS<F> {
                 let (r0, r2) = self.right_operand_ps.sumcheck_evals(b);
                 let (l0, l2) = self.left_operand_ps.sumcheck_evals(b);
                 [
-                    *l0.as_unreduced_ref(),
-                    *l2.as_unreduced_ref(),
-                    *r0.as_unreduced_ref(),
-                    *r2.as_unreduced_ref(),
+                    l0.to_unreduced(),
+                    l2.to_unreduced(),
+                    r0.to_unreduced(),
+                    r2.to_unreduced(),
                 ]
             })
-            .fold_with([F::Unreduced::<5>::zero(); 4], |running, new| {
+            .fold_with([F::UnreducedMulU64::zero(); 4], |running, new| {
                 [
                     running[0] + new[0],
                     running[1] + new[1],
@@ -89,7 +89,7 @@ impl<F: JoltField> RafProverState<F> for BinaryRafPS<F> {
                 ]
             })
             .reduce(
-                || [F::Unreduced::zero(); 4],
+                || [F::UnreducedMulU64::zero(); 4],
                 |running, new| {
                     [
                         running[0] + new[0],
@@ -100,14 +100,8 @@ impl<F: JoltField> RafProverState<F> for BinaryRafPS<F> {
                 },
             );
         [
-            F::from_montgomery_reduce(
-                left_0.mul_trunc::<4, 9>(gamma.as_unreduced_ref())
-                    + right_0.mul_trunc::<4, 9>(gamma_sqr.as_unreduced_ref()),
-            ),
-            F::from_montgomery_reduce(
-                left_2.mul_trunc::<4, 9>(gamma.as_unreduced_ref())
-                    + right_2.mul_trunc::<4, 9>(gamma_sqr.as_unreduced_ref()),
-            ),
+            F::reduce_mul_u64(left_0) * gamma + F::reduce_mul_u64(right_0) * gamma_sqr,
+            F::reduce_mul_u64(left_2) * gamma + F::reduce_mul_u64(right_2) * gamma_sqr,
         ]
     }
 

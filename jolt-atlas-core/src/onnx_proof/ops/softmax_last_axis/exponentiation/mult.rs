@@ -145,7 +145,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MultProver<F>
         let Self {
             eq, exp_hi, exp_lo, ..
         } = self;
-        let [q_constant, q_quadratic] = eq.par_fold_out_in_unreduced::<9, 2>(&|g| {
+        let [q_constant, q_quadratic] = eq.par_fold_out_in_unreduced::<2>(&|g| {
             let exp_hi_0 = exp_hi.get_bound_coeff(2 * g);
             let exp_hi_inf = exp_hi.get_bound_coeff(2 * g + 1) - exp_hi_0;
             let exp_lo_0 = exp_lo.get_bound_coeff(2 * g);

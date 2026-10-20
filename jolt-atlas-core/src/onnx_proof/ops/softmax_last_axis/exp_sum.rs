@@ -162,7 +162,7 @@ impl<F: JoltField> ExpSumProver<F> {
         let Self { exp_q, .. } = self;
         let gs_eq_r0_k = self.gs_eq_r0_k.as_ref().unwrap();
         let [q_constant] =
-            gs_eq_r0_k.par_fold_out_in_unreduced::<9, 1>(&|g| [exp_q.get_bound_coeff(2 * g)]);
+            gs_eq_r0_k.par_fold_out_in_unreduced::<1>(&|g| [exp_q.get_bound_coeff(2 * g)]);
         gs_eq_r0_k.gruen_poly_deg_2(q_constant, previous_claim)
     }
 }

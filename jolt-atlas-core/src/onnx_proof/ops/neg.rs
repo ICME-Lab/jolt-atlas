@@ -209,7 +209,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for NegProver<F> 
             operand,
             ..
         } = self;
-        let [q_constant] = eq_r_node_output.par_fold_out_in_unreduced::<9, 1>(&|g| {
+        let [q_constant] = eq_r_node_output.par_fold_out_in_unreduced::<1>(&|g| {
             let o0 = operand.get_bound_coeff(2 * g);
             [-o0]
         });

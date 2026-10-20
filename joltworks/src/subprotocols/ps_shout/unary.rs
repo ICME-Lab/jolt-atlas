@@ -1,5 +1,5 @@
 use crate::{
-    field::{JoltField, MulTrunc},
+    field::JoltField,
     lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
     poly::{
         multilinear_polynomial::PolynomialEvaluation,
@@ -61,18 +61,18 @@ impl<F: JoltField> RafProverState<F> for UnaryRafPS<F> {
             .with_min_len(par_enabled())
             .map(|b| {
                 let (o0, o2) = self.identity_ps.sumcheck_evals(b);
-                [*o0.as_unreduced_ref(), *o2.as_unreduced_ref()]
+                [o0.to_unreduced(), o2.to_unreduced()]
             })
-            .fold_with([F::Unreduced::<5>::zero(); 2], |running, new| {
+            .fold_with([F::UnreducedMulU64::zero(); 2], |running, new| {
                 [running[0] + new[0], running[1] + new[1]]
             })
             .reduce(
-                || [F::Unreduced::zero(); 2],
+                || [F::UnreducedMulU64::zero(); 2],
                 |running, new| [running[0] + new[0], running[1] + new[1]],
             );
         [
-            F::from_montgomery_reduce(operand_0.mul_trunc::<4, 9>(gamma.as_unreduced_ref())),
-            F::from_montgomery_reduce(operand_2.mul_trunc::<4, 9>(gamma.as_unreduced_ref())),
+            F::reduce_mul_u64(operand_0) * gamma,
+            F::reduce_mul_u64(operand_2) * gamma,
         ]
     }
 

@@ -215,7 +215,7 @@ impl<F: JoltField> MaxIndicatorProver<F> {
             ..
         } = self;
         let gs_eq = gs_eq.as_ref().unwrap();
-        let [q_constant, q_quadratic] = gs_eq.par_fold_out_in_unreduced::<9, 2>(&|g| {
+        let [q_constant, q_quadratic] = gs_eq.par_fold_out_in_unreduced::<2>(&|g| {
             let i_0 = indicator.get_bound_coeff(2 * g);
             let i_inf = indicator.get_bound_coeff(2 * g + 1) - i_0;
 

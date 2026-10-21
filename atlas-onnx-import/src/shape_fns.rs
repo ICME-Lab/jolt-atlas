@@ -66,7 +66,7 @@ pub fn norm_axis(axis: i64, rank: usize) -> Result<usize, String> {
 
 /// Promote dtypes for arithmetic (ONNX requires equal types; we allow
 /// I32/I64 mixing since we widen payloads).
-fn promote(a: DType, b: DType) -> Result<DType, String> {
+pub(crate) fn promote(a: DType, b: DType) -> Result<DType, String> {
     match (a, b) {
         (x, y) if x == y => Ok(x),
         (DType::I32, DType::I64) | (DType::I64, DType::I32) => Ok(DType::I64),
@@ -201,11 +201,17 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
         "Reshape" => {
             let x = info(0)?;
             let target = g
-                .konst(node.inputs[1])
+                .konst(*node.inputs.get(1).ok_or("Reshape missing shape input")?)
                 .ok_or("Reshape target must be constant")?
                 .as_i64s()
                 .ok_or("Reshape target must be integer")?
                 .to_vec();
+            // With allowzero=1 (opset 14) a 0 in the target is a literal
+            // zero dim, not "copy the input dim" — unsupported, so reject
+            // rather than silently reinterpret.
+            if node.attr_int("allowzero").unwrap_or(0) != 0 && target.contains(&0) {
+                return Err("Reshape with allowzero=1 and a 0 target dim".into());
+            }
             one(x.dtype, reshape_dims(&x.dims, &target)?)
         }
         "Squeeze" => {
@@ -216,6 +222,16 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
                         .iter()
                         .map(|&a| norm_axis(a, x.dims.len()))
                         .collect::<Result<_, _>>()?;
+                    // ONNX requires squeezed dims to be 1; dropping a larger
+                    // dim would desynchronize dims from the element count.
+                    for &a in &axes {
+                        if x.dims[a] != 1 {
+                            return Err(format!(
+                                "Squeeze axis {a} has size {}, expected 1",
+                                x.dims[a]
+                            ));
+                        }
+                    }
                     x.dims
                         .iter()
                         .enumerate()
@@ -248,13 +264,22 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
         }
         "Flatten" => {
             let x = info(0)?;
-            let axis = norm_axis(node.attr_int("axis").unwrap_or(1), x.dims.len() + 1)?;
-            let (lead, tail) = x.dims.split_at(axis.min(x.dims.len()));
+            // ONNX Flatten: axis in [-r, r]; axis == r is valid (everything
+            // in the leading dim), but a negative axis counts from r, so it
+            // normalizes against the rank, not rank + 1. Zero-size dims stay
+            // zero: the empty product is already 1.
+            let raw = node.attr_int("axis").unwrap_or(1);
+            let axis = if raw < 0 {
+                norm_axis(raw, x.dims.len())?
+            } else {
+                norm_axis(raw, x.dims.len() + 1)?
+            };
+            let (lead, tail) = x.dims.split_at(axis);
             one(
                 x.dtype,
                 vec![
-                    lead.iter().product::<usize>().max(1),
-                    tail.iter().product::<usize>().max(1),
+                    lead.iter().product::<usize>(),
+                    tail.iter().product::<usize>(),
                 ],
             )
         }
@@ -276,8 +301,17 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
             dims[axis] = 0;
             for i in 0..node.inputs.len() {
                 let x = info(i)?;
-                if x.dims.len() != first.dims.len() {
-                    return Err("Concat rank mismatch".into());
+                let compatible = x.dims.len() == first.dims.len()
+                    && x.dims
+                        .iter()
+                        .zip(&first.dims)
+                        .enumerate()
+                        .all(|(d, (a, b))| d == axis || a == b);
+                if !compatible {
+                    return Err(format!(
+                        "Concat shape mismatch: {:?} vs {:?} on axis {axis}",
+                        x.dims, first.dims
+                    ));
                 }
                 dims[axis] += x.dims[axis];
             }
@@ -301,13 +335,32 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
                     .map(|&v| checked_dim(v, "Split size"))
                     .collect::<Result<_, _>>()?,
                 None => {
-                    if x.dims[axis] % n != 0 {
-                        return Err(format!(
-                            "Split axis {} of size {} not divisible by {n}",
-                            axis, x.dims[axis]
-                        ));
+                    if let Some(num) = node.attr_int("num_outputs") {
+                        // Opset 18 form: uneven splits allowed, chunks of
+                        // ceil(size/n) with a smaller final chunk.
+                        if num != n as i64 {
+                            return Err(format!(
+                                "Split num_outputs {num} but node has {n} outputs"
+                            ));
+                        }
+                        let chunk = x.dims[axis].div_ceil(n);
+                        let mut remaining = x.dims[axis];
+                        (0..n)
+                            .map(|_| {
+                                let s = chunk.min(remaining);
+                                remaining -= s;
+                                s
+                            })
+                            .collect()
+                    } else {
+                        if x.dims[axis] % n != 0 {
+                            return Err(format!(
+                                "Split axis {} of size {} not divisible by {n}",
+                                axis, x.dims[axis]
+                            ));
+                        }
+                        vec![x.dims[axis] / n; n]
                     }
-                    vec![x.dims[axis] / n; n]
                 }
             };
             let covered = sizes
@@ -338,11 +391,12 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
         }
         "Shape" => {
             let x = info(0)?;
-            one(DType::I64, vec![x.dims.len()])
+            let (start, end) = shape_slice_bounds(node, x.dims.len());
+            one(DType::I64, vec![end.saturating_sub(start)])
         }
         "ConstantOfShape" => {
             let shape = g
-                .konst(node.inputs[0])
+                .konst(*node.inputs.first().ok_or("ConstantOfShape missing input")?)
                 .ok_or("ConstantOfShape input must be constant")?
                 .as_i64s()
                 .ok_or("ConstantOfShape input must be integer")?;
@@ -359,7 +413,7 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
         "Expand" => {
             let x = info(0)?;
             let shape: Vec<usize> = g
-                .konst(node.inputs[1])
+                .konst(*node.inputs.get(1).ok_or("Expand missing shape input")?)
                 .ok_or("Expand shape must be constant")?
                 .as_i64s()
                 .ok_or("Expand shape must be integer")?
@@ -371,7 +425,7 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
         "Tile" => {
             let x = info(0)?;
             let repeats = g
-                .konst(node.inputs[1])
+                .konst(*node.inputs.get(1).ok_or("Tile missing repeats input")?)
                 .ok_or("Tile repeats must be constant")?
                 .as_i64s()
                 .ok_or("Tile repeats must be integer")?;
@@ -402,6 +456,18 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
         "Range" | "NonZero" => Err(format!("{} must be constant at import time", node.op)),
         other => Err(format!("unsupported operator {other}")),
     }
+}
+
+/// The resolved `[start, end)` window of ONNX `Shape` (opset 15 added the
+/// `start`/`end` attributes: negative values count from the rank, then both
+/// clamp to `[0, rank]`).
+pub fn shape_slice_bounds(node: &INode, rank: usize) -> (usize, usize) {
+    let r = rank as i64;
+    let clamp = |v: i64| (if v < 0 { v + r } else { v }).clamp(0, r) as usize;
+    (
+        clamp(node.attr_int("start").unwrap_or(0)),
+        clamp(node.attr_int("end").unwrap_or(r)),
+    )
 }
 
 /// ONNX Reshape semantics: `0` copies the input dim, one `-1` is inferred.
@@ -476,9 +542,9 @@ pub fn slice_params(node: &INode, input_dims: &[usize]) -> Result<SliceParams, S
             v.clamp(0, size)
         };
         let (s, e) = (clamp(start), clamp(end));
-        if e < s {
-            return Err(format!("empty slice {start}..{end} on axis {axis}"));
-        }
+        // ONNX: start >= end (after clamping) yields an empty output, not an
+        // error — shape-subgraph-computed bounds produce this legitimately.
+        let e = e.max(s);
         dims[axis] = (e - s) as usize;
         starts_out.push(s);
         ends_out.push(e);

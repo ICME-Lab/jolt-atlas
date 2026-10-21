@@ -77,6 +77,20 @@ fn expand(t: &ConstTensor, dims: &[usize], budget: usize) -> Result<ConstTensor,
     })
 }
 
+/// Narrow an I32-labeled payload to int32 range (two's-complement wrap,
+/// matching what onnxruntime's int32 arithmetic/casts compute). The importer
+/// stores I32 widened to i64, so without this a fold could carry values no
+/// int32 runtime ever produces.
+fn wrap_i32(t: &mut ConstTensor) {
+    if t.dtype == DType::I32
+        && let ConstData::I64(v) = &mut t.data
+    {
+        for x in v {
+            *x = *x as i32 as i64;
+        }
+    }
+}
+
 fn binary_numeric(
     a: &ConstTensor,
     b: &ConstTensor,
@@ -94,7 +108,7 @@ fn binary_numeric(
         }),
         (ConstData::I64(x), ConstData::I64(y)) => {
             let v: Result<Vec<i64>, String> = x.iter().zip(y).map(|(&p, &q)| fi(p, q)).collect();
-            Ok(ConstTensor {
+            let mut t = ConstTensor {
                 dtype: if a.dtype == DType::I32 && b.dtype == DType::I32 {
                     DType::I32
                 } else {
@@ -102,7 +116,9 @@ fn binary_numeric(
                 },
                 dims,
                 data: ConstData::I64(v?),
-            })
+            };
+            wrap_i32(&mut t);
+            Ok(t)
         }
         _ => Err("mixed/unsupported operand types in constant fold".into()),
     }
@@ -164,12 +180,16 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
     match node.op.as_str() {
         "Shape" => {
             let dims = g
-                .dims(node.inputs[0])
+                .dims(*node.inputs.first().ok_or("Shape missing input")?)
                 .ok_or("Shape input has no inferred dims")?;
+            // Opset 15 Shape takes start/end attributes and returns
+            // dims[start..end]; ignoring them would fold the wrong shape.
+            let (start, end) = shape_fns::shape_slice_bounds(node, dims.len());
+            let window = &dims[start..end.max(start)];
             out(ConstTensor {
                 dtype: DType::I64,
-                dims: vec![dims.len()],
-                data: ConstData::I64(dims.iter().map(|&d| d as i64).collect()),
+                dims: vec![window.len()],
+                data: ConstData::I64(window.iter().map(|&d| d as i64).collect()),
             })
         }
         "Identity" => out(k(0)?.clone()),
@@ -181,15 +201,19 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                     dims: t.dims.clone(),
                     data: ConstData::F32(v.iter().map(|&x| -x).collect()),
                 }),
-                ConstData::I64(v) => out(ConstTensor {
-                    dtype: t.dtype,
-                    dims: t.dims.clone(),
-                    data: ConstData::I64(
-                        v.iter()
-                            .map(|&x| x.checked_neg().ok_or("i64 overflow in Neg fold"))
-                            .collect::<Result<_, _>>()?,
-                    ),
-                }),
+                ConstData::I64(v) => {
+                    let mut r = ConstTensor {
+                        dtype: t.dtype,
+                        dims: t.dims.clone(),
+                        data: ConstData::I64(
+                            v.iter()
+                                .map(|&x| x.checked_neg().ok_or("i64 overflow in Neg fold"))
+                                .collect::<Result<_, _>>()?,
+                        ),
+                    };
+                    wrap_i32(&mut r);
+                    out(r)
+                }
                 ConstData::Bool(_) => Err("Neg of bool".into()),
             }
         }
@@ -212,19 +236,39 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                             ConstData::Bool(v) => v.iter().map(|&x| x as u8 as f32).collect(),
                         }),
                     },
-                    DataType::Int64 | DataType::Int32 => ConstTensor {
-                        dtype: if target == DataType::Int64 {
-                            DType::I64
-                        } else {
-                            DType::I32
-                        },
-                        dims,
-                        data: ConstData::I64(match &t.data {
-                            ConstData::F32(v) => v.iter().map(|&x| x as i64).collect(),
-                            ConstData::I64(v) => v.clone(),
+                    DataType::Int64 | DataType::Int32 => {
+                        // Int32 results are narrowed with two's-complement
+                        // wrap (C static_cast, what onnxruntime computes).
+                        // Non-finite float→int is undefined in ONNX and
+                        // runtime-dependent, so refuse rather than guess.
+                        let narrow = target == DataType::Int32;
+                        let vals: Vec<i64> = match &t.data {
+                            ConstData::F32(v) => v
+                                .iter()
+                                .map(|&x| {
+                                    if !x.is_finite() {
+                                        return Err(format!(
+                                            "Cast of non-finite {x} to int in fold"
+                                        ));
+                                    }
+                                    Ok(if narrow { x as i32 as i64 } else { x as i64 })
+                                })
+                                .collect::<Result<_, _>>()?,
+                            ConstData::I64(v) => {
+                                if narrow {
+                                    v.iter().map(|&x| x as i32 as i64).collect()
+                                } else {
+                                    v.clone()
+                                }
+                            }
                             ConstData::Bool(v) => v.iter().map(|&x| x as i64).collect(),
-                        }),
-                    },
+                        };
+                        ConstTensor {
+                            dtype: if narrow { DType::I32 } else { DType::I64 },
+                            dims,
+                            data: ConstData::I64(vals),
+                        }
+                    }
                     DataType::Bool => ConstTensor {
                         dtype: DType::Bool,
                         dims,
@@ -272,12 +316,18 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                 }
             },
         )?),
-        "Pow" => out(binary_numeric(k(0)?, k(1)?, f32::powf, |a, b| {
-            u32::try_from(b)
-                .ok()
-                .and_then(|e| a.checked_pow(e))
-                .ok_or_else(|| "integer Pow out of range".to_string())
-        })?),
+        "Pow" => {
+            // ONNX Pow's result type is the base type, not the promotion.
+            let mut r = binary_numeric(k(0)?, k(1)?, f32::powf, |a, b| {
+                u32::try_from(b)
+                    .ok()
+                    .and_then(|e| a.checked_pow(e))
+                    .ok_or_else(|| "integer Pow out of range".to_string())
+            })?;
+            r.dtype = k(0)?.dtype;
+            wrap_i32(&mut r);
+            out(r)
+        }
         "Equal" => out(compare(k(0)?, k(1)?, |a, b| a == b, |a, b| a == b)?),
         "LessOrEqual" => out(compare(k(0)?, k(1)?, |a, b| a <= b, |a, b| a <= b)?),
         "Less" => out(compare(k(0)?, k(1)?, |a, b| a < b, |a, b| a < b)?),
@@ -329,7 +379,9 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                 _ => return Err("Where branch types disagree".into()),
             };
             out(ConstTensor {
-                dtype: ea.dtype,
+                // Match shape inference's dtype promotion (I32 + I64 → I64),
+                // not whichever branch happens to be X.
+                dtype: shape_fns::promote(ea.dtype, eb.dtype)?,
                 dims,
                 data,
             })
@@ -338,6 +390,16 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Reshape" | "Squeeze" | "Unsqueeze" | "Flatten" => {
             let infos = shape_fns::infer(node, g)?;
             let mut t = k(0)?.clone();
+            let n = checked_element_count(&infos[0].dims)
+                .ok_or("reinterpreted shape overflows")?;
+            if n != t.len() {
+                return Err(format!(
+                    "{} fold would change the element count: {:?} holds {} elements",
+                    node.op,
+                    infos[0].dims,
+                    t.len()
+                ));
+            }
             t.dims = infos[0].dims.clone();
             out(t)
         }
@@ -380,7 +442,8 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
             let parts: Vec<&ConstTensor> =
                 (0..node.inputs.len()).map(k).collect::<Result<_, _>>()?;
             for p in &parts {
-                let compatible = p.dims.len() == first.dims.len()
+                let compatible = p.dtype == first.dtype
+                    && p.dims.len() == first.dims.len()
                     && p.dims
                         .iter()
                         .zip(&first.dims)

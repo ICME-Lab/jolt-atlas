@@ -508,19 +508,25 @@ pub fn from_proto(
             };
             attrs.insert(a.name.clone(), value);
         }
-        // Optional trailing inputs are encoded as "" in ONNX; drop them.
-        let inputs = node
-            .input
-            .iter()
-            .filter(|n| !n.is_empty())
-            .map(|n| g.edge_by_name(n))
-            .collect();
-        let outputs = node
-            .output
-            .iter()
-            .filter(|n| !n.is_empty())
-            .map(|n| g.edge_by_name(n))
-            .collect();
+        // Optional trailing inputs/outputs are encoded as "" in ONNX; drop
+        // them. An omitted *interior* operand (e.g. Slice without axes but
+        // with steps) must not be dropped — later operands would silently
+        // shift into its position — so it is rejected instead.
+        let mut positional = |names: &[String], kind: &str| -> Result<Vec<EdgeId>, ImportError> {
+            let mut names = names;
+            while names.last().is_some_and(|n| n.is_empty()) {
+                names = &names[..names.len() - 1];
+            }
+            if names.iter().any(|n| n.is_empty()) {
+                return Err(ImportError::UnsupportedFeature {
+                    what: format!("omitted optional {kind} before a supplied one"),
+                    context: name.clone(),
+                });
+            }
+            Ok(names.iter().map(|n| g.edge_by_name(n)).collect())
+        };
+        let inputs = positional(&node.input, "input")?;
+        let outputs = positional(&node.output, "output")?;
         g.push_node(INode {
             name,
             op: node.op_type.clone(),

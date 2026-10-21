@@ -29,6 +29,7 @@ pub fn run_all(g: &mut IGraph) -> Result<Vec<PassReport>, ImportError> {
     let mut reports = Vec::new();
     let passes: &[(&'static str, Pass)] = &[
         ("elide", elide),
+        ("gather_norm", gather_norm),
         ("reshape_family", reshape_family),
         ("split_to_slices", split_to_slices),
         ("pow_to_square_cube", pow_to_square_cube),
@@ -191,6 +192,75 @@ fn split_to_slices(g: &mut IGraph) -> Result<usize, ImportError> {
 }
 
 /// Pow(x, const 2|3) → atlas.Square / atlas.Cube.
+/// Normalize Gather: resolve a negative axis attribute and rebase negative
+/// constant indices (ONNX from-the-end indexing) by the axis length — the
+/// prover's gather kernels only accept non-negative indices.
+fn gather_norm(g: &mut IGraph) -> Result<usize, ImportError> {
+    let mut rewrites = 0;
+    for idx in 0..g.nodes.len() {
+        let Some(node) = g.nodes[idx].as_ref() else {
+            continue;
+        };
+        if node.op != "Gather" {
+            continue;
+        }
+        let name = node.name.clone();
+        let (data, indices) = (node.inputs[0], node.inputs[1]);
+        let axis_attr = node.attr_int("axis").unwrap_or(0);
+        let rank = dims_of(g, data).len();
+        let fail = |reason: String| ImportError::Pass {
+            pass: "gather_norm",
+            node: name.clone(),
+            reason,
+        };
+        let axis = crate::shape_fns::norm_axis(axis_attr, rank).map_err(&fail)?;
+        if axis as i64 != axis_attr {
+            let node = g.nodes[idx].as_mut().expect("live");
+            node.attrs.insert("axis".into(), Attr::Int(axis as i64));
+            rewrites += 1;
+        }
+        let axis_len = dims_of(g, data)[axis] as i64;
+        let Some(k) = g.konst(indices) else {
+            continue;
+        };
+        let Some(vals) = k.as_i64s() else {
+            continue; // non-integer indices fail shape/lowering loudly
+        };
+        if vals.iter().all(|&v| v >= 0) {
+            continue;
+        }
+        let (dtype, dims) = (k.dtype, k.dims.clone());
+        let resolved: Vec<i64> = vals
+            .iter()
+            .map(|&v| {
+                let r = if v < 0 { v + axis_len } else { v };
+                if (0..axis_len).contains(&r) {
+                    Ok(r)
+                } else {
+                    Err(format!("Gather index {v} out of range for axis length {axis_len}"))
+                }
+            })
+            .collect::<Result<_, _>>()
+            .map_err(&fail)?;
+        // The index constant may feed other nodes; rebase on a fresh edge.
+        let re = g.fresh_edge(
+            &format!("{name}/indices"),
+            TensorInfo {
+                dtype,
+                dims: dims.clone(),
+            },
+        );
+        g.edge_mut(re).konst = Some(ConstTensor {
+            dtype,
+            dims,
+            data: ConstData::I64(resolved),
+        });
+        g.nodes[idx].as_mut().expect("live").inputs[1] = re;
+        rewrites += 1;
+    }
+    Ok(rewrites)
+}
+
 fn pow_to_square_cube(g: &mut IGraph) -> Result<usize, ImportError> {
     let mut rewrites = 0;
     for idx in 0..g.nodes.len() {
@@ -506,6 +576,15 @@ fn div_rewrites(g: &mut IGraph) -> Result<usize, ImportError> {
                     let Some(vals) = k.as_f32s() else {
                         continue; // integer Div would have folded; leave it
                     };
+                    // 1/0 would silently become a huge finite constant
+                    // under quantization; ONNX produces inf/NaN there.
+                    if vals.iter().any(|&v| !(1.0 / v).is_finite()) {
+                        return Err(ImportError::Pass {
+                            pass: "div_rewrites",
+                            node: name,
+                            reason: "Div by a zero or non-finite constant".into(),
+                        });
+                    }
                     let recip = ConstTensor {
                         dtype: DType::F32,
                         dims: k.dims.clone(),
@@ -621,20 +700,20 @@ fn matmul_gemm_to_einsum(g: &mut IGraph) -> Result<usize, ImportError> {
                 .unwrap_or(0)
                 != 0;
 
-        // Absorb Transpose(last two axes) feeding either operand.
-        let mut a_swapped = false;
+        // Absorb Transpose(last two axes) feeding the RHS: both RHS layouts
+        // ("kn"/"nk") are canonical. The LHS has no "km" einsum, so a
+        // transposed LHS keeps its Transpose (it becomes a MoveAxis) rather
+        // than being absorbed into an equation lowering would reject.
         let mut b_swapped = b_transposed;
-        for (operand, swapped) in [(&mut a, &mut a_swapped), (&mut b, &mut b_swapped)] {
-            if let Some((_, p)) = g.producer(*operand)
-                && (p.op == "Transpose")
-                && p.attrs.get("perm").is_some_and(|attr| {
-                    matches!(attr, Attr::Ints(perm)
-                        if is_last_two_swap(&perm.iter().map(|&v| v as usize).collect::<Vec<_>>()))
-                })
-            {
-                *operand = p.inputs[0];
-                *swapped = !*swapped;
-            }
+        if let Some((_, p)) = g.producer(b)
+            && (p.op == "Transpose")
+            && p.attrs.get("perm").is_some_and(|attr| {
+                matches!(attr, Attr::Ints(perm)
+                    if is_last_two_swap(&perm.iter().map(|&v| v as usize).collect::<Vec<_>>()))
+            })
+        {
+            b = p.inputs[0];
+            b_swapped = !b_swapped;
         }
 
         let mut a_dims = dims_of(g, a);
@@ -662,9 +741,8 @@ fn matmul_gemm_to_einsum(g: &mut IGraph) -> Result<usize, ImportError> {
         let batch = &b"abcd"[..];
         let equation = match (ra, rb) {
             (2, 2) => {
-                let lhs = if a_swapped { "km" } else { "mk" };
                 let rhs = if b_swapped { "nk" } else { "kn" };
-                format!("{lhs},{rhs}->mn")
+                format!("mk,{rhs}->mn")
             }
             (r, s) if r == s && (3..=4).contains(&r) => {
                 // Batched forms normalize to a contraction-last RHS
@@ -673,13 +751,6 @@ fn matmul_gemm_to_einsum(g: &mut IGraph) -> Result<usize, ImportError> {
                 // (no transpose to absorb, e.g. attention·V) gets an
                 // explicit MoveAxis — a cheap structural node — instead of
                 // its own einsum layout.
-                if a_swapped {
-                    return Err(ImportError::Pass {
-                        pass: "matmul_gemm_to_einsum",
-                        node: name,
-                        reason: "batched matmul with transposed LHS unsupported".into(),
-                    });
-                }
                 if !b_swapped {
                     let mut t_dims = b_dims.clone();
                     t_dims.swap(r - 2, r - 1);
@@ -1193,9 +1264,9 @@ fn repeat_to_gather(g: &mut IGraph) -> Result<usize, ImportError> {
 /// Cast policy in the quantized domain:
 /// - float → int/bool: `atlas.Descale` (divide by `2^scale`; maps a scaled
 ///   0/S mask to raw 0/1) — old-crate parity;
-/// - int/bool → float: identity (runtime int values reaching a float
-///   context are scaled by construction: inputs are classified, constant
-///   trees fold in float).
+/// - int/bool → float: identity, but ONLY when the operand provably carries
+///   already-scaled values (see [`scaled_lineage`]); anything else would
+///   leak raw integers into the scaled domain, silently off by `2^scale`.
 fn cast_policy(g: &mut IGraph) -> Result<usize, ImportError> {
     let mut rewrites = 0;
     for idx in 0..g.nodes.len() {
@@ -1205,8 +1276,51 @@ fn cast_policy(g: &mut IGraph) -> Result<usize, ImportError> {
         if node.op != "Cast" {
             continue;
         }
-        let src = g.info(node.inputs[0]).map(|i| i.dtype).expect("analyzed");
+        let name = node.name.clone();
+        let input = node.inputs[0];
+        let src = g.info(input).map(|i| i.dtype).expect("analyzed");
         let dst = g.info(node.outputs[0]).map(|i| i.dtype).expect("analyzed");
+        if matches!(src, DType::I64 | DType::I32 | DType::Bool) && dst == DType::F32 {
+            match (scaled_lineage(g, input), raw_lineage(g, input)) {
+                // Pre-scaled by the input descriptor: the cast is a no-op.
+                (Ok(()), _) => {
+                    let node = g.nodes[idx].as_mut().expect("live");
+                    node.attrs.clear();
+                    node.op = "Identity".into();
+                }
+                // Provably raw (e.g. the floor idiom Cast(Cast(x→int)→f32)):
+                // entering the scaled domain multiplies by 2^scale, done as
+                // a raw Mul with constant 1.0 (which quantizes to 2^scale).
+                (Err(_), Ok(())) => {
+                    let one = g.fresh_edge(
+                        &format!("{name}/rescale"),
+                        TensorInfo {
+                            dtype: DType::F32,
+                            dims: vec![1],
+                        },
+                    );
+                    g.edge_mut(one).konst = Some(ConstTensor {
+                        dtype: DType::F32,
+                        dims: vec![1],
+                        data: ConstData::F32(vec![1.0]),
+                    });
+                    let node = g.nodes[idx].as_mut().expect("live");
+                    node.attrs.clear();
+                    node.op = "atlas.RawMul".into();
+                    node.inputs = vec![input, one];
+                }
+                // Mixed or unprovable: refuse rather than guess the domain.
+                (Err(scaled), Err(raw)) => {
+                    return Err(ImportError::Pass {
+                        pass: "cast_policy",
+                        node: name,
+                        reason: format!("int→float Cast is neither provably scaled ({scaled}) nor provably raw ({raw})"),
+                    });
+                }
+            }
+            rewrites += 1;
+            continue;
+        }
         let node = g.nodes[idx].as_mut().expect("live");
         node.attrs.clear();
         match (src, dst) {
@@ -1220,6 +1334,94 @@ fn cast_policy(g: &mut IGraph) -> Result<usize, ImportError> {
         rewrites += 1;
     }
     Ok(rewrites)
+}
+
+/// Verify that an int→float Cast operand is scaled by construction: its
+/// lineage must pass only through value-preserving ops and terminate at
+/// graph inputs (which `classify_inputs` then marks Scaled through the very
+/// same ops, so the caller supplies pre-scaled values). Integer arithmetic,
+/// a descaled float, or an int constant in the lineage would be raw, and
+/// lowering the Cast to identity would misread it as scaled — so reject.
+/// Keep the op list a subset of the walk in `classify_int_input` (modulo
+/// the pass-rewrite renames, which run before this policy).
+fn scaled_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
+    let mut frontier = vec![start];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(e) = frontier.pop() {
+        if !seen.insert(e) {
+            continue;
+        }
+        if g.inputs.contains(&e) {
+            continue;
+        }
+        if g.konst(e).is_some() {
+            return Err(format!(
+                "int→float Cast lineage reaches constant {}, whose raw value \
+                 would be misread as scaled",
+                g.edge(e).name
+            ));
+        }
+        let Some((_, p)) = g.producer(e) else {
+            return Err(format!("{} has no producer", g.edge(e).name));
+        };
+        match p.op.as_str() {
+            // Value-preserving data movement, pre- and post-rewrite names.
+            // Gather/Slice carry their data operand through unchanged; the
+            // index/shape operands are not part of the value lineage.
+            "Unsqueeze" | "Squeeze" | "Reshape" | "Flatten" | "Identity" | "Slice" | "Expand"
+            | "Tile" | "Transpose" | "Split" | "Gather" | "atlas.Slice" | "atlas.MoveAxis"
+            | "atlas.Broadcast" => frontier.push(p.inputs[0]),
+            "Concat" => frontier.extend(p.inputs.iter().copied()),
+            other => {
+                return Err(format!(
+                    "int→float Cast fed by `{other}`; only value-preserving \
+                     lineages from classified inputs lower to identity"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The dual of [`scaled_lineage`]: the operand provably carries raw integer
+/// values — every leaf is an int constant or the output of a float→int Cast
+/// (both raw by construction), reached through value-preserving ops or raw
+/// integer arithmetic, and never a graph input (whose classification this
+/// pass cannot see).
+fn raw_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
+    let mut frontier = vec![start];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(e) = frontier.pop() {
+        if !seen.insert(e) {
+            continue;
+        }
+        if g.inputs.contains(&e) {
+            return Err(format!(
+                "{} is a graph input; its quantization kind is not visible here",
+                g.edge(e).name
+            ));
+        }
+        if g.konst(e).is_some() {
+            continue; // unfolded int constants are raw
+        }
+        let Some((_, p)) = g.producer(e) else {
+            return Err(format!("{} has no producer", g.edge(e).name));
+        };
+        match p.op.as_str() {
+            // A float→int cast produces raw values, whatever fed it.
+            "atlas.Descale" => continue,
+            "Cast" if g.info(e).is_some_and(|i| i.dtype != DType::F32) => continue,
+            "Unsqueeze" | "Squeeze" | "Reshape" | "Flatten" | "Identity" | "Slice" | "Expand"
+            | "Tile" | "Transpose" | "Split" | "Gather" | "atlas.Slice" | "atlas.MoveAxis"
+            | "atlas.Broadcast" => frontier.push(p.inputs[0]),
+            // Raw integer arithmetic stays raw (integer Mul lowers without
+            // the fixed-point rebase).
+            "Add" | "Sub" | "Mul" | "Neg" | "Concat" | "Where" | "And" | "Equal" | "Less"
+            | "LessOrEqual" | "Greater" => frontier.extend(p.inputs.iter().copied()),
+            other => return Err(format!("`{other}` is not provably raw")),
+        }
+    }
+    Ok(())
 }
 
 /// Make `Edge` debug-printable for pass tests.

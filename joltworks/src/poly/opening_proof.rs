@@ -428,7 +428,7 @@ where
     /// `Openings<F>` - The openings with points removed
     pub fn take(&mut self) -> Openings<F> {
         // to reduce proof size, remove all the opening points from accumulator.openings and just leave the claims
-        for (_, opening) in self.openings.iter_mut() {
+        for opening in self.openings.values_mut() {
             opening.0.r.clear();
         }
         std::mem::take(&mut self.openings)
@@ -496,7 +496,7 @@ where
         let _enter = prepare_span.enter();
 
         // Populate dense_polynomial_map
-        for (_, sumcheck) in self.sumchecks.iter() {
+        for sumcheck in self.sumchecks.values() {
             if let ProverOpening::Dense(_) = &sumcheck.prover_state {
                 let poly_id = sumcheck.polynomials[0];
                 self.dense_polynomial_map.entry(poly_id).or_insert_with(|| {

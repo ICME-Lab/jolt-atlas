@@ -94,12 +94,12 @@ pub fn softmax_last_axis_decomposed(
     decomp
         .lut_hi
         .resize(decomp.lut_hi.len().next_power_of_two(), 0);
-    let z_bound = (decomp.lut_hi.len() * decomp.base) as i32;
+    let z_bound = (decomp.lut_hi.len() * decomp.base) as i64;
 
     // Pre-allocate all witness vectors.
     let mut max_k = Vec::with_capacity(num_slices);
     let mut argmax_k = Vec::with_capacity(num_slices);
-    let mut z = vec![0i32; total];
+    let mut z = vec![0i64; total];
     let mut exp_q = vec![0i32; total];
     let mut exp_sum_q = Vec::with_capacity(num_slices);
     let mut inv_sum = Vec::with_capacity(num_slices);
@@ -126,10 +126,13 @@ pub fn softmax_last_axis_decomposed(
         argmax_k.push(argmax);
 
         // 3. z and exp_q via DECOMPOSED lookup
+        // `mv - x` needs 33 bits (a `max_k` near `i32::MAX` against an attention mask near
+        // `i32::MIN`), so `z` is accumulated in i64.
+        let mv = i64::from(mv);
         let mut sum_exp: i32 = 0;
         for j in 0..last_dim {
             let idx = offset + j;
-            z[idx] = mv - data[idx]; // ≥ 0
+            z[idx] = mv - i64::from(data[idx]); // ≥ 0
 
             // Saturate to sub-table range: z_c = min(z, z_bound - 1)
             // where z_bound = K_hi * B.  For values beyond the table,
@@ -272,10 +275,10 @@ pub fn generate_exp_lut_decomposed(scale: i32) -> ExpLutDecomposed {
 /// the flat `[F*N]` input. Used by softmax's saturating-clamp lookup
 /// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::significance_clamp`) to re-derive the
 /// pre-clamp witness without re-running the full decomposed trace.
-pub fn softmax_z(x: &[i32], max_k: &[i32], last_dim: usize) -> Vec<i32> {
+pub fn softmax_z(x: &[i32], max_k: &[i32], last_dim: usize) -> Vec<i64> {
     x.iter()
         .enumerate()
-        .map(|(idx, &xi)| max_k[idx / last_dim] - xi)
+        .map(|(idx, &xi)| i64::from(max_k[idx / last_dim]) - i64::from(xi))
         .collect()
 }
 

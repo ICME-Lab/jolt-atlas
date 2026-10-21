@@ -814,10 +814,14 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                     .sum()
             };
 
-            let gruen_univariate_evals =
-                d_gruen.gruen_poly_deg_2(gruen_eval_0, previous_claim / eq_r_address_claim);
-
-            gruen_univariate_evals * eq_r_address_claim
+            assert!(!eq_r_address_claim.is_zero(), "division by zero");
+            // Gruen interpolation is linear in both inputs. Move the address
+            // factor inside to avoid dividing by it, then retain normalization.
+            UniPoly::from_coeff(
+                d_gruen
+                    .gruen_poly_deg_2(eq_r_address_claim * gruen_eval_0, previous_claim)
+                    .coeffs,
+            )
         }
     }
 
@@ -884,6 +888,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
 
 #[cfg(test)]
 mod tests {
+    use super::{EqAddressState, EqCycleState, OneHotPolynomialProverOpening};
     use crate::{
         field::JoltField,
         poly::{
@@ -894,26 +899,101 @@ mod tests {
                     HyperKZGVerifierKey,
                 },
             },
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+            multilinear_polynomial::{
+                MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+            },
             one_hot_polynomial::OneHotPolynomial,
             opening_proof::{
                 OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
                 VerifierOpeningAccumulator, BIG_ENDIAN,
             },
             rlc_polynomial::build_materialized_rlc,
+            unipoly::UniPoly,
         },
         transcripts::{Blake2bTranscript, Transcript},
     };
     use ark_bn254::Bn254;
     use ark_ec::pairing::Pairing;
-    use ark_std::UniformRand;
+    use ark_std::{UniformRand, Zero};
     use common::CommittedPoly;
     use itertools::Itertools;
     use rand::{Rng, SeedableRng};
     use std::collections::BTreeMap;
+    use std::sync::{Arc, RwLock};
 
     type Fr = <Bn254 as Pairing>::ScalarField;
     type Challenge = <Fr as JoltField>::Challenge;
+
+    #[test]
+    fn one_hot_cycle_messages_match_dense_sum() {
+        for log_t in [1, 2, 4] {
+            for all_zero in [false, true] {
+                let r_address = [Challenge::from(3u128), Challenge::from(5u128)];
+                let r_cycle: Vec<_> = (0..log_t).map(|i| Challenge::from(7 + i as u128)).collect();
+                let indices = (0..1 << log_t)
+                    .map(|i| (!all_zero && i % 3 != 0).then_some((i % 4) as u16))
+                    .collect();
+                let polynomial = OneHotPolynomial::<Fr>::from_indices(indices, 4);
+                let point = [r_address.as_slice(), r_cycle.as_slice()].concat();
+                let mut claim = polynomial.evaluate(&point);
+                let mut opening = OneHotPolynomialProverOpening::new(
+                    Arc::new(RwLock::new(EqAddressState::new(&r_address))),
+                    Arc::new(RwLock::new(EqCycleState::new(&r_cycle))),
+                );
+                opening.initialize(polynomial);
+
+                for round in 0..2 + log_t {
+                    let message = opening.compute_message(round, claim);
+                    if round >= 2 {
+                        let address = opening.eq_address_state.read().unwrap();
+                        let cycle = opening.eq_cycle_state.read().unwrap();
+                        let h = opening.polynomial.H.read().unwrap();
+                        let d = cycle.D.merge();
+                        let half = h.len() / 2;
+                        // Independently sum the dense product at x = 0, 1, 2.
+                        let evals: Vec<Fr> = (0..3)
+                            .map(|x| {
+                                let x = Fr::from_u64(x);
+                                (0..half)
+                                    .map(|j| {
+                                        let d_x = d[j] + x * (d[j + half] - d[j]);
+                                        let h_0 = h.get_bound_coeff(j);
+                                        let h_x = h_0 + x * (h.get_bound_coeff(j + half) - h_0);
+                                        address.B.final_claim() * d_x * h_x
+                                    })
+                                    .sum()
+                            })
+                            .collect();
+                        let expected = UniPoly::from_coeff(UniPoly::from_evals(&evals).coeffs);
+                        assert_eq!(message, expected);
+                        assert_eq!(
+                            message.evaluate(&Fr::zero()) + message.evaluate(&Fr::from_u64(1)),
+                            claim
+                        );
+                        if all_zero {
+                            assert_eq!(message.coeffs, vec![Fr::zero()]);
+                        }
+                    }
+                    let challenge = Challenge::from(13 + round as u128);
+                    claim = message.evaluate(&challenge);
+                    opening.bind(challenge, round);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "division by zero")]
+    fn one_hot_cycle_rejects_zero_address_factor() {
+        let mut opening = OneHotPolynomialProverOpening::<Fr>::new(
+            Arc::new(RwLock::new(EqAddressState::new(&[Fr::from_u64(1)]))),
+            Arc::new(RwLock::new(EqCycleState::new(&[Challenge::from(3u128)]))),
+        );
+        opening.initialize(OneHotPolynomial::from_indices(vec![Some(0), Some(1)], 2));
+        // eq(1, 0) = 0. Use a field one, not the encoded challenge value 1.
+        opening.bind(Challenge::from(0u128), 0);
+        opening.compute_message(1, Fr::zero());
+    }
 
     #[test]
     fn test_3_dense() {

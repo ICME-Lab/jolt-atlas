@@ -92,8 +92,13 @@ fn classify_int_input(g: &IGraph, edge: EdgeId, name: &str) -> Result<InputKind,
                 if input != e {
                     continue;
                 }
+                // This walk must cover (at least) every op the cast-policy
+                // lineage check (`passes::scaled_lineage`) accepts, or an
+                // input could be classified RawInt while its Cast still
+                // lowers to identity — silently off by 2^scale.
                 match node.op.as_str() {
                     "Gather" if pos == 1 => used_as_index = true,
+                    "Gather" => frontier.extend(node.outputs.iter().copied()),
                     "Cast"
                         if g.info(node.outputs[0])
                             .is_some_and(|i| i.dtype == DType::F32) =>
@@ -101,7 +106,7 @@ fn classify_int_input(g: &IGraph, edge: EdgeId, name: &str) -> Result<InputKind,
                         used_as_float = true;
                     }
                     "Unsqueeze" | "Squeeze" | "Reshape" | "Flatten" | "Identity" | "Slice"
-                    | "Expand" | "Tile" | "Transpose" | "Concat" => {
+                    | "Expand" | "Tile" | "Transpose" | "Concat" | "Split" => {
                         frontier.extend(node.outputs.iter().copied());
                     }
                     _ => {}

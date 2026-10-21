@@ -1,0 +1,29 @@
+[package]
+name = "atlas-onnx-import-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+prost = "0.13"
+atlas-onnx-import = { path = ".." }
+atlas-trace = { path = "../../atlas-trace" }
+
+[[bin]]
+name = "import"
+path = "fuzz_targets/import.rs"
+test = false
+doc = false
+bench = false
+
+# Standalone workspace: the fuzz profile and nightly sanitizer flags must not
+# leak into the main workspace, and nothing here needs the root [patch] set.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1

@@ -4,11 +4,7 @@ use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::op::ScalarConstDiv;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Op;
-use atlas_trace::Tensor;
-use atlas_trace::Trace;
+use atlas_trace::{op::ScalarConstDiv, trace::LayerData, Op, Tensor, Trace};
 use common::CommittedPoly;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{

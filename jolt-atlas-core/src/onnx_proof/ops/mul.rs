@@ -5,9 +5,7 @@ use crate::{
     onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::op::Mul;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Trace;
+use atlas_trace::{op::Mul, trace::LayerData, Trace};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,

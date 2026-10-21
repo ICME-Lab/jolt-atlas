@@ -11,9 +11,7 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::op::Sub;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Trace;
+use atlas_trace::{op::Sub, trace::LayerData, Trace};
 use common::{CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{

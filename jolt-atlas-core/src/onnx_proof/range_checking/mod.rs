@@ -159,7 +159,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
         let padded_operands = TraceView::padded_operand_tensors(trace, &self.computation_node);
-        let lookup_operands = self.operands.build_lookup_operands(&padded_operands);
+        let lookup_operands = self.operands.build_lookup_operands(trace, &padded_operands);
 
         let lookup_bits = self
             .operands

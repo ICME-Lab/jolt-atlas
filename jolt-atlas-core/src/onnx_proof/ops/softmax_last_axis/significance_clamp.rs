@@ -21,8 +21,7 @@ use crate::{
     onnx_proof::op_lookups::{DefaultLookupOperands, LookupOperandsTrait},
     utils::opening_access::AccOpeningAccessor,
 };
-use atlas_trace::Tensor;
-use atlas_trace::Trace;
+use atlas_trace::{Tensor, Trace};
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,

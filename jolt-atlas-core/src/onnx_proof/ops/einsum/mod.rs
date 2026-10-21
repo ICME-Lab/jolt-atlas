@@ -1,12 +1,6 @@
 use std::sync::Arc;
 
-use atlas_trace::Model;
-
-use atlas_trace::Op;
-
-use atlas_trace::Trace;
-
-use atlas_trace::op::Einsum;
+use atlas_trace::{op::Einsum, Model, Op, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::{

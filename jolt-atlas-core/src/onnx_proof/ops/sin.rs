@@ -16,10 +16,7 @@ use crate::onnx_proof::{
     ProofId, ProofType, Prover, Verifier,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_trace::op::Sin;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Model;
-use atlas_trace::Tensor;
+use atlas_trace::{op::Sin, trace::LayerData, Model, Tensor};
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};

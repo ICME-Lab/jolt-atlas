@@ -13,11 +13,7 @@
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
 //! `BatchedSumcheck` call.
 
-use atlas_trace::Tensor;
-
-use atlas_trace::Trace;
-
-use atlas_trace::trace::LayerData;
+use atlas_trace::{trace::LayerData, Tensor, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;

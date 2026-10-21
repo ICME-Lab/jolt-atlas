@@ -4,8 +4,29 @@
 //! Folding computes in the declared dtype (f32 stays f32, matching what the
 //! exporter's own constant folding would produce).
 
-use crate::graph::{Attr, ConstData, ConstTensor, DType, IGraph, INode};
+use crate::graph::{Attr, ConstData, ConstTensor, DType, IGraph, INode, checked_element_count};
 use crate::shape_fns::{self, norm_axis};
+
+/// Base materialization budget for a fold, in elements. Shape/mask subgraphs
+/// are small; this admits an 8192x8192 mask.
+const FOLD_BASE_ELEMENTS: usize = 1 << 26;
+
+/// How many elements a fold of these inputs may materialize: the base
+/// budget, or twice the input payload for folds over real weights
+/// (transposed/concatenated initializers).
+fn fold_budget<'a>(inputs: impl Iterator<Item = &'a ConstTensor>) -> usize {
+    let input_elems: usize = inputs.map(|t| t.len()).sum();
+    FOLD_BASE_ELEMENTS.max(input_elems.saturating_mul(2))
+}
+
+/// Checked element count of a fold result, against `budget`. Untrusted
+/// shapes reach folding before the analysis-level cap, so every fold checks
+/// its output size *before* allocating.
+fn fold_numel(dims: &[usize], budget: usize) -> Result<usize, String> {
+    checked_element_count(dims)
+        .filter(|&n| n <= budget)
+        .ok_or_else(|| format!("fold result shape {dims:?} exceeds the materialization budget"))
+}
 
 /// Row-major strides.
 fn strides(dims: &[usize]) -> Vec<usize> {
@@ -29,9 +50,9 @@ fn bcast_src_index(flat: usize, out_dims: &[usize], src_dims: &[usize]) -> usize
     idx
 }
 
-/// Broadcast-expand a constant to `dims`.
-fn expand(t: &ConstTensor, dims: &[usize]) -> ConstTensor {
-    let total: usize = dims.iter().product();
+/// Broadcast-expand a constant to `dims`, within `budget` elements.
+fn expand(t: &ConstTensor, dims: &[usize], budget: usize) -> Result<ConstTensor, String> {
+    let total = fold_numel(dims, budget)?;
     let data = match &t.data {
         ConstData::F32(v) => ConstData::F32(
             (0..total)
@@ -49,11 +70,11 @@ fn expand(t: &ConstTensor, dims: &[usize]) -> ConstTensor {
                 .collect(),
         ),
     };
-    ConstTensor {
+    Ok(ConstTensor {
         dtype: t.dtype,
         dims: dims.to_vec(),
         data,
-    }
+    })
 }
 
 fn binary_numeric(
@@ -63,7 +84,8 @@ fn binary_numeric(
     fi: impl Fn(i64, i64) -> Result<i64, String>,
 ) -> Result<ConstTensor, String> {
     let dims = shape_fns::broadcast(&a.dims, &b.dims)?;
-    let (ea, eb) = (expand(a, &dims), expand(b, &dims));
+    let budget = fold_budget([a, b].into_iter());
+    let (ea, eb) = (expand(a, &dims, budget)?, expand(b, &dims, budget)?);
     match (&ea.data, &eb.data) {
         (ConstData::F32(x), ConstData::F32(y)) => Ok(ConstTensor {
             dtype: DType::F32,
@@ -93,7 +115,8 @@ fn compare(
     fi: impl Fn(i64, i64) -> bool,
 ) -> Result<ConstTensor, String> {
     let dims = shape_fns::broadcast(&a.dims, &b.dims)?;
-    let (ea, eb) = (expand(a, &dims), expand(b, &dims));
+    let budget = fold_budget([a, b].into_iter());
+    let (ea, eb) = (expand(a, &dims, budget)?, expand(b, &dims, budget)?);
     let data = match (&ea.data, &eb.data) {
         (ConstData::F32(x), ConstData::F32(y)) => {
             x.iter().zip(y).map(|(&p, &q)| ff(p, q)).collect()
@@ -161,7 +184,11 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                 ConstData::I64(v) => out(ConstTensor {
                     dtype: t.dtype,
                     dims: t.dims.clone(),
-                    data: ConstData::I64(v.iter().map(|&x| -x).collect()),
+                    data: ConstData::I64(
+                        v.iter()
+                            .map(|&x| x.checked_neg().ok_or("i64 overflow in Neg fold"))
+                            .collect::<Result<_, _>>()?,
+                    ),
                 }),
                 ConstData::Bool(_) => Err("Neg of bool".into()),
             }
@@ -212,23 +239,25 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
             };
             out(cast(t)?)
         }
+        // Integer folds use checked arithmetic: a wrapped constant would
+        // silently change the model's semantics.
         "Add" => out(binary_numeric(
             k(0)?,
             k(1)?,
             |a, b| a + b,
-            |a, b| Ok(a + b),
+            |a, b| a.checked_add(b).ok_or_else(|| "i64 overflow in Add fold".into()),
         )?),
         "Sub" => out(binary_numeric(
             k(0)?,
             k(1)?,
             |a, b| a - b,
-            |a, b| Ok(a - b),
+            |a, b| a.checked_sub(b).ok_or_else(|| "i64 overflow in Sub fold".into()),
         )?),
         "Mul" => out(binary_numeric(
             k(0)?,
             k(1)?,
             |a, b| a * b,
-            |a, b| Ok(a * b),
+            |a, b| a.checked_mul(b).ok_or_else(|| "i64 overflow in Mul fold".into()),
         )?),
         "Div" => out(binary_numeric(
             k(0)?,
@@ -245,8 +274,9 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         )?),
         "Pow" => out(binary_numeric(k(0)?, k(1)?, f32::powf, |a, b| {
             u32::try_from(b)
-                .map(|e| a.pow(e))
-                .map_err(|_| "negative integer exponent".to_string())
+                .ok()
+                .and_then(|e| a.checked_pow(e))
+                .ok_or_else(|| "integer Pow out of range".to_string())
         })?),
         "Equal" => out(compare(k(0)?, k(1)?, |a, b| a == b, |a, b| a == b)?),
         "LessOrEqual" => out(compare(k(0)?, k(1)?, |a, b| a <= b, |a, b| a <= b)?),
@@ -254,7 +284,8 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Greater" => out(compare(k(0)?, k(1)?, |a, b| a > b, |a, b| a > b)?),
         "And" => {
             let dims = shape_fns::broadcast(&k(0)?.dims, &k(1)?.dims)?;
-            let (a, b) = (expand(k(0)?, &dims), expand(k(1)?, &dims));
+            let budget = fold_budget([k(0)?, k(1)?].into_iter());
+            let (a, b) = (expand(k(0)?, &dims, budget)?, expand(k(1)?, &dims, budget)?);
             match (&a.data, &b.data) {
                 (ConstData::Bool(x), ConstData::Bool(y)) => out(ConstTensor {
                     dtype: DType::Bool,
@@ -267,7 +298,12 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Where" => {
             let (c, a, b) = (k(0)?, k(1)?, k(2)?);
             let dims = shape_fns::broadcast(&shape_fns::broadcast(&c.dims, &a.dims)?, &b.dims)?;
-            let (ec, ea, eb) = (expand(c, &dims), expand(a, &dims), expand(b, &dims));
+            let budget = fold_budget([c, a, b].into_iter());
+            let (ec, ea, eb) = (
+                expand(c, &dims, budget)?,
+                expand(a, &dims, budget)?,
+                expand(b, &dims, budget)?,
+            );
             let ConstData::Bool(cond) = &ec.data else {
                 return Err("Where condition must be bool".into());
             };
@@ -308,13 +344,14 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Transpose" => {
             let t = k(0)?;
             let perm: Vec<usize> = match node.attr_ints("perm") {
-                Some(p) => p.iter().map(|&v| v as usize).collect(),
+                Some(p) => shape_fns::validate_perm(p, t.dims.len())?,
                 None => (0..t.dims.len()).rev().collect(),
             };
             let out_dims: Vec<usize> = perm.iter().map(|&p| t.dims[p]).collect();
             let src_strides = strides(&t.dims);
             let out_strides = strides(&out_dims);
-            let total: usize = out_dims.len().pow(0).max(out_dims.iter().product());
+            // A valid perm preserves the element count, so this is t.len().
+            let total = t.len();
             let map_idx = |flat: usize| -> usize {
                 let mut src = 0;
                 for (axis, &od) in out_dims.iter().enumerate() {
@@ -342,6 +379,20 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
             )?;
             let parts: Vec<&ConstTensor> =
                 (0..node.inputs.len()).map(k).collect::<Result<_, _>>()?;
+            for p in &parts {
+                let compatible = p.dims.len() == first.dims.len()
+                    && p.dims
+                        .iter()
+                        .zip(&first.dims)
+                        .enumerate()
+                        .all(|(i, (a, b))| i == axis || a == b);
+                if !compatible {
+                    return Err(format!(
+                        "Concat shape mismatch: {:?} vs {:?} on axis {axis}",
+                        p.dims, first.dims
+                    ));
+                }
+            }
             let mut dims = first.dims.clone();
             dims[axis] = parts.iter().map(|p| p.dims[axis]).sum();
             let outer: usize = first.dims[..axis].iter().product();
@@ -422,6 +473,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
             let mut dims = data_t.dims[..axis].to_vec();
             dims.extend_from_slice(&idx_t.dims);
             dims.extend_from_slice(&data_t.dims[axis + 1..]);
+            fold_numel(&dims, fold_budget([data_t, idx_t].into_iter()))?;
             macro_rules! gat {
                 ($v:expr, $variant:ident) => {{
                     let mut data = Vec::with_capacity(outer * resolved.len() * inner);
@@ -451,10 +503,11 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                 .as_i64s()
                 .ok_or("Expand shape must be integer")?
                 .iter()
-                .map(|&d| d as usize)
-                .collect();
+                .map(|&d| usize::try_from(d).map_err(|_| format!("Expand: negative dim {d}")))
+                .collect::<Result<_, _>>()?;
             let dims = shape_fns::broadcast(&t.dims, &shape)?;
-            out(expand(t, &dims))
+            let budget = fold_budget([t].into_iter());
+            out(expand(t, &dims, budget)?)
         }
         "Tile" => {
             let t = k(0)?;
@@ -462,12 +515,23 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                 .as_i64s()
                 .ok_or("Tile repeats must be integer")?
                 .iter()
-                .map(|&r| r as usize)
-                .collect();
-            let out_dims: Vec<usize> = t.dims.iter().zip(&repeats).map(|(&d, &r)| d * r).collect();
+                .map(|&r| usize::try_from(r).map_err(|_| format!("Tile: negative repeat {r}")))
+                .collect::<Result<_, _>>()?;
+            if repeats.len() != t.dims.len() {
+                return Err("Tile repeats rank mismatch".into());
+            }
+            let out_dims: Vec<usize> = t
+                .dims
+                .iter()
+                .zip(&repeats)
+                .map(|(&d, &r)| {
+                    d.checked_mul(r)
+                        .ok_or_else(|| format!("Tile dim {d} x {r} overflows"))
+                })
+                .collect::<Result<_, _>>()?;
+            let total = fold_numel(&out_dims, fold_budget([t].into_iter()))?;
             let out_strides = strides(&out_dims);
             let src_strides = strides(&t.dims);
-            let total: usize = out_dims.iter().product();
             let map_idx = |flat: usize| -> usize {
                 let mut src = 0;
                 for (axis, &od) in out_dims.iter().enumerate() {
@@ -492,9 +556,11 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                 .as_i64s()
                 .ok_or("ConstantOfShape input must be integer")?
                 .iter()
-                .map(|&d| d as usize)
-                .collect();
-            let total: usize = shape.iter().product();
+                .map(|&d| {
+                    usize::try_from(d).map_err(|_| format!("ConstantOfShape: negative dim {d}"))
+                })
+                .collect::<Result<_, _>>()?;
+            let total = fold_numel(&shape, FOLD_BASE_ELEMENTS)?;
             let fill = match node.attrs.get("value") {
                 Some(Attr::Tensor(t)) => t.clone(),
                 _ => ConstTensor {
@@ -522,16 +588,31 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                     if d == 0 {
                         return Err("Range delta is zero".into());
                     }
-                    let n = ((l - s).max(0) as f64 / d as f64).ceil() as usize;
+                    // ONNX: max(ceil((limit - start) / delta), 0), which is
+                    // non-empty for a negative delta with limit < start. The
+                    // operands are untrusted i64s, so count in i128.
+                    let (diff, delta) = (l as i128 - s as i128, d as i128);
+                    let n = if diff != 0 && (diff > 0) == (delta > 0) {
+                        ((diff.abs() + delta.abs() - 1) / delta.abs()) as u64 as usize
+                    } else {
+                        0
+                    };
+                    fold_numel(&[n], FOLD_BASE_ELEMENTS)?;
+                    // Every element lies between start and limit, so the
+                    // i128 intermediate always fits back into i64.
+                    let data = (0..n)
+                        .map(|i| (s as i128 + i as i128 * delta) as i64)
+                        .collect();
                     out(ConstTensor {
                         dtype: DType::I64,
                         dims: vec![n],
-                        data: ConstData::I64((0..n).map(|i| s + i as i64 * d).collect()),
+                        data: ConstData::I64(data),
                     })
                 }
                 (ConstData::F32(s), ConstData::F32(l), ConstData::F32(d)) => {
                     let (s, l, d) = (s[0], l[0], d[0]);
                     let n = (((l - s) / d).ceil()).max(0.0) as usize;
+                    fold_numel(&[n], FOLD_BASE_ELEMENTS)?;
                     out(ConstTensor {
                         dtype: DType::F32,
                         dims: vec![n],

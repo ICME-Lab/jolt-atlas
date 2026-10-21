@@ -2,7 +2,33 @@
 //! over fully bound dims. No symbolic algebra — a shape either resolves to
 //! concrete `usize`s or the import fails with the node's name attached.
 
-use crate::graph::{DType, IGraph, INode, TensorInfo};
+use crate::graph::{DType, IGraph, INode, TensorInfo, checked_element_count};
+
+/// A non-negative `i64` dim (shape operands are untrusted model data).
+fn checked_dim(d: i64, context: &str) -> Result<usize, String> {
+    usize::try_from(d).map_err(|_| format!("{context}: negative dim {d}"))
+}
+
+/// Validate a transpose permutation: a bijection over `0..rank`.
+pub fn validate_perm(perm: &[i64], rank: usize) -> Result<Vec<usize>, String> {
+    if perm.len() != rank {
+        return Err("Transpose perm rank mismatch".into());
+    }
+    let mut seen = vec![false; rank];
+    let mut out = Vec::with_capacity(rank);
+    for &v in perm {
+        let p = usize::try_from(v)
+            .ok()
+            .filter(|&p| p < rank)
+            .ok_or_else(|| format!("Transpose perm entry {v} out of range for rank {rank}"))?;
+        if seen[p] {
+            return Err(format!("Transpose perm repeats axis {p}"));
+        }
+        seen[p] = true;
+        out.push(p);
+    }
+    Ok(out)
+}
 
 /// NumPy broadcast of two shapes.
 pub fn broadcast(a: &[usize], b: &[usize]) -> Result<Vec<usize>, String> {
@@ -151,6 +177,14 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
                     .collect::<Result<_, _>>()?,
                 None => (0..x.dims.len()).collect(),
             };
+            // Repeated axes would silently skew the mean's element count
+            // downstream (norm fusion multiplies the axis dims).
+            let mut dedup = axes.clone();
+            dedup.sort_unstable();
+            dedup.dedup();
+            if dedup.len() != axes.len() {
+                return Err(format!("{} repeats a reduction axis", node.op));
+            }
             let mut dims = Vec::new();
             for (i, &d) in x.dims.iter().enumerate() {
                 if axes.contains(&i) {
@@ -227,12 +261,9 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
         "Transpose" => {
             let x = info(0)?;
             let perm: Vec<usize> = match node.attr_ints("perm") {
-                Some(p) => p.iter().map(|&v| v as usize).collect(),
+                Some(p) => validate_perm(p, x.dims.len())?,
                 None => (0..x.dims.len()).rev().collect(),
             };
-            if perm.len() != x.dims.len() {
-                return Err("Transpose perm rank mismatch".into());
-            }
             one(x.dtype, perm.iter().map(|&p| x.dims[p]).collect())
         }
         "Concat" => {
@@ -261,8 +292,14 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
             let x = info(0)?;
             let axis = norm_axis(node.attr_int("axis").unwrap_or(0), x.dims.len())?;
             let n = node.outputs.len();
+            if n == 0 {
+                return Err("Split with no outputs".into());
+            }
             let sizes: Vec<usize> = match node.attr_ints("split") {
-                Some(s) => s.iter().map(|&v| v as usize).collect(),
+                Some(s) => s
+                    .iter()
+                    .map(|&v| checked_dim(v, "Split size"))
+                    .collect::<Result<_, _>>()?,
                 None => {
                     if x.dims[axis] % n != 0 {
                         return Err(format!(
@@ -273,7 +310,10 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
                     vec![x.dims[axis] / n; n]
                 }
             };
-            if sizes.len() != n || sizes.iter().sum::<usize>() != x.dims[axis] {
+            let covered = sizes
+                .iter()
+                .try_fold(0usize, |acc, &s| acc.checked_add(s));
+            if sizes.len() != n || covered != Some(x.dims[axis]) {
                 return Err("Split sizes do not cover the axis".into());
             }
             Ok(sizes
@@ -310,7 +350,11 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
                 Some(crate::graph::Attr::Tensor(t)) => t.dtype,
                 _ => DType::F32,
             };
-            one(dtype, shape.iter().map(|&d| d as usize).collect())
+            let dims = shape
+                .iter()
+                .map(|&d| checked_dim(d, "ConstantOfShape"))
+                .collect::<Result<_, _>>()?;
+            one(dtype, dims)
         }
         "Expand" => {
             let x = info(0)?;
@@ -320,8 +364,8 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
                 .as_i64s()
                 .ok_or("Expand shape must be integer")?
                 .iter()
-                .map(|&d| d as usize)
-                .collect();
+                .map(|&d| checked_dim(d, "Expand"))
+                .collect::<Result<_, _>>()?;
             one(x.dtype, broadcast(&x.dims, &shape)?)
         }
         "Tile" => {
@@ -334,14 +378,17 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
             if repeats.len() != x.dims.len() {
                 return Err("Tile repeats rank mismatch".into());
             }
-            one(
-                x.dtype,
-                x.dims
-                    .iter()
-                    .zip(repeats)
-                    .map(|(&d, &r)| d * r as usize)
-                    .collect(),
-            )
+            let dims = x
+                .dims
+                .iter()
+                .zip(repeats)
+                .map(|(&d, &r)| {
+                    checked_dim(r, "Tile repeat")?
+                        .checked_mul(d)
+                        .ok_or_else(|| format!("Tile dim {d} x {r} overflows"))
+                })
+                .collect::<Result<_, _>>()?;
+            one(x.dtype, dims)
         }
         "LayerNormalization" => {
             let x = info(0)?;
@@ -359,7 +406,12 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
 
 /// ONNX Reshape semantics: `0` copies the input dim, one `-1` is inferred.
 pub fn reshape_dims(input: &[usize], target: &[i64]) -> Result<Vec<usize>, String> {
-    let total: usize = input.iter().product();
+    // The target dims are untrusted i64s: every product is checked (and
+    // capped) so a hostile shape can't overflow into a bogus element count.
+    let numel = |dims: &[usize]| -> Result<usize, String> {
+        checked_element_count(dims).ok_or_else(|| format!("Reshape shape {dims:?} overflows"))
+    };
+    let total = numel(input)?;
     let mut out: Vec<usize> = Vec::with_capacity(target.len());
     let mut infer_pos = None;
     for (i, &t) in target.iter().enumerate() {
@@ -376,13 +428,13 @@ pub fn reshape_dims(input: &[usize], target: &[i64]) -> Result<Vec<usize>, Strin
         }
     }
     if let Some(i) = infer_pos {
-        let known: usize = out.iter().product();
+        let known = numel(&out)?;
         if known == 0 || !total.is_multiple_of(known) {
             return Err(format!("cannot infer -1 dim: {total} vs {out:?}"));
         }
         out[i] = total / known;
     }
-    if out.iter().product::<usize>() != total {
+    if numel(&out)? != total {
         return Err(format!(
             "Reshape {input:?} -> {out:?} changes element count"
         ));

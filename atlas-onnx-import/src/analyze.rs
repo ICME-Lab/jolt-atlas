@@ -8,9 +8,22 @@
 use crate::{
     error::ImportError,
     fold_fns,
-    graph::{IGraph, TensorInfo},
+    graph::{IGraph, TensorInfo, checked_element_count},
     shape_fns,
 };
+
+/// Every shape that enters the graph passes this gate: with each tensor's
+/// element count capped, no downstream partial product of dims can overflow.
+fn check_dims(node: &str, op: &str, dims: &[usize]) -> Result<(), ImportError> {
+    if checked_element_count(dims).is_none() {
+        return Err(ImportError::Shape {
+            node: node.into(),
+            op_type: op.into(),
+            reason: format!("shape {dims:?} exceeds the element cap"),
+        });
+    }
+    Ok(())
+}
 
 /// Analyze the graph: after this, every edge has a [`TensorInfo`] and every
 /// import-time-constant edge carries its payload. Nodes whose outputs all
@@ -42,6 +55,7 @@ pub fn analyze(g: &mut IGraph) -> Result<(), ImportError> {
                         )));
                     }
                     for (edge, tensor) in outputs.into_iter().zip(results) {
+                        check_dims(&name, &op, &tensor.dims)?;
                         g.edge_mut(edge).info = Some(TensorInfo {
                             dtype: tensor.dtype,
                             dims: tensor.dims.clone(),
@@ -78,6 +92,7 @@ pub fn analyze(g: &mut IGraph) -> Result<(), ImportError> {
             )));
         }
         for (edge, info) in outputs.into_iter().zip(infos) {
+            check_dims(&name, &op, &info.dims)?;
             g.edge_mut(edge).info = Some(info);
         }
     }

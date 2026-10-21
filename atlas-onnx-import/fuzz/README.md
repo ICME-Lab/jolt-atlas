@@ -49,15 +49,19 @@ and minimize it with:
 cargo +nightly fuzz tmin import fuzz/artifacts/import/crash-<hash>
 ```
 
-## Known findings
+## Findings log
 
 Crashers worth keeping are checked in under `fuzz/regressions/`; re-run them
 with `cargo +nightly fuzz run import fuzz/regressions/<file>`.
 
-- `crash-8cc58347…`: a Reshape whose target dims are huge positive `i64`s
-  drives the unchecked `usize` products in `reshape_dims`
-  (`src/shape_fns.rs`) to a multiply-with-overflow abort. Unfixed; found on
-  the harness's first 60-second run.
+- `crash-8cc58347…`: Reshape target dims of huge positive `i64`s drove the
+  unchecked `usize` products in `reshape_dims` to a multiply-with-overflow
+  abort. Found on the harness's first 60-second run; fixed by the
+  checked-arithmetic hardening commit, kept as a regression input.
+- A 30-minute fork-mode campaign against the pre-hardening build banked 14
+  more distinct crashers (same overflow/panic class); all stopped
+  reproducing after the hardening + semantics commits and were folded into
+  the corpus.
 
 ## Notes
 

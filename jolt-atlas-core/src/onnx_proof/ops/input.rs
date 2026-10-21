@@ -1,8 +1,9 @@
-use crate::compat::{node::ComputationNode, ops::Input};
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_trace::op::Input;
 use joltworks::{
     field::JoltField, poly::multilinear_polynomial::EvaluateMle,
     subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
@@ -48,11 +49,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn input_only_model(input_shape: &[usize]) -> Model {

@@ -15,12 +15,15 @@
 //! different types of committed polynomials (e.g., node outputs, division quotients, range check
 //! addresses, etc.).
 
-use crate::compat::{
-    model::{trace::Trace, Model},
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
+use atlas_trace::Model;
+
+use atlas_trace::Op;
+
+use atlas_trace::Tensor;
+
+use atlas_trace::Trace;
+
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
@@ -326,7 +329,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::DivNodeQuotient(node_idx) => {
                 let computation_node = &model.view(*node_idx);
-                assert!(matches!(computation_node.operator, Operator::Div(_)));
+                assert!(matches!(computation_node.operator, Op::Div(_)));
                 let layer_data = TraceView::layer_data(trace, computation_node);
                 let q = layer_data.output;
                 MultilinearPolynomial::from(q.clone())
@@ -335,12 +338,9 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let computation_node = &model.view(*node_idx);
                 // For nodes that use the quotient for a lookup (erf/sigmoid ...),
                 // the quotient is virtualized from a one-hot encoding.
-                assert!(matches!(
-                    computation_node.operator,
-                    Operator::Cos(_) | Operator::Sin(_)
-                ));
+                assert!(matches!(computation_node.operator, Op::Cos(_) | Op::Sin(_)));
                 let tau = match &computation_node.operator {
-                    Operator::Cos(_) | Operator::Sin(_) => TRIG_PERIOD_MODULUS as i32,
+                    Op::Cos(_) | Op::Sin(_) => TRIG_PERIOD_MODULUS as i32,
                     _ => unreachable!(
                         "teleport quotient witness requested for non-teleport operator"
                     ),
@@ -352,7 +352,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::ScalarConstDivNodeRemainder(node_idx) => {
                 let computation_node = &model.view(*node_idx);
-                let Operator::ScalarConstDiv(op) = &computation_node.operator else {
+                let Op::ScalarConstDiv(op) = &computation_node.operator else {
                     panic!("Expected ScalarConstDiv operator at node {node_idx}");
                 };
                 let b = op.divisor;
@@ -371,7 +371,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::RsqrtQuotient(node_idx) => {
                 let computation_node = &model.view(*node_idx);
-                assert!(matches!(computation_node.operator, Operator::Rsqrt(_)));
+                assert!(matches!(computation_node.operator, Op::Rsqrt(_)));
                 let layer_data = TraceView::layer_data(trace, computation_node);
                 let [input] = layer_data.operands[..] else {
                     panic!("Expected one operand for Rsqrt operation")
@@ -410,10 +410,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::GatherRa(node_idx) => {
                 let computation_node = &model.view(*node_idx);
-                assert!(matches!(
-                    computation_node.operator,
-                    Operator::GatherSmall(_)
-                ));
+                assert!(matches!(computation_node.operator, Op::GatherSmall(_)));
                 let layer_data = TraceView::layer_data(trace, computation_node);
                 let indexes = &layer_data.operands[1];
                 let non_zero_addresses: Vec<_> = indexes
@@ -431,7 +428,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::GatherRaD(node_idx, d_idx) => {
                 let computation_node = &model.view(*node_idx);
-                let Operator::GatherLarge(gather_op) = &computation_node.operator else {
+                let Op::GatherLarge(gather_op) = &computation_node.operator else {
                     panic!("Expected GatherLarge operator for GatherRaD committed polynomial");
                 };
                 let layer_data = TraceView::layer_data(trace, computation_node);
@@ -467,10 +464,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
 
                 let computation_node = &model.view(*node_idx);
                 assert!(
-                    matches!(
-                        computation_node.operator,
-                        Operator::Cos(_) | Operator::Sin(_)
-                    ),
+                    matches!(computation_node.operator, Op::Cos(_) | Op::Sin(_)),
                     "Expected Cos or Sin operator for CosRaD/SinRaD committed polynomial"
                 );
                 let layer_data = TraceView::layer_data(trace, computation_node);
@@ -500,10 +494,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             CommittedPoly::TrigDownscaleRaD(node_idx, d_idx) => {
                 let computation_node = &model.view(*node_idx);
                 assert!(
-                    matches!(
-                        computation_node.operator,
-                        Operator::Cos(_) | Operator::Sin(_)
-                    ),
+                    matches!(computation_node.operator, Op::Cos(_) | Op::Sin(_)),
                     "Expected Cos or Sin operator for TrigDownscaleRaD committed polynomial"
                 );
                 let layer_data = TraceView::layer_data(trace, computation_node);
@@ -583,7 +574,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
 /// The softmax node's log2 scale (the model's global scale).
 fn softmax_op_scale(node: &ComputationNode) -> i32 {
     assert!(
-        matches!(node.operator, Operator::SoftmaxLastAxis(_)),
+        matches!(node.operator, Op::SoftmaxLastAxis(_)),
         "Expected SoftmaxLastAxis at node {}",
         node.idx
     );

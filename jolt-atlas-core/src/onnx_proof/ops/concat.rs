@@ -1,15 +1,15 @@
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{Concat, Operator},
-};
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::Concat;
+use atlas_trace::trace::LayerData;
 use atlas_trace::Model;
+use atlas_trace::Op;
+use atlas_trace::Trace;
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -112,7 +112,7 @@ impl<F: JoltField> ConcatSumcheckParams<F> {
         model: &Model,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let Operator::Concat(concat_op) = &computation_node.operator else {
+        let Op::Concat(concat_op) = &computation_node.operator else {
             panic!("Expected Concat operator")
         };
         let r_output = accessor.get_reduced_opening().0;
@@ -525,11 +525,10 @@ fn axis_offset(raw_input_dims: &[Vec<usize>], input_idx: usize, axis: usize) -> 
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn concat_model(input_shapes: Vec<Vec<usize>>, axis: isize) -> Model {

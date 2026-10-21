@@ -5,7 +5,7 @@
 //! accessors the proof layer works with, so no re-keyed copy of the trace is
 //! ever built.
 
-use crate::compat::node::ComputationNode;
+use crate::node_view::ComputationNode;
 use atlas_trace::trace::{FusedIntermediates, LayerData};
 use atlas_trace::{NodeId, SoftmaxWitness, Tensor, Trace};
 

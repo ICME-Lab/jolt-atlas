@@ -1,5 +1,6 @@
+use atlas_trace::trace::LayerData;
 
-use crate::compat::{model::trace::LayerData, node::ComputationNode};
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{Prover, Verifier};
 use joltworks::{
@@ -80,14 +81,15 @@ impl NodeEvalReduction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compat::{
-        model::{test::ModelBuilder, trace::ModelExecutionIO, Model},
-        ops::{Add, Operator},
-        tensor::Tensor,
-    };
     use crate::node_view::ModelView;
     use crate::onnx_proof::{AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, ProofId};
+    use crate::test_builder::ModelBuilder;
     use ark_bn254::{Bn254, Fr};
+    use atlas_trace::op::Add;
+    use atlas_trace::trace::ModelExecutionIO;
+    use atlas_trace::Model;
+    use atlas_trace::Op;
+    use atlas_trace::Tensor;
     use common::VirtualPoly;
     use joltworks::{
         poly::{
@@ -134,7 +136,7 @@ mod tests {
             .expect("model execution failed");
         let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
 
-        let producer_node = ComputationNode::new(0, Operator::Add(Add), vec![], vec![n]);
+        let producer_node = ComputationNode::new(0, Op::Add(Add), vec![], vec![n]);
 
         let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
@@ -197,7 +199,7 @@ mod tests {
             .expect("model execution failed");
         let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
 
-        let producer_node = ComputationNode::new(producer_idx, Operator::Add(Add), vec![], vec![n]);
+        let producer_node = ComputationNode::new(producer_idx, Op::Add(Add), vec![], vec![n]);
 
         let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
@@ -255,7 +257,7 @@ mod tests {
         let proofs = BTreeMap::new();
         let mut verifier = Verifier::<Fr, Blake2bTranscript>::new(&preprocessing, &proofs, &io);
 
-        let producer_node = ComputationNode::new(producer_idx, Operator::Add(Add), vec![], vec![n]);
+        let producer_node = ComputationNode::new(producer_idx, Op::Add(Add), vec![], vec![n]);
 
         let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();

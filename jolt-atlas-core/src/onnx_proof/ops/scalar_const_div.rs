@@ -1,14 +1,14 @@
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{Operator, ScalarConstDiv},
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::ScalarConstDiv;
+use atlas_trace::trace::LayerData;
+use atlas_trace::Op;
+use atlas_trace::Tensor;
+use atlas_trace::Trace;
 use common::CommittedPoly;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -102,7 +102,7 @@ impl<F: JoltField> ScalarConstDivParams<F> {
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_node_output = accessor.get_reduced_opening().0;
-        let Operator::ScalarConstDiv(scalar_const_div) = &computation_node.operator else {
+        let Op::ScalarConstDiv(scalar_const_div) = &computation_node.operator else {
             panic!("Expected ScalarConstDiv operator")
         };
         Self {
@@ -332,8 +332,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn scalar_const_div_model(T: usize, divisor: i32) -> Model {

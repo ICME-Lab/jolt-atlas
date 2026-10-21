@@ -34,11 +34,15 @@
 use crate::onnx_proof::trace_view::TraceView;
 use std::array;
 
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{MeanOfSquares, Operator},
-};
+use atlas_trace::Op;
+
+use atlas_trace::Trace;
+
+use atlas_trace::op::MeanOfSquares;
+
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
@@ -88,9 +92,9 @@ pub fn mos_divisor(op: &MeanOfSquares, scale: i32) -> i64 {
 /// `R = Σx² mod D` (used where the trace is out of reach).
 pub fn mos_remainder(
     op: &MeanOfSquares,
-    operands: &[&crate::compat::tensor::Tensor<i32>],
+    operands: &[&atlas_trace::Tensor<i32>],
     scale: i32,
-) -> crate::compat::tensor::Tensor<i32> {
+) -> atlas_trace::Tensor<i32> {
     use atlas_trace::op::{EvalCtx, Op, TableCache};
     use atlas_trace::{NodeAux, Scale, SemVersion};
     let cache = TableCache::default();
@@ -258,7 +262,7 @@ pub struct MeanOfSquaresReductionParams<F: JoltField> {
 impl<F: JoltField> MeanOfSquaresReductionParams<F> {
     /// Build params from the node and accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let Operator::MeanOfSquares(op) = &computation_node.operator else {
+        let Op::MeanOfSquares(op) = &computation_node.operator else {
             panic!("MeanOfSquaresReductionParams: expected MeanOfSquares operator");
         };
         // The sumcheck cube splits the flat-padded operand into
@@ -454,11 +458,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     /// `[m, n]` input, reduce the last axis (size `n`, a power of two) → `[m, 1]`.

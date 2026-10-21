@@ -5,9 +5,10 @@
 //! `verify` delegates to.
 
 use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
-use crate::compat::model::{trace::ModelExecutionIO, Model};
 use crate::node_view::ModelView;
 use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
+use atlas_trace::trace::ModelExecutionIO;
+use atlas_trace::Model;
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,

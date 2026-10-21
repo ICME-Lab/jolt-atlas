@@ -17,7 +17,7 @@
 //! after its node loop. The batched sumcheck computes instance messages in
 //! parallel across instances, which is what turns the ~750 tiny sequential
 //! sumchecks into a few large parallel ones.
-use crate::compat::node::ComputationNode;
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     clamp_split::{
         self, BucketSplit, NodeSplit, SplitParams, SplitProver, SplitVerifier, ValueParams,

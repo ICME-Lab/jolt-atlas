@@ -1,4 +1,3 @@
-use common::utils::logging::setup_tracing;
 /// nanoGPT ONNX proof, selectable between the HyperKZG and Dory commitment
 /// schemes so their execution profiles can be compared on the same workload.
 ///
@@ -15,7 +14,9 @@ use common::utils::logging::setup_tracing;
 /// # Both, back to back (one Chrome trace covering both for comparison)
 /// cargo run --release --package jolt-atlas-core --example gpt2 -- --pcs both --trace
 /// ```
-use jolt_atlas_core::compat::{model::RunArgs, tensor::Tensor};
+use atlas_trace::Tensor;
+use common::utils::logging::setup_tracing;
+use jolt_atlas_core::loader::RunArgs;
 use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,

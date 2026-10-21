@@ -7,11 +7,11 @@
 //! The batch pack is bound first through a high eq polynomial
 //! ([`EqSchedule::High`]); the contraction axis `k` follows.
 
-use crate::compat::tensor::Tensor;
 use crate::{
     onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
+use atlas_trace::Tensor;
 use common::parallel::par_enabled;
 use joltworks::{
     field::{IntoOpening, JoltField},
@@ -152,8 +152,10 @@ impl<F: JoltField> EinsumLayout<F> for AbmkAbnkAbmnLayout {
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn abmk_abnk_abmn_model(

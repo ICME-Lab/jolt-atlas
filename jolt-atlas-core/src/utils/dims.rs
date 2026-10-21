@@ -6,7 +6,11 @@
 //! the flattened dimensions that layout folds over. The module also normalizes
 //! multi-dimensional sum operations to a 2D representation.
 
-use crate::compat::{model::Model, node::ComputationNode, ops::Operator};
+use atlas_trace::Model;
+
+use atlas_trace::Op;
+
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use joltworks::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
 use rayon::prelude::*;
@@ -286,7 +290,7 @@ pub fn sum_config(computation_node: &ComputationNode, model: &Model) -> SumConfi
     };
 
     // Ensure we have a Sum operator and extract it
-    let Operator::Sum(sum_operator) = &computation_node.operator else {
+    let Op::Sum(sum_operator) = &computation_node.operator else {
         panic!("Expected Sum operator")
     };
 

@@ -1,7 +1,7 @@
 use super::*;
-use crate::compat::ops::GatherSmall;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
+use atlas_trace::op::GatherSmall;
 use common::CommittedPoly;
 use joltworks::subprotocols::{
     booleanity::{
@@ -130,7 +130,7 @@ pub(crate) fn build_stage2_provers<F: JoltField>(
     HammingBooleanitySumcheckProver<F>,
     SmallBooleanitySumcheckProver<F>,
 ) {
-    let Operator::GatherSmall(gather_op) = &computation_node.operator else {
+    let Op::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
     let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, computation_node);
@@ -176,7 +176,7 @@ pub(crate) fn build_stage2_verifiers<F: JoltField>(
     HammingBooleanitySumcheckVerifier<F>,
     BooleanitySumcheckVerifier<F>,
 ) {
-    let Operator::GatherSmall(gather_op) = &computation_node.operator else {
+    let Op::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
     let model = &verifier.preprocessing.model;
@@ -263,7 +263,7 @@ pub(crate) fn build_stage3_prover<F: JoltField>(
     computation_node: &ComputationNode,
     prover: &mut Prover<F, impl Transcript>,
 ) -> HammingWeightSumcheckProver<F> {
-    let Operator::GatherSmall(gather_op) = &computation_node.operator else {
+    let Op::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
     let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, computation_node);
@@ -288,7 +288,7 @@ pub(crate) fn build_stage3_verifier<F: JoltField>(
     computation_node: &ComputationNode,
     verifier: &mut Verifier<'_, F, impl Transcript>,
 ) -> HammingWeightSumcheckVerifier<F> {
-    let Operator::GatherSmall(gather_op) = &computation_node.operator else {
+    let Op::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
     let model = &verifier.preprocessing.model;
@@ -317,7 +317,7 @@ pub(crate) fn build_stage2_verifiers_zk<F: JoltField>(
     HammingBooleanitySumcheckVerifier<F>,
     BooleanitySumcheckVerifier<F>,
 ) {
-    let Operator::GatherSmall(gather_op) = &computation_node.operator else {
+    let Op::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
     let dict = &model.view(computation_node.inputs[0]);
@@ -349,7 +349,7 @@ pub(crate) fn build_stage3_verifier_zk<F: JoltField>(
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
 ) -> HammingWeightSumcheckVerifier<F> {
-    let Operator::GatherSmall(gather_op) = &computation_node.operator else {
+    let Op::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
     let dict = &model.view(computation_node.inputs[0]);

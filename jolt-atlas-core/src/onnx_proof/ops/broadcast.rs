@@ -3,12 +3,15 @@ use crate::onnx_proof::trace_view::TraceView;
 use atlas_trace::Model;
 use core::panic;
 
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Broadcast,
-    tensor::Tensor,
-};
+use atlas_trace::Tensor;
+
+use atlas_trace::Trace;
+
+use atlas_trace::op::Broadcast;
+
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
 use joltworks::{
     field::JoltField,
     poly::{
@@ -260,8 +263,10 @@ fn split_broadcast_vars<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {

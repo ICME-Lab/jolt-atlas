@@ -11,7 +11,9 @@
 //! rejects the attack. Used exclusively by
 //! [`MaliciousONNXProof`](crate::onnx_proof::malicious_prover).
 
-use crate::compat::{model::trace::LayerData, node::ComputationNode};
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{clamp_lookups::prove_clamp_lookup, ProofId, Prover},

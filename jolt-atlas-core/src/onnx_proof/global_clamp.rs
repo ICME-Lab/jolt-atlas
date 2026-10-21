@@ -23,11 +23,13 @@ use super::{
     fused_rebase::{rebase_bits, rebase_remainder, remainder_lookup_bits},
     witness::build_one_hot_rad_witness,
 };
-use crate::compat::model::{trace::Trace, Model};
-use crate::compat::{node::ComputationNode, ops::Operator};
 use crate::node_view::clamp_value_bound;
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_trace::Model;
+use atlas_trace::Op;
+use atlas_trace::Trace;
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -90,7 +92,7 @@ pub fn clamp_buckets(model: &Model) -> Vec<ClampBucket> {
 pub fn has_remainder_rc(node: &ComputationNode) -> bool {
     matches!(
         node.operator,
-        Operator::Einsum(_) | Operator::Mul(_) | Operator::Square(_) | Operator::Cube(_)
+        Op::Einsum(_) | Op::Mul(_) | Op::Square(_) | Op::Cube(_)
     ) && rebase_bits(node).is_some_and(|b| b > 0)
         && !is_scalar(node)
 }

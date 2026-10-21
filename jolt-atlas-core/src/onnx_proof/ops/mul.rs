@@ -1,14 +1,13 @@
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Mul,
-};
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_fused_rescale_proof_api,
     onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::Mul;
+use atlas_trace::trace::LayerData;
+use atlas_trace::Trace;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -264,11 +263,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MulVerifier
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn mul_model(rng: &mut StdRng, T: usize) -> Model {

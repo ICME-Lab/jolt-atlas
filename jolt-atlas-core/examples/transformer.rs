@@ -1,5 +1,5 @@
+use atlas_trace::Tensor;
 use common::utils::logging::setup_tracing;
-use jolt_atlas_core::compat::tensor::Tensor;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,

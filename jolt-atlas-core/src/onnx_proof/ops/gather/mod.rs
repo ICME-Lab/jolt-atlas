@@ -1,16 +1,15 @@
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::trace::LayerData;
 use atlas_trace::Model;
+use atlas_trace::Op;
+use atlas_trace::Tensor;
+use atlas_trace::Trace;
 use common::parallel::par_enabled;
 use common::VirtualPoly;
 #[cfg(feature = "zk")]
@@ -78,8 +77,8 @@ impl<F: JoltField> GatherParams<F> {
         let gamma = transcript.challenge_scalar();
 
         let dict_len = match &computation_node.operator {
-            Operator::GatherSmall(gather_op) => gather_op.dict_len,
-            Operator::GatherLarge(gather_op) => gather_op.dict_len,
+            Op::GatherSmall(gather_op) => gather_op.dict_len,
+            Op::GatherLarge(gather_op) => gather_op.dict_len,
             _ => panic!("Expected Gather operator"),
         };
 
@@ -434,9 +433,12 @@ pub(crate) fn fold_dictionary<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{model::test::ModelBuilder, model::Model, ops::Operator, tensor::Tensor};
     use crate::node_view::ModelView;
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Op;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usize) -> Model {
@@ -478,7 +480,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x889);
         let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
         let model = gather_model(&indices_dims, dict_len, word_dim);
-        assert!(matches!(model.view(2).operator, Operator::GatherSmall(_)));
+        assert!(matches!(model.view(2).operator, Op::GatherSmall(_)));
         unit_test_op(model, &[input]);
     }
 
@@ -490,7 +492,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x88A);
         let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
         let model = gather_model(&indices_dims, dict_len, word_dim);
-        assert!(matches!(model.view(2).operator, Operator::GatherLarge(_)));
+        assert!(matches!(model.view(2).operator, Op::GatherLarge(_)));
         unit_test_op(model, &[input]);
     }
 

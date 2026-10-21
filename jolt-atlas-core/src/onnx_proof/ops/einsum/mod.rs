@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
-use crate::compat::{
-    model::{trace::Trace, Model},
-    node::ComputationNode,
-    ops::{Einsum, Operator},
-};
+use atlas_trace::Model;
+
+use atlas_trace::Op;
+
+use atlas_trace::Trace;
+
+use atlas_trace::op::Einsum;
+
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
         clamp_lookups::is_scalar,
@@ -146,7 +150,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
 /// not an Einsum operator.
 fn einsum_equation(computation_node: &ComputationNode) -> String {
     match &computation_node.operator {
-        Operator::Einsum(Einsum { equation, .. }) => equation.to_string(),
+        Op::Einsum(Einsum { equation, .. }) => equation.to_string(),
         _ => panic!("Unexpected operator"),
     }
 }

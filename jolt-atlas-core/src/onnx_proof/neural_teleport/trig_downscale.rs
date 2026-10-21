@@ -5,16 +5,15 @@
 //! lookup reads. Also establishes `r`'s claim (`VirtualPoly::TeleportRemainder`) for
 //! `division.rs`'s `a = P·q + r` derivation.
 use super::division::compute_division;
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{op_lookups::LookupOperandsTrait, Prover, Verifier},
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_trace::trace::LayerData;
+use atlas_trace::Tensor;
+use atlas_trace::Trace;
 use common::{
     consts::{TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS, XLEN},
     CommittedPoly, VirtualPoly,

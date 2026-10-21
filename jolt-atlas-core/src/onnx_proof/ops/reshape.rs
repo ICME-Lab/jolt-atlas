@@ -7,11 +7,13 @@
 //!
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Reshape,
-};
+use atlas_trace::Trace;
+
+use atlas_trace::op::Reshape;
+
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::dims::{coord_to_linear, linear_to_coord};
@@ -385,11 +387,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumc
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn reshape_model(input_shape: &[usize], output_shape: &[usize]) -> Model {

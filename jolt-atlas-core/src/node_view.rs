@@ -1,6 +1,6 @@
 //! The proof layer's per-node working view over an [`atlas_trace::Model`].
 //!
-//! Operator provers and their params structs need an **owned** bundle of node
+//! Op provers and their params structs need an **owned** bundle of node
 //! facts (index, operator, operand indices, dims, clamp width, scale) that
 //! outlives model borrows across sumcheck lifetimes. [`ComputationNode`] is
 //! that bundle, built on demand by [`ModelView::view`]; the model itself is

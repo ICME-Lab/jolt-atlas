@@ -1,9 +1,10 @@
-use crate::compat::{node::ComputationNode, ops::ReLU};
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     op_lookups::{OpLookupEncoding, OpLookupProvider},
     ops::OperatorProofTrait,
     ProofId, ProofType, Prover, Verifier,
 };
+use atlas_trace::op::ReLU;
 use common::CommittedPoly;
 use joltworks::{
     self,
@@ -121,11 +122,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn relu_model(T: usize) -> Model {

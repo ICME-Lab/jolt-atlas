@@ -58,9 +58,11 @@ use super::{
     deferred_lookups::DEFERRED_PROOF_IDX,
     global_clamp::ClampBucket,
 };
-use crate::compat::{model::trace::Trace, model::Model, node::ComputationNode};
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
+use atlas_trace::Model;
+use atlas_trace::Trace;
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::subprotocols::booleanity::{LinearClaim, LinearTerm};
 use joltworks::{
@@ -179,7 +181,7 @@ pub fn exact_output_prover(model: &Model, trace: &Trace, node_idx: usize) -> boo
 /// [`exact_output_prover`] from the verifier's public IO.
 pub fn exact_output_verifier(
     model: &Model,
-    io: &crate::compat::model::trace::ModelExecutionIO,
+    io: &atlas_trace::trace::ModelExecutionIO,
     node_idx: usize,
 ) -> bool {
     model.output_indices().contains(&node_idx)

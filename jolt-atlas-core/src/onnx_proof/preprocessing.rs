@@ -10,8 +10,8 @@
 //! 2. [`AtlasProverPreprocessing`]  — adds the PCS prover setup (SRS).
 //! 3. [`AtlasVerifierPreprocessing`] — adds the PCS verifier setup (VK).
 
-use crate::compat::model::Model;
 use crate::node_view::ModelView;
+use atlas_trace::Model;
 use common::CommittedPoly;
 use joltworks::{
     field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,

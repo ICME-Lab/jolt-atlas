@@ -1,14 +1,13 @@
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Square,
-};
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_fused_rescale_proof_api,
     onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::Square;
+use atlas_trace::trace::LayerData;
+use atlas_trace::Trace;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -258,11 +257,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SquareVerif
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn square_model(T: usize) -> Model {
@@ -314,8 +312,8 @@ mod tests {
     #[test]
     fn test_square_blindfold_constraint_consistency() {
         use super::*;
-        use crate::compat::ops::Operator;
         use ark_bn254::Fr;
+        use atlas_trace::Op;
         use joltworks::{
             field::challenge::mont_ark_u128::MontU128Challenge,
             poly::opening_proof::{OpeningId, VerifierOpeningAccumulator},
@@ -330,7 +328,7 @@ mod tests {
         // Simulate a computation node: node 1 (Square) takes input from node 0.
         // Scale 0 keeps it a raw square so `input_claim` is the plain output
         // opening (the BlindFold constraint asserted here).
-        let node = ComputationNode::new(1, Operator::Square(Square { scale: 0 }), vec![0], vec![4]);
+        let node = ComputationNode::new(1, Op::Square(Square { scale: 0 }), vec![0], vec![4]);
 
         // Set up the verifier accumulator with known opening values
         let mut accumulator = VerifierOpeningAccumulator::<F>::new();

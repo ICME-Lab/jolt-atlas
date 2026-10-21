@@ -1,9 +1,10 @@
-use crate::compat::{node::ComputationNode, ops::IsNan};
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::IsNan;
 use joltworks::{
     field::JoltField, poly::multilinear_polynomial::EvaluateMle,
     subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,

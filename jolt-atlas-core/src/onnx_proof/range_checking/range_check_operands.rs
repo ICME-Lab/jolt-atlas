@@ -1,8 +1,7 @@
-use crate::compat::{
-    node::ComputationNode,
-    ops::{MeanOfSquares, Operator},
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
+use atlas_trace::op::MeanOfSquares;
+use atlas_trace::Op;
+use atlas_trace::Tensor;
 use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
@@ -32,7 +31,7 @@ pub struct RangeCheckOperandsBase {
     /// Virtual polynomial representing the range-check read-address (Ra).
     pub virtual_ra: VirtualPoly,
     /// The operator this range-check is associated with, used for operator-specific logic in operand extraction and claim transformation.
-    pub operator: Operator,
+    pub operator: Op,
 }
 
 /// Trait defining the interface for operations that require range-checking.
@@ -140,7 +139,7 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
 
 impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
-        let Operator::Rsqrt(inner) = &node.operator else {
+        let Op::Rsqrt(inner) = &node.operator else {
             panic!("Expected Rsqrt operator");
         };
         let _ = inner;
@@ -184,7 +183,7 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
 
 impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
-        let Operator::Rsqrt(inner) = &node.operator else {
+        let Op::Rsqrt(inner) = &node.operator else {
             panic!("Expected Sqrt operator");
         };
         let _ = inner;
@@ -265,7 +264,7 @@ pub struct MeanOfSquaresRangeCheckOperands {
 impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
         let op = match &node.operator {
-            Operator::MeanOfSquares(op) => op.clone(),
+            Op::MeanOfSquares(op) => op.clone(),
             other => panic!("MeanOfSquares range check: unexpected operator {other:?}"),
         };
         Self {
@@ -310,7 +309,7 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
 
 /// The fused mean-of-squares divisor `D = N·2^S` as an `i32` (the range-check
 /// value domain), recovered from the operator's stored count + scale.
-fn mean_of_squares_divisor_i32(op: &crate::compat::ops::MeanOfSquares, scale: i32) -> i32 {
+fn mean_of_squares_divisor_i32(op: &atlas_trace::op::MeanOfSquares, scale: i32) -> i32 {
     i32_divisor(mos_divisor(op, scale))
 }
 
@@ -328,7 +327,7 @@ pub struct TeleportRangeCheckOperands {
 impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
         let tau = match &node.operator {
-            Operator::Cos(_) | Operator::Sin(_) => TRIG_PERIOD_MODULUS as i32,
+            Op::Cos(_) | Op::Sin(_) => TRIG_PERIOD_MODULUS as i32,
             _ => {
                 panic!("Expected Cos or Sin operator for neural teleportation division")
             }

@@ -1,4 +1,4 @@
-use crate::compat::{model::trace::LayerData, node::ComputationNode, ops::Cos, tensor::Tensor};
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
@@ -20,7 +20,10 @@ use crate::{
     },
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_trace::op::Cos;
+use atlas_trace::trace::LayerData;
 use atlas_trace::Model;
+use atlas_trace::Tensor;
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
@@ -581,11 +584,10 @@ impl RaOneHotEncoding for CosRaEncoding {
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     use common::consts::TRIG_PERIOD_MODULUS;

@@ -33,11 +33,13 @@
 use crate::onnx_proof::trace_view::TraceView;
 use std::{array, sync::Arc};
 
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    tensor::Tensor,
-};
+use atlas_trace::Tensor;
+
+use atlas_trace::Trace;
+
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::fused_rebase,
     utils::opening_access::{AccOpeningAccessor, Target},

@@ -1,14 +1,11 @@
 //! Module for constructing malicious provers for ONNX proof experiments. Contains a variant of the main prover that generates proofs for tampered traces, as well as a variant of the sumcheck prover that allows the caller to control how openings are cached (for attack experiments).
-use crate::compat::{
-    model::{
-        trace::{ModelExecutionIO, Trace},
-        Model,
-    },
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
+use atlas_trace::trace::ModelExecutionIO;
+use atlas_trace::Model;
+use atlas_trace::Op;
+use atlas_trace::Tensor;
+use atlas_trace::Trace;
 use joltworks::{
     field::JoltField,
     poly::{commitment::commitment_scheme::CommitmentScheme, unipoly::UniPoly},
@@ -153,7 +150,7 @@ impl MaliciousONNXProof {
         let sub_node = model
             .views()
             .into_iter()
-            .find(|node| matches!(node.operator, Operator::Sub(_)))
+            .find(|node| matches!(node.operator, Op::Sub(_)))
             .expect("model should contain a Sub node");
         let output = trace
             .node_outputs
@@ -176,7 +173,7 @@ impl MaliciousONNXProof {
                 computation_node.idx,
                 malicious_eval_reduction_prove(computation_node, prover),
             );
-            if matches!(computation_node.operator, Operator::Sub(_)) {
+            if matches!(computation_node.operator, Op::Sub(_)) {
                 proofs.extend(malicious_sub_prove(computation_node, prover));
             } else {
                 let (_, execution_proofs) = OperatorProver::prove(computation_node, prover);

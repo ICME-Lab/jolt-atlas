@@ -310,11 +310,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compat::{model::RunArgs, tensor::Tensor};
+    use crate::loader::RunArgs;
     use crate::onnx_proof::{
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     };
     use ark_bn254::{Bn254, Fr};
+    use atlas_trace::Tensor;
     use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
     use rand::{rngs::StdRng, Rng, SeedableRng};
 

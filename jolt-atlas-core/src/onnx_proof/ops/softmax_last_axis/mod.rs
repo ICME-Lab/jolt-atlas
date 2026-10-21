@@ -46,7 +46,11 @@ use joltworks::{
 };
 use std::collections::BTreeMap;
 
-use crate::compat::{node::ComputationNode, ops::SoftmaxLastAxis, tensor::Tensor};
+use atlas_trace::Tensor;
+
+use atlas_trace::op::SoftmaxLastAxis;
+
+use crate::node_view::ComputationNode;
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,
@@ -1220,10 +1224,9 @@ impl VerifierLookupTableData {
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
 
     use crate::onnx_proof::ops::test::unit_test_op;
 

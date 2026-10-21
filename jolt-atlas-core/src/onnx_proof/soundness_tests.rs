@@ -1,15 +1,14 @@
-use crate::compat::{
-    model::{test::ModelBuilder, Model},
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::{
     malicious_prover::MaliciousONNXProof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
     AtlasVerifierPreprocessing, Blake2bTranscript, ONNXProof,
 };
+use crate::test_builder::ModelBuilder;
 use ark_bn254::{Bn254, Fr};
+use atlas_trace::Model;
+use atlas_trace::Op;
+use atlas_trace::Tensor;
 use common::VirtualPoly;
 use joltworks::poly::{
     commitment::hyperkzg::HyperKZG,
@@ -40,7 +39,7 @@ fn find_sub_node(model: &Model) -> ComputationNode {
     model
         .views()
         .into_iter()
-        .find(|node| matches!(node.operator, Operator::Sub(_)))
+        .find(|node| matches!(node.operator, Op::Sub(_)))
         .expect("sub node should exist")
 }
 

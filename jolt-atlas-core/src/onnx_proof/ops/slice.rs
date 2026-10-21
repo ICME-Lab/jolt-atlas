@@ -1,15 +1,15 @@
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{Operator, Slice},
-};
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::Slice;
+use atlas_trace::trace::LayerData;
 use atlas_trace::Model;
+use atlas_trace::Op;
+use atlas_trace::Trace;
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -114,7 +114,7 @@ impl<F: JoltField> SliceSumcheckParams<F> {
         model: &Model,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let Operator::Slice(slice_op) = &computation_node.operator else {
+        let Op::Slice(slice_op) = &computation_node.operator else {
             panic!("Expected Slice operator")
         };
         let axis = slice_op.axis;
@@ -423,11 +423,10 @@ fn validate_slice_shapes(
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn slice_model(input_shape: Vec<usize>, axis: usize, start: usize, end: usize) -> Model {

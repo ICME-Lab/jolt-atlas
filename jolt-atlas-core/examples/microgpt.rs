@@ -1,4 +1,3 @@
-use common::utils::logging::setup_tracing;
 /// Run with tracing:
 /// ```bash
 /// # Chrome Tracing JSON output (view in chrome://tracing)
@@ -7,7 +6,8 @@ use common::utils::logging::setup_tracing;
 /// # Terminal output with timing
 /// cargo run --example microgpt -- --trace-terminal
 /// ```
-use jolt_atlas_core::compat::tensor::Tensor;
+use atlas_trace::Tensor;
+use common::utils::logging::setup_tracing;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,

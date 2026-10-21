@@ -10,7 +10,9 @@
 //! Internal implementation details (helper methods, state structs) live in
 //! [`prover`], [`verifier`], and [`types`] submodules.
 
-use crate::compat::{model::trace::ModelExecutionIO, tensor::Tensor};
+use atlas_trace::Tensor;
+
+use atlas_trace::trace::ModelExecutionIO;
 use joltworks::{
     field::JoltField,
     poly::commitment::commitment_scheme::CommitmentScheme,

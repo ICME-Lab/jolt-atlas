@@ -16,11 +16,13 @@
 //! `operand_link` in `mod.rs`.
 
 use super::witness::generate_exp_lut_decomposed;
-use crate::compat::{model::trace::Trace, node::ComputationNode, tensor::Tensor};
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::op_lookups::{DefaultLookupOperands, LookupOperandsTrait},
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_trace::Tensor;
+use atlas_trace::Trace;
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,

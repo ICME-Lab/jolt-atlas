@@ -1,4 +1,3 @@
-use common::utils::logging::setup_tracing;
 /// Run with tracing:
 /// ```bash
 /// # Chrome Tracing JSON output (view in chrome://tracing)
@@ -12,7 +11,9 @@ use common::utils::logging::setup_tracing;
 /// ```bash
 /// python scripts/download_bge_small_en_v1_5.py
 /// ```
-use jolt_atlas_core::compat::{model::RunArgs, tensor::Tensor};
+use atlas_trace::Tensor;
+use common::utils::logging::setup_tracing;
+use jolt_atlas_core::loader::RunArgs;
 use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,

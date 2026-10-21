@@ -13,11 +13,13 @@
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
 //! `BatchedSumcheck` call.
 
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    tensor::Tensor,
-};
+use atlas_trace::Tensor;
+
+use atlas_trace::Trace;
+
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},

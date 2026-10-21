@@ -3,7 +3,7 @@
 //! Provides a node-scoped accessor/provider layer over opening accumulators,
 //! with a small internal builder used to derive opening IDs consistently.
 
-use crate::compat::node::ComputationNode;
+use crate::node_view::ComputationNode;
 use common::VirtualPoly;
 use joltworks::{
     field::JoltField,

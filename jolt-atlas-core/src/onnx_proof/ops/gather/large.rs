@@ -1,6 +1,6 @@
 use super::*;
-use crate::compat::ops::GatherLarge;
 use crate::onnx_proof::trace_view::TraceView;
+use atlas_trace::op::GatherLarge;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 use joltworks::{
@@ -122,7 +122,7 @@ pub(crate) struct GatherRaEncoding {
 impl GatherRaEncoding {
     pub(crate) fn new(computation_node: &ComputationNode) -> Self {
         let gather_op = match &computation_node.operator {
-            Operator::GatherLarge(gather_op) => gather_op,
+            Op::GatherLarge(gather_op) => gather_op,
             _ => panic!("Expected GatherLarge operator"),
         };
         Self {

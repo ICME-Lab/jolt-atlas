@@ -8,6 +8,7 @@ use crate::compat::{
     ops::Operator,
     tensor::Tensor,
 };
+use crate::node_view::ModelView;
 use joltworks::{
     field::JoltField,
     poly::{commitment::commitment_scheme::CommitmentScheme, unipoly::UniPoly},
@@ -48,8 +49,8 @@ impl MaliciousONNXProof {
         inputs: &[Tensor<i32>],
     ) -> ProverOutput<F, T, PCS> {
         // Generate trace and io
-        let trace = pp.model().trace(inputs);
-        let io = trace.io(pp.model().inner());
+        let trace = pp.model().trace(inputs).expect("model execution failed");
+        let io = trace.io(pp.model());
 
         // Initialize prover state
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
@@ -74,7 +75,7 @@ impl MaliciousONNXProof {
         // IOP portion
         let mut eval_reduction_proofs = BTreeMap::new();
         Self::iop(
-            pp.model().nodes(),
+            pp.model(),
             &mut prover,
             &mut proofs,
             &mut eval_reduction_proofs,
@@ -107,9 +108,9 @@ impl MaliciousONNXProof {
         pp: &AtlasProverPreprocessing<F, PCS>,
         inputs: &[Tensor<i32>],
     ) -> ProverOutput<F, T, PCS> {
-        let mut trace = pp.model().trace(inputs);
+        let mut trace = pp.model().trace(inputs).expect("model execution failed");
         Self::tamper_first_sub_output_to_zero(&mut trace, pp.model());
-        let io = trace.io(pp.model().inner());
+        let io = trace.io(pp.model());
 
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
         let mut proofs = BTreeMap::new();
@@ -127,7 +128,7 @@ impl MaliciousONNXProof {
 
         let mut eval_reduction_proofs = BTreeMap::new();
         Self::iop(
-            pp.model().nodes(),
+            pp.model(),
             &mut prover,
             &mut proofs,
             &mut eval_reduction_proofs,
@@ -150,9 +151,8 @@ impl MaliciousONNXProof {
 
     fn tamper_first_sub_output_to_zero(trace: &mut Trace, model: &Model) {
         let sub_node = model
-            .graph
-            .nodes
-            .values()
+            .views()
+            .into_iter()
             .find(|node| matches!(node.operator, Operator::Sub(_)))
             .expect("model should contain a Sub node");
         let output = trace
@@ -166,12 +166,12 @@ impl MaliciousONNXProof {
     /// Uses the malicious Sub prover for Sub nodes; honest provers for all others.
     #[tracing::instrument(skip_all, name = "ONNXProof::iop")]
     pub(super) fn iop<F: JoltField, T: Transcript>(
-        computation_nodes: &BTreeMap<usize, ComputationNode>,
+        model: &Model,
         prover: &mut Prover<F, T>,
         proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
         eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
     ) {
-        for (_, computation_node) in computation_nodes.iter().rev() {
+        for computation_node in model.views().iter().rev() {
             eval_reduction_proofs.insert(
                 computation_node.idx,
                 malicious_eval_reduction_prove(computation_node, prover),

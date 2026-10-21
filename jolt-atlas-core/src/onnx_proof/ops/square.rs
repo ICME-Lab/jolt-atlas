@@ -441,7 +441,7 @@ mod tests {
         let input = Tensor::<i32>::random_small(&mut rng, &[size]);
         let model = square_model(size);
         let pp = AtlasSharedPreprocessing::preprocess(model);
-        let trace = pp.model().trace(&[input]);
+        let trace = pp.model().trace(&[input]).expect("model execution failed");
 
         // 2. Create prover state
         let mut prover = Prover::<F, T>::new(pp.clone(), trace);
@@ -450,8 +450,7 @@ mod tests {
         ONNXProof::<F, T, joltworks::poly::commitment::hyperkzg::HyperKZG<ark_bn254::Bn254>>::output_claim(&mut prover);
 
         // 4. Eval reduction for the Square node
-        let nodes = pp.model().nodes();
-        let (_, square_node) = nodes.iter().next_back().unwrap();
+        let square_node = &pp.model().view(pp.model().num_nodes() - 1);
         NodeEvalReduction::prove(&mut prover, square_node);
 
         // 4b. The Square node fuses the rescale, so its arithmetic sumcheck's

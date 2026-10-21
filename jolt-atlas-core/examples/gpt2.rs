@@ -15,10 +15,8 @@ use common::utils::logging::setup_tracing;
 /// # Both, back to back (one Chrome trace covering both for comparison)
 /// cargo run --release --package jolt-atlas-core --example gpt2 -- --pcs both --trace
 /// ```
-use jolt_atlas_core::compat::{
-    model::{Model, RunArgs},
-    tensor::Tensor,
-};
+use jolt_atlas_core::compat::{model::RunArgs, tensor::Tensor};
+use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, DoryScheme, Fr, HyperKZG, ONNXProof,
@@ -89,7 +87,7 @@ fn main() {
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ]);
-    let model = Model::load("models/gpt2/network.onnx", &run_args);
+    let model = jolt_atlas_core::loader::load_model("models/gpt2/network.onnx", &run_args);
     println!("{}", model.pretty_print());
     println!("max num vars: {}", model.max_num_vars());
 

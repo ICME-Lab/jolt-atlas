@@ -1,6 +1,7 @@
+use crate::node_view::ModelView;
 use crate::{
     compat::{
-        model::{trace::ModelExecutionIO, Model, RunArgs},
+        model::{trace::ModelExecutionIO, RunArgs},
         tensor::Tensor,
     },
     onnx_proof::{
@@ -72,7 +73,7 @@ fn prove_and_verify(
     run_args: &RunArgs,
     config: TestConfig,
 ) -> ModelExecutionIO {
-    let model = Model::load(&format!("{model_dir}network.onnx"), run_args);
+    let model = crate::loader::load_model(&format!("{model_dir}network.onnx"), run_args);
     if config.print_model {
         println!("model: {}", model.pretty_print());
     }
@@ -174,7 +175,7 @@ fn test_gpt2_dory() {
     .set_scale(MODEL_SCALE as i32);
     let inputs = [input_ids, attention_mask, position_ids];
 
-    let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
+    let model = crate::loader::load_model(&format!("{working_dir}network.onnx"), &run_args);
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, DoryScheme>::new(pp);
 
@@ -237,7 +238,7 @@ fn test_gpt2_zk() {
     ])
     .set_scale(MODEL_SCALE as i32);
 
-    let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
+    let model = crate::loader::load_model(&format!("{working_dir}network.onnx"), &run_args);
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);

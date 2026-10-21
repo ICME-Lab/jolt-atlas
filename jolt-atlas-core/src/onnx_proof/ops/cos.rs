@@ -1,9 +1,4 @@
-use crate::compat::{
-    model::{trace::LayerData, ComputationGraph},
-    node::ComputationNode,
-    ops::Cos,
-    tensor::Tensor,
-};
+use crate::compat::{model::trace::LayerData, node::ComputationNode, ops::Cos, tensor::Tensor};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
@@ -25,6 +20,7 @@ use crate::{
     },
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_trace::Model;
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
@@ -94,7 +90,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
 
         let params = CosParams::new(
             node.clone(),
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
             &prover.accumulator,
             &mut prover.transcript,
         );
@@ -189,7 +185,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
 
         let exec_sumcheck = CosVerifier::new(
             node.clone(),
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -281,7 +277,7 @@ impl<F: JoltField> CosParams<F> {
     /// Create a new CosParams instance for the given computation node.
     pub fn new(
         computation_node: ComputationNode,
-        _graph: &ComputationGraph,
+        _model: &Model,
         accumulator: &impl OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
@@ -490,11 +486,11 @@ impl<F: JoltField> CosVerifier<F> {
     /// Initialize the verifier state.
     pub fn new(
         computation_node: ComputationNode,
-        graph: &ComputationGraph,
+        model: &Model,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let params = CosParams::new(computation_node, graph, accumulator, transcript);
+        let params = CosParams::new(computation_node, model, accumulator, transcript);
         let cos_table = MultilinearPolynomial::from(CosTable::materialize());
         Self { params, cos_table }
     }

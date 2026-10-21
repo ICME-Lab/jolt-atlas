@@ -23,7 +23,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
 
         let params = GatherParams::new(
             node.clone(),
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
             &prover.accumulator,
             &mut prover.transcript,
         );
@@ -74,7 +74,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let exec_sumcheck = GatherVerifier::new(
             node.clone(),
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );

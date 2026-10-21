@@ -156,8 +156,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         inputs: &[Tensor<i32>],
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
         // Generate trace and io
-        let trace = pp.model().trace(inputs);
-        let io = trace.io(pp.model().inner());
+        let trace = pp.model().trace(inputs).expect("model execution failed");
+        let io = trace.io(pp.model());
 
         // Initialize prover state
         // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state
@@ -181,7 +181,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // IOP portion
         let mut eval_reduction_proofs = BTreeMap::new();
         Self::iop(
-            pp.model().nodes(),
+            pp.model(),
             &mut prover,
             &mut proofs,
             &mut eval_reduction_proofs,

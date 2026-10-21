@@ -7,6 +7,7 @@
 //! multi-dimensional sum operations to a 2D representation.
 
 use crate::compat::{model::Model, node::ComputationNode, ops::Operator};
+use crate::node_view::ModelView;
 use joltworks::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
 use rayon::prelude::*;
 
@@ -109,8 +110,8 @@ fn extract_mk_kn_mn_dims(computation_node: &ComputationNode, model: &Model) -> E
     let [a_idx, b_idx] = computation_node.inputs[..] else {
         panic!("Expected exactly two inputs for mk,kn->mk operation")
     };
-    let _a_node = &model[a_idx];
-    let b_node = &model[b_idx];
+    let _a_node = &model.view(a_idx);
+    let b_node = &model.view(b_idx);
     assert_eq!(
         computation_node.output_dims.len(),
         2,
@@ -126,8 +127,8 @@ fn extract_k_nk_n_dims(computation_node: &ComputationNode, model: &Model) -> Ein
     let [a_idx, b_idx] = computation_node.inputs[..] else {
         panic!("Expected exactly two inputs for k,nk->n operation")
     };
-    let a_node = &model[a_idx];
-    let b_node = &model[b_idx];
+    let a_node = &model.view(a_idx);
+    let b_node = &model.view(b_idx);
     let n = b_node.output_dims[0];
     let k = b_node.output_dims[1];
     // The k,nk->n layout is strictly vector-matrix: it folds only the k axis,
@@ -147,8 +148,8 @@ fn extract_amk_ank_amn_dims(computation_node: &ComputationNode, model: &Model) -
     let [a_idx, b_idx] = computation_node.inputs[..] else {
         panic!("Expected exactly two inputs for amk,ank->amn operation")
     };
-    let a_node = &model[a_idx];
-    let b_node = &model[b_idx];
+    let a_node = &model.view(a_idx);
+    let b_node = &model.view(b_idx);
     let a = a_node.output_dims[0];
     let m = a_node.output_dims[1];
     let k = a_node.output_dims[2];
@@ -160,8 +161,8 @@ fn extract_abmk_abnk_abmn_dims(computation_node: &ComputationNode, model: &Model
     let [a_idx, b_idx] = computation_node.inputs[..] else {
         panic!("Expected exactly two inputs for abmk,abnk->abmn operation")
     };
-    let a_node = &model[a_idx];
-    let b_node = &model[b_idx];
+    let a_node = &model.view(a_idx);
+    let b_node = &model.view(b_idx);
     let a = a_node.output_dims[0];
     let b = a_node.output_dims[1];
     let m = a_node.output_dims[2];
@@ -295,7 +296,7 @@ pub fn sum_config(computation_node: &ComputationNode, model: &Model) -> SumConfi
     };
 
     // Get dimension information from the model
-    let input_dims = &model[input_idx].output_dims;
+    let input_dims = &model.view(input_idx).output_dims;
     let output_dims = &computation_node.output_dims;
     let ndim = input_dims.len();
 

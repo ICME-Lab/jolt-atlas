@@ -1,11 +1,10 @@
+use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
+use atlas_trace::Model;
 use core::panic;
 
 use crate::compat::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
+    model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Broadcast,
     tensor::Tensor,
@@ -53,7 +52,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
         let broadcast_verifier = BroadcastVerifier::new(
             node.clone(),
             &verifier.accumulator,
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
         );
         broadcast_verifier.verify(&mut verifier.accumulator, &mut verifier.transcript)
     }
@@ -149,14 +148,10 @@ impl<F: JoltField> BroadcastVerifier<F> {
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
         let params = BroadcastParams::new(computation_node, accumulator);
-        let input_dims = &graph
-            .nodes
-            .get(&params.computation_node.inputs[0])
-            .expect("Broadcast node should have an input")
-            .output_dims;
+        let input_dims = &model.view(params.computation_node.inputs[0]).output_dims;
         let output_dims = &params.computation_node.output_dims;
 
         let broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);

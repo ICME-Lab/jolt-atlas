@@ -10,6 +10,7 @@ use crate::compat::{
     ops::Operator,
     tensor::Tensor,
 };
+use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
 use ark_bn254::{Bn254, Fr};
@@ -362,8 +363,7 @@ fn verify_gather_small_zk(
     {
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
-        let (hb_v, bool_v) =
-            build_stage2_verifiers_zk::<F>(node, &model.graph, accumulator, transcript);
+        let (hb_v, bool_v) = build_stage2_verifiers_zk::<F>(node, model, accumulator, transcript);
         verify_zk_sumcheck_instances(
             zk_proof,
             vec![Box::new(hb_v), Box::new(bool_v)],
@@ -377,7 +377,7 @@ fn verify_gather_small_zk(
     {
         let (pid, zk_proof) = &bundle.zk_sumcheck_proofs[*zk_proof_idx];
         assert_eq!(*pid, node.idx);
-        let hw_v = build_stage3_verifier_zk::<F>(node, &model.graph, accumulator, transcript);
+        let hw_v = build_stage3_verifier_zk::<F>(node, model, accumulator, transcript);
         verify_zk_sumcheck_instances(zk_proof, vec![Box::new(hw_v)], accumulator, transcript)?;
         *zk_proof_idx += 1;
     }
@@ -914,7 +914,7 @@ fn prove_cos_sin_zk(
         ($Params:ty, $Prover:ty) => {{
             let params = <$Params>::new(
                 node.clone(),
-                &model.graph,
+                model,
                 &prover.accumulator,
                 &mut prover.transcript,
             );
@@ -1067,7 +1067,7 @@ fn prove_gather_large_zk(
     // Execution sumcheck
     let params = GatherParams::new(
         node.clone(),
-        &model.graph,
+        model,
         &prover.accumulator,
         &mut prover.transcript,
     );
@@ -1135,7 +1135,7 @@ fn prove_gather_small_zk(
     // Stage 1: Execution
     let params = GatherParams::new(
         node.clone(),
-        &model.graph,
+        model,
         &prover.accumulator,
         &mut prover.transcript,
     );
@@ -1574,8 +1574,8 @@ pub fn prove_zk(
     inputs: &[Tensor<i32>],
     pedersen_gens: &PedersenGenerators<C>,
 ) -> (ZkProofBundle, ModelExecutionIO) {
-    let trace = pp.model().trace(inputs);
-    let io = trace.io(pp.model().inner());
+    let trace = pp.model().trace(inputs).expect("model execution failed");
+    let io = trace.io(pp.model());
     let mut prover = Prover::<F, T>::new(pp.shared.clone(), trace);
     // Bind public inputs into the transcript before any challenge (issue #230);
     // mirrored in `verify_zk_with_pcs_capture_and_extract`.
@@ -2540,7 +2540,7 @@ fn verify_zk_with_pcs_capture_and_extract(
 
     // 3. Full IOP replay: for each node, verify eval reduction + absorb ZK sumcheck
     let mut zk_proof_idx = 0;
-    for (_, node) in model.graph.nodes.iter().rev() {
+    for node in model.views().iter().rev() {
         // Match is exhaustive: adding a new Operator variant fails to compile
         // until it is routed to a specific verify flow or the default branch.
         match &node.operator {
@@ -3226,7 +3226,7 @@ fn create_verifier_instances(
             vec![Box::new(ReshapeSumcheckVerifier::new(
                 node.clone(),
                 accumulator,
-                &model.graph,
+                model,
             ))]
         }
         Operator::Slice(_) => {
@@ -3234,7 +3234,7 @@ fn create_verifier_instances(
             vec![Box::new(SliceSumcheckVerifier::new(
                 node.clone(),
                 accumulator,
-                &model.graph,
+                model,
             ))]
         }
         Operator::Concat(_) => {
@@ -3242,7 +3242,7 @@ fn create_verifier_instances(
             vec![Box::new(ConcatSumcheckVerifier::new(
                 node.clone(),
                 accumulator,
-                &model.graph,
+                model,
             ))]
         }
         Operator::ScalarConstDiv(_) => {
@@ -3263,7 +3263,7 @@ fn create_verifier_instances(
             use crate::onnx_proof::ops::cos::CosVerifier;
             vec![Box::new(CosVerifier::new(
                 node.clone(),
-                &model.graph,
+                model,
                 accumulator,
                 transcript,
             ))]
@@ -3272,7 +3272,7 @@ fn create_verifier_instances(
             use crate::onnx_proof::ops::sin::SinVerifier;
             vec![Box::new(SinVerifier::new(
                 node.clone(),
-                &model.graph,
+                model,
                 accumulator,
                 transcript,
             ))]
@@ -3289,7 +3289,7 @@ fn create_verifier_instances(
             use crate::onnx_proof::ops::gather::GatherVerifier;
             vec![Box::new(GatherVerifier::new(
                 node.clone(),
-                &model.graph,
+                model,
                 accumulator,
                 transcript,
             ))]

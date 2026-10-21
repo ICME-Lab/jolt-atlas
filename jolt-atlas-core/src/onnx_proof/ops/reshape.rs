@@ -8,19 +8,18 @@
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
 use crate::compat::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
+    model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::Reshape,
 };
+use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::Model;
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -60,7 +59,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         let params = ReshapeSumcheckParams::<F>::new(
             node.clone(),
             &prover.accumulator,
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
         );
         let mut prover_sumcheck = ReshapeSumcheckProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
@@ -84,7 +83,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         let verifier_sumcheck = ReshapeSumcheckVerifier::new(
             node.clone(),
             &verifier.accumulator,
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
         );
         Sumcheck::verify(
             proof,
@@ -161,20 +160,15 @@ pub struct ReshapeSumcheckParams<F: JoltField> {
 }
 
 impl<F: JoltField> ReshapeSumcheckParams<F> {
-    /// Build reshape sumcheck parameters from node/opening context and graph metadata.
+    /// Build reshape sumcheck parameters from node/opening context and model metadata.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_output = accessor.get_reduced_opening().0;
-        let input_raw_dims = graph
-            .nodes
-            .get(&computation_node.inputs[0])
-            .expect("Reshape node should have one input")
-            .output_dims
-            .clone();
+        let input_raw_dims = model.view(computation_node.inputs[0]).output_dims.clone();
         let output_raw_dims = computation_node.output_dims.clone();
         Self {
             computation_node,
@@ -336,13 +330,13 @@ pub struct ReshapeSumcheckVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> ReshapeSumcheckVerifier<F> {
-    /// Build the reshape sumcheck verifier from node/opening context and graph metadata.
+    /// Build the reshape sumcheck verifier from node/opening context and model metadata.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
-        let params = ReshapeSumcheckParams::new(computation_node, accumulator, graph);
+        let params = ReshapeSumcheckParams::new(computation_node, accumulator, model);
         Self { params }
     }
 }

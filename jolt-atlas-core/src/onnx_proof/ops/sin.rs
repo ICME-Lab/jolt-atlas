@@ -1,9 +1,4 @@
-use crate::compat::{
-    model::{trace::LayerData, ComputationGraph},
-    node::ComputationNode,
-    ops::Sin,
-    tensor::Tensor,
-};
+use crate::compat::{model::trace::LayerData, node::ComputationNode, ops::Sin, tensor::Tensor};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
     neural_teleport::{
@@ -21,6 +16,7 @@ use crate::onnx_proof::{
     ProofId, ProofType, Prover, Verifier,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_trace::Model;
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
@@ -90,7 +86,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
 
         let params = SinParams::new(
             node.clone(),
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
             &prover.accumulator,
             &mut prover.transcript,
         );
@@ -185,7 +181,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
 
         let exec_sumcheck = SinVerifier::new(
             node.clone(),
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -277,7 +273,7 @@ impl<F: JoltField> SinParams<F> {
     /// Create a new SinParams instance for the given computation node.
     pub fn new(
         computation_node: ComputationNode,
-        _graph: &ComputationGraph,
+        _model: &Model,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
@@ -484,11 +480,11 @@ impl<F: JoltField> SinVerifier<F> {
     /// Initialize the verifier state.
     pub fn new(
         computation_node: ComputationNode,
-        graph: &ComputationGraph,
+        model: &Model,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let params = SinParams::new(computation_node, graph, accumulator, transcript);
+        let params = SinParams::new(computation_node, model, accumulator, transcript);
         let sin_table = MultilinearPolynomial::from(SinTable::materialize());
         Self { params, sin_table }
     }

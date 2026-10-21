@@ -1,5 +1,6 @@
 use super::*;
 use crate::compat::ops::GatherSmall;
+use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use common::CommittedPoly;
 use joltworks::subprotocols::{
@@ -27,7 +28,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherSmall {
 
         let params = GatherParams::new(
             node.clone(),
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
             &prover.accumulator,
             &mut prover.transcript,
         );
@@ -77,7 +78,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherSmall {
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let exec_sumcheck = GatherVerifier::new(
             node.clone(),
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -178,9 +179,9 @@ pub(crate) fn build_stage2_verifiers<F: JoltField>(
     let Operator::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
-    let graph = &verifier.preprocessing.model.graph;
-    let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
-    let indices = graph.nodes.get(&computation_node.inputs[1]).unwrap();
+    let model = &verifier.preprocessing.model;
+    let dict = &model.view(computation_node.inputs[0]);
+    let indices = model.view(computation_node.inputs[1]);
 
     let num_words = dict.output_dims[gather_op.axis];
     let num_lookups = indices.pow2_padded_num_output_elements();
@@ -290,8 +291,8 @@ pub(crate) fn build_stage3_verifier<F: JoltField>(
     let Operator::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
-    let graph = &verifier.preprocessing.model.graph;
-    let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
+    let model = &verifier.preprocessing.model;
+    let dict = &model.view(computation_node.inputs[0]);
 
     let num_words = dict.output_dims[gather_op.axis];
 
@@ -309,7 +310,7 @@ pub(crate) fn build_stage3_verifier<F: JoltField>(
 #[cfg(feature = "zk")]
 pub(crate) fn build_stage2_verifiers_zk<F: JoltField>(
     computation_node: &ComputationNode,
-    graph: &crate::compat::model::ComputationGraph,
+    model: &Model,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
 ) -> (
@@ -319,8 +320,8 @@ pub(crate) fn build_stage2_verifiers_zk<F: JoltField>(
     let Operator::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
-    let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
-    let indices = graph.nodes.get(&computation_node.inputs[1]).unwrap();
+    let dict = &model.view(computation_node.inputs[0]);
+    let indices = model.view(computation_node.inputs[1]);
     let num_words = dict.output_dims[gather_op.axis];
     let num_lookups = indices.pow2_padded_num_output_elements();
 
@@ -344,14 +345,14 @@ pub(crate) fn build_stage2_verifiers_zk<F: JoltField>(
 #[cfg(feature = "zk")]
 pub(crate) fn build_stage3_verifier_zk<F: JoltField>(
     computation_node: &ComputationNode,
-    graph: &crate::compat::model::ComputationGraph,
+    model: &Model,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
 ) -> HammingWeightSumcheckVerifier<F> {
     let Operator::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
-    let dict = graph.nodes.get(&computation_node.inputs[0]).unwrap();
+    let dict = &model.view(computation_node.inputs[0]);
     let num_words = dict.output_dims[gather_op.axis];
     let hw_params =
         ra_hamming_weight_params::<F>(computation_node, num_words, accumulator, transcript);

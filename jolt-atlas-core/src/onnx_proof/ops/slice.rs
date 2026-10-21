@@ -1,16 +1,15 @@
 use crate::compat::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
+    model::trace::{LayerData, Trace},
     node::ComputationNode,
     ops::{Operator, Slice},
 };
+use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::Model;
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -52,7 +51,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
         let params = SliceSumcheckParams::new(
             node.clone(),
             &prover.accumulator,
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
         );
         let mut prover_sumcheck = SliceSumcheckProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
@@ -76,7 +75,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
         let verifier_sumcheck = SliceSumcheckVerifier::new(
             node.clone(),
             &verifier.accumulator,
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
         );
         Sumcheck::verify(
             proof,
@@ -108,11 +107,11 @@ pub struct SliceSumcheckParams<F: JoltField> {
 }
 
 impl<F: JoltField> SliceSumcheckParams<F> {
-    /// Build slice sumcheck parameters from the graph metadata and reduced output opening.
+    /// Build slice sumcheck parameters from the model metadata and reduced output opening.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let Operator::Slice(slice_op) = &computation_node.operator else {
@@ -122,12 +121,7 @@ impl<F: JoltField> SliceSumcheckParams<F> {
         let start = slice_op.start;
         let end = slice_op.end;
         let r_output = accessor.get_reduced_opening().0;
-        let input_raw_dims = graph
-            .nodes
-            .get(&computation_node.inputs[0])
-            .expect("Slice node should have one input")
-            .output_dims
-            .clone();
+        let input_raw_dims = model.view(computation_node.inputs[0]).output_dims.clone();
         let output_raw_dims = computation_node.output_dims.clone();
         validate_slice_shapes(&input_raw_dims, &output_raw_dims, axis, start, end);
         Self {
@@ -302,13 +296,13 @@ pub struct SliceSumcheckVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> SliceSumcheckVerifier<F> {
-    /// Build the slice verifier from the reduced output opening and graph metadata.
+    /// Build the slice verifier from the reduced output opening and model metadata.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
-        let params = SliceSumcheckParams::new(computation_node, accumulator, graph);
+        let params = SliceSumcheckParams::new(computation_node, accumulator, model);
         Self { params }
     }
 }

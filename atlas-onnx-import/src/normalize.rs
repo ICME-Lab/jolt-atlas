@@ -118,10 +118,9 @@ pub fn normalize(g: &mut IGraph, opset: i64) -> Result<(), ImportError> {
             "Constant" => {
                 let node = g.nodes[idx].as_ref().expect("live");
                 let name = node.name.clone();
-                let out = *node
-                    .outputs
-                    .first()
-                    .ok_or_else(|| ImportError::Malformed(format!("Constant {name} has no output")))?;
+                let out = *node.outputs.first().ok_or_else(|| {
+                    ImportError::Malformed(format!("Constant {name} has no output"))
+                })?;
                 let tensor = match (
                     node.attrs.get("value").cloned(),
                     node.attr_float("value_float"),

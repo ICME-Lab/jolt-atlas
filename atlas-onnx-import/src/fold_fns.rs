@@ -289,19 +289,28 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
             k(0)?,
             k(1)?,
             |a, b| a + b,
-            |a, b| a.checked_add(b).ok_or_else(|| "i64 overflow in Add fold".into()),
+            |a, b| {
+                a.checked_add(b)
+                    .ok_or_else(|| "i64 overflow in Add fold".into())
+            },
         )?),
         "Sub" => out(binary_numeric(
             k(0)?,
             k(1)?,
             |a, b| a - b,
-            |a, b| a.checked_sub(b).ok_or_else(|| "i64 overflow in Sub fold".into()),
+            |a, b| {
+                a.checked_sub(b)
+                    .ok_or_else(|| "i64 overflow in Sub fold".into())
+            },
         )?),
         "Mul" => out(binary_numeric(
             k(0)?,
             k(1)?,
             |a, b| a * b,
-            |a, b| a.checked_mul(b).ok_or_else(|| "i64 overflow in Mul fold".into()),
+            |a, b| {
+                a.checked_mul(b)
+                    .ok_or_else(|| "i64 overflow in Mul fold".into())
+            },
         )?),
         "Div" => out(binary_numeric(
             k(0)?,
@@ -390,8 +399,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Reshape" | "Squeeze" | "Unsqueeze" | "Flatten" => {
             let infos = shape_fns::infer(node, g)?;
             let mut t = k(0)?.clone();
-            let n = checked_element_count(&infos[0].dims)
-                .ok_or("reinterpreted shape overflows")?;
+            let n = checked_element_count(&infos[0].dims).ok_or("reinterpreted shape overflows")?;
             if n != t.len() {
                 return Err(format!(
                     "{} fold would change the element count: {:?} holds {} elements",

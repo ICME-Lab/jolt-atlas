@@ -237,7 +237,9 @@ fn gather_norm(g: &mut IGraph) -> Result<usize, ImportError> {
                 if (0..axis_len).contains(&r) {
                     Ok(r)
                 } else {
-                    Err(format!("Gather index {v} out of range for axis length {axis_len}"))
+                    Err(format!(
+                        "Gather index {v} out of range for axis length {axis_len}"
+                    ))
                 }
             })
             .collect::<Result<_, _>>()
@@ -1314,7 +1316,9 @@ fn cast_policy(g: &mut IGraph) -> Result<usize, ImportError> {
                     return Err(ImportError::Pass {
                         pass: "cast_policy",
                         node: name,
-                        reason: format!("int→float Cast is neither provably scaled ({scaled}) nor provably raw ({raw})"),
+                        reason: format!(
+                            "int→float Cast is neither provably scaled ({scaled}) nor provably raw ({raw})"
+                        ),
                     });
                 }
             }

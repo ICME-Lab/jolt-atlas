@@ -363,9 +363,7 @@ pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
                     }
                 }
             };
-            let covered = sizes
-                .iter()
-                .try_fold(0usize, |acc, &s| acc.checked_add(s));
+            let covered = sizes.iter().try_fold(0usize, |acc, &s| acc.checked_add(s));
             if sizes.len() != n || covered != Some(x.dims[axis]) {
                 return Err("Split sizes do not cover the axis".into());
             }

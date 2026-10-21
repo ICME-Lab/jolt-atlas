@@ -3,6 +3,7 @@ use crate::compat::{
     node::ComputationNode,
     ops::Iff,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
@@ -146,7 +147,7 @@ impl<F: JoltField> IffProver<F> {
         let LayerData {
             operands,
             output: _output,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [mask_operand, a_operand, b_operand] = operands[..] else {
             panic!("Expected three operands for Iff operation")
         };

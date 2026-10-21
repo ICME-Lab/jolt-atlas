@@ -3,6 +3,7 @@ use crate::compat::{
     node::ComputationNode,
     ops::Neg,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
@@ -54,7 +55,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Neg {
         let (opening_point, _claim) =
             AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
 
-        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for Neg operation")
         };
@@ -185,7 +186,7 @@ impl<F: JoltField> NegProver<F> {
         let LayerData {
             operands,
             output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for Neg operation")
         };

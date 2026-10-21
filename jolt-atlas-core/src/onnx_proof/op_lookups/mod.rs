@@ -11,6 +11,7 @@ use crate::compat::{
     ops::Operator,
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::compute_lookup_indices_from_operands;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -197,7 +198,7 @@ impl LookupOperandsTrait for DefaultLookupOperands {
         let LayerData {
             output: _,
             operands,
-        } = Trace::layer_data(trace, node);
+        } = TraceView::layer_data(trace, node);
         operands[0].padded_pow2().map(|v| v as i64)
     }
 

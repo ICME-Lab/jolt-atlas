@@ -6,6 +6,7 @@ use crate::compat::{
     node::ComputationNode,
     ops::{Concat, Operator},
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
@@ -233,7 +234,7 @@ pub struct ConcatSumcheckProver<F: JoltField> {
 impl<F: JoltField> ConcatSumcheckProver<F> {
     /// Initialize prover state from trace tensors and prepared concat parameters.
     pub fn initialize(trace: &Trace, params: ConcatSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         assert!(!operands.is_empty(), "Concat expects at least one operand");
         assert_eq!(
             operands.len(),

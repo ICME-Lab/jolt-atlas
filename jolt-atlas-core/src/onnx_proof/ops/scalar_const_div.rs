@@ -4,6 +4,7 @@ use crate::compat::{
     ops::{Operator, ScalarConstDiv},
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
@@ -190,7 +191,7 @@ impl<F: JoltField> ScalarConstDivProver<F> {
     pub fn initialize(trace: &Trace, params: ScalarConstDivParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand] = operands[..] else {
             panic!("Expected one operands for ScalarConstDiv operation")
         };

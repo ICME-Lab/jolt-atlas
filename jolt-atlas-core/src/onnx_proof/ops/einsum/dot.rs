@@ -30,6 +30,7 @@
 //! `Σ L·R` body stays identical. That seam is centralized in
 //! [`EinsumDotParams::input_claim`].
 
+use crate::onnx_proof::trace_view::TraceView;
 use std::{array, sync::Arc};
 
 use crate::compat::{
@@ -257,7 +258,7 @@ impl<F: JoltField> EinsumDotProver<F> {
     /// Initialize the prover by folding the operands at the output randomness.
     #[tracing::instrument(skip_all, name = "EinsumDotProver::initialize")]
     pub fn initialize(trace: &Trace, params: EinsumDotParams<F>) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for einsum operation")
         };

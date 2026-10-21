@@ -3,6 +3,7 @@ use crate::compat::{
     node::ComputationNode,
     ops::{Operator, Rsqrt},
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
@@ -317,7 +318,7 @@ impl<F: JoltField> RsqrtProver<F> {
     pub fn initialize(trace: &Trace, params: RsqrtParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
             panic!("Expected one operand for Rsqrt operation")
         };

@@ -15,6 +15,7 @@ use crate::compat::{
     },
     node::ComputationNode,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
 use common::{parallel::ParallelFlagGuard, CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -123,7 +124,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         let LayerData {
             operands: _,
             output,
-        } = Trace::layer_data(&prover.trace, output_computation_node);
+        } = TraceView::layer_data(&prover.trace, output_computation_node);
 
         // Sample challenge from verifier over the power-of-two padded output domain
         let r_node_output = prover.transcript.challenge_vector_optimized::<F>(

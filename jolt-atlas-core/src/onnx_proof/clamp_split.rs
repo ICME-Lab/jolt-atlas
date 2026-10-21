@@ -59,6 +59,7 @@ use super::{
     global_clamp::ClampBucket,
 };
 use crate::compat::{model::trace::Trace, model::Model, node::ComputationNode};
+use crate::onnx_proof::trace_view::TraceView;
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::subprotocols::booleanity::{LinearClaim, LinearTerm};
 use joltworks::{
@@ -170,7 +171,7 @@ pub fn exact_output_prover(model: &Model, trace: &Trace, node_idx: usize) -> boo
     model.outputs().contains(&node_idx)
         && trace
             .node_outputs
-            .get(&node_idx)
+            .get(node_idx)
             .is_some_and(|t| unsaturated(t.data()))
 }
 
@@ -241,7 +242,7 @@ impl NodeSplit {
     /// Re-derive the node's split witness from the trace.
     pub fn from_trace(node: &ComputationNode, trace: &Trace) -> Self {
         let acc = clamp_intermediate(node, trace);
-        let out = Trace::layer_data(trace, node).output.padded_pow2();
+        let out = TraceView::layer_data(trace, node).output.padded_pow2();
         Self::new(acc.data(), out.data())
     }
 }

@@ -11,10 +11,8 @@
 //! rejects the attack. Used exclusively by
 //! [`MaliciousONNXProof`](crate::onnx_proof::malicious_prover).
 
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-};
+use crate::compat::{model::trace::LayerData, node::ComputationNode};
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{clamp_lookups::prove_clamp_lookup, ProofId, Prover},
     utils::opening_access::{AccOpeningAccessor, Target},
@@ -44,7 +42,7 @@ pub fn malicious_sub_prove<F: JoltField, T: Transcript>(
     results.extend(prove_clamp_lookup(node, prover, None));
 
     // (3) FORGED operand tie: claim `left(r) + 1` instead of `left(r)`.
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+    let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
     let [left, right] = operands[..] else {
         panic!("Expected two operands for Sub operation")
     };

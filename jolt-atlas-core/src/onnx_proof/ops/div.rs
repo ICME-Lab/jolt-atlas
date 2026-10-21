@@ -4,6 +4,7 @@ use crate::compat::{
     ops::Div,
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
@@ -275,7 +276,7 @@ impl<F: JoltField> DivProver<F> {
     pub fn initialize(trace: &Trace, params: DivParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Div operation")
         };

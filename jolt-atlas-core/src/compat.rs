@@ -103,7 +103,7 @@ pub mod tensor {
 /// Model, graph, trace, and analysis views, old-shaped.
 pub mod model {
     use super::*;
-    use atlas_trace::{NodeAux, Tensor};
+    use atlas_trace::Tensor;
 
     pub use trace::{LayerData, ModelExecutionIO, Trace};
 
@@ -309,10 +309,14 @@ pub mod model {
         pub fn trace(&self, inputs: &[Tensor<i32>]) -> Trace {
             let Some(inner) = &self.inner else {
                 assert!(inputs.is_empty(), "view-only model cannot be executed");
-                return Trace::new(BTreeMap::new());
+                return Trace {
+                    node_outputs: Vec::new(),
+                    aux: BTreeMap::new(),
+                    scale: Scale::new(self.scale as u8).expect("scale in range"),
+                    version: SemVersion::V1,
+                };
             };
-            let t = inner.trace(inputs).expect("model execution failed");
-            Trace::from_atlas(t)
+            inner.trace(inputs).expect("model execution failed")
         }
 
         /// The node views, by index.
@@ -824,125 +828,9 @@ pub mod model {
         }
     }
 
-    /// Trace types, old-shaped.
+    /// Trace re-exports (the proof layer consumes the raw atlas trace).
     pub mod trace {
-        use super::*;
-        use atlas_trace::trace::FusedIntermediates;
-        use atlas_trace::SoftmaxWitness;
-
-        pub use atlas_trace::trace::ModelExecutionIO;
-
-        /// A captured execution: node outputs plus per-node witnesses.
-        #[derive(Clone, Debug, PartialEq)]
-        pub struct Trace {
-            /// Output tensor per node index.
-            pub node_outputs: BTreeMap<usize, Tensor<i32>>,
-            /// Fused-rescale quotient/remainder per fused node.
-            pub fused_intermediates: BTreeMap<usize, FusedIntermediates>,
-            /// Full softmax witness per softmax node.
-            pub softmax_witnesses: BTreeMap<usize, SoftmaxWitness>,
-        }
-
-        /// Operands and output of one node.
-        #[derive(Debug, Clone)]
-        pub struct LayerData<'a> {
-            /// The node's output tensor.
-            pub output: &'a Tensor<i32>,
-            /// The node's operand tensors.
-            pub operands: Vec<&'a Tensor<i32>>,
-        }
-
-        impl Trace {
-            /// Convert from an [`atlas_trace::Trace`].
-            pub fn from_atlas(t: atlas_trace::Trace) -> Self {
-                let node_outputs = t.node_outputs.into_iter().enumerate().collect();
-                let mut fused_intermediates = BTreeMap::new();
-                let mut softmax_witnesses = BTreeMap::new();
-                for (id, aux) in t.aux {
-                    match aux {
-                        NodeAux::Fused(f) => {
-                            fused_intermediates.insert(id.index(), f);
-                        }
-                        NodeAux::Softmax(w) => {
-                            softmax_witnesses.insert(id.index(), *w);
-                        }
-                    }
-                }
-                Trace {
-                    node_outputs,
-                    fused_intermediates,
-                    softmax_witnesses,
-                }
-            }
-
-            /// A trace from bare node outputs (tests / tampering harnesses).
-            pub fn new(node_outputs: BTreeMap<usize, Tensor<i32>>) -> Self {
-                Trace {
-                    node_outputs,
-                    fused_intermediates: BTreeMap::new(),
-                    softmax_witnesses: BTreeMap::new(),
-                }
-            }
-
-            /// Cached fused intermediates of a node, if any.
-            pub fn fused_intermediates(&self, node_idx: usize) -> Option<&FusedIntermediates> {
-                self.fused_intermediates.get(&node_idx)
-            }
-
-            /// The softmax witness of a node, if any.
-            pub fn softmax_witness(&self, node_idx: usize) -> Option<&SoftmaxWitness> {
-                self.softmax_witnesses.get(&node_idx)
-            }
-
-            /// Operands and output of a node.
-            pub fn layer_data<'a>(&'a self, n: &node::ComputationNode) -> LayerData<'a> {
-                LayerData {
-                    output: &self[n.idx],
-                    operands: self.operand_tensors(n),
-                }
-            }
-
-            /// Operand tensors of a node.
-            pub fn operand_tensors(&self, n: &node::ComputationNode) -> Vec<&Tensor<i32>> {
-                n.inputs
-                    .iter()
-                    .map(|idx| self.node_outputs.get(idx).expect("operand traced"))
-                    .collect()
-            }
-
-            /// Operand tensors with power-of-two padding applied.
-            pub fn padded_operand_tensors(&self, n: &node::ComputationNode) -> Vec<Tensor<i32>> {
-                self.operand_tensors(n)
-                    .into_iter()
-                    .map(Tensor::padded_pow2)
-                    .collect()
-            }
-
-            /// The public IO of this execution.
-            pub fn io(&self, model: &Model) -> ModelExecutionIO {
-                ModelExecutionIO {
-                    inputs: model
-                        .inputs()
-                        .iter()
-                        .map(|idx| self.node_outputs[idx].clone())
-                        .collect(),
-                    outputs: model
-                        .outputs()
-                        .iter()
-                        .map(|idx| self.node_outputs[idx].clone())
-                        .collect(),
-                    input_indices: model.inputs().to_vec(),
-                    output_indices: model.outputs().to_vec(),
-                }
-            }
-        }
-
-        impl std::ops::Index<usize> for Trace {
-            type Output = Tensor<i32>;
-
-            fn index(&self, index: usize) -> &Self::Output {
-                &self.node_outputs[&index]
-            }
-        }
+        pub use atlas_trace::trace::{LayerData, ModelExecutionIO};
+        pub use atlas_trace::Trace;
     }
 }

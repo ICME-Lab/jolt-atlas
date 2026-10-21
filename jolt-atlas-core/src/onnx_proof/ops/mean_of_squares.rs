@@ -31,6 +31,7 @@
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
 
+use crate::onnx_proof::trace_view::TraceView;
 use std::array;
 
 use crate::compat::{
@@ -321,7 +322,7 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     /// Initialize by loading the operand and the retained-dim eq-poly.
     #[tracing::instrument(skip_all, name = "MeanOfSquaresReductionProver::initialize")]
     pub fn initialize(trace: &Trace, params: MeanOfSquaresReductionParams<F>) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for MeanOfSquares operation")
         };

@@ -10,6 +10,7 @@ use crate::compat::{
     node::ComputationNode,
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{op_lookups::LookupOperandsTrait, Prover, Verifier},
     utils::opening_access::AccOpeningAccessor,
@@ -80,7 +81,7 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
 
     /// The teleportation remainder, re-derived from the trace (not stored separately).
     fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-        let LayerData { operands, .. } = Trace::layer_data(trace, node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, node);
         let (_quotient, remainder) = compute_division(operands[0], TRIG_PERIOD_MODULUS as i32);
         remainder.map(|v| v as i64)
     }

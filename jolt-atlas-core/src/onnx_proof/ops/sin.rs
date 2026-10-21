@@ -1,12 +1,10 @@
 use crate::compat::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
+    model::{trace::LayerData, ComputationGraph},
     node::ComputationNode,
     ops::Sin,
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
     neural_teleport::{
         division::{
@@ -74,7 +72,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         cache_teleport_quotient_prove(node, prover, TRIG_PERIOD_MODULUS as i32);
 
         // Plumbing: downscale.
-        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
         let input = operands[0];
         let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
         let downscaled = cache_downscaled_prove(node, prover, &remainder);

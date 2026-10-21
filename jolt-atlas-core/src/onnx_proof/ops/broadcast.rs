@@ -1,3 +1,4 @@
+use crate::onnx_proof::trace_view::TraceView;
 use core::panic;
 
 use crate::compat::{
@@ -92,7 +93,7 @@ impl<F: JoltField> BroadcastProver<F> {
     /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: BroadcastParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for Broadcast operation")
         };

@@ -10,6 +10,7 @@ use crate::compat::{
     ops::Operator,
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
 use ark_bn254::{Bn254, Fr};
 use ark_std::{One, Zero};
@@ -213,7 +214,7 @@ fn prove_zk_eval_reduction(
     let LayerData {
         operands: _,
         output,
-    } = Trace::layer_data(&prover.trace, node);
+    } = TraceView::layer_data(&prover.trace, node);
     let output_mle = MultilinearPolynomial::from(output.padded_pow2());
 
     let (proof, reduced, h_com) = EvalReductionProtocol::prove_zk::<F, C, _>(
@@ -1574,7 +1575,7 @@ pub fn prove_zk(
     pedersen_gens: &PedersenGenerators<C>,
 ) -> (ZkProofBundle, ModelExecutionIO) {
     let trace = pp.model().trace(inputs);
-    let io = Trace::io(&trace, pp.model());
+    let io = trace.io(pp.model().inner());
     let mut prover = Prover::<F, T>::new(pp.shared.clone(), trace);
     // Bind public inputs into the transcript before any challenge (issue #230);
     // mirrored in `verify_zk_with_pcs_capture_and_extract`.

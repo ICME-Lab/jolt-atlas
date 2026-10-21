@@ -6,6 +6,7 @@ use crate::compat::{
     node::ComputationNode,
     ops::{Operator, Slice},
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
@@ -222,7 +223,7 @@ pub struct SliceSumcheckProver<F: JoltField> {
 impl<F: JoltField> SliceSumcheckProver<F> {
     /// Initialize the slice sumcheck prover from trace data and prepared parameters.
     pub fn initialize(trace: &Trace, params: SliceSumcheckParams<F>) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
             panic!("Slice expects exactly one operand")
         };

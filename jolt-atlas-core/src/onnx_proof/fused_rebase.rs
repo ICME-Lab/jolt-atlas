@@ -22,6 +22,7 @@
 //! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
 
 use crate::compat::{model::trace::Trace, node::ComputationNode, ops::Operator, tensor::Tensor};
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         clamp_lookups::{

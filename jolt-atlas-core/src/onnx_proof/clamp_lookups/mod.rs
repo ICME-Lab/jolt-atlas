@@ -26,6 +26,7 @@ use crate::compat::{
     ops::Operator,
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
     clamp_split::NodeSplit,
     deferred_lookups::{ProverLookupJob, VerifierLookupJob},
@@ -119,7 +120,7 @@ pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tenso
     if let Some(cached) = trace.fused_intermediates(node.idx) {
         return cached.quotient.padded_pow2();
     }
-    let LayerData { operands, .. } = Trace::layer_data(trace, node);
+    let LayerData { operands, .. } = TraceView::layer_data(trace, node);
     let raw = match &node.operator {
         Operator::Add(_) | Operator::Sub(_) => {
             let [left, right] = operands[..] else {
@@ -301,7 +302,9 @@ pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
         // Public unsaturated output: the verifier checks `ClampAcc == out`.
         return Vec::new();
     }
-    let output = Trace::layer_data(&prover.trace, node).output.padded_pow2();
+    let output = TraceView::layer_data(&prover.trace, node)
+        .output
+        .padded_pow2();
     let split = NodeSplit::new(witness.data(), output.data());
     prover.deferred.push(ProverLookupJob::Clamp {
         node: node.clone(),

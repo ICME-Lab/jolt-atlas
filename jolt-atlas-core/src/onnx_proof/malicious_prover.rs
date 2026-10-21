@@ -49,7 +49,7 @@ impl MaliciousONNXProof {
     ) -> ProverOutput<F, T, PCS> {
         // Generate trace and io
         let trace = pp.model().trace(inputs);
-        let io = Trace::io(&trace, pp.model());
+        let io = trace.io(pp.model().inner());
 
         // Initialize prover state
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
@@ -109,7 +109,7 @@ impl MaliciousONNXProof {
     ) -> ProverOutput<F, T, PCS> {
         let mut trace = pp.model().trace(inputs);
         Self::tamper_first_sub_output_to_zero(&mut trace, pp.model());
-        let io = Trace::io(&trace, pp.model());
+        let io = trace.io(pp.model().inner());
 
         let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
         let mut proofs = BTreeMap::new();
@@ -157,7 +157,7 @@ impl MaliciousONNXProof {
             .expect("model should contain a Sub node");
         let output = trace
             .node_outputs
-            .get_mut(&sub_node.idx)
+            .get_mut(sub_node.idx)
             .expect("trace should contain output for Sub node");
         output.data_mut().fill(0);
     }

@@ -3,6 +3,7 @@ use crate::compat::{
     node::ComputationNode,
     ops::Add,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         clamp_lookups::{
@@ -88,7 +89,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Add {
 
         // Operand tie: open `left(r)`, `right(r)`. The verifier ties them to
         // `acc` (non-scalar) or recomputes `SatClamp(left + right)` (scalar).
-        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
         let [left, right] = operands[..] else {
             panic!("Expected two operands for Add operation")
         };
@@ -258,7 +259,7 @@ impl<F: JoltField> AddProver<F> {
         let LayerData {
             operands,
             output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Add operation")
         };

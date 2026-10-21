@@ -10,10 +10,7 @@
 //! Internal implementation details (helper methods, state structs) live in
 //! [`prover`], [`verifier`], and [`types`] submodules.
 
-use crate::compat::{
-    model::trace::{ModelExecutionIO, Trace},
-    tensor::Tensor,
-};
+use crate::compat::{model::trace::ModelExecutionIO, tensor::Tensor};
 use joltworks::{
     field::JoltField,
     poly::commitment::commitment_scheme::CommitmentScheme,
@@ -35,6 +32,7 @@ pub mod op_lookups;
 pub mod ops;
 pub mod proof_serialization;
 pub mod range_checking;
+pub mod trace_view;
 pub mod witness;
 
 #[cfg(test)]
@@ -159,7 +157,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
         // Generate trace and io
         let trace = pp.model().trace(inputs);
-        let io = Trace::io(&trace, pp.model());
+        let io = trace.io(pp.model().inner());
 
         // Initialize prover state
         // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state

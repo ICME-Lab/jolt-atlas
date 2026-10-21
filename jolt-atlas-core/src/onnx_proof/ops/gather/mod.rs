@@ -7,6 +7,7 @@ use crate::compat::{
     ops::Operator,
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
@@ -177,7 +178,7 @@ impl<F: JoltField> GatherProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [dictionary, indexes] = operands[..] else {
             panic!("Expected two operands for Gather operation")
         };

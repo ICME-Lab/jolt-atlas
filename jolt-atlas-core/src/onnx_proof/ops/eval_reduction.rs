@@ -1,7 +1,5 @@
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-};
+use crate::compat::{model::trace::LayerData, node::ComputationNode};
+use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{Prover, Verifier};
 use joltworks::{
     field::JoltField,
@@ -40,7 +38,7 @@ impl NodeEvalReduction {
             let LayerData {
                 operands: _,
                 output,
-            } = Trace::layer_data(&prover.trace, computation_node);
+            } = TraceView::layer_data(&prover.trace, computation_node);
             let output_mle = MultilinearPolynomial::from(output.padded_pow2());
             EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
                 .expect("Proving evaluation reduction should not fail")
@@ -82,7 +80,7 @@ impl NodeEvalReduction {
 mod tests {
     use super::*;
     use crate::compat::{
-        model::{test::ModelBuilder, trace::Trace, Model},
+        model::{test::ModelBuilder, trace::ModelExecutionIO, Model},
         ops::{Add, Operator},
         tensor::Tensor,
     };
@@ -226,8 +224,12 @@ mod tests {
         let consumer = 1;
 
         let preprocessing = AtlasSharedPreprocessing::preprocess(model);
-        let trace = preprocessing.model().trace(&[]);
-        let io = Trace::io(&trace, preprocessing.model());
+        let io = ModelExecutionIO {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            input_indices: Vec::new(),
+            output_indices: Vec::new(),
+        };
 
         let proofs = BTreeMap::new();
         let mut verifier = Verifier::<Fr, Blake2bTranscript>::new(&preprocessing, &proofs, &io);
@@ -312,7 +314,7 @@ mod tests {
 
         let shared = AtlasSharedPreprocessing::preprocess(model);
         let trace = shared.model().trace(&[input]);
-        let io = Trace::io(&trace, shared.model());
+        let io = trace.io(shared.model().inner());
 
         // Build just enough prover state for (opening_claims, proofs, eval_reduction_proofs)
         // using output_claim + iop (no commitments, no reduced opening proof stage).

@@ -18,6 +18,7 @@ use crate::compat::{
     node::ComputationNode,
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
@@ -238,7 +239,7 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let raw_input = operands[0];
         let clamp_bound = 1i32 << ACTIVATION_BOUND;
         let clamped_tensor = raw_input.map(|x| x.clamp(-clamp_bound, clamp_bound - 1));

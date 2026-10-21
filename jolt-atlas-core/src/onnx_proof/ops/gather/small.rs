@@ -1,5 +1,6 @@
 use super::*;
 use crate::compat::ops::GatherSmall;
+use crate::onnx_proof::trace_view::TraceView;
 use common::CommittedPoly;
 use joltworks::subprotocols::{
     booleanity::{
@@ -131,7 +132,7 @@ pub(crate) fn build_stage2_provers<F: JoltField>(
     let Operator::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, computation_node);
+    let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, computation_node);
     let [dict, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };
@@ -264,7 +265,7 @@ pub(crate) fn build_stage3_prover<F: JoltField>(
     let Operator::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, computation_node);
+    let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, computation_node);
     let [dict, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };

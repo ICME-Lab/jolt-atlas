@@ -1,5 +1,6 @@
 use super::*;
 use crate::compat::ops::GatherLarge;
+use crate::onnx_proof::trace_view::TraceView;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 use joltworks::{
@@ -164,7 +165,7 @@ pub(crate) fn gather_lookup_indices(
     computation_node: &ComputationNode,
     trace: &Trace,
 ) -> Vec<usize> {
-    let LayerData { operands, .. } = Trace::layer_data(trace, computation_node);
+    let LayerData { operands, .. } = TraceView::layer_data(trace, computation_node);
     let [_, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };

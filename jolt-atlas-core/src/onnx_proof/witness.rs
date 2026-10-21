@@ -21,6 +21,7 @@ use crate::compat::{
     ops::Operator,
     tensor::Tensor,
 };
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits},
@@ -61,7 +62,7 @@ fn build_range_check_rad_witness<F: JoltField, H: RangeCheckingOperandsTrait>(
     d: usize,
 ) -> MultilinearPolynomial<F> {
     let computation_node = &model.graph.nodes[&node_idx];
-    let inputs = trace.padded_operand_tensors(computation_node);
+    let inputs = TraceView::padded_operand_tensors(trace, computation_node);
     let rc_operands = RangeCheckOperands::<H>::new(computation_node);
 
     let [left_operand, right_operand] = rc_operands
@@ -197,7 +198,7 @@ pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::T
                 }
                 CommittedPoly::MeanOfSquaresRangeCheckRaD(_, d) => {
                     let bits = mos_range_bits.get_or_insert_with(|| {
-                        let padded_operands = trace.padded_operand_tensors(node);
+                        let padded_operands = TraceView::padded_operand_tensors(trace, node);
                         let rc_operands =
                             RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
                         let [left, right] = rc_operands
@@ -268,7 +269,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
         match self {
             CommittedPoly::NodeOutputRaD(node_idx, d) => {
                 let computation_node = &model.graph.nodes[node_idx];
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
@@ -280,7 +281,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::SymmetricClampRaD(node_idx, d) => {
                 let computation_node = &model.graph.nodes[node_idx];
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
@@ -292,7 +293,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::ActivationClampRaD(node_idx, d) => {
                 let computation_node = &model.graph.nodes[node_idx];
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let padded_operands: Vec<_> = layer_data
                     .operands
                     .iter()
@@ -304,7 +305,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::ActivationSmallRaD(node_idx, d) => {
                 let computation_node = &model.graph.nodes[node_idx];
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
                 build_activation_small_rad_witness(input, *d)
             }
@@ -325,7 +326,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             CommittedPoly::DivNodeQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(matches!(computation_node.operator, Operator::Div(_)));
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let q = layer_data.output;
                 MultilinearPolynomial::from(q.clone())
             }
@@ -343,7 +344,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                         "teleport quotient witness requested for non-teleport operator"
                     ),
                 };
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
                 let (quotient, _remainder) = compute_division(input, tau);
                 MultilinearPolynomial::from(quotient)
@@ -354,7 +355,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     panic!("Expected ScalarConstDiv operator at node {node_idx}");
                 };
                 let b = op.divisor;
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let [left_operand] = layer_data.operands[..] else {
                     panic!("Expected one operand for ScalarConstDiv operation")
                 };
@@ -370,7 +371,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             CommittedPoly::RsqrtQuotient(node_idx) => {
                 let computation_node = &model.graph.nodes[node_idx];
                 assert!(matches!(computation_node.operator, Operator::Rsqrt(_)));
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let [input] = layer_data.operands[..] else {
                     panic!("Expected one operand for Rsqrt operation")
                 };
@@ -412,7 +413,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     computation_node.operator,
                     Operator::GatherSmall(_)
                 ));
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let indexes = &layer_data.operands[1];
                 let non_zero_addresses: Vec<_> = indexes
                     .data()
@@ -432,7 +433,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let Operator::GatherLarge(gather_op) = &computation_node.operator else {
                     panic!("Expected GatherLarge operator for GatherRaD committed polynomial");
                 };
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let indexes = layer_data.operands[1].padded_pow2();
                 let lookup_indices: Vec<usize> = indexes
                     .data()
@@ -471,7 +472,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     ),
                     "Expected Cos or Sin operator for CosRaD/SinRaD committed polynomial"
                 );
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
 
                 let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
@@ -504,7 +505,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     ),
                     "Expected Cos or Sin operator for TrigDownscaleRaD committed polynomial"
                 );
-                let layer_data = Trace::layer_data(trace, computation_node);
+                let layer_data = TraceView::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
                 let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
                 let lookup_indices = compute_lookup_indices_from_operands(&[&remainder], false);

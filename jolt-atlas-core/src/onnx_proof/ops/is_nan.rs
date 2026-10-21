@@ -1,4 +1,5 @@
 use crate::compat::{node::ComputationNode, ops::IsNan};
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
@@ -18,7 +19,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for IsNan {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
         let (opening_point, _claim) = accessor.get_reduced_opening();
-        let operand = prover.trace.operand_tensors(node)[0];
+        let operand = TraceView::operand_tensors(&prover.trace, node)[0];
         let operand_claim = operand.evaluate_mle(&opening_point.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, opening_point);
         provider.append_nodeio(Target::Input(0), operand_claim);

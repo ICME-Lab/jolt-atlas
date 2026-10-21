@@ -14,10 +14,7 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::op::Rsqrt;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Op;
-use atlas_trace::Trace;
+use atlas_trace::{op::Rsqrt, trace::LayerData, Op, Trace};
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{

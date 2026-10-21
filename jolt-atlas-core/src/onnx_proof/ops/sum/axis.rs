@@ -4,9 +4,7 @@ use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
 };
 
-use atlas_trace::Trace;
-
-use atlas_trace::trace::LayerData;
+use atlas_trace::{trace::LayerData, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::utils::{

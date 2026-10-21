@@ -7,8 +7,7 @@ use crate::{
     },
 };
 use ark_bn254::{Bn254, Fr};
-use atlas_trace::trace::ModelExecutionIO;
-use atlas_trace::Tensor;
+use atlas_trace::{trace::ModelExecutionIO, Tensor};
 use common::consts::MODEL_SCALE;
 use joltworks::{
     poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},

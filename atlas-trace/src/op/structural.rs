@@ -399,16 +399,24 @@ impl OpSpec for Concat {
     }
 }
 
-/// Shared gather kernel: embedding lookup on axis 0.
-fn gather_eval(dict: &Tensor<i32>, indices: &Tensor<i32>) -> Result<Tensor<i32>, KernelError> {
+/// Shared gather kernel: embedding lookup on axis 0. Indices are checked
+/// against the *semantic* `dict_len`, not the padded row count — an index in
+/// `[dict_len, next_pow2(dict_len))` would otherwise silently read a
+/// zero-padded row instead of being rejected as out of vocabulary.
+fn gather_eval(
+    dict: &Tensor<i32>,
+    indices: &Tensor<i32>,
+    dict_len: usize,
+) -> Result<Tensor<i32>, KernelError> {
     let dict_rows = dict.dims()[0];
+    let bound = dict_len.min(dict_rows);
     let row: usize = dict.dims()[1..].iter().product();
     let mut out = Vec::with_capacity(indices.len() * row);
     for &ix in indices.data() {
-        if ix < 0 || ix as usize >= dict_rows {
+        if ix < 0 || ix as usize >= bound {
             return Err(KernelError::GatherOutOfRange {
                 index: ix as i64,
-                dict_len: dict_rows,
+                dict_len,
             });
         }
         let base = ix as usize * row;
@@ -454,7 +462,11 @@ macro_rules! impl_gather {
                 inputs: &[&Tensor<i32>],
                 _ctx: &EvalCtx<'_>,
             ) -> Result<Eval, KernelError> {
-                Ok(Eval::plain(gather_eval(inputs[0], inputs[1])?))
+                Ok(Eval::plain(gather_eval(
+                    inputs[0],
+                    inputs[1],
+                    self.dict_len,
+                )?))
             }
 
             fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {

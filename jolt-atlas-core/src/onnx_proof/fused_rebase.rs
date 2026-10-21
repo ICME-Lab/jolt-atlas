@@ -21,11 +21,7 @@
 //! Scalar nodes (`log_T = 0`) skip the one-hot reductions and open `rescaled` and
 //! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
 
-use atlas_trace::Op;
-
-use atlas_trace::Tensor;
-
-use atlas_trace::Trace;
+use atlas_trace::{Op, Tensor, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;

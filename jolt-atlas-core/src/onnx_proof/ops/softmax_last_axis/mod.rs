@@ -46,9 +46,7 @@ use joltworks::{
 };
 use std::collections::BTreeMap;
 
-use atlas_trace::Tensor;
-
-use atlas_trace::op::SoftmaxLastAxis;
+use atlas_trace::{op::SoftmaxLastAxis, Tensor};
 
 use crate::node_view::ComputationNode;
 use common::{

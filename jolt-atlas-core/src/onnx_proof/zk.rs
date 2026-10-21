@@ -5,18 +5,13 @@
 //! Sumcheck round polynomials are Pedersen-committed instead of sent in the clear,
 //! and a BlindFold proof (Nova folding + Spartan) verifies constraint consistency.
 
-use atlas_trace::Op;
-
-use atlas_trace::Tensor;
-
-use atlas_trace::Trace;
+use atlas_trace::{trace::ModelExecutionIO, Op, Tensor, Trace};
 
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{AtlasProverPreprocessing, AtlasVerifierPreprocessing, ONNXProof, Prover};
 use ark_bn254::{Bn254, Fr};
 use ark_std::{One, Zero};
-use atlas_trace::trace::ModelExecutionIO;
 use common::VirtualPoly;
 use joltworks::{
     curve::Bn254Curve,

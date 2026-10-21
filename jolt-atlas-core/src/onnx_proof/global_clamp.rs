@@ -27,9 +27,7 @@ use crate::node_view::clamp_value_bound;
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_trace::Model;
-use atlas_trace::Op;
-use atlas_trace::Trace;
+use atlas_trace::{Model, Op, Trace};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},

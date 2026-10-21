@@ -1,6 +1,5 @@
 use crate::node_view::ComputationNode;
-use atlas_trace::op::MoveAxis;
-use atlas_trace::Op;
+use atlas_trace::{op::MoveAxis, Op};
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{

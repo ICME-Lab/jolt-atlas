@@ -7,11 +7,7 @@
 //!
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
-use atlas_trace::Trace;
-
-use atlas_trace::op::Reshape;
-
-use atlas_trace::trace::LayerData;
+use atlas_trace::{op::Reshape, trace::LayerData, Model, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
@@ -21,7 +17,6 @@ use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::Model;
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{

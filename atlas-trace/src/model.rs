@@ -221,6 +221,16 @@ fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
 
 /// Pad every dimension to the next power of two: rewrite each op's
 /// shape-carrying fields, then pad the node's output dims.
+///
+/// KNOWN GAP: this pass does not verify that padded lanes stay inert. An op
+/// that writes live values into padded lanes (`Broadcast` expanding a
+/// non-power-of-two axis, `Gather` on zero-padded index lanes, the
+/// `ConstantFill` activations) is only sound when something downstream
+/// absorbs them (zero-padded weights, a masked reduction, output cropping).
+/// Today that absorption holds by construction of the importer's lowering
+/// and is checked by nothing; a per-axis padded-lane analysis is the
+/// designed fix (see the ignored `broadcast_fill_inflates_padded_reduction`
+/// test below, which pins the failing case).
 fn pad_graph(graph: &mut Graph) -> Result<(), CompileError> {
     let originals: Vec<Vec<usize>> = graph.nodes.iter().map(|n| n.output_dims.clone()).collect();
 
@@ -294,6 +304,29 @@ impl std::ops::Index<NodeId> for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Pins the padding-soundness gap documented on `pad_graph`: Broadcast of
+    // a size-1 axis to a non-power-of-two extent fills the padded lanes with
+    // the live value, so a reduction over that axis counts the padded lanes.
+    // The assertion states the CORRECT (semantic) result; un-ignore it when
+    // the padded-lane analysis (or a masked Broadcast) lands.
+    #[test]
+    #[ignore = "known padding-soundness gap: broadcast fills padded lanes with live values"]
+    fn broadcast_fill_inflates_padded_reduction() {
+        use crate::{GraphBuilder, op};
+        let mut b = GraphBuilder::new();
+        let x = b.input(&[2, 1]);
+        let bc = b.push(Op::Broadcast(op::Broadcast { shape: vec![2, 3] }), &[x]);
+        let sum = b.push(Op::Sum(op::Sum { axes: vec![1] }), &[bc]);
+        b.output(sum);
+        let model = b.build(CompileOptions::default()).unwrap();
+        let input = Tensor::new(vec![5, 7], &[2, 1]).unwrap();
+        let trace = model.trace(&[input]).unwrap();
+        let out = trace.output(model.outputs()[0]);
+        // Semantic result: 3·v per row. Today the padded 4th lane also holds
+        // v, so the trace (and the proof, which agrees with it) yields 4·v.
+        assert_eq!(&out.data()[..2], &[15, 21]);
+    }
 
     #[test]
     fn width_rounding_matches_old_crate() {

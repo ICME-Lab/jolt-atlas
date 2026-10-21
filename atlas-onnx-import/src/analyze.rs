@@ -100,18 +100,64 @@ pub fn analyze(g: &mut IGraph) -> Result<(), ImportError> {
 }
 
 /// Drop nodes whose outputs are unused (classic DCE over the SSA graph).
+///
+/// Worklist formulation: use counts are computed once, then maintained as
+/// nodes are removed — linear in the graph, where the old
+/// recompute-until-fixpoint loop was quadratic on long dead chains.
 pub fn dce(g: &mut IGraph) {
-    loop {
-        let dead: Vec<usize> = g
-            .live_nodes()
-            .filter(|(_, n)| n.outputs.iter().all(|&e| g.use_count(e) == 0))
-            .map(|(i, _)| i)
-            .collect();
-        if dead.is_empty() {
-            return;
+    let mut counts = g.use_counts();
+    let mut worklist: Vec<usize> = g
+        .live_nodes()
+        .filter(|(_, n)| n.outputs.iter().all(|&e| counts[e.0] == 0))
+        .map(|(i, _)| i)
+        .collect();
+    while let Some(idx) = worklist.pop() {
+        let Some(node) = g.nodes[idx].as_ref() else {
+            continue; // already removed via another path
+        };
+        if !node.outputs.iter().all(|&e| counts[e.0] == 0) {
+            continue;
         }
-        for idx in dead {
-            g.remove_node(idx);
+        let inputs = node.inputs.clone();
+        g.remove_node(idx);
+        for &e in &inputs {
+            counts[e.0] -= 1;
+            if counts[e.0] == 0
+                && let Some((pidx, p)) = g.producer(e)
+                && p.outputs.iter().all(|&o| counts[o.0] == 0)
+            {
+                worklist.push(pidx);
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::INode;
+
+    #[test]
+    fn dce_removes_dead_chains_and_keeps_live_nodes() {
+        let mut g = IGraph::default();
+        let x = g.edge_by_name("x");
+        g.inputs.push(x);
+        let e1 = g.edge_by_name("e1");
+        let e2 = g.edge_by_name("e2");
+        let live = g.edge_by_name("live");
+        let mk = |name: &str, i, o| INode {
+            name: name.into(),
+            op: "Identity".into(),
+            attrs: Default::default(),
+            inputs: vec![i],
+            outputs: vec![o],
+        };
+        g.push_node(mk("dead1", x, e1));
+        g.push_node(mk("dead2", e1, e2));
+        let keep = g.push_node(mk("keep", x, live));
+        g.outputs.push(live);
+        dce(&mut g);
+        assert_eq!(g.live_nodes().count(), 1);
+        assert!(g.nodes[keep].is_some());
     }
 }

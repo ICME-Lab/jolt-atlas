@@ -4,6 +4,8 @@
 //! Folding computes in the declared dtype (f32 stays f32, matching what the
 //! exporter's own constant folding would produce).
 
+use atlas_trace::tensor::row_major_strides as strides;
+
 use crate::graph::{Attr, ConstData, ConstTensor, DType, IGraph, INode, checked_element_count};
 use crate::shape_fns::{self, norm_axis};
 
@@ -26,15 +28,6 @@ fn fold_numel(dims: &[usize], budget: usize) -> Result<usize, String> {
     checked_element_count(dims)
         .filter(|&n| n <= budget)
         .ok_or_else(|| format!("fold result shape {dims:?} exceeds the materialization budget"))
-}
-
-/// Row-major strides.
-fn strides(dims: &[usize]) -> Vec<usize> {
-    let mut s = vec![1usize; dims.len()];
-    for i in (0..dims.len().saturating_sub(1)).rev() {
-        s[i] = s[i + 1] * dims[i + 1];
-    }
-    s
 }
 
 /// Flat source index of broadcast element `flat` of `out_dims` in a tensor
@@ -495,7 +488,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         }
         "Slice" => {
             let t = k(0)?;
-            let (axes, starts, ends, _, out_dims) = shape_fns::slice_params(node, &t.dims)?;
+            let (axes, starts, _, _, out_dims) = shape_fns::slice_params(node, &t.dims)?;
             // Gather element-by-element through coordinate mapping.
             let out_strides = strides(&out_dims);
             let src_strides = strides(&t.dims);
@@ -506,7 +499,6 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                     let mut coord = (flat / out_strides[axis]) % od;
                     if let Some(pos) = axes.iter().position(|&a| a == axis) {
                         coord += starts[pos] as usize;
-                        let _ = ends;
                     }
                     src += coord * src_strides[axis];
                 }
@@ -640,6 +632,14 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                     data: ConstData::F32(vec![0.0]),
                 },
             };
+            // ONNX requires a one-element `value`; an empty tensor attribute
+            // would make the fill reads below out of bounds.
+            if fill.len() != 1 {
+                return Err(format!(
+                    "ConstantOfShape value must hold exactly 1 element, has {}",
+                    fill.len()
+                ));
+            }
             let data = match &fill.data {
                 ConstData::F32(v) => ConstData::F32(vec![v[0]; total]),
                 ConstData::I64(v) => ConstData::I64(vec![v[0]; total]),
@@ -653,6 +653,16 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         }
         "Range" => {
             let (s, l, d) = (k(0)?, k(1)?, k(2)?);
+            // ONNX Range takes scalar operands; an empty (or wider) tensor
+            // would make the [0] reads below out of bounds.
+            for (t, which) in [(s, "start"), (l, "limit"), (d, "delta")] {
+                if t.len() != 1 {
+                    return Err(format!(
+                        "Range {which} must be a scalar, has {} elements",
+                        t.len()
+                    ));
+                }
+            }
             match (&s.data, &l.data, &d.data) {
                 (ConstData::I64(s), ConstData::I64(l), ConstData::I64(d)) => {
                     let (s, l, d) = (s[0], l[0], d[0]);
@@ -755,4 +765,98 @@ pub fn foldable(op: &str) -> bool {
             | "Range"
             | "NonZero"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::graph::{EdgeId, TensorInfo};
+
+    fn konst_edge(g: &mut IGraph, name: &str, t: ConstTensor) -> EdgeId {
+        let e = g.edge_by_name(name);
+        g.edge_mut(e).info = Some(TensorInfo {
+            dtype: t.dtype,
+            dims: t.dims.clone(),
+        });
+        g.edge_mut(e).konst = Some(t);
+        e
+    }
+
+    fn i64_tensor(dims: &[usize], vals: &[i64]) -> ConstTensor {
+        ConstTensor {
+            dtype: DType::I64,
+            dims: dims.to_vec(),
+            data: ConstData::I64(vals.to_vec()),
+        }
+    }
+
+    // Fuzz-class regression: an empty `value` tensor attribute used to drive
+    // the fill reads out of bounds (index panic on hostile models).
+    #[test]
+    fn constant_of_shape_rejects_empty_value() {
+        let mut g = IGraph::default();
+        let shape = konst_edge(&mut g, "shape", i64_tensor(&[1], &[0]));
+        let out = g.edge_by_name("out");
+        let mut attrs = BTreeMap::new();
+        attrs.insert("value".into(), Attr::Tensor(i64_tensor(&[0], &[])));
+        let node = INode {
+            name: "cos".into(),
+            op: "ConstantOfShape".into(),
+            attrs,
+            inputs: vec![shape],
+            outputs: vec![out],
+        };
+        let err = fold(&node, &g).unwrap_err();
+        assert!(err.contains("exactly 1 element"), "{err}");
+    }
+
+    // Fuzz-class regression: zero-element start/limit/delta used to be read
+    // at [0] unconditionally.
+    #[test]
+    fn range_rejects_empty_operands() {
+        let mut g = IGraph::default();
+        let s = konst_edge(&mut g, "start", i64_tensor(&[0], &[]));
+        let l = konst_edge(&mut g, "limit", i64_tensor(&[1], &[10]));
+        let d = konst_edge(&mut g, "delta", i64_tensor(&[1], &[1]));
+        let out = g.edge_by_name("range_out");
+        let node = INode {
+            name: "r".into(),
+            op: "Range".into(),
+            attrs: BTreeMap::new(),
+            inputs: vec![s, l, d],
+            outputs: vec![out],
+        };
+        let err = fold(&node, &g).unwrap_err();
+        assert!(err.contains("must be a scalar"), "{err}");
+    }
+
+    // Fuzz-class regression: repeated Slice axes made the inferred dims keep
+    // the last occurrence while the fold mapped coordinates with the first,
+    // reading past the source buffer (axes=[0,0], starts=[8,0], ends=[10,10]
+    // on dims [10] drove the source index to 17).
+    #[test]
+    fn slice_fold_rejects_repeated_axes() {
+        let mut g = IGraph::default();
+        let data = konst_edge(
+            &mut g,
+            "data",
+            i64_tensor(&[10], &(0..10).collect::<Vec<_>>()),
+        );
+        let out = g.edge_by_name("slice_out");
+        let mut attrs = BTreeMap::new();
+        attrs.insert("axes".into(), Attr::Ints(vec![0, 0]));
+        attrs.insert("starts".into(), Attr::Ints(vec![8, 0]));
+        attrs.insert("ends".into(), Attr::Ints(vec![10, 10]));
+        let node = INode {
+            name: "s".into(),
+            op: "Slice".into(),
+            attrs,
+            inputs: vec![data],
+            outputs: vec![out],
+        };
+        let err = fold(&node, &g).unwrap_err();
+        assert!(err.contains("repeats an axis"), "{err}");
+    }
 }

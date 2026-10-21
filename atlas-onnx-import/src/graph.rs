@@ -177,8 +177,13 @@ impl INode {
     }
 }
 
-/// The importer graph. Nodes are tombstoned (`None`) when removed by a pass;
-/// edge producers/uses are recomputed on demand.
+/// The importer graph. Nodes are tombstoned (`None`) when removed by a pass.
+///
+/// An edge→producer index is maintained by [`IGraph::push_node`] and
+/// [`IGraph::remove_node`], making [`IGraph::producer`] O(1) — pass loops
+/// call it per node, and a linear scan there made the pipeline quadratic on
+/// transformer-scale graphs. The index requires that a live node's `outputs`
+/// are never reassigned in place: replace the node (push + remove) instead.
 #[derive(Debug, Default)]
 pub struct IGraph {
     /// Nodes (tombstoned when removed).
@@ -190,6 +195,7 @@ pub struct IGraph {
     /// Graph outputs.
     pub outputs: Vec<EdgeId>,
     names: HashMap<String, EdgeId>,
+    producers: HashMap<EdgeId, usize>,
 }
 
 impl IGraph {
@@ -218,16 +224,15 @@ impl IGraph {
         self.edges[id.0].info.as_ref().map(|i| i.dims.as_slice())
     }
 
-    /// The live node producing an edge.
+    /// The live node producing an edge (O(1) via the maintained index).
     pub fn producer(&self, id: EdgeId) -> Option<(usize, &INode)> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| n.as_ref().map(|n| (i, n)))
-            .find(|(_, n)| n.outputs.contains(&id))
+        let &idx = self.producers.get(&id)?;
+        self.nodes[idx].as_ref().map(|n| (idx, n))
     }
 
     /// How many live node inputs plus graph outputs reference the edge.
+    /// One O(nodes) scan — for a per-edge query over many edges, build
+    /// [`IGraph::use_counts`] once instead.
     pub fn use_count(&self, id: EdgeId) -> usize {
         self.nodes
             .iter()
@@ -235,6 +240,20 @@ impl IGraph {
             .map(|n| n.inputs.iter().filter(|&&e| e == id).count())
             .sum::<usize>()
             + self.outputs.iter().filter(|&&e| e == id).count()
+    }
+
+    /// Use counts of every edge (indexed by `EdgeId`), computed in one scan.
+    pub fn use_counts(&self) -> Vec<usize> {
+        let mut counts = vec![0usize; self.edges.len()];
+        for node in self.nodes.iter().flatten() {
+            for &e in &node.inputs {
+                counts[e.0] += 1;
+            }
+        }
+        for &e in &self.outputs {
+            counts[e.0] += 1;
+        }
+        counts
     }
 
     /// Intern (or look up) an edge by name.
@@ -265,15 +284,27 @@ impl IGraph {
         id
     }
 
-    /// Append a node.
+    /// Append a node. The new node becomes the producer of its outputs
+    /// (passes push a replacement before removing the node it supersedes).
     pub fn push_node(&mut self, node: INode) -> usize {
+        let idx = self.nodes.len();
+        for &o in &node.outputs {
+            self.producers.insert(o, idx);
+        }
         self.nodes.push(Some(node));
-        self.nodes.len() - 1
+        idx
     }
 
-    /// Remove a node.
+    /// Remove a node, dropping its producer entries (unless a replacement
+    /// node already took an output over).
     pub fn remove_node(&mut self, idx: usize) {
-        self.nodes[idx] = None;
+        if let Some(node) = self.nodes[idx].take() {
+            for &o in &node.outputs {
+                if self.producers.get(&o) == Some(&idx) {
+                    self.producers.remove(&o);
+                }
+            }
+        }
     }
 
     /// Live nodes with their indices.
@@ -650,4 +681,35 @@ fn input_signature(
         )));
     }
     Ok((dtype, dims))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(name: &str, inputs: Vec<EdgeId>, outputs: Vec<EdgeId>) -> INode {
+        INode {
+            name: name.into(),
+            op: "Identity".into(),
+            attrs: BTreeMap::new(),
+            inputs,
+            outputs,
+        }
+    }
+
+    #[test]
+    fn producer_index_tracks_node_replacement() {
+        let mut g = IGraph::default();
+        let a = g.edge_by_name("a");
+        let b = g.edge_by_name("b");
+        let old = g.push_node(node("old", vec![a], vec![b]));
+        assert_eq!(g.producer(b).map(|(i, _)| i), Some(old));
+        // The pass replacement pattern: push the successor, then remove the
+        // superseded node — the index must end up on the new producer.
+        let new = g.push_node(node("new", vec![a], vec![b]));
+        g.remove_node(old);
+        assert_eq!(g.producer(b).map(|(i, _)| i), Some(new));
+        g.remove_node(new);
+        assert!(g.producer(b).is_none());
+    }
 }

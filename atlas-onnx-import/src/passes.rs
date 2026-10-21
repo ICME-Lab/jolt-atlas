@@ -337,6 +337,14 @@ fn norm_fusion(g: &mut IGraph) -> Result<usize, ImportError> {
             });
         }
         let n = x_dims[rank - 1];
+        if n == 0 {
+            // 1/N below would be inf (and quantize to a silent saturation).
+            return Err(ImportError::Pass {
+                pass: "norm_fusion",
+                node: name,
+                reason: "LayerNormalization over a zero-size axis".into(),
+            });
+        }
         let mut red_dims = x_dims.clone();
         red_dims[rank - 1] = 1;
 
@@ -435,6 +443,15 @@ fn norm_fusion(g: &mut IGraph) -> Result<usize, ImportError> {
         };
         let out = node.outputs[0];
         let n: usize = axes.iter().map(|&a| x_dims[a]).product();
+        if n == 0 {
+            // 1/N for the mean would be inf (and quantize to a silent
+            // saturation); a zero-size reduction has no lowerable form.
+            return Err(ImportError::Pass {
+                pass: "norm_fusion",
+                node: name,
+                reason: format!("{op} over zero elements"),
+            });
+        }
         let axes_attr = Attr::Ints(axes.iter().map(|&a| a as i64).collect());
 
         // Output edge of the kept-dims reduction (atlas.Sum keeps dims=1).
@@ -665,6 +682,20 @@ fn matmul_gemm_to_einsum(g: &mut IGraph) -> Result<usize, ImportError> {
         let name = node.name.clone();
         let out = node.outputs[0];
         let is_gemm = node.op == "Gemm";
+        // atlas.Einsum has no raw (rebase-free) form: its eval always divides
+        // the contraction by 2^scale, so an integer matmul's result would be
+        // silently shrunk by that factor. Reject it (lowering gates this too).
+        if g.info(out).is_some_and(|i| i.dtype != DType::F32) {
+            return Err(ImportError::Pass {
+                pass: "matmul_gemm_to_einsum",
+                node: name,
+                reason: format!(
+                    "{} over non-float operands cannot be lowered: \
+                     einsum always rebases by 2^scale",
+                    if is_gemm { "Gemm" } else { "MatMul" }
+                ),
+            });
+        }
         let (mut a, mut b) = (node.inputs[0], node.inputs[1]);
         let bias = if is_gemm {
             node.inputs.get(2).copied()
@@ -1132,7 +1163,6 @@ fn expand_to_broadcast(g: &mut IGraph) -> Result<usize, ImportError> {
             "shape".into(),
             Attr::Ints(out_dims.iter().map(|&d| d as i64).collect()),
         );
-        node.outputs = vec![out];
         rewrites += 1;
     }
     Ok(rewrites)
@@ -1340,14 +1370,47 @@ fn cast_policy(g: &mut IGraph) -> Result<usize, ImportError> {
     Ok(rewrites)
 }
 
+/// ONNX ops that carry their (first) data operand's values through unchanged
+/// — pure data movement. The single source of truth shared by input
+/// classification ([`crate::inputs`]) and the cast-policy lineage walks
+/// below: the two walks must cover the same op set, or an input could be
+/// classified `RawInt` while its Cast lowers to identity — silently off by
+/// `2^scale`. `Concat` merges several operands, so lineage walks handle it
+/// in its own arm (every operand is part of the lineage).
+pub(crate) const VALUE_PRESERVING_OPS: &[&str] = &[
+    "Unsqueeze",
+    "Squeeze",
+    "Reshape",
+    "Flatten",
+    "Identity",
+    "Slice",
+    "Expand",
+    "Tile",
+    "Transpose",
+    "Split",
+    "Gather",
+    "Concat",
+];
+
+/// Pass-introduced structural aliases of [`VALUE_PRESERVING_OPS`] entries.
+/// The rewrite passes run before `cast_policy`, so its lineage walks see
+/// these names too; input classification runs before the passes and never
+/// does.
+const VALUE_PRESERVING_ATLAS_OPS: &[&str] = &["atlas.Slice", "atlas.MoveAxis", "atlas.Broadcast"];
+
+/// Whether `op` passes its data operand(s) through unchanged (either name
+/// surface).
+fn value_preserving(op: &str) -> bool {
+    VALUE_PRESERVING_OPS.contains(&op) || VALUE_PRESERVING_ATLAS_OPS.contains(&op)
+}
+
 /// Verify that an int→float Cast operand is scaled by construction: its
 /// lineage must pass only through value-preserving ops and terminate at
 /// graph inputs (which `classify_inputs` then marks Scaled through the very
-/// same ops, so the caller supplies pre-scaled values). Integer arithmetic,
-/// a descaled float, or an int constant in the lineage would be raw, and
-/// lowering the Cast to identity would misread it as scaled — so reject.
-/// Keep the op list a subset of the walk in `classify_int_input` (modulo
-/// the pass-rewrite renames, which run before this policy).
+/// same ops — [`VALUE_PRESERVING_OPS`] — so the caller supplies pre-scaled
+/// values). Integer arithmetic, a descaled float, or an int constant in the
+/// lineage would be raw, and lowering the Cast to identity would misread it
+/// as scaled — so reject.
 fn scaled_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
     let mut frontier = vec![start];
     let mut seen = std::collections::HashSet::new();
@@ -1369,13 +1432,10 @@ fn scaled_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
             return Err(format!("{} has no producer", g.edge(e).name));
         };
         match p.op.as_str() {
-            // Value-preserving data movement, pre- and post-rewrite names.
+            "Concat" => frontier.extend(p.inputs.iter().copied()),
             // Gather/Slice carry their data operand through unchanged; the
             // index/shape operands are not part of the value lineage.
-            "Unsqueeze" | "Squeeze" | "Reshape" | "Flatten" | "Identity" | "Slice" | "Expand"
-            | "Tile" | "Transpose" | "Split" | "Gather" | "atlas.Slice" | "atlas.MoveAxis"
-            | "atlas.Broadcast" => frontier.push(p.inputs[0]),
-            "Concat" => frontier.extend(p.inputs.iter().copied()),
+            op if value_preserving(op) => frontier.push(p.inputs[0]),
             other => {
                 return Err(format!(
                     "int→float Cast fed by `{other}`; only value-preserving \
@@ -1415,13 +1475,11 @@ fn raw_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
             // A float→int cast produces raw values, whatever fed it.
             "atlas.Descale" => continue,
             "Cast" if g.info(e).is_some_and(|i| i.dtype != DType::F32) => continue,
-            "Unsqueeze" | "Squeeze" | "Reshape" | "Flatten" | "Identity" | "Slice" | "Expand"
-            | "Tile" | "Transpose" | "Split" | "Gather" | "atlas.Slice" | "atlas.MoveAxis"
-            | "atlas.Broadcast" => frontier.push(p.inputs[0]),
             // Raw integer arithmetic stays raw (integer Mul lowers without
             // the fixed-point rebase).
             "Add" | "Sub" | "Mul" | "Neg" | "Concat" | "Where" | "And" | "Equal" | "Less"
             | "LessOrEqual" | "Greater" => frontier.extend(p.inputs.iter().copied()),
+            op if value_preserving(op) => frontier.push(p.inputs[0]),
             other => return Err(format!("`{other}` is not provably raw")),
         }
     }
@@ -1432,5 +1490,40 @@ fn raw_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
 impl std::fmt::Display for Edge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An integer MatMul must be rejected: atlas.Einsum always rebases by
+    // 2^scale, which would silently divide raw integer products.
+    #[test]
+    fn integer_matmul_is_rejected() {
+        let mut g = IGraph::default();
+        let info = TensorInfo {
+            dtype: DType::I64,
+            dims: vec![2, 2],
+        };
+        let a = g.fresh_edge("a", info.clone());
+        let b = g.fresh_edge("b", info.clone());
+        let out = g.fresh_edge("out", info);
+        g.push_node(INode {
+            name: "mm".into(),
+            op: "MatMul".into(),
+            attrs: Default::default(),
+            inputs: vec![a, b],
+            outputs: vec![out],
+        });
+        g.outputs.push(out);
+        let err = matmul_gemm_to_einsum(&mut g).unwrap_err();
+        assert!(matches!(
+            err,
+            ImportError::Pass {
+                pass: "matmul_gemm_to_einsum",
+                ..
+            }
+        ));
     }
 }

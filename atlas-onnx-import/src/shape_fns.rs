@@ -30,29 +30,11 @@ pub fn validate_perm(perm: &[i64], rank: usize) -> Result<Vec<usize>, String> {
     Ok(out)
 }
 
-/// NumPy broadcast of two shapes.
+/// NumPy broadcast of two shapes — the same rule the lowered graph's
+/// `Broadcast` op enforces, so it is delegated to atlas-trace rather than
+/// reimplemented (two copies of the rule could drift apart).
 pub fn broadcast(a: &[usize], b: &[usize]) -> Result<Vec<usize>, String> {
-    let rank = a.len().max(b.len());
-    let mut out = vec![0usize; rank];
-    for i in 0..rank {
-        let da = if i < rank - a.len() {
-            1
-        } else {
-            a[i - (rank - a.len())]
-        };
-        let db = if i < rank - b.len() {
-            1
-        } else {
-            b[i - (rank - b.len())]
-        };
-        out[i] = match (da, db) {
-            (x, y) if x == y => x,
-            (1, y) => y,
-            (x, 1) => x,
-            _ => return Err(format!("cannot broadcast {a:?} with {b:?}")),
-        };
-    }
-    Ok(out)
+    atlas_trace::tensor::broadcast_shape(a, b).map_err(|e| e.to_string())
 }
 
 /// Normalize a possibly negative axis.
@@ -526,6 +508,16 @@ pub fn slice_params(node: &INode, input_dims: &[usize]) -> Result<SliceParams, S
     };
     if starts.len() != ends.len() || starts.len() != axes.len() || starts.len() != steps.len() {
         return Err("Slice parameter lengths disagree".into());
+    }
+    // ONNX requires unique axes. A repeated axis would desynchronize the
+    // consumers of these params: the output dims keep the LAST occurrence's
+    // extent while the fold's coordinate mapping and the lowered chain of
+    // single-axis slices apply the FIRST occurrence's bounds.
+    let mut dedup = axes.clone();
+    dedup.sort_unstable();
+    dedup.dedup();
+    if dedup.len() != axes.len() {
+        return Err("Slice repeats an axis".into());
     }
     let mut dims = input_dims.to_vec();
     let mut starts_out = Vec::new();

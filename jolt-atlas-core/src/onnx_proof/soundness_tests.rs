@@ -1,14 +1,14 @@
-use crate::compat::{
-    model::{test::ModelBuilder, Model},
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
+use crate::node_view::ModelView;
 use crate::onnx_proof::{
     malicious_prover::MaliciousONNXProof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
     AtlasVerifierPreprocessing, Blake2bTranscript, ONNXProof,
 };
+use crate::test_builder::ModelBuilder;
 use ark_bn254::{Bn254, Fr};
+use atlas_trace::Model;
+use atlas_trace::Op;
+use atlas_trace::Tensor;
 use common::VirtualPoly;
 use joltworks::poly::{
     commitment::hyperkzg::HyperKZG,
@@ -37,11 +37,9 @@ fn sub_model_const_2(t: usize) -> Model {
 
 fn find_sub_node(model: &Model) -> ComputationNode {
     model
-        .graph
-        .nodes
-        .values()
-        .find(|node| matches!(node.operator, Operator::Sub(_)))
-        .cloned()
+        .views()
+        .into_iter()
+        .find(|node| matches!(node.operator, Op::Sub(_)))
         .expect("sub node should exist")
 }
 
@@ -183,7 +181,7 @@ fn soundness_same_consumer_duplicate_operand_should_track_both() {
         ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &[input]);
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
 
-    let y_node = &verifier_pp.model().graph.nodes[&y_idx];
+    let y_node = &verifier_pp.model().view(y_idx);
     assert_eq!(
         y_node.inputs[0], y_node.inputs[1],
         "test precondition: y must consume x twice"

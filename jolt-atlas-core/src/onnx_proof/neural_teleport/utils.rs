@@ -3,7 +3,7 @@
 //! This module centralizes helper functions used by activation ops, and periodic functions.
 
 use super::{n_bits_to_usize, usize_to_n_bits};
-use crate::compat::tensor::Tensor;
+use atlas_trace::Tensor;
 use common::parallel::par_enabled;
 use joltworks::{
     field::{FieldChallengeOps, JoltField},

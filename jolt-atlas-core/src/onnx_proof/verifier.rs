@@ -5,8 +5,10 @@
 //! `verify` delegates to.
 
 use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
-use crate::compat::model::{trace::ModelExecutionIO, Model};
+use crate::node_view::ModelView;
 use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
+use atlas_trace::trace::ModelExecutionIO;
+use atlas_trace::Model;
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
@@ -111,8 +113,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         model: &Model,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        let output_index = model.outputs()[0];
-        let output_computation_node = &model[output_index];
+        let output_index = model.output_indices()[0];
+        let output_computation_node = &model.view(output_index);
         let r_node_output = verifier.transcript.challenge_vector_optimized::<F>(
             output_computation_node
                 .pow2_padded_num_output_elements()
@@ -153,7 +155,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         model: &Model,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        for (_, node) in model.graph.nodes.iter().rev() {
+        for node in model.views().iter().rev() {
             let res = OperatorVerifier::verify(node, verifier, &self.eval_reduction_proofs);
             #[cfg(test)]
             if let Err(e) = &res {

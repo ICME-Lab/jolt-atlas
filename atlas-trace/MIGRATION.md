@@ -1,13 +1,18 @@
 # Migrating `jolt-atlas-core` from `atlas-onnx-tracer` to `atlas-trace`
 
-> **Status: DONE.** `jolt-atlas-core` runs on `atlas-trace` +
-> `atlas-onnx-import` through the transitional facade
-> (`jolt-atlas-core/src/compat.rs`), and `atlas-onnx-tracer` has been
-> deleted from the workspace (tract is gone from the lockfile). The zoo
-> lives at `models/`. Remaining follow-ups: dissolve the facade in favor of
-> direct `atlas_trace` types, land the softmax `active_len` selector
-> polynomial (masked softmax is rejected at proving time until then), and
-> repair the pre-existing `zk`-feature bitrot.
+> **Status: DONE — facade dissolved.** `jolt-atlas-core` runs directly on
+> `atlas_trace::{Model, Trace, Op}` + `atlas-onnx-import`: the transitional
+> facade (`compat.rs`) has been deleted. The proof layer's only view types
+> are `node_view::ComputationNode` (an owned per-node bundle built on
+> demand, since sumcheck params outlive model borrows) plus the `ModelView`/
+> `TraceView` accessor traits; model loading lives in `loader.rs` and the
+> test builder in `test_builder.rs`. The einsum registry is pruned to the
+> four canonical importer equations over three layout families.
+> `atlas-onnx-tracer` has been deleted from the workspace (tract is gone
+> from the lockfile), and the zoo lives at `models/`. Remaining follow-ups:
+> land the softmax `active_len` selector polynomial (masked softmax is
+> rejected at proving time until then) and repair the pre-existing
+> `zk`-feature bitrot.
 
 `atlas-trace` + `atlas-onnx-import` replaced `atlas-onnx-tracer` end to end.
 Validation status (differential suites in both crates' `tests/`):

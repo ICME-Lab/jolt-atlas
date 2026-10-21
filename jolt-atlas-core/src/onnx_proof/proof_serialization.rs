@@ -310,14 +310,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compat::{
-        model::{Model, RunArgs},
-        tensor::Tensor,
-    };
+    use crate::loader::RunArgs;
     use crate::onnx_proof::{
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     };
     use ark_bn254::{Bn254, Fr};
+    use atlas_trace::Tensor;
     use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
@@ -327,7 +325,8 @@ mod tests {
     fn test_proof_serialization_roundtrip_transformer() {
         // --- Setup ---
         let working_dir = "../models/transformer/";
-        let model = Model::load(&format!("{working_dir}network.onnx"), &RunArgs::default());
+        let model =
+            crate::loader::load_model(&format!("{working_dir}network.onnx"), &RunArgs::default());
 
         let pp = AtlasSharedPreprocessing::preprocess(model);
         let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);

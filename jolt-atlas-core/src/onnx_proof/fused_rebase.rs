@@ -21,8 +21,14 @@
 //! Scalar nodes (`log_T = 0`) skip the one-hot reductions and open `rescaled` and
 //! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
 
-pub use crate::compat::ops::rebase_bits as compat_rebase_bits;
-use crate::compat::{model::trace::Trace, node::ComputationNode, ops::Operator, tensor::Tensor};
+use atlas_trace::Op;
+
+use atlas_trace::Tensor;
+
+use atlas_trace::Trace;
+
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         clamp_lookups::{
@@ -53,13 +59,26 @@ use joltworks::{
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 
-/// Rebase width `S` (in bits) of a node's fused rescaling division, or
-/// `None` if the operator does not fuse a rescale.
+/// Rebase width `S` (in bits) of a node's fused rescaling division at the
+/// model's log2 `scale`, or `None` when the operator does not fuse a
+/// power-of-two rescale (`MeanOfSquares` divides by `count·2^S` and takes its
+/// own path).
 ///
 /// `Mul`/`Square` are at scale `2S` and rebase by `2^S`; `Cube` is at scale
 /// `3S` and rebases by `2^(2S)`; einsum is a (sum of) products at scale `2S`.
+pub fn op_rebase_bits(op: &Op, scale: i32) -> Option<i32> {
+    match op {
+        Op::Einsum(_) => Some(scale),
+        Op::Mul(m) => Some(if m.rebase { scale } else { 0 }),
+        Op::Square(s) => Some(if s.rebase { scale } else { 0 }),
+        Op::Cube(c) => Some(if c.rebase { scale * 2 } else { 0 }),
+        _ => None,
+    }
+}
+
+/// [`op_rebase_bits`] of a node view (which carries the model scale).
 pub fn rebase_bits(node: &ComputationNode) -> Option<i32> {
-    compat_rebase_bits(node)
+    op_rebase_bits(&node.operator, node.scale)
 }
 
 /// Whether a node fuses the rescaling division (`bits > 0`).
@@ -126,12 +145,12 @@ pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<
 }
 
 /// Human-readable operator name for scalar-clamp error messages.
-fn op_name(op: &Operator) -> &'static str {
+fn op_name(op: &Op) -> &'static str {
     match op {
-        Operator::Einsum(_) => "Einsum",
-        Operator::Mul(_) => "Mul",
-        Operator::Square(_) => "Square",
-        Operator::Cube(_) => "Cube",
+        Op::Einsum(_) => "Einsum",
+        Op::Mul(_) => "Mul",
+        Op::Square(_) => "Square",
+        Op::Cube(_) => "Cube",
         _ => "rescale-op",
     }
 }

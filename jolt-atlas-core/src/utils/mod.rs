@@ -1,6 +1,6 @@
 //! Utility modules for dimension handling and tensor operations.
 
-use crate::compat::tensor::Tensor;
+use atlas_trace::Tensor;
 use common::{consts::XLEN, parallel::par_enabled};
 use joltworks::utils::{interleave_bits, lookup_bits::LookupBits};
 use rayon::prelude::*;

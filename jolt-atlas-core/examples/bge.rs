@@ -1,4 +1,3 @@
-use common::utils::logging::setup_tracing;
 /// Run with tracing:
 /// ```bash
 /// # Chrome Tracing JSON output (view in chrome://tracing)
@@ -12,10 +11,10 @@ use common::utils::logging::setup_tracing;
 /// ```bash
 /// python scripts/download_bge_small_en_v1_5.py
 /// ```
-use jolt_atlas_core::compat::{
-    model::{Model, RunArgs},
-    tensor::Tensor,
-};
+use atlas_trace::Tensor;
+use common::utils::logging::setup_tracing;
+use jolt_atlas_core::loader::RunArgs;
+use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
@@ -32,7 +31,8 @@ fn main() {
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ]);
-    let model = Model::load("models/bge-small-en-v1.5/network.onnx", &run_args);
+    let model =
+        jolt_atlas_core::loader::load_model("models/bge-small-en-v1.5/network.onnx", &run_args);
     println!("{}", model.pretty_print());
     println!("max num vars: {}", model.max_num_vars());
 

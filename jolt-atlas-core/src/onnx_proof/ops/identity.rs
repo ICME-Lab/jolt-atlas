@@ -1,8 +1,9 @@
-use crate::compat::{node::ComputationNode, ops::Identity};
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::Identity;
 use joltworks::{
     field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,

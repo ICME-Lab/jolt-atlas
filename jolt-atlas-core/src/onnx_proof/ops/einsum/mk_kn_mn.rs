@@ -1,10 +1,10 @@
 //! `mk,kn->mn` layout (standard matrix multiply) for the einsum [`dot`](super::dot) engine.
 
-use crate::compat::tensor::Tensor;
 use crate::{
     onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
+use atlas_trace::Tensor;
 use common::parallel::par_enabled;
 use joltworks::{
     field::JoltField,
@@ -100,8 +100,10 @@ impl<F: JoltField> EinsumLayout<F> for MkKnMnLayout {
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn matmul_model(rng: &mut StdRng, m: usize, k: usize, n: usize) -> Model {

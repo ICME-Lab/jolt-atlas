@@ -97,9 +97,19 @@ impl OpSpec for SoftmaxLastAxis {
             for j in 0..active_len {
                 let idx = offset + j;
                 // z ≥ 0; saturate to the sub-table range (exp decays to 0
-                // beyond it anyway).
-                let z_c = (mv - data[idx]).min(z_bound - 1);
-                let zu = z_c as usize;
+                // beyond it anyway). The raw difference is computed in i64 —
+                // two extreme logits span up to 2^32 — but the proof layer
+                // recomputes z = max - x in i32 (softmax_z), so a span past
+                // i32::MAX is a typed error, not a wrapped value.
+                let z = mv as i64 - data[idx] as i64;
+                if z > i32::MAX as i64 {
+                    return Err(KernelError::WitnessOverflow {
+                        op: "softmax",
+                        what: "z = max - x",
+                        value: z,
+                    });
+                }
+                let zu = z.min((z_bound - 1) as i64) as usize;
                 let z_hi = (zu >> lut.log2_base) as i32;
                 let z_lo = (zu & (lut.base - 1)) as i32;
                 let hi_val = lut_hi[z_hi as usize];

@@ -70,8 +70,15 @@ pub struct BoundCtx<'a> {
 
 /// How an operator behaves under power-of-two padding of its operands.
 ///
-/// Declared, not inferred: the padding pass refuses ops without a variant,
-/// so a new op cannot silently miscompute on padded lanes.
+/// This classification is *declared documentation plus per-op masking*, not
+/// a property the padding pass enforces: [`crate::model`]'s `pad_graph`
+/// rewrites shapes via [`OpSpec::apply_padding`] but never consults this
+/// variant. Each `NeedsMask` op masks itself (softmax via `active_len`,
+/// mean-of-squares via `count`); `ConstantFill` and the non-zero padded
+/// lanes a `Broadcast`/`Gather` can produce rely on downstream absorption
+/// (zero-padded weights, output cropping) that no analysis currently
+/// verifies — see the ignored `broadcast_fill_...` test in `model.rs` for
+/// the known gap.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum PadBehavior {
     /// Zero inputs in padded lanes produce zero outputs in padded lanes

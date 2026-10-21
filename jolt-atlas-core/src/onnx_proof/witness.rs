@@ -31,7 +31,7 @@ use crate::{
         clamp_lookups::{clamp_intermediate, clamp_lookup_bits},
         neural_teleport::{division::compute_division, n_bits_to_usize},
         ops::rsqrt::rsqrt_dividend,
-        ops::softmax_last_axis::{generate_exp_lut_decomposed, softmax_z, SoftmaxLastAxisTrace},
+        ops::softmax_last_axis::{generate_exp_lut_decomposed, softmax_z},
         range_checking::range_check_operands::{
             DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
             RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
@@ -507,19 +507,14 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let node = &model.view(*node_idx);
                 let log_scale = softmax_op_scale(node) as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
-                let lookup_indices: Vec<usize> = st.R.iter().map(|&v| v as usize).collect();
+                let lookup_indices: Vec<usize> = st.r.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
             }
             CommittedPoly::SoftmaxExpRemainderRaD(node_idx, d) => {
                 let node = &model.view(*node_idx);
                 let log_scale = softmax_op_scale(node) as usize;
                 let st = softmax_last_axis_full_trace(node, trace);
-                let lookup_indices: Vec<usize> = st
-                    .decomposed_exp
-                    .r_exp
-                    .iter()
-                    .map(|&v| v as usize)
-                    .collect();
+                let lookup_indices: Vec<usize> = st.r_exp.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_scale, *d)
             }
             CommittedPoly::SoftmaxZHiRaD(node_idx, d) => {
@@ -527,8 +522,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let st = softmax_last_axis_full_trace(node, trace);
                 let decomp = generate_exp_lut_decomposed(st.scale as i32);
                 let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
-                let lookup_indices: Vec<usize> =
-                    st.decomposed_exp.z_hi.iter().map(|&v| v as usize).collect();
+                let lookup_indices: Vec<usize> = st.z_hi.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_hi, *d)
             }
             CommittedPoly::SoftmaxZLoRaD(node_idx, d) => {
@@ -536,8 +530,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let st = softmax_last_axis_full_trace(node, trace);
                 let decomp = generate_exp_lut_decomposed(st.scale as i32);
                 let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
-                let lookup_indices: Vec<usize> =
-                    st.decomposed_exp.z_lo.iter().map(|&v| v as usize).collect();
+                let lookup_indices: Vec<usize> = st.z_lo.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_lo, *d)
             }
             CommittedPoly::SoftmaxClampRaD(node_idx, d) => {
@@ -583,11 +576,13 @@ fn softmax_op_scale(node: &ComputationNode) -> i32 {
 
 /// The softmax node's full witness, captured in the trace at execution time
 /// (the old pipeline re-ran the decomposed softmax here).
-fn softmax_last_axis_full_trace(node: &ComputationNode, trace: &Trace) -> SoftmaxLastAxisTrace {
-    let w = trace
+fn softmax_last_axis_full_trace<'a>(
+    node: &ComputationNode,
+    trace: &'a Trace,
+) -> &'a atlas_trace::SoftmaxWitness {
+    trace
         .softmax_witness(node.idx)
-        .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx));
-    SoftmaxLastAxisTrace::from_witness(w)
+        .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx))
 }
 
 /// Build a one-hot RaD witness for an identity range-check or Shout ra

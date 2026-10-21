@@ -71,7 +71,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits, math::Math},
 };
-pub use witness::{generate_exp_lut_decomposed, softmax_z, SoftmaxLastAxisTrace};
+pub use witness::{generate_exp_lut_decomposed, softmax_z, ExpLutDecomposed};
 
 /// exp_sum(r0_k) = sum_{k,j} eq(r0_k, k) * exp_q[k,j]
 pub mod exp_sum;
@@ -114,8 +114,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             .trace
             .softmax_witness(node.idx)
             .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx));
-        let trace = SoftmaxLastAxisTrace::from_witness(witness);
-        SoftmaxLastAxisProver::new(node, trace, scale).prove(prover)
+        SoftmaxLastAxisProver::new(node, witness.clone(), scale).prove(prover)
     }
 
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::verify")]
@@ -179,7 +178,8 @@ pub(crate) struct SoftmaxLastAxisProver {
     pub(crate) computation_node: ComputationNode,
     pub(crate) scale: i32,
     pub(crate) F_N: [usize; 2],
-    pub(crate) trace: SoftmaxLastAxisTrace,
+    pub(crate) witness: atlas_trace::SoftmaxWitness,
+    pub(crate) lut: ExpLutDecomposed,
 }
 
 impl SoftmaxLastAxisProver {
@@ -212,22 +212,21 @@ impl SoftmaxLastAxisProver {
         // ── Pre-compute index/lookup data from trace vectors ────────────
 
         // R-derived data (consumed by stage1 RC + stage2 one-hot)
-        let r_lookup_bits = to_lookup_bits(&self.trace.R, scale_bits as usize);
-        let r_indices = to_indices(&self.trace.R);
+        let r_lookup_bits = to_lookup_bits(&self.witness.r, scale_bits as usize);
+        let r_indices = to_indices(&self.witness.r);
 
         // r_exp-derived data (consumed by stage2 RC + stage3 one-hot)
-        let r_exp_lookup_bits =
-            to_lookup_bits(&self.trace.decomposed_exp.r_exp, scale_bits as usize);
-        let r_exp_indices = to_indices(&self.trace.decomposed_exp.r_exp);
+        let r_exp_lookup_bits = to_lookup_bits(&self.witness.r_exp, scale_bits as usize);
+        let r_exp_indices = to_indices(&self.witness.r_exp);
 
         // z_hi/z_lo indices (consumed by stage3 + stage4)
-        let z_hi_indices = to_indices(&self.trace.decomposed_exp.z_hi);
-        let z_lo_indices = to_indices(&self.trace.decomposed_exp.z_lo);
+        let z_hi_indices = to_indices(&self.witness.z_hi);
+        let z_lo_indices = to_indices(&self.witness.z_lo);
 
         // Padded lookup tables (consumed by stage3 Shout + stage4 one-hot)
-        let mut table_hi = std::mem::take(&mut self.trace.decomposed_exp.lut.lut_hi);
+        let mut table_hi = std::mem::take(&mut self.lut.lut_hi);
         pad_to_power_of_two(&mut table_hi);
-        let mut table_lo = std::mem::take(&mut self.trace.decomposed_exp.lut.lut_lo);
+        let mut table_lo = std::mem::take(&mut self.lut.lut_lo);
         pad_to_power_of_two(&mut table_lo);
 
         let lut_data = LookupTableData {
@@ -238,10 +237,10 @@ impl SoftmaxLastAxisProver {
         };
 
         // z = max_k - x, the sat-clamp lookup's witness. Computed here (not inside
-        // `build_stage3_instances`) because stage 2 takes ownership of `self.trace.x` (for
-        // `max_indicator_prover`) — by the time stage 3 runs, `self.trace.x` is empty.
+        // `build_stage3_instances`) because stage 2 takes ownership of `self.witness.x` (for
+        // `max_indicator_prover`) — by the time stage 3 runs, `self.witness.x` is empty.
         let last_dim = self.F_N[1];
-        let z = softmax_z(&self.trace.x, &self.trace.max_k, last_dim);
+        let z = softmax_z(&self.witness.x, &self.witness.max_k, last_dim);
         let z_tensor = Tensor::from_slice(&z, &[z.len()])
             .expect("softmax_z tensor construction")
             .padded_pow2()
@@ -393,7 +392,11 @@ impl SoftmaxLastAxisVerifier {
 // ---------------------------------------------------------------------------
 
 impl SoftmaxLastAxisProver {
-    pub(crate) fn new(node: &ComputationNode, trace: SoftmaxLastAxisTrace, scale: i32) -> Self {
+    pub(crate) fn new(
+        node: &ComputationNode,
+        witness: atlas_trace::SoftmaxWitness,
+        scale: i32,
+    ) -> Self {
         let (&n, leading_dims) = node
             .output_dims
             .split_last()
@@ -403,7 +406,8 @@ impl SoftmaxLastAxisProver {
             computation_node: node.clone(),
             scale,
             F_N: [f, n],
-            trace,
+            lut: generate_exp_lut_decomposed(scale),
+            witness,
         }
     }
 
@@ -435,15 +439,15 @@ impl SoftmaxLastAxisProver {
         for k in 0..f {
             provider.append_advice(
                 |idx| VirtualPoly::SoftmaxSumOutput(idx, k),
-                F::from_u32(self.trace.exp_sum_q[k] as u32),
+                F::from_u32(self.witness.exp_sum_q[k] as u32),
             );
             provider.append_advice(
                 |idx| VirtualPoly::SoftmaxMaxOutput(idx, k),
-                F::from_u32(self.trace.max_k[k] as u32),
+                F::from_u32(self.witness.max_k[k] as u32),
             );
             provider.append_advice(
                 |idx| VirtualPoly::SoftmaxMaxIndex(idx, k),
-                F::from_u32(self.trace.argmax_k[k] as u32),
+                F::from_u32(self.witness.argmax_k[k] as u32),
             );
         }
     }
@@ -458,7 +462,7 @@ impl SoftmaxLastAxisProver {
         let r0 = accessor.get_reduced_opening().0;
         let log_f = self.F_N[0].log_2();
         let r_lead = r0.split_at(log_f).0;
-        let eval = self.trace.exp_sum_q.evaluate_mle(&r_lead.r);
+        let eval = self.witness.exp_sum_q.evaluate_mle(&r_lead.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r_lead);
         provider.append_advice(VirtualPoly::SoftmaxExpSum, eval);
     }
@@ -467,7 +471,7 @@ impl SoftmaxLastAxisProver {
     pub(crate) fn cache_R<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r0 = accessor.get_reduced_opening().0;
-        let eval = self.trace.R.evaluate_mle(&r0.r);
+        let eval = self.witness.r.evaluate_mle(&r0.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r0);
         provider.append_advice(VirtualPoly::SoftmaxRecipMultRemainder, eval);
     }
@@ -498,13 +502,17 @@ impl SoftmaxLastAxisProver {
         );
         #[cfg(feature = "zk")]
         {
-            recip_mult_params.inv_sum_evals =
-                self.trace.inv_sum.iter().map(|&x| F::from_i32(x)).collect();
+            recip_mult_params.inv_sum_evals = self
+                .witness
+                .inv_sum
+                .iter()
+                .map(|&x| F::from_i32(x))
+                .collect();
         }
-        let exp_q_for_sum = self.trace.exp_q.clone();
+        let exp_q_for_sum = self.witness.exp_q.clone();
         let recip_mult_prover = RecipMultProver::initialize(
-            std::mem::take(&mut self.trace.exp_q),
-            std::mem::take(&mut self.trace.inv_sum),
+            std::mem::take(&mut self.witness.exp_q),
+            std::mem::take(&mut self.witness.inv_sum),
             recip_mult_params,
         );
 
@@ -535,7 +543,7 @@ impl SoftmaxLastAxisProver {
     pub(crate) fn cache_r_exp<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
-        let eval = self.trace.decomposed_exp.r_exp.evaluate_mle(&r1.r);
+        let eval = self.witness.r_exp.evaluate_mle(&r1.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r1);
         provider.append_advice(VirtualPoly::SoftmaxExpRemainder, eval);
     }
@@ -566,16 +574,18 @@ impl SoftmaxLastAxisProver {
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let r1_k = r1.split_at(log_f).0;
 
-        let max_k_eval = self.trace.max_k.evaluate_mle(&r1_k.r);
+        let max_k_eval = self.witness.max_k.evaluate_mle(&r1_k.r);
         let max_indicator_params = MaxIndicatorParams::new(
             self.computation_node.clone(),
             self.F_N,
-            std::mem::take(&mut self.trace.argmax_k),
+            std::mem::take(&mut self.witness.argmax_k),
             max_k_eval,
             &prover.accumulator,
         );
-        let max_indicator_prover =
-            MaxIndicatorProver::initialize(std::mem::take(&mut self.trace.x), max_indicator_params);
+        let max_indicator_prover = MaxIndicatorProver::initialize(
+            std::mem::take(&mut self.witness.x),
+            max_indicator_params,
+        );
 
         let exp_mult_params = MultParams::new(
             self.computation_node.clone(),
@@ -583,8 +593,8 @@ impl SoftmaxLastAxisProver {
             &prover.accumulator,
         );
         let exp_mult_prover = MultProver::initialize(
-            std::mem::take(&mut self.trace.decomposed_exp.exp_hi),
-            std::mem::take(&mut self.trace.decomposed_exp.exp_lo),
+            std::mem::take(&mut self.witness.exp_hi),
+            std::mem::take(&mut self.witness.exp_lo),
             exp_mult_params,
         );
 
@@ -618,8 +628,8 @@ impl SoftmaxLastAxisProver {
     pub(crate) fn cache_z_hi_lo<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r2 = accessor.get_advice(VirtualPoly::SoftmaxExpHi).0;
-        let z_hi_eval = self.trace.decomposed_exp.z_hi.evaluate_mle(&r2.r);
-        let z_lo_eval = self.trace.decomposed_exp.z_lo.evaluate_mle(&r2.r);
+        let z_hi_eval = self.witness.z_hi.evaluate_mle(&r2.r);
+        let z_lo_eval = self.witness.z_lo.evaluate_mle(&r2.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r2);
         provider.append_advice(VirtualPoly::SoftmaxZHi, z_hi_eval);
         provider.append_advice(VirtualPoly::SoftmaxZLo, z_lo_eval);
@@ -640,7 +650,7 @@ impl SoftmaxLastAxisProver {
 
     /// Build stage 3 sumcheck instances: exp-digit lookups plus the saturating-clamp lookup's
     /// execution proof. `z_tensor` is computed by the caller (`prove`), since by this point
-    /// `self.trace.x` has already been consumed by stage 2's `max_indicator_prover`.
+    /// `self.witness.x` has already been consumed by stage 2's `max_indicator_prover`.
     pub(crate) fn build_stage3_instances<F: JoltField, T: Transcript>(
         &mut self,
         prover: &mut Prover<F, T>,

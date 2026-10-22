@@ -78,7 +78,7 @@ use rayon::prelude::*;
 const DEGREE: usize = 3;
 
 /// Fused divisor `D = count·2^scale` (the semantic count, not the padded one).
-pub fn mos_divisor(op: &MeanOfSquares, scale: i32) -> i64 {
+pub fn mos_divisor(op: &MeanOfSquares, scale: u8) -> i64 {
     (1i64 << scale) * op.count as i64
 }
 

@@ -57,7 +57,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         assert_eq!(
-            node.scale, MODEL_SCALE as i32,
+            node.scale, MODEL_SCALE as u8,
             "Sin teleportation proving is only calibrated for MODEL_SCALE={MODEL_SCALE} \
              (got {})",
             node.scale
@@ -157,7 +157,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        if node.scale != MODEL_SCALE as i32 {
+        if node.scale != MODEL_SCALE as u8 {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "Sin teleportation verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} \
                      (got {})",

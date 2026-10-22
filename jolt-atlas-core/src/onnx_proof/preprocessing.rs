@@ -77,8 +77,8 @@ impl AtlasSharedPreprocessing {
     }
 
     /// Get the model's scale.
-    pub fn scale(&self) -> i32 {
-        self.model().scale_i32()
+    pub fn scale(&self) -> u8 {
+        self.model().scale_log2()
     }
 }
 
@@ -133,8 +133,8 @@ where
     }
 
     /// Get the models scale
-    pub fn scale(&self) -> i32 {
-        self.model().scale_i32()
+    pub fn scale(&self) -> u8 {
+        self.model().scale_log2()
     }
 }
 
@@ -193,7 +193,7 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> AtlasVerifierPreprocessing<
     }
 
     /// Get the model's scale.
-    pub fn scale(&self) -> i32 {
-        self.model().scale_i32()
+    pub fn scale(&self) -> u8 {
+        self.model().scale_log2()
     }
 }

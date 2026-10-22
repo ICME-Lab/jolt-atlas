@@ -62,7 +62,8 @@ use joltworks::{
 ///
 /// `Mul`/`Square` are at scale `2S` and rebase by `2^S`; `Cube` is at scale
 /// `3S` and rebases by `2^(2S)`; einsum is a (sum of) products at scale `2S`.
-pub fn op_rebase_bits(op: &Op, scale: i32) -> Option<i32> {
+pub fn op_rebase_bits(op: &Op, scale: u8) -> Option<i32> {
+    let scale = i32::from(scale);
     match op {
         Op::Einsum(_) => Some(scale),
         Op::Mul(m) => Some(if m.rebase { scale } else { 0 }),

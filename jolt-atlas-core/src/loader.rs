@@ -3,13 +3,28 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Load and compile an ONNX model, panicking on failure (examples and tests;
+/// use [`atlas_onnx_import::load`] for typed errors).
+pub fn load_model(path: &str, run_args: &RunArgs) -> atlas_trace::Model {
+    let imported = atlas_onnx_import::load(
+        std::path::Path::new(path),
+        &atlas_onnx_import::LoadOptions {
+            bindings: run_args.variables.clone(),
+            scale: atlas_trace::Scale::new(run_args.scale).expect("scale in range"),
+            pad_pow2: run_args.pad_to_power_of_2,
+        },
+    )
+    .unwrap_or_else(|e| panic!("load_model({path}): {e}"));
+    imported.model
+}
+
 /// Runtime arguments for loading a model.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunArgs {
     /// Symbolic dim bindings (`batch_size`, `sequence_length`, …).
     pub variables: std::collections::HashMap<String, usize>,
     /// Global fixed-point scale (log2).
-    pub scale: i32,
+    pub scale: u8,
     /// Pad all dims to powers of two.
     pub pad_to_power_of_2: bool,
 }
@@ -20,7 +35,7 @@ impl Default for RunArgs {
         variables.insert("batch_size".to_string(), 1);
         RunArgs {
             variables,
-            scale: common::consts::MODEL_SCALE as i32,
+            scale: common::consts::MODEL_SCALE as u8,
             pad_to_power_of_2: true,
         }
     }
@@ -42,23 +57,8 @@ impl RunArgs {
     }
 
     /// Set the fixed-point scale (log2).
-    pub fn set_scale(mut self, scale: i32) -> Self {
+    pub fn set_scale(mut self, scale: u8) -> Self {
         self.scale = scale;
         self
     }
-}
-
-/// Load and compile an ONNX model, panicking on failure (examples and tests;
-/// use [`atlas_onnx_import::load`] for typed errors).
-pub fn load_model(path: &str, run_args: &RunArgs) -> atlas_trace::Model {
-    let imported = atlas_onnx_import::load(
-        std::path::Path::new(path),
-        &atlas_onnx_import::LoadOptions {
-            bindings: run_args.variables.clone(),
-            scale: atlas_trace::Scale::new(run_args.scale as u8).expect("scale in range"),
-            pad_pow2: run_args.pad_to_power_of_2,
-        },
-    )
-    .unwrap_or_else(|e| panic!("load_model({path}): {e}"));
-    imported.model
 }

@@ -12,83 +12,6 @@ use crate::{
     tensor::Tensor,
 };
 
-/// Options for [`Model::compile`].
-#[derive(Clone, Debug)]
-pub struct CompileOptions {
-    /// The global fixed-point scale.
-    pub scale: Scale,
-    /// Pad every dimension to the next power of two (what the prover needs).
-    pub pad_pow2: bool,
-    /// The semantics version to trace under.
-    pub version: SemVersion,
-}
-
-impl Default for CompileOptions {
-    fn default() -> Self {
-        CompileOptions {
-            scale: Scale::new(14).expect("14 is in range"),
-            pad_pow2: true,
-            version: SemVersion::V1,
-        }
-    }
-}
-
-/// Supported saturating-clamp lookup widths (multiples of 8: the read-raf
-/// sumcheck runs 8 address phases).
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum ClampWidth {
-    /// 40-bit lookup.
-    W40,
-    /// 48-bit lookup.
-    W48,
-    /// 56-bit lookup.
-    W56,
-    /// Full 64-bit lookup (an i64 accumulation).
-    W64,
-}
-
-impl ClampWidth {
-    /// The width in bits.
-    pub fn bits(self) -> usize {
-        match self {
-            ClampWidth::W40 => 40,
-            ClampWidth::W48 => 48,
-            ClampWidth::W56 => 56,
-            ClampWidth::W64 => 64,
-        }
-    }
-
-    /// Smallest supported width whose signed range contains `[-bound, bound]`.
-    /// Ported verbatim from the old crate's `width_for_bound`.
-    pub fn for_bound(bound: u128) -> ClampWidth {
-        if bound >= (1u128 << 63) {
-            return ClampWidth::W64;
-        }
-        // `bound < 2^b`; a w-bit two's-complement holds [-2^(w-1), 2^(w-1)).
-        let needed = (u128::BITS - bound.leading_zeros()) as usize + 1;
-        [ClampWidth::W40, ClampWidth::W48, ClampWidth::W56]
-            .into_iter()
-            .find(|w| w.bits() >= needed)
-            .unwrap_or(ClampWidth::W64)
-    }
-}
-
-/// Analysis results attached to a node by compilation.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NodeMeta {
-    /// Width of the node's saturating-clamp lookup; `None` = no clamp.
-    pub sat_clamp_bits: Option<ClampWidth>,
-}
-
-/// Original (pre-padding) IO dims, for padding inputs and cropping outputs.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IoDims {
-    /// Original dims per graph input (same order as `graph.inputs`).
-    pub inputs: Vec<Vec<usize>>,
-    /// Original dims per graph output (same order as `graph.outputs`).
-    pub outputs: Vec<Vec<usize>>,
-}
-
 /// A compiled, analyzed, immutable model.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Model {
@@ -299,6 +222,83 @@ impl std::ops::Index<NodeId> for Model {
     fn index(&self, id: NodeId) -> &crate::graph::Node {
         self.graph.node(id)
     }
+}
+
+/// Options for [`Model::compile`].
+#[derive(Clone, Debug)]
+pub struct CompileOptions {
+    /// The global fixed-point scale.
+    pub scale: Scale,
+    /// Pad every dimension to the next power of two (what the prover needs).
+    pub pad_pow2: bool,
+    /// The semantics version to trace under.
+    pub version: SemVersion,
+}
+
+impl Default for CompileOptions {
+    fn default() -> Self {
+        CompileOptions {
+            scale: Scale::new(14).expect("14 is in range"),
+            pad_pow2: true,
+            version: SemVersion::V1,
+        }
+    }
+}
+
+/// Supported saturating-clamp lookup widths (multiples of 8: the read-raf
+/// sumcheck runs 8 address phases).
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum ClampWidth {
+    /// 40-bit lookup.
+    W40,
+    /// 48-bit lookup.
+    W48,
+    /// 56-bit lookup.
+    W56,
+    /// Full 64-bit lookup (an i64 accumulation).
+    W64,
+}
+
+impl ClampWidth {
+    /// The width in bits.
+    pub fn bits(self) -> usize {
+        match self {
+            ClampWidth::W40 => 40,
+            ClampWidth::W48 => 48,
+            ClampWidth::W56 => 56,
+            ClampWidth::W64 => 64,
+        }
+    }
+
+    /// Smallest supported width whose signed range contains `[-bound, bound]`.
+    /// Ported verbatim from the old crate's `width_for_bound`.
+    pub fn for_bound(bound: u128) -> ClampWidth {
+        if bound >= (1u128 << 63) {
+            return ClampWidth::W64;
+        }
+        // `bound < 2^b`; a w-bit two's-complement holds [-2^(w-1), 2^(w-1)).
+        let needed = (u128::BITS - bound.leading_zeros()) as usize + 1;
+        [ClampWidth::W40, ClampWidth::W48, ClampWidth::W56]
+            .into_iter()
+            .find(|w| w.bits() >= needed)
+            .unwrap_or(ClampWidth::W64)
+    }
+}
+
+/// Analysis results attached to a node by compilation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeMeta {
+    /// Width of the node's saturating-clamp lookup; `None` = no clamp.
+    pub sat_clamp_bits: Option<ClampWidth>,
+}
+
+/// Original (pre-padding) IO dims, for padding inputs and cropping outputs.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IoDims {
+    /// Original dims per graph input (same order as `graph.inputs`).
+    pub inputs: Vec<Vec<usize>>,
+    /// Original dims per graph output (same order as `graph.outputs`).
+    pub outputs: Vec<Vec<usize>>,
 }
 
 #[cfg(test)]

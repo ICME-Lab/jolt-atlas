@@ -91,7 +91,7 @@ pub struct DivRangeCheckOperands;
 /// For the quotient `q = ⌊S³ / x̂⌋`, verifies the division remainder
 /// `r = S³ mod x̂` satisfies `0 ≤ r < x̂`.
 pub struct RiRangeCheckOperands {
-    scale: i32,
+    scale: u8,
 }
 
 /// Operands for the fused rsqrt square-root range-check.
@@ -99,7 +99,7 @@ pub struct RiRangeCheckOperands {
 /// For the output `v̂ = ⌊√q⌋` of the quotient `q = ⌊S³ / x̂⌋`, verifies that the
 /// remainder `r = q - v̂²` satisfies `0 ≤ r ≤ 2·v̂`.
 pub struct RsRangeCheckOperands {
-    scale: i32,
+    scale: u8,
 }
 
 impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
@@ -274,7 +274,7 @@ pub struct MeanOfSquaresRangeCheckOperands {
     /// The mean of squares operator
     op: MeanOfSquares,
     /// The model's log2 fixed-point scale.
-    scale: i32,
+    scale: u8,
     /// The node's index, for fetching its trace-captured fused intermediates.
     node_idx: usize,
 }
@@ -343,7 +343,7 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
 
 /// The fused mean-of-squares divisor `D = N·2^S` as an `i32` (the range-check
 /// value domain), recovered from the operator's stored count + scale.
-fn mean_of_squares_divisor_i32(op: &atlas_trace::op::MeanOfSquares, scale: i32) -> i32 {
+fn mean_of_squares_divisor_i32(op: &atlas_trace::op::MeanOfSquares, scale: u8) -> i32 {
     i32_divisor(mos_divisor(op, scale))
 }
 

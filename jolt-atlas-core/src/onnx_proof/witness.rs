@@ -565,7 +565,7 @@ fn softmax_op_scale(node: &ComputationNode) -> i32 {
         "Expected SoftmaxLastAxis at node {}",
         node.idx
     );
-    node.scale
+    node.scale as i32
 }
 
 /// The softmax node's full witness, captured in the trace at execution time

@@ -140,7 +140,7 @@ fn test_gpt2() {
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ])
-    .set_scale(MODEL_SCALE as i32);
+    .set_scale(MODEL_SCALE as u8);
 
     prove_and_verify(
         working_dir,
@@ -170,7 +170,7 @@ fn test_gpt2_dory() {
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ])
-    .set_scale(MODEL_SCALE as i32);
+    .set_scale(MODEL_SCALE as u8);
     let inputs = [input_ids, attention_mask, position_ids];
 
     let model = crate::loader::load_model(&format!("{working_dir}network.onnx"), &run_args);
@@ -234,7 +234,7 @@ fn test_gpt2_zk() {
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ])
-    .set_scale(MODEL_SCALE as i32);
+    .set_scale(MODEL_SCALE as u8);
 
     let model = crate::loader::load_model(&format!("{working_dir}network.onnx"), &run_args);
     let pp = AtlasSharedPreprocessing::preprocess(model);

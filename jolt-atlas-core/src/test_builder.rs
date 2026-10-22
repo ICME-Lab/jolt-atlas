@@ -5,14 +5,14 @@ use atlas_trace::{op, CompileOptions, Graph, Node, NodeId, Op, SemVersion, Tenso
 /// A connection to a node's output.
 pub type Wire = usize;
 
-const DEFAULT_SCALE: u32 = common::consts::MODEL_SCALE as u32;
+const DEFAULT_SCALE: u8 = common::consts::MODEL_SCALE as u8;
 
 /// Builds a model node by node.
 pub struct ModelBuilder {
     nodes: Vec<Node>,
     inputs: Vec<NodeId>,
     outputs: Vec<NodeId>,
-    scale: u32,
+    scale: u8,
 }
 
 impl Default for ModelBuilder {
@@ -28,7 +28,7 @@ impl ModelBuilder {
     }
 
     /// Builder at a custom log2 scale.
-    pub fn with_scale(scale: u32) -> Self {
+    pub fn with_scale(scale: u8) -> Self {
         Self {
             nodes: Vec::new(),
             inputs: Vec::new(),
@@ -248,7 +248,7 @@ impl ModelBuilder {
     }
 
     /// Cube; `scale == 0` is the raw building-block variant.
-    pub fn cube(&mut self, input: Wire, scale: i32) -> Wire {
+    pub fn cube(&mut self, input: Wire, scale: u8) -> Wire {
         let d = self.dims(input);
         self.push(Op::Cube(op::Cube { rebase: scale != 0 }), vec![input], d)
     }
@@ -354,7 +354,7 @@ impl ModelBuilder {
         atlas_trace::Model::compile(
             graph,
             CompileOptions {
-                scale: atlas_trace::Scale::new(self.scale as u8).expect("scale in range"),
+                scale: atlas_trace::Scale::new(self.scale).expect("scale in range"),
                 pad_pow2: false,
                 version: SemVersion::V1,
             },

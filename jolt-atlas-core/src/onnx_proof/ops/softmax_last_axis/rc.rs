@@ -31,7 +31,7 @@ pub struct SoftmaxRCProvider {
 
 impl SoftmaxRCProvider {
     /// Range-check for reciprocal-multiplication remainders (`R[k,j] ∈ [0, S)`).
-    pub fn remainder(node: ComputationNode, scale: i32) -> Self {
+    pub fn remainder(node: ComputationNode, scale: u8) -> Self {
         Self {
             node,
             log_k: scale as usize,
@@ -41,7 +41,7 @@ impl SoftmaxRCProvider {
     }
 
     /// Range-check for exponentiation remainders (`r_exp[k,j] ∈ [0, S)`).
-    pub fn exp_remainder(node: ComputationNode, scale: i32) -> Self {
+    pub fn exp_remainder(node: ComputationNode, scale: u8) -> Self {
         Self {
             node,
             log_k: scale as usize,
@@ -97,7 +97,7 @@ pub struct SoftmaxRaEncoding {
 impl SoftmaxRaEncoding {
     /// One-hot for reciprocal-mult remainder `ra`.
     /// Cycle point comes from the node output (`NodeExecution`).
-    pub fn remainder(node_idx: usize, scale: i32) -> Self {
+    pub fn remainder(node_idx: usize, scale: u8) -> Self {
         Self {
             node_idx,
             log_k: scale as usize,
@@ -109,7 +109,7 @@ impl SoftmaxRaEncoding {
     }
 
     /// One-hot for exponentiation remainder `ra`.
-    pub fn exp_remainder(node_idx: usize, scale: i32) -> Self {
+    pub fn exp_remainder(node_idx: usize, scale: u8) -> Self {
         Self {
             node_idx,
             log_k: scale as usize,

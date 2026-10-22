@@ -24,45 +24,49 @@ pub fn mask_sentinel_magnitude(scale: Scale) -> f64 {
     ((scale.log2() as f64 + 1.0) * std::f64::consts::LN_2).ceil() + 1.0
 }
 
-/// Quantize one float: `round(x · 2^scale)` with the old crate's special
-/// cases, pinned by tests below.
+/// Finite constants beyond this magnitude are treated as ±∞ stand-ins
+/// (attention-mask sentinels, Clip bounds), never as values to represent.
+const INFINITY_PROXY: f64 = 1e6;
+
+/// Quantize one float: `round(x · 2^scale)`, with the old crate's pinned
+/// special cases. Exactly one of four things happens:
+///
+/// 1. `round(x·2^s)` fits i32 → that value (zero flushed to ±1, see below);
+/// 2. unrepresentable and `x < -1e6` (e.g. the -3.4e38 attention mask in
+///    GPT-2) → the scale-indexed mask sentinel;
+/// 3. unrepresentable and `x > 1e6` (e.g. +3.4e38 Clip bounds) → half the
+///    i32 range;
+/// 4. anything else — NaN, or a finite value too large for i32 fixed point
+///    at this scale — → a typed error.
 pub fn quantize_float(x: f64, scale: Scale, tensor_name: &str) -> Result<i32, ImportError> {
     let mult = scale.denom_i64() as f64;
-    let max_value = ((i32::MAX as f64) / mult).round();
+    let scaled = (x * mult).round();
 
-    let clamped = if x < -max_value {
-        if x < -1e6 {
-            // Extreme values (e.g. the -3.4e38 attention mask in GPT-2)
-            // clamp to the scale-indexed sentinel.
-            -mask_sentinel_magnitude(scale)
+    // Representable (NaN fails both comparisons and falls through).
+    if (i32::MIN as f64..=i32::MAX as f64).contains(&scaled) {
+        let q = scaled as i32;
+        // Flush-to-±1: constants that would quantize to zero keep their sign
+        // (load-bearing for LayerNorm eps, which rounds to 0 at scale 14
+        // otherwise). Constants only; a warning-worthy wart inherited from
+        // the old crate, to be retired when eps folds into Rsqrt.
+        return Ok(if q == 0 && x != 0.0 {
+            if x > 0.0 { 1 } else { -1 }
         } else {
-            return Err(ImportError::QuantRange {
-                tensor: tensor_name.to_string(),
-                value: x as f32,
-            });
-        }
-    } else if x > max_value {
-        if x > 1e6 {
-            max_value / 2.0
-        } else {
-            return Err(ImportError::QuantRange {
-                tensor: tensor_name.to_string(),
-                value: x as f32,
-            });
-        }
-    } else {
-        x
-    };
-    let scaled = (clamped * mult).round() as i32;
+            q
+        });
+    }
 
-    // Flush-to-±1: constants that would quantize to zero keep their sign
-    // (load-bearing for LayerNorm eps, which rounds to 0 at scale 14
-    // otherwise). Constants only; a warning-worthy wart inherited from the
-    // old crate, to be retired when eps folds into Rsqrt.
-    Ok(if scaled == 0 && x != 0.0 {
-        if x > 0.0 { 1 } else { -1 }
-    } else {
-        scaled
+    // ±∞ stand-ins, pinned from the old crate.
+    if x < -INFINITY_PROXY {
+        return Ok((-mask_sentinel_magnitude(scale) * mult) as i32);
+    }
+    if x > INFINITY_PROXY {
+        return Ok((((i32::MAX as f64) / mult).round() / 2.0 * mult) as i32);
+    }
+
+    Err(ImportError::QuantRange {
+        tensor: tensor_name.to_string(),
+        value: x as f32,
     })
 }
 
@@ -128,5 +132,41 @@ mod tests {
         assert_eq!(quantize_float(1e-5, s(14), "t").unwrap(), 1); // LayerNorm eps
         assert_eq!(quantize_float(-1e-9, s(14), "t").unwrap(), -1);
         assert_eq!(quantize_float(0.0, s(14), "t").unwrap(), 0);
+    }
+
+    /// NaN used to slip through the range comparisons, saturate to 0 in the
+    /// cast, and leave through the flush-to-±1 branch as -1. It must error.
+    #[test]
+    fn nan_is_rejected() {
+        assert!(quantize_float(f64::NAN, s(14), "t").is_err());
+    }
+
+    /// Infinities take the same ±∞-proxy paths as the ±3.4e38 sentinels.
+    #[test]
+    fn infinities_take_sentinel_paths() {
+        assert_eq!(
+            quantize_float(f64::NEG_INFINITY, s(14), "t").unwrap(),
+            quantize_float(-3.4e38, s(14), "t").unwrap()
+        );
+        assert_eq!(
+            quantize_float(f64::INFINITY, s(14), "t").unwrap(),
+            quantize_float(3.4e38, s(14), "t").unwrap()
+        );
+    }
+
+    /// The representability gate is on the exact scaled value: the largest
+    /// in-range f64 quantizes to i32::MAX, and the first value whose rounding
+    /// crosses 2^31 errors instead of silently saturating in the `as` cast.
+    #[test]
+    fn exact_boundary() {
+        assert_eq!(
+            quantize_float((i32::MAX as f64) / 16384.0, s(14), "t").unwrap(),
+            i32::MAX
+        );
+        assert!(quantize_float(131_072.0, s(14), "t").is_err()); // rounds to 2^31
+        assert_eq!(
+            quantize_float(-131_072.0, s(14), "t").unwrap(), // -2^31 fits
+            i32::MIN
+        );
     }
 }

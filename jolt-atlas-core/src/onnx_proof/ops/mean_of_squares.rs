@@ -36,11 +36,11 @@ use std::array;
 
 use atlas_trace::{op::MeanOfSquares, trace::LayerData, Op, Trace};
 
-use crate::node_view::ComputationNode;
 use crate::{
-    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
+    node_view::ComputationNode,
     onnx_proof::{
         clamp_lookups::{clamp_committed_polys, is_scalar, recover_small_int, verify_scalar_clamp},
+        deferred_lookups::{DeferredBatch, DeferredOneHot},
         fused_rebase,
         ops::{OperatorProofTrait, Prover, Verifier},
         range_checking::{
@@ -427,10 +427,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
+    use crate::{onnx_proof::ops::test::unit_test_op, test_builder::ModelBuilder};
+    use atlas_trace::{Model, Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     /// `[m, n]` input, reduce the last axis (size `n`, a power of two) → `[m, 1]`.

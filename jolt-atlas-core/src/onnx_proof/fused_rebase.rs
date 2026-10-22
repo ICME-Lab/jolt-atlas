@@ -23,15 +23,15 @@
 
 use atlas_trace::{Op, Tensor, Trace};
 
-use crate::node_view::ComputationNode;
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
+    node_view::ComputationNode,
     onnx_proof::{
         clamp_lookups::{
             is_scalar, prove_append_acc, prove_clamp_lookup, recover_small_int, verify_append_acc,
             verify_clamp_lookup, verify_scalar_clamp,
         },
         deferred_lookups::{ProverLookupJob, VerifierLookupJob},
+        trace_view::TraceView,
         ProofId, Prover, Verifier,
     },
     utils::opening_access::AccOpeningAccessor,

@@ -13,10 +13,9 @@
 //! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
 
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
-    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
+        deferred_lookups::{DeferredBatch, DeferredOneHot},
         op_lookups::OpLookupProvider,
         ops::{
             softmax_last_axis::{
@@ -32,6 +31,7 @@ use crate::{
             },
             OperatorProofTrait,
         },
+        trace_view::TraceView,
         ProofId, ProofType, Prover, Verifier,
     },
     utils::{
@@ -1245,8 +1245,7 @@ impl VerifierLookupTableData {
 #[cfg(test)]
 mod tests {
     use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
+    use atlas_trace::{Model, Tensor};
 
     use crate::onnx_proof::ops::test::unit_test_op;
 

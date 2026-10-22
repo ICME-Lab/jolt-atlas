@@ -310,6 +310,63 @@ mod tests {
     // the live value, so a reduction over that axis counts the padded lanes.
     // The assertion states the CORRECT (semantic) result; un-ignore it when
     // the padded-lane analysis (or a masked Broadcast) lands.
+    /// Concat whose non-last operand is non-pow2 on the axis would pad
+    /// *interior* lanes ([3]+[4] → [a0,a1,a2,0,b0..b3]), shifting the second
+    /// operand off its semantic positions — compile must reject it. The
+    /// mirrored pow2-first order is coherent and must execute correctly.
+    #[test]
+    fn concat_interior_padding_rejected() {
+        use crate::{GraphBuilder, op};
+        let build = |first: Vec<i32>, second: Vec<i32>| {
+            let mut b = GraphBuilder::new();
+            let d1 = vec![first.len()];
+            let d2 = vec![second.len()];
+            let x = b.input(&d1);
+            let c = b.constant(Tensor::new(second, &d2).unwrap());
+            let cat = b.push(Op::Concat(op::Concat { axis: 0 }), &[x, c]);
+            b.output(cat);
+            (b.build(CompileOptions::default()), first)
+        };
+
+        let (rejected, _) = build(vec![1, 2, 3], vec![101, 102, 103, 104]);
+        assert!(rejected.is_err(), "non-pow2 first operand must be rejected");
+
+        let (model, first) = build(vec![1, 2, 3, 4], vec![101, 102, 103]);
+        let model = model.expect("pow2-first concat is pad-coherent");
+        let input = Tensor::new(first, &[4]).unwrap();
+        let trace = model.trace(&[input]).unwrap();
+        let out = trace.output(model.outputs()[0]);
+        assert_eq!(&out.data()[..7], &[1, 2, 3, 4, 101, 102, 103]);
+    }
+
+    /// Size-1 axes never move elements in the row-major layout, so
+    /// squeeze/unsqueeze reshapes are pad-coherent even around non-pow2
+    /// axes; genuinely merged non-pow2 axes stay rejected.
+    #[test]
+    fn squeeze_reshape_is_pad_coherent() {
+        use crate::{GraphBuilder, op};
+        let reshape = |in_dims: &[usize], shape: Vec<usize>| {
+            let mut b = GraphBuilder::new();
+            let x = b.input(in_dims);
+            let r = b.push(Op::Reshape(op::Reshape { shape }), &[x]);
+            b.output(r);
+            b.build(CompileOptions::default())
+        };
+
+        let model = reshape(&[1, 7, 8], vec![7, 8]).expect("squeeze of a leading 1");
+        let input = Tensor::new((0..56).collect(), &[1, 7, 8]).unwrap();
+        let trace = model.trace(&[input]).unwrap();
+        let out = trace.output(model.outputs()[0]);
+        assert_eq!(out.data()[..56], (0..56).collect::<Vec<i32>>()[..]);
+
+        reshape(&[7, 8], vec![1, 7, 8]).expect("unsqueeze to a leading 1");
+        reshape(&[7, 1, 8], vec![7, 8]).expect("squeeze of an interior 1");
+        assert!(
+            reshape(&[2, 7], vec![14]).is_err(),
+            "merging a non-pow2 axis stays rejected"
+        );
+    }
+
     #[test]
     #[ignore = "known padding-soundness gap: broadcast fills padded lanes with live values"]
     fn broadcast_fill_inflates_padded_reduction() {

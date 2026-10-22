@@ -125,6 +125,17 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             node.scale, MODEL_SCALE as i32,
             "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
         );
+        // Mirror of the prove-side gate: the sumchecks below check the
+        // *unmasked* relations, so a model declaring a masked softmax must
+        // be rejected here too (deserialized preprocessing bypasses the
+        // preprocess()-time assert).
+        let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+        if self.active_len.is_some_and(|n| n != last_dim) {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "masked softmax (active_len {:?} of {last_dim}) is not yet verifiable",
+                self.active_len
+            )));
+        }
         let scale_bits = verifier.preprocessing.scale();
         let scale = 1i32 << node.scale;
         let mut sm = SoftmaxLastAxisVerifier::new(

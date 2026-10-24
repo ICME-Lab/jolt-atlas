@@ -99,7 +99,12 @@ fn model_output_hash(name: &str) -> Result<u64, String> {
 }
 
 const GOLDENS: &[(&str, u64)] = &[
-    ("op_gauntlet", 0xc20679e19bec4682),
+    // Repinned (was 0xc20679e19bec4682): the gauntlet's floor idiom
+    // Cast(Cast(x→int64)→f32) used to lower the second Cast to identity,
+    // leaving the raw floor(x) misread as a scaled value (off by 2^scale,
+    // old-crate parity). cast_policy now rescales provably-raw lineages, so
+    // the pattern computes the ONNX value.
+    ("op_gauntlet", 0xdd4739a294d6d712),
     ("microgpt", 0xe5dc388d7ed530e2),
     ("multihead_attention", 0x4f61f7105a88d2a5),
     ("transformer", 0x3ce822595b275bbc),

@@ -141,10 +141,20 @@ impl<'g> Lowerer<'g> {
             Ok(me.push(op, inputs, out.clone()))
         };
 
+        // Rebase (÷2^scale after a product) is the fixed-point correction
+        // for scaled (float-domain) operands; raw integer products must
+        // stay raw or every value silently shrinks by 2^scale.
+        let scaled = self
+            .g
+            .info(node.outputs[0])
+            .is_none_or(|i| i.dtype == crate::graph::DType::F32);
+
         let id = match node.op.as_str() {
             "Add" => elementwise(self, Op::Add(op::Add))?,
             "Sub" => elementwise(self, Op::Sub(op::Sub))?,
-            "Mul" => elementwise(self, Op::Mul(op::Mul { rebase: true }))?,
+            "Mul" => elementwise(self, Op::Mul(op::Mul { rebase: scaled }))?,
+            // Raw product by construction (cast_policy's ×2^scale rescale).
+            "atlas.RawMul" => elementwise(self, Op::Mul(op::Mul { rebase: false }))?,
             "Neg" => direct(self, Op::Neg(op::Neg))?,
             "Relu" => direct(self, Op::ReLU(op::ReLU))?,
             "Tanh" => direct(self, Op::Tanh(op::Tanh))?,
@@ -156,8 +166,8 @@ impl<'g> Lowerer<'g> {
             "And" => elementwise(self, Op::And(op::And))?,
             "Where" => elementwise(self, Op::Iff(op::Iff))?,
             "Identity" => direct(self, Op::Identity(op::Identity))?,
-            "atlas.Square" => direct(self, Op::Square(op::Square { rebase: true }))?,
-            "atlas.Cube" => direct(self, Op::Cube(op::Cube { rebase: true }))?,
+            "atlas.Square" => direct(self, Op::Square(op::Square { rebase: scaled }))?,
+            "atlas.Cube" => direct(self, Op::Cube(op::Cube { rebase: scaled }))?,
             "atlas.Rsqrt" => direct(self, Op::Rsqrt(op::Rsqrt))?,
             "atlas.Descale" => direct(
                 self,
@@ -215,11 +225,15 @@ impl<'g> Lowerer<'g> {
                 last
             }
             "Gather" => {
-                let axis = node.attr_int("axis").unwrap_or(0);
+                let dict_dims = lower_dims(self.g.dims(node.inputs[0]).expect("analyzed"));
+                let axis = crate::shape_fns::norm_axis(
+                    node.attr_int("axis").unwrap_or(0),
+                    dict_dims.len(),
+                )
+                .map_err(attr_err)?;
                 if axis != 0 {
                     return Err(attr_err(format!("Gather axis {axis}; only axis 0 lowers")));
                 }
-                let dict_dims = lower_dims(self.g.dims(node.inputs[0]).expect("analyzed"));
                 let dict_len = dict_dims[0];
                 let gather = if dict_len.next_power_of_two() <= GATHER_SMALL_LIMIT {
                     Op::GatherSmall(op::GatherSmall { axis: 0, dict_len })

@@ -85,17 +85,26 @@ pub fn tensor_payload(tensor: &TensorProto, model_dir: &Path) -> Result<Vec<u8>,
             path: full.display().to_string(),
             source,
         })?;
-    let mut buf = match length {
-        Some(len) => vec![0u8; len as usize],
-        None => Vec::new(),
-    };
+    // Read via a length-capped stream instead of pre-allocating a buffer of
+    // the declared size: `length` is untrusted metadata, and allocating it
+    // up front would let a tiny model file demand arbitrary memory.
+    let mut buf = Vec::new();
     match length {
-        Some(_) => file
-            .read_exact(&mut buf)
-            .map_err(|source| ImportError::Io {
-                path: full.display().to_string(),
-                source,
-            })?,
+        Some(len) => {
+            file.by_ref()
+                .take(len)
+                .read_to_end(&mut buf)
+                .map_err(|source| ImportError::Io {
+                    path: full.display().to_string(),
+                    source,
+                })?;
+            if buf.len() as u64 != len {
+                return Err(ImportError::ExternalData {
+                    tensor: tensor.name.clone(),
+                    reason: format!("{full:?} holds {} of {len} bytes", buf.len()),
+                });
+            }
+        }
         None => {
             file.read_to_end(&mut buf)
                 .map_err(|source| ImportError::Io {

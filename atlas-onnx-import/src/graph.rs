@@ -508,19 +508,25 @@ pub fn from_proto(
             };
             attrs.insert(a.name.clone(), value);
         }
-        // Optional trailing inputs are encoded as "" in ONNX; drop them.
-        let inputs = node
-            .input
-            .iter()
-            .filter(|n| !n.is_empty())
-            .map(|n| g.edge_by_name(n))
-            .collect();
-        let outputs = node
-            .output
-            .iter()
-            .filter(|n| !n.is_empty())
-            .map(|n| g.edge_by_name(n))
-            .collect();
+        // Optional trailing inputs/outputs are encoded as "" in ONNX; drop
+        // them. An omitted *interior* operand (e.g. Slice without axes but
+        // with steps) must not be dropped — later operands would silently
+        // shift into its position — so it is rejected instead.
+        let mut positional = |names: &[String], kind: &str| -> Result<Vec<EdgeId>, ImportError> {
+            let mut names = names;
+            while names.last().is_some_and(|n| n.is_empty()) {
+                names = &names[..names.len() - 1];
+            }
+            if names.iter().any(|n| n.is_empty()) {
+                return Err(ImportError::UnsupportedFeature {
+                    what: format!("omitted optional {kind} before a supplied one"),
+                    context: name.clone(),
+                });
+            }
+            Ok(names.iter().map(|n| g.edge_by_name(n)).collect())
+        };
+        let inputs = positional(&node.input, "input")?;
+        let outputs = positional(&node.output, "output")?;
         g.push_node(INode {
             name,
             op: node.op_type.clone(),
@@ -538,17 +544,29 @@ pub fn from_proto(
     Ok(g)
 }
 
-/// Checked product of dims with a hard cap (2^40 elements) so untrusted
-/// shape metadata can never drive an unbounded allocation.
+/// Hard cap on the element count of any tensor the importer will represent:
+/// far beyond anything provable, but small enough that no partial product of
+/// capped dims (including power-of-two padding) can overflow `usize`.
+pub const MAX_TENSOR_ELEMENTS: usize = 1 << 34;
+
+/// Checked product of dims with the [`MAX_TENSOR_ELEMENTS`] cap so untrusted
+/// shape metadata can never drive an unbounded allocation. A zero dim makes
+/// the count 0, but the remaining dims must still fit the cap (partial
+/// products of a zero-element shape are computed all over the pipeline).
 pub fn checked_element_count(dims: &[usize]) -> Option<usize> {
-    let mut total: usize = 1;
+    let mut nonzero: usize = 1;
+    let mut has_zero = false;
     for &d in dims {
-        total = total.checked_mul(d)?;
-        if total > (1 << 40) {
+        if d == 0 {
+            has_zero = true;
+            continue;
+        }
+        nonzero = nonzero.checked_mul(d)?;
+        if nonzero > MAX_TENSOR_ELEMENTS {
             return None;
         }
     }
-    Some(total)
+    Some(if has_zero { 0 } else { nonzero })
 }
 
 /// Resolve a symbolic dimension: a binding name, an integer literal, or a
@@ -624,6 +642,12 @@ fn input_signature(
             }
         };
         dims.push(size);
+    }
+    if checked_element_count(&dims).is_none() {
+        return Err(ImportError::Malformed(format!(
+            "input {}: shape {dims:?} exceeds the element cap",
+            input.name
+        )));
     }
     Ok((dtype, dims))
 }

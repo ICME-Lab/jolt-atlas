@@ -59,10 +59,32 @@ pub fn resolve_const_operands(g: &mut IGraph, idx: usize) -> Result<(), ImportEr
         return Ok(());
     };
     match node.op.as_str() {
-        "Squeeze" | "Unsqueeze" | "ReduceSum" | "ReduceMean"
-            if g.nodes[idx].as_ref().expect("live").inputs.len() > 1 =>
-        {
+        "Squeeze" | "Unsqueeze" if node.inputs.len() > 1 => {
             input_to_ints_attr(g, idx, 1, "axes")?;
+        }
+        "ReduceSum" | "ReduceMean" => {
+            if node.inputs.len() > 1 {
+                input_to_ints_attr(g, idx, 1, "axes")?;
+            }
+            // Resolve the ONNX empty-axes convention here, so every
+            // downstream consumer of the `axes` attribute sees one form:
+            // empty/absent axes mean identity when noop_with_empty_axes=1
+            // (the node becomes Identity) and reduce-all when 0 (the attr
+            // is dropped; a missing attr is reduce-all everywhere).
+            let node = g.nodes[idx].as_mut().expect("live");
+            let axes_empty = match node.attrs.get("axes") {
+                Some(Attr::Ints(v)) => v.is_empty(),
+                None => true,
+                _ => false,
+            };
+            if axes_empty {
+                if node.attr_int("noop_with_empty_axes").unwrap_or(0) != 0 {
+                    node.op = "Identity".into();
+                    node.attrs.clear();
+                } else {
+                    node.attrs.remove("axes");
+                }
+            }
         }
         "Slice" => {
             let n = g.nodes[idx].as_ref().expect("live").inputs.len();
@@ -95,8 +117,10 @@ pub fn normalize(g: &mut IGraph, opset: i64) -> Result<(), ImportError> {
         match op.as_str() {
             "Constant" => {
                 let node = g.nodes[idx].as_ref().expect("live");
-                let out = node.outputs[0];
                 let name = node.name.clone();
+                let out = *node.outputs.first().ok_or_else(|| {
+                    ImportError::Malformed(format!("Constant {name} has no output"))
+                })?;
                 let tensor = match (
                     node.attrs.get("value").cloned(),
                     node.attr_float("value_float"),

@@ -1,8 +1,7 @@
 //! Per-input quantization descriptors.
 //!
 //! The importer classifies each graph input so callers no longer need to
-//! know the scaling convention by heart (the old examples multiplied some
-//! inputs by the scale factor by hand).
+//! know the scaling convention by heart.
 
 use atlas_trace::{Scale, Tensor};
 
@@ -56,6 +55,19 @@ impl InputDescriptor {
 /// - an input used both ways is an error;
 /// - otherwise integer inputs default to [`InputKind::RawInt`].
 pub fn classify_inputs(g: &IGraph, inputs: &[EdgeId]) -> Result<Vec<InputDescriptor>, ImportError> {
+    // Consumer adjacency, built once: each per-input walk below then visits
+    // only the consumers of its frontier edges, instead of rescanning every
+    // live node per edge (quadratic on transformer-scale graphs).
+    let mut consumers: std::collections::HashMap<EdgeId, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (idx, node) in g.live_nodes() {
+        for &input in &node.inputs {
+            let entry = consumers.entry(input).or_default();
+            if entry.last() != Some(&idx) {
+                entry.push(idx);
+            }
+        }
+    }
     inputs
         .iter()
         .map(|&edge| {
@@ -65,7 +77,9 @@ pub fn classify_inputs(g: &IGraph, inputs: &[EdgeId]) -> Result<Vec<InputDescrip
             let name = g.edge(edge).name.clone();
             let kind = match info.dtype {
                 DType::F32 => InputKind::Scaled,
-                DType::I64 | DType::I32 | DType::Bool => classify_int_input(g, edge, &name)?,
+                DType::I64 | DType::I32 | DType::Bool => {
+                    classify_int_input(g, &consumers, edge, &name)?
+                }
             };
             Ok(InputDescriptor {
                 name,
@@ -76,37 +90,43 @@ pub fn classify_inputs(g: &IGraph, inputs: &[EdgeId]) -> Result<Vec<InputDescrip
         .collect()
 }
 
-fn classify_int_input(g: &IGraph, edge: EdgeId, name: &str) -> Result<InputKind, ImportError> {
+fn classify_int_input(
+    g: &IGraph,
+    consumers: &std::collections::HashMap<EdgeId, Vec<usize>>,
+    edge: EdgeId,
+    name: &str,
+) -> Result<InputKind, ImportError> {
     let mut used_as_index = false;
     let mut used_as_float = false;
     // Walk transitively through structural (value-preserving) ops: masks
-    // typically pass through Unsqueeze/Reshape before their Cast.
+    // typically pass through Unsqueeze/Reshape before their Cast. The op set
+    // is `passes::VALUE_PRESERVING_OPS`, shared with the cast-policy lineage
+    // check (`passes::scaled_lineage`): the walks must cover the same ops, or
+    // an input could be classified RawInt while its Cast still lowers to
+    // identity — silently off by 2^scale.
     let mut frontier = vec![edge];
     let mut seen = std::collections::HashSet::new();
     while let Some(e) = frontier.pop() {
         if !seen.insert(e) {
             continue;
         }
-        for (_, node) in g.live_nodes() {
+        for &node_idx in consumers.get(&e).into_iter().flatten() {
+            let Some(node) = g.nodes[node_idx].as_ref() else {
+                continue;
+            };
             for (pos, &input) in node.inputs.iter().enumerate() {
                 if input != e {
                     continue;
                 }
-                // This walk must cover (at least) every op the cast-policy
-                // lineage check (`passes::scaled_lineage`) accepts, or an
-                // input could be classified RawInt while its Cast still
-                // lowers to identity — silently off by 2^scale.
                 match node.op.as_str() {
                     "Gather" if pos == 1 => used_as_index = true,
-                    "Gather" => frontier.extend(node.outputs.iter().copied()),
                     "Cast"
                         if g.info(node.outputs[0])
                             .is_some_and(|i| i.dtype == DType::F32) =>
                     {
                         used_as_float = true;
                     }
-                    "Unsqueeze" | "Squeeze" | "Reshape" | "Flatten" | "Identity" | "Slice"
-                    | "Expand" | "Tile" | "Transpose" | "Concat" | "Split" => {
+                    op if crate::passes::VALUE_PRESERVING_OPS.contains(&op) => {
                         frontier.extend(node.outputs.iter().copied());
                     }
                     _ => {}

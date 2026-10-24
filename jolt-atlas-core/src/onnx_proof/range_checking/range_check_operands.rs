@@ -1,7 +1,5 @@
 use crate::node_view::ComputationNode;
-use atlas_trace::op::MeanOfSquares;
-use atlas_trace::Op;
-use atlas_trace::Tensor;
+use atlas_trace::{op::MeanOfSquares, NodeId, Op, Tensor, Trace};
 use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
@@ -10,7 +8,7 @@ use joltworks::{
 };
 use num::integer::Roots;
 
-use crate::onnx_proof::ops::mean_of_squares::{mos_divisor, mos_remainder};
+use crate::onnx_proof::ops::mean_of_squares::mos_divisor;
 use crate::{
     onnx_proof::{neural_teleport::division::compute_division, range_checking::RangeCheckEncoding},
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
@@ -54,8 +52,14 @@ pub trait RangeCheckingOperandsTrait {
 
     // NOTE: In the future, range-checks with a constant value such as "tau" (neural teleportation) may be proven using a single-operand lookup table (#253).
     // Hence, "build_lookup_operands" returns a vector of tensors, to account for both cases.
-    /// Builds the encoding operands for the lookup table from the model's operand tensors.
-    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>>;
+    /// Builds the encoding operands for the lookup table from the model's
+    /// operand tensors. `trace` is available so implementations can reuse
+    /// trace-captured intermediates instead of re-executing kernels.
+    fn build_lookup_operands(
+        &self,
+        trace: &Trace,
+        operand_tensors: &[Tensor<i32>],
+    ) -> Vec<Tensor<i32>>;
 
     /// Get the committed polynomial for the d-th dimension of the range-check read-address.
     fn rad_poly(index: usize, d: usize) -> CommittedPoly;
@@ -87,7 +91,7 @@ pub struct DivRangeCheckOperands;
 /// For the quotient `q = ⌊S³ / x̂⌋`, verifies the division remainder
 /// `r = S³ mod x̂` satisfies `0 ≤ r < x̂`.
 pub struct RiRangeCheckOperands {
-    scale: i32,
+    scale: u8,
 }
 
 /// Operands for the fused rsqrt square-root range-check.
@@ -95,7 +99,7 @@ pub struct RiRangeCheckOperands {
 /// For the output `v̂ = ⌊√q⌋` of the quotient `q = ⌊S³ / x̂⌋`, verifies that the
 /// remainder `r = q - v̂²` satisfies `0 ≤ r ≤ 2·v̂`.
 pub struct RsRangeCheckOperands {
-    scale: i32,
+    scale: u8,
 }
 
 impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
@@ -113,7 +117,11 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
         }
     }
 
-    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
+    fn build_lookup_operands(
+        &self,
+        _trace: &Trace,
+        operand_tensors: &[Tensor<i32>],
+    ) -> Vec<Tensor<i32>> {
         assert_eq!(
             operand_tensors.len(),
             2,
@@ -156,7 +164,11 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
         }
     }
 
-    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
+    fn build_lookup_operands(
+        &self,
+        _trace: &Trace,
+        operand_tensors: &[Tensor<i32>],
+    ) -> Vec<Tensor<i32>> {
         assert_eq!(
             operand_tensors.len(),
             1,
@@ -207,7 +219,11 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
         (left_claim, right_claim + right_claim + F::one())
     }
 
-    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
+    fn build_lookup_operands(
+        &self,
+        _trace: &Trace,
+        operand_tensors: &[Tensor<i32>],
+    ) -> Vec<Tensor<i32>> {
         assert_eq!(
             operand_tensors.len(),
             1,
@@ -258,7 +274,9 @@ pub struct MeanOfSquaresRangeCheckOperands {
     /// The mean of squares operator
     op: MeanOfSquares,
     /// The model's log2 fixed-point scale.
-    scale: i32,
+    scale: u8,
+    /// The node's index, for fetching its trace-captured fused intermediates.
+    node_idx: usize,
 }
 
 impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
@@ -270,6 +288,7 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
         Self {
             op,
             scale: node.scale,
+            node_idx: node.idx,
         }
     }
 
@@ -283,9 +302,24 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
         }
     }
 
-    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
-        let operand_refs: Vec<&Tensor<i32>> = operand_tensors.iter().collect();
-        let remainder = mos_remainder(&self.op, &operand_refs, self.scale);
+    fn build_lookup_operands(
+        &self,
+        trace: &Trace,
+        _operand_tensors: &[Tensor<i32>],
+    ) -> Vec<Tensor<i32>> {
+        // The executor always captures the fused intermediates; read the
+        // rescaling remainder from the trace instead of re-executing the
+        // whole O(count·elements) mean-of-squares kernel.
+        let remainder = trace
+            .fused(NodeId(self.node_idx as u32))
+            .unwrap_or_else(|| {
+                panic!(
+                    "mean-of-squares node {} has no fused intermediates in the trace",
+                    self.node_idx
+                )
+            })
+            .remainder
+            .clone();
         let divisor_i32 = mean_of_squares_divisor_i32(&self.op, self.scale);
         let bound = Tensor::construct(vec![divisor_i32], vec![1])
             .expand(remainder.dims())
@@ -309,7 +343,7 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
 
 /// The fused mean-of-squares divisor `D = N·2^S` as an `i32` (the range-check
 /// value domain), recovered from the operator's stored count + scale.
-fn mean_of_squares_divisor_i32(op: &atlas_trace::op::MeanOfSquares, scale: i32) -> i32 {
+fn mean_of_squares_divisor_i32(op: &atlas_trace::op::MeanOfSquares, scale: u8) -> i32 {
     i32_divisor(mos_divisor(op, scale))
 }
 
@@ -346,7 +380,11 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
         }
     }
 
-    fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
+    fn build_lookup_operands(
+        &self,
+        _trace: &Trace,
+        operand_tensors: &[Tensor<i32>],
+    ) -> Vec<Tensor<i32>> {
         assert_eq!(
             operand_tensors.len(),
             1,
@@ -425,8 +463,12 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckOperands<H> {
     }
 
     /// Computes the lookup operand tensors from the node input operands.
-    pub fn build_lookup_operands(&self, operand_tensors: &[Tensor<i32>]) -> Vec<Tensor<i32>> {
-        self.helper.build_lookup_operands(operand_tensors)
+    pub fn build_lookup_operands(
+        &self,
+        trace: &Trace,
+        operand_tensors: &[Tensor<i32>],
+    ) -> Vec<Tensor<i32>> {
+        self.helper.build_lookup_operands(trace, operand_tensors)
     }
 
     /// Computes the interleaved one-hot encoding required to perform the range-checking lookup.

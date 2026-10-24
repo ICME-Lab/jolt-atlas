@@ -51,13 +51,13 @@ where
 pub fn materialize_signed_activation_table(
     log_table_size: usize,
     tau: i32,
-    scale: i32,
+    scale: u8,
     kind: atlas_trace::semantics::tables::TableKind,
 ) -> Vec<i32> {
     assert_eq!(tau, 1, "scaled activation tables are materialized per-op");
     let table = atlas_trace::semantics::tables::table(
         kind,
-        atlas_trace::Scale::new(scale as u8).expect("scale in range"),
+        atlas_trace::Scale::new(scale).expect("scale in range"),
         atlas_trace::SemVersion::V1,
     );
     let table_size = 1usize << log_table_size;

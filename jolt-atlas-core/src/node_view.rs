@@ -26,7 +26,7 @@ pub struct ComputationNode {
     /// The model's global fixed-point scale (log2). Carried per node so
     /// operator-level helpers (`rebase_bits`, table sizing) don't need a
     /// model reference.
-    pub scale: i32,
+    pub scale: u8,
 }
 
 impl ComputationNode {
@@ -38,7 +38,7 @@ impl ComputationNode {
             inputs,
             output_dims,
             sat_clamp_bits: 64,
-            scale: common::consts::MODEL_SCALE as i32,
+            scale: common::consts::MODEL_SCALE as u8,
         }
     }
 
@@ -64,7 +64,7 @@ impl ComputationNode {
 /// Proof-layer accessors over a compiled [`atlas_trace::Model`].
 pub trait ModelView {
     /// The model's log2 fixed-point scale as the proof layer carries it.
-    fn scale_i32(&self) -> i32;
+    fn scale_log2(&self) -> u8;
     /// Number of nodes in the graph.
     fn num_nodes(&self) -> usize;
     /// Build the owned node view at `idx`.
@@ -87,8 +87,8 @@ pub trait ModelView {
 }
 
 impl ModelView for atlas_trace::Model {
-    fn scale_i32(&self) -> i32 {
-        self.scale().log2() as i32
+    fn scale_log2(&self) -> u8 {
+        self.scale().log2() as u8
     }
 
     fn num_nodes(&self) -> usize {
@@ -104,7 +104,7 @@ impl ModelView for atlas_trace::Model {
             inputs: node.inputs.iter().map(|i| i.index()).collect(),
             output_dims: node.output_dims.clone(),
             sat_clamp_bits: meta.sat_clamp_bits.map(|w| w.bits()).unwrap_or(64),
-            scale: self.scale_i32(),
+            scale: self.scale_log2(),
         }
     }
 

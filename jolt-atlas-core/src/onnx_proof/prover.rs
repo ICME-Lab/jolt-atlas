@@ -11,10 +11,7 @@ use super::{
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
-use atlas_trace::trace::LayerData;
-use atlas_trace::trace::ModelExecutionIO;
-use atlas_trace::Model;
-use atlas_trace::Trace;
+use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
 use common::{parallel::ParallelFlagGuard, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,

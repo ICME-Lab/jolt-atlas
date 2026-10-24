@@ -12,6 +12,7 @@ use crate::{
     error::ImportError,
     graph::{Attr, ConstData, ConstTensor, DType, Edge, EdgeId, IGraph, INode, TensorInfo},
 };
+use atlas_trace::Scale;
 
 /// How many rewrites each pass performed (for logging and tests).
 #[derive(Debug, Clone)]
@@ -24,27 +25,39 @@ pub struct PassReport {
 
 type Pass = fn(&mut IGraph) -> Result<usize, ImportError>;
 
+/// A pass in the fixed pipeline; `Scaled` passes need the fixed-point scale
+/// (today only `div_rewrites`, which rejects sub-resolution reciprocals).
+enum PassFn {
+    Plain(Pass),
+    Scaled(fn(&mut IGraph, Scale) -> Result<usize, ImportError>),
+}
+
 /// Run the full pipeline in its fixed order.
-pub fn run_all(g: &mut IGraph) -> Result<Vec<PassReport>, ImportError> {
+pub fn run_all(g: &mut IGraph, scale: Scale) -> Result<Vec<PassReport>, ImportError> {
+    use PassFn::{Plain, Scaled};
     let mut reports = Vec::new();
-    let passes: &[(&'static str, Pass)] = &[
-        ("elide", elide),
-        ("gather_norm", gather_norm),
-        ("reshape_family", reshape_family),
-        ("split_to_slices", split_to_slices),
-        ("pow_to_square_cube", pow_to_square_cube),
-        ("norm_fusion", norm_fusion),
-        ("div_rewrites", div_rewrites),
-        ("matmul_gemm_to_einsum", matmul_gemm_to_einsum),
-        ("slice_through_projection", slice_through_projection),
-        ("transpose_to_moveaxis", transpose_to_moveaxis),
-        ("expand_to_broadcast", expand_to_broadcast),
-        ("repeat_to_gather", repeat_to_gather),
-        ("cast_policy", cast_policy),
-        ("elide_again", elide),
+    let passes: &[(&'static str, PassFn)] = &[
+        ("elide", Plain(elide)),
+        ("gather_norm", Plain(gather_norm)),
+        ("reshape_family", Plain(reshape_family)),
+        ("split_to_slices", Plain(split_to_slices)),
+        ("pow_to_square_cube", Plain(pow_to_square_cube)),
+        ("norm_fusion", Plain(norm_fusion)),
+        ("div_rewrites", Scaled(div_rewrites)),
+        ("rsqrt_eps_floor", Scaled(rsqrt_eps_floor)),
+        ("matmul_gemm_to_einsum", Plain(matmul_gemm_to_einsum)),
+        ("slice_through_projection", Plain(slice_through_projection)),
+        ("transpose_to_moveaxis", Plain(transpose_to_moveaxis)),
+        ("expand_to_broadcast", Plain(expand_to_broadcast)),
+        ("repeat_to_gather", Plain(repeat_to_gather)),
+        ("cast_policy", Plain(cast_policy)),
+        ("elide_again", Plain(elide)),
     ];
-    for &(name, pass) in passes {
-        let rewrites = pass(g)?;
+    for (name, pass) in passes {
+        let rewrites = match pass {
+            Plain(f) => f(g)?,
+            Scaled(f) => f(g, scale)?,
+        };
         reports.push(PassReport { name, rewrites });
     }
     crate::analyze::dce(g);
@@ -337,6 +350,14 @@ fn norm_fusion(g: &mut IGraph) -> Result<usize, ImportError> {
             });
         }
         let n = x_dims[rank - 1];
+        if n == 0 {
+            // 1/N below would be inf (and quantize to a silent saturation).
+            return Err(ImportError::Pass {
+                pass: "norm_fusion",
+                node: name,
+                reason: "LayerNormalization over a zero-size axis".into(),
+            });
+        }
         let mut red_dims = x_dims.clone();
         red_dims[rank - 1] = 1;
 
@@ -435,6 +456,15 @@ fn norm_fusion(g: &mut IGraph) -> Result<usize, ImportError> {
         };
         let out = node.outputs[0];
         let n: usize = axes.iter().map(|&a| x_dims[a]).product();
+        if n == 0 {
+            // 1/N for the mean would be inf (and quantize to a silent
+            // saturation); a zero-size reduction has no lowerable form.
+            return Err(ImportError::Pass {
+                pass: "norm_fusion",
+                node: name,
+                reason: format!("{op} over zero elements"),
+            });
+        }
         let axes_attr = Attr::Ints(axes.iter().map(|&a| a as i64).collect());
 
         // Output edge of the kept-dims reduction (atlas.Sum keeps dims=1).
@@ -550,7 +580,7 @@ fn add_reshape_to_edge(g: &mut IGraph, name: &str, from: EdgeId, to: EdgeId, sha
 ///
 /// Anything that leaves a runtime f32 Div/Sqrt/Reciprocal is rejected at
 /// lowering.
-fn div_rewrites(g: &mut IGraph) -> Result<usize, ImportError> {
+fn div_rewrites(g: &mut IGraph, scale: Scale) -> Result<usize, ImportError> {
     let mut rewrites = 0;
     for idx in 0..g.nodes.len() {
         let Some(node) = g.nodes[idx].as_ref() else {
@@ -585,6 +615,24 @@ fn div_rewrites(g: &mut IGraph) -> Result<usize, ImportError> {
                             pass: "div_rewrites",
                             node: name,
                             reason: "Div by a zero or non-finite constant".into(),
+                        });
+                    }
+                    // A reciprocal below the fixed-point resolution would
+                    // quantize to 0 and silently zero the quotient (the old
+                    // crate's flush-to-±1 instead inflated it to 2^-s — a
+                    // division by 2^s rather than by `v`). Reject loudly.
+                    let mult = scale.denom_i64() as f64;
+                    if let Some(&v) = vals
+                        .iter()
+                        .find(|&&v| ((1.0 / v as f64) * mult).round() == 0.0)
+                    {
+                        return Err(ImportError::Pass {
+                            pass: "div_rewrites",
+                            node: name,
+                            reason: format!(
+                                "Div by {v:e} exceeds fixed-point resolution at scale {}                                  (reciprocal quantizes to 0)",
+                                scale.log2()
+                            ),
                         });
                     }
                     let recip = ConstTensor {
@@ -638,6 +686,68 @@ fn div_rewrites(g: &mut IGraph) -> Result<usize, ImportError> {
     Ok(rewrites)
 }
 
+/// Floor the eps constant feeding every `atlas.Rsqrt` at one fixed-point ulp.
+///
+/// `MeanOfSquares` floor-divides, so a small-but-nonzero row can quantize to
+/// variance 0; `rsqrt(var + ⌈eps⌉₁)` then still normalizes it approximately
+/// correctly, where `rsqrt(0)` would zero it — and the prover's rsqrt
+/// division witness requires a positive operand outright. The old crate got
+/// this implicitly from the global flush-to-±1 quantizer wart; this pass is
+/// the explicit, local replacement: a positive sub-resolution constant added
+/// directly under an `atlas.Rsqrt` is bumped to exactly one ulp (`2^-s`).
+/// Every `atlas.Rsqrt` is produced by `norm_fusion` or `div_rewrites`, so
+/// running after both covers synthesized and model-provided eps alike.
+fn rsqrt_eps_floor(g: &mut IGraph, scale: Scale) -> Result<usize, ImportError> {
+    let mult = scale.denom_i64() as f64;
+    let ulp = (1.0 / mult) as f32;
+    let mut rewrites = 0;
+    for idx in 0..g.nodes.len() {
+        let Some(node) = g.nodes[idx].as_ref() else {
+            continue;
+        };
+        if node.op != "atlas.Rsqrt" {
+            continue;
+        }
+        let v = node.inputs[0];
+        let Some((add_idx, add)) = g.producer(v) else {
+            continue;
+        };
+        if add.op != "Add" {
+            continue;
+        }
+        let eps_slot = add.inputs.iter().position(|&e| {
+            g.konst(e).and_then(|k| k.as_f32s()).is_some_and(|vals| {
+                !vals.is_empty()
+                    && vals
+                        .iter()
+                        .all(|&c| c > 0.0 && ((c as f64) * mult).round() == 0.0)
+            })
+        });
+        let Some(slot) = eps_slot else {
+            continue;
+        };
+        let old_edge = add.inputs[slot];
+        let dims = g.konst(old_edge).expect("checked above").dims.clone();
+        let len: usize = dims.iter().product::<usize>().max(1);
+        let name = format!("{}/eps_floor", g.nodes[idx].as_ref().expect("live").name);
+        let fe = g.fresh_edge(
+            &name,
+            TensorInfo {
+                dtype: DType::F32,
+                dims: dims.clone(),
+            },
+        );
+        g.edge_mut(fe).konst = Some(ConstTensor {
+            dtype: DType::F32,
+            dims,
+            data: ConstData::F32(vec![ulp; len]),
+        });
+        g.nodes[add_idx].as_mut().expect("live").inputs[slot] = fe;
+        rewrites += 1;
+    }
+    Ok(rewrites)
+}
+
 /// Whether `perm` swaps only the last two axes.
 fn is_last_two_swap(perm: &[usize]) -> bool {
     let r = perm.len();
@@ -665,6 +775,20 @@ fn matmul_gemm_to_einsum(g: &mut IGraph) -> Result<usize, ImportError> {
         let name = node.name.clone();
         let out = node.outputs[0];
         let is_gemm = node.op == "Gemm";
+        // atlas.Einsum has no raw (rebase-free) form: its eval always divides
+        // the contraction by 2^scale, so an integer matmul's result would be
+        // silently shrunk by that factor. Reject it (lowering gates this too).
+        if g.info(out).is_some_and(|i| i.dtype != DType::F32) {
+            return Err(ImportError::Pass {
+                pass: "matmul_gemm_to_einsum",
+                node: name,
+                reason: format!(
+                    "{} over non-float operands cannot be lowered: \
+                     einsum always rebases by 2^scale",
+                    if is_gemm { "Gemm" } else { "MatMul" }
+                ),
+            });
+        }
         let (mut a, mut b) = (node.inputs[0], node.inputs[1]);
         let bias = if is_gemm {
             node.inputs.get(2).copied()
@@ -1132,7 +1256,6 @@ fn expand_to_broadcast(g: &mut IGraph) -> Result<usize, ImportError> {
             "shape".into(),
             Attr::Ints(out_dims.iter().map(|&d| d as i64).collect()),
         );
-        node.outputs = vec![out];
         rewrites += 1;
     }
     Ok(rewrites)
@@ -1340,14 +1463,47 @@ fn cast_policy(g: &mut IGraph) -> Result<usize, ImportError> {
     Ok(rewrites)
 }
 
+/// ONNX ops that carry their (first) data operand's values through unchanged
+/// — pure data movement. The single source of truth shared by input
+/// classification ([`crate::inputs`]) and the cast-policy lineage walks
+/// below: the two walks must cover the same op set, or an input could be
+/// classified `RawInt` while its Cast lowers to identity — silently off by
+/// `2^scale`. `Concat` merges several operands, so lineage walks handle it
+/// in its own arm (every operand is part of the lineage).
+pub(crate) const VALUE_PRESERVING_OPS: &[&str] = &[
+    "Unsqueeze",
+    "Squeeze",
+    "Reshape",
+    "Flatten",
+    "Identity",
+    "Slice",
+    "Expand",
+    "Tile",
+    "Transpose",
+    "Split",
+    "Gather",
+    "Concat",
+];
+
+/// Pass-introduced structural aliases of [`VALUE_PRESERVING_OPS`] entries.
+/// The rewrite passes run before `cast_policy`, so its lineage walks see
+/// these names too; input classification runs before the passes and never
+/// does.
+const VALUE_PRESERVING_ATLAS_OPS: &[&str] = &["atlas.Slice", "atlas.MoveAxis", "atlas.Broadcast"];
+
+/// Whether `op` passes its data operand(s) through unchanged (either name
+/// surface).
+fn value_preserving(op: &str) -> bool {
+    VALUE_PRESERVING_OPS.contains(&op) || VALUE_PRESERVING_ATLAS_OPS.contains(&op)
+}
+
 /// Verify that an int→float Cast operand is scaled by construction: its
 /// lineage must pass only through value-preserving ops and terminate at
 /// graph inputs (which `classify_inputs` then marks Scaled through the very
-/// same ops, so the caller supplies pre-scaled values). Integer arithmetic,
-/// a descaled float, or an int constant in the lineage would be raw, and
-/// lowering the Cast to identity would misread it as scaled — so reject.
-/// Keep the op list a subset of the walk in `classify_int_input` (modulo
-/// the pass-rewrite renames, which run before this policy).
+/// same ops — [`VALUE_PRESERVING_OPS`] — so the caller supplies pre-scaled
+/// values). Integer arithmetic, a descaled float, or an int constant in the
+/// lineage would be raw, and lowering the Cast to identity would misread it
+/// as scaled — so reject.
 fn scaled_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
     let mut frontier = vec![start];
     let mut seen = std::collections::HashSet::new();
@@ -1369,13 +1525,10 @@ fn scaled_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
             return Err(format!("{} has no producer", g.edge(e).name));
         };
         match p.op.as_str() {
-            // Value-preserving data movement, pre- and post-rewrite names.
+            "Concat" => frontier.extend(p.inputs.iter().copied()),
             // Gather/Slice carry their data operand through unchanged; the
             // index/shape operands are not part of the value lineage.
-            "Unsqueeze" | "Squeeze" | "Reshape" | "Flatten" | "Identity" | "Slice" | "Expand"
-            | "Tile" | "Transpose" | "Split" | "Gather" | "atlas.Slice" | "atlas.MoveAxis"
-            | "atlas.Broadcast" => frontier.push(p.inputs[0]),
-            "Concat" => frontier.extend(p.inputs.iter().copied()),
+            op if value_preserving(op) => frontier.push(p.inputs[0]),
             other => {
                 return Err(format!(
                     "int→float Cast fed by `{other}`; only value-preserving \
@@ -1415,13 +1568,11 @@ fn raw_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
             // A float→int cast produces raw values, whatever fed it.
             "atlas.Descale" => continue,
             "Cast" if g.info(e).is_some_and(|i| i.dtype != DType::F32) => continue,
-            "Unsqueeze" | "Squeeze" | "Reshape" | "Flatten" | "Identity" | "Slice" | "Expand"
-            | "Tile" | "Transpose" | "Split" | "Gather" | "atlas.Slice" | "atlas.MoveAxis"
-            | "atlas.Broadcast" => frontier.push(p.inputs[0]),
             // Raw integer arithmetic stays raw (integer Mul lowers without
             // the fixed-point rebase).
             "Add" | "Sub" | "Mul" | "Neg" | "Concat" | "Where" | "And" | "Equal" | "Less"
             | "LessOrEqual" | "Greater" => frontier.extend(p.inputs.iter().copied()),
+            op if value_preserving(op) => frontier.push(p.inputs[0]),
             other => return Err(format!("`{other}` is not provably raw")),
         }
     }
@@ -1432,5 +1583,147 @@ fn raw_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
 impl std::fmt::Display for Edge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An integer MatMul must be rejected: atlas.Einsum always rebases by
+    // 2^scale, which would silently divide raw integer products.
+    #[test]
+    fn integer_matmul_is_rejected() {
+        let mut g = IGraph::default();
+        let info = TensorInfo {
+            dtype: DType::I64,
+            dims: vec![2, 2],
+        };
+        let a = g.fresh_edge("a", info.clone());
+        let b = g.fresh_edge("b", info.clone());
+        let out = g.fresh_edge("out", info);
+        g.push_node(INode {
+            name: "mm".into(),
+            op: "MatMul".into(),
+            attrs: Default::default(),
+            inputs: vec![a, b],
+            outputs: vec![out],
+        });
+        g.outputs.push(out);
+        let err = matmul_gemm_to_einsum(&mut g).unwrap_err();
+        assert!(matches!(
+            err,
+            ImportError::Pass {
+                pass: "matmul_gemm_to_einsum",
+                ..
+            }
+        ));
+    }
+
+    // Div by a constant whose reciprocal is below the fixed-point resolution
+    // must be rejected: quantizing it would silently zero the quotient (and
+    // the old flush-to-±1 turned it into a division by 2^scale instead).
+    #[test]
+    fn div_by_sub_resolution_reciprocal_is_rejected() {
+        let scale = Scale::new(14).unwrap();
+        let build = |divisor: f32| {
+            let mut g = IGraph::default();
+            let info = TensorInfo {
+                dtype: DType::F32,
+                dims: vec![2],
+            };
+            let x = g.fresh_edge("x", info.clone());
+            let d = g.fresh_edge("d", info.clone());
+            g.edge_mut(d).konst = Some(ConstTensor {
+                dtype: DType::F32,
+                dims: vec![2],
+                data: ConstData::F32(vec![divisor, divisor]),
+            });
+            let out = g.fresh_edge("out", info);
+            g.push_node(INode {
+                name: "div".into(),
+                op: "Div".into(),
+                attrs: Default::default(),
+                inputs: vec![x, d],
+                outputs: vec![out],
+            });
+            g.outputs.push(out);
+            g
+        };
+
+        // 1/1e7 quantizes to 0 at scale 14: rejected.
+        let err = div_rewrites(&mut build(1e7), scale).unwrap_err();
+        assert!(matches!(
+            err,
+            ImportError::Pass {
+                pass: "div_rewrites",
+                ..
+            }
+        ));
+        // 1/100 is representable: rewritten to a Mul by the reciprocal.
+        assert_eq!(div_rewrites(&mut build(100.0), scale).unwrap(), 1);
+    }
+
+    // A positive sub-resolution eps under an atlas.Rsqrt is floored to one
+    // ulp; a representable eps is left alone.
+    #[test]
+    fn rsqrt_eps_is_floored_to_one_ulp() {
+        let scale = Scale::new(14).unwrap();
+        let build = |eps: f32| {
+            let mut g = IGraph::default();
+            let info = TensorInfo {
+                dtype: DType::F32,
+                dims: vec![2, 1],
+            };
+            let var = g.fresh_edge("var", info.clone());
+            let e = g.fresh_edge(
+                "eps",
+                TensorInfo {
+                    dtype: DType::F32,
+                    dims: vec![1],
+                },
+            );
+            g.edge_mut(e).konst = Some(ConstTensor {
+                dtype: DType::F32,
+                dims: vec![1],
+                data: ConstData::F32(vec![eps]),
+            });
+            let ve = g.fresh_edge("var_eps", info.clone());
+            g.push_node(INode {
+                name: "add".into(),
+                op: "Add".into(),
+                attrs: Default::default(),
+                inputs: vec![var, e],
+                outputs: vec![ve],
+            });
+            let inv = g.fresh_edge("inv", info);
+            g.push_node(INode {
+                name: "rsqrt".into(),
+                op: "atlas.Rsqrt".into(),
+                attrs: Default::default(),
+                inputs: vec![ve],
+                outputs: vec![inv],
+            });
+            g.outputs.push(inv);
+            g
+        };
+
+        let mut g = build(1e-5); // sub-resolution at scale 14
+        assert_eq!(rsqrt_eps_floor(&mut g, scale).unwrap(), 1);
+        let (_, add) = g
+            .producer(
+                g.nodes
+                    .iter()
+                    .flatten()
+                    .find(|n| n.op == "atlas.Rsqrt")
+                    .unwrap()
+                    .inputs[0],
+            )
+            .unwrap();
+        let floored = g.konst(add.inputs[1]).unwrap().as_f32s().unwrap();
+        assert_eq!(floored, vec![1.0 / 16384.0]);
+
+        let mut g = build(1e-2); // representable: untouched
+        assert_eq!(rsqrt_eps_floor(&mut g, scale).unwrap(), 0);
     }
 }

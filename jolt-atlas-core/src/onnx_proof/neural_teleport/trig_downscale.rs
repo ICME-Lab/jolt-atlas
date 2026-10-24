@@ -11,9 +11,7 @@ use crate::{
     onnx_proof::{op_lookups::LookupOperandsTrait, Prover, Verifier},
     utils::opening_access::AccOpeningAccessor,
 };
-use atlas_trace::trace::LayerData;
-use atlas_trace::Tensor;
-use atlas_trace::Trace;
+use atlas_trace::{trace::LayerData, Tensor, Trace};
 use common::{
     consts::{TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS, XLEN},
     CommittedPoly, VirtualPoly,

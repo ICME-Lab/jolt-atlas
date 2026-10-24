@@ -34,19 +34,13 @@
 use crate::onnx_proof::trace_view::TraceView;
 use std::array;
 
-use atlas_trace::Op;
+use atlas_trace::{op::MeanOfSquares, trace::LayerData, Op, Trace};
 
-use atlas_trace::Trace;
-
-use atlas_trace::op::MeanOfSquares;
-
-use atlas_trace::trace::LayerData;
-
-use crate::node_view::ComputationNode;
 use crate::{
-    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
+    node_view::ComputationNode,
     onnx_proof::{
         clamp_lookups::{clamp_committed_polys, is_scalar, recover_small_int, verify_scalar_clamp},
+        deferred_lookups::{DeferredBatch, DeferredOneHot},
         fused_rebase,
         ops::{OperatorProofTrait, Prover, Verifier},
         range_checking::{
@@ -84,33 +78,8 @@ use rayon::prelude::*;
 const DEGREE: usize = 3;
 
 /// Fused divisor `D = count·2^scale` (the semantic count, not the padded one).
-pub fn mos_divisor(op: &MeanOfSquares, scale: i32) -> i64 {
+pub fn mos_divisor(op: &MeanOfSquares, scale: u8) -> i64 {
     (1i64 << scale) * op.count as i64
-}
-
-/// Re-execute the fused mean-of-squares to recover the rescaling remainder
-/// `R = Σx² mod D` (used where the trace is out of reach).
-pub fn mos_remainder(
-    op: &MeanOfSquares,
-    operands: &[&atlas_trace::Tensor<i32>],
-    scale: i32,
-) -> atlas_trace::Tensor<i32> {
-    use atlas_trace::op::{EvalCtx, Op, TableCache};
-    use atlas_trace::{NodeAux, Scale, SemVersion};
-    let cache = TableCache::default();
-    let ctx = EvalCtx {
-        scale: Scale::new(scale as u8).expect("scale in range"),
-        version: SemVersion::V1,
-        tables: &cache,
-    };
-    let eval = Op::MeanOfSquares(op.clone())
-        .spec()
-        .eval(operands, &ctx)
-        .expect("mean-of-squares re-execution");
-    match eval.aux {
-        Some(NodeAux::Fused(f)) => f.remainder,
-        _ => unreachable!("mean-of-squares always produces fused intermediates"),
-    }
 }
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
@@ -458,10 +427,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
+    use crate::{onnx_proof::ops::test::unit_test_op, test_builder::ModelBuilder};
+    use atlas_trace::{Model, Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     /// `[m, n]` input, reduce the last axis (size `n`, a power of two) → `[m, 1]`.

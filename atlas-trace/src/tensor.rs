@@ -456,7 +456,8 @@ pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>, ShapeErro
     Ok(out)
 }
 
-fn row_major_strides(dims: &[usize]) -> Vec<usize> {
+/// Row-major (C-order) strides of a shape.
+pub fn row_major_strides(dims: &[usize]) -> Vec<usize> {
     let mut strides = vec![1usize; dims.len()];
     for i in (0..dims.len().saturating_sub(1)).rev() {
         strides[i] = strides[i + 1] * dims[i + 1];

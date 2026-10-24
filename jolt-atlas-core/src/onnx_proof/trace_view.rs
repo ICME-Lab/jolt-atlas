@@ -6,8 +6,10 @@
 //! ever built.
 
 use crate::node_view::ComputationNode;
-use atlas_trace::trace::{FusedIntermediates, LayerData};
-use atlas_trace::{NodeId, SoftmaxWitness, Tensor, Trace};
+use atlas_trace::{
+    trace::{FusedIntermediates, LayerData},
+    NodeId, SoftmaxWitness, Tensor, Trace,
+};
 
 /// Node-view-based accessors over the raw trace.
 pub trait TraceView {

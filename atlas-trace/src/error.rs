@@ -234,4 +234,14 @@ pub enum KernelError {
         /// Flat element index.
         element: usize,
     },
+    /// A computed witness value does not fit the witness's integer width.
+    #[error("{op}: {what} {value} exceeds the i32 witness range")]
+    WitnessOverflow {
+        /// Operator name.
+        op: &'static str,
+        /// Which witness value overflowed.
+        what: &'static str,
+        /// The overflowing value.
+        value: i64,
+    },
 }

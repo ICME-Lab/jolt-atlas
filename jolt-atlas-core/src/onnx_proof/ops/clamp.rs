@@ -9,9 +9,7 @@ use crate::{
     },
     utils::compute_lookup_indices_from_operands,
 };
-use atlas_trace::op::Clamp;
-use atlas_trace::Tensor;
-use atlas_trace::Trace;
+use atlas_trace::{op::Clamp, Tensor, Trace};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,

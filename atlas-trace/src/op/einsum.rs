@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     error::{KernelError, ShapeError},
     id::Scale,
-    tensor::Tensor,
+    tensor::{Tensor, row_major_strides as strides},
 };
 
 use super::{BoundCtx, Einsum, Eval, EvalCtx, OpSpec, PadBehavior, fused::rebase_eval};
@@ -153,15 +153,6 @@ impl<'de> Deserialize<'de> for EinsumEq {
         let s = String::deserialize(deserializer)?;
         s.parse().map_err(serde::de::Error::custom)
     }
-}
-
-/// Row-major strides for `dims`.
-fn strides(dims: &[usize]) -> Vec<usize> {
-    let mut s = vec![1usize; dims.len()];
-    for i in (0..dims.len().saturating_sub(1)).rev() {
-        s[i] = s[i + 1] * dims[i + 1];
-    }
-    s
 }
 
 /// Raw i64 contraction `acc[out] = Σ_sum Π_i operand_i[...]`.

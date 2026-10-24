@@ -382,7 +382,7 @@ fn norm_fusion(g: &mut IGraph) -> Result<usize, ImportError> {
             });
         };
         push("atlas.Sum", vec![("axes", axes.clone())], vec![x], sum);
-        push("Mul", vec![], vec![sum, recip_n], mean);
+        push("atlas.ScaledMul", vec![], vec![sum, recip_n], mean);
         push("Sub", vec![], vec![x, mean], centered);
         push(
             "atlas.MeanOfSquares",
@@ -537,7 +537,10 @@ fn norm_fusion(g: &mut IGraph) -> Result<usize, ImportError> {
             let (target, kept) = make_target(g, &format!("{name}/mean_kept"));
             g.push_node(INode {
                 name: format!("{name}/mean"),
-                op: "Mul".into(),
+                // Always-rebased: an integer reduction's raw sum times the
+                // scaled 1/N reciprocal needs the ÷2^s to yield a raw mean —
+                // output-dtype-driven rebase would skip it (see lower.rs).
+                op: "atlas.ScaledMul".into(),
                 attrs: Default::default(),
                 inputs: vec![sum, recip],
                 outputs: vec![target],
@@ -1568,10 +1571,13 @@ fn raw_lineage(g: &IGraph, start: EdgeId) -> Result<(), String> {
             // A float→int cast produces raw values, whatever fed it.
             "atlas.Descale" => continue,
             "Cast" if g.info(e).is_some_and(|i| i.dtype != DType::F32) => continue,
-            // Raw integer arithmetic stays raw (integer Mul lowers without
-            // the fixed-point rebase).
+            // Raw integer arithmetic stays raw (integer Mul/Square/Cube
+            // lower without the fixed-point rebase; pow_to_square_cube runs
+            // before this walk, so the rewritten names appear here).
             "Add" | "Sub" | "Mul" | "Neg" | "Concat" | "Where" | "And" | "Equal" | "Less"
-            | "LessOrEqual" | "Greater" => frontier.extend(p.inputs.iter().copied()),
+            | "LessOrEqual" | "Greater" | "atlas.Square" | "atlas.Cube" => {
+                frontier.extend(p.inputs.iter().copied())
+            }
             op if value_preserving(op) => frontier.push(p.inputs[0]),
             other => return Err(format!("`{other}` is not provably raw")),
         }
@@ -1662,6 +1668,111 @@ mod tests {
         ));
         // 1/100 is representable: rewritten to a Mul by the reciprocal.
         assert_eq!(div_rewrites(&mut build(100.0), scale).unwrap(), 1);
+    }
+
+    /// The floor-square idiom `Cast(Square(Cast(x→int)) → f32)` is provably
+    /// raw: pow_to_square_cube runs before cast_policy, so the lineage walk
+    /// must recognize the rewritten op names.
+    #[test]
+    fn integer_square_lineage_is_raw() {
+        let mut g = IGraph::default();
+        let x = g.fresh_edge(
+            "x",
+            TensorInfo {
+                dtype: DType::F32,
+                dims: vec![4],
+            },
+        );
+        g.inputs.push(x);
+        let xi = g.fresh_edge(
+            "xi",
+            TensorInfo {
+                dtype: DType::I64,
+                dims: vec![4],
+            },
+        );
+        g.push_node(INode {
+            name: "to_int".into(),
+            op: "Cast".into(),
+            attrs: Default::default(),
+            inputs: vec![x],
+            outputs: vec![xi],
+        });
+        let sq = g.fresh_edge(
+            "sq",
+            TensorInfo {
+                dtype: DType::I64,
+                dims: vec![4],
+            },
+        );
+        g.push_node(INode {
+            name: "square".into(),
+            op: "atlas.Square".into(),
+            attrs: Default::default(),
+            inputs: vec![xi],
+            outputs: vec![sq],
+        });
+        let f = g.fresh_edge(
+            "f",
+            TensorInfo {
+                dtype: DType::F32,
+                dims: vec![4],
+            },
+        );
+        g.push_node(INode {
+            name: "to_float".into(),
+            op: "Cast".into(),
+            attrs: Default::default(),
+            inputs: vec![sq],
+            outputs: vec![f],
+        });
+        g.outputs.push(f);
+
+        cast_policy(&mut g).expect("raw square lineage must be accepted");
+        let rescale = g
+            .nodes
+            .iter()
+            .flatten()
+            .find(|n| n.name == "to_float")
+            .unwrap();
+        assert_eq!(rescale.op, "atlas.RawMul");
+    }
+
+    /// norm_fusion's 1/N reciprocal multiply must rebase regardless of the
+    /// output dtype (an integer reduction's raw sum times the scaled
+    /// reciprocal), so it is emitted as atlas.ScaledMul.
+    #[test]
+    fn reduce_mean_emits_scaled_mul() {
+        let mut g = IGraph::default();
+        let x = g.fresh_edge(
+            "x",
+            TensorInfo {
+                dtype: DType::I32,
+                dims: vec![2, 4],
+            },
+        );
+        g.inputs.push(x);
+        let out = g.fresh_edge(
+            "mean",
+            TensorInfo {
+                dtype: DType::I32,
+                dims: vec![2, 1],
+            },
+        );
+        g.push_node(INode {
+            name: "rm".into(),
+            op: "ReduceMean".into(),
+            attrs: [("axes".to_string(), Attr::Ints(vec![1]))].into(),
+            inputs: vec![x],
+            outputs: vec![out],
+        });
+        g.outputs.push(out);
+
+        norm_fusion(&mut g).unwrap();
+        assert!(
+            g.nodes.iter().flatten().any(|n| n.op == "atlas.ScaledMul"),
+            "reciprocal multiply must be the always-rebased variant"
+        );
     }
 
     // A positive sub-resolution eps under an atlas.Rsqrt is floored to one

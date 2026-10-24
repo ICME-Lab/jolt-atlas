@@ -15,12 +15,22 @@ use crate::{
 /// are small; this admits an 8192x8192 mask.
 const FOLD_BASE_ELEMENTS: usize = 1 << 26;
 
+/// Import-wide cap on the total elements all folds together may
+/// materialize. The per-fold budget scales with input payloads, so without
+/// a cumulative cap a synthesized constant can inflate its own allowance
+/// (ConstantOfShape -> Tile -> Tile -> ... doubles each step).
+pub(crate) const FOLD_TOTAL_ELEMENTS: usize = 1 << 27;
+
 /// Try to fold `node`. `Ok(None)` means "not a foldable op" (caller falls
 /// back to shape inference); `Err` means the fold ran and failed.
 ///
 /// Precondition (checked by the caller): every input the op needs folded is
 /// constant. `Shape` only needs its input's dims.
-pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String> {
+pub fn fold(
+    node: &INode,
+    g: &IGraph,
+    remaining: usize,
+) -> Result<Option<Vec<ConstTensor>>, String> {
     let k = |i: usize| -> Result<&ConstTensor, String> {
         node.inputs
             .get(i)
@@ -140,6 +150,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Add" => out(binary_numeric(
             k(0)?,
             k(1)?,
+            remaining,
             |a, b| a + b,
             |a, b| {
                 a.checked_add(b)
@@ -149,6 +160,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Sub" => out(binary_numeric(
             k(0)?,
             k(1)?,
+            remaining,
             |a, b| a - b,
             |a, b| {
                 a.checked_sub(b)
@@ -158,6 +170,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Mul" => out(binary_numeric(
             k(0)?,
             k(1)?,
+            remaining,
             |a, b| a * b,
             |a, b| {
                 a.checked_mul(b)
@@ -167,6 +180,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Div" => out(binary_numeric(
             k(0)?,
             k(1)?,
+            remaining,
             |a, b| a / b,
             // ONNX integer division truncates toward zero (C semantics).
             |a, b| {
@@ -179,7 +193,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         )?),
         "Pow" => {
             // ONNX Pow's result type is the base type, not the promotion.
-            let mut r = binary_numeric(k(0)?, k(1)?, f32::powf, |a, b| {
+            let mut r = binary_numeric(k(0)?, k(1)?, remaining, f32::powf, |a, b| {
                 u32::try_from(b)
                     .ok()
                     .and_then(|e| a.checked_pow(e))
@@ -189,13 +203,37 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
             wrap_i32(&mut r);
             out(r)
         }
-        "Equal" => out(compare(k(0)?, k(1)?, |a, b| a == b, |a, b| a == b)?),
-        "LessOrEqual" => out(compare(k(0)?, k(1)?, |a, b| a <= b, |a, b| a <= b)?),
-        "Less" => out(compare(k(0)?, k(1)?, |a, b| a < b, |a, b| a < b)?),
-        "Greater" => out(compare(k(0)?, k(1)?, |a, b| a > b, |a, b| a > b)?),
+        "Equal" => out(compare(
+            k(0)?,
+            k(1)?,
+            remaining,
+            |a, b| a == b,
+            |a, b| a == b,
+        )?),
+        "LessOrEqual" => out(compare(
+            k(0)?,
+            k(1)?,
+            remaining,
+            |a, b| a <= b,
+            |a, b| a <= b,
+        )?),
+        "Less" => out(compare(
+            k(0)?,
+            k(1)?,
+            remaining,
+            |a, b| a < b,
+            |a, b| a < b,
+        )?),
+        "Greater" => out(compare(
+            k(0)?,
+            k(1)?,
+            remaining,
+            |a, b| a > b,
+            |a, b| a > b,
+        )?),
         "And" => {
             let dims = shape_fns::broadcast(&k(0)?.dims, &k(1)?.dims)?;
-            let budget = fold_budget([k(0)?, k(1)?].into_iter());
+            let budget = fold_budget([k(0)?, k(1)?].into_iter(), remaining);
             let (a, b) = (expand(k(0)?, &dims, budget)?, expand(k(1)?, &dims, budget)?);
             match (&a.data, &b.data) {
                 (ConstData::Bool(x), ConstData::Bool(y)) => out(ConstTensor {
@@ -209,7 +247,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
         "Where" => {
             let (c, a, b) = (k(0)?, k(1)?, k(2)?);
             let dims = shape_fns::broadcast(&shape_fns::broadcast(&c.dims, &a.dims)?, &b.dims)?;
-            let budget = fold_budget([c, a, b].into_iter());
+            let budget = fold_budget([c, a, b].into_iter(), remaining);
             let (ec, ea, eb) = (
                 expand(c, &dims, budget)?,
                 expand(a, &dims, budget)?,
@@ -395,7 +433,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
             let mut dims = data_t.dims[..axis].to_vec();
             dims.extend_from_slice(&idx_t.dims);
             dims.extend_from_slice(&data_t.dims[axis + 1..]);
-            fold_numel(&dims, fold_budget([data_t, idx_t].into_iter()))?;
+            fold_numel(&dims, fold_budget([data_t, idx_t].into_iter(), remaining))?;
             macro_rules! gat {
                 ($v:expr, $variant:ident) => {{
                     let mut data = Vec::with_capacity(outer * resolved.len() * inner);
@@ -428,7 +466,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                 .map(|&d| usize::try_from(d).map_err(|_| format!("Expand: negative dim {d}")))
                 .collect::<Result<_, _>>()?;
             let dims = shape_fns::broadcast(&t.dims, &shape)?;
-            let budget = fold_budget([t].into_iter());
+            let budget = fold_budget([t].into_iter(), remaining);
             out(expand(t, &dims, budget)?)
         }
         "Tile" => {
@@ -451,7 +489,7 @@ pub fn fold(node: &INode, g: &IGraph) -> Result<Option<Vec<ConstTensor>>, String
                         .ok_or_else(|| format!("Tile dim {d} x {r} overflows"))
                 })
                 .collect::<Result<_, _>>()?;
-            let total = fold_numel(&out_dims, fold_budget([t].into_iter()))?;
+            let total = fold_numel(&out_dims, fold_budget([t].into_iter(), remaining))?;
             let out_strides = strides(&out_dims);
             let src_strides = strides(&t.dims);
             let map_idx = |flat: usize| -> usize {
@@ -629,9 +667,11 @@ pub fn foldable(op: &str) -> bool {
 /// How many elements a fold of these inputs may materialize: the base
 /// budget, or twice the input payload for folds over real weights
 /// (transposed/concatenated initializers).
-fn fold_budget<'a>(inputs: impl Iterator<Item = &'a ConstTensor>) -> usize {
+fn fold_budget<'a>(inputs: impl Iterator<Item = &'a ConstTensor>, remaining: usize) -> usize {
     let input_elems: usize = inputs.map(|t| t.len()).sum();
-    FOLD_BASE_ELEMENTS.max(input_elems.saturating_mul(2))
+    FOLD_BASE_ELEMENTS
+        .max(input_elems.saturating_mul(2))
+        .min(remaining)
 }
 
 /// Checked element count of a fold result, against `budget`. Untrusted
@@ -700,11 +740,12 @@ fn wrap_i32(t: &mut ConstTensor) {
 fn binary_numeric(
     a: &ConstTensor,
     b: &ConstTensor,
+    remaining: usize,
     ff: impl Fn(f32, f32) -> f32,
     fi: impl Fn(i64, i64) -> Result<i64, String>,
 ) -> Result<ConstTensor, String> {
     let dims = shape_fns::broadcast(&a.dims, &b.dims)?;
-    let budget = fold_budget([a, b].into_iter());
+    let budget = fold_budget([a, b].into_iter(), remaining);
     let (ea, eb) = (expand(a, &dims, budget)?, expand(b, &dims, budget)?);
     match (&ea.data, &eb.data) {
         (ConstData::F32(x), ConstData::F32(y)) => Ok(ConstTensor {
@@ -733,11 +774,12 @@ fn binary_numeric(
 fn compare(
     a: &ConstTensor,
     b: &ConstTensor,
+    remaining: usize,
     ff: impl Fn(f32, f32) -> bool,
     fi: impl Fn(i64, i64) -> bool,
 ) -> Result<ConstTensor, String> {
     let dims = shape_fns::broadcast(&a.dims, &b.dims)?;
-    let budget = fold_budget([a, b].into_iter());
+    let budget = fold_budget([a, b].into_iter(), remaining);
     let (ea, eb) = (expand(a, &dims, budget)?, expand(b, &dims, budget)?);
     let data = match (&ea.data, &eb.data) {
         (ConstData::F32(x), ConstData::F32(y)) => {
@@ -794,6 +836,30 @@ mod tests {
         }
     }
 
+    // Fuzz-class regression: the per-fold budget scales with input payloads,
+    // so a chain of synthesized constants (ConstantOfShape -> Tile -> ...)
+    // could inflate its own allowance; the import-wide `remaining` cap is
+    // what stops it. A Tile within its per-fold budget but over the
+    // remaining allowance must fail before allocating.
+    #[test]
+    fn fold_respects_cumulative_allowance() {
+        let mut g = IGraph::default();
+        let data = konst_edge(&mut g, "data", i64_tensor(&[4], &[1, 2, 3, 4]));
+        let reps = konst_edge(&mut g, "reps", i64_tensor(&[1], &[4]));
+        let out = g.edge_by_name("tiled");
+        let node = INode {
+            name: "t".into(),
+            op: "Tile".into(),
+            attrs: BTreeMap::new(),
+            inputs: vec![data, reps],
+            outputs: vec![out],
+        };
+        // 16 output elements, per-fold budget fine, but only 8 remaining.
+        let err = fold(&node, &g, 8).unwrap_err();
+        assert!(err.contains("materialization budget"), "{err}");
+        assert!(fold(&node, &g, 16).is_ok());
+    }
+
     // Fuzz-class regression: an empty `value` tensor attribute used to drive
     // the fill reads out of bounds (index panic on hostile models).
     #[test]
@@ -810,7 +876,7 @@ mod tests {
             inputs: vec![shape],
             outputs: vec![out],
         };
-        let err = fold(&node, &g).unwrap_err();
+        let err = fold(&node, &g, FOLD_TOTAL_ELEMENTS).unwrap_err();
         assert!(err.contains("exactly 1 element"), "{err}");
     }
 
@@ -830,7 +896,7 @@ mod tests {
             inputs: vec![s, l, d],
             outputs: vec![out],
         };
-        let err = fold(&node, &g).unwrap_err();
+        let err = fold(&node, &g, FOLD_TOTAL_ELEMENTS).unwrap_err();
         assert!(err.contains("must be a scalar"), "{err}");
     }
 
@@ -858,7 +924,7 @@ mod tests {
             inputs: vec![data],
             outputs: vec![out],
         };
-        let err = fold(&node, &g).unwrap_err();
+        let err = fold(&node, &g, FOLD_TOTAL_ELEMENTS).unwrap_err();
         assert!(err.contains("repeats an axis"), "{err}");
     }
 }

@@ -16,10 +16,14 @@ use crate::{
 /// import-time-constant edge carries its payload. Nodes whose outputs all
 /// folded are removed.
 pub fn analyze(g: &mut IGraph) -> Result<(), ImportError> {
+    // Import-wide fold allowance: per-fold budgets scale with input payloads,
+    // so synthesized constants must not be able to inflate their own
+    // allowance across a chain of folds.
+    let mut fold_remaining = fold_fns::FOLD_TOTAL_ELEMENTS;
     for idx in g.topo_order()? {
         // Shape parameters supplied as (now folded) inputs become attrs.
         crate::normalize::resolve_const_operands(g, idx)?;
-        if try_fold(g, idx)? {
+        if try_fold(g, idx, &mut fold_remaining)? {
             continue;
         }
         infer_shapes(g, idx)?;
@@ -31,7 +35,7 @@ pub fn analyze(g: &mut IGraph) -> Result<(), ImportError> {
 /// are constant (`Shape` needs only its input's dims; the rest need every
 /// operand). On success the outputs carry their payloads and the node is
 /// removed; returns whether that happened.
-fn try_fold(g: &mut IGraph, idx: usize) -> Result<bool, ImportError> {
+fn try_fold(g: &mut IGraph, idx: usize, fold_remaining: &mut usize) -> Result<bool, ImportError> {
     let node = g.nodes[idx].as_ref().expect("live");
     let (name, op) = (node.name.clone(), node.op.clone());
 
@@ -39,11 +43,13 @@ fn try_fold(g: &mut IGraph, idx: usize) -> Result<bool, ImportError> {
     if !(fold_fns::foldable(&op) && (op == "Shape" || inputs_const)) {
         return Ok(false);
     }
-    let Some(results) = fold_fns::fold(node, g)
+    let Some(results) = fold_fns::fold(node, g, *fold_remaining)
         .map_err(|reason| shape_err(&name, &op, format!("constant fold failed: {reason}")))?
     else {
         return Ok(false);
     };
+    let produced: usize = results.iter().map(|t| t.len()).sum();
+    *fold_remaining = fold_remaining.saturating_sub(produced);
 
     let outputs = node.outputs.clone();
     check_output_count(&name, "fold produced", results.len(), outputs.len())?;

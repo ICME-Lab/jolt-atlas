@@ -234,6 +234,10 @@ impl<'g> Lowerer<'g> {
             "Mul" => elementwise(self, Op::Mul(op::Mul { rebase: scaled }))?,
             // Raw product by construction (cast_policy's ×2^scale rescale).
             "atlas.RawMul" => elementwise(self, Op::Mul(op::Mul { rebase: false }))?,
+            // Rebased regardless of dtype: norm_fusion's 1/N reciprocal
+            // multiply, whose scaled constant times a possibly-raw sum must
+            // divide by 2^scale to stay in the operand's domain.
+            "atlas.ScaledMul" => elementwise(self, Op::Mul(op::Mul { rebase: true }))?,
             "Neg" => direct(self, Op::Neg(op::Neg))?,
             "Relu" => direct(self, Op::ReLU(op::ReLU))?,
             "Tanh" => direct(self, Op::Tanh(op::Tanh))?,

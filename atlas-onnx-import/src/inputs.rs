@@ -104,16 +104,26 @@ fn classify_int_input(
     // check (`passes::scaled_lineage`): the walks must cover the same ops, or
     // an input could be classified RawInt while its Cast still lowers to
     // identity — silently off by 2^scale.
-    let mut frontier = vec![edge];
+    //
+    // Each frontier entry carries whether the input's VALUE is still intact
+    // (`direct`). Float use counts only on direct paths (mirroring
+    // `scaled_lineage`); index use counts through integer arithmetic too,
+    // since an arithmetically derived Gather index still means the caller
+    // must supply raw integers.
+    let mut frontier = vec![(edge, true)];
     let mut seen = std::collections::HashSet::new();
-    while let Some(e) = frontier.pop() {
-        if !seen.insert(e) {
+    while let Some((e, direct)) = frontier.pop() {
+        if !seen.insert((e, direct)) {
             continue;
         }
         for &node_idx in consumers.get(&e).into_iter().flatten() {
             let Some(node) = g.nodes[node_idx].as_ref() else {
                 continue;
             };
+            let out_is_int = node.outputs.first().is_some_and(|&o| {
+                g.info(o)
+                    .is_some_and(|i| matches!(i.dtype, DType::I64 | DType::I32 | DType::Bool))
+            });
             for (pos, &input) in node.inputs.iter().enumerate() {
                 if input != e {
                     continue;
@@ -121,13 +131,27 @@ fn classify_int_input(
                 match node.op.as_str() {
                     "Gather" if pos == 1 => used_as_index = true,
                     "Cast"
-                        if g.info(node.outputs[0])
-                            .is_some_and(|i| i.dtype == DType::F32) =>
+                        if direct
+                            && g.info(node.outputs[0])
+                                .is_some_and(|i| i.dtype == DType::F32) =>
                     {
                         used_as_float = true;
                     }
+                    // Int→int Cast: cast_policy later rewrites it to
+                    // Identity, so this walk must see through it too.
+                    "Cast" if out_is_int => {
+                        frontier.extend(node.outputs.iter().map(|&o| (o, direct)));
+                    }
                     op if crate::passes::VALUE_PRESERVING_OPS.contains(&op) => {
-                        frontier.extend(node.outputs.iter().copied());
+                        frontier.extend(node.outputs.iter().map(|&o| (o, direct)));
+                    }
+                    // Integer arithmetic: the value is no longer the input's,
+                    // but a downstream index use still pins the raw domain.
+                    "Add" | "Sub" | "Mul" | "Neg" | "Where" | "And" | "Equal" | "Less"
+                    | "LessOrEqual" | "Greater"
+                        if out_is_int =>
+                    {
+                        frontier.extend(node.outputs.iter().map(|&o| (o, false)));
                     }
                     _ => {}
                 }
@@ -141,5 +165,135 @@ fn classify_int_input(
         ))),
         (false, true) => Ok(InputKind::Scaled),
         _ => Ok(InputKind::RawInt),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{Attr, ConstData, ConstTensor, INode, TensorInfo};
+
+    fn int_info(dims: &[usize], dtype: DType) -> TensorInfo {
+        TensorInfo {
+            dtype,
+            dims: dims.to_vec(),
+        }
+    }
+
+    fn fresh(g: &mut IGraph, name: &str, dtype: DType) -> EdgeId {
+        g.fresh_edge(name, int_info(&[4], dtype))
+    }
+
+    /// An input consumed as float data (direct Cast) AND as a Gather index
+    /// derived through integer arithmetic is a domain conflict: classifying
+    /// it Scaled would feed 2^s-scaled values into the index path.
+    #[test]
+    fn mixed_float_and_arithmetic_index_use_is_rejected() {
+        let mut g = IGraph::default();
+        let x = fresh(&mut g, "x", DType::I64);
+        g.inputs.push(x);
+
+        let as_float = fresh(&mut g, "as_float", DType::F32);
+        g.push_node(INode {
+            name: "to_float".into(),
+            op: "Cast".into(),
+            attrs: Default::default(),
+            inputs: vec![x],
+            outputs: vec![as_float],
+        });
+
+        let two = fresh(&mut g, "two", DType::I64);
+        g.edge_mut(two).konst = Some(ConstTensor {
+            dtype: DType::I64,
+            dims: vec![1],
+            data: ConstData::I64(vec![2]),
+        });
+        let scaled_idx = fresh(&mut g, "idx", DType::I64);
+        g.push_node(INode {
+            name: "mul".into(),
+            op: "Mul".into(),
+            attrs: Default::default(),
+            inputs: vec![x, two],
+            outputs: vec![scaled_idx],
+        });
+        let dict = fresh(&mut g, "dict", DType::F32);
+        let gathered = fresh(&mut g, "gathered", DType::F32);
+        g.push_node(INode {
+            name: "gather".into(),
+            op: "Gather".into(),
+            attrs: [("axis".to_string(), Attr::Int(0))].into(),
+            inputs: vec![dict, scaled_idx],
+            outputs: vec![gathered],
+        });
+
+        let err = classify_inputs(&g, &[x]).unwrap_err();
+        assert!(
+            err.to_string().contains("both as indices"),
+            "expected domain-conflict rejection, got: {err}"
+        );
+    }
+
+    /// cast_policy sees through int→int Casts (it rewrites them to
+    /// Identity), so classification must too, or the input descriptor says
+    /// RawInt while the graph treats the values as scaled.
+    #[test]
+    fn widening_cast_chain_classifies_scaled() {
+        let mut g = IGraph::default();
+        let x = fresh(&mut g, "x", DType::I32);
+        g.inputs.push(x);
+        let wide = fresh(&mut g, "wide", DType::I64);
+        g.push_node(INode {
+            name: "widen".into(),
+            op: "Cast".into(),
+            attrs: Default::default(),
+            inputs: vec![x],
+            outputs: vec![wide],
+        });
+        let f = fresh(&mut g, "f", DType::F32);
+        g.push_node(INode {
+            name: "to_float".into(),
+            op: "Cast".into(),
+            attrs: Default::default(),
+            inputs: vec![wide],
+            outputs: vec![f],
+        });
+
+        let desc = classify_inputs(&g, &[x]).unwrap();
+        assert_eq!(desc[0].kind, InputKind::Scaled);
+    }
+
+    /// A float use reached only through integer arithmetic is NOT a scaled
+    /// use (cast_policy's scaled_lineage would reject that cast anyway):
+    /// the input stays RawInt.
+    #[test]
+    fn arithmetic_then_cast_does_not_classify_scaled() {
+        let mut g = IGraph::default();
+        let x = fresh(&mut g, "x", DType::I64);
+        g.inputs.push(x);
+        let two = fresh(&mut g, "two", DType::I64);
+        g.edge_mut(two).konst = Some(ConstTensor {
+            dtype: DType::I64,
+            dims: vec![1],
+            data: ConstData::I64(vec![2]),
+        });
+        let doubled = fresh(&mut g, "doubled", DType::I64);
+        g.push_node(INode {
+            name: "mul".into(),
+            op: "Mul".into(),
+            attrs: Default::default(),
+            inputs: vec![x, two],
+            outputs: vec![doubled],
+        });
+        let f = fresh(&mut g, "f", DType::F32);
+        g.push_node(INode {
+            name: "to_float".into(),
+            op: "Cast".into(),
+            attrs: Default::default(),
+            inputs: vec![doubled],
+            outputs: vec![f],
+        });
+
+        let desc = classify_inputs(&g, &[x]).unwrap();
+        assert_eq!(desc[0].kind, InputKind::RawInt);
     }
 }

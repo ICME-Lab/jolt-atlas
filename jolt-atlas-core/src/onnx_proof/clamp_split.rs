@@ -58,7 +58,11 @@ use super::{
     deferred_lookups::DEFERRED_PROOF_IDX,
     global_clamp::ClampBucket,
 };
-use crate::compat::{model::trace::Trace, model::Model, node::ComputationNode};
+use crate::node_view::ComputationNode;
+use crate::node_view::ModelView;
+use crate::onnx_proof::trace_view::TraceView;
+use atlas_trace::Model;
+use atlas_trace::Trace;
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::subprotocols::booleanity::{LinearClaim, LinearTerm};
 use joltworks::{
@@ -167,20 +171,20 @@ pub fn unsaturated(t: &[i32]) -> bool {
 /// `SatClamp(acc) = out` is equivalent to `acc = out`. Such a node is a gap
 /// in its clamp bucket (prover side: from the trace).
 pub fn exact_output_prover(model: &Model, trace: &Trace, node_idx: usize) -> bool {
-    model.outputs().contains(&node_idx)
+    model.output_indices().contains(&node_idx)
         && trace
             .node_outputs
-            .get(&node_idx)
+            .get(node_idx)
             .is_some_and(|t| unsaturated(t.data()))
 }
 
 /// [`exact_output_prover`] from the verifier's public IO.
 pub fn exact_output_verifier(
     model: &Model,
-    io: &crate::compat::model::trace::ModelExecutionIO,
+    io: &atlas_trace::trace::ModelExecutionIO,
     node_idx: usize,
 ) -> bool {
-    model.outputs().contains(&node_idx)
+    model.output_indices().contains(&node_idx)
         && io
             .output_indices
             .iter()
@@ -241,7 +245,7 @@ impl NodeSplit {
     /// Re-derive the node's split witness from the trace.
     pub fn from_trace(node: &ComputationNode, trace: &Trace) -> Self {
         let acc = clamp_intermediate(node, trace);
-        let out = Trace::layer_data(trace, node).output.padded_pow2();
+        let out = TraceView::layer_data(trace, node).output.padded_pow2();
         Self::new(acc.data(), out.data())
     }
 }
@@ -300,7 +304,7 @@ impl BucketSplit {
     pub fn from_trace(bucket: &ClampBucket, trace: &Trace, model: &Model) -> Self {
         Self::assemble(bucket, |idx| {
             (!exact_output_prover(model, trace, idx))
-                .then(|| NodeSplit::from_trace(&model.graph.nodes[&idx], trace))
+                .then(|| NodeSplit::from_trace(&model.view(idx), trace))
         })
     }
 

@@ -1,14 +1,14 @@
+use crate::node_view::ModelView;
 use crate::{
-    compat::{
-        model::{trace::ModelExecutionIO, Model, RunArgs},
-        tensor::Tensor,
-    },
+    loader::RunArgs,
     onnx_proof::{
         proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
         AtlasVerifierPreprocessing, ONNXProof,
     },
 };
 use ark_bn254::{Bn254, Fr};
+use atlas_trace::trace::ModelExecutionIO;
+use atlas_trace::Tensor;
 use common::consts::MODEL_SCALE;
 use joltworks::{
     poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
@@ -72,7 +72,7 @@ fn prove_and_verify(
     run_args: &RunArgs,
     config: TestConfig,
 ) -> ModelExecutionIO {
-    let model = Model::load(&format!("{model_dir}network.onnx"), run_args);
+    let model = crate::loader::load_model(&format!("{model_dir}network.onnx"), run_args);
     if config.print_model {
         println!("model: {}", model.pretty_print());
     }
@@ -174,7 +174,7 @@ fn test_gpt2_dory() {
     .set_scale(MODEL_SCALE as i32);
     let inputs = [input_ids, attention_mask, position_ids];
 
-    let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
+    let model = crate::loader::load_model(&format!("{working_dir}network.onnx"), &run_args);
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, DoryScheme>::new(pp);
 
@@ -237,7 +237,7 @@ fn test_gpt2_zk() {
     ])
     .set_scale(MODEL_SCALE as i32);
 
-    let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
+    let model = crate::loader::load_model(&format!("{working_dir}network.onnx"), &run_args);
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
@@ -399,7 +399,7 @@ fn test_op_gauntlet() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_square_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
 
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF02);
@@ -427,7 +427,7 @@ fn test_square_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_add_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
 
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF03);
@@ -481,7 +481,7 @@ fn test_add_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_zk_constant_binding_rejects_cross_model_attack() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
 
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xC0FFEE);
@@ -598,7 +598,7 @@ fn test_zk_constant_binding_rejects_cross_model_attack() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_zk_rejects_rebound_input_for_square_model() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
 
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0x5EED);
@@ -648,7 +648,8 @@ fn test_zk_rejects_rebound_input_for_square_model() {
 /// prover-known opening points).
 #[test]
 fn test_input_binding_changes_transcript() {
-    use crate::{compat::model::trace::ModelExecutionIO, onnx_proof::append_inputs_to_transcript};
+    use crate::onnx_proof::append_inputs_to_transcript;
+    use atlas_trace::trace::ModelExecutionIO;
     use joltworks::transcripts::{Blake2bTranscript, Transcript};
 
     let io = |vals: &[i32]| ModelExecutionIO {
@@ -681,7 +682,7 @@ fn test_input_binding_changes_transcript() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_reshape_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
 
     let mut rng = StdRng::seed_from_u64(0xBF04);
     let input = Tensor::<i32>::random_small(&mut rng, &[4, 4]);
@@ -707,7 +708,7 @@ fn test_reshape_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_slice_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
 
     let mut rng = StdRng::seed_from_u64(0xBF05);
     let input = Tensor::<i32>::random_small(&mut rng, &[2, 8]);
@@ -733,7 +734,7 @@ fn test_slice_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_neg_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF06);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -756,7 +757,7 @@ fn test_neg_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_sub_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF07);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -780,7 +781,7 @@ fn test_sub_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_mul_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF08);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -804,7 +805,7 @@ fn test_mul_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_cube_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF09);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -827,7 +828,7 @@ fn test_cube_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_iff_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF10);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -852,7 +853,7 @@ fn test_iff_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_concat_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let mut rng = StdRng::seed_from_u64(0xBF11);
     let a = Tensor::<i32>::random_small(&mut rng, &[4, 2]);
     let b = Tensor::<i32>::random_small(&mut rng, &[4, 2]);
@@ -876,7 +877,7 @@ fn test_concat_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_scalar_const_div_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF12);
     // ScalarConstDiv divides by a constant integer. The model builder takes the divisor.
@@ -900,7 +901,7 @@ fn test_scalar_const_div_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_and_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     use rand::Rng;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF13);
@@ -929,7 +930,7 @@ fn test_and_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_div_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF14);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -954,7 +955,7 @@ fn test_div_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_sigmoid_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF15);
@@ -980,7 +981,7 @@ fn test_sigmoid_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_tanh_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF16);
@@ -1006,7 +1007,7 @@ fn test_tanh_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_erf_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF17);
@@ -1032,7 +1033,7 @@ fn test_erf_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_cos_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF18);
     let input = Tensor::random_range(&mut rng, &[size], -5000..5000);
@@ -1055,7 +1056,7 @@ fn test_cos_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_sin_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF19);
     let input = Tensor::random_range(&mut rng, &[size], -5000..5000);
@@ -1078,7 +1079,7 @@ fn test_sin_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_rsqrt_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF20);
     // Rsqrt needs positive inputs; avoid 0 since we divide by x
@@ -1102,7 +1103,7 @@ fn test_rsqrt_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_relu_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF21);
     let input = Tensor::random_range(&mut rng, &[size], -256..256);
@@ -1125,7 +1126,7 @@ fn test_relu_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_einsum_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let m = 1 << 2;
     let k = 1 << 2;
     let n = 1 << 2;
@@ -1152,7 +1153,7 @@ fn test_einsum_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_sum_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let m = 1 << 3;
     let n = 1 << 3;
     let mut rng = StdRng::seed_from_u64(0xBF23);
@@ -1176,7 +1177,7 @@ fn test_sum_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_gather_large_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let dict_len = 70000; // > 65536 to trigger GatherLarge
     let word_dim = 2;
     let num_indices = 1 << 3;
@@ -1203,7 +1204,7 @@ fn test_gather_large_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_gather_small_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let dict_len = 32; // <= 65536 to trigger GatherSmall
     let word_dim = 4;
     let num_indices = 1 << 3;
@@ -1230,7 +1231,7 @@ fn test_gather_small_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_softmax_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let f = 1 << 2; // leading dim (batch)
     let n = 1 << 2; // last axis (softmax dim)
     let mut rng = StdRng::seed_from_u64(0xBF26);
@@ -1254,7 +1255,7 @@ fn test_softmax_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_srs_derived_pedersen_generators() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF30);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1277,7 +1278,7 @@ fn test_srs_derived_pedersen_generators() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_multi_op_arithmetic_chain_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF40);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1306,7 +1307,7 @@ fn test_multi_op_arithmetic_chain_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_multi_op_mul_div_sub_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF41);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1337,7 +1338,7 @@ fn test_multi_op_mul_div_sub_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_multi_op_cube_relu_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF42);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1366,7 +1367,7 @@ fn test_multi_op_cube_relu_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_multi_op_div_add_zk() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF43);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1396,7 +1397,7 @@ fn test_multi_op_div_add_zk() {
 #[ignore = "benchmark, run manually with --release --nocapture"]
 #[test]
 fn bench_square_zk_overhead() {
-    use crate::compat::model::test::ModelBuilder;
+    use crate::test_builder::ModelBuilder;
     use std::time::Instant;
 
     let size = 1 << 16;

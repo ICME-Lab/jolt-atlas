@@ -1,4 +1,4 @@
-use crate::compat::{node::ComputationNode, ops::Sigmoid};
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     ops::{
         activation_clamped::{
@@ -9,6 +9,7 @@ use crate::onnx_proof::{
     },
     ProofId, Prover, Verifier,
 };
+use atlas_trace::op::Sigmoid;
 use common::{
     consts::{ACTIVATION_TABLE_VARS, MODEL_SCALE},
     CommittedPoly,
@@ -58,11 +59,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use common::consts::ACTIVATION_BOUND;
     use rand::{rngs::StdRng, SeedableRng};
 

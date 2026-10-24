@@ -1,12 +1,14 @@
+use crate::onnx_proof::trace_view::TraceView;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
 };
 
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-};
+use atlas_trace::Trace;
+
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
 use crate::utils::{
     dims::{SumAxis, SumConfig},
     opening_access::{AccOpeningAccessor, Target},
@@ -159,7 +161,7 @@ impl<F: JoltField> SumAxisProver<F> {
         let LayerData {
             operands,
             output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for SumAxis operation")
         };
@@ -325,11 +327,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn sum_model<const AXIS: usize>(m: usize, n: usize) -> Model {

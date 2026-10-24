@@ -20,17 +20,18 @@
 //! `64 / log_k_chunk` committed chunks ([`CommittedPoly::ClampRaD`]).
 
 use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupProvider};
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{sat_binop_intermediate, sum::sum_axes_i64, Operator},
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
     clamp_split::NodeSplit,
     deferred_lookups::{ProverLookupJob, VerifierLookupJob},
     ProofId, Prover, Verifier,
 };
+use atlas_trace::op::sum_axes_i64;
+use atlas_trace::trace::LayerData;
+use atlas_trace::Op;
+use atlas_trace::Tensor;
+use atlas_trace::Trace;
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
@@ -49,7 +50,7 @@ use rayon::prelude::*;
 
 /// Widest address of the saturating-clamp lookup table (an i64 accumulation).
 /// Individual nodes use `node.sat_clamp_bits ∈ {40, 48, 56, 64}` (see
-/// `crate::compat::model::clamp_width`); this is the default / upper bound.
+/// `crate::node_view`); this is the default / upper bound.
 pub const CLAMP_LOG_K: usize = 64;
 
 /// Whether `node`'s (padded) output is a single element (`log_T = 0`).
@@ -97,14 +98,26 @@ pub(crate) fn acc_opening_id(node_idx: usize) -> OpeningId {
 ///
 /// The padding (to the next power of two) matches the node-output MLE domain, so
 /// the accumulation and output polynomials share the same `log_T`.
+/// Pre-clamp `i64` accumulation of a binary saturating Add/Sub — the clamp
+/// lookup index the prover re-derives.
+fn sat_binop_intermediate(operator: &Op, lhs: &Tensor<i32>, rhs: &Tensor<i32>) -> Tensor<i64> {
+    let combine: fn(i64, i64) -> i64 = match operator {
+        Op::Add(_) => |a, b| a + b,
+        Op::Sub(_) => |a, b| a - b,
+        other => panic!("sat_binop_intermediate: expected Add or Sub, got {other}"),
+    };
+    lhs.zip_map(rhs, |a, b| combine(a as i64, b as i64))
+        .expect("sat_binop_intermediate: operand dims must match")
+}
+
 pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
     // Fused rescale ops: the trace already holds the pre-clamp quotient.
     if let Some(cached) = trace.fused_intermediates(node.idx) {
         return cached.quotient.padded_pow2();
     }
-    let LayerData { operands, .. } = Trace::layer_data(trace, node);
+    let LayerData { operands, .. } = TraceView::layer_data(trace, node);
     let raw = match &node.operator {
-        Operator::Add(_) | Operator::Sub(_) => {
+        Op::Add(_) | Op::Sub(_) => {
             let [left, right] = operands[..] else {
                 panic!(
                     "clamp lookup (Add/Sub) expects two operands, got {}",
@@ -113,7 +126,7 @@ pub(crate) fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tenso
             };
             sat_binop_intermediate(&node.operator, left, right)
         }
-        Operator::Sum(s) => {
+        Op::Sum(s) => {
             let [operand] = operands[..] else {
                 panic!(
                     "clamp lookup (Sum) expects one operand, got {}",
@@ -242,7 +255,7 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
 
 /// Clamp lookup indices: each i64 accumulation value's low `bits` bits (its
 /// two's-complement encoding at the node's clamp width — see
-/// `crate::compat::model::clamp_width`), the address into
+/// `crate::node_view`), the address into
 /// [`SaturationTable`]. Shared with `witness.rs`'s `ClampRaD` witness generation.
 pub(crate) fn clamp_lookup_bits(intermediate: &Tensor<i64>, bits: usize) -> Vec<LookupBits> {
     intermediate
@@ -284,7 +297,9 @@ pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
         // Public unsaturated output: the verifier checks `ClampAcc == out`.
         return Vec::new();
     }
-    let output = Trace::layer_data(&prover.trace, node).output.padded_pow2();
+    let output = TraceView::layer_data(&prover.trace, node)
+        .output
+        .padded_pow2();
     let split = NodeSplit::new(witness.data(), output.data());
     prover.deferred.push(ProverLookupJob::Clamp {
         node: node.clone(),

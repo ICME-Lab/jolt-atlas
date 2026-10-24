@@ -1,15 +1,15 @@
-use crate::compat::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::ComputationNode,
-    ops::{Concat, Operator},
-};
+use crate::node_view::ComputationNode;
+use crate::node_view::ModelView;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::Concat;
+use atlas_trace::trace::LayerData;
+use atlas_trace::Model;
+use atlas_trace::Op;
+use atlas_trace::Trace;
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -51,7 +51,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
         let params = ConcatSumcheckParams::new(
             node.clone(),
             &prover.accumulator,
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
         );
         let mut prover_sumcheck = ConcatSumcheckProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
@@ -75,7 +75,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
         let verifier_sumcheck = ConcatSumcheckVerifier::new(
             node.clone(),
             &verifier.accumulator,
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
         );
         Sumcheck::verify(
             proof,
@@ -105,19 +105,19 @@ pub struct ConcatSumcheckParams<F: JoltField> {
 }
 
 impl<F: JoltField> ConcatSumcheckParams<F> {
-    /// Build concat sumcheck parameters from the graph metadata and reduced output opening.
+    /// Build concat sumcheck parameters from the model metadata and reduced output opening.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let Operator::Concat(concat_op) = &computation_node.operator else {
+        let Op::Concat(concat_op) = &computation_node.operator else {
             panic!("Expected Concat operator")
         };
         let r_output = accessor.get_reduced_opening().0;
-        let input_raw_dims = graph
-            .get_input_nodes(&computation_node)
+        let input_raw_dims = model
+            .operand_views(&computation_node)
             .iter()
             .map(|input_node| input_node.output_dims.clone())
             .collect::<Vec<_>>();
@@ -233,7 +233,7 @@ pub struct ConcatSumcheckProver<F: JoltField> {
 impl<F: JoltField> ConcatSumcheckProver<F> {
     /// Initialize prover state from trace tensors and prepared concat parameters.
     pub fn initialize(trace: &Trace, params: ConcatSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         assert!(!operands.is_empty(), "Concat expects at least one operand");
         assert_eq!(
             operands.len(),
@@ -353,13 +353,13 @@ pub struct ConcatSumcheckVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> ConcatSumcheckVerifier<F> {
-    /// Build the concat verifier from the reduced output opening and graph metadata.
+    /// Build the concat verifier from the reduced output opening and model metadata.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
-        let params = ConcatSumcheckParams::new(computation_node, accumulator, graph);
+        let params = ConcatSumcheckParams::new(computation_node, accumulator, model);
         Self { params }
     }
 }
@@ -525,11 +525,10 @@ fn axis_offset(raw_input_dims: &[Vec<usize>], input_idx: usize, axis: usize) -> 
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn concat_model(input_shapes: Vec<Vec<usize>>, axis: isize) -> Model {

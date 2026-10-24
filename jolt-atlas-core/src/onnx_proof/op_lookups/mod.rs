@@ -1,16 +1,20 @@
-//! Operator lookup tables and Prefix suffix Read-raf checking protocols.
+//! Op lookup tables and Prefix suffix Read-raf checking protocols.
 //!
 //! This module provides infrastructure for proving operations using lookup tables,
 //! particularly ReLU and comparison operations. The Prefix suffix Read-raf checking sum-check protocol
 //! verifies correct reads from lookup tables and combines multiple claims using
 //! gamma batching for efficiency.
 
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
+use atlas_trace::Op;
+
+use atlas_trace::Tensor;
+
+use atlas_trace::Trace;
+
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::compute_lookup_indices_from_operands;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -197,7 +201,7 @@ impl LookupOperandsTrait for DefaultLookupOperands {
         let LayerData {
             output: _,
             operands,
-        } = Trace::layer_data(trace, node);
+        } = TraceView::layer_data(trace, node);
         operands[0].padded_pow2().map(|v| v as i64)
     }
 
@@ -488,8 +492,8 @@ pub trait InterleavedBitsMarker {
 impl InterleavedBitsMarker for ComputationNode {
     fn is_interleaved_operands(&self) -> bool {
         match self.operator {
-            Operator::ReLU(_) => false,
-            Operator::Clamp(_) => false,
+            Op::ReLU(_) => false,
+            Op::Clamp(_) => false,
             _ => unimplemented!(),
         }
     }

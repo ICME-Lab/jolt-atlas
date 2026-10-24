@@ -1,7 +1,7 @@
 use common::parallel::par_enabled;
 use std::array;
 
-use crate::compat::node::ComputationNode;
+use crate::node_view::ComputationNode;
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use common::VirtualPoly;
 #[cfg(feature = "zk")]

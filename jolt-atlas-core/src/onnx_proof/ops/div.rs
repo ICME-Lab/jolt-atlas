@@ -1,9 +1,5 @@
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Div,
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
@@ -15,6 +11,10 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::Div;
+use atlas_trace::trace::LayerData;
+use atlas_trace::Tensor;
+use atlas_trace::Trace;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -275,7 +275,7 @@ impl<F: JoltField> DivProver<F> {
     pub fn initialize(trace: &Trace, params: DivParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Div operation")
         };
@@ -530,11 +530,10 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     const SCALE: i32 = 8;

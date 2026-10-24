@@ -15,14 +15,14 @@
 //! digit-split identity itself. `z` still needs tying back to the real input, done by
 //! `operand_link` in `mod.rs`.
 
-use crate::compat::{
-    model::trace::Trace, node::ComputationNode, ops::softmax::generate_exp_lut_decomposed,
-    tensor::Tensor, utils::quantize::scale_to_multiplier,
-};
+use super::witness::generate_exp_lut_decomposed;
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::op_lookups::{DefaultLookupOperands, LookupOperandsTrait},
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_trace::Tensor;
+use atlas_trace::Trace;
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,
@@ -61,7 +61,7 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
         let accessor = AccOpeningAccessor::new(accumulator, node);
         let z_hi_claim = accessor.get_advice(VirtualPoly::SoftmaxZHi).1;
         let z_lo_claim = accessor.get_advice(VirtualPoly::SoftmaxZLo).1;
-        let base = generate_exp_lut_decomposed(scale_to_multiplier(MODEL_SCALE as i32) as i32).base;
+        let base = generate_exp_lut_decomposed(1i32 << MODEL_SCALE).base;
         z_hi_claim * F::from_u64(base as u64) + z_lo_claim
     }
 

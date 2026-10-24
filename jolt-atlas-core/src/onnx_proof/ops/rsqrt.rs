@@ -1,8 +1,5 @@
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{Operator, Rsqrt},
-};
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
@@ -17,6 +14,10 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_trace::op::Rsqrt;
+use atlas_trace::trace::LayerData;
+use atlas_trace::Op;
+use atlas_trace::Trace;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -53,7 +54,7 @@ use joltworks::{
 /// both the division and square-root relations are built around.
 pub fn rsqrt_dividend(node: &ComputationNode) -> i64 {
     assert!(
-        matches!(node.operator, Operator::Rsqrt(_)),
+        matches!(node.operator, Op::Rsqrt(_)),
         "rsqrt_dividend called on a non-Rsqrt node"
     );
     1i64 << (3 * node.scale)
@@ -317,7 +318,7 @@ impl<F: JoltField> RsqrtProver<F> {
     pub fn initialize(trace: &Trace, params: RsqrtParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
             panic!("Expected one operand for Rsqrt operation")
         };
@@ -599,11 +600,10 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     /// Upper bound on the random quantized inputs; positive so the division is well-defined.

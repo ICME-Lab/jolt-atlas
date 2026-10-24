@@ -1,4 +1,4 @@
-use crate::compat::node::ComputationNode;
+use crate::node_view::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
 use common::parallel::par_enabled;
 use common::VirtualPoly;

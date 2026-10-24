@@ -31,13 +31,18 @@
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
 
+use crate::onnx_proof::trace_view::TraceView;
 use std::array;
 
-use crate::compat::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{mean_of_squares::mos_divisor, MeanOfSquares, Operator},
-};
+use atlas_trace::Op;
+
+use atlas_trace::Trace;
+
+use atlas_trace::op::MeanOfSquares;
+
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
@@ -77,6 +82,36 @@ use joltworks::{
 use rayon::prelude::*;
 
 const DEGREE: usize = 3;
+
+/// Fused divisor `D = count·2^scale` (the semantic count, not the padded one).
+pub fn mos_divisor(op: &MeanOfSquares, scale: i32) -> i64 {
+    (1i64 << scale) * op.count as i64
+}
+
+/// Re-execute the fused mean-of-squares to recover the rescaling remainder
+/// `R = Σx² mod D` (used where the trace is out of reach).
+pub fn mos_remainder(
+    op: &MeanOfSquares,
+    operands: &[&atlas_trace::Tensor<i32>],
+    scale: i32,
+) -> atlas_trace::Tensor<i32> {
+    use atlas_trace::op::{EvalCtx, Op, TableCache};
+    use atlas_trace::{NodeAux, Scale, SemVersion};
+    let cache = TableCache::default();
+    let ctx = EvalCtx {
+        scale: Scale::new(scale as u8).expect("scale in range"),
+        version: SemVersion::V1,
+        tables: &cache,
+    };
+    let eval = Op::MeanOfSquares(op.clone())
+        .spec()
+        .eval(operands, &ctx)
+        .expect("mean-of-squares re-execution");
+    match eval.aux {
+        Some(NodeAux::Fused(f)) => f.remainder,
+        _ => unreachable!("mean-of-squares always produces fused intermediates"),
+    }
+}
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
     #[tracing::instrument(skip_all, name = "MeanOfSquares::prove")]
@@ -227,7 +262,7 @@ pub struct MeanOfSquaresReductionParams<F: JoltField> {
 impl<F: JoltField> MeanOfSquaresReductionParams<F> {
     /// Build params from the node and accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let Operator::MeanOfSquares(op) = &computation_node.operator else {
+        let Op::MeanOfSquares(op) = &computation_node.operator else {
             panic!("MeanOfSquaresReductionParams: expected MeanOfSquares operator");
         };
         // The sumcheck cube splits the flat-padded operand into
@@ -291,7 +326,7 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     /// Initialize by loading the operand and the retained-dim eq-poly.
     #[tracing::instrument(skip_all, name = "MeanOfSquaresReductionProver::initialize")]
     pub fn initialize(trace: &Trace, params: MeanOfSquaresReductionParams<F>) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for MeanOfSquares operation")
         };
@@ -423,11 +458,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     /// `[m, n]` input, reduce the last axis (size `n`, a power of two) → `[m, 1]`.

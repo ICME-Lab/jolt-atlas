@@ -1,5 +1,3 @@
-use bincode::config::standard;
-use common::utils::logging::setup_tracing;
 /// Run with tracing:
 /// ```bash
 /// # Chrome Tracing JSON output (view in chrome://tracing)
@@ -23,10 +21,12 @@ use common::utils::logging::setup_tracing;
 /// `common::consts::MODEL_SCALE == 14` (Qwen's export scale) — several proving-side lookup
 /// tables are const-generic on `MODEL_SCALE` rather than runtime scale, so this can't be passed
 /// as a flag; edit `common/src/consts/general.rs` and recompile if needed.
-use jolt_atlas_core::compat::{
-    model::{Model, RunArgs},
-    tensor::Tensor,
-};
+use atlas_trace::Model;
+use atlas_trace::Tensor;
+use bincode::config::standard;
+use common::utils::logging::setup_tracing;
+use jolt_atlas_core::loader::RunArgs;
+use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, DoryScheme, Fr, ONNXProof,
@@ -67,14 +67,12 @@ fn parse_input_arg(args: &[String]) -> String {
 }
 
 /// Per-operator histogram of the statically derived saturating-clamp widths
-/// (see `jolt_atlas_core::compat::model::clamp_width`).
+/// (see `jolt_atlas_core::node_view`).
 fn print_clamp_width_histogram(model: &Model) {
     use std::collections::BTreeMap;
     let mut hist: BTreeMap<(String, usize), usize> = BTreeMap::new();
-    for node in model.graph.nodes.values() {
-        if jolt_atlas_core::compat::model::clamp_width::clamp_value_bound(node, &model.graph.nodes)
-            .is_some()
-        {
+    for node in &model.views() {
+        if jolt_atlas_core::node_view::clamp_value_bound(model, node).is_some() {
             let op = format!("{:?}", node.operator);
             let op = op
                 .split(|c: char| !c.is_alphanumeric())
@@ -90,7 +88,7 @@ fn print_clamp_width_histogram(model: &Model) {
     }
     use jolt_atlas_core::onnx_proof::global_clamp::{clamp_buckets, remainder_buckets};
     let op_name = |idx: usize| {
-        let op = format!("{:?}", model.graph.nodes[&idx].operator);
+        let op = format!("{:?}", model.view(idx).operator);
         op.split(|c: char| !c.is_alphanumeric())
             .next()
             .unwrap()
@@ -115,9 +113,8 @@ fn print_clamp_width_histogram(model: &Model) {
         );
     }
     let mut sizes: Vec<(usize, usize)> = model
-        .graph
-        .nodes
-        .values()
+        .views()
+        .iter()
         .map(|n| (n.pow2_padded_num_output_elements(), n.idx))
         .collect();
     sizes.sort_unstable_by(|a, b| b.cmp(a));
@@ -148,7 +145,7 @@ fn load_or_build_shared_preprocessing(
         return shared;
     }
 
-    let model = Model::load(MODEL_PATH, run_args);
+    let model = jolt_atlas_core::loader::load_model(MODEL_PATH, run_args);
     println!("{}", model.pretty_print());
     println!("max num vars: {}", model.max_num_vars());
     print_clamp_width_histogram(&model);

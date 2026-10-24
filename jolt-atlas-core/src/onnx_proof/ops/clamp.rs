@@ -1,4 +1,4 @@
-use crate::compat::{model::trace::Trace, node::ComputationNode, ops::Clamp, tensor::Tensor};
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
         op_lookups::{
@@ -9,6 +9,9 @@ use crate::{
     },
     utils::compute_lookup_indices_from_operands,
 };
+use atlas_trace::op::Clamp;
+use atlas_trace::Tensor;
+use atlas_trace::Trace;
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
@@ -179,11 +182,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
 
 #[cfg(test)]
 mod tests {
-    use crate::compat::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
     use crate::onnx_proof::ops::test::unit_test_op;
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use joltworks::lookup_tables::clamp::CLAMP_BOUND;
     use rand::{rngs::StdRng, SeedableRng};
 

@@ -10,10 +10,9 @@
 //! Internal implementation details (helper methods, state structs) live in
 //! [`prover`], [`verifier`], and [`types`] submodules.
 
-use crate::compat::{
-    model::trace::{ModelExecutionIO, Trace},
-    tensor::Tensor,
-};
+use atlas_trace::Tensor;
+
+use atlas_trace::trace::ModelExecutionIO;
 use joltworks::{
     field::JoltField,
     poly::commitment::commitment_scheme::CommitmentScheme,
@@ -35,6 +34,7 @@ pub mod op_lookups;
 pub mod ops;
 pub mod proof_serialization;
 pub mod range_checking;
+pub mod trace_view;
 pub mod witness;
 
 #[cfg(test)]
@@ -158,8 +158,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         inputs: &[Tensor<i32>],
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
         // Generate trace and io
-        let trace = pp.model().trace(inputs);
-        let io = Trace::io(&trace, pp.model());
+        let trace = pp.model().trace(inputs).expect("model execution failed");
+        let io = trace.io(pp.model());
 
         // Initialize prover state
         // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state
@@ -183,7 +183,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // IOP portion
         let mut eval_reduction_proofs = BTreeMap::new();
         Self::iop(
-            pp.model().nodes(),
+            pp.model(),
             &mut prover,
             &mut proofs,
             &mut eval_reduction_proofs,

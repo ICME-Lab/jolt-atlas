@@ -27,11 +27,7 @@ use crate::onnx_proof::{
     deferred_lookups::{ProverLookupJob, VerifierLookupJob},
     ProofId, Prover, Verifier,
 };
-use atlas_trace::op::sum_axes_i64;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Op;
-use atlas_trace::Tensor;
-use atlas_trace::Trace;
+use atlas_trace::{op::sum_axes_i64, trace::LayerData, Op, Tensor, Trace};
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,

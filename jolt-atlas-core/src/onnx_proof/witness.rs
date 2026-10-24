@@ -15,13 +15,7 @@
 //! different types of committed polynomials (e.g., node outputs, division quotients, range check
 //! addresses, etc.).
 
-use atlas_trace::Model;
-
-use atlas_trace::Op;
-
-use atlas_trace::Tensor;
-
-use atlas_trace::Trace;
+use atlas_trace::{Model, Op, Tensor, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
@@ -70,7 +64,7 @@ fn build_range_check_rad_witness<F: JoltField, H: RangeCheckingOperandsTrait>(
     let rc_operands = RangeCheckOperands::<H>::new(computation_node);
 
     let [left_operand, right_operand] = rc_operands
-        .build_lookup_operands(&inputs)
+        .build_lookup_operands(trace, &inputs)
         .try_into()
         .expect("Expected two operands for range-checking");
 
@@ -206,7 +200,7 @@ pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::T
                         let rc_operands =
                             RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
                         let [left, right] = rc_operands
-                            .build_lookup_operands(&padded_operands)
+                            .build_lookup_operands(trace, &padded_operands)
                             .try_into()
                             .unwrap();
 
@@ -571,7 +565,7 @@ fn softmax_op_scale(node: &ComputationNode) -> i32 {
         "Expected SoftmaxLastAxis at node {}",
         node.idx
     );
-    node.scale
+    node.scale as i32
 }
 
 /// The softmax node's full witness, captured in the trace at execution time

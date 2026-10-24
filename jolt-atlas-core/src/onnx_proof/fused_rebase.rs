@@ -21,21 +21,17 @@
 //! Scalar nodes (`log_T = 0`) skip the one-hot reductions and open `rescaled` and
 //! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
 
-use atlas_trace::Op;
+use atlas_trace::{Op, Tensor, Trace};
 
-use atlas_trace::Tensor;
-
-use atlas_trace::Trace;
-
-use crate::node_view::ComputationNode;
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
+    node_view::ComputationNode,
     onnx_proof::{
         clamp_lookups::{
             is_scalar, prove_append_acc, prove_clamp_lookup, recover_small_int, verify_append_acc,
             verify_clamp_lookup, verify_scalar_clamp,
         },
         deferred_lookups::{ProverLookupJob, VerifierLookupJob},
+        trace_view::TraceView,
         ProofId, Prover, Verifier,
     },
     utils::opening_access::AccOpeningAccessor,
@@ -66,7 +62,8 @@ use joltworks::{
 ///
 /// `Mul`/`Square` are at scale `2S` and rebase by `2^S`; `Cube` is at scale
 /// `3S` and rebases by `2^(2S)`; einsum is a (sum of) products at scale `2S`.
-pub fn op_rebase_bits(op: &Op, scale: i32) -> Option<i32> {
+pub fn op_rebase_bits(op: &Op, scale: u8) -> Option<i32> {
+    let scale = i32::from(scale);
     match op {
         Op::Einsum(_) => Some(scale),
         Op::Mul(m) => Some(if m.rebase { scale } else { 0 }),

@@ -1,11 +1,7 @@
 //! Module for constructing malicious provers for ONNX proof experiments. Contains a variant of the main prover that generates proofs for tampered traces, as well as a variant of the sumcheck prover that allows the caller to control how openings are cached (for attack experiments).
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
-use atlas_trace::trace::ModelExecutionIO;
-use atlas_trace::Model;
-use atlas_trace::Op;
-use atlas_trace::Tensor;
-use atlas_trace::Trace;
+use atlas_trace::{trace::ModelExecutionIO, Model, Op, Tensor, Trace};
 use joltworks::{
     field::JoltField,
     poly::{commitment::commitment_scheme::CommitmentScheme, unipoly::UniPoly},

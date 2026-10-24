@@ -139,10 +139,14 @@ fn load_or_build_shared_preprocessing(
 ) -> AtlasSharedPreprocessing {
     if use_cache && Path::new(SHARED_PP_CACHE_PATH).exists() {
         let bytes = fs::read(SHARED_PP_CACHE_PATH).expect("failed to read shared preprocessing");
-        let (shared, _): (AtlasSharedPreprocessing, usize) =
-            bincode::serde::decode_from_slice(&bytes, standard())
-                .expect("failed to decode shared preprocessing");
-        return shared;
+        // A stale or format-incompatible cache is a cache miss, not a crash:
+        // the preprocessing serialization changes with the model format.
+        match bincode::serde::decode_from_slice::<AtlasSharedPreprocessing, _>(&bytes, standard()) {
+            Ok((shared, _)) => return shared,
+            Err(e) => {
+                eprintln!("stale shared-preprocessing cache ({e}); rebuilding");
+            }
+        }
     }
 
     let model = jolt_atlas_core::loader::load_model(MODEL_PATH, run_args);

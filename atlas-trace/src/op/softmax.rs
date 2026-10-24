@@ -49,7 +49,11 @@ impl OpSpec for SoftmaxLastAxis {
         }
 
         let s = ctx.scale.denom_i32();
-        let s_sq = s * s;
+        // All row-level arithmetic runs in i64: a row sum of exp_q terms (each
+        // up to S) overflows i32 once active_len · S exceeds 2^31 (e.g. a
+        // vocab-size softmax axis), and s² itself overflows i32 at scale ≥ 16.
+        let s_i64 = s as i64;
+        let s_sq = s_i64 * s_i64;
         let rows = input.len() / last_dim;
         let data = input.data();
 
@@ -89,13 +93,23 @@ impl OpSpec for SoftmaxLastAxis {
             w.argmax_k
                 .push(live.iter().position(|&x| x == mv).expect("max exists"));
 
-            let mut sum_exp: i32 = 0;
+            let mut sum_exp: i64 = 0;
             for j in 0..active_len {
                 let idx = offset + j;
                 // z ≥ 0; saturate to the sub-table range (exp decays to 0
-                // beyond it anyway).
-                let z_c = (mv - data[idx]).min(z_bound - 1);
-                let zu = z_c as usize;
+                // beyond it anyway). The raw difference is computed in i64 —
+                // two extreme logits span up to 2^32 — but the proof layer
+                // recomputes z = max - x in i32 (softmax_z), so a span past
+                // i32::MAX is a typed error, not a wrapped value.
+                let z = mv as i64 - data[idx] as i64;
+                if z > i32::MAX as i64 {
+                    return Err(KernelError::WitnessOverflow {
+                        op: "softmax",
+                        what: "z = max - x",
+                        value: z,
+                    });
+                }
+                let zu = z.min((z_bound - 1) as i64) as usize;
                 let z_hi = (zu >> lut.log2_base) as i32;
                 let z_lo = (zu & (lut.base - 1)) as i32;
                 let hi_val = lut_hi[z_hi as usize];
@@ -109,19 +123,29 @@ impl OpSpec for SoftmaxLastAxis {
                 w.exp_lo[idx] = lo_val;
                 w.exp_q[idx] = exp_q;
                 w.r_exp[idx] = (product - exp_q as i64 * s as i64) as i32;
-                sum_exp += exp_q;
+                sum_exp += exp_q as i64;
             }
-            w.exp_sum_q.push(sum_exp);
+            // The witness (and the proof protocol behind it) carries the row
+            // sum as an i32; a row whose live exponentials exceed that is a
+            // typed error, never a wrapped sum.
+            let sum_exp_i32 = i32::try_from(sum_exp).map_err(|_| KernelError::WitnessOverflow {
+                op: "softmax",
+                what: "exp_sum_q",
+                value: sum_exp,
+            })?;
+            w.exp_sum_q.push(sum_exp_i32);
 
-            let inv = s_sq / sum_exp;
+            // inv ≤ s²/s = s, so it always fits back into i32.
+            let inv = (s_sq / sum_exp) as i32;
             w.inv_sum.push(inv);
 
             for j in 0..active_len {
                 let idx = offset + j;
-                let product = w.exp_q[idx] * inv;
-                let sq = product / s;
-                softmax_q[idx] = sq;
-                w.r[idx] = product - sq * s;
+                // exp_q, inv ≤ S: the product needs i64 headroom at scale ≥ 16.
+                let product = w.exp_q[idx] as i64 * inv as i64;
+                let sq = product / s_i64;
+                softmax_q[idx] = sq as i32;
+                w.r[idx] = (product - sq * s_i64) as i32;
             }
             // Lanes active_len..last_dim stay 0 everywhere.
         }
@@ -241,6 +265,35 @@ mod tests {
         assert_eq!(w.exp_q[3], 0);
         assert_eq!(w.exp_hi[3], 0);
         assert_eq!(w.r_exp[3], 0);
+    }
+
+    #[test]
+    fn wide_rows_sum_in_i64() {
+        // A vocab-width row: 2^17 lanes whose exponentials sum past i32::MAX
+        // would overflow an i32 accumulator (an abort under the workspace's
+        // release overflow-checks). The sum runs in i64; a row whose total
+        // exceeds the i32 witness range is a typed error, never a panic.
+        let n = 1 << 18;
+        let input = Tensor::new(vec![0i32; n], &[1, n]).unwrap();
+        let cache = TableCache::default();
+        let ctx = EvalCtx {
+            scale: Scale::new(14).unwrap(),
+            version: SemVersion::V1,
+            tables: &cache,
+        };
+        let op = SoftmaxLastAxis { active_len: None };
+        let err = match op.eval(&[&input], &ctx) {
+            Err(e) => e,
+            Ok(_) => panic!("overflowing row sum must not evaluate"),
+        };
+        assert!(matches!(err, KernelError::WitnessOverflow { .. }), "{err}");
+
+        // A wide row whose sum still fits the witness evaluates fine.
+        let mut data = vec![-100_000i32; n];
+        data[0] = 0;
+        let input = Tensor::new(data, &[1, n]).unwrap();
+        let (out, _) = eval(input, None, 14);
+        assert!(out.data()[0] > 0);
     }
 
     #[test]

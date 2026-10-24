@@ -14,10 +14,7 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::op::Rsqrt;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Op;
-use atlas_trace::Trace;
+use atlas_trace::{op::Rsqrt, trace::LayerData, Op, Trace};
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -609,7 +606,7 @@ mod tests {
     /// Upper bound on the random quantized inputs; positive so the division is well-defined.
     const INPUT_MAX: i32 = 1 << 16;
 
-    fn rsqrt_model(T: usize, scale: u32) -> Model {
+    fn rsqrt_model(T: usize, scale: u8) -> Model {
         let mut b = ModelBuilder::with_scale(scale);
         let input = b.input(vec![T]);
         let res = b.rsqrt(input);

@@ -13,10 +13,9 @@
 //! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
 
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
-    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
+        deferred_lookups::{DeferredBatch, DeferredOneHot},
         op_lookups::OpLookupProvider,
         ops::{
             softmax_last_axis::{
@@ -32,6 +31,7 @@ use crate::{
             },
             OperatorProofTrait,
         },
+        trace_view::TraceView,
         ProofId, ProofType, Prover, Verifier,
     },
     utils::{
@@ -46,9 +46,7 @@ use joltworks::{
 };
 use std::collections::BTreeMap;
 
-use atlas_trace::Tensor;
-
-use atlas_trace::op::SoftmaxLastAxis;
+use atlas_trace::{op::SoftmaxLastAxis, Tensor};
 
 use crate::node_view::ComputationNode;
 use common::{
@@ -96,7 +94,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         debug_assert_eq!(
-            node.scale, MODEL_SCALE as i32,
+            node.scale, MODEL_SCALE as u8,
             "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
         );
         // The masked (non-full-row) softmax needs a selector polynomial in
@@ -124,9 +122,20 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         debug_assert_eq!(
-            node.scale, MODEL_SCALE as i32,
+            node.scale, MODEL_SCALE as u8,
             "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
         );
+        // Mirror of the prove-side gate: the sumchecks below check the
+        // *unmasked* relations, so a model declaring a masked softmax must
+        // be rejected here too (deserialized preprocessing bypasses the
+        // preprocess()-time assert).
+        let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+        if self.active_len.is_some_and(|n| n != last_dim) {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "masked softmax (active_len {:?} of {last_dim}) is not yet verifiable",
+                self.active_len
+            )));
+        }
         let scale_bits = verifier.preprocessing.scale();
         let scale = 1i32 << node.scale;
         let mut sm = SoftmaxLastAxisVerifier::new(
@@ -139,7 +148,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             &mut verifier.accumulator,
             &mut verifier.transcript,
             verifier.proofs,
-            scale_bits,
+            scale_bits as i32,
         )?;
         for instance in stage3 {
             verifier.defer(DeferredBatch::SoftmaxStage3, instance);
@@ -203,7 +212,7 @@ impl SoftmaxLastAxisProver {
         // identical; assert it so a future move to per-node scales fails loudly
         // here instead of silently mismatching commitment and range-check widths.
         debug_assert_eq!(
-            self.scale.ilog2() as i32,
+            self.scale.ilog2() as u8,
             scale_bits,
             "softmax operator scale (log2 {}) disagrees with preprocessing scale {scale_bits}",
             self.scale.ilog2(),
@@ -960,7 +969,8 @@ impl SoftmaxLastAxisVerifier {
             &*accumulator,
             transcript,
         );
-        let rc_provider = SoftmaxRCProvider::remainder(self.computation_node.clone(), scale_bits);
+        let rc_provider =
+            SoftmaxRCProvider::remainder(self.computation_node.clone(), scale_bits as u8);
         let rc_R_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
         Ok(vec![
             Box::new(recip_mult_verifier),
@@ -1032,10 +1042,10 @@ impl SoftmaxLastAxisVerifier {
             MultVerifier::new(self.computation_node.clone(), self.scale, &*accumulator);
 
         let rc_provider =
-            SoftmaxRCProvider::exp_remainder(self.computation_node.clone(), scale_bits);
+            SoftmaxRCProvider::exp_remainder(self.computation_node.clone(), scale_bits as u8);
         let exp_r_rc_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
 
-        let encoding = SoftmaxRaEncoding::remainder(self.idx(), scale_bits);
+        let encoding = SoftmaxRaEncoding::remainder(self.idx(), scale_bits as u8);
         let [R_ra_verifier, R_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
@@ -1093,7 +1103,7 @@ impl SoftmaxLastAxisVerifier {
             .read_raf_verify::<F, T, SoftmaxClampTable<XLEN>, XLEN>(accumulator, transcript);
 
         let scale_bits = self.scale.ilog2() as i32;
-        let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits);
+        let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits as u8);
         let [r_exp_ra_verifier, r_exp_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
@@ -1235,12 +1245,11 @@ impl VerifierLookupTableData {
 #[cfg(test)]
 mod tests {
     use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
+    use atlas_trace::{Model, Tensor};
 
     use crate::onnx_proof::ops::test::unit_test_op;
 
-    fn softmax_last_axis_model(input_shape: &[usize], scale: u32) -> Model {
+    fn softmax_last_axis_model(input_shape: &[usize], scale: u8) -> Model {
         let mut b = ModelBuilder::with_scale(scale);
         let i = b.input(input_shape.to_vec());
         let res = b.softmax_last_axis(i);
@@ -1249,7 +1258,7 @@ mod tests {
     }
 
     /// Helper: build a small softmax test at the given scale.
-    fn run_softmax_scale_test(scale: u32) {
+    fn run_softmax_scale_test(scale: u8) {
         let input_shape = vec![2, 8];
         #[rustfmt::skip]
         let data: Vec<i32> = vec![
@@ -1263,7 +1272,7 @@ mod tests {
 
     #[test]
     fn test_softmax_model_scale() {
-        run_softmax_scale_test(common::consts::MODEL_SCALE as u32);
+        run_softmax_scale_test(common::consts::MODEL_SCALE as u8);
     }
 
     #[ignore = "built for scale=12; only runs when MODEL_SCALE is compiled to 12"]

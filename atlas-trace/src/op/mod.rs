@@ -17,8 +17,7 @@ mod structural;
 
 pub use einsum::EinsumEq;
 
-use std::fmt;
-use std::sync::OnceLock;
+use std::{fmt, sync::OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -29,75 +28,6 @@ use crate::{
     tensor::Tensor,
     trace::NodeAux,
 };
-
-/// Result of evaluating an operator: the output tensor plus any auxiliary
-/// witness captured for the prover.
-pub struct Eval {
-    /// The node's quantized output.
-    pub output: Tensor<i32>,
-    /// Fused-rescale intermediates or the softmax witness, if the op
-    /// produces one.
-    pub aux: Option<NodeAux>,
-}
-
-impl Eval {
-    /// An evaluation with no auxiliary witness.
-    pub fn plain(output: Tensor<i32>) -> Self {
-        Eval { output, aux: None }
-    }
-}
-
-/// Everything a kernel may depend on besides its input tensors.
-pub struct EvalCtx<'a> {
-    /// The model's global fixed-point scale.
-    pub scale: Scale,
-    /// The semantics version tables are generated under.
-    pub version: SemVersion,
-    /// Memoized activation tables (generation is deterministic, so caching
-    /// is purely an optimization).
-    pub tables: &'a TableCache,
-}
-
-/// Inputs to the static clamp-width bound analysis.
-pub struct BoundCtx<'a> {
-    /// The model's global fixed-point scale.
-    pub scale: Scale,
-    /// Each operand's (padded) dims.
-    pub input_dims: Vec<&'a [usize]>,
-    /// Each operand's constant data, when the operand is a `Constant` node.
-    pub input_consts: Vec<Option<&'a Tensor<i32>>>,
-}
-
-/// How an operator behaves under power-of-two padding of its operands.
-///
-/// Declared, not inferred: the padding pass refuses ops without a variant,
-/// so a new op cannot silently miscompute on padded lanes.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum PadBehavior {
-    /// Zero inputs in padded lanes produce zero outputs in padded lanes
-    /// (elementwise arithmetic, einsum against zero-padded weights, …).
-    ZeroPreserving,
-    /// Pure index plumbing; the op's shape-carrying fields are rewritten by
-    /// [`OpSpec::apply_padding`] (reshape, broadcast, slice, concat, …).
-    Structural,
-    /// Padded lanes would corrupt the result unless the op masks them
-    /// internally (softmax via `active_len`, mean-of-squares via `count`
-    /// vs `padded_count`).
-    NeedsMask,
-    /// Padded (zero) lanes map to the op's value at zero, which is not zero
-    /// (sigmoid: `S/2`; cos: `S`). Deterministic and identical to the old
-    /// crate's behavior; downstream multiplicative/structural ops absorb it,
-    /// but a reduction over a padded axis would see these constants.
-    ConstantFill,
-}
-
-/// What the padding pass tells an op when rewriting it.
-pub struct PadCtx<'a> {
-    /// Each operand's dims before padding.
-    pub input_dims: Vec<&'a [usize]>,
-    /// This node's output dims before padding.
-    pub output_dims: &'a [usize],
-}
 
 /// The single per-op behavior trait. See the module docs.
 pub trait OpSpec: fmt::Display {
@@ -176,6 +106,82 @@ impl fmt::Debug for TableCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("TableCache")
     }
+}
+
+/// Result of evaluating an operator: the output tensor plus any auxiliary
+/// witness captured for the prover.
+pub struct Eval {
+    /// The node's quantized output.
+    pub output: Tensor<i32>,
+    /// Fused-rescale intermediates or the softmax witness, if the op
+    /// produces one.
+    pub aux: Option<NodeAux>,
+}
+
+impl Eval {
+    /// An evaluation with no auxiliary witness.
+    pub fn plain(output: Tensor<i32>) -> Self {
+        Eval { output, aux: None }
+    }
+}
+
+/// Everything a kernel may depend on besides its input tensors.
+pub struct EvalCtx<'a> {
+    /// The model's global fixed-point scale.
+    pub scale: Scale,
+    /// The semantics version tables are generated under.
+    pub version: SemVersion,
+    /// Memoized activation tables (generation is deterministic, so caching
+    /// is purely an optimization).
+    pub tables: &'a TableCache,
+}
+
+/// Inputs to the static clamp-width bound analysis.
+pub struct BoundCtx<'a> {
+    /// The model's global fixed-point scale.
+    pub scale: Scale,
+    /// Each operand's (padded) dims.
+    pub input_dims: Vec<&'a [usize]>,
+    /// Each operand's constant data, when the operand is a `Constant` node.
+    pub input_consts: Vec<Option<&'a Tensor<i32>>>,
+}
+
+/// How an operator behaves under power-of-two padding of its operands.
+///
+/// This classification is *declared documentation plus per-op masking*, not
+/// a property the padding pass enforces: [`crate::model`]'s `pad_graph`
+/// rewrites shapes via [`OpSpec::apply_padding`] but never consults this
+/// variant. Each `NeedsMask` op masks itself (softmax via `active_len`,
+/// mean-of-squares via `count`); `ConstantFill` and the non-zero padded
+/// lanes a `Broadcast`/`Gather` can produce rely on downstream absorption
+/// (zero-padded weights, output cropping) that no analysis currently
+/// verifies — see the ignored `broadcast_fill_...` test in `model.rs` for
+/// the known gap.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum PadBehavior {
+    /// Zero inputs in padded lanes produce zero outputs in padded lanes
+    /// (elementwise arithmetic, einsum against zero-padded weights, …).
+    ZeroPreserving,
+    /// Pure index plumbing; the op's shape-carrying fields are rewritten by
+    /// [`OpSpec::apply_padding`] (reshape, broadcast, slice, concat, …).
+    Structural,
+    /// Padded lanes would corrupt the result unless the op masks them
+    /// internally (softmax via `active_len`, mean-of-squares via `count`
+    /// vs `padded_count`).
+    NeedsMask,
+    /// Padded (zero) lanes map to the op's value at zero, which is not zero
+    /// (sigmoid: `S/2`; cos: `S`). Deterministic and identical to the old
+    /// crate's behavior; downstream multiplicative/structural ops absorb it,
+    /// but a reduction over a padded axis would see these constants.
+    ConstantFill,
+}
+
+/// What the padding pass tells an op when rewriting it.
+pub struct PadCtx<'a> {
+    /// Each operand's dims before padding.
+    pub input_dims: Vec<&'a [usize]>,
+    /// This node's output dims before padding.
+    pub output_dims: &'a [usize],
 }
 
 /// Check that every input has the same dims and return them; `expected`

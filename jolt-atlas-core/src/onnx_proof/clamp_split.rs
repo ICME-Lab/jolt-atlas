@@ -61,8 +61,7 @@ use super::{
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_trace::Model;
-use atlas_trace::Trace;
+use atlas_trace::{Model, Trace};
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::subprotocols::booleanity::{LinearClaim, LinearTerm};
 use joltworks::{

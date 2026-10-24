@@ -20,10 +20,12 @@ pub mod proto;
 pub mod quantize;
 pub mod shape_fns;
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use atlas_trace::{CompileOptions, Model, Scale};
+
+/// Fallback ONNX opset version used when the model doesn't declare one.
+const DEFAULT_ONNX_OPSET: i64 = 13;
 
 pub use error::ImportError;
 pub use inputs::{InputDescriptor, InputKind};
@@ -99,7 +101,7 @@ pub fn load_graph(path: &Path, opts: &LoadOptions) -> Result<LoweredGraph, Impor
         .iter()
         .find(|o| o.domain.is_empty() || o.domain == "ai.onnx")
         .map(|o| o.version)
-        .unwrap_or(13);
+        .unwrap_or(DEFAULT_ONNX_OPSET);
 
     let mut g = graph::from_proto(&proto_model, model_dir, &opts.bindings)?;
     normalize::normalize(&mut g, opset)?;
@@ -107,7 +109,7 @@ pub fn load_graph(path: &Path, opts: &LoadOptions) -> Result<LoweredGraph, Impor
     analyze::dce(&mut g);
     // Classify inputs while the ONNX surface (Cast/Gather uses) is intact.
     let descriptors = inputs::classify_inputs(&g, &g.inputs.clone())?;
-    let pass_reports = passes::run_all(&mut g)?;
+    let pass_reports = passes::run_all(&mut g, opts.scale)?;
     let lowered = lower::lower(&g, opts.scale, &descriptors)?;
     Ok(LoweredGraph {
         graph: lowered.graph,

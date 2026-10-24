@@ -1,20 +1,17 @@
-use crate::node_view::ComputationNode;
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
+    node_view::ComputationNode,
     onnx_proof::{
         ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
         range_checking::{
             range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
             RangeCheckProvider,
         },
+        trace_view::TraceView,
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::op::Div;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Tensor;
-use atlas_trace::Trace;
+use atlas_trace::{op::Div, trace::LayerData, Tensor, Trace};
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -530,10 +527,8 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
+    use crate::{onnx_proof::ops::test::unit_test_op, test_builder::ModelBuilder};
+    use atlas_trace::{Model, Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     const SCALE: i32 = 8;

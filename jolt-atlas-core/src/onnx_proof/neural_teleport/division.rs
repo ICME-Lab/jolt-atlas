@@ -5,9 +5,7 @@
 //! Once `q` and `r` each have an evaluation claim at the same point, deriving `a`'s claim is
 //! pure field arithmetic — no sumcheck is needed to enforce the identity.
 
-use atlas_trace::Tensor;
-
-use atlas_trace::trace::LayerData;
+use atlas_trace::{trace::LayerData, Tensor};
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;

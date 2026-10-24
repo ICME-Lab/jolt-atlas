@@ -5,11 +5,7 @@ use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::op::Slice;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Model;
-use atlas_trace::Op;
-use atlas_trace::Trace;
+use atlas_trace::{op::Slice, trace::LayerData, Model, Op, Trace};
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{

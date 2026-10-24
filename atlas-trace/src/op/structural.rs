@@ -22,6 +22,13 @@ fn pow2_dims(dims: &[usize]) -> Vec<usize> {
 /// coherence: in every group, each non-leading axis must already be a power
 /// of two on both sides.
 fn check_pad_coherent_reshape(input: &[usize], target: &[usize]) -> Result<(), String> {
+    // Size-1 axes pad to 1 and contribute stride 1, so they never move any
+    // element in the row-major layout: drop them before grouping, which
+    // admits squeeze/unsqueeze (e.g. [1,7,768] <-> [7,768]) that the group
+    // check would otherwise reject on the merged leading 1.
+    let input: Vec<usize> = input.iter().copied().filter(|&d| d != 1).collect();
+    let target: Vec<usize> = target.iter().copied().filter(|&d| d != 1).collect();
+    let (input, target) = (&input[..], &target[..]);
     let (mut i, mut j) = (0usize, 0usize);
     while i < input.len() || j < target.len() {
         // Grow a balanced group: take one axis per side, then extend the
@@ -380,9 +387,22 @@ impl OpSpec for Concat {
     }
 
     fn apply_padding(&mut self, ctx: &PadCtx<'_>) -> Result<(), String> {
-        // Each operand's concat-axis extent pads independently; the padded
-        // extents must add up to the padded output extent or the kernel's
-        // output dims diverge from the declared ones.
+        // Every operand except the last must already be a power of two on
+        // the concat axis: a non-pow2 operand pads *interior* lanes of the
+        // concatenated axis with zeros, shifting every later operand's
+        // values off their semantic positions (e.g. [3]+[4]: the padded
+        // kernel yields [a0,a1,a2,0,b0..b3], not [a0,a1,a2,b0..b3,0]).
+        for (i, d) in ctx.input_dims.iter().enumerate() {
+            let extent = d[self.axis];
+            if i + 1 < ctx.input_dims.len() && !extent.is_power_of_two() {
+                return Err(format!(
+                    "concat axis {}: operand {i} extent {extent} is not a power of two;                      its padding would land inside the concatenated axis",
+                    self.axis
+                ));
+            }
+        }
+        // The padded extents must also add up to the padded output extent
+        // or the kernel's output dims diverge from the declared ones.
         let sum_padded: usize = ctx
             .input_dims
             .iter()
@@ -399,16 +419,24 @@ impl OpSpec for Concat {
     }
 }
 
-/// Shared gather kernel: embedding lookup on axis 0.
-fn gather_eval(dict: &Tensor<i32>, indices: &Tensor<i32>) -> Result<Tensor<i32>, KernelError> {
+/// Shared gather kernel: embedding lookup on axis 0. Indices are checked
+/// against the *semantic* `dict_len`, not the padded row count — an index in
+/// `[dict_len, next_pow2(dict_len))` would otherwise silently read a
+/// zero-padded row instead of being rejected as out of vocabulary.
+fn gather_eval(
+    dict: &Tensor<i32>,
+    indices: &Tensor<i32>,
+    dict_len: usize,
+) -> Result<Tensor<i32>, KernelError> {
     let dict_rows = dict.dims()[0];
+    let bound = dict_len.min(dict_rows);
     let row: usize = dict.dims()[1..].iter().product();
     let mut out = Vec::with_capacity(indices.len() * row);
     for &ix in indices.data() {
-        if ix < 0 || ix as usize >= dict_rows {
+        if ix < 0 || ix as usize >= bound {
             return Err(KernelError::GatherOutOfRange {
                 index: ix as i64,
-                dict_len: dict_rows,
+                dict_len,
             });
         }
         let base = ix as usize * row;
@@ -454,7 +482,11 @@ macro_rules! impl_gather {
                 inputs: &[&Tensor<i32>],
                 _ctx: &EvalCtx<'_>,
             ) -> Result<Eval, KernelError> {
-                Ok(Eval::plain(gather_eval(inputs[0], inputs[1])?))
+                Ok(Eval::plain(gather_eval(
+                    inputs[0],
+                    inputs[1],
+                    self.dict_len,
+                )?))
             }
 
             fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {

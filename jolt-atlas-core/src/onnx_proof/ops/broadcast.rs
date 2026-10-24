@@ -1,15 +1,7 @@
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_trace::Model;
+use atlas_trace::{op::Broadcast, trace::LayerData, Model, Tensor, Trace};
 use core::panic;
-
-use atlas_trace::Tensor;
-
-use atlas_trace::Trace;
-
-use atlas_trace::op::Broadcast;
-
-use atlas_trace::trace::LayerData;
 
 use crate::node_view::ComputationNode;
 use joltworks::{

@@ -5,13 +5,7 @@
 //! verifies correct reads from lookup tables and combines multiple claims using
 //! gamma batching for efficiency.
 
-use atlas_trace::Op;
-
-use atlas_trace::Tensor;
-
-use atlas_trace::Trace;
-
-use atlas_trace::trace::LayerData;
+use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;

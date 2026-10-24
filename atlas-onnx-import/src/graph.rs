@@ -6,109 +6,16 @@
 //! and `verify_supported` is the single choke point guaranteeing only
 //! lowerable ops remain.
 
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::path::Path;
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+};
 
 use crate::{error::ImportError, proto};
 
 /// Index of an SSA edge (a named value) in [`IGraph::edges`].
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EdgeId(pub usize);
-
-/// The element type of a value.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum DType {
-    /// 32-bit float (quantized at lowering).
-    F32,
-    /// 64-bit int (indices, shapes, masks).
-    I64,
-    /// 32-bit int (kept raw at lowering).
-    I32,
-    /// Boolean.
-    Bool,
-}
-
-/// A constant tensor's payload. Integer data is widened to `i64`; the
-/// [`DType`] remembers the declared width.
-#[derive(Clone, PartialEq, Debug)]
-pub enum ConstData {
-    /// Float payload.
-    F32(Vec<f32>),
-    /// Integer payload (i32 widened).
-    I64(Vec<i64>),
-    /// Boolean payload.
-    Bool(Vec<bool>),
-}
-
-/// A constant tensor.
-#[derive(Clone, PartialEq, Debug)]
-pub struct ConstTensor {
-    /// Declared element type.
-    pub dtype: DType,
-    /// Dimensions.
-    pub dims: Vec<usize>,
-    /// Payload.
-    pub data: ConstData,
-}
-
-impl ConstTensor {
-    /// Element count.
-    pub fn len(&self) -> usize {
-        match &self.data {
-            ConstData::F32(v) => v.len(),
-            ConstData::I64(v) => v.len(),
-            ConstData::Bool(v) => v.len(),
-        }
-    }
-
-    /// Whether the tensor has no elements.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// The payload as i64 values, if integer or bool.
-    pub fn as_i64s(&self) -> Option<&[i64]> {
-        match &self.data {
-            ConstData::I64(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    /// The payload as f32 values, if float.
-    pub fn as_f32s(&self) -> Option<&[f32]> {
-        match &self.data {
-            ConstData::F32(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    /// A scalar (single-element) value as i64.
-    pub fn scalar_i64(&self) -> Option<i64> {
-        match (&self.data, self.len()) {
-            (ConstData::I64(v), 1) => Some(v[0]),
-            (ConstData::Bool(v), 1) => Some(v[0] as i64),
-            _ => None,
-        }
-    }
-
-    /// A scalar (single-element) value as f32.
-    pub fn scalar_f32(&self) -> Option<f32> {
-        match (&self.data, self.len()) {
-            (ConstData::F32(v), 1) => Some(v[0]),
-            _ => None,
-        }
-    }
-}
-
-/// Shape and type of a value, filled by shape inference.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct TensorInfo {
-    /// Element type.
-    pub dtype: DType,
-    /// Static dims.
-    pub dims: Vec<usize>,
-}
 
 /// One SSA value.
 #[derive(Clone, Debug)]
@@ -119,21 +26,6 @@ pub struct Edge {
     pub info: Option<TensorInfo>,
     /// Constant payload, if the value is known at import time.
     pub konst: Option<ConstTensor>,
-}
-
-/// A typed attribute.
-#[derive(Clone, PartialEq, Debug)]
-pub enum Attr {
-    /// Integer.
-    Int(i64),
-    /// Integer list.
-    Ints(Vec<i64>),
-    /// Float.
-    Float(f32),
-    /// String.
-    Str(String),
-    /// Tensor.
-    Tensor(ConstTensor),
 }
 
 /// One operation.
@@ -177,8 +69,13 @@ impl INode {
     }
 }
 
-/// The importer graph. Nodes are tombstoned (`None`) when removed by a pass;
-/// edge producers/uses are recomputed on demand.
+/// The importer graph. Nodes are tombstoned (`None`) when removed by a pass.
+///
+/// An edge→producer index is maintained by [`IGraph::push_node`] and
+/// [`IGraph::remove_node`], making [`IGraph::producer`] O(1) — pass loops
+/// call it per node, and a linear scan there made the pipeline quadratic on
+/// transformer-scale graphs. The index requires that a live node's `outputs`
+/// are never reassigned in place: replace the node (push + remove) instead.
 #[derive(Debug, Default)]
 pub struct IGraph {
     /// Nodes (tombstoned when removed).
@@ -190,6 +87,7 @@ pub struct IGraph {
     /// Graph outputs.
     pub outputs: Vec<EdgeId>,
     names: HashMap<String, EdgeId>,
+    producers: HashMap<EdgeId, usize>,
 }
 
 impl IGraph {
@@ -218,16 +116,15 @@ impl IGraph {
         self.edges[id.0].info.as_ref().map(|i| i.dims.as_slice())
     }
 
-    /// The live node producing an edge.
+    /// The live node producing an edge (O(1) via the maintained index).
     pub fn producer(&self, id: EdgeId) -> Option<(usize, &INode)> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| n.as_ref().map(|n| (i, n)))
-            .find(|(_, n)| n.outputs.contains(&id))
+        let &idx = self.producers.get(&id)?;
+        self.nodes[idx].as_ref().map(|n| (idx, n))
     }
 
     /// How many live node inputs plus graph outputs reference the edge.
+    /// One O(nodes) scan — for a per-edge query over many edges, build
+    /// [`IGraph::use_counts`] once instead.
     pub fn use_count(&self, id: EdgeId) -> usize {
         self.nodes
             .iter()
@@ -235,6 +132,20 @@ impl IGraph {
             .map(|n| n.inputs.iter().filter(|&&e| e == id).count())
             .sum::<usize>()
             + self.outputs.iter().filter(|&&e| e == id).count()
+    }
+
+    /// Use counts of every edge (indexed by `EdgeId`), computed in one scan.
+    pub fn use_counts(&self) -> Vec<usize> {
+        let mut counts = vec![0usize; self.edges.len()];
+        for node in self.nodes.iter().flatten() {
+            for &e in &node.inputs {
+                counts[e.0] += 1;
+            }
+        }
+        for &e in &self.outputs {
+            counts[e.0] += 1;
+        }
+        counts
     }
 
     /// Intern (or look up) an edge by name.
@@ -265,15 +176,27 @@ impl IGraph {
         id
     }
 
-    /// Append a node.
+    /// Append a node. The new node becomes the producer of its outputs
+    /// (passes push a replacement before removing the node it supersedes).
     pub fn push_node(&mut self, node: INode) -> usize {
+        let idx = self.nodes.len();
+        for &o in &node.outputs {
+            self.producers.insert(o, idx);
+        }
         self.nodes.push(Some(node));
-        self.nodes.len() - 1
+        idx
     }
 
-    /// Remove a node.
+    /// Remove a node, dropping its producer entries (unless a replacement
+    /// node already took an output over).
     pub fn remove_node(&mut self, idx: usize) {
-        self.nodes[idx] = None;
+        if let Some(node) = self.nodes[idx].take() {
+            for &o in &node.outputs {
+                if self.producers.get(&o) == Some(&idx) {
+                    self.producers.remove(&o);
+                }
+            }
+        }
     }
 
     /// Live nodes with their indices.
@@ -346,92 +269,6 @@ impl IGraph {
         }
         Ok(order)
     }
-}
-
-/// Decode a `TensorProto` into a [`ConstTensor`].
-pub fn decode_tensor(t: &proto::TensorProto, model_dir: &Path) -> Result<ConstTensor, ImportError> {
-    use proto::tensor_proto::DataType;
-
-    if t.segment.is_some() {
-        return Err(ImportError::UnsupportedFeature {
-            what: "TensorProto.segment".into(),
-            context: t.name.clone(),
-        });
-    }
-    // Model files are untrusted: dims are checked (no negative sizes, no
-    // overflow in the element count, and a hard cap) before any allocation.
-    let dims: Vec<usize> = t
-        .dims
-        .iter()
-        .map(|&d| {
-            usize::try_from(d)
-                .map_err(|_| ImportError::Malformed(format!("tensor {}: negative dim {d}", t.name)))
-        })
-        .collect::<Result<_, _>>()?;
-    let expected = checked_element_count(&dims)
-        .ok_or_else(|| ImportError::Malformed(format!("tensor {}: dims overflow", t.name)))?;
-    let raw = proto::tensor_payload(t, model_dir)?;
-
-    let dtype = DataType::try_from(t.data_type).map_err(|_| ImportError::UnsupportedFeature {
-        what: format!("tensor data_type {}", t.data_type),
-        context: t.name.clone(),
-    })?;
-    let (dtype, data) = match dtype {
-        DataType::Float => {
-            let v: Vec<f32> = if !raw.is_empty() {
-                raw.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().expect("chunk of 4")))
-                    .collect()
-            } else {
-                t.float_data.clone()
-            };
-            (DType::F32, ConstData::F32(v))
-        }
-        DataType::Int64 => {
-            let v: Vec<i64> = if !raw.is_empty() {
-                raw.chunks_exact(8)
-                    .map(|c| i64::from_le_bytes(c.try_into().expect("chunk of 8")))
-                    .collect()
-            } else {
-                t.int64_data.clone()
-            };
-            (DType::I64, ConstData::I64(v))
-        }
-        DataType::Int32 => {
-            let v: Vec<i64> = if !raw.is_empty() {
-                raw.chunks_exact(4)
-                    .map(|c| i32::from_le_bytes(c.try_into().expect("chunk of 4")) as i64)
-                    .collect()
-            } else {
-                t.int32_data.iter().map(|&v| v as i64).collect()
-            };
-            (DType::I32, ConstData::I64(v))
-        }
-        DataType::Bool => {
-            let v: Vec<bool> = if !raw.is_empty() {
-                raw.iter().map(|&b| b != 0).collect()
-            } else {
-                t.int32_data.iter().map(|&v| v != 0).collect()
-            };
-            (DType::Bool, ConstData::Bool(v))
-        }
-        other => {
-            return Err(ImportError::UnsupportedFeature {
-                what: format!("tensor data type {other:?} (re-export the model in fp32)"),
-                context: t.name.clone(),
-            });
-        }
-    };
-    let tensor = ConstTensor { dtype, dims, data };
-    if tensor.len() != expected {
-        return Err(ImportError::Malformed(format!(
-            "tensor {}: {} elements, dims {:?} expect {expected}",
-            t.name,
-            tensor.len(),
-            tensor.dims
-        )));
-    }
-    Ok(tensor)
 }
 
 /// Build the importer graph from the decoded model: intern all edges, attach
@@ -544,10 +381,259 @@ pub fn from_proto(
     Ok(g)
 }
 
+/// Decode a `TensorProto` into a [`ConstTensor`].
+pub fn decode_tensor(t: &proto::TensorProto, model_dir: &Path) -> Result<ConstTensor, ImportError> {
+    use proto::tensor_proto::DataType;
+
+    if t.segment.is_some() {
+        return Err(ImportError::UnsupportedFeature {
+            what: "TensorProto.segment".into(),
+            context: t.name.clone(),
+        });
+    }
+    // Model files are untrusted: dims are checked (no negative sizes, no
+    // overflow in the element count, and a hard cap) before any allocation.
+    let dims: Vec<usize> = t
+        .dims
+        .iter()
+        .map(|&d| {
+            usize::try_from(d)
+                .map_err(|_| ImportError::Malformed(format!("tensor {}: negative dim {d}", t.name)))
+        })
+        .collect::<Result<_, _>>()?;
+    let expected = checked_element_count(&dims)
+        .ok_or_else(|| ImportError::Malformed(format!("tensor {}: dims overflow", t.name)))?;
+    let mut raw = proto::tensor_payload(t, model_dir)?;
+    let external = t.data_location == proto::tensor_proto::DataLocation::External as i32;
+
+    let dtype = DataType::try_from(t.data_type).map_err(|_| ImportError::UnsupportedFeature {
+        what: format!("tensor data_type {}", t.data_type),
+        context: t.name.clone(),
+    })?;
+    let has_raw_data = !raw.is_empty() || external;
+    if has_raw_data {
+        validate_raw_payload(t, dtype, expected, &mut raw)?;
+    }
+    let (dtype, data) = match dtype {
+        DataType::Float => {
+            let v: Vec<f32> = if has_raw_data {
+                raw.chunks_exact(4)
+                    .map(|c| f32::from_le_bytes(c.try_into().expect("chunk of 4")))
+                    .collect()
+            } else {
+                t.float_data.clone()
+            };
+            (DType::F32, ConstData::F32(v))
+        }
+        DataType::Int64 => {
+            let v: Vec<i64> = if has_raw_data {
+                raw.chunks_exact(8)
+                    .map(|c| i64::from_le_bytes(c.try_into().expect("chunk of 8")))
+                    .collect()
+            } else {
+                t.int64_data.clone()
+            };
+            (DType::I64, ConstData::I64(v))
+        }
+        DataType::Int32 => {
+            let v: Vec<i64> = if has_raw_data {
+                raw.chunks_exact(4)
+                    .map(|c| i32::from_le_bytes(c.try_into().expect("chunk of 4")) as i64)
+                    .collect()
+            } else {
+                t.int32_data.iter().map(|&v| v as i64).collect()
+            };
+            (DType::I32, ConstData::I64(v))
+        }
+        DataType::Bool => {
+            let v: Vec<bool> = if has_raw_data {
+                raw.iter().map(|&b| b != 0).collect()
+            } else {
+                t.int32_data.iter().map(|&v| v != 0).collect()
+            };
+            (DType::Bool, ConstData::Bool(v))
+        }
+        other => {
+            return Err(ImportError::UnsupportedFeature {
+                what: format!("tensor data type {other:?} (re-export the model in fp32)"),
+                context: t.name.clone(),
+            });
+        }
+    };
+    let tensor = ConstTensor { dtype, dims, data };
+    if tensor.len() != expected {
+        return Err(ImportError::Malformed(format!(
+            "tensor {}: {} elements, dims {:?} expect {expected}",
+            t.name,
+            tensor.len(),
+            tensor.dims
+        )));
+    }
+    Ok(tensor)
+}
+
+/// Validate the size of a tensor's raw payload. External data without an
+/// explicit length may share a file with later tensors, so keep only the
+/// number of bytes described by this tensor's shape and type.
+fn validate_raw_payload(
+    tensor: &proto::TensorProto,
+    dtype: proto::tensor_proto::DataType,
+    expected_elements: usize,
+    raw: &mut Vec<u8>,
+) -> Result<(), ImportError> {
+    use proto::tensor_proto::{DataLocation, DataType};
+
+    let bytes_per_element = match dtype {
+        DataType::Float | DataType::Int32 => 4,
+        DataType::Int64 => 8,
+        DataType::Bool => 1,
+        _ => return Ok(()),
+    };
+    let expected_bytes = expected_elements
+        .checked_mul(bytes_per_element)
+        .ok_or_else(|| {
+            ImportError::Malformed(format!("tensor {}: byte size overflow", tensor.name))
+        })?;
+    let external = tensor.data_location == DataLocation::External as i32;
+    let external_without_length =
+        external && !tensor.external_data.iter().any(|kv| kv.key == "length");
+
+    if external_without_length {
+        if raw.len() < expected_bytes {
+            return Err(ImportError::Malformed(format!(
+                "tensor {}: raw payload has {} bytes, dims {:?} and data type {:?} need {expected_bytes}",
+                tensor.name,
+                raw.len(),
+                tensor.dims,
+                dtype
+            )));
+        }
+        raw.truncate(expected_bytes);
+    } else if raw.len() != expected_bytes {
+        return Err(ImportError::Malformed(format!(
+            "tensor {}: raw payload has {} bytes, dims {:?} and data type {:?} expect {expected_bytes}",
+            tensor.name,
+            raw.len(),
+            tensor.dims,
+            dtype
+        )));
+    }
+    Ok(())
+}
+
 /// Hard cap on the element count of any tensor the importer will represent:
 /// far beyond anything provable, but small enough that no partial product of
 /// capped dims (including power-of-two padding) can overflow `usize`.
 pub const MAX_TENSOR_ELEMENTS: usize = 1 << 34;
+
+/// The element type of a value.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum DType {
+    /// 32-bit float (quantized at lowering).
+    F32,
+    /// 64-bit int (indices, shapes, masks).
+    I64,
+    /// 32-bit int (kept raw at lowering).
+    I32,
+    /// Boolean.
+    Bool,
+}
+
+/// A constant tensor's payload. Integer data is widened to `i64`; the
+/// [`DType`] remembers the declared width.
+#[derive(Clone, PartialEq, Debug)]
+pub enum ConstData {
+    /// Float payload.
+    F32(Vec<f32>),
+    /// Integer payload (i32 widened).
+    I64(Vec<i64>),
+    /// Boolean payload.
+    Bool(Vec<bool>),
+}
+
+/// A constant tensor.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ConstTensor {
+    /// Declared element type.
+    pub dtype: DType,
+    /// Dimensions.
+    pub dims: Vec<usize>,
+    /// Payload.
+    pub data: ConstData,
+}
+
+impl ConstTensor {
+    /// Element count.
+    pub fn len(&self) -> usize {
+        match &self.data {
+            ConstData::F32(v) => v.len(),
+            ConstData::I64(v) => v.len(),
+            ConstData::Bool(v) => v.len(),
+        }
+    }
+
+    /// Whether the tensor has no elements.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The payload as i64 values, if integer or bool.
+    pub fn as_i64s(&self) -> Option<&[i64]> {
+        match &self.data {
+            ConstData::I64(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// The payload as f32 values, if float.
+    pub fn as_f32s(&self) -> Option<&[f32]> {
+        match &self.data {
+            ConstData::F32(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// A scalar (single-element) value as i64.
+    pub fn scalar_i64(&self) -> Option<i64> {
+        match (&self.data, self.len()) {
+            (ConstData::I64(v), 1) => Some(v[0]),
+            (ConstData::Bool(v), 1) => Some(v[0] as i64),
+            _ => None,
+        }
+    }
+
+    /// A scalar (single-element) value as f32.
+    pub fn scalar_f32(&self) -> Option<f32> {
+        match (&self.data, self.len()) {
+            (ConstData::F32(v), 1) => Some(v[0]),
+            _ => None,
+        }
+    }
+}
+
+/// Shape and type of a value, filled by shape inference.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TensorInfo {
+    /// Element type.
+    pub dtype: DType,
+    /// Static dims.
+    pub dims: Vec<usize>,
+}
+
+/// A typed attribute.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Attr {
+    /// Integer.
+    Int(i64),
+    /// Integer list.
+    Ints(Vec<i64>),
+    /// Float.
+    Float(f32),
+    /// String.
+    Str(String),
+    /// Tensor.
+    Tensor(ConstTensor),
+}
 
 /// Checked product of dims with the [`MAX_TENSOR_ELEMENTS`] cap so untrusted
 /// shape metadata can never drive an unbounded allocation. A zero dim makes
@@ -650,4 +736,49 @@ fn input_signature(
         )));
     }
     Ok((dtype, dims))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(name: &str, inputs: Vec<EdgeId>, outputs: Vec<EdgeId>) -> INode {
+        INode {
+            name: name.into(),
+            op: "Identity".into(),
+            attrs: BTreeMap::new(),
+            inputs,
+            outputs,
+        }
+    }
+
+    #[test]
+    fn producer_index_tracks_node_replacement() {
+        let mut g = IGraph::default();
+        let a = g.edge_by_name("a");
+        let b = g.edge_by_name("b");
+        let old = g.push_node(node("old", vec![a], vec![b]));
+        assert_eq!(g.producer(b).map(|(i, _)| i), Some(old));
+        // The pass replacement pattern: push the successor, then remove the
+        // superseded node — the index must end up on the new producer.
+        let new = g.push_node(node("new", vec![a], vec![b]));
+        g.remove_node(old);
+        assert_eq!(g.producer(b).map(|(i, _)| i), Some(new));
+        g.remove_node(new);
+        assert!(g.producer(b).is_none());
+    }
+
+    #[test]
+    fn decode_tensor_rejects_raw_payload_with_trailing_bytes() {
+        let tensor = proto::TensorProto {
+            dims: vec![1],
+            data_type: proto::tensor_proto::DataType::Float as i32,
+            raw_data: vec![0; 5].into(),
+            ..Default::default()
+        };
+
+        let error = decode_tensor(&tensor, Path::new("."))
+            .expect_err("raw payload with a trailing byte must be rejected");
+        assert!(error.to_string().contains("raw payload has 5 bytes"));
+    }
 }

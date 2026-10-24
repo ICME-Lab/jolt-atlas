@@ -51,7 +51,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(descriptors) = inputs::classify_inputs(&g, &graph_inputs) else {
         return;
     };
-    if passes::run_all(&mut g).is_err() {
+    if passes::run_all(&mut g, Scale::new(14).expect("in range")).is_err() {
         return;
     }
     let scale = Scale::new(14).expect("in range");

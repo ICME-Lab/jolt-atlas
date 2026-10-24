@@ -6,9 +6,7 @@ use crate::onnx_proof::{
 };
 use crate::test_builder::ModelBuilder;
 use ark_bn254::{Bn254, Fr};
-use atlas_trace::Model;
-use atlas_trace::Op;
-use atlas_trace::Tensor;
+use atlas_trace::{Model, Op, Tensor};
 use common::VirtualPoly;
 use joltworks::poly::{
     commitment::hyperkzg::HyperKZG,

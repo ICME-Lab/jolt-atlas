@@ -27,7 +27,7 @@ impl SmallActivationTable for TanhTableMarker {
         crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
             ACTIVATION_TABLE_VARS,
             1,
-            MODEL_SCALE as i32,
+            MODEL_SCALE as u8,
             atlas_trace::semantics::tables::TableKind::Tanh,
         )
     }

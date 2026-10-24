@@ -34,8 +34,23 @@ pub struct AtlasSharedPreprocessing {
 
 impl AtlasSharedPreprocessing {
     /// Preprocess an ONNX model for proving and verification.
+    ///
+    /// Panics on models the proof layer cannot prove yet, so an unprovable
+    /// model fails here — before commitments and witness generation — with
+    /// the node named, instead of inside a prover thread mid-IOP.
     #[tracing::instrument(skip_all, name = "AtlasSharedPreprocessing::preprocess")]
     pub fn preprocess(model: Model) -> Self {
+        for (id, node, _) in model.nodes() {
+            if let atlas_trace::Op::SoftmaxLastAxis(s) = &node.op {
+                let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+                assert!(
+                    s.active_len.is_none_or(|n| n == last_dim),
+                    "node {id:?}: masked softmax (active_len {:?} of {last_dim}) is not yet \
+                     provable; use a power-of-two softmax axis",
+                    s.active_len
+                );
+            }
+        }
         Self { model }
     }
 
@@ -62,8 +77,8 @@ impl AtlasSharedPreprocessing {
     }
 
     /// Get the model's scale.
-    pub fn scale(&self) -> i32 {
-        self.model().scale_i32()
+    pub fn scale(&self) -> u8 {
+        self.model().scale_log2()
     }
 }
 
@@ -118,8 +133,8 @@ where
     }
 
     /// Get the models scale
-    pub fn scale(&self) -> i32 {
-        self.model().scale_i32()
+    pub fn scale(&self) -> u8 {
+        self.model().scale_log2()
     }
 }
 
@@ -178,7 +193,7 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> AtlasVerifierPreprocessing<
     }
 
     /// Get the model's scale.
-    pub fn scale(&self) -> i32 {
-        self.model().scale_i32()
+    pub fn scale(&self) -> u8 {
+        self.model().scale_log2()
     }
 }

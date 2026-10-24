@@ -4,76 +4,6 @@
 
 use crate::graph::{DType, IGraph, INode, TensorInfo, checked_element_count};
 
-/// A non-negative `i64` dim (shape operands are untrusted model data).
-fn checked_dim(d: i64, context: &str) -> Result<usize, String> {
-    usize::try_from(d).map_err(|_| format!("{context}: negative dim {d}"))
-}
-
-/// Validate a transpose permutation: a bijection over `0..rank`.
-pub fn validate_perm(perm: &[i64], rank: usize) -> Result<Vec<usize>, String> {
-    if perm.len() != rank {
-        return Err("Transpose perm rank mismatch".into());
-    }
-    let mut seen = vec![false; rank];
-    let mut out = Vec::with_capacity(rank);
-    for &v in perm {
-        let p = usize::try_from(v)
-            .ok()
-            .filter(|&p| p < rank)
-            .ok_or_else(|| format!("Transpose perm entry {v} out of range for rank {rank}"))?;
-        if seen[p] {
-            return Err(format!("Transpose perm repeats axis {p}"));
-        }
-        seen[p] = true;
-        out.push(p);
-    }
-    Ok(out)
-}
-
-/// NumPy broadcast of two shapes.
-pub fn broadcast(a: &[usize], b: &[usize]) -> Result<Vec<usize>, String> {
-    let rank = a.len().max(b.len());
-    let mut out = vec![0usize; rank];
-    for i in 0..rank {
-        let da = if i < rank - a.len() {
-            1
-        } else {
-            a[i - (rank - a.len())]
-        };
-        let db = if i < rank - b.len() {
-            1
-        } else {
-            b[i - (rank - b.len())]
-        };
-        out[i] = match (da, db) {
-            (x, y) if x == y => x,
-            (1, y) => y,
-            (x, 1) => x,
-            _ => return Err(format!("cannot broadcast {a:?} with {b:?}")),
-        };
-    }
-    Ok(out)
-}
-
-/// Normalize a possibly negative axis.
-pub fn norm_axis(axis: i64, rank: usize) -> Result<usize, String> {
-    let a = if axis < 0 { axis + rank as i64 } else { axis };
-    if a < 0 || a as usize >= rank {
-        return Err(format!("axis {axis} out of range for rank {rank}"));
-    }
-    Ok(a as usize)
-}
-
-/// Promote dtypes for arithmetic (ONNX requires equal types; we allow
-/// I32/I64 mixing since we widen payloads).
-pub(crate) fn promote(a: DType, b: DType) -> Result<DType, String> {
-    match (a, b) {
-        (x, y) if x == y => Ok(x),
-        (DType::I32, DType::I64) | (DType::I64, DType::I32) => Ok(DType::I64),
-        _ => Err(format!("mismatched operand types {a:?} vs {b:?}")),
-    }
-}
-
 /// Infer the output infos of one (normalized) ONNX node.
 pub fn infer(node: &INode, g: &IGraph) -> Result<Vec<TensorInfo>, String> {
     let info = |i: usize| -> Result<&TensorInfo, String> {
@@ -527,6 +457,16 @@ pub fn slice_params(node: &INode, input_dims: &[usize]) -> Result<SliceParams, S
     if starts.len() != ends.len() || starts.len() != axes.len() || starts.len() != steps.len() {
         return Err("Slice parameter lengths disagree".into());
     }
+    // ONNX requires unique axes. A repeated axis would desynchronize the
+    // consumers of these params: the output dims keep the LAST occurrence's
+    // extent while the fold's coordinate mapping and the lowered chain of
+    // single-axis slices apply the FIRST occurrence's bounds.
+    let mut dedup = axes.clone();
+    dedup.sort_unstable();
+    dedup.dedup();
+    if dedup.len() != axes.len() {
+        return Err("Slice repeats an axis".into());
+    }
     let mut dims = input_dims.to_vec();
     let mut starts_out = Vec::new();
     let mut ends_out = Vec::new();
@@ -589,5 +529,57 @@ fn matmul_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>, String> {
             out.push(n);
             Ok(out)
         }
+    }
+}
+
+/// A non-negative `i64` dim (shape operands are untrusted model data).
+fn checked_dim(d: i64, context: &str) -> Result<usize, String> {
+    usize::try_from(d).map_err(|_| format!("{context}: negative dim {d}"))
+}
+
+/// Validate a transpose permutation: a bijection over `0..rank`.
+pub fn validate_perm(perm: &[i64], rank: usize) -> Result<Vec<usize>, String> {
+    if perm.len() != rank {
+        return Err("Transpose perm rank mismatch".into());
+    }
+    let mut seen = vec![false; rank];
+    let mut out = Vec::with_capacity(rank);
+    for &v in perm {
+        let p = usize::try_from(v)
+            .ok()
+            .filter(|&p| p < rank)
+            .ok_or_else(|| format!("Transpose perm entry {v} out of range for rank {rank}"))?;
+        if seen[p] {
+            return Err(format!("Transpose perm repeats axis {p}"));
+        }
+        seen[p] = true;
+        out.push(p);
+    }
+    Ok(out)
+}
+
+/// NumPy broadcast of two shapes — the same rule the lowered graph's
+/// `Broadcast` op enforces, so it is delegated to atlas-trace rather than
+/// reimplemented (two copies of the rule could drift apart).
+pub fn broadcast(a: &[usize], b: &[usize]) -> Result<Vec<usize>, String> {
+    atlas_trace::tensor::broadcast_shape(a, b).map_err(|e| e.to_string())
+}
+
+/// Normalize a possibly negative axis.
+pub fn norm_axis(axis: i64, rank: usize) -> Result<usize, String> {
+    let a = if axis < 0 { axis + rank as i64 } else { axis };
+    if a < 0 || a as usize >= rank {
+        return Err(format!("axis {axis} out of range for rank {rank}"));
+    }
+    Ok(a as usize)
+}
+
+/// Promote dtypes for arithmetic (ONNX requires equal types; we allow
+/// I32/I64 mixing since we widen payloads).
+pub(crate) fn promote(a: DType, b: DType) -> Result<DType, String> {
+    match (a, b) {
+        (x, y) if x == y => Ok(x),
+        (DType::I32, DType::I64) | (DType::I64, DType::I32) => Ok(DType::I64),
+        _ => Err(format!("mismatched operand types {a:?} vs {b:?}")),
     }
 }

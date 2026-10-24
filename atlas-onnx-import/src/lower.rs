@@ -29,6 +29,85 @@ const CANONICAL_EINSUMS: &[&str] = &["mk,kn->mn", "mk,nk->mn", "amk,ank->amn", "
 /// parity (`node/handlers/index.rs`).
 const GATHER_SMALL_LIMIT: usize = 65_536;
 
+/// Lower the rewritten importer graph. `descriptors` come from
+/// [`classify_inputs`] run *before* the rewrite passes (classification
+/// inspects `Cast`/`Gather` uses that passes rewrite away).
+pub fn lower(
+    g: &IGraph,
+    scale: Scale,
+    descriptors: &[InputDescriptor],
+) -> Result<Lowered, ImportError> {
+    // Inputs that nothing consumes (e.g. empty KV-cache tensors whose
+    // concats were elided) are pruned — same behavior as the old pipeline.
+    let use_counts = g.use_counts();
+    let live_inputs: Vec<EdgeId> = g
+        .inputs
+        .iter()
+        .copied()
+        .filter(|&e| use_counts[e.0] > 0)
+        .collect();
+    let input_descriptors: Vec<InputDescriptor> = live_inputs
+        .iter()
+        .map(|&e| {
+            let name = &g.edge(e).name;
+            descriptors
+                .iter()
+                .find(|d| &d.name == name)
+                .cloned()
+                .ok_or_else(|| ImportError::Malformed(format!("input {name} has no descriptor")))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let mut lw = Lowerer {
+        g,
+        scale,
+        nodes: Vec::new(),
+        edge_to_node: HashMap::new(),
+        inputs: Vec::new(),
+    };
+
+    // Graph inputs first, in declared order.
+    for &edge in &live_inputs {
+        let dims = lower_dims(g.dims(edge).ok_or_else(|| {
+            ImportError::Malformed(format!("input {} has no shape", g.edge(edge).name))
+        })?);
+        let id = lw.push(Op::Input(op::Input), vec![], dims);
+        lw.inputs.push(id);
+        lw.edge_to_node.insert(edge, id);
+    }
+
+    for idx in g.topo_order()? {
+        let node = g.nodes[idx].as_ref().expect("live");
+        if node.outputs.len() != 1 {
+            return Err(ImportError::Malformed(format!(
+                "node {} still has {} outputs at lowering",
+                node.name,
+                node.outputs.len()
+            )));
+        }
+        lw.lower_node(node)?;
+    }
+
+    // resolve(), not a bare map lookup: a graph output can be a constant
+    // edge (an initializer, or a value analysis fully folded) that no
+    // surviving node produces — it must be materialized like any other
+    // constant operand.
+    let outputs = g
+        .outputs
+        .iter()
+        .map(|&e| lw.resolve(e))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Lowered {
+        graph: Graph {
+            nodes: lw.nodes,
+            inputs: lw.inputs,
+            outputs,
+        },
+        input_descriptors,
+    })
+}
+
 /// The lowering result.
 pub struct Lowered {
     /// The atlas-trace graph (uncompiled).
@@ -155,6 +234,10 @@ impl<'g> Lowerer<'g> {
             "Mul" => elementwise(self, Op::Mul(op::Mul { rebase: scaled }))?,
             // Raw product by construction (cast_policy's ×2^scale rescale).
             "atlas.RawMul" => elementwise(self, Op::Mul(op::Mul { rebase: false }))?,
+            // Rebased regardless of dtype: norm_fusion's 1/N reciprocal
+            // multiply, whose scaled constant times a possibly-raw sum must
+            // divide by 2^scale to stay in the operand's domain.
+            "atlas.ScaledMul" => elementwise(self, Op::Mul(op::Mul { rebase: true }))?,
             "Neg" => direct(self, Op::Neg(op::Neg))?,
             "Relu" => direct(self, Op::ReLU(op::ReLU))?,
             "Tanh" => direct(self, Op::Tanh(op::Tanh))?,
@@ -199,6 +282,12 @@ impl<'g> Lowerer<'g> {
                 let axis = node.attr_int("axis").ok_or_else(unlowered)? as usize;
                 let start = node.attr_int("start").ok_or_else(unlowered)? as usize;
                 let end = node.attr_int("end").ok_or_else(unlowered)? as usize;
+                if start >= end {
+                    return Err(attr_err(format!(
+                        "slice {start}..{end} selects no elements; \
+                         empty tensors cannot be lowered"
+                    )));
+                }
                 direct(self, Op::Slice(op::Slice { axis, start, end }))?
             }
             "Slice" => {
@@ -210,6 +299,16 @@ impl<'g> Lowerer<'g> {
                 let mut dims = in_dims;
                 let mut last = current;
                 for ((&axis, &start), &end) in axes.iter().zip(&starts).zip(&ends) {
+                    // slice_params admits empty windows (constant folds need
+                    // them for shape subgraphs), but a *runtime* empty slice
+                    // has no lowerable form — atlas-trace rejects zero-size
+                    // tensors — so refuse it here with a typed error.
+                    if start >= end {
+                        return Err(attr_err(format!(
+                            "slice {start}..{end} on axis {axis} selects no elements; \
+                             empty tensors cannot be lowered"
+                        )));
+                    }
                     dims[axis] = (end - start) as usize;
                     last = self.push(
                         Op::Slice(op::Slice {
@@ -289,6 +388,14 @@ impl<'g> Lowerer<'g> {
                 )?
             }
             "atlas.Einsum" => {
+                // Einsum has no raw (rebase-free) form: its eval always
+                // divides the contraction by 2^scale. An integer einsum
+                // would silently shrink every product by that factor.
+                if !scaled {
+                    return Err(attr_err(
+                        "einsum over non-float operands would be rebased by 2^scale".into(),
+                    ));
+                }
                 let Some(crate::graph::Attr::Str(eq)) = node.attrs.get("equation") else {
                     return Err(unlowered());
                 };
@@ -307,83 +414,34 @@ impl<'g> Lowerer<'g> {
     }
 }
 
-/// Lower the rewritten importer graph. `descriptors` come from
-/// [`classify_inputs`] run *before* the rewrite passes (classification
-/// inspects `Cast`/`Gather` uses that passes rewrite away).
-pub fn lower(
-    g: &IGraph,
-    scale: Scale,
-    descriptors: &[InputDescriptor],
-) -> Result<Lowered, ImportError> {
-    // Inputs that nothing consumes (e.g. empty KV-cache tensors whose
-    // concats were elided) are pruned — same behavior as the old pipeline.
-    let live_inputs: Vec<EdgeId> = g
-        .inputs
-        .iter()
-        .copied()
-        .filter(|&e| g.use_count(e) > 0)
-        .collect();
-    let input_descriptors: Vec<InputDescriptor> = live_inputs
-        .iter()
-        .map(|&e| {
-            let name = &g.edge(e).name;
-            descriptors
-                .iter()
-                .find(|d| &d.name == name)
-                .cloned()
-                .ok_or_else(|| ImportError::Malformed(format!("input {name} has no descriptor")))
-        })
-        .collect::<Result<_, _>>()?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{ConstData, ConstTensor, DType, TensorInfo};
 
-    let mut lw = Lowerer {
-        g,
-        scale,
-        nodes: Vec::new(),
-        edge_to_node: HashMap::new(),
-        inputs: Vec::new(),
-    };
-
-    // Graph inputs first, in declared order.
-    for &edge in &live_inputs {
-        let dims = lower_dims(g.dims(edge).ok_or_else(|| {
-            ImportError::Malformed(format!("input {} has no shape", g.edge(edge).name))
-        })?);
-        let id = lw.push(Op::Input(op::Input), vec![], dims);
-        lw.inputs.push(id);
-        lw.edge_to_node.insert(edge, id);
+    // A graph output that is a constant edge (an initializer, or a value
+    // analysis fully folded) has no producing node; lowering must
+    // materialize it instead of failing with "never produced".
+    #[test]
+    fn constant_graph_output_lowers_to_a_constant_node() {
+        let mut g = IGraph::default();
+        let out = g.edge_by_name("const_out");
+        g.edge_mut(out).info = Some(TensorInfo {
+            dtype: DType::F32,
+            dims: vec![2],
+        });
+        g.edge_mut(out).konst = Some(ConstTensor {
+            dtype: DType::F32,
+            dims: vec![2],
+            data: ConstData::F32(vec![1.0, 2.0]),
+        });
+        g.outputs.push(out);
+        let lowered = lower(&g, Scale::new(14).unwrap(), &[]).expect("constant output lowers");
+        assert_eq!(lowered.graph.outputs.len(), 1);
+        let id = lowered.graph.outputs[0];
+        assert!(matches!(
+            lowered.graph.nodes[id.0 as usize].op,
+            Op::Constant(_)
+        ));
     }
-
-    for idx in g.topo_order()? {
-        let node = g.nodes[idx].as_ref().expect("live");
-        if node.outputs.len() != 1 {
-            return Err(ImportError::Malformed(format!(
-                "node {} still has {} outputs at lowering",
-                node.name,
-                node.outputs.len()
-            )));
-        }
-        lw.lower_node(node)?;
-    }
-
-    let outputs = g
-        .outputs
-        .iter()
-        .map(|&e| {
-            lw.edge_to_node.get(&e).copied().ok_or_else(|| {
-                ImportError::Malformed(format!(
-                    "graph output {} was never produced",
-                    g.edge(e).name
-                ))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(Lowered {
-        graph: Graph {
-            nodes: lw.nodes,
-            inputs: lw.inputs,
-            outputs,
-        },
-        input_descriptors,
-    })
 }

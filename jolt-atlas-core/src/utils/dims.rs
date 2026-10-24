@@ -6,9 +6,7 @@
 //! the flattened dimensions that layout folds over. The module also normalizes
 //! multi-dimensional sum operations to a 2D representation.
 
-use atlas_trace::Model;
-
-use atlas_trace::Op;
+use atlas_trace::{Model, Op};
 
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;

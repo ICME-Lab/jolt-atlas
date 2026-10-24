@@ -33,11 +33,7 @@
 use crate::onnx_proof::trace_view::TraceView;
 use std::{array, sync::Arc};
 
-use atlas_trace::Tensor;
-
-use atlas_trace::Trace;
-
-use atlas_trace::trace::LayerData;
+use atlas_trace::{trace::LayerData, Tensor, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::{

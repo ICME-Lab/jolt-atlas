@@ -62,6 +62,13 @@ with `cargo +nightly fuzz run import fuzz/regressions/<file>`.
   more distinct crashers (same overflow/panic class); all stopped
   reproducing after the hardening + semantics commits and were folded into
   the corpus.
+- A full-branch code review found three more reachable panic classes in the
+  constant-folding path before the fuzzer did: `ConstantOfShape` with an
+  empty `value` tensor attribute, `Range` with zero-element operands, and
+  `Slice` with a repeated `axes` entry (output dims take the last
+  occurrence's extent, the coordinate mapping the first's bounds → an
+  out-of-bounds read). All three now take typed error paths, pinned by unit
+  tests in `fold_fns.rs`.
 
 ## Notes
 

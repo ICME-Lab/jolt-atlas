@@ -1,13 +1,13 @@
 use crate::node_view::ComputationNode;
+#[cfg(feature = "zk")]
+use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_fused_rescale_proof_api,
     onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::op::Square;
-use atlas_trace::trace::LayerData;
-use atlas_trace::Trace;
+use atlas_trace::{op::Square, trace::LayerData, Trace};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -328,7 +328,7 @@ mod tests {
         // Simulate a computation node: node 1 (Square) takes input from node 0.
         // Scale 0 keeps it a raw square so `input_claim` is the plain output
         // opening (the BlindFold constraint asserted here).
-        let node = ComputationNode::new(1, Op::Square(Square { scale: 0 }), vec![0], vec![4]);
+        let node = ComputationNode::new(1, Op::Square(Square { rebase: false }), vec![0], vec![4]);
 
         // Set up the verifier accumulator with known opening values
         let mut accumulator = VerifierOpeningAccumulator::<F>::new();

@@ -4,10 +4,10 @@
 //! It uses the prefix-suffix read-checking sumcheck protocol from the Twist and Shout paper to
 //! efficiently verify that remainder values are within valid bounds using lookup tables.
 
+use crate::compat::{model::trace::Trace, node::ComputationNode};
 use crate::onnx_proof::range_checking::range_check_operands::{
     RangeCheckOperands, RangeCheckingOperandsTrait,
 };
-use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
 use common::{
     consts::{LOG_K, XLEN},
     CommittedPoly, VirtualPoly,

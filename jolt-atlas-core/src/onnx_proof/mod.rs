@@ -10,7 +10,7 @@
 //! Internal implementation details (helper methods, state structs) live in
 //! [`prover`], [`verifier`], and [`types`] submodules.
 
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::trace::{ModelExecutionIO, Trace},
     tensor::Tensor,
 };
@@ -110,8 +110,8 @@ pub(crate) fn append_inputs_to_transcript<T: Transcript>(
         }
 
         // Encode values explicitly in LE for cross-platform determinism.
-        let mut bytes = Vec::with_capacity(tensor.inner.len() * 4);
-        for v in &tensor.inner {
+        let mut bytes = Vec::with_capacity(tensor.data().len() * 4);
+        for v in tensor.data() {
             bytes.extend_from_slice(&v.to_le_bytes());
         }
         transcript.append_bytes(&bytes);

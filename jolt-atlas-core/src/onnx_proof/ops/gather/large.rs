@@ -1,5 +1,5 @@
 use super::*;
-use atlas_onnx_tracer::ops::GatherLarge;
+use crate::compat::ops::GatherLarge;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 use joltworks::{
@@ -169,7 +169,7 @@ pub(crate) fn gather_lookup_indices(
         panic!("Expected two operands for Gather operation")
     };
     indexes
-        .padded_next_power_of_two()
+        .padded_pow2()
         .data()
         .par_iter()
         .with_min_len(par_enabled())

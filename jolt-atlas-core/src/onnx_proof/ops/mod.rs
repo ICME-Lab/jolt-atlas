@@ -110,7 +110,7 @@ pub mod tanh;
 #[cfg(test)]
 mod test;
 
-use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
+use crate::compat::{node::ComputationNode, ops::Operator};
 // Re-export handler types for convenient access
 
 // Re-export operator param/prover/verifier types for the handler macro
@@ -582,7 +582,7 @@ macro_rules! impl_fused_rescale_proof_api {
                     ops::{$params_ty, $prover_ty},
                 };
 
-                let fused = fused_rebase::fuses_rebase(&node.operator);
+                let fused = fused_rebase::fuses_rebase(node);
                 let mut proofs = Vec::new();
                 let remainder = if fused {
                     let (pre_proofs, remainder) = fused_rebase::prove_pre(node, prover);
@@ -620,7 +620,7 @@ macro_rules! impl_fused_rescale_proof_api {
                 use joltworks::subprotocols::sumcheck::Sumcheck;
                 use $crate::onnx_proof::{fused_rebase, ops::$verifier_ty};
 
-                let fused = fused_rebase::fuses_rebase(&node.operator);
+                let fused = fused_rebase::fuses_rebase(node);
                 if fused {
                     fused_rebase::verify_pre(node, verifier)?;
                 }

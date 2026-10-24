@@ -3,7 +3,7 @@
 //! Provides a node-scoped accessor/provider layer over opening accumulators,
 //! with a small internal builder used to derive opening IDs consistently.
 
-use atlas_onnx_tracer::node::ComputationNode;
+use crate::compat::node::ComputationNode;
 use common::VirtualPoly;
 use joltworks::{
     field::JoltField,

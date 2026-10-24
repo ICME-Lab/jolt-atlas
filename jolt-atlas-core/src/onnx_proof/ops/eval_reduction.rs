@@ -1,8 +1,8 @@
-use crate::onnx_proof::{Prover, Verifier};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
 };
+use crate::onnx_proof::{Prover, Verifier};
 use joltworks::{
     field::JoltField,
     poly::multilinear_polynomial::MultilinearPolynomial,
@@ -41,7 +41,7 @@ impl NodeEvalReduction {
                 operands: _,
                 output,
             } = Trace::layer_data(&prover.trace, computation_node);
-            let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+            let output_mle = MultilinearPolynomial::from(output.padded_pow2());
             EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
                 .expect("Proving evaluation reduction should not fail")
         };
@@ -81,13 +81,13 @@ impl NodeEvalReduction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::onnx_proof::{AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, ProofId};
-    use ark_bn254::{Bn254, Fr};
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, trace::Trace, Model},
         ops::{Add, Operator},
         tensor::Tensor,
     };
+    use crate::onnx_proof::{AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, ProofId};
+    use ark_bn254::{Bn254, Fr};
     use common::VirtualPoly;
     use joltworks::{
         poly::{
@@ -129,7 +129,7 @@ mod tests {
 
         let producer_node = ComputationNode::new(0, Operator::Add(Add), vec![], vec![n]);
 
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
 
         let point1 = prover.transcript.challenge_vector_optimized::<Fr>(num_vars);
@@ -185,7 +185,7 @@ mod tests {
 
         let producer_node = ComputationNode::new(producer_idx, Operator::Add(Add), vec![], vec![n]);
 
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
 
         let point = prover.transcript.challenge_vector_optimized::<Fr>(num_vars);
@@ -234,7 +234,7 @@ mod tests {
 
         let producer_node = ComputationNode::new(producer_idx, Operator::Add(Add), vec![], vec![n]);
 
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
 
         let point = verifier

@@ -1,10 +1,10 @@
 //! `mk,kn->mn` layout (standard matrix multiply) for the einsum [`dot`](super::dot) engine.
 
+use crate::compat::tensor::Tensor;
 use crate::{
     onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
-use atlas_onnx_tracer::tensor::Tensor;
 use common::parallel::par_enabled;
 use joltworks::{
     field::JoltField,
@@ -100,8 +100,8 @@ impl<F: JoltField> EinsumLayout<F> for MkKnMnLayout {
 
 #[cfg(test)]
 mod tests {
+    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn matmul_model(rng: &mut StdRng, m: usize, k: usize, n: usize) -> Model {
@@ -149,10 +149,10 @@ mod tests {
     ) -> (Model, Tensor<i32>) {
         let mut b = ModelBuilder::new();
         let i = b.input(vec![m, k]);
-        let c = b.constant(Tensor::new(Some(&vec![const_value; k * n]), &[k, n]).unwrap());
+        let c = b.constant(Tensor::from_slice(&vec![const_value; k * n], &[k, n]).unwrap());
         let res = b.einsum("mk,kn->mn", vec![i, c], vec![m, n]);
         b.mark_output(res);
-        let input = Tensor::new(Some(&vec![input_value; m * k]), &[m, k]).unwrap();
+        let input = Tensor::from_slice(&vec![input_value; m * k], &[m, k]).unwrap();
         (b.build(), input)
     }
 

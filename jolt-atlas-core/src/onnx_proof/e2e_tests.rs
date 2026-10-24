@@ -1,20 +1,21 @@
-use crate::onnx_proof::{
-    proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    AtlasVerifierPreprocessing, ONNXProof,
+use crate::{
+    compat::{
+        model::{trace::ModelExecutionIO, Model, RunArgs},
+        tensor::Tensor,
+    },
+    onnx_proof::{
+        proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+        AtlasVerifierPreprocessing, ONNXProof,
+    },
 };
 use ark_bn254::{Bn254, Fr};
-use atlas_onnx_tracer::{
-    model::{trace::ModelExecutionIO, Model, RunArgs},
-    tensor::Tensor,
-};
 use common::consts::MODEL_SCALE;
 use joltworks::{
     poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
     transcripts::Blake2bTranscript,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use serde_json::Value;
-use std::{collections::HashMap, fs::File, io::Read, time::Instant};
+use std::time::Instant;
 
 // Fixed-point scale factor: 2^8 = 256
 const SCALE: i32 = 256;
@@ -113,24 +114,24 @@ fn prove_and_verify(
 #[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
 #[test]
 fn test_gpt2() {
-    let working_dir = "../atlas-onnx-tracer/models/gpt2/";
+    let working_dir = "../models/gpt2/";
     let mut rng = StdRng::seed_from_u64(42);
     let seq_len: usize = 16;
     let vocab_size: i32 = 50257;
 
     // Input 0: input_ids — random token IDs used as Gather indices
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
-    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq_len]).unwrap();
 
-    // Input 1: position_ids — sequential positions used as Gather indices
+    // Input 1: attention_mask — all 1s (attend everywhere). The importer's
+    // typed input descriptors classify it as a raw integer (it indexes the
+    // extended-mask dictionary), so no fixed-point scaling.
+    let attention_mask_data: Vec<i32> = vec![1; seq_len];
+    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
+
+    // Input 2: position_ids — sequential positions used as Gather indices.
     let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
-    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
-
-    // Input 2: attention_mask — all 1s (attend everywhere)
-    // The model's Cast handler divides by scale to de-quantize, so we provide
-    // the mask in quantized form: 1.0 in fixed-point = 1 << scale.
-    let attention_mask_data: Vec<i32> = vec![1 << MODEL_SCALE; seq_len];
-    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    let position_ids = Tensor::from_slice(&position_ids_data, &[1, seq_len]).unwrap();
 
     // Configure RunArgs for GPT-2. Square/Cube fuse the i64 accumulate + rescale
     // + clamp ; mean-of-squares still decomposes to a raw Square, so very
@@ -144,7 +145,7 @@ fn test_gpt2() {
 
     prove_and_verify(
         working_dir,
-        &[input_ids, position_ids, attention_mask],
+        &[input_ids, attention_mask, position_ids],
         &run_args,
         TestConfig::new().print_model().print_timing(),
     );
@@ -153,25 +154,25 @@ fn test_gpt2() {
 #[ignore = "requires GPT-2 ONNX model download (run scripts/download_gpt2.py first)"]
 #[test]
 fn test_gpt2_dory() {
-    let working_dir = "../atlas-onnx-tracer/models/gpt2/";
+    let working_dir = "../models/gpt2/";
     let mut rng = StdRng::seed_from_u64(42);
     let seq_len: usize = 16;
     let vocab_size: i32 = 50257;
 
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
-    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq_len]).unwrap();
     let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
-    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
-    // 1.0 in fixed-point = 1 << scale.
-    let attention_mask_data: Vec<i32> = vec![1 << MODEL_SCALE; seq_len];
-    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    let position_ids = Tensor::from_slice(&position_ids_data, &[1, seq_len]).unwrap();
+    // Raw 1s: the mask indexes the extended-mask dictionary.
+    let attention_mask_data: Vec<i32> = vec![1; seq_len];
+    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
     let run_args = RunArgs::new([
         ("batch_size", 1),
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ])
     .set_scale(MODEL_SCALE as i32);
-    let inputs = [input_ids, position_ids, attention_mask];
+    let inputs = [input_ids, attention_mask, position_ids];
 
     let model = Model::load(&format!("{working_dir}network.onnx"), &run_args);
     let pp = AtlasSharedPreprocessing::preprocess(model);
@@ -214,20 +215,20 @@ fn test_gpt2_zk() {
         .build()
         .expect("failed to build ZK rayon pool");
 
-    let working_dir = "../atlas-onnx-tracer/models/gpt2/";
+    let working_dir = "../models/gpt2/";
     let mut rng = StdRng::seed_from_u64(42);
     let seq_len: usize = 16;
     let vocab_size: i32 = 50257;
 
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
-    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq_len]).unwrap();
 
     let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
-    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
+    let position_ids = Tensor::from_slice(&position_ids_data, &[1, seq_len]).unwrap();
 
-    // 1.0 in fixed-point = 1 << scale.
-    let attention_mask_data: Vec<i32> = vec![1 << MODEL_SCALE; seq_len];
-    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    // Raw 1s: the mask indexes the extended-mask dictionary.
+    let attention_mask_data: Vec<i32> = vec![1; seq_len];
+    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
 
     let run_args = RunArgs::new([
         ("batch_size", 1),
@@ -248,7 +249,7 @@ fn test_gpt2_zk() {
     let (bundle, io) = zk_pool.install(|| {
         crate::onnx_proof::zk::prove_zk(
             &prover_pp,
-            &[input_ids, position_ids, attention_mask],
+            &[input_ids, attention_mask, position_ids],
             &gens,
         )
     });
@@ -260,22 +261,22 @@ fn test_gpt2_zk() {
 #[ignore = "requires BGE ONNX model download (run scripts/download_bge_small_en_v1_5.py first)"]
 #[test]
 fn test_bge_small_en_v1_5() {
-    let working_dir = "../atlas-onnx-tracer/models/bge-small-en-v1.5/";
+    let working_dir = "../models/bge-small-en-v1.5/";
     let mut rng = StdRng::seed_from_u64(43);
     let seq_len: usize = 16;
     let vocab_size: i32 = 30522;
 
     // Input 0: input_ids — random token IDs used as Gather indices
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
-    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq_len]).unwrap();
 
     // Input 1: token_type_ids — segment IDs in {0, 1}. Use all zeros for single-segment input.
     let token_type_ids_data: Vec<i32> = vec![0; seq_len];
-    let token_type_ids = Tensor::new(Some(&token_type_ids_data), &[1, seq_len]).unwrap();
+    let token_type_ids = Tensor::from_slice(&token_type_ids_data, &[1, seq_len]).unwrap();
 
     // Input 2: attention_mask — all 1s (attend everywhere), in BERT-style binary form.
     let attention_mask_data: Vec<i32> = vec![1; seq_len];
-    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
 
     // Configure RunArgs for BGE
     let run_args = RunArgs::new([
@@ -286,7 +287,7 @@ fn test_bge_small_en_v1_5() {
 
     prove_and_verify(
         working_dir,
-        &[input_ids, token_type_ids, attention_mask],
+        &[input_ids, attention_mask, token_type_ids],
         &run_args,
         TestConfig::new().print_model().print_timing(),
     );
@@ -294,12 +295,12 @@ fn test_bge_small_en_v1_5() {
 
 #[test]
 fn test_nanoGPT() {
-    let working_dir = "../atlas-onnx-tracer/models/nanoGPT/";
+    let working_dir = "../models/nanoGPT/";
     let mut rng = StdRng::seed_from_u64(0x1096);
     let input_data: Vec<i32> = (0..64)
         .map(|_| (1 << 5) + rng.gen_range(-20..=20))
         .collect();
-    let input = Tensor::new(Some(&input_data), &[1, 64]).unwrap();
+    let input = Tensor::from_slice(&input_data, &[1, 64]).unwrap();
     prove_and_verify(
         working_dir,
         &[input],
@@ -313,12 +314,12 @@ fn test_nanoGPT() {
 
 #[test]
 fn test_transformer() {
-    let working_dir = "../atlas-onnx-tracer/models/transformer/";
+    let working_dir = "../models/transformer/";
     let mut rng = StdRng::seed_from_u64(0x1096);
     let input_data: Vec<i32> = (0..64 * 64)
         .map(|_| SCALE + rng.gen_range(-50..=50))
         .collect();
-    let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
+    let input = Tensor::from_slice(&input_data, &[1, 64, 64]).unwrap();
     prove_and_verify(
         working_dir,
         &[input],
@@ -328,31 +329,8 @@ fn test_transformer() {
 }
 
 #[test]
-fn test_minigpt() {
-    let working_dir = "../atlas-onnx-tracer/models/minigpt/";
-    let mut rng = StdRng::seed_from_u64(0x42);
-
-    // Model hyperparameters (matching the minigpt Python script by @karpathy)
-    // vocab_size=1024, n_embd=32, n_head=8, n_layer=2, block_size=32
-    let vocab_size: i32 = 1024;
-    let block_size = 32;
-
-    // Generate random token IDs in [0, vocab_size)
-    let input_data: Vec<i32> = (0..block_size)
-        .map(|_| rng.gen_range(0..vocab_size))
-        .collect();
-    let input = Tensor::new(Some(&input_data), &[1, block_size]).unwrap();
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-}
-
-#[test]
 fn test_microgpt() {
-    let working_dir = "../atlas-onnx-tracer/models/microgpt/";
+    let working_dir = "../models/microgpt/";
     let mut rng = StdRng::seed_from_u64(0x42);
 
     // Model hyperparameters (matching the microGPT Python script by @karpathy)
@@ -364,7 +342,7 @@ fn test_microgpt() {
     let input_data: Vec<i32> = (0..block_size)
         .map(|_| rng.gen_range(0..vocab_size))
         .collect();
-    let input = Tensor::new(Some(&input_data), &[1, block_size]).unwrap();
+    let input = Tensor::from_slice(&input_data, &[1, block_size]).unwrap();
     prove_and_verify(
         working_dir,
         &[input],
@@ -374,24 +352,8 @@ fn test_microgpt() {
 }
 
 #[test]
-fn test_layernorm_head() {
-    let working_dir = "../atlas-onnx-tracer/models/layernorm_head/";
-    let mut rng = StdRng::seed_from_u64(0x8096);
-    let input_data: Vec<i32> = (0..16 * 16)
-        .map(|_| SCALE + rng.gen_range(-50..=50))
-        .collect();
-    let input = Tensor::construct(input_data, vec![16, 16]);
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::default(),
-    );
-}
-
-#[test]
 fn test_multihead_attention() {
-    let working_dir = "../atlas-onnx-tracer/models/multihead_attention/";
+    let working_dir = "../models/multihead_attention/";
     let mut rng = StdRng::seed_from_u64(0x1013);
     let input_data: Vec<i32> = (0..16 * 128)
         .map(|_| SCALE + rng.gen_range(-10..=10))
@@ -405,427 +367,29 @@ fn test_multihead_attention() {
     );
 }
 
-// Anytime we get some structure closer to realistic transformer blocks,
-// the tracer optimizes it and no Concat nodes remain in traced model.
-// So we keep a simpler .onnx model to ensure the concat node remains.
+/// One small synthetic model covering the whole lowerable op surface:
+/// embedding gather, decomposed LayerNorm, masked attention (Where/IsNaN),
+/// both GELU forms, RMSNorm, Split/Concat/Expand, every sum-axis shape,
+/// trig/sigmoid, Neg/Square, and a Cast descale round trip. Generated by
+/// scripts/gen_test_models.py; replaces the retired single-op fixtures.
 #[test]
-fn test_concat_transformer_block_e2e() {
-    let working_dir = "../atlas-onnx-tracer/models/concat_transformer_block/";
-    let mut rng = StdRng::seed_from_u64(0xC07CA7);
-
-    // Matches models/concat_transformer_block/gen.py static input shapes.
-    let head_0 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
-    let head_1 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
-    let head_2 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
-    let head_3 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
-    let head_4 = Tensor::random_range(&mut rng, &[1, 4, 16], (SCALE - 16)..(SCALE + 16));
+fn test_op_gauntlet() {
+    let working_dir = "../models/op_gauntlet/";
+    let mut rng = StdRng::seed_from_u64(0x6AB1);
+    let seq = 16usize;
+    let input_ids_data: Vec<i32> = (0..seq).map(|_| rng.gen_range(0..64)).collect();
+    let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq]).unwrap();
+    // Raw 0/1 mask (bool cond for the attention Where); keep one position
+    // masked out so the mask path is live.
+    let mut mask_data = vec![1i32; seq];
+    mask_data[seq - 1] = 0;
+    let attention_mask = Tensor::from_slice(&mask_data, &[1, seq]).unwrap();
 
     prove_and_verify(
         working_dir,
-        &[head_0, head_1, head_2, head_3, head_4],
-        &RunArgs::default().with_padding(false),
-        TestConfig::new().print_timing().print_model(),
-    );
-}
-
-#[test]
-fn test_self_attention_layer() {
-    let working_dir = "../atlas-onnx-tracer/models/self_attention_layer/";
-    let mut rng = StdRng::seed_from_u64(0x1003);
-    let input_data: Vec<i32> = (0..64 * 64)
-        .map(|_| SCALE + rng.gen_range(-10..=10))
-        .collect();
-    let input = Tensor::construct(input_data, vec![1, 64, 64]);
-
-    prove_and_verify(
-        working_dir,
-        &[input],
+        &[input_ids, attention_mask],
         &Default::default(),
-        TestConfig::new().print_model().debug_info(),
-    );
-}
-
-#[test]
-fn test_sum_axes() {
-    let working_dir = "../atlas-onnx-tracer/models/sum_axes_test/";
-    let mut rng = StdRng::seed_from_u64(0x923);
-    let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().debug_info(),
-    );
-}
-
-#[ignore = "hzkg fails when all coeffs are zero"]
-#[test]
-fn test_sum_independent() {
-    let working_dir = "../atlas-onnx-tracer/models/sum_independent/";
-    let mut rng = StdRng::seed_from_u64(0x923);
-    let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().debug_info(),
-    );
-}
-
-#[test]
-fn test_sum_operations_e2e() {
-    // Test 1D sum along axis 0
-    let working_dir = "../atlas-onnx-tracer/models/sum_1d_axis0/";
-    let mut rng = StdRng::seed_from_u64(0x923);
-    let input = Tensor::random_small(&mut rng, &[8]);
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().debug_info(),
-    );
-
-    // Test 2D sum along axis 0
-    let working_dir = "../atlas-onnx-tracer/models/sum_2d_axis0/";
-    let mut rng = StdRng::seed_from_u64(0x924);
-    let input = Tensor::random_small(&mut rng, &[4, 8]);
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().debug_info(),
-    );
-
-    // Test 2D sum along axis 1
-    let working_dir = "../atlas-onnx-tracer/models/sum_2d_axis1/";
-    let mut rng = StdRng::seed_from_u64(0x925);
-    let input = Tensor::random_small(&mut rng, &[4, 8]);
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().debug_info(),
-    );
-
-    // Test 3D sum along axis 2
-    let working_dir = "../atlas-onnx-tracer/models/sum_3d_axis2/";
-    let mut rng = StdRng::seed_from_u64(0x926);
-    let input = Tensor::random_small(&mut rng, &[1, 4, 8]);
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().debug_info(),
-    );
-}
-
-#[ignore = "hzkg fails when all coeffs are zero"]
-#[test]
-fn test_layernorm_partial_head() {
-    let working_dir = "../atlas-onnx-tracer/models/layernorm_partial_head/";
-    let input_data = vec![SCALE; 16 * 16];
-    let input = Tensor::construct(input_data, vec![16, 16]);
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model(),
-    );
-}
-
-#[test]
-fn test_article_classification() {
-    let working_dir = "../atlas-onnx-tracer/models/article_classification/";
-
-    // Load the vocab mapping from JSON
-    let vocab_path = format!("{working_dir}/vocab.json");
-    let vocab = load_vocab(&vocab_path).expect("Failed to load vocab");
-    // Input text string to classify
-    let input_text = "The government plans new trade policies.";
-
-    // Build input vector from the input text (512 features for small MLP)
-    let input_vector = build_input_vector(input_text, &vocab);
-    let input = Tensor::construct(input_vector, vec![1, 512]);
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-
-    /// Load vocab.json into HashMap<String, (usize, i32)>
-    fn load_vocab(path: &str) -> Result<HashMap<String, (usize, i32)>, Box<dyn std::error::Error>> {
-        let mut file = File::open(path)?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-
-        let json_value: Value = serde_json::from_str(&contents)?;
-        let mut vocab = HashMap::new();
-
-        if let Value::Object(map) = json_value {
-            for (word, data) in map {
-                if let (Some(index), Some(idf)) = (
-                    data.get("index").and_then(|v| v.as_u64()),
-                    data.get("idf").and_then(|v| v.as_f64()),
-                ) {
-                    vocab.insert(word, (index as usize, (idf * 1000.0) as i32));
-                    // Scale IDF and convert to i32
-                }
-            }
-        }
-
-        Ok(vocab)
-    }
-
-    fn build_input_vector(text: &str, vocab: &HashMap<String, (usize, i32)>) -> Vec<i32> {
-        let mut vec = vec![0; 512];
-
-        // Split text into tokens (preserve punctuation as tokens)
-        let re = regex::Regex::new(r"\w+|[^\w\s]").unwrap();
-        for cap in re.captures_iter(text) {
-            let token = cap.get(0).unwrap().as_str().to_lowercase();
-            if let Some(&(index, idf)) = vocab.get(&token) {
-                if index < 512 {
-                    vec[index] += idf; // accumulate idf value
-                }
-            }
-        }
-
-        vec
-    }
-}
-
-#[ignore = "hzkg fails when all coeffs are zero"]
-#[test]
-fn test_add_sub_mul() {
-    let working_dir = "../atlas-onnx-tracer/models/test_add_sub_mul/";
-
-    // Create test input vector of size 65536
-    // Using small values to avoid overflow
-    let mut rng = StdRng::seed_from_u64(0x100);
-    // Create tensor with shape [65536]
-    let input = Tensor::random_range(&mut rng, &[1 << 16], -(1 << 10)..(1 << 10));
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing().debug_info(),
-    );
-}
-
-#[test]
-fn test_rsqrt() {
-    let working_dir = "../atlas-onnx-tracer/models/rsqrt/";
-
-    // Create test input vector of size 4
-    let mut rng = StdRng::seed_from_u64(0x100);
-    let input_vec = (0..4)
-        .map(|_| rng.gen_range(1..i32::MAX))
-        .collect::<Vec<i32>>();
-    let input = Tensor::construct(input_vec, vec![4]);
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-}
-
-#[test]
-fn test_perceptron() {
-    let working_dir = "../atlas-onnx-tracer/models/perceptron/";
-    let input = Tensor::construct(vec![1, 2, 3, 4], vec![1, 4]);
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new()
-            .print_model()
-            .print_timing()
-            .print_proof_size(),
-    );
-}
-
-#[ignore = "hzkg fails when all coeffs are zero"]
-#[test]
-fn test_broadcast() {
-    let working_dir = "../atlas-onnx-tracer/models/broadcast/";
-    let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
-
-    let io = prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-
-    // Print output for verification
-    println!("Output shape: {:?}", io.outputs[0].dims());
-    println!("Expected: input [4] broadcasted through operations to shape [2, 5, 4]");
-}
-
-#[test]
-fn test_reshape() {
-    let working_dir = "../atlas-onnx-tracer/models/reshape/";
-    let input = Tensor::construct(vec![1, 2, 3, 4], vec![4]);
-
-    let io = prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-
-    println!("Output shape: {:?}", io.outputs[0].dims());
-}
-
-#[test]
-fn test_moveaxis() {
-    let working_dir = "../atlas-onnx-tracer/models/moveaxis/";
-    let input_vector: Vec<i32> = (1..=64).collect();
-    let input = Tensor::construct(input_vector, vec![2, 4, 8]);
-
-    let io = prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-
-    println!("Output shape: {:?}", io.outputs[0].dims());
-}
-
-#[test]
-fn test_slice_e2e() {
-    let working_dir = "../atlas-onnx-tracer/models/slice/";
-    let input_vector: Vec<i32> = (1..=64).collect();
-    let input = Tensor::construct(input_vector, vec![2, 4, 8]);
-
-    let io = prove_and_verify(
-        working_dir,
-        &[input],
-        &RunArgs::default().with_padding(false),
-        TestConfig::new().print_model().print_timing(),
-    );
-    println!("Output shape: {:?}", io.outputs[0].dims());
-}
-
-#[test]
-fn test_gather() {
-    let working_dir = "../atlas-onnx-tracer/models/gather/";
-    let mut rng = StdRng::seed_from_u64(0x100);
-    // Input values in [0, 8)
-    let input = Tensor::random_range(&mut rng, &[1, 64], 0..65);
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model(),
-    );
-}
-
-#[test]
-fn test_tanh() {
-    let working_dir = "../atlas-onnx-tracer/models/tanh/";
-    let input_vector = vec![10, 40, 70, 100];
-    let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-}
-
-#[test]
-fn test_erf() {
-    let working_dir = "../atlas-onnx-tracer/models/erf/";
-    let input_vector = vec![10, 40, 70, 100];
-    let input = Tensor::new(Some(&input_vector), &[4]).unwrap();
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-}
-
-#[test]
-fn test_sigmoid() {
-    let working_dir = "../atlas-onnx-tracer/models/sigmoid_encoder/";
-    let mut rng = StdRng::seed_from_u64(0x100);
-    let input = Tensor::random_range(&mut rng, &[1, 4, 16], -(SCALE * 50)..(SCALE * 50));
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-}
-
-#[test]
-fn test_positional_encoding_trig() {
-    let working_dir = "../atlas-onnx-tracer/models/positional_encoding/";
-
-    // Positional-encoding-style angle tensor: [batch=1, sequence_length=8, half_dim=4].
-    // Values are fixed-point quantized with SCALE=256.
-    let input_vector = vec![
-        0, 0, 0, 0, 256, 26, 2, 0, 512, 52, 6, 0, 768, 76, 8, 0, 1024, 102, 10, 2, 1280, 128, 12,
-        2, 1536, 154, 16, 2, 1792, 180, 18, 2,
-    ];
-    let input = Tensor::new(Some(&input_vector), &[1, 8, 4]).unwrap();
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::new().print_model().print_timing(),
-    );
-}
-
-#[test]
-fn test_mlp_square() {
-    let working_dir = "../atlas-onnx-tracer/models/mlp_square/";
-    let input_vector = vec![
-        (70.0 * SCALE as f32) as i32,
-        (71.0 * SCALE as f32) as i32,
-        (72.0 * SCALE as f32) as i32,
-        (73.0 * SCALE as f32) as i32,
-    ];
-    let input = Tensor::new(Some(&input_vector), &[1, 4]).unwrap();
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::default(),
-    );
-}
-
-#[test]
-fn test_mlp_square_4layer() {
-    let working_dir = "../atlas-onnx-tracer/models/mlp_square_4layer/";
-    let input_vector = vec![
-        (1.0 * SCALE as f32) as i32,
-        (2.0 * SCALE as f32) as i32,
-        (3.0 * SCALE as f32) as i32,
-        (4.0 * SCALE as f32) as i32,
-    ];
-    let input = Tensor::new(Some(&input_vector), &[1, 4]).unwrap();
-
-    prove_and_verify(
-        working_dir,
-        &[input],
-        &Default::default(),
-        TestConfig::default(),
+        TestConfig::new().print_timing().debug_info(),
     );
 }
 
@@ -835,7 +399,7 @@ fn test_mlp_square_4layer() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_square_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
 
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF02);
@@ -863,7 +427,7 @@ fn test_square_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_add_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
 
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF03);
@@ -917,7 +481,7 @@ fn test_add_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_zk_constant_binding_rejects_cross_model_attack() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
 
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xC0FFEE);
@@ -927,7 +491,7 @@ fn test_zk_constant_binding_rejects_cross_model_attack() {
     let mut constant_mprime_data: Vec<i32> = constant_m.iter().copied().collect();
     // Make sure they differ in at least one coordinate.
     constant_mprime_data[0] = constant_mprime_data[0].wrapping_add(1);
-    let constant_mprime = Tensor::new(Some(&constant_mprime_data), constant_m.dims())
+    let constant_mprime = Tensor::from_slice(&constant_mprime_data, constant_m.dims())
         .expect("constant tensor should be valid");
 
     let build = |c: Tensor<i32>| {
@@ -1034,7 +598,7 @@ fn test_zk_constant_binding_rejects_cross_model_attack() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_zk_rejects_rebound_input_for_square_model() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
 
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0x5EED);
@@ -1068,7 +632,7 @@ fn test_zk_rejects_rebound_input_for_square_model() {
     // Attack: rebind the verifier-facing input from x to -x, leave the
     // output (x^2 == (-x)^2) unchanged. Must be rejected.
     let neg_data: Vec<i32> = io.inputs[0].iter().map(|v| -v).collect();
-    io.inputs[0] = Tensor::new(Some(&neg_data), io.inputs[0].dims())
+    io.inputs[0] = Tensor::from_slice(&neg_data, io.inputs[0].dims())
         .expect("negated input tensor should be valid");
 
     let rebound = crate::onnx_proof::zk::verify_zk(&bundle, &verifier_pp, &io, &gens);
@@ -1084,12 +648,11 @@ fn test_zk_rejects_rebound_input_for_square_model() {
 /// prover-known opening points).
 #[test]
 fn test_input_binding_changes_transcript() {
-    use crate::onnx_proof::append_inputs_to_transcript;
-    use atlas_onnx_tracer::model::trace::ModelExecutionIO;
+    use crate::{compat::model::trace::ModelExecutionIO, onnx_proof::append_inputs_to_transcript};
     use joltworks::transcripts::{Blake2bTranscript, Transcript};
 
     let io = |vals: &[i32]| ModelExecutionIO {
-        inputs: vec![Tensor::new(Some(vals), &[vals.len()]).unwrap()],
+        inputs: vec![Tensor::from_slice(vals, &[vals.len()]).unwrap()],
         outputs: vec![],
         input_indices: vec![0],
         output_indices: vec![],
@@ -1118,7 +681,7 @@ fn test_input_binding_changes_transcript() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_reshape_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
 
     let mut rng = StdRng::seed_from_u64(0xBF04);
     let input = Tensor::<i32>::random_small(&mut rng, &[4, 4]);
@@ -1144,7 +707,7 @@ fn test_reshape_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_slice_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
 
     let mut rng = StdRng::seed_from_u64(0xBF05);
     let input = Tensor::<i32>::random_small(&mut rng, &[2, 8]);
@@ -1170,7 +733,7 @@ fn test_slice_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_neg_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF06);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1193,7 +756,7 @@ fn test_neg_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_sub_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF07);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1217,7 +780,7 @@ fn test_sub_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_mul_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF08);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1241,7 +804,7 @@ fn test_mul_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_cube_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF09);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1264,7 +827,7 @@ fn test_cube_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_iff_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF10);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1289,7 +852,7 @@ fn test_iff_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_concat_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let mut rng = StdRng::seed_from_u64(0xBF11);
     let a = Tensor::<i32>::random_small(&mut rng, &[4, 2]);
     let b = Tensor::<i32>::random_small(&mut rng, &[4, 2]);
@@ -1313,7 +876,7 @@ fn test_concat_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_scalar_const_div_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF12);
     // ScalarConstDiv divides by a constant integer. The model builder takes the divisor.
@@ -1337,7 +900,7 @@ fn test_scalar_const_div_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_and_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     use rand::Rng;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF13);
@@ -1366,7 +929,7 @@ fn test_and_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_div_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF14);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1391,7 +954,7 @@ fn test_div_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_sigmoid_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF15);
@@ -1417,7 +980,7 @@ fn test_sigmoid_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_tanh_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF16);
@@ -1443,7 +1006,7 @@ fn test_tanh_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_erf_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     use common::consts::ACTIVATION_TABLE_VARS;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF17);
@@ -1469,7 +1032,7 @@ fn test_erf_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_cos_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF18);
     let input = Tensor::random_range(&mut rng, &[size], -5000..5000);
@@ -1492,7 +1055,7 @@ fn test_cos_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_sin_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF19);
     let input = Tensor::random_range(&mut rng, &[size], -5000..5000);
@@ -1515,7 +1078,7 @@ fn test_sin_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_rsqrt_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF20);
     // Rsqrt needs positive inputs; avoid 0 since we divide by x
@@ -1539,7 +1102,7 @@ fn test_rsqrt_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_relu_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF21);
     let input = Tensor::random_range(&mut rng, &[size], -256..256);
@@ -1562,7 +1125,7 @@ fn test_relu_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_einsum_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let m = 1 << 2;
     let k = 1 << 2;
     let n = 1 << 2;
@@ -1589,7 +1152,7 @@ fn test_einsum_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_sum_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let m = 1 << 3;
     let n = 1 << 3;
     let mut rng = StdRng::seed_from_u64(0xBF23);
@@ -1613,7 +1176,7 @@ fn test_sum_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_gather_large_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let dict_len = 70000; // > 65536 to trigger GatherLarge
     let word_dim = 2;
     let num_indices = 1 << 3;
@@ -1640,7 +1203,7 @@ fn test_gather_large_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_gather_small_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let dict_len = 32; // <= 65536 to trigger GatherSmall
     let word_dim = 4;
     let num_indices = 1 << 3;
@@ -1667,7 +1230,7 @@ fn test_gather_small_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_softmax_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let f = 1 << 2; // leading dim (batch)
     let n = 1 << 2; // last axis (softmax dim)
     let mut rng = StdRng::seed_from_u64(0xBF26);
@@ -1691,7 +1254,7 @@ fn test_softmax_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_srs_derived_pedersen_generators() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF30);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1714,7 +1277,7 @@ fn test_srs_derived_pedersen_generators() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_multi_op_arithmetic_chain_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF40);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1743,7 +1306,7 @@ fn test_multi_op_arithmetic_chain_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_multi_op_mul_div_sub_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF41);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1774,7 +1337,7 @@ fn test_multi_op_mul_div_sub_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_multi_op_cube_relu_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF42);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1803,7 +1366,7 @@ fn test_multi_op_cube_relu_zk() {
 #[cfg(feature = "zk")]
 #[test]
 fn test_multi_op_div_add_zk() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     let size = 1 << 4;
     let mut rng = StdRng::seed_from_u64(0xBF43);
     let input = Tensor::<i32>::random_small(&mut rng, &[size]);
@@ -1833,7 +1396,7 @@ fn test_multi_op_div_add_zk() {
 #[ignore = "benchmark, run manually with --release --nocapture"]
 #[test]
 fn bench_square_zk_overhead() {
-    use atlas_onnx_tracer::model::test::ModelBuilder;
+    use crate::compat::model::test::ModelBuilder;
     use std::time::Instant;
 
     let size = 1 << 16;

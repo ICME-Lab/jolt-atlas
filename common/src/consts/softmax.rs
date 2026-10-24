@@ -1,13 +1,13 @@
 use super::general::MODEL_SCALE;
 
 /// log2 of softmax's saturating-clamp table size at [`MODEL_SCALE`]: the padded
-/// `hi_size * base` from `generate_exp_lut_decomposed` (`atlas-onnx-tracer::ops::softmax`) at
+/// `hi_size * base` from `exp_lut_decomposed` (`atlas_trace::semantics::tables`) at
 /// that scale, rounded up to the next power of two. Derived at compile time by
 /// [`softmax_clamp_bound`].
 pub const SOFTMAX_CLAMP_BOUND: usize = softmax_clamp_bound(MODEL_SCALE as u32);
 
 /// Compile-time derivation of [`SOFTMAX_CLAMP_BOUND`] for an arbitrary `scale`, mirroring
-/// `atlas_onnx_tracer::ops::softmax::generate_exp_lut_decomposed`'s arithmetic in fixed-point
+/// `atlas_trace::semantics::tables::exp_lut_decomposed`'s arithmetic in fixed-point
 /// integers (that function needs non-const `f64::ln`, so can't run in `const` context; since its
 /// multiplier `S = 2^scale` is always a power of two, `ln(2S) = (scale + 1) * ln(2)` avoids
 /// needing a real logarithm at all).

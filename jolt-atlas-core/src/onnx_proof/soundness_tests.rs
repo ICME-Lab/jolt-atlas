@@ -1,14 +1,14 @@
-use crate::onnx_proof::{
-    malicious_prover::MaliciousONNXProof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    AtlasVerifierPreprocessing, Blake2bTranscript, ONNXProof,
-};
-use ark_bn254::{Bn254, Fr};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::{test::ModelBuilder, Model},
     node::ComputationNode,
     ops::Operator,
     tensor::Tensor,
 };
+use crate::onnx_proof::{
+    malicious_prover::MaliciousONNXProof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+    AtlasVerifierPreprocessing, Blake2bTranscript, ONNXProof,
+};
+use ark_bn254::{Bn254, Fr};
 use common::VirtualPoly;
 use joltworks::poly::{
     commitment::hyperkzg::HyperKZG,
@@ -29,7 +29,7 @@ fn sub_model_const_2(t: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![t]);
     let c =
-        b.constant(Tensor::new(Some(&vec![2; t]), &[t]).expect("constant tensor should be valid"));
+        b.constant(Tensor::from_slice(&vec![2; t], &[t]).expect("constant tensor should be valid"));
     let out = b.sub(i, c);
     b.mark_output(out);
     b.build()
@@ -121,7 +121,7 @@ fn soundness_sub_virtual_operand_attack_is_rejected() {
 fn soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected() {
     let t = 1 << 6;
     let model = sub_model_const_2(t);
-    let input = Tensor::new(Some(&vec![3; t]), &[t]).expect("input tensor should be valid");
+    let input = Tensor::from_slice(&vec![3; t], &[t]).expect("input tensor should be valid");
 
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);

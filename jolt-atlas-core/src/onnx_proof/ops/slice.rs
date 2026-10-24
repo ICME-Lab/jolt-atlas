@@ -1,14 +1,14 @@
-use crate::utils::{
-    dims::{coord_to_linear, linear_to_coord},
-    opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::{
         trace::{LayerData, Trace},
         ComputationGraph,
     },
     node::ComputationNode,
     ops::{Operator, Slice},
+};
+use crate::utils::{
+    dims::{coord_to_linear, linear_to_coord},
+    opening_access::{AccOpeningAccessor, Target},
 };
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
@@ -227,7 +227,7 @@ impl<F: JoltField> SliceSumcheckProver<F> {
             panic!("Slice expects exactly one operand")
         };
 
-        let input_mle = MultilinearPolynomial::from(input.padded_next_power_of_two());
+        let input_mle = MultilinearPolynomial::from(input.padded_pow2());
         let selector = build_slice_selector(
             &params.input_raw_dims,
             &params.output_raw_dims,
@@ -428,11 +428,11 @@ fn validate_slice_shapes(
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn slice_model(input_shape: Vec<usize>, axis: usize, start: usize, end: usize) -> Model {

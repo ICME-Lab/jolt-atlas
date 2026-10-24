@@ -32,14 +32,14 @@
 
 use std::{array, sync::Arc};
 
-use crate::{
-    onnx_proof::fused_rebase,
-    utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     tensor::Tensor,
+};
+use crate::{
+    onnx_proof::fused_rebase,
+    utils::opening_access::{AccOpeningAccessor, Target},
 };
 use common::parallel::par_enabled;
 use joltworks::{

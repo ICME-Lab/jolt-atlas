@@ -58,7 +58,7 @@ use super::{
     deferred_lookups::DEFERRED_PROOF_IDX,
     global_clamp::ClampBucket,
 };
-use atlas_onnx_tracer::{model::trace::Trace, model::Model, node::ComputationNode};
+use crate::compat::{model::trace::Trace, model::Model, node::ComputationNode};
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::subprotocols::booleanity::{LinearClaim, LinearTerm};
 use joltworks::{
@@ -177,7 +177,7 @@ pub fn exact_output_prover(model: &Model, trace: &Trace, node_idx: usize) -> boo
 /// [`exact_output_prover`] from the verifier's public IO.
 pub fn exact_output_verifier(
     model: &Model,
-    io: &atlas_onnx_tracer::model::trace::ModelExecutionIO,
+    io: &crate::compat::model::trace::ModelExecutionIO,
     node_idx: usize,
 ) -> bool {
     model.outputs().contains(&node_idx)
@@ -241,9 +241,7 @@ impl NodeSplit {
     /// Re-derive the node's split witness from the trace.
     pub fn from_trace(node: &ComputationNode, trace: &Trace) -> Self {
         let acc = clamp_intermediate(node, trace);
-        let out = Trace::layer_data(trace, node)
-            .output
-            .padded_next_power_of_two();
+        let out = Trace::layer_data(trace, node).output.padded_pow2();
         Self::new(acc.data(), out.data())
     }
 }

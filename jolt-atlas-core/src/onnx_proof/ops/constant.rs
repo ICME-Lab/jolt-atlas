@@ -1,9 +1,9 @@
+use crate::compat::{node::ComputationNode, ops::Constant};
 use crate::onnx_proof::{
     ops::{OperatorProofTrait, Prover, Verifier},
     ProofId,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_onnx_tracer::{node::ComputationNode, ops::Constant};
 
 use joltworks::{
     field::JoltField, poly::multilinear_polynomial::EvaluateMle,

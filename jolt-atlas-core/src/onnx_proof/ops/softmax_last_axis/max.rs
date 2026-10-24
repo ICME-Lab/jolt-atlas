@@ -1,8 +1,8 @@
 use common::parallel::par_enabled;
 use std::array;
 
+use crate::compat::node::ComputationNode;
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
-use atlas_onnx_tracer::node::ComputationNode;
 use common::VirtualPoly;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{

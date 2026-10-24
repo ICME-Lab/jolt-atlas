@@ -1,3 +1,4 @@
+use crate::compat::{node::ComputationNode, ops::Tanh};
 use crate::onnx_proof::{
     ops::{
         activation_clamped::{
@@ -8,7 +9,6 @@ use crate::onnx_proof::{
     },
     ProofId, Prover, Verifier,
 };
-use atlas_onnx_tracer::{node::ComputationNode, ops::Tanh, tensor::ops::nonlinearities};
 use common::{
     consts::{ACTIVATION_TABLE_VARS, MODEL_SCALE},
     CommittedPoly,
@@ -27,7 +27,7 @@ impl SmallActivationTable for TanhTableMarker {
             ACTIVATION_TABLE_VARS,
             1,
             MODEL_SCALE as i32,
-            nonlinearities::tanh,
+            atlas_trace::semantics::tables::TableKind::Tanh,
         )
     }
 }
@@ -58,11 +58,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
+    use crate::compat::{
         model::{test::ModelBuilder, Model},
         tensor::Tensor,
     };
+    use crate::onnx_proof::ops::test::unit_test_op;
     use common::consts::ACTIVATION_BOUND;
     use rand::{rngs::StdRng, SeedableRng};
 

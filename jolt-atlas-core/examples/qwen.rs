@@ -1,3 +1,5 @@
+use bincode::config::standard;
+use common::utils::logging::setup_tracing;
 /// Run with tracing:
 /// ```bash
 /// # Chrome Tracing JSON output (view in chrome://tracing)
@@ -21,12 +23,10 @@
 /// `common::consts::MODEL_SCALE == 14` (Qwen's export scale) — several proving-side lookup
 /// tables are const-generic on `MODEL_SCALE` rather than runtime scale, so this can't be passed
 /// as a flag; edit `common/src/consts/general.rs` and recompile if needed.
-use atlas_onnx_tracer::{
+use jolt_atlas_core::compat::{
     model::{Model, RunArgs},
     tensor::Tensor,
 };
-use bincode::config::standard;
-use common::utils::logging::setup_tracing;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, DoryScheme, Fr, ONNXProof,
@@ -34,9 +34,9 @@ use jolt_atlas_core::onnx_proof::{
 use std::{env, fs, path::Path};
 use tokenizers::Tokenizer;
 
-const MODEL_PATH: &str = "atlas-onnx-tracer/models/qwen/network.onnx";
-const TOKENIZER_PATH: &str = "atlas-onnx-tracer/models/qwen/tokenizer.json";
-const SHARED_PP_CACHE_PATH: &str = "atlas-onnx-tracer/models/qwen/shared_preprocessing.bin";
+const MODEL_PATH: &str = "models/qwen/network.onnx";
+const TOKENIZER_PATH: &str = "models/qwen/tokenizer.json";
+const SHARED_PP_CACHE_PATH: &str = "models/qwen/shared_preprocessing.bin";
 /// Same default as `qwen_quant_error_analysis`'s `setup(...)` call, so the two examples are
 /// directly comparable out of the box.
 const DEFAULT_PROMPT: &str = "The quick brown fox jumps over the lazy dog";
@@ -67,12 +67,12 @@ fn parse_input_arg(args: &[String]) -> String {
 }
 
 /// Per-operator histogram of the statically derived saturating-clamp widths
-/// (see `atlas_onnx_tracer::model::clamp_width`).
+/// (see `jolt_atlas_core::compat::model::clamp_width`).
 fn print_clamp_width_histogram(model: &Model) {
     use std::collections::BTreeMap;
     let mut hist: BTreeMap<(String, usize), usize> = BTreeMap::new();
     for node in model.graph.nodes.values() {
-        if atlas_onnx_tracer::model::clamp_width::clamp_value_bound(node, &model.graph.nodes)
+        if jolt_atlas_core::compat::model::clamp_width::clamp_value_bound(node, &model.graph.nodes)
             .is_some()
         {
             let op = format!("{:?}", node.operator);
@@ -197,7 +197,7 @@ fn main() {
     let scale = run_args.scale;
 
     let input_ids_data: Vec<i32> = token_ids.iter().map(|&id| id as i32).collect();
-    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq_len]).unwrap();
 
     // Qwen export input 1 is `position_ids`, fixed-point (i << scale) so RoPE's
     // Einsum(inv_freq, pos)/2^scale = inv_freq * i. Matches `qea::make_qwen_i32_inputs`,
@@ -208,10 +208,11 @@ fn main() {
         "seq_len={seq_len} too large for scale={scale} (max position index {max_pos})"
     );
     let position_ids_data: Vec<i32> = (0..seq_len as i32).map(|i| i << scale).collect();
-    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
-    // Input 2 is `attention_mask`; provide quantized 1.0s (attend everywhere).
-    let attention_mask_data: Vec<i32> = vec![1 << scale; seq_len];
-    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    let position_ids = Tensor::from_slice(&position_ids_data, &[1, seq_len]).unwrap();
+    // `attention_mask`: raw 1s (attend everywhere) — it indexes the
+    // extended-mask dictionary, so no fixed-point scaling.
+    let attention_mask_data: Vec<i32> = vec![1; seq_len];
+    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
 
     tracing::info!("Loaded input data");
     let pp = load_or_build_shared_preprocessing(&run_args, use_cache);
@@ -223,7 +224,7 @@ fn main() {
     let timing = std::time::Instant::now();
     let (proof, io, _debug_info) = ONNXProof::<Fr, Blake2bTranscript, DoryScheme>::prove(
         &prover_preprocessing,
-        &[input_ids, position_ids, attention_mask],
+        &[input_ids, attention_mask, position_ids],
     );
     println!("Proof generation took {:.2?}", timing.elapsed());
     println!(

@@ -1,6 +1,6 @@
 use core::panic;
 
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::{
         trace::{LayerData, Trace},
         ComputationGraph,
@@ -204,7 +204,7 @@ impl<F: JoltField> BroadcastVerifier<F> {
 fn build_broadcast_tensor(input_dims: &[usize], target_dims: &[usize]) -> Tensor<i32> {
     let bc_dims = get_broadcast_dims(input_dims, target_dims);
     let num_elems: usize = bc_dims.iter().product();
-    Tensor::new(Some(&vec![1i32; num_elems]), &bc_dims).unwrap()
+    Tensor::from_slice(&vec![1i32; num_elems], &bc_dims).unwrap()
 }
 
 /// Computes the broadcast dimensions
@@ -264,8 +264,8 @@ fn split_broadcast_vars<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
+    use crate::compat::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {

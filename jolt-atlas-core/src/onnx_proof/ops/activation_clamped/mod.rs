@@ -13,6 +13,11 @@
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
 //! `BatchedSumcheck` call.
 
+use crate::compat::{
+    model::trace::{LayerData, Trace},
+    node::ComputationNode,
+    tensor::Tensor,
+};
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
@@ -23,11 +28,6 @@ use crate::{
         ProofId, Prover, Verifier,
     },
     utils::{compute_lookup_indices_from_operands, opening_access::AccOpeningAccessor},
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    tensor::{ops::nonlinearities, Tensor},
 };
 use common::{
     consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, XLEN},
@@ -62,9 +62,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
-};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::marker::PhantomData;
 
 const EXEC_DEGREE_BOUND: usize = 2;
@@ -242,8 +240,9 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
     ) -> Self {
         let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
         let raw_input = operands[0];
-        let clamped_tensor = nonlinearities::clamp(raw_input, ACTIVATION_BOUND);
-        let clamped_tensor_padded = clamped_tensor.padded_next_power_of_two();
+        let clamp_bound = 1i32 << ACTIVATION_BOUND;
+        let clamped_tensor = raw_input.map(|x| x.clamp(-clamp_bound, clamp_bound - 1));
+        let clamped_tensor_padded = clamped_tensor.padded_pow2();
 
         let clamped_claim = MultilinearPolynomial::from(
             clamped_tensor_padded

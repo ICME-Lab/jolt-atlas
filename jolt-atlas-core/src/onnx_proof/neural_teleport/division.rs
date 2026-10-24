@@ -5,13 +5,13 @@
 //! Once `q` and `r` each have an evaluation claim at the same point, deriving `a`'s claim is
 //! pure field arithmetic — no sumcheck is needed to enforce the identity.
 
-use crate::onnx_proof::{Prover, Verifier};
-use crate::utils::opening_access::{AccOpeningAccessor, Target};
-use atlas_onnx_tracer::{
+use crate::compat::{
     model::trace::{LayerData, Trace},
     node::ComputationNode,
     tensor::Tensor,
 };
+use crate::onnx_proof::{Prover, Verifier};
+use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,

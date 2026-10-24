@@ -6,8 +6,8 @@
 //! ```bash
 //! cargo run --release --package jolt-atlas-core --example cos_bench
 //! ```
-use atlas_onnx_tracer::{model::test::ModelBuilder, tensor::Tensor};
 use common::consts::MODEL_SCALE;
+use jolt_atlas_core::compat::{model::test::ModelBuilder, tensor::Tensor};
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, Fr, HyperKZG, ONNXProof,
@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 const INPUT_LENS: &[usize] = &[1 << 8, 1 << 16];
 const NUM_RUNS: usize = 5;
 
-fn cos_model(input_len: usize) -> atlas_onnx_tracer::model::Model {
+fn cos_model(input_len: usize) -> jolt_atlas_core::compat::model::Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![input_len]);
     let res = b.cos(i);

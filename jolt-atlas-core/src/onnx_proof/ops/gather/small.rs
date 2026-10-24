@@ -1,5 +1,5 @@
 use super::*;
-use atlas_onnx_tracer::ops::GatherSmall;
+use crate::compat::ops::GatherSmall;
 use common::CommittedPoly;
 use joltworks::subprotocols::{
     booleanity::{
@@ -308,7 +308,7 @@ pub(crate) fn build_stage3_verifier<F: JoltField>(
 #[cfg(feature = "zk")]
 pub(crate) fn build_stage2_verifiers_zk<F: JoltField>(
     computation_node: &ComputationNode,
-    graph: &atlas_onnx_tracer::model::ComputationGraph,
+    graph: &crate::compat::model::ComputationGraph,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
 ) -> (
@@ -343,7 +343,7 @@ pub(crate) fn build_stage2_verifiers_zk<F: JoltField>(
 #[cfg(feature = "zk")]
 pub(crate) fn build_stage3_verifier_zk<F: JoltField>(
     computation_node: &ComputationNode,
-    graph: &atlas_onnx_tracer::model::ComputationGraph,
+    graph: &crate::compat::model::ComputationGraph,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
 ) -> HammingWeightSumcheckVerifier<F> {

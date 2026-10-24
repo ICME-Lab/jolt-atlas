@@ -16,9 +16,10 @@ use crate::{
     graph::{ConstData, ConstTensor},
 };
 
-/// Finite constants beyond this magnitude are treated as ±∞ stand-ins
-/// (attention-mask sentinels, Clip bounds), never as values to represent.
-const INFINITY_PROXY: f64 = 1e6;
+/// Finite constants below this magnitude are treated as −∞ stand-ins
+/// (attention-mask sentinels like GPT-2's -3.4e38), never as values to
+/// represent.
+const NEG_INFINITY_PROXY: f64 = -1e6;
 
 /// Quantize one float: `round(x · 2^scale)`, with the old crate's pinned
 /// special cases. Exactly one of four things happens:
@@ -26,10 +27,8 @@ const INFINITY_PROXY: f64 = 1e6;
 /// 1. `round(x·2^s)` fits i32 → that value (sub-resolution rounds to 0);
 /// 2. unrepresentable and `x < -1e6` (e.g. the -3.4e38 attention mask in
 ///    GPT-2) → the scale-indexed mask sentinel;
-/// 3. unrepresentable and `x > 1e6` (e.g. +3.4e38 Clip bounds) → half the
-///    i32 range;
-/// 4. anything else — NaN, or a finite value too large for i32 fixed point
-///    at this scale — → a typed error.
+/// 3. anything else — NaN, +∞ stand-ins, or a finite value too large for
+///    i32 fixed point at this scale — → a typed error.
 pub fn quantize_float(x: f64, scale: Scale, tensor_name: &str) -> Result<i32, ImportError> {
     let mult = scale.denom_i64() as f64;
     let scaled = (x * mult).round();
@@ -44,12 +43,16 @@ pub fn quantize_float(x: f64, scale: Scale, tensor_name: &str) -> Result<i32, Im
         return Ok(scaled as i32);
     }
 
-    // ±∞ stand-ins, pinned from the old crate.
-    if x < -INFINITY_PROXY {
+    // −∞ stand-in: the minimal magnitude whose softmax weight is exactly
+    // zero (see `mask_sentinel_magnitude`) — the fixed-point meaning of an
+    // additive attention mask. Retires when the masked-softmax selector
+    // lands and mask-add patterns lower to `SoftmaxLastAxis.active_len`.
+    // (There is deliberately no +∞ counterpart: nothing in the zoo produces
+    // one, and a huge positive constant has no principled stand-in — a
+    // model that needs e.g. +inf Clip bounds should get a Clip-elision
+    // pass, not a magic value.)
+    if x < NEG_INFINITY_PROXY {
         return Ok((-mask_sentinel_magnitude(scale) * mult) as i32);
-    }
-    if x > INFINITY_PROXY {
-        return Ok((((i32::MAX as f64) / mult).round() / 2.0 * mult) as i32);
     }
 
     Err(ImportError::QuantRange {
@@ -112,13 +115,8 @@ mod tests {
 
     #[test]
     fn positive_saturation_and_errors() {
-        // > 1e6 saturates to max_value/2.
-        let v = quantize_float(3.4e38, s(14), "t").unwrap();
-        assert_eq!(
-            v,
-            ((i32::MAX as f64 / 16384.0).round() / 2.0 * 16384.0) as i32
-        );
-        // In (max_value, 1e6]: hard error.
+        // Unrepresentable positive values error — there is no +∞ stand-in.
+        assert!(quantize_float(3.4e38, s(14), "t").is_err());
         assert!(quantize_float(500_000.0, s(14), "t").is_err());
         assert!(quantize_float(-500_000.0, s(14), "t").is_err());
     }
@@ -140,17 +138,15 @@ mod tests {
         assert!(quantize_float(f64::NAN, s(14), "t").is_err());
     }
 
-    /// Infinities take the same ±∞-proxy paths as the ±3.4e38 sentinels.
+    /// -∞ takes the mask-sentinel path like -3.4e38; +∞ errors like any
+    /// unrepresentable positive value.
     #[test]
     fn infinities_take_sentinel_paths() {
         assert_eq!(
             quantize_float(f64::NEG_INFINITY, s(14), "t").unwrap(),
             quantize_float(-3.4e38, s(14), "t").unwrap()
         );
-        assert_eq!(
-            quantize_float(f64::INFINITY, s(14), "t").unwrap(),
-            quantize_float(3.4e38, s(14), "t").unwrap()
-        );
+        assert!(quantize_float(f64::INFINITY, s(14), "t").is_err());
     }
 
     /// The representability gate is on the exact scaled value: the largest

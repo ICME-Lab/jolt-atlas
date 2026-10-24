@@ -271,92 +271,6 @@ impl IGraph {
     }
 }
 
-/// Decode a `TensorProto` into a [`ConstTensor`].
-pub fn decode_tensor(t: &proto::TensorProto, model_dir: &Path) -> Result<ConstTensor, ImportError> {
-    use proto::tensor_proto::DataType;
-
-    if t.segment.is_some() {
-        return Err(ImportError::UnsupportedFeature {
-            what: "TensorProto.segment".into(),
-            context: t.name.clone(),
-        });
-    }
-    // Model files are untrusted: dims are checked (no negative sizes, no
-    // overflow in the element count, and a hard cap) before any allocation.
-    let dims: Vec<usize> = t
-        .dims
-        .iter()
-        .map(|&d| {
-            usize::try_from(d)
-                .map_err(|_| ImportError::Malformed(format!("tensor {}: negative dim {d}", t.name)))
-        })
-        .collect::<Result<_, _>>()?;
-    let expected = checked_element_count(&dims)
-        .ok_or_else(|| ImportError::Malformed(format!("tensor {}: dims overflow", t.name)))?;
-    let raw = proto::tensor_payload(t, model_dir)?;
-
-    let dtype = DataType::try_from(t.data_type).map_err(|_| ImportError::UnsupportedFeature {
-        what: format!("tensor data_type {}", t.data_type),
-        context: t.name.clone(),
-    })?;
-    let (dtype, data) = match dtype {
-        DataType::Float => {
-            let v: Vec<f32> = if !raw.is_empty() {
-                raw.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().expect("chunk of 4")))
-                    .collect()
-            } else {
-                t.float_data.clone()
-            };
-            (DType::F32, ConstData::F32(v))
-        }
-        DataType::Int64 => {
-            let v: Vec<i64> = if !raw.is_empty() {
-                raw.chunks_exact(8)
-                    .map(|c| i64::from_le_bytes(c.try_into().expect("chunk of 8")))
-                    .collect()
-            } else {
-                t.int64_data.clone()
-            };
-            (DType::I64, ConstData::I64(v))
-        }
-        DataType::Int32 => {
-            let v: Vec<i64> = if !raw.is_empty() {
-                raw.chunks_exact(4)
-                    .map(|c| i32::from_le_bytes(c.try_into().expect("chunk of 4")) as i64)
-                    .collect()
-            } else {
-                t.int32_data.iter().map(|&v| v as i64).collect()
-            };
-            (DType::I32, ConstData::I64(v))
-        }
-        DataType::Bool => {
-            let v: Vec<bool> = if !raw.is_empty() {
-                raw.iter().map(|&b| b != 0).collect()
-            } else {
-                t.int32_data.iter().map(|&v| v != 0).collect()
-            };
-            (DType::Bool, ConstData::Bool(v))
-        }
-        other => {
-            return Err(ImportError::UnsupportedFeature {
-                what: format!("tensor data type {other:?} (re-export the model in fp32)"),
-                context: t.name.clone(),
-            });
-        }
-    };
-    let tensor = ConstTensor { dtype, dims, data };
-    if tensor.len() != expected {
-        return Err(ImportError::Malformed(format!(
-            "tensor {}: {} elements, dims {:?} expect {expected}",
-            t.name,
-            tensor.len(),
-            tensor.dims
-        )));
-    }
-    Ok(tensor)
-}
-
 /// Build the importer graph from the decoded model: intern all edges, attach
 /// initializers as constants, resolve graph-input shapes against `bindings`.
 pub fn from_proto(
@@ -465,6 +379,146 @@ pub fn from_proto(
     }
 
     Ok(g)
+}
+
+/// Decode a `TensorProto` into a [`ConstTensor`].
+pub fn decode_tensor(t: &proto::TensorProto, model_dir: &Path) -> Result<ConstTensor, ImportError> {
+    use proto::tensor_proto::DataType;
+
+    if t.segment.is_some() {
+        return Err(ImportError::UnsupportedFeature {
+            what: "TensorProto.segment".into(),
+            context: t.name.clone(),
+        });
+    }
+    // Model files are untrusted: dims are checked (no negative sizes, no
+    // overflow in the element count, and a hard cap) before any allocation.
+    let dims: Vec<usize> = t
+        .dims
+        .iter()
+        .map(|&d| {
+            usize::try_from(d)
+                .map_err(|_| ImportError::Malformed(format!("tensor {}: negative dim {d}", t.name)))
+        })
+        .collect::<Result<_, _>>()?;
+    let expected = checked_element_count(&dims)
+        .ok_or_else(|| ImportError::Malformed(format!("tensor {}: dims overflow", t.name)))?;
+    let mut raw = proto::tensor_payload(t, model_dir)?;
+    let external = t.data_location == proto::tensor_proto::DataLocation::External as i32;
+
+    let dtype = DataType::try_from(t.data_type).map_err(|_| ImportError::UnsupportedFeature {
+        what: format!("tensor data_type {}", t.data_type),
+        context: t.name.clone(),
+    })?;
+    let has_raw_data = !raw.is_empty() || external;
+    if has_raw_data {
+        validate_raw_payload(t, dtype, expected, &mut raw)?;
+    }
+    let (dtype, data) = match dtype {
+        DataType::Float => {
+            let v: Vec<f32> = if has_raw_data {
+                raw.chunks_exact(4)
+                    .map(|c| f32::from_le_bytes(c.try_into().expect("chunk of 4")))
+                    .collect()
+            } else {
+                t.float_data.clone()
+            };
+            (DType::F32, ConstData::F32(v))
+        }
+        DataType::Int64 => {
+            let v: Vec<i64> = if has_raw_data {
+                raw.chunks_exact(8)
+                    .map(|c| i64::from_le_bytes(c.try_into().expect("chunk of 8")))
+                    .collect()
+            } else {
+                t.int64_data.clone()
+            };
+            (DType::I64, ConstData::I64(v))
+        }
+        DataType::Int32 => {
+            let v: Vec<i64> = if has_raw_data {
+                raw.chunks_exact(4)
+                    .map(|c| i32::from_le_bytes(c.try_into().expect("chunk of 4")) as i64)
+                    .collect()
+            } else {
+                t.int32_data.iter().map(|&v| v as i64).collect()
+            };
+            (DType::I32, ConstData::I64(v))
+        }
+        DataType::Bool => {
+            let v: Vec<bool> = if has_raw_data {
+                raw.iter().map(|&b| b != 0).collect()
+            } else {
+                t.int32_data.iter().map(|&v| v != 0).collect()
+            };
+            (DType::Bool, ConstData::Bool(v))
+        }
+        other => {
+            return Err(ImportError::UnsupportedFeature {
+                what: format!("tensor data type {other:?} (re-export the model in fp32)"),
+                context: t.name.clone(),
+            });
+        }
+    };
+    let tensor = ConstTensor { dtype, dims, data };
+    if tensor.len() != expected {
+        return Err(ImportError::Malformed(format!(
+            "tensor {}: {} elements, dims {:?} expect {expected}",
+            t.name,
+            tensor.len(),
+            tensor.dims
+        )));
+    }
+    Ok(tensor)
+}
+
+/// Validate the size of a tensor's raw payload. External data without an
+/// explicit length may share a file with later tensors, so keep only the
+/// number of bytes described by this tensor's shape and type.
+fn validate_raw_payload(
+    tensor: &proto::TensorProto,
+    dtype: proto::tensor_proto::DataType,
+    expected_elements: usize,
+    raw: &mut Vec<u8>,
+) -> Result<(), ImportError> {
+    use proto::tensor_proto::{DataLocation, DataType};
+
+    let bytes_per_element = match dtype {
+        DataType::Float | DataType::Int32 => 4,
+        DataType::Int64 => 8,
+        DataType::Bool => 1,
+        _ => return Ok(()),
+    };
+    let expected_bytes = expected_elements
+        .checked_mul(bytes_per_element)
+        .ok_or_else(|| {
+            ImportError::Malformed(format!("tensor {}: byte size overflow", tensor.name))
+        })?;
+    let external = tensor.data_location == DataLocation::External as i32;
+    let external_without_length =
+        external && !tensor.external_data.iter().any(|kv| kv.key == "length");
+
+    if external_without_length {
+        if raw.len() < expected_bytes {
+            return Err(ImportError::Malformed(format!(
+                "tensor {}: raw payload has {} bytes, dims {:?} and data type {:?} need {expected_bytes}",
+                tensor.name,
+                raw.len(),
+                tensor.dims,
+                dtype
+            )));
+        }
+        raw.truncate(expected_bytes);
+    } else if raw.len() != expected_bytes {
+        return Err(ImportError::Malformed(format!(
+            "tensor {}: raw payload has {} bytes, dims {:?} and data type {:?} expect {expected_bytes}",
+            tensor.name,
+            raw.len(),
+            tensor.dims,
+            dtype
+        )));
+    }
+    Ok(())
 }
 
 /// Hard cap on the element count of any tensor the importer will represent:
@@ -712,5 +766,19 @@ mod tests {
         assert_eq!(g.producer(b).map(|(i, _)| i), Some(new));
         g.remove_node(new);
         assert!(g.producer(b).is_none());
+    }
+
+    #[test]
+    fn decode_tensor_rejects_raw_payload_with_trailing_bytes() {
+        let tensor = proto::TensorProto {
+            dims: vec![1],
+            data_type: proto::tensor_proto::DataType::Float as i32,
+            raw_data: vec![0; 5].into(),
+            ..Default::default()
+        };
+
+        let error = decode_tensor(&tensor, Path::new("."))
+            .expect_err("raw payload with a trailing byte must be rejected");
+        assert!(error.to_string().contains("raw payload has 5 bytes"));
     }
 }

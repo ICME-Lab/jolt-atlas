@@ -29,6 +29,85 @@ const CANONICAL_EINSUMS: &[&str] = &["mk,kn->mn", "mk,nk->mn", "amk,ank->amn", "
 /// parity (`node/handlers/index.rs`).
 const GATHER_SMALL_LIMIT: usize = 65_536;
 
+/// Lower the rewritten importer graph. `descriptors` come from
+/// [`classify_inputs`] run *before* the rewrite passes (classification
+/// inspects `Cast`/`Gather` uses that passes rewrite away).
+pub fn lower(
+    g: &IGraph,
+    scale: Scale,
+    descriptors: &[InputDescriptor],
+) -> Result<Lowered, ImportError> {
+    // Inputs that nothing consumes (e.g. empty KV-cache tensors whose
+    // concats were elided) are pruned — same behavior as the old pipeline.
+    let use_counts = g.use_counts();
+    let live_inputs: Vec<EdgeId> = g
+        .inputs
+        .iter()
+        .copied()
+        .filter(|&e| use_counts[e.0] > 0)
+        .collect();
+    let input_descriptors: Vec<InputDescriptor> = live_inputs
+        .iter()
+        .map(|&e| {
+            let name = &g.edge(e).name;
+            descriptors
+                .iter()
+                .find(|d| &d.name == name)
+                .cloned()
+                .ok_or_else(|| ImportError::Malformed(format!("input {name} has no descriptor")))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let mut lw = Lowerer {
+        g,
+        scale,
+        nodes: Vec::new(),
+        edge_to_node: HashMap::new(),
+        inputs: Vec::new(),
+    };
+
+    // Graph inputs first, in declared order.
+    for &edge in &live_inputs {
+        let dims = lower_dims(g.dims(edge).ok_or_else(|| {
+            ImportError::Malformed(format!("input {} has no shape", g.edge(edge).name))
+        })?);
+        let id = lw.push(Op::Input(op::Input), vec![], dims);
+        lw.inputs.push(id);
+        lw.edge_to_node.insert(edge, id);
+    }
+
+    for idx in g.topo_order()? {
+        let node = g.nodes[idx].as_ref().expect("live");
+        if node.outputs.len() != 1 {
+            return Err(ImportError::Malformed(format!(
+                "node {} still has {} outputs at lowering",
+                node.name,
+                node.outputs.len()
+            )));
+        }
+        lw.lower_node(node)?;
+    }
+
+    // resolve(), not a bare map lookup: a graph output can be a constant
+    // edge (an initializer, or a value analysis fully folded) that no
+    // surviving node produces — it must be materialized like any other
+    // constant operand.
+    let outputs = g
+        .outputs
+        .iter()
+        .map(|&e| lw.resolve(e))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Lowered {
+        graph: Graph {
+            nodes: lw.nodes,
+            inputs: lw.inputs,
+            outputs,
+        },
+        input_descriptors,
+    })
+}
+
 /// The lowering result.
 pub struct Lowered {
     /// The atlas-trace graph (uncompiled).
@@ -329,85 +408,6 @@ impl<'g> Lowerer<'g> {
         self.edge_to_node.insert(node.outputs[0], id);
         Ok(())
     }
-}
-
-/// Lower the rewritten importer graph. `descriptors` come from
-/// [`classify_inputs`] run *before* the rewrite passes (classification
-/// inspects `Cast`/`Gather` uses that passes rewrite away).
-pub fn lower(
-    g: &IGraph,
-    scale: Scale,
-    descriptors: &[InputDescriptor],
-) -> Result<Lowered, ImportError> {
-    // Inputs that nothing consumes (e.g. empty KV-cache tensors whose
-    // concats were elided) are pruned — same behavior as the old pipeline.
-    let use_counts = g.use_counts();
-    let live_inputs: Vec<EdgeId> = g
-        .inputs
-        .iter()
-        .copied()
-        .filter(|&e| use_counts[e.0] > 0)
-        .collect();
-    let input_descriptors: Vec<InputDescriptor> = live_inputs
-        .iter()
-        .map(|&e| {
-            let name = &g.edge(e).name;
-            descriptors
-                .iter()
-                .find(|d| &d.name == name)
-                .cloned()
-                .ok_or_else(|| ImportError::Malformed(format!("input {name} has no descriptor")))
-        })
-        .collect::<Result<_, _>>()?;
-
-    let mut lw = Lowerer {
-        g,
-        scale,
-        nodes: Vec::new(),
-        edge_to_node: HashMap::new(),
-        inputs: Vec::new(),
-    };
-
-    // Graph inputs first, in declared order.
-    for &edge in &live_inputs {
-        let dims = lower_dims(g.dims(edge).ok_or_else(|| {
-            ImportError::Malformed(format!("input {} has no shape", g.edge(edge).name))
-        })?);
-        let id = lw.push(Op::Input(op::Input), vec![], dims);
-        lw.inputs.push(id);
-        lw.edge_to_node.insert(edge, id);
-    }
-
-    for idx in g.topo_order()? {
-        let node = g.nodes[idx].as_ref().expect("live");
-        if node.outputs.len() != 1 {
-            return Err(ImportError::Malformed(format!(
-                "node {} still has {} outputs at lowering",
-                node.name,
-                node.outputs.len()
-            )));
-        }
-        lw.lower_node(node)?;
-    }
-
-    // resolve(), not a bare map lookup: a graph output can be a constant
-    // edge (an initializer, or a value analysis fully folded) that no
-    // surviving node produces — it must be materialized like any other
-    // constant operand.
-    let outputs = g
-        .outputs
-        .iter()
-        .map(|&e| lw.resolve(e))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(Lowered {
-        graph: Graph {
-            nodes: lw.nodes,
-            inputs: lw.inputs,
-            outputs,
-        },
-        input_descriptors,
-    })
 }
 
 #[cfg(test)]

@@ -15,98 +15,6 @@ use crate::{
     graph::{Attr, ConstData, ConstTensor, DType, IGraph, TensorInfo},
 };
 
-/// Move a constant operand into an ints attribute, erroring when runtime.
-fn input_to_ints_attr(
-    g: &mut IGraph,
-    node_idx: usize,
-    input_pos: usize,
-    attr: &'static str,
-) -> Result<(), ImportError> {
-    let node = g.nodes[node_idx].as_ref().expect("live");
-    let Some(&edge) = node.inputs.get(input_pos) else {
-        return Ok(()); // optional input absent
-    };
-    let (name, op) = (node.name.clone(), node.op.clone());
-    let Some(k) = g.konst(edge) else {
-        return Err(ImportError::NonConstant {
-            node: name,
-            op_type: op,
-            input: attr.into(),
-        });
-    };
-    let values = k
-        .as_i64s()
-        .ok_or_else(|| ImportError::UnsupportedAttribute {
-            node: name.clone(),
-            op_type: op.clone(),
-            reason: format!("{attr} operand must be integer"),
-        })?
-        .to_vec();
-    let node = g.nodes[node_idx].as_mut().expect("live");
-    node.attrs.insert(attr.into(), Attr::Ints(values));
-    node.inputs.truncate(input_pos.min(node.inputs.len()));
-    Ok(())
-}
-
-/// Convert the const operands of shape-parameter ops into attributes.
-///
-/// Called from the analysis pass per node, in topological order — at that
-/// point every foldable upstream value has already been folded, so a
-/// shape-subgraph-computed `ends` operand is constant here even though it
-/// was not at normalize time.
-pub fn resolve_const_operands(g: &mut IGraph, idx: usize) -> Result<(), ImportError> {
-    let Some(node) = g.nodes[idx].as_ref() else {
-        return Ok(());
-    };
-    match node.op.as_str() {
-        "Squeeze" | "Unsqueeze" if node.inputs.len() > 1 => {
-            input_to_ints_attr(g, idx, 1, "axes")?;
-        }
-        "ReduceSum" | "ReduceMean" => {
-            if node.inputs.len() > 1 {
-                input_to_ints_attr(g, idx, 1, "axes")?;
-            }
-            // Resolve the ONNX empty-axes convention here, so every
-            // downstream consumer of the `axes` attribute sees one form:
-            // empty/absent axes mean identity when noop_with_empty_axes=1
-            // (the node becomes Identity) and reduce-all when 0 (the attr
-            // is dropped; a missing attr is reduce-all everywhere).
-            let node = g.nodes[idx].as_mut().expect("live");
-            let axes_empty = match node.attrs.get("axes") {
-                Some(Attr::Ints(v)) => v.is_empty(),
-                None => true,
-                _ => false,
-            };
-            if axes_empty {
-                if node.attr_int("noop_with_empty_axes").unwrap_or(0) != 0 {
-                    node.op = "Identity".into();
-                    node.attrs.clear();
-                } else {
-                    node.attrs.remove("axes");
-                }
-            }
-        }
-        "Slice" => {
-            let n = g.nodes[idx].as_ref().expect("live").inputs.len();
-            if n > 1 {
-                if n > 4 {
-                    input_to_ints_attr(g, idx, 4, "steps")?;
-                }
-                if g.nodes[idx].as_ref().expect("live").inputs.len() > 3 {
-                    input_to_ints_attr(g, idx, 3, "axes")?;
-                }
-                input_to_ints_attr(g, idx, 2, "ends")?;
-                input_to_ints_attr(g, idx, 1, "starts")?;
-            }
-        }
-        "Split" if g.nodes[idx].as_ref().expect("live").inputs.len() > 1 => {
-            input_to_ints_attr(g, idx, 1, "split")?;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 /// Normalize the graph in place. `opset` is the ai.onnx opset version.
 pub fn normalize(g: &mut IGraph, opset: i64) -> Result<(), ImportError> {
     for idx in 0..g.nodes.len() {
@@ -203,6 +111,98 @@ pub fn normalize(g: &mut IGraph, opset: i64) -> Result<(), ImportError> {
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// Move a constant operand into an ints attribute, erroring when runtime.
+fn input_to_ints_attr(
+    g: &mut IGraph,
+    node_idx: usize,
+    input_pos: usize,
+    attr: &'static str,
+) -> Result<(), ImportError> {
+    let node = g.nodes[node_idx].as_ref().expect("live");
+    let Some(&edge) = node.inputs.get(input_pos) else {
+        return Ok(()); // optional input absent
+    };
+    let (name, op) = (node.name.clone(), node.op.clone());
+    let Some(k) = g.konst(edge) else {
+        return Err(ImportError::NonConstant {
+            node: name,
+            op_type: op,
+            input: attr.into(),
+        });
+    };
+    let values = k
+        .as_i64s()
+        .ok_or_else(|| ImportError::UnsupportedAttribute {
+            node: name.clone(),
+            op_type: op.clone(),
+            reason: format!("{attr} operand must be integer"),
+        })?
+        .to_vec();
+    let node = g.nodes[node_idx].as_mut().expect("live");
+    node.attrs.insert(attr.into(), Attr::Ints(values));
+    node.inputs.truncate(input_pos.min(node.inputs.len()));
+    Ok(())
+}
+
+/// Convert the const operands of shape-parameter ops into attributes.
+///
+/// Called from the analysis pass per node, in topological order — at that
+/// point every foldable upstream value has already been folded, so a
+/// shape-subgraph-computed `ends` operand is constant here even though it
+/// was not at normalize time.
+pub fn resolve_const_operands(g: &mut IGraph, idx: usize) -> Result<(), ImportError> {
+    let Some(node) = g.nodes[idx].as_ref() else {
+        return Ok(());
+    };
+    match node.op.as_str() {
+        "Squeeze" | "Unsqueeze" if node.inputs.len() > 1 => {
+            input_to_ints_attr(g, idx, 1, "axes")?;
+        }
+        "ReduceSum" | "ReduceMean" => {
+            if node.inputs.len() > 1 {
+                input_to_ints_attr(g, idx, 1, "axes")?;
+            }
+            // Resolve the ONNX empty-axes convention here, so every
+            // downstream consumer of the `axes` attribute sees one form:
+            // empty/absent axes mean identity when noop_with_empty_axes=1
+            // (the node becomes Identity) and reduce-all when 0 (the attr
+            // is dropped; a missing attr is reduce-all everywhere).
+            let node = g.nodes[idx].as_mut().expect("live");
+            let axes_empty = match node.attrs.get("axes") {
+                Some(Attr::Ints(v)) => v.is_empty(),
+                None => true,
+                _ => false,
+            };
+            if axes_empty {
+                if node.attr_int("noop_with_empty_axes").unwrap_or(0) != 0 {
+                    node.op = "Identity".into();
+                    node.attrs.clear();
+                } else {
+                    node.attrs.remove("axes");
+                }
+            }
+        }
+        "Slice" => {
+            let n = g.nodes[idx].as_ref().expect("live").inputs.len();
+            if n > 1 {
+                if n > 4 {
+                    input_to_ints_attr(g, idx, 4, "steps")?;
+                }
+                if g.nodes[idx].as_ref().expect("live").inputs.len() > 3 {
+                    input_to_ints_attr(g, idx, 3, "axes")?;
+                }
+                input_to_ints_attr(g, idx, 2, "ends")?;
+                input_to_ints_attr(g, idx, 1, "starts")?;
+            }
+        }
+        "Split" if g.nodes[idx].as_ref().expect("live").inputs.len() > 1 => {
+            input_to_ints_attr(g, idx, 1, "split")?;
+        }
+        _ => {}
     }
     Ok(())
 }

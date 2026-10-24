@@ -8,6 +8,9 @@
 //! cargo run --release --features zk --package jolt-atlas-core --example gpt2_zk_bench
 //! ```
 
+#[cfg(feature = "zk")]
+use jolt_atlas_core::node_view::ModelView;
+
 #[cfg(not(feature = "zk"))]
 fn main() {
     eprintln!("This example requires the `zk` feature. Re-run with:");

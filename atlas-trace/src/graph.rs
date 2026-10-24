@@ -35,79 +35,79 @@ impl Graph {
     /// Structural validation: id ranges, topological order, IO wiring, and
     /// per-op static parameters. Shape checking happens at compile.
     pub fn validate(&self) -> Result<(), GraphError> {
+        for (i, node) in self.nodes.iter().enumerate() {
+            self.validate_node(NodeId(i as u32), node)?;
+        }
+        self.validate_inputs()?;
+        self.validate_outputs()
+    }
+
+    fn check_id(&self, id: NodeId) -> Result<(), GraphError> {
         let len = self.nodes.len();
-        let check_id = |id: NodeId| {
-            if id.index() >= len {
-                Err(GraphError::IdOutOfRange { id, len })
-            } else {
-                Ok(())
-            }
-        };
-
-        for (i, node) in self.nodes.iter().enumerate() {
-            let this = NodeId(i as u32);
-            for &input in &node.inputs {
-                check_id(input)?;
-                if input.index() >= i {
-                    return Err(GraphError::NotTopological { node: this, input });
-                }
-            }
-            if matches!(node.op, Op::Input(_) | Op::Constant(_)) && !node.inputs.is_empty() {
-                return Err(GraphError::InvalidIo {
-                    node: this,
-                    reason: format!("{} nodes take no operands", node.op),
-                });
-            }
-            node.op
-                .spec()
-                .validate()
-                .map_err(|reason| GraphError::InvalidOp {
-                    node: this,
-                    op: node.op.to_string(),
-                    reason,
-                })?;
+        if id.index() >= len {
+            return Err(GraphError::IdOutOfRange { id, len });
         }
+        Ok(())
+    }
 
-        // Every declared input is an Input node, and every Input node is
-        // declared exactly once.
+    /// Operands are in range and strictly earlier, source ops take no
+    /// operands, and the op's static parameters are valid.
+    fn validate_node(&self, this: NodeId, node: &Node) -> Result<(), GraphError> {
+        for &input in &node.inputs {
+            self.check_id(input)?;
+            if input.index() >= this.index() {
+                return Err(GraphError::NotTopological { node: this, input });
+            }
+        }
+        if matches!(node.op, Op::Input(_) | Op::Constant(_)) && !node.inputs.is_empty() {
+            return Err(invalid_io(
+                this,
+                format!("{} nodes take no operands", node.op),
+            ));
+        }
+        node.op
+            .spec()
+            .validate()
+            .map_err(|reason| GraphError::InvalidOp {
+                node: this,
+                op: node.op.to_string(),
+                reason,
+            })
+    }
+
+    /// Every declared input is an Input node, and every Input node is
+    /// declared exactly once.
+    fn validate_inputs(&self) -> Result<(), GraphError> {
         for &id in &self.inputs {
-            check_id(id)?;
+            self.check_id(id)?;
             if !matches!(self.nodes[id.index()].op, Op::Input(_)) {
-                return Err(GraphError::InvalidIo {
-                    node: id,
-                    reason: "declared as graph input but is not an Input node".into(),
-                });
+                return Err(invalid_io(
+                    id,
+                    "declared as graph input but is not an Input node",
+                ));
             }
         }
         for (i, node) in self.nodes.iter().enumerate() {
             let this = NodeId(i as u32);
-            if matches!(node.op, Op::Input(_)) {
-                match self.inputs.iter().filter(|&&id| id == this).count() {
-                    1 => {}
-                    0 => {
-                        return Err(GraphError::InvalidIo {
-                            node: this,
-                            reason: "Input node not declared in graph.inputs".into(),
-                        });
-                    }
-                    n => {
-                        return Err(GraphError::InvalidIo {
-                            node: this,
-                            reason: format!("Input node declared {n} times"),
-                        });
-                    }
-                }
+            if !matches!(node.op, Op::Input(_)) {
+                continue;
+            }
+            match self.inputs.iter().filter(|&&id| id == this).count() {
+                1 => {}
+                0 => return Err(invalid_io(this, "Input node not declared in graph.inputs")),
+                n => return Err(invalid_io(this, format!("Input node declared {n} times"))),
             }
         }
+        Ok(())
+    }
 
+    /// At least one output is declared, and every output id is in range.
+    fn validate_outputs(&self) -> Result<(), GraphError> {
         if self.outputs.is_empty() {
-            return Err(GraphError::InvalidIo {
-                node: NodeId(0),
-                reason: "graph declares no outputs".into(),
-            });
+            return Err(invalid_io(NodeId(0), "graph declares no outputs"));
         }
         for &id in &self.outputs {
-            check_id(id)?;
+            self.check_id(id)?;
         }
         Ok(())
     }
@@ -115,6 +115,13 @@ impl Graph {
     /// The node behind an id.
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id.index()]
+    }
+}
+
+fn invalid_io(node: NodeId, reason: impl Into<String>) -> GraphError {
+    GraphError::InvalidIo {
+        node,
+        reason: reason.into(),
     }
 }
 

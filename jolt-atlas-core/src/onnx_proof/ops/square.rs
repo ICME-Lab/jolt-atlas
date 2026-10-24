@@ -1,4 +1,6 @@
 use crate::node_view::ComputationNode;
+#[cfg(feature = "zk")]
+use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_fused_rescale_proof_api,
@@ -326,7 +328,7 @@ mod tests {
         // Simulate a computation node: node 1 (Square) takes input from node 0.
         // Scale 0 keeps it a raw square so `input_claim` is the plain output
         // opening (the BlindFold constraint asserted here).
-        let node = ComputationNode::new(1, Op::Square(Square { scale: 0 }), vec![0], vec![4]);
+        let node = ComputationNode::new(1, Op::Square(Square { rebase: false }), vec![0], vec![4]);
 
         // Set up the verifier accumulator with known opening values
         let mut accumulator = VerifierOpeningAccumulator::<F>::new();

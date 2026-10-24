@@ -1,8 +1,7 @@
 //! Per-input quantization descriptors.
 //!
 //! The importer classifies each graph input so callers no longer need to
-//! know the scaling convention by heart (the old examples multiplied some
-//! inputs by the scale factor by hand).
+//! know the scaling convention by heart.
 
 use atlas_trace::{Scale, Tensor};
 

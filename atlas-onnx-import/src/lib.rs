@@ -109,7 +109,7 @@ pub fn load_graph(path: &Path, opts: &LoadOptions) -> Result<LoweredGraph, Impor
     analyze::dce(&mut g);
     // Classify inputs while the ONNX surface (Cast/Gather uses) is intact.
     let descriptors = inputs::classify_inputs(&g, &g.inputs.clone())?;
-    let pass_reports = passes::run_all(&mut g)?;
+    let pass_reports = passes::run_all(&mut g, opts.scale)?;
     let lowered = lower::lower(&g, opts.scale, &descriptors)?;
     Ok(LoweredGraph {
         graph: lowered.graph,

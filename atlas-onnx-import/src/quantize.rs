@@ -16,14 +16,6 @@ use crate::{
     graph::{ConstData, ConstTensor},
 };
 
-/// `C(scale) = ⌈(scale+1)·ln2⌉ + 1`: magnitude (in units of `2^scale`) of
-/// the sentinel that extreme-negative mask constants clamp to. It stays
-/// above the softmax exp cutoff, so masked positions still saturate to
-/// weight zero bit-exactly.
-pub fn mask_sentinel_magnitude(scale: Scale) -> f64 {
-    ((scale.log2() as f64 + 1.0) * std::f64::consts::LN_2).ceil() + 1.0
-}
-
 /// Finite constants beyond this magnitude are treated as ±∞ stand-ins
 /// (attention-mask sentinels, Clip bounds), never as values to represent.
 const INFINITY_PROXY: f64 = 1e6;
@@ -31,7 +23,7 @@ const INFINITY_PROXY: f64 = 1e6;
 /// Quantize one float: `round(x · 2^scale)`, with the old crate's pinned
 /// special cases. Exactly one of four things happens:
 ///
-/// 1. `round(x·2^s)` fits i32 → that value (zero flushed to ±1, see below);
+/// 1. `round(x·2^s)` fits i32 → that value (sub-resolution rounds to 0);
 /// 2. unrepresentable and `x < -1e6` (e.g. the -3.4e38 attention mask in
 ///    GPT-2) → the scale-indexed mask sentinel;
 /// 3. unrepresentable and `x > 1e6` (e.g. +3.4e38 Clip bounds) → half the
@@ -42,18 +34,14 @@ pub fn quantize_float(x: f64, scale: Scale, tensor_name: &str) -> Result<i32, Im
     let mult = scale.denom_i64() as f64;
     let scaled = (x * mult).round();
 
-    // Representable (NaN fails both comparisons and falls through).
+    // Representable (NaN fails both comparisons and falls through). Values
+    // below the fixed-point resolution round to 0 — the old crate flushed
+    // them to ±1, inflating sub-resolution weights by orders of magnitude.
+    // The one constant that genuinely needed the flush, the eps feeding
+    // rsqrt in normalization, is floored explicitly by the importer's
+    // `rsqrt_eps_floor` pass instead.
     if (i32::MIN as f64..=i32::MAX as f64).contains(&scaled) {
-        let q = scaled as i32;
-        // Flush-to-±1: constants that would quantize to zero keep their sign
-        // (load-bearing for LayerNorm eps, which rounds to 0 at scale 14
-        // otherwise). Constants only; a warning-worthy wart inherited from
-        // the old crate, to be retired when eps folds into Rsqrt.
-        return Ok(if q == 0 && x != 0.0 {
-            if x > 0.0 { 1 } else { -1 }
-        } else {
-            q
-        });
+        return Ok(scaled as i32);
     }
 
     // ±∞ stand-ins, pinned from the old crate.
@@ -89,6 +77,14 @@ pub fn quantize_const(t: &ConstTensor, scale: Scale, name: &str) -> Result<Vec<i
             .collect(),
         ConstData::Bool(v) => Ok(v.iter().map(|&b| b as i32).collect()),
     }
+}
+
+/// `C(scale) = ⌈(scale+1)·ln2⌉ + 1`: magnitude (in units of `2^scale`) of
+/// the sentinel that extreme-negative mask constants clamp to. It stays
+/// above the softmax exp cutoff, so masked positions still saturate to
+/// weight zero bit-exactly.
+pub fn mask_sentinel_magnitude(scale: Scale) -> f64 {
+    ((scale.log2() as f64 + 1.0) * std::f64::consts::LN_2).ceil() + 1.0
 }
 
 #[cfg(test)]
@@ -127,11 +123,14 @@ mod tests {
         assert!(quantize_float(-500_000.0, s(14), "t").is_err());
     }
 
+    /// Sub-resolution constants round to zero (the old crate flushed them to
+    /// ±1; LayerNorm eps no longer needs that — see `rsqrt`'s zero handling).
     #[test]
-    fn flush_to_one() {
-        assert_eq!(quantize_float(1e-5, s(14), "t").unwrap(), 1); // LayerNorm eps
-        assert_eq!(quantize_float(-1e-9, s(14), "t").unwrap(), -1);
+    fn sub_resolution_rounds_to_zero() {
+        assert_eq!(quantize_float(1e-5, s(14), "t").unwrap(), 0); // LayerNorm eps
+        assert_eq!(quantize_float(-1e-9, s(14), "t").unwrap(), 0);
         assert_eq!(quantize_float(0.0, s(14), "t").unwrap(), 0);
+        assert_eq!(quantize_float(4e-5, s(14), "t").unwrap(), 1); // ≥ half ulp
     }
 
     /// NaN used to slip through the range comparisons, saturate to 0 in the

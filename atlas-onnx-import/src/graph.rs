@@ -6,109 +6,16 @@
 //! and `verify_supported` is the single choke point guaranteeing only
 //! lowerable ops remain.
 
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::path::Path;
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+};
 
 use crate::{error::ImportError, proto};
 
 /// Index of an SSA edge (a named value) in [`IGraph::edges`].
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EdgeId(pub usize);
-
-/// The element type of a value.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum DType {
-    /// 32-bit float (quantized at lowering).
-    F32,
-    /// 64-bit int (indices, shapes, masks).
-    I64,
-    /// 32-bit int (kept raw at lowering).
-    I32,
-    /// Boolean.
-    Bool,
-}
-
-/// A constant tensor's payload. Integer data is widened to `i64`; the
-/// [`DType`] remembers the declared width.
-#[derive(Clone, PartialEq, Debug)]
-pub enum ConstData {
-    /// Float payload.
-    F32(Vec<f32>),
-    /// Integer payload (i32 widened).
-    I64(Vec<i64>),
-    /// Boolean payload.
-    Bool(Vec<bool>),
-}
-
-/// A constant tensor.
-#[derive(Clone, PartialEq, Debug)]
-pub struct ConstTensor {
-    /// Declared element type.
-    pub dtype: DType,
-    /// Dimensions.
-    pub dims: Vec<usize>,
-    /// Payload.
-    pub data: ConstData,
-}
-
-impl ConstTensor {
-    /// Element count.
-    pub fn len(&self) -> usize {
-        match &self.data {
-            ConstData::F32(v) => v.len(),
-            ConstData::I64(v) => v.len(),
-            ConstData::Bool(v) => v.len(),
-        }
-    }
-
-    /// Whether the tensor has no elements.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// The payload as i64 values, if integer or bool.
-    pub fn as_i64s(&self) -> Option<&[i64]> {
-        match &self.data {
-            ConstData::I64(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    /// The payload as f32 values, if float.
-    pub fn as_f32s(&self) -> Option<&[f32]> {
-        match &self.data {
-            ConstData::F32(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    /// A scalar (single-element) value as i64.
-    pub fn scalar_i64(&self) -> Option<i64> {
-        match (&self.data, self.len()) {
-            (ConstData::I64(v), 1) => Some(v[0]),
-            (ConstData::Bool(v), 1) => Some(v[0] as i64),
-            _ => None,
-        }
-    }
-
-    /// A scalar (single-element) value as f32.
-    pub fn scalar_f32(&self) -> Option<f32> {
-        match (&self.data, self.len()) {
-            (ConstData::F32(v), 1) => Some(v[0]),
-            _ => None,
-        }
-    }
-}
-
-/// Shape and type of a value, filled by shape inference.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct TensorInfo {
-    /// Element type.
-    pub dtype: DType,
-    /// Static dims.
-    pub dims: Vec<usize>,
-}
 
 /// One SSA value.
 #[derive(Clone, Debug)]
@@ -119,21 +26,6 @@ pub struct Edge {
     pub info: Option<TensorInfo>,
     /// Constant payload, if the value is known at import time.
     pub konst: Option<ConstTensor>,
-}
-
-/// A typed attribute.
-#[derive(Clone, PartialEq, Debug)]
-pub enum Attr {
-    /// Integer.
-    Int(i64),
-    /// Integer list.
-    Ints(Vec<i64>),
-    /// Float.
-    Float(f32),
-    /// String.
-    Str(String),
-    /// Tensor.
-    Tensor(ConstTensor),
 }
 
 /// One operation.
@@ -579,6 +471,115 @@ pub fn from_proto(
 /// far beyond anything provable, but small enough that no partial product of
 /// capped dims (including power-of-two padding) can overflow `usize`.
 pub const MAX_TENSOR_ELEMENTS: usize = 1 << 34;
+
+/// The element type of a value.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum DType {
+    /// 32-bit float (quantized at lowering).
+    F32,
+    /// 64-bit int (indices, shapes, masks).
+    I64,
+    /// 32-bit int (kept raw at lowering).
+    I32,
+    /// Boolean.
+    Bool,
+}
+
+/// A constant tensor's payload. Integer data is widened to `i64`; the
+/// [`DType`] remembers the declared width.
+#[derive(Clone, PartialEq, Debug)]
+pub enum ConstData {
+    /// Float payload.
+    F32(Vec<f32>),
+    /// Integer payload (i32 widened).
+    I64(Vec<i64>),
+    /// Boolean payload.
+    Bool(Vec<bool>),
+}
+
+/// A constant tensor.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ConstTensor {
+    /// Declared element type.
+    pub dtype: DType,
+    /// Dimensions.
+    pub dims: Vec<usize>,
+    /// Payload.
+    pub data: ConstData,
+}
+
+impl ConstTensor {
+    /// Element count.
+    pub fn len(&self) -> usize {
+        match &self.data {
+            ConstData::F32(v) => v.len(),
+            ConstData::I64(v) => v.len(),
+            ConstData::Bool(v) => v.len(),
+        }
+    }
+
+    /// Whether the tensor has no elements.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The payload as i64 values, if integer or bool.
+    pub fn as_i64s(&self) -> Option<&[i64]> {
+        match &self.data {
+            ConstData::I64(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// The payload as f32 values, if float.
+    pub fn as_f32s(&self) -> Option<&[f32]> {
+        match &self.data {
+            ConstData::F32(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// A scalar (single-element) value as i64.
+    pub fn scalar_i64(&self) -> Option<i64> {
+        match (&self.data, self.len()) {
+            (ConstData::I64(v), 1) => Some(v[0]),
+            (ConstData::Bool(v), 1) => Some(v[0] as i64),
+            _ => None,
+        }
+    }
+
+    /// A scalar (single-element) value as f32.
+    pub fn scalar_f32(&self) -> Option<f32> {
+        match (&self.data, self.len()) {
+            (ConstData::F32(v), 1) => Some(v[0]),
+            _ => None,
+        }
+    }
+}
+
+/// Shape and type of a value, filled by shape inference.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TensorInfo {
+    /// Element type.
+    pub dtype: DType,
+    /// Static dims.
+    pub dims: Vec<usize>,
+}
+
+/// A typed attribute.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Attr {
+    /// Integer.
+    Int(i64),
+    /// Integer list.
+    Ints(Vec<i64>),
+    /// Float.
+    Float(f32),
+    /// String.
+    Str(String),
+    /// Tensor.
+    Tensor(ConstTensor),
+}
 
 /// Checked product of dims with the [`MAX_TENSOR_ELEMENTS`] cap so untrusted
 /// shape metadata can never drive an unbounded allocation. A zero dim makes

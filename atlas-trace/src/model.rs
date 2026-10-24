@@ -310,6 +310,44 @@ mod tests {
     // the live value, so a reduction over that axis counts the padded lanes.
     // The assertion states the CORRECT (semantic) result; un-ignore it when
     // the padded-lane analysis (or a masked Broadcast) lands.
+    /// Pins `rsqrt`'s totality at the kernel level: a zero-variance row
+    /// traces to zero output instead of a panic. Note this is the *tracer*
+    /// contract only — the prover's rsqrt division witness needs a positive
+    /// operand, which imports guarantee via the `rsqrt_eps_floor` pass; a
+    /// quantized-zero variance with a nonzero row also under-normalizes, so
+    /// graphs headed for proving should always carry a floored eps.
+    #[test]
+    fn zero_variance_row_normalizes_to_zero_without_eps() {
+        use crate::{GraphBuilder, op};
+        let mut b = GraphBuilder::new();
+        let x = b.input(&[2, 4]);
+        let var = b.push(
+            Op::MeanOfSquares(op::MeanOfSquares {
+                axes: vec![1],
+                count: 4,
+                padded_count: 4,
+            }),
+            &[x],
+        );
+        let inv = b.push(Op::Rsqrt(op::Rsqrt), &[var]);
+        let inv_b = b.push(Op::Broadcast(op::Broadcast { shape: vec![2, 4] }), &[inv]);
+        let y = b.push(Op::Mul(op::Mul { rebase: true }), &[x, inv_b]);
+        b.output(y);
+        let model = b.build(CompileOptions::default()).unwrap();
+
+        let s = 1i32 << 14;
+        // Row 0: all zeros (zero variance). Row 1: all 1.0 (variance 1.0).
+        let input = Tensor::new(vec![0, 0, 0, 0, s, s, s, s], &[2, 4]).unwrap();
+        let trace = model.trace(&[input]).unwrap();
+        let out = trace.output(model.outputs()[0]);
+        assert_eq!(&out.data()[..4], &[0, 0, 0, 0], "zero row stays zero");
+        assert_eq!(
+            &out.data()[4..8],
+            &[s, s, s, s],
+            "unit row normalizes to 1.0"
+        );
+    }
+
     /// Concat whose non-last operand is non-pow2 on the axis would pad
     /// *interior* lanes ([3]+[4] → [a0,a1,a2,0,b0..b3]), shifting the second
     /// operand off its semantic positions — compile must reject it. The

@@ -40,9 +40,11 @@ containing no prover code.
 
 ### Invariants
 
-- Behavior-preserving in every phase: a proof that verifies before a move verifies after it;
-  transcript byte streams are unchanged (zoo e2es with transcript lockstep and serialization
-  round-trips).
+- Behavior-preserving in every phase, checked **across the move, not within one build**: the
+  in-build zoo harness proves and verifies with the same code and cannot see a coordinated
+  change, so each phase pins proof-bytes and transcript digests from deterministic zoo inputs
+  at the pre-move commit and asserts the post-move build reproduces them byte for byte (the
+  same cross-stage gate as `specs/upstream-adoption.md`).
 - The verifier crate must not depend on `jolt-atlas-core`. This is the boundary `cargo` and the
   CI isolation build actually enforce. Two reachable-but-unused exceptions are held by review,
   not by the compiler, until closed: (a) `joltworks` prover APIs (e.g.
@@ -73,10 +75,13 @@ containing no prover code.
 
 Phase 1 — this PR:
 
-- [ ] `jolt-atlas-verifier` exists, owns `ONNXProof` + serialization + `ONNXProof::from_parts`
-  (taking **every** field: construction is production prover code, so nothing about it is
-  test-gated) + public read accessors for the fields core's verification free functions
-  consume.
+- [ ] `jolt-atlas-verifier` exists and owns the proof artifact **closed under its field types**:
+  `ONNXProof` and the core-owned types its fields reference — `Claims`, `ProofId`/`ProofType`,
+  `ReducedOpeningProof` — with their serialization (leaving any of them in core would retain the
+  forbidden core dependency). Each moved struct with private fields gets a production
+  `from_parts` constructor taking **every** field (core's prover constructs `ReducedOpeningProof`
+  through its private `joint_opening_proof` today) and public read accessors for what core's
+  free functions consume; nothing about construction or reads is test-gated.
 - [ ] `cargo check -p jolt-atlas-verifier` builds in isolation with no dependency on
   `jolt-atlas-core`; CI gains that build as a job, so a future core-dependency leak fails CI.
 - [ ] Core's inherent `ONNXProof` methods are free functions (`jolt_atlas_core::prove`,
@@ -110,7 +115,9 @@ Later phases (recorded here for the program's shape; ticked by their own PRs, no
 The suites prove the reorganization changed nothing: op-surface table, the three soundness
 sweeps, the zoo, importer goldens. Harness wiring changes are confined to `testing/mutate.rs`
 (test-util mutation accessors replace direct field access) in phase 1, and to the lockstep
-recorder when `verify` moves. In phase 1 the lockstep path is untouched: core's free `verify`
+recorder when `verify` moves. Phase 1 additionally carries the cross-move gate from the
+Invariants: pinned pre-move proof and transcript digests reproduced byte for byte by the
+post-move build. In phase 1 the lockstep path is otherwise untouched: core's free `verify`
 keeps the existing `#[cfg(test)]` comparison block; the recorder and canary land only in the
 phase that moves `verify`, because until then there is nothing in the verifier crate to gate —
 a phase-1 canary would exercise core's `cfg(test)` path and tick a box without protecting
@@ -142,9 +149,12 @@ common ─▶ joltworks* ─▶ jolt-atlas-verifier ─▶ jolt-atlas-core (prov
 (`specs/upstream-adoption.md`); the edge and the boundary drawn here are unchanged by that
 substitution.
 
-**Phase 1 — the proof-type boundary.** What moves is exactly the no-core-dependency set: the
-`ONNXProof` struct, its serialization, `from_parts`, read accessors, and `test-util` mutation
-accessors. Everything else once considered for the skeleton fails a dependency check:
+**Phase 1 — the proof-type boundary.** What moves is exactly the no-core-dependency set,
+closed under field types: `ONNXProof` together with `Claims`, `ProofId`/`ProofType` and
+`ReducedOpeningProof`, their serialization, `from_parts` constructors (on `ONNXProof` and on
+`ReducedOpeningProof`, whose private `joint_opening_proof` core's prover fills in production),
+read accessors, and `test-util` mutation accessors. Everything else once considered for the
+skeleton fails a dependency check:
 
 - *Verification logic* (`verify`, `Verifier`, `verify_iop`, deferred verification) calls core's
   per-op `OperatorVerifier` — moving it is a cargo cycle. It stays in core as free functions

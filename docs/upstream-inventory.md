@@ -57,11 +57,11 @@ shared-ancestry subsystems, in priority order:
 | `e012da54` reject G1/G2 encodings with trailing bytes | crypto / deserialization | **Inspect now.** Our proofs deserialize commitments; trailing-byte acceptance is proof malleability. Check our ark-serialize paths and Dory/HyperKZG commitment decoding. |
 | `521e53f6` verifier: reject trace lengths below the PCS floor | verifier bounds | **Inspect now.** Do we validate minimum sizes before PCS verification? Related to the verifier-panic hardening item. |
 | `189baa3e` pick up arkworks MSM caller-pool fix | arkworks dep | **Inspect.** We pin `a16z/arkworks-algebra` `dev/twist-shout` by branch, and `Cargo.lock` currently holds **two different revs of that branch at once** (`b8f0f51`, `76bb3a4`): unify the pin, then check both against the MSM fix. |
-| `f75c59c2` defer Dory opening table materialization | Dory | Inspect during the Dory adoption; perf/memory, our fork may share the pattern. |
+| `f75c59c2` defer Dory opening table materialization | Dory | Triage at stage 0 (applicability verdict); any remediation rides the PCS adoption stage. |
 | `39062151` field: state which extension towers are fields | jolt-field | Arrives with the vendored-pin bump on the Akita branch. |
 | `89c0c8b5`, `21f1841e` Akita setup sizing / thread-pool | jolt-akita | Arrive with the Akita pin bump. |
 | `00223594` blindfold: bound outer row commitment jobs | blindfold | Deferred with zk. |
-| `0337eda5` kernels: exceptional equality challenges | eq handling | Inspect: check whether our eq-polynomial edge cases share the pattern. |
+| `0337eda5` kernels: exceptional equality challenges | eq handling | Triage at stage 0: check whether our eq-polynomial edge cases share the pattern. |
 
 Also not a `fix:` but soundness-relevant to review against our fork: the J2 transcript work
 (`7931b223` challenge codecs with a 2⁻¹⁶⁰ per-message bias budget, `f3265b5a` sponge PoW).
@@ -73,8 +73,10 @@ upstream's bias budget before, not during, the transcript adoption.
 One subsystem per PR, each gated by the zoo transcript-lockstep e2es and the soundness sweeps;
 the first two are also where the triage items above get resolved:
 
-1. `jolt-field` pin bump + the dep/deserialization triage items (`e012da54`, `189baa3e`,
-   `521e53f6`).
+1. Stage 0 of `specs/upstream-adoption.md`: lockfile unification, the J2 review, and the
+   triage (applicability verdicts) of **all five** flagged fixes (`e012da54`, `189baa3e`,
+   `521e53f6`, `f75c59c2`, `0337eda5`); remediation of applicable findings is scheduled per
+   finding. Then the `jolt-field` pin bump as stage 1.
 2. `jolt-transcript` (with the J2 bias review) — proof format changes land here.
 3. `jolt-sumcheck` + `jolt-poly`.
 4. `jolt-openings`/`jolt-claims` — the claim-ledger convergence decision.
@@ -82,5 +84,5 @@ the first two are also where the triage items above get resolved:
 6. Verifier-primitive adoption closing the `jolt-atlas-verifier` dependency cone
    (supersedes `specs/verifier-crate.md` ladder phases 2–3).
 
-This document is a snapshot; regenerate the numbers against a newer `upstream/main` when the
-adoption spec is written.
+This document is a snapshot; it is regenerated against a newer `upstream/main` at stage 0 of
+`specs/upstream-adoption.md` and at every subsequent pin bump.

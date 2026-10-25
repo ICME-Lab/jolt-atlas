@@ -156,18 +156,6 @@ pub(crate) fn sampling_seed() -> u64 {
         .unwrap_or(0x50FF_D00D)
 }
 
-/// The prover's accumulator records one `BlindFoldBatchOpening` entry per
-/// committed polynomial while preparing the joint opening (BlindFold / zk
-/// bookkeeping). Those entries are serialized into `opening_claims`, but the
-/// non-zk verifier takes the batch claims from
-/// `ReducedOpeningProof::sumcheck_claims` and never reads them: dead proof
-/// bytes, documented here so the sweep can tolerate them. Stripping them in
-/// `finalize_proof` would shrink every proof by one field element per
-/// committed polynomial.
-pub(crate) fn is_dead_batch_opening_claim(id: &OpeningId) -> bool {
-    matches!(id.sumcheck, SumcheckId::BlindFoldBatchOpening)
-}
-
 fn variant_name(debug: String) -> String {
     debug
         .split(['(', '{', ' '])
@@ -222,12 +210,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
 
     let mut strata = std::collections::HashSet::new();
     for id in proof.opening_claims.0.keys() {
-        if is_dead_batch_opening_claim(id) {
-            if all || strata.insert(("dead".to_string(), String::new(), String::new())) {
-                sites.push((Site::Claim(*id), Expect::Tolerated));
-                sites.push((Site::ClaimRemoved(*id), Expect::Tolerated));
-            }
-        } else if all || strata.insert(opening_stratum(id, model)) {
+        if all || strata.insert(opening_stratum(id, model)) {
             sites.push((Site::Claim(*id), Expect::MustReject));
             sites.push((Site::ClaimRemoved(*id), Expect::RejectOrPanic));
         }

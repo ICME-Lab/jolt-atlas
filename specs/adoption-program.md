@@ -100,20 +100,30 @@ specific):
   against our Blake2b/Keccak challenge sampling, conclusion recorded.
 - [ ] **Stage 1 — verifier boundary**: `specs/verifier-boundary.md` implemented (its own spec
   and PR; listed here because later gates use its isolation build).
-- [ ] **Stage 2 — `jolt-field`**: vendored pin current; **one field type for the tree** — the
-  stage resolves how our `ark_bn254::Fr` (pinned arkworks fork, `joltworks::JoltField`) and
-  upstream's `Ring`/bn254 wrapper unify (their backend wraps arkworks; the stage decides
-  wrapper-at-the-boundary vs. a local `Ring` impl and records it). Behavior-preserving; BN254
-  stays active, Fp128 becomes available.
+- [ ] **Stage 2 — `jolt-field`**: vendored pin current, and **`jolt_field::Fr` becomes the
+  tree's scalar type**. Upstream's `Fr` is a `#[repr(transparent)]` newtype over
+  `ark_bn254::Fr` from the same arkworks fork and branch we pin, so this is a mechanical
+  rename, done once: `joltworks::JoltField` is implemented for `jolt_field::Fr` (our trait,
+  their type — orphan-rule-clean), the workspace's field parameter switches over, and
+  `ark_bn254::Fr` appears nowhere outside the vendored crates and arkworks-facing internals
+  (MSM, pairings, commitment serialization). A bridging seam of `repr(transparent)` casts at
+  every vendored boundary was considered and rejected: it re-creates a fork-shaped seam the
+  program exists to remove, and every later stage would pay it again. Behavior-preserving
+  (same field, pinned digests gate the swap); BN254 stays active, Fp128 becomes available.
 - [ ] **Stage 3 — `jolt-transcript`**: codecs, bias budget, prover/verifier transcript split.
   Protocol-breaking. The PoW/codec cost is protocol-inherent: quantified in the PR and accepted
   on security grounds — no delta can remove it, and pretending one could would drop the
   hardening.
-- [ ] **Stage 4 — `jolt-sumcheck` + `jolt-poly` + `jolt-utils`**: the engine-substrate swap,
-  absorbing `msm`/`curve`/`config`/`utils` homes, with recorded dispositions for the
-  shout/booleanity/Hamming family, `univariate_skip` (does upstream's round scheduler subsume
-  it?), and the prefix–suffix lookup framework (atlas table *contents* stay atlas-only).
-  Behavior-preserving modulo stage 3's format; atlas fold-routine deltas re-ported here.
+- [ ] **Stage 4 — `jolt-sumcheck` + `jolt-poly` + `jolt-utils`**: the engine-substrate swap.
+  `jolt-utils` is thin upstream (alloc/math/thread), so `utils` maps there but `msm/`,
+  `curve.rs` and `config.rs` get their own recorded dispositions (upstream candidates:
+  `jolt-crypto`/`jolt-optimizations`; staying atlas is legitimate) — the inventory's
+  every-module-assigned invariant is the gate, not a promised destination. Likewise recorded:
+  the shout/booleanity/Hamming family, `univariate_skip` (does upstream's round scheduler
+  subsume it?), and the prefix–suffix lookup framework (atlas table *contents* stay
+  atlas-only). The split-eq delta is cheaper than the inventory feared — upstream
+  `jolt-poly/split_eq.rs` already carries the Gruen machinery. Behavior-preserving modulo
+  stage 3's format; remaining atlas fold-routine deltas re-ported here.
 - [ ] **Stage 5 — `jolt-openings`/`jolt-claims` + relations**: the time-boxed spike answers
   whether the claim lattice expresses atlas flows (node-indexed openings, multi-consumer
   evaluation reduction, deferred batches). Yes → adopt; no → the atlas accumulator stays as an

@@ -18,6 +18,9 @@ sumcheck-based protocols over multilinear polynomial commitments.
   including across agents; parallel Cargo invocations fight over the build lock.
 - Lead with the result. Report the checks actually run, their results, and any remaining blocker.
 - Before opening or updating a PR, read `CONTRIBUTING.md` and run `/clean-branch`.
+- Changes of 500+ non-trivial lines start with a spec in `specs/` (`/new-spec`, then
+  `/analyze-spec`, then `/implement-spec`). Specs are frozen at merge; the code is the source of
+  truth for current behavior.
 
 ## Essential Commands
 

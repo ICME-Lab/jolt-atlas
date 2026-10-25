@@ -116,7 +116,8 @@ Probing an invariant the spec left implicit:
 The Intent → Invariants section says the new softmax path "produces the same output as the
 trace." That is the honest-prover direction only. What must a malicious prover be unable to do:
 can it pick a different max, or a quotient/remainder split that is not the Euclidean one? The
-existing `soundness_tests.rs` cases for `fused_rebase` are the model for pinning this. If
+`witness_tamper_sweep` in `onnx_proof/testing/soundness.rs` pins this once the op is in a probe
+model; say so, or name the dedicated `known_gap_*` test if it is deferred. If
 soundness is out of scope for this PR, the Invariants section should say so explicitly.
 ```
 Why good: names the gap precisely, points at a concrete existing test as the model, leaves the

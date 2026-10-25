@@ -31,29 +31,46 @@ CI (`.github/workflows/rust.yml`) sets `RUSTFLAGS=-D warnings`, so every warning
 cargo fmt --all --check
 RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets
 
-# Tests: dev profile, nextest. Never pass --release to tests; the release recompile after
-# every edit costs minutes. Release is for the examples and benchmarks below.
+# Tests: dev profile, nextest (`.config/nextest.toml` holds the profiles). Never pass --release
+# to tests; the release recompile after every edit costs minutes. Release is for the example
+# below. The workspace run covers unit tests, the op-surface table, the soundness sweeps, the
+# checked-in zoo (op_gauntlet + tiny GPT-2 / Qwen2 / BERT stand-ins) end to end, and the
+# importer's golden hashes, in about a minute.
 cargo nextest run --workspace
+cargo nextest run -p jolt-atlas-core -E 'test(op_surface)'   # one case per op variant
+cargo nextest run -p jolt-atlas-core -E 'test(soundness)'    # mutation / tamper / forgery sweeps
+cargo nextest run -p jolt-atlas-core -E 'test(zoo)'          # end-to-end models
 cargo nextest run -p jolt-atlas-core -E 'test(<name>)'
+JOLT_SOUNDNESS_EXHAUSTIVE=1 cargo nextest run -p jolt-atlas-core -E 'test(soundness)'  # every site (nightly)
 
-# Model zoo gates (decode / analyze / import gates + golden output hashes). These are
-# #[ignore] tests that CI runs explicitly.
-cargo nextest run -p atlas-onnx-import --run-ignored ignored-only
+# Full-zoo import gates (decode / analyze / import) over whatever is in models/. #[ignore] tests
+# that CI runs explicitly after the workspace run.
+cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'not test(golden_zoo_big)'
 
-# Full-model prove & verify. Download the ONNX files first (one-time, needs .venv with Python 3.11):
+# Real-model prove & verify (the heavy CI job: main, nightly, PRs labelled `ci:heavy`). Download
+# the ONNX files first (one-time, needs .venv with Python 3.11; installs the pinned toolchain
+# from scripts/requirements-models.txt):
 #   python -m venv .venv && source .venv/bin/activate && python scripts/download_gpt2.py
-#   python scripts/download_bge_small_en_v1_5.py
-cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_gpt2_dory)'
-cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_bge_small_en_v1_5)'
+#   python scripts/download_bge_small_en_v1_5.py && python scripts/download_qwen.py   # qwen: 2.5 GB
+cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::gpt2_dory$/)'
+cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::bge_small_en_v1_5$/)'
+cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::qwen$/)'
 cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'test(golden_zoo_big)'
 
-# Examples and benchmarks (release)
-cargo run --release -p jolt-atlas-core --example gpt2      # also: nanoGPT, transformer, microgpt, bge, qwen
+# Pinned open issues: #[ignore]d `known_gap_*` tests that fail today and turn green when fixed.
+cargo nextest run -p jolt-atlas-core --run-ignored ignored-only -E 'test(known_gap)'
+
+# The example (release): proves and verifies any model directory; also the benchmark driver.
+cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen2-tiny      # or models/gpt2 --pcs dory
+cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2 --trace-terminal
 cargo run --release -p atlas-onnx-import --example dump_lowered_ops -- <model.onnx>
+
+# Regenerating the tiny fixtures (changes weights → re-pin atlas-onnx-import/tests/golden_zoo.rs)
+.venv/bin/python scripts/gen_tiny_models.py
 ```
 
-The `zk` feature on `jolt-atlas-core` (forwarding to `joltworks/zk`) is not in the CI matrix.
-Changes behind it need an explicit `--features zk` build.
+The `zk` feature on `jolt-atlas-core` (forwarding to `joltworks/zk`) is not in the CI matrix and
+has no tests. Changes behind it need an explicit `--features zk` build.
 
 ## Architecture
 
@@ -75,7 +92,8 @@ Workspace members, in dependency order:
   `ONNXProof::prove` / `ONNXProof::verify`, with `prover.rs`, `verifier.rs`, `preprocessing.rs`,
   `witness.rs`, and `types.rs`. Per-op protocols live under `onnx_proof/ops/`; shared machinery
   under `clamp_lookups`, `clamp_split`, `fused_rebase`, `global_clamp`, `deferred_lookups`,
-  `op_lookups`, `range_checking`, `neural_teleport`. Examples and benchmarks are in `examples/`.
+  `op_lookups`, `range_checking`, `neural_teleport`. The whole test suite is under
+  `onnx_proof/testing/`; the `prove` example is in `examples/`.
 
 Pipeline: ONNX file → `atlas-onnx-import` (decode, infer, fold, lower) → `atlas-trace` model
 → execute to a trace → `jolt-atlas-core` preprocess, commit, prove → verify against the model's
@@ -98,12 +116,23 @@ root `Cargo.toml`.
 
 ### Prover/Verifier Invariants
 
-- The verifier never trusts the prover for anything the trace semantics define. Every op
-  protocol has a soundness test that a malicious prover cannot pass; see
-  `onnx_proof/soundness_tests.rs` and `onnx_proof/malicious_prover.rs`.
+- The verifier never trusts the prover for anything the trace semantics define. Soundness is
+  tested generically in `onnx_proof/testing/soundness.rs`: every field of a finished proof is
+  mutated (`proof_mutation_sweep`), the trace is tampered before proving
+  (`witness_tamper_sweep`, via `ONNXProof::prove_from_trace`), and every opening claim is forged
+  at the accumulator (`opening_forgery_sweep`, via the test-feature hook
+  `joltworks::poly::opening_proof::forgery`). A new op or witness column is covered once it
+  appears in one of the probe models in `onnx_proof/testing/models.rs`; a new proof field needs a
+  `mutate::Site`. Prover-side `#[cfg(test)]` self-checks use `probe_assert!` so a tampered proof
+  still reaches the verifier.
+- Every `atlas_trace::Op` variant has a row in `onnx_proof/testing/op_surface.rs`; `OpKind::of`
+  is a wildcard-free match, so adding a variant fails to compile until the table declares a
+  stance (a proving case, an `#[ignore]` with its reason, or an expected rejection).
 - Protocol-level changes (sumcheck ordering, transcript absorption, claim lifecycle, opening
-  reduction) need the end-to-end tests in `onnx_proof/e2e_tests.rs` and at least one full-model
-  prove & verify run.
+  reduction) need the zoo tests in `onnx_proof/testing/zoo.rs` (every e2e also round-trips the
+  proof through serialization) and at least one real-model prove & verify run.
+- An open gap is pinned as an `#[ignore]`d `known_gap_*` test whose message states the failure;
+  it must fail today and turn green when fixed. Never allowlist a sweep finding silently.
 - Lookup table generation has one owner in `atlas-trace`. Never regenerate or approximate a
   table on the prover side.
 

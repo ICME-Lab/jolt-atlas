@@ -25,7 +25,7 @@ ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "de
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, features = ["curve"], optional = true }
 num-traits = { version = "0.2.19", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
-allocative = { version = "=0.3.6", optional = true }
+allocative = { version = "0.3", optional = true }
 bytemuck = { version = "1", optional = true }
 rand_core = { version = "0.6.4", default-features = false }
 rayon = { version = "1.10", optional = true }
@@ -45,7 +45,7 @@ fp128-proof-linkage = ["asm"]
 fp64-proof-linkage = []
 
 [dev-dependencies]
-allocative = "=0.3.6"
+allocative = "0.3"
 bincode = { version = "2", features = ["serde"] }
 num-bigint = { version = "0.4.6", default-features = false }
 rand = "0.8.5"

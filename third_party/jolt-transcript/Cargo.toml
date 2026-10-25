@@ -1,0 +1,56 @@
+# Vendored from https://github.com/a16z/jolt crates/jolt-transcript at rev
+# f3265b5a9981f0c1359f2b63008824616f0c82fa, with workspace dependency
+# inheritance resolved and the bench/fuzz/test targets removed
+# (third_party/PINS.md).
+[package]
+name = "jolt-transcript"
+version = "0.1.0"
+edition = "2021"
+description = "Fiat-Shamir transcript implementations for Jolt"
+repository = "https://github.com/a16z/jolt"
+license = "MIT OR Apache-2.0"
+keywords = ["SNARK", "cryptography", "proofs", "fiat-shamir"]
+categories = ["cryptography", "no-std"]
+
+[package.metadata.cargo-machete]
+# Enabled only to select getrandom 0.4's `wasm_js` backend on wasm32.
+ignored = ["getrandom_v04"]
+
+[features]
+default = ["transcript-blake2b", "transcript-keccak", "transcript-poseidon"]
+spongefish = [
+  "dep:spongefish",
+  "dep:getrandom_v04",
+  "spongefish/getrandom",
+  "spongefish/turboshake128",
+]
+digest = ["dep:digest"]
+# The prover's proof-of-work nonce search. It copies the sponge state, which
+# spongefish 0.8.0 exposes only under `yolocrypto`; verifier builds leave it off.
+prover-grinding = ["spongefish", "spongefish/yolocrypto"]
+# Searches proof-of-work nonces on all threads; the nonce found is the same.
+parallel = ["prover-grinding", "dep:rayon"]
+solinas = ["jolt-field/solinas"]
+binary = ["jolt-field/binary"]
+bn254 = ["dep:ark-bn254", "dep:ark-ff", "jolt-field/bn254"]
+transcript-blake2b = ["spongefish", "digest", "dep:blake2"]
+transcript-keccak = ["spongefish", "spongefish/keccak"]
+transcript-poseidon = ["spongefish", "bn254", "dep:light-poseidon"]
+
+[dependencies]
+ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, optional = true }
+ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false, optional = true }
+light-poseidon = { version = "0.4", optional = true }
+spongefish = { version = "=0.8.0", default-features = false, optional = true }
+blake2 = { version = "0.11.0-rc.6", optional = true }
+digest = { version = "0.11", optional = true }
+jolt-field = { path = "../jolt-field", default-features = false }
+rayon = { version = "1.12.0", optional = true }
+
+# spongefish seeds the prover's private RNG from getrandom 0.4, which needs
+# an explicit backend on wasm32-unknown-unknown.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom_v04 = { version = "0.4", package = "getrandom", default-features = false, features = ["wasm_js"], optional = true }
+
+[dev-dependencies]
+num-bigint = { version = "0.4.6", default-features = false }

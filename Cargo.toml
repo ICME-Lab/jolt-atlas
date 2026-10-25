@@ -19,6 +19,7 @@ members = [
     "jolt-atlas-core",
     "jolt-atlas-verifier",
     "third_party/jolt-field",
+    "third_party/jolt-transcript",
     "atlas-trace",
     "atlas-onnx-import",
     "common",
@@ -34,6 +35,7 @@ joltworks = { path = "./joltworks" }
 jolt-atlas-verifier = { path = "./jolt-atlas-verifier" }
 # Vendored upstream crates (third_party/PINS.md records each pin).
 jolt-field = { path = "./third_party/jolt-field", default-features = false }
+jolt-transcript = { path = "./third_party/jolt-transcript", default-features = false }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

@@ -106,7 +106,12 @@ specific):
   rename, done once: `joltworks::JoltField` is implemented for `jolt_field::Fr` (our trait,
   their type — orphan-rule-clean), the workspace's field parameter switches over, and
   `ark_bn254::Fr` appears nowhere outside the vendored crates and arkworks-facing internals
-  (MSM, pairings, commitment serialization). A bridging seam of `repr(transparent)` casts at
+  (MSM, pairings, commitment serialization). The rename **includes the PCS-facing field type**:
+  `ONNXProof` requires `PCS::Field = F`, and HyperKZG/Dory currently expose `ark_bn254::Fr` as
+  `CommitmentScheme::Field` — implementing `JoltField` for the newtype does not satisfy that
+  equality, so the stage adapts the `joltworks` PCS impls to expose `jolt_field::Fr`,
+  converting to arkworks types inside their internals; without this, the stage's own
+  prove-and-verify gate cannot pass. A bridging seam of `repr(transparent)` casts at
   every vendored boundary was considered and rejected: it re-creates a fork-shaped seam the
   program exists to remove, and every later stage would pay it again. Behavior-preserving
   (same field, pinned digests gate the swap); BN254 stays active, Fp128 becomes available.
@@ -139,15 +144,23 @@ specific):
   as an atlas-only crate (upstream claim traits where possible) and
   `jolt-openings`/`jolt-claims` vendor later only as internal PCS dependencies behind an
   adapter. Then the **pilot
-  relations**: `Mul` (`eq·(L·R − out·2^S − rem)`) and `Rsqrt`
+  relations**: `Mul` — in its fused form `eq·(L·R − q·2^S − rem)` where `q` is the **pre-clamp
+   quotient opening** (`VirtualPoly::ClampAcc`-tied, as `fused_rebase::fused_input_claim` reads
+   it today; using the clamped node output here would reject honest saturated executions, see
+   `atlas-trace/src/op/fused.rs:33–39`), with the clamp lookup and the remainder range check
+   remaining separate lookup-family protocols outside the relation; non-fused `Mul` (scale 0)
+   uses the output directly — and `Rsqrt`
   (`eq·(x̂·q + r_div − S³ + γ·(out² + r_sqrt − q))`) implemented on the adopted
   `Expr`/`SymbolicSumcheck` layer (or, on the "no" branch, a minimal same-`Term`-shape atlas
   IR, reason recorded), transcript-identical via pinned digests, hand-written
   `Params`/`Prover`/`Verifier` deleted in the same PR, S ⊆ R notes present. The opening-forgery
   sweep is ported onto the adopted claim system **before** the old accumulator is deleted.
 - [ ] **Stage 6 — relation migrations**, one PR per family: fused-rescale (`Square`, `Cube`,
-  einsum-dot rescale tie) → `Div`/`Iff`/Add–Sub operand ties → `Sum`/`MeanOfSquares` → softmax
-  stages (post-#218, own decision point). Each deletes its pairs, pins digests, carries the
+  einsum-dot rescale tie) → `Div`/`Iff`/Add–Sub operand ties → `Neg`, `ScalarConstDiv` and the
+  remaining small algebraic verifiers → `Sum`/`MeanOfSquares` → softmax stages (post-#218, own
+  decision point). The closing family PR asserts completeness against the op-surface table:
+  every op is either relation-migrated or on the recorded lookup-family list — stage 8 cannot
+  start on an unaccounted remainder. Each PR deletes its pairs, pins digests, carries the
   migration checklist.
 - [ ] **Stage 7 — PCS**: `jolt-dory`, `jolt-hyperkzg`, `jolt-akita` (dependencies satisfied by
   stages 2–5 per upstream's crate graph); atlas Dory perf deltas re-ported. **Akita/Fp128
@@ -155,9 +168,14 @@ specific):
   harness and sweeps are `Fr`/HyperKZG-hard-wired today and must become generic, with
   Akita-specific `mutate::Site`s — before any default flips; an honest real-model run alone
   does not cover malicious proofs on the new backend.
-- [ ] **Stage 8 — verifier-cone closure**: with core emptied of per-op verifiers (stage 6), the
-  `Verifier` state, `verify_iop`, deferred verification and verifier preprocessing (whose
-  per-op registry dependency dissolved) move to `jolt-atlas-verifier`; `verify` re-attaches to
+- [ ] **Stage 8 — verifier-cone closure**. Stage 6 removes the *relation-family* verifiers but
+  not everything: the lookup-family verifier-side handlers (ReLU/gather/clamp one-hot
+  parameter builders, range-check verification) move as code, not relations, and
+  `OperatorProofTrait` — which today mixes proving, verification and the committed-polynomial
+  registry in one trait dispatched by `NodeCommittedPolynomials` (`ops/mod.rs:276–280`) — is
+  split so the verifier-side methods and the model-only commitment metadata can cross without
+  dragging prover code. Then the `Verifier` state, `verify_iop`, deferred verification and
+  verifier preprocessing move to `jolt-atlas-verifier`; `verify` re-attaches to
   `ONNXProof`; the relations and engine verifier side live in the crate. "Prover-free" holds at
   two enforceable levels: crate level (no `jolt-atlas-core`, no upstream prover product crates
   — cargo + isolation build) and lint level (a clippy `disallowed-methods`/`disallowed-types`

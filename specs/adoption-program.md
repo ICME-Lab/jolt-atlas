@@ -157,11 +157,15 @@ specific):
   sweep is ported onto the adopted claim system **before** the old accumulator is deleted.
 - [ ] **Stage 6 — relation migrations**, one PR per family: fused-rescale (`Square`, `Cube`,
   einsum-dot rescale tie) → `Div`/`Iff`/Add–Sub operand ties → `Neg`, `ScalarConstDiv` and the
-  remaining small algebraic verifiers → `Sum`/`MeanOfSquares` → softmax stages (post-#218, own
-  decision point). The closing family PR asserts completeness against the op-surface table:
-  every op is either relation-migrated or on the recorded lookup-family list — stage 8 cannot
-  start on an unaccounted remainder. Each PR deletes its pairs, pins digests, carries the
-  migration checklist.
+  remaining small algebraic verifiers → `Sum`/`MeanOfSquares` → softmax. **Softmax's
+  disposition is decided by the closing family PR's author on a simple rule**: if the #218
+  aux-vector rework has merged by then, the softmax stages migrate as the final relation
+  family; if not, softmax joins the stage-8 move-as-code list (like the lookup family) and its
+  relation migration is recorded as a named post-program follow-up — either way it has exactly
+  one checkable disposition. The closing family PR asserts completeness against the op-surface
+  table: every op is relation-migrated, on the recorded lookup-family list, or on the explicit
+  deferred list with its stage-8 move assignment — stage 8 cannot start on an unaccounted
+  remainder. Each PR deletes its pairs, pins digests, carries the migration checklist.
 - [ ] **Stage 7 — PCS**: `jolt-dory`, `jolt-hyperkzg`, `jolt-akita` (dependencies satisfied by
   stages 2–5 per upstream's crate graph); atlas Dory perf deltas re-ported. **Akita/Fp128
   activation** additionally requires the structural suites as Fp128+Akita instances — the
@@ -178,14 +182,19 @@ specific):
   verifier preprocessing move to `jolt-atlas-verifier`; `verify` re-attaches to
   `ONNXProof`; the relations and engine verifier side live in the crate. "Prover-free" holds at
   two enforceable levels: crate level (no `jolt-atlas-core`, no upstream prover product crates
-  — cargo + isolation build) and lint level (a clippy `disallowed-methods`/`disallowed-types`
-  bar on the vendored toolkit's prover entry points, e.g. `jolt-sumcheck::prover`, which
-  upstream exports unconditionally — run in the isolation CI job).
+  — cargo + isolation build) and item level. Clippy's `disallowed-methods`/`disallowed-types`
+  cannot ban a module path, so the bar is **an enumerated list of concrete public prover
+  functions and types per vendored crate** (e.g. the items `jolt_sumcheck::prover` exports,
+  which upstream ships unconditionally), maintained as a checklist item of the stage that
+  vendors each crate, **plus** a module-path import check in the isolation CI job (reject
+  `::prover` / `::witness` path segments appearing in `jolt-atlas-verifier` sources) as the
+  backstop for items the enumeration misses.
 
 Program definition of done (checkable): `joltworks` is gone — every inventory module replaced
 or in a named atlas-only crate; `jolt-atlas-core` contains no verification logic;
 `jolt-atlas-verifier` verifies a serialized proof from the model and public IO alone; isolation
-build and prover-API lint green; `third_party/PINS.md` records every pin.
+build, the enumerated prover-item disallow list and the import-path check green;
+`third_party/PINS.md` records every pin.
 
 ### Testing Strategy
 

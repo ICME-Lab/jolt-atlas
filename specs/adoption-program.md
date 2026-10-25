@@ -64,6 +64,10 @@ Each invariant names the mechanism that holds it.
   commit runs it green on the untouched tree, so the expected values provably predate the
   change. A protocol-breaking stage re-pins in a separate commit whose message names the cause.
   There is no proof-format version: the code is pre-production and old proofs need not verify.
+  Classification per stage: 0, 1, 2, 4 (modulo stage 3's format), 5, 6, 7b and 8 are
+  behavior-preserving; 3 and 7a (re-pins to Akita) are protocol-breaking. If stage 0 lands
+  before stage 1's harness exists, its PR body records hand-run before/after hashes of the
+  serialized proof for each checked-in zoo model on HyperKZG instead.
 - **For migrated ops the relation is the only verifier**: no hand-written
   `expected_output_claim` exists (the type is deleted — compiler). Every relation is bound to
   the op it proves by `type Spec: atlas_trace::OpSpec` (e.g. `type Spec = atlas_trace::op::Mul`
@@ -149,7 +153,8 @@ what is specific).
   `zk` feature deleted from `jolt-atlas-core` and `joltworks` — `zk.rs`, the BlindFold fork
   code, the zk-gated `OutputClaimConstraint` machinery — and the zk paragraph removed from
   `CLAUDE.md`. If stage 1 lands first, it leaves `zk.rs`'s inherent-method call sites
-  (`zk.rs:1601–1620`) as they are; the feature cannot regress.
+  (`zk.rs:1601–1620`) as they are; the feature cannot regress. Behavior-preserving (digests,
+  or hand-run proof hashes if the harness does not exist yet).
 - [ ] **Stage 2 — `jolt-field`** (stage 2 PR): `jolt-field` vendored on main under
   `third_party/` at the Akita branch's pin (`0e3faf07`, bumped deliberately if needed);
   `joltworks::JoltField` implemented for upstream's `Fp128` (the `fp128-field` branch's shim is
@@ -221,11 +226,12 @@ what is specific).
   proofs on the new backend — and a real-model prove & verify. Then the default field/PCS flips
   to Fp128 + Akita, the heavy job and the README benchmark move to Akita, the digest harness
   pins Akita, and the cost against the Dory baseline is measured and recorded in the PR —
-  accepted regardless.
+  accepted regardless. Protocol-breaking (re-pin to Akita).
 - [ ] **Stage 7b — BN254 removal** (stage 7b PR): Dory, HyperKZG, the BN254 `JoltField` impl
   and every pairing/curve path deleted; `ark-bn254`/`ark-ec` gone from the tree, and the
   `a16z/arkworks-algebra` fork pin with them unless a vendored crate still requires `ark-ff`
-  (recorded in `PINS.md`); the `prove` example's `--pcs` choices updated.
+  (recorded in `PINS.md`); the `prove` example's `--pcs` choices updated. Behavior-preserving
+  (Akita digests).
 - [ ] **Stage 8 — verifier-cone closure** (stage 8 PR). Stage 6 removes the
   *relation-family* verifiers but not everything: the lookup-family verifier-side handlers
   (ReLU/gather/clamp one-hot parameter builders, range-check verification) move as code, not
@@ -243,6 +249,7 @@ what is specific).
   checklist item of the stage that vendors each crate, **plus** a module-path import check in
   the isolation CI job (reject `::prover` / `::witness` path segments appearing in
   `jolt-atlas-verifier` sources) as the backstop for items the enumeration misses.
+  Behavior-preserving (digests).
 
 Program definition of done (checkable): `joltworks` is gone — every inventory module replaced
 or in a named atlas-only crate; `jolt-atlas-core` contains no verification logic;
@@ -264,10 +271,15 @@ Akita with Akita `mutate::Site`s (stage 7a). No sweep tolerance may be added at 
 ### Performance
 
 Behavior-preserving stages: no regression on the README benchmark, measured with the `prove`
-example per stage (`models/gpt2 --pcs dory` through stage 6, Akita from stage 7a); atlas delta
-re-porting is the lever, and a stage that cannot hold the line keeps the delta and documents
-the divergence in `PINS.md`. Stage 1 is code motion only; the `test-util` inertness criterion
-keeps its measurement honest. Protocol-breaking stages may carry **protocol-inherent** costs
+example per stage (`models/gpt2 --pcs dory` through stage 6, Akita from stage 7a). The baseline
+is that command on `main` immediately before the stage; the gate is the median of 3 runs of
+total prove time within +3% of the baseline median. The README table is HyperKZG today; stage 1
+re-measures it on Dory so the published numbers match the gate. The `tracing` span names the
+table cites (`ONNXProof::prove`, `ONNXProof::verify`, `ONNXProof::iop`, …) are kept as
+instrument labels when stage 1 turns the methods into free functions. Atlas delta re-porting is
+the lever, and a stage that cannot hold the line keeps the delta and documents the divergence
+in `PINS.md`. Stage 1 is code motion only; the `test-util` inertness criterion keeps its
+measurement honest. Protocol-breaking stages may carry **protocol-inherent** costs
 (stage 3's PoW), quantified and accepted explicitly. The relation engine's risk is the prover's
 sumcheck inner loop: mitigated by compiling each static relation to a monomorphized fold at
 instance build, keeping the Gruen split-eq factor engine-owned outside the relation, and the

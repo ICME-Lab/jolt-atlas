@@ -32,17 +32,9 @@ fn decode_one(dir: &Path) -> Result<(usize, usize), String> {
 /// Small models run in default CI.
 #[test]
 fn decode_small_models() {
-    for name in [
-        "op_gauntlet",
-        "microgpt",
-        "multihead_attention",
-        "transformer",
-        "nanoGPT",
-    ] {
+    for name in ["op_gauntlet", "gpt2-tiny", "qwen2-tiny", "bge-tiny"] {
         let dir = zoo_dir().join(name);
-        if !dir.exists() {
-            continue;
-        }
+        assert!(dir.exists(), "{name} is a checked-in fixture");
         match decode_one(&dir) {
             Ok((nodes, edges)) => println!("{name}: {nodes} nodes, {edges} edges"),
             Err(e) => panic!("{name}: {e}"),

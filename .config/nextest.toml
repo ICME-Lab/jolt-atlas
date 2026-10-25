@@ -1,0 +1,34 @@
+# nextest configuration (https://nexte.st/docs/configuration/)
+
+[profile.default]
+fail-fast = false
+# A test is "slow" after 60 s and is killed after 10 × 60 s.
+slow-timeout = { period = "60s", terminate-after = 10 }
+status-level = "slow"
+final-status-level = "slow"
+
+# dory-pcs persists its setup (SRS) to a per-user disk cache the first time a
+# given size is requested; two tests generating the same size concurrently
+# race on that file ("Failed to load setup from disk"). Run Dory tests one at
+# a time.
+[[profile.default.overrides]]
+filter = 'test(dory) | test(/::qwen$/)'
+test-group = "dory-setup-cache"
+
+[test-groups]
+dory-setup-cache = { max-threads = 1 }
+
+[profile.ci]
+inherits = "default"
+failure-output = "immediate-final"
+retries = 0
+
+[profile.ci.junit]
+path = "junit.xml"
+
+# Real GPT-2 / BGE / Qwen: one at a time, generous timeouts, timings printed.
+[profile.heavy]
+inherits = "ci"
+test-threads = 1
+slow-timeout = { period = "300s", terminate-after = 9 }
+success-output = "final"

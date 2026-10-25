@@ -206,7 +206,10 @@ impl<F: JoltField> SumAxisProver<F> {
                 .with_min_len(par_enabled())
                 .map(|i| operand.get_bound_coeff(i))
                 .sum::<F>();
-            assert_eq!(claim, params.input_claim(_accumulator));
+            crate::onnx_proof::testing::probe::probe_assert_eq!(
+                claim,
+                params.input_claim(_accumulator)
+            );
         }
         Self { params, operand }
     }
@@ -320,99 +323,5 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
             .into_provider(transcript, OpeningPoint::new(opening_point));
         provider.append_nodeio(Target::Input(0));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    fn sum_model<const AXIS: usize>(m: usize, n: usize) -> Model {
-        let mut b = ModelBuilder::new();
-        let i = b.input(vec![m, n]);
-        let output_dims = if AXIS == 0 { vec![n] } else { vec![m] };
-        let res = b.sum(i, vec![AXIS], output_dims);
-        b.mark_output(res);
-        b.build()
-    }
-
-    fn test_sum_axis_generic(log_m: usize, log_n: usize, seed: u64, axis: usize) {
-        let m = 1 << log_m;
-        let n = 1 << log_n;
-        let mut rng = StdRng::seed_from_u64(seed);
-        let input = Tensor::<i32>::random_small(&mut rng, &[m, n]);
-        let model = match axis {
-            0 => sum_model::<0>(m, n),
-            1 => sum_model::<1>(m, n),
-            _ => panic!("Invalid axis"),
-        };
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    fn test_sum_axis_0_1d() {
-        test_sum_axis_generic(5, 0, 0x123, 0);
-    }
-
-    #[test]
-    fn test_sum_axis_0_2d() {
-        test_sum_axis_generic(4, 5, 0x398, 0);
-    }
-
-    #[test]
-    fn test_sum_axis_1_2d() {
-        test_sum_axis_generic(4, 5, 0x878, 1);
-    }
-
-    #[test]
-    fn test_sum_axis_1_1d() {
-        test_sum_axis_generic(4, 0, 0x844, 1);
-    }
-
-    /// Vector output (`T = 4`): rows saturate at both `i32::MAX` and `i32::MIN`,
-    /// exercising the clamp lookup on the axis accumulation.
-    #[test]
-    fn test_sum_axis_saturating_overflow() {
-        let m = 4;
-        let n = 8;
-        let data: Vec<i32> = (0..m * n)
-            .map(|i| {
-                if (i / n) % 2 == 0 {
-                    i32::MAX / 2
-                } else {
-                    i32::MIN / 2
-                }
-            })
-            .collect();
-        let input = Tensor::<i32>::from_slice(&data, &[m, n]).unwrap();
-        let model = sum_model::<1>(m, n);
-        unit_test_op(model, &[input]);
-    }
-
-    /// Scalar output (`T = 1`): the accumulation overflows and the verifier checks
-    /// `output == SatClamp(sum)` directly.
-    #[test]
-    fn test_sum_scalar_saturating_overflow() {
-        let m = 64;
-        let n = 1;
-        let data = vec![i32::MAX / 2; m * n];
-        let input = Tensor::<i32>::from_slice(&data, &[m, n]).unwrap();
-        let model = sum_model::<0>(m, n);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    #[ignore = "TODO: non-power-of-two sum(axis) path not fully validated yet"]
-    fn test_sum_axis_non_power_of_two_input_len() {
-        let mut rng = StdRng::seed_from_u64(0x845);
-        let m = 33;
-        let n = 65;
-        let input = Tensor::<i32>::random_small(&mut rng, &[m, n]);
-        let model = sum_model::<1>(m, n);
-        unit_test_op(model, &[input]);
     }
 }

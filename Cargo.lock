@@ -238,6 +238,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 name = "atlas-onnx-import"
 version = "0.1.0"
 dependencies = [
+ "atlas-onnx-import",
  "atlas-trace",
  "bytes",
  "prost",

@@ -1,0 +1,25 @@
+{
+  "generator": "scripts/gen_tiny_models.py",
+  "seed": 684453,
+  "kind": "gpt2",
+  "config": {
+    "n_layer": 2,
+    "n_embd": 48,
+    "n_head": 3,
+    "n_inner": 192,
+    "vocab_size": 1000,
+    "n_positions": 64,
+    "n_ctx": 64,
+    "activation_function": "gelu_new",
+    "layer_norm_epsilon": 1e-05,
+    "use_cache": true,
+    "bos_token_id": 999,
+    "eos_token_id": 999
+  },
+  "export": [
+    "--task",
+    "text-generation-with-past",
+    "--opset",
+    "18"
+  ]
+}

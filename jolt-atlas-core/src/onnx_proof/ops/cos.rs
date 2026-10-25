@@ -398,7 +398,10 @@ impl<F: JoltField> CosProver<F> {
                     a * (b + params.gamma * int)
                 })
                 .sum();
-            assert_eq!(rv_claim + params.gamma * downscaled_claim, claim)
+            crate::onnx_proof::testing::probe::probe_assert_eq!(
+                rv_claim + params.gamma * downscaled_claim,
+                claim
+            )
         }
 
         (
@@ -576,51 +579,5 @@ impl RaOneHotEncoding for CosRaEncoding {
 
     fn one_hot_params(&self) -> OneHotParams {
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), COS_TABLE_VARS)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    use common::consts::TRIG_PERIOD_MODULUS;
-
-    fn cos_model(input_shape: &[usize]) -> Model {
-        let mut b = ModelBuilder::new();
-        let i = b.input(input_shape.to_vec());
-        let res = b.cos(i);
-        b.mark_output(res);
-        b.build()
-    }
-
-    #[test]
-    fn test_cos_random_inputs() {
-        let t = 1 << 13;
-        let mut rng = StdRng::seed_from_u64(0xC05);
-        let input = Tensor::random_range(&mut rng, &[t], -50000..50000);
-        let model = cos_model(&[t]);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    fn test_cos_periodic_boundary_inputs() {
-        let m = TRIG_PERIOD_MODULUS as i32;
-        let input = Tensor::from_slice(&[-m - 1, -m, -1, 0, 1, m - 1, m, m + 1], &[8]).unwrap();
-        let model = cos_model(&[8]);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    #[ignore = "TODO: non-power-of-two cos path not fully validated yet"]
-    fn test_cos_non_power_of_two_input_len() {
-        let t = 1000;
-        let mut rng = StdRng::seed_from_u64(0xC06);
-        let input = Tensor::random_range(&mut rng, &[t], -50000..50000);
-        let model = cos_model(&[t]);
-        unit_test_op(model, &[input]);
     }
 }

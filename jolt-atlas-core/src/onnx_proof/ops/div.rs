@@ -305,7 +305,7 @@ impl<F: JoltField> DivProver<F> {
                     b * q + R - a
                 })
                 .sum();
-            assert_eq!(F::zero(), claim)
+            crate::onnx_proof::testing::probe::probe_assert_eq!(F::zero(), claim)
         }
         Self {
             params,
@@ -523,69 +523,4 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
     )?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{onnx_proof::ops::test::unit_test_op, test_builder::ModelBuilder};
-    use atlas_trace::{Model, Tensor};
-    use rand::{rngs::StdRng, SeedableRng};
-
-    const SCALE: i32 = 8;
-
-    fn div_model(T: usize) -> Model {
-        let mut b = ModelBuilder::new();
-        let i = b.input(vec![T]);
-        let c = b.constant(Tensor::construct(vec![1 << SCALE; T], vec![T]));
-        let res = b.div(i, c);
-        b.mark_output(res);
-        b.build()
-    }
-
-    fn recip_model(T: usize) -> Model {
-        let mut b = ModelBuilder::new();
-        let i = b.input(vec![T]);
-        let c = b.constant(Tensor::construct(vec![1 << (SCALE * 2); T], vec![T]));
-        let res = b.div(c, i);
-        b.mark_output(res);
-        b.build()
-    }
-
-    #[test]
-    fn test_div_by_const() {
-        let T = 1 << 16;
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::<i32>::random(&mut rng, &[T]);
-        let model = div_model(T);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    fn test_div_by_tensor() {
-        let T = 1 << 16;
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let model = recip_model(T);
-        let mut input = Tensor::<i32>::random_range(&mut rng, &[T], 1..SCALE * SCALE);
-        input.data_mut().iter_mut().for_each(|v| {
-            if *v == 0 {
-                *v = 1
-            }
-        });
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    #[ignore = "non-power-of-two path not fully supported yet"]
-    fn test_div_non_power_of_two_input_len() {
-        let t = 1000;
-        let mut rng = StdRng::seed_from_u64(0x889);
-        let mut input = Tensor::<i32>::random_range(&mut rng, &[t], 1..SCALE * SCALE);
-        input.data_mut().iter_mut().for_each(|v| {
-            if *v == 0 {
-                *v = 1
-            }
-        });
-        let model = div_model(t);
-        unit_test_op(model, &[input]);
-    }
 }

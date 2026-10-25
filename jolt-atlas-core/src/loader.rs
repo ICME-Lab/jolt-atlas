@@ -6,7 +6,13 @@ use serde::{Deserialize, Serialize};
 /// Load and compile an ONNX model, panicking on failure (examples and tests;
 /// use [`atlas_onnx_import::load`] for typed errors).
 pub fn load_model(path: &str, run_args: &RunArgs) -> atlas_trace::Model {
-    let imported = atlas_onnx_import::load(
+    load_imported(path, run_args).model
+}
+
+/// Like [`load_model`], but keeps the input descriptors and the pass log
+/// (needed to synthesize inputs and to assert which importer rewrites fired).
+pub fn load_imported(path: &str, run_args: &RunArgs) -> atlas_onnx_import::ImportedModel {
+    atlas_onnx_import::load(
         std::path::Path::new(path),
         &atlas_onnx_import::LoadOptions {
             bindings: run_args.variables.clone(),
@@ -14,8 +20,7 @@ pub fn load_model(path: &str, run_args: &RunArgs) -> atlas_trace::Model {
             pad_pow2: run_args.pad_to_power_of_2,
         },
     )
-    .unwrap_or_else(|e| panic!("load_model({path}): {e}"));
-    imported.model
+    .unwrap_or_else(|e| panic!("load_model({path}): {e}"))
 }
 
 /// Runtime arguments for loading a model.

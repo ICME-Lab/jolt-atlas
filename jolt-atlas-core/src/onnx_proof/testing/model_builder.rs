@@ -1,4 +1,5 @@
-//! Programmatic [`atlas_trace::Model`] construction for tests and benches.
+//! Programmatic [`atlas_trace::Model`] construction for tests (explicit dims,
+//! no padding pass unless [`ModelBuilder::build_padded`] is used).
 
 use atlas_trace::{op, CompileOptions, Graph, Node, NodeId, Op, SemVersion, Tensor};
 
@@ -308,6 +309,25 @@ impl ModelBuilder {
         )
     }
 
+    /// Softmax over the last axis with only the first `active_len` columns live
+    /// (the masked form the proof layer rejects at preprocessing).
+    pub fn softmax_last_axis_masked(&mut self, input: Wire, active_len: usize) -> Wire {
+        let d = self.dims(input);
+        self.push(
+            Op::SoftmaxLastAxis(op::SoftmaxLastAxis {
+                active_len: Some(active_len),
+            }),
+            vec![input],
+            d,
+        )
+    }
+
+    /// Always-zero NaN check.
+    pub fn is_nan(&mut self, input: Wire) -> Wire {
+        let d = self.dims(input);
+        self.push(Op::IsNan(op::IsNan), vec![input], d)
+    }
+
     /// Tanh activation.
     pub fn tanh(&mut self, input: Wire) -> Wire {
         let d = self.dims(input);
@@ -346,6 +366,17 @@ impl ModelBuilder {
     /// Compile into an [`atlas_trace::Model`] (dims are taken as given —
     /// no padding pass; clamp widths are annotated).
     pub fn build(self) -> atlas_trace::Model {
+        self.build_with(false)
+    }
+
+    /// Compile with the production power-of-two padding pass, as the ONNX
+    /// importer does (`pad_pow2: true`); inputs are then supplied unpadded
+    /// and padded by the executor.
+    pub fn build_padded(self) -> atlas_trace::Model {
+        self.build_with(true)
+    }
+
+    fn build_with(self, pad_pow2: bool) -> atlas_trace::Model {
         let graph = Graph {
             nodes: self.nodes,
             inputs: self.inputs,
@@ -355,7 +386,7 @@ impl ModelBuilder {
             graph,
             CompileOptions {
                 scale: atlas_trace::Scale::new(self.scale).expect("scale in range"),
-                pad_pow2: false,
+                pad_pow2,
                 version: SemVersion::V1,
             },
         )

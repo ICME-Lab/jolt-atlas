@@ -47,6 +47,48 @@ pub const LITTLE_ENDIAN: Endianness = true;
 pub type Opening<F> = (OpeningPoint<BIG_ENDIAN, F>, F);
 pub type Openings<F> = BTreeMap<OpeningId, Opening<F>>;
 
+/// Test-only opening forgery hook (feature `test-feature`).
+///
+/// Soundness sweeps set a target [`OpeningId`]; every claim the prover
+/// appends under that id (dense, sparse or virtual) is bumped by one before
+/// it reaches the transcript, so the forged value flows into the prover's
+/// own Fiat-Shamir state and downstream claims exactly as a malicious prover
+/// would arrange. The verifier must still reject. This is the single choke
+/// point every opening passes through, including those appended from inside
+/// joltworks subprotocols.
+#[cfg(any(test, feature = "test-feature"))]
+pub mod forgery {
+    use super::OpeningId;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        RwLock,
+    };
+
+    static TARGET: RwLock<Option<OpeningId>> = RwLock::new(None);
+    static HITS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Target an opening id (or clear with `None`); resets the hit counter.
+    pub fn set(target: Option<OpeningId>) {
+        *TARGET.write().unwrap() = target;
+        HITS.store(0, Ordering::SeqCst);
+    }
+
+    /// How many appended claims were forged since the last [`set`].
+    pub fn hits() -> usize {
+        HITS.load(Ordering::SeqCst)
+    }
+
+    /// The claim to actually append for `id`.
+    pub fn apply<F: crate::field::JoltField>(id: OpeningId, claim: F) -> F {
+        if *TARGET.read().unwrap() == Some(id) {
+            HITS.fetch_add(1, Ordering::SeqCst);
+            claim + F::one()
+        } else {
+            claim
+        }
+    }
+}
+
 /// Accumulates openings computed by the prover over the course of Jolt,
 /// so that they can all be reduced to a single opening proof using sumcheck.
 #[derive(Clone, Allocative)]
@@ -288,6 +330,8 @@ where
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
+        #[cfg(any(test, feature = "test-feature"))]
+        let claim = forgery::apply(opening_id, claim);
         #[cfg(feature = "zk")]
         let suppress = self.zk_mode;
         #[cfg(not(feature = "zk"))]
@@ -344,6 +388,12 @@ where
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
+        #[cfg(any(test, feature = "test-feature"))]
+        let claims: Vec<F> = polynomials
+            .iter()
+            .zip(claims)
+            .map(|(&poly, claim)| forgery::apply(OpeningId::new(poly, sumcheck), claim))
+            .collect();
         #[cfg(feature = "zk")]
         let suppress = self.zk_mode;
         #[cfg(not(feature = "zk"))]
@@ -403,6 +453,8 @@ where
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }
+        #[cfg(any(test, feature = "test-feature"))]
+        let claim = forgery::apply(opening_id, claim);
 
         #[cfg(feature = "zk")]
         let suppress = self.zk_mode;

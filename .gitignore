@@ -38,3 +38,6 @@ temp_file
 
 # python virtual environment
 .venv/
+
+# Python bytecode from the model scripts
+__pycache__/

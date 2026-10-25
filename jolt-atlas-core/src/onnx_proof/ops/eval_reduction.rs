@@ -82,8 +82,8 @@ impl NodeEvalReduction {
 mod tests {
     use super::*;
     use crate::node_view::ModelView;
+    use crate::onnx_proof::testing::ModelBuilder;
     use crate::onnx_proof::{AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, ProofId};
-    use crate::test_builder::ModelBuilder;
     use ark_bn254::{Bn254, Fr};
     use atlas_trace::op::Add;
     use atlas_trace::trace::ModelExecutionIO;

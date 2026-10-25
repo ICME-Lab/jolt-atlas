@@ -42,8 +42,9 @@ Before asking the user anything, form a hypothesis from the Summary and Goal:
 1. Read the behavioral contract at the top of `atlas-trace/src/lib.rs`. For each clause, judge
    whether this feature relies on it, preserves it, or changes it.
 2. If the feature touches the prover, list the op protocols under
-   `jolt-atlas-core/src/onnx_proof/ops/` it affects and the soundness tests
-   (`onnx_proof/soundness_tests.rs`, `onnx_proof/malicious_prover.rs`) that pin them today.
+   `jolt-atlas-core/src/onnx_proof/ops/` it affects, their rows in
+   `onnx_proof/testing/op_surface.rs`, and which probe model in `onnx_proof/testing/models.rs`
+   puts them under the soundness sweeps (`onnx_proof/testing/soundness.rs`) today.
 3. Independently, imagine the binary properties that would have to hold for the Goal to be
    correct. Which are not pinned by an existing test?
 
@@ -72,7 +73,8 @@ sufficient and add tests only for distinct gaps.
 
 #### Evaluation: Testing Strategy
 Ask: "Which existing tests must keep passing? What new tests are needed? Which CI jobs cover this:
-the workspace tests, the zoo gates and golden hashes, the GPT-2 or BGE prove & verify? If it
+the workspace tests (op-surface table, soundness sweeps, checked-in zoo), the zoo gates and
+golden hashes, the real-model GPT-2 / BGE / Qwen prove & verify? If it
 touches the `zk` feature, how is that verified, since CI does not build it?"
 
 #### Evaluation: Performance
@@ -80,7 +82,8 @@ touches the `zk` feature, how is that verified, since CI does not build it?"
 Before asking the user anything, form a hypothesis:
 1. Read the benchmark tables in `README.md`. Judge which stages (witness + commitment, IOP
    proving, opening proof, verify) this feature is likely to move, and in which direction.
-2. Decide which example under `jolt-atlas-core/examples/` is the right benchmark.
+2. Decide which model the `prove` example should run as the benchmark (a `models/*-tiny`
+   stand-in for shape coverage, a real download for absolute numbers).
 
 Present the hypothesis in one pass:
 ```

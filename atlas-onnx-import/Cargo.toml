@@ -10,6 +10,11 @@ atlas-trace.workspace = true
 bytes = "1"
 prost = "0.13"
 thiserror.workspace = true
+rand = { workspace = true, default-features = true, optional = true }
+
+[features]
+# Deterministic descriptor-driven model inputs (`fixtures` module).
+test-util = ["dep:rand"]
 
 [dev-dependencies]
-rand = { workspace = true, default-features = true }
+atlas-onnx-import = { path = ".", features = ["test-util"] }

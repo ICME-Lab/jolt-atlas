@@ -6,96 +6,159 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: ['**', main]
+    branches: ['**']
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    # Nightly: real models + exhaustive soundness sweeps.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
 
 env:
   RUSTFLAGS: -D warnings
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Full debuginfo on opt-level-3 test binaries is most of the cache; line
+  # tables keep backtraces useful.
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref || github.run_id }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  # Never cancel a main/nightly heavy run because another push landed.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   fmt:
     name: Format check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
-      - name: cargo fmt
-        run: cargo fmt --all --check
+          cache: false
+      - run: cargo fmt --all --check
 
-  clippy-and-test:
-    name: Clippy & Test (${{ matrix.variant.name }})
+  clippy:
+    name: Clippy
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        variant:
-          - name: default
-            clippy_args: --workspace --all-targets
-            test_args: --workspace
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
-      - name: cargo clippy
-        run: cargo clippy ${{ matrix.variant.clippy_args }}
-      - uses: taiki-e/install-action@nextest
-      - name: Run tests
-        run: cargo nextest run ${{ matrix.variant.test_args }}
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - run: cargo clippy --workspace --all-targets
 
-  zoo-gates:
-    name: Model zoo import gates & goldens
+  test:
+    # Unit tests, the exhaustive op-surface table, the soundness sweeps, the
+    # checked-in zoo (op gauntlet + tiny GPT-2 / Qwen2 / BERT stand-ins)
+    # end to end, and the importer's zoo gates and golden hashes.
+    name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
       - uses: taiki-e/install-action@nextest
-      - name: Decode / analyze / import gates + golden output hashes
-        run: cargo nextest run -p atlas-onnx-import --run-ignored ignored-only
+      - name: Workspace tests
+        run: cargo nextest run --workspace --profile ci
+      - name: Full-zoo import gates (checked-in models)
+        run: >
+          cargo nextest run -p atlas-onnx-import --profile ci
+          --run-ignored ignored-only -E 'not test(golden_zoo_big)'
 
-  test-gpt2:
-    name: GPT-2 Prove & Verify
+  heavy-models:
+    # Real GPT-2 (Dory), BGE and Qwen2-0.5B (Dory): main, nightly,
+    # workflow_dispatch, and PRs labelled `ci:heavy`.
+    name: Real model (${{ matrix.model.name }})
+    needs: test
+    if: >
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:heavy')
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - name: gpt2
+            dir: models/gpt2
+            script: download_gpt2.py
+            test: 'test(/zoo::gpt2_dory$/)'
+          - name: bge
+            dir: models/bge-small-en-v1.5
+            script: download_bge_small_en_v1_5.py
+            test: 'test(/zoo::bge_small_en_v1_5$/)'
+          - name: qwen
+            dir: models/qwen
+            script: download_qwen.py
+            test: 'test(/zoo::qwen$/)'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          save-if: false
+          cache-on-failure: true
+      - uses: taiki-e/install-action@nextest
+      - name: Restore ${{ matrix.model.name }} export
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.model.dir }}
+          key: model-${{ matrix.model.name }}-${{ hashFiles(format('scripts/{0}', matrix.model.script), 'scripts/onnx_export_utils.py', 'scripts/requirements-models.txt') }}
       - uses: actions/setup-python@v5
+        if: steps.model-cache.outputs.cache-hit != 'true'
         with:
           python-version: '3.11'
-      - name: Download GPT-2 ONNX model
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          python scripts/download_gpt2.py
-      - uses: taiki-e/install-action@nextest
-      - name: Run GPT-2 test
-        run: cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_gpt2_dory)'
-      - name: GPT-2 golden output hash
-        run: cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'test(golden_zoo_big)'
+          cache: pip
+          cache-dependency-path: scripts/requirements-models.txt
+      - name: Export ${{ matrix.model.name }} to ONNX
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: python scripts/${{ matrix.model.script }}
+      - name: Prove & verify
+        run: >
+          cargo nextest run -p jolt-atlas-core --profile heavy
+          --run-ignored ignored-only -E '${{ matrix.model.test }}'
+      - name: Golden forward hash
+        run: >
+          cargo nextest run -p atlas-onnx-import --profile heavy
+          --run-ignored ignored-only -E 'test(golden_zoo_big)'
 
-  test-bge:
-    name: BGE Prove & Verify
+  soundness-exhaustive:
+    # Every mutation site, every witness element, every opening id.
+    name: Exhaustive soundness sweeps
+    needs: test
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      JOLT_SOUNDNESS_EXHAUSTIVE: '1'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Download BGE ONNX model
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          python scripts/download_bge_small_en_v1_5.py
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          save-if: false
+          cache-on-failure: true
       - uses: taiki-e/install-action@nextest
-      - name: Run BGE test
-        run: cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_bge_small_en_v1_5)'
-      - name: BGE golden output hash
-        run: cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'test(golden_zoo_big)'
-
+      - run: >
+          cargo nextest run -p jolt-atlas-core --profile heavy
+          -E 'test(soundness)'

@@ -158,7 +158,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
             let res = OperatorVerifier::verify(node, verifier, &self.eval_reduction_proofs);
             #[cfg(test)]
             if let Err(e) = &res {
-                println!("Verification failed at node {node:#?}: {e:?}");
+                if !crate::onnx_proof::testing::probe::active() {
+                    println!("Verification failed at node {node:#?}: {e:?}");
+                }
             }
             res?;
         }
@@ -183,8 +185,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
                 &mut verifier.transcript,
             );
             #[cfg(test)]
-            {
-                if let Err(e) = &reduction_res {
+            if let Err(e) = &reduction_res {
+                if !crate::onnx_proof::testing::probe::active() {
                     println!("Opening reduction via sumcheck failed: {e:?}");
                 }
             }

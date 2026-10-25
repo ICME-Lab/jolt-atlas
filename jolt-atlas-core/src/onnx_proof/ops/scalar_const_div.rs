@@ -325,39 +325,3 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ScalarConst
         provider.append_advice(CommittedPoly::ScalarConstDivNodeRemainder);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    fn scalar_const_div_model(T: usize, divisor: i32) -> Model {
-        let mut b = ModelBuilder::new();
-        let i = b.input(vec![T]);
-        let res = b.scalar_const_div(i, divisor);
-        b.mark_output(res);
-        b.build()
-    }
-
-    #[test]
-    fn test_scalar_const_div() {
-        let T = 1 << 16;
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::<i32>::random_small(&mut rng, &[T]);
-        let model = scalar_const_div_model(T, 128);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    #[ignore = "non-power-of-two path not fully supported yet"]
-    fn test_scalar_const_div_non_power_of_two_input_len() {
-        let t = 1000;
-        let mut rng = StdRng::seed_from_u64(0x889);
-        let input = Tensor::<i32>::random_small(&mut rng, &[t]);
-        let model = scalar_const_div_model(t, 128);
-        unit_test_op(model, &[input]);
-    }
-}

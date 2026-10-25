@@ -167,7 +167,10 @@ impl<F: JoltField> IffProver<F> {
                 })
                 .sum();
 
-            assert_eq!(output.evaluate(&params.r_node_output.r), claim)
+            crate::onnx_proof::testing::probe::probe_assert_eq!(
+                output.evaluate(&params.r_node_output.r),
+                claim
+            )
         }
         Self {
             params,
@@ -301,43 +304,5 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IffVerifier
         provider.append_nodeio(Target::Input(0));
         provider.append_nodeio(Target::Input(1));
         provider.append_nodeio(Target::Input(2));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    fn iff_model(rng: &mut StdRng, T: usize) -> Model {
-        let mut b = ModelBuilder::new();
-        let i = b.input(vec![T]);
-        let mask = b.constant(Tensor::random_boolean(rng, &[T]));
-        let c0 = b.constant(Tensor::random(rng, &[T]));
-        let res = b.iff(mask, i, c0);
-        b.mark_output(res);
-        b.build()
-    }
-
-    #[test]
-    fn test_iff() {
-        let T = 1 << 16;
-        let mut rng = StdRng::seed_from_u64(0x899);
-        let input = Tensor::<i32>::random(&mut rng, &[T]);
-        let model = iff_model(&mut rng, T);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    #[ignore = "TODO: non-power-of-two iff path not fully validated yet"]
-    fn test_iff_non_power_of_two_input_len() {
-        let t = 1000;
-        let mut rng = StdRng::seed_from_u64(0x89A);
-        let input = Tensor::<i32>::random(&mut rng, &[t]);
-        let model = iff_model(&mut rng, t);
-        unit_test_op(model, &[input]);
     }
 }

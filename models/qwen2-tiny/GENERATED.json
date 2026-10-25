@@ -1,0 +1,27 @@
+{
+  "generator": "scripts/gen_tiny_models.py",
+  "seed": 684453,
+  "kind": "qwen2",
+  "config": {
+    "num_hidden_layers": 2,
+    "hidden_size": 56,
+    "num_attention_heads": 14,
+    "num_key_value_heads": 2,
+    "intermediate_size": 152,
+    "vocab_size": 1000,
+    "max_position_embeddings": 64,
+    "rms_norm_eps": 1e-06,
+    "rope_theta": 1000000.0,
+    "hidden_act": "silu",
+    "tie_word_embeddings": true,
+    "use_cache": false,
+    "bos_token_id": 999,
+    "eos_token_id": 999
+  },
+  "export": [
+    "--task",
+    "text-generation",
+    "--opset",
+    "18"
+  ]
+}

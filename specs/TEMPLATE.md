@@ -49,17 +49,21 @@ Concrete, testable criteria. Each should be verifiable by a test, benchmark, or 
 ### Testing Strategy
 
 Which existing tests must continue passing? What new tests are needed? Say which CI jobs cover
-the change (`cargo nextest run --workspace`, the `atlas-onnx-import` zoo gates and golden hashes,
-the GPT-2 and BGE prove & verify runs). For a new or changed op protocol, name the soundness test
-that shows a malicious prover is rejected. For changes behind the `zk` feature, which CI does not
-build, say how they are verified.
+the change (`cargo nextest run --workspace`: unit tests, the op-surface table, the soundness
+sweeps, the checked-in zoo; the `atlas-onnx-import` zoo gates and golden hashes; the real-model
+GPT-2 / BGE / Qwen prove & verify job). For a new op, name its rows in
+`jolt-atlas-core/src/onnx_proof/testing/op_surface.rs` (including saturation and non-power-of-two
+stances) and which probe model in `onnx_proof/testing/models.rs` puts it under the soundness
+sweeps. For a changed proof format, name the new `mutate::Site`. For changes behind the `zk`
+feature, which CI does not build, say how they are verified.
 
 ### Performance
 
-What are the performance expectations? Name the benchmark that verifies them: an example under
-`jolt-atlas-core/examples/` (`gpt2`, `nanoGPT`, `bge`, ...) run with `--trace-terminal`, and the
-stage from the README benchmark table (witness + commitment, IOP proving, opening proof, verify)
-that is expected to move, with direction and rough magnitude. "No regression" is acceptable if
+What are the performance expectations? Name the benchmark that verifies them: the `prove`
+example (`cargo run --release -p jolt-atlas-core --example prove -- --model models/<dir>
+--trace-terminal`, with `--pcs dory` for the production scheme) on a named model, and the stage
+from the README benchmark table (witness + commitment, IOP proving, opening proof, verify) that
+is expected to move, with direction and rough magnitude. "No regression" is acceptable if
 you name the benchmark that verifies it. Memory budgets matter: the README's reference machine
 has 16 GB.
 

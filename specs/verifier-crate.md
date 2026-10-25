@@ -42,7 +42,9 @@ commitment or proving code.
   generation, no proving, no per-op prover code, no trace execution. This is the boundary `cargo`
   and the CI isolation build actually enforce in phase 1. Named exception: the crate depends on
   `joltworks` whole, whose prover APIs (e.g. `CommitmentScheme::commit`) remain *reachable* though
-  unused; review holds that line until phases 2–3 of the ladder close it compile-time.
+  unused; review holds that line until the upstream-adoption program
+  (`specs/upstream-adoption.md`) closes it compile-time by replacing `joltworks` with vendored
+  upstream verifier-side crates.
 - The verifier still derives everything it trusts from the model and the proof alone: it may
   depend on `atlas-trace` for graph structure and `semantics` (lookup-table generation is part of
   the statement), never on trace *execution*.
@@ -52,9 +54,10 @@ commitment or proving code.
 
 ### Non-Goals
 
-- Splitting `joltworks` in the same PR. The end state is complete decomposition — the verifier's
-  whole dependency cone prover-free, as upstream a16z/jolt separates it — reached by the phased
-  ladder in Design; this PR lands phase 1 only.
+- Splitting `joltworks` at all. The end state is complete decomposition — the verifier's whole
+  dependency cone prover-free, as upstream a16z/jolt separates it — reached by the
+  upstream-adoption program (`specs/upstream-adoption.md`), not by splitting our fork. This spec
+  lands only the product boundary and its CI check.
 - The `zk` feature. BlindFold verification stays in `jolt-atlas-core` behind `zk` until the
   feature has tests.
 - Minimizing verifier dependencies (e.g. a no-std story). The crate boundary comes first;
@@ -68,7 +71,7 @@ commitment or proving code.
 - [ ] `jolt-atlas-verifier` builds in isolation (`cargo check -p jolt-atlas-verifier`) with no
   dependency on `jolt-atlas-core` (witness generation, proving, per-op prover code) or on trace
   execution. Prover APIs inside `joltworks` remain reachable in phase 1; the criterion is the
-  crate edge, not API reachability (see End state and ladder).
+  crate edge, not API reachability (see End state).
 - [ ] `ONNXProof::verify` call sites migrate to the new crate's entry point; `jolt-atlas-core`
   re-exports it during the transition so downstream code moves at its own pace.
 - [ ] `cargo nextest run --workspace` passes; the zoo e2es' transcript-lockstep and
@@ -104,10 +107,14 @@ None expected: code motion, no algorithmic change. Verified by the `prove` examp
 Target dependency graph:
 
 ```
-common ─▶ joltworks ─▶ jolt-atlas-verifier ─▶ jolt-atlas-core (prover, witness, testing)
+common ─▶ joltworks* ─▶ jolt-atlas-verifier ─▶ jolt-atlas-core (prover, witness, testing)
              ▲                 ▲
              └── atlas-trace ──┘        (atlas-onnx-import unchanged)
 ```
+
+\* `joltworks` is being replaced per subsystem by vendored upstream crates
+(`specs/upstream-adoption.md`); the edge and the boundary drawn here are unchanged by that
+substitution.
 
 At the end state, `jolt-atlas-verifier` owns: verifier preprocessing
 (`AtlasVerifierPreprocessing`), proof types and deserialization, the `Verifier` state and
@@ -142,36 +149,33 @@ move in phase 1:
 The enforcement value (the crate edge and its CI check) lands with step 1; the boundary tightens
 monotonically until `verify` itself crosses in step 2's final move.
 
-### End state and ladder
+### End state
 
 The end state is complete decomposition: no crate in the verifier's dependency cone contains
 prover code. With `jolt-atlas-verifier` depending on `joltworks` whole, cargo cannot stop
 verifier code from calling `joltworks`' prover halves, and light targets link prover machinery
-they never run — the boundary has a hole one layer down. Phases, each independently shippable:
+they never run — the boundary has a hole one layer down.
 
-1. **This spec**: `jolt-atlas-verifier` + CI isolation build. Bounds the product layer, where
-   the audit risk concentrates (per-op verification, claim plumbing).
-2. **Superseded** (see `specs/upstream-adoption.md`): upstream a16z/jolt now ships the
-   decomposed toolkit this phase and phase 3 were going to carve out of `joltworks` by hand.
-   The verifier cone closes by adopting upstream's verifier-side crates (`jolt-sumcheck`,
-   `jolt-poly`, `jolt-openings`/`jolt-claims`, PCS crates) at pinned vendored revs.
-3. **Superseded**, as above: `joltworks` is retired by per-subsystem upstream adoption rather
-   than split in place; the adoption spec's final stage is exactly this spec's end state
-   (`jolt-atlas-verifier`'s dependency cone prover-free, proven by the CI isolation build).
-
-A `joltworks`-first split was considered and rejected as sequencing: it spends the largest
-refactor on the layer with the least audit risk, bounds nothing at the op layer where the known
-soundness findings live, and would be rebased through the upcoming `joltworks` restructuring.
+This spec lands the product boundary and its CI isolation build: the layer where the audit risk
+concentrates (per-op verification, claim plumbing). The hole below it is closed by the
+upstream-adoption program (`specs/upstream-adoption.md`), which replaces `joltworks`
+subsystem-by-subsystem with vendored upstream verifier-side crates (`jolt-sumcheck`,
+`jolt-poly`, `jolt-openings`/`jolt-claims`, the PCS crates); that program's final stage is
+exactly this spec's end state — `jolt-atlas-verifier`'s dependency cone prover-free, proven by
+the isolation build. The two specs divide cleanly: this one draws the box around our ONNX
+verifier (which upstream, whose `jolt-verifier` verifies RISC-V execution, can never supply);
+the adoption program swaps the machinery underneath it.
 
 ### Alternatives Considered
 
 - **A feature flag (`verifier-only`) instead of a crate**: rejected — features are additive and
   easy to mis-combine; they don't give an auditable dependency edge, and nothing stops a later
   change from leaking prover code into the "verifier-only" cfg.
-- **Extracting out of `joltworks` instead (verifier primitives crate)**: deferred — the
-  subprotocol prover/verifier split inside `joltworks` is real but much larger; the product-level
-  boundary (what does *jolt-atlas* verification need?) is the one audits and light targets ask
-  for first.
+- **Extracting a verifier-primitives crate out of `joltworks`** (or splitting it behind a
+  `prover` feature): superseded — upstream a16z/jolt now ships the decomposed toolkit, so the
+  subprotocol-level split arrives by adoption (`specs/upstream-adoption.md`) instead of by
+  carving up our fork. The product-level boundary (what does *jolt-atlas* verification need?)
+  remains this spec's job and is the one audits and light targets ask for first.
 - **Splitting every op file by hand now**: rejected as double work; see sequencing above.
 
 ## Documentation
@@ -190,6 +194,8 @@ verification loop and per-op verifier moves ride later PRs per the sequencing ab
 ## References
 
 - Upstream precedent: a16z/jolt's separation of verification from the prover crate.
+- `specs/upstream-adoption.md` (#397): retires `joltworks` via vendored upstream crates and
+  closes this spec's dependency cone; `docs/upstream-inventory.md` is its factual basis.
 - `specs/core-test-overhaul.md` (the sweeps that gate this reorganization).
 - Verifier-simplification arc: claim-lifecycle hardening PRs, expression-engine design (spec to
   follow).

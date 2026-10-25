@@ -74,10 +74,13 @@ Each invariant names the mechanism that holds it.
   they verify RISC-V execution, not ONNX graphs; our product layer stays ours.
 - The lookup/one-hot family (Shout read-raf, booleanity, Hamming, gather, clamp, range checks)
   never becomes relations: a different protocol shape, already shared machinery.
-- The `zk` feature and `jolt-blindfold`. The zk-gated BlindFold `OutputClaimConstraint`
-  machinery is a third encoding of the same identities (e.g. `ops/rsqrt.rs:228–289`); it stays
-  untouched with `zk`, and is subsumed by relations if and when zk revives — recorded here so
-  it is a decision, not an accident.
+- The `zk` feature and `jolt-blindfold`. The feature does not compile today (57 pre-existing
+  errors) and no program stage repairs or chases it; **a dedicated zk-revival spec, written
+  after this program completes**, owns restoring zero-knowledge on the end-state architecture
+  (expected: adopt upstream `jolt-blindfold` rather than repair the fork). The zk-gated
+  BlindFold `OutputClaimConstraint` machinery — a third encoding of the same identities (e.g.
+  `ops/rsqrt.rs:228–289`) — is subsumed by relations in that spec. Recorded here so it is a
+  decision, not an accident.
 - Flipping the default field or PCS before stage 7's activation gates.
 - Upstreaming our deltas (worthwhile, separate per-delta effort).
 - A general constraint DSL: relations are sums of products over wires, degree ≤ 3 plus an

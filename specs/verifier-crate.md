@@ -151,16 +151,13 @@ they never run — the boundary has a hole one layer down. Phases, each independ
 
 1. **This spec**: `jolt-atlas-verifier` + CI isolation build. Bounds the product layer, where
    the audit risk concentrates (per-op verification, claim plumbing).
-2. **`joltworks` `prover` feature** (default-on; nothing downstream changes).
-   `jolt-atlas-verifier` depends with `default-features = false` and the isolation build
-   compiles that configuration, taking prover code out of the compiled verifier cone without
-   moving files. Features are additive, which rules them out for the product boundary; the
-   isolation build is the single-consumer context where that cannot bite. The gated set is the
-   exact content of phase 3's prover crate.
-3. **`joltworks` decomposition** into prover/verifier (plus shared) crates, executed with the
-   planned field/PCS restructuring rather than before it, so the subprotocol files — each
-   interleaving prover and verifier structs around shared params — are split once, during a
-   rebuild that touches them anyway.
+2. **Superseded** (see `specs/upstream-adoption.md`): upstream a16z/jolt now ships the
+   decomposed toolkit this phase and phase 3 were going to carve out of `joltworks` by hand.
+   The verifier cone closes by adopting upstream's verifier-side crates (`jolt-sumcheck`,
+   `jolt-poly`, `jolt-openings`/`jolt-claims`, PCS crates) at pinned vendored revs.
+3. **Superseded**, as above: `joltworks` is retired by per-subsystem upstream adoption rather
+   than split in place; the adoption spec's final stage is exactly this spec's end state
+   (`jolt-atlas-verifier`'s dependency cone prover-free, proven by the CI isolation build).
 
 A `joltworks`-first split was considered and rejected as sequencing: it spends the largest
 refactor on the layer with the least audit risk, bounds nothing at the op layer where the known

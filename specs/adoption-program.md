@@ -124,11 +124,21 @@ specific):
   atlas-only). The split-eq delta is cheaper than the inventory feared — upstream
   `jolt-poly/split_eq.rs` already carries the Gruen machinery. Behavior-preserving modulo
   stage 3's format; remaining atlas fold-routine deltas re-ported here.
-- [ ] **Stage 5 — `jolt-openings`/`jolt-claims` + relations**: the time-boxed spike answers
-  whether the claim lattice expresses atlas flows (node-indexed openings, multi-consumer
-  evaluation reduction, deferred batches). Yes → adopt; no → the atlas accumulator stays as an
-  atlas-only crate (upstream claim traits where possible) and `jolt-openings`/`jolt-claims`
-  vendor later only as internal PCS dependencies behind an adapter. Then the **pilot
+- [ ] **Stage 5 — `jolt-openings`/`jolt-claims` + relations**: the spike answers whether the
+  claim lattice expresses atlas flows, with a defined bar and box. **Pass** iff the `Mul` pilot
+  relation, written as a `SymbolicSumcheck` over atlas `OpeningId`s, proves and verifies on a
+  probe model (`testing/models.rs`) through the adopted claim system, **and** each stress flow
+  is demonstrated as a working construct: a node-indexed opening fetched through the lattice, a
+  multi-consumer evaluation reduction producing a `ReducedInstance`, and a deferred-batch
+  registration verified after the node loop — "expressible on paper" is not a pass. **Fail**
+  evidence is the specific flow that cannot be expressed, recorded in the spike PR as the
+  reason for the fallback. **Box: two weeks of focused effort**, after which the fallback
+  (minimal same-`Term`-shape atlas IR) is taken without further debate; the fallback is
+  deliberately cheap to exit later, so a wrong "no" is bounded, while an unboxed spike is the
+  schedule hole this program exists to remove. Yes → adopt; no → the atlas accumulator stays
+  as an atlas-only crate (upstream claim traits where possible) and
+  `jolt-openings`/`jolt-claims` vendor later only as internal PCS dependencies behind an
+  adapter. Then the **pilot
   relations**: `Mul` (`eq·(L·R − out·2^S − rem)`) and `Rsqrt`
   (`eq·(x̂·q + r_div − S³ + γ·(out² + r_sqrt − q))`) implemented on the adopted
   `Expr`/`SymbolicSumcheck` layer (or, on the "no" branch, a minimal same-`Term`-shape atlas

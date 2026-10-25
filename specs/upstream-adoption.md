@@ -42,10 +42,11 @@ shout, evaluation reduction, the one-hot machinery, atlas lookup-table contents)
 - **One pin**: every vendored crate in one tree builds from the same upstream rev; mixed revs
   (today's split `arkworks dev/twist-shout` lockfile pins) are a defect this program removes.
 - **Per-stage soundness gates**: every stage passes the soundness sweeps, the op-surface table,
-  the full zoo, and one real-model prove & verify. Stages are either **behavior-preserving**
-  (transcript-lockstep against the previous stage, byte-identical proofs) or **declared
-  protocol-breaking** (proof format changes; gated by the full suite plus a serialization
-  version bump and re-pinned goldens). No stage is silently protocol-breaking.
+  the full zoo, one real-model prove & verify, and — once `jolt-atlas-verifier` exists — its CI
+  isolation build, so each swap is checked against the product verifier boundary. Stages are
+  either **behavior-preserving** (transcript-lockstep against the previous stage, byte-identical
+  proofs) or **declared protocol-breaking** (proof format changes; gated by the full suite plus
+  a serialization version bump and re-pinned goldens). No stage is silently protocol-breaking.
 - **Atlas deltas are re-ported, not lost**: before a subsystem is swapped, its atlas-specific
   changes are enumerated (perf work, the opening-accumulator semantics, zk hooks) and each is
   re-applied on the vendored crate, upstreamed, or retired with a stated reason.
@@ -163,7 +164,13 @@ through this program rather than rebasing wholesale.
 
 ## Execution
 
-Stage 0 is independent and can start immediately (lockfile unification, fix triage, J2 review).
+This program depends on `specs/verifier-crate.md` (#396): its phase 1 (the proof-type boundary
+and the CI isolation build) lands **before stage 1**, so every adoption stage is gated by the
+isolation build from the start; and stage 6 is unreachable until that spec's later phases have
+moved verification into the crate, since the cone can only close around code that lives there.
+Only stage 0 is independent of #396 and can start immediately (lockfile unification, fix
+triage, J2 review).
+
 Stages 1–3 are sequential. Stage 4's spike can run concurrently with stage 3. Stage 5 depends
 on 1; Akita activation depends on 2–4. Stage 6 lands whenever the cone's last prover dependency
 falls. Each stage's PR enumerates the atlas deltas it re-ports (from the inventory's bucket

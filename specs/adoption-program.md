@@ -175,17 +175,29 @@ what is specific).
   transcript split. Protocol-breaking (re-pin). The PoW/codec cost is protocol-inherent:
   quantified in the PR and accepted on security grounds — no delta can remove it, and
   pretending one could would drop the hardening.
-- [ ] **Stage 4 — `jolt-sumcheck` + `jolt-poly` + `jolt-utils`** (stage 4 PR): the
-  engine-substrate swap. `jolt-utils` is thin upstream (alloc/math/thread), so `utils` maps
-  there but `msm/`, `curve.rs` and `config.rs` get their own recorded dispositions (upstream
-  candidates: `jolt-crypto`/`jolt-optimizations`; staying atlas is legitimate, and BN254-only
-  code is retired at stage 7) — the inventory's every-module-assigned invariant is the gate,
-  not a promised destination. Likewise recorded: the shout/booleanity/Hamming family,
-  `univariate_skip` (does upstream's round scheduler subsume it?), and the prefix–suffix lookup
-  framework (atlas table *contents* stay atlas-only). The split-eq delta is cheaper than the
-  inventory feared — upstream `jolt-poly/split_eq.rs` already carries the Gruen machinery.
-  Behavior-preserving modulo stage 3's format; remaining atlas fold-routine deltas re-ported
-  here.
+- [ ] **Stage 4a — `jolt-utils` and the recorded dispositions** (stage 4a PR): `jolt-utils`
+  vendored and its allocator adopted; every module this stage names (`utils/*`, `msm/`,
+  `config.rs`, `curve.rs`, the shout/booleanity/Hamming family, `univariate_skip`, the
+  prefix–suffix lookup framework) has a recorded disposition in `docs/upstream-inventory.md` —
+  the every-module-assigned invariant is the gate, not a promised destination. Behavior-preserving
+  (digests).
+- [ ] **Stage 4b — the engine swap onto `jolt-sumcheck` + `jolt-poly`** (one PR per op family,
+  after a field-trait PR): split from stage 4 when the port met three facts the original entry
+  did not anticipate. (1) `jolt-poly` bounds on upstream `jolt_field::JoltField`, which our
+  generic `F: joltworks::field::JoltField` cannot carry — method names collide with upstream
+  `Ring`/`Field`, and the `ark_bn254::Fr` kernel cannot implement a foreign trait — so the first
+  PR unifies the field traits (our trait extends upstream's, the kernel stops being a
+  `JoltField`, colliding methods resolve to upstream's). (2) `jolt-sumcheck` takes the facade
+  `T: Transcript<Challenge = F>`, with no proof-of-work hook and full-field challenges, while
+  stage 3's rounds grind on the split transcript and bind with the 125-bit `MontU128Challenge`;
+  the vendored crate carries a recorded delta for both (a split-transcript adapter with a grind
+  hook, and an optimized-challenge round path), each kept only if it holds the performance line.
+  (3) Adoption ports every op protocol and the joltworks sumcheck subprotocols onto upstream's
+  round-scheduler traits and `jolt-poly` types, so it lands op family by op family, each PR
+  reproducing the digests and passing the performance gate. Upstream's exceptional-challenge fix
+  (`0337eda5`) and capped decoding of the sumcheck/polynomial proof types land with it. The
+  split-eq delta is cheaper than the inventory feared — upstream `jolt-poly/split_eq.rs` already
+  carries the Gruen machinery; remaining atlas fold-routine deltas are re-ported here.
 - [ ] **Stage 5 — `jolt-openings`/`jolt-claims` + relations** (spike PR, then pilot PR): the
   spike answers whether the claim lattice expresses atlas flows, with a defined bar and box.
   **Pass** iff the `Mul` pilot relation, written as a `SymbolicSumcheck` over atlas

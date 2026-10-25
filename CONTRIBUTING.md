@@ -27,8 +27,15 @@ spec to implementation.
 1. **Write the spec** with `/new-spec <feature-name>` in Claude Code, or copy
    [`specs/TEMPLATE.md`](specs/TEMPLATE.md) by hand to `specs/<feature-name>.md`.
 2. **Tighten it** with `/analyze-spec`, which scores the spec's ambiguity and interviews you until
-   it is clear enough to implement without clarifying questions.
-3. **Open a PR** containing only the spec, and put the PR number in the spec's header table.
+   it is clear enough to implement without clarifying questions. This step is required before
+   opening the PR, and the PR description says it ran: the analyzer reads the repo, so it catches
+   buildability problems (coherence rules, dependency cycles, feature leaks) locally in one pass
+   that would otherwise surface as serial review rounds on GitHub.
+3. **Open a PR** containing only the spec; put the PR number in the spec's header table in the
+   same PR or at merge. If the spec names other specs in `Depends on`/`Supersedes` (or in its
+   body), grep those documents and update their cross-references in the same PR — coupled specs
+   drift apart one edit at a time, and dangling references to deleted sections are a review
+   finding, not a nitpick.
 4. **Spec review**: maintainers review and approve the spec. Design discussion happens here, on a
    document of a few hundred lines, not on the implementation diff.
 5. **Implement** on the same branch with `/implement-spec`, or by hand. The skill runs the CI

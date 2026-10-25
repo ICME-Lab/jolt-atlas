@@ -49,9 +49,9 @@ commitment or proving code.
 
 ### Non-Goals
 
-- Splitting `joltworks` in the same PR. `joltworks` mixes prover and verifier halves of each
-  subprotocol; the extraction initially depends on `joltworks` whole, with its prover/verifier
-  split tracked as follow-up work (feature-gating or a `joltworks-verifier` sibling).
+- Splitting `joltworks` in the same PR. The end state is complete decomposition — the verifier's
+  whole dependency cone prover-free, as upstream a16z/jolt separates it — reached by the phased
+  ladder in Design; this PR lands phase 1 only.
 - The `zk` feature. BlindFold verification stays in `jolt-atlas-core` behind `zk` until the
   feature has tests.
 - Minimizing verifier dependencies (e.g. a no-std story). The crate boundary comes first;
@@ -119,6 +119,30 @@ Two viable sequencings:
 Recommendation: do (1)'s skeleton and CI check early for the enforcement value, and let the
 bulk of per-op code arrive via (2), avoiding splitting 30+ op files by hand only to delete the
 split halves during the engine migration.
+
+### End state and ladder
+
+The end state is complete decomposition: no crate in the verifier's dependency cone contains
+prover code. With `jolt-atlas-verifier` depending on `joltworks` whole, cargo cannot stop
+verifier code from calling `joltworks`' prover halves, and light targets link prover machinery
+they never run — the boundary has a hole one layer down. Phases, each independently shippable:
+
+1. **This spec**: `jolt-atlas-verifier` + CI isolation build. Bounds the product layer, where
+   the audit risk concentrates (per-op verification, claim plumbing).
+2. **`joltworks` `prover` feature** (default-on; nothing downstream changes).
+   `jolt-atlas-verifier` depends with `default-features = false` and the isolation build
+   compiles that configuration, taking prover code out of the compiled verifier cone without
+   moving files. Features are additive, which rules them out for the product boundary; the
+   isolation build is the single-consumer context where that cannot bite. The gated set is the
+   exact content of phase 3's prover crate.
+3. **`joltworks` decomposition** into prover/verifier (plus shared) crates, executed with the
+   planned field/PCS restructuring rather than before it, so the subprotocol files — each
+   interleaving prover and verifier structs around shared params — are split once, during a
+   rebuild that touches them anyway.
+
+A `joltworks`-first split was considered and rejected as sequencing: it spends the largest
+refactor on the layer with the least audit risk, bounds nothing at the op layer where the known
+soundness findings live, and would be rebased through the upcoming `joltworks` restructuring.
 
 ### Alternatives Considered
 

@@ -156,10 +156,13 @@ fn proof_mutation_sweep() {
         let (other, _, _) = Proof::prove(&h.prover_pp, &alt.inputs);
         let sites = enumerate_sites::<Pcs>(&h.proof, &other, &h.io, h.prover_pp.model());
         // Sequential on purpose: a verifier crash (stack overflow) must be
-        // attributable to the site being tried.
+        // attributable to the site being tried, which the exhaustive run
+        // logs site by site.
         let mut outcomes: Vec<(Site, Expect, Outcome)> = Vec::with_capacity(sites.len());
         for (site, expect) in sites {
-            eprintln!("  [{}] trying {site:?}", h.name);
+            if exhaustive() {
+                eprintln!("  [{}] trying {site:?}", h.name);
+            }
             let mut proof = h.proof.clone();
             let mut io = h.io.clone();
             apply_site(&mut proof, &mut io, &other, &site);

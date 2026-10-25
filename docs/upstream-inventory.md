@@ -29,7 +29,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 
 | `joltworks` module | Upstream counterpart | Bucket | Notes |
 |---|---|---|---|
-| `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | adopt | Already vendored on the Akita branch; our `challenge/mont_ark_*` is the pre-codec design. |
+| `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | adopt (stage 2: vendored) | `jolt-field` is vendored at `0e3faf07`; the BN254 scalar is `jolt_field::Fr` and `JoltField` is implemented for it and for `Fp128`. Our `JoltField` trait and `challenge/mont_ark_*` (the pre-codec design) remain atlas-side until the stage-3/4 ports move onto upstream's traits. |
 | `transcripts/` (blake2b, keccak) | `jolt-transcript` | adopt+delta | Upstream adds codecs, bias budget, PoW, prover/verifier split. Proof-format change; stage 3. |
 | `subprotocols/sumcheck{,_prover,_verifier}.rs` | `jolt-sumcheck` | adopt+delta | Heavily diverged both ways (~842 changed lines vs the 2026-06 jolt-core copy); our batching and instance traits vs their scheduler/recorder. |
 | `poly/` core (dense, multilinear, eq, split_eq, unipoly, compact, lagrange, …) | `jolt-poly` | adopt+delta | `split_eq_poly` is ~12% diverged from the 2026-06 copy — the closest module we have; most deltas are atlas perf work (fold routines). |

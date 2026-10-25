@@ -76,9 +76,13 @@ cargo run --release -p atlas-onnx-import --example dump_lowered_ops -- <model.on
 Workspace members, in dependency order:
 
 - **common** — shared constants and parallel helpers.
+- **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
+  (`third_party/PINS.md`): `jolt-field`.
 - **joltworks** — the proof-system toolkit inherited from Jolt: `field`, `poly` (multilinear
   polynomials and commitment schemes), `subprotocols` (sumcheck, evaluation reduction),
-  `lookup_tables`, `msm`, `transcripts`, `curve`, `config`.
+  `lookup_tables`, `msm`, `transcripts`, `config`. The BN254 scalar is upstream
+  `jolt_field::Fr` (`field::bn254`, forwarding to the `ark_bn254::Fr` kernel); `field::fp128`
+  is the 128-bit Solinas field for the lattice backend.
 - **atlas-trace** — deterministic fixed-point IR, op semantics, and the trace engine. Owns the
   behavioral contract below.
 - **atlas-onnx-import** — tract-free ONNX frontend: protobuf decode (prost, vendored proto),

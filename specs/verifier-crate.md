@@ -6,6 +6,8 @@
 | Created     | 2026-10-25                     |
 | Status      | proposed                       |
 | PR          | #396                           |
+| Depends on  | —                              |
+| Supersedes  | — (its own earlier ladder phases 2–3 were folded into #397) |
 
 Status is `proposed` until the implementation merges, then `implemented`. A spec is frozen at
 merge: it records what was decided and why at that point in time. The code is the source of
@@ -180,6 +182,24 @@ crate, and the verification loop, `Verifier` state and preprocessing move last, 
 they dispatch to remains in core.
 
 ### End state
+
+**When is the full prover/verifier split done?** Four links, in order; the date lives in the
+second:
+
+1. Phase 1 (this PR): the proof artifact moves. No verification logic moves yet.
+2. The **expression-engine migration** (its own spec, not yet written — the critical path):
+   per-op verification stops being hand-written prover/verifier pairs and becomes op specs
+   consumed by an interpreter living in this crate. This is what carries the ~30 ops'
+   verification across the boundary; until its spec exists, the split has no schedule.
+3. This spec's later phases: with no per-op verifier left in core, the `Verifier` state,
+   verification loop, deferred verification and preprocessing move (the cycles that block them
+   dissolve), and `verify` re-attaches to `ONNXProof`.
+4. `specs/upstream-adoption.md` stage 6: the toolkit underneath is vendored upstream crates.
+
+**Definition of done, checkable**: `jolt-atlas-core` contains no verification logic (no
+`OperatorVerifier`, no `expected_output_claim` implementations, no verifier preprocessing);
+`jolt-atlas-verifier` verifies a serialized proof given only the model and public IO; the CI
+isolation build and the prover-API lint are green.
 
 The end state is complete decomposition at two levels of enforcement, because one level is
 unattainable: upstream's toolkit crates export their prover modules unconditionally

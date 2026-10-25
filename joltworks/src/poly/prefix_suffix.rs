@@ -485,24 +485,24 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
                 let q_left = q[index];
                 let q_right = q[index + len / 2];
                 (
-                    p_evals.0.mul_unreduced::<9>(q_left),  // prefix(0) * suffix(0)
-                    p_evals.1.mul_unreduced::<9>(q_left),  // prefix(2) * suffix(0)
-                    p_evals.1.mul_unreduced::<9>(q_right), // prefix(2) * suffix(1)
+                    p_evals.0.mul_to_product_accum(q_left), // prefix(0) * suffix(0)
+                    p_evals.1.mul_to_product_accum(q_left), // prefix(2) * suffix(0)
+                    p_evals.1.mul_to_product_accum(q_right), // prefix(2) * suffix(1)
                 )
             })
             .reduce(
                 || {
                     (
-                        F::Unreduced::<9>::zero(),
-                        F::Unreduced::<9>::zero(),
-                        F::Unreduced::<9>::zero(),
+                        F::UnreducedProductAccum::zero(),
+                        F::UnreducedProductAccum::zero(),
+                        F::UnreducedProductAccum::zero(),
                     )
                 },
                 |running, new| (running.0 + new.0, running.1 + new.1, running.2 + new.2),
             );
-        let eval_0 = F::from_montgomery_reduce(eval_0);
-        let eval_2_right = F::from_montgomery_reduce(eval_2_right);
-        let eval_2_left = F::from_montgomery_reduce(eval_2_left);
+        let eval_0 = F::reduce_product_accum(eval_0);
+        let eval_2_right = F::reduce_product_accum(eval_2_right);
+        let eval_2_left = F::reduce_product_accum(eval_2_left);
         (eval_0, eval_2_right + eval_2_right - eval_2_left)
     }
 

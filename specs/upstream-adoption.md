@@ -6,6 +6,8 @@
 | Created     | 2026-10-25                     |
 | Status      | proposed                       |
 | PR          | #397                           |
+| Depends on  | #396 (phase 1 lands before stage 1) |
+| Supersedes  | the feature-gate/split plan recorded in #396's Alternatives Considered |
 
 Status is `proposed` until the implementation merges, then `implemented`. A spec is frozen at
 merge: it records what was decided and why at that point in time. The code is the source of
@@ -172,8 +174,9 @@ spec):
    revised end state in `specs/verifier-crate.md`). This stage is that spec's declared end
    state; by then its
    own later phases (verification loop, preprocessing, per-op verifier moves, gated on the
-   expression-engine migration) must have landed, since the cone can only close around code
-   that lives in the crate.
+   expression-engine migration — **a spec that does not exist yet and is the critical path for
+   the full prover/verifier split**; see that spec's End state for the four-link completion
+   chain) must have landed, since the cone can only close around code that lives in the crate.
 
 Relationship to in-flight work: the `fp128-field` / `field-trait` / `akita-adapter` branches
 (based on pre-rewrite main) are the raw material for stages 1 and 5; their content re-lands

@@ -171,13 +171,18 @@ they dispatch to remains in core.
 
 ### End state
 
-The end state is complete decomposition: no crate in the verifier's dependency cone contains
-prover code. With `jolt-atlas-verifier` depending on `joltworks` whole, cargo cannot stop
-verifier code from calling `joltworks`' prover halves — the boundary has a hole one layer
-down. The hole is closed by the upstream-adoption program (`specs/upstream-adoption.md`),
-which replaces `joltworks` subsystem-by-subsystem with vendored upstream verifier-side crates;
-that program's final stage is exactly this spec's end state, proven by the same CI isolation
-build. The two specs divide cleanly: this one draws the box around our ONNX verifier (which
+The end state is complete decomposition at two levels of enforcement, because one level is
+unattainable: upstream's toolkit crates export their prover modules unconditionally
+(`jolt-sumcheck` has `pub mod prover`), so a dependency cone of adopted crates can never be
+prover-free module-by-module. What the end state guarantees is: **crate-level** — no
+`jolt-atlas-core`, no upstream prover product crates (`jolt-prover`, `jolt-spartan-prover`,
+`jolt-witness`) anywhere in the cone, enforced by cargo and the CI isolation build; and
+**lint-level** — the vendored toolkit's prover entry points barred inside `jolt-atlas-verifier`
+by a `disallowed-methods`/`disallowed-types` clippy configuration run in the same CI job. With
+`jolt-atlas-verifier` depending on `joltworks` whole today, even the crate-level guarantee has
+a hole one layer down; the upstream-adoption program (`specs/upstream-adoption.md`) closes it
+by replacing `joltworks` subsystem-by-subsystem, and that program's final stage is exactly this
+end state, proven by the same CI job. The two specs divide cleanly: this one draws the box around our ONNX verifier (which
 upstream, whose `jolt-verifier` verifies RISC-V execution, can never supply); the adoption
 program swaps the machinery underneath it.
 

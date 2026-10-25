@@ -5,7 +5,7 @@
 | Author(s)   | @Forpee                        |
 | Created     | 2026-10-25                     |
 | Status      | proposed                       |
-| PR          |                                |
+| PR          | #396                           |
 
 Status is `proposed` until the implementation merges, then `implemented`. A spec is frozen at
 merge: it records what was decided and why at that point in time. The code is the source of

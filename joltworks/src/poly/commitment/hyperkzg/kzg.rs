@@ -1,4 +1,4 @@
-use crate::field::{ArkScalar, JoltField};
+use crate::field::ArkScalar;
 use crate::msm::VariableBaseMSM;
 use crate::poly::multilinear_polynomial::MultilinearPolynomial;
 use crate::poly::unipoly::UniPoly;
@@ -7,7 +7,7 @@ use ark_ec::scalar_mul::fixed_base::FixedBase;
 use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{One, UniformRand, Zero};
+use ark_std::{UniformRand, Zero};
 use common::parallel::par_enabled;
 use rand_core::{CryptoRng, RngCore};
 use rayon::prelude::*;
@@ -27,10 +27,7 @@ impl<P: Pairing> SRS<P> {
         mut rng: &mut R,
         num_g1_powers: usize,
         num_g2_powers: usize,
-    ) -> Self
-    where
-        P::ScalarField: JoltField,
-    {
+    ) -> Self {
         let beta = P::ScalarField::rand(&mut rng);
         let g1 = P::G1::rand(&mut rng);
         let g2 = P::G2::rand(&mut rng);
@@ -187,10 +184,7 @@ pub struct UnivariateKZG<P: Pairing, G: Group<P> = G1> {
     _phantom: PhantomData<(P, G)>,
 }
 
-impl<P: Pairing> UnivariateKZG<P>
-where
-    P::ScalarField: JoltField,
-{
+impl<P: Pairing> UnivariateKZG<P> {
     #[tracing::instrument(skip_all, name = "KZG::commit_batch")]
     pub fn commit_batch<F, U>(
         pk: &KZGProverKey<P>,
@@ -244,9 +238,9 @@ where
     }
 
     #[tracing::instrument(skip_all, name = "KZG::commit_variable_batch_univariate")]
-    pub fn commit_variable_batch_univariate(
+    pub fn commit_variable_batch_univariate<F: ArkScalar<Ark = P::ScalarField>>(
         pk: &KZGProverKey<P>,
-        polys: &[UniPoly<P::ScalarField>],
+        polys: &[UniPoly<F>],
     ) -> Result<Vec<P::G1Affine>, ProofVerifyError> {
         let g1_powers = &pk.g1_powers();
 
@@ -266,20 +260,20 @@ where
     }
 
     #[tracing::instrument(skip_all, name = "KZG::commit_offset")]
-    pub fn commit_offset(
+    pub fn commit_offset<F: ArkScalar<Ark = P::ScalarField>>(
         pk: &KZGProverKey<P>,
-        poly: &UniPoly<P::ScalarField>,
+        poly: &UniPoly<F>,
         offset: usize,
     ) -> Result<P::G1Affine, ProofVerifyError> {
-        Self::commit_inner(pk, &poly.coeffs, offset)
+        Self::commit_inner(pk, F::slice_as_ark(&poly.coeffs), offset)
     }
 
     #[tracing::instrument(skip_all, name = "KZG::commit")]
-    pub fn commit(
+    pub fn commit<F: ArkScalar<Ark = P::ScalarField>>(
         pk: &KZGProverKey<P>,
-        poly: &UniPoly<P::ScalarField>,
+        poly: &UniPoly<F>,
     ) -> Result<P::G1Affine, ProofVerifyError> {
-        Self::commit_inner(pk, &poly.coeffs, 0)
+        Self::commit_inner(pk, F::slice_as_ark(&poly.coeffs), 0)
     }
 
     #[tracing::instrument(skip_all, name = "KZG::commit_as_univariate")]
@@ -331,34 +325,32 @@ where
     }
 
     #[tracing::instrument(skip_all, name = "KZG::open")]
-    pub fn open(
+    pub fn open<F: ArkScalar<Ark = P::ScalarField>>(
         pk: &KZGProverKey<P>,
-        poly: &UniPoly<P::ScalarField>,
-        point: &<P::ScalarField as JoltField>::Challenge,
-    ) -> Result<(P::G1Affine, P::ScalarField), ProofVerifyError>
-    where
-        <P as Pairing>::ScalarField: JoltField,
-    {
+        poly: &UniPoly<F>,
+        point: &F::Challenge,
+    ) -> Result<(P::G1Affine, F), ProofVerifyError> {
         let proof = Self::generic_open(pk.g1_powers(), poly, *point)?;
         let evaluation = poly.evaluate(point);
         Ok((proof.into_affine(), evaluation))
     }
 
-    pub fn verify(
+    pub fn verify<F: ArkScalar<Ark = P::ScalarField>>(
         vk: &KZGVerifierKey<P>,
         commitment: &P::G1Affine,
-        point: &<P::ScalarField as JoltField>::Challenge,
+        point: &F::Challenge,
         proof: &P::G1Affine,
-        evaluation: &P::ScalarField,
+        evaluation: &F,
     ) -> Result<bool, ProofVerifyError> {
+        let point: F = (*point).into();
         Ok(P::multi_pairing(
             [
-                commitment.into_group() - vk.g1.into_group() * evaluation,
+                commitment.into_group() - vk.g1.into_group() * evaluation.to_ark(),
                 -proof.into_group(),
             ],
             [
                 vk.g2,
-                (vk.beta_g2.into_group() - (vk.g2 * (*point).into())).into(),
+                (vk.beta_g2.into_group() - (vk.g2 * point.to_ark())).into(),
             ],
         )
         .is_zero())
@@ -367,23 +359,19 @@ where
 
 impl<P: Pairing, G: Group<P>> UnivariateKZG<P, G>
 where
-    P::ScalarField: JoltField,
     G::Curve: CurveGroup<ScalarField = P::ScalarField>,
 {
     #[tracing::instrument(skip_all, name = "KZG::open")]
-    pub fn generic_open(
+    pub fn generic_open<F: ArkScalar<Ark = P::ScalarField>>(
         powers: &[<G::Curve as CurveGroup>::Affine],
-        poly: &UniPoly<P::ScalarField>,
-        point: <P::ScalarField as JoltField>::Challenge,
-    ) -> Result<G::Curve, ProofVerifyError>
-    where
-        <P as Pairing>::ScalarField: JoltField,
-    {
-        let divisor = UniPoly::from_coeff(vec![-point.into(), P::ScalarField::one()]);
+        poly: &UniPoly<F>,
+        point: F::Challenge,
+    ) -> Result<G::Curve, ProofVerifyError> {
+        let divisor = UniPoly::from_coeff(vec![-point.into(), F::one()]);
         let (witness_poly, _) = poly.divide_with_remainder(&divisor).unwrap();
         let proof = <G::Curve as VariableBaseMSM>::msm_field_elements(
             &powers[..witness_poly.coeffs.len()],
-            witness_poly.coeffs.as_slice(),
+            F::slice_as_ark(&witness_poly.coeffs),
         )?;
         Ok(proof)
     }
@@ -411,6 +399,8 @@ impl<P: Pairing> UnivariateKZG<P, G2> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::field::bn254::Fr;
+    use crate::field::JoltField;
     use ark_bn254::Bn254;
     use ark_std::rand::Rng;
     use rand_chacha::ChaCha20Rng;
@@ -427,9 +417,9 @@ mod test {
 
             let pp = Arc::new(SRS::<Bn254>::setup(&mut rng, degree, 2));
             let (ck, vk) = SRS::trim(pp, degree);
-            let p = UniPoly::random::<ChaCha20Rng>(degree, rng);
+            let p = UniPoly::<Fr>::random::<ChaCha20Rng>(degree, rng);
             let comm = UnivariateKZG::<Bn254>::commit(&ck, &p)?;
-            let point = <<Bn254 as Pairing>::ScalarField as JoltField>::Challenge::random(&mut rng);
+            let point = <Fr as JoltField>::Challenge::random(&mut rng);
             let (proof, value) = UnivariateKZG::<Bn254>::open(&ck, &p, &point)?;
             assert!(
                 UnivariateKZG::<_, G1>::verify(&vk, &comm, &point, &proof, &value)?,

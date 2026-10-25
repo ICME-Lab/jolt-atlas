@@ -1329,11 +1329,11 @@ mod guardrail_tests {
     use super::{
         OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
     };
+    use crate::field::bn254::Fr;
     use crate::{
         subprotocols::evaluation_reduction::ReducedInstance,
         transcripts::{Blake2bProver, ProvingTranscript},
     };
-    use ark_bn254::Fr;
     use common::VirtualPoly;
 
     #[test]

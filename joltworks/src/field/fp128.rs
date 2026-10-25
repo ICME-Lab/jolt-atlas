@@ -33,7 +33,10 @@ use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 pub type Inner = Prime128OffsetA7F7;
 
 /// The 128-bit Solinas field, wrapped so it can implement `JoltField`.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
+#[derive(
+    Clone, Copy, Default, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
 pub struct Fp128(pub Inner);
 
 impl Allocative for Fp128 {
@@ -302,6 +305,147 @@ impl CanonicalDeserialize for Fp128 {
     }
 }
 
+impl jolt_field::AdditiveGroup for Fp128 {}
+
+impl Ring for Fp128 {
+    #[inline]
+    fn from_u64(v: u64) -> Self {
+        Self(Inner::from_u64(v))
+    }
+
+    #[inline]
+    fn from_i64(v: i64) -> Self {
+        Self(Inner::from_i64(v))
+    }
+
+    #[inline]
+    fn from_u128(v: u128) -> Self {
+        Self(Inner::from_u128(v))
+    }
+
+    #[inline]
+    fn from_i128(v: i128) -> Self {
+        Self(Inner::from_i128(v))
+    }
+
+    #[inline]
+    fn from_bool(v: bool) -> Self {
+        Self(Inner::from_bool(v))
+    }
+
+    #[inline]
+    fn from_u8(v: u8) -> Self {
+        Self(Inner::from_u8(v))
+    }
+
+    #[inline]
+    fn from_u16(v: u16) -> Self {
+        Self(Inner::from_u16(v))
+    }
+
+    #[inline]
+    fn from_u32(v: u32) -> Self {
+        Self(Inner::from_u32(v))
+    }
+
+    #[inline]
+    fn from_i8(v: i8) -> Self {
+        Self(Inner::from_i8(v))
+    }
+
+    #[inline]
+    fn from_i16(v: i16) -> Self {
+        Self(Inner::from_i16(v))
+    }
+
+    #[inline]
+    fn from_i32(v: i32) -> Self {
+        Self(Inner::from_i32(v))
+    }
+
+    #[inline]
+    fn square(&self) -> Self {
+        Self(Ring::square(&self.0))
+    }
+
+    #[inline(always)]
+    fn mul_u64(&self, n: u64) -> Self {
+        Self(Ring::mul_u64(&self.0, n))
+    }
+
+    #[inline(always)]
+    fn mul_i64(&self, n: i64) -> Self {
+        Self(Ring::mul_i64(&self.0, n))
+    }
+
+    #[inline(always)]
+    fn mul_u128(&self, n: u128) -> Self {
+        Self(Ring::mul_u128(&self.0, n))
+    }
+
+    #[inline(always)]
+    fn mul_i128(&self, n: i128) -> Self {
+        Self(Ring::mul_i128(&self.0, n))
+    }
+}
+
+impl Field for Fp128 {
+    #[inline]
+    fn inverse(&self) -> Option<Self> {
+        Field::inverse(&self.0).map(Self)
+    }
+
+    fn random<R: rand_core::RngCore>(rng: &mut R) -> Self {
+        sample_u128(|| (rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64))
+    }
+}
+
+impl jolt_field::CanonicalBytes for Fp128 {
+    const NUM_BYTES: usize = <Inner as jolt_field::CanonicalBytes>::NUM_BYTES;
+
+    fn to_bytes_le(&self, out: &mut [u8]) {
+        self.0.to_bytes_le(out)
+    }
+}
+
+impl CanonicalEncoding for Fp128 {
+    const MODULUS_BITS: u32 = <Inner as CanonicalEncoding>::MODULUS_BITS;
+
+    fn from_bytes_le_reduced(bytes: &[u8]) -> Self {
+        Self(Inner::from_bytes_le_reduced(bytes))
+    }
+
+    fn from_bytes_le_checked(bytes: &[u8]) -> Option<Self> {
+        Inner::from_bytes_le_checked(bytes).map(Self)
+    }
+
+    fn to_u128_checked(&self) -> Option<u128> {
+        self.0.to_u128_checked()
+    }
+
+    fn from_u128_checked(v: u128) -> Option<Self> {
+        Inner::from_u128_checked(v).map(Self)
+    }
+
+    fn from_u128_reduced(v: u128) -> Self {
+        Self(Inner::from_u128_reduced(v))
+    }
+
+    fn num_bits(&self) -> u32 {
+        CanonicalEncoding::num_bits(&self.0)
+    }
+
+    fn from_scalar_challenge_bytes(bytes: &[u8]) -> Self {
+        Self(Inner::from_scalar_challenge_bytes(bytes))
+    }
+}
+
+impl jolt_field::WithAccumulator for Fp128 {
+    type Accumulator = jolt_field::NaiveAccumulator<Fp128>;
+    type SmallScalarAccumulator = jolt_field::NaiveAccumulator<Fp128>;
+    type SignedProductAccumulator = jolt_field::NaiveAccumulator<Fp128>;
+}
+
 impl FieldOps for Fp128 {}
 impl FieldOps<&Fp128, Fp128> for Fp128 {}
 impl FieldOps<&Fp128, Fp128> for &Fp128 {}
@@ -375,108 +519,14 @@ impl JoltField for Fp128 {
             .expect("the fp128 modulus is a valid field order")
     }
 
-    fn random<R: rand_core::RngCore>(rng: &mut R) -> Self {
-        sample_u128(|| (rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64))
-    }
-
-    #[inline]
-    fn from_bool(val: bool) -> Self {
-        Self(Inner::from_bool(val))
-    }
-
-    #[inline]
-    fn from_u8(n: u8) -> Self {
-        Self(Inner::from_u8(n))
-    }
-
-    #[inline]
-    fn from_u16(n: u16) -> Self {
-        Self(Inner::from_u16(n))
-    }
-
-    #[inline]
-    fn from_u32(n: u32) -> Self {
-        Self(Inner::from_u32(n))
-    }
-
-    #[inline]
-    fn from_u64(n: u64) -> Self {
-        Self(Inner::from_u64(n))
-    }
-
-    #[cfg(test)]
-    fn from_i8(val: i8) -> Self {
-        Self(Inner::from_i8(val))
-    }
-
-    #[cfg(test)]
-    fn from_i16(val: i16) -> Self {
-        Self(Inner::from_i16(val))
-    }
-
-    #[inline]
-    fn from_i32(val: i32) -> Self {
-        Self(Inner::from_i32(val))
-    }
-
-    #[inline]
-    fn from_i64(val: i64) -> Self {
-        Self(Inner::from_i64(val))
-    }
-
-    #[inline]
-    fn from_i128(val: i128) -> Self {
-        Self(Inner::from_i128(val))
-    }
-
-    #[inline]
-    fn from_u128(val: u128) -> Self {
-        Self(Inner::from_u128(val))
-    }
-
     #[inline]
     fn to_u64(&self) -> Option<u64> {
         self.0.to_u64_checked()
     }
 
     #[inline]
-    fn square(&self) -> Self {
-        Self(Ring::square(&self.0))
-    }
-
-    #[inline]
-    fn inverse(&self) -> Option<Self> {
-        Field::inverse(&self.0).map(Self)
-    }
-
-    #[inline]
     fn from_bytes(bytes: &[u8]) -> Self {
         Self(Inner::from_bytes_le_reduced(bytes))
-    }
-
-    #[inline]
-    fn num_bits(&self) -> u32 {
-        CanonicalEncoding::num_bits(&self.0)
-    }
-
-    #[inline(always)]
-    fn mul_u64(&self, n: u64) -> Self {
-        Self(Ring::mul_u64(&self.0, n))
-    }
-
-    #[inline(always)]
-    fn mul_i64(&self, n: i64) -> Self {
-        Self(Ring::mul_i64(&self.0, n))
-    }
-
-    #[inline(always)]
-    fn mul_u128(&self, n: u128) -> Self {
-        Self(Ring::mul_u128(&self.0, n))
-    }
-
-    #[inline(always)]
-    fn mul_i128(&self, n: i128) -> Self {
-        Self(Ring::mul_i128(&self.0, n))
     }
 
     #[inline(always)]
@@ -584,7 +634,7 @@ mod tests {
             assert_eq!(fx + fy, F::from_u128(x as u128 + y as u128));
             assert_eq!(fx * fy, F::from_u128(x as u128 * y as u128));
             assert_eq!(fx - fy, F::from_i128(x as i128 - y as i128));
-            assert_eq!(JoltField::square(&fx), fx * fx);
+            assert_eq!(Ring::square(&fx), fx * fx);
             assert_eq!(-fx + fx, F::zero());
 
             let a = F::rand(&mut rng);
@@ -609,16 +659,16 @@ mod tests {
     #[test]
     fn inverse_and_division() {
         let mut rng = test_rng();
-        assert!(JoltField::inverse(&F::zero()).is_none());
+        assert!(Field::inverse(&F::zero()).is_none());
         for _ in 0..64 {
             let a = F::rand(&mut rng);
             let b = F::rand(&mut rng);
             if a.is_zero() || b.is_zero() {
                 continue;
             }
-            let inv = JoltField::inverse(&a).unwrap();
+            let inv = Field::inverse(&a).unwrap();
             assert_eq!(a * inv, F::one());
-            assert_eq!(a / b, a * JoltField::inverse(&b).unwrap());
+            assert_eq!(a / b, a * Field::inverse(&b).unwrap());
             assert_eq!(&a / &b, a / b);
             assert_eq!((a / b) * b, a);
         }
@@ -654,7 +704,7 @@ mod tests {
 
             let fx = F::from_u64(x);
             assert_eq!(fx.to_u64(), Some(x));
-            assert_eq!(JoltField::num_bits(&fx), 64 - x.leading_zeros());
+            assert_eq!(CanonicalEncoding::num_bits(&fx), 64 - x.leading_zeros());
         }
         assert_eq!((F::from_u128(u64::MAX as u128 + 1)).to_u64(), None);
         assert_eq!(F::from_u64(3).mul_pow_2(4), F::from_u64(48));
@@ -665,17 +715,14 @@ mod tests {
         let mut rng = test_rng();
         for _ in 0..256 {
             let x = rng.gen::<u64>();
-            assert_eq!(F::from_u64(x), JoltField::mul_u64(&F::one(), x));
+            assert_eq!(F::from_u64(x), Ring::mul_u64(&F::one(), x));
             let y = F::random(&mut rng);
-            assert_eq!(y * F::from_u64(x), JoltField::mul_u64(&y, x));
-            assert_eq!(
-                y * F::from_i64(-(x as i64)),
-                JoltField::mul_i64(&y, -(x as i64))
-            );
+            assert_eq!(y * F::from_u64(x), Ring::mul_u64(&y, x));
+            assert_eq!(y * F::from_i64(-(x as i64)), Ring::mul_i64(&y, -(x as i64)));
             let n = rng.gen::<u128>();
-            assert_eq!(y * F::from_u128(n), JoltField::mul_u128(&y, n));
+            assert_eq!(y * F::from_u128(n), Ring::mul_u128(&y, n));
             let m = rng.gen::<i128>();
-            assert_eq!(y * F::from_i128(m), JoltField::mul_i128(&y, m));
+            assert_eq!(y * F::from_i128(m), Ring::mul_i128(&y, m));
         }
     }
 

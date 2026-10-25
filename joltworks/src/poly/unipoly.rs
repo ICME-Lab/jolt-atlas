@@ -595,7 +595,8 @@ impl_op!(UniPoly, Mul, mul, JoltField);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_bn254::Fr;
+    use crate::field::bn254::Fr;
+    use jolt_field::Ring;
     use num::Zero;
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;

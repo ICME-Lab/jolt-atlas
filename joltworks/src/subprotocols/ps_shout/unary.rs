@@ -276,6 +276,7 @@ pub type UnaryReadRafSumcheckVerifier<F, LUT, const LOG_K: usize> =
 
 #[cfg(test)]
 pub mod tests {
+    use crate::field::bn254::Fr;
     use crate::{
         lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
         poly::{
@@ -298,7 +299,6 @@ pub mod tests {
         transcripts::{Blake2bProver, ProvingTranscript, Transcript},
         utils::lookup_bits::LookupBits,
     };
-    use ark_bn254::Fr;
     use common::VirtualPoly;
     use itertools::Itertools;
     use rand::{rngs::StdRng, Rng, SeedableRng};

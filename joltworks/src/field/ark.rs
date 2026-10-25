@@ -1,46 +1,54 @@
-use super::{FieldOps, JoltField, UnreducedInteger};
-#[cfg(feature = "challenge-254-bit")]
-use crate::field::challenge::Mont254BitChallenge;
-#[cfg(not(feature = "challenge-254-bit"))]
-use crate::field::challenge::MontU128Challenge;
+//! The arkworks BN254 scalar-field kernel behind [`jolt_field::Fr`]'s [`JoltField`] impl
+//! (`super::bn254`): the unreduced-product ladder and the conversions upstream does not provide,
+//! on `ark_bn254::Fr` limbs. `ark_bn254::Fr` itself is not a `JoltField`.
+
+use super::UnreducedInteger;
 use crate::field::folded_accum::{
     Folded256MulU128, Folded256MulU128Accum, Folded256MulU64, Folded256Product,
     Folded256ProductAccum,
 };
 use crate::utils::thread::unsafe_allocate_zero_vec;
-use ark_ff::{prelude::*, BigInt, BigInteger, PrimeField, UniformRand};
+use ark_ff::{BigInt, BigInteger, PrimeField};
 use common::parallel::par_enabled;
 use rayon::prelude::*;
 
-impl FieldOps for ark_bn254::Fr {}
-impl FieldOps<&ark_bn254::Fr, ark_bn254::Fr> for &ark_bn254::Fr {}
-impl FieldOps<&ark_bn254::Fr, ark_bn254::Fr> for ark_bn254::Fr {}
-
 impl<const N: usize> UnreducedInteger for BigInt<N> {}
 
-impl super::ArkScalar for ark_bn254::Fr {
-    type Ark = Self;
+/// The kernel operations [`super::bn254`] forwards to, implemented on arkworks limbs.
+pub(crate) trait Bn254Kernel: Sized {
+    const MONTGOMERY_R: Self;
+    const MONTGOMERY_R_SQUARE: Self;
 
-    #[inline(always)]
-    fn to_ark(self) -> Self {
-        self
-    }
+    type UnreducedElem;
+    type UnreducedMulU64;
+    type UnreducedMulU128;
+    type UnreducedMulU128Accum;
+    type UnreducedProduct;
+    type UnreducedProductAccum;
 
-    #[inline(always)]
-    fn slice_as_ark(xs: &[Self]) -> &[Self] {
-        xs
-    }
-
-    #[inline(always)]
-    fn challenge_to_ark(c: Self::Challenge) -> Self::Challenge {
-        c
-    }
+    fn compute_lookup_tables() -> [Vec<Self>; 2];
+    fn to_u64(&self) -> Option<u64>;
+    fn from_bytes(bytes: &[u8]) -> Self;
+    fn to_unreduced(&self) -> Self::UnreducedElem;
+    fn mul_u64_unreduced(self, other: u64) -> Self::UnreducedMulU64;
+    fn mul_u128_unreduced(self, other: u128) -> Self::UnreducedMulU128;
+    fn mul_to_product(self, other: Self) -> Self::UnreducedProduct;
+    fn mul_to_product_accum(self, other: Self) -> Self::UnreducedProductAccum;
+    fn unreduced_mul_u64(a: &Self::UnreducedElem, b: u64) -> Self::UnreducedMulU64;
+    fn unreduced_mul_to_product_accum(
+        a: &Self::UnreducedElem,
+        b: &Self::UnreducedElem,
+    ) -> Self::UnreducedProductAccum;
+    fn mul_to_accum_mag<const M: usize>(&self, mag: &BigInt<M>) -> Self::UnreducedMulU128Accum;
+    fn mul_to_product_mag<const M: usize>(&self, mag: &BigInt<M>) -> Self::UnreducedProduct;
+    fn reduce_mul_u64(x: Self::UnreducedMulU64) -> Self;
+    fn reduce_mul_u128(x: Self::UnreducedMulU128) -> Self;
+    fn reduce_mul_u128_accum(x: Self::UnreducedMulU128Accum) -> Self;
+    fn reduce_product(x: Self::UnreducedProduct) -> Self;
+    fn reduce_product_accum(x: Self::UnreducedProductAccum) -> Self;
 }
 
-impl JoltField for ark_bn254::Fr {
-    const NUM_BYTES: usize = 32;
-    const NUM_LIMBS: usize = 4;
-
+impl Bn254Kernel for ark_bn254::Fr {
     // SAFETY: Transmuting from the Montgomery R constants from arkworks,
     // which are guaranteed to be valid field elements in Montgomery form.
     const MONTGOMERY_R: Self = unsafe {
@@ -59,35 +67,7 @@ impl JoltField for ark_bn254::Fr {
     type UnreducedProduct = Folded256Product;
     type UnreducedProductAccum = Folded256ProductAccum;
 
-    type SmallValueLookupTables = [Vec<Self>; 2];
-
-    type ChallengeCodecField = jolt_field::Fr;
-
-    #[inline]
-    fn from_challenge_codec(x: jolt_field::Fr) -> Self {
-        x.into()
-    }
-
-    fn challenge_set_size() -> jolt_transcript::ChallengeSetSize {
-        // MontU128Challenge masks to 125 bits. The full-field mode prices against 2^253 <= p,
-        // which can only overstate the proof of work.
-        #[cfg(not(feature = "challenge-254-bit"))]
-        let bits = 125;
-        #[cfg(feature = "challenge-254-bit")]
-        let bits = 253;
-        jolt_transcript::ChallengeSetSize::power_of_two(bits)
-    }
-
-    #[cfg(not(feature = "challenge-254-bit"))]
-    type Challenge = MontU128Challenge<ark_bn254::Fr>;
-    #[cfg(feature = "challenge-254-bit")]
-    type Challenge = Mont254BitChallenge<ark_bn254::Fr>;
-
-    fn random<R: rand_core::RngCore>(rng: &mut R) -> Self {
-        <Self as UniformRand>::rand(rng)
-    }
-
-    fn compute_lookup_tables() -> Self::SmallValueLookupTables {
+    fn compute_lookup_tables() -> [Vec<Self>; 2] {
         let mut lookup_tables = [
             unsafe_allocate_zero_vec(1 << 16),
             unsafe_allocate_zero_vec(1 << 16),
@@ -95,150 +75,15 @@ impl JoltField for ark_bn254::Fr {
 
         for i in 0..2 {
             let bitshift = 16 * i;
-            let unit = <Self as JoltField>::from_u64(1 << bitshift);
+            let unit = ark_bn254::Fr::from(1u64 << bitshift);
             lookup_tables[i] = (0usize..(1 << 16))
                 .into_par_iter()
                 .with_min_len(par_enabled())
-                .map(|j| unit * <Self as JoltField>::from_u64(j as u64))
+                .map(|j| unit * ark_bn254::Fr::from(j as u64))
                 .collect();
         }
 
         lookup_tables
-    }
-
-    #[inline]
-    fn from_bool(val: bool) -> Self {
-        if val {
-            Self::one()
-        } else {
-            Self::zero()
-        }
-    }
-
-    #[inline]
-    fn from_u8(n: u8) -> Self {
-        <Self as PrimeField>::from_u64::<5>(n as u64).unwrap()
-    }
-
-    #[inline]
-    fn from_u16(n: u16) -> Self {
-        <Self as PrimeField>::from_u64::<5>(n as u64).unwrap()
-    }
-
-    #[inline]
-    fn from_u32(n: u32) -> Self {
-        <Self as PrimeField>::from_u64::<5>(n as u64).unwrap()
-    }
-
-    #[inline]
-    fn from_u64(n: u64) -> Self {
-        if n <= u16::MAX as u64 {
-            <Self as JoltField>::from_u16(n as u16)
-        } else if n <= u32::MAX as u64 {
-            <Self as JoltField>::from_u32(n as u32)
-        } else {
-            <Self as PrimeField>::from_u64::<5>(n).unwrap()
-        }
-    }
-
-    #[cfg(test)]
-    fn from_i8(val: i8) -> Self {
-        if val.is_negative() {
-            let val = val.unsigned_abs();
-            -<Self as JoltField>::from_u8(val)
-        } else {
-            <Self as JoltField>::from_u8(val as u8)
-        }
-    }
-
-    #[cfg(test)]
-    fn from_i16(val: i16) -> Self {
-        if val.is_negative() {
-            let val = val.unsigned_abs();
-            -<Self as JoltField>::from_u16(val)
-        } else {
-            <Self as JoltField>::from_u16(val as u16)
-        }
-    }
-
-    #[inline]
-    fn from_i32(val: i32) -> Self {
-        if val.is_negative() {
-            let val = val.unsigned_abs();
-            if val <= u16::MAX as u32 {
-                -<Self as JoltField>::from_u16(val as u16)
-            } else {
-                -<Self as JoltField>::from_u32(val)
-            }
-        } else {
-            <Self as JoltField>::from_u32(val as u32)
-        }
-    }
-
-    #[inline]
-    fn from_i64(val: i64) -> Self {
-        if val.is_negative() {
-            let val = val.unsigned_abs();
-            if val <= u16::MAX as u64 {
-                -<Self as JoltField>::from_u16(val as u16)
-            } else if val <= u32::MAX as u64 {
-                -<Self as JoltField>::from_u32(val as u32)
-            } else {
-                -<Self as JoltField>::from_u64(val)
-            }
-        } else {
-            let val = val as u64;
-            if val <= u16::MAX as u64 {
-                <Self as JoltField>::from_u16(val as u16)
-            } else if val <= u32::MAX as u64 {
-                <Self as JoltField>::from_u32(val as u32)
-            } else {
-                <Self as JoltField>::from_u64(val)
-            }
-        }
-    }
-
-    #[inline]
-    fn from_i128(val: i128) -> Self {
-        if val.is_negative() {
-            let val = val.unsigned_abs();
-            if val <= u16::MAX as u128 {
-                -<Self as JoltField>::from_u16(val as u16)
-            } else if val <= u32::MAX as u128 {
-                -<Self as JoltField>::from_u32(val as u32)
-            } else if val <= u64::MAX as u128 {
-                -<Self as JoltField>::from_u64(val as u64)
-            } else {
-                let bigint = BigInt::new([val as u64, (val >> 64) as u64, 0, 0]);
-                -<Self as PrimeField>::from_bigint(bigint).unwrap()
-            }
-        } else {
-            let val = val as u128;
-            if val <= u16::MAX as u128 {
-                <Self as JoltField>::from_u16(val as u16)
-            } else if val <= u32::MAX as u128 {
-                <Self as JoltField>::from_u32(val as u32)
-            } else if val <= u64::MAX as u128 {
-                <Self as JoltField>::from_u64(val as u64)
-            } else {
-                let bigint = BigInt::new([val as u64, (val >> 64) as u64, 0, 0]);
-                <Self as PrimeField>::from_bigint(bigint).unwrap()
-            }
-        }
-    }
-
-    #[inline]
-    fn from_u128(val: u128) -> Self {
-        if val <= u16::MAX as u128 {
-            <Self as JoltField>::from_u16(val as u16)
-        } else if val <= u32::MAX as u128 {
-            <Self as JoltField>::from_u32(val as u32)
-        } else if val <= u64::MAX as u128 {
-            <Self as JoltField>::from_u64(val as u64)
-        } else {
-            let bigint = BigInt::new([val as u64, (val >> 64) as u64, 0, 0]);
-            <Self as PrimeField>::from_bigint(bigint).unwrap()
-        }
     }
 
     #[inline]
@@ -247,7 +92,7 @@ impl JoltField for ark_bn254::Fr {
         let limbs: &[u64] = bigint.as_ref();
         let result = limbs[0];
 
-        if <Self as JoltField>::from_u64(result) != *self {
+        if ark_bn254::Fr::from(result) != *self {
             None
         } else {
             Some(result)
@@ -255,60 +100,13 @@ impl JoltField for ark_bn254::Fr {
     }
 
     #[inline]
-    fn square(&self) -> Self {
-        <Self as ark_ff::Field>::square(self)
-    }
-
-    #[inline]
-    fn inverse(&self) -> Option<Self> {
-        <Self as ark_ff::Field>::inverse(self)
-    }
-
-    #[inline]
     fn from_bytes(bytes: &[u8]) -> Self {
         ark_bn254::Fr::from_le_bytes_mod_order(bytes)
-    }
-
-    #[inline]
-    fn num_bits(&self) -> u32 {
-        <Self as PrimeField>::into_bigint(*self).num_bits()
     }
 
     #[inline(always)]
     fn to_unreduced(&self) -> Self::UnreducedElem {
         self.0
-    }
-
-    #[inline]
-    fn mul_u64(&self, n: u64) -> Self {
-        if n == 0 || self.is_zero() {
-            Self::zero()
-        } else if n == 1 {
-            *self
-        } else {
-            ark_ff::Fp::mul_u64::<5>(*self, n)
-        }
-    }
-
-    #[inline(always)]
-    fn mul_i64(&self, n: i64) -> Self {
-        ark_ff::Fp::mul_i64::<5>(*self, n)
-    }
-
-    #[inline(always)]
-    fn mul_u128(&self, n: u128) -> Self {
-        ark_ff::Fp::mul_u128::<5, 6>(*self, n)
-    }
-
-    #[inline]
-    fn mul_i128(&self, n: i128) -> Self {
-        if n == 0 || self.is_zero() {
-            Self::zero()
-        } else if n == 1 {
-            *self
-        } else {
-            ark_ff::Fp::mul_i128::<5, 6>(*self, n)
-        }
     }
 
     #[inline]
@@ -377,35 +175,5 @@ impl JoltField for ark_bn254::Fr {
     #[inline]
     fn reduce_product_accum(x: Folded256ProductAccum) -> Self {
         ark_bn254::Fr::from_montgomery_reduce::<9, 5>(x.normalize())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::field::JoltField;
-    use ark_bn254::Fr;
-    use ark_std::test_rng;
-    use ark_std::One;
-    use rand_chacha::rand_core::RngCore;
-
-    #[test]
-    fn implicit_montgomery_conversion() {
-        let mut rng = test_rng();
-        for _ in 0..256 {
-            let x = rng.next_u64();
-            assert_eq!(
-                <Fr as JoltField>::from_u64(x),
-                JoltField::mul_u64(&Fr::one(), x)
-            );
-        }
-
-        for _ in 0..256 {
-            let x = rng.next_u64();
-            let y = Fr::random(&mut rng);
-            assert_eq!(
-                y * <Fr as JoltField>::from_u64(x),
-                JoltField::mul_u64(&y, x)
-            );
-        }
     }
 }

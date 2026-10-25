@@ -126,8 +126,14 @@ pub trait UnreducedInteger:
 {
 }
 
+/// The field abstraction the proof system is written against. It extends upstream
+/// [`jolt_field::JoltField`] (ring/field arithmetic, integer conversions, canonical encoding,
+/// accumulators), so upstream crates accept every `JoltField`, and adds the atlas-specific
+/// surface: the unreduced-product ladder, the 125-bit challenge type, arkworks serialization and
+/// transcript codecs.
 pub trait JoltField:
     'static
+    + jolt_field::JoltField
     + Sized
     + Zero
     + One
@@ -246,78 +252,15 @@ pub trait JoltField:
         + UniformRand
         + OptimizedMul<Self, Self>;
 
-    fn random<R: rand_core::RngCore>(rng: &mut R) -> Self;
     /// Computes the small-value lookup tables.
     fn compute_lookup_tables() -> Self::SmallValueLookupTables {
         unimplemented!("Small-value lookup tables are unimplemented")
     }
-    // Conversion from primitive integers to field elements in Montgomery form.
-
-    /// Conversion from a boolean to a field element.
-    fn from_bool(val: bool) -> Self;
-    /// Conversion from a 8-bit unsigned integer to a field element.
-    fn from_u8(n: u8) -> Self;
-    /// Conversion from a 16-bit unsigned integer to a field element.
-    fn from_u16(n: u16) -> Self;
-    /// Conversion from a 32-bit unsigned integer to a field element.
-    fn from_u32(n: u32) -> Self;
-    /// Conversion from a 64-bit unsigned integer to a field element.
-    fn from_u64(n: u64) -> Self;
-    /// Conversion from a 8-bit signed integer to a field element.
-    #[cfg(test)]
-    fn from_i8(val: i8) -> Self;
-    /// Conversion from a 16-bit signed integer to a field element.
-    #[cfg(test)]
-    fn from_i16(val: i16) -> Self;
-    /// Conversion from a 32-bit signed integer to a field element.
-    fn from_i32(val: i32) -> Self;
-    /// Conversion from a 64-bit signed integer to a field element.
-    fn from_i64(val: i64) -> Self;
-    /// Conversion from a 128-bit signed integer to a field element.
-    fn from_i128(val: i128) -> Self;
-    /// Conversion from a 128-bit unsigned integer to a field element.
-    fn from_u128(val: u128) -> Self;
-    /// Squares a field element.
-    fn square(&self) -> Self;
     /// Conversion from a byte array to a field element.
     fn from_bytes(bytes: &[u8]) -> Self;
-    /// Inverts a field element.
-    fn inverse(&self) -> Option<Self>;
     /// Conversion from a field element to a 64-bit unsigned integer.
     fn to_u64(&self) -> Option<u64> {
         unimplemented!("conversion to u64 not implemented");
-    }
-    fn num_bits(&self) -> u32 {
-        unimplemented!("num_bits is not implemented");
-    }
-
-    #[inline(always)]
-    fn mul_u64(&self, n: u64) -> Self {
-        *self * Self::from_u64(n)
-    }
-    #[inline(always)]
-    fn mul_i64(&self, n: i64) -> Self {
-        *self * Self::from_i64(n)
-    }
-    #[inline(always)]
-    fn mul_u128(&self, n: u128) -> Self {
-        *self * Self::from_u128(n)
-    }
-    #[inline(always)]
-    fn mul_i128(&self, n: i128) -> Self {
-        *self * Self::from_i128(n)
-    }
-
-    fn mul_pow_2(&self, mut pow: usize) -> Self {
-        if pow > 255 {
-            panic!("pow > 255");
-        }
-        let mut res = *self;
-        while pow >= 64 {
-            res = res.mul_u64(1 << 63);
-            pow -= 63;
-        }
-        res.mul_u64(1 << pow)
     }
 
     /// Reinterpret field element as its unreduced integer representation.
@@ -377,13 +320,13 @@ pub trait BarrettReduce<F: JoltField> {
 /// multiplication, the BN254 commitment schemes) can take its elements without copying.
 pub trait ArkScalar: JoltField {
     /// The arkworks field with the same elements and layout.
-    type Ark: JoltField + ark_ff::PrimeField;
+    type Ark: ark_ff::PrimeField;
 
     fn to_ark(self) -> Self::Ark;
 
-    fn slice_as_ark(xs: &[Self]) -> &[Self::Ark];
+    fn from_ark(x: Self::Ark) -> Self;
 
-    fn challenge_to_ark(c: Self::Challenge) -> <Self::Ark as JoltField>::Challenge;
+    fn slice_as_ark(xs: &[Self]) -> &[Self::Ark];
 }
 
 /// Trait for accumulators that finish with Montgomery reduction to a field element
@@ -446,3 +389,22 @@ pub mod challenge;
 pub mod folded_accum;
 pub mod fp128;
 pub mod tracked_ark;
+
+#[cfg(test)]
+mod tests {
+    use super::JoltField;
+
+    /// Upstream crates (`jolt-poly`, `jolt-sumcheck`) bound on `jolt_field::JoltField`; every
+    /// `JoltField`, generic or concrete, must satisfy it.
+    fn upstream_accepts<F: JoltField>() {
+        fn upstream_bound<G: jolt_field::JoltField>() {}
+        upstream_bound::<F>();
+    }
+
+    #[test]
+    fn every_field_satisfies_the_upstream_bound() {
+        upstream_accepts::<super::bn254::Fr>();
+        upstream_accepts::<super::fp128::Fp128>();
+        upstream_accepts::<super::tracked_ark::TrackedFr>();
+    }
+}

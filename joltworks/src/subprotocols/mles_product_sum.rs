@@ -1338,8 +1338,9 @@ fn product_eval_univariate_naive_accumulate<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
-    use ark_bn254::Fr;
+    use crate::field::bn254::Fr;
     use ark_std::{test_rng, UniformRand, Zero};
+    use jolt_field::Field;
     use std::array::from_fn;
 
     use crate::{

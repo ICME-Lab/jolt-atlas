@@ -59,6 +59,7 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for OrTable<XLEN> {
 #[cfg(test)]
 mod test {
     use super::OrTable;
+    use crate::field::bn254::Fr;
     use crate::{
         lookup_tables::test::{
             lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
@@ -66,7 +67,6 @@ mod test {
         },
         subprotocols::ps_shout::binary::tests::test_read_raf_sumcheck,
     };
-    use ark_bn254::Fr;
     use common::consts::XLEN;
 
     #[test]

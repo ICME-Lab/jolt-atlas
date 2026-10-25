@@ -71,6 +71,7 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for UnsignedAbsTa
 
 #[cfg(test)]
 mod test {
+    use crate::field::bn254::Fr;
     use crate::{
         lookup_tables::{
             test::{
@@ -82,7 +83,6 @@ mod test {
         },
         subprotocols::ps_shout::unary::tests::test_read_raf_sumcheck,
     };
-    use ark_bn254::Fr;
 
     fn unsigned_abs(x: i8) -> u8 {
         x.unsigned_abs()

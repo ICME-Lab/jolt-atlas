@@ -8,7 +8,6 @@ use crate::{
                 HyperKZGVerifierKey, KZGVerifierKey, UnivariateKZG, SRS,
             },
         },
-        dense_mlpoly::DensePolynomial,
         multilinear_polynomial::MultilinearPolynomial,
     },
     transcripts::Transcript,
@@ -21,9 +20,8 @@ use rand_chacha::ChaCha20Rng;
 use rayon::prelude::*;
 use std::{borrow::Borrow, sync::Arc};
 
-/// The commitment scheme's field is `jolt_field::Fr`; KZG itself runs on the layout-identical
-/// `ark_bn254::Fr`. Commitments take the polynomial's scalars without copying (see
-/// [`ArkScalar`]); an opening converts the materialized polynomial once.
+/// The commitment scheme's field is `jolt_field::Fr`; the curve arithmetic takes its elements as
+/// the layout-identical `ark_bn254::Fr` without copying (see [`ArkScalar`]).
 impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
     type Field = Fr;
     type ProverSetup = HyperKZGProverKey<ark_bn254::Bn254>;
@@ -119,15 +117,7 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
         _hint: Option<Self::OpeningProofHint>,
         transcript: &mut ProofTranscript,
     ) -> Self::Proof {
-        let dense: &DensePolynomial<Fr> = poly
-            .try_into()
-            .expect("HyperKZG opens a materialized dense polynomial");
-        let poly = MultilinearPolynomial::from(Fr::slice_as_ark(dense.evals_ref()).to_vec());
-        let opening_point: Vec<_> = opening_point
-            .iter()
-            .map(|&c| Fr::challenge_to_ark(c))
-            .collect();
-        HyperKZG::<ark_bn254::Bn254>::open(setup, &poly, &opening_point, transcript).unwrap()
+        HyperKZG::<ark_bn254::Bn254>::open(setup, poly, opening_point, transcript).unwrap()
     }
 
     #[tracing::instrument(skip_all, name = "HyperKZG::verify")]
@@ -139,15 +129,11 @@ impl CommitmentScheme for HyperKZG<ark_bn254::Bn254> {
         opening: &Self::Field,                                   // evaluation \widetilde{Z}(r)
         commitment: &Self::Commitment,
     ) -> Result<(), ProofVerifyError> {
-        let opening_point: Vec<_> = opening_point
-            .iter()
-            .map(|&c| Fr::challenge_to_ark(c))
-            .collect();
         HyperKZG::<ark_bn254::Bn254>::verify_inner(
             setup,
             commitment,
-            &opening_point,
-            &opening.to_ark(),
+            opening_point,
+            opening,
             proof,
             transcript,
         )

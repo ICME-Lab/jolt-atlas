@@ -165,14 +165,12 @@ impl<F: JoltField> EqPlusOnePrefixSuffixPoly<F> {
 
 #[cfg(test)]
 mod tests {
-    use ark_bn254::Fr;
+    use crate::field::bn254::Fr;
+    use jolt_field::Ring;
 
-    use crate::{
-        field::JoltField,
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{OpeningPoint, BIG_ENDIAN},
-        },
+    use crate::poly::{
+        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        opening_proof::{OpeningPoint, BIG_ENDIAN},
     };
 
     use super::{EqPlusOnePolynomial, EqPlusOnePrefixSuffixPoly};

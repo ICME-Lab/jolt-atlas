@@ -571,8 +571,9 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use ark_bn254::Fr;
-    use ark_ff::{AdditiveGroup, Field};
+    use crate::field::bn254::Fr;
+    use num_traits::{One, Zero};
+
     use ark_std::test_rng;
 
     pub fn prefix_suffix_decomposition_test<
@@ -606,7 +607,7 @@ pub mod tests {
             ps.init_P(&mut prefix_registry);
             ps.init_Q(
                 &(0..(1 << (NUM_VARS - PREFIX_LEN * phase)))
-                    .map(|_| Fr::ONE)
+                    .map(|_| Fr::one())
                     .collect::<Vec<_>>(),
                 &lookup_bits,
             );
@@ -618,12 +619,18 @@ pub mod tests {
                     let eval_point = rr
                         .iter()
                         .cloned()
-                        .chain(std::iter::once(Fr::ZERO))
+                        .chain(std::iter::once(Fr::zero()))
                         .chain(
                             std::iter::repeat_n(b, round)
                                 .enumerate()
                                 .rev()
-                                .map(|(i, b)| if (b >> i) & 1 == 1 { Fr::ONE } else { Fr::ZERO }),
+                                .map(|(i, b)| {
+                                    if (b >> i) & 1 == 1 {
+                                        Fr::one()
+                                    } else {
+                                        Fr::zero()
+                                    }
+                                }),
                         )
                         .collect::<Vec<Fr>>();
                     let suffix_len = SUFFIX_LEN - phase * PREFIX_LEN;
@@ -632,9 +639,9 @@ pub mod tests {
                             let mut eval_point = eval_point.clone();
                             for j in (0..suffix_len).rev() {
                                 if (i >> j) & 1 == 1 {
-                                    eval_point.push(Fr::ONE);
+                                    eval_point.push(Fr::one());
                                 } else {
-                                    eval_point.push(Fr::ZERO);
+                                    eval_point.push(Fr::zero());
                                 }
                             }
                             poly.evaluate(&eval_point)
@@ -646,12 +653,18 @@ pub mod tests {
                     let eval_point = rr
                         .iter()
                         .cloned()
-                        .chain(std::iter::once(Fr::ONE + Fr::ONE))
+                        .chain(std::iter::once(Fr::one() + Fr::one()))
                         .chain(
                             std::iter::repeat_n(b, round)
                                 .enumerate()
                                 .rev()
-                                .map(|(i, b)| if (b >> i) & 1 == 1 { Fr::ONE } else { Fr::ZERO }),
+                                .map(|(i, b)| {
+                                    if (b >> i) & 1 == 1 {
+                                        Fr::one()
+                                    } else {
+                                        Fr::zero()
+                                    }
+                                }),
                         )
                         .collect::<Vec<Fr>>();
                     let direct_eval: Fr = (0..(1 << suffix_len))
@@ -659,9 +672,9 @@ pub mod tests {
                             let mut eval_point = eval_point.clone();
                             for j in (0..suffix_len).rev() {
                                 if (i >> j) & 1 == 1 {
-                                    eval_point.push(Fr::ONE);
+                                    eval_point.push(Fr::one());
                                 } else {
-                                    eval_point.push(Fr::ZERO);
+                                    eval_point.push(Fr::zero());
                                 }
                             }
                             poly.evaluate(&eval_point)

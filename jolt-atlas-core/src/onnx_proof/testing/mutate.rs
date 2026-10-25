@@ -11,7 +11,7 @@ use ark_bn254::Bn254;
 use ark_std::One;
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use common::VirtualPoly;
-use joltworks::field::JoltField;
+use jolt_field::Ring;
 use joltworks::poly::{
     commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme, hyperkzg::HyperKZG},
     opening_proof::{OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},

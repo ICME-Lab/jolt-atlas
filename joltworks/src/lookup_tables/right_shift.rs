@@ -60,6 +60,7 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for RightShiftTab
 
 #[cfg(test)]
 mod test {
+    use crate::field::bn254::Fr;
     use crate::{
         lookup_tables::{
             right_shift::RightShiftTable,
@@ -70,7 +71,6 @@ mod test {
         },
         subprotocols::ps_shout::unary::tests::test_read_raf_sumcheck,
     };
-    use ark_bn254::Fr;
 
     #[test]
     fn prefix_suffix() {

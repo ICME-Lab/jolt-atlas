@@ -11,6 +11,7 @@ use crate::{
 use ark_bn254::Bn254;
 use ark_std::UniformRand;
 use common::CommittedPoly;
+use num_traits::One;
 use rand::Rng;
 use rand_core::SeedableRng;
 use std::collections::BTreeMap;

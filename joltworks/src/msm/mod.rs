@@ -2,7 +2,7 @@ use common::parallel::par_enabled;
 use std::borrow::Borrow;
 
 use crate::{
-    field::{ArkScalar, JoltField},
+    field::ArkScalar,
     poly::{multilinear_polynomial::MultilinearPolynomial, unipoly::UniPoly},
     utils::errors::ProofVerifyError,
 };
@@ -19,9 +19,7 @@ use rayon::prelude::*;
 // A very light wrapper around Ark5.0 VariableBaseMSM
 pub trait VariableBaseMSM: ArkVariableBaseMSM
 where
-    Self: ScalarMul, // technically implied by ArkVariableBaseMSM, but explicitly mentioned to be
-    // consistent with current Jolt Msm implementation.
-    Self::ScalarField: JoltField,
+    Self: ScalarMul,
 {
     /// MSM of `bases` with the coefficients of `poly`, whose field `F` is laid out as
     /// `Self::ScalarField` (see [`ArkScalar`]).
@@ -321,20 +319,23 @@ where
             .collect()
     }
 
-    fn batch_msm_univariate(
+    fn batch_msm_univariate<F: ArkScalar<Ark = Self::ScalarField>>(
         bases: &[Self::MulBase],
-        polys: &[UniPoly<Self::ScalarField>],
+        polys: &[UniPoly<F>],
     ) -> Vec<Self> {
         polys
             .par_iter()
             .with_min_len(par_enabled())
             .map(|poly| {
-                VariableBaseMSM::msm_field_elements(&bases[..poly.coeffs.len()], &poly.coeffs)
-                    .unwrap()
+                VariableBaseMSM::msm_field_elements(
+                    &bases[..poly.coeffs.len()],
+                    F::slice_as_ark(&poly.coeffs),
+                )
+                .unwrap()
             })
             .collect()
     }
 }
 
 // Implement VariableBaseMSM For any type G (like G1Projective) that implements the CurveGroup trait.
-impl<F: JoltField, G: CurveGroup<ScalarField = F>> VariableBaseMSM for G {}
+impl<G: CurveGroup> VariableBaseMSM for G {}

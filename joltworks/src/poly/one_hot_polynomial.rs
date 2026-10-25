@@ -120,13 +120,13 @@ impl<F: JoltField> OneHotPolynomial<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field::bn254::Fr;
     use crate::{
         poly::{multilinear_polynomial::BindingOrder, unipoly::UniPoly},
         subprotocols::opening_reduction::{
             EqAddressState, EqCycleState, OneHotPolynomialProverOpening,
         },
     };
-    use ark_bn254::Fr;
     use ark_std::{test_rng, Zero};
     use rand_core::RngCore;
 

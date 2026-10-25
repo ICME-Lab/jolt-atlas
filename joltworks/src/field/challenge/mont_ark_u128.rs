@@ -82,32 +82,25 @@ impl<F: JoltField> UniformRand for MontU128Challenge<F> {
     }
 }
 
-impl Into<ark_bn254::Fr> for MontU128Challenge<ark_bn254::Fr> {
-    #[inline(always)]
-    fn into(self) -> ark_bn254::Fr {
-        ark_bn254::Fr::from_bigint_unchecked(BigInt::new(self.value())).unwrap()
-    }
-}
-impl Into<ark_bn254::Fr> for &MontU128Challenge<ark_bn254::Fr> {
-    #[inline(always)]
-    fn into(self) -> ark_bn254::Fr {
-        ark_bn254::Fr::from_bigint_unchecked(BigInt::new(self.value())).unwrap()
-    }
-}
-
-impl_field_ops_inline!(MontU128Challenge<ark_bn254::Fr>, ark_bn254::Fr, optimized);
-
 impl Into<TrackedFr> for MontU128Challenge<TrackedFr> {
     #[inline(always)]
     fn into(self) -> TrackedFr {
-        TrackedFr(ark_bn254::Fr::from_bigint_unchecked(BigInt::new(self.value())).unwrap())
+        TrackedFr(
+            ark_bn254::Fr::from_bigint_unchecked(BigInt::new(self.value()))
+                .unwrap()
+                .into(),
+        )
     }
 }
 
 impl Into<TrackedFr> for &MontU128Challenge<TrackedFr> {
     #[inline(always)]
     fn into(self) -> TrackedFr {
-        TrackedFr(ark_bn254::Fr::from_bigint_unchecked(BigInt::new(self.value())).unwrap())
+        TrackedFr(
+            ark_bn254::Fr::from_bigint_unchecked(BigInt::new(self.value()))
+                .unwrap()
+                .into(),
+        )
     }
 }
 
@@ -153,34 +146,6 @@ impl OptimizedMul<jolt_field::Fr, jolt_field::Fr> for MontU128Challenge<jolt_fie
     fn mul_01_optimized(self, other: jolt_field::Fr) -> Self::Output {
         if other.is_zero() {
             jolt_field::Fr::zero()
-        } else if other.is_one() {
-            self.into()
-        } else {
-            self * other
-        }
-    }
-}
-
-impl OptimizedMul<ark_bn254::Fr, ark_bn254::Fr> for MontU128Challenge<ark_bn254::Fr> {
-    fn mul_0_optimized(self, other: ark_bn254::Fr) -> Self::Output {
-        if other.is_zero() {
-            ark_bn254::Fr::zero()
-        } else {
-            self * other
-        }
-    }
-
-    fn mul_1_optimized(self, other: ark_bn254::Fr) -> Self::Output {
-        if other.is_one() {
-            self.into()
-        } else {
-            self * other
-        }
-    }
-
-    fn mul_01_optimized(self, other: ark_bn254::Fr) -> Self::Output {
-        if other.is_zero() {
-            ark_bn254::Fr::zero()
         } else if other.is_one() {
             self.into()
         } else {

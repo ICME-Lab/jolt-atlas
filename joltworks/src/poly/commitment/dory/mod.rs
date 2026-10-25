@@ -429,6 +429,7 @@ mod tests {
         poly::{dense_mlpoly::DensePolynomial, multilinear_polynomial::PolynomialEvaluation},
         transcripts::{Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript},
     };
+    use jolt_field::Ring;
 
     /// Bare-metal round trip against the native `dory-pcs` API. Proves the crate
     /// links and runs inside this workspace's `dev/twist-shout` arkworks fork.

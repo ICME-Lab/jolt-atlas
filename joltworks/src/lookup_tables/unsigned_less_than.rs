@@ -61,7 +61,7 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for UnsignedLessTha
 
 #[cfg(test)]
 mod test {
-    use ark_bn254::Fr;
+    use crate::field::bn254::Fr;
     use common::consts::XLEN;
 
     use crate::{

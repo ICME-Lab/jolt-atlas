@@ -225,6 +225,7 @@ pub type BinaryReadRafSumcheckVerifier<F, LUT> =
 
 #[cfg(test)]
 pub mod tests {
+    use crate::field::bn254::Fr;
     use crate::{
         lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
         poly::{
@@ -247,7 +248,6 @@ pub mod tests {
         transcripts::{Blake2bProver, ProvingTranscript, Transcript},
         utils::{lookup_bits::LookupBits, uninterleave_bits},
     };
-    use ark_bn254::Fr;
     use common::{
         consts::{LOG_K, XLEN},
         VirtualPoly,

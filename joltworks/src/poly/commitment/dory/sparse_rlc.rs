@@ -342,6 +342,7 @@ mod tests {
         transcripts::{Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript},
     };
     use dory::{backends::arkworks::BN254, Transparent};
+    use jolt_field::Ring;
 
     fn one_hot(k: usize, t: usize, seed: u64) -> MultilinearPolynomial<Fr> {
         let idx: Vec<Option<u16>> = (0..t)

@@ -21,7 +21,7 @@ use crate::{
 };
 use ark_ec::{pairing::Pairing, AffineRepr};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{One, Zero};
+use ark_std::Zero;
 use common::parallel::par_enabled;
 use kzg::{KZGProverKey, KZGVerifierKey, UnivariateKZG, SRS};
 use rand_core::{CryptoRng, RngCore};
@@ -44,10 +44,7 @@ pub mod tests;
 pub struct HyperKZGSRS<P: Pairing>(Arc<SRS<P>>);
 
 impl<P: Pairing> HyperKZGSRS<P> {
-    pub fn setup<R: RngCore + CryptoRng>(rng: &mut R, max_degree: usize) -> Self
-    where
-        P::ScalarField: JoltField,
-    {
+    pub fn setup<R: RngCore + CryptoRng>(rng: &mut R, max_degree: usize) -> Self {
         Self(Arc::new(SRS::setup(rng, max_degree, 2)))
     }
 
@@ -139,7 +136,7 @@ pub struct HyperKZGProof<P: Pairing> {
 // division (f(x) - f(u)) / (x - u), but we don't use a general
 // division algorithm, we make use of the fact that the division
 // never has a remainder, and that the denominator is always a linear
-// polynomial. The cost is (d-1) mults + (d-1) adds in P::ScalarField, where
+// polynomial. The cost is (d-1) mults + (d-1) adds in the field, where
 // d is the degree of f.
 //
 // We use the fact that if we compute the quotient of f(x)/(x-u),
@@ -147,20 +144,17 @@ pub struct HyperKZGProof<P: Pairing> {
 // the quotient of f(x)/(x-u) and (f(x) - f(v))/(x-u) is the
 // same.  One advantage is that computing f(u) could be decoupled
 // from kzg_open, it could be done later or separate from computing W.
-fn kzg_batch_open_no_rem<P: Pairing>(
-    f: &MultilinearPolynomial<P::ScalarField>,
-    u: &[P::ScalarField],
+fn kzg_batch_open_no_rem<P: Pairing, F: ArkScalar<Ark = P::ScalarField>>(
+    f: &MultilinearPolynomial<F>,
+    u: &[F],
     pk: &HyperKZGProverKey<P>,
-) -> Vec<P::G1Affine>
-where
-    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
-{
-    let f: &DensePolynomial<P::ScalarField> = f.try_into().unwrap();
+) -> Vec<P::G1Affine> {
+    let f: &DensePolynomial<F> = f.try_into().unwrap();
     let h = u
         .par_iter()
         .with_min_len(par_enabled())
         .map(|ui| {
-            let h = compute_witness_polynomial::<P>(&f.evals(), *ui);
+            let h = compute_witness_polynomial(&f.evals(), *ui);
             MultilinearPolynomial::from(h)
         })
         .collect::<Vec<_>>();
@@ -168,17 +162,11 @@ where
     UnivariateKZG::commit_batch(&pk.kzg_pk, &h).unwrap()
 }
 
-fn compute_witness_polynomial<P: Pairing>(
-    f: &[P::ScalarField],
-    u: P::ScalarField,
-) -> Vec<P::ScalarField>
-where
-    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
-{
+fn compute_witness_polynomial<F: JoltField>(f: &[F], u: F) -> Vec<F> {
     let d = f.len();
 
     // Compute h(x) = f(x)/(x - u)
-    let mut h = vec![P::ScalarField::zero(); d];
+    let mut h = vec![F::zero(); d];
     for i in (1..d).rev() {
         h[i - 1] = f[i] + h[i] * u;
     }
@@ -186,21 +174,18 @@ where
     h
 }
 
-fn kzg_open_batch<P: Pairing, ProofTranscript: Transcript>(
-    f: &[MultilinearPolynomial<P::ScalarField>],
-    u: &[P::ScalarField],
+fn kzg_open_batch<P: Pairing, F: ArkScalar<Ark = P::ScalarField>, ProofTranscript: Transcript>(
+    f: &[MultilinearPolynomial<F>],
+    u: &[F],
     pk: &HyperKZGProverKey<P>,
     transcript: &mut ProofTranscript,
-) -> (Vec<P::G1Affine>, Vec<Vec<P::ScalarField>>)
-where
-    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
-{
+) -> (Vec<P::G1Affine>, Vec<Vec<F>>) {
     let k = f.len();
     let t = u.len();
 
     // The verifier needs f_i(u_j), so we compute them here
     // (V will compute B(u_j) itself)
-    let mut v = vec![vec!(P::ScalarField::zero(); k); t];
+    let mut v = vec![vec!(F::zero(); k); t];
     v.par_iter_mut()
         .with_min_len(par_enabled())
         .enumerate()
@@ -213,14 +198,14 @@ where
         });
 
     // TODO(moodlezoup): Avoid cloned()
-    let scalars = v.iter().flatten().collect::<Vec<&P::ScalarField>>();
-    transcript.append_scalars::<P::ScalarField>(&scalars);
-    let q_powers: Vec<P::ScalarField> = transcript.challenge_scalar_powers(f.len());
-    let f_arc: Vec<Arc<MultilinearPolynomial<P::ScalarField>>> =
+    let scalars = v.iter().flatten().collect::<Vec<&F>>();
+    transcript.append_scalars::<F>(&scalars);
+    let q_powers: Vec<F> = transcript.challenge_scalar_powers(f.len());
+    let f_arc: Vec<Arc<MultilinearPolynomial<F>>> =
         f.iter().map(|poly| Arc::new(poly.clone())).collect();
 
     let B = {
-        let poly_refs: Vec<&MultilinearPolynomial<P::ScalarField>> =
+        let poly_refs: Vec<&MultilinearPolynomial<F>> =
             f_arc.iter().map(|arc| arc.as_ref()).collect();
         let dense_result = DensePolynomial::linear_combination(&poly_refs, &q_powers);
         MultilinearPolynomial::from(dense_result.Z)
@@ -232,32 +217,29 @@ where
     // The prover computes the challenge to keep the transcript in the same
     // state as that of the verifier
     transcript.append_points(&w.iter().map(|g| g.into_group()).collect::<Vec<P::G1>>());
-    let _d_0: P::ScalarField = transcript.challenge_scalar();
+    let _d_0: F = transcript.challenge_scalar();
 
     (w, v)
 }
 
 // vk is hashed in transcript already, so we do not add it here
-fn kzg_verify_batch<P: Pairing, ProofTranscript: Transcript>(
+fn kzg_verify_batch<P: Pairing, F: ArkScalar<Ark = P::ScalarField>, ProofTranscript: Transcript>(
     vk: &HyperKZGVerifierKey<P>,
     C: &[P::G1Affine],
     W: &[P::G1Affine],
-    u: &[P::ScalarField],
-    v: &[Vec<P::ScalarField>],
+    u: &[F],
+    v: &[Vec<F>],
     transcript: &mut ProofTranscript,
-) -> bool
-where
-    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
-{
+) -> bool {
     let k = C.len();
     let t = u.len();
 
-    let scalars = v.iter().flatten().collect::<Vec<&P::ScalarField>>();
-    transcript.append_scalars::<P::ScalarField>(&scalars);
-    let q_powers: Vec<P::ScalarField> = transcript.challenge_scalar_powers(k);
+    let scalars = v.iter().flatten().collect::<Vec<&F>>();
+    transcript.append_scalars::<F>(&scalars);
+    let q_powers: Vec<F> = transcript.challenge_scalar_powers(k);
 
     transcript.append_points(&W.iter().map(|g| g.into_group()).collect::<Vec<P::G1>>());
-    let d_0: P::ScalarField = transcript.challenge_scalar();
+    let d_0: F = transcript.challenge_scalar();
     let d_1 = d_0 * d_0;
 
     assert_eq!(t, 3);
@@ -280,9 +262,9 @@ where
     // L0, L1, L2 can be replaced by single MSM of C with the powers of q multiplied by (1 + d_0 + d_1)
     // with additionally concatenated inputs for scalars/bases.
 
-    let q_power_multiplier: P::ScalarField = P::ScalarField::one() + d_0 + d_1;
+    let q_power_multiplier: F = F::one() + d_0 + d_1;
 
-    let q_powers_multiplied: Vec<P::ScalarField> = q_powers
+    let q_powers_multiplied: Vec<F> = q_powers
         .par_iter()
         .with_min_len(par_enabled())
         .map(|q_power| *q_power * q_power_multiplier)
@@ -300,24 +282,25 @@ where
                 .map(|(a, b)| *a * *b)
                 .sum()
         })
-        .collect::<Vec<P::ScalarField>>();
+        .collect::<Vec<F>>();
 
+    let scalars: Vec<F> = [
+        &q_powers_multiplied[..k],
+        &[
+            u[0],
+            (u[1] * d_0),
+            (u[2] * d_1),
+            -(B_u[0] + d_0 * B_u[1] + d_1 * B_u[2]),
+        ],
+    ]
+    .concat();
     let L = <P::G1 as VariableBaseMSM>::msm_field_elements(
         &[&C[..k], &[W[0], W[1], W[2], vk.kzg_vk.g1]].concat(),
-        &[
-            &q_powers_multiplied[..k],
-            &[
-                u[0],
-                (u[1] * d_0),
-                (u[2] * d_1),
-                -(B_u[0] + d_0 * B_u[1] + d_1 * B_u[2]),
-            ],
-        ]
-        .concat(),
+        F::slice_as_ark(&scalars),
     )
     .unwrap();
 
-    let R = W[0] + W[1] * d_0 + W[2] * d_1;
+    let R = W[0] + W[1] * d_0.to_ark() + W[2] * d_1.to_ark();
 
     // Check that e(L, vk.H) == e(R, vk.tau_H)
     P::multi_pairing([L, -R], [vk.kzg_vk.g2, vk.kzg_vk.beta_g2]).is_zero()
@@ -328,10 +311,7 @@ pub struct HyperKZG<P: Pairing> {
     _phantom: PhantomData<P>,
 }
 
-impl<P: Pairing> HyperKZG<P>
-where
-    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
-{
+impl<P: Pairing> HyperKZG<P> {
     pub fn protocol_name() -> &'static [u8] {
         b"HyperKZG"
     }
@@ -355,10 +335,10 @@ where
     }
 
     #[tracing::instrument(skip_all, name = "HyperKZG::open")]
-    pub fn open<ProofTranscript: Transcript>(
+    pub fn open<F: ArkScalar<Ark = P::ScalarField>, ProofTranscript: Transcript>(
         pk: &HyperKZGProverKey<P>,
-        poly: &MultilinearPolynomial<P::ScalarField>,
-        point: &[<P::ScalarField as JoltField>::Challenge],
+        poly: &MultilinearPolynomial<F>,
+        point: &[F::Challenge],
         transcript: &mut ProofTranscript,
     ) -> Result<HyperKZGProof<P>, ProofVerifyError> {
         let ell = point.len();
@@ -368,12 +348,12 @@ where
         // Phase 1  -- create commitments com_1, ..., com_\ell
         // We do not compute final Pi (and its commitment) as it is constant and equals to 'eval'
         // also known to verifier, so can be derived on its side as well
-        let mut polys: Vec<MultilinearPolynomial<P::ScalarField>> = Vec::new();
+        let mut polys: Vec<MultilinearPolynomial<F>> = Vec::new();
         polys.push(poly.clone());
         for i in 0..ell - 1 {
-            let previous_poly: &DensePolynomial<P::ScalarField> = (&polys[i]).try_into().unwrap();
+            let previous_poly: &DensePolynomial<F> = (&polys[i]).try_into().unwrap();
             let Pi_len = previous_poly.len() / 2;
-            let mut Pi = vec![P::ScalarField::zero(); Pi_len];
+            let mut Pi = vec![F::zero(); Pi_len];
             Pi.par_iter_mut()
                 .with_min_len(par_enabled())
                 .enumerate()
@@ -395,22 +375,26 @@ where
         // We do not need to add x to the transcript, because in our context x was obtained from the transcript.
         // We also do not need to absorb `C` and `eval` as they are already absorbed by the transcript by the caller
         transcript.append_points(&com.iter().map(|g| g.into_group()).collect::<Vec<P::G1>>());
-        let r: <P as Pairing>::ScalarField = transcript.challenge_scalar();
+        let r: F = transcript.challenge_scalar();
         let u = vec![r, -r, r * r];
 
         // Phase 3 -- create response
         let (w, v) = kzg_open_batch(&polys, &u, pk, transcript);
+        let v = v
+            .into_iter()
+            .map(|row| row.into_iter().map(F::to_ark).collect())
+            .collect();
 
         Ok(HyperKZGProof { com, w, v })
     }
 
     /// A method to verify purported evaluations of a batch of polynomials
     #[tracing::instrument(skip_all, name = "HyperKZG::verify")]
-    pub fn verify_inner<ProofTranscript: Transcript>(
+    pub fn verify_inner<F: ArkScalar<Ark = P::ScalarField>, ProofTranscript: Transcript>(
         vk: &HyperKZGVerifierKey<P>,
         C: &HyperKZGCommitment<P>,
-        point: &[<P::ScalarField as JoltField>::Challenge],
-        P_of_x: &P::ScalarField,
+        point: &[F::Challenge],
+        P_of_x: &F,
         pi: &HyperKZGProof<P>,
         transcript: &mut ProofTranscript,
     ) -> Result<(), ProofVerifyError> {
@@ -423,9 +407,9 @@ where
         // we do not need to add x to the transcript, because in our context x was
         // obtained from the transcript
         transcript.append_points(&com.iter().map(|g| g.into_group()).collect::<Vec<P::G1>>());
-        let r: <P as Pairing>::ScalarField = transcript.challenge_scalar();
+        let r: F = transcript.challenge_scalar();
 
-        if r == P::ScalarField::zero() || C.0 == P::G1Affine::zero() {
+        if r == F::zero() || C.0 == P::G1Affine::zero() {
             return Err(ProofVerifyError::InternalError);
         }
         com.insert(0, C.0); // set com_0 = C, shifts other commitments to the right
@@ -433,7 +417,10 @@ where
         let u = vec![r, -r, r * r];
 
         // Setup vectors (Y, ypos, yneg) from pi.v
-        let v = &pi.v;
+        let v: Vec<Vec<F>> =
+            pi.v.iter()
+                .map(|row| row.iter().map(|&x| F::from_ark(x)).collect())
+                .collect();
         if v.len() != 3 {
             return Err(ProofVerifyError::InternalError);
         }
@@ -446,10 +433,10 @@ where
         Y.push(*y);
 
         // Check consistency of (Y, ypos, yneg)
-        let two = P::ScalarField::from(2u64);
+        let two = F::from_u64(2);
         for i in 0..ell {
             if two * r * Y[i + 1]
-                != r * (P::ScalarField::one() - point[ell - i - 1]) * (ypos[i] + yneg[i])
+                != r * (F::one() - point[ell - i - 1]) * (ypos[i] + yneg[i])
                     + point[ell - i - 1] * (ypos[i] - yneg[i])
             {
                 return Err(ProofVerifyError::InternalError);
@@ -459,7 +446,7 @@ where
         }
 
         // Check commitments to (Y, ypos, yneg) are valid
-        if !kzg_verify_batch(vk, &com, &pi.w, &u, &pi.v, transcript) {
+        if !kzg_verify_batch(vk, &com, &pi.w, &u, &v, transcript) {
             return Err(ProofVerifyError::InternalError);
         }
 

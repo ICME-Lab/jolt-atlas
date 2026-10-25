@@ -522,7 +522,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityS
 
 #[cfg(test)]
 mod tests {
-    use ark_bn254::Fr;
+    use crate::field::bn254::Fr;
     use common::CommittedPoly;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 

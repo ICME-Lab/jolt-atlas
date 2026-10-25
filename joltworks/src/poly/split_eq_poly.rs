@@ -600,7 +600,7 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_bn254::Fr;
+    use crate::field::bn254::Fr;
     use ark_std::{test_rng, One};
 
     #[test]

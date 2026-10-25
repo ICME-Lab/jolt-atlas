@@ -88,7 +88,7 @@ fn lt_evals<F: JoltField>(r: &OpeningPoint<BIG_ENDIAN, F>) -> Vec<F> {
 
 #[cfg(test)]
 mod tests {
-    use ark_bn254::Fr;
+    use crate::field::bn254::Fr;
 
     use crate::{
         field::challenge::MontU128Challenge,

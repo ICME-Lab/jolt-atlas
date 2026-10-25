@@ -625,8 +625,9 @@ impl<F: JoltField> PolynomialEvaluation<F> for DensePolynomial<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_bn254::Fr;
+    use crate::field::bn254::Fr;
     use ark_std::test_rng;
+    use jolt_field::Field;
     use rand::Rng;
 
     pub fn compute_chis_at_r<F: JoltField>(r: &[F::Challenge]) -> Vec<F> {

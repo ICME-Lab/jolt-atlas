@@ -295,14 +295,15 @@ impl EvalReductionProtocol {
 
 #[cfg(test)]
 mod tests {
+    use jolt_field::Field;
 
     use super::*;
+    use crate::field::bn254::Fr;
     use crate::{
         field::{IntoOpening, JoltField},
         poly::multilinear_polynomial::PolynomialEvaluation,
         transcripts::{Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript},
     };
-    use ark_bn254::Fr;
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use rand_distr::Uniform;
 
@@ -461,7 +462,7 @@ mod tests {
 
             // Verify random challenges
             for _ in 0..10 {
-                let t_f: Fr = rng.gen();
+                let t_f: Fr = Fr::random(&mut rng);
                 let l_eval = eval_on_l(&r_i_vec, t_f);
                 let h_eval = h.evaluate(&t_f);
                 let mle_eval = mle.evaluate(&l_eval);

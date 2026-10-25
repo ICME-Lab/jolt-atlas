@@ -466,11 +466,12 @@ mod tests {
         multilinear_polynomial::MultilinearPolynomial,
         prefix_suffix::tests::prefix_suffix_decomposition_test,
     };
+    use jolt_field::Ring;
+    use num_traits::{One, Zero};
 
     use super::*;
-    use ark_bn254::Fr;
-    use ark_ec::AdditiveGroup;
-    use ark_ff::Field;
+    use crate::field::bn254::Fr;
+
     use ark_std::test_rng;
 
     #[test]
@@ -537,23 +538,23 @@ mod tests {
 
         // Test a few specific points
         // k=0 should map to start_address
-        let point_0 = vec![Fr::ZERO; NUM_VARS];
+        let point_0 = vec![Fr::zero(); NUM_VARS];
         assert_eq!(unmap_poly.evaluate(&point_0), Fr::from(START_ADDRESS));
 
         // k=1 should map to start_address + 8
-        let mut point_1 = vec![Fr::ZERO; NUM_VARS];
-        point_1[NUM_VARS - 1] = Fr::ONE;
+        let mut point_1 = vec![Fr::zero(); NUM_VARS];
+        point_1[NUM_VARS - 1] = Fr::one();
         assert_eq!(unmap_poly.evaluate(&point_1), Fr::from(START_ADDRESS + 8));
 
         // k=2 should map to start_address + 16
-        let mut point_2 = vec![Fr::ZERO; NUM_VARS];
-        point_2[NUM_VARS - 2] = Fr::ONE;
+        let mut point_2 = vec![Fr::zero(); NUM_VARS];
+        point_2[NUM_VARS - 2] = Fr::one();
         assert_eq!(unmap_poly.evaluate(&point_2), Fr::from(START_ADDRESS + 16));
 
         // k=3 should map to start_address + 24
-        let mut point_3 = vec![Fr::ZERO; NUM_VARS];
-        point_3[NUM_VARS - 1] = Fr::ONE;
-        point_3[NUM_VARS - 2] = Fr::ONE;
+        let mut point_3 = vec![Fr::zero(); NUM_VARS];
+        point_3[NUM_VARS - 1] = Fr::one();
+        point_3[NUM_VARS - 2] = Fr::one();
         assert_eq!(unmap_poly.evaluate(&point_3), Fr::from(START_ADDRESS + 24));
     }
 
@@ -566,10 +567,10 @@ mod tests {
 
         // Test evaluation on boolean hypercube
         for i in 0..(1 << NUM_VARS) {
-            let mut eval_point = vec![Fr::ZERO; NUM_VARS];
+            let mut eval_point = vec![Fr::zero(); NUM_VARS];
             for j in 0..NUM_VARS {
                 if (i >> j) & 1 == 1 {
-                    eval_point[j] = Fr::ONE;
+                    eval_point[j] = Fr::one();
                 }
             }
             eval_point.reverse();
@@ -612,10 +613,10 @@ mod tests {
 
         // Verify that both polynomials agree on the entire boolean hypercube
         for i in 0..(1 << NUM_VARS) {
-            let mut eval_point = vec![Fr::ZERO; NUM_VARS];
+            let mut eval_point = vec![Fr::zero(); NUM_VARS];
             for j in 0..NUM_VARS {
                 if (i >> j) & 1 == 1 {
-                    eval_point[j] = Fr::ONE;
+                    eval_point[j] = Fr::one();
                 }
             }
             let ro_poly = ro_poly.evaluate(&eval_point);

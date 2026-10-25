@@ -202,7 +202,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
 #[cfg(test)]
 mod tests {
-    use ark_bn254::Fr;
+    use crate::field::bn254::Fr;
+    use jolt_field::Ring;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
     use crate::{

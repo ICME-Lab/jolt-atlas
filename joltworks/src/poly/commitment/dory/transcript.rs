@@ -6,7 +6,7 @@
 //! self-consistent. Byte/group/serde appends are length-prefixed to keep the
 //! absorb injective.
 
-use ark_bn254::Fr;
+use crate::field::bn254::{from_ark, to_ark, Fr};
 use dory::backends::arkworks::{ArkFr, BN254};
 use dory::primitives::arithmetic::Group as DoryGroup;
 use dory::primitives::transcript::Transcript as DoryTranscript;
@@ -33,7 +33,7 @@ impl<T: Transcript> DoryTranscript for LocalToDoryTranscript<'_, T> {
     }
 
     fn append_field(&mut self, _label: &[u8], x: &ArkFr) {
-        self.transcript.append_scalar::<Fr>(&x.0);
+        self.transcript.append_scalar::<Fr>(&from_ark(x.0));
     }
 
     fn append_group<G: DoryGroup>(&mut self, _label: &[u8], g: &G) {
@@ -53,7 +53,7 @@ impl<T: Transcript> DoryTranscript for LocalToDoryTranscript<'_, T> {
     }
 
     fn challenge_scalar(&mut self, _label: &[u8]) -> ArkFr {
-        ArkFr(self.transcript.challenge_scalar::<Fr>())
+        ArkFr(to_ark(self.transcript.challenge_scalar::<Fr>()))
     }
 
     fn reset(&mut self, _domain_label: &[u8]) {

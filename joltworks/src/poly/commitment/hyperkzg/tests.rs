@@ -13,7 +13,7 @@ use rand::Rng;
 use rand_core::SeedableRng;
 use std::collections::BTreeMap;
 
-type Fr = <Bn254 as Pairing>::ScalarField;
+type Fr = crate::field::bn254::Fr;
 type Challenge = <Fr as JoltField>::Challenge;
 
 #[test]
@@ -33,7 +33,7 @@ fn test_hyperkzg_eval() {
         // Compute the expected evaluation dynamically
         let eval = poly.evaluate(&point);
         let mut tr = Blake2bTranscript::new(b"TestEval");
-        let proof = HyperKZG::open(&pk, &poly, &point, &mut tr).unwrap();
+        let proof = HyperKZG::prove(&pk, &poly, &point, None, &mut tr);
         let mut tr = Blake2bTranscript::new(b"TestEval");
         HyperKZG::verify(&proof, &vk, &mut tr, &point, &eval, &c)
     };
@@ -41,7 +41,7 @@ fn test_hyperkzg_eval() {
     let test_inner_wrong =
         |point: Vec<Challenge>, wrong_eval: Fr| -> Result<(), ProofVerifyError> {
             let mut tr = Blake2bTranscript::new(b"TestEval");
-            let proof = HyperKZG::open(&pk, &poly, &point, &mut tr).unwrap();
+            let proof = HyperKZG::prove(&pk, &poly, &point, None, &mut tr);
             let mut tr = Blake2bTranscript::new(b"TestEval");
             HyperKZG::verify(&proof, &vk, &mut tr, &point, &wrong_eval, &c)
         };
@@ -94,7 +94,7 @@ fn test_hyperkzg_small() {
 
     // prove an evaluation
     let mut tr = Blake2bTranscript::new(b"TestEval");
-    let proof = HyperKZG::open(&pk, &poly, &point, &mut tr).unwrap();
+    let proof = HyperKZG::prove(&pk, &poly, &point, None, &mut tr);
     let post_c_p = tr.challenge_scalar::<Fr>();
 
     // verify the evaluation
@@ -133,14 +133,10 @@ fn test_hyperkzg_large() {
 
         let n = 1 << ell; // n = 2^ell
 
-        let poly_raw = (0..n)
-            .map(|_| <Bn254 as Pairing>::ScalarField::rand(&mut rng))
-            .collect::<Vec<_>>();
+        let poly_raw = (0..n).map(|_| Fr::rand(&mut rng)).collect::<Vec<_>>();
         let poly = MultilinearPolynomial::from(poly_raw.clone());
         let point = (0..ell)
-            .map(|_| {
-                <<Bn254 as Pairing>::ScalarField as JoltField>::Challenge::from(rng.gen::<u128>())
-            })
+            .map(|_| Challenge::from(rng.gen::<u128>()))
             .collect::<Vec<_>>();
         let eval = poly.evaluate(&point);
 
@@ -153,7 +149,7 @@ fn test_hyperkzg_large() {
         // prove an evaluation
         let mut prover_transcript = Blake2bTranscript::new(b"TestEval");
         let proof: HyperKZGProof<Bn254> =
-            HyperKZG::open(&pk, &poly, &point, &mut prover_transcript).unwrap();
+            HyperKZG::prove(&pk, &poly, &point, None, &mut prover_transcript);
 
         // verify the evaluation
         let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
@@ -184,20 +180,15 @@ fn test_hyperkzg_batch_dense_diff() {
     let mut prover_tr = Blake2bTranscript::new(b"TestEval");
 
     let mut point = (0..sizes[0] - 1)
-        .map(|_| <<Bn254 as Pairing>::ScalarField as JoltField>::Challenge::from(rng.gen::<u128>()))
+        .map(|_| Challenge::from(rng.gen::<u128>()))
         .collect::<Vec<_>>();
     let mut openings_data: Vec<OpeningData> = Vec::with_capacity(sizes.len());
     for ell in sizes {
         // extend point for iteration
-        point.insert(
-            0,
-            <<Bn254 as Pairing>::ScalarField as JoltField>::Challenge::from(rng.gen::<u128>()),
-        );
+        point.insert(0, Challenge::from(rng.gen::<u128>()));
 
         let n = 1 << ell; // n = 2^ell
-        let poly_raw = (0..n)
-            .map(|_| <Bn254 as Pairing>::ScalarField::rand(&mut rng))
-            .collect::<Vec<_>>();
+        let poly_raw = (0..n).map(|_| Fr::rand(&mut rng)).collect::<Vec<_>>();
         let poly = MultilinearPolynomial::from(poly_raw.clone());
         let eval = poly.evaluate(&point);
 
@@ -226,13 +217,13 @@ fn test_hyperkzg_batch_dense_diff() {
         .sum();
 
     // prove an evaluation
-    let proof: HyperKZGProof<Bn254> = HyperKZG::open(
+    let proof: HyperKZGProof<Bn254> = HyperKZG::prove(
         &pk,
         &MultilinearPolynomial::LargeScalars(joint_poly),
         &point,
+        None,
         &mut prover_tr,
-    )
-    .unwrap();
+    );
 
     // verify the evaluation
     let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
@@ -272,12 +263,10 @@ fn test_hyperkzg_batch_dense_oh() {
     let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(oh_total_size);
     let mut prover_tr = Blake2bTranscript::new(b"TestEval");
 
-    let dense_poly_raw = (0..N)
-        .map(|_| <Bn254 as Pairing>::ScalarField::rand(&mut rng))
-        .collect::<Vec<_>>();
+    let dense_poly_raw = (0..N).map(|_| Fr::rand(&mut rng)).collect::<Vec<_>>();
     let dense_poly = MultilinearPolynomial::from(dense_poly_raw.clone());
     let mut point = (0..log_N)
-        .map(|_| <<Bn254 as Pairing>::ScalarField as JoltField>::Challenge::from(rng.gen::<u128>()))
+        .map(|_| Challenge::from(rng.gen::<u128>()))
         .collect::<Vec<_>>();
     let dense_poly_eval = dense_poly.evaluate(&point);
     let dense_commitment = HyperKZG::commit(&dense_poly, &pk).0;
@@ -291,10 +280,7 @@ fn test_hyperkzg_batch_dense_oh() {
     let one_hot_poly = OneHotPolynomial::<Fr>::from_indices(nonzero_indices.clone(), K);
 
     (0..oh_num_vars - log_N).for_each(|_| {
-        point.insert(
-            0,
-            <<Bn254 as Pairing>::ScalarField as JoltField>::Challenge::from(rng.gen::<u128>()),
-        );
+        point.insert(0, Challenge::from(rng.gen::<u128>()));
     });
     let one_hot_eval = one_hot_poly.evaluate(&point);
     let one_hot_commitment =
@@ -317,7 +303,7 @@ fn test_hyperkzg_batch_dense_oh() {
     let rlc_eval = dense_poly_eval * lagrange_eval + gamma_powers[1] * one_hot_eval;
 
     // prove an evaluation
-    let proof: HyperKZGProof<Bn254> = HyperKZG::open(&pk, &rlc, &point, &mut prover_tr).unwrap();
+    let proof: HyperKZGProof<Bn254> = HyperKZG::prove(&pk, &rlc, &point, None, &mut prover_tr);
 
     // verify the evaluation
     let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
@@ -471,7 +457,7 @@ fn test_hyperkzg_batch_3dense_3oh() {
     }
 
     // Prove
-    let proof: HyperKZGProof<Bn254> = HyperKZG::open(&pk, &rlc, &point, &mut prover_tr).unwrap();
+    let proof: HyperKZGProof<Bn254> = HyperKZG::prove(&pk, &rlc, &point, None, &mut prover_tr);
 
     // Verify
     let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
@@ -532,7 +518,7 @@ fn test_hyperkzg_srs_file_roundtrip() {
     let eval = poly.evaluate(&point);
 
     let mut tr1 = Blake2bTranscript::new(b"TestSRS");
-    let proof = HyperKZG::open(&pk2, &poly, &point, &mut tr1).unwrap();
+    let proof = HyperKZG::prove(&pk2, &poly, &point, None, &mut tr1);
 
     let mut tr2 = Blake2bTranscript::new(b"TestSRS");
     assert!(HyperKZG::verify(&proof, &vk2, &mut tr2, &point, &eval, &c2).is_ok());

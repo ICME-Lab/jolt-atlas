@@ -17,9 +17,10 @@
 
 use std::collections::BTreeSet;
 
-use ark_bn254::{Bn254, Fr};
+use ark_bn254::Bn254;
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use common::consts::{ACTIVATION_BOUND, MODEL_SCALE, TRIG_PERIOD_MODULUS};
+use joltworks::field::bn254::Fr;
 use joltworks::{
     lookup_tables::clamp::CLAMP_BOUND, poly::commitment::commitment_scheme::CommitmentScheme,
     poly::commitment::hyperkzg::HyperKZG,

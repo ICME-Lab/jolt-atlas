@@ -8,10 +8,11 @@
 //! only smaller. The real downloads are `#[ignore]`d and run in the heavy
 //! CI job.
 
-use ark_bn254::{Bn254, Fr};
+use ark_bn254::Bn254;
 use atlas_onnx_import::fixtures::{standard_bindings, synth_inputs, GOLDEN_SEED};
 use atlas_onnx_import::ImportedModel;
 use atlas_trace::Tensor;
+use joltworks::field::bn254::Fr;
 use joltworks::poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG};
 
 use super::{prove_verify_roundtrip, RoundtripOptions};

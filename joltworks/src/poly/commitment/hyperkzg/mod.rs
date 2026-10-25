@@ -10,7 +10,7 @@
 //! and within the KZG commitment scheme implementation itself).
 
 use crate::{
-    field::JoltField,
+    field::{ArkScalar, JoltField},
     msm::VariableBaseMSM,
     poly::{
         dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial,
@@ -153,7 +153,7 @@ fn kzg_batch_open_no_rem<P: Pairing>(
     pk: &HyperKZGProverKey<P>,
 ) -> Vec<P::G1Affine>
 where
-    <P as Pairing>::ScalarField: JoltField,
+    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
 {
     let f: &DensePolynomial<P::ScalarField> = f.try_into().unwrap();
     let h = u
@@ -173,7 +173,7 @@ fn compute_witness_polynomial<P: Pairing>(
     u: P::ScalarField,
 ) -> Vec<P::ScalarField>
 where
-    <P as Pairing>::ScalarField: JoltField,
+    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
 {
     let d = f.len();
 
@@ -193,7 +193,7 @@ fn kzg_open_batch<P: Pairing, ProofTranscript: Transcript>(
     transcript: &mut ProofTranscript,
 ) -> (Vec<P::G1Affine>, Vec<Vec<P::ScalarField>>)
 where
-    <P as Pairing>::ScalarField: JoltField,
+    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
 {
     let k = f.len();
     let t = u.len();
@@ -247,7 +247,7 @@ fn kzg_verify_batch<P: Pairing, ProofTranscript: Transcript>(
     transcript: &mut ProofTranscript,
 ) -> bool
 where
-    <P as Pairing>::ScalarField: JoltField,
+    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
 {
     let k = C.len();
     let t = u.len();
@@ -330,7 +330,7 @@ pub struct HyperKZG<P: Pairing> {
 
 impl<P: Pairing> HyperKZG<P>
 where
-    <P as Pairing>::ScalarField: JoltField,
+    <P as Pairing>::ScalarField: ArkScalar<Ark = <P as Pairing>::ScalarField>,
 {
     pub fn protocol_name() -> &'static [u8] {
         b"HyperKZG"
@@ -477,7 +477,7 @@ impl HyperKZG<ark_bn254::Bn254> {
     #[tracing::instrument(skip_all, name = "HyperKZG::commit_one_hot")]
     pub fn commit_one_hot(
         pk: &HyperKZGProverKey<ark_bn254::Bn254>,
-        poly: &OneHotPolynomial<ark_bn254::Fr>,
+        poly: &OneHotPolynomial<crate::field::bn254::Fr>,
     ) -> Result<HyperKZGCommitment<ark_bn254::Bn254>, ProofVerifyError> {
         let T = poly.nonzero_indices.len();
         let K = poly.K;
@@ -515,7 +515,7 @@ impl HyperKZG<ark_bn254::Bn254> {
     #[tracing::instrument(skip_all, name = "HyperKZG::batch_commit_one_hot")]
     pub fn batch_commit_one_hot(
         pk: &HyperKZGProverKey<ark_bn254::Bn254>,
-        polys: &[OneHotPolynomial<ark_bn254::Fr>],
+        polys: &[OneHotPolynomial<crate::field::bn254::Fr>],
     ) -> Result<Vec<HyperKZGCommitment<ark_bn254::Bn254>>, ProofVerifyError> {
         if polys.is_empty() {
             return Ok(vec![]);

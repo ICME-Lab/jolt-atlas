@@ -2,8 +2,8 @@
 
 use std::time::Instant;
 
-use ark_bn254::Fr;
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
+use joltworks::field::bn254::Fr;
 use joltworks::{
     poly::commitment::commitment_scheme::CommitmentScheme, transcripts::Blake2bTranscript,
 };

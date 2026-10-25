@@ -86,13 +86,14 @@ mod tests {
     use crate::onnx_proof::{
         prover, verifier, AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, ProofId,
     };
-    use ark_bn254::{Bn254, Fr};
+    use ark_bn254::Bn254;
     use atlas_trace::op::Add;
     use atlas_trace::trace::ModelExecutionIO;
     use atlas_trace::Model;
     use atlas_trace::Op;
     use atlas_trace::Tensor;
     use common::VirtualPoly;
+    use joltworks::field::bn254::Fr;
     use joltworks::{
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},

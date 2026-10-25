@@ -1,4 +1,4 @@
-use crate::field::JoltField;
+use crate::field::{ArkScalar, JoltField};
 use crate::msm::VariableBaseMSM;
 use crate::poly::multilinear_polynomial::MultilinearPolynomial;
 use crate::poly::unipoly::UniPoly;
@@ -192,12 +192,13 @@ where
     P::ScalarField: JoltField,
 {
     #[tracing::instrument(skip_all, name = "KZG::commit_batch")]
-    pub fn commit_batch<U>(
+    pub fn commit_batch<F, U>(
         pk: &KZGProverKey<P>,
         polys: &[U],
     ) -> Result<Vec<P::G1Affine>, ProofVerifyError>
     where
-        U: Borrow<MultilinearPolynomial<P::ScalarField>> + Sync,
+        F: ArkScalar<Ark = P::ScalarField>,
+        U: Borrow<MultilinearPolynomial<F>> + Sync,
     {
         let g1_powers = &pk.g1_powers();
 
@@ -224,9 +225,9 @@ where
 
     // This API will try to minimize copies to the GPU or just do the batches in parallel on the CPU
     #[tracing::instrument(skip_all, name = "KZG::commit_variable_batch")]
-    pub fn commit_variable_batch(
+    pub fn commit_variable_batch<F: ArkScalar<Ark = P::ScalarField>>(
         pk: &KZGProverKey<P>,
-        polys: &[MultilinearPolynomial<P::ScalarField>],
+        polys: &[MultilinearPolynomial<F>],
     ) -> Result<Vec<P::G1Affine>, ProofVerifyError> {
         let g1_powers = &pk.g1_powers();
 
@@ -282,9 +283,9 @@ where
     }
 
     #[tracing::instrument(skip_all, name = "KZG::commit_as_univariate")]
-    pub fn commit_as_univariate(
+    pub fn commit_as_univariate<F: ArkScalar<Ark = P::ScalarField>>(
         pk: &KZGProverKey<P>,
-        poly: &MultilinearPolynomial<P::ScalarField>,
+        poly: &MultilinearPolynomial<F>,
     ) -> Result<P::G1Affine, ProofVerifyError> {
         if pk.g1_powers().len() < poly.len() {
             return Err(ProofVerifyError::KeyLengthError(

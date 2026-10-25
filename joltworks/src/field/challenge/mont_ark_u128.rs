@@ -7,6 +7,7 @@
 //!
 //! For implementation details and benchmarks, see: *TODO: LINK*
 
+use crate::field::bn254::MulHiBigintU128;
 use crate::field::OptimizedMul;
 use crate::field::{tracked_ark::TrackedFr, JoltField};
 //use crate::impl_field_ops_inline;
@@ -19,12 +20,18 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{Add, Mul, Sub};
-#[derive(
-    Copy, Clone, Default, PartialEq, Eq, Hash, CanonicalSerialize, CanonicalDeserialize, Allocative,
-)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, Hash, CanonicalSerialize, CanonicalDeserialize)]
 pub struct MontU128Challenge<F: JoltField> {
     value: [u64; 4],
     _marker: PhantomData<F>,
+}
+
+// Manual impl: the challenge holds only limbs, so it needs no `F: Allocative` bound (which a
+// derive would add).
+impl<F: JoltField> Allocative for MontU128Challenge<F> {
+    fn visit<'a, 'b: 'a>(&self, visitor: &'a mut allocative::Visitor<'b>) {
+        visitor.visit_simple_sized::<Self>();
+    }
 }
 
 impl<F: JoltField> Display for MontU128Challenge<F> {
@@ -106,6 +113,54 @@ impl Into<TrackedFr> for &MontU128Challenge<TrackedFr> {
 }
 
 impl_field_ops_inline!(MontU128Challenge<TrackedFr>, TrackedFr, optimized);
+
+impl Into<jolt_field::Fr> for MontU128Challenge<jolt_field::Fr> {
+    #[inline(always)]
+    fn into(self) -> jolt_field::Fr {
+        ark_bn254::Fr::from_bigint_unchecked(BigInt::new(self.value()))
+            .unwrap()
+            .into()
+    }
+}
+
+impl Into<jolt_field::Fr> for &MontU128Challenge<jolt_field::Fr> {
+    #[inline(always)]
+    fn into(self) -> jolt_field::Fr {
+        ark_bn254::Fr::from_bigint_unchecked(BigInt::new(self.value()))
+            .unwrap()
+            .into()
+    }
+}
+
+impl_field_ops_inline!(MontU128Challenge<jolt_field::Fr>, jolt_field::Fr, optimized);
+
+impl OptimizedMul<jolt_field::Fr, jolt_field::Fr> for MontU128Challenge<jolt_field::Fr> {
+    fn mul_0_optimized(self, other: jolt_field::Fr) -> Self::Output {
+        if other.is_zero() {
+            jolt_field::Fr::zero()
+        } else {
+            self * other
+        }
+    }
+
+    fn mul_1_optimized(self, other: jolt_field::Fr) -> Self::Output {
+        if other.is_one() {
+            self.into()
+        } else {
+            self * other
+        }
+    }
+
+    fn mul_01_optimized(self, other: jolt_field::Fr) -> Self::Output {
+        if other.is_zero() {
+            jolt_field::Fr::zero()
+        } else if other.is_one() {
+            self.into()
+        } else {
+            self * other
+        }
+    }
+}
 
 impl OptimizedMul<ark_bn254::Fr, ark_bn254::Fr> for MontU128Challenge<ark_bn254::Fr> {
     fn mul_0_optimized(self, other: ark_bn254::Fr) -> Self::Output {

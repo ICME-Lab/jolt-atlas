@@ -9,7 +9,7 @@
 //! `L^T·M` (vector-matrix product), the evaluation, and (absent a hint) the row
 //! commitments — and all three are linear, so this type computes them straight
 //! from the one-hots in `O(Σ nonzeros)` plus `O(dense)` for the few dense polys.
-use ark_bn254::Fr;
+use crate::field::bn254::{from_ark, to_ark, Fr};
 use ark_ff::{One, Zero};
 use common::{parallel::par_enabled, CommittedPoly};
 use dory::{
@@ -78,7 +78,7 @@ impl<'a> SparseRlc<'a> {
                         acc += *gamma * p.get_scaled_coeff(j, Fr::one());
                     }
                 }
-                ArkFr(acc)
+                ArkFr(to_ark(acc))
             })
             .collect();
         for (_, oh) in &one_hots {
@@ -136,7 +136,7 @@ impl<'a> SparseRlc<'a> {
                             picks[idx / num_cols] = picks[idx / num_cols] + g1[idx % num_cols];
                         }
                     }
-                    let gamma = ArkFr(*gamma);
+                    let gamma = ArkFr(to_ark(*gamma));
                     for (r, pick) in picks.into_iter().enumerate() {
                         local[r] = local[r] + pick.scale(&gamma);
                     }
@@ -173,13 +173,13 @@ impl DoryPolynomial<ArkFr> for SparseRlc<'_> {
         let high_factor = |m: usize| -> Fr {
             point[m..]
                 .iter()
-                .fold(Fr::one(), |acc, p| acc * (Fr::one() - p.0))
+                .fold(Fr::one(), |acc, p| acc * (Fr::one() - from_ark(p.0)))
         };
         let mut total = Fr::zero();
         if !self.dense.is_empty() {
             let m = self.dense.len().log_2();
-            let r: Vec<Fr> = point[..m].iter().rev().map(|p| p.0).collect();
-            let dense: Vec<Fr> = self.dense.iter().map(|c| c.0).collect();
+            let r: Vec<Fr> = point[..m].iter().rev().map(|p| from_ark(p.0)).collect();
+            let dense: Vec<Fr> = self.dense.iter().map(|c| from_ark(c.0)).collect();
             total += MultilinearPolynomial::from(dense).evaluate(&r) * high_factor(m);
         }
         let one_hot_total: Fr = self
@@ -187,11 +187,11 @@ impl DoryPolynomial<ArkFr> for SparseRlc<'_> {
             .par_iter()
             .map(|(gamma, oh)| {
                 let m = oh.get_num_vars();
-                let r: Vec<Fr> = point[..m].iter().rev().map(|p| p.0).collect();
+                let r: Vec<Fr> = point[..m].iter().rev().map(|p| from_ark(p.0)).collect();
                 *gamma * oh.evaluate(&r) * high_factor(m)
             })
             .sum();
-        ArkFr(total + one_hot_total)
+        ArkFr(to_ark(total + one_hot_total))
     }
 
     fn commit<E, Mo, M1>(
@@ -235,7 +235,7 @@ impl MultilinearLagrange<ArkFr> for SparseRlc<'_> {
                 let mut idx = j;
                 let mut row = 0;
                 while idx < self.dense.len() {
-                    acc += left_vec[row].0 * self.dense[idx].0;
+                    acc += from_ark(left_vec[row].0 * self.dense[idx].0);
                     idx += num_cols;
                     row += 1;
                 }
@@ -254,7 +254,7 @@ impl MultilinearLagrange<ArkFr> for SparseRlc<'_> {
                     // γ_i · L[row] for every row this polynomial touches.
                     let lg: Vec<Fr> = left_vec[..touched_rows]
                         .iter()
-                        .map(|l| l.0 * *gamma)
+                        .map(|l| from_ark(l.0) * *gamma)
                         .collect();
                     for (t, k_opt) in oh.nonzero_indices.iter().enumerate() {
                         if let Some(k) = k_opt {
@@ -279,7 +279,7 @@ impl MultilinearLagrange<ArkFr> for SparseRlc<'_> {
             .zip(sparse.par_iter())
             .with_min_len(par_enabled())
             .for_each(|(x, y)| *x += *y);
-        v.into_iter().map(ArkFr).collect()
+        v.into_iter().map(|x| ArkFr(to_ark(x))).collect()
     }
 }
 
@@ -299,7 +299,7 @@ pub fn combine_row_commitments(hints: &[Vec<ArkG1>], coeffs: &[Fr]) -> Vec<ArkG1
             .iter()
             .zip(coeffs)
             .filter(|(h, _)| r < h.len() && !h[r].0.is_zero())
-            .map(|(h, g)| (h[r], ArkFr(*g)))
+            .map(|(h, g)| (h[r], ArkFr(to_ark(*g))))
             .unzip()
     };
     let mut rows: Vec<ArkG1> = (0..num_rows)
@@ -385,7 +385,7 @@ mod tests {
         let joint_dense = build_materialized_rlc(&gammas, &polys);
         let joint_dense_ark = dory::backends::arkworks::ArkworksPolynomial::new(
             (0..1 << num_vars)
-                .map(|i| ArkFr(joint_dense.get_coeff(i)))
+                .map(|i| ArkFr(to_ark(joint_dense.get_coeff(i))))
                 .collect(),
         );
         let sparse = SparseRlc::new(&gammas, &polys, num_vars);
@@ -393,13 +393,13 @@ mod tests {
 
         // Evaluation (dory var order).
         let point: Vec<ArkFr> = (0..num_vars)
-            .map(|i| ArkFr(Fr::from_u64(17 + 13 * i as u64)))
+            .map(|i| ArkFr(to_ark(Fr::from_u64(17 + 13 * i as u64))))
             .collect();
         assert_eq!(sparse.evaluate(&point), joint_dense_ark.evaluate(&point));
 
         // Vector-matrix product.
         let left: Vec<ArkFr> = (0..1 << nu)
-            .map(|i| ArkFr(Fr::from_u64(101 + i as u64)))
+            .map(|i| ArkFr(to_ark(Fr::from_u64(101 + i as u64))))
             .collect();
         assert_eq!(
             sparse.vector_matrix_product(&left, nu, sigma),

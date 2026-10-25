@@ -2,7 +2,7 @@ use common::parallel::par_enabled;
 use std::borrow::Borrow;
 
 use crate::{
-    field::JoltField,
+    field::{ArkScalar, JoltField},
     poly::{multilinear_polynomial::MultilinearPolynomial, unipoly::UniPoly},
     utils::errors::ProofVerifyError,
 };
@@ -23,14 +23,17 @@ where
     // consistent with current Jolt Msm implementation.
     Self::ScalarField: JoltField,
 {
+    /// MSM of `bases` with the coefficients of `poly`, whose field `F` is laid out as
+    /// `Self::ScalarField` (see [`ArkScalar`]).
     #[tracing::instrument(skip_all)]
-    fn msm<U>(bases: &[Self::MulBase], poly: &U) -> Result<Self, ProofVerifyError>
+    fn msm<F, U>(bases: &[Self::MulBase], poly: &U) -> Result<Self, ProofVerifyError>
     where
-        U: Borrow<MultilinearPolynomial<Self::ScalarField>> + Sync,
+        F: ArkScalar<Ark = Self::ScalarField>,
+        U: Borrow<MultilinearPolynomial<F>> + Sync,
     {
         match poly.borrow() {
             MultilinearPolynomial::LargeScalars(poly) => {
-                let scalars: &[Self::ScalarField] = poly.evals_ref();
+                let scalars: &[Self::ScalarField] = F::slice_as_ark(poly.evals_ref());
                 ArkVariableBaseMSM::msm(bases, scalars).map_err(|_bad_index| {
                     ProofVerifyError::KeyLengthError(bases.len(), scalars.len())
                 })
@@ -306,9 +309,10 @@ where
             .ok_or(ProofVerifyError::KeyLengthError(bases.len(), scalars.len()))
     }
 
-    fn batch_msm<U>(bases: &[Self::MulBase], polys: &[U]) -> Vec<Self>
+    fn batch_msm<F, U>(bases: &[Self::MulBase], polys: &[U]) -> Vec<Self>
     where
-        U: Borrow<MultilinearPolynomial<Self::ScalarField>> + Sync,
+        F: ArkScalar<Ark = Self::ScalarField>,
+        U: Borrow<MultilinearPolynomial<F>> + Sync,
     {
         polys
             .par_iter()

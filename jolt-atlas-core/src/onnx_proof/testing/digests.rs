@@ -7,10 +7,11 @@
 //! state. A behavior-preserving change leaves every pin untouched; a
 //! protocol-breaking change re-pins in its own commit, naming the cause.
 
-use ark_bn254::{Bn254, Fr};
+use ark_bn254::Bn254;
 use atlas_onnx_import::fixtures::{synth_inputs, GOLDEN_SEED};
 use atlas_trace::{Model, Tensor};
 use blake2::{digest::consts::U32, Blake2b, Digest};
+use joltworks::field::bn254::Fr;
 use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
 
 use super::zoo::{op_gauntlet_inputs, zoo};

@@ -37,7 +37,7 @@ pub use types::{DoryCommitment, DoryHint, DoryProof, DoryProverSetup, DoryVerifi
 
 use std::borrow::Borrow;
 
-use ark_bn254::Fr;
+use crate::field::bn254::{to_ark, Fr};
 use dory::{
     backends::arkworks::{ArkFr, ArkG1, ArkGT, ArkworksPolynomial, G1Routines, G2Routines, BN254},
     primitives::{
@@ -119,7 +119,9 @@ impl DoryScheme {
             return coeffs;
         }
         let padded = poly.len().next_power_of_two();
-        let mut coeffs: Vec<ArkFr> = (0..poly.len()).map(|i| ArkFr(poly.get_coeff(i))).collect();
+        let mut coeffs: Vec<ArkFr> = (0..poly.len())
+            .map(|i| ArkFr(to_ark(poly.get_coeff(i))))
+            .collect();
         coeffs.resize(padded, <ArkFr as DoryField>::zero());
         coeffs
     }
@@ -188,7 +190,7 @@ impl DoryScheme {
         opening_point
             .iter()
             .rev()
-            .map(|c| ArkFr((*c).into()))
+            .map(|c| ArkFr(to_ark((*c).into())))
             .collect()
     }
 }
@@ -283,7 +285,7 @@ impl CommitmentScheme for DoryScheme {
         let combined = commitments
             .iter()
             .zip(coeffs.iter())
-            .map(|(commitment, gamma)| ArkFr(*gamma) * commitment.borrow().0)
+            .map(|(commitment, gamma)| ArkFr(to_ark(*gamma)) * commitment.borrow().0)
             .fold(<ArkGT as DoryGroup>::identity(), |acc, term| acc + term);
         DoryCommitment(combined)
     }
@@ -406,7 +408,7 @@ impl CommitmentScheme for DoryScheme {
         let mut dory_transcript = LocalToDoryTranscript::new(transcript);
         dory_verify::<_, BN254, G1Routines, G2Routines, _>(
             commitment.0,
-            ArkFr(*opening),
+            ArkFr(to_ark(*opening)),
             &point,
             &proof.0,
             setup.0.clone(),
@@ -590,7 +592,10 @@ mod tests {
         // it through the ordinary (non-one-hot) path.
         let dense_coeffs = DoryScheme::materialize(&one_hot);
         let dense_poly = MultilinearPolynomial::LargeScalars(DensePolynomial::new(
-            dense_coeffs.iter().map(|c| c.0).collect(),
+            dense_coeffs
+                .iter()
+                .map(|c| crate::field::bn254::from_ark(c.0))
+                .collect(),
         ));
 
         let setup = DoryScheme::setup_prover((k * t).log_2());

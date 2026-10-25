@@ -362,6 +362,19 @@ pub trait BarrettReduce<F: JoltField> {
     fn barrett_reduce(&self) -> F;
 }
 
+/// A [`JoltField`] laid out exactly like an arkworks scalar field, so curve code (MSMs, scalar
+/// multiplication, the BN254 commitment schemes) can take its elements without copying.
+pub trait ArkScalar: JoltField {
+    /// The arkworks field with the same elements and layout.
+    type Ark: JoltField + ark_ff::PrimeField;
+
+    fn to_ark(self) -> Self::Ark;
+
+    fn slice_as_ark(xs: &[Self]) -> &[Self::Ark];
+
+    fn challenge_to_ark(c: Self::Challenge) -> <Self::Ark as JoltField>::Challenge;
+}
+
 /// Trait for accumulators that finish with Montgomery reduction to a field element
 pub trait MontgomeryReduce<F: JoltField> {
     fn montgomery_reduce(&self) -> F;
@@ -417,6 +430,7 @@ where
 }
 
 pub mod ark;
+pub mod bn254;
 pub mod challenge;
 pub mod folded_accum;
 pub mod fp128;

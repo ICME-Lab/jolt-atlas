@@ -53,7 +53,8 @@ pub use prover::Prover;
 pub use types::ProverDebugInfo;
 pub use verifier::Verifier;
 
-pub use ark_bn254::{Bn254, Fr};
+pub use ark_bn254::Bn254;
+pub use joltworks::field::bn254::Fr;
 pub use joltworks::{
     poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
     transcripts::Blake2bTranscript,

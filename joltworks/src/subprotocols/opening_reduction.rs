@@ -826,6 +826,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
 
 #[cfg(test)]
 mod tests {
+    use crate::field::bn254::Fr;
     use crate::{
         field::JoltField,
         poly::{
@@ -847,14 +848,12 @@ mod tests {
         transcripts::{Blake2bTranscript, Transcript},
     };
     use ark_bn254::Bn254;
-    use ark_ec::pairing::Pairing;
     use ark_std::UniformRand;
     use common::CommittedPoly;
     use itertools::Itertools;
     use rand::{Rng, SeedableRng};
     use std::collections::BTreeMap;
 
-    type Fr = <Bn254 as Pairing>::ScalarField;
     type Challenge = <Fr as JoltField>::Challenge;
 
     #[test]
@@ -935,7 +934,7 @@ mod tests {
 
         // Prove
         let eval_proof: HyperKZGProof<Bn254> =
-            HyperKZG::open(&pk, &rlc, &state.r_sumcheck, &mut prover_tr).unwrap();
+            HyperKZG::prove(&pk, &rlc, &state.r_sumcheck, None, &mut prover_tr);
 
         // Verify
         let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
@@ -1132,7 +1131,7 @@ mod tests {
 
         // Prove
         let eval_proof: HyperKZGProof<Bn254> =
-            HyperKZG::open(&pk, &rlc, &state.r_sumcheck, &mut prover_tr).unwrap();
+            HyperKZG::prove(&pk, &rlc, &state.r_sumcheck, None, &mut prover_tr);
 
         // Verify
         let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
@@ -1339,7 +1338,7 @@ mod tests {
 
         // Prove
         let eval_proof: HyperKZGProof<Bn254> =
-            HyperKZG::open(&pk, &rlc, &state.r_sumcheck, &mut prover_tr).unwrap();
+            HyperKZG::prove(&pk, &rlc, &state.r_sumcheck, None, &mut prover_tr);
 
         // Verify
         let mut verifier_tr = Blake2bTranscript::new(b"TestEval");

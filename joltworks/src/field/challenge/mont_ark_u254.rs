@@ -15,19 +15,18 @@ use std::hash::Hash;
 use std::ops::*;
 
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    Hash,
-    CanonicalSerialize,
-    CanonicalDeserialize,
-    Allocative,
+    Copy, Clone, Debug, Default, PartialEq, Eq, Hash, CanonicalSerialize, CanonicalDeserialize,
 )]
 pub struct Mont254BitChallenge<F: JoltField> {
     value: F,
+}
+
+// Manual impl: a field element is plain data, so no `F: Allocative` bound (which a derive would
+// add) is needed.
+impl<F: JoltField> Allocative for Mont254BitChallenge<F> {
+    fn visit<'a, 'b: 'a>(&self, visitor: &'a mut allocative::Visitor<'b>) {
+        visitor.visit_simple_sized::<Self>();
+    }
 }
 
 impl<F: JoltField> Mont254BitChallenge<F> {
@@ -106,6 +105,54 @@ impl Into<TrackedFr> for &Mont254BitChallenge<TrackedFr> {
 }
 
 impl_field_ops_inline!(Mont254BitChallenge<TrackedFr>, TrackedFr, standard);
+
+impl Into<jolt_field::Fr> for Mont254BitChallenge<jolt_field::Fr> {
+    #[inline(always)]
+    fn into(self) -> jolt_field::Fr {
+        self.value()
+    }
+}
+
+impl Into<jolt_field::Fr> for &Mont254BitChallenge<jolt_field::Fr> {
+    #[inline(always)]
+    fn into(self) -> jolt_field::Fr {
+        self.value()
+    }
+}
+
+impl_field_ops_inline!(
+    Mont254BitChallenge<jolt_field::Fr>,
+    jolt_field::Fr,
+    standard
+);
+
+impl OptimizedMul<jolt_field::Fr, jolt_field::Fr> for Mont254BitChallenge<jolt_field::Fr> {
+    fn mul_0_optimized(self, other: jolt_field::Fr) -> Self::Output {
+        if other.is_zero() {
+            jolt_field::Fr::zero()
+        } else {
+            self * other
+        }
+    }
+
+    fn mul_1_optimized(self, other: jolt_field::Fr) -> Self::Output {
+        if other.is_one() {
+            self.into()
+        } else {
+            self * other
+        }
+    }
+
+    fn mul_01_optimized(self, other: jolt_field::Fr) -> Self::Output {
+        if other.is_zero() {
+            jolt_field::Fr::zero()
+        } else if other.is_one() {
+            self.into()
+        } else {
+            self * other
+        }
+    }
+}
 
 impl OptimizedMul<ark_bn254::Fr, ark_bn254::Fr> for Mont254BitChallenge<ark_bn254::Fr> {
     fn mul_0_optimized(self, other: ark_bn254::Fr) -> Self::Output {

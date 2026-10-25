@@ -18,6 +18,25 @@ impl FieldOps<&ark_bn254::Fr, ark_bn254::Fr> for ark_bn254::Fr {}
 
 impl<const N: usize> UnreducedInteger for BigInt<N> {}
 
+impl super::ArkScalar for ark_bn254::Fr {
+    type Ark = Self;
+
+    #[inline(always)]
+    fn to_ark(self) -> Self {
+        self
+    }
+
+    #[inline(always)]
+    fn slice_as_ark(xs: &[Self]) -> &[Self] {
+        xs
+    }
+
+    #[inline(always)]
+    fn challenge_to_ark(c: Self::Challenge) -> Self::Challenge {
+        c
+    }
+}
+
 impl JoltField for ark_bn254::Fr {
     const NUM_BYTES: usize = 32;
     const NUM_LIMBS: usize = 4;

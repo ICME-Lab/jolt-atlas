@@ -7,10 +7,11 @@
 //! A site whose mutation is accepted is a dead field (proof malleability) or
 //! an orphan claim; a verifier panic is a robustness bug.
 
-use ark_bn254::{Bn254, Fr};
+use ark_bn254::Bn254;
 use ark_std::One;
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use common::VirtualPoly;
+use joltworks::field::bn254::Fr;
 use joltworks::{
     poly::{
         commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme, hyperkzg::HyperKZG},
@@ -63,7 +64,7 @@ impl PcsMutations for HyperKZG<Bn254> {
 
     fn apply(p: &mut Self::Proof, site: PcsSite) {
         match site {
-            PcsSite::V { i, j } => p.v[i][j] += Fr::one(),
+            PcsSite::V { i, j } => p.v[i][j] += ark_bn254::Fr::one(),
             PcsSite::SwapW { i, j } => p.w.swap(i, j),
             PcsSite::SwapCom { i, j } => p.com.swap(i, j),
             PcsSite::ComFromW { i } => p.com[i] = p.w[0],

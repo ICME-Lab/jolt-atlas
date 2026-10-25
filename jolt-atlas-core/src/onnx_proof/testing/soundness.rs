@@ -20,8 +20,9 @@
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use ark_bn254::{Bn254, Fr};
+use ark_bn254::Bn254;
 use atlas_trace::{trace::ModelExecutionIO, Model, NodeId, Tensor, Trace};
+use joltworks::field::bn254::Fr;
 use joltworks::poly::{
     commitment::hyperkzg::HyperKZG,
     opening_proof::{forgery, OpeningId},

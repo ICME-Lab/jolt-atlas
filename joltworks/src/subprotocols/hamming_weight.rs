@@ -3,7 +3,7 @@ use allocative::Allocative;
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use common::parallel::par_enabled;
-use common::{CommittedPoly, VirtualPoly};
+use common::CommittedPoly;
 use rayon::prelude::*;
 use std::iter::zip;
 
@@ -46,14 +46,11 @@ impl<F: JoltField> SumcheckInstanceParams<F> for HammingWeightSumcheckParams<F> 
         self.num_rounds
     }
 
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        if self.sumcheck_id == SumcheckId::RamHammingWeight {
-            let id = OpeningId::new(VirtualPoly::HammingWeight, SumcheckId::RamHammingBooleanity);
-            let (_, hamming_booleanity_claim) = accumulator.get_virtual_polynomial_opening(id);
-            hamming_booleanity_claim * self.gamma_powers.iter().sum::<F>()
-        } else {
-            self.gamma_powers.iter().sum()
-        }
+    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+        // No consumer constructs a `RamHammingWeight` instance. A consumer
+        // whose input claim is another sumcheck's output should carry that
+        // claim's `OpeningId` in these params explicitly.
+        self.gamma_powers.iter().sum()
     }
 
     fn degree(&self) -> usize {

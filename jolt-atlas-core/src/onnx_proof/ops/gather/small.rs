@@ -212,7 +212,7 @@ fn ra_hamming_bool_params<F: JoltField>(
     opening_accumulator: &dyn OpeningAccumulator<F>,
     _transcript: &mut impl Transcript,
 ) -> HammingBooleanitySumcheckParams<F> {
-    let polynomial_types = vec![VirtualPoly::HammingWeight];
+    let polynomial_types = vec![VirtualPoly::HammingWeight(computation_node.idx)];
 
     let r_lookup = AccOpeningAccessor::new(opening_accumulator, computation_node)
         .get_nodeio(Target::Input(1))

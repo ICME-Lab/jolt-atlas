@@ -38,8 +38,11 @@ commitment or proving code.
 - Behavior-preserving: a proof that verifies before the split verifies after it, and vice versa;
   transcript byte streams are unchanged (the zoo e2es verify with transcript lockstep and
   serialization round-trips).
-- The verifier crate must not depend on prover-only code. Enforced by `cargo`, and by CI building
-  `jolt-atlas-verifier` in isolation.
+- The verifier crate must not depend on `jolt-atlas-core` or `atlas-trace` execution: no witness
+  generation, no proving, no per-op prover code, no trace execution. This is the boundary `cargo`
+  and the CI isolation build actually enforce in phase 1. Named exception: the crate depends on
+  `joltworks` whole, whose prover APIs (e.g. `CommitmentScheme::commit`) remain *reachable* though
+  unused; review holds that line until phases 2–3 of the ladder close it compile-time.
 - The verifier still derives everything it trusts from the model and the proof alone: it may
   depend on `atlas-trace` for graph structure and `semantics` (lookup-table generation is part of
   the statement), never on trace *execution*.
@@ -63,23 +66,31 @@ commitment or proving code.
 ### Acceptance Criteria
 
 - [ ] `jolt-atlas-verifier` builds in isolation (`cargo check -p jolt-atlas-verifier`) with no
-  path to prover-only modules (`witness`, `prover`, commitment code, trace execution).
+  dependency on `jolt-atlas-core` (witness generation, proving, per-op prover code) or on trace
+  execution. Prover APIs inside `joltworks` remain reachable in phase 1; the criterion is the
+  crate edge, not API reachability (see End state and ladder).
 - [ ] `ONNXProof::verify` call sites migrate to the new crate's entry point; `jolt-atlas-core`
   re-exports it during the transition so downstream code moves at its own pace.
-- [ ] `cargo nextest run --workspace` passes unchanged; the zoo e2es' transcript-lockstep and
-  byte-identical re-serialization checks pass against the extracted verifier.
+- [ ] `cargo nextest run --workspace` passes; the zoo e2es' transcript-lockstep and
+  byte-identical re-serialization checks pass against the extracted verifier. The lockstep
+  comparison hooks are gated by a `test-util` cargo feature on the verifier crate (not
+  `#[cfg(test)]`, which is off when the crate compiles as a dependency of core's tests), enabled
+  through core's dev-dependency. A canary test forces a transcript divergence and asserts the
+  lockstep check fires, so silently compiled-out hooks fail CI.
 - [ ] The real-model heavy job (GPT-2 Dory, BGE, Qwen) passes once on the extraction branch.
 - [ ] CI gains a job (or build step) that builds the verifier crate alone, so a future
   prover-dependency leak fails CI rather than an audit.
 
 ### Testing Strategy
 
-No new tests: the suite's value here is proving the reorganization changed nothing. The soundness
-sweeps (`proof_mutation_sweep`, `witness_tamper_sweep`, `opening_forgery_sweep`), the op-surface
-table, and the zoo all exercise the verifier through its public entry point and must pass
-unmodified. The sweeps and tamper harness stay in `jolt-atlas-core`'s `onnx_proof/testing/`
+The suite's value here is proving the reorganization changed nothing: every existing assertion
+and mutation/forgery site is preserved. Harness *wiring* may change — the mutation sweep reaches
+proof internals (`reduced_opening_proof`, `joint_opening_proof`) through module privacy today,
+which a crate boundary removes — so the verifier crate exposes `test-util`-gated mutation
+accessors for the proof fields the sweep targets, and `testing/mutate.rs` goes through them. The
+sweeps, tamper harness and op-surface table stay in `jolt-atlas-core`'s `onnx_proof/testing/`
 (they need the prover to build proofs to attack) and drive the extracted verifier through the
-new crate.
+new crate. One new test: the lockstep canary named in the acceptance criteria.
 
 ### Performance
 
@@ -98,27 +109,38 @@ common ─▶ joltworks ─▶ jolt-atlas-verifier ─▶ jolt-atlas-core (prove
              └── atlas-trace ──┘        (atlas-onnx-import unchanged)
 ```
 
-`jolt-atlas-verifier` owns: verifier preprocessing (`AtlasVerifierPreprocessing`), proof types
-and deserialization, the `Verifier` state and verification loop, per-op verifier logic, the
-deferred-lookup verification, and range-check/clamp verification parameters. `jolt-atlas-core`
-keeps the prover, witness generation, trace integration, the `prove` example, and all of
-`testing/` (which needs both sides).
+At the end state, `jolt-atlas-verifier` owns: verifier preprocessing
+(`AtlasVerifierPreprocessing`), proof types and deserialization, the `Verifier` state and
+verification loop, per-op verifier logic, the deferred-lookup verification, and
+range-check/clamp verification parameters. `jolt-atlas-core` keeps the prover, witness
+generation, trace integration, the `prove` example, and all of `testing/` (which needs both
+sides).
 
-The main obstacle is that per-op prover and verifier code share files and private helpers.
-Two viable sequencings:
+**Proof-type ownership.** `ONNXProof` and its inherent `verify` move with the verifier crate.
+Core cannot then keep inherent `prove` / `prove_from_trace` impls on the type (re-exports don't
+bypass coherence), so proving becomes core-owned free functions (`jolt_atlas_core::prove`,
+`prove_from_trace`) returning an `ONNXProof` built through a public `ONNXProof::from_parts`
+constructor; call sites migrate mechanically. The `test-util` mutation accessors above cover the
+fields `from_parts` doesn't expose.
 
-1. **Skeleton first**: create the crate with the top-level verify entry point, proof types, and
-   whatever moves cleanly (verifier.rs, preprocessing, deferred verification); per-op verifier
-   structs move file-by-file as they are touched. The dependency-direction CI check lands
-   immediately; the boundary tightens over time.
-2. **After the expression-engine migration** (see the verifier-simplification work): once op
-   identities are data consumed by a generic interpreter, per-op verifier code largely
-   disappears, and the extraction moves the interpreter plus op specs — far fewer files, split
-   once instead of twice.
+**Buildable intermediate boundary.** Per-op prover and verifier code share files and private
+helpers, and the verification loop (`verify_iop`) dispatches into per-op verifiers: moving the
+loop while per-op verifiers remain in core would create a `cargo` dependency cycle (verifier
+crate → core's `OperatorVerifier`, core → verifier crate's proof types). So the loop does not
+move in phase 1:
 
-Recommendation: do (1)'s skeleton and CI check early for the enforcement value, and let the
-bulk of per-op code arrive via (2), avoiding splitting 30+ op files by hand only to delete the
-split halves during the engine migration.
+1. **Skeleton first**: the crate starts with what has no core dependencies — proof types,
+   deserialization, `from_parts`, verifier preprocessing — plus the CI isolation build. Core
+   re-exports the moved types; the top-level `verify`, the `Verifier` state and the
+   deferred-lookup verification stay in core for now.
+2. **Per-op verifier logic arrives via the expression-engine migration** (see the
+   verifier-simplification work): once op identities are data consumed by a generic interpreter,
+   per-op verifier code largely disappears, the interpreter and op specs land in the verifier
+   crate, and the verification loop and `Verifier` state move last, when nothing they dispatch to
+   remains in core — far fewer files, split once instead of twice.
+
+The enforcement value (the crate edge and its CI check) lands with step 1; the boundary tightens
+monotonically until `verify` itself crosses in step 2's final move.
 
 ### End state and ladder
 
@@ -162,9 +184,11 @@ soundness findings live, and would be rebased through the upcoming `joltworks` r
 
 ## Execution
 
-Suggested commit sequence for the skeleton PR: (1) create the crate with proof types +
-deserialization moved; (2) move `verifier.rs`, verifier preprocessing, and deferred verification,
-re-exporting from `jolt-atlas-core`; (3) CI isolation build. Per-op moves ride later PRs.
+Suggested commit sequence for the skeleton PR: (1) create the crate with proof types,
+deserialization and `ONNXProof::from_parts` moved, core's proving as free functions, re-exports
+in place; (2) move verifier preprocessing; (3) `test-util` feature with the lockstep hooks and
+mutation accessors, plus the canary test; (4) CI isolation build. The `Verifier` state,
+verification loop and per-op verifier moves ride later PRs per the sequencing above.
 
 ## References
 

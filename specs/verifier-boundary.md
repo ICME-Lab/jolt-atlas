@@ -5,7 +5,7 @@
 | Author(s)   | @Forpee                        |
 | Created     | 2026-10-25                     |
 | Status      | proposed                       |
-| PR          | (filled when the PR opens, or at merge) |
+| PR          | #399                           |
 | Depends on  | —                              |
 | Supersedes  | PR #396 (closed; this is its phase 1, freed of the program it was entangled with) |
 

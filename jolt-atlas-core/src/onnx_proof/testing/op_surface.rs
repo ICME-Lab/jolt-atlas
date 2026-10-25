@@ -20,7 +20,6 @@ use std::collections::BTreeSet;
 use ark_bn254::Bn254;
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use common::consts::{ACTIVATION_BOUND, MODEL_SCALE, TRIG_PERIOD_MODULUS};
-use joltworks::field::bn254::Fr;
 use joltworks::{
     lookup_tables::clamp::CLAMP_BOUND, poly::commitment::commitment_scheme::CommitmentScheme,
     poly::commitment::hyperkzg::HyperKZG,
@@ -55,7 +54,7 @@ const fn seed_of(name: &str) -> u64 {
 }
 
 /// Run one case under `PCS`.
-pub(crate) fn run_case<PCS: CommitmentScheme<Field = Fr>>(case: &OpCase) {
+pub(crate) fn run_case<PCS: CommitmentScheme>(case: &OpCase) {
     let mut rng = StdRng::seed_from_u64(seed_of(case.name));
     let (model, inputs) = (case.build)(&mut rng);
     let io = prove_verify_roundtrip::<PCS>(model, &inputs, RoundtripOptions::default());
@@ -65,7 +64,7 @@ pub(crate) fn run_case<PCS: CommitmentScheme<Field = Fr>>(case: &OpCase) {
 }
 
 /// Run the case called `name` under `PCS`.
-pub(crate) fn run_named<PCS: CommitmentScheme<Field = Fr>>(name: &str) {
+pub(crate) fn run_named<PCS: CommitmentScheme>(name: &str) {
     let case = CASES
         .iter()
         .find(|c| c.name == name)

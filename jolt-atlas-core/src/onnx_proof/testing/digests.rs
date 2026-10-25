@@ -11,8 +11,10 @@ use ark_bn254::Bn254;
 use atlas_onnx_import::fixtures::{synth_inputs, GOLDEN_SEED};
 use atlas_trace::{Model, Tensor};
 use blake2::{digest::consts::U32, Blake2b, Digest};
-use joltworks::field::bn254::Fr;
-use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
+use joltworks::{
+    poly::commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
+    transcripts::Blake2bTranscript,
+};
 
 use super::zoo::{op_gauntlet_inputs, zoo};
 use crate::onnx_proof::{
@@ -23,13 +25,19 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Prove `model` on `inputs` and compare against the pinned
+/// Prove `model` on `inputs` under `PCS` and compare against the pinned
 /// `(proof hash, final transcript state)`.
-fn assert_digest(name: &str, model: Model, inputs: &[Tensor<i32>], proof: &str, transcript: &str) {
-    let pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(
+fn assert_digest<PCS: CommitmentScheme>(
+    name: &str,
+    model: Model,
+    inputs: &[Tensor<i32>],
+    proof: &str,
+    transcript: &str,
+) {
+    let pp = AtlasProverPreprocessing::<PCS::Field, PCS>::new(
         AtlasSharedPreprocessing::preprocess(model),
     );
-    let (p, _, debug) = prove::<Fr, Blake2bTranscript, HyperKZG<Bn254>>(&pp, inputs);
+    let (p, _, debug) = prove::<PCS::Field, Blake2bTranscript, PCS>(&pp, inputs);
     let bytes = serialize_proof(&p).expect("proof serializes");
     let got_proof = hex(&Blake2b::<U32>::digest(&bytes));
     let got_transcript = hex(&debug
@@ -47,7 +55,7 @@ fn assert_digest(name: &str, model: Model, inputs: &[Tensor<i32>], proof: &str, 
 fn digest_op_gauntlet() {
     let imported = zoo("op_gauntlet", 16);
     let inputs = op_gauntlet_inputs(&imported);
-    assert_digest(
+    assert_digest::<HyperKZG<Bn254>>(
         "op_gauntlet",
         imported.model,
         &inputs,
@@ -60,7 +68,7 @@ fn digest_op_gauntlet() {
 fn digest_gpt2_tiny() {
     let imported = zoo("gpt2-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    assert_digest(
+    assert_digest::<HyperKZG<Bn254>>(
         "gpt2-tiny",
         imported.model,
         &inputs,
@@ -73,7 +81,7 @@ fn digest_gpt2_tiny() {
 fn digest_qwen2_tiny() {
     let imported = zoo("qwen2-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    assert_digest(
+    assert_digest::<HyperKZG<Bn254>>(
         "qwen2-tiny",
         imported.model,
         &inputs,
@@ -86,7 +94,7 @@ fn digest_qwen2_tiny() {
 fn digest_bge_tiny() {
     let imported = zoo("bge-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    assert_digest(
+    assert_digest::<HyperKZG<Bn254>>(
         "bge-tiny",
         imported.model,
         &inputs,

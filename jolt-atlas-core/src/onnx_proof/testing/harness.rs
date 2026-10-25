@@ -3,7 +3,6 @@
 use std::time::Instant;
 
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
-use joltworks::field::bn254::Fr;
 use joltworks::{
     poly::commitment::commitment_scheme::CommitmentScheme, transcripts::Blake2bTranscript,
 };
@@ -44,7 +43,7 @@ pub(crate) fn prove_verify_roundtrip<PCS>(
     opts: RoundtripOptions,
 ) -> ModelExecutionIO
 where
-    PCS: CommitmentScheme<Field = Fr>,
+    PCS: CommitmentScheme,
 {
     // Independent reference execution: the proven statement must be exactly
     // what the executor computes.
@@ -56,19 +55,19 @@ where
 
     let shared = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = match opts.srs_num_vars {
-        Some(n) => AtlasProverPreprocessing::<Fr, PCS>::new_with_srs_num_vars(shared, n),
-        None => AtlasProverPreprocessing::<Fr, PCS>::new(shared),
+        Some(n) => AtlasProverPreprocessing::<PCS::Field, PCS>::new_with_srs_num_vars(shared, n),
+        None => AtlasProverPreprocessing::<PCS::Field, PCS>::new(shared),
     };
 
     let t = Instant::now();
-    let (proof, io, debug) = prove::<Fr, Blake2bTranscript, PCS>(&prover_pp, inputs);
+    let (proof, io, debug) = prove::<PCS::Field, Blake2bTranscript, PCS>(&prover_pp, inputs);
     println!("prove: {:?}", t.elapsed());
     assert_eq!(
         io.outputs, expected,
         "prover IO diverged from the reference execution"
     );
 
-    let verifier_pp = AtlasVerifierPreprocessing::<Fr, PCS>::from(&prover_pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<PCS::Field, PCS>::from(&prover_pp);
     let t = Instant::now();
     verify(
         &proof,
@@ -82,7 +81,7 @@ where
     if opts.serialization_roundtrip {
         let bytes = serialize_proof(&proof).expect("proof serializes");
         println!("proof size: {} bytes", bytes.len());
-        let de: ONNXProof<Fr, Blake2bTranscript, PCS> =
+        let de: ONNXProof<PCS::Field, Blake2bTranscript, PCS> =
             deserialize_proof(&bytes).expect("proof deserializes");
         verify(&de, &verifier_pp, &io, None).expect("deserialized proof must verify");
         assert_eq!(

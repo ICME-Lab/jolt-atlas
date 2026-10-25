@@ -11,7 +11,7 @@ use ark_bn254::Bn254;
 use ark_std::One;
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use common::VirtualPoly;
-use joltworks::field::bn254::Fr;
+use joltworks::field::JoltField;
 use joltworks::{
     poly::{
         commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme, hyperkzg::HyperKZG},
@@ -37,7 +37,7 @@ pub(crate) enum PcsSite {
 }
 
 /// How a PCS exposes its opening proof to the sweep.
-pub(crate) trait PcsMutations: CommitmentScheme<Field = Fr, Commitment: PartialEq> {
+pub(crate) trait PcsMutations: CommitmentScheme<Commitment: PartialEq> {
     fn sites(proof: &Self::Proof) -> Vec<PcsSite>;
     fn apply(proof: &mut Self::Proof, site: PcsSite);
 }
@@ -200,8 +200,8 @@ fn consumer_counts(model: &Model) -> Vec<usize> {
 /// coefficients are sampled (first round, last round, two random rounds per
 /// proof) unless exhaustive.
 pub(crate) fn enumerate_sites<PCS: PcsMutations>(
-    proof: &ONNXProof<Fr, Blake2bTranscript, PCS>,
-    other: &ONNXProof<Fr, Blake2bTranscript, PCS>,
+    proof: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
+    other: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
     io: &ModelExecutionIO,
     model: &Model,
 ) -> Vec<(Site, Expect)> {
@@ -354,12 +354,12 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
 /// Apply `site` to `proof` / `io`. `other` is a second honest proof of the
 /// same model on different inputs (splice material).
 pub(crate) fn apply_site<PCS: PcsMutations>(
-    proof: &mut ONNXProof<Fr, Blake2bTranscript, PCS>,
+    proof: &mut ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
     io: &mut ModelExecutionIO,
-    other: &ONNXProof<Fr, Blake2bTranscript, PCS>,
+    other: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
     site: &Site,
 ) {
-    let one = Fr::one();
+    let one = PCS::Field::one();
     match site {
         Site::Claim(id) => {
             proof
@@ -379,7 +379,10 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
             );
             proof.opening_claims_mut().openings_mut().insert(
                 id,
-                (OpeningPoint::<BIG_ENDIAN, Fr>::default(), Fr::from(7u64)),
+                (
+                    OpeningPoint::<BIG_ENDIAN, PCS::Field>::default(),
+                    PCS::Field::from_u64(7),
+                ),
             );
         }
         Site::RoundCoeff {

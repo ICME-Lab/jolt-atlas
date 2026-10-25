@@ -24,7 +24,7 @@ use ark_bn254::Bn254;
 use atlas_trace::{trace::ModelExecutionIO, Model, NodeId, Tensor, Trace};
 use joltworks::field::bn254::Fr;
 use joltworks::poly::{
-    commitment::hyperkzg::HyperKZG,
+    commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
     opening_proof::{forgery, OpeningId},
 };
 use joltworks::transcripts::Blake2bTranscript;
@@ -47,8 +47,9 @@ use crate::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,
 };
 
+/// The BN254 instantiation the sweeps run under; the sweep bodies are generic over the PCS (and
+/// its field).
 type Pcs = HyperKZG<Bn254>;
-type Proof = ONNXProof<Fr, Blake2bTranscript, Pcs>;
 
 /// What happened when a (possibly tampered) proof met the verifier. The
 /// payloads are reported through `Debug`.
@@ -73,8 +74,8 @@ fn payload(p: Box<dyn std::any::Any + Send>) -> String {
 /// Verify without debug lockstep (tampering must surface as `Err`, not as a
 /// transcript-compare panic), catching verifier panics.
 pub(crate) fn run_verify<PCS: PcsMutations>(
-    proof: &ONNXProof<Fr, Blake2bTranscript, PCS>,
-    vpp: &AtlasVerifierPreprocessing<Fr, PCS>,
+    proof: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
+    vpp: &AtlasVerifierPreprocessing<PCS::Field, PCS>,
     io: &ModelExecutionIO,
 ) -> Outcome {
     match probe::expecting_panics(|| {
@@ -87,14 +88,19 @@ pub(crate) fn run_verify<PCS: PcsMutations>(
 }
 
 /// A proof of a tampered trace, or the prover's panic message.
-pub(crate) type TamperedProve<PCS> =
-    Result<(ONNXProof<Fr, Blake2bTranscript, PCS>, ModelExecutionIO), String>;
+pub(crate) type TamperedProve<PCS> = Result<
+    (
+        ONNXProof<<PCS as CommitmentScheme>::Field, Blake2bTranscript, PCS>,
+        ModelExecutionIO,
+    ),
+    String,
+>;
 
 /// Execute, apply `tamper` to the trace, prove from the tampered trace.
 /// Returns the tampered trace too, so callers can tell an effective tamper
 /// from a no-op one.
 pub(crate) fn prove_tampered<PCS: PcsMutations>(
-    pp: &AtlasProverPreprocessing<Fr, PCS>,
+    pp: &AtlasProverPreprocessing<PCS::Field, PCS>,
     inputs: &[Tensor<i32>],
     tamper: &mut dyn FnMut(&mut Trace),
 ) -> (Trace, TamperedProve<PCS>) {
@@ -103,7 +109,7 @@ pub(crate) fn prove_tampered<PCS: PcsMutations>(
     let tampered = trace.clone();
     let res = match probe::expecting_panics(|| {
         catch_unwind(AssertUnwindSafe(move || {
-            prove_from_trace::<Fr, Blake2bTranscript, PCS>(pp, trace)
+            prove_from_trace::<PCS::Field, Blake2bTranscript, PCS>(pp, trace)
         }))
     }) {
         Ok((proof, io, _)) => Ok((proof, io)),
@@ -112,20 +118,20 @@ pub(crate) fn prove_tampered<PCS: PcsMutations>(
     (tampered, res)
 }
 
-struct Honest {
+struct Honest<PCS: CommitmentScheme> {
     name: &'static str,
-    prover_pp: AtlasProverPreprocessing<Fr, Pcs>,
-    verifier_pp: AtlasVerifierPreprocessing<Fr, Pcs>,
+    prover_pp: AtlasProverPreprocessing<PCS::Field, PCS>,
+    verifier_pp: AtlasVerifierPreprocessing<PCS::Field, PCS>,
     inputs: Vec<Tensor<i32>>,
-    proof: Proof,
+    proof: ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
     io: ModelExecutionIO,
 }
 
-fn honest(m: ProbeModel) -> Honest {
+fn honest<PCS: CommitmentScheme>(m: ProbeModel) -> Honest<PCS> {
     let shared = AtlasSharedPreprocessing::preprocess(m.model);
-    let prover_pp = AtlasProverPreprocessing::<Fr, Pcs>::new(shared);
+    let prover_pp = AtlasProverPreprocessing::<PCS::Field, PCS>::new(shared);
     let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
-    let (proof, io, _) = prove::<Fr, Blake2bTranscript, Pcs>(&prover_pp, &m.inputs);
+    let (proof, io, _) = prove::<PCS::Field, Blake2bTranscript, PCS>(&prover_pp, &m.inputs);
     verify(&proof, &verifier_pp, &io, None).expect("probe model must prove honestly");
     Honest {
         name: m.name,
@@ -149,12 +155,16 @@ fn report(title: &str, rows: &BTreeMap<&'static str, (usize, usize)>) {
 #[test]
 #[serial(soundness_probe)]
 fn proof_mutation_sweep() {
+    proof_mutation_sweep_for::<Pcs>();
+}
+
+fn proof_mutation_sweep_for<PCS: PcsMutations>() {
     let _probe = ProbeGuard::enter();
     let mut violations: Vec<String> = vec![];
     for (m, alt) in probe_models().into_iter().zip(probe_models_alt()) {
-        let h = honest(m);
-        let (other, _, _) = prove::<Fr, Blake2bTranscript, Pcs>(&h.prover_pp, &alt.inputs);
-        let sites = enumerate_sites::<Pcs>(&h.proof, &other, &h.io, h.prover_pp.model());
+        let h = honest::<PCS>(m);
+        let (other, _, _) = prove::<PCS::Field, Blake2bTranscript, PCS>(&h.prover_pp, &alt.inputs);
+        let sites = enumerate_sites::<PCS>(&h.proof, &other, &h.io, h.prover_pp.model());
         // Sequential on purpose: a verifier crash (stack overflow) must be
         // attributable to the site being tried, which the exhaustive run
         // logs site by site.
@@ -371,19 +381,24 @@ fn op_name(model: &Model, node: usize) -> String {
 #[test]
 #[serial(soundness_probe)]
 fn witness_tamper_sweep() {
+    witness_tamper_sweep_for::<Pcs>();
+}
+
+fn witness_tamper_sweep_for<PCS: PcsMutations>() {
     let _probe = ProbeGuard::enter();
     let all = exhaustive();
     let mut violations: Vec<String> = vec![];
     let mut refusals: Vec<String> = vec![];
     let mut out_of_domain: Vec<String> = vec![];
     for m in probe_models() {
-        let h = honest(m);
+        let h = honest::<PCS>(m);
         let model = h.prover_pp.model().clone();
         let honest_trace = model.trace(&h.inputs).expect("honest execution");
         let honest_bytes = serialize_proof(&h.proof).expect("serializes");
         {
             // The "proof unchanged" oracle below needs a deterministic prover.
-            let (again, _, _) = prove::<Fr, Blake2bTranscript, Pcs>(&h.prover_pp, &h.inputs);
+            let (again, _, _) =
+                prove::<PCS::Field, Blake2bTranscript, PCS>(&h.prover_pp, &h.inputs);
             assert_eq!(
                 serialize_proof(&again).unwrap(),
                 honest_bytes,
@@ -395,7 +410,7 @@ fn witness_tamper_sweep() {
         let mut neutral = 0usize;
         for site in &sites {
             let (tampered, res) =
-                prove_tampered::<Pcs>(&h.prover_pp, &h.inputs, &mut |t| apply_witness(t, site));
+                prove_tampered::<PCS>(&h.prover_pp, &h.inputs, &mut |t| apply_witness(t, site));
             let divergences = probe::take_divergences();
             let class: &'static str = match site {
                 WitnessSite::NodeOutput { .. } => "NodeOutput",
@@ -500,7 +515,11 @@ fn witness_tamper_sweep() {
 
 /// Stratified sample of opening ids: one per (polynomial kind, sumcheck
 /// kind, op kind of the executing node). Exhaustive mode takes all.
-fn forgery_targets(proof: &Proof, model: &Model, all: bool) -> Vec<OpeningId> {
+fn forgery_targets<PCS: CommitmentScheme>(
+    proof: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
+    model: &Model,
+    all: bool,
+) -> Vec<OpeningId> {
     let mut seen = std::collections::HashSet::new();
     let mut targets = vec![];
     for id in proof.opening_claims().openings().keys() {
@@ -514,17 +533,21 @@ fn forgery_targets(proof: &Proof, model: &Model, all: bool) -> Vec<OpeningId> {
 #[test]
 #[serial(soundness_probe)]
 fn opening_forgery_sweep() {
+    opening_forgery_sweep_for::<Pcs>();
+}
+
+fn opening_forgery_sweep_for<PCS: PcsMutations>() {
     let _probe = ProbeGuard::enter();
     let all = exhaustive();
     let mut violations: Vec<String> = vec![];
     let mut unreached: Vec<String> = vec![];
     for m in probe_models() {
-        let h = honest(m);
+        let h = honest::<PCS>(m);
         let targets = forgery_targets(&h.proof, h.prover_pp.model(), all);
         let mut rejected = 0usize;
         for id in &targets {
             forgery::set(Some(*id));
-            let (_, res) = prove_tampered::<Pcs>(&h.prover_pp, &h.inputs, &mut |_| {});
+            let (_, res) = prove_tampered::<PCS>(&h.prover_pp, &h.inputs, &mut |_| {});
             let hits = forgery::hits();
             forgery::set(None);
             let divergences = probe::take_divergences();
@@ -577,7 +600,7 @@ fn opening_forgery_sweep() {
 
 // ── binding tests ────────────────────────────────────────────────────────
 
-fn prove_verify_pair(model: Model, inputs: &[Tensor<i32>]) -> Honest {
+fn prove_verify_pair(model: Model, inputs: &[Tensor<i32>]) -> Honest<Pcs> {
     honest(ProbeModel {
         name: "binding",
         model,

@@ -36,8 +36,8 @@ use super::{
         sub_const_model, ProbeModel,
     },
     mutate::{
-        apply_site, enumerate_sites, exhaustive, is_dead_batch_opening_claim, opening_stratum,
-        site_class, Expect, PcsMutations, Site,
+        apply_site, enumerate_sites, exhaustive, opening_stratum, site_class, Expect, PcsMutations,
+        Site,
     },
     probe::{self, ProbeGuard},
 };
@@ -504,11 +504,6 @@ fn forgery_targets(proof: &Proof, model: &Model, all: bool) -> Vec<OpeningId> {
     let mut seen = std::collections::HashSet::new();
     let mut targets = vec![];
     for id in proof.opening_claims.0.keys() {
-        // Batch-opening bookkeeping entries are never appended through the
-        // accumulator (see `is_dead_batch_opening_claim`).
-        if is_dead_batch_opening_claim(id) {
-            continue;
-        }
         if all || seen.insert(opening_stratum(id, model)) {
             targets.push(*id);
         }

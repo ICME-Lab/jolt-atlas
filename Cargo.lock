@@ -1036,6 +1036,7 @@ dependencies = [
  "atlas-onnx-import",
  "atlas-trace",
  "bincode 2.0.1",
+ "blake2",
  "common",
  "derive_more",
  "itertools 0.10.5",

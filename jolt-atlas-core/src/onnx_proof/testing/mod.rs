@@ -10,11 +10,14 @@
 //! * [`soundness`] (+ [`mutate`], [`probe`], [`models`]): generic attacks on
 //!   the proof system: proof-field mutation, witness tamper, opening forgery,
 //!   binding tests, and pinned `known_gap_*` tests.
+//! * [`digests`]: cross-stage pins of the zoo's proof bytes and final
+//!   transcript state, so a coordinated prover+verifier change is visible.
 //! * [`model_builder`]: programmatic model construction.
 //!
 //! This module is a descendant of `onnx_proof` so tests can reach the
 //! proof's private fields without widening any visibility.
 
+mod digests;
 pub(crate) mod harness;
 pub(crate) mod model_builder;
 mod models;

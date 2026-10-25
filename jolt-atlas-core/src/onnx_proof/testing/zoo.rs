@@ -17,7 +17,7 @@ use joltworks::poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG};
 use super::{prove_verify_roundtrip, RoundtripOptions};
 use crate::loader::{load_imported, RunArgs};
 
-fn zoo(name: &str, seq_len: usize) -> ImportedModel {
+pub(super) fn zoo(name: &str, seq_len: usize) -> ImportedModel {
     load_imported(
         &format!("../models/{name}/network.onnx"),
         &RunArgs::new(standard_bindings(seq_len)),
@@ -57,17 +57,10 @@ fn einsum_equations(imported: &ImportedModel) -> Vec<String> {
         .collect()
 }
 
-// ── checked-in zoo ───────────────────────────────────────────────────────
-
-/// One small synthetic model covering the lowerable op surface: embedding
-/// gather, decomposed LayerNorm, masked attention (Where/IsNaN), both GELU
-/// forms, RMSNorm, Split/Concat/Expand, every sum-axis shape, trig/sigmoid,
-/// Neg/Square, and a Cast descale round trip (`scripts/gen_test_models.py`).
-#[test]
-fn op_gauntlet() {
-    let imported = zoo("op_gauntlet", 16);
-    let mut inputs = synth_inputs(&imported, GOLDEN_SEED);
-    // Keep one position masked out so the attention mask path is live.
+/// The gauntlet's golden inputs with one position masked out, so the
+/// attention mask path is live.
+pub(super) fn op_gauntlet_inputs(imported: &ImportedModel) -> Vec<Tensor<i32>> {
+    let mut inputs = synth_inputs(imported, GOLDEN_SEED);
     let mask = imported
         .input_descriptors
         .iter()
@@ -77,6 +70,19 @@ fn op_gauntlet() {
     let mut data = inputs[mask].data().to_vec();
     *data.last_mut().unwrap() = 0;
     inputs[mask] = Tensor::from_slice(&data, &dims).unwrap();
+    inputs
+}
+
+// ── checked-in zoo ───────────────────────────────────────────────────────
+
+/// One small synthetic model covering the lowerable op surface: embedding
+/// gather, decomposed LayerNorm, masked attention (Where/IsNaN), both GELU
+/// forms, RMSNorm, Split/Concat/Expand, every sum-axis shape, trig/sigmoid,
+/// Neg/Square, and a Cast descale round trip (`scripts/gen_test_models.py`).
+#[test]
+fn op_gauntlet() {
+    let imported = zoo("op_gauntlet", 16);
+    let inputs = op_gauntlet_inputs(&imported);
     prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
 }
 

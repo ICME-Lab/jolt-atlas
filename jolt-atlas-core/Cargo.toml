@@ -51,6 +51,8 @@ strum_macros.workspace = true
 serial_test.workspace = true
 
 [dev-dependencies]
+# Digest of serialized proofs in the cross-stage digest harness.
+blake2 = "0.10"
 # Enable test-feature for joltworks during tests only
 joltworks = { workspace = true, features = ["test-feature"] }
 # Descriptor-driven zoo inputs shared with the importer's golden tests.

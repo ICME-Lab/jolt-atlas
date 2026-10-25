@@ -99,6 +99,12 @@ impl BatchedSumcheck {
 
         let mut r_sumcheck: Vec<F::Challenge> = Vec::with_capacity(max_num_rounds);
         let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(max_num_rounds);
+        let max_degree = sumcheck_instances
+            .iter()
+            .map(|sumcheck| sumcheck.degree())
+            .max()
+            .unwrap();
+        let pow_bits = round_pow_bits::<F>(max_degree);
         // Spread per-round message computation across instances rather than
         // inside each one (see `message` below) when asked to and worthwhile.
         const MANY_INSTANCES: usize = 8;
@@ -175,6 +181,9 @@ impl BatchedSumcheck {
 
             // append the prover's message to the transcript
             compressed_poly.append_to_transcript(transcript);
+            transcript
+                .pow(pow_bits)
+                .expect("proof-of-work nonce search");
             let r_j = transcript.challenge_scalar_optimized::<F>();
             r_sumcheck.push(r_j);
 
@@ -320,6 +329,23 @@ impl BatchedSumcheck {
     }
 }
 
+/// Security level the per-round proof of work targets.
+pub const ROUND_SECURITY_BITS: u32 = 128;
+
+/// Proof-of-work difficulty before the challenge of a sumcheck round whose polynomial has degree
+/// `degree`. A cheating round polynomial survives only if the challenge hits one of at most
+/// `degree` roots, probability `degree / |C|` per query for challenge set `C`
+/// ([`JoltField::challenge_set_size`]); the grind raises each query's cost so the bound reaches
+/// `2^-ROUND_SECURITY_BITS` (`jolt_transcript::grind_bits_for_loss`).
+pub fn round_pow_bits<F: JoltField>(degree: usize) -> u32 {
+    jolt_transcript::grind_bits_for_loss(
+        degree.max(1) as u64,
+        F::challenge_set_size(),
+        ROUND_SECURITY_BITS,
+    )
+    .expect("round degrees are far below the proof-of-work limit")
+}
+
 pub struct Sumcheck;
 
 impl Sumcheck {
@@ -337,11 +363,15 @@ impl Sumcheck {
         let mut previous_claim = input_claim;
         let mut r_sumcheck: Vec<F::Challenge> = Vec::with_capacity(num_rounds);
         let mut compressed_polys: Vec<CompressedUniPoly<F>> = Vec::with_capacity(num_rounds);
+        let pow_bits = round_pow_bits::<F>(sumcheck_instance.degree());
         for round in 0..num_rounds {
             let univariate_poly = sumcheck_instance.compute_message(round, previous_claim);
             // append the prover's message to the transcript
             let compressed_poly = univariate_poly.compress();
             compressed_poly.append_to_transcript(transcript);
+            transcript
+                .pow(pow_bits)
+                .expect("proof-of-work nonce search");
             let r_j = transcript.challenge_scalar_optimized::<F>();
             r_sumcheck.push(r_j);
 
@@ -415,6 +445,7 @@ impl<F: JoltField> SumcheckInstanceProof<F> {
     ) -> Result<(F, Vec<F::Challenge>), ProofVerifyError> {
         let mut e = claim;
         let mut r: Vec<F::Challenge> = Vec::new();
+        let pow_bits = round_pow_bits::<F>(degree_bound);
 
         // verify that there is a univariate polynomial for each round
         if self.compressed_polys.len() != num_rounds {
@@ -434,6 +465,7 @@ impl<F: JoltField> SumcheckInstanceProof<F> {
 
             // append the prover's message to the transcript
             self.compressed_polys[i].append_to_transcript(transcript);
+            transcript.pow(pow_bits)?;
 
             //derive the verifier's challenge for the next round
             let r_i: F::Challenge = transcript.challenge_scalar_optimized::<F>();

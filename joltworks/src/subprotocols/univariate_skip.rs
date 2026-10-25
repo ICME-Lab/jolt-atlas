@@ -6,6 +6,7 @@ use crate::field::JoltField;
 use crate::poly::lagrange_poly::LagrangePolynomial;
 use crate::poly::opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumulator};
 use crate::poly::unipoly::UniPoly;
+use crate::subprotocols::sumcheck::round_pow_bits;
 use crate::subprotocols::sumcheck_prover::SumcheckInstanceProver;
 use crate::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier;
 use crate::transcripts::{AppendToTranscript, Transcript};
@@ -135,6 +136,9 @@ pub fn prove_uniskip_round<F: JoltField, T: Transcript, I: SumcheckInstanceProve
     let uni_poly = instance.compute_message(0, input_claim);
     // Append full polynomial and derive r0
     uni_poly.append_to_transcript(transcript);
+    transcript
+        .pow(round_pow_bits::<F>(instance.degree()))
+        .expect("proof-of-work nonce search");
     let r0: F::Challenge = transcript.challenge_scalar_optimized::<F>();
     instance.cache_openings(opening_accumulator, transcript, &[r0]);
     UniSkipFirstRoundProof::new(uni_poly)
@@ -180,6 +184,7 @@ impl<F: JoltField, T: Transcript> UniSkipFirstRoundProof<F, T> {
 
         // Append full polynomial and derive r0
         proof.uni_poly.append_to_transcript(transcript);
+        transcript.pow(round_pow_bits::<F>(degree_bound))?;
         let r0 = transcript.challenge_scalar_optimized::<F>();
 
         // Check symmetric-domain sum equals zero (initial claim), and compute next claim s1(r0)

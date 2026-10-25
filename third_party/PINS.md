@@ -10,6 +10,7 @@ owns the adoption order; `docs/upstream-inventory.md` records the divergence eac
 |---|---|---|---|---|
 | `jolt-field` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 2 (bumped from `0e3faf07` at stage 3) | Manifest only (below) |
 | `jolt-transcript` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 3 | Manifest only (below) |
+| `jolt-utils` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4a | Manifest only (below) |
 
 ## `jolt-field`
 
@@ -41,3 +42,9 @@ path to the vendored copy) and drops the `benches/`, `fuzz/` and `tests/` target
 `[lints] workspace = true` table; `num-bigint` stays as the dev-dependency of the in-source unit
 tests. It brings `spongefish =0.8.0`, `blake2 0.11.0-rc.6` and `digest 0.11` from crates.io,
 alongside the `blake2 0.10` our own code uses.
+
+## `jolt-utils`
+
+`src/` is byte-identical to `crates/jolt-utils` at the pinned rev. The manifest resolves
+workspace inheritance to explicit versions (`jolt-field` dev-dependency by path) and drops the
+`[lints] workspace = true` table.

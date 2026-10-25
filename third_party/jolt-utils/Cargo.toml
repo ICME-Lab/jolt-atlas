@@ -1,0 +1,23 @@
+# Vendored from https://github.com/a16z/jolt crates/jolt-utils at rev
+# f3265b5a9981f0c1359f2b63008824616f0c82fa, with workspace dependency
+# inheritance resolved (third_party/PINS.md).
+[package]
+name = "jolt-utils"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Dependency-light utilities shared across the Jolt workspace"
+repository = "https://github.com/a16z/jolt"
+keywords = ["SNARK", "zkvm"]
+categories = ["cryptography"]
+
+[features]
+default = []
+parallel = ["dep:rayon"]
+
+[dependencies]
+num-traits = { version = "0.2.19", default-features = false }
+rayon = { version = "1.12.0", optional = true }
+
+[dev-dependencies]
+jolt-field = { path = "../jolt-field" }

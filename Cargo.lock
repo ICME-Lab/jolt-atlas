@@ -1194,6 +1194,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jolt-utils"
+version = "0.1.0"
+dependencies = [
+ "jolt-field",
+ "num-traits",
+ "rayon",
+]
+
+[[package]]
 name = "joltworks"
 version = "0.1.0"
 dependencies = [
@@ -1214,6 +1223,7 @@ dependencies = [
  "jolt-field",
  "jolt-optimizations",
  "jolt-transcript",
+ "jolt-utils",
  "memory-stats",
  "num",
  "num-derive",

@@ -42,8 +42,8 @@ use super::{
     probe::{self, ProbeGuard},
 };
 use crate::onnx_proof::{
-    proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    AtlasVerifierPreprocessing, ONNXProof,
+    proof_serialization::serialize_proof, prove, prove_from_trace, verify,
+    AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,
 };
 
 type Pcs = HyperKZG<Bn254>;
@@ -76,8 +76,9 @@ pub(crate) fn run_verify<PCS: PcsMutations>(
     vpp: &AtlasVerifierPreprocessing<Fr, PCS>,
     io: &ModelExecutionIO,
 ) -> Outcome {
-    match probe::expecting_panics(|| catch_unwind(AssertUnwindSafe(|| proof.verify(vpp, io, None))))
-    {
+    match probe::expecting_panics(|| {
+        catch_unwind(AssertUnwindSafe(|| verify(proof, vpp, io, None)))
+    }) {
         Ok(Ok(())) => Outcome::Accepted,
         Ok(Err(e)) => Outcome::Rejected(format!("{e:?}")),
         Err(p) => Outcome::VerifierPanicked(payload(p)),
@@ -101,7 +102,7 @@ pub(crate) fn prove_tampered<PCS: PcsMutations>(
     let tampered = trace.clone();
     let res = match probe::expecting_panics(|| {
         catch_unwind(AssertUnwindSafe(move || {
-            ONNXProof::<Fr, Blake2bTranscript, PCS>::prove_from_trace(pp, trace)
+            prove_from_trace::<Fr, Blake2bTranscript, PCS>(pp, trace)
         }))
     }) {
         Ok((proof, io, _)) => Ok((proof, io)),
@@ -123,10 +124,8 @@ fn honest(m: ProbeModel) -> Honest {
     let shared = AtlasSharedPreprocessing::preprocess(m.model);
     let prover_pp = AtlasProverPreprocessing::<Fr, Pcs>::new(shared);
     let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
-    let (proof, io, _) = Proof::prove(&prover_pp, &m.inputs);
-    proof
-        .verify(&verifier_pp, &io, None)
-        .expect("probe model must prove honestly");
+    let (proof, io, _) = prove::<Fr, Blake2bTranscript, Pcs>(&prover_pp, &m.inputs);
+    verify(&proof, &verifier_pp, &io, None).expect("probe model must prove honestly");
     Honest {
         name: m.name,
         prover_pp,
@@ -153,7 +152,7 @@ fn proof_mutation_sweep() {
     let mut violations: Vec<String> = vec![];
     for (m, alt) in probe_models().into_iter().zip(probe_models_alt()) {
         let h = honest(m);
-        let (other, _, _) = Proof::prove(&h.prover_pp, &alt.inputs);
+        let (other, _, _) = prove::<Fr, Blake2bTranscript, Pcs>(&h.prover_pp, &alt.inputs);
         let sites = enumerate_sites::<Pcs>(&h.proof, &other, &h.io, h.prover_pp.model());
         // Sequential on purpose: a verifier crash (stack overflow) must be
         // attributable to the site being tried, which the exhaustive run
@@ -383,7 +382,7 @@ fn witness_tamper_sweep() {
         let honest_bytes = serialize_proof(&h.proof).expect("serializes");
         {
             // The "proof unchanged" oracle below needs a deterministic prover.
-            let (again, _, _) = Proof::prove(&h.prover_pp, &h.inputs);
+            let (again, _, _) = prove::<Fr, Blake2bTranscript, Pcs>(&h.prover_pp, &h.inputs);
             assert_eq!(
                 serialize_proof(&again).unwrap(),
                 honest_bytes,

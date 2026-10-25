@@ -1,7 +1,7 @@
 //! Verifier state and internal verification helpers for [`ONNXProof`].
 //!
-//! The public entry point is [`ONNXProof::verify`] (defined in the parent module).
-//! This file houses the [`Verifier`] struct and the private helper methods that
+//! The public entry point is [`verify`](super::verify) (defined in the parent module).
+//! This file houses the [`Verifier`] struct and the private helper functions that
 //! `verify` delegates to.
 
 use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
@@ -86,158 +86,165 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
 }
 
 // ---------------------------------------------------------------------------
-// Internal verifier helpers on ONNXProof
+// Internal verification helpers
 // ---------------------------------------------------------------------------
 
-impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
-    /// Populate the verifier accumulator with opening claims and
-    /// commitments from the proof.
-    pub(super) fn populate_accumulator(&self, verifier: &mut Verifier<'_, F, T>) {
-        // Load all opening claims from the proof (NodeOutput+Execution claims
-        // are now stored directly in opening_claims alongside everything else).
-        for (key, (_, claim)) in &self.opening_claims.0 {
-            verifier
-                .accumulator
-                .openings
-                .insert(*key, (OpeningPoint::default(), *claim));
-        }
-
-        for commitment in &self.commitments {
-            verifier.transcript.append_serializable(commitment);
-        }
+/// Populate the verifier accumulator with opening claims and
+/// commitments from the proof.
+pub(super) fn populate_accumulator<
+    F: JoltField,
+    T: Transcript,
+    PCS: CommitmentScheme<Field = F>,
+>(
+    proof: &ONNXProof<F, T, PCS>,
+    verifier: &mut Verifier<'_, F, T>,
+) {
+    // Load all opening claims from the proof (NodeOutput+Execution claims
+    // are now stored directly in opening_claims alongside everything else).
+    for (key, (_, claim)) in &proof.opening_claims.0 {
+        verifier
+            .accumulator
+            .openings
+            .insert(*key, (OpeningPoint::default(), *claim));
     }
 
-    /// Verify that the output MLE evaluates correctly at the random challenge point τ.
-    pub(crate) fn verify_output_claim(
-        model: &Model,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let output_index = model.output_indices()[0];
-        let output_computation_node = &model.view(output_index);
-        let r_node_output = verifier.transcript.challenge_vector_optimized::<F>(
-            output_computation_node
-                .pow2_padded_num_output_elements()
-                .log_2(),
+    for commitment in &proof.commitments {
+        verifier.transcript.append_serializable(commitment);
+    }
+}
+
+/// Verify that the output MLE evaluates correctly at the random challenge point τ.
+pub(crate) fn verify_output_claim<F: JoltField, T: Transcript>(
+    model: &Model,
+    verifier: &mut Verifier<'_, F, T>,
+) -> Result<(), ProofVerifyError> {
+    let output_index = model.output_indices()[0];
+    let output_computation_node = &model.view(output_index);
+    let r_node_output = verifier.transcript.challenge_vector_optimized::<F>(
+        output_computation_node
+            .pow2_padded_num_output_elements()
+            .log_2(),
+    );
+    let expected_output_claim =
+        MultilinearPolynomial::from(verifier.io.outputs[0].padded_pow2()).evaluate(&r_node_output);
+
+    let output_opening_id = OpeningId::new(
+        VirtualPoly::NodeOutput(output_computation_node.idx),
+        // We add a NodeOutput claim for the model output. We use idx+1 as the execution,
+        // since some nodes add a claim during their own execution that would otherwise collide with the output claim.
+        SumcheckId::NodeExecution(output_computation_node.idx + 1),
+    );
+
+    let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, output_computation_node)
+        .into_provider(&mut verifier.transcript, r_node_output.into());
+
+    // append_virtual now handles both transcript append and opening point update.
+    // The claim was loaded from opening_claims in populate_accumulator.
+    provider.append_custom(output_opening_id);
+    // Read the prover's claimed value and compare against IO.
+    let output_claim = provider.get_custom(output_opening_id).1;
+    if expected_output_claim != output_claim {
+        return Err(ProofVerifyError::InvalidOpeningProof(
+            "Expected output claim does not match actual output claim".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Iterate over computation graph in reverse topological order and verify each operation.
+#[tracing::instrument(skip_all, name = "ONNXProof::verify_iop")]
+pub(crate) fn verify_iop<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+    proof: &ONNXProof<F, T, PCS>,
+    model: &Model,
+    verifier: &mut Verifier<'_, F, T>,
+) -> Result<(), ProofVerifyError> {
+    for node in model.views().iter().rev() {
+        let res = OperatorVerifier::verify(node, verifier, &proof.eval_reduction_proofs);
+        #[cfg(test)]
+        if let Err(e) = &res {
+            if !crate::onnx_proof::testing::probe::active() {
+                println!("Verification failed at node {node:#?}: {e:?}");
+            }
+        }
+        res?;
+    }
+    crate::onnx_proof::deferred_lookups::verify_all(verifier)
+}
+
+/// Verify the reduced opening proof (sumcheck reduction + PCS verification).
+#[tracing::instrument(skip_all, name = "ONNXProof::verify_reduced_openings")]
+pub(super) fn verify_reduced_openings<
+    F: JoltField,
+    T: Transcript,
+    PCS: CommitmentScheme<Field = F>,
+>(
+    proof: &ONNXProof<F, T, PCS>,
+    pp: &AtlasVerifierPreprocessing<F, PCS>,
+    verifier: &mut Verifier<'_, F, T>,
+) -> Result<(), ProofVerifyError> {
+    if let Some(reduced_opening_proof) = &proof.reduced_opening_proof {
+        verifier.accumulator.prepare_for_sumcheck(
+            &reduced_opening_proof.sumcheck_claims,
+            &mut verifier.transcript,
+        )?;
+
+        let reduction_res = verifier.accumulator.verify_batch_opening_sumcheck(
+            &reduced_opening_proof.sumcheck_proof,
+            &mut verifier.transcript,
         );
-        let expected_output_claim =
-            MultilinearPolynomial::from(verifier.io.outputs[0].padded_pow2())
-                .evaluate(&r_node_output);
+        #[cfg(test)]
+        if let Err(e) = &reduction_res {
+            if !crate::onnx_proof::testing::probe::active() {
+                println!("Opening reduction via sumcheck failed: {e:?}");
+            }
+        }
+        let r_sumcheck = reduction_res?;
 
-        let output_opening_id = OpeningId::new(
-            VirtualPoly::NodeOutput(output_computation_node.idx),
-            // We add a NodeOutput claim for the model output. We use idx+1 as the execution,
-            // since some nodes add a claim during their own execution that would otherwise collide with the output claim.
-            SumcheckId::NodeExecution(output_computation_node.idx + 1),
+        let verifier_state = verifier.accumulator.finalize_batch_opening_sumcheck(
+            r_sumcheck,
+            &reduced_opening_proof.sumcheck_claims,
+            &mut verifier.transcript,
         );
 
-        let mut provider =
-            AccOpeningAccessor::new(&mut verifier.accumulator, output_computation_node)
-                .into_provider(&mut verifier.transcript, r_node_output.into());
-
-        // append_virtual now handles both transcript append and opening point update.
-        // The claim was loaded from opening_claims in populate_accumulator.
-        provider.append_custom(output_opening_id);
-        // Read the prover's claimed value and compare against IO.
-        let output_claim = provider.get_custom(output_opening_id).1;
-        if expected_output_claim != output_claim {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "Expected output claim does not match actual output claim".to_string(),
-            ));
+        // Commitments are in sorted `CommittedPoly` order (the prover's
+        // `poly_map`); the joint opening covers the opened subset.
+        let mut committed = pp.shared.get_models_committed_polynomials::<F, T>();
+        committed.sort();
+        if committed.len() != proof.commitments.len() {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "expected {} commitments, found {}",
+                committed.len(),
+                proof.commitments.len()
+            )));
         }
-        Ok(())
-    }
-
-    /// Iterate over computation graph in reverse topological order and verify each operation.
-    #[tracing::instrument(skip_all, name = "ONNXProof::verify_iop")]
-    pub(crate) fn verify_iop(
-        &self,
-        model: &Model,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        for node in model.views().iter().rev() {
-            let res = OperatorVerifier::verify(node, verifier, &self.eval_reduction_proofs);
-            #[cfg(test)]
-            if let Err(e) = &res {
-                if !crate::onnx_proof::testing::probe::active() {
-                    println!("Verification failed at node {node:#?}: {e:?}");
-                }
-            }
-            res?;
-        }
-        crate::onnx_proof::deferred_lookups::verify_all(verifier)
-    }
-
-    /// Verify the reduced opening proof (sumcheck reduction + PCS verification).
-    #[tracing::instrument(skip_all, name = "ONNXProof::verify_reduced_openings")]
-    pub(super) fn verify_reduced_openings(
-        &self,
-        pp: &AtlasVerifierPreprocessing<F, PCS>,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        if let Some(reduced_opening_proof) = &self.reduced_opening_proof {
-            verifier.accumulator.prepare_for_sumcheck(
-                &reduced_opening_proof.sumcheck_claims,
-                &mut verifier.transcript,
-            )?;
-
-            let reduction_res = verifier.accumulator.verify_batch_opening_sumcheck(
-                &reduced_opening_proof.sumcheck_proof,
-                &mut verifier.transcript,
-            );
-            #[cfg(test)]
-            if let Err(e) = &reduction_res {
-                if !crate::onnx_proof::testing::probe::active() {
-                    println!("Opening reduction via sumcheck failed: {e:?}");
-                }
-            }
-            let r_sumcheck = reduction_res?;
-
-            let verifier_state = verifier.accumulator.finalize_batch_opening_sumcheck(
-                r_sumcheck,
-                &reduced_opening_proof.sumcheck_claims,
-                &mut verifier.transcript,
-            );
-
-            // Commitments are in sorted `CommittedPoly` order (the prover's
-            // `poly_map`); the joint opening covers the opened subset.
-            let mut committed = pp.shared.get_models_committed_polynomials::<F, T>();
-            committed.sort();
-            if committed.len() != self.commitments.len() {
-                return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                    "expected {} commitments, found {}",
-                    committed.len(),
-                    self.commitments.len()
-                )));
-            }
-            let by_poly: BTreeMap<CommittedPoly, &PCS::Commitment> = committed
-                .iter()
-                .copied()
-                .zip(self.commitments.iter())
-                .collect();
-            let selected: Vec<&PCS::Commitment> = verifier_state
-                .polynomials
-                .iter()
-                .map(|p| {
-                    by_poly.get(p).copied().ok_or_else(|| {
-                        ProofVerifyError::InvalidOpeningProof(format!(
-                            "opening of uncommitted polynomial {p:?}"
-                        ))
-                    })
+        let by_poly: BTreeMap<CommittedPoly, &PCS::Commitment> = committed
+            .iter()
+            .copied()
+            .zip(proof.commitments.iter())
+            .collect();
+        let selected: Vec<&PCS::Commitment> = verifier_state
+            .polynomials
+            .iter()
+            .map(|p| {
+                by_poly.get(p).copied().ok_or_else(|| {
+                    ProofVerifyError::InvalidOpeningProof(format!(
+                        "opening of uncommitted polynomial {p:?}"
+                    ))
                 })
-                .collect::<Result<_, _>>()?;
-            let joint_commitment = PCS::combine_commitments(&selected, &verifier_state.poly_coeffs);
+            })
+            .collect::<Result<_, _>>()?;
+        let joint_commitment = PCS::combine_commitments(&selected, &verifier_state.poly_coeffs);
 
-            verifier.accumulator.verify_joint_opening::<_, PCS>(
-                &pp.generators,
-                &reduced_opening_proof.joint_opening_proof,
-                &joint_commitment,
-                &verifier_state,
-                &mut verifier.transcript,
-            )?;
-        } else if verifier.accumulator.sumchecks_keys().next().is_some() {
-            // Some committed polynomial was opened: a joint opening is required.
-            return Err(ProofVerifyError::MissingReductionProof);
-        }
-        Ok(())
+        verifier.accumulator.verify_joint_opening::<_, PCS>(
+            &pp.generators,
+            &reduced_opening_proof.joint_opening_proof,
+            &joint_commitment,
+            &verifier_state,
+            &mut verifier.transcript,
+        )?;
+    } else if verifier.accumulator.sumchecks_keys().next().is_some() {
+        // Some committed polynomial was opened: a joint opening is required.
+        return Err(ProofVerifyError::MissingReductionProof);
     }
+    Ok(())
 }

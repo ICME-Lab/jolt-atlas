@@ -3,11 +3,11 @@
 //! This module implements the core proving and verification logic for ONNX neural networks.
 //! It provides:
 //! - [`ONNXProof`]: The main proof structure containing all sumcheck proofs and commitments
-//! - [`ONNXProof::prove`]: Generate a proof for an ONNX model execution
-//! - [`ONNXProof::verify`]: Verify a proof against expected IO
+//! - [`prove`]: Generate a proof for an ONNX model execution
+//! - [`verify`]: Verify a proof against expected IO
 //! - Preprocessing structs for model setup and commitment scheme initialization
 //!
-//! Internal implementation details (helper methods, state structs) live in
+//! Internal implementation details (helper functions, state structs) live in
 //! [`prover`], [`verifier`], and [`types`] submodules.
 
 use atlas_trace::{trace::ModelExecutionIO, Tensor};
@@ -141,111 +141,119 @@ pub struct ONNXProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = 
 
 // ── Public API: prove & verify ───────────────────────────────────────────
 
-impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
-    /// Generate a proof for an ONNX neural network computation.
-    ///
-    /// Executes the model with the given inputs, generates a trace, and produces
-    /// sumcheck proofs for each operation. Returns the proof, execution IO, and
-    /// optional debug information.
-    #[tracing::instrument(skip_all, name = "ONNXProof::prove")]
-    pub fn prove(
-        pp: &AtlasProverPreprocessing<F, PCS>,
-        inputs: &[Tensor<i32>],
-    ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
-        let trace = pp.model().trace(inputs).expect("model execution failed");
-        Self::prove_from_trace(pp, trace)
-    }
+/// Generate a proof for an ONNX neural network computation.
+///
+/// Executes the model with the given inputs, generates a trace, and produces
+/// sumcheck proofs for each operation. Returns the proof, execution IO, and
+/// optional debug information.
+#[tracing::instrument(skip_all, name = "ONNXProof::prove")]
+#[allow(clippy::type_complexity)]
+pub fn prove<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+    pp: &AtlasProverPreprocessing<F, PCS>,
+    inputs: &[Tensor<i32>],
+) -> (
+    ONNXProof<F, T, PCS>,
+    ModelExecutionIO,
+    Option<ProverDebugInfo<F, T>>,
+) {
+    let trace = pp.model().trace(inputs).expect("model execution failed");
+    prove_from_trace(pp, trace)
+}
 
-    /// Prove from an already-executed trace. The public IO is derived from
-    /// the trace, so this is the prover's *claimed* statement; the soundness
-    /// sweeps tamper with the trace before calling it.
-    pub(crate) fn prove_from_trace(
-        pp: &AtlasProverPreprocessing<F, PCS>,
-        trace: atlas_trace::Trace,
-    ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
-        let io = trace.io(pp.model());
+/// Prove from an already-executed trace. The public IO is derived from
+/// the trace, so this is the prover's *claimed* statement; the soundness
+/// sweeps tamper with the trace before calling it.
+#[allow(clippy::type_complexity)]
+pub(crate) fn prove_from_trace<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+    pp: &AtlasProverPreprocessing<F, PCS>,
+    trace: atlas_trace::Trace,
+) -> (
+    ONNXProof<F, T, PCS>,
+    ModelExecutionIO,
+    Option<ProverDebugInfo<F, T>>,
+) {
+    let io = trace.io(pp.model());
 
-        // Initialize prover state
-        // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state
-        let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
-        let mut proofs = BTreeMap::new();
+    // Initialize prover state
+    // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state
+    let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
+    let mut proofs = BTreeMap::new();
 
-        // Bind public inputs into the transcript before any challenge (issue #230).
-        append_inputs_to_transcript(&mut prover.transcript, &io);
+    // Bind public inputs into the transcript before any challenge (issue #230).
+    append_inputs_to_transcript(&mut prover.transcript, &io);
 
-        // Commit to witness polynomials and append commitments to transcript
-        let (poly_map, commitments, hints) = Self::commit_witness_polynomials(
-            pp.model(),
-            &prover.trace,
-            &pp.generators,
-            &mut prover.transcript,
-        );
+    // Commit to witness polynomials and append commitments to transcript
+    let (poly_map, commitments, hints) = prover::commit_witness_polynomials::<F, T, PCS>(
+        pp.model(),
+        &prover.trace,
+        &pp.generators,
+        &mut prover.transcript,
+    );
 
-        // Evaluate output MLE at random point τ
-        Self::output_claim(&mut prover);
+    // Evaluate output MLE at random point τ
+    prover::output_claim(&mut prover);
 
-        // IOP portion
-        let mut eval_reduction_proofs = BTreeMap::new();
-        Self::iop(
-            pp.model(),
-            &mut prover,
-            &mut proofs,
-            &mut eval_reduction_proofs,
-        );
+    // IOP portion
+    let mut eval_reduction_proofs = BTreeMap::new();
+    prover::iop(
+        pp.model(),
+        &mut prover,
+        &mut proofs,
+        &mut eval_reduction_proofs,
+    );
 
-        // Reduction sum-check + PCS::prove
-        let reduced_opening_proof =
-            Self::prove_reduced_openings(&mut prover, &poly_map, hints, &pp.generators);
-        Self::finalize_proof(
-            prover,
-            io,
-            commitments,
-            proofs,
-            eval_reduction_proofs,
-            reduced_opening_proof,
-        )
-    }
+    // Reduction sum-check + PCS::prove
+    let reduced_opening_proof =
+        prover::prove_reduced_openings(&mut prover, &poly_map, hints, &pp.generators);
+    prover::finalize_proof(
+        prover,
+        io,
+        commitments,
+        proofs,
+        eval_reduction_proofs,
+        reduced_opening_proof,
+    )
+}
 
-    /// Verify a proof for an ONNX neural network computation.
-    ///
-    /// Checks all sumcheck proofs, validates opening claims, and verifies that the
-    /// computation produces the expected output.
-    #[tracing::instrument(skip_all, name = "ONNXProof::verify")]
-    pub fn verify(
-        &self,
-        pp: &AtlasVerifierPreprocessing<F, PCS>,
-        io: &ModelExecutionIO,
-        _debug_info: Option<ProverDebugInfo<F, T>>,
-    ) -> Result<(), ProofVerifyError> {
-        // Initialize verifier state
-        let mut verifier: Verifier<F, T> = Verifier::new(&pp.shared, &self.proofs, io);
-        #[cfg(test)]
-        {
-            if let Some(debug_info) = _debug_info {
-                verifier.transcript.compare_to(debug_info.transcript);
-                verifier
-                    .accumulator
-                    .compare_to(debug_info.opening_accumulator);
-            }
+/// Verify a proof for an ONNX neural network computation.
+///
+/// Checks all sumcheck proofs, validates opening claims, and verifies that the
+/// computation produces the expected output.
+#[tracing::instrument(skip_all, name = "ONNXProof::verify")]
+pub fn verify<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+    proof: &ONNXProof<F, T, PCS>,
+    pp: &AtlasVerifierPreprocessing<F, PCS>,
+    io: &ModelExecutionIO,
+    _debug_info: Option<ProverDebugInfo<F, T>>,
+) -> Result<(), ProofVerifyError> {
+    // Initialize verifier state
+    let mut verifier: Verifier<F, T> = Verifier::new(&pp.shared, &proof.proofs, io);
+    #[cfg(test)]
+    {
+        if let Some(debug_info) = _debug_info {
+            verifier.transcript.compare_to(debug_info.transcript);
+            verifier
+                .accumulator
+                .compare_to(debug_info.opening_accumulator);
         }
-
-        // Bind public inputs into the transcript before any challenge (issue #230).
-        // Must mirror the prover's first append, after `compare_to` installs the
-        // expected state history and before any commitment is absorbed.
-        append_inputs_to_transcript(&mut verifier.transcript, io);
-
-        // Populate claims and commitments in the verifier accumulator.
-        self.populate_accumulator(&mut verifier);
-
-        // Verify output MLE at random point τ
-        Self::verify_output_claim(pp.model(), &mut verifier)?;
-
-        // Verify each operation in reverse topological order
-        self.verify_iop(pp.model(), &mut verifier)?;
-
-        // Verify reduced opening proof
-        self.verify_reduced_openings(pp, &mut verifier)
     }
+
+    // Bind public inputs into the transcript before any challenge (issue #230).
+    // Must mirror the prover's first append, after `compare_to` installs the
+    // expected state history and before any commitment is absorbed.
+    append_inputs_to_transcript(&mut verifier.transcript, io);
+
+    // Populate claims and commitments in the verifier accumulator.
+    verifier::populate_accumulator(proof, &mut verifier);
+
+    // Verify output MLE at random point τ
+    verifier::verify_output_claim(pp.model(), &mut verifier)?;
+
+    // Verify each operation in reverse topological order
+    verifier::verify_iop(proof, pp.model(), &mut verifier)?;
+
+    // Verify reduced opening proof
+    verifier::verify_reduced_openings(proof, pp, &mut verifier)
 }
 
 /// Batched polynomial opening proof using sumcheck reduction.

@@ -83,7 +83,9 @@ mod tests {
     use super::*;
     use crate::node_view::ModelView;
     use crate::onnx_proof::testing::ModelBuilder;
-    use crate::onnx_proof::{AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, ProofId};
+    use crate::onnx_proof::{
+        prover, verifier, AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, ProofId,
+    };
     use ark_bn254::{Bn254, Fr};
     use atlas_trace::op::Add;
     use atlas_trace::trace::ModelExecutionIO;
@@ -315,18 +317,13 @@ mod tests {
             BTreeMap::new();
         let mut eval_reduction_proofs = BTreeMap::new();
 
-        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::output_claim(&mut prover);
+        prover::output_claim(&mut prover);
 
         let output_idx = prover.preprocessing.model().output_indices()[0];
         assert_eq!(prover.accumulator.get_node_openings(output_idx).len(), 1);
         let model = prover.preprocessing.model().clone();
 
-        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::iop(
-            &model,
-            &mut prover,
-            &mut proofs,
-            &mut eval_reduction_proofs,
-        );
+        prover::iop(&model, &mut prover, &mut proofs, &mut eval_reduction_proofs);
 
         assert!(eval_reduction_proofs.contains_key(&output_idx));
     }
@@ -351,8 +348,8 @@ mod tests {
         let mut proofs = BTreeMap::new();
         let mut eval_reduction_proofs = BTreeMap::new();
 
-        ONNXProof::<_, _, HyperKZG<Bn254>>::output_claim(&mut prover);
-        ONNXProof::<_, _, HyperKZG<Bn254>>::iop(
+        prover::output_claim(&mut prover);
+        prover::iop(
             shared.model(),
             &mut prover,
             &mut proofs,
@@ -369,11 +366,10 @@ mod tests {
         };
 
         let mut verifier = Verifier::new(&shared, &partial_proof.proofs, &io);
-        partial_proof.populate_accumulator(&mut verifier);
-        ONNXProof::<_, _, HyperKZG<Bn254>>::verify_output_claim(shared.model(), &mut verifier)
+        verifier::populate_accumulator(&partial_proof, &mut verifier);
+        verifier::verify_output_claim(shared.model(), &mut verifier)
             .expect("verify_output_claim should succeed for consistent partial proof state");
-        partial_proof
-            .verify_iop(shared.model(), &mut verifier)
+        verifier::verify_iop(&partial_proof, shared.model(), &mut verifier)
             .expect("verify_iop should succeed in isolation after output-claim initialization");
 
         let output_idx = shared.model().output_indices()[0];

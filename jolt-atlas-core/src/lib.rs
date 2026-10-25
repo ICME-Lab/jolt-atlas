@@ -4,8 +4,8 @@
 //! computations. It uses the sum-check protocol to generate succinct proofs that a neural network
 //! was executed correctly on given inputs without revealing the inputs or intermediate values.
 //!
-//! The main entry point is the [`onnx_proof`] module, which contains the prover and verifier
-//! implementations for ONNX models.
+//! The entry points are [`prove`] and [`verify`]; the [`onnx_proof`] module contains the
+//! prover and verifier implementations for ONNX models.
 
 #![allow(
     clippy::len_without_is_empty,
@@ -20,3 +20,5 @@ pub mod loader;
 pub mod node_view;
 pub mod onnx_proof;
 pub mod utils;
+
+pub use onnx_proof::{prove, verify};

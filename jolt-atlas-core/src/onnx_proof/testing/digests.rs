@@ -15,8 +15,7 @@ use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTransc
 
 use super::zoo::{op_gauntlet_inputs, zoo};
 use crate::onnx_proof::{
-    proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    ONNXProof,
+    proof_serialization::serialize_proof, prove, AtlasProverPreprocessing, AtlasSharedPreprocessing,
 };
 
 fn hex(bytes: &[u8]) -> String {
@@ -29,7 +28,7 @@ fn assert_digest(name: &str, model: Model, inputs: &[Tensor<i32>], proof: &str, 
     let pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(
         AtlasSharedPreprocessing::preprocess(model),
     );
-    let (p, _, debug) = ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&pp, inputs);
+    let (p, _, debug) = prove::<Fr, Blake2bTranscript, HyperKZG<Bn254>>(&pp, inputs);
     let bytes = serialize_proof(&p).expect("proof serializes");
     let got_proof = hex(&Blake2b::<U32>::digest(&bytes));
     let got_transcript = hex(&debug

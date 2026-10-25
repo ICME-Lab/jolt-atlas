@@ -34,8 +34,9 @@ use common::utils::logging::setup_tracing;
 use jolt_atlas_core::loader::{load_imported, RunArgs};
 use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
-    proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    AtlasVerifierPreprocessing, Blake2bTranscript, Bn254, DoryScheme, Fr, HyperKZG, ONNXProof,
+    proof_serialization::serialize_proof, prove, verify, AtlasProverPreprocessing,
+    AtlasSharedPreprocessing, AtlasVerifierPreprocessing, Blake2bTranscript, Bn254, DoryScheme, Fr,
+    HyperKZG,
 };
 use joltworks::poly::commitment::commitment_scheme::CommitmentScheme;
 
@@ -253,7 +254,7 @@ fn run<PCS: CommitmentScheme<Field = Fr>>(
     println!("[{label}] prover setup: {:.2?}", t.elapsed());
 
     let t = Instant::now();
-    let (proof, io, _) = ONNXProof::<Fr, Blake2bTranscript, PCS>::prove(&prover_pp, inputs);
+    let (proof, io, _) = prove::<Fr, Blake2bTranscript, PCS>(&prover_pp, inputs);
     println!("[{label}] prove: {:.2?}", t.elapsed());
     let bytes = serialize_proof(&proof).expect("proof serializes");
     println!(
@@ -265,9 +266,7 @@ fn run<PCS: CommitmentScheme<Field = Fr>>(
 
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, PCS>::from(&prover_pp);
     let t = Instant::now();
-    proof
-        .verify(&verifier_pp, &io, None)
-        .expect("verification failed");
+    verify(&proof, &verifier_pp, &io, None).expect("verification failed");
     println!("[{label}] verify: {:.2?}", t.elapsed());
     println!("Proof verified successfully!");
 }

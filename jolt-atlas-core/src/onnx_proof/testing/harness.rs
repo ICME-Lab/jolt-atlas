@@ -10,7 +10,8 @@ use joltworks::{
 
 use crate::onnx_proof::{
     proof_serialization::{deserialize_proof, serialize_proof},
-    AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,
+    prove, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
+    ONNXProof,
 };
 
 /// Knobs for [`prove_verify_roundtrip`]; the defaults are the full check.
@@ -60,7 +61,7 @@ where
     };
 
     let t = Instant::now();
-    let (proof, io, debug) = ONNXProof::<Fr, Blake2bTranscript, PCS>::prove(&prover_pp, inputs);
+    let (proof, io, debug) = prove::<Fr, Blake2bTranscript, PCS>(&prover_pp, inputs);
     println!("prove: {:?}", t.elapsed());
     assert_eq!(
         io.outputs, expected,
@@ -69,13 +70,13 @@ where
 
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, PCS>::from(&prover_pp);
     let t = Instant::now();
-    proof
-        .verify(
-            &verifier_pp,
-            &io,
-            if opts.lockstep_debug { debug } else { None },
-        )
-        .expect("honest proof must verify");
+    verify(
+        &proof,
+        &verifier_pp,
+        &io,
+        if opts.lockstep_debug { debug } else { None },
+    )
+    .expect("honest proof must verify");
     println!("verify: {:?}", t.elapsed());
 
     if opts.serialization_roundtrip {
@@ -83,8 +84,7 @@ where
         println!("proof size: {} bytes", bytes.len());
         let de: ONNXProof<Fr, Blake2bTranscript, PCS> =
             deserialize_proof(&bytes).expect("proof deserializes");
-        de.verify(&verifier_pp, &io, None)
-            .expect("deserialized proof must verify");
+        verify(&de, &verifier_pp, &io, None).expect("deserialized proof must verify");
         assert_eq!(
             serialize_proof(&de).expect("re-serializes"),
             bytes,

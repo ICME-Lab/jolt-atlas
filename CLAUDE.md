@@ -83,9 +83,12 @@ Workspace members, in dependency order:
   `lookup_tables`, `msm`, `transcripts`, `config`. `transcripts` runs on upstream
   `jolt-transcript`'s split surface: the prover uses a `ProvingTranscript` (spongefish
   `ProverState`, proof-of-work grinding behind the `prover` feature), the verifier a
-  `VerifyingTranscript` over the proof's NARG string. The BN254 scalar is upstream
-  `jolt_field::Fr` (`field::bn254`, forwarding to the `ark_bn254::Fr` kernel); `field::fp128`
-  is the 128-bit Solinas field for the lattice backend.
+  `VerifyingTranscript` over the proof's NARG string. `field::JoltField` extends upstream
+  `jolt_field::JoltField` (ring/field methods resolve to upstream's) and adds the
+  unreduced-product ladder and challenge types. The BN254 scalar is upstream `jolt_field::Fr`
+  (`field::bn254`; its ladder runs on the private arkworks kernel in `field::ark`, and
+  `ark_bn254::Fr` itself is not a `JoltField`); `field::fp128` is the 128-bit Solinas field for
+  the lattice backend.
 - **atlas-trace** — deterministic fixed-point IR, op semantics, and the trace engine. Owns the
   behavioral contract below.
 - **atlas-onnx-import** — tract-free ONNX frontend: protobuf decode (prost, vendored proto),

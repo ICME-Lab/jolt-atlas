@@ -17,94 +17,120 @@ Soundness depends only on what the verifier checks, but today the verifier is in
 the prover across `jolt-atlas-core`: every op module holds a prover/verifier pair, witness
 generation sits next to verification, and nothing stops verifier code from reaching prover
 internals. An auditor asking "what exactly does the verifier accept?" has no boundary to stand
-on. This spec extracts verification into a `jolt-atlas-verifier` crate — as upstream a16z/jolt
-separates its verifier — so the trust perimeter becomes a cargo dependency edge: the audit
-surface is one crate, the compiler enforces that verification cannot depend on prover-only
-code, and lightweight verification targets (wasm, embedded, constrained environments) build
-without the prover.
+on. This spec creates a `jolt-atlas-verifier` crate — as upstream a16z/jolt separates its
+verifier — so the trust perimeter becomes a cargo dependency edge. **This PR ships phase 1,
+the proof-type boundary**: the crate exists, owns the proof artifact, and carries the CI
+isolation build; verification logic crosses in later phases as the per-op code is freed from
+its prover halves (via the expression-engine migration) and the toolkit underneath is replaced
+by upstream adoption (`specs/upstream-adoption.md`).
 
 ## Intent
 
 ### Goal
 
-Create a `jolt-atlas-verifier` crate containing everything required to deserialize and verify an
-`ONNXProof` against a model and its public IO — verifier preprocessing, the verifier opening
-accumulator, sumcheck verification, PCS verification, transcripts, and the per-op verification
-logic — and nothing a verifier does not need: no trace execution, no witness generation, no
-commitment or proving code.
+Phase 1 (this PR): create `jolt-atlas-verifier` owning the proof artifact — `ONNXProof`, its
+serialization, construction (`from_parts`) and read accessors — with a CI build that compiles
+the crate in isolation, and convert every inherent `ONNXProof` method in `jolt-atlas-core`
+(proving *and* verification) into core-owned free functions over the moved type.
+
+End state (later phases, closed jointly with `specs/upstream-adoption.md`): the crate owns
+verifier preprocessing, the `Verifier` state and verification loop, per-op verification and
+deferred-lookup verification, with an inherent `verify` back on the type, and a dependency cone
+containing no prover code.
 
 ### Invariants
 
-- Behavior-preserving: a proof that verifies before the split verifies after it, and vice versa;
-  transcript byte streams are unchanged (the zoo e2es verify with transcript lockstep and
-  serialization round-trips).
-- The verifier crate must not depend on `jolt-atlas-core` or `atlas-trace` execution: no witness
-  generation, no proving, no per-op prover code, no trace execution. This is the boundary `cargo`
-  and the CI isolation build actually enforce in phase 1. Named exception: the crate depends on
-  `joltworks` whole, whose prover APIs (e.g. `CommitmentScheme::commit`) remain *reachable* though
-  unused; review holds that line until the upstream-adoption program
-  (`specs/upstream-adoption.md`) closes it compile-time by replacing `joltworks` with vendored
-  upstream verifier-side crates.
-- The verifier still derives everything it trusts from the model and the proof alone: it may
-  depend on `atlas-trace` for graph structure and `semantics` (lookup-table generation is part of
-  the statement), never on trace *execution*.
+- Behavior-preserving in every phase: a proof that verifies before a move verifies after it;
+  transcript byte streams are unchanged (zoo e2es with transcript lockstep and serialization
+  round-trips).
+- The verifier crate must not depend on `jolt-atlas-core`. This is the boundary `cargo` and the
+  CI isolation build actually enforce. Two reachable-but-unused exceptions are held by review,
+  not by the compiler, until closed: (a) `joltworks` prover APIs (e.g.
+  `CommitmentScheme::commit`) — closed compile-time by upstream adoption; (b) `atlas-trace`
+  *execution* (`Model::trace` lives in the same crate as the graph and `semantics` the verifier
+  legitimately needs) — closed by a future `atlas-trace` feature split; until then, "the
+  verifier never executes the trace" is a review-held line, not a compiler-held one.
 - The proof serialization format is unchanged, or changes land in their own PR before this one.
-- Soundness sweeps, the op-surface table, and the zoo run against the extracted verifier — the
-  sweeps' subject is precisely the code that moves.
+- Every existing soundness-sweep assertion and mutation/forgery site is preserved; only harness
+  wiring may change (see Testing Strategy).
+- No prover type appears in the verifier crate's API, in any phase. `ProverDebugInfo` stays
+  core-owned; lockstep comparison happens on core's side (see Testing Strategy).
 
 ### Non-Goals
 
-- Splitting `joltworks` at all. The end state is complete decomposition — the verifier's whole
-  dependency cone prover-free, as upstream a16z/jolt separates it — reached by the
-  upstream-adoption program (`specs/upstream-adoption.md`), not by splitting our fork. This spec
-  lands only the product boundary and its CI check.
-- The `zk` feature. BlindFold verification stays in `jolt-atlas-core` behind `zk` until the
-  feature has tests.
-- Minimizing verifier dependencies (e.g. a no-std story). The crate boundary comes first;
-  dependency dieting is follow-up.
+- Moving verification logic in this PR. The `Verifier` state, `verify` loop, per-op verifiers,
+  deferred-lookup verification and verifier preprocessing stay in core until later phases (see
+  Design for why each would otherwise create a dependency cycle).
+- Splitting `joltworks` at all: superseded by the upstream-adoption program
+  (`specs/upstream-adoption.md`), whose final stage closes this spec's dependency cone.
+- The `zk` feature. BlindFold verification stays in `jolt-atlas-core` behind `zk`.
+- Minimizing verifier dependencies (no-std, the `atlas-trace` feature split): follow-ups.
 - Changing any verification logic. Pure reorganization; protocol changes land separately.
 
 ## Evaluation
 
 ### Acceptance Criteria
 
-- [ ] `jolt-atlas-verifier` builds in isolation (`cargo check -p jolt-atlas-verifier`) with no
-  dependency on `jolt-atlas-core` (witness generation, proving, per-op prover code) or on trace
-  execution. Prover APIs inside `joltworks` remain reachable in phase 1; the criterion is the
-  crate edge, not API reachability (see End state).
-- [ ] `ONNXProof::verify` call sites migrate to the new crate's entry point; `jolt-atlas-core`
-  re-exports it during the transition so downstream code moves at its own pace.
-- [ ] `cargo nextest run --workspace` passes; the zoo e2es' transcript-lockstep and
-  byte-identical re-serialization checks pass against the extracted verifier. The lockstep
-  comparison hooks are gated by a `test-util` cargo feature on the verifier crate (not
-  `#[cfg(test)]`, which is off when the crate compiles as a dependency of core's tests), enabled
-  through core's dev-dependency. A canary test forces a transcript divergence and asserts the
-  lockstep check fires, so silently compiled-out hooks fail CI.
-- [ ] The real-model heavy job (GPT-2 Dory, BGE, Qwen) passes once on the extraction branch.
-- [ ] CI gains a job (or build step) that builds the verifier crate alone, so a future
-  prover-dependency leak fails CI rather than an audit.
+Phase 1 — this PR:
+
+- [ ] `jolt-atlas-verifier` exists, owns `ONNXProof` + serialization + `ONNXProof::from_parts`
+  (taking **every** field: construction is production prover code, so nothing about it is
+  test-gated) + public read accessors for the fields core's verification free functions
+  consume.
+- [ ] `cargo check -p jolt-atlas-verifier` builds in isolation with no dependency on
+  `jolt-atlas-core`; CI gains that build as a job, so a future core-dependency leak fails CI.
+- [ ] Core's inherent `ONNXProof` methods are free functions (`jolt_atlas_core::prove`,
+  `prove_from_trace`, `verify`, and the verification helpers they call), over the moved type —
+  both sides at once, because a type defined in another crate admits no inherent impls in core
+  (the same coherence rule either way).
+- [ ] A `test-util` feature on the verifier crate gates `&mut` accessors for proof fields, and
+  `testing/mutate.rs` reaches proof internals only through them (it loses module-privacy access
+  when the type moves). Reads need no gating (public accessors); construction needs none
+  (`from_parts`).
+- [ ] `cargo nextest run --workspace` passes with every sweep assertion and mutation/forgery
+  site intact; the zoo's transcript-lockstep and byte-identical re-serialization checks pass.
+- [ ] The real-model heavy job (GPT-2 Dory minimum) passes once on the branch.
+
+Later phases (recorded here for the program's shape; ticked by their own PRs, not this one):
+
+- [ ] Verifier preprocessing moves once the per-op committed-polynomial registry
+  (`NodeCommittedPolynomials`) moves with the per-op migration.
+- [ ] The `Verifier` state, verification loop and deferred verification move when no per-op
+  verifier remains in core; `verify` re-attaches to `ONNXProof` as an inherent method and
+  core's free `verify` becomes a re-export shim, then disappears.
+- [ ] With `verify` in the crate: lockstep becomes a `test-util` **state recorder** on the
+  verifier's transcript/accumulator — the verifier never sees `ProverDebugInfo`; core's test
+  harness installs the recorder and compares the recording against prover state on its side. A
+  canary test forces a transcript divergence and asserts the recorder-based lockstep catches
+  it, so silently compiled-out hooks fail CI.
+- [ ] The isolation build compiles `default-features` (no `test-util`) in every phase.
 
 ### Testing Strategy
 
-The suite's value here is proving the reorganization changed nothing: every existing assertion
-and mutation/forgery site is preserved. Harness *wiring* may change — the mutation sweep reaches
-proof internals (`reduced_opening_proof`, `joint_opening_proof`) through module privacy today,
-which a crate boundary removes — so the verifier crate exposes `test-util`-gated mutation
-accessors for the proof fields the sweep targets, and `testing/mutate.rs` goes through them. The
-sweeps, tamper harness and op-surface table stay in `jolt-atlas-core`'s `onnx_proof/testing/`
-(they need the prover to build proofs to attack) and drive the extracted verifier through the
-new crate. One new test: the lockstep canary named in the acceptance criteria.
+The suites prove the reorganization changed nothing: op-surface table, the three soundness
+sweeps, the zoo, importer goldens. Harness wiring changes are confined to `testing/mutate.rs`
+(test-util mutation accessors replace direct field access) in phase 1, and to the lockstep
+recorder when `verify` moves. In phase 1 the lockstep path is untouched: core's free `verify`
+keeps the existing `#[cfg(test)]` comparison block; the recorder and canary land only in the
+phase that moves `verify`, because until then there is nothing in the verifier crate to gate —
+a phase-1 canary would exercise core's `cfg(test)` path and tick a box without protecting
+anything.
 
 ### Performance
 
-None expected: code motion, no algorithmic change. Verified by the `prove` example on
-`models/gpt2 --pcs dory` (verify stage of the README benchmark table, no regression).
+Code motion only; verified by the `prove` example on `models/gpt2 --pcs dory` (README benchmark
+table, verify stage, no regression). Note: examples build with dev-dependencies, so a core
+dev-dep enabling `test-util` puts the hook-bearing configuration in the benchmark binary. The
+spec therefore requires `test-util` hooks (mutation accessors now, the state recorder later) to
+be **inert unless explicitly invoked** — no recording, no allocation, nothing beyond an
+installed-recorder check — and the benchmark runs with no recorder installed, so the measured
+verifier is the one downstream users build.
 
 ## Design
 
 ### Architecture
 
-Target dependency graph:
+Target dependency graph (end state):
 
 ```
 common ─▶ joltworks* ─▶ jolt-atlas-verifier ─▶ jolt-atlas-core (prover, witness, testing)
@@ -116,55 +142,44 @@ common ─▶ joltworks* ─▶ jolt-atlas-verifier ─▶ jolt-atlas-core (prov
 (`specs/upstream-adoption.md`); the edge and the boundary drawn here are unchanged by that
 substitution.
 
-At the end state, `jolt-atlas-verifier` owns: verifier preprocessing
-(`AtlasVerifierPreprocessing`), proof types and deserialization, the `Verifier` state and
-verification loop, per-op verifier logic, the deferred-lookup verification, and
-range-check/clamp verification parameters. `jolt-atlas-core` keeps the prover, witness
-generation, trace integration, the `prove` example, and all of `testing/` (which needs both
-sides).
+**Phase 1 — the proof-type boundary.** What moves is exactly the no-core-dependency set: the
+`ONNXProof` struct, its serialization, `from_parts`, read accessors, and `test-util` mutation
+accessors. Everything else once considered for the skeleton fails a dependency check:
 
-**Proof-type ownership.** `ONNXProof` and its inherent `verify` move with the verifier crate.
-Core cannot then keep inherent `prove` / `prove_from_trace` impls on the type (re-exports don't
-bypass coherence), so proving becomes core-owned free functions (`jolt_atlas_core::prove`,
-`prove_from_trace`) returning an `ONNXProof` built through a public `ONNXProof::from_parts`
-constructor; call sites migrate mechanically. The `test-util` mutation accessors above cover the
-fields `from_parts` doesn't expose.
+- *Verification logic* (`verify`, `Verifier`, `verify_iop`, deferred verification) calls core's
+  per-op `OperatorVerifier` — moving it is a cargo cycle. It stays in core as free functions
+  over the moved type. The free-function conversion is forced by coherence anyway: once
+  `ONNXProof` is defined in another crate, core can keep inherent impls for neither `prove` nor
+  `verify`, so both sides convert symmetrically in the same commit.
+- *Verifier preprocessing* (`AtlasVerifierPreprocessing`) embeds `AtlasSharedPreprocessing`,
+  whose `get_models_committed_polynomials` calls the per-op committed-polynomial registry
+  (`NodeCommittedPolynomials` in `ops/`) — the same cycle. It stays in core until the per-op
+  migration moves the registry.
 
-**Buildable intermediate boundary.** Per-op prover and verifier code share files and private
-helpers, and the verification loop (`verify_iop`) dispatches into per-op verifiers: moving the
-loop while per-op verifiers remain in core would create a `cargo` dependency cycle (verifier
-crate → core's `OperatorVerifier`, core → verifier crate's proof types). So the loop does not
-move in phase 1:
+**Field-access design.** `from_parts` takes every proof field: the prover constructs complete
+proofs in production code, so a partial constructor plus test-gated setters cannot serve it.
+Reads used by core's verification free functions (the reduced opening proof, the joint opening
+proof, claims, commitments) are public read-only accessors — production code, not test code.
+The `test-util` feature gates only *mutation* (the sweep's tampering), keeping the production
+proof API immutable after construction.
 
-1. **Skeleton first**: the crate starts with what has no core dependencies — proof types,
-   deserialization, `from_parts`, verifier preprocessing — plus the CI isolation build. Core
-   re-exports the moved types; the top-level `verify`, the `Verifier` state and the
-   deferred-lookup verification stay in core for now.
-2. **Per-op verifier logic arrives via the expression-engine migration** (see the
-   verifier-simplification work): once op identities are data consumed by a generic interpreter,
-   per-op verifier code largely disappears, the interpreter and op specs land in the verifier
-   crate, and the verification loop and `Verifier` state move last, when nothing they dispatch to
-   remains in core — far fewer files, split once instead of twice.
-
-The enforcement value (the crate edge and its CI check) lands with step 1; the boundary tightens
-monotonically until `verify` itself crosses in step 2's final move.
+**Per-op verifier logic arrives via the expression-engine migration** (the
+verifier-simplification work): once op identities are data consumed by a generic interpreter,
+per-op verifier code largely disappears, the interpreter and op specs land in the verifier
+crate, and the verification loop, `Verifier` state and preprocessing move last, when nothing
+they dispatch to remains in core.
 
 ### End state
 
 The end state is complete decomposition: no crate in the verifier's dependency cone contains
 prover code. With `jolt-atlas-verifier` depending on `joltworks` whole, cargo cannot stop
-verifier code from calling `joltworks`' prover halves, and light targets link prover machinery
-they never run — the boundary has a hole one layer down.
-
-This spec lands the product boundary and its CI isolation build: the layer where the audit risk
-concentrates (per-op verification, claim plumbing). The hole below it is closed by the
-upstream-adoption program (`specs/upstream-adoption.md`), which replaces `joltworks`
-subsystem-by-subsystem with vendored upstream verifier-side crates (`jolt-sumcheck`,
-`jolt-poly`, `jolt-openings`/`jolt-claims`, the PCS crates); that program's final stage is
-exactly this spec's end state — `jolt-atlas-verifier`'s dependency cone prover-free, proven by
-the isolation build. The two specs divide cleanly: this one draws the box around our ONNX
-verifier (which upstream, whose `jolt-verifier` verifies RISC-V execution, can never supply);
-the adoption program swaps the machinery underneath it.
+verifier code from calling `joltworks`' prover halves — the boundary has a hole one layer
+down. The hole is closed by the upstream-adoption program (`specs/upstream-adoption.md`),
+which replaces `joltworks` subsystem-by-subsystem with vendored upstream verifier-side crates;
+that program's final stage is exactly this spec's end state, proven by the same CI isolation
+build. The two specs divide cleanly: this one draws the box around our ONNX verifier (which
+upstream, whose `jolt-verifier` verifies RISC-V execution, can never supply); the adoption
+program swaps the machinery underneath it.
 
 ### Alternatives Considered
 
@@ -172,24 +187,27 @@ the adoption program swaps the machinery underneath it.
   easy to mis-combine; they don't give an auditable dependency edge, and nothing stops a later
   change from leaking prover code into the "verifier-only" cfg.
 - **Extracting a verifier-primitives crate out of `joltworks`** (or splitting it behind a
-  `prover` feature): superseded — upstream a16z/jolt now ships the decomposed toolkit, so the
-  subprotocol-level split arrives by adoption (`specs/upstream-adoption.md`) instead of by
-  carving up our fork. The product-level boundary (what does *jolt-atlas* verification need?)
-  remains this spec's job and is the one audits and light targets ask for first.
-- **Splitting every op file by hand now**: rejected as double work; see sequencing above.
+  `prover` feature): superseded — upstream ships the decomposed toolkit; the subprotocol-level
+  split arrives by adoption (`specs/upstream-adoption.md`) instead of by carving up our fork.
+- **Splitting every op file by hand now**: rejected as double work; the expression-engine
+  migration separates per-op prover/verifier code as a by-product.
+- **Moving `verify` in phase 1 behind a dependency-inversion trait** (core registers per-op
+  verifiers into the crate at runtime): rejected — it buys the entry point early at the cost of
+  a dynamic dispatch seam inside the audit surface that the end state doesn't want, and the
+  cycle analysis above shows the honest phase-1 boundary is the proof type.
 
 ## Documentation
 
-`README.md` (crate map, verification usage), `CLAUDE.md`/`AGENTS.md` crate map, and
+`README.md` (crate map, proof-type ownership), `CLAUDE.md`/`AGENTS.md` crate map, and
 `CONTRIBUTING.md` CI table gain the new crate and the isolation build job.
 
 ## Execution
 
-Suggested commit sequence for the skeleton PR: (1) create the crate with proof types,
-deserialization and `ONNXProof::from_parts` moved, core's proving as free functions, re-exports
-in place; (2) move verifier preprocessing; (3) `test-util` feature with the lockstep hooks and
-mutation accessors, plus the canary test; (4) CI isolation build. The `Verifier` state,
-verification loop and per-op verifier moves ride later PRs per the sequencing above.
+Suggested commit sequence for the phase-1 PR: (1) convert core's inherent `ONNXProof` methods
+to free functions in place (mechanical, reviewable alone); (2) create the crate and move the
+type, serialization, `from_parts` and read accessors, updating call sites; (3) `test-util`
+mutation accessors and the `testing/mutate.rs` rewiring; (4) the CI isolation build
+(`default-features`). Later phases ride their own PRs per the sequencing above.
 
 ## References
 
@@ -197,5 +215,5 @@ verification loop and per-op verifier moves ride later PRs per the sequencing ab
 - `specs/upstream-adoption.md` (#397): retires `joltworks` via vendored upstream crates and
   closes this spec's dependency cone; `docs/upstream-inventory.md` is its factual basis.
 - `specs/core-test-overhaul.md` (the sweeps that gate this reorganization).
-- Verifier-simplification arc: claim-lifecycle hardening PRs, expression-engine design (spec to
-  follow).
+- Verifier-simplification arc: claim-lifecycle hardening PRs (#394, #395), expression-engine
+  design (spec to follow).

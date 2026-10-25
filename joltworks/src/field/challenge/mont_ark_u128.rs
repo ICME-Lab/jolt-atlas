@@ -1,11 +1,10 @@
 //! Optimized Challenge field for faster polynomial operations
 //!
-//! This module implements a specialized Challenge type that is a 125-bit subset of JoltField
-//! with the two least significant bits zeroed out. This constraint enables ~1.6x faster
-//! multiplication with ark_bn254::Fr elements, resulting in ~1.3x speedup for polynomial
-//! binding operations.
-//!
-//! For implementation details and benchmarks, see: *TODO: LINK*
+//! This module implements a specialized Challenge type: a 125-bit value (the top three bits of the
+//! drawn `u128` are masked) placed in the two high limbs of a Montgomery-form element, exactly
+//! uniform on its 2^125-element set. This constraint enables ~1.6x faster multiplication with
+//! BN254 scalars, resulting in ~1.3x speedup for polynomial binding operations. The set size
+//! prices the transcript's proof of work before each sumcheck round challenge.
 
 use crate::field::bn254::MulHiBigintU128;
 use crate::field::OptimizedMul;

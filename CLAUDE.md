@@ -77,10 +77,13 @@ Workspace members, in dependency order:
 
 - **common** — shared constants and parallel helpers.
 - **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
-  (`third_party/PINS.md`): `jolt-field`.
+  (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`.
 - **joltworks** — the proof-system toolkit inherited from Jolt: `field`, `poly` (multilinear
   polynomials and commitment schemes), `subprotocols` (sumcheck, evaluation reduction),
-  `lookup_tables`, `msm`, `transcripts`, `config`. The BN254 scalar is upstream
+  `lookup_tables`, `msm`, `transcripts`, `config`. `transcripts` runs on upstream
+  `jolt-transcript`'s split surface: the prover uses a `ProvingTranscript` (spongefish
+  `ProverState`, proof-of-work grinding behind the `prover` feature), the verifier a
+  `VerifyingTranscript` over the proof's NARG string. The BN254 scalar is upstream
   `jolt_field::Fr` (`field::bn254`, forwarding to the `ark_bn254::Fr` kernel); `field::fp128`
   is the 128-bit Solinas field for the lattice backend.
 - **atlas-trace** — deterministic fixed-point IR, op semantics, and the trace engine. Owns the

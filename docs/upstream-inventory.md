@@ -30,7 +30,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 | `joltworks` module | Upstream counterpart | Bucket | Notes |
 |---|---|---|---|
 | `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | adopt (stage 2: vendored) | `jolt-field` is vendored at `0e3faf07`; the BN254 scalar is `jolt_field::Fr` and `JoltField` is implemented for it and for `Fp128`. Our `JoltField` trait and `challenge/mont_ark_*` (the pre-codec design) remain atlas-side until the stage-3/4 ports move onto upstream's traits. |
-| `transcripts/` (blake2b, keccak) | `jolt-transcript` | adopt+delta | Upstream adds codecs, bias budget, PoW, prover/verifier split. Proof-format change; stage 3. |
+| `transcripts/` (blake2b, keccak) | `jolt-transcript` | adopted (stage 3) | `jolt-transcript` is vendored; `joltworks::transcripts` keeps our `Transcript` trait as a thin layer over upstream's split surface (`ProverState`/`VerifierState`, codecs, `grind`). The remaining delta is that trait itself, which the stage-4 ports replace with upstream's. |
 | `subprotocols/sumcheck{,_prover,_verifier}.rs` | `jolt-sumcheck` | adopt+delta | Heavily diverged both ways (~842 changed lines vs the 2026-06 jolt-core copy); our batching and instance traits vs their scheduler/recorder. |
 | `poly/` core (dense, multilinear, eq, split_eq, unipoly, compact, lagrange, …) | `jolt-poly` | adopt+delta | `split_eq_poly` is ~12% diverged from the 2026-06 copy — the closest module we have; most deltas are atlas perf work (fold routines). |
 | `poly/opening_proof.rs`, `subprotocols/opening_reduction.rs` | `jolt-openings` + `jolt-claims` | rebuild-on-adopt | Ours is fully diverged (~2,074 changed lines of 1,636): the accumulator is keyed on atlas `OpeningId`/`VirtualPoly` and interleaved with evaluation reduction. Upstream's claim lattice is architecturally what the verifier-simplification arc's claim-ledger/ProofPlan design describes — evaluate adopting it instead of building our own. |
@@ -54,7 +54,7 @@ shared-ancestry subsystems, in priority order:
 
 | Commit | Area | Verdict (stage 0) | Remediation |
 |---|---|---|---|
-| `e012da54` reject G1/G2 encodings with trailing bytes | crypto / deserialization | **Applies, robustness.** The upstream pattern (serde decoding a point from a `Vec<u8>` and ignoring the tail) does not exist here: commitments and points stream through one ark reader. The same byte-level malleability exists one level up: `deserialize_proof` accepts `proof ‖ junk`, and the map decoders (`deserialize_btreemap`, `Claims`) accept unsorted and duplicate keys. No false acceptance: the verifier checks the decoded object, and the transcript absorbs re-serialized values, never raw bytes. | Stage 3 (the proof format changes there): reject leftover bytes in `deserialize_proof`; require strictly increasing keys in map decoding. |
+| `e012da54` reject G1/G2 encodings with trailing bytes | crypto / deserialization | **Applies, robustness.** The upstream pattern (serde decoding a point from a `Vec<u8>` and ignoring the tail) does not exist here: commitments and points stream through one ark reader. The same byte-level malleability exists one level up: `deserialize_proof` accepts `proof ‖ junk`, and the map decoders (`deserialize_btreemap`, `Claims`) accept unsorted and duplicate keys. No false acceptance: the verifier checks the decoded object, and the transcript absorbs re-serialized values, never raw bytes. | Done at stage 3: `deserialize_proof` rejects leftover bytes and map decoding requires strictly increasing keys. |
 | `521e53f6` verifier: reject trace lengths below the PCS floor | verifier bounds | **Does not apply.** `ONNXProof` carries no trace length; every size reaching PCS verification comes from the verifier's model and accumulator (round counts, claim counts and commitment counts are all checked against them). | None. |
 | `189baa3e` pick up arkworks MSM caller-pool fix | arkworks dep | **Resolved at stage 0.** `ark-ec` already resolved to `b8f0f51`, which contains the fix (a liveness issue: a thread pool built per MSM call, panicking where threads cannot spawn). The lockfile split is unified on `b8f0f51`; `76bb3a4` is its ancestor and differs only in `ark-ec`. | Done. |
 | `f75c59c2` defer Dory opening table materialization | Dory | **Does not apply.** A memory/perf change for upstream's GPU kernel seam over zkVM program tables; we have neither. | None. |
@@ -76,12 +76,22 @@ under Fp128. Remediation: stage 3 adopts the codecs and the `ChallengeSetSize`-p
 before the 125-bit sumcheck challenges. (The `mont_ark_u128` module doc says the two low bits are
 zeroed; the code masks the top three. Fixed with the transcript adoption.)
 
+*Resolved at stage 3.* The transcript is upstream `jolt-transcript`'s split surface: full-width
+challenges decode through the `ChallengeCodec` (within the 2⁻¹⁶⁰ budget), and every sumcheck
+round challenge (including the univariate-skip round) is preceded by a `grind` priced by
+`grind_bits_for_loss(degree, |C| = 2¹²⁵, λ = 128)`, 3–6 bits for degree ≤ 8, so each round
+reaches 2⁻¹²⁸ per hash query. Measured cost on GPT-2 (Dory, M3, median of 3): prove 27.00 s →
+27.30 s (+1.1%), verify unchanged, proof +7,810 bytes (+0.31%, the nonce NARG string).
+
 **Further robustness findings from the triage** (none lets a false proof verify):
 
 - *Verifier memory exhaustion on crafted bytes*: ark's `Vec<T>` decoder and dory-pcs's proof
   decoder pre-allocate from a prover-supplied length (`Vec::with_capacity(len)`), so a few bytes
-  can request a huge allocation. Stage 3, with the format change: bound the input size or decode
-  through capped wrappers.
+  can request a huge allocation. Our own decoders (maps, claims, the NARG string) never
+  pre-allocate from a decoded length. The remaining sites are inside third-party decoders of
+  types later stages replace, so they are fixed with them: the sumcheck and polynomial proof
+  types at stage 4, the PCS proofs at stage 7 (capped decoding in the adopted types, or a
+  `MAX_PROOF_BYTES` bound with length checks against it).
 - *Verifier panic on an empty opening batch*: a proof carrying `Some(reduced_opening_proof)` with
   zero claims for a model with no committed openings reaches `.max().unwrap()` on an empty
   instance list in `BatchedSumcheck::verify`. Stage 5 (the opening/claim system is replaced):

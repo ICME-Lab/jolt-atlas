@@ -5,7 +5,7 @@
 | Author(s)   | @Forpee                        |
 | Created     | 2026-10-25                     |
 | Status      | proposed                       |
-| PR          | (filled when the PR opens, or at merge) |
+| PR          | #400                           |
 | Depends on  | `specs/verifier-boundary.md` (stage 1) |
 | Supersedes  | PRs #396 (program portions) and #397 (closed), and the unopened `spec/expression-engine` draft — one linear order replaces three interdependent documents |
 

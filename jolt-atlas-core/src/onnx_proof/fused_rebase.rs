@@ -198,7 +198,7 @@ pub fn committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
 pub fn prove_pre<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
-) -> (crate::onnx_proof::ops::ExecutionProofs<F, T>, Tensor<i32>) {
+) -> (crate::onnx_proof::ops::ExecutionProofs<F>, Tensor<i32>) {
     let RebaseIntermediates {
         quotient,
         remainder,
@@ -228,7 +228,7 @@ pub fn prove_remainder_rc<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
     remainder: &Tensor<i32>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
     let bits = rebase_bits(node).expect("fused op");
     let lookup_bits = remainder_lookup_bits(remainder, bits);
     // Deferred: proven after the node loop as part of the batched remainder

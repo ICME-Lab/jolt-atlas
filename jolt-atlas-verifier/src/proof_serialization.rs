@@ -17,7 +17,6 @@ use joltworks::{
         opening_proof::{OpeningId, OpeningPoint},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
 };
 
 use crate::{Claims, ONNXProof, ReducedOpeningProof};
@@ -129,13 +128,12 @@ impl<F: JoltField> CanonicalDeserialize for Claims<F> {
 }
 
 // ---------------------------------------------------------------------------
-// ReducedOpeningProof<F, T, PCS>
+// ReducedOpeningProof<F, PCS>
 // ---------------------------------------------------------------------------
 
-impl<F, T, PCS> CanonicalSerialize for ReducedOpeningProof<F, T, PCS>
+impl<F, PCS> CanonicalSerialize for ReducedOpeningProof<F, PCS>
 where
     F: JoltField,
-    T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
     fn serialize_with_mode<W: Write>(
@@ -159,10 +157,9 @@ where
     }
 }
 
-impl<F, T, PCS> Valid for ReducedOpeningProof<F, T, PCS>
+impl<F, PCS> Valid for ReducedOpeningProof<F, PCS>
 where
     F: JoltField,
-    T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
     fn check(&self) -> Result<(), SerializationError> {
@@ -170,10 +167,9 @@ where
     }
 }
 
-impl<F, T, PCS> CanonicalDeserialize for ReducedOpeningProof<F, T, PCS>
+impl<F, PCS> CanonicalDeserialize for ReducedOpeningProof<F, PCS>
 where
     F: JoltField,
-    T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
     fn deserialize_with_mode<R: Read>(
@@ -195,13 +191,12 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// ONNXProof<F, T, PCS>
+// ONNXProof<F, PCS>
 // ---------------------------------------------------------------------------
 
-impl<F, T, PCS> CanonicalSerialize for ONNXProof<F, T, PCS>
+impl<F, PCS> CanonicalSerialize for ONNXProof<F, PCS>
 where
     F: JoltField,
-    T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
     fn serialize_with_mode<W: Write>(
@@ -247,10 +242,9 @@ where
     }
 }
 
-impl<F, T, PCS> Valid for ONNXProof<F, T, PCS>
+impl<F, PCS> Valid for ONNXProof<F, PCS>
 where
     F: JoltField,
-    T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
     fn check(&self) -> Result<(), SerializationError> {
@@ -258,10 +252,9 @@ where
     }
 }
 
-impl<F, T, PCS> CanonicalDeserialize for ONNXProof<F, T, PCS>
+impl<F, PCS> CanonicalDeserialize for ONNXProof<F, PCS>
 where
     F: JoltField,
-    T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
     fn deserialize_with_mode<R: Read>(
@@ -290,12 +283,9 @@ where
 // ---------------------------------------------------------------------------
 
 /// Serialize a proof to bytes (compressed).
-pub fn serialize_proof<F, T, PCS>(
-    proof: &ONNXProof<F, T, PCS>,
-) -> Result<Vec<u8>, SerializationError>
+pub fn serialize_proof<F, PCS>(proof: &ONNXProof<F, PCS>) -> Result<Vec<u8>, SerializationError>
 where
     F: JoltField,
-    T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
     let mut buf = Vec::with_capacity(proof.serialized_size(Compress::Yes));
@@ -304,12 +294,9 @@ where
 }
 
 /// Deserialize a proof from bytes (compressed).
-pub fn deserialize_proof<F, T, PCS>(
-    bytes: &[u8],
-) -> Result<ONNXProof<F, T, PCS>, SerializationError>
+pub fn deserialize_proof<F, PCS>(bytes: &[u8]) -> Result<ONNXProof<F, PCS>, SerializationError>
 where
     F: JoltField,
-    T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 {
     ONNXProof::deserialize_compressed(bytes)

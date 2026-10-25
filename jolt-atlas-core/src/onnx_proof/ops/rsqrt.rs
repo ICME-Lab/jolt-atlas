@@ -63,7 +63,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let mut results = Vec::new();
         // Execution proof
         let params = RsqrtParams::new(node.clone(), &mut prover.transcript);
@@ -84,7 +84,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         prover: &mut Prover<F, T>,
     ) -> (
         EvalReductionProof<F>,
-        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
+        Vec<(ProofId, SumcheckInstanceProof<F>)>,
     ) {
         let mut proofs = self.prove(node, prover);
         let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
@@ -453,7 +453,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RsqrtVerifi
 fn prove_range_and_onehot<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
     // Both range checks are built now (challenges drawn, operand claims
     // appended) and proven after the node loop in the `RangeCheck` batch; their
     // one-hot checks follow that batch.

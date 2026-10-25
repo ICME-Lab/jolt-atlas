@@ -129,7 +129,7 @@ use std::collections::BTreeMap;
 use crate::onnx_proof::{ProofId, Prover, Verifier};
 
 /// Standard execution proofs emitted by an operator.
-pub(crate) type ExecutionProofs<F, T> = Vec<(ProofId, SumcheckInstanceProof<F, T>)>;
+pub(crate) type ExecutionProofs<F> = Vec<(ProofId, SumcheckInstanceProof<F>)>;
 
 /// Eval-reduction flow mode for an operator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,7 +160,7 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
     ///
     /// Returns a vector of (ProofId, Proof) pairs. Most operators return a single
     /// proof, but some (like ReLU) return multiple proofs.
-    fn prove(&self, _node: &ComputationNode, _prover: &mut Prover<F, T>) -> ExecutionProofs<F, T> {
+    fn prove(&self, _node: &ComputationNode, _prover: &mut Prover<F, T>) -> ExecutionProofs<F> {
         panic!(
             "Op selected default reduction flow but did not implement prove; either implement prove or switch reduction_flow to Custom and implement prove_with_reduction"
         )
@@ -175,7 +175,7 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
         &self,
         _node: &ComputationNode,
         _prover: &mut Prover<F, T>,
-    ) -> (EvalReductionProof<F>, ExecutionProofs<F, T>) {
+    ) -> (EvalReductionProof<F>, ExecutionProofs<F>) {
         panic!("Op selected custom reduction flow but did not implement prove_with_reduction")
     }
 
@@ -306,7 +306,7 @@ impl OperatorProver {
     pub fn prove<F, T>(
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> (EvalReductionProof<F>, ExecutionProofs<F, T>)
+    ) -> (EvalReductionProof<F>, ExecutionProofs<F>)
     where
         F: JoltField,
         T: Transcript,
@@ -320,7 +320,7 @@ impl OperatorProver {
         operator: &O,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> (EvalReductionProof<F>, ExecutionProofs<F, T>)
+    ) -> (EvalReductionProof<F>, ExecutionProofs<F>)
     where
         F: JoltField,
         T: Transcript,
@@ -500,7 +500,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
                 &self,
                 node: &ComputationNode,
                 prover: &mut Prover<F, T>,
-            ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+            ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
                 use joltworks::subprotocols::sumcheck::Sumcheck;
                 use $crate::onnx_proof::ops::{$params_ty, $prover_ty};
 
@@ -564,7 +564,7 @@ macro_rules! impl_fused_rescale_proof_api {
                 &self,
                 node: &ComputationNode,
                 prover: &mut Prover<F, T>,
-            ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+            ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
                 use joltworks::subprotocols::sumcheck::Sumcheck;
                 use $crate::onnx_proof::{
                     clamp_lookups::is_scalar,

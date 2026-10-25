@@ -24,7 +24,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let params = MoveAxisParams::<F>::new(node.clone(), &prover.accumulator);
         let moveaxis_prover = MoveAxisProver::initialize(params);
         moveaxis_prover.prove(&mut prover.accumulator, &mut prover.transcript);

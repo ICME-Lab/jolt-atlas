@@ -207,7 +207,7 @@ pub enum VerifierLookupJob {
 fn batched_prove<F: JoltField, T: Transcript>(
     mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>>,
     prover: &mut Prover<F, T>,
-    proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
     proof_type: ProofType,
 ) {
     let _s = tracing::span!(tracing::Level::INFO, "deferred::batched_prove", kind = ?proof_type)
@@ -244,7 +244,7 @@ fn batched_verify<F: JoltField, T: Transcript>(
 #[tracing::instrument(skip_all, name = "deferred_lookups::prove_all")]
 pub fn prove_all<F: JoltField, T: Transcript>(
     prover: &mut Prover<F, T>,
-    proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
 ) {
     let mut clamp: Vec<(ComputationNode, NodeSplit)> = Vec::new();
     let mut remainder: Vec<(ComputationNode, i32, Vec<LookupBits>)> = Vec::new();

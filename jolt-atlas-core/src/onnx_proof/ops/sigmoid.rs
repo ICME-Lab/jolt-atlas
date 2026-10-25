@@ -39,7 +39,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         prove_clamped_activation::<F, T, SigmoidTableMarker>(node, prover)
     }
 

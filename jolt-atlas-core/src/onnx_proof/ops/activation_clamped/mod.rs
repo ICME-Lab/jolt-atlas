@@ -422,7 +422,7 @@ impl RaOneHotEncoding for SmallTableRaEncoding {
 pub fn prove_clamped_activation<F, T, Table>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)>
+) -> Vec<(ProofId, SumcheckInstanceProof<F>)>
 where
     F: JoltField,
     T: Transcript,

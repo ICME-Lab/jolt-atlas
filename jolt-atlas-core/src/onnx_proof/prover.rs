@@ -154,7 +154,7 @@ pub(crate) fn output_claim<F: JoltField, T: Transcript>(prover: &mut Prover<F, T
 pub(crate) fn iop<F: JoltField, T: Transcript>(
     model: &Model,
     prover: &mut Prover<F, T>,
-    proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
     eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
 ) {
     for node in model.views().iter().rev() {
@@ -175,7 +175,7 @@ pub(super) fn prove_reduced_openings<
     poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
     hints: Vec<PCS::OpeningProofHint>,
     generators: &PCS::ProverSetup,
-) -> Option<ReducedOpeningProof<F, T, PCS>> {
+) -> Option<ReducedOpeningProof<F, PCS>> {
     if poly_map.is_empty() {
         return None;
     }
@@ -236,11 +236,11 @@ pub(super) fn finalize_proof<F: JoltField, T: Transcript, PCS: CommitmentScheme<
     mut prover: Prover<F, T>,
     io: ModelExecutionIO,
     commitments: Vec<PCS::Commitment>,
-    proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    proofs: BTreeMap<ProofId, SumcheckInstanceProof<F>>,
     eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
-    reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
+    reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
 ) -> (
-    ONNXProof<F, T, PCS>,
+    ONNXProof<F, PCS>,
     ModelExecutionIO,
     Option<ProverDebugInfo<F, T>>,
 ) {

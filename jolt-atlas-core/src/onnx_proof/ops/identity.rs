@@ -15,7 +15,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let node_poly_opening =
             AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
         let (opening_point, claim) = node_poly_opening;

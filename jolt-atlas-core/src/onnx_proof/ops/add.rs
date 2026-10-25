@@ -50,7 +50,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Add {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         // Output opening point `r` (shared by the lookup `r_cycle` and the tie).
         let (opening_point, _claim) =
             AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();

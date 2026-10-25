@@ -56,7 +56,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let fused = fused_rebase::fuses_rebase(node);
 
         // The fused einsum proves `Σ_k L·R = rescaled·2^S + R` (division) and

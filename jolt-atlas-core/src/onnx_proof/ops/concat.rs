@@ -39,7 +39,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let params = ConcatSumcheckParams::new(
             node.clone(),
             &prover.accumulator,

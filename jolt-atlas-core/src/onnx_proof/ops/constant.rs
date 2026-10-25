@@ -18,7 +18,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Constant {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let _opening = AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
         vec![]
     }

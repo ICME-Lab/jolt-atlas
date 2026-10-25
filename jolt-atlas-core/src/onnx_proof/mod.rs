@@ -133,7 +133,7 @@ pub fn prove<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
     pp: &AtlasProverPreprocessing<F, PCS>,
     inputs: &[Tensor<i32>],
 ) -> (
-    ONNXProof<F, T, PCS>,
+    ONNXProof<F, PCS>,
     ModelExecutionIO,
     Option<ProverDebugInfo<F, T>>,
 ) {
@@ -149,7 +149,7 @@ pub(crate) fn prove_from_trace<F: JoltField, T: Transcript, PCS: CommitmentSchem
     pp: &AtlasProverPreprocessing<F, PCS>,
     trace: atlas_trace::Trace,
 ) -> (
-    ONNXProof<F, T, PCS>,
+    ONNXProof<F, PCS>,
     ModelExecutionIO,
     Option<ProverDebugInfo<F, T>>,
 ) {
@@ -202,7 +202,7 @@ pub(crate) fn prove_from_trace<F: JoltField, T: Transcript, PCS: CommitmentSchem
 /// computation produces the expected output.
 #[tracing::instrument(skip_all, name = "ONNXProof::verify")]
 pub fn verify<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
-    proof: &ONNXProof<F, T, PCS>,
+    proof: &ONNXProof<F, PCS>,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     io: &ModelExecutionIO,
     _debug_info: Option<ProverDebugInfo<F, T>>,

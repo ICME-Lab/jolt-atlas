@@ -280,7 +280,7 @@ pub fn prove_clamp_lookup<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
     intermediate: Option<Tensor<i64>>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
     let witness = intermediate.unwrap_or_else(|| clamp_intermediate(node, &prover.trace));
     let provider =
         OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node));

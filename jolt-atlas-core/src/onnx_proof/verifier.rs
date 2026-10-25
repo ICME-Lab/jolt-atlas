@@ -36,7 +36,7 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
     /// Interactive proof transcript.
     pub transcript: T,
     /// Map of proof IDs to sumcheck proofs.
-    pub proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    pub proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F>>,
     /// Model execution inputs and outputs.
     pub io: &'a ModelExecutionIO,
     /// Lookups registered during the node loop, verified afterwards in one
@@ -55,7 +55,7 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
     /// Create a new verifier with the given preprocessing, proofs, and IO
     pub fn new(
         preprocessing: &'a AtlasSharedPreprocessing,
-        proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F>>,
         io: &'a ModelExecutionIO,
     ) -> Self {
         Self {
@@ -96,7 +96,7 @@ pub(super) fn populate_accumulator<
     T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 >(
-    proof: &ONNXProof<F, T, PCS>,
+    proof: &ONNXProof<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
 ) {
     // Load all opening claims from the proof (NodeOutput+Execution claims
@@ -154,7 +154,7 @@ pub(crate) fn verify_output_claim<F: JoltField, T: Transcript>(
 /// Iterate over computation graph in reverse topological order and verify each operation.
 #[tracing::instrument(skip_all, name = "ONNXProof::verify_iop")]
 pub(crate) fn verify_iop<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
-    proof: &ONNXProof<F, T, PCS>,
+    proof: &ONNXProof<F, PCS>,
     model: &Model,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
@@ -178,7 +178,7 @@ pub(super) fn verify_reduced_openings<
     T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 >(
-    proof: &ONNXProof<F, T, PCS>,
+    proof: &ONNXProof<F, PCS>,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {

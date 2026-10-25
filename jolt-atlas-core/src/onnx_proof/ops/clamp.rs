@@ -80,7 +80,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         debug_assert_eq!(self.bound_log as usize, CLAMP_BOUND);
         let mut results = Vec::new();
 

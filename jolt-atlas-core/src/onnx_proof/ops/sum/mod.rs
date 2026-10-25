@@ -51,7 +51,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let sum_config = utils::dims::sum_config(node, &prover.preprocessing.model);
 
         // (1+2) Prove `output = SatClamp(acc)`. Non-scalar: clamp lookup + one-hot.

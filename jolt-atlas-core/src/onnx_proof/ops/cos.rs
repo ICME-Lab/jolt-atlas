@@ -55,7 +55,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         assert_eq!(
             node.scale, MODEL_SCALE as u8,
             "Cos teleportation proving is only calibrated for MODEL_SCALE={MODEL_SCALE} \

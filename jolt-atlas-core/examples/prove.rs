@@ -266,7 +266,8 @@ fn run<PCS: CommitmentScheme<Field = Fr>>(
 
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, PCS>::from(&prover_pp);
     let t = Instant::now();
-    verify(&proof, &verifier_pp, &io, None).expect("verification failed");
+    verify::<Fr, Blake2bTranscript, PCS>(&proof, &verifier_pp, &io, None)
+        .expect("verification failed");
     println!("[{label}] verify: {:.2?}", t.elapsed());
     println!("Proof verified successfully!");
 }

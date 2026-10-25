@@ -23,7 +23,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherSmall {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let mut results = Vec::new();
 
         let params = GatherParams::new(

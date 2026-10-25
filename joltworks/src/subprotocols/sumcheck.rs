@@ -18,7 +18,6 @@ use crate::{
 
 use ark_serialize::*;
 use rayon::prelude::*;
-use std::marker::PhantomData;
 
 /// Implements the standard technique for batching parallel sumchecks to reduce
 /// verifier cost and proof size.
@@ -32,7 +31,7 @@ impl BatchedSumcheck {
         sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
-    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
+    ) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
         Self::prove_inner(sumcheck_instances, opening_accumulator, transcript, false)
     }
 
@@ -49,7 +48,7 @@ impl BatchedSumcheck {
         sumcheck_instances: Vec<&mut dyn SumcheckInstanceProver<F, ProofTranscript>>,
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
-    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
+    ) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
         Self::prove_inner(sumcheck_instances, opening_accumulator, transcript, true)
     }
 
@@ -58,7 +57,7 @@ impl BatchedSumcheck {
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
         parallel_instances: bool,
-    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
+    ) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
         let max_num_rounds = sumcheck_instances
             .iter()
             .map(|sumcheck| sumcheck.num_rounds())
@@ -247,7 +246,7 @@ impl BatchedSumcheck {
 
     #[tracing::instrument(skip_all, name = "BatchedSumcheck::verify")]
     pub fn verify<F: JoltField, ProofTranscript: Transcript>(
-        proof: &SumcheckInstanceProof<F, ProofTranscript>,
+        proof: &SumcheckInstanceProof<F>,
         sumcheck_instances: Vec<&dyn SumcheckInstanceVerifier<F, ProofTranscript>>,
         opening_accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
@@ -329,7 +328,7 @@ impl Sumcheck {
         sumcheck_instance: &mut dyn SumcheckInstanceProver<F, ProofTranscript>,
         opening_accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
-    ) -> (SumcheckInstanceProof<F, ProofTranscript>, Vec<F::Challenge>) {
+    ) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
         let num_rounds = sumcheck_instance.num_rounds();
 
         // Append input claims to transcript
@@ -363,7 +362,7 @@ impl Sumcheck {
 
     #[tracing::instrument(skip_all, name = "Sumcheck::verify")]
     pub fn verify<F: JoltField, ProofTranscript: Transcript>(
-        proof: &SumcheckInstanceProof<F, ProofTranscript>,
+        proof: &SumcheckInstanceProof<F>,
         sumcheck_instance: &dyn SumcheckInstanceVerifier<F, ProofTranscript>,
         opening_accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut ProofTranscript,
@@ -385,19 +384,13 @@ impl Sumcheck {
 }
 
 #[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone)]
-pub struct SumcheckInstanceProof<F: JoltField, ProofTranscript: Transcript> {
+pub struct SumcheckInstanceProof<F: JoltField> {
     pub compressed_polys: Vec<CompressedUniPoly<F>>,
-    _marker: PhantomData<ProofTranscript>,
 }
 
-impl<F: JoltField, ProofTranscript: Transcript> SumcheckInstanceProof<F, ProofTranscript> {
-    pub fn new(
-        compressed_polys: Vec<CompressedUniPoly<F>>,
-    ) -> SumcheckInstanceProof<F, ProofTranscript> {
-        SumcheckInstanceProof {
-            compressed_polys,
-            _marker: PhantomData,
-        }
+impl<F: JoltField> SumcheckInstanceProof<F> {
+    pub fn new(compressed_polys: Vec<CompressedUniPoly<F>>) -> SumcheckInstanceProof<F> {
+        SumcheckInstanceProof { compressed_polys }
     }
 
     /// Verify this sumcheck proof.
@@ -413,7 +406,7 @@ impl<F: JoltField, ProofTranscript: Transcript> SumcheckInstanceProof<F, ProofTr
     /// Returns (e, r)
     /// - `e`: Claimed evaluation at random point
     /// - `r`: Evaluation point
-    pub fn verify(
+    pub fn verify<ProofTranscript: Transcript>(
         &self,
         claim: F,
         num_rounds: usize,

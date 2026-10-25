@@ -504,7 +504,7 @@ where
     pub fn prove_batch_opening_sumcheck<T: Transcript>(
         &mut self,
         transcript: &mut T,
-    ) -> (SumcheckInstanceProof<F, T>, Vec<F::Challenge>) {
+    ) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
         #[cfg(feature = "allocative")]
         {
             print_data_structure_heap_usage("Opening accumulator", &(*self));
@@ -905,7 +905,7 @@ where
     )]
     pub fn verify_batch_opening_sumcheck<T: Transcript>(
         &self,
-        sumcheck_proof: &SumcheckInstanceProof<F, T>,
+        sumcheck_proof: &SumcheckInstanceProof<F>,
         transcript: &mut T,
     ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
         let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = self

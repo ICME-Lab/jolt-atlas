@@ -81,9 +81,9 @@ where
     if opts.serialization_roundtrip {
         let bytes = serialize_proof(&proof).expect("proof serializes");
         println!("proof size: {} bytes", bytes.len());
-        let de: ONNXProof<PCS::Field, Blake2bTranscript, PCS> =
-            deserialize_proof(&bytes).expect("proof deserializes");
-        verify(&de, &verifier_pp, &io, None).expect("deserialized proof must verify");
+        let de: ONNXProof<PCS::Field, PCS> = deserialize_proof(&bytes).expect("proof deserializes");
+        verify::<PCS::Field, Blake2bTranscript, PCS>(&de, &verifier_pp, &io, None)
+            .expect("deserialized proof must verify");
         assert_eq!(
             serialize_proof(&de).expect("re-serializes"),
             bytes,

@@ -48,7 +48,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let params = ReshapeSumcheckParams::<F>::new(
             node.clone(),
             &prover.accumulator,

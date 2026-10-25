@@ -74,12 +74,14 @@ fn payload(p: Box<dyn std::any::Any + Send>) -> String {
 /// Verify without debug lockstep (tampering must surface as `Err`, not as a
 /// transcript-compare panic), catching verifier panics.
 pub(crate) fn run_verify<PCS: PcsMutations>(
-    proof: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
+    proof: &ONNXProof<PCS::Field, PCS>,
     vpp: &AtlasVerifierPreprocessing<PCS::Field, PCS>,
     io: &ModelExecutionIO,
 ) -> Outcome {
     match probe::expecting_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| verify(proof, vpp, io, None)))
+        catch_unwind(AssertUnwindSafe(|| {
+            verify::<PCS::Field, Blake2bTranscript, PCS>(proof, vpp, io, None)
+        }))
     }) {
         Ok(Ok(())) => Outcome::Accepted,
         Ok(Err(e)) => Outcome::Rejected(format!("{e:?}")),
@@ -90,7 +92,7 @@ pub(crate) fn run_verify<PCS: PcsMutations>(
 /// A proof of a tampered trace, or the prover's panic message.
 pub(crate) type TamperedProve<PCS> = Result<
     (
-        ONNXProof<<PCS as CommitmentScheme>::Field, Blake2bTranscript, PCS>,
+        ONNXProof<<PCS as CommitmentScheme>::Field, PCS>,
         ModelExecutionIO,
     ),
     String,
@@ -123,7 +125,7 @@ struct Honest<PCS: CommitmentScheme> {
     prover_pp: AtlasProverPreprocessing<PCS::Field, PCS>,
     verifier_pp: AtlasVerifierPreprocessing<PCS::Field, PCS>,
     inputs: Vec<Tensor<i32>>,
-    proof: ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
+    proof: ONNXProof<PCS::Field, PCS>,
     io: ModelExecutionIO,
 }
 
@@ -132,7 +134,8 @@ fn honest<PCS: CommitmentScheme>(m: ProbeModel) -> Honest<PCS> {
     let prover_pp = AtlasProverPreprocessing::<PCS::Field, PCS>::new(shared);
     let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
     let (proof, io, _) = prove::<PCS::Field, Blake2bTranscript, PCS>(&prover_pp, &m.inputs);
-    verify(&proof, &verifier_pp, &io, None).expect("probe model must prove honestly");
+    verify::<PCS::Field, Blake2bTranscript, PCS>(&proof, &verifier_pp, &io, None)
+        .expect("probe model must prove honestly");
     Honest {
         name: m.name,
         prover_pp,
@@ -516,7 +519,7 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
 /// Stratified sample of opening ids: one per (polynomial kind, sumcheck
 /// kind, op kind of the executing node). Exhaustive mode takes all.
 fn forgery_targets<PCS: CommitmentScheme>(
-    proof: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
+    proof: &ONNXProof<PCS::Field, PCS>,
     model: &Model,
     all: bool,
 ) -> Vec<OpeningId> {

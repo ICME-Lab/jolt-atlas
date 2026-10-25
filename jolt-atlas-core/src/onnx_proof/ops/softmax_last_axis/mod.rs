@@ -92,7 +92,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         debug_assert_eq!(
             node.scale, MODEL_SCALE as u8,
             "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
@@ -202,7 +202,7 @@ impl SoftmaxLastAxisProver {
     fn prove<F: JoltField, T: Transcript>(
         mut self,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let scale_bits = prover.preprocessing.scale();
 
         // Invariant guard: the SatClamp commitment is sized in
@@ -331,7 +331,7 @@ impl SoftmaxLastAxisVerifier {
         &mut self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-        proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F>>,
         scale_bits: i32,
     ) -> Result<
         (
@@ -382,7 +382,7 @@ impl SoftmaxLastAxisVerifier {
         &self,
         proof_type: ProofType,
         instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>,
-        proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F>>,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
@@ -490,7 +490,7 @@ impl SoftmaxLastAxisProver {
         &mut self,
         prover: &mut Prover<F, T>,
         r_lookup_bits: Vec<LookupBits>,
-    ) -> SumcheckInstanceProof<F, T> {
+    ) -> SumcheckInstanceProof<F> {
         let mut instances = self.build_stage1_instances(prover, r_lookup_bits);
         run_batched_prove(&mut instances, prover)
     }
@@ -553,7 +553,7 @@ impl SoftmaxLastAxisProver {
         prover: &mut Prover<F, T>,
         r_exp_lookup_bits: Vec<LookupBits>,
         r_indices: &[usize],
-    ) -> SumcheckInstanceProof<F, T> {
+    ) -> SumcheckInstanceProof<F> {
         let mut instances = self.build_stage2_instances(prover, r_exp_lookup_bits, r_indices);
         run_batched_prove(&mut instances, prover)
     }
@@ -642,7 +642,7 @@ impl SoftmaxLastAxisProver {
         lut_data: &LookupTableData,
         r_exp_indices: &[usize],
         z_tensor: Tensor<i64>,
-    ) -> SumcheckInstanceProof<F, T> {
+    ) -> SumcheckInstanceProof<F> {
         let mut instances = self.build_stage3_instances(prover, lut_data, r_exp_indices, z_tensor);
         run_batched_prove(&mut instances, prover)
     }
@@ -717,7 +717,7 @@ impl SoftmaxLastAxisProver {
         prover: &mut Prover<F, T>,
         lut_data: &LookupTableData,
         significance_clamp_indices: &[usize],
-    ) -> SumcheckInstanceProof<F, T> {
+    ) -> SumcheckInstanceProof<F> {
         let mut instances =
             self.build_stage4_instances(prover, lut_data, significance_clamp_indices);
         run_batched_prove(&mut instances, prover)
@@ -1147,7 +1147,7 @@ pub(crate) fn pad_to_power_of_two(v: &mut Vec<i32>) {
 fn run_batched_prove<F: JoltField, T: Transcript>(
     instances: &mut [Box<dyn SumcheckInstanceProver<F, T>>],
     prover: &mut Prover<F, T>,
-) -> SumcheckInstanceProof<F, T> {
+) -> SumcheckInstanceProof<F> {
     BatchedSumcheck::prove(
         instances.iter_mut().map(|v| &mut **v as _).collect(),
         &mut prover.accumulator,

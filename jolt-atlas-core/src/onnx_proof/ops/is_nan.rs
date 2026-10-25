@@ -17,7 +17,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for IsNan {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
         let (opening_point, _claim) = accessor.get_reduced_opening();
         let operand = TraceView::operand_tensors(&prover.trace, node)[0];

@@ -39,7 +39,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Slice {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let params = SliceSumcheckParams::new(
             node.clone(),
             &prover.accumulator,

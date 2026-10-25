@@ -6,7 +6,6 @@ use joltworks::{
     field::JoltField,
     poly::commitment::commitment_scheme::CommitmentScheme,
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
-    transcripts::Transcript,
 };
 
 use crate::{Claims, ProofId};
@@ -18,27 +17,27 @@ use crate::{Claims, ProofId};
 /// private: the prover builds a proof with [`ONNXProof::from_parts`] and
 /// readers go through the `&` accessors, so a finished proof is immutable.
 #[derive(Debug, Clone)]
-pub struct ONNXProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> {
+pub struct ONNXProof<F: JoltField, PCS: CommitmentScheme<Field = F>> {
     /// Opening claims for committed polynomials.
     opening_claims: Claims<F>,
     /// Map of proof IDs to sumcheck instance proofs.
-    proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+    proofs: BTreeMap<ProofId, SumcheckInstanceProof<F>>,
     /// Polynomial commitments for witness polynomials.
     commitments: Vec<PCS::Commitment>,
     /// Evaluation reduction proofs h polynomials for each opening claim.
     eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
     /// Batched opening proof using reduction sum-check protocol to reduce all polynomial openings to the same point.
-    reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
+    reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
 }
 
-impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
+impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
     /// Assemble a proof from every field.
     pub fn from_parts(
         opening_claims: Claims<F>,
-        proofs: BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
+        proofs: BTreeMap<ProofId, SumcheckInstanceProof<F>>,
         commitments: Vec<PCS::Commitment>,
         eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
-        reduced_opening_proof: Option<ReducedOpeningProof<F, T, PCS>>,
+        reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
     ) -> Self {
         Self {
             opening_claims,
@@ -55,7 +54,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     }
 
     /// Sumcheck instance proofs, keyed by proof id.
-    pub fn proofs(&self) -> &BTreeMap<ProofId, SumcheckInstanceProof<F, T>> {
+    pub fn proofs(&self) -> &BTreeMap<ProofId, SumcheckInstanceProof<F>> {
         &self.proofs
     }
 
@@ -70,21 +69,21 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     }
 
     /// The batched opening proof, absent when nothing committed was opened.
-    pub fn reduced_opening_proof(&self) -> Option<&ReducedOpeningProof<F, T, PCS>> {
+    pub fn reduced_opening_proof(&self) -> Option<&ReducedOpeningProof<F, PCS>> {
         self.reduced_opening_proof.as_ref()
     }
 }
 
 /// Mutable field access for the soundness harness (`test-util`).
 #[cfg(feature = "test-util")]
-impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F, T, PCS> {
+impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
     /// Mutable opening claims.
     pub fn opening_claims_mut(&mut self) -> &mut Claims<F> {
         &mut self.opening_claims
     }
 
     /// Mutable sumcheck proofs.
-    pub fn proofs_mut(&mut self) -> &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>> {
+    pub fn proofs_mut(&mut self) -> &mut BTreeMap<ProofId, SumcheckInstanceProof<F>> {
         &mut self.proofs
     }
 
@@ -99,7 +98,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     }
 
     /// Mutable batched opening proof.
-    pub fn reduced_opening_proof_mut(&mut self) -> &mut Option<ReducedOpeningProof<F, T, PCS>> {
+    pub fn reduced_opening_proof_mut(&mut self) -> &mut Option<ReducedOpeningProof<F, PCS>> {
         &mut self.reduced_opening_proof
     }
 }
@@ -108,19 +107,19 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 ///
 /// Reduces multiple polynomial openings to a single joint opening using sumcheck.
 #[derive(Debug, Clone)]
-pub struct ReducedOpeningProof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> {
+pub struct ReducedOpeningProof<F: JoltField, PCS: CommitmentScheme<Field = F>> {
     /// Sumcheck proof for batching multiple openings.
-    sumcheck_proof: SumcheckInstanceProof<F, T>,
+    sumcheck_proof: SumcheckInstanceProof<F>,
     /// Evaluation claims at the sumcheck point.
     sumcheck_claims: Vec<F>,
     /// Joint opening proof for the batched polynomial.
     joint_opening_proof: PCS::Proof,
 }
 
-impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ReducedOpeningProof<F, T, PCS> {
+impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ReducedOpeningProof<F, PCS> {
     /// Assemble a reduced opening proof from every field.
     pub fn from_parts(
-        sumcheck_proof: SumcheckInstanceProof<F, T>,
+        sumcheck_proof: SumcheckInstanceProof<F>,
         sumcheck_claims: Vec<F>,
         joint_opening_proof: PCS::Proof,
     ) -> Self {
@@ -132,7 +131,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ReducedOpeni
     }
 
     /// The opening-reduction sumcheck proof.
-    pub fn sumcheck_proof(&self) -> &SumcheckInstanceProof<F, T> {
+    pub fn sumcheck_proof(&self) -> &SumcheckInstanceProof<F> {
         &self.sumcheck_proof
     }
 
@@ -149,9 +148,9 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ReducedOpeni
 
 /// Mutable field access for the soundness harness (`test-util`).
 #[cfg(feature = "test-util")]
-impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ReducedOpeningProof<F, T, PCS> {
+impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ReducedOpeningProof<F, PCS> {
     /// Mutable reduction sumcheck proof.
-    pub fn sumcheck_proof_mut(&mut self) -> &mut SumcheckInstanceProof<F, T> {
+    pub fn sumcheck_proof_mut(&mut self) -> &mut SumcheckInstanceProof<F> {
         &mut self.sumcheck_proof
     }
 

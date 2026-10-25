@@ -12,12 +12,9 @@ use ark_std::One;
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use common::VirtualPoly;
 use joltworks::field::JoltField;
-use joltworks::{
-    poly::{
-        commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme, hyperkzg::HyperKZG},
-        opening_proof::{OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
-    },
-    transcripts::Blake2bTranscript,
+use joltworks::poly::{
+    commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme, hyperkzg::HyperKZG},
+    opening_proof::{OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
 };
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
@@ -200,8 +197,8 @@ fn consumer_counts(model: &Model) -> Vec<usize> {
 /// coefficients are sampled (first round, last round, two random rounds per
 /// proof) unless exhaustive.
 pub(crate) fn enumerate_sites<PCS: PcsMutations>(
-    proof: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
-    other: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
+    proof: &ONNXProof<PCS::Field, PCS>,
+    other: &ONNXProof<PCS::Field, PCS>,
     io: &ModelExecutionIO,
     model: &Model,
 ) -> Vec<(Site, Expect)> {
@@ -354,9 +351,9 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
 /// Apply `site` to `proof` / `io`. `other` is a second honest proof of the
 /// same model on different inputs (splice material).
 pub(crate) fn apply_site<PCS: PcsMutations>(
-    proof: &mut ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
+    proof: &mut ONNXProof<PCS::Field, PCS>,
     io: &mut ModelExecutionIO,
-    other: &ONNXProof<PCS::Field, Blake2bTranscript, PCS>,
+    other: &ONNXProof<PCS::Field, PCS>,
     site: &Site,
 ) {
     let one = PCS::Field::one();

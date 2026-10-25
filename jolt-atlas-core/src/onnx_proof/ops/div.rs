@@ -47,7 +47,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let mut results = Vec::new();
 
         // Execution proof
@@ -69,7 +69,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         prover: &mut Prover<F, T>,
     ) -> (
         EvalReductionProof<F>,
-        Vec<(ProofId, SumcheckInstanceProof<F, T>)>,
+        Vec<(ProofId, SumcheckInstanceProof<F>)>,
     ) {
         let mut proofs = self.prove(node, prover);
 
@@ -396,7 +396,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier
 fn prove_range_and_onehot<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
     let mut results = Vec::new();
 
     let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);

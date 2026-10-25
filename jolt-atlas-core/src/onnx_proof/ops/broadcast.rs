@@ -31,7 +31,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
         &self,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
+    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let params = BroadcastParams::new(node.clone(), &prover.accumulator);
         let broadcast_prover = BroadcastProver::initialize(&prover.trace, params);
         broadcast_prover.prove(&mut prover.accumulator, &mut prover.transcript);

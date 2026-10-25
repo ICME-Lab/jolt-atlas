@@ -314,8 +314,7 @@ mod tests {
             .expect("model execution failed");
         let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
 
-        let mut proofs: BTreeMap<ProofId, SumcheckInstanceProof<Fr, Blake2bTranscript>> =
-            BTreeMap::new();
+        let mut proofs: BTreeMap<ProofId, SumcheckInstanceProof<Fr>> = BTreeMap::new();
         let mut eval_reduction_proofs = BTreeMap::new();
 
         prover::output_claim(&mut prover);
@@ -358,7 +357,7 @@ mod tests {
         );
 
         let opening_claims = Claims::from_parts(prover.accumulator.take());
-        let partial_proof = ONNXProof::<_, _, HyperKZG<Bn254>>::from_parts(
+        let partial_proof = ONNXProof::<_, HyperKZG<Bn254>>::from_parts(
             opening_claims,
             proofs,
             vec![],
@@ -366,7 +365,8 @@ mod tests {
             None,
         );
 
-        let mut verifier = Verifier::new(&shared, partial_proof.proofs(), &io);
+        let mut verifier =
+            Verifier::<_, Blake2bTranscript>::new(&shared, partial_proof.proofs(), &io);
         verifier::populate_accumulator(&partial_proof, &mut verifier);
         verifier::verify_output_claim(shared.model(), &mut verifier)
             .expect("verify_output_claim should succeed for consistent partial proof state");

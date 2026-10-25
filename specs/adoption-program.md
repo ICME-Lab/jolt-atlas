@@ -49,7 +49,7 @@ Each invariant names the mechanism that holds it.
   diff. Mechanism: `third_party/PINS.md` + review; the split-pin defect (`b8f0f51`/`76bb3a4`
   arkworks locks) is removed at stage 0.
 - **Per-stage gates**: every stage passes the soundness sweeps, the op-surface table, the zoo,
-  one real-model prove & verify (GPT-2 Dory minimum until stage 7 flips the default, GPT-2
+  one real-model prove & verify (GPT-2 Dory minimum until stage 7a flips the default, GPT-2
   Akita after), and — from stage 1 on — the `jolt-atlas-verifier` isolation build. Mechanism:
   CI plus the heavy job, named per stage PR.
 - **No stage is silently protocol-breaking**: stages declare behavior-preserving or
@@ -58,8 +58,9 @@ Each invariant names the mechanism that holds it.
   coordinated prover+verifier change. Mechanism: the cross-stage digest harness
   (`onnx_proof/testing/digests.rs`, created by stage 1), which pins, for each checked-in zoo
   model on its deterministic inputs, a hash of the serialized proof bytes and of the final
-  transcript state. Through stage 6 it pins HyperKZG (its setup is seeded,
-  `hyperkzg/commitment_scheme.rs:38`); from stage 7 it pins Akita. In every
+  transcript state. It pins the default backend at the time: HyperKZG until stage 7a lands
+  (its setup is seeded, `hyperkzg/commitment_scheme.rs:38`), Akita from then on — including
+  for any stage-6 family that lands after 7a. In every
   behavior-preserving stage the harness's pinned values are unchanged and the stage PR's first
   commit runs it green on the untouched tree, so the expected values provably predate the
   change. A protocol-breaking stage re-pins in a separate commit whose message names the cause.
@@ -160,8 +161,16 @@ what is specific).
   `joltworks::JoltField` implemented for upstream's `Fp128` (the `fp128-field` branch's shim is
   the starting point); the structural suites — op-surface, the three sweeps, the zoo, the
   digest harness — made generic over field and PCS, still instantiated for BN254 + HyperKZG/
-  Dory. BN254 stays `ark_bn254::Fr` inside the HyperKZG/Dory impls; no tree-wide rename and no
-  PCS field adaptation, since stage 7 deletes those impls. Behavior-preserving (digests).
+  Dory. The BN254 scalar becomes upstream's `jolt_field::Fr` (the `bn254` feature): stages 3–4
+  cannot run their BN254 gates otherwise, because upstream `jolt-poly` bounds on
+  `jolt_field::JoltField` and `jolt-transcript`'s sealed `ChallengeCodec` is implemented for
+  `jolt_field::Fr`, not `ark_bn254::Fr` (`jolt-transcript/src/challenge.rs` at `f3265b5a`) — a
+  distinct Montgomery type that orphan rules and the seal keep atlas crates from bridging.
+  HyperKZG and Dory expose `jolt_field::Fr` as `CommitmentScheme::Field` (so `PCS::Field = F`
+  holds) and keep arkworks types internal, converting at the boundary. This work is temporary —
+  stage 7b deletes it — and is the price of running stages 3–6 on a backend with a PCS.
+  Behavior-preserving (digests): the conversion is a representation change, not an arithmetic
+  one.
 - [ ] **Stage 3 — `jolt-transcript`** (stage 3 PR): codecs, bias budget, prover/verifier
   transcript split. Protocol-breaking (re-pin). The PoW/codec cost is protocol-inherent:
   quantified in the PR and accepted on security grounds — no delta can remove it, and
@@ -191,7 +200,8 @@ what is specific).
   weeks of focused effort**, after which the fallback (minimal same-`Term`-shape atlas IR) is
   taken without further debate; the fallback is deliberately cheap to exit later, so a wrong
   "no" is bounded, while an unboxed spike is the schedule hole this program exists to remove.
-  Yes → adopt; no → the atlas accumulator stays as an atlas-only crate (upstream claim traits
+  Yes → adopt, vendoring `jolt-crypto` in the same PR (`jolt-openings` depends on it
+  unconditionally at `f3265b5a`, default features off included); no → the atlas accumulator stays as an atlas-only crate (upstream claim traits
   where possible) and `jolt-openings`/`jolt-claims` vendor later only as internal PCS
   dependencies behind an adapter. Then the **pilot relations**, transcript-identical
   (digests): `Mul` in its fused form — input claim `q(r₀)·2^S + rem(r₀)`, where `q` is the
@@ -219,7 +229,8 @@ what is specific).
   deferred list with its stage-8 move assignment — stage 8 cannot start on an unaccounted
   remainder. Each PR deletes its pairs, reproduces digests, carries the migration checklist.
 - [ ] **Stage 7a — Akita becomes the PCS** (stage 7a PR): `jolt-akita` vendored (its
-  `jolt-crypto` dependency with it if stage 4 did not), starting from the `akita-adapter`
+  `jolt-crypto` dependency with it on the stage-5 fallback path; the adoption path already
+  vendored it), starting from the `akita-adapter`
   branch's `AkitaScheme`; atlas Akita deltas recorded. Activation gates, all before the default
   flips: the structural suites instantiated for Fp128 + Akita (generic since stage 2) with
   Akita-specific `mutate::Site`s — an honest real-model run alone does not cover malicious
@@ -228,9 +239,13 @@ what is specific).
   pins Akita, and the cost against the Dory baseline is measured and recorded in the PR —
   accepted regardless. Protocol-breaking (re-pin to Akita).
 - [ ] **Stage 7b — BN254 removal** (stage 7b PR): Dory, HyperKZG, the BN254 `JoltField` impl
-  and every pairing/curve path deleted; `ark-bn254`/`ark-ec` gone from the tree, and the
-  `a16z/arkworks-algebra` fork pin with them unless a vendored crate still requires `ark-ff`
-  (recorded in `PINS.md`); the `prove` example's `--pcs` choices updated. Behavior-preserving
+  and every pairing/curve path deleted from atlas code. The removal gate is the resolved
+  production dependency graph, not source text: whole-crate vendoring keeps upstream's
+  feature-gated BN254 backend in `third_party/` (`jolt-field`'s optional `ark-bn254` under its
+  `bn254` feature), so the check is that `cargo tree` for every workspace member, with BN254
+  features disabled, contains no `ark-bn254` or `ark-ec` — run in CI. The
+  `a16z/arkworks-algebra` fork pin goes with them unless a resolved crate still requires
+  `ark-ff` (recorded in `PINS.md`); the `prove` example's `--pcs` choices updated. Behavior-preserving
   (Akita digests).
 - [ ] **Stage 8 — verifier-cone closure** (stage 8 PR). Stage 6 removes the
   *relation-family* verifiers but not everything: the lookup-family verifier-side handlers
@@ -254,7 +269,9 @@ what is specific).
 Program definition of done (checkable): `joltworks` is gone — every inventory module replaced
 or in a named atlas-only crate; `jolt-atlas-core` contains no verification logic;
 `jolt-atlas-verifier` verifies a serialized proof from the model and public IO alone; Fp128 +
-Akita is the only field and PCS, with no `ark-bn254`, pairing or `zk` code in the tree;
+Akita is the only field and PCS, with no `zk` code in the tree and no `ark-bn254`, `ark-ec` or
+pairing code in atlas sources or the resolved dependency graph (vendored upstream crates may
+carry disabled BN254 features, per stage 7b);
 isolation build, the enumerated prover-item disallow list and the import-path check green;
 `third_party/PINS.md` records every pin.
 
@@ -271,7 +288,8 @@ Akita with Akita `mutate::Site`s (stage 7a). No sweep tolerance may be added at 
 ### Performance
 
 Behavior-preserving stages: no regression on the README benchmark, measured with the `prove`
-example per stage (`models/gpt2 --pcs dory` through stage 6, Akita from stage 7a). The baseline
+example per stage (`models/gpt2 --pcs dory` until stage 7a lands, Akita from then on, whatever
+stage-6 families remain). The baseline
 is that command on `main` immediately before the stage; the gate is the median of 3 runs of
 total prove time within +3% of the baseline median. The README table is HyperKZG today; stage 1
 re-measures it on Dory so the published numbers match the gate. The `tracing` span names the
@@ -374,8 +392,11 @@ gated hooks.
 - **Citing an `atlas_trace::semantics` function path**: rejected — `semantics` holds helpers
   (`rebase`, `rsqrt`, tables), not op definitions (Add's lives in `op/linear.rs`), and a path
   string is not compiler-checked. The op-type binding is.
-- **Tree-wide rename to `jolt_field::Fr` at stage 2** (with HyperKZG/Dory adapted to expose
-  it): rejected — all of that work lands on the BN254 path that stage 7b deletes.
+- **Keeping `ark_bn254::Fr` as the BN254 scalar through stage 7b** (skipping the stage-2
+  adaptation because 7b deletes it): rejected — upstream `jolt-poly` and `jolt-transcript`
+  accept only `jolt_field` types, so stages 3–4 would have no BN254 backend to gate on, and
+  Fp128 has no PCS before Akita. The throwaway adaptation is cheaper than a vendored
+  compatibility delta in two upstream crates.
 - **Keeping Dory/BN254 for zero-knowledge via `jolt-blindfold`**: rejected — the zk we want is
   lattice zk; BlindFold is Dory-only and ours does not compile.
 - **A `verifier-only` feature flag instead of a crate** (stage 1): rejected — features are
@@ -403,8 +424,10 @@ inherent `ONNXProof` methods to free functions in place (mechanical, reviewable 
 rewiring; (5) the CI isolation job.
 
 Program order: stages 0 and 1 can start today. Stages 2→5 are sequential; the stage-5 spike may
-begin during stage 4. Stage 6's families are sequential PRs; stage 7a may start after 5 and in
-parallel with 6, and 7b follows 7a; stage 8 lands last. Each stage PR enumerates its atlas
+begin during stage 4. Stage 6's families are sequential PRs. Stage 7a may be developed and
+land after 5, in parallel with 6; 7b lands after 7a. Gates follow the cutover: any stage-6
+family landing after 7a reproduces Akita digests, runs the GPT-2 Akita heavy job, and measures
+against the Akita baseline. Stage 8 lands last. Each stage PR enumerates its atlas
 deltas from the inventory as a checklist.
 
 ## References

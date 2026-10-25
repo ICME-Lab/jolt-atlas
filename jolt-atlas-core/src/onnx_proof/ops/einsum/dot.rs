@@ -18,8 +18,7 @@
 //!    opening points ([`EinsumLayout::operand_points`]).
 //!
 //! Everything else — the `Params` boilerplate, the multiply-accumulate message
-//! loop, challenge ingestion, the BlindFold (`zk`) constraints — is written once,
-//! here. This is the generalization of the per-variant engine that
+//! loop, challenge ingestion — is written once, here. This is the generalization of the per-variant engine that
 //! [`rbmk_rbnk_bmn`](super::rbmk_rbnk_bmn) already used for three patterns.
 //!
 //! ## Where the claim comes from
@@ -60,11 +59,6 @@ use joltworks::{
     transcripts::Transcript,
 };
 use rayon::prelude::*;
-
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
 
 /// The eq-poly binding schedule within the (HighToLow) sumcheck round order.
 ///
@@ -199,46 +193,6 @@ impl<F: JoltField> SumcheckInstanceParams<F> for EinsumDotParams<F> {
 
     fn num_rounds(&self) -> usize {
         self.layout.num_rounds()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        use crate::utils::opening_access::OpeningIdBuilder;
-        let builder = OpeningIdBuilder::new(&self.computation_node);
-        let left = ValueSource::Opening(builder.nodeio(Target::Input(0)));
-        let right = ValueSource::Opening(builder.nodeio(Target::Input(1)));
-        // With an EQ factor the claim is scaled by the (eq) challenge value;
-        // a plain dot product is just the operand product.
-        let term = if self.layout.schedule().has_eq() {
-            ProductTerm::scaled(ValueSource::Challenge(0), vec![left, right])
-        } else {
-            ProductTerm::product(vec![left, right])
-        };
-        Some(OutputClaimConstraint::sum_of_products(vec![term]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        if self.layout.schedule().has_eq() {
-            vec![self
-                .layout
-                .output_eq(&self.r_node_output, sumcheck_challenges)]
-        } else {
-            vec![]
-        }
     }
 }
 

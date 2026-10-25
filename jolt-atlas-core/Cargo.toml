@@ -3,9 +3,6 @@ name = "jolt-atlas-core"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-zk = ["joltworks/zk"]
-
 [dependencies]
 # Internal
 atlas-trace = { workspace = true, features = ["test-util"] }

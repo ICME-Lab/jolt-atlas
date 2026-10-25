@@ -287,9 +287,8 @@ pub fn verify_post<F: JoltField, T: Transcript>(
 
 /// Append the rescaling remainder `R` (padded to the node-output cycle domain,
 /// as produced by [`rebase_intermediates`]) as a virtual advice opening at the
-/// output point. `pub(crate)`: also used by the ZK flow (`onnx_proof::zk`),
-/// where the append is transcript-quiet (accumulator `zk_mode`).
-pub(crate) fn cache_remainder_prove<F: JoltField, T: Transcript>(
+/// output point.
+fn cache_remainder_prove<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
     remainder: &Tensor<i32>,
@@ -302,10 +301,8 @@ pub(crate) fn cache_remainder_prove<F: JoltField, T: Transcript>(
 }
 
 /// Verifier counterpart of [`cache_remainder_prove`]: append the remainder
-/// opening point (its claim is loaded from the proof's opening claims; a
-/// placeholder in ZK mode, where the value reaches the proof only through
-/// the prover-supplied baked initial claims of the following stages).
-pub(crate) fn cache_remainder_verify<F: JoltField, T: Transcript>(
+/// opening point (its claim is loaded from the proof's opening claims).
+fn cache_remainder_verify<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,

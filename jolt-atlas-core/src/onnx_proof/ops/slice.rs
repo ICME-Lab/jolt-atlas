@@ -7,10 +7,6 @@ use crate::utils::{
 };
 use atlas_trace::{op::Slice, trace::LayerData, Model, Op, Trace};
 use common::parallel::par_enabled;
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -154,50 +150,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SliceSumcheckParams<F> {
             .log_2()
     }
 
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
     // output = input_claim * selector_claim
     // selector_claim is deterministic from public data (shapes + r_output), so Challenge(0).
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        let input_id = crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node)
-            .nodeio(Target::Input(0));
-        let term = ProductTerm::scaled(
-            ValueSource::Challenge(0),
-            vec![ValueSource::Opening(input_id)],
-        );
-        Some(OutputClaimConstraint::sum_of_products(vec![term]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let selector = build_slice_selector(
-            &self.input_raw_dims,
-            &self.output_raw_dims,
-            self.axis,
-            self.start,
-            &self.r_output.r,
-        );
-        let selector_claim =
-            joltworks::poly::multilinear_polynomial::MultilinearPolynomial::from(selector)
-                .evaluate(
-                    &self
-                        .normalize_opening_point(&sumcheck_challenges.into_opening())
-                        .r,
-                );
-        vec![selector_claim]
-    }
 }
 
 /// Prover state for the slice selector sumcheck.

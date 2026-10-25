@@ -33,10 +33,6 @@ use common::{
     parallel::par_enabled,
     CommittedPoly, VirtualPoly,
 };
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
@@ -183,38 +179,6 @@ impl<F: JoltField, Table: SmallActivationTable> SumcheckInstanceParams<F>
 
     fn num_rounds(&self) -> usize {
         ACTIVATION_TABLE_VARS
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        use crate::utils::opening_access::OpeningIdBuilder;
-        let builder = OpeningIdBuilder::new(&self.computation_node);
-        let ra_id = builder.advice(VirtualPoly::ActivationSmallRa);
-        Some(OutputClaimConstraint::sum_of_products(vec![
-            ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(ra_id)]),
-        ]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let opening_point = self.normalize_opening_point(&sumcheck_challenges.into_opening());
-        let table = MultilinearPolynomial::from(Table::materialize());
-        let table_claim = table.evaluate(&opening_point.r);
-        let int_eval = SignedIdentityPoly::new(ACTIVATION_TABLE_VARS).evaluate(&opening_point.r);
-        vec![table_claim + self.gamma * int_eval]
     }
 }
 

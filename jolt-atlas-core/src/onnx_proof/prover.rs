@@ -297,15 +297,6 @@ pub(super) fn polynomial_map<F: JoltField, T: Transcript>(
     polys
 }
 
-#[tracing::instrument(skip_all)]
-#[cfg_attr(not(feature = "zk"), allow(dead_code))]
-pub(super) fn commit_to_polynomials<F: JoltField, PCS: CommitmentScheme<Field = F>>(
-    poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
-    pcs: &PCS::ProverSetup,
-) -> Vec<PCS::Commitment> {
-    commit_to_polynomials_with_hints::<F, PCS>(poly_map, pcs).0
-}
-
 /// Commit to every polynomial (in `poly_map` order), keeping the per-polynomial
 /// opening hints so the joint opening can be assembled from them.
 #[tracing::instrument(skip_all)]

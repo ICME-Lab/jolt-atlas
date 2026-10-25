@@ -117,19 +117,6 @@ where
     pub appended_virtual_openings: RefCell<Vec<OpeningId>>,
     /// Reduced claims per instance (group), keyed like `sumchecks`.
     pub cached_opening_claims: BTreeMap<OpeningId, F>,
-    #[cfg(feature = "zk")]
-    pending_claims: Vec<F>,
-    #[cfg(feature = "zk")]
-    pending_claim_ids: Vec<OpeningId>,
-    /// In ZK mode the prover suppresses cleartext transcript appends in
-    /// `append_virtual` / `append_dense`; transcript synchronisation comes
-    /// from the Pedersen commitments emitted by `BatchedSumcheck::prove_zk`
-    /// (or via auxiliary_claims for public scalars that are intentionally
-    /// re-appended with `zk_mode` toggled off on both sides — see the
-    /// Softmax aux-scalar path). `pending_claims` is still collected so the
-    /// downstream commit_chunked step can hide the claim values.
-    #[cfg(feature = "zk")]
-    pub zk_mode: bool,
 }
 
 /// Accumulates openings encountered by the verifier over the course of Jolt,
@@ -150,11 +137,6 @@ where
     /// can detect any places where the openings don't match up.
     #[cfg(any(test, feature = "test-feature"))]
     prover_opening_accumulator: Option<ProverOpeningAccumulator<F>>,
-    #[cfg(feature = "zk")]
-    pending_claims: Vec<F>,
-    /// When true, `append_virtual` inserts new keys with placeholder claims
-    /// instead of panicking. Claims are verified by BlindFold, not individually.
-    pub zk_mode: bool,
 }
 
 pub trait OpeningAccumulator<F: JoltField> {
@@ -252,25 +234,7 @@ where
             #[cfg(any(test, feature = "test-feature"))]
             appended_virtual_openings: std::cell::RefCell::new(vec![]),
             cached_opening_claims: BTreeMap::new(),
-            #[cfg(feature = "zk")]
-            pending_claims: Vec::new(),
-            #[cfg(feature = "zk")]
-            pending_claim_ids: Vec::new(),
-            #[cfg(feature = "zk")]
-            zk_mode: false,
         }
-    }
-
-    /// Takes and returns the pending ZK claims, leaving the internal vector empty.
-    #[cfg(feature = "zk")]
-    pub fn take_pending_claims(&mut self) -> Vec<F> {
-        std::mem::take(&mut self.pending_claims)
-    }
-
-    /// Takes and returns the pending ZK claim IDs, leaving the internal vector empty.
-    #[cfg(feature = "zk")]
-    pub fn take_pending_claim_ids(&mut self) -> Vec<OpeningId> {
-        std::mem::take(&mut self.pending_claim_ids)
     }
 
     /// The distinct committed polynomials with a registered opening.
@@ -335,13 +299,7 @@ where
     {
         #[cfg(any(test, feature = "test-feature"))]
         let claim = forgery::apply(opening_id, claim);
-        #[cfg(feature = "zk")]
-        let suppress = self.zk_mode;
-        #[cfg(not(feature = "zk"))]
-        let suppress = false;
-        if !suppress {
-            transcript.append_scalar(&claim);
-        }
+        transcript.append_scalar(&claim);
 
         let shared_eq = self
             .eq_cycle_map
@@ -369,12 +327,6 @@ where
             claim,
         );
         self.sumchecks.insert(opening_id, sumcheck);
-
-        #[cfg(feature = "zk")]
-        {
-            self.pending_claims.push(claim);
-            self.pending_claim_ids.push(opening_id);
-        }
     }
 
     #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::append_sparse")]
@@ -397,15 +349,9 @@ where
             .zip(claims)
             .map(|(&poly, claim)| forgery::apply(OpeningId::new(poly, sumcheck), claim))
             .collect();
-        #[cfg(feature = "zk")]
-        let suppress = self.zk_mode;
-        #[cfg(not(feature = "zk"))]
-        let suppress = false;
-        if !suppress {
-            claims.iter().for_each(|claim| {
-                transcript.append_scalar(claim);
-            });
-        }
+        claims.iter().for_each(|claim| {
+            transcript.append_scalar(claim);
+        });
         let r_concat = [r_address.as_slice(), r_cycle.as_slice()].concat();
 
         let shared_eq_address = Arc::new(RwLock::new(EqAddressState::new(&r_address)));
@@ -432,12 +378,6 @@ where
             claims.clone(),
         );
         self.sumchecks.insert(key, sumcheck_instance);
-        #[cfg(feature = "zk")]
-        for (label, claim) in polynomials.iter().copied().zip(claims.into_iter()) {
-            let key = OpeningId::new(label, sumcheck);
-            self.pending_claims.push(claim);
-            self.pending_claim_ids.push(key);
-        }
     }
 
     pub fn append_virtual<T: Transcript>(
@@ -459,22 +399,11 @@ where
         #[cfg(any(test, feature = "test-feature"))]
         let claim = forgery::apply(opening_id, claim);
 
-        #[cfg(feature = "zk")]
-        let suppress = self.zk_mode;
-        #[cfg(not(feature = "zk"))]
-        let suppress = false;
-        if !suppress {
-            transcript.append_scalar(&claim);
-        }
+        transcript.append_scalar(&claim);
 
         self.openings.insert(opening_id, (opening_point, claim));
         #[cfg(any(test, feature = "test-feature"))]
         self.appended_virtual_openings.borrow_mut().push(opening_id);
-        #[cfg(feature = "zk")]
-        {
-            self.pending_claims.push(claim);
-            self.pending_claim_ids.push(opening_id);
-        }
     }
 
     /// Take the openings, removing the points to reduce proof size
@@ -606,79 +535,10 @@ where
         (sumcheck_proof, r_sumcheck)
     }
 
-    /// ZK variant of `prove_batch_opening_sumcheck`. Runs `BatchedSumcheck::prove_zk`
-    /// so that round polynomials are Pedersen-committed rather than sent in the clear,
-    /// and the resulting stage data is pushed into `blindfold_accumulator` for later
-    /// inclusion in the BlindFold R1CS witness. The reduced opening claim is no longer
-    /// leaked through the transcript; binding to `y_com` happens via BlindFold.
-    #[cfg(feature = "zk")]
-    #[tracing::instrument(
-        skip_all,
-        name = "ProverOpeningAccumulator::prove_batch_opening_sumcheck_zk"
-    )]
-    pub fn prove_batch_opening_sumcheck_zk<T, C, R>(
-        &mut self,
-        blindfold_accumulator: &mut crate::subprotocols::blindfold::BlindFoldAccumulator<F, C>,
-        stage_configs: &mut Vec<crate::subprotocols::blindfold::StageConfig>,
-        pedersen_gens: &crate::poly::commitment::pedersen::PedersenGenerators<C>,
-        rng: &mut R,
-        transcript: &mut T,
-    ) -> (
-        crate::subprotocols::sumcheck::ZkSumcheckProof<F, C, T>,
-        Vec<F::Challenge>,
-    )
-    where
-        T: Transcript,
-        C: crate::curve::JoltCurve<F = F>,
-        R: rand_core::CryptoRngCore,
-    {
-        use crate::subprotocols::sumcheck_verifier::SumcheckInstanceParams;
-
-        let mut sumchecks = std::mem::take(&mut self.sumchecks);
-        // Capture stage shape before borrowing the instances mutably.
-        let max_rounds = sumchecks
-            .values()
-            .map(|opening| <Opening<F> as SumcheckInstanceParams<F>>::num_rounds(&opening.opening))
-            .max()
-            .unwrap_or(1);
-        let max_degree = sumchecks
-            .values()
-            .map(|opening| <Opening<F> as SumcheckInstanceParams<F>>::degree(&opening.opening))
-            .max()
-            .unwrap_or(1);
-
-        let instances = sumchecks
-            .iter_mut()
-            .map(|(_, opening)| opening as &mut _)
-            .collect();
-
-        let (zk_proof, r_sumcheck, _final_claim) = BatchedSumcheck::prove_zk::<F, C, T, _>(
-            instances,
-            self,
-            blindfold_accumulator,
-            transcript,
-            pedersen_gens,
-            rng,
-        );
-
-        self.sumchecks = sumchecks;
-        stage_configs.push(crate::subprotocols::blindfold::StageConfig::new_chain(
-            max_rounds, max_degree,
-        ));
-        (zk_proof, r_sumcheck)
-    }
-
     /// Finalizes the batch opening reduction sumcheck.
     /// Uses cached claims from `cache_openings`, appends them to transcript, derives gamma powers,
     /// and cleans up sumcheck instances.
     /// Returns the state needed for Stage 8.
-    ///
-    /// In ZK mode the cleartext claim append is suppressed when the prover
-    /// accumulator's `zk_mode` flag is on; the gamma_powers are still derived
-    /// from the transcript (which by then carries the batched-opening stage's
-    /// round commitments via `BatchedSumcheck::prove_zk`). The verifier
-    /// reproduces the same gamma derivation, since both sides skip the
-    /// cleartext append symmetrically.
     #[tracing::instrument(
         skip_all,
         name = "ProverOpeningAccumulator::finalize_batch_opening_sumcheck"
@@ -695,13 +555,7 @@ where
                 .unzip();
         debug_assert!(keys.iter().eq(self.sumchecks.keys()));
 
-        #[cfg(feature = "zk")]
-        let suppress = self.zk_mode;
-        #[cfg(not(feature = "zk"))]
-        let suppress = false;
-        if !suppress {
-            transcript.append_scalars(&sumcheck_claims);
-        }
+        transcript.append_scalars(&sumcheck_claims);
         let gamma_powers: Vec<F> = transcript.challenge_scalar_powers(sumcheck_claims.len());
 
         // Per-polynomial coefficient of the joint RLC: Σ over the instances
@@ -788,7 +642,6 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         let key = opening_id;
         match self.openings.get(&key) {
             Some((point, claim)) => (point.clone(), *claim),
-            None if self.zk_mode => (OpeningPoint::default(), F::zero()),
             None => {
                 panic!("No opening found for {opening_id:?}")
             }
@@ -832,9 +685,6 @@ where
             reduced_evaluations: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
-            #[cfg(feature = "zk")]
-            pending_claims: Vec::new(),
-            zk_mode: false,
         }
     }
 
@@ -855,21 +705,6 @@ where
                 );
             }
         }
-    }
-
-    /// Create a verifier accumulator in ZK mode. In ZK mode, `append_virtual`
-    /// inserts new keys with placeholder claims instead of panicking.
-    pub fn new_zk() -> Self {
-        Self {
-            zk_mode: true,
-            ..Self::new()
-        }
-    }
-
-    /// Takes and returns the pending ZK claims, leaving the internal vector empty.
-    #[cfg(feature = "zk")]
-    pub fn take_pending_claims(&mut self) -> Vec<F> {
-        std::mem::take(&mut self.pending_claims)
     }
 
     pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {
@@ -909,14 +744,8 @@ where
     {
         let point = OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone());
         self.mark_appended(opening_id, &point.r);
-        let claim = if self.zk_mode {
-            // ZK mode: stay transcript-quiet to mirror the prover, even if the
-            // key already exists from a prior append (see the matching comment
-            // in `append_virtual` above).
-            self.openings.insert(opening_id, (point, F::zero()));
-            F::zero()
-        } else if let Some((_, claim)) = self.openings.get(&opening_id) {
-            // Standard mode: claim was pre-loaded.
+        let claim = if let Some((_, claim)) = self.openings.get(&opening_id) {
+            // The claim was pre-loaded from the proof.
             let claim = *claim;
             transcript.append_scalar(&claim);
             self.openings.insert(opening_id, (point, claim));
@@ -959,12 +788,7 @@ where
         for label in polynomials.iter().copied() {
             let key = OpeningId::new(label, sumcheck);
             self.mark_appended(key, &point_f);
-            let claim = if self.zk_mode {
-                // ZK mode: stay transcript-quiet to mirror the prover, even
-                // if the key already exists from a prior append (see the
-                // matching comment in `append_virtual` above).
-                F::zero()
-            } else if let Some((_, c)) = self.openings.get(&key) {
+            let claim = if let Some((_, c)) = self.openings.get(&key) {
                 let c = *c;
                 transcript.append_scalar(&c);
                 c
@@ -1010,28 +834,9 @@ where
             );
         }
 
-        if self.zk_mode {
-            // ZK mode: stay transcript-quiet to mirror the prover (whose
-            // zk_mode also suppresses cleartext appends). We always (re)write
-            // a placeholder claim, even when the key already exists from a
-            // prior `append_virtual` call. This matters when the same
-            // `opening_id` is registered twice in a sumcheck batch (e.g.
-            // `SoftmaxExpQ` from both RecipMult and ExpSum cache_openings):
-            // without this, the second call would fall into the standard
-            // branch and emit a stray `transcript.append_scalar(F::zero())`
-            // that the prover does not produce. The actual claim is verified
-            // by BlindFold, not individually.
-            //
-            // Callers that publish a real cleartext claim (the Softmax
-            // auxiliary-scalar path) pre-populate `openings` AND toggle
-            // `zk_mode = false`, so they fall through to the standard branch
-            // below.
+        if self.openings.contains_key(&opening_id) {
             self.mark_appended(opening_id, &opening_point.r);
-            self.openings
-                .insert(opening_id, (opening_point.clone(), F::zero()));
-        } else if self.openings.contains_key(&opening_id) {
-            self.mark_appended(opening_id, &opening_point.r);
-            // Standard mode: claim was pre-loaded. Append to transcript.
+            // The claim was pre-loaded from the proof. Append to transcript.
             let (_, claim) = &self.openings[&opening_id];
             transcript.append_scalar(claim);
             let claim = *claim;
@@ -1329,8 +1134,6 @@ pub enum SumcheckId {
     HammingWeight,
     /// RLC sumcheck for the execution of a specific node.
     RLC(usize),
-    /// Batch opening reduction (used by BlindFold y_com constraint).
-    BlindFoldBatchOpening,
     /// Eval-shift sumcheck used in neural teleport ops
     NTEvalShift,
 }
@@ -1356,7 +1159,6 @@ impl CanonicalSerialize for SumcheckId {
                 7u8.serialize_with_mode(&mut writer, compress)?;
                 idx.serialize_with_mode(&mut writer, compress)?;
             }
-            Self::BlindFoldBatchOpening => 8u8.serialize_with_mode(&mut writer, compress)?,
             Self::NTEvalShift => 9u8.serialize_with_mode(&mut writer, compress)?,
         }
         Ok(())
@@ -1400,7 +1202,6 @@ impl CanonicalDeserialize for SumcheckId {
                 let idx = usize::deserialize_with_mode(&mut reader, compress, validate)?;
                 Ok(Self::RLC(idx))
             }
-            8 => Ok(Self::BlindFoldBatchOpening),
             9 => Ok(Self::NTEvalShift),
             _ => Err(SerializationError::InvalidData),
         }

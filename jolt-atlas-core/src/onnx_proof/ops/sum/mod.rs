@@ -28,28 +28,6 @@ use crate::{
 /// Axis-wise sum implementations for sumcheck protocol.
 pub mod axis;
 
-/// Create a Sum prover instance for the ZK pipeline.
-pub fn create_sum_prover<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    model: &atlas_trace::Model,
-    trace: &atlas_trace::Trace,
-    accumulator: &joltworks::poly::opening_proof::ProverOpeningAccumulator<F>,
-) -> Box<dyn joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>> {
-    let sum_config = utils::dims::sum_config(node, model);
-    let params = SumAxisParams::new(node.clone(), sum_config, accumulator);
-    Box::new(SumAxisProver::initialize(trace, params, accumulator))
-}
-
-/// Create a Sum verifier instance for the ZK pipeline.
-pub fn create_sum_verifier<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    model: &atlas_trace::Model,
-    accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
-) -> Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>> {
-    let sum_config = utils::dims::sum_config(node, model);
-    Box::new(SumAxisVerifier::new(node.clone(), sum_config, accumulator))
-}
-
 /// Saturating axis-sum proof: `output = SatClamp(acc)`, `acc[k] = Σ_axis operand[k, ·]`.
 ///
 /// Reuses the [`Add`](super::add)/[`Sub`](super::sub) clamp infrastructure: the

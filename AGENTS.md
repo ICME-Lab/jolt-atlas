@@ -69,9 +69,6 @@ cargo run --release -p atlas-onnx-import --example dump_lowered_ops -- <model.on
 .venv/bin/python scripts/gen_tiny_models.py
 ```
 
-The `zk` feature on `jolt-atlas-core` (forwarding to `joltworks/zk`) is not in the CI matrix and
-has no tests. Changes behind it need an explicit `--features zk` build.
-
 ## Architecture
 
 ### Crate Map

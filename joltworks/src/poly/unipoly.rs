@@ -631,8 +631,7 @@ mod tests {
         assert_eq!(constant_poly, poly);
 
         // `from_evals` with 4 points preserves a length-4 coefficient vector,
-        // even when the leading coefficient is zero (required by `compress()`
-        // in the BlindFold Spartan round-polynomial path).
+        // even when the leading coefficient is zero (required by `compress()`).
         let evals = vec![0.into(), 1.into(), 4.into(), 9.into()]; // evals of x^2 at 0, 1, 2, 3
         let poly = UniPoly::from_evals(&evals);
         let expected_poly = UniPoly::<Fr> {

@@ -37,8 +37,6 @@ mod preprocessing;
 mod prover;
 mod types;
 mod verifier;
-#[cfg(feature = "zk")]
-pub mod zk;
 
 #[cfg(test)]
 pub(crate) mod testing;

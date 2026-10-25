@@ -1,6 +1,4 @@
 use crate::node_view::ComputationNode;
-#[cfg(feature = "zk")]
-use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_fused_rescale_proof_api,
@@ -8,10 +6,6 @@ use crate::{
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_trace::{op::Square, trace::LayerData, Trace};
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -78,49 +72,11 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SquareParams<F> {
 
     // Non-fused: the input claim is the node's own output evaluation from
     // eval reduction. Fused (`fuses_rebase`): it is `ClampAcc·2^S +
-    // RescaleRemainder` from two prover advices. Either way the value is
-    // baked as a constant in BlindFold's R1CS (not a variable) — like every
-    // chain-start initial claim in the zk pipeline today; a real constraint
-    // over the advice openings is future work.
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
+    // RescaleRemainder` from two prover advices.
 
     // output = eq_eval * operand^2
     // eq_eval is a deterministic function of the sumcheck challenges and r_node_output,
     // so it is passed as Challenge(0). The operand opening appears twice (squared).
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        let operand_id =
-            crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node)
-                .nodeio(Target::Input(0));
-        let term = ProductTerm::scaled(
-            ValueSource::Challenge(0),
-            vec![
-                ValueSource::Opening(operand_id),
-                ValueSource::Opening(operand_id),
-            ],
-        );
-        Some(OutputClaimConstraint::sum_of_products(vec![term]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let r_node_output_prime: Vec<F> = self
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime);
-        vec![eq_eval]
-    }
 }
 
 /// Prover state for element-wise square sumcheck protocol.

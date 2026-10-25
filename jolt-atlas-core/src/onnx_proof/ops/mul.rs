@@ -6,10 +6,6 @@ use crate::{
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_trace::{op::Mul, trace::LayerData, Trace};
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -74,45 +70,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MulParams<F> {
             .log_2()
     }
 
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
     // output = eq_eval * left * right
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        let builder = crate::utils::opening_access::OpeningIdBuilder::new(&self.computation_node);
-        let left_id = builder.clone().nodeio(Target::Input(0));
-        let right_id = builder.nodeio(Target::Input(1));
-
-        Some(OutputClaimConstraint::sum_of_products(vec![
-            ProductTerm::scaled(
-                ValueSource::Challenge(0),
-                vec![
-                    ValueSource::Opening(left_id),
-                    ValueSource::Opening(right_id),
-                ],
-            ),
-        ]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let r_node_output_prime: Vec<F> = self
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_node_output_prime);
-        vec![eq_eval]
-    }
 }
 
 /// Prover state for element-wise multiplication sumcheck protocol.

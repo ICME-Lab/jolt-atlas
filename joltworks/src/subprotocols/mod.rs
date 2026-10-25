@@ -1,5 +1,3 @@
-#[cfg(feature = "zk")]
-pub mod blindfold;
 pub mod booleanity;
 pub mod evaluation_reduction;
 pub mod hamming_booleanity;

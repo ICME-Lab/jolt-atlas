@@ -16,10 +16,6 @@ use crate::{
 };
 use atlas_trace::{op::Rsqrt, trace::LayerData, Op, Trace};
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
-#[cfg(feature = "zk")]
-use joltworks::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
 use joltworks::{
     field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
@@ -212,83 +208,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RsqrtParams<F> {
             .log_2()
     }
 
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
     // output = eq * (input*quotient + div_rem - S³ + gamma*(output² + sqrt_rem - quotient))
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        use crate::utils::opening_access::OpeningIdBuilder;
-        let builder = OpeningIdBuilder::new(&self.computation_node);
-        let input_id = builder.nodeio(Target::Input(0));
-        let quotient_id = builder.advice(CommittedPoly::RsqrtQuotient);
-        let output_id = builder.nodeio(Target::Current);
-        let div_rem_id = builder.advice(VirtualPoly::DivRemainder);
-        let sqrt_rem_id = builder.advice(VirtualPoly::SqrtRemainder);
-        Some(OutputClaimConstraint::sum_of_products(vec![
-            // eq * input * quotient
-            ProductTerm::scaled(
-                ValueSource::Challenge(0),
-                vec![
-                    ValueSource::Opening(input_id),
-                    ValueSource::Opening(quotient_id),
-                ],
-            ),
-            // eq * div_remainder
-            ProductTerm::scaled(
-                ValueSource::Challenge(1),
-                vec![ValueSource::Opening(div_rem_id)],
-            ),
-            // -eq * S³  (constant term, no openings)
-            ProductTerm::scaled(ValueSource::Challenge(2), vec![]),
-            // eq * gamma * output²
-            ProductTerm::scaled(
-                ValueSource::Challenge(3),
-                vec![
-                    ValueSource::Opening(output_id),
-                    ValueSource::Opening(output_id),
-                ],
-            ),
-            // eq * gamma * sqrt_remainder
-            ProductTerm::scaled(
-                ValueSource::Challenge(4),
-                vec![ValueSource::Opening(sqrt_rem_id)],
-            ),
-            // -eq * gamma * quotient
-            ProductTerm::scaled(
-                ValueSource::Challenge(5),
-                vec![ValueSource::Opening(quotient_id)],
-            ),
-        ]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        let r_prime: Vec<F> = self
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let eq_eval = EqPolynomial::mle(&self.r_node_output.r, &r_prime);
-        let eq_gamma = eq_eval * self.gamma;
-        let s_cubed = F::from_i64(rsqrt_dividend(&self.computation_node));
-        vec![
-            eq_eval,            // Ch(0): eq * input * quotient
-            eq_eval,            // Ch(1): eq * div_remainder
-            -eq_eval * s_cubed, // Ch(2): -eq * S³ (constant)
-            eq_gamma,           // Ch(3): eq * gamma * output²
-            eq_gamma,           // Ch(4): eq * gamma * sqrt_remainder
-            -eq_gamma,          // Ch(5): -eq * gamma * quotient
-        ]
-    }
 }
 
 /// Prover state for the fused reciprocal-square-root sumcheck.

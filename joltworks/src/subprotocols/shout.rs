@@ -34,11 +34,6 @@ use crate::{
     subprotocols::sumcheck_verifier::SumcheckInstanceParams,
 };
 
-#[cfg(feature = "zk")]
-use crate::subprotocols::blindfold::{
-    InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
-};
-
 const READ_RAF_DEGREE_BOUND: usize = 2;
 
 pub fn read_raf_prover<F: JoltField, T: Transcript>(
@@ -48,7 +43,7 @@ pub fn read_raf_prover<F: JoltField, T: Transcript>(
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Box<dyn SumcheckInstanceProver<F, T>> {
-    let params = ReadRafParams::new(provider, table, accumulator, transcript);
+    let params = ReadRafParams::new(provider, accumulator, transcript);
     Box::new(ReadRafProver::initialize(lookup_indices, table, params))
 }
 
@@ -97,16 +92,12 @@ pub struct ReadRafParams<F: JoltField> {
     ra_vp: VirtualPoly,
     ra_sid: SumcheckId,
     log_K: usize,
-    /// Lookup table (stored for BlindFold constraint evaluation).
-    #[cfg_attr(not(feature = "zk"), allow(dead_code))]
-    table: Vec<i32>,
 }
 
 impl<F: JoltField> ReadRafParams<F> {
     /// Create new parameters for exponentiation lookups.
     pub fn new(
         provider: &impl ReadRafProvider<F>,
-        table: &[i32],
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
@@ -120,7 +111,6 @@ impl<F: JoltField> ReadRafParams<F> {
             ra_vp,
             ra_sid,
             log_K: provider.log_K(),
-            table: table.to_vec(),
         }
     }
 }
@@ -142,39 +132,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
         self.log_K
     }
 
-    #[cfg(feature = "zk")]
-    fn input_claim_constraint(&self) -> InputClaimConstraint {
-        InputClaimConstraint::default()
-    }
-
-    #[cfg(feature = "zk")]
-    fn input_constraint_challenge_values(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-
     // output = ra_claim * (val_claim + gamma * int_claim)
     //        = Challenge(0) * Opening(ra)
-    #[cfg(feature = "zk")]
-    fn output_claim_constraint(&self) -> Option<OutputClaimConstraint> {
-        let ra_id = OpeningId::new(self.ra_vp, self.ra_sid);
-        Some(OutputClaimConstraint::sum_of_products(vec![
-            ProductTerm::scaled(ValueSource::Challenge(0), vec![ValueSource::Opening(ra_id)]),
-        ]))
-    }
-
-    #[cfg(feature = "zk")]
-    fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        use crate::poly::identity_poly::IdentityPolynomial;
-        use crate::poly::multilinear_polynomial::EvaluateMle;
-
-        let sc: Vec<F> = sumcheck_challenges.to_vec().into_opening();
-        let val_claim = self.table.evaluate_mle(&sc);
-        let int_claim = IdentityPolynomial::new(self.log_K).evaluate(&sc);
-        vec![val_claim + self.gamma * int_claim]
-    }
 }
 
 /// Prover state for lookups into small tables.
@@ -288,7 +247,7 @@ impl<F: JoltField> ReadRafVerifier<F> {
         accumulator: &VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let params = ReadRafParams::new(provider, &table, accumulator, transcript);
+        let params = ReadRafParams::new(provider, accumulator, transcript);
         Self { params, table }
     }
 }

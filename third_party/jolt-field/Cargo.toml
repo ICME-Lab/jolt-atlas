@@ -1,6 +1,7 @@
 # Vendored from https://github.com/a16z/jolt crates/jolt-field at rev
-# 0e3faf07f7ebb4a074e0ad58bcea29fc1dda521b (2026-09-15), with workspace
-# dependency inheritance and the bench/test/fuzz targets removed.
+# f3265b5a9981f0c1359f2b63008824616f0c82fa, with workspace dependency
+# inheritance resolved and the bench/example/fuzz/test targets removed
+# (third_party/PINS.md).
 #
 # It is vendored (rather than a git dependency) so that jolt-akita (which
 # uses jolt-field by path inside the a16z/jolt checkout) and the LayerZero
@@ -25,6 +26,7 @@ ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/tw
 num-traits = { version = "0.2.19", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 allocative = { version = "=0.3.6", optional = true }
+bytemuck = { version = "1", optional = true }
 rand_core = { version = "0.6.4", default-features = false }
 rayon = { version = "1.10", optional = true }
 thiserror = "2.0"
@@ -33,11 +35,14 @@ thiserror = "2.0"
 default = ["bn254"]
 bn254 = ["dep:ark-ff", "dep:ark-serialize", "dep:ark-bn254"]
 solinas = []
+binary = []
 asm = []
 fuzzing = ["asm"]
 parallel = ["dep:rayon"]
 allocative = ["dep:allocative"]
+bytemuck = ["dep:bytemuck"]
 fp128-proof-linkage = ["asm"]
+fp64-proof-linkage = []
 
 [dev-dependencies]
 allocative = "=0.3.6"

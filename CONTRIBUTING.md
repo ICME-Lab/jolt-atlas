@@ -60,11 +60,12 @@ CI (`.github/workflows/rust.yml`) runs on every PR with `RUSTFLAGS=-D warnings`:
 |-----|------|---------|
 | Format check | every PR | `cargo fmt --all --check` |
 | Clippy | every PR | `cargo clippy --workspace --all-targets` |
+| Verifier isolation | every PR | `cargo check -p jolt-atlas-verifier`, then `cargo tree -p jolt-atlas-verifier` must not contain `jolt-atlas-core` |
 | Test | every PR | `cargo nextest run --workspace --profile ci` (unit tests, the op-surface table, the soundness sweeps, the checked-in zoo end to end, golden hashes), then the full-zoo import gates `cargo nextest run -p atlas-onnx-import --profile ci --run-ignored ignored-only -E 'not test(golden_zoo_big)'` |
 | Real model (gpt2 / bge / qwen) | main, nightly, `workflow_dispatch`, PRs labelled `ci:heavy` | `scripts/download_<model>.py` (cached), then `cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::<name>$/)'` and `golden_zoo_big` |
 | Exhaustive soundness sweeps | nightly, `workflow_dispatch` | `JOLT_SOUNDNESS_EXHAUSTIVE=1 cargo nextest run -p jolt-atlas-core --profile heavy -E 'test(soundness)'` |
 
-Run the first three rows locally before pushing (about a minute of tests). The real-model job
+Run the first four rows locally before pushing (about a minute of tests). The real-model job
 needs the ONNX files downloaded first (see [Getting Started](README.md#getting-started)); run
 the model your change touches, or add the `ci:heavy` label to the PR. The tiny stand-ins
 (`models/*-tiny`) exercise the same importer passes and prover kernels as the real models, so a

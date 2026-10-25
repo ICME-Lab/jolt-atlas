@@ -54,6 +54,28 @@ jobs:
           cache-on-failure: true
       - run: cargo clippy --workspace --all-targets
 
+  verifier-isolation:
+    # The verifier crate must build alone and never depend on the prover.
+    name: Verifier isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check
+          save-if: false
+          cache-on-failure: true
+      - run: cargo check -p jolt-atlas-verifier
+      - name: No jolt-atlas-core in the verifier's dependency tree
+        run: |
+          if cargo tree -p jolt-atlas-verifier -e normal,build --prefix none | grep -q '^jolt-atlas-core '; then
+            echo "jolt-atlas-verifier depends on jolt-atlas-core" >&2
+            exit 1
+          fi
+
   test:
     # Unit tests, the exhaustive op-surface table, the soundness sweeps, the
     # checked-in zoo (op gauntlet + tiny GPT-2 / Qwen2 / BERT stand-ins)

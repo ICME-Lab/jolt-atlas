@@ -65,24 +65,28 @@ cargo test -p atlas-onnx-import --test golden_zoo    # prints the new hashes on 
 
 GPT-2 is a 125-million-parameter transformer model from OpenAI.
 
-**JOLT Atlas**
+**JOLT Atlas** (Dory PCS)
 
 | Stage | Wall clock |
 | ----- | ---------- |
-| Proving/verifying key generation (`setup_prover`) | 1.003 s |
-| Witness + commitment phase (`ONNXProof::commit_witness_polynomials`) | 0.762 s |
-| IOP proving (`ONNXProof::iop`) | 5.997 s |
-| Reduction opening proof (excluding `HyperKZG::prove`) | 1.899 s |
-| HyperKZG prove (`HyperKZG::prove`) | 2.392 s |
-| Proof time (`ONNXProof::prove`) | 14.889 s |
-| Verify time (`ONNXProof::verify`) | 1.038 s |
-| **End-to-end total (`setup_prover` + prove + verify)** | **16.930 s** |
+| Proving/verifying key generation (`DoryScheme::setup_prover`, cached URS) | 0.843 s |
+| Witness + commitment phase (`ONNXProof::commit_witness_polynomials`) | 10.0 s |
+| IOP proving (`ONNXProof::iop`) | 8.47 s |
+| Opening reduction sumcheck + Dory opening (`ONNXProof::prove_reduced_openings`) | 7.83 s |
+| Proof time (`ONNXProof::prove`) | 29.3 s |
+| Verify time (`ONNXProof::verify`) | 3.43 s |
+| **End-to-end total (`setup_prover` + prove + verify)** | **33.6 s** |
+
+Stage rows come from one `--trace-terminal` run, which adds tracing overhead. Without
+tracing, the median of 3 runs is 27.6 s to prove and 3.4 s to verify. Dory is the
+benchmark backend: the per-stage performance gate in `specs/adoption-program.md` measures
+this command.
 
 ### How to reproduce locally
 
 ```bash
 # from repo root
-cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
+cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2 --pcs dory
 ```
 
 Add `-- --trace` for Chrome Tracing JSON output (view in `chrome://tracing`), or `-- --trace-terminal` for timing printed to the terminal.

@@ -88,16 +88,21 @@ Workspace members, in dependency order:
   static shape inference, whitelist constant folding, rewrite passes, weight quantization, and
   lowering to the `atlas-trace` IR. Golden output hashes for the model zoo live in `tests/`;
   cargo-fuzz targets and their regression corpus in `fuzz/` (see `fuzz/README.md`).
-- **jolt-atlas-core** — the prover and verifier. `onnx_proof` is the entry point:
-  `ONNXProof::prove` / `ONNXProof::verify`, with `prover.rs`, `verifier.rs`, `preprocessing.rs`,
-  `witness.rs`, and `types.rs`. Per-op protocols live under `onnx_proof/ops/`; shared machinery
-  under `clamp_lookups`, `clamp_split`, `fused_rebase`, `global_clamp`, `deferred_lookups`,
-  `op_lookups`, `range_checking`, `neural_teleport`. The whole test suite is under
-  `onnx_proof/testing/`; the `prove` example is in `examples/`.
+- **jolt-atlas-verifier** — the proof object and its wire format: `ONNXProof`,
+  `ReducedOpeningProof`, `Claims`, `ProofId`/`ProofType`, and `proof_serialization`. Every proof
+  field is private (`from_parts` + `&` accessors; `&mut` behind the `test-util` feature). No
+  prover dependency; CI checks it builds in isolation. Verification logic still lives in core
+  until the per-op verifiers move.
+- **jolt-atlas-core** — the prover and the verification logic. `onnx_proof` is the entry point:
+  the free functions `prove` / `verify` (re-exported at the crate root), with `prover.rs`,
+  `verifier.rs`, `preprocessing.rs`, `witness.rs`, and `types.rs`. Per-op protocols live under
+  `onnx_proof/ops/`; shared machinery under `clamp_lookups`, `clamp_split`, `fused_rebase`,
+  `global_clamp`, `deferred_lookups`, `op_lookups`, `range_checking`, `neural_teleport`. The
+  whole test suite is under `onnx_proof/testing/`; the `prove` example is in `examples/`.
 
 Pipeline: ONNX file → `atlas-onnx-import` (decode, infer, fold, lower) → `atlas-trace` model
 → execute to a trace → `jolt-atlas-core` preprocess, commit, prove → verify against the model's
-public IO.
+public IO. The proof crosses the prover/verifier boundary as a `jolt-atlas-verifier` type.
 
 Arkworks comes from the fork `a16z/arkworks-algebra`, branch `dev/twist-shout`, pinned in the
 root `Cargo.toml`.
@@ -119,7 +124,7 @@ root `Cargo.toml`.
 - The verifier never trusts the prover for anything the trace semantics define. Soundness is
   tested generically in `onnx_proof/testing/soundness.rs`: every field of a finished proof is
   mutated (`proof_mutation_sweep`), the trace is tampered before proving
-  (`witness_tamper_sweep`, via `ONNXProof::prove_from_trace`), and every opening claim is forged
+  (`witness_tamper_sweep`, via `prove_from_trace`), and every opening claim is forged
   at the accumulator (`opening_forgery_sweep`, via the test-feature hook
   `joltworks::poly::opening_proof::forgery`). A new op or witness column is covered once it
   appears in one of the probe models in `onnx_proof/testing/models.rs`; a new proof field needs a

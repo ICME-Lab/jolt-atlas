@@ -30,16 +30,16 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 | `joltworks` module | Upstream counterpart | Bucket | Notes |
 |---|---|---|---|
 | `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | adopt | Already vendored on the Akita branch; our `challenge/mont_ark_*` is the pre-codec design. |
-| `transcripts/` (blake2b, keccak) | `jolt-transcript` | adopt+delta | Upstream adds codecs, bias budget, PoW, prover/verifier split. Proof-format change; ride the Akita cutover. |
+| `transcripts/` (blake2b, keccak) | `jolt-transcript` | adopt+delta | Upstream adds codecs, bias budget, PoW, prover/verifier split. Proof-format change; stage 3. |
 | `subprotocols/sumcheck{,_prover,_verifier}.rs` | `jolt-sumcheck` | adopt+delta | Heavily diverged both ways (~842 changed lines vs the 2026-06 jolt-core copy); our batching and instance traits vs their scheduler/recorder. |
 | `poly/` core (dense, multilinear, eq, split_eq, unipoly, compact, lagrange, …) | `jolt-poly` | adopt+delta | `split_eq_poly` is ~12% diverged from the 2026-06 copy — the closest module we have; most deltas are atlas perf work (fold routines). |
 | `poly/opening_proof.rs`, `subprotocols/opening_reduction.rs` | `jolt-openings` + `jolt-claims` | rebuild-on-adopt | Ours is fully diverged (~2,074 changed lines of 1,636): the accumulator is keyed on atlas `OpeningId`/`VirtualPoly` and interleaved with evaluation reduction. Upstream's claim lattice is architecturally what the verifier-simplification arc's claim-ledger/ProofPlan design describes — evaluate adopting it instead of building our own. |
 | `subprotocols/evaluation_reduction.rs` | — | atlas-only | Node-output multi-consumer reduction; ONNX-graph-specific. |
-| `poly/commitment/{commitment_scheme,dory,hyperkzg,pedersen,mock}` | `jolt-dory`, `jolt-hyperkzg` | adopt+delta | Our Dory carries atlas perf work (one-hot commit paths, sparse RLC); upstream fixed Dory table materialization since the pin. |
+| `poly/commitment/{commitment_scheme,dory,hyperkzg,pedersen,mock}` | `jolt-akita` (+ `jolt-openings` traits) | retire (BN254) / adopt (Akita) | `dory` and `hyperkzg` are BN254-only and are deleted at stage 7b of `specs/adoption-program.md`, never vendored; `pedersen` (curve-generic, used by the zk paths) goes with the `zk` deletion at stage 0, or with the curve code at stage 7b if anything non-zk still uses it; until then the Dory perf work (one-hot commit paths, sparse RLC) stays in place. Akita arrives at stage 7a from the `akita-adapter` branch's `AkitaScheme`; `mock` stays as a test PCS. |
 | `subprotocols/{shout,booleanity,hamming_booleanity,hamming_weight}` | twist/shout ancestry in upstream crates | adopt+delta | Shared ancestry, diverged; inspect per file during the port. |
 | `subprotocols/{ps_shout,ra_virtual,gamma_fold,identity_range_check,mles_product_sum}` | — | atlas-only | Prefix–suffix shout and the atlas one-hot machinery. |
 | `subprotocols/univariate_skip.rs` | upstream sumcheck | adopt+delta | Check whether the round scheduler subsumes it. |
-| `subprotocols/blindfold/` | `jolt-blindfold` | rebuild-on-adopt (deferred) | Our `zk` feature is untested and outside CI; revisit when zk is revived. |
+| `subprotocols/blindfold/` | — | retire | Deleted with the `zk` feature at stage 0. Upstream `jolt-blindfold` is Dory/BN254-only; zero-knowledge returns as lattice zk, a separate effort. |
 | `lookup_tables/` framework (prefix/suffix traits) | `jolt-lookup-tables` | adopt+delta | Framework is shared ancestry; **contents are atlas-only** (relu, clamp, sat_val vs their RISC-V instruction tables). |
 | `msm/`, `curve.rs`, `config.rs`, `utils/` | `jolt-utils` + arkworks | adopt+delta | Keep `utils/lookup_bits` alignment in mind; the rest is low-risk. |
 

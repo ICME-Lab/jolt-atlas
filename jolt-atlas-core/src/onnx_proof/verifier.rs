@@ -17,7 +17,7 @@ use joltworks::{
         opening_proof::{OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
+    transcripts::{Transcript, VerifyingTranscript},
     utils::{errors::ProofVerifyError, math::Math},
 };
 use std::collections::BTreeMap;
@@ -52,16 +52,21 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
 }
 
 impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
-    /// Create a new verifier with the given preprocessing, proofs, and IO
+    /// Create a new verifier with the given preprocessing, proofs, IO, and the
+    /// proof's transcript NARG string.
     pub fn new(
         preprocessing: &'a AtlasSharedPreprocessing,
         proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F>>,
         io: &'a ModelExecutionIO,
-    ) -> Self {
+        narg: &[u8],
+    ) -> Self
+    where
+        T: VerifyingTranscript,
+    {
         Self {
             preprocessing,
             accumulator: VerifierOpeningAccumulator::new(),
-            transcript: T::new(b"ONNXProof"),
+            transcript: T::new(b"ONNXProof", narg.to_vec()),
             proofs,
             io,
             deferred: Vec::new(),

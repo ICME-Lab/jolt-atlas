@@ -47,4 +47,8 @@ pub enum ProofVerifyError {
     MissingProof(usize),
     #[error("Missing reduction proof")]
     MissingReductionProof,
+    #[error("Transcript proof of work failed")]
+    ProofOfWork,
+    #[error("Transcript NARG string not fully consumed")]
+    TrailingNarg,
 }

@@ -845,7 +845,9 @@ mod tests {
             },
             rlc_polynomial::build_materialized_rlc,
         },
-        transcripts::{Blake2bTranscript, Transcript},
+        transcripts::{
+            Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
+        },
     };
     use ark_bn254::Bn254;
     use ark_std::UniformRand;
@@ -877,7 +879,7 @@ mod tests {
         let srs = HyperKZGSRS::setup(&mut rng, max_dense_size);
         let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) =
             srs.trim(max_dense_size);
-        let mut prover_tr = Blake2bTranscript::new(b"TestEval");
+        let mut prover_tr = Blake2bProver::new(b"TestEval");
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
             ProverOpeningAccumulator::new();
 
@@ -937,8 +939,8 @@ mod tests {
             HyperKZG::prove(&pk, &rlc, &state.r_sumcheck, None, &mut prover_tr);
 
         // Verify
-        let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
-        verifier_tr.compare_to(prover_tr);
+        let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_tr.narg().to_vec());
+        verifier_tr.compare_to(prover_tr.state_history().to_vec());
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
         // Take claims
@@ -1032,7 +1034,7 @@ mod tests {
         // Setup
         let srs = HyperKZGSRS::setup(&mut rng, max_size);
         let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(max_size);
-        let mut prover_tr = Blake2bTranscript::new(b"TestEval");
+        let mut prover_tr = Blake2bProver::new(b"TestEval");
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
             ProverOpeningAccumulator::new();
 
@@ -1134,8 +1136,8 @@ mod tests {
             HyperKZG::prove(&pk, &rlc, &state.r_sumcheck, None, &mut prover_tr);
 
         // Verify
-        let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
-        verifier_tr.compare_to(prover_tr);
+        let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_tr.narg().to_vec());
+        verifier_tr.compare_to(prover_tr.state_history().to_vec());
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
         // Take claims
@@ -1239,7 +1241,7 @@ mod tests {
         // Setup
         let srs = HyperKZGSRS::setup(&mut rng, max_size);
         let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(max_size);
-        let mut prover_tr = Blake2bTranscript::new(b"TestEval");
+        let mut prover_tr = Blake2bProver::new(b"TestEval");
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
             ProverOpeningAccumulator::new();
 
@@ -1341,8 +1343,8 @@ mod tests {
             HyperKZG::prove(&pk, &rlc, &state.r_sumcheck, None, &mut prover_tr);
 
         // Verify
-        let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
-        verifier_tr.compare_to(prover_tr);
+        let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_tr.narg().to_vec());
+        verifier_tr.compare_to(prover_tr.state_history().to_vec());
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
         // Take claims

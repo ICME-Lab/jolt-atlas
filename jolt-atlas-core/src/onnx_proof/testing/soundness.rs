@@ -27,7 +27,7 @@ use joltworks::poly::{
     commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
     opening_proof::{forgery, OpeningId},
 };
-use joltworks::transcripts::Blake2bTranscript;
+use joltworks::transcripts::{Blake2bProver, Blake2bVerifier};
 use rand::{rngs::StdRng, SeedableRng};
 use serial_test::serial;
 
@@ -80,7 +80,7 @@ pub(crate) fn run_verify<PCS: PcsMutations>(
 ) -> Outcome {
     match probe::expecting_panics(|| {
         catch_unwind(AssertUnwindSafe(|| {
-            verify::<PCS::Field, Blake2bTranscript, PCS>(proof, vpp, io, None)
+            verify::<PCS::Field, Blake2bVerifier, PCS>(proof, vpp, io, None)
         }))
     }) {
         Ok(Ok(())) => Outcome::Accepted,
@@ -111,7 +111,7 @@ pub(crate) fn prove_tampered<PCS: PcsMutations>(
     let tampered = trace.clone();
     let res = match probe::expecting_panics(|| {
         catch_unwind(AssertUnwindSafe(move || {
-            prove_from_trace::<PCS::Field, Blake2bTranscript, PCS>(pp, trace)
+            prove_from_trace::<PCS::Field, Blake2bProver, PCS>(pp, trace)
         }))
     }) {
         Ok((proof, io, _)) => Ok((proof, io)),
@@ -133,8 +133,8 @@ fn honest<PCS: CommitmentScheme>(m: ProbeModel) -> Honest<PCS> {
     let shared = AtlasSharedPreprocessing::preprocess(m.model);
     let prover_pp = AtlasProverPreprocessing::<PCS::Field, PCS>::new(shared);
     let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
-    let (proof, io, _) = prove::<PCS::Field, Blake2bTranscript, PCS>(&prover_pp, &m.inputs);
-    verify::<PCS::Field, Blake2bTranscript, PCS>(&proof, &verifier_pp, &io, None)
+    let (proof, io, _) = prove::<PCS::Field, Blake2bProver, PCS>(&prover_pp, &m.inputs);
+    verify::<PCS::Field, Blake2bVerifier, PCS>(&proof, &verifier_pp, &io, None)
         .expect("probe model must prove honestly");
     Honest {
         name: m.name,
@@ -166,7 +166,7 @@ fn proof_mutation_sweep_for<PCS: PcsMutations>() {
     let mut violations: Vec<String> = vec![];
     for (m, alt) in probe_models().into_iter().zip(probe_models_alt()) {
         let h = honest::<PCS>(m);
-        let (other, _, _) = prove::<PCS::Field, Blake2bTranscript, PCS>(&h.prover_pp, &alt.inputs);
+        let (other, _, _) = prove::<PCS::Field, Blake2bProver, PCS>(&h.prover_pp, &alt.inputs);
         let sites = enumerate_sites::<PCS>(&h.proof, &other, &h.io, h.prover_pp.model());
         // Sequential on purpose: a verifier crash (stack overflow) must be
         // attributable to the site being tried, which the exhaustive run
@@ -400,8 +400,7 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
         let honest_bytes = serialize_proof(&h.proof).expect("serializes");
         {
             // The "proof unchanged" oracle below needs a deterministic prover.
-            let (again, _, _) =
-                prove::<PCS::Field, Blake2bTranscript, PCS>(&h.prover_pp, &h.inputs);
+            let (again, _, _) = prove::<PCS::Field, Blake2bProver, PCS>(&h.prover_pp, &h.inputs);
             assert_eq!(
                 serialize_proof(&again).unwrap(),
                 honest_bytes,

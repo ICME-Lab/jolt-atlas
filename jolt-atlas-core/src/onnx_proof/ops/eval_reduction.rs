@@ -102,7 +102,7 @@ mod tests {
         subprotocols::{
             evaluation_reduction::EvalReductionProtocol, sumcheck::SumcheckInstanceProof,
         },
-        transcripts::Blake2bTranscript,
+        transcripts::{Blake2bProver, Blake2bVerifier, ProvingTranscript},
     };
     use rand::{rngs::StdRng, SeedableRng};
     use std::collections::BTreeMap;
@@ -137,7 +137,7 @@ mod tests {
             .model()
             .trace(std::slice::from_ref(&output))
             .expect("model execution failed");
-        let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
+        let mut prover = Prover::<Fr, Blake2bProver>::new(preprocessing, trace);
 
         let producer_node = ComputationNode::new(0, Op::Add(Add), vec![], vec![n]);
 
@@ -200,7 +200,7 @@ mod tests {
             .model()
             .trace(std::slice::from_ref(&output))
             .expect("model execution failed");
-        let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
+        let mut prover = Prover::<Fr, Blake2bProver>::new(preprocessing, trace);
 
         let producer_node = ComputationNode::new(producer_idx, Op::Add(Add), vec![], vec![n]);
 
@@ -258,7 +258,7 @@ mod tests {
         };
 
         let proofs = BTreeMap::new();
-        let mut verifier = Verifier::<Fr, Blake2bTranscript>::new(&preprocessing, &proofs, &io);
+        let mut verifier = Verifier::<Fr, Blake2bVerifier>::new(&preprocessing, &proofs, &io, &[]);
 
         let producer_node = ComputationNode::new(producer_idx, Op::Add(Add), vec![], vec![n]);
 
@@ -276,7 +276,7 @@ mod tests {
         let opening = (OpeningPoint::new(point.clone()), claim);
         verifier.accumulator.openings.insert(key, opening);
 
-        let mut prover_transcript = Blake2bTranscript::new(b"ONNXProof");
+        let mut prover_transcript = Blake2bProver::new(b"ONNXProof");
         let (proof, _reduced_prover) = EvalReductionProtocol::prove(
             &verifier.accumulator.get_node_openings(producer_idx),
             output_mle,
@@ -312,7 +312,7 @@ mod tests {
             .model()
             .trace(&[input])
             .expect("model execution failed");
-        let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
+        let mut prover = Prover::<Fr, Blake2bProver>::new(preprocessing, trace);
 
         let mut proofs: BTreeMap<ProofId, SumcheckInstanceProof<Fr>> = BTreeMap::new();
         let mut eval_reduction_proofs = BTreeMap::new();
@@ -344,7 +344,7 @@ mod tests {
 
         // Build just enough prover state for (opening_claims, proofs, eval_reduction_proofs)
         // using output_claim + iop (no commitments, no reduced opening proof stage).
-        let mut prover = Prover::<_, Blake2bTranscript>::new(shared.clone(), trace);
+        let mut prover = Prover::<_, Blake2bProver>::new(shared.clone(), trace);
         let mut proofs = BTreeMap::new();
         let mut eval_reduction_proofs = BTreeMap::new();
 
@@ -363,10 +363,15 @@ mod tests {
             vec![],
             eval_reduction_proofs,
             None,
+            prover.transcript.into_narg(),
         );
 
-        let mut verifier =
-            Verifier::<_, Blake2bTranscript>::new(&shared, partial_proof.proofs(), &io);
+        let mut verifier = Verifier::<_, Blake2bVerifier>::new(
+            &shared,
+            partial_proof.proofs(),
+            &io,
+            partial_proof.narg(),
+        );
         verifier::populate_accumulator(&partial_proof, &mut verifier);
         verifier::verify_output_claim(shared.model(), &mut verifier)
             .expect("verify_output_claim should succeed for consistent partial proof state");

@@ -21,7 +21,7 @@ use joltworks::{
         opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
     },
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
-    transcripts::Transcript,
+    transcripts::{ProvingTranscript, Transcript},
     utils::math::Math,
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -60,7 +60,10 @@ pub struct Prover<F: JoltField, T: Transcript> {
 
 impl<F: JoltField, T: Transcript> Prover<F, T> {
     /// Create a new prover with the given preprocessing and trace
-    pub fn new(preprocessing: AtlasSharedPreprocessing, trace: Trace) -> Self {
+    pub fn new(preprocessing: AtlasSharedPreprocessing, trace: Trace) -> Self
+    where
+        T: ProvingTranscript,
+    {
         Self {
             trace,
             preprocessing,
@@ -232,7 +235,11 @@ pub(super) fn prove_reduced_openings<
 }
 
 #[allow(clippy::type_complexity)]
-pub(super) fn finalize_proof<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+pub(super) fn finalize_proof<
+    F: JoltField,
+    T: ProvingTranscript,
+    PCS: CommitmentScheme<Field = F>,
+>(
     mut prover: Prover<F, T>,
     io: ModelExecutionIO,
     commitments: Vec<PCS::Commitment>,
@@ -242,16 +249,17 @@ pub(super) fn finalize_proof<F: JoltField, T: Transcript, PCS: CommitmentScheme<
 ) -> (
     ONNXProof<F, PCS>,
     ModelExecutionIO,
-    Option<ProverDebugInfo<F, T>>,
+    Option<ProverDebugInfo<F>>,
 ) {
     #[cfg(test)]
     let debug_info = Some(ProverDebugInfo {
-        transcript: prover.transcript.clone(),
+        transcript_history: prover.transcript.state_history().to_vec(),
         opening_accumulator: prover.accumulator.clone(),
     });
     #[cfg(not(test))]
     let debug_info = None;
     let opening_claims = prover.accumulator.take();
+    let narg = prover.transcript.into_narg();
     (
         ONNXProof::from_parts(
             Claims::from_parts(opening_claims),
@@ -259,6 +267,7 @@ pub(super) fn finalize_proof<F: JoltField, T: Transcript, PCS: CommitmentScheme<
             commitments,
             eval_reduction_proofs,
             reduced_opening_proof,
+            narg,
         ),
         io,
         debug_info,

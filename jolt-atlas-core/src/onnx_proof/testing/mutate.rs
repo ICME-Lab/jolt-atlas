@@ -118,6 +118,12 @@ pub(crate) enum Site {
     ReducedSpliced,
     /// A PCS-level edit of the joint opening proof.
     ReducedPcs(PcsSite),
+    /// `narg[i] ^= 1` (a proof-of-work nonce byte).
+    NargByte { i: usize },
+    /// Drop the last NARG byte.
+    NargTruncated,
+    /// Append a byte to the NARG string.
+    NargExtended,
     /// `io.outputs[0][elem] += 1`.
     IoOutput { elem: usize },
     /// `io.inputs[tensor][elem] += 1`.
@@ -328,6 +334,15 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
         }
     }
 
+    let narg_len = proof.narg().len();
+    if narg_len > 0 {
+        for i in [0, narg_len / 2, narg_len - 1] {
+            sites.push((Site::NargByte { i }, Expect::MustReject));
+        }
+        sites.push((Site::NargTruncated, Expect::MustReject));
+    }
+    sites.push((Site::NargExtended, Expect::MustReject));
+
     let out_len = io.outputs[0].data().len();
     for elem in [0, out_len / 2, out_len - 1] {
         sites.push((Site::IoOutput { elem }, Expect::MustReject));
@@ -458,6 +473,11 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
                 .joint_opening_proof_mut(),
             *s,
         ),
+        Site::NargByte { i } => proof.narg_mut()[*i] ^= 1,
+        Site::NargTruncated => {
+            proof.narg_mut().pop();
+        }
+        Site::NargExtended => proof.narg_mut().push(0),
         Site::IoOutput { elem } => {
             let d = io.outputs[0].data_mut();
             d[*elem] = d[*elem].wrapping_add(1);
@@ -490,6 +510,9 @@ pub(crate) fn site_class(site: &Site) -> &'static str {
         Site::ReducedRemoved => "ReducedRemoved",
         Site::ReducedSpliced => "ReducedSpliced",
         Site::ReducedPcs(_) => "ReducedPcs",
+        Site::NargByte { .. } => "NargByte",
+        Site::NargTruncated => "NargTruncated",
+        Site::NargExtended => "NargExtended",
         Site::IoOutput { .. } => "IoOutput",
         Site::IoInput { .. } => "IoInput",
         Site::IoInputIndex { .. } => "IoInputIndex",

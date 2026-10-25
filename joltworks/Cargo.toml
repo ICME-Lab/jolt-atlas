@@ -4,10 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+default = ["prover"]
 monitor = ["dep:sysinfo"]
 allocative = ["dep:inferno"]
 challenge-254-bit = []
-test-feature = []
+# The lockstep state history reads the sponge state, which spongefish exposes under
+# `yolocrypto` (enabled by `prover-grinding`).
+test-feature = ["prover"]
+# The prover's proof-of-work nonce search; verifier-only builds leave it off.
+prover = ["jolt-transcript/prover-grinding"]
 
 [dependencies]
 # Internal
@@ -27,6 +32,8 @@ sha3 = "0.10.8"
 blake2 = "0.10"
 jolt-optimizations = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 jolt-field = { workspace = true, features = ["bn254", "solinas", "asm"] }
+jolt-transcript = { workspace = true, features = ["bn254", "solinas", "transcript-blake2b", "transcript-keccak"] }
+spongefish = { version = "=0.8.0", default-features = false, features = ["keccak"] }
 dory = { package = "dory-pcs", version = "0.4.0", features = [
     "backends",
     "cache",

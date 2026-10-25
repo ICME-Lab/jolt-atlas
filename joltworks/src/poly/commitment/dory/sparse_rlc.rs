@@ -339,7 +339,7 @@ mod tests {
             },
             dense_mlpoly::DensePolynomial,
         },
-        transcripts::{Blake2bTranscript, Transcript},
+        transcripts::{Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript},
     };
     use dory::{backends::arkworks::BN254, Transparent};
 
@@ -427,10 +427,10 @@ mod tests {
             .map(|i| <Fr as JoltField>::Challenge::from((i as u128) + 5))
             .collect();
         let opening = joint_dense.evaluate(&opening_point);
-        let mut pt = Blake2bTranscript::new(b"sparse-rlc");
+        let mut pt = Blake2bProver::new(b"sparse-rlc");
         let proof = DoryScheme::prove_rlc(&setup, &polys, &gammas, hints, &opening_point, &mut pt);
         let vsetup = DoryScheme::setup_verifier(&setup);
-        let mut vt = Blake2bTranscript::new(b"sparse-rlc");
+        let mut vt = Blake2bVerifier::new(b"sparse-rlc", pt.narg().to_vec());
         DoryScheme::verify(
             &proof,
             &vsetup,
@@ -442,9 +442,9 @@ mod tests {
         .expect("sparse joint opening must verify against the combined commitment");
 
         // And without hints (sparse recompute path).
-        let mut pt = Blake2bTranscript::new(b"sparse-rlc");
+        let mut pt = Blake2bProver::new(b"sparse-rlc");
         let proof = DoryScheme::prove_rlc(&setup, &polys, &gammas, vec![], &opening_point, &mut pt);
-        let mut vt = Blake2bTranscript::new(b"sparse-rlc");
+        let mut vt = Blake2bVerifier::new(b"sparse-rlc", pt.narg().to_vec());
         DoryScheme::verify(
             &proof,
             &vsetup,

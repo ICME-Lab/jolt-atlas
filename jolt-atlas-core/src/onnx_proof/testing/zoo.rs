@@ -202,7 +202,7 @@ fn qwen() {
 fn input_binding_changes_transcript() {
     use crate::onnx_proof::append_inputs_to_transcript;
     use atlas_trace::trace::ModelExecutionIO;
-    use joltworks::transcripts::{Blake2bTranscript, Transcript};
+    use joltworks::transcripts::{Blake2bProver, ProvingTranscript, Transcript};
 
     let io = |vals: &[i32]| ModelExecutionIO {
         inputs: vec![Tensor::from_slice(vals, &[vals.len()]).unwrap()],
@@ -211,7 +211,7 @@ fn input_binding_changes_transcript() {
         output_indices: vec![],
     };
     let challenge_for = |vals: &[i32]| -> Fr {
-        let mut t = Blake2bTranscript::new(b"ONNXProof");
+        let mut t = Blake2bProver::new(b"ONNXProof");
         append_inputs_to_transcript(&mut t, &io(vals));
         t.challenge_scalar::<Fr>()
     };

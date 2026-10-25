@@ -331,6 +331,16 @@ impl JoltField for TrackedFr {
 
     type SmallValueLookupTables = <ark_bn254::Fr as JoltField>::SmallValueLookupTables;
 
+    type ChallengeCodecField = jolt_field::Fr;
+
+    fn from_challenge_codec(x: jolt_field::Fr) -> Self {
+        TrackedFr(x.into())
+    }
+
+    fn challenge_set_size() -> jolt_transcript::ChallengeSetSize {
+        <ark_bn254::Fr as JoltField>::challenge_set_size()
+    }
+
     // Default: Use optimized 125-bit MontChallenge
     #[cfg(not(feature = "challenge-254-bit"))]
     type Challenge = MontU128Challenge<TrackedFr>;

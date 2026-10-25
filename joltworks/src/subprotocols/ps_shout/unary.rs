@@ -295,7 +295,7 @@ pub mod tests {
             },
             sumcheck::Sumcheck,
         },
-        transcripts::{Blake2bTranscript, Transcript},
+        transcripts::{Blake2bProver, ProvingTranscript, Transcript},
         utils::lookup_bits::LookupBits,
     };
     use ark_bn254::Fr;
@@ -402,8 +402,8 @@ pub mod tests {
         }
     }
 
-    fn new_test_transcript() -> (Blake2bTranscript, Vec<Fr>) {
-        let mut transcript = Blake2bTranscript::new(b"test");
+    fn new_test_transcript() -> (Blake2bProver, Vec<Fr>) {
+        let mut transcript = Blake2bProver::new(b"test");
         let r_cycle: Vec<Fr> = transcript.challenge_vector(LOG_NUM_LOOKUPS);
         (transcript, r_cycle)
     }

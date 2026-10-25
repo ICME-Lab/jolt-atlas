@@ -13,7 +13,7 @@ use atlas_trace::{Model, Tensor};
 use blake2::{digest::consts::U32, Blake2b, Digest};
 use joltworks::{
     poly::commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
-    transcripts::Blake2bTranscript,
+    transcripts::Blake2bProver,
 };
 
 use super::zoo::{op_gauntlet_inputs, zoo};
@@ -37,13 +37,14 @@ fn assert_digest<PCS: CommitmentScheme>(
     let pp = AtlasProverPreprocessing::<PCS::Field, PCS>::new(
         AtlasSharedPreprocessing::preprocess(model),
     );
-    let (p, _, debug) = prove::<PCS::Field, Blake2bTranscript, PCS>(&pp, inputs);
+    let (p, _, debug) = prove::<PCS::Field, Blake2bProver, PCS>(&pp, inputs);
     let bytes = serialize_proof(&p).expect("proof serializes");
     let got_proof = hex(&Blake2b::<U32>::digest(&bytes));
-    let got_transcript = hex(&debug
-        .expect("test builds carry debug info")
-        .transcript
-        .state);
+    let debug = debug.expect("test builds carry debug info");
+    let got_transcript = hex(debug
+        .transcript_history
+        .last()
+        .expect("the transcript records its construction"));
     assert_eq!(
         (got_proof.as_str(), got_transcript.as_str()),
         (proof, transcript),

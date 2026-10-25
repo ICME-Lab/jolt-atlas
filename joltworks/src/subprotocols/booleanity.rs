@@ -529,7 +529,9 @@ mod tests {
     use crate::{
         field::IntoOpening,
         subprotocols::sumcheck::Sumcheck,
-        transcripts::{Blake2bTranscript, Transcript},
+        transcripts::{
+            Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
+        },
         utils::thread::unsafe_allocate_zero_vec,
     };
 
@@ -543,7 +545,7 @@ mod tests {
         let words = 1 << log_words;
         let lookups = 1 << log_lookups;
 
-        let mut prover_transcript = Blake2bTranscript::default();
+        let mut prover_transcript = Blake2bProver::new(b"");
         let mut prover_accumulator = ProverOpeningAccumulator::new();
         let r_lookups: Vec<Fr> = prover_transcript
             .challenge_vector_optimized::<Fr>(log_lookups)
@@ -585,7 +587,7 @@ mod tests {
         let (proof, _) =
             Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
-        let mut verifier_transcript = Blake2bTranscript::default();
+        let mut verifier_transcript = Blake2bVerifier::new(b"", prover_transcript.narg().to_vec());
         let mut verifier_accumulator = VerifierOpeningAccumulator::new();
         let _r_x: Vec<<Fr as JoltField>::Challenge> =
             verifier_transcript.challenge_vector_optimized::<Fr>(log_lookups);

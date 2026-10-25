@@ -4,7 +4,9 @@ use crate::{
         commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::PolynomialEvaluation, rlc_polynomial::build_materialized_rlc,
     },
-    transcripts::{Blake2bTranscript, Transcript},
+    transcripts::{
+        Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
+    },
 };
 use ark_bn254::Bn254;
 use ark_std::UniformRand;
@@ -32,17 +34,17 @@ fn test_hyperkzg_eval() {
     let test_inner = |point: Vec<Challenge>| -> Result<(), ProofVerifyError> {
         // Compute the expected evaluation dynamically
         let eval = poly.evaluate(&point);
-        let mut tr = Blake2bTranscript::new(b"TestEval");
+        let mut tr = Blake2bProver::new(b"TestEval");
         let proof = HyperKZG::prove(&pk, &poly, &point, None, &mut tr);
-        let mut tr = Blake2bTranscript::new(b"TestEval");
+        let mut tr = Blake2bVerifier::new(b"TestEval", tr.into_narg());
         HyperKZG::verify(&proof, &vk, &mut tr, &point, &eval, &c)
     };
 
     let test_inner_wrong =
         |point: Vec<Challenge>, wrong_eval: Fr| -> Result<(), ProofVerifyError> {
-            let mut tr = Blake2bTranscript::new(b"TestEval");
+            let mut tr = Blake2bProver::new(b"TestEval");
             let proof = HyperKZG::prove(&pk, &poly, &point, None, &mut tr);
-            let mut tr = Blake2bTranscript::new(b"TestEval");
+            let mut tr = Blake2bVerifier::new(b"TestEval", tr.into_narg());
             HyperKZG::verify(&proof, &vk, &mut tr, &point, &wrong_eval, &c)
         };
 
@@ -93,12 +95,12 @@ fn test_hyperkzg_small() {
     let c = HyperKZG::commit(&poly, &pk).0;
 
     // prove an evaluation
-    let mut tr = Blake2bTranscript::new(b"TestEval");
+    let mut tr = Blake2bProver::new(b"TestEval");
     let proof = HyperKZG::prove(&pk, &poly, &point, None, &mut tr);
     let post_c_p = tr.challenge_scalar::<Fr>();
 
     // verify the evaluation
-    let mut verifier_transcript = Blake2bTranscript::new(b"TestEval");
+    let mut verifier_transcript = Blake2bVerifier::new(b"TestEval", tr.narg().to_vec());
     assert!(HyperKZG::verify(&proof, &vk, &mut verifier_transcript, &point, &eval, &c).is_ok());
     let post_c_v = verifier_transcript.challenge_scalar::<Fr>();
 
@@ -113,7 +115,7 @@ fn test_hyperkzg_small() {
     let mut bad_proof = proof.clone();
     let v1 = bad_proof.v[1].clone();
     bad_proof.v[0].clone_from(&v1);
-    let mut verifier_transcript2 = Blake2bTranscript::new(b"TestEval");
+    let mut verifier_transcript2 = Blake2bVerifier::new(b"TestEval", tr.narg().to_vec());
     assert!(HyperKZG::verify(
         &bad_proof,
         &vk,
@@ -147,19 +149,19 @@ fn test_hyperkzg_large() {
         let C = HyperKZG::commit(&poly, &pk).0;
 
         // prove an evaluation
-        let mut prover_transcript = Blake2bTranscript::new(b"TestEval");
+        let mut prover_transcript = Blake2bProver::new(b"TestEval");
         let proof: HyperKZGProof<Bn254> =
             HyperKZG::prove(&pk, &poly, &point, None, &mut prover_transcript);
 
         // verify the evaluation
-        let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
+        let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_transcript.narg().to_vec());
         assert!(HyperKZG::verify(&proof, &vk, &mut verifier_tr, &point, &eval, &C).is_ok());
 
         // Change the proof and expect verification to fail
         let mut bad_proof = proof.clone();
         let v1 = bad_proof.v[1].clone();
         bad_proof.v[0].clone_from(&v1);
-        let mut verifier_tr2 = Blake2bTranscript::new(b"TestEval");
+        let mut verifier_tr2 = Blake2bVerifier::new(b"TestEval", prover_transcript.narg().to_vec());
         assert!(HyperKZG::verify(&bad_proof, &vk, &mut verifier_tr2, &point, &eval, &C).is_err());
     }
 }
@@ -177,7 +179,7 @@ fn test_hyperkzg_batch_dense_diff() {
     let max_size = 1 << sizes[sizes.len() - 1];
     let srs = HyperKZGSRS::setup(&mut rng, max_size);
     let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(max_size);
-    let mut prover_tr = Blake2bTranscript::new(b"TestEval");
+    let mut prover_tr = Blake2bProver::new(b"TestEval");
 
     let mut point = (0..sizes[0] - 1)
         .map(|_| Challenge::from(rng.gen::<u128>()))
@@ -226,7 +228,7 @@ fn test_hyperkzg_batch_dense_diff() {
     );
 
     // verify the evaluation
-    let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
+    let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_tr.narg().to_vec());
     let coeffs: Vec<Fr> = verifier_tr.challenge_scalar_powers(openings_data.len());
     let joint_commitment = HyperKZG::combine_commitments(
         &openings_data
@@ -261,7 +263,7 @@ fn test_hyperkzg_batch_dense_oh() {
 
     let srs = HyperKZGSRS::setup(&mut rng, oh_total_size);
     let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(oh_total_size);
-    let mut prover_tr = Blake2bTranscript::new(b"TestEval");
+    let mut prover_tr = Blake2bProver::new(b"TestEval");
 
     let dense_poly_raw = (0..N).map(|_| Fr::rand(&mut rng)).collect::<Vec<_>>();
     let dense_poly = MultilinearPolynomial::from(dense_poly_raw.clone());
@@ -306,7 +308,7 @@ fn test_hyperkzg_batch_dense_oh() {
     let proof: HyperKZGProof<Bn254> = HyperKZG::prove(&pk, &rlc, &point, None, &mut prover_tr);
 
     // verify the evaluation
-    let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
+    let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_tr.narg().to_vec());
     let gamma_powers = verifier_tr.challenge_scalar_powers::<Fr>(2);
     let rlc_commitment =
         HyperKZG::combine_commitments(&[&dense_commitment, &one_hot_commitment], &gamma_powers);
@@ -362,7 +364,7 @@ fn test_hyperkzg_batch_3dense_3oh() {
     // Setup
     let srs = HyperKZGSRS::setup(&mut rng, max_size);
     let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(max_size);
-    let mut prover_tr = Blake2bTranscript::new(b"TestEval");
+    let mut prover_tr = Blake2bProver::new(b"TestEval");
 
     // Generate evaluation point based on largest polynomial
     let point: Vec<Challenge> = (0..max_num_vars)
@@ -460,7 +462,7 @@ fn test_hyperkzg_batch_3dense_3oh() {
     let proof: HyperKZGProof<Bn254> = HyperKZG::prove(&pk, &rlc, &point, None, &mut prover_tr);
 
     // Verify
-    let mut verifier_tr = Blake2bTranscript::new(b"TestEval");
+    let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_tr.narg().to_vec());
     let gamma_powers = verifier_tr.challenge_scalar_powers::<Fr>(num_polys);
     let all_commitments: Vec<&HyperKZGCommitment<Bn254>> = dense_polys
         .iter()
@@ -517,10 +519,10 @@ fn test_hyperkzg_srs_file_roundtrip() {
     let point: Vec<Challenge> = (0..8).map(|i| Challenge::from((i * 7) as u128)).collect();
     let eval = poly.evaluate(&point);
 
-    let mut tr1 = Blake2bTranscript::new(b"TestSRS");
+    let mut tr1 = Blake2bProver::new(b"TestSRS");
     let proof = HyperKZG::prove(&pk2, &poly, &point, None, &mut tr1);
 
-    let mut tr2 = Blake2bTranscript::new(b"TestSRS");
+    let mut tr2 = Blake2bVerifier::new(b"TestSRS", tr1.into_narg());
     assert!(HyperKZG::verify(&proof, &vk2, &mut tr2, &point, &eval, &c2).is_ok());
 
     // Cleanup

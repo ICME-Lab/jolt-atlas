@@ -31,7 +31,7 @@ members = [
 atlas-trace = { path = "./atlas-trace" }
 atlas-onnx-import = { path = "./atlas-onnx-import" }
 common = { path = "./common" }
-joltworks = { path = "./joltworks" }
+joltworks = { path = "./joltworks", default-features = false }
 jolt-atlas-verifier = { path = "./jolt-atlas-verifier" }
 # Vendored upstream crates (third_party/PINS.md records each pin).
 jolt-field = { path = "./third_party/jolt-field", default-features = false }

@@ -300,7 +300,7 @@ mod tests {
     use crate::{
         field::{IntoOpening, JoltField},
         poly::multilinear_polynomial::PolynomialEvaluation,
-        transcripts::Blake2bTranscript,
+        transcripts::{Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript},
     };
     use ark_bn254::Fr;
     use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -485,13 +485,14 @@ mod tests {
 
         let witness = EvalReductionWitness { mle };
 
-        let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let mut prover_tr = Blake2bProver::new(b"eval-reduction-test");
         let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
         let (proof, reduced_prover) = instance
             .prove(&witness, &mut prover_tr)
             .expect("prover should succeed");
 
-        let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let mut verifier_tr =
+            Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
         let reduced_verifier = instance
             .verify(&proof, &mut verifier_tr)
             .expect("verifier should accept valid reduction proof");
@@ -505,7 +506,7 @@ mod tests {
         let v = mle.evaluate(&r);
         let opening: Opening<Fr> = (r.clone().into(), v);
 
-        let mut prover_tr = Blake2bTranscript::new(b"eval-red-single");
+        let mut prover_tr = Blake2bProver::new(b"eval-red-single");
         let (proof, reduced_prover) =
             EvalReductionProtocol::prove::<Fr, _>(&[&opening], mle, &mut prover_tr)
                 .expect("single opening should be propagated by prover");
@@ -517,7 +518,7 @@ mod tests {
             "h should be constant for single opening case"
         );
 
-        let mut verifier_tr = Blake2bTranscript::new(b"eval-red-single");
+        let mut verifier_tr = Blake2bVerifier::new(b"eval-red-single", prover_tr.narg().to_vec());
         let reduced_verifier =
             EvalReductionProtocol::verify::<Fr, _>(&[&opening], &proof, &mut verifier_tr)
                 .expect("single opening should be propagated by verifier");
@@ -539,13 +540,14 @@ mod tests {
 
         let witness = EvalReductionWitness { mle };
 
-        let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let mut prover_tr = Blake2bProver::new(b"eval-reduction-test");
         let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
         let (mut proof, _reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
 
         // Tamper h so boundary checks fail.
         proof.h.coeffs[0] += Fr::from(1u64);
-        let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let mut verifier_tr =
+            Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
         let err = instance
             .verify(&proof, &mut verifier_tr)
             .expect_err("verifier should reject when h is tampered");
@@ -565,11 +567,12 @@ mod tests {
 
         let witness = EvalReductionWitness { mle };
 
-        let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let mut prover_tr = Blake2bProver::new(b"eval-reduction-test");
         let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
         let (proof, reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
 
-        let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let mut verifier_tr =
+            Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
         // Force transcript divergence before verification starts.
         verifier_tr.append_message(b"desync");
 
@@ -597,10 +600,11 @@ mod tests {
 
         let witness = EvalReductionWitness { mle };
 
-        let mut prover_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let mut prover_tr = Blake2bProver::new(b"eval-reduction-test");
         let instance = EvalReductionInstance::new(&[&opening1, &opening2, &opening3]);
         let (proof, reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
-        let mut verifier_tr = Blake2bTranscript::new(b"eval-reduction-test");
+        let mut verifier_tr =
+            Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
         let reduced_verifier = instance.verify(&proof, &mut verifier_tr).unwrap();
         assert_eq!(reduced_verifier, reduced);
     }

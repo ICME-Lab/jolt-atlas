@@ -4,7 +4,8 @@ use std::time::Instant;
 
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use joltworks::{
-    poly::commitment::commitment_scheme::CommitmentScheme, transcripts::Blake2bTranscript,
+    poly::commitment::commitment_scheme::CommitmentScheme,
+    transcripts::{Blake2bProver, Blake2bVerifier},
 };
 
 use crate::onnx_proof::{
@@ -60,7 +61,7 @@ where
     };
 
     let t = Instant::now();
-    let (proof, io, debug) = prove::<PCS::Field, Blake2bTranscript, PCS>(&prover_pp, inputs);
+    let (proof, io, debug) = prove::<PCS::Field, Blake2bProver, PCS>(&prover_pp, inputs);
     println!("prove: {:?}", t.elapsed());
     assert_eq!(
         io.outputs, expected,
@@ -69,7 +70,7 @@ where
 
     let verifier_pp = AtlasVerifierPreprocessing::<PCS::Field, PCS>::from(&prover_pp);
     let t = Instant::now();
-    verify(
+    verify::<PCS::Field, Blake2bVerifier, PCS>(
         &proof,
         &verifier_pp,
         &io,
@@ -82,7 +83,7 @@ where
         let bytes = serialize_proof(&proof).expect("proof serializes");
         println!("proof size: {} bytes", bytes.len());
         let de: ONNXProof<PCS::Field, PCS> = deserialize_proof(&bytes).expect("proof deserializes");
-        verify::<PCS::Field, Blake2bTranscript, PCS>(&de, &verifier_pp, &io, None)
+        verify::<PCS::Field, Blake2bVerifier, PCS>(&de, &verifier_pp, &io, None)
             .expect("deserialized proof must verify");
         assert_eq!(
             serialize_proof(&de).expect("re-serializes"),

@@ -227,6 +227,9 @@ where
             r.serialize_with_mode(&mut writer, compress)?;
         }
 
+        // 6. Transcript NARG string
+        self.narg().serialize_with_mode(&mut writer, compress)?;
+
         Ok(())
     }
 
@@ -239,6 +242,7 @@ where
             + self
                 .reduced_opening_proof()
                 .map_or(0, |r| r.serialized_size(compress))
+            + self.narg().serialized_size(compress)
     }
 }
 
@@ -267,6 +271,7 @@ where
         let commitments = Vec::deserialize_with_mode(&mut reader, compress, validate)?;
         let eval_reduction_proofs = deserialize_btreemap(&mut reader, compress, validate)?;
         let reduced_opening_proof = Option::deserialize_with_mode(&mut reader, compress, validate)?;
+        let narg = Vec::<u8>::deserialize_with_mode(&mut reader, compress, validate)?;
 
         Ok(Self::from_parts(
             opening_claims,
@@ -274,6 +279,7 @@ where
             commitments,
             eval_reduction_proofs,
             reduced_opening_proof,
+            narg,
         ))
     }
 }

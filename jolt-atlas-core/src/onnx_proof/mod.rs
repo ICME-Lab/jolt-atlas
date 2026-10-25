@@ -14,8 +14,10 @@
 use atlas_trace::{trace::ModelExecutionIO, Tensor};
 
 use joltworks::{
-    field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
-    transcripts::Transcript, utils::errors::ProofVerifyError,
+    field::JoltField,
+    poly::commitment::commitment_scheme::CommitmentScheme,
+    transcripts::{ProvingTranscript, Transcript, VerifyingTranscript},
+    utils::errors::ProofVerifyError,
 };
 use std::collections::BTreeMap;
 
@@ -57,7 +59,7 @@ pub use ark_bn254::Bn254;
 pub use joltworks::field::bn254::Fr;
 pub use joltworks::{
     poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
-    transcripts::Blake2bTranscript,
+    transcripts::{Blake2bProver, Blake2bVerifier},
 };
 
 // ── Public-input transcript binding (soundness, issue #230) ──────────────
@@ -129,29 +131,33 @@ pub(crate) fn append_inputs_to_transcript<T: Transcript>(
 /// optional debug information.
 #[tracing::instrument(skip_all, name = "ONNXProof::prove")]
 #[allow(clippy::type_complexity)]
-pub fn prove<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+pub fn prove<F: JoltField, T: ProvingTranscript, PCS: CommitmentScheme<Field = F>>(
     pp: &AtlasProverPreprocessing<F, PCS>,
     inputs: &[Tensor<i32>],
 ) -> (
     ONNXProof<F, PCS>,
     ModelExecutionIO,
-    Option<ProverDebugInfo<F, T>>,
+    Option<ProverDebugInfo<F>>,
 ) {
     let trace = pp.model().trace(inputs).expect("model execution failed");
-    prove_from_trace(pp, trace)
+    prove_from_trace::<F, T, PCS>(pp, trace)
 }
 
 /// Prove from an already-executed trace. The public IO is derived from
 /// the trace, so this is the prover's *claimed* statement; the soundness
 /// sweeps tamper with the trace before calling it.
 #[allow(clippy::type_complexity)]
-pub(crate) fn prove_from_trace<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+pub(crate) fn prove_from_trace<
+    F: JoltField,
+    T: ProvingTranscript,
+    PCS: CommitmentScheme<Field = F>,
+>(
     pp: &AtlasProverPreprocessing<F, PCS>,
     trace: atlas_trace::Trace,
 ) -> (
     ONNXProof<F, PCS>,
     ModelExecutionIO,
-    Option<ProverDebugInfo<F, T>>,
+    Option<ProverDebugInfo<F>>,
 ) {
     let io = trace.io(pp.model());
 
@@ -201,18 +207,20 @@ pub(crate) fn prove_from_trace<F: JoltField, T: Transcript, PCS: CommitmentSchem
 /// Checks all sumcheck proofs, validates opening claims, and verifies that the
 /// computation produces the expected output.
 #[tracing::instrument(skip_all, name = "ONNXProof::verify")]
-pub fn verify<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+pub fn verify<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<Field = F>>(
     proof: &ONNXProof<F, PCS>,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     io: &ModelExecutionIO,
-    _debug_info: Option<ProverDebugInfo<F, T>>,
+    _debug_info: Option<ProverDebugInfo<F>>,
 ) -> Result<(), ProofVerifyError> {
     // Initialize verifier state
-    let mut verifier: Verifier<F, T> = Verifier::new(&pp.shared, proof.proofs(), io);
+    let mut verifier: Verifier<F, T> = Verifier::new(&pp.shared, proof.proofs(), io, proof.narg());
     #[cfg(test)]
     {
         if let Some(debug_info) = _debug_info {
-            verifier.transcript.compare_to(debug_info.transcript);
+            verifier
+                .transcript
+                .compare_to(debug_info.transcript_history);
             verifier
                 .accumulator
                 .compare_to(debug_info.opening_accumulator);
@@ -234,5 +242,8 @@ pub fn verify<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
     verifier::verify_iop(proof, pp.model(), &mut verifier)?;
 
     // Verify reduced opening proof
-    verifier::verify_reduced_openings(proof, pp, &mut verifier)
+    verifier::verify_reduced_openings(proof, pp, &mut verifier)?;
+
+    // Every proof-of-work nonce in the NARG string must have been read.
+    verifier.transcript.finish()
 }

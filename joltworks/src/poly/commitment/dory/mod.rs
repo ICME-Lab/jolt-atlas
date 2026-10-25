@@ -427,7 +427,7 @@ mod tests {
     use super::*;
     use crate::{
         poly::{dense_mlpoly::DensePolynomial, multilinear_polynomial::PolynomialEvaluation},
-        transcripts::Blake2bTranscript,
+        transcripts::{Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript},
     };
 
     /// Bare-metal round trip against the native `dory-pcs` API. Proves the crate
@@ -501,10 +501,10 @@ mod tests {
             .collect();
         let opening = poly.evaluate(&point);
 
-        let mut pt = Blake2bTranscript::new(b"dory-adapter-rt");
+        let mut pt = Blake2bProver::new(b"dory-adapter-rt");
         let proof = DoryScheme::prove(&setup, &poly, &point, Some(hint), &mut pt);
 
-        let mut vt = Blake2bTranscript::new(b"dory-adapter-rt");
+        let mut vt = Blake2bVerifier::new(b"dory-adapter-rt", pt.narg().to_vec());
         DoryScheme::verify(&proof, &vsetup, &mut vt, &point, &opening, &commitment)
             .expect("dory adapter verify should succeed");
     }
@@ -559,10 +559,10 @@ mod tests {
             .map(|i| <Fr as JoltField>::Challenge::from((i as u128) + 5))
             .collect();
         let opening = joint_poly.evaluate(&point);
-        let mut pt = Blake2bTranscript::new(b"dory-combine");
+        let mut pt = Blake2bProver::new(b"dory-combine");
         let proof = DoryScheme::prove(&setup, &joint_poly, &point, None, &mut pt);
         let vsetup = DoryScheme::setup_verifier(&setup);
-        let mut vt = Blake2bTranscript::new(b"dory-combine");
+        let mut vt = Blake2bVerifier::new(b"dory-combine", pt.narg().to_vec());
         DoryScheme::verify(&proof, &vsetup, &mut vt, &point, &opening, &combined)
             .expect("opening must verify against the combined commitment");
     }

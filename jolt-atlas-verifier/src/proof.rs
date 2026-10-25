@@ -28,6 +28,9 @@ pub struct ONNXProof<F: JoltField, PCS: CommitmentScheme<Field = F>> {
     eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
     /// Batched opening proof using reduction sum-check protocol to reduce all polynomial openings to the same point.
     reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
+    /// The transcript's NARG string: the proof-of-work nonces, read back by the verifier's
+    /// transcript, which rejects a string it does not consume exactly.
+    narg: Vec<u8>,
 }
 
 impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
@@ -38,6 +41,7 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
         commitments: Vec<PCS::Commitment>,
         eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
         reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
+        narg: Vec<u8>,
     ) -> Self {
         Self {
             opening_claims,
@@ -45,6 +49,7 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
             commitments,
             eval_reduction_proofs,
             reduced_opening_proof,
+            narg,
         }
     }
 
@@ -72,6 +77,11 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
     pub fn reduced_opening_proof(&self) -> Option<&ReducedOpeningProof<F, PCS>> {
         self.reduced_opening_proof.as_ref()
     }
+
+    /// The transcript's NARG string (proof-of-work nonces).
+    pub fn narg(&self) -> &[u8] {
+        &self.narg
+    }
 }
 
 /// Mutable field access for the soundness harness (`test-util`).
@@ -95,6 +105,11 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
     /// Mutable evaluation-reduction proofs.
     pub fn eval_reduction_proofs_mut(&mut self) -> &mut BTreeMap<usize, EvalReductionProof<F>> {
         &mut self.eval_reduction_proofs
+    }
+
+    /// Mutable NARG string.
+    pub fn narg_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.narg
     }
 
     /// Mutable batched opening proof.

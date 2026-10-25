@@ -227,7 +227,9 @@ mod tests {
             one_hot_polynomial::OneHotPolynomial,
         },
         subprotocols::sumcheck::Sumcheck,
-        transcripts::{Blake2bTranscript, Transcript},
+        transcripts::{
+            Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
+        },
         utils::{index_to_field_bitvector, math::Math},
     };
 
@@ -273,7 +275,7 @@ mod tests {
         let T: usize = 1 << log_T;
         let K: usize = 1 << log_K;
 
-        let mut prover_transcript = Blake2bTranscript::default();
+        let mut prover_transcript = Blake2bProver::new(b"");
         let mut prover_accumulator = ProverOpeningAccumulator::new();
 
         let r_cycle: Vec<<Fr as JoltField>::Challenge> =
@@ -322,7 +324,7 @@ mod tests {
         let (proof, _) =
             Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
-        let mut verifier_transcript = Blake2bTranscript::default();
+        let mut verifier_transcript = Blake2bVerifier::new(b"", prover_transcript.narg().to_vec());
         let mut verifier_accumulator = VerifierOpeningAccumulator::new();
         let _r_x: Vec<<Fr as JoltField>::Challenge> =
             verifier_transcript.challenge_vector_optimized::<Fr>(log_T);

@@ -1331,7 +1331,7 @@ mod guardrail_tests {
     };
     use crate::{
         subprotocols::evaluation_reduction::ReducedInstance,
-        transcripts::{Blake2bTranscript, Transcript},
+        transcripts::{Blake2bProver, ProvingTranscript},
     };
     use ark_bn254::Fr;
     use common::VirtualPoly;
@@ -1357,7 +1357,7 @@ mod guardrail_tests {
         acc.openings
             .insert(id, (OpeningPoint::default(), Fr::from(1u64)));
 
-        let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        let mut transcript = Blake2bProver::new(b"guardrail_test");
         acc.append_virtual(
             &mut transcript,
             id,
@@ -1382,7 +1382,7 @@ mod guardrail_tests {
         acc.openings
             .insert(id, (OpeningPoint::default(), Fr::from(1u64)));
 
-        let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        let mut transcript = Blake2bProver::new(b"guardrail_test");
         let point = OpeningPoint::new(vec![Fr::from(1u64), Fr::from(2u64)]);
         acc.append_virtual(&mut transcript, id, point.clone());
         acc.append_virtual(&mut transcript, id, point);
@@ -1400,7 +1400,7 @@ mod guardrail_tests {
             },
         );
 
-        let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        let mut transcript = Blake2bProver::new(b"guardrail_test");
         let id = OpeningId::new(VirtualPoly::NodeOutput(3), SumcheckId::NodeExecution(9));
         acc.append_virtual(
             &mut transcript,
@@ -1422,7 +1422,7 @@ mod guardrail_tests {
             },
         );
 
-        let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        let mut transcript = Blake2bProver::new(b"guardrail_test");
         let id = OpeningId::new(VirtualPoly::NodeOutput(3), SumcheckId::Raf);
         acc.append_virtual(
             &mut transcript,

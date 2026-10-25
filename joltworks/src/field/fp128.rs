@@ -363,6 +363,18 @@ impl JoltField for Fp128 {
     // MontU128Challenge), and challenge × field is the native field multiply.
     type Challenge = Fp128;
 
+    type ChallengeCodecField = Inner;
+
+    #[inline]
+    fn from_challenge_codec(x: Inner) -> Self {
+        Fp128(x)
+    }
+
+    fn challenge_set_size() -> jolt_transcript::ChallengeSetSize {
+        jolt_transcript::ChallengeSetSize::field_order(0u128.wrapping_sub(Inner::C), 1)
+            .expect("the fp128 modulus is a valid field order")
+    }
+
     fn random<R: rand_core::RngCore>(rng: &mut R) -> Self {
         sample_u128(|| (rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64))
     }
@@ -545,7 +557,7 @@ mod tests {
     #![allow(clippy::op_ref, clippy::assign_op_pattern, clippy::useless_conversion)]
     use super::*;
     use crate::field::{BarrettReduce, FMAdd, MontgomeryReduce};
-    use crate::transcripts::{Blake2bTranscript, Transcript};
+    use crate::transcripts::{Blake2bProver, ProvingTranscript, Transcript};
     use crate::utils::accumulation::{FullAccumS, MedAccumS, SmallAccumS, WideAccumS};
     use ark_ff::biginteger::{S128, S64};
     use ark_std::test_rng;
@@ -844,8 +856,8 @@ mod tests {
 
     #[test]
     fn challenge_via_transcript() {
-        let mut t1 = Blake2bTranscript::new(b"fp128");
-        let mut t2 = Blake2bTranscript::new(b"fp128");
+        let mut t1 = Blake2bProver::new(b"fp128");
+        let mut t2 = Blake2bProver::new(b"fp128");
         for t in [&mut t1, &mut t2] {
             t.append_u64(42);
             t.append_scalar(&F::from_u64(7));

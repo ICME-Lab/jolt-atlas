@@ -115,6 +115,17 @@ impl JoltField for Fr {
 
     type SmallValueLookupTables = [Vec<Self>; 2];
 
+    type ChallengeCodecField = Fr;
+
+    #[inline]
+    fn from_challenge_codec(x: Fr) -> Self {
+        x
+    }
+
+    fn challenge_set_size() -> jolt_transcript::ChallengeSetSize {
+        <Ark as JoltField>::challenge_set_size()
+    }
+
     #[cfg(not(feature = "challenge-254-bit"))]
     type Challenge = MontU128Challenge<Fr>;
     #[cfg(feature = "challenge-254-bit")]

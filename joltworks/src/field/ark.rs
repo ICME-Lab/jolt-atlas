@@ -61,6 +61,23 @@ impl JoltField for ark_bn254::Fr {
 
     type SmallValueLookupTables = [Vec<Self>; 2];
 
+    type ChallengeCodecField = jolt_field::Fr;
+
+    #[inline]
+    fn from_challenge_codec(x: jolt_field::Fr) -> Self {
+        x.into()
+    }
+
+    fn challenge_set_size() -> jolt_transcript::ChallengeSetSize {
+        // MontU128Challenge masks to 125 bits. The full-field mode prices against 2^253 <= p,
+        // which can only overstate the proof of work.
+        #[cfg(not(feature = "challenge-254-bit"))]
+        let bits = 125;
+        #[cfg(feature = "challenge-254-bit")]
+        let bits = 253;
+        jolt_transcript::ChallengeSetSize::power_of_two(bits)
+    }
+
     #[cfg(not(feature = "challenge-254-bit"))]
     type Challenge = MontU128Challenge<ark_bn254::Fr>;
     #[cfg(feature = "challenge-254-bit")]

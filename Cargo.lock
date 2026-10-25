@@ -1155,6 +1155,7 @@ dependencies = [
  "fixedbitset",
  "inferno",
  "itertools 0.10.5",
+ "jolt-field",
  "jolt-optimizations",
  "memory-stats",
  "num",

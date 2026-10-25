@@ -83,6 +83,11 @@ where
         let bytes = serialize_proof(&proof).expect("proof serializes");
         println!("proof size: {} bytes", bytes.len());
         let de: ONNXProof<PCS::Field, PCS> = deserialize_proof(&bytes).expect("proof deserializes");
+        let trailing = [bytes.as_slice(), &[0]].concat();
+        assert!(
+            deserialize_proof::<PCS::Field, PCS>(&trailing).is_err(),
+            "a proof followed by trailing bytes must not deserialize"
+        );
         verify::<PCS::Field, Blake2bVerifier, PCS>(&de, &verifier_pp, &io, None)
             .expect("deserialized proof must verify");
         assert_eq!(

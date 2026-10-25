@@ -71,9 +71,23 @@ where
     for _ in 0..len {
         let k = K::deserialize_with_mode(&mut *reader, compress, validate)?;
         let v = V::deserialize_with_mode(&mut *reader, compress, validate)?;
-        map.insert(k, v);
+        insert_ascending(&mut map, k, v)?;
     }
     Ok(map)
+}
+
+/// Insert a decoded entry, rejecting a key that is not strictly greater than every key so far.
+/// Maps serialize in key order, so this makes the encoding of each map unique.
+fn insert_ascending<K: Ord, V>(
+    map: &mut BTreeMap<K, V>,
+    k: K,
+    v: V,
+) -> Result<(), SerializationError> {
+    if map.last_key_value().is_some_and(|(last, _)| *last >= k) {
+        return Err(SerializationError::InvalidData);
+    }
+    map.insert(k, v);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +135,7 @@ impl<F: JoltField> CanonicalDeserialize for Claims<F> {
         for _ in 0..len {
             let key = OpeningId::deserialize_with_mode(&mut reader, compress, validate)?;
             let claim = F::deserialize_with_mode(&mut reader, compress, validate)?;
-            claims.insert(key, (OpeningPoint::default(), claim));
+            insert_ascending(&mut claims, key, (OpeningPoint::default(), claim))?;
         }
         Ok(Claims::from_parts(claims))
     }
@@ -299,11 +313,52 @@ where
     Ok(buf)
 }
 
-/// Deserialize a proof from bytes (compressed).
+/// Deserialize a proof from bytes (compressed). The bytes must hold exactly one proof: trailing
+/// bytes are rejected, so a proof has a single byte encoding.
 pub fn deserialize_proof<F, PCS>(bytes: &[u8]) -> Result<ONNXProof<F, PCS>, SerializationError>
 where
     F: JoltField,
     PCS: CommitmentScheme<Field = F>,
 {
-    ONNXProof::deserialize_compressed(bytes)
+    let mut reader = bytes;
+    let proof = ONNXProof::deserialize_compressed(&mut reader)?;
+    if !reader.is_empty() {
+        return Err(SerializationError::InvalidData);
+    }
+    Ok(proof)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode(entries: &[(u64, u64)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        (entries.len() as u64)
+            .serialize_compressed(&mut buf)
+            .unwrap();
+        for (k, v) in entries {
+            k.serialize_compressed(&mut buf).unwrap();
+            v.serialize_compressed(&mut buf).unwrap();
+        }
+        buf
+    }
+
+    fn decode(bytes: &[u8]) -> Result<BTreeMap<u64, u64>, SerializationError> {
+        deserialize_btreemap(&mut &bytes[..], Compress::Yes, Validate::Yes)
+    }
+
+    #[test]
+    fn map_decoding_requires_strictly_ascending_keys() {
+        let map = decode(&encode(&[(1, 10), (2, 20), (5, 50)])).unwrap();
+        assert_eq!(map.len(), 3);
+        assert!(
+            decode(&encode(&[(2, 20), (1, 10)])).is_err(),
+            "unsorted keys"
+        );
+        assert!(
+            decode(&encode(&[(1, 10), (1, 11)])).is_err(),
+            "duplicate key"
+        );
+    }
 }

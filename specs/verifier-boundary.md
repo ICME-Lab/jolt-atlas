@@ -65,7 +65,14 @@ Each invariant names the mechanism that holds it.
 - Moving verification logic. `verify`, the `Verifier` state, `verify_iop`, deferred
   verification, verifier preprocessing and all per-op verifiers stay in core; each would create
   a dependency cycle today (Design), and they cross later under `specs/adoption-program.md`.
-- The `zk` feature; BlindFold stays in core behind `zk`.
+- The `zk` feature entirely. It does not compile today (57 pre-existing errors under
+  `cargo check -p jolt-atlas-core --features zk`; the tracer rewrite left it behind and the
+  test overhaul deleted its never-compiling tests), so this PR does not update `zk.rs`'s
+  inherent-method call sites (`ONNXProof::polynomial_map`/`commit_to_polynomials`/
+  `output_claim` at `zk.rs:1601–1620`) and cannot regress it. zk is owned by a dedicated
+  revival spec scheduled **after** the adoption program (`specs/adoption-program.md` records
+  it), which will restore the build on the by-then-current architecture — most likely by
+  adopting upstream `jolt-blindfold` rather than repairing the fork.
 - Minimizing verifier dependencies (no-std, an `atlas-trace` feature split): follow-ups.
 - Changing any verification logic or identity.
 

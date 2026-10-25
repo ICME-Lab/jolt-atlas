@@ -82,7 +82,7 @@ Per stage (the sequence is in Design):
   implementations outlive a stage).
 - [ ] After the final stage, `joltworks` contains only atlas-specific code or is gone, and
   `jolt-atlas-verifier`'s dependency cone contains no prover code (closing
-  `specs/verifier-crate.md`'s end state via adopted upstream crates instead of feature-gating).
+  `specs/verifier-crate.md`'s end state via adopted upstream crates).
 - [ ] A `third_party/PINS.md` records every vendored crate's upstream rev and last-triage date.
 
 ### Testing Strategy
@@ -130,7 +130,10 @@ Six stages, one PR each (large stages may split further; every PR references thi
    sign-off before any default flips.
 6. **Verifier-cone closure** — `jolt-atlas-verifier` (from `specs/verifier-crate.md`) depends
    only on vendored verifier-side crates plus atlas-only verifier code; the CI isolation build
-   proves the cone is prover-free. Supersedes that spec's ladder phases 2–3.
+   proves the cone is prover-free. This stage is that spec's declared end state; by then its
+   own later phases (verification loop, preprocessing, per-op verifier moves, gated on the
+   expression-engine migration) must have landed, since the cone can only close around code
+   that lives in the crate.
 
 Relationship to in-flight work: the `fp128-field` / `field-trait` / `akita-adapter` branches
 (based on pre-rewrite main) are the raw material for stages 1 and 5; their content re-lands
@@ -149,14 +152,14 @@ through this program rather than rebasing wholesale.
   vendors `jolt-field`); vendoring also makes the audit surface and pin provenance explicit
   in-tree.
 - **Build our own decomposition and claim ledger** (the pre-inventory plan): rejected — it
-  duplicates systems upstream now ships; see `specs/verifier-crate.md` phases 2–3, which this
-  spec supersedes.
+  duplicates systems upstream now ships; `specs/verifier-crate.md` records the superseded
+  feature-gate/split ideas under Alternatives Considered.
 
 ## Documentation
 
 `README.md` and `CLAUDE.md`/`AGENTS.md` crate maps per stage; `third_party/PINS.md` (new);
 `docs/upstream-inventory.md` regenerated at stage 0 and referenced per stage;
-`specs/verifier-crate.md` is amended (its ladder phases 2–3 point here).
+`specs/verifier-crate.md` is kept in sync (its End state section points here).
 
 ## Execution
 
@@ -169,8 +172,9 @@ notes) as a checklist in the PR body.
 ## References
 
 - `docs/upstream-inventory.md` (divergence inventory, fix triage, drift measurements).
-- `specs/verifier-crate.md` (#396): the product verifier boundary; its phases 2–3 are
-  superseded by this program.
+- `specs/verifier-crate.md` (#396): the product verifier boundary. Its phase 1 (the proof-type
+  boundary) lands before this program; its later phases interleave with these stages; its end
+  state is this program's stage 6.
 - `specs/core-test-overhaul.md`: the sweeps and zoo that gate every stage.
 - Upstream: a16z/jolt `f3265b5a` (2026-10-25), 31-crate workspace; the vendored `jolt-field`
   precedent at `third_party/jolt-field` on the Akita integration branch (pin `0e3faf07`).

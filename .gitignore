@@ -38,3 +38,9 @@ temp_file
 
 # python virtual environment
 .venv/
+
+# Python bytecode from the model scripts
+__pycache__/
+
+# The pinned model-export toolchain must be tracked despite the *.txt rule above.
+!scripts/requirements-models.txt

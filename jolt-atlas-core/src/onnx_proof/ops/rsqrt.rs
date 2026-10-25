@@ -346,12 +346,15 @@ impl<F: JoltField> RsqrtProver<F> {
                     let quotient = quotient.get_bound_coeff(i);
                     let div_remainder: F = div_remainder.get_bound_coeff(i);
                     // range checking: div_remainder < x
-                    assert!(div_remainder.to_u64().unwrap() < x.to_u64().unwrap());
+                    crate::onnx_proof::testing::probe::probe_assert!(div_remainder
+                        .to_u64()
+                        .zip(x.to_u64())
+                        .is_some_and(|(r, x)| r < x));
 
                     x * quotient + div_remainder - s_cubed
                 })
                 .sum();
-            assert_eq!(F::zero(), div_claim);
+            crate::onnx_proof::testing::probe::probe_assert_eq!(F::zero(), div_claim);
 
             let sqrt_claim = (0..input.len())
                 .map(|i| {
@@ -359,12 +362,15 @@ impl<F: JoltField> RsqrtProver<F> {
                     let out: F = output.get_bound_coeff(i);
                     let sqrt_remainder: F = sqrt_remainder.get_bound_coeff(i);
                     // range checking: sqrt_remainder <= 2*output
-                    assert!(sqrt_remainder.to_u64().unwrap() <= 2 * out.to_u64().unwrap());
+                    crate::onnx_proof::testing::probe::probe_assert!(sqrt_remainder
+                        .to_u64()
+                        .zip(out.to_u64())
+                        .is_some_and(|(r, o)| r <= 2 * o));
 
                     out * out + sqrt_remainder - quotient
                 })
                 .sum();
-            assert_eq!(F::zero(), sqrt_claim)
+            crate::onnx_proof::testing::probe::probe_assert_eq!(F::zero(), sqrt_claim)
         }
 
         let gamma = params.gamma;
@@ -593,55 +599,4 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         .push(DeferredOneHot::RangeCheck(sqrt_operands.get_encoding(node)));
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    /// Upper bound on the random quantized inputs; positive so the division is well-defined.
-    const INPUT_MAX: i32 = 1 << 16;
-
-    fn rsqrt_model(T: usize, scale: u8) -> Model {
-        let mut b = ModelBuilder::with_scale(scale);
-        let input = b.input(vec![T]);
-        let res = b.rsqrt(input);
-        b.mark_output(res);
-        b.build()
-    }
-
-    #[test]
-    fn test_rsqrt() {
-        let T = 1 << 16;
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::<i32>::random_range(&mut rng, &[T], 1..INPUT_MAX);
-        let model = rsqrt_model(T, 8);
-        unit_test_op(model, &[input]);
-    }
-
-    /// At scale 12, `S³ = 2³⁶` and `quotient = ⌊S³/x̂⌋` exceeds i32 for small inputs
-    /// (`x̂ < 32`), exercising the u64 quotient / i64 `out²` witness path.
-    #[test]
-    fn test_rsqrt_scale_12() {
-        let T = 1 << 16;
-        let mut rng = StdRng::seed_from_u64(0x88c);
-        // Include small inputs so the quotient overflows i32.
-        let input = Tensor::<i32>::random_range(&mut rng, &[T], 1..INPUT_MAX);
-        let model = rsqrt_model(T, 12);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    #[ignore = "non-power-of-two path not fully supported yet"]
-    fn test_rsqrt_non_power_of_two_input_len() {
-        let t = 1000;
-        let mut rng = StdRng::seed_from_u64(0x889);
-        let input = Tensor::<i32>::random_range(&mut rng, &[t], 1..INPUT_MAX);
-        let model = rsqrt_model(t, 8);
-        unit_test_op(model, &[input]);
-    }
 }

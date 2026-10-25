@@ -307,9 +307,13 @@ canonical_serde_enum! {
         SoftmaxMaxIndex(usize, usize),
 
         // ----- Hamming weight -----
-        /// Polynomial used in the Hamming-weight sumcheck (shared across all
-        /// nodes; no parameters).
-        HammingWeight,
+        /// Polynomial used in the Hamming-weight sumcheck.
+        ///
+        /// * `0` – node index. Per node: a shared identifier would alias the
+        ///   openings of every node using the check, binding one accumulator
+        ///   slot at a different point per node; only the constant-1 honest
+        ///   value keeps that coincidence invisible.
+        HammingWeight(usize),
 
         // ----- Advice-derived polynomials (proven via ReadRafSumcheckProver) -----
 

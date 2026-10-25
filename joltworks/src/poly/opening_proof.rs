@@ -47,6 +47,48 @@ pub const LITTLE_ENDIAN: Endianness = true;
 pub type Opening<F> = (OpeningPoint<BIG_ENDIAN, F>, F);
 pub type Openings<F> = BTreeMap<OpeningId, Opening<F>>;
 
+/// Test-only opening forgery hook (feature `test-feature`).
+///
+/// Soundness sweeps set a target [`OpeningId`]; every claim the prover
+/// appends under that id (dense, sparse or virtual) is bumped by one before
+/// it reaches the transcript, so the forged value flows into the prover's
+/// own Fiat-Shamir state and downstream claims exactly as a malicious prover
+/// would arrange. The verifier must still reject. This is the single choke
+/// point every opening passes through, including those appended from inside
+/// joltworks subprotocols.
+#[cfg(any(test, feature = "test-feature"))]
+pub mod forgery {
+    use super::OpeningId;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        RwLock,
+    };
+
+    static TARGET: RwLock<Option<OpeningId>> = RwLock::new(None);
+    static HITS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Target an opening id (or clear with `None`); resets the hit counter.
+    pub fn set(target: Option<OpeningId>) {
+        *TARGET.write().unwrap() = target;
+        HITS.store(0, Ordering::SeqCst);
+    }
+
+    /// How many appended claims were forged since the last [`set`].
+    pub fn hits() -> usize {
+        HITS.load(Ordering::SeqCst)
+    }
+
+    /// The claim to actually append for `id`.
+    pub fn apply<F: crate::field::JoltField>(id: OpeningId, claim: F) -> F {
+        if *TARGET.read().unwrap() == Some(id) {
+            HITS.fetch_add(1, Ordering::SeqCst);
+            claim + F::one()
+        } else {
+            claim
+        }
+    }
+}
+
 /// Accumulates openings computed by the prover over the course of Jolt,
 /// so that they can all be reduced to a single opening proof using sumcheck.
 #[derive(Clone, Allocative)]
@@ -99,6 +141,9 @@ where
     /// See `ProverOpeningAccumulator::sumchecks`.
     sumchecks: BTreeMap<OpeningId, OpeningProofReductionSumcheckVerifier<F>>,
     pub openings: Openings<F>,
+    /// Ids bound by an `append_*` call, to reject one id bound at two
+    /// different points (see [`Self::mark_appended`]).
+    appended: BTreeSet<OpeningId>,
     /// Mapping for nodes reduced opening points
     pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
     /// In testing, the Jolt verifier may be provided the prover's openings so that we
@@ -288,6 +333,8 @@ where
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
+        #[cfg(any(test, feature = "test-feature"))]
+        let claim = forgery::apply(opening_id, claim);
         #[cfg(feature = "zk")]
         let suppress = self.zk_mode;
         #[cfg(not(feature = "zk"))]
@@ -344,6 +391,12 @@ where
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
+        #[cfg(any(test, feature = "test-feature"))]
+        let claims: Vec<F> = polynomials
+            .iter()
+            .zip(claims)
+            .map(|(&poly, claim)| forgery::apply(OpeningId::new(poly, sumcheck), claim))
+            .collect();
         #[cfg(feature = "zk")]
         let suppress = self.zk_mode;
         #[cfg(not(feature = "zk"))]
@@ -403,6 +456,8 @@ where
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }
+        #[cfg(any(test, feature = "test-feature"))]
+        let claim = forgery::apply(opening_id, claim);
 
         #[cfg(feature = "zk")]
         let suppress = self.zk_mode;
@@ -773,12 +828,32 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
+            appended: BTreeSet::new(),
             reduced_evaluations: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
             #[cfg(feature = "zk")]
             pending_claims: Vec::new(),
             zk_mode: false,
+        }
+    }
+
+    /// Record that `opening_id` was bound at `new_point`. A re-append is only
+    /// legal when it re-binds the same point (the same opening registered by
+    /// two instances of one sumcheck batch, e.g. `SoftmaxExpQ` from both
+    /// RecipMult and ExpSum): binding one id at two different points would
+    /// silently discard the first binding, leaving a claim some check believes
+    /// it constrained but the accumulator no longer holds. Appends are driven
+    /// by verifier code (the model), never by proof data, so a violation is a
+    /// code bug and panics.
+    fn mark_appended(&mut self, opening_id: OpeningId, new_point: &[F]) {
+        if !self.appended.insert(opening_id) {
+            if let Some((existing, _)) = self.openings.get(&opening_id) {
+                assert_eq!(
+                    existing.r, new_point,
+                    "opening {opening_id:?} appended twice at different points"
+                );
+            }
         }
     }
 
@@ -832,29 +907,19 @@ where
         T: Transcript,
         U: Copy + Send + Sync + Into<F>,
     {
+        let point = OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone());
+        self.mark_appended(opening_id, &point.r);
         let claim = if self.zk_mode {
             // ZK mode: stay transcript-quiet to mirror the prover, even if the
             // key already exists from a prior append (see the matching comment
             // in `append_virtual` above).
-            self.openings.insert(
-                opening_id,
-                (
-                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
-                    F::zero(),
-                ),
-            );
+            self.openings.insert(opening_id, (point, F::zero()));
             F::zero()
         } else if let Some((_, claim)) = self.openings.get(&opening_id) {
             // Standard mode: claim was pre-loaded.
             let claim = *claim;
             transcript.append_scalar(&claim);
-            self.openings.insert(
-                opening_id,
-                (
-                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
-                    claim,
-                ),
-            );
+            self.openings.insert(opening_id, (point, claim));
             claim
         } else {
             panic!("Tried to populate dense opening for non-existent key: {opening_id:?}");
@@ -889,9 +954,11 @@ where
         T: Transcript,
         U: Copy + Send + Sync + Into<F>,
     {
+        let point_f: Vec<F> = opening_point.iter().map(|u| (*u).into()).collect();
         let mut claims = Vec::with_capacity(polynomials.len());
         for label in polynomials.iter().copied() {
             let key = OpeningId::new(label, sumcheck);
+            self.mark_appended(key, &point_f);
             let claim = if self.zk_mode {
                 // ZK mode: stay transcript-quiet to mirror the prover, even
                 // if the key already exists from a prior append (see the
@@ -959,10 +1026,13 @@ where
             // auxiliary-scalar path) pre-populate `openings` AND toggle
             // `zk_mode = false`, so they fall through to the standard branch
             // below.
+            self.mark_appended(opening_id, &opening_point.r);
             self.openings
                 .insert(opening_id, (opening_point.clone(), F::zero()));
-        } else if let Some((_, claim)) = self.openings.get(&opening_id) {
+        } else if self.openings.contains_key(&opening_id) {
+            self.mark_appended(opening_id, &opening_point.r);
             // Standard mode: claim was pre-loaded. Append to transcript.
+            let (_, claim) = &self.openings[&opening_id];
             transcript.append_scalar(claim);
             let claim = *claim;
             self.openings
@@ -1470,6 +1540,51 @@ mod guardrail_tests {
     fn get_node_output_opening_panics_before_reduction() {
         let acc = ProverOpeningAccumulator::<Fr>::new();
         let _ = acc.get_node_output_opening(7);
+    }
+
+    /// One opening id bound at two different points would silently discard
+    /// the first binding, leaving a check constraining a claim the
+    /// accumulator no longer holds.
+    #[test]
+    #[should_panic(expected = "appended twice at different points")]
+    fn verifier_append_rejects_rebinding_at_a_different_point() {
+        let mut acc = super::VerifierOpeningAccumulator::<Fr>::new();
+        let id = OpeningId::new(
+            VirtualPoly::HammingWeight(0),
+            SumcheckId::RamHammingBooleanity,
+        );
+        acc.openings
+            .insert(id, (OpeningPoint::default(), Fr::from(1u64)));
+
+        let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        acc.append_virtual(
+            &mut transcript,
+            id,
+            OpeningPoint::new(vec![Fr::from(1u64), Fr::from(2u64)]),
+        );
+        acc.append_virtual(
+            &mut transcript,
+            id,
+            OpeningPoint::new(vec![Fr::from(3u64), Fr::from(4u64)]),
+        );
+    }
+
+    /// Re-binding the same id at the same point is legal (two instances of
+    /// one batch registering a shared opening).
+    #[test]
+    fn verifier_append_allows_rebinding_at_the_same_point() {
+        let mut acc = super::VerifierOpeningAccumulator::<Fr>::new();
+        let id = OpeningId::new(
+            VirtualPoly::HammingWeight(0),
+            SumcheckId::RamHammingBooleanity,
+        );
+        acc.openings
+            .insert(id, (OpeningPoint::default(), Fr::from(1u64)));
+
+        let mut transcript = Blake2bTranscript::new(b"guardrail_test");
+        let point = OpeningPoint::new(vec![Fr::from(1u64), Fr::from(2u64)]);
+        acc.append_virtual(&mut transcript, id, point.clone());
+        acc.append_virtual(&mut transcript, id, point);
     }
 
     #[test]

@@ -1,0 +1,24 @@
+{
+  "generator": "scripts/gen_tiny_models.py",
+  "seed": 684453,
+  "kind": "bert",
+  "config": {
+    "num_hidden_layers": 2,
+    "hidden_size": 48,
+    "num_attention_heads": 3,
+    "intermediate_size": 192,
+    "vocab_size": 1000,
+    "type_vocab_size": 2,
+    "max_position_embeddings": 64,
+    "layer_norm_eps": 1e-12,
+    "hidden_act": "gelu",
+    "pad_token_id": 0
+  },
+  "export": [
+    "--task",
+    "feature-extraction",
+    "--opset",
+    "14"
+  ],
+  "keep_output": "last_hidden_state"
+}

@@ -279,7 +279,7 @@ where
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
         _transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
+        #[allow(unused_variables)] sumcheck_challenges: &[F::Challenge],
     ) {
         // Cache the final sumcheck claim in the accumulator
         let claim = match &self.prover_state {
@@ -291,19 +291,23 @@ where
         // Also register the reduced evaluation as a standard opening so the
         // BlindFold R1CS can reference it via `OpeningId`. The opening point
         // is the batched-opening sumcheck's challenge vector r_sumcheck; the
-        // claim is the per-poly value P(r_sumcheck). Stored unconditionally
-        // (cheap insert); only the `--features zk` path actually consumes it
-        // via the extra constraint linking `joint_claim = sum gamma_i * y_P_i`
-        // to `y_com`.
-        use crate::field::IntoOpening;
-        let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
-        let opening_id = crate::poly::opening_proof::OpeningId::new(
-            self.polynomials[0],
-            SumcheckId::BlindFoldBatchOpening,
-        );
-        accumulator
-            .openings
-            .insert(opening_id, (opening_point, claim));
+        // claim is the per-poly value P(r_sumcheck). Only the `--features zk`
+        // path consumes it, via the extra constraint linking
+        // `joint_claim = sum gamma_i * y_P_i` to `y_com`; in a non-zk proof it
+        // would serialize as a claim no verification step reads, so it is
+        // only stored for zk builds.
+        #[cfg(feature = "zk")]
+        {
+            use crate::field::IntoOpening;
+            let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
+            let opening_id = crate::poly::opening_proof::OpeningId::new(
+                self.polynomials[0],
+                SumcheckId::BlindFoldBatchOpening,
+            );
+            accumulator
+                .openings
+                .insert(opening_id, (opening_point, claim));
+        }
     }
 }
 
@@ -388,23 +392,27 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
     fn cache_openings(
         &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
+        #[allow(unused_variables)] accumulator: &mut VerifierOpeningAccumulator<F>,
         _transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
+        #[allow(unused_variables)] sumcheck_challenges: &[F::Challenge],
     ) {
         // Mirror the prover-side insert: register an opening at
         // `(self.polynomial, SumcheckId::BlindFoldBatchOpening)` so the
         // BlindFold R1CS can reference it. In ZK mode the actual claim is a
         // placeholder; the value the prover assigned is verified by BlindFold.
-        use crate::field::IntoOpening;
-        let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
-        let opening_id = crate::poly::opening_proof::OpeningId::new(
-            self.polynomials[0],
-            SumcheckId::BlindFoldBatchOpening,
-        );
-        accumulator
-            .openings
-            .insert(opening_id, (opening_point, F::zero()));
+        // Zk builds only, mirroring the prover (see the matching comment there).
+        #[cfg(feature = "zk")]
+        {
+            use crate::field::IntoOpening;
+            let opening_point = OpeningPoint::new(sumcheck_challenges.into_opening());
+            let opening_id = crate::poly::opening_proof::OpeningId::new(
+                self.polynomials[0],
+                SumcheckId::BlindFoldBatchOpening,
+            );
+            accumulator
+                .openings
+                .insert(opening_id, (opening_point, F::zero()));
+        }
     }
 }
 

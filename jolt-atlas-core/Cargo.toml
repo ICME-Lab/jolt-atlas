@@ -53,4 +53,6 @@ serial_test.workspace = true
 [dev-dependencies]
 # Enable test-feature for joltworks during tests only
 joltworks = { workspace = true, features = ["test-feature"] }
+# Descriptor-driven zoo inputs shared with the importer's golden tests.
+atlas-onnx-import = { workspace = true, features = ["test-util"] }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }

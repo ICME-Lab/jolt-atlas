@@ -76,11 +76,12 @@ dev profile, never `--release`.
 2. **Lint**: `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`
 3. **Test**: `cargo nextest run --workspace`
 4. **Zoo gates**, if `atlas-onnx-import` or `atlas-trace` changed:
-   `cargo nextest run -p atlas-onnx-import --run-ignored ignored-only`
-5. **Full-model prove & verify**, if the proof system or trace semantics changed (needs the
+   `cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'not test(golden_zoo_big)'`
+5. **Real-model prove & verify**, if the proof system or trace semantics changed (needs the
    downloaded models; see `CLAUDE.md`):
-   `cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_gpt2_dory)'`
-   and the BGE equivalent if the spec names it.
+   `cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::gpt2_dory$/)'`
+   and the BGE / Qwen equivalents if the spec names them. A new op also needs its
+   `op_surface.rs` rows and a place in a soundness probe model.
 6. **`zk` feature**, if the spec touches it: `cargo clippy -p jolt-atlas-core --features zk`
    plus whatever verification the spec's Testing Strategy names.
 7. **Fix** any failures and repeat.
@@ -91,8 +92,8 @@ PR comment when unattended).
 ## Phase 4: Validate
 
 1. **Correctness**: every acceptance criterion in the spec passes, with the evidence named.
-2. **Performance**: run the benchmark the spec's Performance section names (an example under
-   `jolt-atlas-core/examples/` with `--trace-terminal`, in `--release`) and confirm the named
+2. **Performance**: run the benchmark the spec's Performance section names (the `prove`
+   example on the named model with `--trace-terminal`, in `--release`) and confirm the named
    stage moved in the declared direction, or stayed within the declared tolerance. Record the
    numbers.
 3. **Self-review**: consistency with existing patterns, missing edge cases, anything beyond the

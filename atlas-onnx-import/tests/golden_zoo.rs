@@ -7,25 +7,20 @@
 //! padded Qwen execution was incorrect). A hash change means the imported
 //! model's semantics changed and must be deliberate.
 //!
-//! Run with `cargo test -p atlas-onnx-import --test golden_zoo -- --ignored`.
+//! The checked-in zoo (`golden_zoo`) runs in default CI; the downloaded
+//! models (`golden_zoo_big`) run in the heavy CI job:
+//! `cargo test -p atlas-onnx-import --test golden_zoo -- --ignored golden_zoo_big`.
+//!
+//! Inputs come from `atlas_onnx_import::fixtures::synth_inputs` with
+//! `GOLDEN_SEED`; its draw order is part of this contract.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use atlas_onnx_import::{InputKind, LoadOptions};
-use atlas_trace::{Op, Tensor};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use atlas_onnx_import::LoadOptions;
+use atlas_onnx_import::fixtures::{GOLDEN_SEED, standard_bindings, synth_inputs};
 
 fn zoo_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../models")
-}
-
-fn bindings() -> HashMap<String, usize> {
-    HashMap::from([
-        ("batch_size".to_string(), 1),
-        ("sequence_length".to_string(), 16),
-        ("past_sequence_length".to_string(), 0),
-    ])
 }
 
 fn fnv(values: impl IntoIterator<Item = i32>) -> u64 {
@@ -43,61 +38,17 @@ fn fnv(values: impl IntoIterator<Item = i32>) -> u64 {
 fn model_output_hash(name: &str) -> Result<u64, String> {
     let path = zoo_dir().join(name).join("network.onnx");
     let opts = LoadOptions {
-        bindings: bindings(),
+        bindings: standard_bindings(16),
         ..Default::default()
     };
     let imported = atlas_onnx_import::load(&path, &opts).map_err(|e| e.to_string())?;
-    let s = 1i32 << 14;
-
-    // Smallest gather dictionary bounds valid index inputs.
-    let min_dict = imported
-        .model
-        .graph()
-        .nodes
-        .iter()
-        .filter_map(|n| match &n.op {
-            Op::GatherSmall(g) => Some(g.dict_len),
-            Op::GatherLarge(g) => Some(g.dict_len),
-            _ => None,
-        })
-        .min()
-        .unwrap_or(2);
-
-    let mut rng = StdRng::seed_from_u64(0xD1FF);
-    let inputs: Vec<Tensor<i32>> = imported
-        .input_descriptors
-        .iter()
-        .map(|d| {
-            let len: usize = d.dims.iter().product();
-            let lower = d.name.to_lowercase();
-            let data: Vec<i32> = if lower.contains("mask") {
-                match d.kind {
-                    InputKind::Scaled => vec![s; len],
-                    InputKind::RawInt => vec![1; len],
-                }
-            } else if lower.contains("position") {
-                match d.kind {
-                    InputKind::Scaled => (0..len as i32).map(|i| i * s).collect(),
-                    InputKind::RawInt => (0..len as i32).collect(),
-                }
-            } else if lower.contains("token_type") {
-                vec![0; len]
-            } else {
-                match d.kind {
-                    InputKind::RawInt => (0..len)
-                        .map(|_| rng.gen_range(0..(min_dict as i32).max(1)))
-                        .collect(),
-                    InputKind::Scaled => (0..len).map(|_| rng.gen_range(-s..s)).collect(),
-                }
-            };
-            Tensor::new(data, &d.dims).expect("dims")
-        })
-        .collect();
-
+    let inputs = synth_inputs(&imported, GOLDEN_SEED);
     let outputs = imported.model.forward(&inputs).map_err(|e| e.to_string())?;
     Ok(fnv(outputs.iter().flat_map(|t| t.data().iter().copied())))
 }
 
+/// The checked-in zoo: the synthetic op gauntlet plus the tiny random-init
+/// stand-ins for the real architectures (`scripts/gen_tiny_models.py`).
 const GOLDENS: &[(&str, u64)] = &[
     // Repinned (was 0xc20679e19bec4682): the gauntlet's floor idiom
     // Cast(Cast(x→int64)→f32) used to lower the second Cast to identity,
@@ -105,10 +56,9 @@ const GOLDENS: &[(&str, u64)] = &[
     // old-crate parity). cast_policy now rescales provably-raw lineages, so
     // the pattern computes the ONNX value.
     ("op_gauntlet", 0xdd4739a294d6d712),
-    ("microgpt", 0xb6cdabdf5cbafe7f),
-    ("multihead_attention", 0x7c62c505a32b3940),
-    ("transformer", 0x36c0ac20ff7e97ed),
-    ("nanoGPT", 0x9c8ff48d91e391ed),
+    ("gpt2-tiny", 0x3c08911de86f9b3a),
+    ("qwen2-tiny", 0x77cc6155185561ad),
+    ("bge-tiny", 0xce922e2e14210317),
 ];
 
 /// The big downloaded models (hundreds of MB); separate so default golden
@@ -119,11 +69,16 @@ const GOLDENS_BIG: &[(&str, u64)] = &[
     ("bge-small-en-v1.5", 0x69e16675d78f8737),
 ];
 
-fn run(goldens: &[(&str, u64)]) {
+fn run(goldens: &[(&str, u64)], require_present: bool) {
     let mut failures = vec![];
     for &(name, expected) in goldens {
         if !zoo_dir().join(name).join("network.onnx").exists() {
-            println!("SKIP {name}: model not present");
+            if require_present {
+                println!("FAIL {name}: model not present");
+                failures.push(name);
+            } else {
+                println!("SKIP {name}: model not present");
+            }
             continue;
         }
         match model_output_hash(name) {
@@ -142,13 +97,12 @@ fn run(goldens: &[(&str, u64)]) {
 }
 
 #[test]
-#[ignore]
 fn golden_zoo() {
-    run(GOLDENS);
+    run(GOLDENS, true);
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires the downloaded models (scripts/download_*.py)"]
 fn golden_zoo_big() {
-    run(GOLDENS_BIG);
+    run(GOLDENS_BIG, false);
 }

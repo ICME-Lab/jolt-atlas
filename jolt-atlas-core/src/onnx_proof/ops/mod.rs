@@ -71,9 +71,6 @@ pub mod iff;
 pub mod input;
 /// Check for NaN values.
 pub mod is_nan;
-#[cfg(test)]
-/// Experimental malicious variant of Sub proof logic.
-pub mod malicious_sub;
 /// Fused mean-of-squares reduction operation.
 pub mod mean_of_squares;
 /// Reorder tensor axes.
@@ -106,9 +103,6 @@ pub mod sub;
 pub mod sum;
 /// Tanh activation function.
 pub mod tanh;
-
-#[cfg(test)]
-mod test;
 
 use atlas_trace::Op;
 
@@ -216,12 +210,12 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
     }
 }
 
-/// Dispatches on all provable `Op` variants, binding the inner value
-/// to `$inner` and evaluating `$body`. Every `Op` is currently handled, so
-/// `$fallback` is retained only as a defensive arm for any future variant.
+/// Dispatches on every `Op` variant, binding the inner value to `$inner`
+/// and evaluating `$body`. The match is exhaustive on purpose: adding a
+/// variant to `atlas_trace::Op` must fail to compile here until the proof
+/// layer handles it.
 macro_rules! dispatch_operator {
-    ($node:expr, |$inner:ident| $body:expr, _ => $fallback:expr) => {
-        #[allow(unreachable_patterns)]
+    ($node:expr, |$inner:ident| $body:expr) => {
         match &$node.operator {
             Op::And($inner) => $body,
             Op::Add($inner) => $body,
@@ -256,7 +250,6 @@ macro_rules! dispatch_operator {
             Op::Sub($inner) => $body,
             Op::Sum($inner) => $body,
             Op::Tanh($inner) => $body,
-            _ => $fallback, // TODO: comment out once MeanOfSquares is implemented
         }
     };
 }
@@ -283,11 +276,9 @@ impl NodeCommittedPolynomials {
     pub fn get_committed_polynomials<F: JoltField, T: Transcript>(
         node: &ComputationNode,
     ) -> Vec<CommittedPoly> {
-        dispatch_operator!(
-            node,
-            |inner| OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node),
-            _ => panic!("Unhandled operator in graph: {node:#?}")
-        )
+        dispatch_operator!(node, |inner| {
+            OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
+        })
     }
 }
 
@@ -320,11 +311,9 @@ impl OperatorProver {
         F: JoltField,
         T: Transcript,
     {
-        dispatch_operator!(
-            node,
-            |inner| Self::prove_and_reduce_node(inner, node, prover),
-            _ => panic!("Unhandled operator in graph: {node:#?}")
-        )
+        dispatch_operator!(node, |inner| Self::prove_and_reduce_node(
+            inner, node, prover
+        ))
     }
 
     fn prove_and_reduce_node<F, T, O>(
@@ -385,11 +374,12 @@ impl OperatorVerifier {
             ))
         })?;
 
-        dispatch_operator!(
+        dispatch_operator!(node, |inner| Self::verify_and_reduce_node(
+            inner,
             node,
-            |inner| Self::verify_and_reduce_node(inner, node, verifier, eval_reduction_proof),
-            _ => Err(ProofVerifyError::MissingProof(node.idx))
-        )
+            verifier,
+            eval_reduction_proof
+        ))
     }
 
     fn verify_and_reduce_node<F, T, O>(

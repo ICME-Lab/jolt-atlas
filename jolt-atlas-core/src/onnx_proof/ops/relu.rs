@@ -119,38 +119,3 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
             .collect()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    fn relu_model(T: usize) -> Model {
-        let mut b = ModelBuilder::new();
-        let i = b.input(vec![T]);
-        let res = b.relu(i);
-        b.mark_output(res);
-        b.build()
-    }
-
-    #[test]
-    fn test_relu() {
-        let T = 1 << 16;
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::<i32>::random_small(&mut rng, &[T]);
-        let model = relu_model(T);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    fn test_relu_non_power_of_two_input_len() {
-        let t = 1000;
-        let mut rng = StdRng::seed_from_u64(0x889);
-        let input = Tensor::<i32>::random_small(&mut rng, &[t]);
-        let model = relu_model(t);
-        unit_test_op(model, &[input]);
-    }
-}

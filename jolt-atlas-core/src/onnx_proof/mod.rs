@@ -36,8 +36,6 @@ pub mod range_checking;
 pub mod trace_view;
 pub mod witness;
 
-#[cfg(test)]
-mod malicious_prover;
 mod preprocessing;
 mod prover;
 mod types;
@@ -46,9 +44,7 @@ mod verifier;
 pub mod zk;
 
 #[cfg(test)]
-mod e2e_tests;
-#[cfg(test)]
-mod soundness_tests;
+pub(crate) mod testing;
 
 // ── Re-exports ───────────────────────────────────────────────────────────
 
@@ -156,8 +152,17 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         pp: &AtlasProverPreprocessing<F, PCS>,
         inputs: &[Tensor<i32>],
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
-        // Generate trace and io
         let trace = pp.model().trace(inputs).expect("model execution failed");
+        Self::prove_from_trace(pp, trace)
+    }
+
+    /// Prove from an already-executed trace. The public IO is derived from
+    /// the trace, so this is the prover's *claimed* statement; the soundness
+    /// sweeps tamper with the trace before calling it.
+    pub(crate) fn prove_from_trace(
+        pp: &AtlasProverPreprocessing<F, PCS>,
+        trace: atlas_trace::Trace,
+    ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
         let io = trace.io(pp.model());
 
         // Initialize prover state

@@ -16,39 +16,45 @@ Our core ethos is to reduce commitment costs via sumcheck while committing only 
 
 ## Examples
 
-Examples live in `jolt-atlas-core/examples/` and demonstrate end-to-end prove → verify flows for various ONNX models.
-
-### GPT-2
-
-GPT-2 proof and verification flow.
+One example, `prove`, proves and verifies any model in the zoo and prints
+timings and proof size:
 
 ```bash
-cargo run --release --package jolt-atlas-core --example gpt2
+# Checked-in stand-ins (no download needed)
+cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen2-tiny
+cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2-tiny --pcs dory
+
+# Real models (see "Getting Started" for the downloads)
+cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2 --pcs dory
+cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen --pcs dory \
+    --input "The quick brown fox jumps over the lazy dog" --use-cache
 ```
 
-### nanoGPT
+Options: `--pcs hyperkzg|dory` (default HyperKZG), `--seq-len N` (default 16),
+`--input "<text>"` (tokenizes with the model's `tokenizer.json`), `--srs-vars N`
+(over-provision the SRS; Dory), `--use-cache` (reuse the shared preprocessing
+across runs), `--stats` (clamp-width histogram and packed buckets),
+`--trace` (Chrome Tracing JSON, view in `chrome://tracing`) or
+`--trace-terminal` (timings on the terminal).
 
-A ~0.25M-parameter GPT model (4 transformer layers). Loads the ONNX graph, generates a SNARK proof of inference, and verifies it.
+### The model zoo (`models/`)
+
+| Model | Source | In CI |
+| ----- | ------ | ----- |
+| `op_gauntlet` | `scripts/gen_test_models.py`: one synthetic block covering the lowerable op surface | every run |
+| `gpt2-tiny`, `qwen2-tiny`, `bge-tiny` | `scripts/gen_tiny_models.py`: random-init GPT-2 / Qwen2 / BERT with the production architectures (GQA ratio 7, RoPE, native LayerNormalization, fused QKV split, Erf GELU, …), exported with the same `optimum` flags as the real models, under 1 MB each | every run |
+| `reject_slice`, `reject_concat` | `scripts/gen_test_models.py`: fixtures the importer must reject | every run |
+| `gpt2`, `bge-small-en-v1.5`, `qwen` | `scripts/download_*.py` (Hugging Face Optimum exports; gitignored) | main, nightly, PRs labelled `ci:heavy` |
+
+Regenerating any fixture changes its weights (and, with a different exporter,
+possibly its graph), so the pinned forward-pass hashes in
+`atlas-onnx-import/tests/golden_zoo.rs` must be re-pinned afterwards. Use the
+pinned toolchain:
 
 ```bash
-cargo run --release --package jolt-atlas-core --example nanoGPT
-```
-
-### Transformer (self-attention)
-
-Single self-attention block proof.
-
-```bash
-cargo run --release --package jolt-atlas-core --example transformer
-```
-
-### MiniGPT / MicroGPT
-
-Smaller GPT variants useful for quick iteration and debugging.
-
-```bash
-cargo run --release --package jolt-atlas-core --example minigpt
-cargo run --release --package jolt-atlas-core --example microgpt
+python3 -m venv .venv && .venv/bin/pip install -r scripts/requirements-models.txt
+.venv/bin/python scripts/gen_tiny_models.py          # all three, or name one
+cargo test -p atlas-onnx-import --test golden_zoo    # prints the new hashes on mismatch
 ```
 
 ## Benchmarks
@@ -72,36 +78,11 @@ GPT-2 is a 125-million-parameter transformer model from OpenAI.
 | Verify time (`ONNXProof::verify`) | 1.038 s |
 | **End-to-end total (`setup_prover` + prove + verify)** | **16.930 s** |
 
-### nanoGPT (~0.25M params, 4 transformer layers)
-
-nanoGPT is the standard workload we use for cross-project comparison. It is a ~250k-parameter GPT model with 4 transformer layers.
-
-**JOLT Atlas**:
-
-| Stage | Wall clock |
-| ----- | ---------- |
-| Verifying key generation (`setup_verifier`) | <0.001 s |
-| Proving key generation (`setup_prover`) | 0.263 s |
-| Proof time (`ONNXProof::prove`) | 2.288 s |
-| Verify time (`ONNXProof::verify`) | 0.127 s |
-| **End-to-end total (`setup_prover` + prove + verify)** | **2.678 s** |
-
-**ezkl** on the same model ([source](https://blog.ezkl.xyz/post/nanogpt/)):
-
-| Stage | Wall clock |
-| ----- | ---------- |
-| Verifying key generation | 192 s |
-| Proving key generation | 212 s |
-| Proof time | 237 s |
-| Verify time | 0.34 s |
-
-JOLT Atlas produces a proof for nanoGPT in **~2.29 s** versus ezkl's **~237 s proof time** (not counting their 400+ s of key generation). That is roughly a **104× speed-up** on proof generation alone.
-
 ### How to reproduce locally
 
 ```bash
 # from repo root
-cargo run --release --package jolt-atlas-core --example gpt2
+cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
 ```
 
 Add `-- --trace` for Chrome Tracing JSON output (view in `chrome://tracing`), or `-- --trace-terminal` for timing printed to the terminal.
@@ -122,12 +103,14 @@ repo. A helper script downloads and prepares it automatically.
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Run the download script
+# Run the download script (installs the pinned export toolchain)
 python scripts/download_gpt2.py
 ```
 
 This exports GPT-2 via [Hugging Face Optimum](https://huggingface.co/docs/optimum/index)
-into `models/gpt2/` and copies `model.onnx` → `network.onnx`.
+into `models/gpt2/` and renames `model.onnx` → `network.onnx`. The same
+pattern gets `scripts/download_bge_small_en_v1_5.py` and
+`scripts/download_qwen.py` (2.5 GB).
 
 4. Inspect the imported model (no proof):
 
@@ -141,10 +124,36 @@ You should see the lowered op inventory and the canonical einsum equations.
 5. Prove & verify GPT-2:
 
 ```bash
-cargo run --release --package jolt-atlas-core --example gpt2
+cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
 ```
 
 A successful run prints `Proof verified successfully!`.
+
+## Testing
+
+```bash
+cargo nextest run --workspace                       # everything CI runs on a PR (~2 min)
+cargo nextest run -p jolt-atlas-core -E 'test(op_surface)'   # the exhaustive single-op table
+cargo nextest run -p jolt-atlas-core -E 'test(soundness)'    # mutation / tamper / forgery sweeps
+cargo nextest run -p jolt-atlas-core -E 'test(zoo)'          # end-to-end models
+cargo nextest run -p jolt-atlas-core --run-ignored ignored-only -E 'test(known_gap)'  # pinned gaps
+```
+
+`jolt-atlas-core/src/onnx_proof/testing/` holds the whole suite:
+
+* `op_surface.rs` is a table with one case per `atlas_trace::Op` variant (plus
+  saturation, tiny-tensor, non-power-of-two, padded and rejection cases).
+  Adding an op variant fails to compile until the table declares a stance for it.
+* `soundness.rs` attacks the proof system generically: every field of a
+  finished proof is perturbed (`proof_mutation_sweep`), the execution trace is
+  tampered before proving (`witness_tamper_sweep`), and every opening claim is
+  forged at the accumulator (`opening_forgery_sweep`). Set
+  `JOLT_SOUNDNESS_EXHAUSTIVE=1` for every site instead of the sampled default
+  (CI runs that nightly).
+* `zoo.rs` proves the checked-in models on every run and the real downloads
+  behind `#[ignore]` (the heavy CI job).
+* Tests named `known_gap_*` are `#[ignore]`d pins of open issues; each fails
+  today for the reason in its `#[ignore]` message and turns green when fixed.
 
 ## Acknowledgments
 

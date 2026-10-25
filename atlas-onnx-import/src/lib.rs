@@ -10,6 +10,8 @@
 
 pub mod analyze;
 pub mod error;
+#[cfg(any(test, feature = "test-util"))]
+pub mod fixtures;
 pub mod fold_fns;
 pub mod graph;
 pub mod inputs;

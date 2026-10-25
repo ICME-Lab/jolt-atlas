@@ -274,7 +274,7 @@ mod tests {
             d: 1,
             num_rounds: log_T,
             gamma_powers: vec![Fr::from_u8(1)],
-            polynomial_types: vec![VirtualPoly::HammingWeight],
+            polynomial_types: vec![VirtualPoly::HammingWeight(0)],
             sumcheck_id: SumcheckId::RamHammingBooleanity,
             r_cycle,
         };

@@ -107,7 +107,7 @@ impl<F: JoltField> BroadcastProver<F> {
             // Tensors are correctly padded, and the spliting of r_input/r_broadcast is correct
             let claim_O = output.evaluate_mle(&params.r_output);
             let eval_I = broadcast_tensor.evaluate_mle(&_r_broadcast);
-            assert_eq!(claim_O, claim_A * eval_I);
+            crate::onnx_proof::testing::probe::probe_assert_eq!(claim_O, claim_A * eval_I);
         }
 
         Self {
@@ -251,51 +251,4 @@ fn split_broadcast_vars<F: JoltField>(
         idx += dim_vars;
     }
     (r_input, r_broadcast)
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {
-        let mut b = ModelBuilder::new();
-        let i = b.input(input_shape.to_vec());
-        let res = b.broadcast(i, output_shape.to_vec());
-        b.mark_output(res);
-        b.build()
-    }
-
-    #[test]
-    fn test_broadcast() {
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let test_IO = vec![
-            //------Input Shape | Output Shape
-            /*-------*/ (vec![4], vec![8, 4]),
-            /*----*/ (vec![1, 4], vec![4, 4]),
-            /*----*/ (vec![4, 1], vec![4, 8]),
-            /*-*/ (vec![1, 1, 4], vec![2, 4, 4]),
-            /*-*/ (vec![1, 4, 1], vec![2, 4, 8]),
-        ];
-
-        for (input_shape, output_shape) in test_IO {
-            let input = Tensor::<i32>::random_small(&mut rng, &input_shape);
-            let model = broadcast_model(&input_shape, &output_shape);
-            unit_test_op(model, &[input]);
-        }
-    }
-
-    #[test]
-    #[ignore = "TODO: non-power-of-two broadcast path not fully validated yet"]
-    fn test_broadcast_non_power_of_two_input_len() {
-        let mut rng = StdRng::seed_from_u64(0x889);
-        let input_shape = vec![5];
-        let output_shape = vec![3, 5];
-        let input = Tensor::<i32>::random_small(&mut rng, &input_shape);
-        let model = broadcast_model(&input_shape, &output_shape);
-        unit_test_op(model, &[input]);
-    }
 }

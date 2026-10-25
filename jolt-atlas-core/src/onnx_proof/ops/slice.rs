@@ -416,39 +416,3 @@ fn validate_slice_shapes(
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Tensor;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    fn slice_model(input_shape: Vec<usize>, axis: usize, start: usize, end: usize) -> Model {
-        let mut b = ModelBuilder::new();
-        let input = b.input(input_shape);
-        let out = b.slice(input, axis, start, end);
-        b.mark_output(out);
-        b.build()
-    }
-
-    #[test]
-    fn test_slice_arbitrary_shapes() {
-        let cases = vec![
-            (vec![2, 5], 1, 1, 4),
-            (vec![3, 4], 0, 1, 3),
-            (vec![2, 3, 5], 2, 0, 4),
-            (vec![2, 4, 3], 1, 1, 4),
-            (vec![4, 6], 1, 2, 5),
-            (vec![5, 3], 0, 0, 2),
-        ];
-
-        for (idx, (shape, axis, start, end)) in cases.into_iter().enumerate() {
-            let mut rng = StdRng::seed_from_u64(0x511CE + idx as u64);
-            let input = Tensor::<i32>::random_small(&mut rng, &shape);
-            let model = slice_model(shape, axis, start, end);
-            unit_test_op(model, &[input]);
-        }
-    }
-}

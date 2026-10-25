@@ -209,7 +209,10 @@ impl<F: JoltField> GatherProver<F> {
                     a * (b + params.gamma * int)
                 })
                 .sum();
-            assert_eq!(rv_claim + params.gamma * index_claim, claim)
+            crate::onnx_proof::testing::probe::probe_assert_eq!(
+                rv_claim + params.gamma * index_claim,
+                claim
+            )
         }
         Self {
             params,
@@ -425,82 +428,4 @@ pub(crate) fn fold_dictionary<F: JoltField>(
         .collect();
     folded.resize(num_words, F::zero());
     folded
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::node_view::ModelView;
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use crate::test_builder::ModelBuilder;
-    use atlas_trace::Model;
-    use atlas_trace::Op;
-    use atlas_trace::Tensor;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usize) -> Model {
-        let mut b = ModelBuilder::new();
-        let dictionnary = {
-            let data = (0..dictionnary_len * word_dim)
-                .map(|i| i as i32)
-                .collect::<Vec<_>>();
-            Tensor::construct(data, vec![dictionnary_len, word_dim])
-        };
-        let dict = b.constant(dictionnary);
-        let indexes = b.input(input_shape.to_vec());
-        let res = b.gather(
-            dict,
-            indexes,
-            0,
-            [input_shape.to_vec(), vec![word_dim]].concat(),
-        );
-        b.mark_output(res);
-        b.build()
-    }
-
-    #[test]
-    fn test_gather() {
-        let indices_dims = vec![4, 8];
-        let dict_len = 32;
-        let word_dim = 4;
-        let mut rng = StdRng::seed_from_u64(0x888);
-        let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
-        let model = gather_model(&indices_dims, dict_len, word_dim);
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    fn test_gather_small_path() {
-        let indices_dims = vec![4, 8];
-        let dict_len = 32;
-        let word_dim = 4;
-        let mut rng = StdRng::seed_from_u64(0x889);
-        let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
-        let model = gather_model(&indices_dims, dict_len, word_dim);
-        assert!(matches!(model.view(2).operator, Op::GatherSmall(_)));
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    fn test_gather_large_path() {
-        let indices_dims = vec![2, 4];
-        let dict_len = 70000;
-        let word_dim = 2;
-        let mut rng = StdRng::seed_from_u64(0x88A);
-        let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
-        let model = gather_model(&indices_dims, dict_len, word_dim);
-        assert!(matches!(model.view(2).operator, Op::GatherLarge(_)));
-        unit_test_op(model, &[input]);
-    }
-
-    #[test]
-    #[ignore = "TODO: non-power-of-two gather path not fully validated yet"]
-    fn test_gather_non_power_of_two_input_len() {
-        let indices_dims = vec![5, 7];
-        let dict_len = 33;
-        let word_dim = 5;
-        let mut rng = StdRng::seed_from_u64(0x889);
-        let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
-        let model = gather_model(&indices_dims, dict_len, word_dim);
-        unit_test_op(model, &[input]);
-    }
 }

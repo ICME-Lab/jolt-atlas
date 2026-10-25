@@ -12,8 +12,8 @@
 //! variants; one large smoke case (`mul_large_2p15`).
 //!
 //! Saturation cases are sized for the current `MODEL_SCALE` and assert that
-//! saturation really happened: the previous suite's magnitudes dated from
-//! scale 8 and no longer saturated at 14.
+//! saturation really happened, so a scale change that stops them saturating
+//! fails loudly instead of silently testing the unsaturated path.
 
 use std::collections::BTreeSet;
 

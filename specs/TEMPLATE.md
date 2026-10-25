@@ -5,7 +5,9 @@
 | Author(s)   |                                |
 | Created     | YYYY-MM-DD                     |
 | Status      | proposed                       |
-| PR          |                                |
+| PR          | (filled when the PR opens, or at merge) |
+| Depends on  | (other specs/PRs this one builds on, or —) |
+| Supersedes  | (specs or sections this one replaces, or —) |
 
 Status is `proposed` until the implementation merges, then `implemented`. A spec is frozen at
 merge: it records what was decided and why at that point in time. The code is the source of
@@ -31,6 +33,16 @@ what a malicious prover must not be able to do. Name the parts of the `atlas-tra
 contract (`atlas-trace/src/lib.rs`) that the feature relies on or changes: the global fixed-point
 scale, the fused-rescale quotient/remainder split, lookup-table semantics, padding behavior.
 
+**For each invariant, name the mechanism that holds it**: the compiler, a CI job, a named test
+or sweep, or review. Say "review-held" out loud when it is review — an invariant whose only
+mechanism is vigilance is a different promise than one the build enforces, and reviewers will
+find the configuration where an unnamed mechanism doesn't exist. "Unchanged" and "enforced"
+without a mechanism are the two words spec reviews reject most.
+
+Facts that can go stale (upstream revisions, line counts, commit lists) belong in a referenced
+living document (e.g. under `docs/`), not in the spec body: the spec freezes at merge, the facts
+don't.
+
 ### Non-Goals
 
 What is explicitly out of scope? Listing non-goals prevents scope creep and clarifies the
@@ -41,6 +53,12 @@ feature's boundaries.
 ### Acceptance Criteria
 
 Concrete, testable criteria. Each should be verifiable by a test, benchmark, or assertion.
+
+**Scope every criterion to the PR that ticks it.** A criterion in the main list must be
+verifiable on *this spec's PR*; if the spec describes a multi-PR program, put later outcomes in
+a separate "Later phases/stages" list that names which PR ticks each box. A spec whose
+acceptance list mixes this-PR and end-state criteria cannot be implemented or reviewed against:
+`/implement-spec` either over-builds or cannot finish.
 
 - [ ] Criterion 1
 - [ ] Criterion 2

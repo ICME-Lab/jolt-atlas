@@ -5,8 +5,8 @@
 //! `prove` delegates to.
 
 use super::{
-    types::{Claims, ProofId, ProverDebugInfo},
-    AtlasSharedPreprocessing, ONNXProof, ReducedOpeningProof,
+    types::ProverDebugInfo, AtlasSharedPreprocessing, Claims, ONNXProof, ProofId,
+    ReducedOpeningProof,
 };
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;

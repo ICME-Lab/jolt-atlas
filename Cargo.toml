@@ -17,6 +17,7 @@ keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 [workspace]
 members = [
     "jolt-atlas-core",
+    "jolt-atlas-verifier",
     "atlas-trace",
     "atlas-onnx-import",
     "common",
@@ -29,6 +30,7 @@ atlas-trace = { path = "./atlas-trace" }
 atlas-onnx-import = { path = "./atlas-onnx-import" }
 common = { path = "./common" }
 joltworks = { path = "./joltworks" }
+jolt-atlas-verifier = { path = "./jolt-atlas-verifier" }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

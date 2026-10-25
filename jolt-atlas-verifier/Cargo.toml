@@ -1,0 +1,13 @@
+[package]
+name = "jolt-atlas-verifier"
+version = "0.1.0"
+edition = "2021"
+description = "The jolt-atlas proof object and its wire format, with no prover dependency."
+
+[features]
+# `&mut` proof-field accessors for the soundness harness. Inert unless called.
+test-util = []
+
+[dependencies]
+joltworks.workspace = true
+ark-serialize.workspace = true

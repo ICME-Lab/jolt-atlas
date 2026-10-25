@@ -1,0 +1,185 @@
+//! Proof identifiers, proof classification, and the opening-claim wrapper.
+
+use ark_serialize::{
+    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
+    Write,
+};
+use joltworks::{field::JoltField, poly::opening_proof::Openings};
+
+// ---------------------------------------------------------------------------
+// ProofId / ProofType
+// ---------------------------------------------------------------------------
+
+/// Unique identifier for a sumcheck proof instance.
+///
+/// Combines the node index with the proof type to uniquely identify each proof.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, CanonicalSerialize, CanonicalDeserialize,
+)]
+pub struct ProofId(pub usize, pub ProofType);
+
+/// Type of sumcheck proof for different operations in the neural network.
+///
+/// The `u8` discriminants are part of the serialization format — do not reorder or remove variants
+/// without a migration, as it would break proof deserialization.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ProofType {
+    /// Execution sumcheck for basic operations.
+    Execution = 0,
+    /// Neural teleportation for tanh approximation.
+    NeuralTeleport = 1,
+    /// Read-address one-hot encoding checks.
+    RaOneHotChecks = 2,
+    /// Hamming weight check for read-addresses.
+    RaHammingWeight = 3,
+    /// Range-checking for remainders.
+    RangeCheck = 4,
+    /// Softmax stage 1
+    SoftmaxStage1 = 5,
+    /// Softmax stage 2
+    SoftmaxStage2 = 6,
+    /// Softmax stage 3
+    SoftmaxStage3 = 7,
+    /// Softmax stage 4
+    SoftmaxStage4 = 8,
+    /// Axis-reduction sumcheck for `Sum` (proves the pre-clamp accumulation
+    /// equals the sum over the reduced axes; the clamp itself is a separate
+    /// `Execution` lookup).
+    SumReduction = 9,
+    /// Einsum contraction (matmul) sumcheck proving
+    /// `Σ_k L·R = rescaled·2^S + R` (the clamp lookup itself is a separate
+    /// `Execution` proof; analogous to `SumReduction`).
+    EinsumMatmul = 10,
+    /// Read-address one-hot checks for a fused rescaling-remainder range
+    /// check (the clamp's one-hot checks use `RaOneHotChecks`). Shared by
+    /// einsum, `Mul`, `Square`, `Cube`.
+    RescaleRemainderRaChecks = 11,
+    /// Element-wise arithmetic sumcheck for a fused `Mul`/`Square`/`Cube`,
+    /// proving `acc(r) = rescaled·2^S + R` (the clamp lookup is a separate
+    /// `Execution` proof; the einsum analogue is `EinsumMatmul`).
+    RescaleArith = 12,
+    /// Read-address one-hot checks for the Cos/Sin trig-table downscale
+    /// (right-shift) lookup (the Cos/Sin table lookup itself stays under
+    /// `Execution`, batched with the downscale read-raf).
+    TrigDownscaleRaChecks = 13,
+    /// All clamp buckets' interior/saturated split sumchecks, proven as one
+    /// batched sumcheck after the node loop (stored under `DEFERRED_PROOF_IDX`;
+    /// see `clamp_split`).
+    DeferredClampSplit = 14,
+    /// All clamp buckets' chunk-value / Hamming and Booleanity checks, batched.
+    DeferredClampChunkChecks = 15,
+    /// All nodes' fused rescale-remainder range checks, batched.
+    DeferredRemainderRC = 16,
+    /// All nodes' rescale-remainder one-hot checks, batched.
+    DeferredRemainderRaChecks = 17,
+    /// All clamped-activation nodes' small-table execution sumchecks, batched.
+    DeferredActivationExec = 18,
+    /// All clamped-activation nodes' activation-clamp read-rafs, batched.
+    DeferredActivationClamp = 19,
+    /// All clamped-activation nodes' small-table one-hot checks, batched.
+    DeferredActivationSmallRaChecks = 20,
+    /// All operand range checks (MeanOfSquares / Rsqrt), batched.
+    DeferredRangeCheck = 21,
+    /// All operand range checks' one-hot checks, batched.
+    DeferredRangeCheckRaChecks = 22,
+    /// All clamped-activation nodes' clamp one-hot checks, batched.
+    DeferredActivationClampRaChecks = 23,
+    /// All softmax nodes' stage-3 lookups (exp digits, significance clamp), batched.
+    DeferredSoftmaxStage3 = 24,
+    /// All softmax nodes' stage-4 one-hot checks, batched.
+    DeferredSoftmaxRaChecks = 25,
+}
+
+impl TryFrom<u8> for ProofType {
+    type Error = SerializationError;
+
+    fn try_from(tag: u8) -> Result<Self, Self::Error> {
+        match tag {
+            0 => Ok(Self::Execution),
+            1 => Ok(Self::NeuralTeleport),
+            2 => Ok(Self::RaOneHotChecks),
+            3 => Ok(Self::RaHammingWeight),
+            4 => Ok(Self::RangeCheck),
+            5 => Ok(Self::SoftmaxStage1),
+            6 => Ok(Self::SoftmaxStage2),
+            7 => Ok(Self::SoftmaxStage3),
+            8 => Ok(Self::SoftmaxStage4),
+            9 => Ok(Self::SumReduction),
+            10 => Ok(Self::EinsumMatmul),
+            11 => Ok(Self::RescaleRemainderRaChecks),
+            12 => Ok(Self::RescaleArith),
+            13 => Ok(Self::TrigDownscaleRaChecks),
+            14 => Ok(Self::DeferredClampSplit),
+            15 => Ok(Self::DeferredClampChunkChecks),
+            16 => Ok(Self::DeferredRemainderRC),
+            17 => Ok(Self::DeferredRemainderRaChecks),
+            18 => Ok(Self::DeferredActivationExec),
+            19 => Ok(Self::DeferredActivationClamp),
+            20 => Ok(Self::DeferredActivationSmallRaChecks),
+            21 => Ok(Self::DeferredRangeCheck),
+            22 => Ok(Self::DeferredRangeCheckRaChecks),
+            23 => Ok(Self::DeferredActivationClampRaChecks),
+            24 => Ok(Self::DeferredSoftmaxStage3),
+            25 => Ok(Self::DeferredSoftmaxRaChecks),
+            _ => Err(SerializationError::InvalidData),
+        }
+    }
+}
+
+impl CanonicalSerialize for ProofType {
+    fn serialize_with_mode<W: Write>(
+        &self,
+        writer: W,
+        compress: Compress,
+    ) -> Result<(), SerializationError> {
+        (*self as u8).serialize_with_mode(writer, compress)
+    }
+
+    fn serialized_size(&self, compress: Compress) -> usize {
+        0u8.serialized_size(compress)
+    }
+}
+
+impl Valid for ProofType {
+    fn check(&self) -> Result<(), SerializationError> {
+        Ok(())
+    }
+}
+
+impl CanonicalDeserialize for ProofType {
+    fn deserialize_with_mode<R: Read>(
+        reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        let tag = u8::deserialize_with_mode(reader, compress, validate)?;
+        ProofType::try_from(tag)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Claims
+// ---------------------------------------------------------------------------
+
+/// Wrapper for polynomial opening claims.
+#[derive(Debug, Clone)]
+pub struct Claims<F: JoltField>(Openings<F>);
+
+impl<F: JoltField> Claims<F> {
+    /// Wrap the prover's final openings.
+    pub fn from_parts(openings: Openings<F>) -> Self {
+        Self(openings)
+    }
+
+    /// The claims, keyed by opening id.
+    pub fn openings(&self) -> &Openings<F> {
+        &self.0
+    }
+
+    /// Mutable claims, for the soundness harness (`test-util`).
+    #[cfg(feature = "test-util")]
+    pub fn openings_mut(&mut self) -> &mut Openings<F> {
+        &mut self.0
+    }
+}

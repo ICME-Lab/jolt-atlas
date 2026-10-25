@@ -20,7 +20,7 @@ use joltworks::{
     transcripts::Transcript,
 };
 
-use super::{Claims, ONNXProof, ReducedOpeningProof};
+use crate::{Claims, ONNXProof, ReducedOpeningProof};
 
 // ---------------------------------------------------------------------------
 // BTreeMap helpers

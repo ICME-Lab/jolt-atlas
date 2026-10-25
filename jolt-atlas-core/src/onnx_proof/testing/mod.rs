@@ -15,7 +15,8 @@
 //! * [`model_builder`]: programmatic model construction.
 //!
 //! This module is a descendant of `onnx_proof` so tests can reach the
-//! proof's private fields without widening any visibility.
+//! prover and verifier helpers without widening any visibility. Proof fields
+//! are reached only through `jolt-atlas-verifier`'s `test-util` accessors.
 
 mod digests;
 pub(crate) mod harness;

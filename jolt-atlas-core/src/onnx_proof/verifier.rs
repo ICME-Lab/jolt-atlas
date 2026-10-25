@@ -4,7 +4,7 @@
 //! This file houses the [`Verifier`] struct and the private helper functions that
 //! `verify` delegates to.
 
-use super::{types::ProofId, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof};
+use super::{AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof, ProofId};
 use crate::node_view::ModelView;
 use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
 use atlas_trace::{trace::ModelExecutionIO, Model};

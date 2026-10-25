@@ -1040,6 +1040,7 @@ dependencies = [
  "common",
  "derive_more",
  "itertools 0.10.5",
+ "jolt-atlas-verifier",
  "joltworks",
  "num",
  "num-derive",
@@ -1057,6 +1058,14 @@ dependencies = [
  "tracing",
  "tracing-chrome",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "jolt-atlas-verifier"
+version = "0.1.0"
+dependencies = [
+ "ark-serialize",
+ "joltworks",
 ]
 
 [[package]]

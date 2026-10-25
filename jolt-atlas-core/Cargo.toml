@@ -12,6 +12,7 @@ atlas-trace = { workspace = true, features = ["test-util"] }
 atlas-onnx-import.workspace = true
 common.workspace = true
 joltworks.workspace = true
+jolt-atlas-verifier.workspace = true
 
 # Cryptography and Math
 ark-bn254.workspace = true
@@ -51,6 +52,8 @@ strum_macros.workspace = true
 serial_test.workspace = true
 
 [dev-dependencies]
+# `&mut` proof-field accessors for testing/mutate.rs.
+jolt-atlas-verifier = { workspace = true, features = ["test-util"] }
 # Digest of serialized proofs in the cross-stage digest harness.
 blake2 = "0.10"
 # Enable test-feature for joltworks during tests only

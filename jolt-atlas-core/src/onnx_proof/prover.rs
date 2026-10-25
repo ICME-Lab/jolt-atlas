@@ -224,11 +224,11 @@ pub(super) fn prove_reduced_openings<
         &state.r_sumcheck,
         &mut prover.transcript,
     );
-    Some(ReducedOpeningProof {
-        sumcheck_proof: accumulator_sumcheck_proof,
+    Some(ReducedOpeningProof::from_parts(
+        accumulator_sumcheck_proof,
         sumcheck_claims,
         joint_opening_proof,
-    })
+    ))
 }
 
 #[allow(clippy::type_complexity)]
@@ -253,13 +253,13 @@ pub(super) fn finalize_proof<F: JoltField, T: Transcript, PCS: CommitmentScheme<
     let debug_info = None;
     let opening_claims = prover.accumulator.take();
     (
-        ONNXProof {
+        ONNXProof::from_parts(
+            Claims::from_parts(opening_claims),
             proofs,
-            opening_claims: Claims(opening_claims),
             commitments,
             eval_reduction_proofs,
             reduced_opening_proof,
-        },
+        ),
         io,
         debug_info,
     )

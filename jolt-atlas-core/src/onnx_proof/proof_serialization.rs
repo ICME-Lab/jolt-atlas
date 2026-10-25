@@ -87,8 +87,8 @@ impl<F: JoltField> CanonicalSerialize for Claims<F> {
         mut writer: W,
         compress: Compress,
     ) -> Result<(), SerializationError> {
-        (self.0.len() as u64).serialize_with_mode(&mut writer, compress)?;
-        for (key, (_point, claim)) in self.0.iter() {
+        (self.openings().len() as u64).serialize_with_mode(&mut writer, compress)?;
+        for (key, (_point, claim)) in self.openings().iter() {
             key.serialize_with_mode(&mut writer, compress)?;
             claim.serialize_with_mode(&mut writer, compress)?;
         }
@@ -97,7 +97,7 @@ impl<F: JoltField> CanonicalSerialize for Claims<F> {
 
     fn serialized_size(&self, compress: Compress) -> usize {
         let mut size = 0u64.serialized_size(compress);
-        for (key, (_point, claim)) in self.0.iter() {
+        for (key, (_point, claim)) in self.openings().iter() {
             size += key.serialized_size(compress);
             size += claim.serialized_size(compress);
         }
@@ -124,7 +124,7 @@ impl<F: JoltField> CanonicalDeserialize for Claims<F> {
             let claim = F::deserialize_with_mode(&mut reader, compress, validate)?;
             claims.insert(key, (OpeningPoint::default(), claim));
         }
-        Ok(Claims(claims))
+        Ok(Claims::from_parts(claims))
     }
 }
 
@@ -143,19 +143,19 @@ where
         mut writer: W,
         compress: Compress,
     ) -> Result<(), SerializationError> {
-        self.sumcheck_proof
+        self.sumcheck_proof()
             .serialize_with_mode(&mut writer, compress)?;
-        self.sumcheck_claims
+        self.sumcheck_claims()
             .serialize_with_mode(&mut writer, compress)?;
-        self.joint_opening_proof
+        self.joint_opening_proof()
             .serialize_with_mode(&mut writer, compress)?;
         Ok(())
     }
 
     fn serialized_size(&self, compress: Compress) -> usize {
-        self.sumcheck_proof.serialized_size(compress)
-            + self.sumcheck_claims.serialized_size(compress)
-            + self.joint_opening_proof.serialized_size(compress)
+        self.sumcheck_proof().serialized_size(compress)
+            + self.sumcheck_claims().serialized_size(compress)
+            + self.joint_opening_proof().serialized_size(compress)
     }
 }
 
@@ -186,11 +186,11 @@ where
         let sumcheck_claims = Vec::deserialize_with_mode(&mut reader, compress, validate)?;
         let joint_opening_proof =
             PCS::Proof::deserialize_with_mode(&mut reader, compress, validate)?;
-        Ok(Self {
+        Ok(Self::from_parts(
             sumcheck_proof,
             sumcheck_claims,
             joint_opening_proof,
-        })
+        ))
     }
 }
 
@@ -210,32 +210,40 @@ where
         compress: Compress,
     ) -> Result<(), SerializationError> {
         // 1. Opening claims
-        self.opening_claims
+        self.opening_claims()
             .serialize_with_mode(&mut writer, compress)?;
 
         // 2. Proofs (BTreeMap<ProofId, SumcheckInstanceProof>)
-        serialize_btreemap(&self.proofs, &mut writer, compress)?;
+        serialize_btreemap(self.proofs(), &mut writer, compress)?;
 
         // 3. Commitments
-        self.commitments
+        self.commitments()
             .serialize_with_mode(&mut writer, compress)?;
 
         // 4. In-IOP evaluation reduction artifacts
-        serialize_btreemap(&self.eval_reduction_proofs, &mut writer, compress)?;
+        serialize_btreemap(self.eval_reduction_proofs(), &mut writer, compress)?;
 
-        // 5. Reduced opening proof (Option)
-        self.reduced_opening_proof
+        // 5. Reduced opening proof (Option, encoded as ark-serialize encodes `Option`)
+        let reduced = self.reduced_opening_proof();
+        reduced
+            .is_some()
             .serialize_with_mode(&mut writer, compress)?;
+        if let Some(r) = reduced {
+            r.serialize_with_mode(&mut writer, compress)?;
+        }
 
         Ok(())
     }
 
     fn serialized_size(&self, compress: Compress) -> usize {
-        self.opening_claims.serialized_size(compress)
-            + serialized_size_btreemap(&self.proofs, compress)
-            + self.commitments.serialized_size(compress)
-            + serialized_size_btreemap(&self.eval_reduction_proofs, compress)
-            + self.reduced_opening_proof.serialized_size(compress)
+        self.opening_claims().serialized_size(compress)
+            + serialized_size_btreemap(self.proofs(), compress)
+            + self.commitments().serialized_size(compress)
+            + serialized_size_btreemap(self.eval_reduction_proofs(), compress)
+            + true.serialized_size(compress)
+            + self
+                .reduced_opening_proof()
+                .map_or(0, |r| r.serialized_size(compress))
     }
 }
 
@@ -267,13 +275,13 @@ where
         let eval_reduction_proofs = deserialize_btreemap(&mut reader, compress, validate)?;
         let reduced_opening_proof = Option::deserialize_with_mode(&mut reader, compress, validate)?;
 
-        Ok(Self {
+        Ok(Self::from_parts(
             opening_claims,
             proofs,
             commitments,
             eval_reduction_proofs,
             reduced_opening_proof,
-        })
+        ))
     }
 }
 

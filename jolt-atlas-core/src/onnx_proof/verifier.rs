@@ -101,14 +101,14 @@ pub(super) fn populate_accumulator<
 ) {
     // Load all opening claims from the proof (NodeOutput+Execution claims
     // are now stored directly in opening_claims alongside everything else).
-    for (key, (_, claim)) in &proof.opening_claims.0 {
+    for (key, (_, claim)) in proof.opening_claims().openings() {
         verifier
             .accumulator
             .openings
             .insert(*key, (OpeningPoint::default(), *claim));
     }
 
-    for commitment in &proof.commitments {
+    for commitment in proof.commitments() {
         verifier.transcript.append_serializable(commitment);
     }
 }
@@ -159,7 +159,7 @@ pub(crate) fn verify_iop<F: JoltField, T: Transcript, PCS: CommitmentScheme<Fiel
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
     for node in model.views().iter().rev() {
-        let res = OperatorVerifier::verify(node, verifier, &proof.eval_reduction_proofs);
+        let res = OperatorVerifier::verify(node, verifier, proof.eval_reduction_proofs());
         #[cfg(test)]
         if let Err(e) = &res {
             if !crate::onnx_proof::testing::probe::active() {
@@ -182,14 +182,14 @@ pub(super) fn verify_reduced_openings<
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    if let Some(reduced_opening_proof) = &proof.reduced_opening_proof {
+    if let Some(reduced_opening_proof) = proof.reduced_opening_proof() {
         verifier.accumulator.prepare_for_sumcheck(
-            &reduced_opening_proof.sumcheck_claims,
+            reduced_opening_proof.sumcheck_claims(),
             &mut verifier.transcript,
         )?;
 
         let reduction_res = verifier.accumulator.verify_batch_opening_sumcheck(
-            &reduced_opening_proof.sumcheck_proof,
+            reduced_opening_proof.sumcheck_proof(),
             &mut verifier.transcript,
         );
         #[cfg(test)]
@@ -202,7 +202,7 @@ pub(super) fn verify_reduced_openings<
 
         let verifier_state = verifier.accumulator.finalize_batch_opening_sumcheck(
             r_sumcheck,
-            &reduced_opening_proof.sumcheck_claims,
+            reduced_opening_proof.sumcheck_claims(),
             &mut verifier.transcript,
         );
 
@@ -210,17 +210,17 @@ pub(super) fn verify_reduced_openings<
         // `poly_map`); the joint opening covers the opened subset.
         let mut committed = pp.shared.get_models_committed_polynomials::<F, T>();
         committed.sort();
-        if committed.len() != proof.commitments.len() {
+        if committed.len() != proof.commitments().len() {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "expected {} commitments, found {}",
                 committed.len(),
-                proof.commitments.len()
+                proof.commitments().len()
             )));
         }
         let by_poly: BTreeMap<CommittedPoly, &PCS::Commitment> = committed
             .iter()
             .copied()
-            .zip(proof.commitments.iter())
+            .zip(proof.commitments().iter())
             .collect();
         let selected: Vec<&PCS::Commitment> = verifier_state
             .polynomials
@@ -237,7 +237,7 @@ pub(super) fn verify_reduced_openings<
 
         verifier.accumulator.verify_joint_opening::<_, PCS>(
             &pp.generators,
-            &reduced_opening_proof.joint_opening_proof,
+            reduced_opening_proof.joint_opening_proof(),
             &joint_commitment,
             &verifier_state,
             &mut verifier.transcript,

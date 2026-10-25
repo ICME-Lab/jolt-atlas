@@ -260,8 +260,8 @@ fn run<PCS: CommitmentScheme<Field = Fr>>(
     println!(
         "[{label}] proof size: {:.2} MiB ({} commitments, {} sumcheck proofs)",
         bytes.len() as f64 / (1024.0 * 1024.0),
-        proof.commitments.len(),
-        proof.proofs.len()
+        proof.commitments().len(),
+        proof.proofs().len()
     );
 
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, PCS>::from(&prover_pp);

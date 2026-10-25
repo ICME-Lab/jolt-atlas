@@ -172,7 +172,25 @@ impl CanonicalDeserialize for ProofType {
 
 /// Wrapper for polynomial opening claims.
 #[derive(Debug, Clone)]
-pub struct Claims<F: JoltField>(pub Openings<F>);
+pub struct Claims<F: JoltField>(Openings<F>);
+
+impl<F: JoltField> Claims<F> {
+    /// Wrap the prover's final openings.
+    pub fn from_parts(openings: Openings<F>) -> Self {
+        Self(openings)
+    }
+
+    /// The claims, keyed by opening id.
+    pub fn openings(&self) -> &Openings<F> {
+        &self.0
+    }
+
+    /// Mutable claims, for the soundness harness only.
+    #[cfg(test)]
+    pub fn openings_mut(&mut self) -> &mut Openings<F> {
+        &mut self.0
+    }
+}
 
 // ---------------------------------------------------------------------------
 // ProverDebugInfo

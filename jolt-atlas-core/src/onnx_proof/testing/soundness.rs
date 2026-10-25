@@ -502,7 +502,7 @@ fn witness_tamper_sweep() {
 fn forgery_targets(proof: &Proof, model: &Model, all: bool) -> Vec<OpeningId> {
     let mut seen = std::collections::HashSet::new();
     let mut targets = vec![];
-    for id in proof.opening_claims.0.keys() {
+    for id in proof.opening_claims().openings().keys() {
         if all || seen.insert(opening_stratum(id, model)) {
             targets.push(*id);
         }
@@ -549,7 +549,7 @@ fn opening_forgery_sweep() {
             "opening forgery sweep [{}]: {} of {} openings targeted{}, {rejected} rejected",
             h.name,
             targets.len(),
-            h.proof.opening_claims.0.len(),
+            h.proof.opening_claims().openings().len(),
             if all {
                 " (exhaustive)"
             } else {

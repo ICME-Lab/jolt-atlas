@@ -209,7 +209,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
     let mut sites = vec![];
 
     let mut strata = std::collections::HashSet::new();
-    for id in proof.opening_claims.0.keys() {
+    for id in proof.opening_claims().openings().keys() {
         if all || strata.insert(opening_stratum(id, model)) {
             sites.push((Site::Claim(*id), Expect::MustReject));
             sites.push((Site::ClaimRemoved(*id), Expect::RejectOrPanic));
@@ -217,7 +217,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
     }
     sites.push((Site::ClaimOrphan, Expect::Tolerated));
 
-    for (id, sc) in &proof.proofs {
+    for (id, sc) in proof.proofs() {
         let rounds = sc.compressed_polys.len();
         let chosen: Vec<usize> = if all || rounds <= 4 {
             (0..rounds).collect()
@@ -257,7 +257,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
     }
 
     let consumers = consumer_counts(model);
-    for (node, er) in &proof.eval_reduction_proofs {
+    for (node, er) in proof.eval_reduction_proofs() {
         // A single-consumer node's `h` is never read (short path in the
         // eval-reduction verifier): a documented dead field.
         let expect = if consumers[*node] > 1 {
@@ -274,11 +274,11 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
     // Swapping or replacing a commitment is a no-op when the two polynomials
     // (or the two executions' versions of one polynomial) are identical,
     // e.g. all-zero one-hot chunks of a clamp bucket nothing saturates in.
-    let n = proof.commitments.len();
+    let n = proof.commitments().len();
     if n >= 2 {
         let pairs: Vec<(usize, usize)> = (0..n)
             .flat_map(|i| (i + 1..n).map(move |j| (i, j)))
-            .filter(|&(i, j)| proof.commitments[i] != proof.commitments[j])
+            .filter(|&(i, j)| proof.commitments()[i] != proof.commitments()[j])
             .collect();
         let chosen: Vec<(usize, usize)> = if all || pairs.len() <= 24 {
             pairs
@@ -290,7 +290,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
         }
     }
     let replaceable: Vec<usize> = (0..n)
-        .filter(|&i| proof.commitments[i] != other.commitments[i])
+        .filter(|&i| proof.commitments()[i] != other.commitments()[i])
         .collect();
     let chosen: Vec<usize> = if all || replaceable.len() <= 16 {
         replaceable
@@ -304,13 +304,13 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
         sites.push((Site::CommitmentDropped, Expect::MustReject));
     }
 
-    if let Some(rop) = &proof.reduced_opening_proof {
-        for (round, poly) in rop.sumcheck_proof.compressed_polys.iter().enumerate() {
+    if let Some(rop) = proof.reduced_opening_proof() {
+        for (round, poly) in rop.sumcheck_proof().compressed_polys.iter().enumerate() {
             for k in 0..poly.coeffs_except_linear_term.len() {
                 sites.push((Site::ReducedRoundCoeff { round, k }, Expect::MustReject));
             }
         }
-        let claims = rop.sumcheck_claims.len();
+        let claims = rop.sumcheck_claims().len();
         let chosen: Vec<usize> = if all || claims <= 8 {
             (0..claims).collect()
         } else {
@@ -325,7 +325,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
         }
         sites.push((Site::ReducedRemoved, Expect::MustReject));
         sites.push((Site::ReducedSpliced, Expect::MustReject));
-        for s in PCS::sites(&rop.joint_opening_proof) {
+        for s in PCS::sites(rop.joint_opening_proof()) {
             sites.push((Site::ReducedPcs(s), Expect::MustReject));
         }
     }
@@ -360,16 +360,23 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
 ) {
     let one = Fr::one();
     match site {
-        Site::Claim(id) => proof.opening_claims.0.get_mut(id).expect("site").1 += one,
+        Site::Claim(id) => {
+            proof
+                .opening_claims_mut()
+                .openings_mut()
+                .get_mut(id)
+                .expect("site")
+                .1 += one
+        }
         Site::ClaimRemoved(id) => {
-            proof.opening_claims.0.remove(id);
+            proof.opening_claims_mut().openings_mut().remove(id);
         }
         Site::ClaimOrphan => {
             let id = OpeningId::new(
                 VirtualPoly::NodeOutput(usize::MAX - 7),
                 SumcheckId::NodeExecution(usize::MAX - 7),
             );
-            proof.opening_claims.0.insert(
+            proof.opening_claims_mut().openings_mut().insert(
                 id,
                 (OpeningPoint::<BIG_ENDIAN, Fr>::default(), Fr::from(7u64)),
             );
@@ -379,65 +386,75 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
             round,
             k,
         } => {
-            proof.proofs.get_mut(id).expect("site").compressed_polys[*round]
+            proof
+                .proofs_mut()
+                .get_mut(id)
+                .expect("site")
+                .compressed_polys[*round]
                 .coeffs_except_linear_term[*k] += one
         }
-        Site::RoundExtraCoeff { proof: id, round } => {
-            proof.proofs.get_mut(id).expect("site").compressed_polys[*round]
-                .coeffs_except_linear_term
-                .push(one)
-        }
+        Site::RoundExtraCoeff { proof: id, round } => proof
+            .proofs_mut()
+            .get_mut(id)
+            .expect("site")
+            .compressed_polys[*round]
+            .coeffs_except_linear_term
+            .push(one),
         Site::RoundDropped { proof: id } => {
             proof
-                .proofs
+                .proofs_mut()
                 .get_mut(id)
                 .expect("site")
                 .compressed_polys
                 .pop();
         }
         Site::ProofRemoved { proof: id } => {
-            proof.proofs.remove(id);
+            proof.proofs_mut().remove(id);
         }
         Site::EvalRedCoeff { node, k } => {
             proof
-                .eval_reduction_proofs
+                .eval_reduction_proofs_mut()
                 .get_mut(node)
                 .expect("site")
                 .h
                 .coeffs[*k] += one
         }
         Site::EvalRedRemoved { node } => {
-            proof.eval_reduction_proofs.remove(node);
+            proof.eval_reduction_proofs_mut().remove(node);
         }
-        Site::CommitmentSwap { i, j } => proof.commitments.swap(*i, *j),
-        Site::CommitmentReplaced { i } => proof.commitments[*i] = other.commitments[*i].clone(),
+        Site::CommitmentSwap { i, j } => proof.commitments_mut().swap(*i, *j),
+        Site::CommitmentReplaced { i } => {
+            proof.commitments_mut()[*i] = other.commitments()[*i].clone()
+        }
         Site::CommitmentDropped => {
-            proof.commitments.pop();
+            proof.commitments_mut().pop();
         }
         Site::ReducedRoundCoeff { round, k } => {
             proof
-                .reduced_opening_proof
+                .reduced_opening_proof_mut()
                 .as_mut()
                 .expect("site")
-                .sumcheck_proof
+                .sumcheck_proof_mut()
                 .compressed_polys[*round]
                 .coeffs_except_linear_term[*k] += one
         }
         Site::ReducedClaim { i } => {
             proof
-                .reduced_opening_proof
+                .reduced_opening_proof_mut()
                 .as_mut()
                 .expect("site")
-                .sumcheck_claims[*i] += one
+                .sumcheck_claims_mut()[*i] += one
         }
-        Site::ReducedRemoved => proof.reduced_opening_proof = None,
-        Site::ReducedSpliced => proof.reduced_opening_proof = other.reduced_opening_proof.clone(),
+        Site::ReducedRemoved => *proof.reduced_opening_proof_mut() = None,
+        Site::ReducedSpliced => {
+            *proof.reduced_opening_proof_mut() = other.reduced_opening_proof().cloned()
+        }
         Site::ReducedPcs(s) => PCS::apply(
-            &mut proof
-                .reduced_opening_proof
+            proof
+                .reduced_opening_proof_mut()
                 .as_mut()
                 .expect("site")
-                .joint_opening_proof,
+                .joint_opening_proof_mut(),
             *s,
         ),
         Site::IoOutput { elem } => {

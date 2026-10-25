@@ -356,16 +356,16 @@ mod tests {
             &mut eval_reduction_proofs,
         );
 
-        let opening_claims = Claims(prover.accumulator.take());
-        let partial_proof = ONNXProof::<_, _, HyperKZG<Bn254>> {
+        let opening_claims = Claims::from_parts(prover.accumulator.take());
+        let partial_proof = ONNXProof::<_, _, HyperKZG<Bn254>>::from_parts(
             opening_claims,
             proofs,
-            commitments: vec![],
+            vec![],
             eval_reduction_proofs,
-            reduced_opening_proof: None,
-        };
+            None,
+        );
 
-        let mut verifier = Verifier::new(&shared, &partial_proof.proofs, &io);
+        let mut verifier = Verifier::new(&shared, partial_proof.proofs(), &io);
         verifier::populate_accumulator(&partial_proof, &mut verifier);
         verifier::verify_output_claim(shared.model(), &mut verifier)
             .expect("verify_output_claim should succeed for consistent partial proof state");

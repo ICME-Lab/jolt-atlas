@@ -4,7 +4,7 @@ use crate::{
     onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
-use atlas_onnx_tracer::tensor::Tensor;
+use atlas_trace::Tensor;
 use common::parallel::par_enabled;
 use joltworks::{
     field::JoltField,
@@ -89,7 +89,9 @@ impl<F: JoltField> EinsumLayout<F> for KNkNLayout {
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn matvec_model(rng: &mut StdRng, k: usize, n: usize) -> Model {

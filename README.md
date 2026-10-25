@@ -127,16 +127,16 @@ python scripts/download_gpt2.py
 ```
 
 This exports GPT-2 via [Hugging Face Optimum](https://huggingface.co/docs/optimum/index)
-into `atlas-onnx-tracer/models/gpt2/` and copies `model.onnx` → `network.onnx`.
+into `models/gpt2/` and copies `model.onnx` → `network.onnx`.
 
-4. Test the model (trace only, no proof):
+4. Inspect the imported model (no proof):
 
 ```bash
-cargo run --release --package atlas-onnx-tracer --example gpt2
+cargo run --release --package atlas-onnx-import --example dump_lowered_ops -- \
+    models/gpt2/network.onnx batch_size=1 sequence_length=16 past_sequence_length=0
 ```
 
-You should see the model graph printed and an output shape like
-`[1, 16, 65536]` (vocab size 50257 padded to the next power of two).
+You should see the lowered op inventory and the canonical einsum equations.
 
 5. Prove & verify GPT-2:
 

@@ -1,7 +1,5 @@
-use atlas_onnx_tracer::{
-    node::ComputationNode,
-    ops::{MoveAxis, Operator},
-};
+use crate::node_view::ComputationNode;
+use atlas_trace::{op::MoveAxis, Op};
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{
@@ -156,10 +154,10 @@ impl<F: JoltField> MoveAxisVerifier<F> {
 fn permute_challenge_groups<F: JoltField>(
     output_dims: &[usize],
     r_output: &[F],
-    operator: &Operator,
+    operator: &Op,
 ) -> Vec<F> {
     let (source, destination) = match operator {
-        Operator::MoveAxis(op) => (op.source, op.destination),
+        Op::MoveAxis(op) => (op.source, op.destination),
         _ => panic!("Expected MoveAxis operator"),
     };
 
@@ -185,7 +183,9 @@ fn permute_challenge_groups<F: JoltField>(
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn moveaxis_model(input_shape: &[usize], source: usize, destination: usize) -> Model {

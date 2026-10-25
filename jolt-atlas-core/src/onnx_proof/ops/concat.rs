@@ -1,15 +1,11 @@
+use crate::node_view::ComputationNode;
+use crate::node_view::ModelView;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::ComputationNode,
-    ops::{Concat, Operator},
-};
+use atlas_trace::{op::Concat, trace::LayerData, Model, Op, Trace};
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -51,7 +47,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
         let params = ConcatSumcheckParams::new(
             node.clone(),
             &prover.accumulator,
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
         );
         let mut prover_sumcheck = ConcatSumcheckProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
@@ -75,7 +71,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
         let verifier_sumcheck = ConcatSumcheckVerifier::new(
             node.clone(),
             &verifier.accumulator,
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
         );
         Sumcheck::verify(
             proof,
@@ -105,24 +101,24 @@ pub struct ConcatSumcheckParams<F: JoltField> {
 }
 
 impl<F: JoltField> ConcatSumcheckParams<F> {
-    /// Build concat sumcheck parameters from the graph metadata and reduced output opening.
+    /// Build concat sumcheck parameters from the model metadata and reduced output opening.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let Operator::Concat(concat_op) = &computation_node.operator else {
+        let Op::Concat(concat_op) = &computation_node.operator else {
             panic!("Expected Concat operator")
         };
         let r_output = accessor.get_reduced_opening().0;
-        let input_raw_dims = graph
-            .get_input_nodes(&computation_node)
+        let input_raw_dims = model
+            .operand_views(&computation_node)
             .iter()
             .map(|input_node| input_node.output_dims.clone())
             .collect::<Vec<_>>();
         let output_raw_dims = computation_node.output_dims.clone();
-        let axis = normalize_axis(concat_op.axis, output_raw_dims.len());
+        let axis = concat_op.axis; // already normalized to a non-negative index
         validate_concat_shapes(
             &input_raw_dims
                 .iter()
@@ -233,7 +229,7 @@ pub struct ConcatSumcheckProver<F: JoltField> {
 impl<F: JoltField> ConcatSumcheckProver<F> {
     /// Initialize prover state from trace tensors and prepared concat parameters.
     pub fn initialize(trace: &Trace, params: ConcatSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         assert!(!operands.is_empty(), "Concat expects at least one operand");
         assert_eq!(
             operands.len(),
@@ -241,7 +237,7 @@ impl<F: JoltField> ConcatSumcheckProver<F> {
             "Concat input shape count mismatch"
         );
 
-        let output_padded_len = output.padded_next_power_of_two().len();
+        let output_padded_len = output.padded_pow2().len();
         let max_input_domain_len = 1usize << params.max_input_num_vars;
         assert!(
             max_input_domain_len <= output_padded_len,
@@ -252,7 +248,7 @@ impl<F: JoltField> ConcatSumcheckProver<F> {
             .iter()
             .enumerate()
             .map(|(input_idx, input_tensor)| {
-                let input_padded = input_tensor.padded_next_power_of_two();
+                let input_padded = input_tensor.padded_pow2();
                 let input_num_vars = input_padded.len().log_2();
                 let extended_input = extend_input_to_max_domain(
                     input_padded.data(),
@@ -353,13 +349,13 @@ pub struct ConcatSumcheckVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> ConcatSumcheckVerifier<F> {
-    /// Build the concat verifier from the reduced output opening and graph metadata.
+    /// Build the concat verifier from the reduced output opening and model metadata.
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
-        let params = ConcatSumcheckParams::new(computation_node, accumulator, graph);
+        let params = ConcatSumcheckParams::new(computation_node, accumulator, model);
         Self { params }
     }
 }
@@ -487,17 +483,6 @@ fn build_concat_selector<F: JoltField>(
     selector
 }
 
-/// Normalizes an ONNX-style axis (possibly negative) to a canonical `[0, rank)` axis.
-fn normalize_axis(axis: isize, rank: usize) -> usize {
-    let rank_i = rank as isize;
-    let normalized = if axis < 0 { axis + rank_i } else { axis };
-    assert!(
-        normalized >= 0 && normalized < rank_i,
-        "Concat axis {axis} out of range for rank {rank}"
-    );
-    normalized as usize
-}
-
 /// Validates concat shape rules.
 fn validate_concat_shapes(inputs_dims: &[&[usize]], out_dims: &[usize], axis: usize) {
     assert!(!inputs_dims.is_empty(), "Concat expects at least one input");
@@ -537,10 +522,9 @@ fn axis_offset(raw_input_dims: &[Vec<usize>], input_idx: usize, axis: usize) -> 
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn concat_model(input_shapes: Vec<Vec<usize>>, axis: isize) -> Model {

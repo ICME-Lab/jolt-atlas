@@ -1,16 +1,11 @@
+use crate::node_view::ComputationNode;
+use crate::node_view::ModelView;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
+use atlas_trace::{trace::LayerData, Model, Op, Tensor, Trace};
 use common::parallel::par_enabled;
 use common::VirtualPoly;
 #[cfg(feature = "zk")]
@@ -23,7 +18,8 @@ use joltworks::{
         eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+            BindingOrder, EvaluateMle, MultilinearPolynomial, PolynomialBinding,
+            PolynomialEvaluation,
         },
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
@@ -66,10 +62,10 @@ pub struct GatherParams<F: JoltField> {
 }
 
 impl<F: JoltField> GatherParams<F> {
-    /// Create new gather parameters from a computation node, graph, accumulator, and transcript.
+    /// Create new gather parameters from a computation node, model, accumulator, and transcript.
     pub fn new(
         computation_node: ComputationNode,
-        graph: &ComputationGraph,
+        model: &Model,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
@@ -77,12 +73,12 @@ impl<F: JoltField> GatherParams<F> {
         let gamma = transcript.challenge_scalar();
 
         let dict_len = match &computation_node.operator {
-            Operator::GatherSmall(gather_op) => gather_op.dict_len,
-            Operator::GatherLarge(gather_op) => gather_op.dict_len,
+            Op::GatherSmall(gather_op) => gather_op.dict_len,
+            Op::GatherLarge(gather_op) => gather_op.dict_len,
             _ => panic!("Expected Gather operator"),
         };
 
-        let input_indices = &graph.nodes.get(&computation_node.inputs[1]).unwrap();
+        let input_indices = &model.view(computation_node.inputs[1]);
         let num_words = dict_len.next_power_of_two();
         let lookup_vars = input_indices.pow2_padded_num_output_elements().log_2();
 
@@ -176,7 +172,7 @@ impl<F: JoltField> GatherProver<F> {
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [dictionary, indexes] = operands[..] else {
             panic!("Expected two operands for Gather operation")
         };
@@ -187,8 +183,8 @@ impl<F: JoltField> GatherProver<F> {
         let (r_index, r_word) = params.r_node_output.r.split_at(params.lookup_vars);
         assert_eq!(r_word.len(), word_dim.log_2());
 
-        let padded_indexes = indexes.padded_next_power_of_two();
-        let index_claim = MultilinearPolynomial::from(padded_indexes.clone()).evaluate(r_index);
+        let padded_indexes = indexes.padded_pow2();
+        let index_claim = padded_indexes.evaluate_mle(r_index);
 
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
             .into_provider(transcript, OpeningPoint::new(r_index.to_vec()));
@@ -307,11 +303,11 @@ impl<F: JoltField> GatherVerifier<F> {
     /// Create a new verifier for the gather operation, caching index operand openings.
     pub fn new(
         computation_node: ComputationNode,
-        graph: &ComputationGraph,
+        model: &Model,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let params = GatherParams::new(computation_node, graph, accumulator, transcript);
+        let params = GatherParams::new(computation_node, model, accumulator, transcript);
 
         let (r_index, _) = params.r_node_output.r.split_at(params.lookup_vars);
         let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
@@ -433,10 +429,12 @@ pub(crate) fn fold_dictionary<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
+    use crate::node_view::ModelView;
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::test::ModelBuilder, model::Model, ops::Operator, tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Op;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn gather_model(input_shape: &[usize], dictionnary_len: usize, word_dim: usize) -> Model {
@@ -478,10 +476,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x889);
         let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
         let model = gather_model(&indices_dims, dict_len, word_dim);
-        assert!(matches!(
-            model.graph.nodes[&2].operator,
-            Operator::GatherSmall(_)
-        ));
+        assert!(matches!(model.view(2).operator, Op::GatherSmall(_)));
         unit_test_op(model, &[input]);
     }
 
@@ -493,10 +488,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x88A);
         let input = Tensor::<i32>::random_range(&mut rng, &indices_dims, 0..dict_len as i32);
         let model = gather_model(&indices_dims, dict_len, word_dim);
-        assert!(matches!(
-            model.graph.nodes[&2].operator,
-            Operator::GatherLarge(_)
-        ));
+        assert!(matches!(model.view(2).operator, Op::GatherLarge(_)));
         unit_test_op(model, &[input]);
     }
 

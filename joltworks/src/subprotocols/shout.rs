@@ -168,10 +168,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
         use crate::poly::identity_poly::IdentityPolynomial;
-        use crate::poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation};
+        use crate::poly::multilinear_polynomial::EvaluateMle;
 
         let sc: Vec<F> = sumcheck_challenges.to_vec().into_opening();
-        let val_claim = MultilinearPolynomial::from(self.table.clone()).evaluate(&sc);
+        let val_claim = self.table.evaluate_mle(&sc);
         let int_claim = IdentityPolynomial::new(self.log_K).evaluate(&sc);
         vec![val_claim + self.gamma * int_claim]
     }

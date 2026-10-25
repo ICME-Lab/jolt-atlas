@@ -1,7 +1,6 @@
 //! Cosine lookup table for neural teleportation, sized to the downscaled remainder
 //! (see [`super::trig_downscale`]); rescaled back up to `2^MODEL_SCALE` precision.
 
-use atlas_onnx_tracer::{tensor::Tensor, utils::quantize::scale_to_multiplier};
 use common::consts::{MODEL_SCALE, TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS};
 
 /// Lookup table bit width for cosine teleportation, after downscaling.
@@ -23,20 +22,17 @@ impl CosTable {
         1 << COS_TABLE_VARS
     }
 
-    /// Materialize the lookup table: `cos(index)` at the reduced scale, rescaled back
-    /// up to `2^MODEL_SCALE` precision — matches `eval_trig`'s round-trip.
+    /// Materialize the lookup table from the deterministic integer trig
+    /// table in [`atlas_trace::semantics`] (entries already carry the
+    /// `2^TRIG_DOWNSCALE_BITS` rescale), extended by the same rule up to the
+    /// power-of-two table size.
     pub fn materialize() -> Vec<i32> {
-        let table_size = Self::table_size();
-        let indices: Vec<i32> = (0..table_size).map(|i| i as i32).collect();
-        let indices_tensor = Tensor::new(Some(&indices), &[1, table_size])
-            .expect("failed to build cos LUT input tensor");
-        let reduced_multiplier =
-            scale_to_multiplier(MODEL_SCALE as i32 - TRIG_DOWNSCALE_BITS as i32);
-        let result = atlas_onnx_tracer::tensor::ops::nonlinearities::cos(
-            &indices_tensor,
-            reduced_multiplier,
+        let table = atlas_trace::semantics::tables::table(
+            atlas_trace::semantics::tables::TableKind::Cos,
+            atlas_trace::Scale::new(MODEL_SCALE as u8).expect("scale in range"),
+            atlas_trace::SemVersion::V1,
         );
-        let rescale_factor = 1i32 << TRIG_DOWNSCALE_BITS;
-        result.data().iter().map(|&v| v * rescale_factor).collect()
+        assert!(table.entries.len() >= Self::table_size());
+        table.entries[..Self::table_size()].to_vec()
     }
 }

@@ -1,18 +1,13 @@
+use crate::node_view::ModelView;
+use crate::onnx_proof::trace_view::TraceView;
+use atlas_trace::{op::Broadcast, trace::LayerData, Model, Tensor, Trace};
 use core::panic;
 
-use atlas_onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::ComputationNode,
-    ops::Broadcast,
-    tensor::Tensor,
-};
+use crate::node_view::ComputationNode;
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
         },
@@ -52,7 +47,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
         let broadcast_verifier = BroadcastVerifier::new(
             node.clone(),
             &verifier.accumulator,
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
         );
         broadcast_verifier.verify(&mut verifier.accumulator, &mut verifier.transcript)
     }
@@ -92,7 +87,7 @@ impl<F: JoltField> BroadcastProver<F> {
     /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: BroadcastParams<F>) -> Self {
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for Broadcast operation")
         };
@@ -104,20 +99,14 @@ impl<F: JoltField> BroadcastProver<F> {
         let (r_input, _r_broadcast) =
             split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
 
-        let mut operand = operand.clone();
-        operand.pad_next_power_of_two();
-        let claim_A = MultilinearPolynomial::from(operand.clone()).evaluate(&r_input);
+        let claim_A = operand.evaluate_mle(&r_input);
 
         #[cfg(test)]
         {
             // Ensure the broadcast tensor is correctly built,
             // Tensors are correctly padded, and the spliting of r_input/r_broadcast is correct
-            let mut output = output.clone();
-            output.pad_next_power_of_two();
-            let claim_O = MultilinearPolynomial::from(output.clone()).evaluate(&params.r_output);
-            let mut broadcast_tensor = broadcast_tensor;
-            broadcast_tensor.pad_next_power_of_two();
-            let eval_I = MultilinearPolynomial::from(broadcast_tensor).evaluate(&_r_broadcast);
+            let claim_O = output.evaluate_mle(&params.r_output);
+            let eval_I = broadcast_tensor.evaluate_mle(&_r_broadcast);
             assert_eq!(claim_O, claim_A * eval_I);
         }
 
@@ -154,23 +143,18 @@ impl<F: JoltField> BroadcastVerifier<F> {
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
-        graph: &ComputationGraph,
+        model: &Model,
     ) -> Self {
         let params = BroadcastParams::new(computation_node, accumulator);
-        let input_dims = &graph
-            .nodes
-            .get(&params.computation_node.inputs[0])
-            .expect("Broadcast node should have an input")
-            .output_dims;
+        let input_dims = &model.view(params.computation_node.inputs[0]).output_dims;
         let output_dims = &params.computation_node.output_dims;
 
-        let mut broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
+        let broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
 
         let (r_input, r_broadcast) =
             split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
 
-        broadcast_tensor.pad_next_power_of_two();
-        let eval_I = MultilinearPolynomial::from(broadcast_tensor).evaluate(&r_broadcast);
+        let eval_I = broadcast_tensor.evaluate_mle(&r_broadcast);
 
         Self {
             params,
@@ -211,7 +195,7 @@ impl<F: JoltField> BroadcastVerifier<F> {
 fn build_broadcast_tensor(input_dims: &[usize], target_dims: &[usize]) -> Tensor<i32> {
     let bc_dims = get_broadcast_dims(input_dims, target_dims);
     let num_elems: usize = bc_dims.iter().product();
-    Tensor::new(Some(&vec![1i32; num_elems]), &bc_dims).unwrap()
+    Tensor::from_slice(&vec![1i32; num_elems], &bc_dims).unwrap()
 }
 
 /// Computes the broadcast dimensions
@@ -272,7 +256,9 @@ fn split_broadcast_vars<F: JoltField>(
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn broadcast_model(input_shape: &[usize], output_shape: &[usize]) -> Model {

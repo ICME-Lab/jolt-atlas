@@ -23,9 +23,11 @@ use super::{
     fused_rebase::{rebase_bits, rebase_remainder, remainder_lookup_bits},
     witness::build_one_hot_rad_witness,
 };
+use crate::node_view::clamp_value_bound;
+use crate::node_view::ComputationNode;
+use crate::node_view::ModelView;
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_onnx_tracer::model::{clamp_width::clamp_value_bound, trace::Trace, Model};
-use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
+use atlas_trace::{Model, Op, Trace};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -74,10 +76,10 @@ pub struct ClampBucket {
 /// width, packed first-fit-decreasing by padded size into a capacity equal to
 /// the largest clamped node (so offsets are automatically aligned).
 pub fn clamp_buckets(model: &Model) -> Vec<ClampBucket> {
-    let nodes = &model.graph.nodes;
-    let clamped: Vec<(usize, usize, usize)> = nodes
-        .values()
-        .filter(|n| clamp_value_bound(n, nodes).is_some() && !is_scalar(n))
+    let clamped: Vec<(usize, usize, usize)> = model
+        .views()
+        .iter()
+        .filter(|n| clamp_value_bound(model, n).is_some() && !is_scalar(n))
         .map(|n| (n.idx, n.sat_clamp_bits, n.pow2_padded_num_output_elements()))
         .collect();
     pack_buckets(BucketKind::Clamp, clamped)
@@ -88,8 +90,8 @@ pub fn clamp_buckets(model: &Model) -> Vec<ClampBucket> {
 pub fn has_remainder_rc(node: &ComputationNode) -> bool {
     matches!(
         node.operator,
-        Operator::Einsum(_) | Operator::Mul(_) | Operator::Square(_) | Operator::Cube(_)
-    ) && rebase_bits(&node.operator).is_some_and(|b| b > 0)
+        Op::Einsum(_) | Op::Mul(_) | Op::Square(_) | Op::Cube(_)
+    ) && rebase_bits(node).is_some_and(|b| b > 0)
         && !is_scalar(node)
 }
 
@@ -97,14 +99,13 @@ pub fn has_remainder_rc(node: &ComputationNode) -> bool {
 /// rebase width.
 pub fn remainder_buckets(model: &Model) -> Vec<ClampBucket> {
     let items: Vec<(usize, usize, usize)> = model
-        .graph
-        .nodes
-        .values()
+        .views()
+        .iter()
         .filter(|n| has_remainder_rc(n))
         .map(|n| {
             (
                 n.idx,
-                rebase_bits(&n.operator).unwrap() as usize,
+                rebase_bits(n).unwrap() as usize,
                 n.pow2_padded_num_output_elements(),
             )
         })
@@ -217,7 +218,7 @@ impl ClampBucket {
         let mut input_claim = F::zero();
         let mut segments = Vec::with_capacity(self.nodes.len());
         for (n, gamma) in self.nodes.iter().zip(gammas) {
-            let node = &model.graph.nodes[&n.idx];
+            let node = &model.view(n.idx);
             let (r, claim) = AccOpeningAccessor::new(accumulator, node)
                 .get_advice(VirtualPoly::RescaleRemainder);
             assert_eq!(r.len(), n.log_t, "node {} remainder point length", n.idx);
@@ -255,7 +256,6 @@ pub fn bucket_witnesses<F: JoltField>(
     model: &Model,
     trace: &Trace,
 ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
-    let nodes = &model.graph.nodes;
     clamp_buckets(model)
         .iter()
         .chain(remainder_buckets(model).iter())
@@ -272,7 +272,7 @@ pub fn bucket_witnesses<F: JoltField>(
             BucketKind::Remainder => {
                 let bits = bucket.assemble_bits(|idx| {
                     remainder_lookup_bits(
-                        &rebase_remainder(&nodes[&idx], trace),
+                        &rebase_remainder(&model.view(idx), trace),
                         bucket.width as i32,
                     )
                 });

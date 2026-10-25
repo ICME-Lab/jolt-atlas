@@ -31,12 +31,16 @@
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
 
+use crate::onnx_proof::trace_view::TraceView;
 use std::array;
 
+use atlas_trace::{op::MeanOfSquares, trace::LayerData, Op, Trace};
+
 use crate::{
-    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
+    node_view::ComputationNode,
     onnx_proof::{
         clamp_lookups::{clamp_committed_polys, is_scalar, recover_small_int, verify_scalar_clamp},
+        deferred_lookups::{DeferredBatch, DeferredOneHot},
         fused_rebase,
         ops::{OperatorProofTrait, Prover, Verifier},
         range_checking::{
@@ -46,11 +50,6 @@ use crate::{
         ProofId, ProofType,
     },
     utils::opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::{mean_of_squares::mos_divisor, MeanOfSquares, Operator},
 };
 use common::{consts::XLEN, parallel::par_enabled, CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -77,6 +76,11 @@ use joltworks::{
 use rayon::prelude::*;
 
 const DEGREE: usize = 3;
+
+/// Fused divisor `D = count·2^scale` (the semantic count, not the padded one).
+pub fn mos_divisor(op: &MeanOfSquares, scale: u8) -> i64 {
+    (1i64 << scale) * op.count as i64
+}
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
     #[tracing::instrument(skip_all, name = "MeanOfSquares::prove")]
@@ -160,7 +164,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
             verify_scalar_clamp(rescaled_claim, output_claim, "MeanOfSquares")?;
 
             let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder).1;
-            verify_scalar_remainder(r_claim, mos_divisor(self))?;
+            verify_scalar_remainder(r_claim, mos_divisor(self, node.scale))?;
         } else {
             let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node);
             let rc_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
@@ -227,7 +231,7 @@ pub struct MeanOfSquaresReductionParams<F: JoltField> {
 impl<F: JoltField> MeanOfSquaresReductionParams<F> {
     /// Build params from the node and accumulator.
     pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let Operator::MeanOfSquares(op) = &computation_node.operator else {
+        let Op::MeanOfSquares(op) = &computation_node.operator else {
             panic!("MeanOfSquaresReductionParams: expected MeanOfSquares operator");
         };
         // The sumcheck cube splits the flat-padded operand into
@@ -239,7 +243,7 @@ impl<F: JoltField> MeanOfSquaresReductionParams<F> {
             "mean-of-squares reduction requires a power-of-two padded reduced count, got {}",
             op.padded_count
         );
-        let divisor = mos_divisor(op);
+        let divisor = mos_divisor(op, computation_node.scale);
         let log_reduced = op.padded_count.log_2();
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_node_output = accessor.get_reduced_opening().0;
@@ -291,11 +295,11 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     /// Initialize by loading the operand and the retained-dim eq-poly.
     #[tracing::instrument(skip_all, name = "MeanOfSquaresReductionProver::initialize")]
     pub fn initialize(trace: &Trace, params: MeanOfSquaresReductionParams<F>) -> Self {
-        let LayerData { operands, .. } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for MeanOfSquares operation")
         };
-        let operand = MultilinearPolynomial::from(operand.padded_next_power_of_two());
+        let operand = MultilinearPolynomial::from(operand.padded_pow2());
         assert_eq!(
             operand.get_num_vars(),
             params.log_retained + params.log_reduced,
@@ -423,11 +427,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::{onnx_proof::ops::test::unit_test_op, test_builder::ModelBuilder};
+    use atlas_trace::{Model, Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     /// `[m, n]` input, reduce the last axis (size `n`, a power of two) → `[m, 1]`.
@@ -476,7 +477,7 @@ mod tests {
     fn test_mean_of_squares_saturating_clamp() {
         let (m, n) = (1 << 1, 1 << 4);
         let big = (1 << 20) + 1;
-        let input = Tensor::new(Some(&vec![big; m * n]), &[m, n]).unwrap();
+        let input = Tensor::from_slice(&vec![big; m * n], &[m, n]).unwrap();
         unit_test_op(mos_model(m, n), &[input]);
     }
 }

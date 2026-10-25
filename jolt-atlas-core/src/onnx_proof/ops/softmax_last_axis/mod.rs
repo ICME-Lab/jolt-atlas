@@ -14,8 +14,8 @@
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
 
 use crate::{
-    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
+        deferred_lookups::{DeferredBatch, DeferredOneHot},
         op_lookups::OpLookupProvider,
         ops::{
             softmax_last_axis::{
@@ -31,6 +31,7 @@ use crate::{
             },
             OperatorProofTrait,
         },
+        trace_view::TraceView,
         ProofId, ProofType, Prover, Verifier,
     },
     utils::{
@@ -45,18 +46,9 @@ use joltworks::{
 };
 use std::collections::BTreeMap;
 
-use atlas_onnx_tracer::{
-    node::ComputationNode,
-    ops::{
-        softmax::{
-            generate_exp_lut_decomposed, softmax_last_axis_decomposed, softmax_z,
-            SoftmaxLastAxisTrace,
-        },
-        SoftmaxLastAxis,
-    },
-    tensor::Tensor,
-    utils::quantize::scale_to_multiplier,
-};
+use atlas_trace::{op::SoftmaxLastAxis, Tensor};
+
+use crate::node_view::ComputationNode;
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,
@@ -64,7 +56,7 @@ use common::{
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial, PolynomialEvaluation},
         opening_proof::OpeningPoint,
     },
     subprotocols::{
@@ -77,6 +69,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits, math::Math},
 };
+pub use witness::{generate_exp_lut_decomposed, softmax_z, ExpLutDecomposed};
 
 /// exp_sum(r0_k) = sum_{k,j} eq(r0_k, k) * exp_q[k,j]
 pub mod exp_sum;
@@ -90,6 +83,8 @@ pub mod rc;
 pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
 pub mod significance_clamp;
+/// Softmax witness view and exp-LUT materialization.
+pub mod witness;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::prove")]
@@ -99,13 +94,25 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         debug_assert_eq!(
-            self.scale, MODEL_SCALE as i32,
+            node.scale, MODEL_SCALE as u8,
             "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
         );
-        let scale = scale_to_multiplier(self.scale) as i32;
-        let softmax_input = prover.trace.operand_tensors(node)[0];
-        let trace = softmax_last_axis_decomposed(softmax_input, scale).1;
-        SoftmaxLastAxisProver::new(node, trace, scale).prove(prover)
+        // The masked (non-full-row) softmax needs a selector polynomial in
+        // these sumchecks; until that lands, only full rows are provable —
+        // the same capability the old pipeline actually had.
+        let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+        assert!(
+            self.active_len.is_none_or(|n| n == last_dim),
+            "masked softmax (active_len {:?} of {last_dim}) is not yet provable; \
+             use a power-of-two softmax axis",
+            self.active_len
+        );
+        let scale = 1i32 << node.scale;
+        let witness = prover
+            .trace
+            .softmax_witness(node.idx)
+            .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx));
+        SoftmaxLastAxisProver::new(node, witness.clone(), scale).prove(prover)
     }
 
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::verify")]
@@ -115,11 +122,22 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         debug_assert_eq!(
-            self.scale, MODEL_SCALE as i32,
+            node.scale, MODEL_SCALE as u8,
             "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
         );
+        // Mirror of the prove-side gate: the sumchecks below check the
+        // *unmasked* relations, so a model declaring a masked softmax must
+        // be rejected here too (deserialized preprocessing bypasses the
+        // preprocess()-time assert).
+        let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+        if self.active_len.is_some_and(|n| n != last_dim) {
+            return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                "masked softmax (active_len {:?} of {last_dim}) is not yet verifiable",
+                self.active_len
+            )));
+        }
         let scale_bits = verifier.preprocessing.scale();
-        let scale = scale_to_multiplier(self.scale) as i32;
+        let scale = 1i32 << node.scale;
         let mut sm = SoftmaxLastAxisVerifier::new(
             node,
             scale,
@@ -130,7 +148,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             &mut verifier.accumulator,
             &mut verifier.transcript,
             verifier.proofs,
-            scale_bits,
+            scale_bits as i32,
         )?;
         for instance in stage3 {
             verifier.defer(DeferredBatch::SoftmaxStage3, instance);
@@ -140,8 +158,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
     }
 
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let log_scale = self.scale as usize;
-        let decomp = generate_exp_lut_decomposed(scale_to_multiplier(self.scale) as i32);
+        let log_scale = node.scale as usize;
+        let decomp = generate_exp_lut_decomposed(1i32 << node.scale);
         let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
         let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
         let idx = node.idx;
@@ -169,7 +187,8 @@ pub(crate) struct SoftmaxLastAxisProver {
     pub(crate) computation_node: ComputationNode,
     pub(crate) scale: i32,
     pub(crate) F_N: [usize; 2],
-    pub(crate) trace: SoftmaxLastAxisTrace,
+    pub(crate) witness: atlas_trace::SoftmaxWitness,
+    pub(crate) lut: ExpLutDecomposed,
 }
 
 impl SoftmaxLastAxisProver {
@@ -193,7 +212,7 @@ impl SoftmaxLastAxisProver {
         // identical; assert it so a future move to per-node scales fails loudly
         // here instead of silently mismatching commitment and range-check widths.
         debug_assert_eq!(
-            self.scale.ilog2() as i32,
+            self.scale.ilog2() as u8,
             scale_bits,
             "softmax operator scale (log2 {}) disagrees with preprocessing scale {scale_bits}",
             self.scale.ilog2(),
@@ -202,22 +221,21 @@ impl SoftmaxLastAxisProver {
         // ── Pre-compute index/lookup data from trace vectors ────────────
 
         // R-derived data (consumed by stage1 RC + stage2 one-hot)
-        let r_lookup_bits = to_lookup_bits(&self.trace.R, scale_bits as usize);
-        let r_indices = to_indices(&self.trace.R);
+        let r_lookup_bits = to_lookup_bits(&self.witness.r, scale_bits as usize);
+        let r_indices = to_indices(&self.witness.r);
 
         // r_exp-derived data (consumed by stage2 RC + stage3 one-hot)
-        let r_exp_lookup_bits =
-            to_lookup_bits(&self.trace.decomposed_exp.r_exp, scale_bits as usize);
-        let r_exp_indices = to_indices(&self.trace.decomposed_exp.r_exp);
+        let r_exp_lookup_bits = to_lookup_bits(&self.witness.r_exp, scale_bits as usize);
+        let r_exp_indices = to_indices(&self.witness.r_exp);
 
         // z_hi/z_lo indices (consumed by stage3 + stage4)
-        let z_hi_indices = to_indices(&self.trace.decomposed_exp.z_hi);
-        let z_lo_indices = to_indices(&self.trace.decomposed_exp.z_lo);
+        let z_hi_indices = to_indices(&self.witness.z_hi);
+        let z_lo_indices = to_indices(&self.witness.z_lo);
 
         // Padded lookup tables (consumed by stage3 Shout + stage4 one-hot)
-        let mut table_hi = std::mem::take(&mut self.trace.decomposed_exp.lut.lut_hi);
+        let mut table_hi = std::mem::take(&mut self.lut.lut_hi);
         pad_to_power_of_two(&mut table_hi);
-        let mut table_lo = std::mem::take(&mut self.trace.decomposed_exp.lut.lut_lo);
+        let mut table_lo = std::mem::take(&mut self.lut.lut_lo);
         pad_to_power_of_two(&mut table_lo);
 
         let lut_data = LookupTableData {
@@ -228,13 +246,13 @@ impl SoftmaxLastAxisProver {
         };
 
         // z = max_k - x, the sat-clamp lookup's witness. Computed here (not inside
-        // `build_stage3_instances`) because stage 2 takes ownership of `self.trace.x` (for
-        // `max_indicator_prover`) — by the time stage 3 runs, `self.trace.x` is empty.
+        // `build_stage3_instances`) because stage 2 takes ownership of `self.witness.x` (for
+        // `max_indicator_prover`) — by the time stage 3 runs, `self.witness.x` is empty.
         let last_dim = self.F_N[1];
-        let z = softmax_z(&self.trace.x, &self.trace.max_k, last_dim);
-        let z_tensor = Tensor::new(Some(&z), &[z.len()])
+        let z = softmax_z(&self.witness.x, &self.witness.max_k, last_dim);
+        let z_tensor = Tensor::from_slice(&z, &[z.len()])
             .expect("softmax_z tensor construction")
-            .padded_next_power_of_two()
+            .padded_pow2()
             .map(|v| v as i64);
         let significance_clamp_indices: Vec<usize> =
             compute_lookup_indices_from_operands(&[&z_tensor.map(|v| v as i32)], false)
@@ -383,7 +401,11 @@ impl SoftmaxLastAxisVerifier {
 // ---------------------------------------------------------------------------
 
 impl SoftmaxLastAxisProver {
-    pub(crate) fn new(node: &ComputationNode, trace: SoftmaxLastAxisTrace, scale: i32) -> Self {
+    pub(crate) fn new(
+        node: &ComputationNode,
+        witness: atlas_trace::SoftmaxWitness,
+        scale: i32,
+    ) -> Self {
         let (&n, leading_dims) = node
             .output_dims
             .split_last()
@@ -393,7 +415,8 @@ impl SoftmaxLastAxisProver {
             computation_node: node.clone(),
             scale,
             F_N: [f, n],
-            trace,
+            lut: generate_exp_lut_decomposed(scale),
+            witness,
         }
     }
 
@@ -425,15 +448,15 @@ impl SoftmaxLastAxisProver {
         for k in 0..f {
             provider.append_advice(
                 |idx| VirtualPoly::SoftmaxSumOutput(idx, k),
-                F::from_u32(self.trace.exp_sum_q[k] as u32),
+                F::from_u32(self.witness.exp_sum_q[k] as u32),
             );
             provider.append_advice(
                 |idx| VirtualPoly::SoftmaxMaxOutput(idx, k),
-                F::from_u32(self.trace.max_k[k] as u32),
+                F::from_u32(self.witness.max_k[k] as u32),
             );
             provider.append_advice(
                 |idx| VirtualPoly::SoftmaxMaxIndex(idx, k),
-                F::from_u32(self.trace.argmax_k[k] as u32),
+                F::from_u32(self.witness.argmax_k[k] as u32),
             );
         }
     }
@@ -448,7 +471,7 @@ impl SoftmaxLastAxisProver {
         let r0 = accessor.get_reduced_opening().0;
         let log_f = self.F_N[0].log_2();
         let r_lead = r0.split_at(log_f).0;
-        let eval = MultilinearPolynomial::from(self.trace.exp_sum_q.clone()).evaluate(&r_lead.r);
+        let eval = self.witness.exp_sum_q.evaluate_mle(&r_lead.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r_lead);
         provider.append_advice(VirtualPoly::SoftmaxExpSum, eval);
     }
@@ -457,7 +480,7 @@ impl SoftmaxLastAxisProver {
     pub(crate) fn cache_R<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r0 = accessor.get_reduced_opening().0;
-        let eval = MultilinearPolynomial::from(self.trace.R.clone()).evaluate(&r0.r);
+        let eval = self.witness.r.evaluate_mle(&r0.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r0);
         provider.append_advice(VirtualPoly::SoftmaxRecipMultRemainder, eval);
     }
@@ -488,13 +511,17 @@ impl SoftmaxLastAxisProver {
         );
         #[cfg(feature = "zk")]
         {
-            recip_mult_params.inv_sum_evals =
-                self.trace.inv_sum.iter().map(|&x| F::from_i32(x)).collect();
+            recip_mult_params.inv_sum_evals = self
+                .witness
+                .inv_sum
+                .iter()
+                .map(|&x| F::from_i32(x))
+                .collect();
         }
-        let exp_q_for_sum = self.trace.exp_q.clone();
+        let exp_q_for_sum = self.witness.exp_q.clone();
         let recip_mult_prover = RecipMultProver::initialize(
-            std::mem::take(&mut self.trace.exp_q),
-            std::mem::take(&mut self.trace.inv_sum),
+            std::mem::take(&mut self.witness.exp_q),
+            std::mem::take(&mut self.witness.inv_sum),
             recip_mult_params,
         );
 
@@ -525,8 +552,7 @@ impl SoftmaxLastAxisProver {
     pub(crate) fn cache_r_exp<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
-        let eval =
-            MultilinearPolynomial::from(self.trace.decomposed_exp.r_exp.clone()).evaluate(&r1.r);
+        let eval = self.witness.r_exp.evaluate_mle(&r1.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r1);
         provider.append_advice(VirtualPoly::SoftmaxExpRemainder, eval);
     }
@@ -557,16 +583,18 @@ impl SoftmaxLastAxisProver {
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let r1_k = r1.split_at(log_f).0;
 
-        let max_k_eval = MultilinearPolynomial::from(self.trace.max_k.clone()).evaluate(&r1_k.r);
+        let max_k_eval = self.witness.max_k.evaluate_mle(&r1_k.r);
         let max_indicator_params = MaxIndicatorParams::new(
             self.computation_node.clone(),
             self.F_N,
-            std::mem::take(&mut self.trace.argmax_k),
+            std::mem::take(&mut self.witness.argmax_k),
             max_k_eval,
             &prover.accumulator,
         );
-        let max_indicator_prover =
-            MaxIndicatorProver::initialize(std::mem::take(&mut self.trace.x), max_indicator_params);
+        let max_indicator_prover = MaxIndicatorProver::initialize(
+            std::mem::take(&mut self.witness.x),
+            max_indicator_params,
+        );
 
         let exp_mult_params = MultParams::new(
             self.computation_node.clone(),
@@ -574,8 +602,8 @@ impl SoftmaxLastAxisProver {
             &prover.accumulator,
         );
         let exp_mult_prover = MultProver::initialize(
-            std::mem::take(&mut self.trace.decomposed_exp.exp_hi),
-            std::mem::take(&mut self.trace.decomposed_exp.exp_lo),
+            std::mem::take(&mut self.witness.exp_hi),
+            std::mem::take(&mut self.witness.exp_lo),
             exp_mult_params,
         );
 
@@ -609,10 +637,8 @@ impl SoftmaxLastAxisProver {
     pub(crate) fn cache_z_hi_lo<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
         let r2 = accessor.get_advice(VirtualPoly::SoftmaxExpHi).0;
-        let z_hi_eval =
-            MultilinearPolynomial::from(self.trace.decomposed_exp.z_hi.clone()).evaluate(&r2.r);
-        let z_lo_eval =
-            MultilinearPolynomial::from(self.trace.decomposed_exp.z_lo.clone()).evaluate(&r2.r);
+        let z_hi_eval = self.witness.z_hi.evaluate_mle(&r2.r);
+        let z_lo_eval = self.witness.z_lo.evaluate_mle(&r2.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r2);
         provider.append_advice(VirtualPoly::SoftmaxZHi, z_hi_eval);
         provider.append_advice(VirtualPoly::SoftmaxZLo, z_lo_eval);
@@ -633,7 +659,7 @@ impl SoftmaxLastAxisProver {
 
     /// Build stage 3 sumcheck instances: exp-digit lookups plus the saturating-clamp lookup's
     /// execution proof. `z_tensor` is computed by the caller (`prove`), since by this point
-    /// `self.trace.x` has already been consumed by stage 2's `max_indicator_prover`.
+    /// `self.witness.x` has already been consumed by stage 2's `max_indicator_prover`.
     pub(crate) fn build_stage3_instances<F: JoltField, T: Transcript>(
         &mut self,
         prover: &mut Prover<F, T>,
@@ -943,7 +969,8 @@ impl SoftmaxLastAxisVerifier {
             &*accumulator,
             transcript,
         );
-        let rc_provider = SoftmaxRCProvider::remainder(self.computation_node.clone(), scale_bits);
+        let rc_provider =
+            SoftmaxRCProvider::remainder(self.computation_node.clone(), scale_bits as u8);
         let rc_R_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
         Ok(vec![
             Box::new(recip_mult_verifier),
@@ -1002,7 +1029,7 @@ impl SoftmaxLastAxisVerifier {
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
         let r1_k = r1.split_at(log_f).0;
 
-        let max_k_eval = MultilinearPolynomial::from(self.max_k.clone()).evaluate(&r1_k.r);
+        let max_k_eval = self.max_k.evaluate_mle(&r1_k.r);
         let max_indicator_verifier = MaxIndicatorVerifier::new(
             self.computation_node.clone(),
             self.F_N,
@@ -1015,10 +1042,10 @@ impl SoftmaxLastAxisVerifier {
             MultVerifier::new(self.computation_node.clone(), self.scale, &*accumulator);
 
         let rc_provider =
-            SoftmaxRCProvider::exp_remainder(self.computation_node.clone(), scale_bits);
+            SoftmaxRCProvider::exp_remainder(self.computation_node.clone(), scale_bits as u8);
         let exp_r_rc_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
 
-        let encoding = SoftmaxRaEncoding::remainder(self.idx(), scale_bits);
+        let encoding = SoftmaxRaEncoding::remainder(self.idx(), scale_bits as u8);
         let [R_ra_verifier, R_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
@@ -1076,7 +1103,7 @@ impl SoftmaxLastAxisVerifier {
             .read_raf_verify::<F, T, SoftmaxClampTable<XLEN>, XLEN>(accumulator, transcript);
 
         let scale_bits = self.scale.ilog2() as i32;
-        let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits);
+        let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), scale_bits as u8);
         let [r_exp_ra_verifier, r_exp_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript);
 
@@ -1106,7 +1133,7 @@ impl SoftmaxLastAxisVerifier {
         let r2 = accessor.get_advice(VirtualPoly::SoftmaxExpHi).0;
         let r2_lead = r2.split_at(log_f).0;
 
-        let max_k_eval = MultilinearPolynomial::from(self.max_k.clone()).evaluate(&r2_lead.r);
+        let max_k_eval = self.max_k.evaluate_mle(&r2_lead.r);
 
         let z_eval = accessor.get_advice(VirtualPoly::SoftmaxClampWitness).1;
 
@@ -1217,14 +1244,12 @@ impl VerifierLookupTableData {
 
 #[cfg(test)]
 mod tests {
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::{Model, Tensor};
 
     use crate::onnx_proof::ops::test::unit_test_op;
 
-    fn softmax_last_axis_model(input_shape: &[usize], scale: u32) -> Model {
+    fn softmax_last_axis_model(input_shape: &[usize], scale: u8) -> Model {
         let mut b = ModelBuilder::with_scale(scale);
         let i = b.input(input_shape.to_vec());
         let res = b.softmax_last_axis(i);
@@ -1233,21 +1258,21 @@ mod tests {
     }
 
     /// Helper: build a small softmax test at the given scale.
-    fn run_softmax_scale_test(scale: u32) {
+    fn run_softmax_scale_test(scale: u8) {
         let input_shape = vec![2, 8];
         #[rustfmt::skip]
         let data: Vec<i32> = vec![
             10, 20, 30, 40, 50, 60, 5, 15,
             25, 35, 45, 55, 8, 18, 28, 38,
         ];
-        let input = Tensor::new(Some(&data), &input_shape).unwrap();
+        let input = Tensor::from_slice(&data, &input_shape).unwrap();
         let model = softmax_last_axis_model(&input_shape, scale);
         unit_test_op(model, &[input]);
     }
 
     #[test]
     fn test_softmax_model_scale() {
-        run_softmax_scale_test(common::consts::MODEL_SCALE as u32);
+        run_softmax_scale_test(common::consts::MODEL_SCALE as u8);
     }
 
     #[ignore = "built for scale=12; only runs when MODEL_SCALE is compiled to 12"]
@@ -1307,7 +1332,7 @@ mod tests {
              -8241,-10310,-12414, -5334, -1045, -8036,-10493,-12577,
         ];
         let input_shape = vec![4, 8, 8];
-        let input = Tensor::new(Some(GPT2_ATTN_SCORES), &input_shape).unwrap();
+        let input = Tensor::from_slice(GPT2_ATTN_SCORES, &input_shape).unwrap();
         let model = softmax_last_axis_model(&input_shape, 12);
         unit_test_op(model, &[input]);
     }

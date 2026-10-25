@@ -1,0 +1,24 @@
+[package]
+name = "atlas-trace"
+version = "0.1.0"
+edition = "2024"
+description = "Deterministic fixed-point IR, semantics, and trace engine for jolt-atlas zkML."
+license-file = "../LICENSE"
+
+[dependencies]
+serde = { workspace = true, default-features = true, features = ["rc"] }
+thiserror.workspace = true
+rayon = { workspace = true, optional = true }
+rand = { workspace = true, default-features = true, optional = true }
+
+[dev-dependencies]
+atlas-trace = { path = ".", features = ["test-util"] }
+proptest = "1.5"
+libm = "0.2"
+rand = { workspace = true, default-features = true }
+serde_json = { workspace = true, default-features = true }
+
+[features]
+default = ["rayon"]
+rayon = ["dep:rayon"]
+test-util = ["dep:rand"]

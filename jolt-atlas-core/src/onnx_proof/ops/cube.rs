@@ -1,13 +1,11 @@
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_fused_rescale_proof_api,
     onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Cube,
-};
+use atlas_trace::{op::Cube, trace::LayerData, Trace};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -138,11 +136,11 @@ impl<F: JoltField> CubeProver<F> {
         let LayerData {
             operands,
             output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for Cube operation")
         };
-        let operand = MultilinearPolynomial::from(operand.padded_next_power_of_two());
+        let operand = MultilinearPolynomial::from(operand.padded_pow2());
         Self {
             params,
             eq_r_node_output,
@@ -247,10 +245,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CubeVerifie
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn cube_model(T: usize) -> Model {
@@ -287,7 +284,7 @@ mod tests {
         let i = b.input(vec![t]);
         let res = b.cube(i, 12);
         b.mark_output(res);
-        let input = Tensor::new(Some(&vec![input_value; t]), &[t]).unwrap();
+        let input = Tensor::from_slice(&vec![input_value; t], &[t]).unwrap();
         (b.build(), input)
     }
 

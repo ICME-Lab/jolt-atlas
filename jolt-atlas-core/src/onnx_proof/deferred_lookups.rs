@@ -17,6 +17,7 @@
 //! after its node loop. The batched sumcheck computes instance messages in
 //! parallel across instances, which is what turns the ~750 tiny sequential
 //! sumchecks into a few large parallel ones.
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     clamp_split::{
         self, BucketSplit, NodeSplit, SplitParams, SplitProver, SplitVerifier, ValueParams,
@@ -25,7 +26,6 @@ use crate::onnx_proof::{
     global_clamp::{clamp_buckets, remainder_buckets, ClampBucket},
     ProofId, ProofType, Prover, Verifier,
 };
-use atlas_onnx_tracer::node::ComputationNode;
 use joltworks::{
     field::JoltField,
     poly::opening_proof::{OpeningAccumulator, OpeningPoint},

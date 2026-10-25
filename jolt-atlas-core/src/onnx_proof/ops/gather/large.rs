@@ -1,5 +1,6 @@
 use super::*;
-use atlas_onnx_tracer::ops::GatherLarge;
+use crate::onnx_proof::trace_view::TraceView;
+use atlas_trace::op::GatherLarge;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 use joltworks::{
@@ -22,7 +23,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
 
         let params = GatherParams::new(
             node.clone(),
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
             &prover.accumulator,
             &mut prover.transcript,
         );
@@ -73,7 +74,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let exec_sumcheck = GatherVerifier::new(
             node.clone(),
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -121,7 +122,7 @@ pub(crate) struct GatherRaEncoding {
 impl GatherRaEncoding {
     pub(crate) fn new(computation_node: &ComputationNode) -> Self {
         let gather_op = match &computation_node.operator {
-            Operator::GatherLarge(gather_op) => gather_op,
+            Op::GatherLarge(gather_op) => gather_op,
             _ => panic!("Expected GatherLarge operator"),
         };
         Self {
@@ -164,12 +165,12 @@ pub(crate) fn gather_lookup_indices(
     computation_node: &ComputationNode,
     trace: &Trace,
 ) -> Vec<usize> {
-    let LayerData { operands, .. } = Trace::layer_data(trace, computation_node);
+    let LayerData { operands, .. } = TraceView::layer_data(trace, computation_node);
     let [_, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };
     indexes
-        .padded_next_power_of_two()
+        .padded_pow2()
         .data()
         .par_iter()
         .with_min_len(par_enabled())

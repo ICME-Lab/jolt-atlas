@@ -1,12 +1,10 @@
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Neg,
-};
+use atlas_trace::{op::Neg, trace::LayerData, Trace};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -54,12 +52,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Neg {
         let (opening_point, _claim) =
             AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
 
-        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for Neg operation")
         };
-        let operand_claim = MultilinearPolynomial::from(operand.padded_next_power_of_two())
-            .evaluate(&opening_point.r);
+        let operand_claim =
+            MultilinearPolynomial::from(operand.padded_pow2()).evaluate(&opening_point.r);
 
         let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
             .into_provider(&mut prover.transcript, opening_point);
@@ -185,11 +183,11 @@ impl<F: JoltField> NegProver<F> {
         let LayerData {
             operands,
             output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for Neg operation")
         };
-        let operand = MultilinearPolynomial::from(operand.padded_next_power_of_two());
+        let operand = MultilinearPolynomial::from(operand.padded_pow2());
         Self {
             params,
             eq_r_node_output,
@@ -297,10 +295,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for NegVerifier
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn neg_model(T: usize) -> Model {

@@ -226,7 +226,7 @@ impl<const XLEN: usize> ClampSpec for ClampTable<XLEN> {
 /// `Square`/`Cube`/`MeanOfSquares`).
 ///
 /// Generic in the address width: a node whose pre-clamp value provably fits in
-/// fewer bits (see `atlas_onnx_tracer::model::clamp_width`) uses a narrower
+/// fewer bits (see `atlas_trace`'s clamp-width analysis) uses a narrower
 /// table, i.e. fewer one-hot chunks.
 pub type SaturationTable<const XLEN: usize = LARGE_XLEN> =
     ClampBoundedTable<XLEN, SIGN_BIT_I32, true>;

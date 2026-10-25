@@ -6,7 +6,7 @@
 /// # Terminal output with timing
 /// cargo run --example microgpt -- --trace-terminal
 /// ```
-use atlas_onnx_tracer::{model::Model, tensor::Tensor};
+use atlas_trace::Tensor;
 use common::utils::logging::setup_tracing;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
@@ -16,7 +16,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("microGPT ONNX Proof");
-    let working_dir = "atlas-onnx-tracer/models/microgpt/";
+    let working_dir = "models/microgpt/";
     let mut rng = StdRng::seed_from_u64(0x42);
 
     // Model hyperparameters (matching the microGPT Python script by @karpathy)
@@ -28,8 +28,11 @@ fn main() {
     let input_data: Vec<i32> = (0..block_size)
         .map(|_| rng.gen_range(0..vocab_size))
         .collect();
-    let input = Tensor::new(Some(&input_data), &[1, block_size]).unwrap();
-    let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+    let input = Tensor::from_slice(&input_data, &[1, block_size]).unwrap();
+    let model = jolt_atlas_core::loader::load_model(
+        &format!("{working_dir}network.onnx"),
+        &Default::default(),
+    );
 
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_preprocessing = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);

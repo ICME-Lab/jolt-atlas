@@ -10,10 +10,8 @@
 //! Internal implementation details (helper methods, state structs) live in
 //! [`prover`], [`verifier`], and [`types`] submodules.
 
-use atlas_onnx_tracer::{
-    model::trace::{ModelExecutionIO, Trace},
-    tensor::Tensor,
-};
+use atlas_trace::{trace::ModelExecutionIO, Tensor};
+
 use joltworks::{
     field::JoltField,
     poly::commitment::commitment_scheme::CommitmentScheme,
@@ -35,6 +33,7 @@ pub mod op_lookups;
 pub mod ops;
 pub mod proof_serialization;
 pub mod range_checking;
+pub mod trace_view;
 pub mod witness;
 
 #[cfg(test)]
@@ -110,8 +109,8 @@ pub(crate) fn append_inputs_to_transcript<T: Transcript>(
         }
 
         // Encode values explicitly in LE for cross-platform determinism.
-        let mut bytes = Vec::with_capacity(tensor.inner.len() * 4);
-        for v in &tensor.inner {
+        let mut bytes = Vec::with_capacity(tensor.data().len() * 4);
+        for v in tensor.data() {
             bytes.extend_from_slice(&v.to_le_bytes());
         }
         transcript.append_bytes(&bytes);
@@ -158,8 +157,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         inputs: &[Tensor<i32>],
     ) -> (Self, ModelExecutionIO, Option<ProverDebugInfo<F, T>>) {
         // Generate trace and io
-        let trace = pp.model().trace(inputs);
-        let io = Trace::io(&trace, pp.model());
+        let trace = pp.model().trace(inputs).expect("model execution failed");
+        let io = trace.io(pp.model());
 
         // Initialize prover state
         // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state
@@ -183,7 +182,7 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // IOP portion
         let mut eval_reduction_proofs = BTreeMap::new();
         Self::iop(
-            pp.model().nodes(),
+            pp.model(),
             &mut prover,
             &mut proofs,
             &mut eval_reduction_proofs,

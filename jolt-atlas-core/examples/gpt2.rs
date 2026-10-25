@@ -14,11 +14,10 @@
 /// # Both, back to back (one Chrome trace covering both for comparison)
 /// cargo run --release --package jolt-atlas-core --example gpt2 -- --pcs both --trace
 /// ```
-use atlas_onnx_tracer::{
-    model::{Model, RunArgs},
-    tensor::Tensor,
-};
+use atlas_trace::Tensor;
 use common::utils::logging::setup_tracing;
+use jolt_atlas_core::loader::RunArgs;
+use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     Blake2bTranscript, Bn254, DoryScheme, Fr, HyperKZG, ONNXProof,
@@ -89,7 +88,7 @@ fn main() {
         ("sequence_length", seq_len),
         ("past_sequence_length", 0),
     ]);
-    let model = Model::load("atlas-onnx-tracer/models/gpt2/network.onnx", &run_args);
+    let model = jolt_atlas_core::loader::load_model("models/gpt2/network.onnx", &run_args);
     println!("{}", model.pretty_print());
     println!("max num vars: {}", model.max_num_vars());
 
@@ -98,22 +97,20 @@ fn main() {
 
     // Input 0 → node 1: input_ids — random token IDs used as Gather indices
     let input_ids_data: Vec<i32> = (0..seq_len).map(|_| rng.gen_range(0..vocab_size)).collect();
-    let input_ids = Tensor::new(Some(&input_ids_data), &[1, seq_len]).unwrap();
+    let input_ids = Tensor::from_slice(&input_ids_data, &[1, seq_len]).unwrap();
 
-    // Input 1 → node 4: position_ids — sequential positions used as Gather indices
+    // Input 1: attention_mask — all 1s, raw integers (it indexes the
+    // extended-mask dictionary; the importer's descriptors say RawInt).
+    let attention_mask_data: Vec<i32> = vec![1; seq_len];
+    let attention_mask = Tensor::from_slice(&attention_mask_data, &[1, seq_len]).unwrap();
+
+    // Input 2: position_ids — sequential positions used as Gather indices.
     let position_ids_data: Vec<i32> = (0..seq_len as i32).collect();
-    let position_ids = Tensor::new(Some(&position_ids_data), &[1, seq_len]).unwrap();
-
-    // Input 2 → node 57: attention_mask — all 1s (attend everywhere)
-    // The model's Cast handler divides by scale to de-quantize, so we provide
-    // the mask in quantized form: 1.0 in fixed-point = 1 << scale.
-    let scale = run_args.scale;
-    let attention_mask_data: Vec<i32> = vec![1 << scale; seq_len];
-    let attention_mask = Tensor::new(Some(&attention_mask_data), &[1, seq_len]).unwrap();
+    let position_ids = Tensor::from_slice(&position_ids_data, &[1, seq_len]).unwrap();
 
     tracing::info!("Loaded model and generated input data");
     let shared = AtlasSharedPreprocessing::preprocess(model);
-    let inputs = [input_ids, position_ids, attention_mask];
+    let inputs = [input_ids, attention_mask, position_ids];
 
     // `shared` is cloned per run so `--pcs both` can profile them back to back.
     if matches!(pcs, PcsChoice::HyperKzg | PcsChoice::Both) {

@@ -1,15 +1,15 @@
+use crate::onnx_proof::trace_view::TraceView;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
 };
 
+use atlas_trace::{trace::LayerData, Trace};
+
+use crate::node_view::ComputationNode;
 use crate::utils::{
     dims::{SumAxis, SumConfig},
     opening_access::{AccOpeningAccessor, Target},
-};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
 };
 use common::{parallel::par_enabled, VirtualPoly};
 use joltworks::{
@@ -159,7 +159,7 @@ impl<F: JoltField> SumAxisProver<F> {
         let LayerData {
             operands,
             output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for SumAxis operation")
         };
@@ -326,10 +326,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SumAxisVeri
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn sum_model<const AXIS: usize>(m: usize, n: usize) -> Model {
@@ -389,7 +388,7 @@ mod tests {
                 }
             })
             .collect();
-        let input = Tensor::<i32>::new(Some(&data), &[m, n]).unwrap();
+        let input = Tensor::<i32>::from_slice(&data, &[m, n]).unwrap();
         let model = sum_model::<1>(m, n);
         unit_test_op(model, &[input]);
     }
@@ -401,7 +400,7 @@ mod tests {
         let m = 64;
         let n = 1;
         let data = vec![i32::MAX / 2; m * n];
-        let input = Tensor::<i32>::new(Some(&data), &[m, n]).unwrap();
+        let input = Tensor::<i32>::from_slice(&data, &[m, n]).unwrap();
         let model = sum_model::<0>(m, n);
         unit_test_op(model, &[input]);
     }

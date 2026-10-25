@@ -1,24 +1,22 @@
-//! Operator lookup tables and Prefix suffix Read-raf checking protocols.
+//! Op lookup tables and Prefix suffix Read-raf checking protocols.
 //!
 //! This module provides infrastructure for proving operations using lookup tables,
 //! particularly ReLU and comparison operations. The Prefix suffix Read-raf checking sum-check protocol
 //! verifies correct reads from lookup tables and combines multiple claims using
 //! gamma batching for efficiency.
 
+use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
+
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::compute_lookup_indices_from_operands;
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use joltworks::{
     config::OneHotParams,
     field::JoltField,
     lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN,
@@ -197,8 +195,8 @@ impl LookupOperandsTrait for DefaultLookupOperands {
         let LayerData {
             output: _,
             operands,
-        } = Trace::layer_data(trace, node);
-        operands[0].padded_next_power_of_two().map(|v| v as i64)
+        } = TraceView::layer_data(trace, node);
+        operands[0].padded_pow2().map(|v| v as i64)
     }
 
     fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
@@ -488,8 +486,8 @@ pub trait InterleavedBitsMarker {
 impl InterleavedBitsMarker for ComputationNode {
     fn is_interleaved_operands(&self) -> bool {
         match self.operator {
-            Operator::ReLU(_) => false,
-            Operator::Clamp(_) => false,
+            Op::ReLU(_) => false,
+            Op::Clamp(_) => false,
             _ => unimplemented!(),
         }
     }
@@ -508,7 +506,7 @@ fn append_raf_claims_prover<F, H>(
 {
     let r_cycle =
         <OpLookupProvider<H> as RafShoutProvider<F>>::r_cycle(provider, opening_accumulator);
-    let claim = MultilinearPolynomial::from(witness.data().to_vec()).evaluate(&r_cycle.r);
+    let claim = witness.evaluate_mle(&r_cycle.r);
     let exec_id = H::witness_opening_id(&provider.computation_node);
     opening_accumulator.append_virtual(transcript, exec_id, r_cycle, claim);
 }

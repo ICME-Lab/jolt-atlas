@@ -4,10 +4,13 @@
 //! It uses the prefix-suffix read-checking sumcheck protocol from the Twist and Shout paper to
 //! efficiently verify that remainder values are within valid bounds using lookup tables.
 
+use atlas_trace::Trace;
+
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::range_checking::range_check_operands::{
     RangeCheckOperands, RangeCheckingOperandsTrait,
 };
-use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode};
+use crate::onnx_proof::trace_view::TraceView;
 use common::{
     consts::{LOG_K, XLEN},
     CommittedPoly, VirtualPoly,
@@ -155,8 +158,8 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        let padded_operands = trace.padded_operand_tensors(&self.computation_node);
-        let lookup_operands = self.operands.build_lookup_operands(&padded_operands);
+        let padded_operands = TraceView::padded_operand_tensors(trace, &self.computation_node);
+        let lookup_operands = self.operands.build_lookup_operands(trace, &padded_operands);
 
         let lookup_bits = self
             .operands

@@ -11,19 +11,17 @@
 //! rejects the attack. Used exclusively by
 //! [`MaliciousONNXProof`](crate::onnx_proof::malicious_prover).
 
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{clamp_lookups::prove_clamp_lookup, ProofId, Prover},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-};
 use joltworks::{
-    field::JoltField,
-    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
+    field::JoltField, poly::multilinear_polynomial::EvaluateMle,
+    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
 };
 
 /// Run the malicious Sub prover for a single node.
@@ -46,15 +44,12 @@ pub fn malicious_sub_prove<F: JoltField, T: Transcript>(
     results.extend(prove_clamp_lookup(node, prover, None));
 
     // (3) FORGED operand tie: claim `left(r) + 1` instead of `left(r)`.
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+    let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
     let [left, right] = operands[..] else {
         panic!("Expected two operands for Sub operation")
     };
-    let forged_left = MultilinearPolynomial::from(left.padded_next_power_of_two())
-        .evaluate(&opening_point.r)
-        + F::one();
-    let right_claim =
-        MultilinearPolynomial::from(right.padded_next_power_of_two()).evaluate(&opening_point.r);
+    let forged_left = left.evaluate_mle(&opening_point.r) + F::one();
+    let right_claim = right.evaluate_mle(&opening_point.r);
     let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
         .into_provider(&mut prover.transcript, opening_point);
     provider.append_nodeio(Target::Input(0), forged_left);

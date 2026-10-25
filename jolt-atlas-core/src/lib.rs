@@ -16,5 +16,8 @@
 )]
 #![warn(missing_docs)]
 
+pub mod loader;
+pub mod node_view;
 pub mod onnx_proof;
+pub mod test_builder;
 pub mod utils;

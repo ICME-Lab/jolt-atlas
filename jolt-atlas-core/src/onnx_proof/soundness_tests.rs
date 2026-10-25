@@ -1,14 +1,12 @@
+use crate::node_view::ComputationNode;
+use crate::node_view::ModelView;
 use crate::onnx_proof::{
     malicious_prover::MaliciousONNXProof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
     AtlasVerifierPreprocessing, Blake2bTranscript, ONNXProof,
 };
+use crate::test_builder::ModelBuilder;
 use ark_bn254::{Bn254, Fr};
-use atlas_onnx_tracer::{
-    model::{test::ModelBuilder, Model},
-    node::ComputationNode,
-    ops::Operator,
-    tensor::Tensor,
-};
+use atlas_trace::{Model, Op, Tensor};
 use common::VirtualPoly;
 use joltworks::poly::{
     commitment::hyperkzg::HyperKZG,
@@ -29,7 +27,7 @@ fn sub_model_const_2(t: usize) -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![t]);
     let c =
-        b.constant(Tensor::new(Some(&vec![2; t]), &[t]).expect("constant tensor should be valid"));
+        b.constant(Tensor::from_slice(&vec![2; t], &[t]).expect("constant tensor should be valid"));
     let out = b.sub(i, c);
     b.mark_output(out);
     b.build()
@@ -37,11 +35,9 @@ fn sub_model_const_2(t: usize) -> Model {
 
 fn find_sub_node(model: &Model) -> ComputationNode {
     model
-        .graph
-        .nodes
-        .values()
-        .find(|node| matches!(node.operator, Operator::Sub(_)))
-        .cloned()
+        .views()
+        .into_iter()
+        .find(|node| matches!(node.operator, Op::Sub(_)))
         .expect("sub node should exist")
 }
 
@@ -121,7 +117,7 @@ fn soundness_sub_virtual_operand_attack_is_rejected() {
 fn soundness_sub_trace_tamper_3_minus_2_becomes_0_is_rejected() {
     let t = 1 << 6;
     let model = sub_model_const_2(t);
-    let input = Tensor::new(Some(&vec![3; t]), &[t]).expect("input tensor should be valid");
+    let input = Tensor::from_slice(&vec![3; t], &[t]).expect("input tensor should be valid");
 
     let pp = AtlasSharedPreprocessing::preprocess(model);
     let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
@@ -183,7 +179,7 @@ fn soundness_same_consumer_duplicate_operand_should_track_both() {
         ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &[input]);
     let verifier_pp = AtlasVerifierPreprocessing::<Fr, HyperKZG<Bn254>>::from(&prover_pp);
 
-    let y_node = &verifier_pp.model().graph.nodes[&y_idx];
+    let y_node = &verifier_pp.model().view(y_idx);
     assert_eq!(
         y_node.inputs[0], y_node.inputs[1],
         "test precondition: y must consume x twice"

@@ -1,3 +1,5 @@
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         neural_teleport::{
@@ -18,15 +20,7 @@ use crate::{
     },
     utils::opening_access::AccOpeningAccessor,
 };
-use atlas_onnx_tracer::{
-    model::{
-        trace::{LayerData, Trace},
-        ComputationGraph,
-    },
-    node::ComputationNode,
-    ops::Cos,
-    tensor::Tensor,
-};
+use atlas_trace::{op::Cos, trace::LayerData, Model, Tensor};
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
@@ -58,9 +52,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
-};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
     fn prove(
@@ -69,10 +61,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
         assert_eq!(
-            self.scale, MODEL_SCALE as i32,
+            node.scale, MODEL_SCALE as u8,
             "Cos teleportation proving is only calibrated for MODEL_SCALE={MODEL_SCALE} \
              (got {})",
-            self.scale
+            node.scale
         );
         let mut results = Vec::new();
 
@@ -80,7 +72,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         cache_teleport_quotient_prove(node, prover, TRIG_PERIOD_MODULUS as i32);
 
         // Plumbing: downscale.
-        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
         let input = operands[0];
         let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
         let downscaled = cache_downscaled_prove(node, prover, &remainder);
@@ -98,7 +90,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
 
         let params = CosParams::new(
             node.clone(),
-            &prover.preprocessing.model.graph,
+            &prover.preprocessing.model,
             &prover.accumulator,
             &mut prover.transcript,
         );
@@ -169,11 +161,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        if self.scale != MODEL_SCALE as i32 {
+        if node.scale != MODEL_SCALE as u8 {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "Cos teleportation verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} \
                      (got {})",
-                self.scale
+                node.scale
             )));
         }
         // Plumbing: cache the quotient's claim.
@@ -193,7 +185,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Cos {
 
         let exec_sumcheck = CosVerifier::new(
             node.clone(),
-            &verifier.preprocessing.model.graph,
+            &verifier.preprocessing.model,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -285,7 +277,7 @@ impl<F: JoltField> CosParams<F> {
     /// Create a new CosParams instance for the given computation node.
     pub fn new(
         computation_node: ComputationNode,
-        _graph: &ComputationGraph,
+        _model: &Model,
         accumulator: &impl OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
@@ -494,11 +486,11 @@ impl<F: JoltField> CosVerifier<F> {
     /// Initialize the verifier state.
     pub fn new(
         computation_node: ComputationNode,
-        graph: &ComputationGraph,
+        model: &Model,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let params = CosParams::new(computation_node, graph, accumulator, transcript);
+        let params = CosParams::new(computation_node, model, accumulator, transcript);
         let cos_table = MultilinearPolynomial::from(CosTable::materialize());
         Self { params, cos_table }
     }
@@ -590,10 +582,9 @@ impl RaOneHotEncoding for CosRaEncoding {
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     use common::consts::TRIG_PERIOD_MODULUS;
@@ -618,7 +609,7 @@ mod tests {
     #[test]
     fn test_cos_periodic_boundary_inputs() {
         let m = TRIG_PERIOD_MODULUS as i32;
-        let input = Tensor::new(Some(&[-m - 1, -m, -1, 0, 1, m - 1, m, m + 1]), &[8]).unwrap();
+        let input = Tensor::from_slice(&[-m - 1, -m, -1, 0, 1, m - 1, m, m + 1], &[8]).unwrap();
         let model = cos_model(&[8]);
         unit_test_op(model, &[input]);
     }

@@ -6,7 +6,7 @@ The script:
   2. Exports BAAI/bge-small-en-v1.5 to ONNX via `optimum-cli`.
   3. Renames model.onnx -> network.onnx (convention used by other models).
 
-Output directory: atlas-onnx-tracer/models/bge-small-en-v1.5/
+Output directory: models/bge-small-en-v1.5/
 """
 
 import subprocess
@@ -15,7 +15,7 @@ from pathlib import Path
 
 MODEL_ID = "BAAI/bge-small-en-v1.5"
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MODEL_DIR = REPO_ROOT / "atlas-onnx-tracer" / "models" / "bge-small-en-v1.5"
+MODEL_DIR = REPO_ROOT / "models" / "bge-small-en-v1.5"
 
 
 def ensure_packages():
@@ -56,55 +56,29 @@ def export_model():
 
 
 def normalize_graph():
-    """Rewrite export patterns the Atlas tracer/prover does not support.
+    """Keep ``token_embeddings`` as the sole graph output.
 
-    The stock optimum feature-extraction export is incompatible with the Atlas
-    tracer in three ways; all are handled here so the documented flow works
-    end to end (load, trace, prove, verify).
+    The export has two outputs: ``token_embeddings`` (the encoder's last
+    hidden state) and ``sentence_embedding`` (pooled + L2-normalized). The
+    Atlas prover seeds an opening only for ``outputs()[0]``, so the second
+    output would never be opened; pooling + normalization are a cheap public
+    post-step. We keep ``token_embeddings`` and dead-node eliminate the
+    pooling / L2-norm subgraph (whose axis-1 ``Gather`` the pipeline does not
+    lower anyway).
 
-    1. Fused ``LayerNormalization`` (opset >= 17) decomposes under tract into
-       ``Div(x, Sqrt(var + eps))``, which tract cannot re-fuse: it only rewrites
-       ``Recip(Sqrt(.))`` to ``Rsqrt`` (see tract's ``declutter_recip``), and the
-       tracer has an ``Rsqrt`` handler but no ``Sqrt`` handler. We pin
-       ``--opset 14`` at export (keeps LayerNorm decomposed) and rewrite
-       ``Div(x, Sqrt(v))`` into ``Mul(x, Reciprocal(Sqrt(v)))`` so tract fuses it.
-
-    2. The export has two graph outputs: ``token_embeddings`` (the encoder's
-       last hidden state) and ``sentence_embedding`` (mean/CLS pooled and
-       L2-normalized). The Atlas prover seeds an opening only for
-       ``outputs()[0]`` (see prover.rs ``output_claim``), so a second output is
-       never opened. We keep ``token_embeddings`` as the sole output -- it is
-       the full 12-layer encoder result, and pooling + normalization are a
-       cheap public post-step -- then dead-node eliminate the pooling / L2-norm
-       subgraph that only fed ``sentence_embedding``.
-
-    Dropping that subgraph also removes its CLS-pooling ``Gather(axis=1)`` (the
-    tracer's Gather is axis-0 only) and its final scalar ``Rsqrt`` over a
-    single pooled element, which triggers a degenerate-instance panic in the
-    Shout lookup prover (see the referenced issue).
+    The old tracer also needed ``Div(x, Sqrt(v))`` rewritten here; the
+    atlas-onnx-import pipeline lowers that pattern itself, so no arithmetic
+    surgery remains.
     """
     import onnx
-    from onnx import helper
 
     path = MODEL_DIR / "model.onnx"
     model = onnx.load(str(path))
     g = model.graph
 
-    # -- 1. Div(x, Sqrt(v)) -> Mul(x, Reciprocal(Sqrt(v))) ------------------
-    sqrt_outs = {n.output[0] for n in g.node if n.op_type == "Sqrt"}
-    nodes, patched_div = [], 0
-    for n in g.node:
-        if n.op_type == "Div" and len(n.input) == 2 and n.input[1] in sqrt_outs:
-            recip_out = n.output[0] + "_recip"
-            nodes.append(helper.make_node(
-                "Reciprocal", [n.input[1]], [recip_out], name=n.name + "_recip"))
-            nodes.append(helper.make_node(
-                "Mul", [n.input[0], recip_out], [n.output[0]], name=n.name + "_mul"))
-            patched_div += 1
-        else:
-            nodes.append(n)
+    nodes = list(g.node)
 
-    # -- 2. Single output = token_embeddings, then dead-node elimination ----
+    # -- Single output = token_embeddings, then dead-node elimination --------
     keep_output = "token_embeddings"
     pruned_outputs = 0
     if any(o.name == keep_output for o in g.output) and len(g.output) > 1:
@@ -129,8 +103,8 @@ def normalize_graph():
     g.node.extend(kept)
     onnx.save(model, str(path))
     print(
-        f"Graph normalized: {patched_div} layernorm div(s) rewritten, "
-        f"{pruned_outputs} output(s) pruned, {removed_nodes} dead node(s) removed."
+        f"Graph normalized: {pruned_outputs} output(s) pruned, "
+        f"{removed_nodes} dead node(s) removed."
     )
 
 

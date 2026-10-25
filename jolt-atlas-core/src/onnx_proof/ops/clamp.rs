@@ -1,3 +1,4 @@
+use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
         op_lookups::{
@@ -8,7 +9,7 @@ use crate::{
     },
     utils::compute_lookup_indices_from_operands,
 };
-use atlas_onnx_tracer::{model::trace::Trace, node::ComputationNode, ops::Clamp, tensor::Tensor};
+use atlas_trace::{op::Clamp, Tensor, Trace};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
@@ -80,7 +81,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        debug_assert_eq!(self.bound_log, CLAMP_BOUND);
+        debug_assert_eq!(self.bound_log as usize, CLAMP_BOUND);
         let mut results = Vec::new();
 
         // Execution proof
@@ -130,7 +131,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        debug_assert_eq!(self.bound_log, CLAMP_BOUND);
+        debug_assert_eq!(self.bound_log as usize, CLAMP_BOUND);
 
         // Verify execution proof
         let provider: OpLookupProvider<SymmetricClampOperands> =
@@ -180,10 +181,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use joltworks::lookup_tables::clamp::CLAMP_BOUND;
     use rand::{rngs::StdRng, SeedableRng};
 
@@ -219,11 +219,9 @@ mod tests {
     #[test]
     fn test_clamp_near_i32_max_saturates_correctly() {
         let t = 4;
-        let input = Tensor::<i32>::new(
-            Some(&[i32::MAX, i32::MAX - 50, i32::MIN, i32::MIN + 50]),
-            &[t],
-        )
-        .unwrap();
+        let input =
+            Tensor::<i32>::from_slice(&[i32::MAX, i32::MAX - 50, i32::MIN, i32::MIN + 50], &[t])
+                .unwrap();
         let model = clamp_model(t);
         unit_test_op(model, &[input]);
     }

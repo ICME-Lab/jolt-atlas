@@ -1,5 +1,5 @@
+use crate::node_view::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_onnx_tracer::node::ComputationNode;
 use common::parallel::par_enabled;
 use common::VirtualPoly;
 #[cfg(feature = "zk")]

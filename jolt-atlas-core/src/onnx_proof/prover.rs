@@ -8,20 +8,16 @@ use super::{
     types::{Claims, ProofId, ProverDebugInfo},
     AtlasSharedPreprocessing, ONNXProof, ReducedOpeningProof,
 };
+use crate::node_view::ModelView;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
-use atlas_onnx_tracer::{
-    model::{
-        trace::{LayerData, ModelExecutionIO, Trace},
-        Model,
-    },
-    node::ComputationNode,
-};
+use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
 use common::{parallel::ParallelFlagGuard, CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
     poly::{
         commitment::commitment_scheme::CommitmentScheme,
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial},
         opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
     },
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
@@ -118,23 +114,22 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
 
     pub(crate) fn output_claim(prover: &mut Prover<F, T>) {
         // Construct output polynomial
-        let output_index = prover.preprocessing.model().outputs()[0];
-        let output_computation_node = &prover.preprocessing.model()[output_index];
+        let output_index = prover.preprocessing.model().output_indices()[0];
+        let output_computation_node = &prover.preprocessing.model().view(output_index);
         let LayerData {
             operands: _,
             output,
-        } = Trace::layer_data(&prover.trace, output_computation_node);
+        } = TraceView::layer_data(&prover.trace, output_computation_node);
 
-        // Pad output tensor to power of 2 with 0 for MLE constructions
-        let output = output.padded_next_power_of_two();
-
-        // Sample challenge from verifier
-        let r_node_output = prover
-            .transcript
-            .challenge_vector_optimized::<F>(output.len().log_2());
+        // Sample challenge from verifier over the power-of-two padded output domain
+        let r_node_output = prover.transcript.challenge_vector_optimized::<F>(
+            output_computation_node
+                .pow2_padded_num_output_elements()
+                .log_2(),
+        );
 
         // Evaluate output polynomial at r_node_output
-        let output_claim = MultilinearPolynomial::from(output.clone()).evaluate(&r_node_output);
+        let output_claim = output.evaluate_mle(&r_node_output);
 
         let output_opening_id = OpeningId::new(
             VirtualPoly::NodeOutput(output_computation_node.idx),
@@ -155,12 +150,12 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
     /// Prove each operation using sum-check and virtual polynomials
     #[tracing::instrument(skip_all, name = "ONNXProof::iop")]
     pub(crate) fn iop(
-        computation_nodes: &BTreeMap<usize, ComputationNode>,
+        model: &Model,
         prover: &mut Prover<F, T>,
         proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F, T>>,
         eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
     ) {
-        for (_, node) in computation_nodes.iter().rev() {
+        for node in model.views().iter().rev() {
             let (eval_reduction_proof, execution_proofs) = OperatorProver::prove(node, prover);
             eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
             proofs.extend(execution_proofs);
@@ -278,9 +273,8 @@ impl<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>> ONNXProof<F,
         // `generate_node_witnesses` still computes each node's accumulation once
         // and slices every committed-poly chunk from it.
         let mut polys: BTreeMap<CommittedPoly, MultilinearPolynomial<F>> = model
-            .graph
-            .nodes
-            .values()
+            .views()
+            .iter()
             .flat_map(|node| {
                 crate::onnx_proof::witness::generate_node_witnesses::<F, T>(node, model, trace)
             })

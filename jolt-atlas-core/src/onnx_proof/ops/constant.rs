@@ -1,15 +1,14 @@
+use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     ops::{OperatorProofTrait, Prover, Verifier},
     ProofId,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_onnx_tracer::{node::ComputationNode, ops::Constant};
+use atlas_trace::op::Constant;
 
 use joltworks::{
-    field::JoltField,
-    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
+    field::JoltField, poly::multilinear_polynomial::EvaluateMle,
+    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 
@@ -32,8 +31,7 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Constant {
     ) -> Result<(), ProofVerifyError> {
         let (r_node_const, const_claim) =
             AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
-        let constant_tensor = self.0.padded_next_power_of_two();
-        let expected_claim = MultilinearPolynomial::from(constant_tensor).evaluate(&r_node_const.r);
+        let expected_claim = self.0.evaluate_mle(&r_node_const.r);
         if expected_claim != const_claim {
             return Err(ProofVerifyError::InvalidOpeningProof(
                 "Const claim does not match expected claim".to_string(),

@@ -1,12 +1,10 @@
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Iff,
-};
+use atlas_trace::{op::Iff, trace::LayerData, Trace};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -146,7 +144,7 @@ impl<F: JoltField> IffProver<F> {
         let LayerData {
             operands,
             output: _output,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [mask_operand, a_operand, b_operand] = operands[..] else {
             panic!("Expected three operands for Iff operation")
         };
@@ -309,7 +307,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for IffVerifier
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{model::test::ModelBuilder, model::Model, tensor::Tensor};
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn iff_model(rng: &mut StdRng, T: usize) -> Model {

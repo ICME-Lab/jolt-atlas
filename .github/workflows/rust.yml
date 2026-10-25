@@ -38,9 +38,6 @@ jobs:
           - name: default
             clippy_args: --workspace --all-targets
             test_args: --workspace
-          - name: zk
-            clippy_args: -p jolt-atlas-core --all-targets --features zk
-            test_args: -p jolt-atlas-core --features zk
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -51,6 +48,16 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Run tests
         run: cargo nextest run ${{ matrix.variant.test_args }}
+
+  zoo-gates:
+    name: Model zoo import gates & goldens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@nextest
+      - name: Decode / analyze / import gates + golden output hashes
+        run: cargo nextest run -p atlas-onnx-import --run-ignored ignored-only
 
   test-gpt2:
     name: GPT-2 Prove & Verify
@@ -69,6 +76,8 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Run GPT-2 test
         run: cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_gpt2_dory)'
+      - name: GPT-2 golden output hash
+        run: cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'test(golden_zoo_big)'
 
   test-bge:
     name: BGE Prove & Verify
@@ -87,16 +96,6 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Run BGE test
         run: cargo nextest run --workspace --run-ignored ignored-only -E 'test(test_bge_small_en_v1_5)'
+      - name: BGE golden output hash
+        run: cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'test(golden_zoo_big)'
 
-  build-wasm-atlas-onnx-tracer:
-    name: Build Wasm - atlas-onnx-tracer
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-Adead_code -Aunused_imports -Aunused_variables -Aunused_mut"
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install wasm32 target
-        run: rustup target add wasm32-unknown-unknown
-      - name: Build Wasm
-        run: cargo build -p atlas-onnx-tracer --release --target wasm32-unknown-unknown

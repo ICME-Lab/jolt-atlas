@@ -1,13 +1,13 @@
+use crate::node_view::ComputationNode;
+#[cfg(feature = "zk")]
+use crate::node_view::ModelView;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_fused_rescale_proof_api,
     onnx_proof::{fused_rebase, ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Square,
-};
+use atlas_trace::{op::Square, trace::LayerData, Trace};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
@@ -142,11 +142,11 @@ impl<F: JoltField> SquareProver<F> {
         let LayerData {
             operands,
             output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for Square operation")
         };
-        let operand = MultilinearPolynomial::from(operand.padded_next_power_of_two());
+        let operand = MultilinearPolynomial::from(operand.padded_pow2());
         Self {
             params,
             eq_r_node_output,
@@ -258,10 +258,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SquareVerif
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn square_model(T: usize) -> Model {
@@ -300,7 +299,7 @@ mod tests {
         let i = b.input(vec![t]);
         let res = b.square(i);
         b.mark_output(res);
-        let input = Tensor::new(Some(&vec![big; t]), &[t]).unwrap();
+        let input = Tensor::from_slice(&vec![big; t], &[t]).unwrap();
         unit_test_op(b.build(), &[input]);
     }
 
@@ -314,7 +313,7 @@ mod tests {
     fn test_square_blindfold_constraint_consistency() {
         use super::*;
         use ark_bn254::Fr;
-        use atlas_onnx_tracer::ops::Operator;
+        use atlas_trace::Op;
         use joltworks::{
             field::challenge::mont_ark_u128::MontU128Challenge,
             poly::opening_proof::{OpeningId, VerifierOpeningAccumulator},
@@ -329,7 +328,7 @@ mod tests {
         // Simulate a computation node: node 1 (Square) takes input from node 0.
         // Scale 0 keeps it a raw square so `input_claim` is the plain output
         // opening (the BlindFold constraint asserted here).
-        let node = ComputationNode::new(1, Operator::Square(Square { scale: 0 }), vec![0], vec![4]);
+        let node = ComputationNode::new(1, Op::Square(Square { rebase: false }), vec![0], vec![4]);
 
         // Set up the verifier accumulator with known opening values
         let mut accumulator = VerifierOpeningAccumulator::<F>::new();
@@ -440,7 +439,7 @@ mod tests {
         let input = Tensor::<i32>::random_small(&mut rng, &[size]);
         let model = square_model(size);
         let pp = AtlasSharedPreprocessing::preprocess(model);
-        let trace = pp.model().trace(&[input]);
+        let trace = pp.model().trace(&[input]).expect("model execution failed");
 
         // 2. Create prover state
         let mut prover = Prover::<F, T>::new(pp.clone(), trace);
@@ -449,8 +448,7 @@ mod tests {
         ONNXProof::<F, T, joltworks::poly::commitment::hyperkzg::HyperKZG<ark_bn254::Bn254>>::output_claim(&mut prover);
 
         // 4. Eval reduction for the Square node
-        let nodes = pp.model().nodes();
-        let (_, square_node) = nodes.iter().next_back().unwrap();
+        let square_node = &pp.model().view(pp.model().num_nodes() - 1);
         NodeEvalReduction::prove(&mut prover, square_node);
 
         // 4b. The Square node fuses the rescale, so its arithmetic sumcheck's

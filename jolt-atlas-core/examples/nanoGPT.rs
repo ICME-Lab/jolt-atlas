@@ -6,7 +6,7 @@
 /// # Terminal output with timing
 /// cargo run --example nanoGPT -- --trace-terminal
 /// ```
-use atlas_onnx_tracer::{model::Model, tensor::Tensor};
+use atlas_trace::Tensor;
 use common::utils::logging::setup_tracing;
 use jolt_atlas_core::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
@@ -16,13 +16,16 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn main() {
     let (_guard, _tracing_enabled) = setup_tracing("nanoGPT");
-    let working_dir = "atlas-onnx-tracer/models/nanoGPT/";
+    let working_dir = "models/nanoGPT/";
     let mut rng = StdRng::seed_from_u64(0x1096);
     let input_data: Vec<i32> = (0..64)
         .map(|_| (1 << 5) + rng.gen_range(-20..=20))
         .collect();
-    let input = Tensor::new(Some(&input_data), &[1, 64]).unwrap();
-    let model = Model::load(&format!("{working_dir}network.onnx"), &Default::default());
+    let input = Tensor::from_slice(&input_data, &[1, 64]).unwrap();
+    let model = jolt_atlas_core::loader::load_model(
+        &format!("{working_dir}network.onnx"),
+        &Default::default(),
+    );
 
     tracing::info!("Loaded model and generated input data");
     let pp = AtlasSharedPreprocessing::preprocess(model);

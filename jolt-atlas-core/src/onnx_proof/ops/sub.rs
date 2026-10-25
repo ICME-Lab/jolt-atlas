@@ -1,3 +1,5 @@
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         clamp_lookups::{
@@ -9,11 +11,7 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Sub,
-};
+use atlas_trace::{op::Sub, trace::LayerData, Trace};
 use common::{CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -24,7 +22,7 @@ use joltworks::{
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+            BindingOrder, EvaluateMle, MultilinearPolynomial, PolynomialBinding,
         },
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
@@ -75,14 +73,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
 
         // Operand tie: open `left(r)`, `right(r)`. The verifier ties them to
         // `acc` (non-scalar) or recomputes `SatClamp(left - right)` (scalar).
-        let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+        let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
         let [left, right] = operands[..] else {
             panic!("Expected two operands for Sub operation")
         };
-        let left_claim =
-            MultilinearPolynomial::from(left.padded_next_power_of_two()).evaluate(&opening_point.r);
-        let right_claim = MultilinearPolynomial::from(right.padded_next_power_of_two())
-            .evaluate(&opening_point.r);
+        let left_claim = left.evaluate_mle(&opening_point.r);
+        let right_claim = right.evaluate_mle(&opening_point.r);
         let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
             .into_provider(&mut prover.transcript, opening_point);
         provider.append_nodeio(Target::Input(0), left_claim);
@@ -244,12 +240,12 @@ impl<F: JoltField> SubProver<F> {
         let LayerData {
             operands,
             output: _,
-        } = Trace::layer_data(trace, &params.computation_node);
+        } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Sub operation")
         };
-        let left_operand = MultilinearPolynomial::from(left_operand.padded_next_power_of_two());
-        let right_operand = MultilinearPolynomial::from(right_operand.padded_next_power_of_two());
+        let left_operand = MultilinearPolynomial::from(left_operand.padded_pow2());
+        let right_operand = MultilinearPolynomial::from(right_operand.padded_pow2());
         Self {
             params,
             eq_r_node_output,
@@ -365,10 +361,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SubVerifier
 #[cfg(test)]
 mod tests {
     use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::test_builder::ModelBuilder;
+    use atlas_trace::Model;
+    use atlas_trace::Tensor;
     use rand::{rngs::StdRng, SeedableRng};
 
     fn sub_model(rng: &mut StdRng, T: usize) -> Model {
@@ -409,10 +404,10 @@ mod tests {
         let const_data: Vec<i32> = (0..t)
             .map(|i| if i % 2 == 0 { -1000 } else { 1000 })
             .collect();
-        let input = Tensor::<i32>::new(Some(&input_data), &[t]).unwrap();
+        let input = Tensor::<i32>::from_slice(&input_data, &[t]).unwrap();
         let mut b = ModelBuilder::new();
         let i = b.input(vec![t]);
-        let c = b.constant(Tensor::<i32>::new(Some(&const_data), &[t]).unwrap());
+        let c = b.constant(Tensor::<i32>::from_slice(&const_data, &[t]).unwrap());
         let res = b.sub(i, c);
         b.mark_output(res);
         unit_test_op(b.build(), &[input]);
@@ -424,10 +419,10 @@ mod tests {
     #[test]
     fn test_sub_scalar_saturates() {
         for (a, c_val) in [(i32::MAX, i32::MIN), (i32::MIN, i32::MAX), (10, 3)] {
-            let input = Tensor::<i32>::new(Some(&[a]), &[1]).unwrap();
+            let input = Tensor::<i32>::from_slice(&[a], &[1]).unwrap();
             let mut bld = ModelBuilder::new();
             let i = bld.input(vec![1]);
-            let c = bld.constant(Tensor::<i32>::new(Some(&[c_val]), &[1]).unwrap());
+            let c = bld.constant(Tensor::<i32>::from_slice(&[c_val], &[1]).unwrap());
             let res = bld.sub(i, c);
             bld.mark_output(res);
             unit_test_op(bld.build(), &[input]);
@@ -439,10 +434,10 @@ mod tests {
     #[test]
     fn test_sub_small_tensors() {
         for t in [1usize, 2, 4, 8] {
-            let input = Tensor::<i32>::new(Some(&vec![7; t]), &[t]).unwrap();
+            let input = Tensor::<i32>::from_slice(&vec![7; t], &[t]).unwrap();
             let mut b = ModelBuilder::new();
             let i = b.input(vec![t]);
-            let c = b.constant(Tensor::<i32>::new(Some(&vec![2; t]), &[t]).unwrap());
+            let c = b.constant(Tensor::<i32>::from_slice(&vec![2; t], &[t]).unwrap());
             let res = b.sub(i, c);
             b.mark_output(res);
             unit_test_op(b.build(), &[input]);

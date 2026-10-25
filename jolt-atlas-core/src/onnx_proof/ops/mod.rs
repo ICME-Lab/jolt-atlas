@@ -1,4 +1,4 @@
-//! # Neural Network Operator Proofs Module
+//! # Neural Network Op Proofs Module
 //!
 //! This module contains proving and verification logic for all supported ONNX operations
 //! in the zero-knowledge proof system. Each operator module implements the [`OperatorProofTrait`]
@@ -8,7 +8,7 @@
 //! - **Verification**: Verify sumcheck proofs from the prover
 //! - **Committed Polynomials**: Specify which polynomials need to be committed
 //!
-//! ## Operator Categories
+//! ## Op Categories
 //!
 //! **Arithmetic Operations**: [`add`], [`sub`], [`mul`], [`div`], [`square`], [`cube`], [`scalar_const_div`]
 //!
@@ -59,7 +59,7 @@ pub mod div;
 pub mod einsum;
 /// Erf activation function.
 pub mod erf;
-/// Operator-scoped evaluation reduction helpers.
+/// Op-scoped evaluation reduction helpers.
 pub mod eval_reduction;
 /// Gather elements from input tensor using indices.
 pub mod gather;
@@ -110,7 +110,9 @@ pub mod tanh;
 #[cfg(test)]
 mod test;
 
-use atlas_onnx_tracer::{node::ComputationNode, ops::Operator};
+use atlas_trace::Op;
+
+use crate::node_view::ComputationNode;
 // Re-export handler types for convenient access
 
 // Re-export operator param/prover/verifier types for the handler macro
@@ -166,7 +168,7 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
     /// proof, but some (like ReLU) return multiple proofs.
     fn prove(&self, _node: &ComputationNode, _prover: &mut Prover<F, T>) -> ExecutionProofs<F, T> {
         panic!(
-            "Operator selected default reduction flow but did not implement prove; either implement prove or switch reduction_flow to Custom and implement prove_with_reduction"
+            "Op selected default reduction flow but did not implement prove; either implement prove or switch reduction_flow to Custom and implement prove_with_reduction"
         )
     }
 
@@ -180,7 +182,7 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
         _node: &ComputationNode,
         _prover: &mut Prover<F, T>,
     ) -> (EvalReductionProof<F>, ExecutionProofs<F, T>) {
-        panic!("Operator selected custom reduction flow but did not implement prove_with_reduction")
+        panic!("Op selected custom reduction flow but did not implement prove_with_reduction")
     }
 
     /// Verify the operation for the given computation node.
@@ -190,7 +192,7 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
         _verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         panic!(
-            "Operator selected default reduction flow but did not implement verify; either implement verify or switch reduction_flow to Custom and implement verify_with_reduction"
+            "Op selected default reduction flow but did not implement verify; either implement verify or switch reduction_flow to Custom and implement verify_with_reduction"
         )
     }
 
@@ -205,9 +207,7 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
         _verifier: &mut Verifier<'_, F, T>,
         _eval_reduction_proof: &EvalReductionProof<F>,
     ) -> Result<(), ProofVerifyError> {
-        panic!(
-            "Operator selected custom reduction flow but did not implement verify_with_reduction"
-        )
+        panic!("Op selected custom reduction flow but did not implement verify_with_reduction")
     }
 
     /// Get the committed polynomials involved in this operator's proof.
@@ -216,46 +216,46 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
     }
 }
 
-/// Dispatches on all provable `Operator` variants, binding the inner value
-/// to `$inner` and evaluating `$body`. Every `Operator` is currently handled, so
+/// Dispatches on all provable `Op` variants, binding the inner value
+/// to `$inner` and evaluating `$body`. Every `Op` is currently handled, so
 /// `$fallback` is retained only as a defensive arm for any future variant.
 macro_rules! dispatch_operator {
     ($node:expr, |$inner:ident| $body:expr, _ => $fallback:expr) => {
         #[allow(unreachable_patterns)]
         match &$node.operator {
-            Operator::And($inner) => $body,
-            Operator::Add($inner) => $body,
-            Operator::Broadcast($inner) => $body,
-            Operator::Constant($inner) => $body,
-            Operator::Cos($inner) => $body,
-            Operator::Cube($inner) => $body,
-            Operator::Clamp($inner) => $body,
-            Operator::Concat($inner) => $body,
-            Operator::Div($inner) => $body,
-            Operator::Erf($inner) => $body,
-            Operator::Einsum($inner) => $body,
-            Operator::GatherSmall($inner) => $body,
-            Operator::GatherLarge($inner) => $body,
-            Operator::Identity($inner) => $body,
-            Operator::Iff($inner) => $body,
-            Operator::Input($inner) => $body,
-            Operator::IsNan($inner) => $body,
-            Operator::MeanOfSquares($inner) => $body,
-            Operator::MoveAxis($inner) => $body,
-            Operator::Mul($inner) => $body,
-            Operator::Neg($inner) => $body,
-            Operator::ReLU($inner) => $body,
-            Operator::Reshape($inner) => $body,
-            Operator::Rsqrt($inner) => $body,
-            Operator::ScalarConstDiv($inner) => $body,
-            Operator::Sigmoid($inner) => $body,
-            Operator::Sin($inner) => $body,
-            Operator::Slice($inner) => $body,
-            Operator::SoftmaxLastAxis($inner) => $body,
-            Operator::Square($inner) => $body,
-            Operator::Sub($inner) => $body,
-            Operator::Sum($inner) => $body,
-            Operator::Tanh($inner) => $body,
+            Op::And($inner) => $body,
+            Op::Add($inner) => $body,
+            Op::Broadcast($inner) => $body,
+            Op::Constant($inner) => $body,
+            Op::Cos($inner) => $body,
+            Op::Cube($inner) => $body,
+            Op::Clamp($inner) => $body,
+            Op::Concat($inner) => $body,
+            Op::Div($inner) => $body,
+            Op::Erf($inner) => $body,
+            Op::Einsum($inner) => $body,
+            Op::GatherSmall($inner) => $body,
+            Op::GatherLarge($inner) => $body,
+            Op::Identity($inner) => $body,
+            Op::Iff($inner) => $body,
+            Op::Input($inner) => $body,
+            Op::IsNan($inner) => $body,
+            Op::MeanOfSquares($inner) => $body,
+            Op::MoveAxis($inner) => $body,
+            Op::Mul($inner) => $body,
+            Op::Neg($inner) => $body,
+            Op::ReLU($inner) => $body,
+            Op::Reshape($inner) => $body,
+            Op::Rsqrt($inner) => $body,
+            Op::ScalarConstDiv($inner) => $body,
+            Op::Sigmoid($inner) => $body,
+            Op::Sin($inner) => $body,
+            Op::Slice($inner) => $body,
+            Op::SoftmaxLastAxis($inner) => $body,
+            Op::Square($inner) => $body,
+            Op::Sub($inner) => $body,
+            Op::Sum($inner) => $body,
+            Op::Tanh($inner) => $body,
             _ => $fallback, // TODO: comment out once MeanOfSquares is implemented
         }
     };
@@ -327,15 +327,15 @@ impl OperatorProver {
         )
     }
 
-    fn prove_and_reduce_node<F, T, Op>(
-        operator: &Op,
+    fn prove_and_reduce_node<F, T, O>(
+        operator: &O,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> (EvalReductionProof<F>, ExecutionProofs<F, T>)
     where
         F: JoltField,
         T: Transcript,
-        Op: OperatorProofTrait<F, T>,
+        O: OperatorProofTrait<F, T>,
     {
         match operator.reduction_flow() {
             ReductionFlow::Default => {
@@ -392,8 +392,8 @@ impl OperatorVerifier {
         )
     }
 
-    fn verify_and_reduce_node<F, T, Op>(
-        operator: &Op,
+    fn verify_and_reduce_node<F, T, O>(
+        operator: &O,
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
         eval_reduction_proof: &EvalReductionProof<F>,
@@ -401,7 +401,7 @@ impl OperatorVerifier {
     where
         F: JoltField,
         T: Transcript,
-        Op: OperatorProofTrait<F, T>,
+        O: OperatorProofTrait<F, T>,
     {
         match operator.reduction_flow() {
             ReductionFlow::Default => {
@@ -582,7 +582,7 @@ macro_rules! impl_fused_rescale_proof_api {
                     ops::{$params_ty, $prover_ty},
                 };
 
-                let fused = fused_rebase::fuses_rebase(&node.operator);
+                let fused = fused_rebase::fuses_rebase(node);
                 let mut proofs = Vec::new();
                 let remainder = if fused {
                     let (pre_proofs, remainder) = fused_rebase::prove_pre(node, prover);
@@ -620,7 +620,7 @@ macro_rules! impl_fused_rescale_proof_api {
                 use joltworks::subprotocols::sumcheck::Sumcheck;
                 use $crate::onnx_proof::{fused_rebase, ops::$verifier_ty};
 
-                let fused = fused_rebase::fuses_rebase(&node.operator);
+                let fused = fused_rebase::fuses_rebase(node);
                 if fused {
                     fused_rebase::verify_pre(node, verifier)?;
                 }

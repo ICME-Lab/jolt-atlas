@@ -1,20 +1,17 @@
 use crate::{
+    node_view::ComputationNode,
     onnx_proof::{
         ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
         range_checking::{
             range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
             RangeCheckProvider,
         },
+        trace_view::TraceView,
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    ops::Div,
-    tensor::Tensor,
-};
+use atlas_trace::{op::Div, trace::LayerData, Tensor, Trace};
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -275,7 +272,7 @@ impl<F: JoltField> DivProver<F> {
     pub fn initialize(trace: &Trace, params: DivParams<F>) -> Self {
         let eq_r_node_output =
             GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
-        let LayerData { operands, output } = Trace::layer_data(trace, &params.computation_node);
+        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Div operation")
         };
@@ -530,11 +527,8 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
 
 #[cfg(test)]
 mod tests {
-    use crate::onnx_proof::ops::test::unit_test_op;
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, Model},
-        tensor::Tensor,
-    };
+    use crate::{onnx_proof::ops::test::unit_test_op, test_builder::ModelBuilder};
+    use atlas_trace::{Model, Tensor};
     use rand::{rngs::StdRng, SeedableRng};
 
     const SCALE: i32 = 8;
@@ -572,7 +566,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0x888);
         let model = recip_model(T);
         let mut input = Tensor::<i32>::random_range(&mut rng, &[T], 1..SCALE * SCALE);
-        input.iter_mut().for_each(|v| {
+        input.data_mut().iter_mut().for_each(|v| {
             if *v == 0 {
                 *v = 1
             }
@@ -586,7 +580,7 @@ mod tests {
         let t = 1000;
         let mut rng = StdRng::seed_from_u64(0x889);
         let mut input = Tensor::<i32>::random_range(&mut rng, &[t], 1..SCALE * SCALE);
-        input.iter_mut().for_each(|v| {
+        input.data_mut().iter_mut().for_each(|v| {
             if *v == 0 {
                 *v = 1
             }

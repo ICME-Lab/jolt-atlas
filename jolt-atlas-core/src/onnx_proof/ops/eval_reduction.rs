@@ -1,8 +1,8 @@
+use atlas_trace::trace::LayerData;
+
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{Prover, Verifier};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-};
 use joltworks::{
     field::JoltField,
     poly::multilinear_polynomial::MultilinearPolynomial,
@@ -40,8 +40,8 @@ impl NodeEvalReduction {
             let LayerData {
                 operands: _,
                 output,
-            } = Trace::layer_data(&prover.trace, computation_node);
-            let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+            } = TraceView::layer_data(&prover.trace, computation_node);
+            let output_mle = MultilinearPolynomial::from(output.padded_pow2());
             EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
                 .expect("Proving evaluation reduction should not fail")
         };
@@ -81,13 +81,15 @@ impl NodeEvalReduction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_view::ModelView;
     use crate::onnx_proof::{AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, ProofId};
+    use crate::test_builder::ModelBuilder;
     use ark_bn254::{Bn254, Fr};
-    use atlas_onnx_tracer::{
-        model::{test::ModelBuilder, trace::Trace, Model},
-        ops::{Add, Operator},
-        tensor::Tensor,
-    };
+    use atlas_trace::op::Add;
+    use atlas_trace::trace::ModelExecutionIO;
+    use atlas_trace::Model;
+    use atlas_trace::Op;
+    use atlas_trace::Tensor;
     use common::VirtualPoly;
     use joltworks::{
         poly::{
@@ -117,19 +119,26 @@ mod tests {
     fn eval_reduction_adds_reduced_evaluations() {
         let n = 1 << 3; // 8 points, i.e. 3 variables
         let output: Tensor<i32> = Tensor::construct((0..n).map(|n| n as i32).collect(), vec![n]);
-        let model = Model::default();
+        let model = {
+            let mut b = ModelBuilder::new();
+            let x = b.input(vec![n]);
+            b.mark_output(x);
+            b.build()
+        };
         let producer_idx = 0;
         let consumer1 = 1;
         let consumer2 = 2;
 
         let preprocessing = AtlasSharedPreprocessing::preprocess(model);
-        let mut trace = preprocessing.model().trace(&[]);
-        trace.node_outputs.insert(0, output.clone());
+        let trace = preprocessing
+            .model()
+            .trace(std::slice::from_ref(&output))
+            .expect("model execution failed");
         let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
 
-        let producer_node = ComputationNode::new(0, Operator::Add(Add), vec![], vec![n]);
+        let producer_node = ComputationNode::new(0, Op::Add(Add), vec![], vec![n]);
 
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
 
         let point1 = prover.transcript.challenge_vector_optimized::<Fr>(num_vars);
@@ -174,18 +183,25 @@ mod tests {
     fn eval_reduction_single_opening_is_propagated() {
         let n = 1 << 3; // 8 points, i.e. 3 variables
         let output: Tensor<i32> = Tensor::construct((0..n).map(|n| n as i32).collect(), vec![n]);
-        let model = Model::default();
+        let model = {
+            let mut b = ModelBuilder::new();
+            let x = b.input(vec![n]);
+            b.mark_output(x);
+            b.build()
+        };
         let producer_idx = 0;
         let consumer = 1;
 
         let preprocessing = AtlasSharedPreprocessing::preprocess(model);
-        let mut trace = preprocessing.model().trace(&[]);
-        trace.node_outputs.insert(producer_idx, output.clone());
+        let trace = preprocessing
+            .model()
+            .trace(std::slice::from_ref(&output))
+            .expect("model execution failed");
         let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
 
-        let producer_node = ComputationNode::new(producer_idx, Operator::Add(Add), vec![], vec![n]);
+        let producer_node = ComputationNode::new(producer_idx, Op::Add(Add), vec![], vec![n]);
 
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
 
         let point = prover.transcript.challenge_vector_optimized::<Fr>(num_vars);
@@ -221,20 +237,29 @@ mod tests {
     fn eval_reduction_verifier_single_opening_is_propagated() {
         let n = 1 << 3; // 8 points, i.e. 3 variables
         let output: Tensor<i32> = Tensor::construct((0..n).map(|i| i as i32).collect(), vec![n]);
-        let model = Model::default();
+        let model = {
+            let mut b = ModelBuilder::new();
+            let x = b.input(vec![n]);
+            b.mark_output(x);
+            b.build()
+        };
         let producer_idx = 0;
         let consumer = 1;
 
         let preprocessing = AtlasSharedPreprocessing::preprocess(model);
-        let trace = preprocessing.model().trace(&[]);
-        let io = Trace::io(&trace, preprocessing.model());
+        let io = ModelExecutionIO {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            input_indices: Vec::new(),
+            output_indices: Vec::new(),
+        };
 
         let proofs = BTreeMap::new();
         let mut verifier = Verifier::<Fr, Blake2bTranscript>::new(&preprocessing, &proofs, &io);
 
-        let producer_node = ComputationNode::new(producer_idx, Operator::Add(Add), vec![], vec![n]);
+        let producer_node = ComputationNode::new(producer_idx, Op::Add(Add), vec![], vec![n]);
 
-        let output_mle = MultilinearPolynomial::from(output.padded_next_power_of_two());
+        let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
 
         let point = verifier
@@ -280,7 +305,10 @@ mod tests {
         let model = one_sub_model(&mut rng, t);
 
         let preprocessing = AtlasSharedPreprocessing::preprocess(model);
-        let trace = preprocessing.model().trace(&[input]);
+        let trace = preprocessing
+            .model()
+            .trace(&[input])
+            .expect("model execution failed");
         let mut prover = Prover::<Fr, Blake2bTranscript>::new(preprocessing, trace);
 
         let mut proofs: BTreeMap<ProofId, SumcheckInstanceProof<Fr, Blake2bTranscript>> =
@@ -289,12 +317,12 @@ mod tests {
 
         ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::output_claim(&mut prover);
 
-        let output_idx = prover.preprocessing.model().outputs()[0];
+        let output_idx = prover.preprocessing.model().output_indices()[0];
         assert_eq!(prover.accumulator.get_node_openings(output_idx).len(), 1);
-        let computation_nodes = prover.preprocessing.model().nodes().clone();
+        let model = prover.preprocessing.model().clone();
 
         ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::iop(
-            &computation_nodes,
+            &model,
             &mut prover,
             &mut proofs,
             &mut eval_reduction_proofs,
@@ -311,8 +339,11 @@ mod tests {
         let model = one_sub_model(&mut rng, t);
 
         let shared = AtlasSharedPreprocessing::preprocess(model);
-        let trace = shared.model().trace(&[input]);
-        let io = Trace::io(&trace, shared.model());
+        let trace = shared
+            .model()
+            .trace(&[input])
+            .expect("model execution failed");
+        let io = trace.io(shared.model());
 
         // Build just enough prover state for (opening_claims, proofs, eval_reduction_proofs)
         // using output_claim + iop (no commitments, no reduced opening proof stage).
@@ -322,7 +353,7 @@ mod tests {
 
         ONNXProof::<_, _, HyperKZG<Bn254>>::output_claim(&mut prover);
         ONNXProof::<_, _, HyperKZG<Bn254>>::iop(
-            shared.model().nodes(),
+            shared.model(),
             &mut prover,
             &mut proofs,
             &mut eval_reduction_proofs,
@@ -345,7 +376,7 @@ mod tests {
             .verify_iop(shared.model(), &mut verifier)
             .expect("verify_iop should succeed in isolation after output-claim initialization");
 
-        let output_idx = shared.model().outputs()[0];
+        let output_idx = shared.model().output_indices()[0];
         assert!(verifier
             .accumulator
             .reduced_evaluations

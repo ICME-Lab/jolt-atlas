@@ -5,13 +5,12 @@
 //! Once `q` and `r` each have an evaluation claim at the same point, deriving `a`'s claim is
 //! pure field arithmetic — no sumcheck is needed to enforce the identity.
 
+use atlas_trace::{trace::LayerData, Tensor};
+
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{Prover, Verifier};
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
-use atlas_onnx_tracer::{
-    model::trace::{LayerData, Trace},
-    node::ComputationNode,
-    tensor::Tensor,
-};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
@@ -52,7 +51,7 @@ pub fn cache_teleport_quotient_prove<F: JoltField, T: Transcript>(
     prover: &mut Prover<F, T>,
     tau: i32,
 ) {
-    let LayerData { operands, .. } = Trace::layer_data(&prover.trace, node);
+    let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
     let (quotient, _remainder) = compute_division(operands[0], tau);
 
     let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);

@@ -310,14 +310,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::loader::RunArgs;
     use crate::onnx_proof::{
         AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     };
     use ark_bn254::{Bn254, Fr};
-    use atlas_onnx_tracer::{
-        model::{Model, RunArgs},
-        tensor::Tensor,
-    };
+    use atlas_trace::Tensor;
     use joltworks::{poly::commitment::hyperkzg::HyperKZG, transcripts::Blake2bTranscript};
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
@@ -326,8 +324,9 @@ mod tests {
     #[test]
     fn test_proof_serialization_roundtrip_transformer() {
         // --- Setup ---
-        let working_dir = "../atlas-onnx-tracer/models/transformer/";
-        let model = Model::load(&format!("{working_dir}network.onnx"), &RunArgs::default());
+        let working_dir = "../models/transformer/";
+        let model =
+            crate::loader::load_model(&format!("{working_dir}network.onnx"), &RunArgs::default());
 
         let pp = AtlasSharedPreprocessing::preprocess(model);
         let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(pp);
@@ -337,7 +336,7 @@ mod tests {
         let input_data: Vec<i32> = (0..64 * 64)
             .map(|_| (1 << 7) + rng.gen_range(-50..=50))
             .collect();
-        let input = Tensor::new(Some(&input_data), &[1, 64, 64]).unwrap();
+        let input = Tensor::from_slice(&input_data, &[1, 64, 64]).unwrap();
 
         // --- Prove ---
         let (proof, io, _debug_info) = TestProof::prove(&prover_pp, &[input]);

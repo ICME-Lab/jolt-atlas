@@ -5,19 +5,29 @@
 //! round that binds it, so the round polynomial cannot be recovered from the running claim by
 //! division and the member evaluates its inner polynomial at that endpoint directly. Random
 //! challenges land there with probability about 2⁻¹²⁵ per coordinate, so no end-to-end test
-//! reaches it.
+//! reaches it. [`gruen_endpoint_closures_agree_with_division`] checks every member's endpoint
+//! closure on the probe models and the op gauntlet instead, against the division it replaces.
 
+use ark_bn254::Bn254;
 use atlas_trace::{Model, Tensor};
 use jolt_field::{Fr, Ring};
 use jolt_sumcheck::ProveRounds;
 use joltworks::{
     field::JoltField,
-    poly::{eq_poly::EqPolynomial, opening_proof::OpeningPoint},
+    poly::{
+        commitment::hyperkzg::HyperKZG, eq_poly::EqPolynomial, opening_proof::OpeningPoint,
+        split_eq_poly::CHECK_GRUEN_ENDPOINTS,
+    },
 };
 use num_traits::{One, Zero};
 use rand::{rngs::StdRng, SeedableRng};
 
-use super::ModelBuilder;
+use super::{
+    harness::prove_verify_roundtrip,
+    models::probe_models,
+    zoo::{op_gauntlet_inputs, zoo},
+    ModelBuilder,
+};
 use crate::{
     node_view::ModelView,
     onnx_proof::ops::{
@@ -152,4 +162,16 @@ fn cube_rounds_where_eq_vanishes() {
         &mut prover,
         &[&f.operands[0], &f.operands[0], &f.operands[0]],
     );
+}
+
+#[test]
+fn gruen_endpoint_closures_agree_with_division() {
+    // nextest runs each test in its own process, so the flag reaches no other test.
+    CHECK_GRUEN_ENDPOINTS.store(true, std::sync::atomic::Ordering::Relaxed);
+    for probe in probe_models() {
+        prove_verify_roundtrip::<HyperKZG<Bn254>>(probe.model, &probe.inputs, Default::default());
+    }
+    let gauntlet = zoo("op_gauntlet", 16);
+    let inputs = op_gauntlet_inputs(&gauntlet);
+    prove_verify_roundtrip::<HyperKZG<Bn254>>(gauntlet.model, &inputs, Default::default());
 }

@@ -13,6 +13,8 @@ use crate::{
 };
 use atlas_trace::{op::Div, trace::LayerData, Tensor, Trace};
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
@@ -23,8 +25,7 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         evaluation_reduction::EvalReductionProof,
@@ -32,6 +33,7 @@ use joltworks::{
         sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
@@ -224,8 +226,10 @@ impl<F: JoltField> DivProver<F> {
     /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: DivParams<F>) -> Self {
-        let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
+        let eq_r_node_output = GruenSplitEqPolynomial::new(
+            &params.r_node_output.r,
+            jolt_poly::BindingOrder::LowToHigh,
+        );
         let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for Div operation")
@@ -277,38 +281,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         &self.params
     }
 
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self {
-            eq_r_node_output,
-            left_operand,
-            right_operand,
-            q,
-            R,
-            ..
-        } = self;
-        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<2>(&|g| {
-            let lo0 = left_operand.get_bound_coeff(2 * g);
-            let ro0 = right_operand.get_bound_coeff(2 * g);
-            let ro1 = right_operand.get_bound_coeff(2 * g + 1);
-            let q0 = q.get_bound_coeff(2 * g);
-            let q1 = q.get_bound_coeff(2 * g + 1);
-            let R0 = R.get_bound_coeff(2 * g);
-            let c0 = (ro0 * q0) + R0 - lo0;
-
-            let e = (ro1 - ro0) * (q1 - q0);
-            [c0, e]
-        });
-        eq_r_node_output.gruen_poly_deg_3(q_constant, q_quadratic, previous_claim)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.eq_r_node_output.bind(r_j);
-        self.left_operand
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.right_operand
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.q.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.R.bind_parallel(r_j, BindingOrder::LowToHigh);
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -328,6 +302,68 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> 
         provider.append_nodeio(Target::Current, self.q.final_claim());
 
         provider.append_advice(VirtualPoly::DivRemainder, self.R.final_claim());
+    }
+}
+
+impl<F: JoltField> DivProver<F> {
+    fn bind(&mut self, r: F) {
+        let r_j = F::challenge_from_field(r);
+        self.eq_r_node_output.bind(r);
+        self.left_operand
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.right_operand
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.q.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.R.bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for DivProver<F> {
+    fn num_rounds(&self) -> usize {
+        self.params.num_rounds()
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r);
+        }
+        let Self {
+            eq_r_node_output,
+            left_operand,
+            right_operand,
+            q,
+            R,
+            ..
+        } = self;
+        eq_r_node_output
+            .gruen_round_deg_3(
+                &|g| {
+                    let lo0 = left_operand.get_bound_coeff(2 * g);
+                    let ro0 = right_operand.get_bound_coeff(2 * g);
+                    let ro1 = right_operand.get_bound_coeff(2 * g + 1);
+                    let q0 = q.get_bound_coeff(2 * g);
+                    let q1 = q.get_bound_coeff(2 * g + 1);
+                    let R0 = R.get_bound_coeff(2 * g);
+                    [(ro0 * q0) + R0 - lo0, (ro1 - ro0) * (q1 - q0)]
+                },
+                &|g| {
+                    right_operand.get_bound_coeff(2 * g + 1) * q.get_bound_coeff(2 * g + 1)
+                        + R.get_bound_coeff(2 * g + 1)
+                        - left_operand.get_bound_coeff(2 * g + 1)
+                },
+                previous_claim,
+            )
+            .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind);
+        Ok(())
     }
 }
 

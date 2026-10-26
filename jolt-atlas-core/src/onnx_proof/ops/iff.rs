@@ -5,6 +5,8 @@ use crate::{
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_trace::{op::Iff, trace::LayerData, Trace};
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -14,13 +16,13 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
@@ -94,8 +96,10 @@ impl<F: JoltField> IffProver<F> {
     /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all, name = "IffProver::initialize")]
     pub fn initialize(trace: &Trace, params: IffParams<F>) -> Self {
-        let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
+        let eq_r_node_output = GruenSplitEqPolynomial::new(
+            &params.r_node_output.r,
+            jolt_poly::BindingOrder::LowToHigh,
+        );
         let LayerData {
             operands,
             output: _output,
@@ -142,41 +146,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IffProver<F> 
         &self.params
     }
 
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self {
-            eq_r_node_output,
-            mask_operand,
-            a_operand,
-            b_operand,
-            ..
-        } = self;
-        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<2>(&|g| {
-            let mask0 = mask_operand.get_bound_coeff(2 * g);
-            let mask1 = mask_operand.get_bound_coeff(2 * g + 1);
-            let mask_inf = mask1 - mask0;
-
-            let a0 = a_operand.get_bound_coeff(2 * g);
-            let a1 = a_operand.get_bound_coeff(2 * g + 1);
-            let a_inf = a1 - a0;
-
-            let b0 = b_operand.get_bound_coeff(2 * g);
-            let b1 = b_operand.get_bound_coeff(2 * g + 1);
-            let b_inf = b1 - b0;
-
-            let c0 = mask0 * a0 + (F::one() - mask0) * b0;
-            let f = (F::one() - mask1) - (F::one() - mask0);
-            let e = mask_inf * a_inf + f * b_inf;
-            [c0, e]
-        });
-        eq_r_node_output.gruen_poly_deg_3(q_constant, q_quadratic, previous_claim)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.eq_r_node_output.bind(r_j);
-        self.mask_operand
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.a_operand.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.b_operand.bind_parallel(r_j, BindingOrder::LowToHigh);
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -194,6 +165,71 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for IffProver<F> 
         provider.append_nodeio(Target::Input(0), self.mask_operand.final_claim());
         provider.append_nodeio(Target::Input(1), self.a_operand.final_claim());
         provider.append_nodeio(Target::Input(2), self.b_operand.final_claim());
+    }
+}
+
+impl<F: JoltField> IffProver<F> {
+    fn bind(&mut self, r: F) {
+        let r_j = F::challenge_from_field(r);
+        self.eq_r_node_output.bind(r);
+        self.mask_operand
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.a_operand.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.b_operand.bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for IffProver<F> {
+    fn num_rounds(&self) -> usize {
+        self.params.num_rounds()
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r);
+        }
+        let Self {
+            eq_r_node_output,
+            mask_operand,
+            a_operand,
+            b_operand,
+            ..
+        } = self;
+        eq_r_node_output
+            .gruen_round_deg_3(
+                &|g| {
+                    let mask0 = mask_operand.get_bound_coeff(2 * g);
+                    let mask1 = mask_operand.get_bound_coeff(2 * g + 1);
+                    let mask_inf = mask1 - mask0;
+
+                    let a0 = a_operand.get_bound_coeff(2 * g);
+                    let a_inf = a_operand.get_bound_coeff(2 * g + 1) - a0;
+
+                    let b0 = b_operand.get_bound_coeff(2 * g);
+                    let b_inf = b_operand.get_bound_coeff(2 * g + 1) - b0;
+
+                    let c0 = mask0 * a0 + (F::one() - mask0) * b0;
+                    let f = (F::one() - mask1) - (F::one() - mask0);
+                    [c0, mask_inf * a_inf + f * b_inf]
+                },
+                &|g| {
+                    let mask1 = mask_operand.get_bound_coeff(2 * g + 1);
+                    mask1 * a_operand.get_bound_coeff(2 * g + 1)
+                        + (F::one() - mask1) * b_operand.get_bound_coeff(2 * g + 1)
+                },
+                previous_claim,
+            )
+            .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind);
+        Ok(())
     }
 }
 

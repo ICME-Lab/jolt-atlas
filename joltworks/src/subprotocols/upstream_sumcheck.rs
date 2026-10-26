@@ -119,6 +119,19 @@ pub(crate) fn expect_engine<F: JoltField, R>(res: Result<R, SumcheckError<F>>) -
     res.unwrap_or_else(|e| panic!("sumcheck prover: {e:?}"))
 }
 
+/// The engine error for a round message whose `s(0) + s(1)` is `actual` instead of
+/// `previous_claim`.
+pub fn round_check_failed<F: JoltField>(
+    round: usize,
+    previous_claim: F,
+) -> impl FnOnce(F) -> SumcheckError<F> {
+    move |actual| SumcheckError::RoundCheckFailed {
+        round,
+        expected: previous_claim,
+        actual,
+    }
+}
+
 /// One of our sumcheck instances as an upstream batch member: its own [`ProveRounds`] when it
 /// has one, otherwise its `compute_message`/`ingest_challenge`/`finalize`.
 pub struct InstanceMember<'a, F: JoltField, T: Transcript> {

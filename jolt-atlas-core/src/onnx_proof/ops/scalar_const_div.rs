@@ -6,6 +6,8 @@ use crate::{
 };
 use atlas_trace::{op::ScalarConstDiv, trace::LayerData, Op, Tensor, Trace};
 use common::CommittedPoly;
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -15,13 +17,13 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
@@ -145,8 +147,10 @@ impl<F: JoltField> ScalarConstDivProver<F> {
     /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: ScalarConstDivParams<F>) -> Self {
-        let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
+        let eq_r_node_output = GruenSplitEqPolynomial::new(
+            &params.r_node_output.r,
+            jolt_poly::BindingOrder::LowToHigh,
+        );
         let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand] = operands[..] else {
             panic!("Expected one operands for ScalarConstDiv operation")
@@ -181,27 +185,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDi
         &self.params
     }
 
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self {
-            eq_r_node_output,
-            left_operand,
-            R,
-            ..
-        } = self;
-        let [q_constant] = eq_r_node_output.par_fold_out_in_unreduced::<1>(&|g| {
-            let lo0 = left_operand.get_bound_coeff(2 * g);
-            let R0 = R.get_bound_coeff(2 * g);
-            let c0 = lo0 - R0;
-            [c0]
-        });
-        eq_r_node_output.gruen_poly_deg_2(q_constant, previous_claim)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.eq_r_node_output.bind(r_j);
-        self.left_operand
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.R.bind_parallel(r_j, BindingOrder::LowToHigh);
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -221,6 +206,51 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ScalarConstDi
             CommittedPoly::ScalarConstDivNodeRemainder,
             self.R.final_claim(),
         );
+    }
+}
+
+impl<F: JoltField> ScalarConstDivProver<F> {
+    fn bind(&mut self, r: F) {
+        let r_j = F::challenge_from_field(r);
+        self.eq_r_node_output.bind(r);
+        self.left_operand
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.R.bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for ScalarConstDivProver<F> {
+    fn num_rounds(&self) -> usize {
+        self.params.num_rounds()
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r);
+        }
+        let Self {
+            eq_r_node_output,
+            left_operand,
+            R,
+            ..
+        } = self;
+        eq_r_node_output
+            .gruen_round_deg_2(
+                &|g| left_operand.get_bound_coeff(2 * g + 1) - R.get_bound_coeff(2 * g + 1),
+                &|g| left_operand.get_bound_coeff(2 * g) - R.get_bound_coeff(2 * g),
+                previous_claim,
+            )
+            .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind);
+        Ok(())
     }
 }
 

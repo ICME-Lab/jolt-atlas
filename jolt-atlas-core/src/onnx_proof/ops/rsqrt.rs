@@ -16,6 +16,8 @@ use crate::{
 };
 use atlas_trace::{op::Rsqrt, trace::LayerData, Op, Trace};
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
@@ -26,8 +28,7 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         evaluation_reduction::EvalReductionProof,
@@ -35,6 +36,7 @@ use joltworks::{
         sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
@@ -233,8 +235,10 @@ pub struct RsqrtProver<F: JoltField> {
 impl<F: JoltField> RsqrtProver<F> {
     /// Initialize the prover with trace data, transcript, and parameters.
     pub fn initialize(trace: &Trace, params: RsqrtParams<F>) -> Self {
-        let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
+        let eq_r_node_output = GruenSplitEqPolynomial::new(
+            &params.r_node_output.r,
+            jolt_poly::BindingOrder::LowToHigh,
+        );
         let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
             panic!("Expected one operand for Rsqrt operation")
@@ -313,48 +317,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
         &self.params
     }
 
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self {
-            eq_r_node_output,
-            input,
-            quotient,
-            output,
-            div_remainder,
-            sqrt_remainder,
-            ..
-        } = self;
-        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<2>(&|g| {
-            let x0 = input.get_bound_coeff(2 * g);
-            let x1 = input.get_bound_coeff(2 * g + 1);
-            let quotient0 = quotient.get_bound_coeff(2 * g);
-            let quotient1 = quotient.get_bound_coeff(2 * g + 1);
-            let div_remainder0 = div_remainder.get_bound_coeff(2 * g);
-
-            let output0 = output.get_bound_coeff(2 * g);
-            let output1 = output.get_bound_coeff(2 * g + 1);
-            let sqrt_remainder0 = sqrt_remainder.get_bound_coeff(2 * g);
-
-            // division relation: x·quotient + div_remainder − S³
-            let div0 = x0 * quotient0 + div_remainder0 - self.s_cubed;
-            // sqrt relation: output² + sqrt_remainder − quotient
-            let sqrt0 = output0 * output0 + sqrt_remainder0 - quotient0;
-
-            let div_quad = (x1 - x0) * (quotient1 - quotient0);
-            let sqrt_quad = (output1 - output0) * (output1 - output0);
-            [div0 + self.gamma * sqrt0, div_quad + self.gamma * sqrt_quad]
-        });
-        eq_r_node_output.gruen_poly_deg_3(q_constant, q_quadratic, previous_claim)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.eq_r_node_output.bind(r_j);
-        self.input.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.quotient.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.output.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.div_remainder
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.sqrt_remainder
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -377,6 +341,88 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
             VirtualPoly::SqrtRemainder,
             self.sqrt_remainder.final_claim(),
         );
+    }
+}
+
+impl<F: JoltField> RsqrtProver<F> {
+    fn bind(&mut self, r: F) {
+        let r_j = F::challenge_from_field(r);
+        self.eq_r_node_output.bind(r);
+        self.input.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.quotient.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.output.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.div_remainder
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.sqrt_remainder
+            .bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for RsqrtProver<F> {
+    fn num_rounds(&self) -> usize {
+        self.params.num_rounds()
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r);
+        }
+        let Self {
+            eq_r_node_output,
+            input,
+            quotient,
+            output,
+            div_remainder,
+            sqrt_remainder,
+            s_cubed,
+            gamma,
+            ..
+        } = self;
+        eq_r_node_output
+            .gruen_round_deg_3(
+                &|g| {
+                    let x0 = input.get_bound_coeff(2 * g);
+                    let x1 = input.get_bound_coeff(2 * g + 1);
+                    let quotient0 = quotient.get_bound_coeff(2 * g);
+                    let quotient1 = quotient.get_bound_coeff(2 * g + 1);
+                    let div_remainder0 = div_remainder.get_bound_coeff(2 * g);
+
+                    let output0 = output.get_bound_coeff(2 * g);
+                    let output1 = output.get_bound_coeff(2 * g + 1);
+                    let sqrt_remainder0 = sqrt_remainder.get_bound_coeff(2 * g);
+
+                    // division relation: x·quotient + div_remainder − S³
+                    let div0 = x0 * quotient0 + div_remainder0 - *s_cubed;
+                    // sqrt relation: output² + sqrt_remainder − quotient
+                    let sqrt0 = output0 * output0 + sqrt_remainder0 - quotient0;
+
+                    let div_quad = (x1 - x0) * (quotient1 - quotient0);
+                    let sqrt_quad = (output1 - output0) * (output1 - output0);
+                    [div0 + *gamma * sqrt0, div_quad + *gamma * sqrt_quad]
+                },
+                &|g| {
+                    let quotient1 = quotient.get_bound_coeff(2 * g + 1);
+                    let output1 = output.get_bound_coeff(2 * g + 1);
+                    let div1 = input.get_bound_coeff(2 * g + 1) * quotient1
+                        + div_remainder.get_bound_coeff(2 * g + 1)
+                        - *s_cubed;
+                    let sqrt1 =
+                        output1 * output1 + sqrt_remainder.get_bound_coeff(2 * g + 1) - quotient1;
+                    div1 + *gamma * sqrt1
+                },
+                previous_claim,
+            )
+            .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind);
+        Ok(())
     }
 }
 

@@ -1,8 +1,9 @@
 use crate::{
     field::{BarrettReduce, FMAdd, JoltField},
     poly::{
-        multilinear_polynomial::MultilinearPolynomial, ra_poly::RaPolynomial,
-        split_eq_poly::SplitEqUnreducedFold,
+        multilinear_polynomial::MultilinearPolynomial,
+        ra_poly::RaPolynomial,
+        split_eq_poly::{check_gruen_endpoint, SplitEqUnreducedFold},
     },
     utils::accumulation::SmallAccumS,
 };
@@ -337,10 +338,12 @@ pub fn finish_mles_product_sum_from_evals<F: JoltField>(
     sum_evals: &[F],
     claim: F,
     eq_poly: &GruenSplitEqPolynomial<F>,
-    q_at_zero: impl FnOnce() -> F,
+    q_at_zero: impl Fn() -> F,
 ) -> Result<UnivariatePoly<F>, F> {
     if sum_evals.len() > 1 {
-        return eq_poly.gruen_poly_from_evals(sum_evals, claim, q_at_zero);
+        let message = eq_poly.gruen_poly_from_evals(sum_evals, claim, &q_at_zero);
+        check_gruen_endpoint(eq_poly, &message, false, q_at_zero);
+        return message;
     }
     // d = 1: the grid is [∞], so q(X) = a + bX with b = sum_evals[0], and
     // claim = l(0)·a + l(1)·(a + b) = (l(0) + l(1))·a + l(1)·b, where l(0) + l(1) is the scalar.

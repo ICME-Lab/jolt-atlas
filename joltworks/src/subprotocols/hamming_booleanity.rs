@@ -3,6 +3,8 @@ use allocative::Allocative;
 use allocative::FlameGraphBuilder;
 use common::parallel::par_enabled;
 use common::VirtualPoly;
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 use std::iter::zip;
 
@@ -15,12 +17,12 @@ use crate::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
 };
@@ -61,6 +63,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for HammingBooleanitySumcheckParams
 #[derive(Allocative)]
 pub struct HammingBooleanitySumcheckProver<F: JoltField> {
     hw: Vec<MultilinearPolynomial<F>>,
+    #[allocative(skip)]
     eq_r: GruenSplitEqPolynomial<F>,
     #[allocative(skip)]
     params: HammingBooleanitySumcheckParams<F>,
@@ -69,7 +72,7 @@ pub struct HammingBooleanitySumcheckProver<F: JoltField> {
 impl<F: JoltField> HammingBooleanitySumcheckProver<F> {
     pub fn gen(params: HammingBooleanitySumcheckParams<F>, G: Vec<Vec<F>>) -> Self {
         let hw = G.into_iter().map(MultilinearPolynomial::from).collect();
-        let eq_r = GruenSplitEqPolynomial::new(&params.r_cycle, BindingOrder::LowToHigh);
+        let eq_r = GruenSplitEqPolynomial::new(&params.r_cycle, jolt_poly::BindingOrder::LowToHigh);
 
         Self { hw, eq_r, params }
     }
@@ -82,41 +85,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T>
         &self.params
     }
 
-    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::compute_message", fields(variant = ?self.params.sumcheck_id))]
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self { hw, eq_r, .. } = self;
-
-        let [q_constant, q_quadratic] = hw
-            .par_iter()
-            .zip(self.params.gamma_powers.par_iter())
-            .with_min_len(par_enabled())
-            .map(|(hw_d, &gamma)| {
-                let [qd_c, qd_q] = eq_r.par_fold_out_in_unreduced::<2>(&|g| {
-                    let hw0 = hw_d.get_bound_coeff(2 * g);
-                    let hw1 = hw_d.get_bound_coeff(2 * g + 1);
-                    let a = hw1 - hw0;
-
-                    let c0 = hw0 * (hw0 - F::one());
-                    let e = a * a;
-                    [c0, e]
-                });
-                [qd_c * gamma, qd_q * gamma]
-            })
-            .reduce(
-                || [F::zero(), F::zero()],
-                |acc, new| [acc[0] + new[0], acc[1] + new[1]],
-            );
-
-        eq_r.gruen_poly_deg_3(q_constant, q_quadratic, previous_claim)
-    }
-
-    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::ingest_challenge", fields(variant = ?self.params.sumcheck_id))]
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.hw
-            .par_iter_mut()
-            .with_min_len(par_enabled())
-            .for_each(|ra| ra.bind_parallel(r_j, BindingOrder::LowToHigh));
-        self.eq_r.bind(r_j);
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -143,6 +113,77 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T>
     #[cfg(feature = "allocative")]
     fn update_flamegraph(&self, flamegraph: &mut FlameGraphBuilder) {
         flamegraph.visit_root(self);
+    }
+}
+
+impl<F: JoltField> HammingBooleanitySumcheckProver<F> {
+    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::bind", fields(variant = ?self.params.sumcheck_id))]
+    fn bind(&mut self, r: F) {
+        let r_j = F::challenge_from_field(r);
+        self.hw
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|ra| ra.bind_parallel(r_j, BindingOrder::LowToHigh));
+        self.eq_r.bind(r);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for HammingBooleanitySumcheckProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::prove_round", fields(variant = ?self.params.sumcheck_id))]
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r);
+        }
+        let Self { hw, eq_r, .. } = self;
+        let gamma_powers = &self.params.gamma_powers;
+
+        let [q_constant, q_quadratic] = hw
+            .par_iter()
+            .zip(gamma_powers.par_iter())
+            .with_min_len(par_enabled())
+            .map(|(hw_d, &gamma)| {
+                let [qd_c, qd_q] = eq_r.par_fold_out_in_unreduced::<2>(&|g| {
+                    let hw0 = hw_d.get_bound_coeff(2 * g);
+                    let hw1 = hw_d.get_bound_coeff(2 * g + 1);
+                    let a = hw1 - hw0;
+                    [hw0 * (hw0 - F::one()), a * a]
+                });
+                [qd_c * gamma, qd_q * gamma]
+            })
+            .reduce(
+                || [F::zero(), F::zero()],
+                |acc, new| [acc[0] + new[0], acc[1] + new[1]],
+            );
+
+        eq_r.gruen_round_deg_3_from(
+            q_constant,
+            q_quadratic,
+            &|g| {
+                hw.iter()
+                    .zip(gamma_powers)
+                    .map(|(hw_d, &gamma)| {
+                        let hw1 = hw_d.get_bound_coeff(2 * g + 1);
+                        gamma * hw1 * (hw1 - F::one())
+                    })
+                    .sum()
+            },
+            previous_claim,
+        )
+        .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind);
+        Ok(())
     }
 }
 

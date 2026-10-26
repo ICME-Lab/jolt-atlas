@@ -1,23 +1,68 @@
-//! Relation-defined ops ([`crate::onnx_proof::relation`]) in the claim flows of the
-//! `relation_flows` probe model. The model proves, verifies and is swept with the other probe
-//! models; these tests pin the structure that makes it exercise each flow, so it cannot stop
-//! doing so silently.
+//! Relation-defined ops ([`crate::onnx_proof::relation`]).
+//!
+//! * Op binding: every relation the prover runs is recorded with the node it ran on, and
+//!   [`relation_specs_match_their_dispatched_op_kind`] checks each relation's `Spec` against the
+//!   [`OpKind`] it was dispatched under, over the probe models and the op gauntlet.
+//! * Claim flows: the `relation_flows` probe model proves, verifies and is swept with the other
+//!   probe models; the tests below pin the structure that makes it exercise each flow, so it
+//!   cannot stop doing so silently.
 
+use ark_bn254::Bn254;
 use atlas_trace::Op;
 use common::VirtualPoly;
 use jolt_claims::{Source, SymbolicSumcheck};
 use jolt_field::Fr;
+use joltworks::poly::commitment::hyperkzg::HyperKZG;
 use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
+use std::sync::Mutex;
 
-use super::models::probe_models;
+use super::{
+    harness::prove_verify_roundtrip,
+    models::probe_models,
+    op_kind::OpKind,
+    zoo::{op_gauntlet_inputs, zoo},
+};
 use crate::{
     node_view::{ComputationNode, ModelView},
     onnx_proof::{
         fused_rebase,
         ops::mul::MulRelation,
-        relation::{RelationExpr, RelationOpening},
+        relation::{AtlasRelation, RelationExpr, RelationOpening},
     },
 };
+
+/// `(op kind of the node, the relation's Spec type)` for every relation the prover has run.
+static DISPATCHES: Mutex<Vec<(OpKind, &'static str)>> = Mutex::new(Vec::new());
+
+/// Record that relation `R` was dispatched for `node`.
+pub(crate) fn record_dispatch<R: AtlasRelation>(node: &ComputationNode) {
+    DISPATCHES
+        .lock()
+        .expect("dispatch log")
+        .push((OpKind::of(&node.operator), std::any::type_name::<R::Spec>()));
+}
+
+#[test]
+fn relation_specs_match_their_dispatched_op_kind() {
+    for probe in probe_models() {
+        prove_verify_roundtrip::<HyperKZG<Bn254>>(probe.model, &probe.inputs, Default::default());
+    }
+    let gauntlet = zoo("op_gauntlet", 16);
+    let inputs = op_gauntlet_inputs(&gauntlet);
+    prove_verify_roundtrip::<HyperKZG<Bn254>>(gauntlet.model, &inputs, Default::default());
+
+    let dispatches = DISPATCHES.lock().expect("dispatch log");
+    for &(kind, spec) in dispatches.iter() {
+        let spec_name = spec.rsplit("::").next().expect("a type name");
+        assert_eq!(spec_name, kind.to_string(), "{spec} dispatched for {kind}");
+    }
+    for kind in [OpKind::Mul, OpKind::And] {
+        assert!(
+            dispatches.iter().any(|&(k, _)| k == kind),
+            "no {kind} node ran through its relation"
+        );
+    }
+}
 
 fn mul_nodes() -> (Vec<ComputationNode>, Vec<ComputationNode>) {
     let probe = probe_models()

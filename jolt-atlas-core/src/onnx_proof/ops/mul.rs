@@ -7,13 +7,17 @@ use crate::{
         ops::OperatorProofTrait,
         relation::{
             AtlasRelation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
-            RelationOpening, RelationParams, RelationProver, RelationVerifier,
+            RelationOpening, RelationSetup,
         },
         ProofId, ProofType, Prover, Verifier,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_trace::{op::Mul, trace::LayerData, Trace};
+use atlas_trace::{
+    op::{Mul, OpSpec},
+    trace::LayerData,
+    Trace,
+};
 use common::VirtualPoly;
 use jolt_claims::{
     constant, derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck,
@@ -29,31 +33,42 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
+use std::marker::PhantomData;
 
-impl_fused_rescale_proof_api!(Mul, MulParams, MulProver, MulVerifier);
+impl_fused_rescale_proof_api!(Mul, relation MulRelation);
 
-/// Element-wise multiplication as a relation:
+/// Element-wise multiplication as a relation.
+pub type MulRelation = ProductRelation<Mul>;
+
+/// An element-wise product `out = L · R` (`Mul`, and `And` on booleans) as a relation:
 ///
 /// ```text
-/// input claim   q(r₀)·2^S + rem(r₀)    (fused: pre-clamp quotient and remainder)
+/// input claim   q(r₀)·2^S + rem(r₀)    (fused rescale: pre-clamp quotient and remainder)
 ///               out(r₀)                (raw product: the reduced output opening)
 /// output claim  eq(r₀, r′) · L(r′) · R(r′)
 /// ```
 ///
-/// The clamp lookup and the remainder range check of a fused node are separate protocols
-/// ([`fused_rebase`]) around this one.
-#[derive(Clone)]
-pub struct MulRelation {
+/// The incoming point is the node output's reduced opening point. The clamp lookup and the
+/// remainder range check of a fused node are separate protocols ([`fused_rebase`]) around this
+/// one.
+///
+/// **S ⊆ R.** A raw product's output is `L·R` exactly, so `Σ eq(r₀,·)·L·R` is the output's MLE
+/// at `r₀`. A fused product splits the `i64` accumulation `L·R` with
+/// `atlas_trace::semantics::fixed::rebase` into `q·2^S + rem` (Euclidean), so the same sum
+/// equals `q(r₀)·2^S + rem(r₀)` for the pre-clamp quotient `q`; the clamped output is never
+/// used here, so saturated executions satisfy it too.
+pub struct ProductRelation<S> {
     node: ComputationNode,
+    _spec: PhantomData<fn() -> S>,
 }
 
-impl MulRelation {
+impl<S> ProductRelation<S> {
     fn ids(&self) -> OpeningIdBuilder<'_> {
         OpeningIdBuilder::new(&self.node)
     }
 }
 
-impl SymbolicSumcheck for MulRelation {
+impl<S: OpSpec + 'static> SymbolicSumcheck for ProductRelation<S> {
     type RelationId = RelationId;
     type OpeningId = RelationOpening;
     type DerivedId = RelationDerived;
@@ -64,11 +79,14 @@ impl SymbolicSumcheck for MulRelation {
     type Outputs<C> = NoOutputs<C>;
 
     fn new(node: ComputationNode) -> Self {
-        Self { node }
+        Self {
+            node,
+            _spec: PhantomData,
+        }
     }
 
     fn id() -> RelationId {
-        RelationId::Mul
+        RelationId::Product
     }
 
     fn rounds(&self) -> usize {
@@ -98,9 +116,22 @@ impl SymbolicSumcheck for MulRelation {
     }
 }
 
-impl AtlasRelation for MulRelation {
-    fn incoming_point<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> Vec<F> {
-        accumulator.get_node_output_opening(self.node.idx).0.r
+impl<S: OpSpec + 'static> AtlasRelation for ProductRelation<S> {
+    type Spec = S;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
+    }
+
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        RelationSetup {
+            incoming_point: accumulator.get_node_output_opening(self.node.idx).0.r,
+            challenges: Vec::new(),
+        }
     }
 
     fn produced(&self) -> Vec<OpeningId> {
@@ -113,7 +144,7 @@ impl AtlasRelation for MulRelation {
     fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
         let [left, right] = operands[..] else {
-            panic!("Expected two operands for Mul operation")
+            panic!("Expected two operands for a product")
         };
         vec![
             MultilinearPolynomial::from(left.padded_pow2()),
@@ -121,10 +152,3 @@ impl AtlasRelation for MulRelation {
         ]
     }
 }
-
-/// The Mul relation with its incoming point.
-pub type MulParams<F> = RelationParams<F, MulRelation>;
-/// The Mul relation's prover.
-pub type MulProver<F> = RelationProver<F, MulRelation>;
-/// The Mul relation's verifier.
-pub type MulVerifier<F> = RelationVerifier<F, MulRelation>;

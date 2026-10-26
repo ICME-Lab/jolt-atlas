@@ -33,9 +33,10 @@ use crate::{
     node_view::ModelView,
     onnx_proof::ops::{
         cube::{CubeParams, CubeProver},
-        mul::{MulParams, MulProver, MulRelation},
+        mul::MulRelation,
         square::{SquareParams, SquareProver},
     },
+    onnx_proof::relation::{RelationParams, RelationProver, RelationSetup},
 };
 
 const NUM_VARS: usize = 3;
@@ -132,8 +133,12 @@ impl Fixture {
 #[test]
 fn mul_rounds_where_eq_vanishes() {
     let f = Fixture::new(0xA17_0401, 2, |b, i| b.mul(i[0], i[1]));
-    let params = MulParams::at(MulRelation::new(f.model.view(f.node)), f.r_node.clone());
-    let mut prover = MulProver::initialize(&f.trace, params);
+    let setup = RelationSetup {
+        incoming_point: f.r_node.clone(),
+        challenges: Vec::new(),
+    };
+    let params = RelationParams::at(MulRelation::new(f.model.view(f.node)), setup);
+    let mut prover = RelationProver::initialize(&f.trace, params);
     f.check(&mut prover, &[&f.operands[0], &f.operands[1]]);
 }
 

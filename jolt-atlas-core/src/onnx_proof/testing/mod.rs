@@ -14,7 +14,8 @@
 //!   transcript state, so a coordinated prover+verifier change is visible.
 //! * [`rounds`]: native sumcheck members driven round by round at eq points
 //!   no end-to-end run reaches.
-//! * [`relations`]: the claim flows relation-defined ops take part in.
+//! * [`relations`]: relation-defined ops' op binding and the claim flows
+//!   they take part in.
 //! * [`model_builder`]: programmatic model construction.
 //!
 //! This module is a descendant of `onnx_proof` so tests can reach the
@@ -30,7 +31,7 @@ pub(crate) mod op_kind;
 pub(crate) mod op_surface;
 mod op_surface_dory;
 pub(crate) mod probe;
-mod relations;
+pub(crate) mod relations;
 mod rounds;
 mod soundness;
 mod zoo;

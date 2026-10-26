@@ -121,7 +121,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-pub use mul::{MulParams, MulProver, MulVerifier};
 pub use rsqrt::{RsqrtParams, RsqrtProver, RsqrtVerifier};
 pub use square::{SquareParams, SquareProver, SquareVerifier};
 use std::collections::BTreeMap;
@@ -494,6 +493,46 @@ pub use impl_standard_params;
 #[macro_export]
 macro_rules! impl_standard_sumcheck_proof_api {
     ($inner_ty:ty, $params_ty:ident, $prover_ty:ident, $verifier_ty:ident) => {
+        $crate::impl_standard_sumcheck_proof_api!(
+            @impl $inner_ty,
+            |node: &ComputationNode, prover: &mut Prover<F, T>| {
+                use $crate::onnx_proof::ops::{$params_ty, $prover_ty};
+                let params = $params_ty::new(node.clone(), &prover.accumulator);
+                $prover_ty::initialize(&prover.trace, params)
+            },
+            |node: &ComputationNode,
+             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             _: &mut T| {
+                use $crate::onnx_proof::ops::$verifier_ty;
+                $verifier_ty::new(node.clone(), accumulator)
+            }
+        );
+    };
+    ($inner_ty:ty, relation $relation:ty) => {
+        $crate::bind_relation!($inner_ty, $relation);
+        $crate::impl_standard_sumcheck_proof_api!(
+            @impl $inner_ty,
+            |node: &ComputationNode, prover: &mut Prover<F, T>| {
+                use $crate::onnx_proof::relation::{RelationParams, RelationProver};
+                let params = RelationParams::<F, $relation>::new(
+                    node.clone(),
+                    &prover.accumulator,
+                    &mut prover.transcript,
+                );
+                RelationProver::initialize(&prover.trace, params)
+            },
+            |node: &ComputationNode,
+             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             transcript: &mut T| {
+                $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
+                    node.clone(),
+                    accumulator,
+                    transcript,
+                )
+            }
+        );
+    };
+    (@impl $inner_ty:ty, $make_prover:expr, $make_verifier:expr) => {
         impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for $inner_ty {
             #[tracing::instrument(skip(node, prover))]
             fn prove(
@@ -502,10 +541,8 @@ macro_rules! impl_standard_sumcheck_proof_api {
                 prover: &mut Prover<F, T>,
             ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
                 use joltworks::subprotocols::sumcheck::Sumcheck;
-                use $crate::onnx_proof::ops::{$params_ty, $prover_ty};
 
-                let params = $params_ty::new(node.clone(), &prover.accumulator);
-                let mut prover_sumcheck = $prover_ty::initialize(&prover.trace, params);
+                let mut prover_sumcheck = ($make_prover)(node, &mut *prover);
                 let (proof, _) = Sumcheck::prove(
                     &mut prover_sumcheck,
                     &mut prover.accumulator,
@@ -521,13 +558,13 @@ macro_rules! impl_standard_sumcheck_proof_api {
                 verifier: &mut Verifier<'_, F, T>,
             ) -> Result<(), ProofVerifyError> {
                 use joltworks::subprotocols::sumcheck::Sumcheck;
-                use $crate::onnx_proof::ops::$verifier_ty;
 
                 let proof = verifier
                     .proofs
                     .get(&ProofId(node.idx, ProofType::Execution))
                     .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-                let verifier_sumcheck = $verifier_ty::new(node.clone(), &verifier.accumulator);
+                let verifier_sumcheck =
+                    ($make_verifier)(node, &verifier.accumulator, &mut verifier.transcript);
                 Sumcheck::verify(
                     proof,
                     &verifier_sumcheck,
@@ -537,6 +574,18 @@ macro_rules! impl_standard_sumcheck_proof_api {
                 Ok(())
             }
         }
+    };
+}
+
+/// Compile-time op binding of a relation-dispatched op: the relation's
+/// [`Spec`](crate::onnx_proof::relation::AtlasRelation::Spec) must be the op it is dispatched for.
+#[macro_export]
+macro_rules! bind_relation {
+    ($inner_ty:ty, $relation:ty) => {
+        const _: () = {
+            fn bound<R: $crate::onnx_proof::relation::AtlasRelation<Spec = $inner_ty>>() {}
+            let _ = bound::<$relation>;
+        };
     };
 }
 
@@ -558,6 +607,46 @@ pub use impl_standard_sumcheck_proof_api;
 #[macro_export]
 macro_rules! impl_fused_rescale_proof_api {
     ($inner_ty:ty, $params_ty:ident, $prover_ty:ident, $verifier_ty:ident) => {
+        $crate::impl_fused_rescale_proof_api!(
+            @impl $inner_ty,
+            |node: &ComputationNode, prover: &mut Prover<F, T>| {
+                use $crate::onnx_proof::ops::{$params_ty, $prover_ty};
+                let params = $params_ty::new(node.clone(), &prover.accumulator);
+                $prover_ty::initialize(&prover.trace, params)
+            },
+            |node: &ComputationNode,
+             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             _: &mut T| {
+                use $crate::onnx_proof::ops::$verifier_ty;
+                $verifier_ty::new(node.clone(), accumulator)
+            }
+        );
+    };
+    ($inner_ty:ty, relation $relation:ty) => {
+        $crate::bind_relation!($inner_ty, $relation);
+        $crate::impl_fused_rescale_proof_api!(
+            @impl $inner_ty,
+            |node: &ComputationNode, prover: &mut Prover<F, T>| {
+                use $crate::onnx_proof::relation::{RelationParams, RelationProver};
+                let params = RelationParams::<F, $relation>::new(
+                    node.clone(),
+                    &prover.accumulator,
+                    &mut prover.transcript,
+                );
+                RelationProver::initialize(&prover.trace, params)
+            },
+            |node: &ComputationNode,
+             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             transcript: &mut T| {
+                $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
+                    node.clone(),
+                    accumulator,
+                    transcript,
+                )
+            }
+        );
+    };
+    (@impl $inner_ty:ty, $make_prover:expr, $make_verifier:expr) => {
         impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for $inner_ty {
             #[tracing::instrument(skip(node, prover))]
             fn prove(
@@ -566,11 +655,7 @@ macro_rules! impl_fused_rescale_proof_api {
                 prover: &mut Prover<F, T>,
             ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
                 use joltworks::subprotocols::sumcheck::Sumcheck;
-                use $crate::onnx_proof::{
-                    clamp_lookups::is_scalar,
-                    fused_rebase,
-                    ops::{$params_ty, $prover_ty},
-                };
+                use $crate::onnx_proof::{clamp_lookups::is_scalar, fused_rebase};
 
                 let fused = fused_rebase::fuses_rebase(node);
                 let mut proofs = Vec::new();
@@ -582,8 +667,7 @@ macro_rules! impl_fused_rescale_proof_api {
                     None
                 };
 
-                let params = $params_ty::new(node.clone(), &prover.accumulator);
-                let mut prover_sumcheck = $prover_ty::initialize(&prover.trace, params);
+                let mut prover_sumcheck = ($make_prover)(node, &mut *prover);
                 let (proof, _) = Sumcheck::prove(
                     &mut prover_sumcheck,
                     &mut prover.accumulator,
@@ -608,7 +692,7 @@ macro_rules! impl_fused_rescale_proof_api {
                 verifier: &mut Verifier<'_, F, T>,
             ) -> Result<(), ProofVerifyError> {
                 use joltworks::subprotocols::sumcheck::Sumcheck;
-                use $crate::onnx_proof::{fused_rebase, ops::$verifier_ty};
+                use $crate::onnx_proof::fused_rebase;
 
                 let fused = fused_rebase::fuses_rebase(node);
                 if fused {
@@ -619,7 +703,8 @@ macro_rules! impl_fused_rescale_proof_api {
                     .proofs
                     .get(&ProofId(node.idx, ProofType::RescaleArith))
                     .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-                let verifier_sumcheck = $verifier_ty::new(node.clone(), &verifier.accumulator);
+                let verifier_sumcheck =
+                    ($make_verifier)(node, &verifier.accumulator, &mut verifier.transcript);
                 Sumcheck::verify(
                     proof,
                     &verifier_sumcheck,

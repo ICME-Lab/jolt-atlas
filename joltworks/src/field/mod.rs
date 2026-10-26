@@ -229,6 +229,11 @@ pub trait JoltField:
     /// The element of `Self` equal to a decoded codec challenge.
     fn from_challenge_codec(x: Self::ChallengeCodecField) -> Self;
 
+    /// The challenge whose field image is `x`: the inverse of `Into<Self>` on
+    /// [`JoltField::Challenge`], for elements that came from a challenge (the upstream sumcheck
+    /// engine hands members their round challenges as field elements).
+    fn challenge_from_field(x: Self) -> Self::Challenge;
+
     /// The size of the set [`JoltField::Challenge`] values are drawn from, which prices the
     /// proof of work before a challenge (`jolt_transcript::grind_bits_for_loss`).
     fn challenge_set_size() -> jolt_transcript::ChallengeSetSize;

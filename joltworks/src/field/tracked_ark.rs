@@ -356,6 +356,17 @@ impl JoltField for TrackedFr {
         TrackedFr(x)
     }
 
+    #[cfg(not(feature = "challenge-254-bit"))]
+    fn challenge_from_field(x: Self) -> Self::Challenge {
+        let [_, _, low, high] = x.0.inner_limbs();
+        MontU128Challenge::new(u128::from(low) | (u128::from(high) << 64))
+    }
+
+    #[cfg(feature = "challenge-254-bit")]
+    fn challenge_from_field(x: Self) -> Self::Challenge {
+        Mont254BitChallenge::new(x)
+    }
+
     fn challenge_set_size() -> jolt_transcript::ChallengeSetSize {
         <Fr as JoltField>::challenge_set_size()
     }

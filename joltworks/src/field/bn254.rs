@@ -119,6 +119,21 @@ impl JoltField for Fr {
         x
     }
 
+    #[cfg(not(feature = "challenge-254-bit"))]
+    #[inline(always)]
+    fn challenge_from_field(x: Self) -> Self::Challenge {
+        // A challenge's field image keeps its Montgomery limbs `[0, 0, low, high]`.
+        let [l0, l1, low, high] = x.inner_limbs();
+        debug_assert!(l0 == 0 && l1 == 0, "not the image of a 125-bit challenge");
+        MontU128Challenge::new(u128::from(low) | (u128::from(high) << 64))
+    }
+
+    #[cfg(feature = "challenge-254-bit")]
+    #[inline(always)]
+    fn challenge_from_field(x: Self) -> Self::Challenge {
+        Mont254BitChallenge::new(x)
+    }
+
     fn challenge_set_size() -> jolt_transcript::ChallengeSetSize {
         // MontU128Challenge masks to 125 bits. The full-field mode prices against 2^253 <= p,
         // which can only overstate the proof of work.

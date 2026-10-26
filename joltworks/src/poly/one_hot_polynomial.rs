@@ -130,7 +130,11 @@ mod tests {
     use ark_std::{test_rng, Zero};
     use rand_core::RngCore;
 
-    fn dense_polynomial_equivalence<const LOG_K: usize, const LOG_T: usize>() {
+    /// With `vanishing_address`, the first address coordinate is 1 and its challenge 0, so
+    /// `eq(r_address, ρ)` vanishes and every cycle-round message is zero.
+    fn dense_polynomial_equivalence<const LOG_K: usize, const LOG_T: usize>(
+        vanishing_address: bool,
+    ) {
         let K: usize = 1 << LOG_K;
         let T: usize = 1 << LOG_T;
 
@@ -142,9 +146,13 @@ mod tests {
         let one_hot_poly = OneHotPolynomial::<Fr>::from_indices(nonzero_indices, K);
         let mut dense_poly = one_hot_poly.to_dense_poly();
 
-        let r_address = std::iter::repeat_with(|| <Fr as JoltField>::Challenge::random(&mut rng))
-            .take(LOG_K)
-            .collect::<Vec<_>>();
+        let mut r_address: Vec<Fr> =
+            std::iter::repeat_with(|| <Fr as JoltField>::Challenge::random(&mut rng).into())
+                .take(LOG_K)
+                .collect();
+        if vanishing_address {
+            r_address[0] = Fr::from(1u64);
+        }
         let r_cycle = std::iter::repeat_with(|| <Fr as JoltField>::Challenge::random(&mut rng))
             .take(LOG_T)
             .collect::<Vec<_>>();
@@ -158,7 +166,8 @@ mod tests {
         );
         one_hot_opening.initialize(vec![(one_hot_poly.clone(), Fr::from(1u64))]);
 
-        let r_concat = [r_address.as_slice(), r_cycle.as_slice()].concat();
+        let r_cycle_field: Vec<Fr> = r_cycle.iter().map(|&r| r.into()).collect();
+        let r_concat = [r_address.as_slice(), r_cycle_field.as_slice()].concat();
         let mut eq = DensePolynomial::new(EqPolynomial::<Fr>::evals(&r_concat));
 
         // Compute the initial input claim
@@ -166,7 +175,9 @@ mod tests {
         let mut previous_claim = input_claim;
 
         for round in 0..LOG_K + LOG_T {
-            let one_hot_message = one_hot_opening.compute_message(round, previous_claim);
+            let one_hot_message = one_hot_opening
+                .compute_message(round, previous_claim)
+                .expect("honest claim");
             // Evals at [0, 2].
             let mut expected_message = vec![Fr::zero(), Fr::zero()];
             let mle_half = dense_poly.len() / 2;
@@ -196,14 +207,18 @@ mod tests {
             }
             assert_eq!(
                 [
-                    one_hot_message.eval_at_zero(),
-                    one_hot_message.evaluate::<Fr>(&Fr::from(2))
+                    one_hot_message.evaluate(Fr::zero()),
+                    one_hot_message.evaluate(Fr::from(2u64))
                 ],
                 *expected_message,
                 "round {round} prover message mismatch"
             );
 
-            let r = <Fr as JoltField>::Challenge::random(&mut rng);
+            let r = if vanishing_address && round == 0 {
+                <Fr as JoltField>::Challenge::default()
+            } else {
+                <Fr as JoltField>::Challenge::random(&mut rng)
+            };
 
             // Update previous_claim by evaluating the univariate polynomial at r
             let eval_at_1 = previous_claim - expected_message[0];
@@ -224,17 +239,22 @@ mod tests {
 
     #[test]
     fn sumcheck_K_less_than_T() {
-        dense_polynomial_equivalence::<5, 6>();
+        dense_polynomial_equivalence::<5, 6>(false);
     }
 
     #[test]
     fn sumcheck_K_equals_T() {
-        dense_polynomial_equivalence::<6, 6>();
+        dense_polynomial_equivalence::<6, 6>(false);
     }
 
     #[test]
     fn sumcheck_K_greater_than_T() {
-        dense_polynomial_equivalence::<6, 5>();
+        dense_polynomial_equivalence::<6, 5>(false);
+    }
+
+    #[test]
+    fn sumcheck_vanishing_address_eq() {
+        dense_polynomial_equivalence::<5, 6>(true);
     }
 
     fn evaluate_test<const LOG_K: usize, const LOG_T: usize>() {

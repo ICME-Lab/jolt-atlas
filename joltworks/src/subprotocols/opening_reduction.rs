@@ -14,12 +14,12 @@ use crate::{
             SumcheckId, VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         ra_poly::RaPolynomial,
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::check_gruen_endpoint,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{
@@ -34,6 +34,8 @@ use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -233,18 +235,8 @@ where
         &self.opening
     }
 
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
-        match &mut self.prover_state {
-            ProverOpening::Dense(opening) => opening.compute_message(round, previous_claim),
-            ProverOpening::OneHot(opening) => opening.compute_message(round, previous_claim),
-        }
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
-        match &mut self.prover_state {
-            ProverOpening::Dense(opening) => opening.bind(r_j, round),
-            ProverOpening::OneHot(opening) => opening.bind(r_j, round),
-        }
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -259,6 +251,80 @@ where
             ProverOpening::OneHot(opening) => opening.final_claim(),
         };
         accumulator.cache_opening_reduction_claim(self.key(), claim);
+    }
+}
+
+impl<F: JoltField> OpeningProofReductionSumcheckProver<F> {
+    fn bind(&mut self, r: F, round: usize) {
+        let r_j = F::challenge_from_field(r);
+        match &mut self.prover_state {
+            ProverOpening::Dense(opening) => opening.bind(r_j, round),
+            ProverOpening::OneHot(opening) => opening.bind(r_j, round),
+        }
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for OpeningProofReductionSumcheckProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.opening)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        match &mut self.prover_state {
+            ProverOpening::Dense(opening) => opening.compute_message(round, previous_claim),
+            ProverOpening::OneHot(opening) => opening.compute_message(round, previous_claim),
+        }
+        .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.opening) - 1);
+        Ok(())
+    }
+}
+
+/// `Σ_j eq(j)·value(j)` over the unbound half of a high-to-low split eq: `j` runs over the
+/// first half of the remaining hypercube (the current variable set to 0), weighted by the
+/// unbound `E_out`/`E_in` tables.
+fn fold_high_to_low<F: JoltField>(
+    gruen_eq: &GruenSplitEqPolynomial<F>,
+    value: impl Fn(usize) -> F + Sync + Send,
+) -> F {
+    let d_e_out = gruen_eq.e_out_current();
+    if gruen_eq.e_in_current_len() <= 1 {
+        // E_in is fully bound
+        let unreduced = (0..d_e_out.len())
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|j| d_e_out[j].mul_to_product_accum(value(j)))
+            .reduce(F::UnreducedProductAccum::zero, |running, new| running + new);
+        F::reduce_product_accum(unreduced)
+    } else {
+        let d_e_in = gruen_eq.e_in_current();
+        let num_x_out_bits = d_e_out.len().log_2();
+        (0..d_e_in.len())
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|x_in| {
+                let unreduced_inner_sum = (0..d_e_out.len())
+                    .into_par_iter()
+                    .with_min_len(par_enabled())
+                    .map(|x_out| {
+                        let j = (x_in << num_x_out_bits) | x_out;
+                        d_e_out[x_out].mul_to_product_accum(value(j))
+                    })
+                    .reduce(F::UnreducedProductAccum::zero, |running, new| running + new);
+                d_e_in[x_in] * F::reduce_product_accum(unreduced_inner_sum)
+            })
+            .sum()
     }
 }
 
@@ -377,61 +443,30 @@ pub struct DensePolynomialProverOpening<F: JoltField> {
 
 impl<F: JoltField> DensePolynomialProverOpening<F> {
     #[tracing::instrument(skip_all, name = "DensePolynomialProverOpening::compute_message")]
-    pub fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+    pub fn compute_message(
+        &mut self,
+        _round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, F> {
         let shared_eq = self.eq_poly.read().unwrap();
         let polynomial_ref = self.polynomial.as_ref().unwrap();
         let polynomial = &polynomial_ref.read().unwrap().poly;
         let gruen_eq = &shared_eq.D;
 
-        // Compute q(0) = sum of polynomial(i) * eq(r, i) for i in [0, mle_half)
+        // q(c) = Σ_j polynomial(c, j)·eq(r, j); the current variable is the top one.
         let mle_half = polynomial.len() / 2;
-        let q_0 = if gruen_eq.E_in_current_len() <= 1 {
-            // E_in is fully bound
-            let unreduced_q_0 = (0..mle_half)
-                .into_par_iter()
-                .with_min_len(par_enabled())
-                .map(|j| {
-                    let eq_eval = gruen_eq.E_out_current()[j];
-                    // TODO(quang): special case depending on the polynomial type?
-                    let poly_eval = polynomial.get_bound_coeff(j);
-                    eq_eval.mul_to_product_accum(poly_eval)
-                })
-                .reduce(F::UnreducedProductAccum::zero, |running, new| running + new);
-            F::reduce_product_accum(unreduced_q_0)
-        } else {
-            let num_x_out = gruen_eq.E_out_current_len();
-            let num_x_in = gruen_eq.E_in_current_len();
-            let num_x_out_bits = num_x_out.log_2();
-            let d_e_in = gruen_eq.E_in_current();
-            let d_e_out = gruen_eq.E_out_current();
-
-            (0..num_x_in)
-                .into_par_iter()
-                .with_min_len(par_enabled())
-                .map(|x_in| {
-                    let unreduced_inner_sum = (0..num_x_out)
-                        .into_par_iter()
-                        .with_min_len(par_enabled())
-                        .map(|x_out| {
-                            let j = (x_in << num_x_out_bits) | x_out;
-                            let poly_eval = polynomial.get_bound_coeff(j);
-                            d_e_out[x_out].mul_to_product_accum(poly_eval)
-                        })
-                        .reduce(F::UnreducedProductAccum::zero, |running, new| running + new);
-                    let inner_sum = F::reduce_product_accum(unreduced_inner_sum);
-                    d_e_in[x_in] * inner_sum
-                })
-                .sum()
-        };
-
-        gruen_eq.gruen_poly_deg_2(q_0, previous_claim)
+        let q_1 = fold_high_to_low(gruen_eq, |j| polynomial.get_bound_coeff(j + mle_half));
+        let q_0 = || fold_high_to_low(gruen_eq, |j| polynomial.get_bound_coeff(j));
+        let message = gruen_eq.gruen_poly_deg_2(q_1, previous_claim, q_0);
+        check_gruen_endpoint(gruen_eq, &message, false, q_0);
+        message
     }
 
     #[tracing::instrument(skip_all, name = "DensePolynomialProverOpening::bind")]
     pub fn bind(&mut self, r_j: F::Challenge, round: usize) {
         let mut shared_eq = self.eq_poly.write().unwrap();
         if shared_eq.num_variables_bound <= round {
-            shared_eq.D.bind(r_j);
+            shared_eq.D.bind(r_j.into());
             shared_eq.num_variables_bound += 1;
         }
 
@@ -484,6 +519,7 @@ pub struct EqAddressState<F: JoltField> {
 #[derive(Clone, Debug, Allocative)]
 pub struct EqCycleState<F: JoltField> {
     /// D stores eq(r', j), see Equation (54) but with Gruen X Dao-Thaler optimizations
+    #[allocative(skip)]
     pub D: GruenSplitEqPolynomial<F>,
     /// The number of variables that have been bound during sumcheck so far
     pub num_variables_bound: usize,
@@ -517,7 +553,8 @@ impl<F: JoltField> EqCycleState<F> {
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
-        let D = GruenSplitEqPolynomial::new(r_cycle, BindingOrder::HighToLow);
+        let r_cycle: Vec<F> = r_cycle.iter().map(|&r| r.into()).collect();
+        let D = GruenSplitEqPolynomial::new(&r_cycle, jolt_poly::BindingOrder::HighToLow);
         Self {
             D,
             num_variables_bound: 0,
@@ -620,7 +657,8 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
         let chunk_size = (T / num_chunks).max(1);
 
         let eq = self.eq_cycle_state.read().unwrap();
-        let D_coeffs_for_G = &eq.D.merge();
+        let D_coeffs_for_G = eq.D.merge();
+        let D_coeffs_for_G = D_coeffs_for_G.evals();
 
         // Compute G as described in Section 6.3, summed over the group.
         let G = (0..num_chunks)
@@ -662,7 +700,11 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
     }
 
     #[tracing::instrument(skip_all, name = "OneHotPolynomialProverOpening::compute_message")]
-    pub fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
+    pub fn compute_message(
+        &mut self,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, F> {
         let shared_eq_address = self.eq_address_state.read().unwrap();
         let shared_eq_cycle = self.eq_cycle_state.read().unwrap();
 
@@ -716,7 +758,10 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                 .map(|evals| F::reduce_product_accum(evals))
                 .collect::<Vec<_>>();
 
-            UniPoly::from_evals_and_hint(previous_claim, &univariate_poly_evals)
+            Ok(UnivariatePoly::from_evals_and_hint(
+                previous_claim,
+                &univariate_poly_evals,
+            ))
         } else {
             // T-variable rounds
             let B = &shared_eq_address.B;
@@ -724,42 +769,21 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
             let eq_r_address_claim = B.final_claim();
             let H = &self.H;
 
-            let gruen_eval_0 = if d_gruen.E_in_current_len() == 1 {
-                let unreduced_gruen_eval_0 = (0..d_gruen.len() / 2)
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|j| d_gruen.E_out_current()[j].mul_to_product_accum(H.get_bound_coeff(j)))
-                    .reduce(F::UnreducedProductAccum::zero, |running, new| running + new);
-                F::reduce_product_accum(unreduced_gruen_eval_0)
-            } else {
-                let d_e_in = d_gruen.E_in_current();
-                let d_e_out = d_gruen.E_out_current();
-                let num_x_in = d_gruen.E_in_current_len();
-                let num_x_out = d_gruen.E_out_current_len();
-                let num_x_out_bits = num_x_out.log_2();
-
-                (0..num_x_in)
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|x_in| {
-                        let unreduced_inner_sum = (0..num_x_out)
-                            .into_par_iter()
-                            .with_min_len(par_enabled())
-                            .map(|x_out| {
-                                let j = (x_in << num_x_out_bits) | x_out;
-                                d_e_out[x_out].mul_to_product_accum(H.get_bound_coeff(j))
-                            })
-                            .reduce(F::UnreducedProductAccum::zero, |running, new| running + new);
-                        let inner_sum = F::reduce_product_accum(unreduced_inner_sum);
-                        d_e_in[x_in] * inner_sum
-                    })
-                    .sum()
+            // s(X) = eq(r_address, ρ)·D(X)·q(X). A vanishing address factor makes the whole
+            // message zero, so it is never divided by.
+            let Some(eq_r_address_inverse) = eq_r_address_claim.inverse() else {
+                return if previous_claim.is_zero() {
+                    Ok(UnivariatePoly::new(vec![F::zero(); 3]))
+                } else {
+                    Err(F::zero())
+                };
             };
-
-            let gruen_univariate_evals =
-                d_gruen.gruen_poly_deg_2(gruen_eval_0, previous_claim / eq_r_address_claim);
-
-            gruen_univariate_evals * eq_r_address_claim
+            let h_half = H.len() / 2;
+            let q_1 = fold_high_to_low(d_gruen, |j| H.get_bound_coeff(j + h_half));
+            let q_0 = || fold_high_to_low(d_gruen, |j| H.get_bound_coeff(j));
+            let message = d_gruen.gruen_poly_deg_2(q_1, previous_claim * eq_r_address_inverse, q_0);
+            check_gruen_endpoint(d_gruen, &message, false, q_0);
+            Ok(message? * eq_r_address_claim)
         }
     }
 
@@ -781,7 +805,7 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                 shared_eq_address.F.update(r);
                 shared_eq_address.num_variables_bound += 1;
             } else {
-                shared_eq_cycle.D.bind(r);
+                shared_eq_cycle.D.bind(r.into());
                 shared_eq_cycle.num_variables_bound += 1;
             }
         }

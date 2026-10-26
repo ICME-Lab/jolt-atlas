@@ -51,3 +51,23 @@ The final diff contains only what the merged code needs:
 
 Scaffolding allowed by 2.2 must therefore be gone by the tip, unless it is a `TODO` whose reason
 names its follow-up.
+
+## 4. Relation migrations
+
+A PR that moves an op onto a symbolic relation (`onnx_proof/relation.rs`) also meets:
+
+- **4.1 Op binding.** The relation's `Spec` is the op's `atlas_trace` payload type, and the op is
+  dispatched through a `relation` arm of the proof macros (or `bind_relation!` beside a custom
+  `OperatorProofTrait` impl), so a wrong binding does not compile. A node of the op appears in a
+  probe model or the op gauntlet, so `relation_specs_match_their_dispatched_op_kind` sees it.
+- **4.2 S ⊆ R note.** The relation's doc argues that every execution of the op's semantics
+  satisfies it, naming the `atlas_trace::semantics` helper it relies on where one exists, and
+  names the protocols outside the relation that its argument needs (range checks, lookups).
+- **4.3 Digests.** The migration keeps the input claim, opening points and opening append order,
+  so `testing/digests.rs` passes unchanged. Changing an op's identity is a separate PR declared
+  protocol-breaking.
+- **4.4 Pairs deleted.** The op's hand-written `Params`/`Prover`/`Verifier` are gone in the same
+  PR: no `expected_output_claim` is written for it.
+- **4.5 Fast paths.** A specialized prover path for a relation is completeness-only and has a
+  `relation_prover_equiv_*` test comparing it with the engine's.
+

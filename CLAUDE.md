@@ -78,7 +78,8 @@ Workspace members, in dependency order:
 - **common** — shared constants and parallel helpers.
 - **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
   (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`, `jolt-utils`, `jolt-poly`,
-  `jolt-sumcheck`.
+  `jolt-sumcheck`, and `jolt-claims` (whose dependency cone, `jolt-openings`, `jolt-crypto`,
+  `jolt-riscv`, `jolt-lookup-tables` and `jolt-r1cs`, is vendored but not workspace members).
 - **joltworks** — the proof-system toolkit inherited from Jolt: `field`, `poly` (multilinear
   polynomials and commitment schemes), `subprotocols` (sumcheck, evaluation reduction),
   `lookup_tables`, `msm`, `transcripts`, `config`. `transcripts` runs on upstream
@@ -111,7 +112,8 @@ Workspace members, in dependency order:
   the free functions `prove` / `verify` (re-exported at the crate root), with `prover.rs`,
   `verifier.rs`, `preprocessing.rs`, `witness.rs`, and `types.rs`. Per-op protocols live under
   `onnx_proof/ops/`; shared machinery under `clamp_lookups`, `clamp_split`, `fused_rebase`,
-  `global_clamp`, `deferred_lookups`, `op_lookups`, `range_checking`, `neural_teleport`. The
+  `global_clamp`, `deferred_lookups`, `op_lookups`, `range_checking`, `neural_teleport`, and
+  the relation engine in `relation`. The
   whole test suite is under `onnx_proof/testing/`; the `prove` example is in `examples/`.
 
 Pipeline: ONNX file → `atlas-onnx-import` (decode, infer, fold, lower) → `atlas-trace` model
@@ -154,6 +156,12 @@ root `Cargo.toml`.
   it must fail today and turn green when fixed. Never allowlist a sweep finding silently.
 - Lookup table generation has one owner in `atlas-trace`. Never regenerate or approximate a
   table on the prover side.
+- For ops migrated to a symbolic relation (`onnx_proof/relation.rs`, a `jolt_claims`
+  `SymbolicSumcheck` over atlas openings), the relation is the source of truth: the engine
+  derives both prover and verifier from it, and no hand-written verifier exists. Each relation is
+  bound to its op by `type Spec` (checked at compile time and by
+  `relation_specs_match_their_dispatched_op_kind`) and documents its S ⊆ R argument;
+  `docs/pull-requests.md` §4 is the migration checklist.
 
 ## Development Guidelines
 

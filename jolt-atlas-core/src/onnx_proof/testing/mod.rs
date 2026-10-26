@@ -4,7 +4,6 @@
 //!   that every end-to-end test goes through, generic over the PCS.
 //! * [`op_kind`] + [`op_surface`]: the exhaustive single-op table. A new
 //!   `atlas_trace::Op` variant fails to compile here until a case exists.
-//! * [`op_surface_dory`]: a shape-class subset of the table under Dory.
 //! * [`zoo`]: the checked-in model zoo (tiny GPT-2 / Qwen2 / BERT stand-ins,
 //!   op gauntlet) on every run; the real downloads behind `#[ignore]`.
 //! * [`soundness`] (+ [`mutate`], [`probe`], [`models`]): generic attacks on
@@ -29,7 +28,6 @@ mod models;
 mod mutate;
 pub(crate) mod op_kind;
 pub(crate) mod op_surface;
-mod op_surface_dory;
 pub(crate) mod probe;
 pub(crate) mod relations;
 mod rounds;

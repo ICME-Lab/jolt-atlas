@@ -563,7 +563,7 @@ impl LagrangeHelper {
 #[cfg(test)]
 mod tests {
     use super::{LagrangeHelper, LagrangePolynomial};
-    use crate::field::bn254::Fr as F;
+    use crate::field::fp128::Fp128 as F;
     use jolt_field::{Field, Ring};
 
     fn grid_nodes<const N: usize>() -> [F; N] {

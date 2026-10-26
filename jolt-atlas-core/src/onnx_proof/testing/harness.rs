@@ -22,8 +22,6 @@ pub(crate) struct RoundtripOptions {
     pub lockstep_debug: bool,
     /// Serialize → deserialize → verify again → re-serialize byte-identically.
     pub serialization_roundtrip: bool,
-    /// Over-provision the SRS (Dory: wider columns).
-    pub srs_num_vars: Option<usize>,
 }
 
 impl Default for RoundtripOptions {
@@ -31,7 +29,6 @@ impl Default for RoundtripOptions {
         Self {
             lockstep_debug: true,
             serialization_roundtrip: true,
-            srs_num_vars: None,
         }
     }
 }
@@ -55,10 +52,7 @@ where
         .outputs;
 
     let shared = AtlasSharedPreprocessing::preprocess(model);
-    let prover_pp = match opts.srs_num_vars {
-        Some(n) => AtlasProverPreprocessing::<PCS::Field, PCS>::new_with_srs_num_vars(shared, n),
-        None => AtlasProverPreprocessing::<PCS::Field, PCS>::new(shared),
-    };
+    let prover_pp = AtlasProverPreprocessing::<PCS::Field, PCS>::new(shared);
 
     let t = Instant::now();
     let (proof, io, debug) = prove::<PCS::Field, Blake2bProver, PCS>(&prover_pp, inputs);

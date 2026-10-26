@@ -360,7 +360,7 @@ mod tests {
         // A sumcheck proof claiming 2⁶⁴ − 1 rounds, with none behind the length.
         let bytes = u64::MAX.to_le_bytes();
         assert!(
-            SumcheckInstanceProof::<joltworks::field::bn254::Fr>::deserialize_compressed(
+            SumcheckInstanceProof::<joltworks::field::fp128::Fp128>::deserialize_compressed(
                 &bytes[..]
             )
             .is_err()

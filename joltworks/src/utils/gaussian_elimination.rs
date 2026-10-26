@@ -64,7 +64,8 @@ fn eliminate<F: JoltField>(matrix: &mut [Vec<F>], i: usize) {
 
 #[cfg(test)]
 mod tests {
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
+    use jolt_field::Ring as _;
 
     use super::gaussian_elimination;
     use ark_std::{One, Zero};
@@ -72,11 +73,16 @@ mod tests {
     #[test]
     fn test_gauss() {
         let mut matrix: Vec<Vec<Fr>> = vec![
-            vec![Fr::one(), Fr::zero(), Fr::zero(), Fr::from(2u64)],
-            vec![Fr::one(), Fr::one(), Fr::one(), Fr::from(17u64)],
-            vec![Fr::one(), Fr::from(2u64), Fr::from(4u64), Fr::from(38u64)],
+            vec![Fr::one(), Fr::zero(), Fr::zero(), Fr::from_u64(2u64)],
+            vec![Fr::one(), Fr::one(), Fr::one(), Fr::from_u64(17u64)],
+            vec![
+                Fr::one(),
+                Fr::from_u64(2u64),
+                Fr::from_u64(4u64),
+                Fr::from_u64(38u64),
+            ],
         ];
-        let result = vec![Fr::from(2u64), Fr::from(12u64), Fr::from(3u64)];
+        let result = vec![Fr::from_u64(2u64), Fr::from_u64(12u64), Fr::from_u64(3u64)];
         assert_eq!(gaussian_elimination(&mut matrix), result);
     }
 }

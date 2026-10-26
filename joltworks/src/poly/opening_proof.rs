@@ -1,8 +1,7 @@
 //! This is a port of the sumcheck-based batch opening proof protocol implemented
 //! in Nova: https://github.com/microsoft/Nova/blob/2772826ba296b66f1cd5deecf7aca3fd1d10e1f4/src/spartan/snark.rs#L410-L424
 //! and such code is Copyright (c) Microsoft Corporation.
-//! For additively homomorphic commitment schemes (including Zeromorph, HyperKZG) we
-//! can use a sumcheck to reduce multiple opening proofs (multiple polynomials, not
+//! A sumcheck reduces multiple opening proofs (multiple polynomials, not
 //! necessarily of the same size, each opened at a different point) into a single opening.
 
 use crate::{
@@ -592,7 +591,7 @@ where
     }
 }
 
-/// Intermediate state between Stage 7 (batch opening reduction sumcheck) and Stage 8 (Dory opening).
+/// Intermediate state between the batch opening reduction sumcheck and the joint PCS opening.
 /// Stored in prover/verifier state to bridge the two stages.
 #[derive(Clone, Allocative)]
 pub struct OpeningReductionState<F: JoltField> {
@@ -1342,12 +1341,13 @@ mod guardrail_tests {
     use super::{
         OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
     };
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use crate::{
         subprotocols::evaluation_reduction::ReducedInstance,
         transcripts::{Blake2bProver, ProvingTranscript},
     };
     use common::VirtualPoly;
+    use jolt_field::Ring as _;
 
     #[test]
     #[should_panic(expected = "reduced evaluation for node 7 not found")]
@@ -1368,18 +1368,18 @@ mod guardrail_tests {
             SumcheckId::RamHammingBooleanity,
         );
         acc.openings
-            .insert(id, (OpeningPoint::default(), Fr::from(1u64)));
+            .insert(id, (OpeningPoint::default(), Fr::from_u64(1u64)));
 
         let mut transcript = Blake2bProver::new(b"guardrail_test");
         acc.append_virtual(
             &mut transcript,
             id,
-            OpeningPoint::new(vec![Fr::from(1u64), Fr::from(2u64)]),
+            OpeningPoint::new(vec![Fr::from_u64(1u64), Fr::from_u64(2u64)]),
         );
         acc.append_virtual(
             &mut transcript,
             id,
-            OpeningPoint::new(vec![Fr::from(3u64), Fr::from(4u64)]),
+            OpeningPoint::new(vec![Fr::from_u64(3u64), Fr::from_u64(4u64)]),
         );
     }
 
@@ -1393,10 +1393,10 @@ mod guardrail_tests {
             SumcheckId::RamHammingBooleanity,
         );
         acc.openings
-            .insert(id, (OpeningPoint::default(), Fr::from(1u64)));
+            .insert(id, (OpeningPoint::default(), Fr::from_u64(1u64)));
 
         let mut transcript = Blake2bProver::new(b"guardrail_test");
-        let point = OpeningPoint::new(vec![Fr::from(1u64), Fr::from(2u64)]);
+        let point = OpeningPoint::new(vec![Fr::from_u64(1u64), Fr::from_u64(2u64)]);
         acc.append_virtual(&mut transcript, id, point.clone());
         acc.append_virtual(&mut transcript, id, point);
     }
@@ -1408,8 +1408,8 @@ mod guardrail_tests {
         acc.reduced_evaluations.insert(
             3,
             ReducedInstance {
-                r: vec![Fr::from(1u64)],
-                claim: Fr::from(2u64),
+                r: vec![Fr::from_u64(1u64)],
+                claim: Fr::from_u64(2u64),
             },
         );
 
@@ -1418,8 +1418,8 @@ mod guardrail_tests {
         acc.append_virtual(
             &mut transcript,
             id,
-            OpeningPoint::new(vec![Fr::from(1u64)]),
-            Fr::from(2u64),
+            OpeningPoint::new(vec![Fr::from_u64(1u64)]),
+            Fr::from_u64(2u64),
         );
     }
 
@@ -1430,8 +1430,8 @@ mod guardrail_tests {
         acc.reduced_evaluations.insert(
             3,
             ReducedInstance {
-                r: vec![Fr::from(1u64)],
-                claim: Fr::from(2u64),
+                r: vec![Fr::from_u64(1u64)],
+                claim: Fr::from_u64(2u64),
             },
         );
 
@@ -1440,8 +1440,8 @@ mod guardrail_tests {
         acc.append_virtual(
             &mut transcript,
             id,
-            OpeningPoint::new(vec![Fr::from(1u64)]),
-            Fr::from(5u64),
+            OpeningPoint::new(vec![Fr::from_u64(1u64)]),
+            Fr::from_u64(5u64),
         );
 
         let key = OpeningId::new(VirtualPoly::NodeOutput(3), SumcheckId::Raf);

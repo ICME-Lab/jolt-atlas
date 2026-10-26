@@ -571,7 +571,8 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
+    use jolt_field::Field as _;
     use num_traits::{One, Zero};
 
     use ark_std::test_rng;
@@ -684,7 +685,7 @@ pub mod tests {
                     assert_eq!(direct_eval, eval.1);
                 }
                 let r = <Fr as JoltField>::Challenge::random(&mut rng);
-                rr.push(r.into());
+                rr.push(r);
                 ps.bind(r);
             }
 

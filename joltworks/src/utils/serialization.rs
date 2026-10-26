@@ -29,7 +29,7 @@ pub fn deserialize_vec<T: CanonicalDeserialize, R: Read>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use ark_serialize::CanonicalSerialize;
     use jolt_field::Field;
 

@@ -10,13 +10,11 @@
 
 use atlas_trace::{Model, Tensor};
 use jolt_claims::SymbolicSumcheck;
-use jolt_field::{Fr, Ring};
+use jolt_field::Ring;
 use jolt_sumcheck::ProveRounds;
-use joltworks::{
-    field::JoltField,
-    poly::{
-        commitment::akita::AkitaScheme, eq_poly::EqPolynomial, split_eq_poly::CHECK_GRUEN_ENDPOINTS,
-    },
+use joltworks::field::fp128::Fp128 as Fr;
+use joltworks::poly::{
+    commitment::akita::AkitaScheme, eq_poly::EqPolynomial, split_eq_poly::CHECK_GRUEN_ENDPOINTS,
 };
 use num_traits::{One, Zero};
 use rand::{rngs::StdRng, SeedableRng};
@@ -63,7 +61,7 @@ fn eq_product_sum(r: &[Fr], operands: &[Vec<Fr>]) -> Fr {
 }
 
 fn random_challenge(rng: &mut StdRng) -> Fr {
-    <Fr as JoltField>::Challenge::random(rng).into()
+    <Fr as jolt_field::Field>::random(rng)
 }
 
 /// A model with one node applied to `NUM_VARS`-variable inputs, its trace's operands as field

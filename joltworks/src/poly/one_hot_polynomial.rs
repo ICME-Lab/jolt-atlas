@@ -120,7 +120,7 @@ impl<F: JoltField> OneHotPolynomial<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use crate::{
         poly::{multilinear_polynomial::BindingOrder, unipoly::UniPoly},
         subprotocols::opening_reduction::{
@@ -128,6 +128,8 @@ mod tests {
         },
     };
     use ark_std::{test_rng, Zero};
+    use jolt_field::Field as _;
+    use jolt_field::Ring as _;
     use rand_core::RngCore;
 
     /// With `vanishing_address`, the first address coordinate is 1 and its challenge 0, so
@@ -147,11 +149,11 @@ mod tests {
         let mut dense_poly = one_hot_poly.to_dense_poly();
 
         let mut r_address: Vec<Fr> =
-            std::iter::repeat_with(|| <Fr as JoltField>::Challenge::random(&mut rng).into())
+            std::iter::repeat_with(|| <Fr as JoltField>::Challenge::random(&mut rng))
                 .take(LOG_K)
                 .collect();
         if vanishing_address {
-            r_address[0] = Fr::from(1u64);
+            r_address[0] = Fr::from_u64(1u64);
         }
         let r_cycle = std::iter::repeat_with(|| <Fr as JoltField>::Challenge::random(&mut rng))
             .take(LOG_T)
@@ -164,9 +166,9 @@ mod tests {
             Arc::new(RwLock::new(eq_address_state)),
             Arc::new(RwLock::new(eq_cycle_state)),
         );
-        one_hot_opening.initialize(vec![(one_hot_poly.clone(), Fr::from(1u64))]);
+        one_hot_opening.initialize(vec![(one_hot_poly.clone(), Fr::from_u64(1u64))]);
 
-        let r_cycle_field: Vec<Fr> = r_cycle.iter().map(|&r| r.into()).collect();
+        let r_cycle_field: Vec<Fr> = r_cycle.to_vec();
         let r_concat = [r_address.as_slice(), r_cycle_field.as_slice()].concat();
         let mut eq = DensePolynomial::new(EqPolynomial::<Fr>::evals(&r_concat));
 
@@ -208,7 +210,7 @@ mod tests {
             assert_eq!(
                 [
                     one_hot_message.evaluate(Fr::zero()),
-                    one_hot_message.evaluate(Fr::from(2u64))
+                    one_hot_message.evaluate(Fr::from_u64(2u64))
                 ],
                 *expected_message,
                 "round {round} prover message mismatch"

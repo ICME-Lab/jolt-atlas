@@ -75,6 +75,22 @@ jobs:
             echo "jolt-atlas-verifier depends on jolt-atlas-core" >&2
             exit 1
           fi
+      - name: No BN254 curve crates in any member's dependency graph
+        # Vendored upstream crates keep optional BN254 features, so they are resolved with their
+        # default features off; atlas crates are resolved as built.
+        run: |
+          status=0
+          for row in $(cargo metadata --format-version 1 --no-deps \
+              | jq -r '.packages[] | "\(.name),\(.manifest_path | contains("/third_party/"))"'); do
+            name=${row%,*}
+            flags=""
+            if [ "${row#*,}" = true ]; then flags=--no-default-features; fi
+            if cargo tree -p "$name" $flags -e normal,build --prefix none | grep -qE '^(ark-bn254|ark-ec) '; then
+              echo "$name resolves ark-bn254 or ark-ec" >&2
+              status=1
+            fi
+          done
+          exit $status
 
   test:
     # Unit tests, the exhaustive op-surface table, the soundness sweeps, the
@@ -101,8 +117,8 @@ jobs:
           --run-ignored ignored-only -E 'not test(golden_zoo_big)'
 
   heavy-models:
-    # Real GPT-2 (Dory), BGE and Qwen2-0.5B (Dory): main, nightly,
-    # workflow_dispatch, and PRs labelled `ci:heavy`.
+    # Real GPT-2, BGE and Qwen2-0.5B: main, nightly, workflow_dispatch, and
+    # PRs labelled `ci:heavy`.
     name: Real model (${{ matrix.model.name }})
     needs: test
     if: >
@@ -117,7 +133,7 @@ jobs:
           - name: gpt2
             dir: models/gpt2
             script: download_gpt2.py
-            test: 'test(/zoo::gpt2_akita$/)'
+            test: 'test(/zoo::gpt2$/)'
           - name: bge
             dir: models/bge-small-en-v1.5
             script: download_bge_small_en_v1_5.py

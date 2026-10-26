@@ -8,12 +8,11 @@
 //! only smaller. The real downloads are `#[ignore]`d and run in the heavy
 //! CI job.
 
-use ark_bn254::Bn254;
 use atlas_onnx_import::fixtures::{standard_bindings, synth_inputs, GOLDEN_SEED};
 use atlas_onnx_import::ImportedModel;
 use atlas_trace::Tensor;
-use joltworks::field::bn254::Fr;
-use joltworks::poly::commitment::{akita::AkitaScheme, dory::DoryScheme, hyperkzg::HyperKZG};
+use joltworks::field::fp128::Fp128 as Fr;
+use joltworks::poly::commitment::akita::AkitaScheme;
 
 use super::{prove_verify_roundtrip, RoundtripOptions};
 use crate::loader::{load_imported, RunArgs};
@@ -91,7 +90,7 @@ fn op_gauntlet() {
 /// with past-KV inputs like the real model: native LayerNormalization,
 /// Gemm, fused-QKV Split, tanh GELU, IsNaN/Where mask, KV-cache elision.
 #[test]
-fn gpt2_tiny_dory() {
+fn gpt2_tiny() {
     let imported = zoo("gpt2-tiny", 16);
     assert_passes_fired(
         &imported,
@@ -104,7 +103,7 @@ fn gpt2_tiny_dory() {
         ],
     );
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<DoryScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 /// Qwen2 architecture (2 layers, 56 hidden, 7 query heads over 1 KV head):
@@ -112,7 +111,7 @@ fn gpt2_tiny_dory() {
 /// einsum (the path PR #382 broke with no test), RoPE Cos/Sin over scaled
 /// position ids, RMSNorm, SiLU, tied embeddings.
 #[test]
-fn qwen2_tiny_dory() {
+fn qwen2_tiny() {
     let imported = zoo("qwen2-tiny", 16);
     assert_passes_fired(
         &imported,
@@ -129,29 +128,6 @@ fn qwen2_tiny_dory() {
             .any(|e| e == "amk,ank->amn"),
         "qwen2-tiny must lower the GQA outer-product einsum"
     );
-    let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<DoryScheme>(imported.model, &inputs, RoundtripOptions::default());
-}
-
-/// The same model under HyperKZG.
-#[test]
-fn qwen2_tiny_hyperkzg() {
-    let imported = zoo("qwen2-tiny", 16);
-    let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
-}
-
-/// The tiny GPT-2 and Qwen2 under Akita (the gauntlet and BGE default to it).
-#[test]
-fn gpt2_tiny_akita() {
-    let imported = zoo("gpt2-tiny", 16);
-    let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
-}
-
-#[test]
-fn qwen2_tiny_akita() {
-    let imported = zoo("qwen2-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
     prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
@@ -185,15 +161,7 @@ fn bge_tiny() {
 
 #[test]
 #[ignore = "requires the GPT-2 ONNX download (scripts/download_gpt2.py)"]
-fn gpt2_dory() {
-    let imported = zoo("gpt2", 16);
-    let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<DoryScheme>(imported.model, &inputs, RoundtripOptions::default());
-}
-
-#[test]
-#[ignore = "requires the GPT-2 ONNX download (scripts/download_gpt2.py)"]
-fn gpt2_akita() {
+fn gpt2() {
     let imported = zoo("gpt2", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
     prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());

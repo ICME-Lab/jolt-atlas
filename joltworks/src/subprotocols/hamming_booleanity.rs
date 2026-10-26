@@ -239,7 +239,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
 
 #[cfg(test)]
 mod tests {
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use jolt_field::Ring;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
@@ -273,7 +273,7 @@ mod tests {
             r_cycle,
         };
 
-        let hw: Vec<Fr> = (0..T).map(|_| Fr::from(rng.next_u32() % 2)).collect();
+        let hw: Vec<Fr> = (0..T).map(|_| Fr::from_u32(rng.next_u32() % 2)).collect();
 
         let mut prover = HammingBooleanitySumcheckProver::gen(params, vec![hw]);
 

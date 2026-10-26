@@ -52,7 +52,7 @@
 //!
 //! Compared to the table lookup: no RaVirtual (the most expensive check), the
 //! dense chunk count drops from `w/4` to 8, and the `w/4` slack chunks are
-//! almost empty (Dory's one-hot commitment is `O(nonzeros)`).
+//! almost empty.
 use super::{
     clamp_lookups::{acc_opening_id, clamp_intermediate},
     deferred_lookups::DEFERRED_PROOF_IDX,
@@ -309,7 +309,7 @@ impl BucketSplit {
     }
 
     /// The chunk polynomials of a bucket with no live node: never opened, so
-    /// committed empty (all `None`, free under Dory's sparse commit).
+    /// committed empty (all `None`).
     pub fn empty_witness_polys<F: JoltField>(
         bucket: &ClampBucket,
     ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {

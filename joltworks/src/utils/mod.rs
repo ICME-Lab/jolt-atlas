@@ -4,7 +4,6 @@ use common::parallel::par_enabled;
 use rayon::prelude::*;
 
 pub mod accumulation;
-pub mod counters;
 pub mod errors;
 pub mod expanding_table;
 pub mod gaussian_elimination;
@@ -24,7 +23,7 @@ pub mod thread;
 /// - [0, 0, 0, 0, 0, 0, 0, 1]
 /// ```ignore
 /// use jolt_core::utils::index_to_field_bitvector;
-/// # use ark_bn254::Fr;
+/// # use joltworks::field::fp128::Fp128 as Fr;
 /// # use ark_std::{One, Zero};
 /// let zero = Fr::zero();
 /// let one = Fr::one();

@@ -58,7 +58,7 @@ impl<const XLEN: usize> PrefixSuffixDecompositionTrait<XLEN> for XorTable<XLEN> 
 
 #[cfg(test)]
 mod test {
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use crate::{
         lookup_tables::test::{
             lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,

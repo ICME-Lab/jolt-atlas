@@ -84,16 +84,16 @@ mod tests {
     use crate::node_view::ModelView;
     use crate::onnx_proof::testing::ModelBuilder;
     use crate::onnx_proof::{
-        prover, verifier, AtlasSharedPreprocessing, Claims, HyperKZG, ONNXProof, ProofId,
+        prover, verifier, AtlasSharedPreprocessing, Claims, ONNXProof, ProofId,
     };
-    use ark_bn254::Bn254;
     use atlas_trace::op::Add;
     use atlas_trace::trace::ModelExecutionIO;
     use atlas_trace::Model;
     use atlas_trace::Op;
     use atlas_trace::Tensor;
     use common::VirtualPoly;
-    use joltworks::field::bn254::Fr;
+    use joltworks::field::fp128::Fp128 as Fr;
+    use joltworks::poly::commitment::mock::MockCommitScheme;
     use joltworks::{
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
@@ -229,10 +229,7 @@ mod tests {
             .get(&producer_idx)
             .expect("single opening should be propagated to reduced_evaluations");
 
-        assert_eq!(
-            reduced.r,
-            point.iter().map(|&c| c.into()).collect::<Vec<_>>()
-        );
+        assert_eq!(reduced.r, point.to_vec());
         assert_eq!(reduced.claim, claim);
     }
 
@@ -293,10 +290,7 @@ mod tests {
             .get(&producer_idx)
             .expect("single opening should be propagated to reduced_evaluations");
 
-        assert_eq!(
-            reduced.r,
-            point.iter().map(|&c| c.into()).collect::<Vec<_>>()
-        );
+        assert_eq!(reduced.r, point.to_vec());
         assert_eq!(reduced.claim, claim);
     }
 
@@ -357,7 +351,7 @@ mod tests {
         );
 
         let opening_claims = Claims::from_parts(prover.accumulator.take());
-        let partial_proof = ONNXProof::<_, HyperKZG<Bn254>>::from_parts(
+        let partial_proof = ONNXProof::<_, MockCommitScheme<Fr>>::from_parts(
             opening_claims,
             proofs,
             (),

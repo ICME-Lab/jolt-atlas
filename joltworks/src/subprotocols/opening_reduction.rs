@@ -846,17 +846,10 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
 
 #[cfg(test)]
 mod tests {
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use crate::{
         field::JoltField,
         poly::{
-            commitment::{
-                commitment_scheme::CommitmentScheme,
-                hyperkzg::{
-                    HyperKZG, HyperKZGCommitment, HyperKZGProof, HyperKZGProverKey, HyperKZGSRS,
-                    HyperKZGVerifierKey,
-                },
-            },
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
             one_hot_polynomial::OneHotPolynomial,
             opening_proof::{
@@ -869,7 +862,6 @@ mod tests {
             Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
         },
     };
-    use ark_bn254::Bn254;
     use ark_std::UniformRand;
     use common::CommittedPoly;
     use itertools::Itertools;
@@ -883,7 +875,6 @@ mod tests {
         let log_T = 6;
         struct PolyData {
             poly: MultilinearPolynomial<Fr>,
-            commitment: HyperKZGCommitment<Bn254>,
             point: Vec<Challenge>,
         }
 
@@ -892,13 +883,6 @@ mod tests {
         // Define dense polynomial sizes (log_N values)
         let dense_configs = [log_T, log_T, log_T];
 
-        // Calculate max size needed
-        let max_dense_size = 1 << dense_configs.iter().max().unwrap();
-
-        // Setup
-        let srs = HyperKZGSRS::setup(&mut rng, max_dense_size);
-        let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) =
-            srs.trim(max_dense_size);
         let mut prover_tr = Blake2bProver::new(b"TestEval");
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
             ProverOpeningAccumulator::new();
@@ -916,17 +900,12 @@ mod tests {
                 let raw: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
-                let commitment = HyperKZG::commit(&poly, &pk).0;
                 let id = OpeningId::new(
                     CommittedPoly::DivNodeQuotient(i),
                     SumcheckId::NodeExecution(0),
                 );
                 prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
-                PolyData {
-                    poly,
-                    commitment,
-                    point,
-                }
+                PolyData { poly, point }
             })
             .collect();
 
@@ -954,10 +933,6 @@ mod tests {
         // Build RLC
         let rlc = build_materialized_rlc(&state.poly_coeffs, &polynomial_map);
 
-        // Prove
-        let eval_proof: HyperKZGProof<Bn254> =
-            HyperKZG::prove(&pk, &rlc, &state.r_sumcheck, None, &mut prover_tr);
-
         // Verify
         let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_tr.narg().to_vec());
         verifier_tr.compare_to(prover_tr.state_history().to_vec());
@@ -996,27 +971,11 @@ mod tests {
             &mut verifier_tr,
         );
 
-        let mut commitments_map: BTreeMap<CommittedPoly, HyperKZGCommitment<Bn254>> =
-            BTreeMap::new();
-        dense_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(CommittedPoly::DivNodeQuotient(i), data.commitment.clone());
-        });
-
-        // Compute joint commitment
-        let joint_commitment = VerifierOpeningAccumulator::compute_joint_commitment::<
-            HyperKZG<Bn254>,
-        >(&mut commitments_map, &verifier_state);
-
-        // Verify joint opening
-        verifier_opening_accumulator
-            .verify_joint_opening::<_, HyperKZG<Bn254>>(
-                &vk,
-                &eval_proof,
-                &joint_commitment,
-                &verifier_state,
-                &mut verifier_tr,
-            )
-            .unwrap();
+        // The reduced claim is the RLC of the committed polynomials at the sumcheck point.
+        assert_eq!(
+            rlc.evaluate(&verifier_state.r_sumcheck),
+            verifier_opening_accumulator.compute_joint_claim::<Blake2bVerifier>(&verifier_state)
+        );
     }
 
     #[test]
@@ -1024,13 +983,11 @@ mod tests {
         let log_T = 6;
         struct PolyData {
             poly: MultilinearPolynomial<Fr>,
-            commitment: HyperKZGCommitment<Bn254>,
             point: Vec<Challenge>,
         }
 
         struct OneHotPolyData {
             poly: OneHotPolynomial<Fr>,
-            commitment: HyperKZGCommitment<Bn254>,
             point: Vec<Challenge>,
         }
 
@@ -1042,18 +999,6 @@ mod tests {
         // Define OneHot polynomial parameters (log_K, log_T)
         let oh_configs = [(5, log_T), (5, log_T), (5, log_T)]; // (K, T) pairs
 
-        // Calculate max size needed
-        let max_dense_size = 1 << dense_configs.iter().max().unwrap();
-        let max_oh_size = oh_configs
-            .iter()
-            .map(|(log_k, log_t)| (1 << log_k) * (1 << log_t))
-            .max()
-            .unwrap();
-        let max_size = max_dense_size.max(max_oh_size);
-
-        // Setup
-        let srs = HyperKZGSRS::setup(&mut rng, max_size);
-        let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(max_size);
         let mut prover_tr = Blake2bProver::new(b"TestEval");
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
             ProverOpeningAccumulator::new();
@@ -1071,17 +1016,12 @@ mod tests {
                 let raw: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
-                let commitment = HyperKZG::commit(&poly, &pk).0;
                 let id = OpeningId::new(
                     CommittedPoly::DivNodeQuotient(i),
                     SumcheckId::NodeExecution(0),
                 );
                 prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
-                PolyData {
-                    poly,
-                    commitment,
-                    point,
-                }
+                PolyData { poly, point }
             })
             .collect();
 
@@ -1101,8 +1041,6 @@ mod tests {
                     .collect();
                 let one_hot = OneHotPolynomial::<Fr>::from_indices(nonzero_indices, k);
                 let eval = one_hot.evaluate(&point);
-                let poly_wrapped = MultilinearPolynomial::OneHot(one_hot.clone());
-                let commitment = HyperKZG::commit(&poly_wrapped, &pk).0;
 
                 let (r_address, r_cycle) = point.split_at(log_k);
                 prover_opening_accumulator.append_sparse(
@@ -1115,7 +1053,6 @@ mod tests {
                 );
                 OneHotPolyData {
                     poly: one_hot,
-                    commitment,
                     point,
                 }
             })
@@ -1150,10 +1087,6 @@ mod tests {
 
         // Build RLC
         let rlc = build_materialized_rlc(&state.poly_coeffs, &polynomial_map);
-
-        // Prove
-        let eval_proof: HyperKZGProof<Bn254> =
-            HyperKZG::prove(&pk, &rlc, &state.r_sumcheck, None, &mut prover_tr);
 
         // Verify
         let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_tr.narg().to_vec());
@@ -1202,42 +1135,22 @@ mod tests {
             &mut verifier_tr,
         );
 
-        let mut commitments_map: BTreeMap<CommittedPoly, HyperKZGCommitment<Bn254>> =
-            BTreeMap::new();
-        dense_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(CommittedPoly::DivNodeQuotient(i), data.commitment.clone());
-        });
-        oh_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(CommittedPoly::NodeOutputRaD(i, 0), data.commitment.clone());
-        });
-        // Compute joint commitment
-        let joint_commitment = VerifierOpeningAccumulator::compute_joint_commitment::<
-            HyperKZG<Bn254>,
-        >(&mut commitments_map, &verifier_state);
-
-        // Verify joint opening
-        verifier_opening_accumulator
-            .verify_joint_opening::<_, HyperKZG<Bn254>>(
-                &vk,
-                &eval_proof,
-                &joint_commitment,
-                &verifier_state,
-                &mut verifier_tr,
-            )
-            .unwrap();
+        // The reduced claim is the RLC of the committed polynomials at the sumcheck point.
+        assert_eq!(
+            rlc.evaluate(&verifier_state.r_sumcheck),
+            verifier_opening_accumulator.compute_joint_claim::<Blake2bVerifier>(&verifier_state)
+        );
     }
 
     #[test]
     fn test_mix() {
         struct PolyData {
             poly: MultilinearPolynomial<Fr>,
-            commitment: HyperKZGCommitment<Bn254>,
             point: Vec<Challenge>,
         }
 
         struct OneHotPolyData {
             poly: OneHotPolynomial<Fr>,
-            commitment: HyperKZGCommitment<Bn254>,
             point: Vec<Challenge>,
         }
 
@@ -1249,18 +1162,6 @@ mod tests {
         // Define OneHot polynomial parameters (log_K, log_T)
         let oh_configs = [(8, 4), (5, 6), (4, 7)]; // (K, T) pairs
 
-        // Calculate max size needed
-        let max_dense_size = 1 << dense_configs.iter().max().unwrap();
-        let max_oh_size = oh_configs
-            .iter()
-            .map(|(log_k, log_t)| (1 << log_k) * (1 << log_t))
-            .max()
-            .unwrap();
-        let max_size = max_dense_size.max(max_oh_size);
-
-        // Setup
-        let srs = HyperKZGSRS::setup(&mut rng, max_size);
-        let (pk, vk): (HyperKZGProverKey<Bn254>, HyperKZGVerifierKey<Bn254>) = srs.trim(max_size);
         let mut prover_tr = Blake2bProver::new(b"TestEval");
         let mut prover_opening_accumulator: ProverOpeningAccumulator<Fr> =
             ProverOpeningAccumulator::new();
@@ -1278,17 +1179,12 @@ mod tests {
                 let raw: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
-                let commitment = HyperKZG::commit(&poly, &pk).0;
                 let id = OpeningId::new(
                     CommittedPoly::DivNodeQuotient(i),
                     SumcheckId::NodeExecution(0),
                 );
                 prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
-                PolyData {
-                    poly,
-                    commitment,
-                    point,
-                }
+                PolyData { poly, point }
             })
             .collect();
 
@@ -1308,8 +1204,6 @@ mod tests {
                     .collect();
                 let one_hot = OneHotPolynomial::<Fr>::from_indices(nonzero_indices, k);
                 let eval = one_hot.evaluate(&point);
-                let poly_wrapped = MultilinearPolynomial::OneHot(one_hot.clone());
-                let commitment = HyperKZG::commit(&poly_wrapped, &pk).0;
 
                 let (r_address, r_cycle) = point.split_at(log_k);
                 prover_opening_accumulator.append_sparse(
@@ -1322,7 +1216,6 @@ mod tests {
                 );
                 OneHotPolyData {
                     poly: one_hot,
-                    commitment,
                     point,
                 }
             })
@@ -1357,10 +1250,6 @@ mod tests {
 
         // Build RLC
         let rlc = build_materialized_rlc(&state.poly_coeffs, &polynomial_map);
-
-        // Prove
-        let eval_proof: HyperKZGProof<Bn254> =
-            HyperKZG::prove(&pk, &rlc, &state.r_sumcheck, None, &mut prover_tr);
 
         // Verify
         let mut verifier_tr = Blake2bVerifier::new(b"TestEval", prover_tr.narg().to_vec());
@@ -1409,28 +1298,10 @@ mod tests {
             &mut verifier_tr,
         );
 
-        let mut commitments_map: BTreeMap<CommittedPoly, HyperKZGCommitment<Bn254>> =
-            BTreeMap::new();
-        dense_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(CommittedPoly::DivNodeQuotient(i), data.commitment.clone());
-        });
-        oh_polys.iter().enumerate().for_each(|(i, data)| {
-            commitments_map.insert(CommittedPoly::NodeOutputRaD(i, 0), data.commitment.clone());
-        });
-        // Compute joint commitment
-        let joint_commitment = VerifierOpeningAccumulator::compute_joint_commitment::<
-            HyperKZG<Bn254>,
-        >(&mut commitments_map, &verifier_state);
-
-        // Verify joint opening
-        verifier_opening_accumulator
-            .verify_joint_opening::<_, HyperKZG<Bn254>>(
-                &vk,
-                &eval_proof,
-                &joint_commitment,
-                &verifier_state,
-                &mut verifier_tr,
-            )
-            .unwrap();
+        // The reduced claim is the RLC of the committed polynomials at the sumcheck point.
+        assert_eq!(
+            rlc.evaluate(&verifier_state.r_sumcheck),
+            verifier_opening_accumulator.compute_joint_claim::<Blake2bVerifier>(&verifier_state)
+        );
     }
 }

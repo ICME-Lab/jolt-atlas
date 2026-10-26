@@ -13,10 +13,7 @@
 pub mod config;
 pub mod field;
 pub mod lookup_tables;
-pub mod msm;
 pub mod poly;
 pub mod subprotocols;
 pub mod transcripts;
 pub mod utils;
-
-pub use ark_bn254;

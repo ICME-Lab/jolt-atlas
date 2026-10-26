@@ -255,8 +255,9 @@ impl<F: JoltField> EqPolynomial<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use ark_std::test_rng;
+    use jolt_field::Field as _;
     use std::time::Instant;
 
     #[test]

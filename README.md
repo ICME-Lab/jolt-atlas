@@ -22,7 +22,7 @@ timings and proof size:
 ```bash
 # Checked-in stand-ins (no download needed)
 cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen2-tiny
-cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2-tiny --pcs dory
+cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2-tiny
 
 # Real models (see "Getting Started" for the downloads)
 cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
@@ -30,13 +30,11 @@ cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen \
     --input "The quick brown fox jumps over the lazy dog" --use-cache
 ```
 
-Options: `--pcs akita|dory|hyperkzg` (default Akita over the 128-bit Solinas field; Dory and
-HyperKZG run over BN254), `--seq-len N` (default 16),
-`--input "<text>"` (tokenizes with the model's `tokenizer.json`), `--srs-vars N`
-(over-provision the SRS; Dory), `--use-cache` (reuse the shared preprocessing
-across runs), `--stats` (clamp-width histogram and packed buckets),
-`--trace` (Chrome Tracing JSON, view in `chrome://tracing`) or
-`--trace-terminal` (timings on the terminal).
+The commitment scheme is Akita over the 128-bit Solinas field. Options: `--seq-len N` (default
+16), `--input "<text>"` (tokenizes with the model's `tokenizer.json`), `--use-cache` (reuse the
+shared preprocessing across runs), `--stats` (clamp-width histogram and packed buckets),
+`--trace` (Chrome Tracing JSON, view in `chrome://tracing`) or `--trace-terminal` (timings on
+the terminal).
 
 ### The model zoo (`models/`)
 
@@ -79,9 +77,9 @@ GPT-2 is a 125-million-parameter transformer model from OpenAI.
 Stage rows come from one `--trace-terminal` run, which adds tracing overhead. Akita's setups
 are derived from public schedule catalogs on first use, inside the proof time. Without
 tracing, the median of 3 runs is 39.9 s to prove and 2.17 s to verify, with a 2.42 MiB proof
-and 6.2 GB peak memory. The same command with `--pcs dory` (BN254, cached URS) proves in
-26.7 s, verifies in 3.42 s, with a 2.37 MiB proof and 6.6 GB peak memory. Akita is the
-benchmark backend: the per-stage performance gate in `specs/adoption-program.md` measures this
+and 6.2 GB peak memory. Before BN254 was removed, the Dory backend (cached URS) proved the
+same model in 26.7 s and verified in 3.42 s, with a 2.37 MiB proof and 6.6 GB peak memory. Akita
+is the benchmark backend: the per-stage performance gate in `specs/adoption-program.md` measures this
 command.
 
 ### How to reproduce locally

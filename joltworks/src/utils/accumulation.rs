@@ -460,8 +460,6 @@ impl<F: JoltField> BarrettReduce<F> for WideAccumU<F> {
 /// S128, S160, and S192 scalars. Finishes with Barrett reduction (pos - neg).
 ///
 /// This is the widest signed accumulator that uses Barrett reduction.
-/// For BN254 (NUM_LIMBS=4) the internal words are `BigInt<7>` (448 bits);
-/// the field × S192 product (4 + 3 = 7 limbs) fits exactly.
 ///
 /// Used in: Spartan outer (Bz second group), R1CS opening proofs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -607,8 +605,6 @@ impl<F: JoltField> BarrettReduce<F> for WideAccumS<F> {
 ///
 /// This is the widest signed accumulator, used where full field × field products
 /// must be tracked (e.g. Az*Bz in Spartan).
-/// For BN254 (NUM_LIMBS=4) the internal words are `BigInt<8>` (512 bits);
-/// the field × S256 product (4 + 4 = 8 limbs) fits exactly.
 ///
 /// Used in: Spartan outer (Az*Bz product), product virtual sumcheck.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

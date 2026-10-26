@@ -296,9 +296,10 @@ impl EvalReductionProtocol {
 #[cfg(test)]
 mod tests {
     use jolt_field::Field;
+    use jolt_field::Ring as _;
 
     use super::*;
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use crate::{
         field::{IntoOpening, JoltField},
         poly::multilinear_polynomial::PolynomialEvaluation,
@@ -430,7 +431,7 @@ mod tests {
             assert!(h.degree() <= num_vars * (num_openings - 1));
             for (i, opening) in openings_vec.iter().enumerate() {
                 let v = mle.evaluate(opening);
-                assert_eq!(h.evaluate(&Fr::from(i as u64)), v);
+                assert_eq!(h.evaluate(&Fr::from_u64(i as u64)), v);
             }
         }
     }
@@ -546,7 +547,7 @@ mod tests {
         let (mut proof, _reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
 
         // Tamper h so boundary checks fail.
-        proof.h.coeffs[0] += Fr::from(1u64);
+        proof.h.coeffs[0] += Fr::from_u64(1u64);
         let mut verifier_tr =
             Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
         let err = instance

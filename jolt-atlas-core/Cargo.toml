@@ -16,7 +16,6 @@ jolt-sumcheck.workspace = true
 jolt-claims.workspace = true
 
 # Cryptography and Math
-ark-bn254.workspace = true
 ark-std.workspace = true
 ark-serialize.workspace = true
 

@@ -7,8 +7,8 @@ use common::CommittedPoly;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
-/// Build materialized dense polynomial from this state (for HyperKZG).
-/// Regenerates witness polynomials from trace and combines them homomorphically.
+/// The random linear combination `Σ_i coeffs_i · f_i` as one dense polynomial, every `f_i`
+/// overlapped at index 0.
 #[tracing::instrument(skip_all)]
 pub fn build_materialized_rlc<F: JoltField>(
     coeffs: &[F],
@@ -58,7 +58,7 @@ pub fn build_materialized_rlc<F: JoltField>(
         .collect();
 
     // Add one-hot polynomials directly (sparse - only set nonzero entries)
-    // Index formula matches HyperKZG::commit_one_hot: k * T + t (no bit reversal)
+    // One-hot index: k * T + t (no bit reversal).
     for ((_, poly), coeff) in one_hot.iter() {
         match poly {
             MultilinearPolynomial::OneHot(oh) => {

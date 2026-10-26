@@ -29,13 +29,13 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 
 | `joltworks` module | Upstream counterpart | Bucket | Notes |
 |---|---|---|---|
-| `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | adopt (stage 2: vendored) | `jolt-field` is vendored at `0e3faf07`; the BN254 scalar is `jolt_field::Fr` and `JoltField` is implemented for it and for `Fp128`. Since stage 4b's first PR our `JoltField` extends upstream `jolt_field::JoltField` (colliding methods resolve to upstream's), so upstream crates accept every atlas field; `ark_bn254::Fr` is only the private kernel behind `jolt_field::Fr`'s unreduced ladder. The atlas extension (ladder, `MontU128Challenge`, codec field) remains. |
+| `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | adopt (stage 2: vendored) | `jolt-field` is vendored at `0e3faf07`. Since stage 4b's first PR our `JoltField` extends upstream `jolt_field::JoltField` (colliding methods resolve to upstream's), so upstream crates accept every atlas field. Since stage 7b `Fp128` is the only implementation: the BN254 impl, its arkworks kernel, `TrackedFr` and the `challenge/` types (`MontU128Challenge`, `Mont254BitChallenge`) are deleted. The atlas extension (ladder, codec field) remains. |
 | `transcripts/` (blake2b, keccak) | `jolt-transcript` | adopted (stage 3) | `jolt-transcript` is vendored; `joltworks::transcripts` keeps our `Transcript` trait as a thin layer over upstream's split surface (`ProverState`/`VerifierState`, codecs, `grind`). The remaining delta is that trait itself, which the stage-4 ports replace with upstream's. |
 | `subprotocols/sumcheck{,_prover,_verifier}.rs` | `jolt-sumcheck` | adopt+delta (stage 4b) | Heavily diverged both ways (~842 changed lines vs the 2026-06 jolt-core copy); our batching and instance traits vs their scheduler/recorder. Upstream takes the facade `T: Transcript<Challenge = F>` (no proof-of-work hook, full-field challenges); our rounds grind (stage 3) and bind with the 125-bit `MontU128Challenge`. Both are met without a vendored delta (`subprotocols/upstream_sumcheck.rs`: a facade view that grinds before each challenge, and `JoltField::challenge_from_field`). The batched driver runs on upstream's engine, and `SumcheckInstanceProver` extends upstream's `ProveRounds`: every instance proves its own rounds, and the trait keeps only the claim lifecycle (degree, input claim, cached openings) that stage 5 replaces. |
 | `poly/` core (dense, multilinear, eq, split_eq, unipoly, compact, lagrange, …) | `jolt-poly` | adopt+delta (stage 4b) | Round kernels run on upstream's `GruenSplitEqPolynomial` and round messages are upstream `UnivariatePoly`s; ours is retired, and `poly/split_eq_poly.rs` keeps only atlas extensions over upstream's (the delayed-reduction fold, Gruen round helpers with endpoint closures). The operand polynomials stay ours (`MultilinearPolynomial`, `RaPolynomial`): they bind with the 125-bit challenge and keep the compact small-scalar layouts, about a quarter faster per bind than `jolt-poly`'s full-field dense binding (2²² evaluations: ~11 ms vs ~15 ms). `UniPoly`/`CompressedUniPoly` remain as the proof's wire form. |
 | `poly/opening_proof.rs`, `subprotocols/opening_reduction.rs` | `jolt-openings` + `jolt-claims` | relation layer adopted, store atlas-only (stage 5 spike) | Ours is fully diverged (~2,074 changed lines of 1,636): the accumulator is keyed on atlas `OpeningId`/`VirtualPoly` and interleaved with evaluation reduction. The stage 5 spike found no claim store to adopt at `f3265b5a`: `jolt-claims` is transcript-free (the `Expr`/`SymbolicSumcheck` layer plus typed claim structs) and `jolt-openings` is stateless PCS traits; the store, transcript wiring and `ConcreteSumcheck` driver live in `jolt-verifier`, bound to the zkVM's stage graph. Atlas relations (`onnx_proof/relation.rs`) are `SymbolicSumcheck`s over atlas openings, run by an atlas engine on the atlas accumulator. The claim-struct traits (`InputClaims`/`OutputClaims` and their derives) are not used: they assume a static opening vocabulary, and atlas opening ids are graph-indexed. |
 | `subprotocols/evaluation_reduction.rs` | — | atlas-only | Node-output multi-consumer reduction; ONNX-graph-specific. |
-| `poly/commitment/{commitment_scheme,dory,hyperkzg,pedersen,mock}` | `jolt-akita` (+ `jolt-openings` traits) | retire (BN254) / adopt (Akita) | `dory` and `hyperkzg` are BN254-only and are deleted at stage 7b of `specs/adoption-program.md`, never vendored; `pedersen` was deleted with `zk` at stage 0 (nothing else used it); until then the Dory perf work (one-hot commit paths, sparse RLC) stays in place. Akita arrives at stage 7a from the `akita-adapter` branch's `AkitaScheme`; `mock` stays as a test PCS. |
+| `poly/commitment/{commitment_scheme,dory,hyperkzg,pedersen,mock}` | `jolt-akita` (+ `jolt-openings` traits) | retired (BN254, stage 7b) / adopted (Akita, stage 7a) | `dory` and `hyperkzg` were BN254-only and are deleted at stage 7b, never vendored; `pedersen` was deleted with `zk` at stage 0 (nothing else used it). Akita arrived at stage 7a from the `akita-adapter` branch's `AkitaScheme`; `mock` stays as a test PCS. |
 | `subprotocols/{shout,booleanity,hamming_booleanity,hamming_weight}` | twist/shout ancestry in upstream crates | adopted onto the engine (stage 4b) | Shared ancestry, diverged. Each implements upstream's `ProveRounds` over upstream's split eq; the relations themselves stay ours. |
 | `subprotocols/{ps_shout,ra_virtual,gamma_fold,identity_range_check,mles_product_sum}` | — | atlas-only | Prefix–suffix shout and the atlas one-hot machinery. |
 | `subprotocols/univariate_skip.rs` | `jolt-sumcheck` (`prove_uniskip_*`, `CenteredIntegerDomain`) | retired (stage 4b) | It had no callers and is deleted; a protocol that needs a uni-skip first round uses upstream's. |
@@ -46,7 +46,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 | `utils/{accumulation,small_scalar}.rs` | — (upstream accumulators live in `jolt-field`) | atlas-only (decided at stage 4b) | The small/medium/wide signed accumulators and small-scalar multiplication serve our compact operand polynomials, which stay ours at stage 4b (their 125-bit-challenge binding beats `jolt-poly`'s; see the `poly/` row), and the round kernels' delayed reduction runs on our `JoltField` ladder. They go if the operand polynomials move to `jolt-poly`. |
 | `utils/{counters,profiling,monitor}.rs` | — | atlas-only | Test/benchmark instrumentation (`TrackedFr` counters, flamegraphs, `monitor` feature). |
 | `utils/{errors,expanding_table,gaussian_elimination,serialization}.rs` | — | atlas-only (decided at stage 4b) | No upstream counterpart at `f3265b5a`. `expanding_table` serves the Booleanity and one-hot opening provers, which bind with it on the engine; `serialization` holds the capped proof-vector decoder. |
-| `msm/` | arkworks MSMs | retire (stage 7b) | A wrapper over arkworks' variable-base MSM for the BN254 commitment schemes; deleted with HyperKZG/Dory. |
+| `msm/` | arkworks MSMs | retired (stage 7b) | A wrapper over arkworks' variable-base MSM for the BN254 commitment schemes; deleted with HyperKZG/Dory. |
 | `config.rs` | `jolt-claims` one-hot geometry | atlas-only until stage 5 | One-hot parameter derivation (`OneHotParams`); upstream's equivalent lives with the claim layer, so it is revisited at stage 5. |
 | `curve.rs` | — | retired (stage 0) | `JoltCurve` was deleted with `zk`; only Pedersen and BlindFold used it. |
 
@@ -107,7 +107,7 @@ reaches 2⁻¹²⁸ per hash query. Measured cost on GPT-2 (Dory, M3, median of 
   reject a reduced proof when the accumulator holds no sumchecks.
 - *Dory proof shape not pinned*: `DoryScheme::verify` accepts any `(nu, sigma)` the dory-pcs
   bounds allow instead of the split the prover must use, a union-bound loss of about log n, not a
-  forgery. Accepted until Dory's deletion at stage 7b.
+  forgery. Closed by Dory's deletion at stage 7b.
 
 ## Op dispositions at the close of stage 6
 
@@ -156,6 +156,20 @@ Akita, all in the adapter rather than the vendored crate:
 Cost against Dory on GPT-2 (release `prove` example, median of 3, M3): prove 39.9 s vs 26.7 s,
 verify 2.17 s vs 3.42 s, proof 2.42 vs 2.37 MiB, peak memory 6.2 vs 6.6 GB. The commitment phase
 dominates (24.4 s), and two of the six 2^24-variable one-hot groups take about 10 s each of it.
+
+## BN254 removal (stage 7b)
+
+Dory, HyperKZG, the BN254 `JoltField` impl (with its arkworks kernel, `TrackedFr` and the
+125/254-bit challenge types), the MSM wrapper, the curve-point transcript methods and the
+256-bit folded accumulators are deleted. Tests that ran over BN254 run over `Fp128`; the
+opening-reduction unit tests that opened through HyperKZG check the reduced claim against the
+materialized RLC's evaluation instead. The `prove` example drops `--pcs` and `--srs-vars`.
+
+The gate is the resolved dependency graph: CI resolves every workspace member (vendored upstream
+crates with default features off, since they keep optional `bn254` features) and fails on
+`ark-bn254` or `ark-ec`. The `a16z/arkworks-algebra` fork pin stays for `ark-ff` (`BigInt`, the
+signed big integers and their `Allocative` derives, used by the Fp128 ladder and the small-scalar
+polynomials) and `ark-serialize`; `third_party/PINS.md` records it.
 
 ## Adoption sequence
 

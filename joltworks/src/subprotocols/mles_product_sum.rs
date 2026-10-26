@@ -1328,7 +1328,7 @@ fn product_eval_univariate_naive_accumulate<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use ark_std::{test_rng, One, UniformRand, Zero};
     use jolt_field::Field;
     use jolt_poly::GruenSplitEqPolynomial;
@@ -1385,10 +1385,10 @@ mod tests {
         let eval = EqPolynomial::mle(challenge, r) * mle_challenge_product;
         let mles = mles.map(RaPolynomial::RoundN);
 
-        let r_field: Vec<Fr> = r.iter().map(|&c| c.into()).collect();
+        let r_field: Vec<Fr> = r.to_vec();
         let eq_poly = GruenSplitEqPolynomial::new(&r_field, jolt_poly::BindingOrder::LowToHigh);
         let sum_poly = compute_mles_product_sum(&mles, claim, &eq_poly).expect("honest claim");
-        let lhs = sum_poly.evaluate(challenge[0].into());
+        let lhs = sum_poly.evaluate(challenge[0]);
 
         assert_eq!(lhs, eval);
     }
@@ -1401,7 +1401,7 @@ mod tests {
         let r = [Fr::one()];
         let mles: [_; 4] = from_fn(|_| random_mle(1, rng));
         let claim = gen_product_mle(&mles).evaluate(&r);
-        let challenge: Fr = <Fr as JoltField>::Challenge::rand(&mut rng).into();
+        let challenge: Fr = <Fr as JoltField>::Challenge::rand(&mut rng);
         let expected = EqPolynomial::mle(&[challenge], &r)
             * mles
                 .iter()
@@ -1453,7 +1453,7 @@ mod tests {
         let w: Vec<<Fr as JoltField>::Challenge> = (0..n_vars)
             .map(|_| <Fr as JoltField>::Challenge::rand(&mut rng))
             .collect();
-        let w_field: Vec<Fr> = w.iter().map(|&c| c.into()).collect();
+        let w_field: Vec<Fr> = w.to_vec();
         let mut eq_poly = GruenSplitEqPolynomial::new(&w_field, jolt_poly::BindingOrder::LowToHigh);
 
         // Number of product terms to sum; keep small for test runtime.
@@ -1497,7 +1497,7 @@ mod tests {
             for mle in mles.iter_mut() {
                 mle.bind_parallel(r_j, BindingOrder::LowToHigh);
             }
-            eq_poly.bind(r_j.into());
+            eq_poly.bind(r_j);
         }
     }
 

@@ -276,7 +276,7 @@ impl<const XLEN: usize> ClampSpec for SoftmaxClampTable<XLEN> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use crate::{
         lookup_tables::test::{
             lookup_table_mle_linearity_test, prefix_suffix_test_unary,

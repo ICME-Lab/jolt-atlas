@@ -466,11 +466,12 @@ mod tests {
         multilinear_polynomial::MultilinearPolynomial,
         prefix_suffix::tests::prefix_suffix_decomposition_test,
     };
+    use jolt_field::Field as _;
     use jolt_field::Ring;
     use num_traits::{One, Zero};
 
     use super::*;
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
 
     use ark_std::test_rng;
 
@@ -539,23 +540,32 @@ mod tests {
         // Test a few specific points
         // k=0 should map to start_address
         let point_0 = vec![Fr::zero(); NUM_VARS];
-        assert_eq!(unmap_poly.evaluate(&point_0), Fr::from(START_ADDRESS));
+        assert_eq!(unmap_poly.evaluate(&point_0), Fr::from_u64(START_ADDRESS));
 
         // k=1 should map to start_address + 8
         let mut point_1 = vec![Fr::zero(); NUM_VARS];
         point_1[NUM_VARS - 1] = Fr::one();
-        assert_eq!(unmap_poly.evaluate(&point_1), Fr::from(START_ADDRESS + 8));
+        assert_eq!(
+            unmap_poly.evaluate(&point_1),
+            Fr::from_u64(START_ADDRESS + 8)
+        );
 
         // k=2 should map to start_address + 16
         let mut point_2 = vec![Fr::zero(); NUM_VARS];
         point_2[NUM_VARS - 2] = Fr::one();
-        assert_eq!(unmap_poly.evaluate(&point_2), Fr::from(START_ADDRESS + 16));
+        assert_eq!(
+            unmap_poly.evaluate(&point_2),
+            Fr::from_u64(START_ADDRESS + 16)
+        );
 
         // k=3 should map to start_address + 24
         let mut point_3 = vec![Fr::zero(); NUM_VARS];
         point_3[NUM_VARS - 1] = Fr::one();
         point_3[NUM_VARS - 2] = Fr::one();
-        assert_eq!(unmap_poly.evaluate(&point_3), Fr::from(START_ADDRESS + 24));
+        assert_eq!(
+            unmap_poly.evaluate(&point_3),
+            Fr::from_u64(START_ADDRESS + 24)
+        );
     }
 
     #[test]
@@ -673,7 +683,7 @@ mod tests {
 
         let K = 1 << NUM_VARS;
         let unmap_evals: Vec<Fr> = (0..K)
-            .map(|k| Fr::from((k as u64).wrapping_mul(8).wrapping_add(START_ADDRESS)))
+            .map(|k| Fr::from_u64((k as u64).wrapping_mul(8).wrapping_add(START_ADDRESS)))
             .collect();
         let mut reference_poly = MultilinearPolynomial::from(unmap_evals.clone());
 

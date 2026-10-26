@@ -79,7 +79,7 @@ dev profile, never `--release`.
    `cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'not test(golden_zoo_big)'`
 5. **Real-model prove & verify**, if the proof system or trace semantics changed (needs the
    downloaded models; see `CLAUDE.md`):
-   `cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::gpt2_dory$/)'`
+   `cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::gpt2$/)'`
    and the BGE / Qwen equivalents if the spec names them. A new op also needs its
    `op_surface.rs` rows and a place in a soundness probe model.
 6. **`zk` feature**, if the spec touches it: `cargo clippy -p jolt-atlas-core --features zk`

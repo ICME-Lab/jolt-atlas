@@ -7,16 +7,12 @@
 //! A site whose mutation is accepted is a dead field (proof malleability) or
 //! an orphan claim; a verifier panic is a robustness bug.
 
-use ark_bn254::Bn254;
 use ark_std::One;
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use common::VirtualPoly;
 use jolt_field::Ring;
 use joltworks::poly::{
-    commitment::{
-        akita::AkitaScheme, commitment_scheme::CommitmentScheme, dory::DoryScheme,
-        hyperkzg::HyperKZG,
-    },
+    commitment::{akita::AkitaScheme, commitment_scheme::CommitmentScheme},
     opening_proof::{OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
 };
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
@@ -26,14 +22,6 @@ use crate::onnx_proof::{ONNXProof, ProofId};
 /// A PCS-specific edit of the joint opening proof.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PcsSite {
-    /// `v[i][j] += 1`.
-    V { i: usize, j: usize },
-    /// Swap two witness commitments.
-    SwapW { i: usize, j: usize },
-    /// Swap two polynomial commitments.
-    SwapCom { i: usize, j: usize },
-    /// Replace a polynomial commitment with a witness commitment.
-    ComFromW { i: usize },
     /// Akita: `slot_evals[slot] += 1` in the `i`-th class opening.
     SlotEval { i: usize, slot: usize },
     /// Akita: an extra slot evaluation in the `i`-th class opening.
@@ -83,44 +71,6 @@ pub(crate) trait PcsMutations: CommitmentScheme<Commitment: PartialEq> {
     }
 }
 
-impl PcsMutations for HyperKZG<Bn254> {
-    fn sites(p: &Self::Proof) -> Vec<PcsSite> {
-        let mut sites = vec![];
-        for (i, row) in p.v.iter().enumerate() {
-            for j in 0..row.len() {
-                sites.push(PcsSite::V { i, j });
-            }
-        }
-        if p.w.len() >= 2 {
-            sites.push(PcsSite::SwapW { i: 0, j: 1 });
-        }
-        if p.com.len() >= 2 {
-            sites.push(PcsSite::SwapCom { i: 0, j: 1 });
-        }
-        if !p.com.is_empty() && !p.w.is_empty() {
-            sites.push(PcsSite::ComFromW { i: 0 });
-        }
-        sites
-    }
-
-    fn apply(p: &mut Self::Proof, site: PcsSite) {
-        match site {
-            PcsSite::V { i, j } => p.v[i][j] += ark_bn254::Fr::one(),
-            PcsSite::SwapW { i, j } => p.w.swap(i, j),
-            PcsSite::SwapCom { i, j } => p.com.swap(i, j),
-            PcsSite::ComFromW { i } => p.com[i] = p.w[0],
-            _ => unreachable!("not a HyperKZG site"),
-        }
-    }
-}
-
-impl PcsMutations for DoryScheme {
-    fn sites(_: &Self::Proof) -> Vec<PcsSite> {
-        vec![]
-    }
-    fn apply(_: &mut Self::Proof, _: PcsSite) {}
-}
-
 impl PcsMutations for AkitaScheme {
     fn sites(p: &Self::Proof) -> Vec<PcsSite> {
         let mut sites = vec![];
@@ -155,7 +105,6 @@ impl PcsMutations for AkitaScheme {
                 p.classes.remove(i);
             }
             PcsSite::ClassOpeningSwap { i, j } => p.classes.swap(i, j),
-            _ => unreachable!("not an Akita site"),
         }
     }
 

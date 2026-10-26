@@ -1,6 +1,5 @@
 use crate::field::JoltField;
 use crate::utils::errors::ProofVerifyError;
-use ark_ec::CurveGroup;
 use ark_serialize::CanonicalSerialize;
 use std::borrow::Borrow;
 
@@ -14,8 +13,6 @@ pub trait Transcript: Send + Sync + 'static {
     fn append_scalar<F: JoltField>(&mut self, scalar: &F);
     fn append_serializable<F: CanonicalSerialize>(&mut self, scalar: &F);
     fn append_scalars<F: JoltField>(&mut self, scalars: &[impl Borrow<F>]);
-    fn append_point<G: CurveGroup>(&mut self, point: &G);
-    fn append_points<G: CurveGroup>(&mut self, points: &[G]);
     fn challenge_u128(&mut self) -> u128;
     /// A full-width field challenge, decoded through the transcript's challenge codec.
     fn challenge_scalar<F: JoltField>(&mut self) -> F;

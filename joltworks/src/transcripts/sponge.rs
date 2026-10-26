@@ -12,7 +12,6 @@ use super::transcript::ProvingTranscript;
 use super::transcript::{Transcript, VerifyingTranscript};
 use crate::field::JoltField;
 use crate::utils::errors::ProofVerifyError;
-use ark_ec::CurveGroup;
 use ark_serialize::CanonicalSerialize;
 #[cfg(feature = "prover")]
 use jolt_transcript::ProverTranscript as _;
@@ -34,8 +33,6 @@ const TAG_U64: u8 = 3;
 const TAG_SCALAR: u8 = 4;
 const TAG_SERIALIZABLE: u8 = 5;
 const TAG_SCALARS: u8 = 6;
-const TAG_POINT: u8 = 7;
-const TAG_POINTS: u8 = 8;
 
 /// A sponge usable for both transcript roles.
 pub trait TranscriptSponge:
@@ -56,10 +53,6 @@ fn compressed<T: CanonicalSerialize>(x: &T) -> Vec<u8> {
     x.serialize_compressed(&mut buf)
         .expect("in-memory serialization cannot fail");
     buf
-}
-
-fn point_bytes<G: CurveGroup>(point: &G) -> Vec<u8> {
-    compressed(&point.into_affine())
 }
 
 fn powers<F: JoltField>(q: F, len: usize) -> Vec<F> {
@@ -101,18 +94,6 @@ macro_rules! impl_transcript_ops {
                     .expect("in-memory serialization cannot fail");
             }
             self.absorb(tagged(TAG_SCALARS, &body));
-        }
-
-        fn append_point<G: CurveGroup>(&mut self, point: &G) {
-            self.absorb(tagged(TAG_POINT, &point_bytes(point)));
-        }
-
-        fn append_points<G: CurveGroup>(&mut self, points: &[G]) {
-            let mut body = (points.len() as u64).to_le_bytes().to_vec();
-            for p in points {
-                body.extend_from_slice(&point_bytes(p));
-            }
-            self.absorb(tagged(TAG_POINTS, &body));
         }
 
         fn challenge_u128(&mut self) -> u128 {

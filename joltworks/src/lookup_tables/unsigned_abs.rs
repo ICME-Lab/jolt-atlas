@@ -71,7 +71,7 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for UnsignedAbsTa
 
 #[cfg(test)]
 mod test {
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use crate::{
         lookup_tables::{
             test::{

@@ -247,69 +247,7 @@ macro_rules! impl_addassign_folded_trunc {
     };
 }
 
-impl_folded_core_traits!(Folded256MulU64, 5, 5);
-impl_folded_core_traits!(Folded256MulU128, 6, 6);
-impl_folded_core_traits!(Folded256MulU128Accum, 7, 7);
-impl_folded_core_traits!(Folded256Product, 8, 8);
-impl_folded_core_traits!(Folded256ProductAccum, 8, 9);
-
-impl_addassign_bigint_trunc!(Folded256MulU64, 4);
-impl_addassign_bigint_trunc!(Folded256MulU128, 4);
-impl_addassign_bigint_trunc!(Folded256MulU128, 5);
-impl_addassign_bigint_trunc!(Folded256MulU128Accum, 4);
-impl_addassign_bigint_trunc!(Folded256MulU128Accum, 5);
-impl_addassign_bigint_trunc!(Folded256MulU128Accum, 6);
-impl_addassign_bigint_trunc!(Folded256Product, 4);
-impl_addassign_bigint_trunc!(Folded256Product, 5);
-impl_addassign_bigint_trunc!(Folded256Product, 6);
-impl_addassign_bigint_trunc!(Folded256ProductAccum, 4);
-
-impl_add_bigint_trunc!(Folded256MulU64, 4);
-
-impl_addassign_folded_trunc!(Folded256MulU128Accum, Folded256MulU64, 5);
-impl_addassign_folded_trunc!(Folded256MulU128Accum, Folded256MulU128, 6);
-impl_addassign_folded_trunc!(Folded256MulU128, Folded256MulU64, 5);
-impl_addassign_folded_trunc!(Folded256Product, Folded256MulU64, 5);
-impl_addassign_folded_trunc!(Folded256Product, Folded256MulU128, 6);
-impl_addassign_folded_trunc!(Folded256ProductAccum, Folded256Product, 8);
-
-/// Folded 4x4 limb multiplication into 8 positional slots.
-///
-/// This keeps all per-product operations independent (no inter-slot carry chain)
-/// and defers carry propagation to normalization. It is a fast portable baseline,
-/// but not necessarily globally optimal versus architecture-specific SIMD/asm.
-#[inline(always)]
-fn fold_mul_4x4(a: BigInt<4>, b: BigInt<4>) -> [u128; 8] {
-    let mut slots = [0u128; 8];
-    let mut i = 0;
-    while i < 4 {
-        let mut j = 0;
-        while j < 4 {
-            let p = (a.0[i] as u128) * (b.0[j] as u128);
-            slots[i + j] += (p as u64) as u128;
-            slots[i + j + 1] += ((p >> 64) as u64) as u128;
-            j += 1;
-        }
-        i += 1;
-    }
-    slots
-}
-
-impl Folded256Product {
-    #[inline(always)]
-    pub fn from_mul(a: BigInt<4>, b: BigInt<4>) -> Self {
-        Self(fold_mul_4x4(a, b))
-    }
-}
-
-impl Folded256ProductAccum {
-    #[inline(always)]
-    pub fn from_mul(a: BigInt<4>, b: BigInt<4>) -> Self {
-        Self(fold_mul_4x4(a, b))
-    }
-}
-
-// Folded accumulators sized for 128-bit fields (Akita fp128, NUM_LIMBS = 2).
+// Folded accumulators sized for 128-bit fields (fp128, NUM_LIMBS = 2).
 // The slot count equals the normalized limb count so that `Sub` — which only
 // covers min(slots, out_limbs) limbs — is exact over the full normalized
 // value, as required by the signed pos/neg accumulators in

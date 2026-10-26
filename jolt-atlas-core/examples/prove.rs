@@ -3,7 +3,7 @@
 //! ```bash
 //! # Checked-in stand-ins (no download needed)
 //! cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen2-tiny
-//! cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2-tiny --pcs dory
+//! cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2-tiny
 //!
 //! # Real models (scripts/download_*.py first)
 //! cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
@@ -13,10 +13,8 @@
 //!
 //! Options:
 //! * `--model <dir>`          directory holding `network.onnx` (required)
-//! * `--pcs akita|dory|hyperkzg`  commitment scheme (default `akita`, over Fp128; the others over BN254)
 //! * `--seq-len N`            sequence length binding (default 16; ignored with `--input`)
 //! * `--input "<text>"`       tokenize with `<dir>/tokenizer.json`; sequence length = token count
-//! * `--srs-vars N`           over-provision the SRS (Dory: wider columns, fewer tier-2 pairings)
 //! * `--use-cache`            reuse `<dir>/shared_preprocessing.seq<N>.bin` when present
 //! * `--stats`                print the model, clamp-width histogram and packed buckets
 //! * `--trace` / `--trace-terminal`  Chrome-trace JSON / terminal timings
@@ -35,24 +33,13 @@ use jolt_atlas_core::loader::{load_imported, RunArgs};
 use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
     proof_serialization::serialize_proof, prove, verify, AkitaScheme, AtlasProverPreprocessing,
-    AtlasSharedPreprocessing, AtlasVerifierPreprocessing, Blake2bProver, Blake2bVerifier, Bn254,
-    DoryScheme, HyperKZG,
+    AtlasSharedPreprocessing, AtlasVerifierPreprocessing, Blake2bProver, Blake2bVerifier, Fp128,
 };
-use joltworks::poly::commitment::commitment_scheme::CommitmentScheme;
-
-#[derive(Clone, Copy)]
-enum Pcs {
-    HyperKzg,
-    Dory,
-    Akita,
-}
 
 struct Args {
     model_dir: PathBuf,
-    pcs: Pcs,
     seq_len: usize,
     input: Option<String>,
-    srs_vars: Option<usize>,
     use_cache: bool,
     stats: bool,
 }
@@ -68,23 +55,15 @@ fn parse_args() -> Args {
     };
     let model_dir = PathBuf::from(value("--model").unwrap_or_else(|| {
         eprintln!(
-            "usage: prove --model <dir> [--pcs akita|dory|hyperkzg] [--seq-len N] [--input TEXT] \
-             [--srs-vars N] [--use-cache] [--stats] [--trace|--trace-terminal]"
+            "usage: prove --model <dir> [--seq-len N] [--input TEXT] [--use-cache] [--stats] \
+             [--trace|--trace-terminal]"
         );
         std::process::exit(2);
     }));
-    let pcs = match value("--pcs").as_deref() {
-        None | Some("akita") => Pcs::Akita,
-        Some("dory") => Pcs::Dory,
-        Some("hyperkzg") => Pcs::HyperKzg,
-        Some(other) => panic!("unknown --pcs {other:?} (akita|dory|hyperkzg)"),
-    };
     Args {
         model_dir,
-        pcs,
         seq_len: value("--seq-len").map_or(16, |v| v.parse().expect("--seq-len N")),
         input: value("--input"),
-        srs_vars: value("--srs-vars").map(|v| v.parse().expect("--srs-vars N")),
         use_cache: argv.iter().any(|a| a == "--use-cache"),
         stats: argv.iter().any(|a| a == "--stats"),
     }
@@ -247,36 +226,28 @@ fn load(args: &Args, run_args: &RunArgs) -> (AtlasSharedPreprocessing, Vec<Input
     (shared, input_descriptors)
 }
 
-/// Prove + verify with the chosen PCS, reporting timings and proof size.
-fn run<PCS: CommitmentScheme>(
-    label: &str,
-    shared: AtlasSharedPreprocessing,
-    inputs: &[Tensor<i32>],
-    srs_vars: Option<usize>,
-) {
+/// Prove + verify, reporting timings and proof size.
+fn run(shared: AtlasSharedPreprocessing, inputs: &[Tensor<i32>]) {
     let t = Instant::now();
-    let prover_pp = match srs_vars {
-        Some(n) => AtlasProverPreprocessing::<PCS::Field, PCS>::new_with_srs_num_vars(shared, n),
-        None => AtlasProverPreprocessing::<PCS::Field, PCS>::new(shared),
-    };
-    println!("[{label}] prover setup: {:.2?}", t.elapsed());
+    let prover_pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(shared);
+    println!("prover setup: {:.2?}", t.elapsed());
 
     let t = Instant::now();
-    let (proof, io, _) = prove::<PCS::Field, Blake2bProver, PCS>(&prover_pp, inputs);
-    println!("[{label}] prove: {:.2?}", t.elapsed());
+    let (proof, io, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&prover_pp, inputs);
+    println!("prove: {:.2?}", t.elapsed());
     let bytes = serialize_proof(&proof).expect("proof serializes");
     println!(
-        "[{label}] proof size: {:.2} MiB ({} commitments, {} sumcheck proofs)",
+        "proof size: {:.2} MiB ({} commitments, {} sumcheck proofs)",
         bytes.len() as f64 / (1024.0 * 1024.0),
         proof.commitments().len(),
         proof.proofs().len()
     );
 
-    let verifier_pp = AtlasVerifierPreprocessing::<PCS::Field, PCS>::from(&prover_pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fp128, AkitaScheme>::from(&prover_pp);
     let t = Instant::now();
-    verify::<PCS::Field, Blake2bVerifier, PCS>(&proof, &verifier_pp, &io, None)
+    verify::<Fp128, Blake2bVerifier, AkitaScheme>(&proof, &verifier_pp, &io, None)
         .expect("verification failed");
-    println!("[{label}] verify: {:.2?}", t.elapsed());
+    println!("verify: {:.2?}", t.elapsed());
     println!("Proof verified successfully!");
 }
 
@@ -313,9 +284,5 @@ fn main() {
         println!("  input {:<16} {:?} {:?}", d.name, d.kind, t.dims());
     }
 
-    match args.pcs {
-        Pcs::HyperKzg => run::<HyperKZG<Bn254>>("hyperkzg", shared, &inputs, args.srs_vars),
-        Pcs::Dory => run::<DoryScheme>("dory", shared, &inputs, args.srs_vars),
-        Pcs::Akita => run::<AkitaScheme>("akita", shared, &inputs, args.srs_vars),
-    }
+    run(shared, &inputs);
 }

@@ -225,7 +225,7 @@ pub type BinaryReadRafSumcheckVerifier<F, LUT> =
 
 #[cfg(test)]
 pub mod tests {
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use crate::{
         lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
         poly::{

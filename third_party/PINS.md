@@ -22,6 +22,15 @@ owns the adoption order; `docs/upstream-inventory.md` records the divergence eac
 | `jolt-r1cs` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
 | `jolt-akita` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 7a | Manifest only (below) |
 
+## The arkworks fork pin
+
+Since stage 7b no atlas crate resolves `ark-bn254` or `ark-ec` (CI checks the graph). The root
+`Cargo.toml` still pins `a16z/arkworks-algebra` branch `dev/twist-shout` for `ark-ff` and
+`ark-serialize`: `joltworks` uses the fork's `BigInt`, its signed big integers (`S64`…`S256`) and
+their `Allocative` derives (which the fork gates on `ark-ff`'s default features). The
+`[patch.crates-io]` entries for `ark-ec` and `ark-bn254` stay so the vendored crates' optional
+`bn254` features, which no atlas build enables, resolve to the same fork.
+
 ## `jolt-field`
 
 `src/`, `asm/` and `build.rs` are byte-identical to `crates/jolt-field` at the pinned rev.

@@ -33,9 +33,8 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
         + Clone;
     type Proof: Sync + Send + CanonicalSerialize + CanonicalDeserialize + Clone + Debug;
     type BatchedProof: Sync + Send + CanonicalSerialize + CanonicalDeserialize;
-    /// A hint that helps the prover compute an opening proof. Typically some byproduct of
-    /// the commitment computation, e.g. for Dory the Pedersen commitments to the rows can be
-    /// used as a hint for the opening proof.
+    /// A hint that helps the prover compute an opening proof: a byproduct of the commitment
+    /// computation (Akita's packed class data).
     type OpeningProofHint: Sync + Send + Clone + Debug + PartialEq;
     /// Commitment data shared by a whole batch of committed polynomials (Akita's packed class
     /// commitments). Homomorphic schemes commit each polynomial independently and use `()`, which
@@ -153,7 +152,7 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
     ///
     /// The default materializes the joint polynomial and calls [`Self::prove`];
     /// schemes that can open the combination without materializing it (see
-    /// Dory) override this.
+    /// Akita) override this.
     fn prove_rlc<ProofTranscript: Transcript>(
         setup: &Self::ProverSetup,
         polynomials: &std::collections::BTreeMap<

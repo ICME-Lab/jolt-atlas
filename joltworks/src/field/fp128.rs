@@ -463,8 +463,7 @@ fn elem_to_field(a: &BigInt<2>) -> Inner {
 
 /// field × M-limb magnitude, eagerly reduced to a canonical element.
 ///
-/// The trait allows smaller fields to eagerly reduce here (BN254 uses a
-/// truncated multiply instead): the full 2+M-limb product would consume the
+/// The full 2+M-limb product would consume the
 /// folded accumulator's slot headroom, so we reduce and embed the canonical
 /// value, which is equivalent modulo p by linearity of the final reduction.
 #[inline(always)]
@@ -493,8 +492,7 @@ impl JoltField for Fp128 {
     type UnreducedMulU64 = Folded128MulU64;
     // The three product-tier levels share one folded type: field × u128 and
     // field × field products are both 4 limbs for fp128, and the folded slots
-    // already carry the accumulation headroom that BN254 encodes as extra
-    // limbs in its wider accumulator levels.
+    // already carry the accumulation headroom.
     type UnreducedMulU128 = Folded128Product;
     type UnreducedMulU128Accum = Folded128Product;
     type UnreducedProduct = Folded128Product;
@@ -503,8 +501,8 @@ impl JoltField for Fp128 {
     type SmallValueLookupTables = [Vec<Self>; 2];
 
     // Full field elements: fp128 challenges are already 128 bits, so there is
-    // no narrower representation to gain from (unlike BN254's 125-bit
-    // MontU128Challenge), and challenge × field is the native field multiply.
+    // no narrower representation to gain from, and challenge × field is the
+    // native field multiply.
     type Challenge = Fp128;
 
     type ChallengeCodecField = Inner;

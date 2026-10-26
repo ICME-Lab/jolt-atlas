@@ -61,7 +61,7 @@ impl<const X_LEN: usize> PrefixSuffixDecompositionTrait<X_LEN> for ReluTable<X_L
 
 #[cfg(test)]
 mod test {
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use crate::{
         lookup_tables::{
             relu::ReluTable,

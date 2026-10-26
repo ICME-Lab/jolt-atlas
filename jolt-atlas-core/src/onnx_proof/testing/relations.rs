@@ -15,7 +15,7 @@
 use atlas_trace::Op;
 use common::VirtualPoly;
 use jolt_claims::{Source, SymbolicSumcheck};
-use jolt_field::Fr;
+use joltworks::field::fp128::Fp128 as Fr;
 use joltworks::poly::commitment::akita::AkitaScheme;
 use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
 use std::{ops::Range, sync::Mutex};
@@ -58,7 +58,6 @@ use atlas_trace::{trace::LayerData, Model, Tensor, Trace};
 use jolt_field::Ring;
 use jolt_sumcheck::ProveRounds;
 use joltworks::{
-    field::JoltField,
     poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
     utils::math::Math,
 };
@@ -339,7 +338,7 @@ const SMALL: Range<i32> = 1..(1 << 7);
 
 fn random_point(rng: &mut StdRng, len: usize) -> Vec<Fr> {
     (0..len)
-        .map(|_| <Fr as JoltField>::Challenge::random(rng).into())
+        .map(|_| <Fr as jolt_field::Field>::random(rng))
         .collect()
 }
 

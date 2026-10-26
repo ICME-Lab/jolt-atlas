@@ -126,6 +126,8 @@ pub trait UnreducedInteger:
 {
 }
 
+impl<const N: usize> UnreducedInteger for BigInt<N> {}
+
 /// The field abstraction the proof system is written against. It extends upstream
 /// [`jolt_field::JoltField`] (ring/field arithmetic, integer conversions, canonical encoding,
 /// accumulators), so upstream crates accept every `JoltField`, and adds the atlas-specific
@@ -164,8 +166,7 @@ pub trait JoltField:
 {
     const NUM_BYTES: usize;
 
-    /// Number of 64-bit limbs in the canonical field element representation.
-    /// BN254: 4, Fp128: 2.
+    /// Number of 64-bit limbs in the canonical field element representation (Fp128: 2).
     const NUM_LIMBS: usize;
 
     /// Montgomery factor R = 2^(64*NUM_LIMBS) mod p.
@@ -295,12 +296,12 @@ pub trait JoltField:
 
     /// Truncated multiply: field × M-limb magnitude → UnreducedMulU128Accum.
     /// Used by `WideAccumS` for accumulating field × {S160, S192} products.
-    /// For BN254 this calls `mul_trunc`; for smaller fields this may eagerly reduce.
+    /// Implementations may reduce eagerly (Fp128 does).
     fn mul_to_accum_mag<const M: usize>(&self, mag: &BigInt<M>) -> Self::UnreducedMulU128Accum;
 
     /// Truncated multiply: field × M-limb magnitude → UnreducedProduct.
     /// Used by `FullAccumS` for accumulating field × {S192, S256} products.
-    /// For BN254 this calls `mul_trunc`; for smaller fields this may eagerly reduce.
+    /// Implementations may reduce eagerly (Fp128 does).
     fn mul_to_product_mag<const M: usize>(&self, mag: &BigInt<M>) -> Self::UnreducedProduct;
 
     fn reduce_mul_u64(x: Self::UnreducedMulU64) -> Self;
@@ -319,19 +320,6 @@ pub trait FMAdd<Left, Right>: Sized {
 /// Trait for accumulators that finish with Barrett reduction to a field element
 pub trait BarrettReduce<F: JoltField> {
     fn barrett_reduce(&self) -> F;
-}
-
-/// A [`JoltField`] laid out exactly like an arkworks scalar field, so curve code (MSMs, scalar
-/// multiplication, the BN254 commitment schemes) can take its elements without copying.
-pub trait ArkScalar: JoltField {
-    /// The arkworks field with the same elements and layout.
-    type Ark: ark_ff::PrimeField;
-
-    fn to_ark(self) -> Self::Ark;
-
-    fn from_ark(x: Self::Ark) -> Self;
-
-    fn slice_as_ark(xs: &[Self]) -> &[Self::Ark];
 }
 
 /// Trait for accumulators that finish with Montgomery reduction to a field element
@@ -388,12 +376,8 @@ where
     }
 }
 
-pub mod ark;
-pub mod bn254;
-pub mod challenge;
 pub mod folded_accum;
 pub mod fp128;
-pub mod tracked_ark;
 
 #[cfg(test)]
 mod tests {
@@ -408,8 +392,6 @@ mod tests {
 
     #[test]
     fn every_field_satisfies_the_upstream_bound() {
-        upstream_accepts::<super::bn254::Fr>();
         upstream_accepts::<super::fp128::Fp128>();
-        upstream_accepts::<super::tracked_ark::TrackedFr>();
     }
 }

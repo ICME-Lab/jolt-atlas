@@ -625,7 +625,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for DensePolynomial<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field::bn254::Fr;
+    use crate::field::fp128::Fp128 as Fr;
     use ark_std::test_rng;
     use jolt_field::Field;
     use rand::Rng;

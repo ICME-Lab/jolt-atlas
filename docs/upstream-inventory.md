@@ -131,6 +131,32 @@ relation's S ⊆ R note: ScalarConstDiv never range-checks its committed remaind
 quotient is not pinned to the floor (soundness); Neg cannot prove negating `i32::MIN`, which
 saturates (completeness).
 
+## Akita as the PCS (stage 7a)
+
+`jolt-akita` is vendored at `f3265b5a` (`third_party/PINS.md`) and `joltworks::poly::commitment::
+akita::AkitaScheme` is the default PCS, over Fp128. Atlas deltas against upstream's own use of
+Akita, all in the adapter rather than the vendored crate:
+
+- **Joint opening without a homomorphism.** `CommitmentScheme` gained a batch commitment
+  (`BatchCommitment`, `batch_commit_all`) and `verify_rlc`; a polynomial's commitment is a slot
+  of a class, and the verifier rebuilds the joint claim from the classes' slot evaluations,
+  checking each opened polynomial's arity against its class (from the reduction instances that
+  open it), before verifying each class natively.
+- **Classes.** Dense classes are prefix-packed per `(encoding, num_vars)` with upstream's
+  `PrefixPackedLayout` under the dense-bounded flavor; signed (`i32`/`i64`) classes are committed
+  shifted by a public offset into `[0, 2^64)`. K = 16 one-hot polynomials of 16+ variables are
+  committed sparsely as 64-column trace one-hot groups (unused columns empty), opened as one
+  group at a shared point. Smaller one-hot polynomials and other K go through the dense path.
+- **Catalogs.** Upstream's packaged catalogs (dense profile `w8r2`, one-hot `w1r0`) cover the
+  checked-in zoo, GPT-2 and BGE; no atlas-specific catalog is generated. Setups are derived on first
+  use and cached per arity.
+- **Transcript.** Akita runs its own Fiat-Shamir, bridged through full-width challenges of the
+  facade transcript (`FacadeChallenge`), without proof of work.
+
+Cost against Dory on GPT-2 (release `prove` example, median of 3, M3): prove 39.9 s vs 26.7 s,
+verify 2.17 s vs 3.42 s, proof 2.42 vs 2.37 MiB, peak memory 6.2 vs 6.6 GB. The commitment phase
+dominates (24.4 s), and two of the six 2^24-variable one-hot groups take about 10 s each of it.
+
 ## Adoption sequence
 
 The ordering lives in one place: `specs/adoption-program.md` (nine stages, 0–8). This inventory

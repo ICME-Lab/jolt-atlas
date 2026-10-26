@@ -12,12 +12,11 @@
 //!   probe models; the tests below pin the structure that makes it exercise each flow, so it
 //!   cannot stop doing so silently.
 
-use ark_bn254::Bn254;
 use atlas_trace::Op;
 use common::VirtualPoly;
 use jolt_claims::{Source, SymbolicSumcheck};
 use jolt_field::Fr;
-use joltworks::poly::commitment::hyperkzg::HyperKZG;
+use joltworks::poly::commitment::akita::AkitaScheme;
 use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
 use std::{ops::Range, sync::Mutex};
 use strum::IntoEnumIterator;
@@ -79,11 +78,11 @@ pub(crate) fn record_dispatch<R: AtlasRelation>(node: &ComputationNode) {
 #[test]
 fn relation_specs_match_their_dispatched_op_kind() {
     for probe in probe_models() {
-        prove_verify_roundtrip::<HyperKZG<Bn254>>(probe.model, &probe.inputs, Default::default());
+        prove_verify_roundtrip::<AkitaScheme>(probe.model, &probe.inputs, Default::default());
     }
     let gauntlet = zoo("op_gauntlet", 16);
     let inputs = op_gauntlet_inputs(&gauntlet);
-    prove_verify_roundtrip::<HyperKZG<Bn254>>(gauntlet.model, &inputs, Default::default());
+    prove_verify_roundtrip::<AkitaScheme>(gauntlet.model, &inputs, Default::default());
 
     let dispatches = DISPATCHES.lock().expect("dispatch log");
     for &(kind, spec) in dispatches.iter() {

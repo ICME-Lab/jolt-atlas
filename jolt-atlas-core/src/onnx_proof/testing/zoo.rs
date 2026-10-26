@@ -84,14 +84,6 @@ pub(super) fn op_gauntlet_inputs(imported: &ImportedModel) -> Vec<Tensor<i32>> {
 fn op_gauntlet() {
     let imported = zoo("op_gauntlet", 16);
     let inputs = op_gauntlet_inputs(&imported);
-    prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
-}
-
-/// The gauntlet under Akita over Fp128.
-#[test]
-fn op_gauntlet_akita() {
-    let imported = zoo("op_gauntlet", 16);
-    let inputs = op_gauntlet_inputs(&imported);
     prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
@@ -149,7 +141,7 @@ fn qwen2_tiny_hyperkzg() {
     prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
 }
 
-/// The tiny architectures under Akita over Fp128.
+/// The tiny GPT-2 and Qwen2 under Akita (the gauntlet and BGE default to it).
 #[test]
 fn gpt2_tiny_akita() {
     let imported = zoo("gpt2-tiny", 16);
@@ -164,13 +156,6 @@ fn qwen2_tiny_akita() {
     prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
-#[test]
-fn bge_tiny_akita() {
-    let imported = zoo("bge-tiny", 16);
-    let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
-}
-
 /// Same model at a non-power-of-two sequence length: would pad the sequence
 /// axis through attention, RoPE and the causal mask.
 #[test]
@@ -180,7 +165,7 @@ fn bge_tiny_akita() {
 fn known_gap_qwen2_tiny_seq12() {
     let imported = zoo("qwen2-tiny", 12);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 /// BERT architecture (2 layers, 48 hidden, 3 heads) at opset 14: Erf GELU,
@@ -193,7 +178,7 @@ fn bge_tiny() {
         &["norm_fusion", "rsqrt_eps_floor", "matmul_gemm_to_einsum"],
     );
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 // ── real models (heavy CI job) ───────────────────────────────────────────
@@ -219,7 +204,7 @@ fn gpt2_akita() {
 fn bge_small_en_v1_5() {
     let imported = zoo("bge-small-en-v1.5", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 #[test]
@@ -227,7 +212,7 @@ fn bge_small_en_v1_5() {
 fn qwen() {
     let imported = zoo("qwen", 8);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<DoryScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 // ── transcript binding (issue #230) ──────────────────────────────────────

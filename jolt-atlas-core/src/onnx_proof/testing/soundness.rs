@@ -20,11 +20,9 @@
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use ark_bn254::Bn254;
 use atlas_trace::{trace::ModelExecutionIO, Model, NodeId, Tensor, Trace};
-use joltworks::field::bn254::Fr;
 use joltworks::poly::{
-    commitment::{akita::AkitaScheme, commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
+    commitment::{akita::AkitaScheme, commitment_scheme::CommitmentScheme},
     opening_proof::{forgery, OpeningId},
 };
 use joltworks::transcripts::{Blake2bProver, Blake2bVerifier};
@@ -47,9 +45,9 @@ use crate::onnx_proof::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,
 };
 
-/// The BN254 instantiation the sweeps run under; the sweep bodies are generic over the PCS (and
-/// its field).
-type Pcs = HyperKZG<Bn254>;
+/// The instantiation the sweeps run under: Akita over Fp128. The sweep bodies are generic over the
+/// PCS (and its field).
+type Pcs = AkitaScheme;
 
 /// What happened when a (possibly tampered) proof met the verifier. The
 /// payloads are reported through `Debug`.
@@ -159,13 +157,6 @@ fn report(title: &str, rows: &BTreeMap<&'static str, (usize, usize)>) {
 #[serial(soundness_probe)]
 fn proof_mutation_sweep() {
     proof_mutation_sweep_for::<Pcs>();
-}
-
-/// [`proof_mutation_sweep`] under Akita over Fp128.
-#[test]
-#[serial(soundness_probe)]
-fn proof_mutation_sweep_akita() {
-    proof_mutation_sweep_for::<AkitaScheme>();
 }
 
 fn proof_mutation_sweep_for<PCS: PcsMutations>() {
@@ -394,13 +385,6 @@ fn witness_tamper_sweep() {
     witness_tamper_sweep_for::<Pcs>();
 }
 
-/// [`witness_tamper_sweep`] under Akita over Fp128.
-#[test]
-#[serial(soundness_probe)]
-fn witness_tamper_sweep_akita() {
-    witness_tamper_sweep_for::<AkitaScheme>();
-}
-
 fn witness_tamper_sweep_for<PCS: PcsMutations>() {
     let _probe = ProbeGuard::enter();
     let all = exhaustive();
@@ -550,13 +534,6 @@ fn forgery_targets<PCS: CommitmentScheme>(
 #[serial(soundness_probe)]
 fn opening_forgery_sweep() {
     opening_forgery_sweep_for::<Pcs>();
-}
-
-/// [`opening_forgery_sweep`] under Akita over Fp128.
-#[test]
-#[serial(soundness_probe)]
-fn opening_forgery_sweep_akita() {
-    opening_forgery_sweep_for::<AkitaScheme>();
 }
 
 fn opening_forgery_sweep_for<PCS: PcsMutations>() {
@@ -753,7 +730,8 @@ mod known_gaps {
         let _probe = ProbeGuard::enter();
         let model = padded_broadcast_sum_model();
         let shared = AtlasSharedPreprocessing::preprocess(model);
-        let prover_pp = AtlasProverPreprocessing::<Fr, Pcs>::new(shared);
+        let prover_pp =
+            AtlasProverPreprocessing::<<Pcs as CommitmentScheme>::Field, Pcs>::new(shared);
         let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
         let x = Tensor::from_slice(&[5, 7], &[2, 1]).unwrap();
         let (_, res) = prove_tampered::<Pcs>(&prover_pp, &[x], &mut |t| {

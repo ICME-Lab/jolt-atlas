@@ -1,7 +1,7 @@
 //! The exhaustive single-op prove/verify table.
 //!
 //! One `#[test]` per case (nextest runs each in its own process and names
-//! failures), all driven by [`prove_verify_roundtrip`] under HyperKZG. Two
+//! failures), all driven by [`prove_verify_roundtrip`] under Akita over Fp128. Two
 //! meta-tests make the table total: every [`OpKind`] must have at least one
 //! declared case (an `#[ignore]`d case is a declared stance), and every case's
 //! model must contain a node of the kind it claims to cover.
@@ -17,12 +17,11 @@
 
 use std::collections::BTreeSet;
 
-use ark_bn254::Bn254;
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use common::consts::{ACTIVATION_BOUND, MODEL_SCALE, TRIG_PERIOD_MODULUS};
 use joltworks::{
-    lookup_tables::clamp::CLAMP_BOUND, poly::commitment::commitment_scheme::CommitmentScheme,
-    poly::commitment::hyperkzg::HyperKZG,
+    lookup_tables::clamp::CLAMP_BOUND, poly::commitment::akita::AkitaScheme,
+    poly::commitment::commitment_scheme::CommitmentScheme,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use strum::IntoEnumIterator;
@@ -90,7 +89,7 @@ macro_rules! op_surface {
             #[test]
             $(#[$meta])*
             fn $name() {
-                run_named::<HyperKZG<Bn254>>(stringify!($name));
+                run_named::<AkitaScheme>(stringify!($name));
             }
         )*
     };

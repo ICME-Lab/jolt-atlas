@@ -25,12 +25,13 @@ cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen2-t
 cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2-tiny --pcs dory
 
 # Real models (see "Getting Started" for the downloads)
-cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2 --pcs dory
-cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen --pcs dory \
+cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
+cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen \
     --input "The quick brown fox jumps over the lazy dog" --use-cache
 ```
 
-Options: `--pcs hyperkzg|dory` (default HyperKZG), `--seq-len N` (default 16),
+Options: `--pcs akita|dory|hyperkzg` (default Akita over the 128-bit Solinas field; Dory and
+HyperKZG run over BN254), `--seq-len N` (default 16),
 `--input "<text>"` (tokenizes with the model's `tokenizer.json`), `--srs-vars N`
 (over-provision the SRS; Dory), `--use-cache` (reuse the shared preprocessing
 across runs), `--stats` (clamp-width histogram and packed buckets),
@@ -65,28 +66,29 @@ cargo test -p atlas-onnx-import --test golden_zoo    # prints the new hashes on 
 
 GPT-2 is a 125-million-parameter transformer model from OpenAI.
 
-**JOLT Atlas** (Dory PCS)
+**JOLT Atlas** (Akita lattice PCS over the 128-bit Solinas field)
 
 | Stage | Wall clock |
 | ----- | ---------- |
-| Proving/verifying key generation (`DoryScheme::setup_prover`, cached URS) | 0.843 s |
-| Witness + commitment phase (`ONNXProof::commit_witness_polynomials`) | 10.0 s |
-| IOP proving (`ONNXProof::iop`) | 8.47 s |
-| Opening reduction sumcheck + Dory opening (`ONNXProof::prove_reduced_openings`) | 7.83 s |
-| Proof time (`ONNXProof::prove`) | 29.3 s |
-| Verify time (`ONNXProof::verify`) | 3.43 s |
-| **End-to-end total (`setup_prover` + prove + verify)** | **33.6 s** |
+| Witness + commitment phase (`ONNXProof::commit_witness_polynomials`) | 25.2 s |
+| IOP proving (`ONNXProof::iop`) | 5.28 s |
+| Opening reduction sumcheck + Akita class openings (`ONNXProof::prove_reduced_openings`) | 6.72 s |
+| Proof time (`ONNXProof::prove`) | 40.6 s |
+| Verify time (`ONNXProof::verify`) | 2.21 s |
 
-Stage rows come from one `--trace-terminal` run, which adds tracing overhead. Without
-tracing, the median of 3 runs is 27.6 s to prove and 3.4 s to verify. Dory is the
-benchmark backend: the per-stage performance gate in `specs/adoption-program.md` measures
-this command.
+Stage rows come from one `--trace-terminal` run, which adds tracing overhead. Akita's setups
+are derived from public schedule catalogs on first use, inside the proof time. Without
+tracing, the median of 3 runs is 39.9 s to prove and 2.17 s to verify, with a 2.42 MiB proof
+and 6.2 GB peak memory. The same command with `--pcs dory` (BN254, cached URS) proves in
+26.7 s, verifies in 3.42 s, with a 2.37 MiB proof and 6.6 GB peak memory. Akita is the
+benchmark backend: the per-stage performance gate in `specs/adoption-program.md` measures this
+command.
 
 ### How to reproduce locally
 
 ```bash
 # from repo root
-cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2 --pcs dory
+cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
 ```
 
 Add `-- --trace` for Chrome Tracing JSON output (view in `chrome://tracing`), or `-- --trace-terminal` for timing printed to the terminal.

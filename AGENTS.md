@@ -52,7 +52,7 @@ cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'not test(g
 # from scripts/requirements-models.txt):
 #   python -m venv .venv && source .venv/bin/activate && python scripts/download_gpt2.py
 #   python scripts/download_bge_small_en_v1_5.py && python scripts/download_qwen.py   # qwen: 2.5 GB
-cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::gpt2_dory$/)'
+cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::gpt2_akita$/)'
 cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::bge_small_en_v1_5$/)'
 cargo nextest run -p jolt-atlas-core --profile heavy --run-ignored ignored-only -E 'test(/zoo::qwen$/)'
 cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'test(golden_zoo_big)'
@@ -61,7 +61,7 @@ cargo nextest run -p atlas-onnx-import --run-ignored ignored-only -E 'test(golde
 cargo nextest run -p jolt-atlas-core --run-ignored ignored-only -E 'test(known_gap)'
 
 # The example (release): proves and verifies any model directory; also the benchmark driver.
-cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen2-tiny      # or models/gpt2 --pcs dory
+cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen2-tiny      # Akita; --pcs dory|hyperkzg for BN254
 cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2 --trace-terminal
 cargo run --release -p atlas-onnx-import --example dump_lowered_ops -- <model.onnx>
 
@@ -78,10 +78,12 @@ Workspace members, in dependency order:
 - **common** — shared constants and parallel helpers.
 - **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
   (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`, `jolt-utils`, `jolt-poly`,
-  `jolt-sumcheck`, and `jolt-claims` (whose dependency cone, `jolt-openings`, `jolt-crypto`,
-  `jolt-riscv`, `jolt-lookup-tables` and `jolt-r1cs`, is vendored but not workspace members).
+  `jolt-sumcheck`, `jolt-claims` (whose dependency cone, `jolt-openings`, `jolt-crypto`,
+  `jolt-riscv`, `jolt-lookup-tables` and `jolt-r1cs`, is vendored but not workspace members), and
+  `jolt-akita` (the lattice PCS adapter, over LayerZero's `akita-*` crates by git).
 - **joltworks** — the proof-system toolkit inherited from Jolt: `field`, `poly` (multilinear
-  polynomials and commitment schemes), `subprotocols` (sumcheck, evaluation reduction),
+  polynomials and commitment schemes: `akita`, the default, over Fp128; `dory` and `hyperkzg`
+  over BN254), `subprotocols` (sumcheck, evaluation reduction),
   `lookup_tables`, `msm`, `transcripts`, `config`. `transcripts` runs on upstream
   `jolt-transcript`'s split surface: the prover uses a `ProvingTranscript` (spongefish
   `ProverState`, proof-of-work grinding behind the `prover` feature), the verifier a

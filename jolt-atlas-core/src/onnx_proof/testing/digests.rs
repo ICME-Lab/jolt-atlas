@@ -2,17 +2,16 @@
 //!
 //! The zoo tests prove and verify with the same build, so a coordinated
 //! prover+verifier change passes them unseen. These tests pin, for each
-//! checked-in model on its golden inputs under HyperKZG (seeded setup), a
+//! checked-in model on its golden inputs under Akita over Fp128, a
 //! blake2b-256 hash of the serialized proof and the prover's final transcript
 //! state. A behavior-preserving change leaves every pin untouched; a
 //! protocol-breaking change re-pins in its own commit, naming the cause.
 
-use ark_bn254::Bn254;
 use atlas_onnx_import::fixtures::{synth_inputs, GOLDEN_SEED};
 use atlas_trace::{Model, Tensor};
 use blake2::{digest::consts::U32, Blake2b, Digest};
 use joltworks::{
-    poly::commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
+    poly::commitment::{akita::AkitaScheme, commitment_scheme::CommitmentScheme},
     transcripts::Blake2bProver,
 };
 
@@ -56,12 +55,12 @@ fn assert_digest<PCS: CommitmentScheme>(
 fn digest_op_gauntlet() {
     let imported = zoo("op_gauntlet", 16);
     let inputs = op_gauntlet_inputs(&imported);
-    assert_digest::<HyperKZG<Bn254>>(
+    assert_digest::<AkitaScheme>(
         "op_gauntlet",
         imported.model,
         &inputs,
-        "6139d1c916384ae22b56de3973e4f3efa3f10e36ec4faf35c596aa11d448f64d",
-        "94dff6fdf6d6613ed7af53edaeca27bccb980e9f9c165867f7b737ba968c95d3",
+        "ef16fe89cb951b29b74ec289dd9feaae78c72efccdb11391196fe2ad3059ad51",
+        "ca088938765af3bde26c5966c491ffa72d02a0f96ec1e17ed9f44596a44058e6",
     );
 }
 
@@ -69,12 +68,12 @@ fn digest_op_gauntlet() {
 fn digest_gpt2_tiny() {
     let imported = zoo("gpt2-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    assert_digest::<HyperKZG<Bn254>>(
+    assert_digest::<AkitaScheme>(
         "gpt2-tiny",
         imported.model,
         &inputs,
-        "f4b4662e9705cdb2fb1961b4eb0417e8f4320767a0b168832faada1ce5974856",
-        "8d331c6ef89b740060517cd017bf48878474dff60c98eabfb952af224b12bae5",
+        "f0102ed5444f6f2d3c180c421ebc35b2496774d0049e59a04a3ea839ec7554be",
+        "e4cabf34e202560a427ef70752ef1213973da7860bf474b721e629ec68cd0659",
     );
 }
 
@@ -82,12 +81,12 @@ fn digest_gpt2_tiny() {
 fn digest_qwen2_tiny() {
     let imported = zoo("qwen2-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    assert_digest::<HyperKZG<Bn254>>(
+    assert_digest::<AkitaScheme>(
         "qwen2-tiny",
         imported.model,
         &inputs,
-        "c06a9cf252764b24ca3e7822891df02f347df04f111bbd9f4c0b89812f8d4003",
-        "f8d1e285eac0e9ff0b5f1513e5f9c94e24ed90151919570e191ac2e500713b24",
+        "435ad136e14cf972206299fd474a01794bca2fcf5b0bb990f1b06a25e07bd4b6",
+        "b006d89e9e7e7c2a2cd14872c5348b8c29a2f88a0611c1ac661f6338b25a52e1",
     );
 }
 
@@ -95,11 +94,11 @@ fn digest_qwen2_tiny() {
 fn digest_bge_tiny() {
     let imported = zoo("bge-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    assert_digest::<HyperKZG<Bn254>>(
+    assert_digest::<AkitaScheme>(
         "bge-tiny",
         imported.model,
         &inputs,
-        "e897d1d7b0adc82f5bc3e6e4eb6cbb2ac2c4ed876026b24461b69a79a68498b2",
-        "cd06ad35885d65e370b6a1256812809464d343eebce1379c87df935a9a36283b",
+        "ef6f6ffd1a07dcdc3188e4cd8211a718b7fdb16b32e13d596d5cddefc722fb27",
+        "0ef811f3fd862097b8090298281c74125f98bd633a8b377963f9df80b22e13ca",
     );
 }

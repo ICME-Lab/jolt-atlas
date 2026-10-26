@@ -6,14 +6,14 @@
 //! cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2-tiny --pcs dory
 //!
 //! # Real models (scripts/download_*.py first)
-//! cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2 --pcs dory
-//! cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen --pcs dory \
+//! cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
+//! cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen \
 //!     --input "The quick brown fox jumps over the lazy dog" --use-cache
 //! ```
 //!
 //! Options:
 //! * `--model <dir>`          directory holding `network.onnx` (required)
-//! * `--pcs hyperkzg|dory|akita`  commitment scheme (default `hyperkzg`; Akita runs over Fp128)
+//! * `--pcs akita|dory|hyperkzg`  commitment scheme (default `akita`, over Fp128; the others over BN254)
 //! * `--seq-len N`            sequence length binding (default 16; ignored with `--input`)
 //! * `--input "<text>"`       tokenize with `<dir>/tokenizer.json`; sequence length = token count
 //! * `--srs-vars N`           over-provision the SRS (Dory: wider columns, fewer tier-2 pairings)
@@ -68,16 +68,16 @@ fn parse_args() -> Args {
     };
     let model_dir = PathBuf::from(value("--model").unwrap_or_else(|| {
         eprintln!(
-            "usage: prove --model <dir> [--pcs hyperkzg|dory|akita] [--seq-len N] [--input TEXT] \
+            "usage: prove --model <dir> [--pcs akita|dory|hyperkzg] [--seq-len N] [--input TEXT] \
              [--srs-vars N] [--use-cache] [--stats] [--trace|--trace-terminal]"
         );
         std::process::exit(2);
     }));
     let pcs = match value("--pcs").as_deref() {
-        None | Some("hyperkzg") => Pcs::HyperKzg,
+        None | Some("akita") => Pcs::Akita,
         Some("dory") => Pcs::Dory,
-        Some("akita") => Pcs::Akita,
-        Some(other) => panic!("unknown --pcs {other:?} (hyperkzg|dory|akita)"),
+        Some("hyperkzg") => Pcs::HyperKzg,
+        Some(other) => panic!("unknown --pcs {other:?} (akita|dory|hyperkzg)"),
     };
     Args {
         model_dir,

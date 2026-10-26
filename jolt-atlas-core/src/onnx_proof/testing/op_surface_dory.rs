@@ -1,7 +1,6 @@
-//! A shape-class subset of the op-surface table under Dory, the production
-//! PCS (GPT-2 and Qwen are proven with Dory; everything else here uses
-//! HyperKZG). One case per committed-polynomial shape class rather than one
-//! per op.
+//! A shape-class subset of the op-surface table under Dory (the full table
+//! runs under Akita). One case per committed-polynomial shape class rather
+//! than one per op.
 
 use joltworks::poly::commitment::dory::DoryScheme;
 

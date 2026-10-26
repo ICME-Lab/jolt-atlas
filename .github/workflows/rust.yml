@@ -117,7 +117,7 @@ jobs:
           - name: gpt2
             dir: models/gpt2
             script: download_gpt2.py
-            test: 'test(/zoo::gpt2_dory$/)'
+            test: 'test(/zoo::gpt2_akita$/)'
           - name: bge
             dir: models/bge-small-en-v1.5
             script: download_bge_small_en_v1_5.py

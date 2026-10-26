@@ -1256,6 +1256,8 @@ dependencies = [
  "itertools 0.10.5",
  "jolt-field",
  "jolt-optimizations",
+ "jolt-poly",
+ "jolt-sumcheck",
  "jolt-transcript",
  "jolt-utils",
  "memory-stats",

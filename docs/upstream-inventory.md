@@ -94,10 +94,12 @@ reaches 2⁻¹²⁸ per hash query. Measured cost on GPT-2 (Dory, M3, median of 
 
 - *Verifier memory exhaustion on crafted bytes*: ark's `Vec<T>` decoder and dory-pcs's proof
   decoder pre-allocate from a prover-supplied length (`Vec::with_capacity(len)`), so a few bytes
-  can request a huge allocation. Our own decoders (maps, claims, the NARG string) never
-  pre-allocate from a decoded length. The remaining sites are inside third-party decoders of
-  types later stages replace, so they are fixed with them: the sumcheck and polynomial proof
-  types at stage 4b, the PCS proofs at stage 7 (capped decoding in the adopted types, or a
+  can request a huge allocation (a length of 2⁶⁴ − 1 panics with a capacity overflow). Our own
+  decoders (maps, claims) never pre-allocate from a decoded length. *Done at stage 4b* for
+  everything outside the PCS: `joltworks::utils::serialization::deserialize_vec` reads ark's
+  encoding but grows as elements decode, and the sumcheck proof, `UniPoly`/`CompressedUniPoly`,
+  the reduced opening claims, the commitment list and the NARG string decode through it. The PCS
+  proofs' internal decoders follow at stage 7 (capped decoding in the adopted types, or a
   `MAX_PROOF_BYTES` bound with length checks against it).
 - *Verifier panic on an empty opening batch*: a proof carrying `Some(reduced_opening_proof)` with
   zero claims for a model with no committed openings reaches `.max().unwrap()` on an empty

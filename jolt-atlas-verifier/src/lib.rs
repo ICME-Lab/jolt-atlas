@@ -1,12 +1,16 @@
 //! Jolt Atlas Verifier - the verifier side of the ONNX proof system.
 //!
 //! This crate owns the proof object ([`ONNXProof`] with its
-//! [`ReducedOpeningProof`], [`Claims`] and [`ProofId`]/[`ProofType`] keys) and
-//! its wire format ([`proof_serialization`]). It depends on no prover crate:
-//! `cargo check -p jolt-atlas-verifier` builds it in isolation. Every proof
-//! field is private; `jolt-atlas-core` builds proofs through `from_parts` and
-//! reads them through `&` accessors. The `test-util` feature adds `&mut`
-//! accessors for the soundness harness.
+//! [`ReducedOpeningProof`], [`Claims`] and [`ProofId`]/[`ProofType`] keys), its
+//! wire format ([`proof_serialization`]), and verification ([`onnx_proof`]:
+//! [`onnx_proof::verify`] and [`ONNXProof::verify`], the per-op verifiers, the
+//! relations they derive from, and the verifier preprocessing). It depends on
+//! no prover crate: `cargo check -p jolt-atlas-verifier` builds it in
+//! isolation, and `clippy.toml` disallows the vendored crates' prover items.
+//! Every proof field is private; `jolt-atlas-core` builds proofs through
+//! `from_parts` and reads them through `&` accessors. The `test-util` feature
+//! adds `&mut` accessors and the `probe` self-check state for the soundness
+//! harness.
 
 #![allow(
     clippy::len_without_is_empty,

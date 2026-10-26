@@ -1,0 +1,30 @@
+# The verifier's dependency cone stays prover-free at item level: these are the public prover
+# items of the vendored upstream crates (third_party/), which ship them unconditionally. A crate
+# vendored later adds its prover items here. CI's verifier-isolation job also rejects `::prover`
+# and `::witness` path segments in this crate's sources, the backstop for items this list misses.
+# `joltworks` prover APIs are review-held until stage 9 dissolves the crate. `allow-invalid`
+# marks items behind jolt-sumcheck's `committed` feature, which no atlas build enables.
+disallowed-methods = [
+    { path = "jolt_sumcheck::prover::prove_batch", reason = "prover-only" },
+    { path = "jolt_sumcheck::prover::prove_uniskip_clear", reason = "prover-only" },
+    { path = "jolt_sumcheck::prover::prove_uniskip_committed", reason = "prover-only", allow-invalid = true },
+    { path = "jolt_transcript::setup::prover_transcript", reason = "prover-only" },
+]
+disallowed-types = [
+    { path = "jolt_sumcheck::prover::ProveRounds", reason = "prover-only" },
+    { path = "jolt_sumcheck::prover::MemberRound", reason = "prover-only" },
+    { path = "jolt_sumcheck::prover::MemberFinish", reason = "prover-only" },
+    { path = "jolt_sumcheck::prover::RoundScheduler", reason = "prover-only" },
+    { path = "jolt_sumcheck::prover::SequentialRounds", reason = "prover-only" },
+    { path = "jolt_sumcheck::prover::ProvedBatch", reason = "prover-only" },
+    { path = "jolt_sumcheck::prover::ProvedUniskip", reason = "prover-only" },
+    { path = "jolt_sumcheck::prover::ProvedUniskipCommitted", reason = "prover-only" },
+    { path = "jolt_sumcheck::recorder::SumcheckRecorder", reason = "prover-only" },
+    { path = "jolt_sumcheck::recorder::ClearSumcheckRecorder", reason = "prover-only" },
+    { path = "jolt_sumcheck::recorder::CommittedSumcheckRecorder", reason = "prover-only", allow-invalid = true },
+    { path = "jolt_sumcheck::recorder::RecordedSumcheck", reason = "prover-only" },
+    { path = "jolt_sumcheck::committed::CommittedSumcheckBuilder", reason = "prover-only", allow-invalid = true },
+    { path = "jolt_sumcheck::committed::CommittedSumcheckWitness", reason = "prover-only" },
+    { path = "jolt_sumcheck::committed::CommittedRoundWitness", reason = "prover-only" },
+    { path = "jolt_transcript::prover::ProverTranscript", reason = "prover-only" },
+]

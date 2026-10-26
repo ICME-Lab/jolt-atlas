@@ -76,6 +76,13 @@ jobs:
             echo "jolt-atlas-verifier depends on jolt-atlas-core" >&2
             exit 1
           fi
+      - name: No prover module paths in the verifier's sources
+        # The backstop for prover items that jolt-atlas-verifier/clippy.toml's list misses.
+        run: |
+          if grep -rnE '\b(prover|witness)::|::(prover|witness) *[;,}]' jolt-atlas-verifier/src --include='*.rs'; then
+            echo "jolt-atlas-verifier names a ::prover or ::witness path" >&2
+            exit 1
+          fi
       - name: No BN254 curve crates in any member's dependency graph
         # Vendored upstream crates keep optional BN254 features, so they are resolved with their
         # default features off; atlas crates are resolved as built.

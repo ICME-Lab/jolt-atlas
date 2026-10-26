@@ -103,18 +103,22 @@ Workspace members, in dependency order:
   static shape inference, whitelist constant folding, rewrite passes, weight quantization, and
   lowering to the `atlas-trace` IR. Golden output hashes for the model zoo live in `tests/`;
   cargo-fuzz targets and their regression corpus in `fuzz/` (see `fuzz/README.md`).
-- **jolt-atlas-verifier** — the proof object and its wire format: `ONNXProof`,
-  `ReducedOpeningProof`, `Claims`, `ProofId`/`ProofType`, and `proof_serialization`. Every proof
-  field is private (`from_parts` + `&` accessors; `&mut` behind the `test-util` feature). No
-  prover dependency; CI checks it builds in isolation. Verification logic still lives in core
-  until the per-op verifiers move.
-- **jolt-atlas-core** — the prover and the verification logic. `onnx_proof` is the entry point:
-  the free functions `prove` / `verify` (re-exported at the crate root), with `prover.rs`,
-  `verifier.rs`, `preprocessing.rs`, `witness.rs`, and `types.rs`. Per-op protocols live under
-  `onnx_proof/ops/`; shared machinery under `clamp_lookups`, `clamp_split`, `fused_rebase`,
-  `global_clamp`, `deferred_lookups`, `op_lookups`, `range_checking`, `neural_teleport`, and
-  the relation engine in `relation`. The
-  whole test suite is under `onnx_proof/testing/`; the `prove` example is in `examples/`.
+- **jolt-atlas-verifier** — the proof object, its wire format, and all verification: `ONNXProof`
+  (with `ONNXProof::verify`), `ReducedOpeningProof`, `Claims`, `ProofId`/`ProofType`,
+  `proof_serialization`, and `onnx_proof` — every op's `OpLayout` and `VerifyOp`, the relations
+  and their parameters, the lookup/clamp/range-check/deferred-batch machinery's verifier sides,
+  the `Verifier` state, `verify`/`verify_with`, and the shared and verifier preprocessing; also
+  `node_view` and `utils`. Every proof field is private (`from_parts` + `&` accessors; `&mut` and
+  the `probe` self-check state behind the `test-util` feature). No prover dependency: CI checks
+  it builds in isolation, `clippy.toml` disallows the vendored crates' prover items, and CI
+  rejects `prover`/`witness` module paths in its sources.
+- **jolt-atlas-core** — the prover. `onnx_proof` mirrors the verifier crate's module tree: each
+  module glob-re-exports its verifier counterpart and adds the prover side (`ProveOp` impls,
+  prover instances, extension traits such as `OpLookupProve` for prover methods on shared
+  types), with `prover.rs`, `witness.rs`, `preprocessing.rs` (prover setup) and `types.rs`.
+  `prove` and the free `verify` (adding the test-only lockstep debug comparison) are re-exported
+  at the crate root. The whole test suite is under `onnx_proof/testing/`; the `prove` example is
+  in `examples/`.
 
 Pipeline: ONNX file → `atlas-onnx-import` (decode, infer, fold, lower) → `atlas-trace` model
 → execute to a trace → `jolt-atlas-core` preprocess, commit, prove → verify against the model's

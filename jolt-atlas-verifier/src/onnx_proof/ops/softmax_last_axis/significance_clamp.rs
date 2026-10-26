@@ -15,7 +15,7 @@
 //! digit-split identity itself. `z` still needs tying back to the real input, done by
 //! `operand_link` in `mod.rs`.
 
-use super::witness::generate_exp_lut_decomposed;
+use super::exp_lut::generate_exp_lut_decomposed;
 use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::op_lookups::{DefaultLookupOperands, LookupOperandsTrait},

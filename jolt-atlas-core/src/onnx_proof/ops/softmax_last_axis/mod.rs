@@ -57,7 +57,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::{lookup_bits::LookupBits, math::Math},
 };
-pub use witness::{generate_exp_lut_decomposed, softmax_z, ExpLutDecomposed};
 
 /// exp_sum(r0_k) = sum_{k,j} eq(r0_k, k) * exp_q[k,j]
 pub mod exp_sum;
@@ -71,8 +70,6 @@ pub mod rc;
 pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
 pub mod significance_clamp;
-/// Softmax witness view and exp-LUT materialization.
-pub mod witness;
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for SoftmaxLastAxis {
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::prove")]

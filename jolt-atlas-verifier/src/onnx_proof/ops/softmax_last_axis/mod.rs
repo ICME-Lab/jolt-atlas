@@ -44,6 +44,7 @@ use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,
 };
+pub use exp_lut::{generate_exp_lut_decomposed, softmax_z, ExpLutDecomposed};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -59,8 +60,9 @@ use joltworks::{
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
-pub use witness::{generate_exp_lut_decomposed, softmax_z, ExpLutDecomposed};
 
+/// Exp-LUT materialization and small softmax helpers.
+pub mod exp_lut;
 /// exp_sum(r0_k) = sum_{k,j} eq(r0_k, k) * exp_q[k,j]
 pub mod exp_sum;
 /// Lookups for the decomposed exponentiation (exp_hi and exp_lo).
@@ -73,8 +75,6 @@ pub mod rc;
 pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
 pub mod significance_clamp;
-/// Softmax witness view and exp-LUT materialization.
-pub mod witness;
 
 impl OpLayout for SoftmaxLastAxis {
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {

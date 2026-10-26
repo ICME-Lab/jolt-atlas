@@ -15,7 +15,6 @@ use crate::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        unipoly::UniPoly,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
@@ -23,6 +22,8 @@ use crate::{
     },
     transcripts::Transcript,
 };
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 
 /// Degree bound of the sumcheck round polynomials in [`HammingWeightSumcheckVerifier`].
 const DEGREE_BOUND: usize = 1;
@@ -74,40 +75,12 @@ impl<F: JoltField> HammingWeightSumcheckProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for HammingWeightSumcheckProver<F> {
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
+    }
+
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
-    }
-
-    #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::compute_message", fields(variant = ?self.params.sumcheck_id))]
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let prover_msg = self
-            .ra
-            .par_iter()
-            .zip(self.params.gamma_powers.par_iter())
-            .with_min_len(par_enabled())
-            .map(|(ra, gamma)| {
-                let ra_sum = (0..ra.len() / 2)
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|i| ra.get_bound_coeff(2 * i))
-                    .fold_with(F::UnreducedMulU64::zero(), |running, new| {
-                        running + new.to_unreduced()
-                    })
-                    .reduce(F::UnreducedMulU64::zero, |running, new| running + new);
-                F::reduce_mul_u64(ra_sum) * gamma
-            })
-            .reduce(F::zero, |running, new| running + new);
-
-        let eval_at_0 = prover_msg;
-        UniPoly::from_evals_and_hint(previous_claim, &[eval_at_0])
-    }
-
-    #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::ingest_challenge", fields(variant = ?self.params.sumcheck_id))]
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.ra
-            .par_iter_mut()
-            .with_min_len(par_enabled())
-            .for_each(|ra| ra.bind_parallel(r_j, BindingOrder::LowToHigh));
     }
 
     fn cache_openings(
@@ -134,6 +107,64 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for HammingWeight
     #[cfg(feature = "allocative")]
     fn update_flamegraph(&self, flamegraph: &mut FlameGraphBuilder) {
         flamegraph.visit_root(self);
+    }
+}
+
+impl<F: JoltField> HammingWeightSumcheckProver<F> {
+    #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::round_message", fields(variant = ?self.params.sumcheck_id))]
+    fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
+        let prover_msg = self
+            .ra
+            .par_iter()
+            .zip(self.params.gamma_powers.par_iter())
+            .with_min_len(par_enabled())
+            .map(|(ra, gamma)| {
+                let ra_sum = (0..ra.len() / 2)
+                    .into_par_iter()
+                    .with_min_len(par_enabled())
+                    .map(|i| ra.get_bound_coeff(2 * i))
+                    .fold_with(F::UnreducedMulU64::zero(), |running, new| {
+                        running + new.to_unreduced()
+                    })
+                    .reduce(F::UnreducedMulU64::zero, |running, new| running + new);
+                F::reduce_mul_u64(ra_sum) * gamma
+            })
+            .reduce(F::zero, |running, new| running + new);
+
+        let eval_at_0 = prover_msg;
+        UnivariatePoly::from_evals_and_hint(previous_claim, &[eval_at_0])
+    }
+
+    #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::bind", fields(variant = ?self.params.sumcheck_id))]
+    fn bind(&mut self, r: F, _round: usize) {
+        let r_j = F::challenge_from_field(r);
+        self.ra
+            .par_iter_mut()
+            .with_min_len(par_enabled())
+            .for_each(|ra| ra.bind_parallel(r_j, BindingOrder::LowToHigh));
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for HammingWeightSumcheckProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        Ok(self.round_message(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

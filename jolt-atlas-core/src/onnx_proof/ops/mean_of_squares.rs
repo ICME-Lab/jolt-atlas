@@ -52,6 +52,8 @@ use crate::{
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use common::{consts::XLEN, parallel::par_enabled, CommittedPoly, VirtualPoly};
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
@@ -62,7 +64,6 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN,
         },
-        unipoly::UniPoly,
     },
     subprotocols::{
         shout::RaOneHotEncoding,
@@ -320,11 +321,29 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MeanOfSquaresReductionProver<F> {
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
+    }
+
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
 
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let point = OpeningPoint::new(sumcheck_challenges.into_opening());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, point);
+        provider.append_nodeio(Target::Input(0), self.operand.final_claim());
+    }
+}
+
+impl<F: JoltField> MeanOfSquaresReductionProver<F> {
+    fn round_message(&mut self, round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let half = self.operand.len() / 2;
         let log_retained = self.params.log_retained;
         let log_reduced = self.params.log_reduced;
@@ -347,10 +366,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MeanOfSquares
                 || [F::zero(); DEGREE],
                 |a, b| array::from_fn(|k| a[k] + b[k]),
             );
-        UniPoly::from_evals_and_hint(previous_claim, &evals)
+        UnivariatePoly::from_evals_and_hint(previous_claim, &evals)
     }
 
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
+    fn bind(&mut self, r: F, round: usize) {
+        let r_j = F::challenge_from_field(r);
         self.operand.bind_parallel(r_j, BindingOrder::HighToLow);
         if round < self.params.log_retained {
             self.eq.bind_parallel(r_j, BindingOrder::HighToLow);
@@ -359,17 +379,28 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MeanOfSquares
             }
         }
     }
+}
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let point = OpeningPoint::new(sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, point);
-        provider.append_nodeio(Target::Input(0), self.operand.final_claim());
+impl<F: JoltField> ProveRounds<F> for MeanOfSquaresReductionProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        Ok(self.round_message(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

@@ -63,6 +63,8 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_trace::{Model, Trace};
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::subprotocols::booleanity::{LinearClaim, LinearTerm};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
@@ -75,7 +77,6 @@ use joltworks::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        unipoly::UniPoly,
     },
     subprotocols::{
         booleanity::{
@@ -540,11 +541,32 @@ impl<F: JoltField> SplitProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SplitProver<F> {
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
+    }
+
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
 
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let r = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let b = self.params.bucket_idx;
+        accumulator.append_virtual(transcript, out_id(b), r.clone(), self.out.final_claim());
+        accumulator.append_virtual(transcript, slack_id(b), r.clone(), self.slack.final_claim());
+        accumulator.append_virtual(transcript, ind_id(b), r, self.ind.final_claim());
+    }
+}
+
+impl<F: JoltField> SplitProver<F> {
+    fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let (b1, b2, b3, m) = self.params.coefficients();
         let half = self.w.len() / 2;
         let evals = (0..half)
@@ -585,29 +607,38 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SplitProver<F
                 || [F::zero(); 4],
                 |a, b| [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]],
             );
-        UniPoly::from_evals_and_hint(previous_claim, &evals)
+        UnivariatePoly::from_evals_and_hint(previous_claim, &evals)
     }
 
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+    fn bind(&mut self, r: F, _round: usize) {
+        let r_j = F::challenge_from_field(r);
         self.w.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.out.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.slack.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.ind.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
+}
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let r = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let b = self.params.bucket_idx;
-        accumulator.append_virtual(transcript, out_id(b), r.clone(), self.out.final_claim());
-        accumulator.append_virtual(transcript, slack_id(b), r.clone(), self.slack.final_claim());
-        accumulator.append_virtual(transcript, ind_id(b), r, self.ind.final_claim());
+impl<F: JoltField> ProveRounds<F> for SplitProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        Ok(self.round_message(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 
@@ -785,29 +816,12 @@ impl<F: JoltField> ValueProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ValueProver<F> {
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
+    }
+
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
-    }
-
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let half = self.w.len() / 2;
-        let [e0, e2] = (0..half)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|g| {
-                let w0 = self.w.get_bound_coeff(2 * g);
-                let w1 = self.w.get_bound_coeff(2 * g + 1);
-                let v0 = self.value.get_bound_coeff(2 * g);
-                let v1 = self.value.get_bound_coeff(2 * g + 1);
-                [w0 * v0, (w1 + w1 - w0) * (v1 + v1 - v0)]
-            })
-            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
-        UniPoly::from_evals_and_hint(previous_claim, &[e0, e2])
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.w.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.value.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
 
     fn cache_openings(
@@ -825,6 +839,53 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ValueProver<F
             r,
             self.value.final_claim(),
         );
+    }
+}
+
+impl<F: JoltField> ValueProver<F> {
+    fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
+        let half = self.w.len() / 2;
+        let [e0, e2] = (0..half)
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|g| {
+                let w0 = self.w.get_bound_coeff(2 * g);
+                let w1 = self.w.get_bound_coeff(2 * g + 1);
+                let v0 = self.value.get_bound_coeff(2 * g);
+                let v1 = self.value.get_bound_coeff(2 * g + 1);
+                [w0 * v0, (w1 + w1 - w0) * (v1 + v1 - v0)]
+            })
+            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
+        UnivariatePoly::from_evals_and_hint(previous_claim, &[e0, e2])
+    }
+
+    fn bind(&mut self, r: F, _round: usize) {
+        let r_j = F::challenge_from_field(r);
+        self.w.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.value.bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for ValueProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        Ok(self.round_message(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

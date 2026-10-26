@@ -40,6 +40,8 @@ use crate::{
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use common::parallel::par_enabled;
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -50,7 +52,6 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN,
         },
-        unipoly::UniPoly,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
@@ -236,95 +237,12 @@ impl<F: JoltField> EinsumDotProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for EinsumDotProver<F> {
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
+    }
+
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
-    }
-
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
-        let half = self.left.len() / 2;
-        match self.params.layout.schedule() {
-            EqSchedule::None => {
-                let evals: [F; 2] = (0..half)
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|i| {
-                        let l = self.left.sumcheck_evals(i, 2, BindingOrder::HighToLow);
-                        let r = self.right.sumcheck_evals(i, 2, BindingOrder::HighToLow);
-                        [l[0] * r[0], l[1] * r[1]]
-                    })
-                    .reduce(|| [F::zero(); 2], |a, b| array::from_fn(|i| a[i] + b[i]));
-                UniPoly::from_evals_and_hint(previous_claim, &evals)
-            }
-            EqSchedule::High { log_eq, low_bits } => {
-                let eq = self.eq.as_ref().expect("eq poly must exist");
-                let evals: [F; 3] = (0..half)
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|i| {
-                        let l = self
-                            .left
-                            .sumcheck_evals_array::<3>(i, BindingOrder::HighToLow);
-                        let r = self
-                            .right
-                            .sumcheck_evals_array::<3>(i, BindingOrder::HighToLow);
-                        let e = if round < log_eq {
-                            eq.sumcheck_evals_array::<3>(i >> low_bits, BindingOrder::HighToLow)
-                        } else {
-                            [self.eq_bound_claim.expect("eq claim should be cached"); 3]
-                        };
-                        [l[0] * r[0] * e[0], l[1] * r[1] * e[1], l[2] * r[2] * e[2]]
-                    })
-                    .reduce(|| [F::zero(); 3], |a, b| array::from_fn(|i| a[i] + b[i]));
-                UniPoly::from_evals_and_hint(previous_claim, &evals)
-            }
-            EqSchedule::Low { log_k, log_b } => {
-                let eq = self.eq.as_ref().expect("eq poly must exist");
-                let evals: [F; 3] = (0..half)
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|jh| {
-                        let l = self
-                            .left
-                            .sumcheck_evals_array::<3>(jh, BindingOrder::HighToLow);
-                        let r = self
-                            .right
-                            .sumcheck_evals_array::<3>(jh, BindingOrder::HighToLow);
-                        let e = if round < log_k {
-                            [eq.get_bound_coeff(jh & ((1 << log_b) - 1)); 3]
-                        } else {
-                            eq.sumcheck_evals_array::<3>(jh, BindingOrder::HighToLow)
-                        };
-                        [l[0] * r[0] * e[0], l[1] * r[1] * e[1], l[2] * r[2] * e[2]]
-                    })
-                    .reduce(|| [F::zero(); 3], |a, b| array::from_fn(|i| a[i] + b[i]));
-                UniPoly::from_evals_and_hint(previous_claim, &evals)
-            }
-        }
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
-        self.left.bind_parallel(r_j, BindingOrder::HighToLow);
-        self.right.bind_parallel(r_j, BindingOrder::HighToLow);
-        match self.params.layout.schedule() {
-            EqSchedule::None => {}
-            EqSchedule::High { log_eq, .. } => {
-                if round < log_eq {
-                    let eq = self.eq.as_mut().expect("eq poly must exist");
-                    eq.bind_parallel(r_j, BindingOrder::HighToLow);
-                    if round == log_eq - 1 {
-                        self.eq_bound_claim = Some(eq.final_claim());
-                    }
-                }
-            }
-            EqSchedule::Low { log_k, .. } => {
-                if round >= log_k {
-                    self.eq
-                        .as_mut()
-                        .expect("eq poly must exist")
-                        .bind_parallel(r_j, BindingOrder::HighToLow);
-                }
-            }
-        }
     }
 
     fn cache_openings(
@@ -350,6 +268,119 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for EinsumDotProv
             self.params.normalize_opening_point(&right_point),
             self.right.final_claim(),
         );
+    }
+}
+
+impl<F: JoltField> EinsumDotProver<F> {
+    fn round_message(&mut self, round: usize, previous_claim: F) -> UnivariatePoly<F> {
+        let half = self.left.len() / 2;
+        match self.params.layout.schedule() {
+            EqSchedule::None => {
+                let evals: [F; 2] = (0..half)
+                    .into_par_iter()
+                    .with_min_len(par_enabled())
+                    .map(|i| {
+                        let l = self.left.sumcheck_evals(i, 2, BindingOrder::HighToLow);
+                        let r = self.right.sumcheck_evals(i, 2, BindingOrder::HighToLow);
+                        [l[0] * r[0], l[1] * r[1]]
+                    })
+                    .reduce(|| [F::zero(); 2], |a, b| array::from_fn(|i| a[i] + b[i]));
+                UnivariatePoly::from_evals_and_hint(previous_claim, &evals)
+            }
+            EqSchedule::High { log_eq, low_bits } => {
+                let eq = self.eq.as_ref().expect("eq poly must exist");
+                let evals: [F; 3] = (0..half)
+                    .into_par_iter()
+                    .with_min_len(par_enabled())
+                    .map(|i| {
+                        let l = self
+                            .left
+                            .sumcheck_evals_array::<3>(i, BindingOrder::HighToLow);
+                        let r = self
+                            .right
+                            .sumcheck_evals_array::<3>(i, BindingOrder::HighToLow);
+                        let e = if round < log_eq {
+                            eq.sumcheck_evals_array::<3>(i >> low_bits, BindingOrder::HighToLow)
+                        } else {
+                            [self.eq_bound_claim.expect("eq claim should be cached"); 3]
+                        };
+                        [l[0] * r[0] * e[0], l[1] * r[1] * e[1], l[2] * r[2] * e[2]]
+                    })
+                    .reduce(|| [F::zero(); 3], |a, b| array::from_fn(|i| a[i] + b[i]));
+                UnivariatePoly::from_evals_and_hint(previous_claim, &evals)
+            }
+            EqSchedule::Low { log_k, log_b } => {
+                let eq = self.eq.as_ref().expect("eq poly must exist");
+                let evals: [F; 3] = (0..half)
+                    .into_par_iter()
+                    .with_min_len(par_enabled())
+                    .map(|jh| {
+                        let l = self
+                            .left
+                            .sumcheck_evals_array::<3>(jh, BindingOrder::HighToLow);
+                        let r = self
+                            .right
+                            .sumcheck_evals_array::<3>(jh, BindingOrder::HighToLow);
+                        let e = if round < log_k {
+                            [eq.get_bound_coeff(jh & ((1 << log_b) - 1)); 3]
+                        } else {
+                            eq.sumcheck_evals_array::<3>(jh, BindingOrder::HighToLow)
+                        };
+                        [l[0] * r[0] * e[0], l[1] * r[1] * e[1], l[2] * r[2] * e[2]]
+                    })
+                    .reduce(|| [F::zero(); 3], |a, b| array::from_fn(|i| a[i] + b[i]));
+                UnivariatePoly::from_evals_and_hint(previous_claim, &evals)
+            }
+        }
+    }
+
+    fn bind(&mut self, r: F, round: usize) {
+        let r_j = F::challenge_from_field(r);
+        self.left.bind_parallel(r_j, BindingOrder::HighToLow);
+        self.right.bind_parallel(r_j, BindingOrder::HighToLow);
+        match self.params.layout.schedule() {
+            EqSchedule::None => {}
+            EqSchedule::High { log_eq, .. } => {
+                if round < log_eq {
+                    let eq = self.eq.as_mut().expect("eq poly must exist");
+                    eq.bind_parallel(r_j, BindingOrder::HighToLow);
+                    if round == log_eq - 1 {
+                        self.eq_bound_claim = Some(eq.final_claim());
+                    }
+                }
+            }
+            EqSchedule::Low { log_k, .. } => {
+                if round >= log_k {
+                    self.eq
+                        .as_mut()
+                        .expect("eq poly must exist")
+                        .bind_parallel(r_j, BindingOrder::HighToLow);
+                }
+            }
+        }
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for EinsumDotProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        Ok(self.round_message(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

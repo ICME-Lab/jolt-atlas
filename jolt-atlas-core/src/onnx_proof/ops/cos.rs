@@ -24,6 +24,8 @@ use atlas_trace::{op::Cos, trace::LayerData, Model, Tensor};
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
@@ -37,7 +39,6 @@ use joltworks::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        unipoly::UniPoly,
     },
     subprotocols::{
         shout::{self, RaOneHotEncoding},
@@ -382,11 +383,36 @@ impl<F: JoltField> CosProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CosProver<F> {
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
+    }
+
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
 
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let r = [
+            opening_point.r.as_slice(),
+            self.params.r_node_output.r.as_slice(),
+        ]
+        .concat();
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, OpeningPoint::new(r));
+        provider.append_advice(VirtualPoly::CosRa, self.input_onehot.final_claim());
+    }
+}
+
+impl<F: JoltField> CosProver<F> {
+    fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let Self {
             input_onehot,
             cos_table,
@@ -414,33 +440,38 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CosProver<F> 
                 |running, new| [running[0] + new[0], running[1] + new[1]],
             );
 
-        UniPoly::from_evals_and_hint(previous_claim, &univariate_poly_evals)
+        UnivariatePoly::from_evals_and_hint(previous_claim, &univariate_poly_evals)
     }
 
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+    fn bind(&mut self, r: F, _round: usize) {
+        let r_j = F::challenge_from_field(r);
         self.input_onehot
             .bind_parallel(r_j, BindingOrder::LowToHigh);
         self.cos_table.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.identity.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
+}
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let r = [
-            opening_point.r.as_slice(),
-            self.params.r_node_output.r.as_slice(),
-        ]
-        .concat();
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, OpeningPoint::new(r));
-        provider.append_advice(VirtualPoly::CosRa, self.input_onehot.final_claim());
+impl<F: JoltField> ProveRounds<F> for CosProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        Ok(self.round_message(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

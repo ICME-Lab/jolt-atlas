@@ -19,6 +19,8 @@ use crate::{
 };
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 use std::array;
 
@@ -29,7 +31,6 @@ use crate::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
         opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumulator},
-        unipoly::UniPoly,
     },
     subprotocols::sumcheck_verifier::SumcheckInstanceParams,
 };
@@ -181,12 +182,34 @@ impl<F: JoltField> ReadRafProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver<F> {
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
+    }
+
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
 
-    #[tracing::instrument(name = "ReadRafProver::compute_message", skip_all)]
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let sc_challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
+        let opening_point = [&sc_challenges, self.params.r.as_slice()].concat();
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(self.params.ra_vp, self.params.ra_sid),
+            opening_point.into(),
+            self.G.final_claim(),
+        );
+    }
+}
+
+impl<F: JoltField> ReadRafProver<F> {
+    #[tracing::instrument(name = "ReadRafProver::round_message", skip_all)]
+    fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let Self { G, val, int, .. } = self;
         let half_poly_len = val.len() / 2;
         let uni_poly_evals: [F; 2] = (0..half_poly_len)
@@ -207,29 +230,37 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver
                 || [F::zero(); 2],
                 |running, new| array::from_fn(|i| running[i] + new[i]),
             );
-        UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
+        UnivariatePoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
     }
 
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+    fn bind(&mut self, r: F, _round: usize) {
+        let r_j = F::challenge_from_field(r);
         self.val.bind_parallel(r_j, BindingOrder::HighToLow);
         self.G.bind_parallel(r_j, BindingOrder::HighToLow);
         self.int.bind_parallel(r_j, BindingOrder::HighToLow);
     }
+}
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let sc_challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
-        let opening_point = [&sc_challenges, self.params.r.as_slice()].concat();
-        accumulator.append_virtual(
-            transcript,
-            OpeningId::new(self.params.ra_vp, self.params.ra_sid),
-            opening_point.into(),
-            self.G.final_claim(),
-        );
+impl<F: JoltField> ProveRounds<F> for ReadRafProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        Ok(self.round_message(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

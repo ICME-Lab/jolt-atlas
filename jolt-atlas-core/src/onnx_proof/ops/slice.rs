@@ -7,6 +7,8 @@ use crate::utils::{
 };
 use atlas_trace::{op::Slice, trace::LayerData, Model, Op, Trace};
 use common::parallel::par_enabled;
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -18,7 +20,6 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        unipoly::UniPoly,
     },
     subprotocols::{
         sumcheck::Sumcheck,
@@ -192,11 +193,31 @@ impl<F: JoltField> SliceSumcheckProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SliceSumcheckProver<F> {
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
+    }
+
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
 
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
+            .into_provider(transcript, opening_point);
+        provider.append_nodeio(Target::Input(0), self.input_mle.final_claim());
+    }
+}
+
+impl<F: JoltField> SliceSumcheckProver<F> {
+    fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
         const DEGREE_BOUND: usize = 2;
         let half_poly_len = self.input_mle.len() / 2;
         let uni_poly_evals: [F; 2] = (0..half_poly_len)
@@ -215,27 +236,37 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SliceSumcheck
                 ]
             })
             .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
-        UniPoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
+        UnivariatePoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
     }
 
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
+    fn bind(&mut self, r: F, _round: usize) {
+        let r_j = F::challenge_from_field(r);
         self.input_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.selector_mle
             .bind_parallel(r_j, BindingOrder::LowToHigh);
     }
+}
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-        provider.append_nodeio(Target::Input(0), self.input_mle.final_claim());
+impl<F: JoltField> ProveRounds<F> for SliceSumcheckProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        Ok(self.round_message(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

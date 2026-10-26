@@ -65,6 +65,10 @@ pub enum RelationDerived {
     Eq,
     /// The batch eq factor of an einsum contraction layout (one when it has none).
     ContractionEq,
+    /// The MLE of public data (a model constant, a public input) at the incoming point.
+    Public,
+    /// The MLE of a broadcast's all-ones replication tensor at its replicated coordinates.
+    BroadcastOnes,
 }
 
 /// A Fiat-Shamir challenge a relation draws in its [`AtlasRelation::setup`].
@@ -91,6 +95,18 @@ pub enum RelationId {
     Select,
     /// The pre-clamp accumulation of a saturating add or subtract, `acc = left ± right`.
     Accumulation,
+    /// An output equal to `±` its operand at the same point (`Identity`, `Neg`).
+    SignedCopy,
+    /// An output that is zero everywhere (`IsNan` on finite fixed-point data).
+    ZeroOutput,
+    /// An output equal to public data (`Constant`, `Input`).
+    PublicValue,
+    /// An output that permutes its operand's axes.
+    AxisPermutation,
+    /// An output replicating its operand along broadcast axes.
+    Broadcast,
+    /// Division by a constant `left = d·q + rem`.
+    ConstantDivision,
 }
 
 /// A relation's expression over atlas openings.
@@ -193,6 +209,33 @@ pub trait EngineRelation: AtlasRelation {
     fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>>;
 }
 
+/// The setup of a relation whose incoming point is `node`'s reduced output point, with no
+/// challenges.
+pub fn reduced_output_setup<F: JoltField>(
+    accumulator: &dyn OpeningAccumulator<F>,
+    node: &ComputationNode,
+) -> RelationSetup<F> {
+    RelationSetup {
+        incoming_point: accumulator.get_node_output_opening(node.idx).0.r,
+        challenges: Vec::new(),
+    }
+}
+
+/// The [`SymbolicSumcheck`] items every atlas relation shares: the atlas id types and no
+/// upstream claim structs (openings resolve through the accumulator).
+#[macro_export]
+macro_rules! atlas_relation_types {
+    () => {
+        type RelationId = $crate::onnx_proof::relation::RelationId;
+        type OpeningId = $crate::onnx_proof::relation::RelationOpening;
+        type DerivedId = $crate::onnx_proof::relation::RelationDerived;
+        type ChallengeId = $crate::onnx_proof::relation::RelationChallenge;
+        type Challenges<F> = jolt_claims::NoChallenges<F>;
+        type Inputs<C> = jolt_claims::NoInputs<C>;
+        type Outputs<C> = jolt_claims::NoOutputs<C>;
+    };
+}
+
 /// The value of an opening the relation reads, from the accumulator.
 fn resolve<F: JoltField>(accumulator: &dyn OpeningAccumulator<F>, opening: &RelationOpening) -> F {
     match *opening {
@@ -252,10 +295,12 @@ pub fn prove_tie<F: JoltField, T: Transcript, R: EngineRelation>(
     assert_eq!(relation.rounds(), 0, "a tie has no rounds");
     note_dispatch(relation);
     let setup = relation.setup(&*accumulator, transcript);
+    let points = relation.opening_points(&setup, &[]);
     let claims: Vec<F> = relation
         .witnesses::<F>(trace)
         .iter()
-        .map(|witness| witness.evaluate(&setup.incoming_point))
+        .zip(&points)
+        .map(|(witness, point)| witness.evaluate(point))
         .collect();
     append_produced(relation, &setup, accumulator, transcript, &[], &claims);
 }
@@ -412,6 +457,11 @@ impl<F: JoltField, R: EngineRelation> RelationProver<F, R> {
         let produced = relation.produced();
         let summand = compile_summand(relation.output_expression::<F>(), &produced, &setup);
         let inner_degree = summand.iter().map(|t| t.wires.len()).max().unwrap_or(0);
+        assert_eq!(
+            relation.degree(),
+            inner_degree.max(1) + 1,
+            "an engine relation's degree is its summand's, eq included"
+        );
         let wires = relation.witnesses(trace);
         assert_eq!(
             wires.len(),
@@ -477,7 +527,10 @@ impl<F: JoltField, R: EngineRelation> ProveRounds<F> for RelationProver<F, R> {
                     .sum()
             }
         };
-        let message = if *inner_degree <= 2 {
+        let message = if *inner_degree <= 1 {
+            // q linear: its value at 1 (and at 0 when the eq factor vanishes there).
+            eq.gruen_round_deg_2(&at_endpoint(1), &at_endpoint(0), previous_claim)
+        } else if *inner_degree == 2 {
             // q quadratic: its constant and X² coefficient.
             eq.gruen_round_deg_3(
                 &|g| {

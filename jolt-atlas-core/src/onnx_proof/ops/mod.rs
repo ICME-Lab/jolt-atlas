@@ -572,6 +572,45 @@ macro_rules! impl_standard_sumcheck_proof_api {
     };
 }
 
+/// Implement [`OperatorProofTrait`] for an op proven by a zero-round relation (a tie) built
+/// from its node: the prover appends the tie's openings, the verifier checks it.
+#[macro_export]
+macro_rules! impl_tie_proof_api {
+    ($inner_ty:ty, $relation:ty) => {
+        $crate::bind_relation!($inner_ty, $relation);
+
+        impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for $inner_ty {
+            #[tracing::instrument(skip(node, prover))]
+            fn prove(
+                &self,
+                node: &ComputationNode,
+                prover: &mut Prover<F, T>,
+            ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
+                $crate::onnx_proof::relation::prove_tie(
+                    &<$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
+                    &prover.trace,
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
+                Vec::new()
+            }
+
+            #[tracing::instrument(skip(node, verifier))]
+            fn verify(
+                &self,
+                node: &ComputationNode,
+                verifier: &mut Verifier<'_, F, T>,
+            ) -> Result<(), ProofVerifyError> {
+                $crate::onnx_proof::relation::verify_tie(
+                    &<$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
+                    &mut verifier.accumulator,
+                    &mut verifier.transcript,
+                )
+            }
+        }
+    };
+}
+
 /// Compile-time op binding of a relation-dispatched op: the relation's
 /// [`Spec`](crate::onnx_proof::relation::AtlasRelation::Spec) must be the op it is dispatched for.
 #[macro_export]

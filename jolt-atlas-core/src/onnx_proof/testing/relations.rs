@@ -17,7 +17,7 @@ use jolt_claims::{Source, SymbolicSumcheck};
 use jolt_field::Fr;
 use joltworks::poly::commitment::hyperkzg::HyperKZG;
 use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
-use std::sync::Mutex;
+use std::{ops::Range, sync::Mutex};
 
 use super::{
     harness::prove_verify_roundtrip,
@@ -32,7 +32,9 @@ use crate::{
         fused_rebase,
         ops::{
             cube::CubeRelation,
+            div::DivRelation,
             einsum::{dot::EinsumDotProver, ContractionRelation},
+            iff::IffRelation,
             mul::MulRelation,
             rsqrt::RsqrtRelation,
             square::SquareRelation,
@@ -86,6 +88,10 @@ fn relation_specs_match_their_dispatched_op_kind() {
         OpKind::Cube,
         OpKind::Rsqrt,
         OpKind::Einsum,
+        OpKind::Div,
+        OpKind::Iff,
+        OpKind::Add,
+        OpKind::Sub,
     ] {
         assert!(
             dispatches.iter().any(|&(k, _)| k == kind),
@@ -260,8 +266,14 @@ fn assert_matches_reference<R: AtlasRelation>(
     }
 }
 
-/// A one-node model: its input dims and how to build the node over the inputs.
-type SingleNodeCase = (Vec<Vec<usize>>, fn(&mut ModelBuilder, &[usize]) -> usize);
+/// A one-node model: its inputs' dims and value ranges, and how to build the node over them.
+type SingleNodeCase = (
+    Vec<(Vec<usize>, Range<i32>)>,
+    fn(&mut ModelBuilder, &[usize]) -> usize,
+);
+
+/// Positive values small enough for any op's arithmetic.
+const SMALL: Range<i32> = 1..(1 << 7);
 
 fn random_point(rng: &mut StdRng, len: usize) -> Vec<Fr> {
     (0..len)
@@ -272,18 +284,18 @@ fn random_point(rng: &mut StdRng, len: usize) -> Vec<Fr> {
 /// One node of `op` built by `build` over inputs of the given dims, traced on random inputs.
 fn single_node(
     seed: u64,
-    input_dims: &[Vec<usize>],
+    inputs: &[(Vec<usize>, Range<i32>)],
     build: impl Fn(&mut ModelBuilder, &[usize]) -> usize,
 ) -> (Model, Trace, ComputationNode, StdRng) {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut b = ModelBuilder::new();
-    let inputs: Vec<usize> = input_dims.iter().map(|d| b.input(d.clone())).collect();
-    let node = build(&mut b, &inputs);
+    let wires: Vec<usize> = inputs.iter().map(|(d, _)| b.input(d.clone())).collect();
+    let node = build(&mut b, &wires);
     b.mark_output(node);
     let model = b.build();
-    let values: Vec<Tensor<i32>> = input_dims
+    let values: Vec<Tensor<i32>> = inputs
         .iter()
-        .map(|d| Tensor::random_range(&mut rng, d, 1..(1 << 7)))
+        .map(|(d, range)| Tensor::random_range(&mut rng, d, range.clone()))
         .collect();
     let trace = model.trace(&values).expect("honest execution");
     let node = model.view(node);
@@ -293,10 +305,20 @@ fn single_node(
 #[test]
 fn relation_prover_equiv_engine() {
     let cases: Vec<SingleNodeCase> = vec![
-        (vec![vec![8], vec![8]], |b, i| b.mul(i[0], i[1])),
-        (vec![vec![8]], |b, i| b.square(i[0])),
-        (vec![vec![8]], |b, i| b.cube(i[0], 0)),
-        (vec![vec![8]], |b, i| b.rsqrt(i[0])),
+        (vec![(vec![8], SMALL), (vec![8], SMALL)], |b, i| {
+            b.mul(i[0], i[1])
+        }),
+        (vec![(vec![8], SMALL)], |b, i| b.square(i[0])),
+        (vec![(vec![8], SMALL)], |b, i| b.cube(i[0], 0)),
+        (vec![(vec![8], SMALL)], |b, i| b.rsqrt(i[0])),
+        (
+            vec![(vec![8], -(1 << 7)..(1 << 7)), (vec![8], SMALL)],
+            |b, i| b.div(i[0], i[1]),
+        ),
+        (
+            vec![(vec![8], 0..2), (vec![8], SMALL), (vec![8], SMALL)],
+            |b, i| b.iff(i[0], i[1], i[2]),
+        ),
     ];
     for (seed, (dims, build)) in (0xA17_0601..).zip(cases) {
         let (_, trace, node, mut rng) = single_node(seed, &dims, build);
@@ -306,6 +328,8 @@ fn relation_prover_equiv_engine() {
             Op::Square(_) => check_engine(|| SquareRelation::new(node.clone()), &trace, rng),
             Op::Cube(_) => check_engine(|| CubeRelation::new(node.clone()), &trace, rng),
             Op::Rsqrt(_) => check_engine(|| RsqrtRelation::new(node.clone()), &trace, rng),
+            Op::Div(_) => check_engine(|| DivRelation::new(node.clone()), &trace, rng),
+            Op::Iff(_) => check_engine(|| IffRelation::new(node.clone()), &trace, rng),
             ref other => panic!("no engine relation for {other}"),
         }
     }
@@ -329,15 +353,16 @@ fn check_engine<R: EngineRelation>(relation: impl Fn() -> R, trace: &Trace, rng:
 #[test]
 fn relation_prover_equiv_contraction() {
     let cases: Vec<SingleNodeCase> = vec![
-        (vec![vec![4, 8], vec![8, 2]], |b, i| {
+        (vec![(vec![4, 8], SMALL), (vec![8, 2], SMALL)], |b, i| {
             b.einsum("mk,kn->mn", vec![i[0], i[1]], vec![4, 2])
         }),
-        (vec![vec![8], vec![4, 8]], |b, i| {
+        (vec![(vec![8], SMALL), (vec![4, 8], SMALL)], |b, i| {
             b.einsum("k,nk->n", vec![i[0], i[1]], vec![4])
         }),
-        (vec![vec![2, 2, 2, 4], vec![2, 2, 2, 4]], |b, i| {
-            b.einsum("abmk,abnk->abmn", vec![i[0], i[1]], vec![2, 2, 2, 2])
-        }),
+        (
+            vec![(vec![2, 2, 2, 4], SMALL), (vec![2, 2, 2, 4], SMALL)],
+            |b, i| b.einsum("abmk,abnk->abmn", vec![i[0], i[1]], vec![2, 2, 2, 2]),
+        ),
     ];
     for (seed, (dims, build)) in (0xA17_0611..).zip(cases) {
         let (model, trace, node, mut rng) = single_node(seed, &dims, build);

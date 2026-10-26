@@ -6,34 +6,32 @@ use crate::{
             range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
             RangeCheckProvider,
         },
+        relation::{
+            prove_tie, verify_tie, AtlasRelation, EngineRelation, RelationChallenge,
+            RelationDerived, RelationExpr, RelationId, RelationOpening, RelationParams,
+            RelationProver, RelationSetup, RelationVerifier,
+        },
         trace_view::TraceView,
         ProofId, ProofType, Prover, Verifier,
     },
-    utils::opening_access::{AccOpeningAccessor, Target},
+    utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_trace::{op::Div, trace::LayerData, Tensor, Trace};
+use atlas_trace::{op::Div, semantics::fixed::rem_floor, trace::LayerData, Trace};
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
-use jolt_sumcheck::{ProveRounds, SumcheckError};
+use jolt_claims::{derived, opening, Expr, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
+use jolt_field::Ring;
 use joltworks::{
     field::{IntoOpening, JoltField},
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN, LITTLE_ENDIAN,
-        },
-        split_eq_poly::SplitEqUnreducedFold,
+        multilinear_polynomial::MultilinearPolynomial,
+        opening_proof::{OpeningAccumulator, OpeningId},
     },
     subprotocols::{
         evaluation_reduction::EvalReductionProof,
         shout::{self, RaOneHotEncoding},
         sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
@@ -53,8 +51,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         let mut results = Vec::new();
 
         // Execution proof
-        let params = DivParams::new(node.clone(), &mut prover.transcript);
-        let mut exec_sumcheck = DivProver::initialize(&prover.trace, params);
+        let params = RelationParams::<F, _>::new(
+            DivRelation::new(node.clone()),
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+        let mut exec_sumcheck = RelationProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
             &mut exec_sumcheck,
             &mut prover.accumulator,
@@ -78,12 +80,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         // Reduce node-output openings first, then bind the reduced output claim
         // as the committed Div quotient opening used by PCS opening verification.
         let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
-
-        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-        let reduced = accessor.get_reduced_opening();
-        let mut provider = accessor.into_provider(&mut prover.transcript, reduced.0.clone());
-
-        provider.append_advice(CommittedPoly::DivNodeQuotient, reduced.1);
+        prove_tie(
+            &DivQuotientRelation::new(node.clone()),
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
 
         if node.is_scalar() {
             return (eval_reduction_proof, proofs);
@@ -104,7 +106,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let exec_sumcheck = DivVerifier::new(node.clone(), &mut verifier.transcript);
+        let exec_sumcheck = RelationVerifier::<F, _>::new(
+            DivRelation::new(node.clone()),
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
         Sumcheck::verify(
             proof,
             &exec_sumcheck,
@@ -124,19 +130,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         self.verify(node, verifier)?;
 
         NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
-        let reduced = AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
-
-        let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
-            .into_provider(&mut verifier.transcript, reduced.0.clone());
-        provider.append_advice(CommittedPoly::DivNodeQuotient);
-
-        let quotient_claim = provider.get_advice(CommittedPoly::DivNodeQuotient).1;
-
-        if quotient_claim != reduced.1 {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "Div quotient claim does not match reduced node-output claim".to_string(),
-            ));
-        }
+        verify_tie(
+            &DivQuotientRelation::new(node.clone()),
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )?;
 
         if node.is_scalar() {
             return Ok(());
@@ -159,269 +157,198 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
     }
 }
 
-// TODO: Reduce two claims to 1 via 4.5.2 PAZK for Quotient polynomial openings
+crate::bind_relation!(Div, DivRelation);
+crate::bind_relation!(Div, DivQuotientRelation);
 
-const DEGREE_BOUND: usize = 3;
-
-/// Parameters for proving element-wise division operations.
+/// Floor division `q = ⌊left / right⌋` as a relation, its point `r₀` drawn from the transcript:
 ///
-/// Division requires proving a * q = b * R where a/b = q with remainder R.
-/// Stores the opening point and computation node information needed for the sumcheck protocol.
-#[derive(Clone)]
-pub struct DivParams<F: JoltField> {
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
+/// ```text
+/// input claim   0
+/// output claim  eq(r₀, r′) · (right·q + rem − left)
+/// ```
+///
+/// **S ⊆ R.** `atlas_trace::semantics::fixed::floor_div` and its remainder `rem_floor` (the
+/// divisor's sign) satisfy `left = right·q + rem` at every element, so the summand vanishes on
+/// the hypercube. The bound on `rem` that makes `q` the floor is the range check below,
+/// outside the relation.
+pub struct DivRelation {
+    node: ComputationNode,
 }
 
-impl<F: JoltField> DivParams<F> {
-    /// Create new division parameters from a computation node and transcript.
-    pub fn new<T: Transcript>(computation_node: ComputationNode, transcript: &mut T) -> Self {
-        let num_vars = computation_node.pow2_padded_num_output_elements().log_2();
-        let r_node_output = transcript.challenge_vector_optimized::<F>(num_vars);
+impl DivRelation {
+    fn ids(&self) -> OpeningIdBuilder<'_> {
+        OpeningIdBuilder::new(&self.node)
+    }
+}
 
-        Self {
-            r_node_output: r_node_output.into(),
-            computation_node,
+impl SymbolicSumcheck for DivRelation {
+    type RelationId = RelationId;
+    type OpeningId = RelationOpening;
+    type DerivedId = RelationDerived;
+    type ChallengeId = RelationChallenge;
+    type Shape = ComputationNode;
+    type Challenges<F> = NoChallenges<F>;
+    type Inputs<C> = NoInputs<C>;
+    type Outputs<C> = NoOutputs<C>;
+
+    fn new(node: ComputationNode) -> Self {
+        Self { node }
+    }
+
+    fn id() -> RelationId {
+        RelationId::Division
+    }
+
+    fn rounds(&self) -> usize {
+        self.node.pow2_padded_num_output_elements().log_2()
+    }
+
+    fn degree(&self) -> usize {
+        3
+    }
+
+    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
+        Expr::zero()
+    }
+
+    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
+        let open = |id| opening(RelationOpening::Id(id));
+        let left = open(self.ids().nodeio(Target::Input(0)));
+        let right = open(self.ids().nodeio(Target::Input(1)));
+        let quotient = open(self.ids().nodeio(Target::Current));
+        let remainder = open(self.ids().advice(VirtualPoly::DivRemainder));
+        derived(RelationDerived::Eq) * (right * quotient + remainder - left)
+    }
+}
+
+impl AtlasRelation for DivRelation {
+    type Spec = Div;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
+    }
+
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        _accumulator: &dyn OpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> RelationSetup<F> {
+        RelationSetup {
+            incoming_point: transcript
+                .challenge_vector_optimized::<F>(self.rounds())
+                .into_opening(),
+            challenges: Vec::new(),
         }
     }
+
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![
+            self.ids().nodeio(Target::Input(0)),
+            self.ids().nodeio(Target::Input(1)),
+            self.ids().nodeio(Target::Current),
+            self.ids().advice(VirtualPoly::DivRemainder),
+        ]
+    }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for DivParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        F::zero()
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.computation_node
-            .pow2_padded_num_output_elements()
-            .log_2()
-    }
-
-    // output = eq_eval * (right * q + R - left)
-    //        = eq_eval * right * q + eq_eval * R + (-eq_eval) * left
-}
-
-/// Prover state for element-wise division sumcheck protocol.
-///
-/// Maintains the equality polynomial, operand polynomials, quotient q, and remainder R
-/// needed to prove the division relation: left = right * q + R.
-pub struct DivProver<F: JoltField> {
-    params: DivParams<F>,
-    eq_r_node_output: GruenSplitEqPolynomial<F>,
-    left_operand: MultilinearPolynomial<F>,
-    right_operand: MultilinearPolynomial<F>,
-    q: MultilinearPolynomial<F>,
-    R: MultilinearPolynomial<F>,
-}
-
-impl<F: JoltField> DivProver<F> {
-    /// Initialize the prover with trace data and parameters.
-    #[tracing::instrument(skip_all)]
-    pub fn initialize(trace: &Trace, params: DivParams<F>) -> Self {
-        let eq_r_node_output = GruenSplitEqPolynomial::new(
-            &params.r_node_output.r,
-            jolt_poly::BindingOrder::LowToHigh,
-        );
-        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
-        let [left_operand, right_operand] = operands[..] else {
+impl EngineRelation for DivRelation {
+    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+        let LayerData { operands, output } = TraceView::layer_data(trace, &self.node);
+        let [left, right] = operands[..] else {
             panic!("Expected two operands for Div operation")
         };
-        let R_tensor = {
-            let data: Vec<i32> = left_operand
-                .iter()
-                .zip(right_operand.iter())
-                .map(|(&a, &b)| {
-                    let mut R = a % b;
-                    if (R < 0 && b > 0) || R > 0 && b < 0 {
-                        R += b
-                    }
-                    R
-                })
-                .collect();
-            Tensor::<i32>::construct(data, left_operand.dims().to_vec())
-        };
-        let left_operand = MultilinearPolynomial::from(left_operand.clone());
-        let right_operand = MultilinearPolynomial::from(right_operand.clone());
-        let q = MultilinearPolynomial::from(output.clone());
-        let R = MultilinearPolynomial::from(R_tensor);
-        #[cfg(test)]
-        {
-            let claim = (0..left_operand.len())
-                .map(|i| {
-                    let a = left_operand.get_bound_coeff(i);
-                    let b = right_operand.get_bound_coeff(i);
-                    let q = q.get_bound_coeff(i);
-                    let R = R.get_bound_coeff(i);
-                    b * q + R - a
-                })
-                .sum();
-            crate::onnx_proof::testing::probe::probe_assert_eq!(F::zero(), claim)
-        }
-        Self {
-            params,
-            eq_r_node_output,
-            left_operand,
-            right_operand,
-            q,
-            R,
-        }
+        let remainder: Vec<i32> = left
+            .padded_pow2()
+            .iter()
+            .zip(right.padded_pow2().iter())
+            // Padding lanes divide 0 by 0: no remainder.
+            .map(|(&a, &b)| if b == 0 { 0 } else { rem_floor(a, b) })
+            .collect();
+        vec![
+            MultilinearPolynomial::from(left.padded_pow2()),
+            MultilinearPolynomial::from(right.padded_pow2()),
+            MultilinearPolynomial::from(output.padded_pow2()),
+            MultilinearPolynomial::from(remainder),
+        ]
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for DivProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
+// TODO: Reduce two claims to 1 via 4.5.2 PAZK for Quotient polynomial openings
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-
-        provider.append_nodeio(Target::Input(0), self.left_operand.final_claim());
-        provider.append_nodeio(Target::Input(1), self.right_operand.final_claim());
-        provider.append_nodeio(Target::Current, self.q.final_claim());
-
-        provider.append_advice(VirtualPoly::DivRemainder, self.R.final_claim());
-    }
-}
-
-impl<F: JoltField> DivProver<F> {
-    fn bind(&mut self, r: F) {
-        let r_j = F::challenge_from_field(r);
-        self.eq_r_node_output.bind(r);
-        self.left_operand
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.right_operand
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.q.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.R.bind_parallel(r_j, BindingOrder::LowToHigh);
-    }
-}
-
-impl<F: JoltField> ProveRounds<F> for DivProver<F> {
-    fn num_rounds(&self) -> usize {
-        self.params.num_rounds()
-    }
-
-    fn prove_round(
-        &mut self,
-        bind: Option<F>,
-        round: usize,
-        previous_claim: F,
-    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
-        if let Some(r) = bind {
-            self.bind(r);
-        }
-        let Self {
-            eq_r_node_output,
-            left_operand,
-            right_operand,
-            q,
-            R,
-            ..
-        } = self;
-        eq_r_node_output
-            .gruen_round_deg_3(
-                &|g| {
-                    let lo0 = left_operand.get_bound_coeff(2 * g);
-                    let ro0 = right_operand.get_bound_coeff(2 * g);
-                    let ro1 = right_operand.get_bound_coeff(2 * g + 1);
-                    let q0 = q.get_bound_coeff(2 * g);
-                    let q1 = q.get_bound_coeff(2 * g + 1);
-                    let R0 = R.get_bound_coeff(2 * g);
-                    [(ro0 * q0) + R0 - lo0, (ro1 - ro0) * (q1 - q0)]
-                },
-                &|g| {
-                    right_operand.get_bound_coeff(2 * g + 1) * q.get_bound_coeff(2 * g + 1)
-                        + R.get_bound_coeff(2 * g + 1)
-                        - left_operand.get_bound_coeff(2 * g + 1)
-                },
-                previous_claim,
-            )
-            .map_err(round_check_failed(round, previous_claim))
-    }
-
-    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind);
-        Ok(())
-    }
-}
-
-/// Verifier for element-wise division sumcheck protocol.
+/// The committed quotient `q` (what the PCS opens) bound to the node's reduced output, a tie:
 ///
-/// Verifies that the prover's sumcheck messages are consistent with the claimed
-/// division operation output and the division relation.
-pub struct DivVerifier<F: JoltField> {
-    params: DivParams<F>,
+/// ```text
+/// input claim   out(r)                 (the reduced output opening)
+/// output claim  q(r)                   (the committed quotient, at the same point)
+/// ```
+///
+/// **S ⊆ R.** The committed quotient is the node's output tensor.
+pub struct DivQuotientRelation {
+    node: ComputationNode,
 }
 
-impl<F: JoltField> DivVerifier<F> {
-    /// Create a new verifier for the division operation.
-    pub fn new<T: Transcript>(computation_node: ComputationNode, transcript: &mut T) -> Self {
-        let params = DivParams::new(computation_node, transcript);
-        Self { params }
+impl SymbolicSumcheck for DivQuotientRelation {
+    type RelationId = RelationId;
+    type OpeningId = RelationOpening;
+    type DerivedId = RelationDerived;
+    type ChallengeId = RelationChallenge;
+    type Shape = ComputationNode;
+    type Challenges<F> = NoChallenges<F>;
+    type Inputs<C> = NoInputs<C>;
+    type Outputs<C> = NoOutputs<C>;
+
+    fn new(node: ComputationNode) -> Self {
+        Self { node }
+    }
+
+    fn id() -> RelationId {
+        RelationId::DivisionQuotient
+    }
+
+    fn rounds(&self) -> usize {
+        0
+    }
+
+    fn degree(&self) -> usize {
+        1
+    }
+
+    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
+        opening(RelationOpening::ReducedNodeOutput(self.node.idx))
+    }
+
+    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
+        opening(RelationOpening::Id(self.produced()[0]))
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for DivVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl AtlasRelation for DivQuotientRelation {
+    type Spec = Div;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 
-    fn expected_output_claim(
+    fn setup<F: JoltField, T: Transcript>(
         &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-
-        let r_node_output = &self.params.r_node_output.r;
-        let r_node_output_prime = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let eq_eval = EqPolynomial::mle(r_node_output, &r_node_output_prime);
-
-        let q_claim = accessor.get_nodeio(Target::Current).1;
-        let R_claim = accessor.get_advice(VirtualPoly::DivRemainder).1;
-        let left_operand_claim = accessor.get_nodeio(Target::Input(0)).1;
-        let right_operand_claim = accessor.get_nodeio(Target::Input(1)).1;
-
-        eq_eval * ((right_operand_claim * q_claim) + R_claim - left_operand_claim)
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        RelationSetup {
+            incoming_point: accumulator.get_node_output_opening(self.node.idx).0.r,
+            challenges: Vec::new(),
+        }
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningIdBuilder::new(&self.node).advice(CommittedPoly::DivNodeQuotient)]
+    }
+}
 
-        provider.append_nodeio(Target::Input(0));
-        provider.append_nodeio(Target::Input(1));
-        provider.append_nodeio(Target::Current);
-        provider.append_advice(VirtualPoly::DivRemainder);
+impl EngineRelation for DivQuotientRelation {
+    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+        let LayerData { output, .. } = TraceView::layer_data(trace, &self.node);
+        vec![MultilinearPolynomial::from(output.padded_pow2())]
     }
 }
 

@@ -111,9 +111,7 @@ use crate::node_view::ComputationNode;
 
 // Re-export operator param/prover/verifier types for the handler macro
 use common::CommittedPoly;
-pub use div::{DivParams, DivProver, DivVerifier};
 use eval_reduction::NodeEvalReduction;
-pub use iff::{IffParams, IffProver, IffVerifier};
 use joltworks::{
     field::JoltField,
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},

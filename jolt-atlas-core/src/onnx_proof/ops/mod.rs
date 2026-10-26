@@ -514,7 +514,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
             |node: &ComputationNode, prover: &mut Prover<F, T>| {
                 use $crate::onnx_proof::relation::{RelationParams, RelationProver};
                 let params = RelationParams::<F, $relation>::new(
-                    node.clone(),
+                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
                     &prover.accumulator,
                     &mut prover.transcript,
                 );
@@ -524,7 +524,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
              accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
              transcript: &mut T| {
                 $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
-                    node.clone(),
+                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
                     accumulator,
                     transcript,
                 )
@@ -628,7 +628,7 @@ macro_rules! impl_fused_rescale_proof_api {
             |node: &ComputationNode, prover: &mut Prover<F, T>| {
                 use $crate::onnx_proof::relation::{RelationParams, RelationProver};
                 let params = RelationParams::<F, $relation>::new(
-                    node.clone(),
+                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
                     &prover.accumulator,
                     &mut prover.transcript,
                 );
@@ -638,7 +638,7 @@ macro_rules! impl_fused_rescale_proof_api {
              accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
              transcript: &mut T| {
                 $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
-                    node.clone(),
+                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
                     accumulator,
                     transcript,
                 )

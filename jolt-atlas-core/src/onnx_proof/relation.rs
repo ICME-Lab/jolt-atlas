@@ -3,12 +3,19 @@
 //!
 //! A relation declares, over atlas openings, its **input-claim expression** (the claimed sum,
 //! from openings at the incoming point `r₀`) and its **output expression** (the expected final
-//! claim at the bound point `r′`): `eq(r₀, r′)` times a sum of products of produced openings,
-//! with constant or challenge coefficients. The engine owns the eq factor (an upstream Gruen
-//! split eq over `r₀`), binds every produced opening's witness low-to-high, and appends the
-//! produced openings in the relation's declared order. Prover and verifier both read the claim
-//! algebra from the relation; neither restates it. For an op proven this way the relation is
-//! the protocol: there is no hand-written verifier.
+//! claim once every round is bound), a sum of products of produced openings with constant,
+//! challenge or derived coefficients. It also says where each produced opening sits given the
+//! sumcheck challenges. Prover and verifier both read the claim algebra from the relation; neither
+//! restates it. For an op proven this way the relation is the protocol: the verifier is
+//! [`RelationVerifier`], derived from it, and no hand-written verifier exists.
+//!
+//! Most relations have the engine's shape ([`EngineRelation`]): every output term is
+//! `eq(r₀, r′)` times produced openings at the one low-to-high bound point `r′`. The engine,
+//! [`RelationProver`], owns that eq factor (an upstream Gruen split eq over `r₀`), binds every
+//! produced opening's witness and appends the openings in declared order. A relation of another
+//! shape keeps a specialized prover, which reads its input claim and appends its openings
+//! through [`relation_input_claim`] and [`append_produced`]; such a prover is completeness-only
+//! and is checked against the relation's reference messages (`relation_prover_equiv_*`).
 //!
 //! The claim store stays the atlas accumulator: a relation's openings are accumulator
 //! [`OpeningId`]s or a node output's reduced opening, the instance the multi-consumer evaluation
@@ -26,7 +33,7 @@ use joltworks::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, PolynomialId, ProverOpeningAccumulator,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
+            VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         split_eq_poly::SplitEqUnreducedFold,
     },
@@ -47,11 +54,14 @@ pub enum RelationOpening {
     ReducedNodeOutput(usize),
 }
 
-/// A verifier-computed scalar in a relation's expressions.
+/// A verifier-computed scalar in a relation's output expression.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RelationDerived {
-    /// `eq(r₀, r′)`, the engine-owned factor of every output term.
+    /// `eq(r₀, r′)` at the low-to-high bound point: the engine-owned factor of every output term
+    /// of an [`EngineRelation`].
     Eq,
+    /// The batch eq factor of an einsum contraction layout (one when it has none).
+    ContractionEq,
 }
 
 /// A Fiat-Shamir challenge a relation draws in its [`AtlasRelation::setup`].
@@ -64,10 +74,12 @@ pub enum RelationChallenge {
 /// The relation names op protocols are registered under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RelationId {
-    /// Element-wise product (`Mul`, and `And` on booleans).
+    /// Element-wise product of operands (`Mul`, `Square`, `Cube`, and `And` on booleans).
     Product,
     /// The fused reciprocal square root.
     Rsqrt,
+    /// An einsum contraction.
+    Contraction,
 }
 
 /// A relation's expression over atlas openings.
@@ -75,20 +87,26 @@ pub type RelationExpr<F> = Expr<F, RelationOpening, RelationDerived, RelationCha
 
 /// What a relation's setup fixes before its sumcheck: the incoming point and the challenges.
 pub struct RelationSetup<F> {
-    /// The incoming point `r₀` (big-endian) the engine's eq factor sits on.
+    /// The incoming point `r₀` (big-endian).
     pub incoming_point: Vec<F>,
     /// The drawn challenges, by id.
     pub challenges: Vec<(RelationChallenge, F)>,
 }
 
 impl<F: Copy> RelationSetup<F> {
-    fn challenge(&self, id: &RelationChallenge) -> F {
+    /// A drawn challenge's value.
+    pub fn challenge(&self, id: &RelationChallenge) -> F {
         self.challenges
             .iter()
             .find(|(drawn, _)| drawn == id)
             .unwrap_or_else(|| panic!("challenge {id:?} was not drawn"))
             .1
     }
+}
+
+/// The big-endian point a low-to-high sumcheck binds: its challenges, last first.
+pub fn low_to_high_point<F: Copy>(challenges: &[F]) -> Vec<F> {
+    challenges.iter().rev().copied().collect()
 }
 
 /// An op protocol as a symbolic relation on one computation node.
@@ -102,7 +120,6 @@ pub trait AtlasRelation:
         OpeningId = RelationOpening,
         DerivedId = RelationDerived,
         ChallengeId = RelationChallenge,
-        Shape = ComputationNode,
     > + Send
     + Sync
 {
@@ -125,7 +142,36 @@ pub trait AtlasRelation:
     /// the output expression; an opening may repeat (an op whose operands are one node).
     fn produced(&self) -> Vec<OpeningId>;
 
-    /// The witness behind each produced opening, aligned with [`Self::produced`].
+    /// The big-endian point of each produced opening, aligned with [`Self::produced`], given the
+    /// sumcheck challenges in round order. Defaults to the low-to-high bound point for all.
+    fn opening_points<F: JoltField>(
+        &self,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Vec<Vec<F>> {
+        vec![low_to_high_point(challenges); self.produced().len()]
+    }
+
+    /// A derived scalar of the output expression, given the sumcheck challenges in round order.
+    fn derive<F: JoltField>(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> F {
+        match id {
+            RelationDerived::Eq => {
+                EqPolynomial::mle(&setup.incoming_point, &low_to_high_point(challenges))
+            }
+            other => panic!("{other:?} is not derived by this relation"),
+        }
+    }
+}
+
+/// A relation the engine proves: each output term is [`RelationDerived::Eq`] times at most three
+/// produced openings at the default bound point, with constant or challenge coefficients.
+pub trait EngineRelation: AtlasRelation {
+    /// The witness behind each produced opening, aligned with [`AtlasRelation::produced`].
     fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>>;
 }
 
@@ -141,7 +187,7 @@ fn resolve<F: JoltField>(accumulator: &dyn OpeningAccumulator<F>, opening: &Rela
 }
 
 /// The relation's input claim: its input expression over the accumulator's openings.
-fn input_claim<F: JoltField, R: AtlasRelation>(
+pub fn relation_input_claim<F: JoltField, R: AtlasRelation>(
     relation: &R,
     setup: &RelationSetup<F>,
     accumulator: &dyn OpeningAccumulator<F>,
@@ -149,15 +195,39 @@ fn input_claim<F: JoltField, R: AtlasRelation>(
     relation.input_expression::<F>().evaluate(
         |opening| resolve(accumulator, opening),
         |challenge| setup.challenge(challenge),
-        |derived| match derived {
-            RelationDerived::Eq => panic!("the input claim is taken before binding: no eq term"),
-        },
+        |derived| panic!("the input claim is taken before binding: no {derived:?} term"),
     )
 }
 
-/// The bound point `r′` (big-endian) of a low-to-high sumcheck.
-fn bound_point<F: JoltField>(challenges: &[F::Challenge]) -> OpeningPoint<BIG_ENDIAN, F> {
-    OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec().into_opening()).match_endianness()
+/// Append the relation's produced openings, with their `claims`, at their points.
+pub fn append_produced<F: JoltField, T: Transcript, R: AtlasRelation>(
+    relation: &R,
+    setup: &RelationSetup<F>,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+    sumcheck_challenges: &[F::Challenge],
+    claims: &[F],
+) {
+    let points = relation.opening_points(setup, &sumcheck_challenges.to_vec().into_opening());
+    for ((&id, point), &claim) in relation.produced().iter().zip(points).zip(claims) {
+        match id.polynomial {
+            PolynomialId::Virtual(_) => accumulator.append_virtual(
+                transcript,
+                id,
+                OpeningPoint::<BIG_ENDIAN, F>::new(point),
+                claim,
+            ),
+            PolynomialId::Committed(_) => accumulator.append_dense(transcript, id, point, claim),
+        }
+    }
+}
+
+/// Tell the test suite which relation ran for a node.
+pub(crate) fn note_dispatch<R: AtlasRelation>(relation: &R) {
+    #[cfg(test)]
+    crate::onnx_proof::testing::relations::record_dispatch::<R>(relation.node());
+    #[cfg(not(test))]
+    let _ = relation;
 }
 
 /// One output term with the eq factor taken out and its challenges folded into the
@@ -166,6 +236,16 @@ struct SummandTerm<F> {
     coefficient: F,
     unit: bool,
     wires: Vec<usize>,
+}
+
+impl<F: JoltField> SummandTerm<F> {
+    fn scaled(&self, value: F) -> F {
+        if self.unit {
+            value
+        } else {
+            self.coefficient * value
+        }
+    }
 }
 
 /// The output expression as the prover's summand: each term must carry the eq factor exactly
@@ -185,6 +265,7 @@ fn compile_summand<F: JoltField>(
             for factor in term.factors {
                 match factor {
                     Source::Derived(RelationDerived::Eq) => eq_factors += 1,
+                    Source::Derived(other) => panic!("the engine derives only Eq, not {other:?}"),
                     Source::Challenge(challenge) => coefficient *= setup.challenge(&challenge),
                     Source::Opening(RelationOpening::Id(id)) => wires.push(
                         produced
@@ -198,7 +279,7 @@ fn compile_summand<F: JoltField>(
                 }
             }
             assert_eq!(eq_factors, 1, "each output term carries the eq factor once");
-            assert!(wires.len() <= 2, "summand terms are at most quadratic");
+            assert!(wires.len() <= 3, "summand terms are at most cubic");
             SummandTerm {
                 unit: coefficient == F::one(),
                 coefficient,
@@ -208,20 +289,19 @@ fn compile_summand<F: JoltField>(
         .collect()
 }
 
-/// A relation on its node with its setup done: what both sides start from.
+/// A relation with its setup done: what both sides start from.
 pub struct RelationParams<F: JoltField, R: AtlasRelation> {
     relation: R,
     setup: RelationSetup<F>,
 }
 
 impl<F: JoltField, R: AtlasRelation> RelationParams<F, R> {
-    /// The relation on `node`, set up against the accumulator and transcript.
+    /// `relation`, set up against the accumulator and transcript.
     pub fn new<T: Transcript>(
-        node: ComputationNode,
+        relation: R,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Self {
-        let relation = R::new(node);
         let setup = relation.setup(accumulator, transcript);
         Self::at(relation, setup)
     }
@@ -230,27 +310,34 @@ impl<F: JoltField, R: AtlasRelation> RelationParams<F, R> {
     pub fn at(relation: R, setup: RelationSetup<F>) -> Self {
         Self { relation, setup }
     }
+
+    /// The relation and its setup.
+    pub fn into_parts(self) -> (R, RelationSetup<F>) {
+        (self.relation, self.setup)
+    }
 }
 
-/// The prover side of a relation: its summand folded over the engine's split eq.
-pub struct RelationProver<F: JoltField, R: AtlasRelation> {
+/// The engine's prover for an [`EngineRelation`]: its summand folded over the split eq.
+pub struct RelationProver<F: JoltField, R: EngineRelation> {
     relation: R,
     setup: RelationSetup<F>,
-    produced: Vec<OpeningId>,
     eq: GruenSplitEqPolynomial<F>,
     summand: Vec<SummandTerm<F>>,
+    /// The most produced openings in one term: the summand's degree in each round variable,
+    /// apart from eq.
+    inner_degree: usize,
     wires: Vec<MultilinearPolynomial<F>>,
 }
 
-impl<F: JoltField, R: AtlasRelation> RelationProver<F, R> {
+impl<F: JoltField, R: EngineRelation> RelationProver<F, R> {
     /// The prover for `params`, its witnesses read from `trace`.
     #[tracing::instrument(skip_all, name = "RelationProver::initialize")]
     pub fn initialize(trace: &Trace, params: RelationParams<F, R>) -> Self {
-        let RelationParams { relation, setup } = params;
-        #[cfg(test)]
-        crate::onnx_proof::testing::relations::record_dispatch::<R>(relation.node());
+        let (relation, setup) = params.into_parts();
+        note_dispatch(&relation);
         let produced = relation.produced();
         let summand = compile_summand(relation.output_expression::<F>(), &produced, &setup);
+        let inner_degree = summand.iter().map(|t| t.wires.len()).max().unwrap_or(0);
         let wires = relation.witnesses(trace);
         assert_eq!(
             wires.len(),
@@ -264,8 +351,8 @@ impl<F: JoltField, R: AtlasRelation> RelationProver<F, R> {
             ),
             relation,
             setup,
-            produced,
             summand,
+            inner_degree,
             wires,
         }
     }
@@ -279,7 +366,7 @@ impl<F: JoltField, R: AtlasRelation> RelationProver<F, R> {
     }
 }
 
-impl<F: JoltField, R: AtlasRelation> ProveRounds<F> for RelationProver<F, R> {
+impl<F: JoltField, R: EngineRelation> ProveRounds<F> for RelationProver<F, R> {
     fn num_rounds(&self) -> usize {
         self.relation.rounds()
     }
@@ -294,50 +381,78 @@ impl<F: JoltField, R: AtlasRelation> ProveRounds<F> for RelationProver<F, R> {
             self.bind(r);
         }
         let Self {
-            eq, summand, wires, ..
+            eq,
+            summand,
+            wires,
+            inner_degree,
+            ..
         } = self;
-        let scaled = |term: &SummandTerm<F>, value: F| {
-            if term.unit {
-                value
-            } else {
-                term.coefficient * value
-            }
-        };
-        eq.gruen_round_deg_3(
-            &|g| {
-                let mut constant = F::zero();
-                let mut quadratic = F::zero();
-                for term in summand.iter() {
-                    match term.wires[..] {
-                        [] => constant += term.coefficient,
-                        [a] => constant += scaled(term, wires[a].get_bound_coeff(2 * g)),
-                        [a, b] => {
-                            let a0 = wires[a].get_bound_coeff(2 * g);
-                            let b0 = wires[b].get_bound_coeff(2 * g);
-                            let a_slope = wires[a].get_bound_coeff(2 * g + 1) - a0;
-                            let b_slope = wires[b].get_bound_coeff(2 * g + 1) - b0;
-                            constant += scaled(term, a0 * b0);
-                            quadratic += scaled(term, a_slope * b_slope);
-                        }
-                        _ => unreachable!("summand terms are at most quadratic"),
-                    }
-                }
-                [constant, quadratic]
-            },
-            &|g| {
+        let (summand, wires) = (&*summand, &*wires);
+        let at = |g: usize, x: usize, wire: usize| wires[wire].get_bound_coeff(2 * g + x);
+        let at_endpoint = |x: usize| {
+            move |g: usize| -> F {
                 summand
                     .iter()
                     .map(|term| {
-                        let product = term.wires.iter().fold(F::one(), |acc, &w| {
-                            acc * wires[w].get_bound_coeff(2 * g + 1)
-                        });
-                        term.coefficient * product
+                        term.scaled(
+                            term.wires
+                                .iter()
+                                .fold(F::one(), |acc, &w| acc * at(g, x, w)),
+                        )
                     })
                     .sum()
-            },
-            previous_claim,
-        )
-        .map_err(round_check_failed(round, previous_claim))
+            }
+        };
+        let message = if *inner_degree <= 2 {
+            // q quadratic: its constant and X² coefficient.
+            eq.gruen_round_deg_3(
+                &|g| {
+                    let mut constant = F::zero();
+                    let mut quadratic = F::zero();
+                    for term in summand.iter() {
+                        match term.wires[..] {
+                            [] => constant += term.coefficient,
+                            [a] => constant += term.scaled(at(g, 0, a)),
+                            [a, b] => {
+                                let (a0, b0) = (at(g, 0, a), at(g, 0, b));
+                                constant += term.scaled(a0 * b0);
+                                quadratic += term.scaled((at(g, 1, a) - a0) * (at(g, 1, b) - b0));
+                            }
+                            _ => unreachable!("inner degree is at most two"),
+                        }
+                    }
+                    [constant, quadratic]
+                },
+                &at_endpoint(1),
+                previous_claim,
+            )
+        } else {
+            // q cubic: its values at 1 and 2 and its X³ coefficient.
+            eq.gruen_round_from_evals::<3>(
+                &|g| {
+                    let mut evals = [F::zero(); 3];
+                    for term in summand.iter() {
+                        let (mut one, mut two, mut slopes) = (F::one(), F::one(), F::one());
+                        for &w in &term.wires {
+                            let (p0, p1) = (at(g, 0, w), at(g, 1, w));
+                            let slope = p1 - p0;
+                            one *= p1;
+                            two *= p1 + slope;
+                            slopes *= slope;
+                        }
+                        evals[0] += term.scaled(one);
+                        evals[1] += term.scaled(two);
+                        if term.wires.len() == 3 {
+                            evals[2] += term.scaled(slopes);
+                        }
+                    }
+                    evals
+                },
+                &at_endpoint(0),
+                previous_claim,
+            )
+        };
+        message.map_err(round_check_failed(round, previous_claim))
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
@@ -346,7 +461,7 @@ impl<F: JoltField, R: AtlasRelation> ProveRounds<F> for RelationProver<F, R> {
     }
 }
 
-impl<F: JoltField, T: Transcript, R: AtlasRelation> SumcheckInstanceProver<F, T>
+impl<F: JoltField, T: Transcript, R: EngineRelation> SumcheckInstanceProver<F, T>
     for RelationProver<F, R>
 {
     fn degree(&self) -> usize {
@@ -354,7 +469,7 @@ impl<F: JoltField, T: Transcript, R: AtlasRelation> SumcheckInstanceProver<F, T>
     }
 
     fn input_claim(&self, accumulator: &ProverOpeningAccumulator<F>) -> F {
-        input_claim(&self.relation, &self.setup, accumulator)
+        relation_input_claim(&self.relation, &self.setup, accumulator)
     }
 
     fn cache_openings(
@@ -363,35 +478,32 @@ impl<F: JoltField, T: Transcript, R: AtlasRelation> SumcheckInstanceProver<F, T>
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let point = bound_point::<F>(sumcheck_challenges);
-        for (&id, wire) in self.produced.iter().zip(&self.wires) {
-            let claim = wire.final_claim();
-            match id.polynomial {
-                PolynomialId::Virtual(_) => {
-                    accumulator.append_virtual(transcript, id, point.clone(), claim)
-                }
-                PolynomialId::Committed(_) => {
-                    accumulator.append_dense(transcript, id, point.r.clone(), claim)
-                }
-            }
-        }
+        let claims: Vec<F> = self.wires.iter().map(|w| w.final_claim()).collect();
+        append_produced(
+            &self.relation,
+            &self.setup,
+            accumulator,
+            transcript,
+            sumcheck_challenges,
+            &claims,
+        );
     }
 }
 
-/// The verifier side of a relation: its output expression at the bound point.
+/// The verifier of a relation: its output expression at the bound point.
 pub struct RelationVerifier<F: JoltField, R: AtlasRelation> {
     relation: R,
     setup: RelationSetup<F>,
 }
 
 impl<F: JoltField, R: AtlasRelation> RelationVerifier<F, R> {
-    /// The verifier for the relation on `node`, set up against the accumulator and transcript.
+    /// The verifier for `relation`, set up against the accumulator and transcript.
     pub fn new<T: Transcript>(
-        node: ComputationNode,
+        relation: R,
         accumulator: &VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Self {
-        let RelationParams { relation, setup } = RelationParams::new(node, accumulator, transcript);
+        let (relation, setup) = RelationParams::new(relation, accumulator, transcript).into_parts();
         Self { relation, setup }
     }
 }
@@ -408,7 +520,7 @@ impl<F: JoltField, T: Transcript, R: AtlasRelation> SumcheckInstanceVerifier<F, 
     }
 
     fn input_claim(&self, accumulator: &VerifierOpeningAccumulator<F>) -> F {
-        input_claim(&self.relation, &self.setup, accumulator)
+        relation_input_claim(&self.relation, &self.setup, accumulator)
     }
 
     fn expected_output_claim(
@@ -416,14 +528,11 @@ impl<F: JoltField, T: Transcript, R: AtlasRelation> SumcheckInstanceVerifier<F, 
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
     ) -> F {
-        let point = bound_point::<F>(sumcheck_challenges);
-        let eq = EqPolynomial::mle(&self.setup.incoming_point, &point.r);
+        let challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
         self.relation.output_expression::<F>().evaluate(
             |opening| resolve(accumulator, opening),
             |challenge| self.setup.challenge(challenge),
-            |derived| match derived {
-                RelationDerived::Eq => eq,
-            },
+            |derived| self.relation.derive(derived, &self.setup, &challenges),
         )
     }
 
@@ -433,15 +542,17 @@ impl<F: JoltField, T: Transcript, R: AtlasRelation> SumcheckInstanceVerifier<F, 
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let point = bound_point::<F>(sumcheck_challenges);
-        for id in self.relation.produced() {
+        let points = self
+            .relation
+            .opening_points(&self.setup, &sumcheck_challenges.to_vec().into_opening());
+        for (id, point) in self.relation.produced().into_iter().zip(points) {
             match id.polynomial {
-                PolynomialId::Virtual(_) => {
-                    accumulator.append_virtual(transcript, id, point.clone())
-                }
-                PolynomialId::Committed(_) => {
-                    accumulator.append_dense(transcript, id, point.r.clone())
-                }
+                PolynomialId::Virtual(_) => accumulator.append_virtual(
+                    transcript,
+                    id,
+                    OpeningPoint::<BIG_ENDIAN, F>::new(point),
+                ),
+                PolynomialId::Committed(_) => accumulator.append_dense(transcript, id, point),
             }
         }
     }

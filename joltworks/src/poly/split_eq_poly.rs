@@ -90,6 +90,16 @@ pub trait SplitEqUnreducedFold<F: JoltField> {
         self.gruen_round_deg_2_scaled(at_one, at_zero, F::one(), previous_claim)
     }
 
+    /// The round message `l(X)·q(X)` of `Σ_g eq(g)·q_g(X)` from `q`'s Toom samples:
+    /// `per_g(g) = [q_g(1), …, q_g(N−1), q_g's leading coefficient]`, and `at_zero(g) = q_g(0)`,
+    /// folded only when the eq factor vanishes at 0. The error carries the actual `s(0) + s(1)`.
+    fn gruen_round_from_evals<const N: usize>(
+        &self,
+        per_g: &(impl Fn(usize) -> [F; N] + Sync + Send),
+        at_zero: &(impl Fn(usize) -> F + Sync + Send),
+        previous_claim: F,
+    ) -> Result<jolt_poly::UnivariatePoly<F>, F>;
+
     /// [`Self::gruen_round_deg_2`] of `scale · Σ_g eq(g)·q_g(X)`, scaling the folded sums
     /// rather than every `q_g`.
     fn gruen_round_deg_2_scaled(
@@ -102,6 +112,22 @@ pub trait SplitEqUnreducedFold<F: JoltField> {
 }
 
 impl<F: JoltField> SplitEqUnreducedFold<F> for jolt_poly::GruenSplitEqPolynomial<F> {
+    fn gruen_round_from_evals<const N: usize>(
+        &self,
+        per_g: &(impl Fn(usize) -> [F; N] + Sync + Send),
+        at_zero: &(impl Fn(usize) -> F + Sync + Send),
+        previous_claim: F,
+    ) -> Result<jolt_poly::UnivariatePoly<F>, F> {
+        let evals = self.par_fold_out_in_unreduced::<N>(per_g);
+        let q_zero = || {
+            let [q_zero] = self.par_fold_out_in_unreduced::<1>(&|g| [at_zero(g)]);
+            q_zero
+        };
+        let message = self.gruen_poly_from_evals(&evals, previous_claim, q_zero);
+        check_gruen_endpoint(self, &message, false, q_zero);
+        message
+    }
+
     fn gruen_round_deg_3_from(
         &self,
         q_constant: F,

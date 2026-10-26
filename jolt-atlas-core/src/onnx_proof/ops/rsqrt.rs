@@ -11,8 +11,9 @@ use crate::{
             RangeCheckProvider,
         },
         relation::{
-            AtlasRelation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
-            RelationOpening, RelationParams, RelationProver, RelationSetup, RelationVerifier,
+            AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
+            RelationId, RelationOpening, RelationParams, RelationProver, RelationSetup,
+            RelationVerifier,
         },
         ProofId, ProofType, Prover, Verifier,
     },
@@ -67,8 +68,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let mut results = Vec::new();
         // Execution proof
-        let params = RelationParams::<F, RsqrtRelation>::new(
-            node.clone(),
+        let params = RelationParams::<F, _>::new(
+            RsqrtRelation::new(node.clone()),
             &prover.accumulator,
             &mut prover.transcript,
         );
@@ -108,8 +109,8 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let verifier_sumcheck = RelationVerifier::<F, RsqrtRelation>::new(
-            node.clone(),
+        let verifier_sumcheck = RelationVerifier::<F, _>::new(
+            RsqrtRelation::new(node.clone()),
             &verifier.accumulator,
             &mut verifier.transcript,
         );
@@ -271,7 +272,9 @@ impl AtlasRelation for RsqrtRelation {
             self.ids().advice(VirtualPoly::SqrtRemainder),
         ]
     }
+}
 
+impl EngineRelation for RsqrtRelation {
     fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, output } = TraceView::layer_data(trace, &self.node);
         let [input] = operands[..] else {

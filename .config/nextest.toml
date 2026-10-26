@@ -32,3 +32,9 @@ inherits = "ci"
 test-threads = 1
 slow-timeout = { period = "300s", terminate-after = 9 }
 success-output = "final"
+
+# The exhaustive soundness sweeps prove once per site; the witness sweep takes
+# about 37 min on an M3 under Akita, so give them twice the heavy budget.
+[[profile.heavy.overrides]]
+filter = 'test(soundness)'
+slow-timeout = { period = "300s", terminate-after = 18 }

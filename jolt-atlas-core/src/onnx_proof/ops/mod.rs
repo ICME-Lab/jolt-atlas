@@ -121,7 +121,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-pub use rsqrt::{RsqrtParams, RsqrtProver, RsqrtVerifier};
 pub use square::{SquareParams, SquareProver, SquareVerifier};
 use std::collections::BTreeMap;
 

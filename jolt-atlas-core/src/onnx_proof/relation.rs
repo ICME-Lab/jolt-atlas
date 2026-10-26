@@ -74,6 +74,9 @@ pub enum RelationDerived {
     /// The MLE of the relation's public table `i` ([`AtlasRelation::table`]) at the
     /// low-to-high bound point.
     Table(usize),
+    /// `eq(r₀, r′_retained)`: eq between the incoming point and the leading (retained)
+    /// coordinates of a high-to-low reduction's bound point.
+    RetainedEq,
 }
 
 /// A Fiat-Shamir challenge a relation draws in its [`AtlasRelation::setup`].
@@ -118,6 +121,10 @@ pub enum RelationId {
     Slice,
     /// A concatenation of operands along an axis.
     Concat,
+    /// A sum along one axis.
+    AxisSum,
+    /// The mean of squares along the reduced axes, rescaled.
+    MeanOfSquares,
 }
 
 /// A relation's expression over atlas openings.
@@ -231,8 +238,19 @@ pub trait AtlasRelation:
 ///   tables ([`RelationDerived::Table`]), and the engine sends the message's evaluations at
 ///   `0, 2, …, degree` with the claim as hint.
 pub trait EngineRelation: AtlasRelation {
-    /// The witness behind each produced opening, aligned with [`AtlasRelation::produced`].
-    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>>;
+    /// The witness behind each produced opening, aligned with [`AtlasRelation::produced`]: a
+    /// polynomial over the sumcheck's hypercube whose final bound value is the opening's claim.
+    fn witnesses<F: JoltField>(
+        &self,
+        trace: &Trace,
+        setup: &RelationSetup<F>,
+    ) -> Vec<MultilinearPolynomial<F>>;
+
+    /// The order a dense relation binds its variables in (an eq-weighted one binds
+    /// low-to-high).
+    fn binding_order(&self) -> BindingOrder {
+        BindingOrder::LowToHigh
+    }
 }
 
 /// The setup of a relation whose incoming point is `node`'s reduced output point, with no
@@ -531,7 +549,7 @@ impl<F: JoltField, R: EngineRelation> RelationProver<F, R> {
             expected_degree,
             "an engine relation's degree is its summand's"
         );
-        let mut wires = relation.witnesses(trace);
+        let mut wires = relation.witnesses(trace, &setup);
         assert_eq!(
             wires.len(),
             produced.len(),
@@ -541,6 +559,10 @@ impl<F: JoltField, R: EngineRelation> RelationProver<F, R> {
             tables
                 .iter()
                 .map(|&index| MultilinearPolynomial::from(relation.table(index, &setup))),
+        );
+        assert!(
+            !eq_weighted || relation.binding_order() == BindingOrder::LowToHigh,
+            "an eq-weighted relation binds low-to-high"
         );
         let eq = eq_weighted.then(|| {
             GruenSplitEqPolynomial::new(&setup.incoming_point, jolt_poly::BindingOrder::LowToHigh)
@@ -561,8 +583,9 @@ impl<F: JoltField, R: EngineRelation> RelationProver<F, R> {
         if let Some(eq) = &mut self.eq {
             eq.bind(r);
         }
+        let order = self.relation.binding_order();
         for wire in &mut self.wires {
-            wire.bind_parallel(r_j, BindingOrder::LowToHigh);
+            wire.bind_parallel(r_j, order);
         }
     }
 }
@@ -590,9 +613,11 @@ impl<F: JoltField, R: EngineRelation> ProveRounds<F> for RelationProver<F, R> {
         } = self;
         let (summand, wires) = (&*summand, &*wires);
         let Some(eq) = eq else {
+            let order = self.relation.binding_order();
             return Ok(match self.relation.degree() {
-                2 => dense_message::<F, 2>(summand, wires, previous_claim),
-                3 => dense_message::<F, 3>(summand, wires, previous_claim),
+                1 => dense_message::<F, 1>(summand, wires, order, previous_claim),
+                2 => dense_message::<F, 2>(summand, wires, order, previous_claim),
+                3 => dense_message::<F, 3>(summand, wires, order, previous_claim),
                 degree => panic!("dense relations of degree {degree} are not supported"),
             });
         };
@@ -677,6 +702,7 @@ impl<F: JoltField, R: EngineRelation> ProveRounds<F> for RelationProver<F, R> {
 fn dense_message<F: JoltField, const D: usize>(
     summand: &[SummandTerm<F>],
     wires: &[MultilinearPolynomial<F>],
+    order: BindingOrder,
     previous_claim: F,
 ) -> UnivariatePoly<F> {
     let half = wires[0].len() / 2;
@@ -688,7 +714,7 @@ fn dense_message<F: JoltField, const D: usize>(
             for term in summand {
                 let mut product: Option<[F; D]> = None;
                 for &w in &term.wires {
-                    let wire = wires[w].sumcheck_evals_array::<D>(i, BindingOrder::LowToHigh);
+                    let wire = wires[w].sumcheck_evals_array::<D>(i, order);
                     product = Some(match product {
                         None => wire,
                         Some(p) => std::array::from_fn(|k| p[k] * wire[k]),

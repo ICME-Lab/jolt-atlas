@@ -13,12 +13,12 @@ use crate::{
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         prefix_suffix::PrefixRegistry,
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{
@@ -28,9 +28,10 @@ use crate::{
         thread::{drop_in_background_thread, unsafe_allocate_zero_vec},
     },
 };
-use ark_std::Zero;
 use common::{parallel::par_enabled, VirtualPoly};
 use itertools::Itertools;
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 use std::array;
 
@@ -343,7 +344,7 @@ where
         let cycle_poly = match &params.cycle {
             CycleWeight::Eq(r) => CyclePoly::Gruen(GruenSplitEqPolynomial::<F>::new(
                 &r.r,
-                BindingOrder::LowToHigh,
+                jolt_poly::BindingOrder::LowToHigh,
             )),
             CycleWeight::Packed { .. } => {
                 CyclePoly::Dense(MultilinearPolynomial::from(u_evals.clone()))
@@ -439,7 +440,11 @@ where
             });
     }
 
-    fn compute_prefix_suffix_prover_message(&self, round: usize, previous_claim: F) -> UniPoly<F> {
+    fn compute_prefix_suffix_prover_message(
+        &self,
+        round: usize,
+        previous_claim: F,
+    ) -> UnivariatePoly<F> {
         let mut read_checking = [F::zero(), F::zero()];
         let mut raf = [F::zero(), F::zero()];
 
@@ -448,7 +453,7 @@ where
             || raf = self.raf_state.prover_msg(self.params.gamma),
         );
 
-        UniPoly::from_evals_and_hint(
+        UnivariatePoly::from_evals_and_hint(
             previous_claim,
             &[read_checking[0] + raf[0], read_checking[1] + raf[1]],
         )
@@ -562,54 +567,39 @@ where
         &self.params
     }
 
-    #[tracing::instrument(skip_all, name = "InstructionReadRafSumcheckProver::compute_message")]
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
-        if round < LOG_K {
-            self.compute_prefix_suffix_prover_message(round, previous_claim)
-        } else {
-            let ra = self.ra.as_ref().unwrap();
-            let val = self.val.unwrap();
-            let raf_val = self.raf_val.unwrap();
-            match &self.cycle_poly {
-                CyclePoly::Gruen(eq_r_node_output) => {
-                    let [eval_at_0] = eq_r_node_output
-                        .par_fold_out_in(
-                            || [F::UnreducedProductAccum::zero(); 1],
-                            |inner, j, _x_in, e_in| {
-                                let ra_at_0_j = ra.get_bound_coeff(2 * j);
-                                inner[0] += e_in.mul_to_product_accum(ra_at_0_j);
-                            },
-                            |_x_out, e_out, inner| {
-                                array::from_fn(|i| {
-                                    let reduced = F::reduce_product_accum(inner[i]);
-                                    e_out.mul_to_product_accum(reduced)
-                                })
-                            },
-                            |a, b| array::from_fn(|i| a[i] + b[i]),
-                        )
-                        .map(F::reduce_product_accum);
-                    eq_r_node_output.gruen_poly_deg_2(eval_at_0 * (val + raf_val), previous_claim)
-                }
-                CyclePoly::Dense(w) => {
-                    // Degree-2 message Σ_j w(j)·ra(j), evaluated at X ∈ {0, 2}.
-                    let [e0, e2] = (0..ra.len() / 2)
-                        .into_par_iter()
-                        .with_min_len(par_enabled())
-                        .map(|j| {
-                            let r = ra.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
-                            let ww = w.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
-                            [r[0] * ww[0], r[1] * ww[1]]
-                        })
-                        .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
-                    let scale = val + raf_val;
-                    UniPoly::from_evals_and_hint(previous_claim, &[e0 * scale, e2 * scale])
-                }
-            }
-        }
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
-    #[tracing::instrument(skip_all, name = "InstructionReadRafSumcheckProver::ingest_challenge")]
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut FS,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        let id = OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
+        accumulator.append_virtual(
+            transcript,
+            id,
+            opening_point,
+            self.ra.as_ref().unwrap().final_claim(),
+        );
+    }
+}
+
+impl<F: JoltField, LUT, const LOG_K: usize, const N: usize, VD, PS>
+    ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+where
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
+    VD: RafVerifierData<F>,
+    PS: RafProverState<F>,
+{
+    #[tracing::instrument(skip_all, name = "InstructionReadRafSumcheckProver::bind")]
+    fn bind(&mut self, r: F, round: usize) {
+        let r_j = F::challenge_from_field(r);
         let log_m = LOG_K / self.phases;
         self.r.push(r_j);
         if round < LOG_K {
@@ -677,28 +667,75 @@ where
                 .unwrap()
                 .bind_parallel(r_j, BindingOrder::LowToHigh);
             match &mut self.cycle_poly {
-                CyclePoly::Gruen(eq) => eq.bind(r_j),
+                CyclePoly::Gruen(eq) => eq.bind(r),
                 CyclePoly::Dense(w) => w.bind_parallel(r_j, BindingOrder::LowToHigh),
             }
         }
     }
+}
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut FS,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let id = OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
-        accumulator.append_virtual(
-            transcript,
-            id,
-            opening_point,
-            self.ra.as_ref().unwrap().final_claim(),
-        );
+impl<F: JoltField, LUT, const LOG_K: usize, const N: usize, VD, PS> ProveRounds<F>
+    for ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+where
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
+    VD: RafVerifierData<F>,
+    PS: RafProverState<F>,
+{
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    #[tracing::instrument(skip_all, name = "InstructionReadRafSumcheckProver::prove_round")]
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        {
+            if round < LOG_K {
+                Ok(self.compute_prefix_suffix_prover_message(round, previous_claim))
+            } else {
+                let ra = self.ra.as_ref().unwrap();
+                let val = self.val.unwrap();
+                let raf_val = self.raf_val.unwrap();
+                match &self.cycle_poly {
+                    CyclePoly::Gruen(eq_r_node_output) => eq_r_node_output
+                        .gruen_round_deg_2_scaled(
+                            &|j| ra.get_bound_coeff(2 * j + 1),
+                            &|j| ra.get_bound_coeff(2 * j),
+                            val + raf_val,
+                            previous_claim,
+                        ),
+                    CyclePoly::Dense(w) => {
+                        // Degree-2 message Σ_j w(j)·ra(j), evaluated at X ∈ {0, 2}.
+                        let [e0, e2] = (0..ra.len() / 2)
+                            .into_par_iter()
+                            .with_min_len(par_enabled())
+                            .map(|j| {
+                                let r = ra.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
+                                let ww = w.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
+                                [r[0] * ww[0], r[1] * ww[1]]
+                            })
+                            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
+                        let scale = val + raf_val;
+                        Ok(UnivariatePoly::from_evals_and_hint(
+                            previous_claim,
+                            &[e0 * scale, e2 * scale],
+                        ))
+                    }
+                }
+            }
+        }
+        .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

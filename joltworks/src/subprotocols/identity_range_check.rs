@@ -10,21 +10,22 @@ use crate::{
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::ps_shout::{CyclePoly, CycleWeight},
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{
         expanding_table::ExpandingTable, lookup_bits::LookupBits, thread::drop_in_background_thread,
     },
 };
-use ark_std::Zero;
 use common::{parallel::par_enabled, VirtualPoly};
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 use std::array;
 
@@ -209,7 +210,7 @@ where
         let cycle_poly = match &params.cycle {
             CycleWeight::Eq(r) => CyclePoly::Gruen(GruenSplitEqPolynomial::<F>::new(
                 &r.r,
-                BindingOrder::LowToHigh,
+                jolt_poly::BindingOrder::LowToHigh,
             )),
             CycleWeight::Packed { .. } => {
                 CyclePoly::Dense(MultilinearPolynomial::from(u_evals.clone()))
@@ -260,8 +261,12 @@ where
     ///
     /// Each component is a degree-2 univariate evaluated at X∈{0,2} using
     /// prefix–suffix decomposition, then added to form the batched message.
-    fn compute_prefix_suffix_prover_message(&self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        UniPoly::from_evals_and_hint(previous_claim, &self.prover_msg())
+    fn compute_prefix_suffix_prover_message(
+        &self,
+        _round: usize,
+        previous_claim: F,
+    ) -> UnivariatePoly<F> {
+        UnivariatePoly::from_evals_and_hint(previous_claim, &self.prover_msg())
     }
 
     #[tracing::instrument(name = "IdentityRCProver::prover_msg", skip_all)]
@@ -328,64 +333,38 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS> for IdentityRCP
         &self.params
     }
 
-    #[tracing::instrument(skip_all, name = "InstructionIdentityRCProver::compute_message")]
-    /// Produces the prover's degree-≤3 univariate for the current round.
-    ///
-    /// - For the first LOG_K rounds: returns two evaluations combining
-    ///   read-checking and RAF prefix–suffix messages (at X∈{0,2}).
-    /// - For the last log(T) rounds: uses Gruen-split EQ.
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
-        if round < self.params.log_K {
-            // Phase 1: First log(K) rounds
-            self.compute_prefix_suffix_prover_message(round, previous_claim)
-        } else {
-            let ra = self.ra.as_ref().unwrap();
-
-            let raf_val = self.raf_val.unwrap();
-            match &self.cycle_poly {
-                CyclePoly::Gruen(eq_r_node_output) => {
-                    let [eval_at_0] = eq_r_node_output
-                        .par_fold_out_in(
-                            || [F::UnreducedProductAccum::zero(); 1],
-                            |inner, j, _x_in, e_in| {
-                                let ra_at_0_j = ra.get_bound_coeff(2 * j);
-                                inner[0] += e_in.mul_to_product_accum(ra_at_0_j);
-                            },
-                            |_x_out, e_out, inner| {
-                                array::from_fn(|i| {
-                                    let reduced = F::reduce_product_accum(inner[i]);
-                                    e_out.mul_to_product_accum(reduced)
-                                })
-                            },
-                            |a, b| array::from_fn(|i| a[i] + b[i]),
-                        )
-                        .map(F::reduce_product_accum);
-                    eq_r_node_output.gruen_poly_deg_2(eval_at_0 * raf_val, previous_claim)
-                }
-                CyclePoly::Dense(w) => {
-                    let [e0, e2] = (0..ra.len() / 2)
-                        .into_par_iter()
-                        .with_min_len(par_enabled())
-                        .map(|j| {
-                            let r = ra.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
-                            let ww = w.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
-                            [r[0] * ww[0], r[1] * ww[1]]
-                        })
-                        .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
-                    UniPoly::from_evals_and_hint(previous_claim, &[e0 * raf_val, e2 * raf_val])
-                }
-            }
-        }
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
-    #[tracing::instrument(skip_all, name = "InstructionIdentityRCProver::ingest_challenge")]
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut FS,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let opening_point = self
+            .params
+            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id),
+            opening_point,
+            self.ra.as_ref().unwrap().final_claim(),
+        );
+    }
+}
+
+impl<F: JoltField> IdentityRCProver<F> {
+    #[tracing::instrument(skip_all, name = "InstructionIdentityRCProver::bind")]
     /// Binds the next variable (address or cycle) and advances state.
     ///
     /// Address rounds: bind all active prefix–suffix polynomials and the
     /// expanding-table accumulator; update checkpoints every two rounds;
     /// initialize next phase/handoff when needed. Cycle rounds: bind the ra/Val
     /// polynomials and Gruen EQ.
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
+    fn bind(&mut self, r: F, round: usize) {
+        let r_j = F::challenge_from_field(r);
         let log_m = self.params.log_K / self.phases;
         if round < self.params.log_K {
             let phase = round / log_m;
@@ -416,27 +395,73 @@ impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS> for IdentityRCP
                 .unwrap()
                 .bind_parallel(r_j, BindingOrder::LowToHigh);
             match &mut self.cycle_poly {
-                CyclePoly::Gruen(eq) => eq.bind(r_j),
+                CyclePoly::Gruen(eq) => eq.bind(r),
                 CyclePoly::Dense(w) => w.bind_parallel(r_j, BindingOrder::LowToHigh),
             }
         }
     }
+}
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut FS,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id),
-            opening_point,
-            self.ra.as_ref().unwrap().final_claim(),
-        );
+impl<F: JoltField> ProveRounds<F> for IdentityRCProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    #[tracing::instrument(skip_all, name = "InstructionIdentityRCProver::prove_round")]
+    /// Produces the prover's degree-≤3 univariate for the current round.
+    ///
+    /// - For the first LOG_K rounds: returns two evaluations combining
+    ///   read-checking and RAF prefix–suffix messages (at X∈{0,2}).
+    /// - For the last log(T) rounds: uses Gruen-split EQ.
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        {
+            if round < self.params.log_K {
+                // Phase 1: First log(K) rounds
+                Ok(self.compute_prefix_suffix_prover_message(round, previous_claim))
+            } else {
+                let ra = self.ra.as_ref().unwrap();
+
+                let raf_val = self.raf_val.unwrap();
+                match &self.cycle_poly {
+                    CyclePoly::Gruen(eq_r_node_output) => eq_r_node_output
+                        .gruen_round_deg_2_scaled(
+                            &|j| ra.get_bound_coeff(2 * j + 1),
+                            &|j| ra.get_bound_coeff(2 * j),
+                            raf_val,
+                            previous_claim,
+                        ),
+                    CyclePoly::Dense(w) => {
+                        let [e0, e2] = (0..ra.len() / 2)
+                            .into_par_iter()
+                            .with_min_len(par_enabled())
+                            .map(|j| {
+                                let r = ra.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
+                                let ww = w.sumcheck_evals_array::<2>(j, BindingOrder::LowToHigh);
+                                [r[0] * ww[0], r[1] * ww[1]]
+                            })
+                            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
+                        Ok(UnivariatePoly::from_evals_and_hint(
+                            previous_claim,
+                            &[e0 * raf_val, e2 * raf_val],
+                        ))
+                    }
+                }
+            }
+        }
+        .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

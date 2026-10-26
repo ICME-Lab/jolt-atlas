@@ -673,6 +673,18 @@ pub trait SplitEqUnreducedFold<F: JoltField> {
         at_one: &(impl Fn(usize) -> F + Sync + Send),
         at_zero: &(impl Fn(usize) -> F + Sync + Send),
         previous_claim: F,
+    ) -> Result<jolt_poly::UnivariatePoly<F>, F> {
+        self.gruen_round_deg_2_scaled(at_one, at_zero, F::one(), previous_claim)
+    }
+
+    /// [`Self::gruen_round_deg_2`] of `scale · Σ_g eq(g)·q_g(X)`, scaling the folded sums
+    /// rather than every `q_g`.
+    fn gruen_round_deg_2_scaled(
+        &self,
+        at_one: &(impl Fn(usize) -> F + Sync + Send),
+        at_zero: &(impl Fn(usize) -> F + Sync + Send),
+        scale: F,
+        previous_claim: F,
     ) -> Result<jolt_poly::UnivariatePoly<F>, F>;
 }
 
@@ -693,16 +705,18 @@ impl<F: JoltField> SplitEqUnreducedFold<F> for jolt_poly::GruenSplitEqPolynomial
         message
     }
 
-    fn gruen_round_deg_2(
+    fn gruen_round_deg_2_scaled(
         &self,
         at_one: &(impl Fn(usize) -> F + Sync + Send),
         at_zero: &(impl Fn(usize) -> F + Sync + Send),
+        scale: F,
         previous_claim: F,
     ) -> Result<jolt_poly::UnivariatePoly<F>, F> {
         let [q_one] = self.par_fold_out_in_unreduced::<1>(&|g| [at_one(g)]);
+        let q_one = q_one * scale;
         let q_zero = || {
             let [q_zero] = self.par_fold_out_in_unreduced::<1>(&|g| [at_zero(g)]);
-            q_zero
+            q_zero * scale
         };
         let message = self.gruen_poly_deg_2(q_one, previous_claim, q_zero);
         check_gruen_endpoint(self, &message, false, q_zero);

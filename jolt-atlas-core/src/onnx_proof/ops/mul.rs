@@ -23,6 +23,7 @@ use joltworks::{
         sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
@@ -168,28 +169,22 @@ impl<F: JoltField> ProveRounds<F> for MulProver<F> {
             right_operand,
             ..
         } = self;
-        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<2>(&|g| {
-            let lo0 = left_operand.get_bound_coeff(2 * g);
-            let lo_inf = left_operand.get_bound_coeff(2 * g + 1) - lo0;
-            let ro0 = right_operand.get_bound_coeff(2 * g);
-            let ro_inf = right_operand.get_bound_coeff(2 * g + 1) - ro0;
-            [lo0 * ro0, lo_inf * ro_inf]
-        });
-        let q_at_one = || {
-            let [q_one] =
-                eq_r_node_output.par_fold_out_in_unreduced::<1>(&|g| {
-                    [left_operand.get_bound_coeff(2 * g + 1)
-                        * right_operand.get_bound_coeff(2 * g + 1)]
-                });
-            q_one
-        };
         eq_r_node_output
-            .gruen_poly_deg_3(q_constant, q_quadratic, previous_claim, q_at_one)
-            .map_err(|actual| SumcheckError::RoundCheckFailed {
-                round,
-                expected: previous_claim,
-                actual,
-            })
+            .gruen_round_deg_3(
+                &|g| {
+                    let lo0 = left_operand.get_bound_coeff(2 * g);
+                    let lo_inf = left_operand.get_bound_coeff(2 * g + 1) - lo0;
+                    let ro0 = right_operand.get_bound_coeff(2 * g);
+                    let ro_inf = right_operand.get_bound_coeff(2 * g + 1) - ro0;
+                    [lo0 * ro0, lo_inf * ro_inf]
+                },
+                &|g| {
+                    left_operand.get_bound_coeff(2 * g + 1)
+                        * right_operand.get_bound_coeff(2 * g + 1)
+                },
+                previous_claim,
+            )
+            .map_err(round_check_failed(round, previous_claim))
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {

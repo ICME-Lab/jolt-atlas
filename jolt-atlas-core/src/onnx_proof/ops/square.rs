@@ -23,6 +23,7 @@ use joltworks::{
         sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
@@ -165,25 +166,20 @@ impl<F: JoltField> ProveRounds<F> for SquareProver<F> {
             operand,
             ..
         } = self;
-        let [q_constant, q_quadratic] = eq_r_node_output.par_fold_out_in_unreduced::<2>(&|g| {
-            let o0 = operand.get_bound_coeff(2 * g);
-            let o_inf = operand.get_bound_coeff(2 * g + 1) - o0;
-            [o0 * o0, o_inf * o_inf]
-        });
-        let q_at_one = || {
-            let [q_one] = eq_r_node_output.par_fold_out_in_unreduced::<1>(&|g| {
-                let o1 = operand.get_bound_coeff(2 * g + 1);
-                [o1 * o1]
-            });
-            q_one
-        };
         eq_r_node_output
-            .gruen_poly_deg_3(q_constant, q_quadratic, previous_claim, q_at_one)
-            .map_err(|actual| SumcheckError::RoundCheckFailed {
-                round,
-                expected: previous_claim,
-                actual,
-            })
+            .gruen_round_deg_3(
+                &|g| {
+                    let o0 = operand.get_bound_coeff(2 * g);
+                    let o_inf = operand.get_bound_coeff(2 * g + 1) - o0;
+                    [o0 * o0, o_inf * o_inf]
+                },
+                &|g| {
+                    let o1 = operand.get_bound_coeff(2 * g + 1);
+                    o1 * o1
+                },
+                previous_claim,
+            )
+            .map_err(round_check_failed(round, previous_claim))
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {

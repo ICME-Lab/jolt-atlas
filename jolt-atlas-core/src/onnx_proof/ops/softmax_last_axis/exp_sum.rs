@@ -2,6 +2,8 @@ use crate::node_view::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
 use common::parallel::par_enabled;
 use common::VirtualPoly;
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -11,12 +13,12 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{math::Math, thread::drop_in_background_thread},
@@ -105,7 +107,11 @@ impl<F: JoltField> ExpSumProver<F> {
         }
     }
 
-    fn compute_phase_1_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
+    fn compute_phase_1_message(
+        &mut self,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, F> {
         let m = round + 1;
         let Self { eq_r0_k, exp_q, .. } = self;
         let half_poly_len = exp_q.len() / 2;
@@ -117,15 +123,20 @@ impl<F: JoltField> ExpSumProver<F> {
                 exp_q.get_bound_coeff(2 * kj) * eq_r0_k[k]
             })
             .sum();
-        UniPoly::from_evals_and_hint(previous_claim, &[eval_0])
+        Ok(UnivariatePoly::from_evals_and_hint(
+            previous_claim,
+            &[eval_0],
+        ))
     }
 
-    fn compute_phase_2_message(&mut self, previous_claim: F) -> UniPoly<F> {
+    fn compute_phase_2_message(&mut self, previous_claim: F) -> Result<UnivariatePoly<F>, F> {
         let Self { exp_q, .. } = self;
         let gs_eq_r0_k = self.gs_eq_r0_k.as_ref().unwrap();
-        let [q_constant] =
-            gs_eq_r0_k.par_fold_out_in_unreduced::<1>(&|g| [exp_q.get_bound_coeff(2 * g)]);
-        gs_eq_r0_k.gruen_poly_deg_2(q_constant, previous_claim)
+        gs_eq_r0_k.gruen_round_deg_2(
+            &|g| exp_q.get_bound_coeff(2 * g + 1),
+            &|g| exp_q.get_bound_coeff(2 * g),
+            previous_claim,
+        )
     }
 }
 
@@ -134,28 +145,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ExpSumProver<
         &self.params
     }
 
-    #[tracing::instrument(name = "ExpSumProver::compute_message", skip_all)]
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
-        if round < self.params.log_N() {
-            self.compute_phase_1_message(round, previous_claim)
-        } else {
-            self.compute_phase_2_message(previous_claim)
-        }
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
-        self.exp_q.bind_parallel(r_j, BindingOrder::LowToHigh);
-
-        if round == self.params.log_N() - 1 {
-            self.gs_eq_r0_k = Some(GruenSplitEqPolynomial::new(
-                &self.params.r0_k,
-                BindingOrder::LowToHigh,
-            ));
-            drop_in_background_thread(std::mem::take(&mut self.eq_r0_k));
-        }
-        if round >= self.params.log_N() {
-            self.gs_eq_r0_k.as_mut().unwrap().bind(r_j);
-        }
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -170,6 +161,54 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ExpSumProver<
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
             .into_provider(transcript, opening_point);
         provider.append_advice(VirtualPoly::SoftmaxExpQ, self.exp_q.final_claim());
+    }
+}
+
+impl<F: JoltField> ExpSumProver<F> {
+    /// Bind round `round`'s challenge.
+    fn bind(&mut self, r: F, round: usize) {
+        let r_j = F::challenge_from_field(r);
+        self.exp_q.bind_parallel(r_j, BindingOrder::LowToHigh);
+
+        if round == self.params.log_N() - 1 {
+            self.gs_eq_r0_k = Some(GruenSplitEqPolynomial::new(
+                &self.params.r0_k,
+                jolt_poly::BindingOrder::LowToHigh,
+            ));
+            drop_in_background_thread(std::mem::take(&mut self.eq_r0_k));
+        }
+        if round >= self.params.log_N() {
+            self.gs_eq_r0_k.as_mut().unwrap().bind(r);
+        }
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for ExpSumProver<F> {
+    fn num_rounds(&self) -> usize {
+        self.params.num_rounds()
+    }
+
+    #[tracing::instrument(name = "ExpSumProver::prove_round", skip_all)]
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        if round < self.params.log_N() {
+            self.compute_phase_1_message(round, previous_claim)
+        } else {
+            self.compute_phase_2_message(previous_claim)
+        }
+        .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, self.params.num_rounds() - 1);
+        Ok(())
     }
 }
 

@@ -1,6 +1,8 @@
 use crate::node_view::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
 use common::VirtualPoly;
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -10,12 +12,12 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
 };
@@ -82,7 +84,7 @@ pub struct MultProver<F: JoltField> {
 impl<F: JoltField> MultProver<F> {
     /// Constructor for softmax exp multiplication prover.
     pub fn initialize(exp_hi: Vec<i32>, exp_lo: Vec<i32>, params: MultParams<F>) -> Self {
-        let eq = GruenSplitEqPolynomial::new(&params.r, BindingOrder::LowToHigh);
+        let eq = GruenSplitEqPolynomial::new(&params.r, jolt_poly::BindingOrder::LowToHigh);
         let exp_hi = MultilinearPolynomial::from(exp_hi);
         let exp_lo = MultilinearPolynomial::from(exp_lo);
         Self {
@@ -99,27 +101,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MultProver<F>
         &self.params
     }
 
-    #[tracing::instrument(name = "MultProver::compute_message", skip_all)]
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let Self {
-            eq, exp_hi, exp_lo, ..
-        } = self;
-        let [q_constant, q_quadratic] = eq.par_fold_out_in_unreduced::<2>(&|g| {
-            let exp_hi_0 = exp_hi.get_bound_coeff(2 * g);
-            let exp_hi_inf = exp_hi.get_bound_coeff(2 * g + 1) - exp_hi_0;
-            let exp_lo_0 = exp_lo.get_bound_coeff(2 * g);
-            let exp_lo_inf = exp_lo.get_bound_coeff(2 * g + 1) - exp_lo_0;
-            let c0 = exp_lo_0 * exp_hi_0;
-            let e = exp_hi_inf * exp_lo_inf;
-            [c0, e]
-        });
-        eq.gruen_poly_deg_3(q_constant, q_quadratic, previous_claim)
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.eq.bind(r_j);
-        self.exp_hi.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.exp_lo.bind_parallel(r_j, BindingOrder::LowToHigh);
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -135,6 +118,52 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MultProver<F>
             .into_provider(transcript, opening_point);
         provider.append_advice(VirtualPoly::SoftmaxExpHi, self.exp_hi.final_claim());
         provider.append_advice(VirtualPoly::SoftmaxExpLo, self.exp_lo.final_claim());
+    }
+}
+
+impl<F: JoltField> MultProver<F> {
+    fn bind(&mut self, r: F) {
+        let r_j = F::challenge_from_field(r);
+        self.eq.bind(r);
+        self.exp_hi.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.exp_lo.bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for MultProver<F> {
+    fn num_rounds(&self) -> usize {
+        self.params.num_rounds()
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r);
+        }
+        let Self {
+            eq, exp_hi, exp_lo, ..
+        } = self;
+        eq.gruen_round_deg_3(
+            &|g| {
+                let exp_hi_0 = exp_hi.get_bound_coeff(2 * g);
+                let exp_hi_inf = exp_hi.get_bound_coeff(2 * g + 1) - exp_hi_0;
+                let exp_lo_0 = exp_lo.get_bound_coeff(2 * g);
+                let exp_lo_inf = exp_lo.get_bound_coeff(2 * g + 1) - exp_lo_0;
+                [exp_lo_0 * exp_hi_0, exp_hi_inf * exp_lo_inf]
+            },
+            &|g| exp_lo.get_bound_coeff(2 * g + 1) * exp_hi.get_bound_coeff(2 * g + 1),
+            previous_claim,
+        )
+        .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind);
+        Ok(())
     }
 }
 

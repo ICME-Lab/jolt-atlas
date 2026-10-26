@@ -17,6 +17,7 @@ use crate::{
         mles_product_sum::compute_mles_product_sum,
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
 };
@@ -164,13 +165,8 @@ impl<F: JoltField> ProveRounds<F> for RaSumcheckProver<F> {
         if let Some(r) = bind {
             self.bind(r);
         }
-        compute_mles_product_sum(&self.ra_i_polys, previous_claim, &self.eq_poly).map_err(
-            |actual| SumcheckError::RoundCheckFailed {
-                round,
-                expected: previous_claim,
-                actual,
-            },
-        )
+        compute_mles_product_sum(&self.ra_i_polys, previous_claim, &self.eq_poly)
+            .map_err(round_check_failed(round, previous_claim))
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {

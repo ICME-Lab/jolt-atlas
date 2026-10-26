@@ -4,6 +4,8 @@ use std::array;
 use crate::node_view::ComputationNode;
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use common::VirtualPoly;
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -15,12 +17,12 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{index_to_field_bitvector, math::Math, thread::drop_in_background_thread},
@@ -137,7 +139,11 @@ impl<F: JoltField> MaxIndicatorProver<F> {
         }
     }
 
-    fn compute_phase_1_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
+    fn compute_phase_1_message(
+        &mut self,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, F> {
         let m = round + 1;
         let Self { X, e, eq, .. } = self;
         let half_poly_len = X.len() / 2;
@@ -159,10 +165,10 @@ impl<F: JoltField> MaxIndicatorProver<F> {
                 || [F::zero(); DEGREE_BOUND],
                 |running, new| array::from_fn(|i| running[i] + new[i]),
             );
-        UniPoly::from_evals_and_hint(previous_claim, &evals)
+        Ok(UnivariatePoly::from_evals_and_hint(previous_claim, &evals))
     }
 
-    fn compute_phase_2_message(&mut self, previous_claim: F) -> UniPoly<F> {
+    fn compute_phase_2_message(&mut self, previous_claim: F) -> Result<UnivariatePoly<F>, F> {
         let Self {
             gs_eq,
             X,
@@ -170,18 +176,18 @@ impl<F: JoltField> MaxIndicatorProver<F> {
             ..
         } = self;
         let gs_eq = gs_eq.as_ref().unwrap();
-        let [q_constant, q_quadratic] = gs_eq.par_fold_out_in_unreduced::<2>(&|g| {
-            let i_0 = indicator.get_bound_coeff(2 * g);
-            let i_inf = indicator.get_bound_coeff(2 * g + 1) - i_0;
+        gs_eq.gruen_round_deg_3(
+            &|g| {
+                let i_0 = indicator.get_bound_coeff(2 * g);
+                let i_inf = indicator.get_bound_coeff(2 * g + 1) - i_0;
 
-            let X_0 = X.get_bound_coeff(2 * g);
-            let X_inf = X.get_bound_coeff(2 * g + 1) - X_0;
-
-            let c0 = i_0 * X_0;
-            let e = i_inf * X_inf;
-            [c0, e]
-        });
-        gs_eq.gruen_poly_deg_3(q_constant, q_quadratic, previous_claim)
+                let X_0 = X.get_bound_coeff(2 * g);
+                let X_inf = X.get_bound_coeff(2 * g + 1) - X_0;
+                [i_0 * X_0, i_inf * X_inf]
+            },
+            &|g| indicator.get_bound_coeff(2 * g + 1) * X.get_bound_coeff(2 * g + 1),
+            previous_claim,
+        )
     }
 }
 
@@ -190,29 +196,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaxIndicatorP
         &self.params
     }
 
-    #[tracing::instrument(name = "MaxIndicatorProver::compute_message", skip_all)]
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
-        if round < self.params.log_N() {
-            self.compute_phase_1_message(round, previous_claim)
-        } else {
-            self.compute_phase_2_message(previous_claim)
-        }
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
-        self.X.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.e.bind_parallel(r_j, BindingOrder::LowToHigh);
-
-        if round == self.params.log_N() - 1 {
-            self.gs_eq = Some(GruenSplitEqPolynomial::new(
-                &self.params.r1_k,
-                BindingOrder::LowToHigh,
-            ));
-            drop_in_background_thread(std::mem::take(&mut self.eq));
-        }
-        if round >= self.params.log_N() {
-            self.gs_eq.as_mut().unwrap().bind(r_j);
-        }
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -227,6 +212,55 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaxIndicatorP
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
             .into_provider(transcript, opening_point);
         provider.append_nodeio(Target::Input(0), self.X.final_claim());
+    }
+}
+
+impl<F: JoltField> MaxIndicatorProver<F> {
+    /// Bind round `round`'s challenge.
+    fn bind(&mut self, r: F, round: usize) {
+        let r_j = F::challenge_from_field(r);
+        self.X.bind_parallel(r_j, BindingOrder::LowToHigh);
+        self.e.bind_parallel(r_j, BindingOrder::LowToHigh);
+
+        if round == self.params.log_N() - 1 {
+            self.gs_eq = Some(GruenSplitEqPolynomial::new(
+                &self.params.r1_k,
+                jolt_poly::BindingOrder::LowToHigh,
+            ));
+            drop_in_background_thread(std::mem::take(&mut self.eq));
+        }
+        if round >= self.params.log_N() {
+            self.gs_eq.as_mut().unwrap().bind(r);
+        }
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for MaxIndicatorProver<F> {
+    fn num_rounds(&self) -> usize {
+        self.params.num_rounds()
+    }
+
+    #[tracing::instrument(name = "MaxIndicatorProver::prove_round", skip_all)]
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        if round < self.params.log_N() {
+            self.compute_phase_1_message(round, previous_claim)
+        } else {
+            self.compute_phase_2_message(previous_claim)
+        }
+        .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, self.params.num_rounds() - 1);
+        Ok(())
     }
 }
 

@@ -23,6 +23,7 @@ use joltworks::{
         sumcheck::SumcheckInstanceProof,
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
@@ -162,11 +163,7 @@ impl<F: JoltField> ProveRounds<F> for CubeProver<F> {
             previous_claim,
             &self.eq_r_node_output,
         )
-        .map_err(|actual| SumcheckError::RoundCheckFailed {
-            round,
-            expected: previous_claim,
-            actual,
-        })
+        .map_err(round_check_failed(round, previous_claim))
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {

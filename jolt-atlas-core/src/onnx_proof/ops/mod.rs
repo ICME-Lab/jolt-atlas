@@ -111,7 +111,6 @@ use crate::node_view::ComputationNode;
 
 // Re-export operator param/prover/verifier types for the handler macro
 use common::CommittedPoly;
-pub use cube::{CubeParams, CubeProver, CubeVerifier};
 pub use div::{DivParams, DivProver, DivVerifier};
 use eval_reduction::NodeEvalReduction;
 pub use iff::{IffParams, IffProver, IffVerifier};
@@ -121,7 +120,6 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-pub use square::{SquareParams, SquareProver, SquareVerifier};
 use std::collections::BTreeMap;
 
 use crate::onnx_proof::{ProofId, Prover, Verifier};

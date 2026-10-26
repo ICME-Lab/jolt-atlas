@@ -56,7 +56,13 @@ fn relation_specs_match_their_dispatched_op_kind() {
         let spec_name = spec.rsplit("::").next().expect("a type name");
         assert_eq!(spec_name, kind.to_string(), "{spec} dispatched for {kind}");
     }
-    for kind in [OpKind::Mul, OpKind::And, OpKind::Rsqrt] {
+    for kind in [
+        OpKind::Mul,
+        OpKind::And,
+        OpKind::Square,
+        OpKind::Cube,
+        OpKind::Rsqrt,
+    ] {
         assert!(
             dispatches.iter().any(|&(k, _)| k == kind),
             "no {kind} node ran through its relation"

@@ -16,8 +16,7 @@ use jolt_sumcheck::ProveRounds;
 use joltworks::{
     field::JoltField,
     poly::{
-        commitment::hyperkzg::HyperKZG, eq_poly::EqPolynomial, opening_proof::OpeningPoint,
-        split_eq_poly::CHECK_GRUEN_ENDPOINTS,
+        commitment::hyperkzg::HyperKZG, eq_poly::EqPolynomial, split_eq_poly::CHECK_GRUEN_ENDPOINTS,
     },
 };
 use num_traits::{One, Zero};
@@ -31,11 +30,7 @@ use super::{
 };
 use crate::{
     node_view::ModelView,
-    onnx_proof::ops::{
-        cube::{CubeParams, CubeProver},
-        mul::MulRelation,
-        square::{SquareParams, SquareProver},
-    },
+    onnx_proof::ops::{cube::CubeRelation, mul::MulRelation, square::SquareRelation},
     onnx_proof::relation::{RelationParams, RelationProver, RelationSetup},
 };
 
@@ -145,22 +140,24 @@ fn mul_rounds_where_eq_vanishes() {
 #[test]
 fn square_rounds_where_eq_vanishes() {
     let f = Fixture::new(0xA17_0402, 1, |b, i| b.square(i[0]));
-    let params = SquareParams {
-        r_node_output: OpeningPoint::new(f.r_node.clone()),
-        computation_node: f.model.view(f.node),
+    let setup = RelationSetup {
+        incoming_point: f.r_node.clone(),
+        challenges: Vec::new(),
     };
-    let mut prover = SquareProver::initialize(&f.trace, params);
+    let params = RelationParams::at(SquareRelation::new(f.model.view(f.node)), setup);
+    let mut prover = RelationProver::initialize(&f.trace, params);
     f.check(&mut prover, &[&f.operands[0], &f.operands[0]]);
 }
 
 #[test]
 fn cube_rounds_where_eq_vanishes() {
     let f = Fixture::new(0xA17_0403, 1, |b, i| b.cube(i[0], 0));
-    let params = CubeParams {
-        r_node_output: OpeningPoint::new(f.r_node.clone()),
-        computation_node: f.model.view(f.node),
+    let setup = RelationSetup {
+        incoming_point: f.r_node.clone(),
+        challenges: Vec::new(),
     };
-    let mut prover = CubeProver::initialize(&f.trace, params);
+    let params = RelationParams::at(CubeRelation::new(f.model.view(f.node)), setup);
+    let mut prover = RelationProver::initialize(&f.trace, params);
     f.check(
         &mut prover,
         &[&f.operands[0], &f.operands[0], &f.operands[0]],

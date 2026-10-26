@@ -86,6 +86,7 @@ pub enum RelationId {
 pub type RelationExpr<F> = Expr<F, RelationOpening, RelationDerived, RelationChallenge>;
 
 /// What a relation's setup fixes before its sumcheck: the incoming point and the challenges.
+#[derive(Clone)]
 pub struct RelationSetup<F> {
     /// The incoming point `r₀` (big-endian).
     pub incoming_point: Vec<F>,

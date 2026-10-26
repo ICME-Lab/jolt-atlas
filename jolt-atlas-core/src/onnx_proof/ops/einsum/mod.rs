@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use atlas_trace::{op::Einsum, Model, Op, Trace};
+use atlas_trace::{op::Einsum, Model, Op};
 
 use crate::node_view::ComputationNode;
 use crate::{
@@ -10,30 +8,34 @@ use crate::{
         ops::{
             einsum::{
                 abmk_abnk_abmn::AbmkAbnkAbmnLayout,
-                dot::{EinsumDotParams, EinsumDotProver, EinsumDotVerifier, EinsumLayout},
+                dot::{EinsumDotProver, EinsumGeometry, EinsumLayout},
                 k_nk_n::KNkNLayout,
                 mk_kn_mn::MkKnMnLayout,
             },
             OperatorProofTrait, Prover, Verifier,
         },
+        relation::{
+            AtlasRelation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
+            RelationOpening, RelationParams, RelationSetup, RelationVerifier,
+        },
         ProofId, ProofType,
     },
-    utils::dims::{lookup_einsum_config, EinsumDims},
+    utils::{
+        dims::{lookup_einsum_config, EinsumDims},
+        opening_access::{OpeningIdBuilder, Target},
+    },
 };
 use common::CommittedPoly;
+use jolt_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
+use jolt_field::Ring;
 use joltworks::{
     field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
-    subprotocols::{
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::SumcheckInstanceVerifier,
-    },
+    poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint},
+    subprotocols::sumcheck::{Sumcheck, SumcheckInstanceProof},
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
 
-/// `abmk,abnk->abmn` layout (batched matmul; also covers `amk,ank->amn`).
 pub mod abmk_abnk_abmn;
 /// Shared sumcheck engine for einsum contraction patterns.
 pub mod dot;
@@ -50,6 +52,8 @@ pub mod mk_kn_mn;
 // - amk,ank->amn    → abmk_abnk_abmn (batch pack 1×a)
 // - abmk,abnk->abmn → abmk_abnk_abmn
 
+crate::bind_relation!(Einsum, ContractionRelation);
+
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     #[tracing::instrument(skip_all, name = "Einsum::prove")]
     fn prove(
@@ -59,10 +63,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let fused = fused_rebase::fuses_rebase(node);
 
-        // The fused einsum proves `Σ_k L·R = rescaled·2^S + R` (division) and
-        // `output = SatClamp(rescaled)` (clamp), both handled by the shared
-        // `fused_rebase` stages; only the contraction (matmul) sumcheck is
-        // einsum-specific. See [`fused_rebase`] for the seam.
         let mut proofs = Vec::new();
         let remainder = if fused {
             let (pre_proofs, remainder) = fused_rebase::prove_pre(node, prover);
@@ -72,19 +72,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
             None
         };
 
-        // EinsumMatmul: the contraction sumcheck (initial claim `acc(r)` via
-        // `fused_rebase::fused_input_claim`).
-        let mut matmul = EinsumProver::sumcheck(
-            &prover.preprocessing.model,
-            &prover.trace,
-            node.clone(),
-            &prover.accumulator,
-        );
-        let (matmul_proof, _) = Sumcheck::prove(
-            &mut *matmul,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
+        let relation = ContractionRelation::for_node(&prover.preprocessing.model, node.clone());
+        let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
+        let mut matmul = EinsumDotProver::initialize(&prover.trace, params);
+        let (matmul_proof, _) =
+            Sumcheck::prove(&mut matmul, &mut prover.accumulator, &mut prover.transcript);
         proofs.push((ProofId(node.idx, ProofType::EinsumMatmul), matmul_proof));
 
         if fused && !is_scalar(node) {
@@ -106,8 +98,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     ) -> Result<(), ProofVerifyError> {
         let fused = fused_rebase::fuses_rebase(node);
 
-        // Mirror the prover: remainder advice + clamp, then the matmul, then the
-        // remainder range-check (or the scalar clear checks).
         if fused {
             fused_rebase::verify_pre(node, verifier)?;
         }
@@ -116,14 +106,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
             .proofs
             .get(&ProofId(node.idx, ProofType::EinsumMatmul))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let matmul = EinsumVerifier::sumcheck(
-            &verifier.preprocessing.model,
-            node.clone(),
-            &verifier.accumulator,
-        );
+        let relation = ContractionRelation::for_node(&verifier.preprocessing.model, node.clone());
+        let matmul =
+            RelationVerifier::new(relation, &verifier.accumulator, &mut verifier.transcript);
         Sumcheck::verify(
             matmul_proof,
-            &*matmul,
+            &matmul,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )?;
@@ -140,12 +128,161 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     }
 }
 
-/// Returns the canonical einsum equation of a node, panicking if the node is
-/// not an Einsum operator.
 fn einsum_equation(computation_node: &ComputationNode) -> String {
     match &computation_node.operator {
         Op::Einsum(Einsum { equation, .. }) => equation.to_string(),
         _ => panic!("Unexpected operator"),
+    }
+}
+
+/// The canonical pattern an einsum node contracts, with its dims.
+#[derive(Clone)]
+pub struct ContractionShape {
+    node: ComputationNode,
+    equation: &'static str,
+    dims: EinsumDims,
+}
+
+/// An einsum contraction as a relation:
+///
+/// ```text
+/// input claim   q(r₀)·2^S + rem(r₀)    (fused rescale: pre-clamp quotient and remainder)
+///               out(r₀)                (no rescale: the reduced output opening)
+/// output claim  L(ρ_L) · R(ρ_R) · EQ
+/// ```
+///
+/// where the operand points `ρ_L`, `ρ_R` and the batch factor `EQ` (one for a plain
+/// contraction) come from the pattern's [`EinsumLayout`] given `r₀` and the sumcheck point. The
+/// [`dot`] engine is its prover.
+///
+/// **S ⊆ R.** The einsum accumulates `acc(m, n) = Σ_k L(m, k)·R(k, n)` (batched patterns per
+/// batch index) in `i64` and splits it with `atlas_trace::semantics::fixed::rebase` into
+/// `q·2^S + rem`; folding the operands at `r₀` turns `acc(r₀)` into the sumcheck's
+/// `Σ_h L(h)·R(h)·EQ(h)`, so the input claim equals the sum for every execution, saturated ones
+/// included (the clamp acts on `q`, outside the relation).
+pub struct ContractionRelation {
+    shape: ContractionShape,
+    geometry: Box<dyn EinsumGeometry>,
+}
+
+impl ContractionRelation {
+    /// The relation of an einsum `node` of `model`.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
+        let config = lookup_einsum_config(&einsum_equation(&node));
+        let dims = (config.dims_extractor)(&node, model);
+        Self::new(ContractionShape {
+            node,
+            equation: config.equation,
+            dims,
+        })
+    }
+
+    /// The pattern's layout at field `F`.
+    pub fn layout<F: JoltField>(&self) -> Box<dyn EinsumLayout<F>> {
+        einsum_layout(self.shape.equation, &self.shape.dims)
+    }
+
+    fn ids(&self) -> OpeningIdBuilder<'_> {
+        OpeningIdBuilder::new(&self.shape.node)
+    }
+}
+
+impl SymbolicSumcheck for ContractionRelation {
+    type RelationId = RelationId;
+    type OpeningId = RelationOpening;
+    type DerivedId = RelationDerived;
+    type ChallengeId = RelationChallenge;
+    type Shape = ContractionShape;
+    type Challenges<F> = NoChallenges<F>;
+    type Inputs<C> = NoInputs<C>;
+    type Outputs<C> = NoOutputs<C>;
+
+    fn new(shape: ContractionShape) -> Self {
+        let geometry = einsum_geometry(shape.equation, &shape.dims);
+        Self { shape, geometry }
+    }
+
+    fn id() -> RelationId {
+        RelationId::Contraction
+    }
+
+    fn rounds(&self) -> usize {
+        self.geometry.num_rounds()
+    }
+
+    fn degree(&self) -> usize {
+        self.geometry.schedule().degree()
+    }
+
+    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
+        fused_rebase::input_expression(&self.shape.node)
+    }
+
+    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
+        let [left, right] = [Target::Input(0), Target::Input(1)]
+            .map(|operand| opening(RelationOpening::Id(self.ids().nodeio(operand))));
+        derived(RelationDerived::ContractionEq) * left * right
+    }
+}
+
+impl AtlasRelation for ContractionRelation {
+    type Spec = Einsum;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
+    }
+
+    fn setup<F: JoltField, Tr: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut Tr,
+    ) -> RelationSetup<F> {
+        RelationSetup {
+            incoming_point: accumulator.get_node_output_opening(self.shape.node.idx).0.r,
+            challenges: Vec::new(),
+        }
+    }
+
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![
+            self.ids().nodeio(Target::Input(0)),
+            self.ids().nodeio(Target::Input(1)),
+        ]
+    }
+
+    fn opening_points<F: JoltField>(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Vec<Vec<F>> {
+        let (left, right) = self
+            .layout::<F>()
+            .operand_points(&OpeningPoint::new(setup.incoming_point.clone()), challenges);
+        vec![left, right]
+    }
+
+    fn derive<F: JoltField>(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> F {
+        match id {
+            RelationDerived::ContractionEq => self
+                .layout::<F>()
+                .output_eq(&OpeningPoint::new(setup.incoming_point.clone()), challenges),
+            other => panic!("a contraction derives no {other:?}"),
+        }
+    }
+}
+
+/// The round geometry of a canonical equation's layout.
+fn einsum_geometry(equation: &str, einsum_dims: &EinsumDims) -> Box<dyn EinsumGeometry> {
+    match equation {
+        "mk,kn->mn" => Box::new(MkKnMnLayout::new(einsum_dims)),
+        "k,nk->n" => Box::new(KNkNLayout::new(einsum_dims)),
+        "abmk,abnk->abmn" => Box::new(AbmkAbnkAbmnLayout::new(einsum_dims)),
+        other => panic!("unexpected canonical einsum equation: {other}"),
     }
 }
 
@@ -154,54 +291,11 @@ fn einsum_equation(computation_node: &ComputationNode) -> String {
 fn einsum_layout<F: JoltField>(
     equation: &str,
     einsum_dims: &EinsumDims,
-) -> Arc<dyn EinsumLayout<F>> {
+) -> Box<dyn EinsumLayout<F>> {
     match equation {
-        "mk,kn->mn" => Arc::new(MkKnMnLayout::new(einsum_dims)),
-        "k,nk->n" => Arc::new(KNkNLayout::new(einsum_dims)),
-        "abmk,abnk->abmn" => Arc::new(AbmkAbnkAbmnLayout::new(einsum_dims)),
+        "mk,kn->mn" => Box::new(MkKnMnLayout::new(einsum_dims)),
+        "k,nk->n" => Box::new(KNkNLayout::new(einsum_dims)),
+        "abmk,abnk->abmn" => Box::new(AbmkAbnkAbmnLayout::new(einsum_dims)),
         other => panic!("unexpected canonical einsum equation: {other}"),
-    }
-}
-
-/// Prover dispatcher for the Einsum contraction (matmul) sumcheck.
-///
-/// Every contraction pattern routes through the shared [`dot`] engine via its
-/// [`EinsumLayout`].
-pub struct EinsumProver;
-
-impl EinsumProver {
-    /// Create a sumcheck prover for the specified Einsum equation.
-    pub fn sumcheck<F: JoltField, T: Transcript>(
-        model: &Model,
-        trace: &Trace,
-        computation_node: ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Box<dyn SumcheckInstanceProver<F, T>> {
-        let config = lookup_einsum_config(&einsum_equation(&computation_node));
-        let einsum_dims = (config.dims_extractor)(&computation_node, model);
-        let layout = einsum_layout::<F>(config.equation, &einsum_dims);
-        let params = EinsumDotParams::new(computation_node, layout, accumulator);
-        Box::new(EinsumDotProver::initialize(trace, params))
-    }
-}
-
-/// Verifier dispatcher for the Einsum contraction (matmul) sumcheck.
-pub struct EinsumVerifier;
-
-impl EinsumVerifier {
-    /// Create a sumcheck verifier for the specified Einsum equation.
-    pub fn sumcheck<F: JoltField, T: Transcript>(
-        model: &Model,
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Box<dyn SumcheckInstanceVerifier<F, T>> {
-        let config = lookup_einsum_config(&einsum_equation(&computation_node));
-        let einsum_dims = (config.dims_extractor)(&computation_node, model);
-        let layout = einsum_layout::<F>(config.equation, &einsum_dims);
-        Box::new(EinsumDotVerifier::new(
-            computation_node,
-            layout,
-            accumulator,
-        ))
     }
 }

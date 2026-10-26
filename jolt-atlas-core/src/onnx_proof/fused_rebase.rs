@@ -31,12 +31,15 @@ use crate::{
             verify_clamp_lookup, verify_scalar_clamp,
         },
         deferred_lookups::{ProverLookupJob, VerifierLookupJob},
+        relation::{RelationExpr, RelationOpening},
         trace_view::TraceView,
         ProofId, Prover, Verifier,
     },
-    utils::opening_access::AccOpeningAccessor,
+    utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder},
 };
 use common::{CommittedPoly, VirtualPoly};
+use jolt_claims::{constant, opening};
+use jolt_field::Ring;
 use joltworks::{
     config::{OneHotConfig, OneHotParams},
     field::JoltField,
@@ -170,6 +173,22 @@ pub fn fused_input_claim<F: JoltField>(
             rescaled * F::from_u64(1u64 << bits) + remainder
         }
         _ => accessor.get_reduced_opening().1,
+    }
+}
+
+/// [`fused_input_claim`] as a relation's input expression: `q(r₀)·2^S + rem(r₀)` over the
+/// node's pre-clamp quotient and remainder advice, or the reduced output opening when the node
+/// does not fuse a rescale.
+pub fn input_expression<F: Ring>(node: &ComputationNode) -> RelationExpr<F> {
+    let ids = OpeningIdBuilder::new(node);
+    match rebase_bits(node) {
+        Some(bits) if bits > 0 => {
+            let quotient = ids.advice(VirtualPoly::ClampAcc);
+            let remainder = ids.advice(VirtualPoly::RescaleRemainder);
+            constant(F::pow2(bits as usize)) * opening(RelationOpening::Id(quotient))
+                + opening(RelationOpening::Id(remainder))
+        }
+        _ => opening(RelationOpening::ReducedNodeOutput(node.idx)),
     }
 }
 

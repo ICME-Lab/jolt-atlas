@@ -1,7 +1,7 @@
 //! `k,nk->n` layout (matrix-vector multiply) for the einsum [`dot`](super::dot) engine.
 
 use crate::{
-    onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
+    onnx_proof::ops::einsum::dot::{EinsumGeometry, EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
 use atlas_trace::Tensor;
@@ -34,7 +34,7 @@ impl KNkNLayout {
     }
 }
 
-impl<F: JoltField> EinsumLayout<F> for KNkNLayout {
+impl EinsumGeometry for KNkNLayout {
     fn num_rounds(&self) -> usize {
         self.k.log_2()
     }
@@ -42,7 +42,9 @@ impl<F: JoltField> EinsumLayout<F> for KNkNLayout {
     fn schedule(&self) -> EqSchedule {
         EqSchedule::None
     }
+}
 
+impl<F: JoltField> EinsumLayout<F> for KNkNLayout {
     fn fold(
         &self,
         left_operand: &Tensor<i32>,
@@ -80,7 +82,7 @@ impl<F: JoltField> EinsumLayout<F> for KNkNLayout {
     fn output_eq(
         &self,
         _r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-        _sumcheck_challenges: &[F::Challenge],
+        _sumcheck_challenges: &[F],
     ) -> F {
         F::one()
     }

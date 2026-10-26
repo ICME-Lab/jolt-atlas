@@ -8,13 +8,13 @@
 //! ([`EqSchedule::High`]); the contraction axis `k` follows.
 
 use crate::{
-    onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
+    onnx_proof::ops::einsum::dot::{EinsumGeometry, EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
 use atlas_trace::Tensor;
 use common::parallel::par_enabled;
 use joltworks::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::MultilinearPolynomial,
@@ -61,7 +61,7 @@ impl AbmkAbnkAbmnLayout {
     }
 }
 
-impl<F: JoltField> EinsumLayout<F> for AbmkAbnkAbmnLayout {
+impl EinsumGeometry for AbmkAbnkAbmnLayout {
     fn num_rounds(&self) -> usize {
         self.log_ab + self.log_k
     }
@@ -72,7 +72,9 @@ impl<F: JoltField> EinsumLayout<F> for AbmkAbnkAbmnLayout {
             low_bits: self.log_k,
         }
     }
+}
 
+impl<F: JoltField> EinsumLayout<F> for AbmkAbnkAbmnLayout {
     fn fold(
         &self,
         left_operand: &Tensor<i32>,
@@ -141,11 +143,10 @@ impl<F: JoltField> EinsumLayout<F> for AbmkAbnkAbmnLayout {
     fn output_eq(
         &self,
         r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-        sumcheck_challenges: &[F::Challenge],
+        sumcheck_challenges: &[F],
     ) -> F {
         let (r_ab_output, _) = r_node_output.split_at(self.log_ab);
-        let sumcheck_opening = sumcheck_challenges.into_opening();
-        let (r_ab, _) = sumcheck_opening.split_at(self.log_ab);
+        let (r_ab, _) = sumcheck_challenges.split_at(self.log_ab);
         EqPolynomial::mle(&r_ab_output.r, r_ab)
     }
 }

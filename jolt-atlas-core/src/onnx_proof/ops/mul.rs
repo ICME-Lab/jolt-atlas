@@ -18,10 +18,7 @@ use atlas_trace::{
     trace::LayerData,
     Trace,
 };
-use common::VirtualPoly;
-use jolt_claims::{
-    constant, derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck,
-};
+use jolt_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
 use joltworks::{
     field::JoltField,
@@ -133,15 +130,7 @@ impl<S: OpSpec + ProductShape + 'static> SymbolicSumcheck for ProductRelation<S>
     }
 
     fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        match fused_rebase::rebase_bits(&self.node) {
-            Some(bits) if bits > 0 => {
-                let quotient = self.ids().advice(VirtualPoly::ClampAcc);
-                let remainder = self.ids().advice(VirtualPoly::RescaleRemainder);
-                constant(F::pow2(bits as usize)) * opening(RelationOpening::Id(quotient))
-                    + opening(RelationOpening::Id(remainder))
-            }
-            _ => opening(RelationOpening::ReducedNodeOutput(self.node.idx)),
-        }
+        fused_rebase::input_expression(&self.node)
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {

@@ -17,46 +17,40 @@
 //! 3. **scatter** — mapping the final sumcheck point back to the two operand
 //!    opening points ([`EinsumLayout::operand_points`]).
 //!
-//! Everything else — the `Params` boilerplate, the multiply-accumulate message
-//! loop, challenge ingestion — is written once, here. This is the generalization of the per-variant engine that
-//! [`rbmk_rbnk_bmn`](super::rbmk_rbnk_bmn) already used for three patterns.
+//! Everything else — the multiply-accumulate message loop, challenge ingestion —
+//! is written once, here.
 //!
 //! ## Where the claim comes from
 //!
-//! The sumcheck's initial claim is `input_claim` (today: the node-output opening).
-//! Fusing the rescaling division + clamp into the einsum (issue #190) only changes
-//! *that* value — `rescaled(r)·2^S + R(r)` instead of `output(r)` — while the
-//! `Σ L·R` body stays identical. That seam is centralized in
-//! [`EinsumDotParams::input_claim`].
+//! The claim algebra is the einsum's
+//! [`ContractionRelation`](super::ContractionRelation): its input claim is the
+//! fused rescale's `rescaled(r)·2^S + R(r)` (or the plain output opening), its
+//! output claim `L·R·EQ` at the scattered operand points. This engine is the
+//! relation's specialized prover; the verifier is the relation's.
 
 use crate::onnx_proof::trace_view::TraceView;
-use std::{array, sync::Arc};
+use std::array;
 
 use atlas_trace::{trace::LayerData, Tensor, Trace};
 
-use crate::node_view::ComputationNode;
-use crate::{
-    onnx_proof::fused_rebase,
-    utils::opening_access::{AccOpeningAccessor, Target},
+use super::ContractionRelation;
+use crate::onnx_proof::relation::{
+    append_produced, note_dispatch, relation_input_claim, AtlasRelation, RelationParams,
+    RelationSetup,
 };
 use common::parallel::par_enabled;
+use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN,
-        },
+        opening_proof::{OpeningPoint, ProverOpeningAccumulator, BIG_ENDIAN},
     },
-    subprotocols::{
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
+    subprotocols::sumcheck_prover::SumcheckInstanceProver,
     transcripts::Transcript,
 };
 use rayon::prelude::*;
@@ -114,16 +108,19 @@ pub struct Folded<F: JoltField> {
     pub eq: Option<MultilinearPolynomial<F>>,
 }
 
-/// Per-pattern description of an einsum contraction sumcheck.
+/// The field-independent half of an einsum contraction pattern: its round geometry.
 ///
 /// See the [module docs](self) for how the engine uses these hooks.
-pub trait EinsumLayout<F: JoltField>: Send + Sync {
+pub trait EinsumGeometry: Send + Sync {
     /// Number of sumcheck rounds (`log` of the contraction(+batch) cube size).
     fn num_rounds(&self) -> usize;
 
     /// The eq-poly binding schedule for this pattern.
     fn schedule(&self) -> EqSchedule;
+}
 
+/// The field-dependent half of an einsum contraction pattern.
+pub trait EinsumLayout<F: JoltField>: EinsumGeometry {
     /// Fold the two operand tensors at `r_node_output` into the sumcheck MLEs.
     fn fold(
         &self,
@@ -145,61 +142,18 @@ pub trait EinsumLayout<F: JoltField>: Send + Sync {
     fn output_eq(
         &self,
         r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-        sumcheck_challenges: &[F::Challenge],
+        sumcheck_challenges: &[F],
     ) -> F;
 }
 
-/// Shared parameters for any einsum contraction sumcheck.
-#[derive(Clone)]
-pub struct EinsumDotParams<F: JoltField> {
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
-    layout: Arc<dyn EinsumLayout<F>>,
-}
-
-impl<F: JoltField> EinsumDotParams<F> {
-    /// Create params for the given pattern `layout`.
-    pub fn new(
-        computation_node: ComputationNode,
-        layout: Arc<dyn EinsumLayout<F>>,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let r_node_output = accessor.get_reduced_opening().0;
-        Self {
-            r_node_output,
-            computation_node,
-            layout,
-        }
-    }
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for EinsumDotParams<F> {
-    fn degree(&self) -> usize {
-        self.layout.schedule().degree()
-    }
-
-    /// The sumcheck's initial claim: the raw accumulation `acc(r) = Σ_k L·R`.
-    ///
-    /// The einsum fuses an i64 accumulate + rescaling division + saturating
-    /// clamp; [`fused_rebase::fused_input_claim`] recovers `acc(r)` from the
-    /// pre-clamp `rescaled` and remainder advice .
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        fused_rebase::fused_input_claim(accumulator, &self.computation_node)
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::new(challenges.to_vec())
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.layout.num_rounds()
-    }
-}
-
-/// Prover for any einsum contraction sumcheck.
+/// The dot engine: the specialized prover of a
+/// [`ContractionRelation`](super::ContractionRelation). Completeness-only: the verifier is the
+/// relation's, and `relation_prover_equiv_contraction` checks these messages against the
+/// relation's reference messages.
 pub struct EinsumDotProver<F: JoltField> {
-    params: EinsumDotParams<F>,
+    relation: ContractionRelation,
+    setup: RelationSetup<F>,
+    schedule: EqSchedule,
     left: MultilinearPolynomial<F>,
     right: MultilinearPolynomial<F>,
     eq: Option<MultilinearPolynomial<F>>,
@@ -210,16 +164,18 @@ pub struct EinsumDotProver<F: JoltField> {
 impl<F: JoltField> EinsumDotProver<F> {
     /// Initialize the prover by folding the operands at the output randomness.
     #[tracing::instrument(skip_all, name = "EinsumDotProver::initialize")]
-    pub fn initialize(trace: &Trace, params: EinsumDotParams<F>) -> Self {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
+    pub fn initialize(trace: &Trace, params: RelationParams<F, ContractionRelation>) -> Self {
+        let (relation, setup) = params.into_parts();
+        note_dispatch(&relation);
+        let layout = relation.layout::<F>();
+        let LayerData { operands, .. } = TraceView::layer_data(trace, relation.node());
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for einsum operation")
         };
-        let Folded { left, right, eq } =
-            params
-                .layout
-                .fold(left_operand, right_operand, &params.r_node_output);
-        let eq_bound_claim = match params.layout.schedule() {
+        let r_node_output = OpeningPoint::new(setup.incoming_point.clone());
+        let Folded { left, right, eq } = layout.fold(left_operand, right_operand, &r_node_output);
+        let schedule = layout.schedule();
+        let eq_bound_claim = match schedule {
             EqSchedule::High { log_eq: 0, .. } => {
                 Some(eq.as_ref().expect("eq poly must exist").final_claim())
             }
@@ -227,7 +183,9 @@ impl<F: JoltField> EinsumDotProver<F> {
         };
 
         Self {
-            params,
+            relation,
+            setup,
+            schedule,
             left,
             right,
             eq,
@@ -237,8 +195,12 @@ impl<F: JoltField> EinsumDotProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for EinsumDotProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+    fn degree(&self) -> usize {
+        self.relation.degree()
+    }
+
+    fn input_claim(&self, accumulator: &ProverOpeningAccumulator<F>) -> F {
+        relation_input_claim(&self.relation, &self.setup, accumulator)
     }
 
     fn cache_openings(
@@ -247,22 +209,13 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for EinsumDotProv
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let sumcheck_challenges = sumcheck_challenges.into_opening();
-        let (left_point, right_point) = self
-            .params
-            .layout
-            .operand_points(&self.params.r_node_output, &sumcheck_challenges);
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, Default::default());
-        provider.append_nodeio_at(
-            Target::Input(0),
-            self.params.normalize_opening_point(&left_point),
-            self.left.final_claim(),
-        );
-        provider.append_nodeio_at(
-            Target::Input(1),
-            self.params.normalize_opening_point(&right_point),
-            self.right.final_claim(),
+        append_produced(
+            &self.relation,
+            &self.setup,
+            accumulator,
+            transcript,
+            sumcheck_challenges,
+            &[self.left.final_claim(), self.right.final_claim()],
         );
     }
 }
@@ -270,7 +223,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for EinsumDotProv
 impl<F: JoltField> EinsumDotProver<F> {
     fn round_message(&mut self, round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let half = self.left.len() / 2;
-        match self.params.layout.schedule() {
+        match self.schedule {
             EqSchedule::None => {
                 let evals: [F; 2] = (0..half)
                     .into_par_iter()
@@ -334,7 +287,7 @@ impl<F: JoltField> EinsumDotProver<F> {
         let r_j = F::challenge_from_field(r);
         self.left.bind_parallel(r_j, BindingOrder::HighToLow);
         self.right.bind_parallel(r_j, BindingOrder::HighToLow);
-        match self.params.layout.schedule() {
+        match self.schedule {
             EqSchedule::None => {}
             EqSchedule::High { log_eq, .. } => {
                 if round < log_eq {
@@ -359,7 +312,7 @@ impl<F: JoltField> EinsumDotProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for EinsumDotProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.relation.rounds()
     }
 
     fn prove_round(
@@ -375,68 +328,7 @@ impl<F: JoltField> ProveRounds<F> for EinsumDotProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.relation.rounds() - 1);
         Ok(())
-    }
-}
-
-/// Verifier for any einsum contraction sumcheck.
-pub struct EinsumDotVerifier<F: JoltField> {
-    params: EinsumDotParams<F>,
-}
-
-impl<F: JoltField> EinsumDotVerifier<F> {
-    /// Create a verifier for the given pattern `layout`.
-    pub fn new(
-        computation_node: ComputationNode,
-        layout: Arc<dyn EinsumLayout<F>>,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Self {
-        let params = EinsumDotParams::new(computation_node, layout, accumulator);
-        Self { params }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for EinsumDotVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let left = accessor.get_nodeio(Target::Input(0)).1;
-        let right = accessor.get_nodeio(Target::Input(1)).1;
-        let eq = self
-            .params
-            .layout
-            .output_eq(&self.params.r_node_output, sumcheck_challenges);
-        left * right * eq
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let sumcheck_challenges = sumcheck_challenges.into_opening();
-        let (left_point, right_point) = self
-            .params
-            .layout
-            .operand_points(&self.params.r_node_output, &sumcheck_challenges);
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, Default::default());
-        provider.append_nodeio_at(
-            Target::Input(0),
-            self.params.normalize_opening_point(&left_point),
-        );
-        provider.append_nodeio_at(
-            Target::Input(1),
-            self.params.normalize_opening_point(&right_point),
-        );
     }
 }

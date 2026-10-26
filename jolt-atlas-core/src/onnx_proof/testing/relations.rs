@@ -37,6 +37,7 @@ use crate::{
             iff::IffRelation,
             mul::MulRelation,
             rsqrt::RsqrtRelation,
+            scalar_const_div::ConstantDivisionRelation,
             square::SquareRelation,
         },
         relation::{
@@ -92,6 +93,14 @@ fn relation_specs_match_their_dispatched_op_kind() {
         OpKind::Iff,
         OpKind::Add,
         OpKind::Sub,
+        OpKind::Neg,
+        OpKind::Identity,
+        OpKind::IsNan,
+        OpKind::Constant,
+        OpKind::Input,
+        OpKind::MoveAxis,
+        OpKind::Broadcast,
+        OpKind::ScalarConstDiv,
     ] {
         assert!(
             dispatches.iter().any(|&(k, _)| k == kind),
@@ -319,6 +328,9 @@ fn relation_prover_equiv_engine() {
             vec![(vec![8], 0..2), (vec![8], SMALL), (vec![8], SMALL)],
             |b, i| b.iff(i[0], i[1], i[2]),
         ),
+        (vec![(vec![8], -(1 << 7)..(1 << 7))], |b, i| {
+            b.scalar_const_div(i[0], 7)
+        }),
     ];
     for (seed, (dims, build)) in (0xA17_0601..).zip(cases) {
         let (_, trace, node, mut rng) = single_node(seed, &dims, build);
@@ -330,6 +342,9 @@ fn relation_prover_equiv_engine() {
             Op::Rsqrt(_) => check_engine(|| RsqrtRelation::new(node.clone()), &trace, rng),
             Op::Div(_) => check_engine(|| DivRelation::new(node.clone()), &trace, rng),
             Op::Iff(_) => check_engine(|| IffRelation::new(node.clone()), &trace, rng),
+            Op::ScalarConstDiv(_) => {
+                check_engine(|| ConstantDivisionRelation::new(node.clone()), &trace, rng)
+            }
             ref other => panic!("no engine relation for {other}"),
         }
     }

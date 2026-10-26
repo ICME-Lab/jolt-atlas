@@ -1,29 +1,33 @@
-use crate::node_view::ModelView;
+use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_trace::{op::Broadcast, trace::LayerData, Model, Tensor, Trace};
+use crate::{
+    atlas_relation_types,
+    onnx_proof::{
+        ops::{OperatorProofTrait, Prover, Verifier},
+        relation::{
+            prove_tie, reduced_output_setup, verify_tie, AtlasRelation, EngineRelation,
+            RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
+        },
+        ProofId,
+    },
+    utils::opening_access::{OpeningIdBuilder, Target},
+};
+use atlas_trace::{op::Broadcast, Model, Tensor, Trace};
 use core::panic;
-
-use crate::node_view::ComputationNode;
+use jolt_claims::{derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::EvaluateMle,
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-        },
+        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial},
+        opening_proof::{OpeningAccumulator, OpeningId},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
 
-use crate::{
-    onnx_proof::{
-        ops::{OperatorProofTrait, Prover, Verifier},
-        ProofId,
-    },
-    utils::opening_access::{AccOpeningAccessor, Target},
-};
+crate::bind_relation!(Broadcast, BroadcastRelation);
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
     #[tracing::instrument(skip_all, name = "Broadcast::prove")]
@@ -32,159 +36,142 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let params = BroadcastParams::new(node.clone(), &prover.accumulator);
-        let broadcast_prover = BroadcastProver::initialize(&prover.trace, params);
-        broadcast_prover.prove(&mut prover.accumulator, &mut prover.transcript);
-        // Broadcast doesn't produce a sumcheck proof
-        vec![]
+        prove_tie(
+            &BroadcastRelation::for_node(&prover.preprocessing.model, node.clone()),
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        Vec::new()
     }
 
+    #[tracing::instrument(skip_all, name = "Broadcast::verify")]
     fn verify(
         &self,
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        let broadcast_verifier = BroadcastVerifier::new(
-            node.clone(),
-            &verifier.accumulator,
-            &verifier.preprocessing.model,
-        );
-        broadcast_verifier.verify(&mut verifier.accumulator, &mut verifier.transcript)
+        verify_tie(
+            &BroadcastRelation::for_node(&verifier.preprocessing.model, node.clone()),
+            &mut verifier.accumulator,
+            &mut verifier.transcript,
+        )
     }
 }
 
-/// Parameters for proving broadcast operations.
+/// A broadcast node and its operand's dims.
+pub struct BroadcastShape {
+    node: ComputationNode,
+    input_dims: Vec<usize>,
+}
+
+/// `Broadcast` as a tie: the output at `r` is the operand at the non-broadcast coordinates of
+/// `r`, times the all-ones replication tensor at the broadcast coordinates.
 ///
-/// Broadcasting expands tensors to larger shapes by replicating elements.
-#[derive(Clone)]
-pub struct BroadcastParams<F: JoltField> {
-    r_output: Vec<F>,
-    computation_node: ComputationNode,
-}
-
-impl<F: JoltField> BroadcastParams<F> {
-    /// Create new broadcast parameters from a computation node and opening accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let r_output = accessor.get_reduced_opening().0.r;
-        Self {
-            r_output,
-            computation_node,
-        }
-    }
-}
-
-/// Prover state for broadcast sumcheck protocol.
+/// ```text
+/// input claim   out(r)                 (the reduced output opening)
+/// output claim  ones(r_broadcast) · operand(r_input)
+/// ```
 ///
-/// Maintains transformed input variables and claims for proving the broadcast relation.
-pub struct BroadcastProver<F: JoltField> {
-    params: BroadcastParams<F>,
-    r_input: Vec<F>,
-    claim_A: F,
+/// **S ⊆ R.** Broadcasting replicates each operand element along the broadcast axes, so the
+/// output tensor is the operand's tensor product with an all-ones tensor.
+pub struct BroadcastRelation {
+    shape: BroadcastShape,
 }
 
-impl<F: JoltField> BroadcastProver<F> {
-    /// Initialize the prover with trace data and parameters.
-    #[tracing::instrument(skip_all)]
-    pub fn initialize(trace: &Trace, params: BroadcastParams<F>) -> Self {
-        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
-        let [operand] = operands[..] else {
-            panic!("Expected one operand for Broadcast operation")
-        };
-
-        let input_dims = operand.dims();
-        let output_dims = output.dims();
-        let broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
-
-        let (r_input, _r_broadcast) =
-            split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
-
-        let claim_A = operand.evaluate_mle(&r_input);
-
-        #[cfg(test)]
-        {
-            // Ensure the broadcast tensor is correctly built,
-            // Tensors are correctly padded, and the spliting of r_input/r_broadcast is correct
-            let claim_O = output.evaluate_mle(&params.r_output);
-            let eval_I = broadcast_tensor.evaluate_mle(&_r_broadcast);
-            crate::onnx_proof::testing::probe::probe_assert_eq!(claim_O, claim_A * eval_I);
-        }
-
-        Self {
-            params,
-            r_input,
-            claim_A,
-        }
+impl BroadcastRelation {
+    /// The relation of a broadcast `node` of `model`.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
+        let input_dims = model.view(node.inputs[0]).output_dims;
+        Self::new(BroadcastShape { node, input_dims })
     }
 
-    /// Prove the broadcast operation by adding the input polynomial to the opening accumulator.
-    #[tracing::instrument(skip_all)]
-    pub fn prove(
+    /// `(r_input, r_broadcast)`: the incoming point split into the operand's coordinates and the
+    /// broadcast ones.
+    fn split<F: JoltField>(&self, r_output: &[F]) -> (Vec<F>, Vec<F>) {
+        let output_dims = &self.shape.node.output_dims;
+        let ones = build_broadcast_tensor(&self.shape.input_dims, output_dims);
+        split_broadcast_vars(output_dims, ones.dims(), r_output)
+    }
+}
+
+impl SymbolicSumcheck for BroadcastRelation {
+    atlas_relation_types!();
+    type Shape = BroadcastShape;
+
+    fn new(shape: BroadcastShape) -> Self {
+        Self { shape }
+    }
+
+    fn id() -> RelationId {
+        RelationId::Broadcast
+    }
+
+    fn rounds(&self) -> usize {
+        0
+    }
+
+    fn degree(&self) -> usize {
+        1
+    }
+
+    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
+        opening(RelationOpening::ReducedNodeOutput(self.shape.node.idx))
+    }
+
+    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
+        derived(RelationDerived::BroadcastOnes) * opening(RelationOpening::Id(self.produced()[0]))
+    }
+}
+
+impl AtlasRelation for BroadcastRelation {
+    type Spec = Broadcast;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
+    }
+
+    fn setup<F: JoltField, T: Transcript>(
         &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) {
-        let opening_point = OpeningPoint::new(self.r_input.clone());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-        provider.append_nodeio(Target::Input(0), self.claim_A);
-    }
-}
-
-/// Verifier for broadcast operation sumcheck protocol.
-pub struct BroadcastVerifier<F: JoltField> {
-    params: BroadcastParams<F>,
-    r_input: Vec<F>,
-    eval_I: F,
-}
-
-impl<F: JoltField> BroadcastVerifier<F> {
-    /// Create new broadcast verifier and compute the broadcast tensor evaluation.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        model: &Model,
-    ) -> Self {
-        let params = BroadcastParams::new(computation_node, accumulator);
-        let input_dims = &model.view(params.computation_node.inputs[0]).output_dims;
-        let output_dims = &params.computation_node.output_dims;
-
-        let broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
-
-        let (r_input, r_broadcast) =
-            split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
-
-        let eval_I = broadcast_tensor.evaluate_mle(&r_broadcast);
-
-        Self {
-            params,
-            r_input,
-            eval_I,
-        }
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.shape.node)
     }
 
-    /// Verify the broadcast operation by checking the polynomial openings.
-    pub fn verify(
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
+    }
+
+    fn opening_points<F: JoltField>(
         &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Result<(), ProofVerifyError> {
-        let opening_point = OpeningPoint::new(self.r_input.clone());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
+        setup: &RelationSetup<F>,
+        _challenges: &[F],
+    ) -> Vec<Vec<F>> {
+        vec![self.split(&setup.incoming_point).0]
+    }
 
-        provider.append_nodeio(Target::Input(0));
-        let operand_claim = provider.get_nodeio(Target::Input(0)).1;
-        let expected_claim_O = operand_claim * self.eval_I;
-
-        let claim_O = provider.get_reduced_opening().1;
-        if expected_claim_O != claim_O {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "Broadcast claim does not match expected claim".to_string(),
-            ));
+    fn derive<F: JoltField>(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        _challenges: &[F],
+    ) -> F {
+        match id {
+            RelationDerived::BroadcastOnes => {
+                let ones =
+                    build_broadcast_tensor(&self.shape.input_dims, &self.shape.node.output_dims);
+                ones.evaluate_mle(&self.split(&setup.incoming_point).1)
+            }
+            other => panic!("a broadcast derives no {other:?}"),
         }
+    }
+}
 
-        Ok(())
+impl EngineRelation for BroadcastRelation {
+    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+        let operand = TraceView::operand_tensors(trace, &self.shape.node)[0];
+        vec![MultilinearPolynomial::from(operand.padded_pow2())]
     }
 }
 

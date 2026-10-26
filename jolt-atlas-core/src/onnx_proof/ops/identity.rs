@@ -1,7 +1,10 @@
 use crate::node_view::ComputationNode;
 use crate::{
-    onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
-    utils::opening_access::{AccOpeningAccessor, Target},
+    impl_tie_proof_api,
+    onnx_proof::{
+        ops::{neg::SignedCopyRelation, OperatorProofTrait},
+        ProofId, Prover, Verifier,
+    },
 };
 use atlas_trace::op::Identity;
 use joltworks::{
@@ -9,40 +12,4 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Identity {
-    #[tracing::instrument(skip_all, name = "Identity::prove")]
-    fn prove(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let node_poly_opening =
-            AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
-        let (opening_point, claim) = node_poly_opening;
-        let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
-            .into_provider(&mut prover.transcript, opening_point);
-        provider.append_nodeio(Target::Input(0), claim);
-        vec![]
-    }
-
-    #[tracing::instrument(skip_all, name = "Identity::verify")]
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let (opening_point, claim) =
-            AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
-        let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
-            .into_provider(&mut verifier.transcript, opening_point);
-        provider.append_nodeio(Target::Input(0));
-        let (_, operand_claim) = provider.get_nodeio(Target::Input(0));
-
-        if operand_claim != claim {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "Identity claim should match operand claim".to_string(),
-            ));
-        }
-        Ok(())
-    }
-}
+impl_tie_proof_api!(Identity, SignedCopyRelation<Identity>);

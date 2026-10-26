@@ -1,65 +1,124 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
-    onnx_proof::{ops::OperatorProofTrait, ProofId, Prover, Verifier},
-    utils::opening_access::{AccOpeningAccessor, Target},
+    atlas_relation_types, impl_tie_proof_api,
+    onnx_proof::{
+        ops::OperatorProofTrait,
+        relation::{
+            reduced_output_setup, AtlasRelation, EngineRelation, RelationExpr, RelationId,
+            RelationOpening, RelationSetup,
+        },
+        ProofId, Prover, Verifier,
+    },
+    utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_trace::{op::Neg, trace::LayerData};
+use atlas_trace::{
+    op::{Identity, Neg, OpSpec},
+    trace::LayerData,
+    Trace,
+};
+use jolt_claims::{constant, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use joltworks::{
     field::JoltField,
-    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+    poly::{
+        multilinear_polynomial::MultilinearPolynomial,
+        opening_proof::{OpeningAccumulator, OpeningId},
+    },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use std::marker::PhantomData;
 
-/// No-sumcheck proof for element-wise negation.
+impl_tie_proof_api!(Neg, SignedCopyRelation<Neg>);
+
+/// An op whose output is `±` its single operand.
+pub trait CopySign: OpSpec + 'static {
+    /// `+1` for `Identity`, `−1` for `Neg`.
+    const SIGN: i64;
+}
+
+impl CopySign for Identity {
+    const SIGN: i64 = 1;
+}
+
+impl CopySign for Neg {
+    const SIGN: i64 = -1;
+}
+
+/// `out = ±operand` as a tie at the output point `r`: no sumcheck, the identity holds at `r`
+/// because it holds on the hypercube and both sides are multilinear.
 ///
-/// `Neg` is linear: `output(x) = -operand(x)` on the shared boolean hypercube,
-/// so the identity holds at the random output opening point `r`. The prover
-/// opens the operand at the same `r`, and the verifier checks
-/// `-operand(r) == output(r)` directly — no sumcheck (cf. [`super::identity`]).
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Neg {
-    #[tracing::instrument(skip_all, name = "Neg::prove")]
-    fn prove(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let (opening_point, _claim) =
-            AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
+/// ```text
+/// input claim   out(r)                 (the reduced output opening)
+/// output claim  ±operand(r)
+/// ```
+///
+/// **S ⊆ R.** `Identity` passes its operand through. `Neg` negates element-wise with
+/// `saturating_neg`, which agrees with field negation everywhere except `i32::MIN`, sent to
+/// `i32::MAX`: an execution negating `i32::MIN` fails the tie (a completeness gap; the
+/// verifier accepts no wrong output).
+pub struct SignedCopyRelation<S> {
+    node: ComputationNode,
+    _spec: PhantomData<fn() -> S>,
+}
 
-        let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
-        let [operand] = operands[..] else {
-            panic!("Expected one operand for Neg operation")
-        };
-        let operand_claim =
-            MultilinearPolynomial::from(operand.padded_pow2()).evaluate(&opening_point.r);
+impl<S: CopySign> SymbolicSumcheck for SignedCopyRelation<S> {
+    atlas_relation_types!();
+    type Shape = ComputationNode;
 
-        let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, node)
-            .into_provider(&mut prover.transcript, opening_point);
-        provider.append_nodeio(Target::Input(0), operand_claim);
-        vec![]
+    fn new(node: ComputationNode) -> Self {
+        Self {
+            node,
+            _spec: PhantomData,
+        }
     }
 
-    #[tracing::instrument(skip_all, name = "Neg::verify")]
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let (opening_point, claim) =
-            AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
-        let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
-            .into_provider(&mut verifier.transcript, opening_point);
-        provider.append_nodeio(Target::Input(0));
-        let operand_claim = provider.get_nodeio(Target::Input(0)).1;
+    fn id() -> RelationId {
+        RelationId::SignedCopy
+    }
 
-        if -operand_claim != claim {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "Neg output claim should equal the negation of the operand claim".to_string(),
-            ));
-        }
-        Ok(())
+    fn rounds(&self) -> usize {
+        0
+    }
+
+    fn degree(&self) -> usize {
+        1
+    }
+
+    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
+        opening(RelationOpening::ReducedNodeOutput(self.node.idx))
+    }
+
+    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
+        constant(F::from_i64(S::SIGN)) * opening(RelationOpening::Id(self.produced()[0]))
+    }
+}
+
+impl<S: CopySign> AtlasRelation for SignedCopyRelation<S> {
+    type Spec = S;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
+    }
+
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.node)
+    }
+
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))]
+    }
+}
+
+impl<S: CopySign> EngineRelation for SignedCopyRelation<S> {
+    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
+        vec![MultilinearPolynomial::from(operands[0].padded_pow2())]
     }
 }

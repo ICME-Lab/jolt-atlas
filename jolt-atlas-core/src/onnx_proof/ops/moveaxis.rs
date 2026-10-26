@@ -1,152 +1,112 @@
 use crate::node_view::ComputationNode;
-use atlas_trace::{op::MoveAxis, Op};
+use crate::onnx_proof::trace_view::TraceView;
+use crate::{
+    atlas_relation_types, impl_tie_proof_api,
+    onnx_proof::{
+        ops::{OperatorProofTrait, Prover, Verifier},
+        relation::{
+            reduced_output_setup, AtlasRelation, EngineRelation, RelationExpr, RelationId,
+            RelationOpening, RelationSetup,
+        },
+        ProofId,
+    },
+    utils::opening_access::{OpeningIdBuilder, Target},
+};
+use atlas_trace::{op::MoveAxis, Op, Trace};
+use jolt_claims::{opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use joltworks::{
     field::JoltField,
-    poly::opening_proof::{
-        OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
+    poly::{
+        multilinear_polynomial::MultilinearPolynomial,
+        opening_proof::{OpeningAccumulator, OpeningId},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
 
-use crate::{
-    onnx_proof::{
-        ops::{OperatorProofTrait, Prover, Verifier},
-        ProofId,
-    },
-    utils::opening_access::{AccOpeningAccessor, Target},
-};
+impl_tie_proof_api!(MoveAxis, AxisPermutationRelation);
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MoveAxis {
-    #[tracing::instrument(skip_all, name = "MoveAxis::prove")]
-    fn prove(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let params = MoveAxisParams::<F>::new(node.clone(), &prover.accumulator);
-        let moveaxis_prover = MoveAxisProver::initialize(params);
-        moveaxis_prover.prove(&mut prover.accumulator, &mut prover.transcript);
-        vec![]
-    }
-
-    #[tracing::instrument(skip_all, name = "MoveAxis::verify")]
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let moveaxis_verifier = MoveAxisVerifier::new(node.clone(), &verifier.accumulator);
-        moveaxis_verifier.verify(&mut verifier.accumulator, &mut verifier.transcript)
-    }
-}
-
-/// Parameters for proving moveaxis (transpose) operations.
+/// `MoveAxis` as a tie: the output at `r` is the operand at `r` with its per-axis coordinate
+/// groups permuted back.
 ///
-/// MoveAxis reorders tensor dimensions (axes) without changing the underlying data.
-#[derive(Clone)]
-pub struct MoveAxisParams<F: JoltField> {
-    r_output: Vec<F>,
-    computation_node: ComputationNode,
-}
-
-impl<F: JoltField> MoveAxisParams<F> {
-    /// Create new moveaxis parameters from a computation node and opening accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let r_output = accessor.get_reduced_opening().0.r;
-        Self {
-            r_output,
-            computation_node,
-        }
-    }
-}
-
-/// Prover state for moveaxis (transpose) operations.
+/// ```text
+/// input claim   out(r)                 (the reduced output opening)
+/// output claim  operand(π⁻¹(r))
+/// ```
 ///
-/// Maintains permuted input challenge variables that correspond to the reordered axes.
-pub struct MoveAxisProver<F: JoltField> {
-    params: MoveAxisParams<F>,
-    r_input: Vec<F>,
+/// **S ⊆ R.** Moving an axis reorders elements without changing them, so the output's MLE is
+/// the operand's with its variable groups permuted.
+pub struct AxisPermutationRelation {
+    node: ComputationNode,
 }
 
-impl<F: JoltField> MoveAxisProver<F> {
-    /// Initialize the prover with parameters, computing the permuted input challenges.
-    pub fn initialize(params: MoveAxisParams<F>) -> Self {
-        let r_input = permute_challenge_groups::<F>(
-            &params.computation_node.output_dims,
-            &params.r_output,
-            &params.computation_node.operator,
-        );
+impl SymbolicSumcheck for AxisPermutationRelation {
+    atlas_relation_types!();
+    type Shape = ComputationNode;
 
-        Self { params, r_input }
+    fn new(node: ComputationNode) -> Self {
+        Self { node }
     }
 
-    /// Generate the proof for the moveaxis operation.
-    pub fn prove(
+    fn id() -> RelationId {
+        RelationId::AxisPermutation
+    }
+
+    fn rounds(&self) -> usize {
+        0
+    }
+
+    fn degree(&self) -> usize {
+        1
+    }
+
+    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
+        opening(RelationOpening::ReducedNodeOutput(self.node.idx))
+    }
+
+    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
+        opening(RelationOpening::Id(self.produced()[0]))
+    }
+}
+
+impl AtlasRelation for AxisPermutationRelation {
+    type Spec = MoveAxis;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
+    }
+
+    fn setup<F: JoltField, T: Transcript>(
         &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) {
-        let opening_point = OpeningPoint::new(self.r_input.clone());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-        // For MoveAxis, claim_A == claim_O since the data doesn't change.
-        let claim_O = provider.get_reduced_opening().1;
-        provider.append_nodeio(Target::Input(0), claim_O);
-    }
-}
-
-/// Verifier for moveaxis (transpose) operations.
-///
-/// Verifies that input and output claims match with appropriately permuted challenge variables.
-pub struct MoveAxisVerifier<F: JoltField> {
-    params: MoveAxisParams<F>,
-    r_input: Vec<F>,
-}
-
-impl<F: JoltField> MoveAxisVerifier<F> {
-    /// Create a new verifier for the moveaxis operation.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Self {
-        let params = MoveAxisParams::new(computation_node, accumulator);
-
-        let r_input = permute_challenge_groups::<F>(
-            &params.computation_node.output_dims,
-            &params.r_output,
-            &params.computation_node.operator,
-        );
-
-        Self { params, r_input }
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.node)
     }
 
-    /// Verify the moveaxis operation.
-    pub fn verify(
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))]
+    }
+
+    fn opening_points<F: JoltField>(
         &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Result<(), ProofVerifyError> {
-        let opening_point = OpeningPoint::new(self.r_input.clone());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
+        setup: &RelationSetup<F>,
+        _challenges: &[F],
+    ) -> Vec<Vec<F>> {
+        vec![permute_challenge_groups(
+            &self.node.output_dims,
+            &setup.incoming_point,
+            &self.node.operator,
+        )]
+    }
+}
 
-        // Cache and retrieve the claim for the input node.
-        provider.append_nodeio(Target::Input(0));
-        let operand_claim = provider.get_nodeio(Target::Input(0)).1;
-
-        // For MoveAxis, the input claim should equal the output claim.
-        let claim_O = provider.get_reduced_opening().1;
-
-        if operand_claim != claim_O {
-            return Err(ProofVerifyError::InvalidOpeningProof(
-                "MoveAxis claim does not match expected claim".to_string(),
-            ));
-        }
-
-        Ok(())
+impl EngineRelation for AxisPermutationRelation {
+    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+        let operand = TraceView::operand_tensors(trace, &self.node)[0];
+        vec![MultilinearPolynomial::from(operand.padded_pow2())]
     }
 }
 

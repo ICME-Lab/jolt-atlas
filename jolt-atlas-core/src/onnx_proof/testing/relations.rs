@@ -1,8 +1,10 @@
 //! Relation-defined ops ([`crate::onnx_proof::relation`]).
 //!
-//! * Op binding: every relation the prover runs is recorded with the node it ran on, and
-//!   [`relation_specs_match_their_dispatched_op_kind`] checks each relation's `Spec` against the
-//!   [`OpKind`] it was dispatched under, over the probe models and the op gauntlet.
+//! * Op binding and completeness: every relation the prover runs is recorded with the node it
+//!   ran on, and [`relation_specs_match_their_dispatched_op_kind`] checks each relation's `Spec`
+//!   against the [`OpKind`] it was dispatched under, over the probe models and the op gauntlet.
+//!   Every op has a [`disposition`]; the ops marked [`Disposition::Relation`] are exactly the
+//!   ones that ran through relations.
 //! * Prover equivalence: every prover of a relation, the engine's and the specialized ones,
 //!   produces the relation's reference round messages (`relation_prover_equiv_*`), computed
 //!   from its expressions alone by summing the output expression over the hypercube.
@@ -18,6 +20,7 @@ use jolt_field::Fr;
 use joltworks::poly::commitment::hyperkzg::HyperKZG;
 use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
 use std::{ops::Range, sync::Mutex};
+use strum::IntoEnumIterator;
 
 use super::{
     harness::prove_verify_roundtrip,
@@ -87,35 +90,76 @@ fn relation_specs_match_their_dispatched_op_kind() {
         let spec_name = spec.rsplit("::").next().expect("a type name");
         assert_eq!(spec_name, kind.to_string(), "{spec} dispatched for {kind}");
     }
-    for kind in [
-        OpKind::Mul,
-        OpKind::And,
-        OpKind::Square,
-        OpKind::Cube,
-        OpKind::Rsqrt,
-        OpKind::Einsum,
-        OpKind::Div,
-        OpKind::Iff,
-        OpKind::Add,
-        OpKind::Sub,
-        OpKind::Neg,
-        OpKind::Identity,
-        OpKind::IsNan,
-        OpKind::Constant,
-        OpKind::Input,
-        OpKind::MoveAxis,
-        OpKind::Broadcast,
-        OpKind::ScalarConstDiv,
-        OpKind::Reshape,
-        OpKind::Slice,
-        OpKind::Concat,
-        OpKind::Sum,
-        OpKind::MeanOfSquares,
-    ] {
+    let relation_kinds: Vec<OpKind> = OpKind::iter()
+        .filter(|&kind| disposition(kind) == Disposition::Relation)
+        .collect();
+    for &(kind, spec) in dispatches.iter() {
+        assert!(
+            relation_kinds.contains(&kind),
+            "{kind} ran through {spec} but its disposition is {:?}",
+            disposition(kind)
+        );
+    }
+    for kind in relation_kinds {
         assert!(
             dispatches.iter().any(|&(k, _)| k == kind),
             "no {kind} node ran through its relation"
         );
+    }
+}
+
+/// How an op is proven once stage 6 of `specs/adoption-program.md` closes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Disposition {
+    /// Its algebraic protocol is a relation (`onnx_proof::relation`); the verifier is derived
+    /// from it. Any lookup or range check it also needs stays with the lookup family.
+    Relation,
+    /// A lookup-family protocol (read-raf lookups over one-hot addresses, clamp and activation
+    /// tables): kept as code and moved as code at stage 8.
+    LookupFamily,
+    /// Deferred to stage 8 as code, with its relation migration a named follow-up. Softmax: the
+    /// #218 aux-vector rework had not merged when stage 6 closed.
+    Deferred,
+}
+
+/// Every op's disposition. Exhaustive on purpose: a new op variant does not compile until it
+/// has one.
+fn disposition(kind: OpKind) -> Disposition {
+    use Disposition::*;
+    match kind {
+        OpKind::Input
+        | OpKind::Constant
+        | OpKind::Identity
+        | OpKind::Add
+        | OpKind::Sub
+        | OpKind::Neg
+        | OpKind::Mul
+        | OpKind::Square
+        | OpKind::Cube
+        | OpKind::Div
+        | OpKind::ScalarConstDiv
+        | OpKind::Einsum
+        | OpKind::Sum
+        | OpKind::MeanOfSquares
+        | OpKind::Rsqrt
+        | OpKind::Iff
+        | OpKind::And
+        | OpKind::IsNan
+        | OpKind::Slice
+        | OpKind::Concat
+        | OpKind::Reshape
+        | OpKind::Broadcast
+        | OpKind::MoveAxis => Relation,
+        OpKind::Tanh
+        | OpKind::Sigmoid
+        | OpKind::Erf
+        | OpKind::Sin
+        | OpKind::Cos
+        | OpKind::ReLU
+        | OpKind::Clamp
+        | OpKind::GatherSmall
+        | OpKind::GatherLarge => LookupFamily,
+        OpKind::SoftmaxLastAxis => Deferred,
     }
 }
 

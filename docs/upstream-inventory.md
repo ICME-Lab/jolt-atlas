@@ -109,6 +109,28 @@ reaches 2⁻¹²⁸ per hash query. Measured cost on GPT-2 (Dory, M3, median of 
   bounds allow instead of the split the prover must use, a union-bound loss of about log n, not a
   forgery. Accepted until Dory's deletion at stage 7b.
 
+## Op dispositions at the close of stage 6
+
+The test `disposition` table in `onnx_proof/testing/relations.rs` is the source of truth; this
+records it as stage 6 closed.
+
+- **Relation-defined** (verifier derived from a `SymbolicSumcheck` in `onnx_proof/relation.rs`):
+  Input, Constant, Identity, Neg, IsNan, Broadcast, MoveAxis (ties); Add and Sub (accumulation
+  ties, non-scalar nodes); Mul, And, Square, Cube, Rsqrt, Div, Iff, ScalarConstDiv (eq-weighted
+  engine relations); Reshape, Slice, Concat, Sum (dense engine relations); Einsum and
+  MeanOfSquares (relations with specialized provers, checked by `relation_prover_equiv_*`).
+- **Lookup family, moved as code at stage 8**: ReLU, Clamp, Tanh, Sigmoid, Erf, Sin, Cos,
+  GatherSmall, GatherLarge, and the clamp lookups, remainder range checks and scalar clamp checks
+  that relation-defined ops still run beside their relations.
+- **Deferred to stage 8 as code**: SoftmaxLastAxis. The #218 aux-vector rework had not merged
+  when stage 6 closed, so by the spec's rule softmax moves as code; migrating its stages to
+  relations is a named follow-up once #218 lands.
+
+Existing gaps the relations preserve (stage 6 is behavior-preserving), each recorded in its
+relation's S ⊆ R note: ScalarConstDiv never range-checks its committed remainder, so the
+quotient is not pinned to the floor (soundness); Neg cannot prove negating `i32::MIN`, which
+saturates (completeness).
+
 ## Adoption sequence
 
 The ordering lives in one place: `specs/adoption-program.md` (nine stages, 0–8). This inventory

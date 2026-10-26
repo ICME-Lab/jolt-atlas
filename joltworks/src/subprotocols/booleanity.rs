@@ -4,6 +4,8 @@ use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 use std::{fmt::Debug, iter::zip, sync::Arc};
 
@@ -17,12 +19,12 @@ use crate::{
             VerifierOpeningAccumulator, BIG_ENDIAN,
         },
         ra_poly::RaPolynomial,
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver,
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
     utils::{expanding_table::ExpandingTable, thread::drop_in_background_thread},
@@ -136,8 +138,10 @@ pub struct BooleanitySumcheckProver<
     I: Into<usize> + Copy + Default + Send + Sync + 'static = u8,
 > {
     /// B: split-eq over address-chunk variables (phase 1, LowToHigh).
+    #[allocative(skip)]
     B: GruenSplitEqPolynomial<F>,
     /// D: split-eq over time/cycle variables (phase 2, LowToHigh).
+    #[allocative(skip)]
     D: GruenSplitEqPolynomial<F>,
     /// G as in the Twist and Shout paper
     G: Vec<Vec<F>>,
@@ -167,8 +171,9 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
         G: Vec<Vec<F>>,
         H_indices: Vec<Vec<Option<I>>>,
     ) -> Self {
-        let B = GruenSplitEqPolynomial::new(&params.r_address, BindingOrder::LowToHigh);
-        let D_poly = GruenSplitEqPolynomial::new(&params.r_cycle, BindingOrder::LowToHigh);
+        let B = GruenSplitEqPolynomial::new(&params.r_address, jolt_poly::BindingOrder::LowToHigh);
+        let D_poly =
+            GruenSplitEqPolynomial::new(&params.r_cycle, jolt_poly::BindingOrder::LowToHigh);
 
         let k_chunk = 1 << params.log_k_chunk;
         let mut F = ExpandingTable::new(k_chunk, BindingOrder::LowToHigh);
@@ -224,7 +229,11 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
         evals
     }
 
-    fn compute_phase1_message(&self, round: usize, previous_claim: F) -> UniPoly<F> {
+    fn compute_phase1_message(
+        &self,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, F> {
         let m = round + 1;
         let B = &self.B;
 
@@ -281,20 +290,48 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
                 coeffs
             });
 
+        // The Booleanity quadratic at 1: the new address bit is 1, so only `k_m = 1` survives.
+        let at_one = |k_prime: usize| -> F {
+            (0..self.params.d)
+                .map(|i| {
+                    let sum: F = self.G[i][k_prime << m..(k_prime + 1) << m]
+                        .iter()
+                        .enumerate()
+                        .filter(|(k, _)| k >> (m - 1) == 1)
+                        .map(|(k, &G_k)| {
+                            let F_k = self.F[k % (1 << (m - 1))];
+                            G_k * F_k * (F_k - F::one())
+                        })
+                        .sum();
+                    self.params.gammas[i] * sum
+                })
+                .sum()
+        };
+
         // Use Gruen optimization to get cubic evaluations from quadratic coefficients
         if self.params.linear.is_none() {
-            return B.gruen_poly_deg_3(quadratic_coeffs[0], quadratic_coeffs[1], previous_claim);
+            return B.gruen_round_deg_3_from(
+                quadratic_coeffs[0],
+                quadratic_coeffs[1],
+                &at_one,
+                previous_claim,
+            );
         }
         let lin = self.linear_phase1_evals();
-        let booleanity = B.gruen_poly_deg_3(
+        let booleanity = B.gruen_round_deg_3_from(
             quadratic_coeffs[0],
             quadratic_coeffs[1],
+            &at_one,
             previous_claim - lin[0] - lin[1],
-        );
-        &booleanity + &UniPoly::from_evals(&lin)
+        )?;
+        Ok(&booleanity + &UnivariatePoly::from_evals(&lin))
     }
 
-    fn compute_phase2_message(&self, _round: usize, previous_claim: F) -> UniPoly<F> {
+    fn compute_phase2_message(
+        &self,
+        _round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, F> {
         let D_poly = &self.D;
 
         // Compute quadratic coefficients via generic split-eq fold (handles both E_in cases).
@@ -334,9 +371,19 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
         });
 
         // s(X) = D(X)·[eq_r_r·q_bool(X) + q_lin(X)], q_lin linear.
-        D_poly.gruen_poly_deg_3(
+        D_poly.gruen_round_deg_3_from(
             self.eq_r_r * coeffs[0] + coeffs[2],
             self.eq_r_r * coeffs[1],
+            &|j_prime| {
+                zip(&self.H, &self.params.gammas)
+                    .enumerate()
+                    .map(|(i, (h, gamma))| {
+                        let h_1 = h.get_bound_coeff(2 * j_prime + 1);
+                        let lin = lin_c.get(i).map_or(F::zero(), |c| *c * h_1);
+                        self.eq_r_r * *gamma * h_1 * (h_1 - F::one()) + lin
+                    })
+                    .sum()
+            },
             previous_claim,
         )
     }
@@ -352,64 +399,8 @@ impl<
         &self.params
     }
 
-    #[tracing::instrument(skip_all, name = "BooleanitySumcheckProver::compute_message", fields(variant = ?self.params.sumcheck_id))]
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
-        if round < self.params.log_k_chunk {
-            // Phase 1: First log(K_chunk) rounds
-            self.compute_phase1_message(round, previous_claim)
-        } else {
-            // Phase 2: Last log(T) rounds
-            self.compute_phase2_message(round, previous_claim)
-        }
-    }
-
-    #[tracing::instrument(skip_all, name = "BooleanitySumcheckProver::ingest_challenge", fields(variant = ?self.params.sumcheck_id))]
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
-        if round < self.params.log_k_chunk {
-            // Phase 1: Bind B and update F
-            self.B.bind(r_j);
-
-            // Update F for this round
-            self.F.update(r_j);
-
-            if let Some(lin) = &self.params.linear {
-                self.lin_id.bind_parallel(r_j, BindingOrder::LowToHigh);
-                self.lin_g
-                    .iter_mut()
-                    .for_each(|g| g.bind_parallel(r_j, BindingOrder::LowToHigh));
-                if round == self.params.log_k_chunk - 1 {
-                    let k = self.lin_id.final_claim();
-                    self.lin_c = zip(&lin.gammas, &lin.weights)
-                        .map(|(g, w)| *g + *w * k)
-                        .collect();
-                    self.lin_g = Vec::new();
-                }
-            }
-
-            // If transitioning to phase 2, prepare H polynomials
-            if round == self.params.log_k_chunk - 1 {
-                self.eq_r_r = self.B.get_current_scalar();
-
-                // Initialize H polynomials using RaPolynomial
-                let F = std::mem::take(&mut self.F);
-                let H_indices = std::mem::take(&mut self.H_indices);
-                self.H = H_indices
-                    .into_iter()
-                    .map(|indices| RaPolynomial::new(Arc::new(indices), F.clone_values()))
-                    .collect();
-
-                // Drop G arrays as they're no longer needed
-                let g = std::mem::take(&mut self.G);
-                drop_in_background_thread(g);
-            }
-        } else {
-            // Phase 2: Bind D and H
-            self.D.bind(r_j);
-            self.H
-                .par_iter_mut()
-                .with_min_len(par_enabled())
-                .for_each(|poly| poly.bind_parallel(r_j, BindingOrder::LowToHigh));
-        }
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -435,6 +426,93 @@ impl<
     #[cfg(feature = "allocative")]
     fn update_flamegraph(&self, flamegraph: &mut FlameGraphBuilder) {
         flamegraph.visit_root(self);
+    }
+}
+
+impl<F: JoltField, I: Into<usize> + Copy + Default + Debug + Send + Sync + 'static>
+    BooleanitySumcheckProver<F, I>
+{
+    #[tracing::instrument(skip_all, name = "BooleanitySumcheckProver::bind", fields(variant = ?self.params.sumcheck_id))]
+    fn bind(&mut self, r: F, round: usize) {
+        let r_j = F::challenge_from_field(r);
+        if round < self.params.log_k_chunk {
+            // Phase 1: Bind B and update F
+            self.B.bind(r);
+
+            // Update F for this round
+            self.F.update(r_j);
+
+            if let Some(lin) = &self.params.linear {
+                self.lin_id.bind_parallel(r_j, BindingOrder::LowToHigh);
+                self.lin_g
+                    .iter_mut()
+                    .for_each(|g| g.bind_parallel(r_j, BindingOrder::LowToHigh));
+                if round == self.params.log_k_chunk - 1 {
+                    let k = self.lin_id.final_claim();
+                    self.lin_c = zip(&lin.gammas, &lin.weights)
+                        .map(|(g, w)| *g + *w * k)
+                        .collect();
+                    self.lin_g = Vec::new();
+                }
+            }
+
+            // If transitioning to phase 2, prepare H polynomials
+            if round == self.params.log_k_chunk - 1 {
+                self.eq_r_r = self.B.current_scalar();
+
+                // Initialize H polynomials using RaPolynomial
+                let F = std::mem::take(&mut self.F);
+                let H_indices = std::mem::take(&mut self.H_indices);
+                self.H = H_indices
+                    .into_iter()
+                    .map(|indices| RaPolynomial::new(Arc::new(indices), F.clone_values()))
+                    .collect();
+
+                // Drop G arrays as they're no longer needed
+                let g = std::mem::take(&mut self.G);
+                drop_in_background_thread(g);
+            }
+        } else {
+            // Phase 2: Bind D and H
+            self.D.bind(r);
+            self.H
+                .par_iter_mut()
+                .with_min_len(par_enabled())
+                .for_each(|poly| poly.bind_parallel(r_j, BindingOrder::LowToHigh));
+        }
+    }
+}
+
+impl<F: JoltField, I: Into<usize> + Copy + Default + Debug + Send + Sync + 'static> ProveRounds<F>
+    for BooleanitySumcheckProver<F, I>
+{
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    #[tracing::instrument(skip_all, name = "BooleanitySumcheckProver::prove_round", fields(variant = ?self.params.sumcheck_id))]
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        if round < self.params.log_k_chunk {
+            // Phase 1: First log(K_chunk) rounds
+            self.compute_phase1_message(round, previous_claim)
+        } else {
+            // Phase 2: Last log(T) rounds
+            self.compute_phase2_message(round, previous_claim)
+        }
+        .map_err(round_check_failed(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
     }
 }
 

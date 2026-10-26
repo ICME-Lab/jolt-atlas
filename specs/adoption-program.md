@@ -393,11 +393,10 @@ types (`EvalReductionProof`, `Openings`) are in `joltworks` and `ModelExecutionI
   whose `get_models_committed_polynomials` calls the per-op registry
   (`NodeCommittedPolynomials` in `ops/`) — the same cycle.
 
-Those cycles dissolve at stage 8, and the `joltworks` exception below at stage 9. Until then two
-reachable-but-unused exceptions to
-"prover-free" are review-held, not compiler-held: `joltworks` prover APIs (the crate is
-depended on whole) and `atlas-trace` execution (`Model::trace` shares a crate with the graph
-and `semantics` the verifier legitimately needs).
+Those cycles dissolve at stage 8, and the `joltworks` exception below at stage 9. Until then
+two reachable-but-unused exceptions to "prover-free" are review-held, not compiler-held:
+`joltworks` prover APIs (the crate is depended on whole) and `atlas-trace` execution
+(`Model::trace` shares a crate with the graph and `semantics` the verifier legitimately needs).
 
 **Field-access design.** All fields are private. `from_parts` takes every field (prover
 construction is production code); reads used by core's free functions are public `&`

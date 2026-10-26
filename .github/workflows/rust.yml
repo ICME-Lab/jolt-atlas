@@ -4,7 +4,8 @@ permissions:
 
 on:
   push:
-    branches: [main]
+    # `dev` gets the fast jobs (fmt, clippy, isolation, workspace tests) on every push.
+    branches: [main, dev]
   pull_request:
     branches: ['**']
     types: [opened, synchronize, reopened, labeled]
@@ -24,7 +25,7 @@ env:
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   # Never cancel a main/nightly heavy run because another push landed.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/dev' }}
 
 jobs:
   fmt:
@@ -118,11 +119,12 @@ jobs:
 
   heavy-models:
     # Real GPT-2, BGE and Qwen2-0.5B: main, nightly, workflow_dispatch, and
-    # PRs labelled `ci:heavy`.
+    # PRs labelled `ci:heavy`; not `dev` pushes.
     name: Real model (${{ matrix.model.name }})
     needs: test
     if: >
-      github.event_name != 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
       contains(github.event.pull_request.labels.*.name, 'ci:heavy')
     runs-on: ubuntu-latest
     timeout-minutes: 90

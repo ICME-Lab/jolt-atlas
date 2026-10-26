@@ -1,0 +1,30 @@
+use jolt_field::JoltField;
+
+use crate::lookup_bits::LookupBits;
+
+use super::{PrefixEval, Prefixes, SparseDensePrefix};
+
+pub enum RightShiftPrefix {}
+
+impl<F: JoltField> SparseDensePrefix<F> for RightShiftPrefix {
+    fn default_checkpoint() -> F {
+        F::zero()
+    }
+
+    fn evaluate(checkpoints: &[PrefixEval<F>], b: LookupBits, _suffix_len: usize) -> F {
+        let (x, y) = b.uninterleave();
+        let (x_val, y_val) = (u64::from(x), u64::from(y));
+        let n = y.len();
+
+        let mut result = checkpoints[Prefixes::RightShift];
+        for i in 0..n {
+            let x_i = (x_val >> (n - 1 - i)) & 1;
+            let y_i = (y_val >> (n - 1 - i)) & 1;
+            if y_i == 1 {
+                result = result + result + F::from_u64(x_i);
+            }
+        }
+
+        result
+    }
+}

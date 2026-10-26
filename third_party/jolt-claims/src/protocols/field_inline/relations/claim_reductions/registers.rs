@@ -1,0 +1,114 @@
+use crate::protocols::field_inline::geometry::claim_reductions::registers::{
+    field_rd_value_reduced, field_rd_value_spartan, field_rs1_value_reduced,
+    field_rs1_value_spartan, field_rs2_value_reduced, field_rs2_value_spartan,
+};
+use serde::{Deserialize, Serialize};
+
+use crate::protocols::field_inline::{
+    FieldInlineChallengeId, FieldInlineDerivedId, FieldInlineOpeningId, FieldInlineRelationId,
+    FieldRegistersClaimReductionChallenge, FieldRegistersClaimReductionPublic,
+    FieldRegistersTraceDimensions,
+};
+use crate::twist::claim_reductions as twist;
+use crate::{InputClaims, OutputClaims, SumcheckChallenges};
+
+/// Produced field-register claim-reduction openings (`FieldRdValue`,
+/// `FieldRs1Value`, `FieldRs2Value` reduced to the Spartan point), all sharing
+/// the single reduction opening point. Field declaration order is the canonical
+/// Fiat-Shamir order and mirrors
+/// `geometry::claim_reductions::registers::claim_reduction_output_openings()`.
+#[cfg_attr(feature = "allocative", derive(::allocative::Allocative))]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, OutputClaims)]
+#[serde(bound(
+    serialize = "C: serde::Serialize",
+    deserialize = "C: serde::Deserialize<'de>"
+))]
+#[protocol(field_inline)]
+#[relation(FieldRegistersClaimReduction)]
+pub struct FieldRegistersClaimReductionOutputClaims<C> {
+    #[opening(FieldRdValue)]
+    pub rd_value: C,
+    #[opening(FieldRs1Value)]
+    pub rs1_value: C,
+    #[opening(FieldRs2Value)]
+    pub rs2_value: C,
+}
+
+/// Consumed field-register openings reduced by this sumcheck, wired from the
+/// field-inline extension of stage 1's outer sumcheck. Generic over the cell.
+#[derive(Clone, Debug, Default, PartialEq, Eq, InputClaims)]
+#[protocol(field_inline)]
+pub struct FieldRegistersClaimReductionInputClaims<C> {
+    #[opening(FieldRdValue, from = FieldRegistersSpartanOuter)]
+    pub rd_value: C,
+    #[opening(FieldRs1Value, from = FieldRegistersSpartanOuter)]
+    pub rs1_value: C,
+    #[opening(FieldRs2Value, from = FieldRegistersSpartanOuter)]
+    pub rs2_value: C,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, SumcheckChallenges)]
+#[cfg_attr(feature = "allocative", derive(::allocative::Allocative))]
+#[protocol(field_inline)]
+pub struct FieldRegistersClaimReductionChallenges<F> {
+    #[challenge(FieldRegistersClaimReductionChallenge::Gamma)]
+    pub gamma: F,
+}
+
+/// Batches the native field-register Spartan-outer openings (`FieldRdValue`,
+/// `FieldRs1Value`, `FieldRs2Value`) by `gamma` and reduces them to the
+/// registers-claim-reduction openings weighted by the `EqSpartan` public.
+#[derive(Clone)]
+pub struct ClaimReduction {
+    shape: FieldRegistersTraceDimensions,
+}
+
+twist::instantiate_value_reduction! {
+    relation = ClaimReduction,
+    id = FieldInlineRelationId::FieldRegistersClaimReduction,
+    ids = (FieldInlineRelationId, FieldInlineOpeningId, FieldInlineDerivedId, FieldInlineChallengeId),
+    dimensions = FieldRegistersTraceDimensions,
+    challenges = FieldRegistersClaimReductionChallenges,
+    inputs = FieldRegistersClaimReductionInputClaims,
+    outputs = FieldRegistersClaimReductionOutputClaims,
+    consumed = [
+        field_rd_value_spartan(),
+        field_rs1_value_spartan(),
+        field_rs2_value_spartan(),
+    ],
+    reduced = [
+        field_rd_value_reduced(),
+        field_rs1_value_reduced(),
+        field_rs2_value_reduced(),
+    ],
+    gamma = FieldRegistersClaimReductionChallenge::Gamma,
+    eq_spartan = FieldRegistersClaimReductionPublic::EqSpartan,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocols::field_inline::geometry::claim_reductions::registers::{
+        claim_reduction_input_openings, claim_reduction_output_openings,
+    };
+    use jolt_field::{Fr, Ring};
+
+    #[test]
+    fn claim_struct_field_order_matches_geometry_opening_order() {
+        let value = Fr::from_u64(1);
+
+        let outputs = FieldRegistersClaimReductionOutputClaims::<Fr> {
+            rd_value: value,
+            rs1_value: value,
+            rs2_value: value,
+        };
+        assert_eq!(outputs.canonical_order(), claim_reduction_output_openings());
+
+        let inputs = FieldRegistersClaimReductionInputClaims::<Fr> {
+            rd_value: value,
+            rs1_value: value,
+            rs2_value: value,
+        };
+        assert_eq!(inputs.canonical_order(), claim_reduction_input_openings());
+    }
+}

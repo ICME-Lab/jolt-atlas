@@ -1,0 +1,18 @@
+# Vendored from https://github.com/a16z/jolt crates/jolt-lookup-tables at rev
+# f3265b5a9981f0c1359f2b63008824616f0c82fa, with workspace dependency
+# inheritance resolved and the non-src targets removed (third_party/PINS.md).
+[package]
+name = "jolt-lookup-tables"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/a16z/jolt"
+
+[features]
+field-inline = ["jolt-riscv/field-inline"]
+
+[dependencies]
+jolt-field = { path = "../jolt-field", default-features = false }
+jolt-riscv = { path = "../jolt-riscv", features = ["serialization"] }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+strum = { version = "0.28.0", default-features = false, features = ["derive"] }

@@ -13,6 +13,13 @@ owns the adoption order; `docs/upstream-inventory.md` records the divergence eac
 | `jolt-utils` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4a | Manifest only (below) |
 | `jolt-poly` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4b | Manifest only (below) |
 | `jolt-sumcheck` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4b | Manifest only (below) |
+| `jolt-claims` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
+| `jolt-claims-derive` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
+| `jolt-openings` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
+| `jolt-crypto` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
+| `jolt-riscv` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
+| `jolt-lookup-tables` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
+| `jolt-r1cs` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
 
 ## `jolt-field`
 
@@ -64,3 +71,23 @@ workspace inheritance and drops the `examples/`, `fuzz/` and `tests/` targets. U
 `jolt-crypto` and `jolt-r1cs` dependencies are not vendored, so the `committed` and `r1cs`
 features are declared empty (the source's `cfg(feature = ...)` gates stay valid) and must stay
 off; `parallel` no longer forwards to `jolt-crypto`. They come back when those crates are vendored.
+
+## `jolt-claims` and its dependency cone
+
+`jolt-claims`, `jolt-claims-derive`, `jolt-openings`, `jolt-crypto`, `jolt-riscv`,
+`jolt-lookup-tables` and `jolt-r1cs` vendor `src/` byte-identical to `crates/<name>` at the
+pinned rev. Atlas uses only `jolt-claims`' relation layer (`Expr`, `SymbolicSumcheck`); the rest
+of the cone is there because `jolt-claims` depends on it unconditionally (its zkVM protocol
+modules use the RISC-V crates, its lattice packing uses `jolt-openings`). The manifests differ
+from upstream's:
+
+- workspace dependency inheritance is resolved to explicit versions, with the arkworks crates on
+  the root `Cargo.toml`'s `dev/twist-shout` branch;
+- `jolt-claims` takes `jolt-openings` with default features off, so `jolt-crypto`'s `bn254`
+  feature (and with it `ark-bn254`/`ark-ec`) stays off in the resolved graph;
+- `jolt-lookup-tables`' `field-inline` feature drops its forward to the `tracer` dev-dependency;
+- `jolt-claims` and `jolt-claims-derive` are workspace members with their dev-dependencies
+  (`bincode`, `rand_chacha`, `prettyplease`, ...) so their upstream tests run in the workspace
+  suite; the other five are `exclude`d from the workspace, because their upstream tests need
+  crates not vendored here (`tracer`, `jolt-dory`), and the `benches/`, `fuzz/` and `tests/`
+  targets of all seven are not vendored.

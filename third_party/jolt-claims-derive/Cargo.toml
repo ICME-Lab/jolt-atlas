@@ -1,0 +1,20 @@
+# Vendored from https://github.com/a16z/jolt crates/jolt-claims-derive at rev
+# f3265b5a9981f0c1359f2b63008824616f0c82fa, with workspace dependency
+# inheritance resolved and the non-src targets removed (third_party/PINS.md).
+[package]
+name = "jolt-claims-derive"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/a16z/jolt"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "3", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0.79"
+
+[dev-dependencies]
+prettyplease = "0.3"

@@ -23,10 +23,21 @@ members = [
     "third_party/jolt-poly",
     "third_party/jolt-sumcheck",
     "third_party/jolt-utils",
+    "third_party/jolt-claims",
+    "third_party/jolt-claims-derive",
     "atlas-trace",
     "atlas-onnx-import",
     "common",
     "joltworks",
+]
+# Vendored as dependencies of `jolt-claims` only; their upstream tests need crates we do not
+# vendor (`tracer`, `jolt-dory`), so they stay out of workspace test runs.
+exclude = [
+    "third_party/jolt-crypto",
+    "third_party/jolt-lookup-tables",
+    "third_party/jolt-openings",
+    "third_party/jolt-r1cs",
+    "third_party/jolt-riscv",
 ]
 
 [workspace.dependencies]
@@ -42,6 +53,7 @@ jolt-transcript = { path = "./third_party/jolt-transcript", default-features = f
 jolt-utils = { path = "./third_party/jolt-utils" }
 jolt-poly = { path = "./third_party/jolt-poly", default-features = false }
 jolt-sumcheck = { path = "./third_party/jolt-sumcheck" }
+jolt-claims = { path = "./third_party/jolt-claims" }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

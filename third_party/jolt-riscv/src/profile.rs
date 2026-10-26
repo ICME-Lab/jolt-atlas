@@ -1,0 +1,504 @@
+use crate::{JoltInstructionKind, JoltInstructionTag, SourceInstructionKind};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SourceExtension {
+    Rv64I,
+    Rv64M,
+    Rv64A,
+    Rv64C,
+    Zicsr,
+    RvPrivileged,
+    JoltCustom,
+    JoltInline,
+    #[cfg(feature = "field-inline")]
+    FieldInline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum JoltTargetExtension {
+    IntegerCore,
+    IntegerMultiply,
+    ControlFlow,
+    LoadStore64,
+    Advice,
+    HostIO,
+    VirtualAssertions,
+    VirtualArithmetic,
+    VirtualShifts,
+    BitManipulation,
+    #[cfg(feature = "field-inline")]
+    FieldInline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum InlineExtension {
+    Sha2,
+    Keccak256,
+    Blake2,
+    Blake3,
+    BigInt256,
+    Secp256k1,
+    Grumpkin,
+    P256,
+    External,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ProfileInstructionIndex(pub u16);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JoltInstructionProfile {
+    pub source_extensions: &'static [SourceExtension],
+    pub inline_extensions: &'static [InlineExtension],
+}
+
+pub const RV64IM_JOLT: JoltInstructionProfile = JoltInstructionProfile {
+    source_extensions: &[
+        SourceExtension::Rv64I,
+        SourceExtension::Rv64M,
+        SourceExtension::Zicsr,
+        SourceExtension::RvPrivileged,
+        SourceExtension::JoltCustom,
+        SourceExtension::JoltInline,
+    ],
+    inline_extensions: &[],
+};
+
+pub const RV64IMAC_JOLT: JoltInstructionProfile = JoltInstructionProfile {
+    source_extensions: &[
+        SourceExtension::Rv64I,
+        SourceExtension::Rv64M,
+        SourceExtension::Rv64A,
+        SourceExtension::Rv64C,
+        SourceExtension::Zicsr,
+        SourceExtension::RvPrivileged,
+        SourceExtension::JoltCustom,
+        SourceExtension::JoltInline,
+    ],
+    inline_extensions: &[],
+};
+
+pub const RV64IMAC_JOLT_ALL_INLINES: JoltInstructionProfile = JoltInstructionProfile {
+    source_extensions: RV64IMAC_JOLT.source_extensions,
+    inline_extensions: &[
+        InlineExtension::Sha2,
+        InlineExtension::Keccak256,
+        InlineExtension::Blake2,
+        InlineExtension::Blake3,
+        InlineExtension::BigInt256,
+        InlineExtension::Secp256k1,
+        InlineExtension::Grumpkin,
+        InlineExtension::P256,
+        InlineExtension::External,
+    ],
+};
+
+#[cfg(feature = "field-inline")]
+pub const RV64IMAC_JOLT_FIELD_INLINE: JoltInstructionProfile = JoltInstructionProfile {
+    source_extensions: &[
+        SourceExtension::Rv64I,
+        SourceExtension::Rv64M,
+        SourceExtension::Rv64A,
+        SourceExtension::Rv64C,
+        SourceExtension::Zicsr,
+        SourceExtension::RvPrivileged,
+        SourceExtension::JoltCustom,
+        SourceExtension::JoltInline,
+        SourceExtension::FieldInline,
+    ],
+    inline_extensions: RV64IMAC_JOLT_ALL_INLINES.inline_extensions,
+};
+
+impl JoltInstructionProfile {
+    pub fn supports_source(self, kind: SourceInstructionKind) -> bool {
+        match source_extension(kind) {
+            None => true,
+            Some(extension) => self.source_extensions.contains(&extension),
+        }
+    }
+
+    pub fn supports_jolt(self, kind: JoltInstructionKind) -> bool {
+        match jolt_target_extension(kind) {
+            None => matches!(kind, JoltInstructionKind::NoOp),
+            Some(extension) => self.supports_target_extension(extension),
+        }
+    }
+
+    pub fn supports_inline(self, extension: InlineExtension) -> bool {
+        self.inline_extensions.contains(&extension)
+    }
+
+    #[cfg(feature = "field-inline")]
+    pub fn supports_field_inline(self) -> bool {
+        self.source_extensions
+            .contains(&SourceExtension::FieldInline)
+    }
+
+    pub fn source_dense_index(
+        self,
+        kind: SourceInstructionKind,
+    ) -> Option<ProfileInstructionIndex> {
+        dense_index(
+            SourceInstructionKind::ALL.iter().copied(),
+            |candidate| self.supports_source(candidate),
+            kind,
+        )
+    }
+
+    pub fn jolt_dense_index(self, kind: JoltInstructionKind) -> Option<ProfileInstructionIndex> {
+        dense_index(
+            JoltInstructionKind::ALL.iter().copied(),
+            |candidate| self.supports_jolt(candidate),
+            kind,
+        )
+    }
+
+    pub fn fingerprint(self) -> u64 {
+        let mut hash = hash_byte(FNV_OFFSET_BASIS, FINGERPRINT_SCHEMA_VERSION);
+        for extension in self.source_extensions {
+            hash = hash_byte(hash, 0x01);
+            hash = hash_byte(hash, source_extension_code(*extension));
+        }
+        for extension in self.inline_extensions {
+            hash = hash_byte(hash, 0x02);
+            hash = hash_byte(hash, inline_extension_code(*extension));
+        }
+        for kind in SourceInstructionKind::ALL {
+            if self.supports_source(*kind) {
+                hash = hash_str(hash_byte(hash, 0x03), kind.canonical_name());
+            }
+        }
+        for kind in JoltInstructionKind::ALL {
+            if self.supports_jolt(*kind) {
+                hash = hash_tag(hash_byte(hash, 0x04), kind.tag());
+                hash = hash_str(hash_byte(hash, 0x05), kind.canonical_name());
+            }
+        }
+        hash
+    }
+
+    fn supports_target_extension(self, extension: JoltTargetExtension) -> bool {
+        match extension {
+            JoltTargetExtension::IntegerCore
+            | JoltTargetExtension::ControlFlow
+            | JoltTargetExtension::LoadStore64
+            | JoltTargetExtension::VirtualAssertions
+            | JoltTargetExtension::VirtualArithmetic
+            | JoltTargetExtension::VirtualShifts => {
+                self.source_extensions.contains(&SourceExtension::Rv64I)
+            }
+            JoltTargetExtension::IntegerMultiply => {
+                self.source_extensions.contains(&SourceExtension::Rv64M)
+            }
+            JoltTargetExtension::Advice => {
+                self.source_extensions.contains(&SourceExtension::Rv64M)
+                    || self.source_extensions.contains(&SourceExtension::Rv64A)
+                    || self
+                        .source_extensions
+                        .contains(&SourceExtension::JoltCustom)
+            }
+            JoltTargetExtension::HostIO => self
+                .source_extensions
+                .contains(&SourceExtension::JoltCustom),
+            JoltTargetExtension::BitManipulation => {
+                self.source_extensions
+                    .contains(&SourceExtension::JoltCustom)
+                    || !self.inline_extensions.is_empty()
+            }
+            #[cfg(feature = "field-inline")]
+            JoltTargetExtension::FieldInline => self.supports_field_inline(),
+        }
+    }
+}
+
+pub const fn source_extension(kind: SourceInstructionKind) -> Option<SourceExtension> {
+    kind.source_extension()
+}
+
+pub const fn jolt_target_extension(kind: JoltInstructionKind) -> Option<JoltTargetExtension> {
+    kind.target_extension()
+}
+
+fn dense_index<I, K>(
+    kinds: I,
+    mut is_supported: impl FnMut(K) -> bool,
+    needle: K,
+) -> Option<ProfileInstructionIndex>
+where
+    I: IntoIterator<Item = K>,
+    K: Copy + Eq,
+{
+    let mut index = 0u16;
+    for candidate in kinds {
+        if !is_supported(candidate) {
+            continue;
+        }
+        if candidate == needle {
+            return Some(ProfileInstructionIndex(index));
+        }
+        index = index.checked_add(1)?;
+    }
+    None
+}
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+const FINGERPRINT_SCHEMA_VERSION: u8 = 1;
+
+const fn hash_byte(hash: u64, byte: u8) -> u64 {
+    (hash ^ byte as u64).wrapping_mul(FNV_PRIME)
+}
+
+const fn hash_tag(hash: u64, tag: JoltInstructionTag) -> u64 {
+    let bytes = tag.0.to_le_bytes();
+    hash_byte(hash_byte(hash, bytes[0]), bytes[1])
+}
+
+fn hash_str(mut hash: u64, value: &str) -> u64 {
+    for byte in value.as_bytes() {
+        hash = hash_byte(hash, *byte);
+    }
+    hash
+}
+
+const fn source_extension_code(extension: SourceExtension) -> u8 {
+    match extension {
+        SourceExtension::Rv64I => 0,
+        SourceExtension::Rv64M => 1,
+        SourceExtension::Rv64A => 2,
+        SourceExtension::Rv64C => 3,
+        SourceExtension::Zicsr => 4,
+        SourceExtension::RvPrivileged => 5,
+        SourceExtension::JoltCustom => 6,
+        SourceExtension::JoltInline => 7,
+        #[cfg(feature = "field-inline")]
+        SourceExtension::FieldInline => 8,
+    }
+}
+
+const fn inline_extension_code(extension: InlineExtension) -> u8 {
+    match extension {
+        InlineExtension::Sha2 => 0,
+        InlineExtension::Keccak256 => 1,
+        InlineExtension::Blake2 => 2,
+        InlineExtension::Blake3 => 3,
+        InlineExtension::BigInt256 => 4,
+        InlineExtension::Secp256k1 => 5,
+        InlineExtension::Grumpkin => 6,
+        InlineExtension::P256 => 7,
+        InlineExtension::External => 8,
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(feature = "field-inline", expect(clippy::unwrap_used))]
+mod tests {
+    use super::*;
+    #[cfg(feature = "field-inline")]
+    use crate::NormalizedOperands;
+
+    #[test]
+    fn default_profile_matches_current_source_shape() {
+        assert!(RV64IMAC_JOLT.supports_source(SourceInstructionKind::ADD));
+        assert!(RV64IMAC_JOLT.supports_source(SourceInstructionKind::ADDW));
+        assert!(RV64IMAC_JOLT.supports_source(SourceInstructionKind::AMOADDW));
+        assert!(RV64IMAC_JOLT.supports_source(SourceInstructionKind::Inline));
+        assert!(!RV64IM_JOLT.supports_source(SourceInstructionKind::AMOADDW));
+    }
+
+    #[test]
+    fn target_legality_rejects_source_only_rows() {
+        assert!(RV64IMAC_JOLT.supports_jolt(JoltInstructionKind::ADD));
+        assert!(RV64IMAC_JOLT.supports_jolt(JoltInstructionKind::ADDW));
+        assert!(RV64IMAC_JOLT.supports_jolt(JoltInstructionKind::LD));
+        assert!(RV64IMAC_JOLT.supports_jolt(JoltInstructionKind::VirtualAssertEQ));
+
+        assert_eq!(SourceInstructionKind::Unimpl.jolt_kind(), None);
+        assert_eq!(SourceInstructionKind::MULH.jolt_kind(), None);
+        assert_eq!(SourceInstructionKind::LW.jolt_kind(), None);
+        assert_eq!(SourceInstructionKind::SW.jolt_kind(), None);
+        assert_eq!(SourceInstructionKind::Inline.jolt_kind(), None);
+    }
+
+    #[test]
+    fn dense_indexes_are_profile_local_and_contiguous() {
+        assert_eq!(
+            RV64IMAC_JOLT.source_dense_index(SourceInstructionKind::NoOp),
+            Some(ProfileInstructionIndex(0))
+        );
+        assert_eq!(
+            RV64IMAC_JOLT.jolt_dense_index(JoltInstructionKind::NoOp),
+            Some(ProfileInstructionIndex(0))
+        );
+        assert_eq!(
+            RV64IM_JOLT.source_dense_index(SourceInstructionKind::AMOADDW),
+            None
+        );
+        assert_eq!(
+            SourceInstructionKind::ADDW.jolt_kind(),
+            Some(JoltInstructionKind::ADDW)
+        );
+
+        let supported = JoltInstructionKind::ALL
+            .iter()
+            .copied()
+            .filter(|kind| RV64IMAC_JOLT.supports_jolt(*kind))
+            .collect::<Vec<_>>();
+        for (expected, kind) in supported.into_iter().enumerate() {
+            assert_eq!(
+                RV64IMAC_JOLT.jolt_dense_index(kind),
+                Some(ProfileInstructionIndex(expected as u16))
+            );
+        }
+    }
+
+    #[test]
+    fn profile_fingerprint_changes_with_legality_sets() {
+        assert_ne!(RV64IM_JOLT.fingerprint(), RV64IMAC_JOLT.fingerprint());
+        assert_ne!(
+            RV64IMAC_JOLT.fingerprint(),
+            RV64IMAC_JOLT_ALL_INLINES.fingerprint()
+        );
+    }
+
+    #[test]
+    fn inline_extension_codes_are_distinct_and_stable() {
+        let codes = RV64IMAC_JOLT_ALL_INLINES
+            .inline_extensions
+            .iter()
+            .map(|e| inline_extension_code(*e));
+        assert!(codes.eq(0..=8));
+    }
+
+    #[test]
+    fn default_profiles_do_not_include_field_inline_rows() {
+        #[cfg(feature = "field-inline")]
+        {
+            assert!(!RV64IMAC_JOLT.supports_source(SourceInstructionKind::FIELD_ADD));
+            assert!(!RV64IMAC_JOLT.supports_jolt(JoltInstructionKind::FIELD_ADD));
+        }
+        #[cfg(not(feature = "field-inline"))]
+        {
+            assert!(SourceInstructionKind::ALL
+                .iter()
+                .all(|kind| !kind.canonical_name().starts_with("field.")));
+            assert!(JoltInstructionKind::ALL
+                .iter()
+                .all(|kind| !kind.canonical_name().starts_with("field.")));
+            assert_eq!(
+                JoltInstructionKind::from_tag(JoltInstructionTag(0x0100)),
+                None
+            );
+        }
+    }
+
+    #[cfg(feature = "field-inline")]
+    #[test]
+    fn field_inline_profile_enables_field_rows_without_changing_base_profile() {
+        assert!(!RV64IMAC_JOLT.supports_source(SourceInstructionKind::FIELD_ADD));
+        assert!(!RV64IMAC_JOLT.supports_jolt(JoltInstructionKind::FIELD_ADD));
+        assert!(RV64IMAC_JOLT_FIELD_INLINE.supports_source(SourceInstructionKind::FIELD_ADD));
+        assert!(RV64IMAC_JOLT_FIELD_INLINE.supports_jolt(JoltInstructionKind::FIELD_ADD));
+        assert_ne!(
+            RV64IMAC_JOLT.fingerprint(),
+            RV64IMAC_JOLT_FIELD_INLINE.fingerprint()
+        );
+        assert_eq!(
+            JoltInstructionKind::from_tag(JoltInstructionTag(0x0100)),
+            Some(JoltInstructionKind::FIELD_ADD)
+        );
+    }
+
+    #[cfg(feature = "field-inline")]
+    #[test]
+    fn field_inline_operand_shapes_separate_field_and_integer_registers() {
+        let operands = NormalizedOperands {
+            rs1: Some(6),
+            rs2: Some(7),
+            rd: Some(5),
+            imm: 0,
+        };
+        let mul = crate::field_inline_operand_shape(JoltInstructionKind::FIELD_MUL).unwrap();
+        assert!(mul.reads_field_rs1);
+        assert!(mul.reads_field_rs2);
+        assert!(mul.writes_field_rd);
+        assert!(mul.is_pure_field_op());
+        assert_eq!(mul.x_operands(operands), NormalizedOperands::default());
+        assert_eq!(mul.field_operands(operands), operands);
+
+        let load = crate::field_inline_operand_shape(
+            JoltInstructionKind::FIELD_LOAD_ACCUMULATE_FROM_REGISTER,
+        )
+        .unwrap();
+        assert!(load.reads_field_rs1);
+        assert!(load.field_rs1_is_field_rd);
+        assert!(load.writes_field_rd);
+        assert!(!load.is_pure_field_op());
+        assert_eq!(
+            load.x_operands(operands),
+            NormalizedOperands {
+                rs1: Some(6),
+                ..NormalizedOperands::default()
+            }
+        );
+
+        assert_eq!(
+            load.field_operands(operands),
+            NormalizedOperands {
+                rs1: Some(5),
+                rd: Some(5),
+                ..NormalizedOperands::default()
+            }
+        );
+
+        let assert_zero =
+            crate::field_inline_operand_shape(JoltInstructionKind::FIELD_ASSERT_ZERO).unwrap();
+        assert!(assert_zero.reads_field_rs1);
+        assert!(!assert_zero.reads_field_rs2);
+        assert!(!assert_zero.writes_field_rd);
+        assert!(assert_zero.is_pure_field_op());
+        assert_eq!(
+            assert_zero.x_operands(operands),
+            NormalizedOperands::default()
+        );
+        let write_operands = NormalizedOperands {
+            rd: Some(5),
+            ..NormalizedOperands::default()
+        };
+
+        let load_memory = crate::field_inline_operand_shape(
+            JoltInstructionKind::FIELD_LOAD_ACCUMULATE_FROM_MEMORY,
+        )
+        .unwrap();
+        assert!(!load_memory.is_pure_field_op());
+        assert_eq!(
+            load_memory.x_operands(operands),
+            NormalizedOperands {
+                rs1: Some(6),
+                ..write_operands
+            }
+        );
+
+        assert_eq!(
+            load_memory.field_operands(operands),
+            NormalizedOperands {
+                rs1: Some(7),
+                rd: Some(7),
+                ..NormalizedOperands::default()
+            }
+        );
+
+        let advice =
+            crate::field_inline_operand_shape(JoltInstructionKind::FIELD_ADVICE_LIMB).unwrap();
+        assert!(!advice.is_pure_field_op());
+        assert_eq!(advice.x_operands(operands), write_operands);
+        assert_eq!(
+            advice.field_operands(operands),
+            NormalizedOperands {
+                rs1: Some(6),
+                rd: Some(7),
+                ..NormalizedOperands::default()
+            }
+        );
+    }
+}

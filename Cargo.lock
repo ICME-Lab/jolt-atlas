@@ -1111,6 +1111,7 @@ dependencies = [
  "derive_more",
  "itertools 0.10.5",
  "jolt-atlas-verifier",
+ "jolt-claims",
  "jolt-field",
  "jolt-poly",
  "jolt-sumcheck",
@@ -1125,8 +1126,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "tokenizers",
  "tracing",
  "tracing-chrome",
@@ -1139,6 +1140,51 @@ version = "0.1.0"
 dependencies = [
  "ark-serialize",
  "joltworks",
+]
+
+[[package]]
+name = "jolt-claims"
+version = "0.1.0"
+dependencies = [
+ "allocative",
+ "bincode 2.0.1",
+ "blake2 0.11.0",
+ "derive_more",
+ "jolt-claims-derive",
+ "jolt-field",
+ "jolt-lookup-tables",
+ "jolt-openings",
+ "jolt-poly",
+ "jolt-r1cs",
+ "jolt-riscv",
+ "jolt-utils",
+ "num-traits",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "rayon",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jolt-claims-derive"
+version = "0.1.0"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "jolt-crypto"
+version = "0.1.0"
+dependencies = [
+ "jolt-field",
+ "jolt-poly",
+ "jolt-transcript",
+ "rand_core 0.6.4",
+ "serde",
 ]
 
 [[package]]
@@ -1160,6 +1206,29 @@ dependencies = [
  "rayon",
  "serde",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jolt-lookup-tables"
+version = "0.1.0"
+dependencies = [
+ "jolt-field",
+ "jolt-riscv",
+ "serde",
+ "strum 0.28.0",
+]
+
+[[package]]
+name = "jolt-openings"
+version = "0.1.0"
+dependencies = [
+ "jolt-crypto",
+ "jolt-field",
+ "jolt-poly",
+ "jolt-transcript",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -1197,6 +1266,25 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "jolt-r1cs"
+version = "0.1.0"
+dependencies = [
+ "jolt-field",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jolt-riscv"
+version = "0.1.0"
+dependencies = [
+ "ark-serialize",
+ "serde",
+ "strum 0.28.0",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1275,8 +1363,8 @@ dependencies = [
  "serial_test",
  "sha3",
  "spongefish",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "sysinfo",
  "thiserror 1.0.69",
  "tracing",
@@ -1637,6 +1725,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "prettyplease"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bfe0f4c752e450fc2faf62654f1c134747922825d5b04ca717b8874f41a40c0"
+dependencies = [
+ "proc-macro2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -2155,6 +2253,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
 
 [[package]]
+name = "strum"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
+dependencies = [
+ "strum_macros 0.28.0",
+]
+
+[[package]]
 name = "strum_macros"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2164,6 +2271,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

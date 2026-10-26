@@ -1,0 +1,56 @@
+use jolt_field::JoltField;
+use jolt_poly::EvaluationClaim;
+use jolt_transcript::{AppendToTranscript, Label, LabelWithCount, Transcript};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkEvaluationClaim<'a, F, C> {
+    pub point: &'a [F],
+    pub hiding_commitment: &'a C,
+}
+
+impl<'a, F, C> ZkEvaluationClaim<'a, F, C> {
+    pub fn new(point: &'a [F], hiding_commitment: &'a C) -> Self {
+        Self {
+            point,
+            hiding_commitment,
+        }
+    }
+}
+
+impl<F, C> AppendToTranscript for ZkEvaluationClaim<'_, F, C>
+where
+    F: JoltField,
+    C: AppendToTranscript,
+{
+    fn append_to_transcript<T: Transcript>(&self, transcript: &mut T) {
+        transcript.append(&LabelWithCount(
+            b"zk_opening_point",
+            self.point.len() as u64,
+        ));
+        for coordinate in self.point {
+            coordinate.append_to_transcript(transcript);
+        }
+        transcript.append(&Label(b"zk_eval_commitment"));
+        self.hiding_commitment.append_to_transcript(transcript);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VerifierOpeningClaim<F: JoltField, C> {
+    pub commitment: C,
+    pub evaluation: EvaluationClaim<F>,
+}
+
+pub(crate) struct VerifierRlcClaims<'a, F: JoltField, C>(pub &'a [VerifierOpeningClaim<F, C>]);
+
+impl<F, C> AppendToTranscript for VerifierRlcClaims<'_, F, C>
+where
+    F: JoltField,
+{
+    fn append_to_transcript<T: Transcript>(&self, transcript: &mut T) {
+        transcript.append(&LabelWithCount(b"rlc_claims", self.0.len() as u64));
+        for claim in self.0 {
+            claim.evaluation.value.append_to_transcript(transcript);
+        }
+    }
+}

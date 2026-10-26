@@ -1,0 +1,39 @@
+# Vendored from https://github.com/a16z/jolt crates/jolt-claims at rev
+# f3265b5a9981f0c1359f2b63008824616f0c82fa, with workspace dependency
+# inheritance resolved and the non-src targets removed (third_party/PINS.md).
+[package]
+name = "jolt-claims"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/a16z/jolt"
+
+[features]
+default = []
+akita = []
+allocative = ["dep:allocative"]
+field-inline = ["jolt-lookup-tables/field-inline"]
+test-utils = []
+
+[dependencies]
+allocative = { version = "0.3", optional = true }
+blake2 = "0.11.0-rc.6"
+derive_more = { version = "2.0.1", default-features = false, features = ["from", "try_into"] }
+jolt-claims-derive = { path = "../jolt-claims-derive" }
+jolt-field = { path = "../jolt-field", default-features = false }
+jolt-lookup-tables = { path = "../jolt-lookup-tables" }
+jolt-poly = { path = "../jolt-poly", default-features = false }
+jolt-r1cs = { path = "../jolt-r1cs" }
+jolt-openings = { path = "../jolt-openings", default-features = false }
+jolt-riscv = { path = "../jolt-riscv", features = ["serialization"] }
+jolt-utils = { path = "../jolt-utils" }
+rayon = "1.12.0"
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+jolt-field = { path = "../jolt-field", features = ["bn254"] }
+bincode = { version = "2", features = ["serde"] }
+num-traits = { version = "0.2.19", default-features = false }
+rand_chacha = { version = "0.3.0", default-features = false }
+rand_core = { version = "0.6.4", default-features = false }

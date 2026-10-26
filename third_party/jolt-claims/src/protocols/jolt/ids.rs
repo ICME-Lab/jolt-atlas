@@ -1,0 +1,549 @@
+use derive_more::From;
+use jolt_openings::CommitmentGroupRole;
+use jolt_riscv::{CircuitFlags, InstructionFlags};
+use serde::{Deserialize, Serialize};
+
+use crate::Expr;
+
+pub type JoltExpr<F> = Expr<F, JoltOpeningId, JoltDerivedId, JoltChallengeId>;
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum JoltRelationId {
+    SpartanOuter,
+    SpartanProductVirtualization,
+    SpartanShift,
+    InstructionClaimReduction,
+    InstructionInputVirtualization,
+    InstructionReadRaf,
+    InstructionRaVirtualization,
+    RamReadWriteChecking,
+    RamRafEvaluation,
+    RamOutputCheck,
+    RamValCheck,
+    RamRaClaimReduction,
+    RamHammingBooleanity,
+    RamRaVirtualization,
+    RegistersClaimReduction,
+    RegistersReadWriteChecking,
+    RegistersValEvaluation,
+    BytecodeReadRaf,
+    Booleanity,
+    AdviceClaimReductionCyclePhase,
+    AdviceClaimReduction,
+    BytecodeClaimReductionCyclePhase,
+    BytecodeClaimReduction,
+    ProgramImageClaimReductionCyclePhase,
+    ProgramImageClaimReduction,
+    IncClaimReduction,
+    HammingWeightClaimReduction,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamReadWriteChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamReadWritePublic {
+    EqCycle,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamValCheckChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamValCheckPublic {
+    LtCyclePlusGamma,
+    /// `Val_init(r_address)`'s public portion — the part of the initial RAM
+    /// evaluation not carried by committed advice / program-image openings.
+    InitEval,
+    /// The negated block selector (`-selector`) weighting one committed advice
+    /// contribution (`untrusted`/`trusted`) in the `Val_init` decomposition.
+    InitSelector(JoltAdviceKind),
+    /// The negated selector (`-1`) weighting the committed program-image
+    /// contribution in the `Val_init` decomposition (committed program mode).
+    InitSelectorProgramImage,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamRaClaimReductionChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamRaVirtualizationPublic {
+    EqCycle,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamHammingBooleanityPublic {
+    EqCycle,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamRafEvaluationPublic {
+    UnmapAddress,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamOutputCheckPublic {
+    EqAddress,
+    IoMask,
+    ValIo,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RamRaClaimReductionPublic {
+    EqCycleRaf,
+    EqCycleReadWrite,
+    EqCycleValCheck,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum BooleanityChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum BooleanityPublic {
+    EqAddressCycle,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum IncClaimReductionChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum IncClaimReductionPublic {
+    EqRamReadWrite,
+    EqRamValCheck,
+    EqRegistersReadWrite,
+    EqRegistersValEvaluation,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum HammingWeightClaimReductionChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum HammingWeightClaimReductionPublic {
+    EqBooleanity,
+    /// Akita path: `eq(r_booleanity_address, 0)` — the digit-zero baseline
+    /// weight of a Booleanity leg (`specs/digit-zero-virtualization.md`).
+    EqBooleanityAtDigitZero,
+    EqVirtualization(usize),
+    /// Akita path: `eq(r_virtualization_address_i, 0)` — the digit-zero
+    /// baseline weight of a virtualization leg.
+    EqVirtualizationAtDigitZero(usize),
+    BalancedIncValueAtAddress,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum BytecodeReadRafChallenge {
+    Gamma,
+    Stage1Gamma,
+    Stage2Gamma,
+    Stage3Gamma,
+    Stage4Gamma,
+    Stage5Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum BytecodeReadRafPublic {
+    StageValue(usize),
+    /// Committed program mode: `eq(stage_cycle_point_s, r_cycle)` factor
+    /// multiplying the staged `BytecodeValClaim(s)` opening. In full mode this
+    /// factor is folded into `StageValue(s)` instead.
+    StageCycleEq(usize),
+    SpartanOuterRaf,
+    SpartanShiftRaf,
+    Entry,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "allocative", derive(::allocative::Allocative))]
+pub enum JoltAdviceKind {
+    Trusted,
+    Untrusted,
+}
+
+impl JoltAdviceKind {
+    /// Role descriptor for the final heterogeneous Akita opening.
+    pub const fn group_role(self) -> CommitmentGroupRole {
+        match self {
+            Self::Untrusted => CommitmentGroupRole::new(0, b"untrusted_advice", "untrusted-advice"),
+            Self::Trusted => CommitmentGroupRole::new(1, b"trusted_advice", "trusted-advice"),
+        }
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum AdviceClaimReductionPublic {
+    FinalScale(JoltAdviceKind),
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum BytecodeClaimReductionChallenge {
+    Eta,
+}
+
+/// Uninhabited payload preserving retired identifier slots in the wire format.
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RetiredIdentifier {}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum BytecodeClaimReductionPublic {
+    // Reserved codec slot; uninhabited and rejected during deserialization.
+    Reserved0(RetiredIdentifier),
+    OutputWeight,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ProgramImageClaimReductionPublic {
+    FinalScale,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SpartanShiftChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SpartanShiftPublic {
+    EqPlusOneOuter,
+    EqPlusOneProduct,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SpartanProductVirtualizationPublic {
+    UniskipLagrangeWeight(usize),
+    LagrangeWeight(usize),
+    TauKernel,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SpartanOuterPublic {
+    /// `LK(τ_high, r₀) · eq(τ_low, ·)` — the uni-skip kernel times the cycle eq.
+    TauKernel,
+    /// The `Az` linear-form weight of R1CS input column `i` (linear in the
+    /// stream variable).
+    AzWeight(usize),
+    /// The `Bz` linear-form weight of R1CS input column `i`.
+    BzWeight(usize),
+    /// The `Az` linear form's public-column contribution.
+    AzConstant,
+    /// The `Bz` linear form's public-column contribution.
+    BzConstant,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RegistersReadWriteChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RegistersReadWritePublic {
+    EqCycle,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RegistersValEvaluationPublic {
+    LtCycle,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RegistersClaimReductionChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RegistersClaimReductionPublic {
+    EqSpartan,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InstructionClaimReductionChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InstructionClaimReductionPublic {
+    EqSpartan,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InstructionInputChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InstructionInputPublic {
+    EqProduct,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InstructionReadRafChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InstructionReadRafPublic {
+    EqTableValue(usize),
+    EqRafConstant,
+    EqRafFlag,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InstructionRaVirtualizationChallenge {
+    Gamma,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InstructionRaVirtualizationPublic {
+    EqCycle,
+}
+
+#[derive(
+    Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize, From,
+)]
+pub enum JoltChallengeId {
+    RamReadWrite(RamReadWriteChallenge),
+    RamValCheck(RamValCheckChallenge),
+    RamRaClaimReduction(RamRaClaimReductionChallenge),
+    Booleanity(BooleanityChallenge),
+    IncClaimReduction(IncClaimReductionChallenge),
+    HammingWeightClaimReduction(HammingWeightClaimReductionChallenge),
+    BytecodeReadRaf(BytecodeReadRafChallenge),
+    BytecodeClaimReduction(BytecodeClaimReductionChallenge),
+    SpartanShift(SpartanShiftChallenge),
+    RegistersReadWrite(RegistersReadWriteChallenge),
+    RegistersClaimReduction(RegistersClaimReductionChallenge),
+    InstructionClaimReduction(InstructionClaimReductionChallenge),
+    InstructionInput(InstructionInputChallenge),
+    InstructionReadRaf(InstructionReadRafChallenge),
+    InstructionRaVirtualization(InstructionRaVirtualizationChallenge),
+}
+
+/// Lattice layouts supply an explicit canonical identifier order; `Ord` is
+/// used only for keyed lookup and does not assign physical slots.
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum JoltCommittedPolynomial {
+    RdInc,
+    RamInc,
+    InstructionRa(usize),
+    BytecodeRa(usize),
+    // Reserved codec slot; uninhabited and rejected during deserialization.
+    Reserved4(RetiredIdentifier),
+    RamRa(usize),
+    TrustedAdvice,
+    UntrustedAdvice,
+    ProgramImageInit,
+    // Lattice-mode committed polynomials (columns of the native trace group); base
+    // mode never constructs these. Appended for codec stability.
+    BalancedIncDigit(usize),
+    BalancedIncCarry,
+    ProgramBytecode,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum JoltVirtualPolynomial {
+    PC,
+    UnexpandedPC,
+    NextPC,
+    NextUnexpandedPC,
+    NextIsNoop,
+    NextIsVirtual,
+    NextIsFirstInSequence,
+    LeftLookupOperand,
+    RightLookupOperand,
+    LeftInstructionInput,
+    RightInstructionInput,
+    Product,
+    ShouldJump,
+    ShouldBranch,
+    Rd,
+    Imm,
+    Rs1Value,
+    Rs2Value,
+    RdWriteValue,
+    Rs1Ra,
+    Rs2Ra,
+    RdWa,
+    LookupOutput,
+    InstructionRaf,
+    InstructionRafFlag,
+    InstructionRa(usize),
+    RegistersVal,
+    RamAddress,
+    RamRa,
+    RamReadValue,
+    RamWriteValue,
+    RamVal,
+    RamValInit,
+    RamValFinal,
+    RamHammingWeight,
+    UnivariateSkip,
+    OpFlags(CircuitFlags),
+    InstructionFlags(InstructionFlags),
+    LookupTableFlag(usize),
+    BytecodeValClaim(usize),
+    BytecodeReadRafAddrClaim,
+    BooleanityAddrClaim,
+    BytecodeClaimReductionIntermediate,
+    ProgramImageInitContributionRw,
+    // Lattice-mode: the gamma-batched RamInc/RdInc stream (its destination
+    // selector is the existing `OpFlags(Store)`; its unsigned shift is a
+    // constant folded into the chunk reconstruction). Appended for codec
+    // stability.
+    FusedInc,
+}
+
+#[derive(
+    Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize, From,
+)]
+pub enum JoltPolynomialId {
+    Committed(JoltCommittedPolynomial),
+    Virtual(JoltVirtualPolynomial),
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum JoltOpeningId {
+    Polynomial {
+        polynomial: JoltPolynomialId,
+        relation: JoltRelationId,
+    },
+    UntrustedAdvice {
+        relation: JoltRelationId,
+    },
+    TrustedAdvice {
+        relation: JoltRelationId,
+    },
+}
+
+impl JoltOpeningId {
+    /// The polynomial this opening refers to; advice openings resolve to
+    /// their committed advice polynomials.
+    pub const fn polynomial_id(self) -> JoltPolynomialId {
+        match self {
+            Self::Polynomial { polynomial, .. } => polynomial,
+            Self::TrustedAdvice { .. } => {
+                JoltPolynomialId::Committed(JoltCommittedPolynomial::TrustedAdvice)
+            }
+            Self::UntrustedAdvice { .. } => {
+                JoltPolynomialId::Committed(JoltCommittedPolynomial::UntrustedAdvice)
+            }
+        }
+    }
+
+    pub fn polynomial(polynomial: impl Into<JoltPolynomialId>, relation: JoltRelationId) -> Self {
+        Self::Polynomial {
+            polynomial: polynomial.into(),
+            relation,
+        }
+    }
+
+    pub fn committed(polynomial: JoltCommittedPolynomial, relation: JoltRelationId) -> Self {
+        Self::polynomial(polynomial, relation)
+    }
+
+    pub fn virtual_polynomial(polynomial: JoltVirtualPolynomial, relation: JoltRelationId) -> Self {
+        Self::polynomial(polynomial, relation)
+    }
+
+    pub fn untrusted_advice(relation: JoltRelationId) -> Self {
+        Self::UntrustedAdvice { relation }
+    }
+
+    pub fn trusted_advice(relation: JoltRelationId) -> Self {
+        Self::TrustedAdvice { relation }
+    }
+}
+
+#[derive(
+    Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize, From,
+)]
+pub enum JoltDerivedId {
+    RamReadWrite(RamReadWritePublic),
+    RamValCheck(RamValCheckPublic),
+    RamRafEvaluation(RamRafEvaluationPublic),
+    RamOutputCheck(RamOutputCheckPublic),
+    RamRaClaimReduction(RamRaClaimReductionPublic),
+    RamRaVirtualization(RamRaVirtualizationPublic),
+    RamHammingBooleanity(RamHammingBooleanityPublic),
+    Booleanity(BooleanityPublic),
+    IncClaimReduction(IncClaimReductionPublic),
+    HammingWeightClaimReduction(HammingWeightClaimReductionPublic),
+    BytecodeReadRaf(BytecodeReadRafPublic),
+    AdviceClaimReduction(AdviceClaimReductionPublic),
+    BytecodeClaimReduction(BytecodeClaimReductionPublic),
+    ProgramImageClaimReduction(ProgramImageClaimReductionPublic),
+    SpartanShift(SpartanShiftPublic),
+    SpartanProductVirtualization(SpartanProductVirtualizationPublic),
+    SpartanOuter(SpartanOuterPublic),
+    RegistersReadWrite(RegistersReadWritePublic),
+    RegistersValEvaluation(RegistersValEvaluationPublic),
+    RegistersClaimReduction(RegistersClaimReductionPublic),
+    InstructionClaimReduction(InstructionClaimReductionPublic),
+    InstructionInput(InstructionInputPublic),
+    InstructionReadRaf(InstructionReadRafPublic),
+    InstructionRaVirtualization(InstructionRaVirtualizationPublic),
+    /// Test-only derived id for toy relations that define their own
+    /// `derive_output_term`. Gated on `any(test, feature = "test-utils")`
+    /// rather than `test` alone because `cfg(test)` is per-crate: a downstream
+    /// crate's tests (the naive prover's toy relation foremost) see this crate
+    /// compiled without `cfg(test)` and reach the variant via the feature.
+    /// Kept LAST so toggling the feature cannot shift the discriminants of
+    /// real variants across feature-unified builds.
+    #[cfg(any(test, feature = "test-utils"))]
+    Test,
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "wire regression tests fail loudly")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advice_group_roles_fix_order_and_transcript_tags() {
+        let untrusted = JoltAdviceKind::Untrusted.group_role();
+        let trusted = JoltAdviceKind::Trusted.group_role();
+
+        assert!(untrusted.order() < trusted.order());
+        assert_eq!(untrusted.transcript_label(), b"untrusted_advice");
+        assert_eq!(trusted.transcript_label(), b"trusted_advice");
+    }
+
+    #[test]
+    fn retired_bytecode_identifiers_are_rejected_without_shifting_live_tags() {
+        let config = bincode::config::standard();
+        for (id, tag) in [
+            (JoltCommittedPolynomial::RamRa(3), vec![5, 3]),
+            (JoltCommittedPolynomial::ProgramImageInit, vec![8]),
+            (JoltCommittedPolynomial::ProgramBytecode, vec![11]),
+        ] {
+            assert_eq!(bincode::serde::encode_to_vec(id, config).unwrap(), tag);
+            let (decoded, consumed) =
+                bincode::serde::decode_from_slice::<JoltCommittedPolynomial, _>(&tag, config)
+                    .unwrap();
+            assert_eq!(decoded, id);
+            assert_eq!(consumed, tag.len());
+        }
+        assert!(
+            bincode::serde::decode_from_slice::<JoltCommittedPolynomial, _>(&[4, 0], config)
+                .is_err()
+        );
+        assert_eq!(
+            bincode::serde::encode_to_vec(BytecodeClaimReductionPublic::OutputWeight, config)
+                .unwrap(),
+            vec![1]
+        );
+        assert!(
+            bincode::serde::decode_from_slice::<BytecodeClaimReductionPublic, _>(&[0, 0], config)
+                .is_err()
+        );
+    }
+}

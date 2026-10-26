@@ -1,0 +1,36 @@
+# Vendored from https://github.com/a16z/jolt crates/jolt-sumcheck at rev
+# f3265b5a9981f0c1359f2b63008824616f0c82fa, with workspace dependency
+# inheritance resolved and the example/fuzz/test targets removed. The
+# `committed` and `r1cs` features are declared but empty: their crates
+# (jolt-crypto, jolt-r1cs) are not vendored (third_party/PINS.md).
+[package]
+name = "jolt-sumcheck"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Sumcheck protocol for Jolt"
+repository = "https://github.com/a16z/jolt"
+
+[features]
+default = []
+binary = ["jolt-poly/binary", "jolt-field/binary"]
+parallel = ["jolt-field/parallel", "jolt-poly/parallel"]
+transcript-blake2b = ["jolt-transcript/transcript-blake2b"]
+transcript-keccak = ["jolt-transcript/transcript-keccak"]
+transcript-poseidon = ["jolt-transcript/transcript-poseidon"]
+committed = []
+r1cs = []
+
+[dependencies]
+jolt-field = { path = "../jolt-field", default-features = false }
+jolt-poly = { path = "../jolt-poly", default-features = false }
+jolt-transcript = { path = "../jolt-transcript", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+tracing = { version = "0.1.37", default-features = false, features = ["attributes"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+bincode = { version = "2", features = ["serde"] }
+jolt-field = { path = "../jolt-field", features = ["bn254", "solinas", "binary"] }
+jolt-transcript = { path = "../jolt-transcript", features = ["bn254", "transcript-blake2b", "transcript-keccak"] }
+num-traits = { version = "0.2.19", default-features = false }

@@ -1,0 +1,39 @@
+# Vendored from https://github.com/a16z/jolt crates/jolt-poly at rev
+# f3265b5a9981f0c1359f2b63008824616f0c82fa, with workspace dependency
+# inheritance resolved and the bench/fuzz/test targets removed
+# (third_party/PINS.md).
+[package]
+name = "jolt-poly"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Polynomial types and operations for Jolt"
+repository = "https://github.com/a16z/jolt"
+
+[features]
+default = ["parallel"]
+binary = ["jolt-field/binary"]
+parallel = ["rayon"]
+# Heap visitation of this crate's tables for the profile harness.
+# Forwards to jolt-field so `F: JoltField` implies `F: Allocative`; without
+# it this crate's field-generic derives cannot discharge their scalar bound.
+allocative = ["dep:allocative", "jolt-field/allocative"]
+transcript = ["dep:jolt-transcript"]
+
+[dependencies]
+allocative = { version = "0.3", optional = true }
+jolt-field = { path = "../jolt-field", default-features = false }
+jolt-utils = { path = "../jolt-utils" }
+jolt-transcript = { path = "../jolt-transcript", default-features = false, optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+tracing = { version = "0.1.37", default-features = false, features = ["attributes"] }
+rayon = { version = "1.12.0", optional = true }
+rand_core = { version = "0.6.4", default-features = false }
+num-traits = { version = "0.2.19", default-features = false }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+jolt-field = { path = "../jolt-field", features = ["bn254", "solinas"] }
+rand = "0.8.5"
+rand_chacha = "0.3.0"
+bincode = { version = "2", features = ["serde"] }

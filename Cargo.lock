@@ -1179,6 +1179,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "jolt-poly"
+version = "0.1.0"
+dependencies = [
+ "allocative",
+ "bincode 2.0.1",
+ "jolt-field",
+ "jolt-transcript",
+ "jolt-utils",
+ "num-traits",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "rayon",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "jolt-sumcheck"
+version = "0.1.0"
+dependencies = [
+ "bincode 2.0.1",
+ "jolt-field",
+ "jolt-poly",
+ "jolt-transcript",
+ "num-traits",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "jolt-transcript"
 version = "0.1.0"
 dependencies = [

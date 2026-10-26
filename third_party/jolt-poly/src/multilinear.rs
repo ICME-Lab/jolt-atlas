@@ -1,0 +1,558 @@
+//! Traits and compositions for multilinear polynomials.
+//!
+//! Three trait tiers with distinct responsibilities:
+//!
+//! - [`MultilinearEvaluation`]: Read-only point evaluation — `num_vars()`, `len()`, `evaluate(point)`
+//! - [`MultilinearBinding`]: In-place variable binding for sumcheck — `bind(scalar)`
+//! - [`MultilinearPoly`]: Streaming matrix-view access for PCS — `for_each_row`, `fold_rows`,
+//!   `is_one_hot`, `for_each_one`
+//!
+//! [`RlcSource`] composes multiple polynomials via random linear combination
+//! without materializing the combined table. Its [`fold_rows`](MultilinearPoly::fold_rows)
+//! distributes across constituents, avoiding allocation of the combined table.
+
+use std::borrow::Cow;
+
+use jolt_field::JoltField;
+
+use crate::Polynomial;
+
+/// Multilinear polynomial evaluation at an arbitrary point.
+///
+/// Any multilinear polynomial $f: \mathbb{F}^n \to \mathbb{F}$ is uniquely
+/// determined by its $2^n$ evaluations on the Boolean hypercube. This trait
+/// exposes point evaluation and dimensional metadata without prescribing how
+/// the evaluations are stored.
+pub trait MultilinearEvaluation<F: JoltField>: Send + Sync {
+    /// Number of variables $n$. The polynomial has $2^n$ evaluations.
+    fn num_vars(&self) -> usize;
+
+    /// Number of evaluations, equal to $2^n$.
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Evaluates the polynomial at `point` $\in \mathbb{F}^n$ using the
+    /// multilinear extension formula:
+    /// $$f(r) = \sum_{x \in \{0,1\}^n} f(x) \cdot \widetilde{eq}(x, r)$$
+    fn evaluate(&self, point: &[F]) -> F;
+}
+
+/// In-place variable binding — the core sumcheck operation.
+///
+/// Fixes the first variable to `scalar`, halving the evaluation table:
+/// $$g(x_2, \ldots, x_n) = (1 - s) \cdot f(0, x_2, \ldots, x_n) + s \cdot f(1, x_2, \ldots, x_n)$$
+///
+/// After calling `bind`, `num_vars` decreases by 1 and `len` halves.
+pub trait MultilinearBinding<F: JoltField>: Send + Sync {
+    fn bind(&mut self, scalar: F);
+}
+
+/// A multilinear polynomial $f : \{0,1\}^n \to \mathbb{F}$ in evaluation form.
+///
+/// The evaluation table can be viewed as a $(2^\nu \times 2^\sigma)$ matrix
+/// where $\nu + \sigma = n$. Implementations range from dense evaluation
+/// tables ([`Polynomial<F>`](crate::Polynomial)) to structured sparse forms
+/// ([`OneHotPolynomial`](crate::OneHotPolynomial)) to lazy compositions ([`RlcSource`]).
+///
+/// Core operations:
+/// - [`num_vars`](Self::num_vars) / [`evaluate`](Self::evaluate): metadata and point evaluation
+/// - [`for_each_row`](Self::for_each_row): row-wise iteration (streaming commit, row-based MSM)
+/// - [`fold_rows`](Self::fold_rows): matrix-vector product $v \cdot M$ (opening protocols)
+/// - [`is_one_hot`](Self::is_one_hot) / [`for_each_one`](Self::for_each_one): unit-entry
+///   one-hot hints for PCS commit optimization (e.g., batch addition instead of MSM)
+pub trait MultilinearPoly<F: JoltField>: Send + Sync {
+    /// Number of variables $n$. The polynomial has $2^n$ evaluations.
+    fn num_vars(&self) -> usize;
+
+    /// Evaluates $f(r)$ at an arbitrary point $r \in \mathbb{F}^n$.
+    fn evaluate(&self, point: &[F]) -> F;
+
+    /// Iterates over the evaluation table in row-major order.
+    ///
+    /// The table is interpreted as a $(2^\nu \times 2^\sigma)$ matrix where
+    /// $\sigma$ is the number of column variables and $\nu = n - \sigma$.
+    /// The closure receives `(row_index, row_data)` pairs in order.
+    ///
+    /// For in-memory polynomials, rows are borrowed slices (zero-copy).
+    /// For lazy sources, each row may be computed on-the-fly.
+    fn for_each_row(&self, sigma: usize, f: &mut dyn FnMut(usize, &[F]));
+
+    /// Folds a left vector against the $(2^\nu \times 2^\sigma)$ matrix form.
+    ///
+    /// Computes:
+    /// $$\text{result}\[c\] = \sum_{r=0}^{2^\nu - 1} \text{left}\[r\] \cdot M\[r\]\[c\]$$
+    ///
+    /// where $M\[r\]\[c\] = f(\text{bits}(r \cdot 2^\sigma + c))$ and
+    /// $\nu = n - \sigma$.
+    ///
+    /// The default implementation iterates rows via [`for_each_row`](Self::for_each_row).
+    /// Implementations with distributable structure (e.g., [`RlcSource`]) or
+    /// sparse representations (e.g., one-hot polynomials) should override
+    /// for better performance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `left.len() != 2^(num_vars - sigma)`.
+    fn fold_rows(&self, left: &[F], sigma: usize) -> Vec<F> {
+        let num_cols = 1usize << sigma;
+        let mut result = jolt_utils::unsafe_allocate_zero_vec(num_cols);
+        self.for_each_row(sigma, &mut |row_idx, row| {
+            let l = left[row_idx];
+            for (r, &val) in result.iter_mut().zip(row.iter()) {
+                *r += l * val;
+            }
+        });
+        result
+    }
+
+    /// Whether this polynomial is represented as unit-valued one-hot entries.
+    ///
+    /// When true, PCS backends may use [`for_each_one`](Self::for_each_one) to
+    /// access the positions whose value is exactly `F::one()`. This is not a
+    /// general sparse-polynomial contract: weighted sparse entries must return
+    /// false here and use the dense row interface.
+    fn is_one_hot(&self) -> bool {
+        false
+    }
+
+    /// Returns the one-hot address-space size `K` when this polynomial exposes
+    /// its sparse row representation.
+    fn one_hot_k(&self) -> Option<usize> {
+        None
+    }
+
+    /// Returns one optional hot column per cycle row when this polynomial
+    /// exposes its sparse row representation.
+    fn one_hot_indices(&self) -> Option<&[Option<u8>]> {
+        None
+    }
+
+    /// Returns the coefficient order used by the sparse one-hot representation.
+    fn one_hot_index_order(&self) -> Option<crate::OneHotIndexOrder> {
+        None
+    }
+
+    /// Borrows the full evaluation table when this polynomial is backed by
+    /// dense storage.
+    ///
+    /// PCS backends that need the dense table use this to
+    /// skip materializing a copy via [`for_each_row`](Self::for_each_row).
+    /// Lazy or sparse sources return `None` and take the materializing path.
+    fn dense_evaluations(&self) -> Option<&[F]> {
+        None
+    }
+
+    /// Dense evaluation table: borrowed when the source exposes
+    /// [`dense_evaluations`](Self::dense_evaluations), materialized via
+    /// [`for_each_row`](Self::for_each_row) otherwise.
+    fn to_dense(&self) -> Cow<'_, [F]> {
+        if let Some(evaluations) = self.dense_evaluations() {
+            Cow::Borrowed(evaluations)
+        } else {
+            let mut table = Vec::with_capacity(1usize << self.num_vars());
+            self.for_each_row(self.num_vars(), &mut |_, row| {
+                table.extend_from_slice(row);
+            });
+            Cow::Owned(table)
+        }
+    }
+
+    /// Iterates over positions whose value is exactly `F::one()`.
+    ///
+    /// Only implementations that return true from [`is_one_hot`](Self::is_one_hot)
+    /// should override this method. The default is a no-op for non-one-hot
+    /// polynomials.
+    fn for_each_one(&self, _f: &mut dyn FnMut(usize)) {}
+}
+
+impl<F: JoltField> MultilinearPoly<F> for Polynomial<F> {
+    #[inline]
+    fn num_vars(&self) -> usize {
+        Polynomial::num_vars(self)
+    }
+
+    fn evaluate(&self, point: &[F]) -> F {
+        Polynomial::evaluate(self, point)
+    }
+
+    fn for_each_row(&self, sigma: usize, f: &mut dyn FnMut(usize, &[F])) {
+        let num_cols = 1usize << sigma;
+        for (i, row) in self.evaluations().chunks(num_cols).enumerate() {
+            f(i, row);
+        }
+    }
+
+    fn fold_rows(&self, left: &[F], sigma: usize) -> Vec<F> {
+        let num_cols = 1usize << sigma;
+        let evals = self.evaluations();
+        debug_assert_eq!(
+            left.len(),
+            evals.len() / num_cols,
+            "left vector length must equal number of rows"
+        );
+
+        let mut result = jolt_utils::unsafe_allocate_zero_vec(num_cols);
+        for (row_idx, row) in evals.chunks(num_cols).enumerate() {
+            let l = left[row_idx];
+            for (r, &val) in result.iter_mut().zip(row.iter()) {
+                *r += l * val;
+            }
+        }
+        result
+    }
+
+    fn dense_evaluations(&self) -> Option<&[F]> {
+        Some(self.evaluations())
+    }
+}
+
+impl<F: JoltField> MultilinearPoly<F> for [F] {
+    #[inline]
+    fn num_vars(&self) -> usize {
+        if self.is_empty() {
+            return 0;
+        }
+        assert!(
+            self.len().is_power_of_two(),
+            "slice length must be a power of two, got {}",
+            self.len()
+        );
+        self.len().trailing_zeros() as usize
+    }
+
+    fn evaluate(&self, point: &[F]) -> F {
+        let eq_evals = crate::EqPolynomial::new(point.to_vec()).evaluations();
+        self.iter().zip(eq_evals.iter()).map(|(&f, &e)| f * e).sum()
+    }
+
+    fn for_each_row(&self, sigma: usize, f: &mut dyn FnMut(usize, &[F])) {
+        let num_cols = 1usize << sigma;
+        for (i, row) in self.chunks(num_cols).enumerate() {
+            f(i, row);
+        }
+    }
+
+    fn fold_rows(&self, left: &[F], sigma: usize) -> Vec<F> {
+        let num_cols = 1usize << sigma;
+        let mut result = jolt_utils::unsafe_allocate_zero_vec(num_cols);
+        for (row_idx, row) in self.chunks(num_cols).enumerate() {
+            let l = left[row_idx];
+            for (r, &val) in result.iter_mut().zip(row.iter()) {
+                *r += l * val;
+            }
+        }
+        result
+    }
+
+    fn dense_evaluations(&self) -> Option<&[F]> {
+        Some(self)
+    }
+}
+
+impl<F: JoltField> MultilinearPoly<F> for Vec<F> {
+    #[inline]
+    fn num_vars(&self) -> usize {
+        self.as_slice().num_vars()
+    }
+
+    fn evaluate(&self, point: &[F]) -> F {
+        self.as_slice().evaluate(point)
+    }
+
+    fn for_each_row(&self, sigma: usize, f: &mut dyn FnMut(usize, &[F])) {
+        self.as_slice().for_each_row(sigma, f);
+    }
+
+    fn fold_rows(&self, left: &[F], sigma: usize) -> Vec<F> {
+        self.as_slice().fold_rows(left, sigma)
+    }
+
+    fn dense_evaluations(&self) -> Option<&[F]> {
+        Some(self.as_slice())
+    }
+}
+
+macro_rules! forward_multilinear_poly {
+    ($($wrapper:ty),* $(,)?) => {$(
+        impl<F, P> MultilinearPoly<F> for $wrapper
+        where
+            F: JoltField,
+            P: MultilinearPoly<F> + ?Sized,
+        {
+            #[inline]
+            fn num_vars(&self) -> usize {
+                (**self).num_vars()
+            }
+
+            fn evaluate(&self, point: &[F]) -> F {
+                (**self).evaluate(point)
+            }
+
+            fn for_each_row(&self, sigma: usize, f: &mut dyn FnMut(usize, &[F])) {
+                (**self).for_each_row(sigma, f);
+            }
+
+            fn fold_rows(&self, left: &[F], sigma: usize) -> Vec<F> {
+                (**self).fold_rows(left, sigma)
+            }
+
+            fn is_one_hot(&self) -> bool {
+                (**self).is_one_hot()
+            }
+
+            fn one_hot_k(&self) -> Option<usize> {
+                (**self).one_hot_k()
+            }
+
+            fn one_hot_indices(&self) -> Option<&[Option<u8>]> {
+                (**self).one_hot_indices()
+            }
+
+            fn one_hot_index_order(&self) -> Option<crate::OneHotIndexOrder> {
+                (**self).one_hot_index_order()
+            }
+
+            fn for_each_one(&self, f: &mut dyn FnMut(usize)) {
+                (**self).for_each_one(f);
+            }
+
+            fn dense_evaluations(&self) -> Option<&[F]> {
+                (**self).dense_evaluations()
+            }
+        }
+    )*};
+}
+
+forward_multilinear_poly!(&P, Box<P>, std::sync::Arc<P>);
+
+/// Lazy RLC composition of multilinear polynomials.
+///
+/// Represents $f(x) = \sum_{i=0}^{k-1} s_i \cdot f_i(x)$ without
+/// materializing the combined evaluation table. Operations distribute
+/// over the constituents:
+///
+/// - [`evaluate`](MultilinearPoly::evaluate): $\sum_i s_i \cdot f_i(r)$
+/// - [`fold_rows`](MultilinearPoly::fold_rows): $\sum_i s_i \cdot (v \cdot M_i)$ —
+///   each polynomial computes its own fold, results are combined with scalars.
+///   No evaluation table is ever materialized.
+pub struct RlcSource<F: JoltField, S: MultilinearPoly<F>> {
+    sources: Vec<S>,
+    scalars: Vec<F>,
+    num_vars: usize,
+}
+
+impl<F: JoltField, S: MultilinearPoly<F>> RlcSource<F, S> {
+    /// Creates a lazy RLC composition.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `sources` and `scalars` have different lengths, or if
+    /// sources have inconsistent `num_vars`.
+    pub fn new(sources: Vec<S>, scalars: Vec<F>) -> Self {
+        assert_eq!(sources.len(), scalars.len());
+        let num_vars = sources.first().map_or(0, |s| s.num_vars());
+        assert!(
+            sources.iter().all(|s| s.num_vars() == num_vars),
+            "all sources must have the same num_vars"
+        );
+        Self {
+            sources,
+            scalars,
+            num_vars,
+        }
+    }
+
+    pub fn sources(&self) -> &[S] {
+        &self.sources
+    }
+
+    pub fn scalars(&self) -> &[F] {
+        &self.scalars
+    }
+}
+
+impl<F: JoltField, S: MultilinearPoly<F>> MultilinearPoly<F> for RlcSource<F, S> {
+    fn num_vars(&self) -> usize {
+        self.num_vars
+    }
+
+    fn evaluate(&self, point: &[F]) -> F {
+        self.sources
+            .iter()
+            .zip(&self.scalars)
+            .map(|(source, &scalar)| scalar * source.evaluate(point))
+            .fold(F::zero(), |acc, x| acc + x)
+    }
+
+    /// Iterates over combined rows by collecting each source's rows and combining.
+    ///
+    /// Memory: O(k × 2^σ) where k = number of sources.
+    /// For streaming-critical paths, prefer [`fold_rows`](Self::fold_rows) which
+    /// distributes without materializing any rows.
+    fn for_each_row(&self, sigma: usize, f: &mut dyn FnMut(usize, &[F])) {
+        if self.sources.is_empty() {
+            return;
+        }
+
+        let num_cols = 1usize << sigma;
+        let nu = self.num_vars.saturating_sub(sigma);
+        let num_rows = 1usize << nu;
+
+        let all_rows: Vec<Vec<Vec<F>>> = self
+            .sources
+            .iter()
+            .map(|source| {
+                let mut rows = Vec::with_capacity(num_rows);
+                source.for_each_row(sigma, &mut |_idx, row| {
+                    rows.push(row.to_vec());
+                });
+                rows
+            })
+            .collect();
+
+        let mut combined = jolt_utils::unsafe_allocate_zero_vec(num_cols);
+        for row_idx in 0..num_rows {
+            combined.fill(F::zero());
+            for (source_rows, &scalar) in all_rows.iter().zip(&self.scalars) {
+                for (dst, &val) in combined.iter_mut().zip(source_rows[row_idx].iter()) {
+                    *dst += scalar * val;
+                }
+            }
+            f(row_idx, &combined);
+        }
+    }
+
+    /// Distributes fold_rows across constituent sources.
+    ///
+    /// Computes $\sum_i s_i \cdot (v \cdot M_i)$ by having each source
+    /// independently compute its own fold. No evaluation table is
+    /// ever materialized — this is the key streaming win.
+    fn fold_rows(&self, left: &[F], sigma: usize) -> Vec<F> {
+        let num_cols = 1usize << sigma;
+        let mut result = jolt_utils::unsafe_allocate_zero_vec(num_cols);
+        for (source, &scalar) in self.sources.iter().zip(&self.scalars) {
+            let contribution = source.fold_rows(left, sigma);
+            for (r, &c) in result.iter_mut().zip(contribution.iter()) {
+                *r += scalar * c;
+            }
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jolt_field::{Field, Fr};
+    use num_traits::Zero;
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
+
+    #[test]
+    fn polynomial_for_each_row_matches_chunks() {
+        let mut rng = ChaCha20Rng::seed_from_u64(1);
+        let poly = Polynomial::<Fr>::random(4, &mut rng);
+        let sigma = 2;
+        let num_cols = 1usize << sigma;
+
+        let mut rows = Vec::new();
+        poly.for_each_row(sigma, &mut |_idx, row| {
+            rows.push(row.to_vec());
+        });
+
+        assert_eq!(rows.len(), poly.len() / num_cols);
+        for (i, row) in rows.iter().enumerate() {
+            let start = i * num_cols;
+            assert_eq!(row.as_slice(), &poly.evaluations()[start..start + num_cols]);
+        }
+    }
+
+    #[test]
+    fn polynomial_fold_rows_matches_manual_vmp() {
+        let mut rng = ChaCha20Rng::seed_from_u64(2);
+        let num_vars = 4;
+        let sigma = 2;
+        let nu = num_vars - sigma;
+        let num_cols = 1usize << sigma;
+        let num_rows = 1usize << nu;
+
+        let poly = Polynomial::<Fr>::random(num_vars, &mut rng);
+        let left: Vec<Fr> = (0..num_rows).map(|_| Fr::random(&mut rng)).collect();
+
+        let result = poly.fold_rows(&left, sigma);
+
+        let mut expected = vec![Fr::zero(); num_cols];
+        for (row, &l) in left.iter().enumerate() {
+            for (col, dest) in expected.iter_mut().enumerate() {
+                *dest += l * poly.evaluations()[row * num_cols + col];
+            }
+        }
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn rlc_source_fold_rows_matches_materialized() {
+        let mut rng = ChaCha20Rng::seed_from_u64(20);
+        let num_vars = 4;
+        let sigma = 2;
+        let nu = num_vars - sigma;
+        let num_rows = 1usize << nu;
+
+        let p1 = Polynomial::<Fr>::random(num_vars, &mut rng);
+        let p2 = Polynomial::<Fr>::random(num_vars, &mut rng);
+        let s1 = Fr::random(&mut rng);
+        let s2 = Fr::random(&mut rng);
+        let left: Vec<Fr> = (0..num_rows).map(|_| Fr::random(&mut rng)).collect();
+
+        let rlc = RlcSource::new(vec![p1.clone(), p2.clone()], vec![s1, s2]);
+        let lazy_result = rlc.fold_rows(&left, sigma);
+
+        let combined_evals: Vec<Fr> = p1
+            .evaluations()
+            .iter()
+            .zip(p2.evaluations().iter())
+            .map(|(&a, &b)| s1 * a + s2 * b)
+            .collect();
+        let combined = Polynomial::new(combined_evals);
+        let materialized_result = combined.fold_rows(&left, sigma);
+
+        assert_eq!(lazy_result, materialized_result);
+    }
+
+    #[test]
+    fn rlc_source_for_each_row_matches_materialized() {
+        let mut rng = ChaCha20Rng::seed_from_u64(30);
+        let num_vars = 3;
+        let sigma = 1;
+
+        let p1 = Polynomial::<Fr>::random(num_vars, &mut rng);
+        let p2 = Polynomial::<Fr>::random(num_vars, &mut rng);
+        let s1 = Fr::random(&mut rng);
+        let s2 = Fr::random(&mut rng);
+
+        let rlc = RlcSource::new(vec![p1.clone(), p2.clone()], vec![s1, s2]);
+
+        let mut lazy_rows = Vec::new();
+        rlc.for_each_row(sigma, &mut |_idx, row| {
+            lazy_rows.push(row.to_vec());
+        });
+
+        let combined_evals: Vec<Fr> = p1
+            .evaluations()
+            .iter()
+            .zip(p2.evaluations().iter())
+            .map(|(&a, &b)| s1 * a + s2 * b)
+            .collect();
+        let combined = Polynomial::new(combined_evals);
+        let mut materialized_rows = Vec::new();
+        combined.for_each_row(sigma, &mut |_idx, row| {
+            materialized_rows.push(row.to_vec());
+        });
+
+        assert_eq!(lazy_rows, materialized_rows);
+    }
+}

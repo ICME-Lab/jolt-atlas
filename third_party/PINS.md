@@ -11,6 +11,8 @@ owns the adoption order; `docs/upstream-inventory.md` records the divergence eac
 | `jolt-field` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 2 (bumped from `0e3faf07` at stage 3) | Manifest only (below) |
 | `jolt-transcript` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 3 | Manifest only (below) |
 | `jolt-utils` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4a | Manifest only (below) |
+| `jolt-poly` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4b | Manifest only (below) |
+| `jolt-sumcheck` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4b | Manifest only (below) |
 
 ## `jolt-field`
 
@@ -48,3 +50,17 @@ alongside the `blake2 0.10` our own code uses.
 `src/` is byte-identical to `crates/jolt-utils` at the pinned rev. The manifest resolves
 workspace inheritance to explicit versions (`jolt-field` dev-dependency by path) and drops the
 `[lints] workspace = true` table.
+
+## `jolt-poly`
+
+`src/` is byte-identical to `crates/jolt-poly` at the pinned rev. The manifest resolves workspace
+inheritance to explicit versions (internal crates by path; `allocative` relaxed to `0.3` as for
+`jolt-field`) and drops the `benches/`, `fuzz/` and `tests/` targets.
+
+## `jolt-sumcheck`
+
+`src/` is byte-identical to `crates/jolt-sumcheck` at the pinned rev. The manifest resolves
+workspace inheritance and drops the `examples/`, `fuzz/` and `tests/` targets. Upstream's optional
+`jolt-crypto` and `jolt-r1cs` dependencies are not vendored, so the `committed` and `r1cs`
+features are declared empty (the source's `cfg(feature = ...)` gates stay valid) and must stay
+off; `parallel` no longer forwards to `jolt-crypto`. They come back when those crates are vendored.

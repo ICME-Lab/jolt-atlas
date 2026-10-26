@@ -1,0 +1,227 @@
+use jolt_field::Field;
+
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum SumcheckError<F: Field> {
+    /// Round check failed: the domain sum did not match the expected value
+    /// carried forward from the previous round.
+    #[error("round {round}: expected sum {expected}, got {actual}")]
+    RoundCheckFailed {
+        /// Zero-indexed round number where the check failed.
+        round: usize,
+        expected: F,
+        /// The computed domain sum.
+        actual: F,
+    },
+
+    /// A round polynomial exceeded the declared degree bound.
+    #[error("degree bound exceeded: degree {got}, max {max}")]
+    DegreeBoundExceeded {
+        /// Actual degree of the offending round polynomial.
+        got: usize,
+        /// Maximum allowed degree from the claim.
+        max: usize,
+    },
+
+    /// A batch with rounds to prove declared a maximum degree of zero. A
+    /// sumcheck round polynomial must have degree at least 1 — the same
+    /// invariant `SumcheckClaim::new` enforces on the verify side.
+    #[error("batch declares max degree 0 with {max_num_vars} rounds to prove")]
+    ZeroBatchDegree {
+        /// Number of rounds that would need round polynomials.
+        max_num_vars: usize,
+    },
+
+    /// A batch member declared more rounds than the batch contains.
+    #[error(
+        "batch member {member} has {rounds} rounds, exceeding the batch's {max_num_vars} rounds"
+    )]
+    BatchMemberRoundsOutOfRange {
+        /// Zero-indexed member position (declaration order).
+        member: usize,
+        /// Round count declared for this member.
+        rounds: usize,
+        /// The batch's total round count.
+        max_num_vars: usize,
+    },
+
+    /// The field implementation cannot represent this batch's padding scale.
+    #[error("batch member {member} requires unsupported padding exponent {exponent}")]
+    BatchPaddingExponentOutOfRange {
+        /// Zero-indexed member position (declaration order).
+        member: usize,
+        /// `max_num_vars - rounds`, which `Ring::mul_pow_2` cannot represent above 255.
+        exponent: usize,
+    },
+
+    #[error(
+        "batch member {member}: activation window overflow for offset {offset}, rounds {rounds}"
+    )]
+    BatchMemberWindowOverflow {
+        /// Zero-indexed member position (declaration order).
+        member: usize,
+        /// The member's activation offset.
+        offset: usize,
+        /// The member's round count.
+        rounds: usize,
+    },
+
+    /// Adding one to the declared degree overflowed `usize`.
+    #[error("sumcheck degree {degree} cannot be represented with its coefficient count")]
+    DegreeOverflow { degree: usize },
+
+    /// A round polynomial encoded in compressed form had fewer than two
+    /// coefficients, so there is no linear term to omit. Any valid
+    /// compressed sumcheck round polynomial has degree ≥ 1.
+    #[error("round {round}: compressed round polynomial requires >= 2 coefficients, got {got}")]
+    CompressedPolynomialTooShort {
+        /// Zero-indexed round number where the malformed polynomial appeared.
+        round: usize,
+        /// Actual number of coefficients received.
+        got: usize,
+    },
+
+    /// The domain-sum coefficient vector must have exactly one scalar per
+    /// round-polynomial coefficient.
+    #[error("round {round}: expected {expected} round-sum coefficients, got {got}")]
+    RoundSumCoefficientCountMismatch {
+        /// Zero-indexed round number where the mismatch appeared.
+        round: usize,
+        /// Expected number of coefficients, equal to `degree + 1`.
+        expected: usize,
+        /// Actual number of coefficients supplied by the domain.
+        got: usize,
+    },
+
+    /// An integer-domain sumcheck round used an invalid domain size.
+    #[error("integer sumcheck domain size must be between 1 and i64::MAX, got {domain_size}")]
+    InvalidIntegerDomain {
+        /// Number of integer points in the domain.
+        domain_size: usize,
+    },
+
+    /// The number of round polynomials in the proof does not match
+    /// the number of variables in the claim.
+    #[error("expected {expected} rounds, proof contains {got}")]
+    WrongNumberOfRounds {
+        /// Expected number of rounds (equal to `num_vars`).
+        expected: usize,
+        /// Actual number of round polynomials in the proof.
+        got: usize,
+    },
+
+    #[error("round polynomial must contain at least one coefficient")]
+    EmptyRoundCoefficients,
+
+    /// A prove-side round-message evaluation could not resolve one of its
+    /// leaves (an opening/derived table or a challenge scalar). Provers
+    /// validate their sources at construction, so this indicates state
+    /// corruption between construction and the round loop.
+    #[error("missing {kind} evaluation source during prove")]
+    MissingEvaluationSource {
+        /// Which leaf kind failed to resolve: "opening", "challenge", or "derived".
+        kind: &'static str,
+    },
+
+    #[error("vector-commitment setup has zero capacity")]
+    ZeroCommitmentCapacity,
+
+    #[error("round polynomial has {coefficients} coefficients, but vector-commitment capacity is {capacity}")]
+    RoundExceedsCommitmentCapacity {
+        /// Number of coefficients in the offending round polynomial.
+        coefficients: usize,
+        /// The vector-commitment setup's capacity.
+        capacity: usize,
+    },
+
+    /// A batched prove was given a member slice whose length disagrees with
+    /// the batch prelude.
+    #[error("batch prelude describes {expected} members, got {got}")]
+    BatchMemberCountMismatch {
+        /// Member count in the batch prelude.
+        expected: usize,
+        /// Member count in the supplied slice.
+        got: usize,
+    },
+
+    /// A batch member's round count disagrees with the batch prelude.
+    #[error("batch member {member}: prelude says {expected} rounds, member reports {got}")]
+    BatchMemberRoundsMismatch {
+        /// Zero-indexed member position (declaration order).
+        member: usize,
+        /// Round count recorded in the batch prelude.
+        expected: usize,
+        /// Round count the member reports.
+        got: usize,
+    },
+
+    #[error(
+        "batch member {member}: window [{offset}, {offset} + {rounds}) exceeds {max_num_vars} rounds"
+    )]
+    BatchMemberWindowOutOfRange {
+        /// Zero-indexed member position (declaration order).
+        member: usize,
+        /// The member's activation offset.
+        offset: usize,
+        /// The member's round count.
+        rounds: usize,
+        /// The batch's total round count.
+        max_num_vars: usize,
+    },
+
+    /// The batch's round scheduler returned no round message for an active
+    /// member. Reported rather than folded as that member's `claim / 2`
+    /// padding (which would surface only as a round-sum mismatch).
+    #[error("batch member {member}: round scheduler produced no round message")]
+    MissingRoundMessage {
+        /// Zero-indexed member position (declaration order).
+        member: usize,
+    },
+
+    /// A round handle came back carrying a member index the batch does not
+    /// have. The engine assigns those indices, so this means the scheduler
+    /// rewrote one; attributing the message by it would misfold the round.
+    #[error("round scheduler returned member index {member}, but the batch has {members} members")]
+    RoundMemberIndexOutOfRange {
+        /// The out-of-range index carried by the returned handle.
+        member: usize,
+        /// Number of members in the batch.
+        members: usize,
+    },
+
+    /// The caller selected a verifier path that is incompatible with the proof
+    /// wire encoding.
+    #[error("wrong sumcheck proof encoding: expected {expected}, got {got}")]
+    WrongProofEncoding {
+        /// Expected proof encoding.
+        expected: &'static str,
+        /// Actual proof encoding.
+        got: &'static str,
+    },
+
+    /// A batched committed consistency was asked for an impossible point slice.
+    #[error("batched point range overflow: offset {offset}, num_vars {num_vars}")]
+    BatchedPointRangeOverflow {
+        /// Starting index into the batched challenge vector.
+        offset: usize,
+        /// Number of variables in the requested instance.
+        num_vars: usize,
+    },
+
+    /// A batched committed consistency did not contain enough challenges for the requested instance.
+    #[error(
+        "batched point out of range: offset {offset}, num_vars {num_vars}, total challenges {total}"
+    )]
+    BatchedPointOutOfRange {
+        /// Starting index into the batched challenge vector.
+        offset: usize,
+        /// Number of variables in the requested instance.
+        num_vars: usize,
+        /// Total number of available batched challenges.
+        total: usize,
+    },
+
+    /// Consecutive integer domain points have colliding images in the field.
+    #[error("integer sumcheck domain of size {domain_size} is not distinct in the field")]
+    IntegerDomainNotDistinct { domain_size: usize },
+}

@@ -1,0 +1,96 @@
+//! Polynomial types and operations for multilinear, univariate, and
+//! specialized polynomials. Backend-agnostic and reusable outside Jolt.
+//!
+//! This crate provides the core polynomial abstractions used throughout
+//! the Jolt zkVM proving system. Polynomials are represented by their
+//! evaluations over the Boolean hypercube, with specialized compact
+//! representations for small-scalar coefficients.
+//!
+//! # Core Traits
+//!
+//! - [`MultilinearEvaluation`]: Point evaluation interface — `num_vars()`, `len()`, `evaluate(point)`
+//! - [`MultilinearBinding`]: In-place variable binding for sumcheck — `bind(scalar)`
+//! - [`UnivariatePolynomial`]: Shared interface for univariate types — `degree()`
+//!
+//! # Polynomial Types
+//!
+//! - [`Polynomial<F: Field>`]: Full evaluation table as `Vec<F>`, with in-place binding and arithmetic
+//! - [`Polynomial<T>`] (compact): When `T` is a small primitive (`bool`, `u8`, etc.), stores
+//!   evaluations natively and promotes to field on demand (up to 32x memory reduction)
+//! - [`EqPolynomial`]: Equality polynomial `eq(x, r)`, materialized via bottom-up doubling
+//! - [`EqPlusOnePolynomial`]: Successor polynomial `eq+1(x, y)` evaluating to 1 when `y = x + 1`
+//! - [`EqPlusOnePrefixSuffix`]: Prefix-suffix decomposition of `eq+1` for sqrt-sized sumcheck buffers
+//! - [`TensorEqTable`] and [`GruenSplitEqPolynomial`]: Split eq tables for sqrt-memory sumcheck kernels
+//! - [`LtPolynomial`]: Less-than polynomial `LT(x, r)` with split optimization for sqrt-sized buffers
+//! - [`IdentityPolynomial`]: Maps hypercube points to their integer index
+//! - [`UnivariatePoly`]: Coefficient-form univariate with Lagrange interpolation and compression
+//! - [`CompressedPoly`]: Compressed univariate with the linear term omitted (one field element saved per round)
+//! - [`OmittedConstantPoly`]: Inner univariate with the constant term omitted, retaining its stored degree bound
+//!
+//! # Streaming and Sparse Access
+//!
+//! - [`MultilinearPoly`]: Core trait for multilinear access — evaluation, row iteration, fold, sparsity hints
+//! - [`RlcSource`]: Lazy random linear combination of multiple [`MultilinearPoly`] sources
+//! - [`OneHotPolynomial`]: Sparse polynomial where each row has at most one nonzero entry (value 1),
+//!   enabling O(T) PCS commit via generator lookup
+//!
+//! # Binding
+//!
+//! - [`BindingOrder`]: Controls variable binding order during sumcheck (MSB-first vs LSB-first)
+//!
+//! # Utility Modules
+//!
+//! - [`lagrange`]: Lagrange interpolation, integer-domain power sums, polynomial
+//!   multiplication, Newton-form interpolation over integer domains
+
+// In the jolt-verifier runtime closure: stricter panic and unsafe discipline
+// than the workspace lints (specs/verifier-closure-lints.md).
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(
+    clippy::get_unwrap,
+    clippy::string_slice,
+    clippy::fallible_impl_from,
+    clippy::mem_forget,
+    clippy::exit,
+    clippy::panic_in_result_fn,
+    clippy::let_underscore_must_use,
+    clippy::host_endian_bytes,
+    clippy::wildcard_enum_match_arm
+)]
+
+mod binding;
+mod compressed_univariate;
+mod dense;
+mod eq;
+mod eq_plus_one;
+mod evaluation_claim;
+mod identity;
+pub mod lagrange;
+mod lt;
+mod mle;
+mod multilinear;
+mod omitted_constant;
+mod one_hot;
+mod point;
+mod split_eq;
+mod univariate;
+
+pub use binding::BindingOrder;
+pub use compressed_univariate::CompressedPoly;
+pub use dense::Polynomial;
+pub use eq::{
+    boolean_bits_msb, boolean_index_msb, boolean_point_msb, eq_index_msb, try_eq_mle, EqPolynomial,
+};
+pub use eq_plus_one::{EqPlusOnePolynomial, EqPlusOnePrefixSuffix};
+pub use evaluation_claim::EvaluationClaim;
+pub use identity::{IdentityPolynomial, OperandPolynomial, OperandSide};
+pub use lt::LtPolynomial;
+pub use mle::{
+    block_selector_mle_msb, range_mask_mle_msb, sparse_mle_msb, sparse_segments_mle_msb, MleError,
+};
+pub use multilinear::{MultilinearBinding, MultilinearEvaluation, MultilinearPoly, RlcSource};
+pub use omitted_constant::OmittedConstantPoly;
+pub use one_hot::{OneHotIndexOrder, OneHotPolynomial};
+pub use point::{Endianness, Point, HIGH_TO_LOW, LOW_TO_HIGH};
+pub use split_eq::{GruenSplitEqPolynomial, TensorEqTable};
+pub use univariate::{UnivariatePoly, UnivariatePolynomial};

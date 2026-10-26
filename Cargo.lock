@@ -1377,7 +1377,11 @@ name = "jolt-atlas-verifier"
 version = "0.1.0"
 dependencies = [
  "ark-serialize",
+ "atlas-trace",
+ "common",
  "joltworks",
+ "rayon",
+ "serde",
 ]
 
 [[package]]

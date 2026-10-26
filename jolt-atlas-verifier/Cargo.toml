@@ -9,5 +9,9 @@ description = "The jolt-atlas proof object and its wire format, with no prover d
 test-util = []
 
 [dependencies]
+atlas-trace.workspace = true
+common.workspace = true
 joltworks.workspace = true
 ark-serialize.workspace = true
+rayon.workspace = true
+serde.workspace = true

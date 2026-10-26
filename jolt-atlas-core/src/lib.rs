@@ -17,8 +17,8 @@
 #![warn(missing_docs)]
 
 pub mod loader;
-pub mod node_view;
 pub mod onnx_proof;
-pub mod utils;
+
+pub use jolt_atlas_verifier::{node_view, utils};
 
 pub use onnx_proof::{prove, verify};

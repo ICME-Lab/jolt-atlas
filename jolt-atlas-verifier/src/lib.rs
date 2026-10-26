@@ -10,9 +10,11 @@
 
 #![warn(missing_docs)]
 
+pub mod node_view;
 mod proof;
 pub mod proof_serialization;
 mod types;
+pub mod utils;
 
 pub use proof::{ONNXProof, ReducedOpeningProof};
 pub use types::{Claims, ProofId, ProofType};

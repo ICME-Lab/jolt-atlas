@@ -32,7 +32,7 @@ implementation PR is stage 1, the verifier boundary.
 
 ### Goal
 
-Execute nine stages (0–8) that end with: the proof-system toolkit as vendored, rev-pinned
+Execute ten stages (0–9) that end with: the proof-system toolkit as vendored, rev-pinned
 upstream crates plus named atlas-only crates; every algebraic-identity op defined by a symbolic
 relation bound to its `atlas_trace` op spec, with the verifier side derived from the relation
 and never hand-written; `jolt-atlas-verifier` holding all verification, its dependency cone
@@ -283,6 +283,21 @@ what is specific).
   the isolation CI job (reject `::prover` / `::witness` path segments appearing in
   `jolt-atlas-verifier` sources) as the backstop for items the enumeration misses.
   Behavior-preserving (digests).
+- [ ] **Stage 9 — `joltworks` dissolved** (stage 9 PR). No earlier stage removes the crate:
+  after stage 8 it still holds every module the inventory buckets as atlas-only (the
+  `JoltField` extension and `fp128`, the transcript layer, the opening store and evaluation
+  reduction, the one-hot and prefix–suffix shout machinery, the lookup-table framework, the
+  accumulators and small scalars, `config.rs`, the utilities) plus the Akita adapter and the
+  commitment trait. Each module moves to a named atlas-only crate on the side of the
+  prover/verifier line stage 8 drew: what verification needs (field extension, transcript
+  layer, verifier accumulator, evaluation-reduction verification, one-hot geometry, the
+  commitment trait and Akita verification, errors and serialization) into crates
+  `jolt-atlas-verifier` may depend on, checked against stage 8's enumerated prover-item list;
+  prover-only modules into prover-side crates or `jolt-atlas-core`. Crate names and the exact
+  split are fixed in the PR. `joltworks` is then deleted from the workspace, the inventory's
+  bucket table records each module's destination crate, and the isolation CI job rejects any
+  prover-side atlas crate in `jolt-atlas-verifier`'s resolved graph — retiring the
+  review-held "`joltworks` prover APIs" exception. Behavior-preserving (digests).
 
 Program definition of done (checkable): `joltworks` is gone — every inventory module replaced
 or in a named atlas-only crate; `jolt-atlas-core` contains no verification logic;
@@ -378,7 +393,8 @@ types (`EvalReductionProof`, `Openings`) are in `joltworks` and `ModelExecutionI
   whose `get_models_committed_polynomials` calls the per-op registry
   (`NodeCommittedPolynomials` in `ops/`) — the same cycle.
 
-Those cycles dissolve at stage 8. Until then two reachable-but-unused exceptions to
+Those cycles dissolve at stage 8, and the `joltworks` exception below at stage 9. Until then two
+reachable-but-unused exceptions to
 "prover-free" are review-held, not compiler-held: `joltworks` prover APIs (the crate is
 depended on whole) and `atlas-trace` execution (`Model::trace` shares a crate with the graph
 and `semantics` the verifier legitimately needs).
@@ -445,7 +461,7 @@ Program order: stages 0 and 1 can start today. Stages 2→5 are sequential; the 
 begin during stage 4. Stage 6's families are sequential PRs. Stage 7a may be developed and
 land after 5, in parallel with 6; 7b lands after 7a. Gates follow the cutover: any stage-6
 family landing after 7a reproduces Akita digests, runs the GPT-2 Akita heavy job, and measures
-against the Akita baseline. Stage 8 lands last. Each stage PR enumerates its atlas
+against the Akita baseline. Stage 8 lands after 7b, and stage 9 lands last. Each stage PR enumerates its atlas
 deltas from the inventory as a checklist.
 
 ## References

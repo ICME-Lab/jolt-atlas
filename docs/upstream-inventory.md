@@ -44,7 +44,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 | `utils/thread.rs` (`unsafe_allocate_zero_vec`) | `jolt-utils` | adopted (stage 4a) | Re-exported from `jolt-utils`; `drop_in_background_thread` stays atlas-only. |
 | `utils/math.rs` (`Math`) | `jolt-utils::Math` | atlas-only delta | Ours rejects `log_2` of a non-power of two and adds `ceil_log_2`; upstream's `log_2` silently rounds up. Kept as a guard. |
 | `utils/{accumulation,small_scalar}.rs` | — (upstream accumulators live in `jolt-field`) | atlas-only (decided at stage 4b) | The small/medium/wide signed accumulators and small-scalar multiplication serve our compact operand polynomials, which stay ours at stage 4b (their 125-bit-challenge binding beats `jolt-poly`'s; see the `poly/` row), and the round kernels' delayed reduction runs on our `JoltField` ladder. They go if the operand polynomials move to `jolt-poly`. |
-| `utils/{counters,profiling,monitor}.rs` | — | atlas-only | Test/benchmark instrumentation (`TrackedFr` counters, flamegraphs, `monitor` feature). |
+| `utils/{profiling,monitor}.rs` | — | atlas-only | Benchmark instrumentation (flamegraphs, `monitor` feature). `utils/counters.rs` (the `TrackedFr` operation counters) was retired with BN254 at stage 7b. |
 | `utils/{errors,expanding_table,gaussian_elimination,serialization}.rs` | — | atlas-only (decided at stage 4b) | No upstream counterpart at `f3265b5a`. `expanding_table` serves the Booleanity and one-hot opening provers, which bind with it on the engine; `serialization` holds the capped proof-vector decoder. |
 | `msm/` | arkworks MSMs | retired (stage 7b) | A wrapper over arkworks' variable-base MSM for the BN254 commitment schemes; deleted with HyperKZG/Dory. |
 | `config.rs` | `jolt-claims` one-hot geometry | atlas-only until stage 5 | One-hot parameter derivation (`OneHotParams`); upstream's equivalent lives with the claim layer, so it is revisited at stage 5. |
@@ -173,7 +173,7 @@ polynomials) and `ark-serialize`; `third_party/PINS.md` records it.
 
 ## Adoption sequence
 
-The ordering lives in one place: `specs/adoption-program.md` (nine stages, 0–8). This inventory
+The ordering lives in one place: `specs/adoption-program.md` (ten stages, 0–9; stage 9 moves every atlas-only module below out of `joltworks` and deletes it). This inventory
 is its factual basis — the bucket table above feeds each stage's delta checklist, and the fix
 triage above is resolved at its stage 0.
 

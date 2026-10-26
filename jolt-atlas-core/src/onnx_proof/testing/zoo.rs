@@ -13,7 +13,7 @@ use atlas_onnx_import::fixtures::{standard_bindings, synth_inputs, GOLDEN_SEED};
 use atlas_onnx_import::ImportedModel;
 use atlas_trace::Tensor;
 use joltworks::field::bn254::Fr;
-use joltworks::poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG};
+use joltworks::poly::commitment::{akita::AkitaScheme, dory::DoryScheme, hyperkzg::HyperKZG};
 
 use super::{prove_verify_roundtrip, RoundtripOptions};
 use crate::loader::{load_imported, RunArgs};
@@ -87,6 +87,14 @@ fn op_gauntlet() {
     prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
 }
 
+/// The gauntlet under Akita over Fp128.
+#[test]
+fn op_gauntlet_akita() {
+    let imported = zoo("op_gauntlet", 16);
+    let inputs = op_gauntlet_inputs(&imported);
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+}
+
 /// GPT-2 architecture (2 layers, 48 hidden, 3 heads, vocab 1000) exported
 /// with past-KV inputs like the real model: native LayerNormalization,
 /// Gemm, fused-QKV Split, tanh GELU, IsNaN/Where mask, KV-cache elision.
@@ -141,6 +149,28 @@ fn qwen2_tiny_hyperkzg() {
     prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
 }
 
+/// The tiny architectures under Akita over Fp128.
+#[test]
+fn gpt2_tiny_akita() {
+    let imported = zoo("gpt2-tiny", 16);
+    let inputs = synth_inputs(&imported, GOLDEN_SEED);
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+}
+
+#[test]
+fn qwen2_tiny_akita() {
+    let imported = zoo("qwen2-tiny", 16);
+    let inputs = synth_inputs(&imported, GOLDEN_SEED);
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+}
+
+#[test]
+fn bge_tiny_akita() {
+    let imported = zoo("bge-tiny", 16);
+    let inputs = synth_inputs(&imported, GOLDEN_SEED);
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+}
+
 /// Same model at a non-power-of-two sequence length: would pad the sequence
 /// axis through attention, RoPE and the causal mask.
 #[test]
@@ -174,6 +204,14 @@ fn gpt2_dory() {
     let imported = zoo("gpt2", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
     prove_verify_roundtrip::<DoryScheme>(imported.model, &inputs, RoundtripOptions::default());
+}
+
+#[test]
+#[ignore = "requires the GPT-2 ONNX download (scripts/download_gpt2.py)"]
+fn gpt2_akita() {
+    let imported = zoo("gpt2", 16);
+    let inputs = synth_inputs(&imported, GOLDEN_SEED);
+    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 #[test]

@@ -24,7 +24,7 @@ use ark_bn254::Bn254;
 use atlas_trace::{trace::ModelExecutionIO, Model, NodeId, Tensor, Trace};
 use joltworks::field::bn254::Fr;
 use joltworks::poly::{
-    commitment::{commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
+    commitment::{akita::AkitaScheme, commitment_scheme::CommitmentScheme, hyperkzg::HyperKZG},
     opening_proof::{forgery, OpeningId},
 };
 use joltworks::transcripts::{Blake2bProver, Blake2bVerifier};
@@ -159,6 +159,13 @@ fn report(title: &str, rows: &BTreeMap<&'static str, (usize, usize)>) {
 #[serial(soundness_probe)]
 fn proof_mutation_sweep() {
     proof_mutation_sweep_for::<Pcs>();
+}
+
+/// [`proof_mutation_sweep`] under Akita over Fp128.
+#[test]
+#[serial(soundness_probe)]
+fn proof_mutation_sweep_akita() {
+    proof_mutation_sweep_for::<AkitaScheme>();
 }
 
 fn proof_mutation_sweep_for<PCS: PcsMutations>() {
@@ -387,6 +394,13 @@ fn witness_tamper_sweep() {
     witness_tamper_sweep_for::<Pcs>();
 }
 
+/// [`witness_tamper_sweep`] under Akita over Fp128.
+#[test]
+#[serial(soundness_probe)]
+fn witness_tamper_sweep_akita() {
+    witness_tamper_sweep_for::<AkitaScheme>();
+}
+
 fn witness_tamper_sweep_for<PCS: PcsMutations>() {
     let _probe = ProbeGuard::enter();
     let all = exhaustive();
@@ -536,6 +550,13 @@ fn forgery_targets<PCS: CommitmentScheme>(
 #[serial(soundness_probe)]
 fn opening_forgery_sweep() {
     opening_forgery_sweep_for::<Pcs>();
+}
+
+/// [`opening_forgery_sweep`] under Akita over Fp128.
+#[test]
+#[serial(soundness_probe)]
+fn opening_forgery_sweep_akita() {
+    opening_forgery_sweep_for::<AkitaScheme>();
 }
 
 fn opening_forgery_sweep_for<PCS: PcsMutations>() {

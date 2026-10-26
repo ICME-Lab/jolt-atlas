@@ -57,9 +57,9 @@ pub use types::ProverDebugInfo;
 pub use verifier::Verifier;
 
 pub use ark_bn254::Bn254;
-pub use joltworks::field::bn254::Fr;
+pub use joltworks::field::{bn254::Fr, fp128::Fp128};
 pub use joltworks::{
-    poly::commitment::{dory::DoryScheme, hyperkzg::HyperKZG},
+    poly::commitment::{akita::AkitaScheme, dory::DoryScheme, hyperkzg::HyperKZG},
     transcripts::{Blake2bProver, Blake2bVerifier},
 };
 

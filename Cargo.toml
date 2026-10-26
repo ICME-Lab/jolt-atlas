@@ -56,6 +56,7 @@ jolt-poly = { path = "./third_party/jolt-poly", default-features = false }
 jolt-sumcheck = { path = "./third_party/jolt-sumcheck" }
 jolt-claims = { path = "./third_party/jolt-claims" }
 jolt-akita = { path = "./third_party/jolt-akita" }
+jolt-openings = { path = "./third_party/jolt-openings", default-features = false }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }

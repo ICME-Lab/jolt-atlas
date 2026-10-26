@@ -5,8 +5,8 @@
 //! [`jolt_transcript::Transcript`]. This module adapts the atlas side to that engine:
 //!
 //! - [`FacadeTranscript`] presents one of our split transcripts as the facade for the duration of
-//!   an engine call. Its challenges are our 125-bit challenges (as field elements), each preceded
-//!   by the round's proof of work.
+//!   an engine call. Its challenges are drawn per [`FacadeChallenge`] (for the sumcheck engine, our
+//!   125-bit challenges as field elements), each preceded by the round's proof of work.
 //! - [`InstanceRounds`] schedules members sequentially or, for batches of independent instances,
 //!   in parallel.
 
@@ -21,6 +21,18 @@ use jolt_sumcheck::{MemberFinish, MemberRound, RoundScheduler, SumcheckError};
 use rayon::prelude::*;
 use std::{marker::PhantomData, ptr::NonNull};
 
+/// How a facade transcript draws a challenge of type `Self` from one of our transcripts.
+pub trait FacadeChallenge: Send + Sync + 'static {
+    fn draw<T: Transcript>(transcript: &mut T) -> Self;
+}
+
+/// The sumcheck engine's challenges: our optimized challenges, as field elements.
+impl<F: JoltField> FacadeChallenge for F {
+    fn draw<T: Transcript>(transcript: &mut T) -> Self {
+        transcript.challenge_scalar_optimized::<F>().into()
+    }
+}
+
 /// One of our transcripts, presented as upstream's facade transcript while an engine call runs.
 ///
 /// The facade trait requires `'static` and `Default`, which a borrow cannot provide, so the view
@@ -28,7 +40,7 @@ use std::{marker::PhantomData, ptr::NonNull};
 /// the caller never sees it by value, so it cannot outlive the borrow. A `Default` view is
 /// detached; the engine never constructs one (it only receives `&mut` views), and using one
 /// panics.
-pub struct FacadeTranscript<T: Transcript, F: JoltField> {
+pub struct FacadeTranscript<T: Transcript, F: FacadeChallenge> {
     inner: Option<NonNull<T>>,
     pow_bits: u32,
     pow_failed: bool,
@@ -37,11 +49,11 @@ pub struct FacadeTranscript<T: Transcript, F: JoltField> {
 
 // SAFETY: the view only forwards to `T`, which is `Send + Sync`; the pointer is never shared
 // beyond the `&mut` borrow it was created from.
-unsafe impl<T: Transcript, F: JoltField> Send for FacadeTranscript<T, F> {}
+unsafe impl<T: Transcript, F: FacadeChallenge> Send for FacadeTranscript<T, F> {}
 // SAFETY: as above.
-unsafe impl<T: Transcript, F: JoltField> Sync for FacadeTranscript<T, F> {}
+unsafe impl<T: Transcript, F: FacadeChallenge> Sync for FacadeTranscript<T, F> {}
 
-impl<T: Transcript, F: JoltField> Default for FacadeTranscript<T, F> {
+impl<T: Transcript, F: FacadeChallenge> Default for FacadeTranscript<T, F> {
     fn default() -> Self {
         Self {
             inner: None,
@@ -52,7 +64,7 @@ impl<T: Transcript, F: JoltField> Default for FacadeTranscript<T, F> {
     }
 }
 
-impl<T: Transcript, F: JoltField> FacadeTranscript<T, F> {
+impl<T: Transcript, F: FacadeChallenge> FacadeTranscript<T, F> {
     /// Run `body` with `transcript` presented as the facade; every challenge it draws is preceded
     /// by a proof of work of difficulty `pow_bits`. A failed proof-of-work check (verifier side)
     /// is reported after `body` returns.
@@ -86,7 +98,7 @@ impl<T: Transcript, F: JoltField> FacadeTranscript<T, F> {
     }
 }
 
-impl<T: Transcript, F: JoltField> jolt_transcript::Transcript for FacadeTranscript<T, F> {
+impl<T: Transcript, F: FacadeChallenge> jolt_transcript::Transcript for FacadeTranscript<T, F> {
     type Challenge = F;
 
     fn new(_label: &'static [u8]) -> Self {
@@ -102,11 +114,11 @@ impl<T: Transcript, F: JoltField> jolt_transcript::Transcript for FacadeTranscri
         if self.inner().pow(bits).is_err() {
             self.pow_failed = true;
         }
-        self.inner().challenge_scalar_optimized::<F>().into()
+        F::draw(self.inner())
     }
 
     fn state(&self) -> [u8; 32] {
-        unreachable!("the sumcheck engine does not read the transcript state")
+        unreachable!("upstream engines driven through the facade do not read the transcript state")
     }
 }
 

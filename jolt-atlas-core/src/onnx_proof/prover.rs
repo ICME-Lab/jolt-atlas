@@ -12,7 +12,7 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
 use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
-use common::{parallel::ParallelFlagGuard, CommittedPoly, VirtualPoly};
+use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
     field::JoltField,
     poly::{
@@ -21,10 +21,9 @@ use joltworks::{
         opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
     },
     subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
-    transcripts::{ProvingTranscript, Transcript},
+    transcripts::{AppendToTranscript, ProvingTranscript, Transcript},
     utils::math::Math,
 };
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
@@ -92,8 +91,15 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
 // Internal proving helpers
 // ---------------------------------------------------------------------------
 
-/// Build the witness polynomial map, commit to each polynomial, and append
-/// all commitments to the transcript.
+/// Commitments to a proof's witness polynomials: the scheme's batch commitment plus one
+/// commitment per polynomial, in `poly_map` order.
+pub(super) struct WitnessCommitments<PCS: CommitmentScheme> {
+    pub(super) batch: PCS::BatchCommitment,
+    pub(super) polys: Vec<PCS::Commitment>,
+}
+
+/// Build the witness polynomial map, commit to every polynomial, and append the commitments to
+/// the transcript (the batch commitment first).
 #[tracing::instrument(skip_all, name = "ONNXProof::commit_witness_polynomials")]
 #[allow(clippy::type_complexity)]
 pub(super) fn commit_witness_polynomials<
@@ -107,14 +113,21 @@ pub(super) fn commit_witness_polynomials<
     transcript: &mut T,
 ) -> (
     BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
-    Vec<PCS::Commitment>,
+    WitnessCommitments<PCS>,
     Vec<PCS::OpeningProofHint>,
 ) {
     let poly_map = polynomial_map::<F, T>(model, trace);
-    let (commitments, hints) = commit_to_polynomials_with_hints::<F, PCS>(&poly_map, generators);
+    let polys: Vec<&MultilinearPolynomial<F>> = poly_map.values().collect();
+    let (batch, per_poly) = PCS::batch_commit_all(&polys, generators);
+    let (commitments, hints): (Vec<_>, Vec<_>) = per_poly.into_iter().unzip();
+    batch.append_to_transcript(transcript);
     for commitment in &commitments {
         transcript.append_serializable(commitment);
     }
+    let commitments = WitnessCommitments {
+        batch,
+        polys: commitments,
+    };
     (poly_map, commitments, hints)
 }
 
@@ -242,7 +255,7 @@ pub(super) fn finalize_proof<
 >(
     mut prover: Prover<F, T>,
     io: ModelExecutionIO,
-    commitments: Vec<PCS::Commitment>,
+    commitments: WitnessCommitments<PCS>,
     proofs: BTreeMap<ProofId, SumcheckInstanceProof<F>>,
     eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
     reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
@@ -264,7 +277,8 @@ pub(super) fn finalize_proof<
         ONNXProof::from_parts(
             Claims::from_parts(opening_claims),
             proofs,
-            commitments,
+            commitments.batch,
+            commitments.polys,
             eval_reduction_proofs,
             reduced_opening_proof,
             narg,
@@ -304,22 +318,4 @@ pub(super) fn polynomial_map<F: JoltField, T: Transcript>(
         model, trace,
     ));
     polys
-}
-
-/// Commit to every polynomial (in `poly_map` order), keeping the per-polynomial
-/// opening hints so the joint opening can be assembled from them.
-#[tracing::instrument(skip_all)]
-pub(super) fn commit_to_polynomials_with_hints<F: JoltField, PCS: CommitmentScheme<Field = F>>(
-    poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
-    pcs: &PCS::ProverSetup,
-) -> (Vec<PCS::Commitment>, Vec<PCS::OpeningProofHint>) {
-    // Rayon jobs were overly fragmented, and the resulting context switching degraded performance,
-    // so the parallelism granularity is now limited to the polynomial level.
-    let _guard = ParallelFlagGuard::disabled();
-    poly_map
-        .values()
-        .collect::<Vec<_>>()
-        .par_iter()
-        .map(|poly| PCS::commit(poly, pcs))
-        .unzip()
 }

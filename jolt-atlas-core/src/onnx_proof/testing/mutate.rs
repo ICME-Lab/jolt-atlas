@@ -13,7 +13,10 @@ use atlas_trace::{trace::ModelExecutionIO, Model};
 use common::VirtualPoly;
 use jolt_field::Ring;
 use joltworks::poly::{
-    commitment::{commitment_scheme::CommitmentScheme, dory::DoryScheme, hyperkzg::HyperKZG},
+    commitment::{
+        akita::AkitaScheme, commitment_scheme::CommitmentScheme, dory::DoryScheme,
+        hyperkzg::HyperKZG,
+    },
     opening_proof::{OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
 };
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
@@ -31,12 +34,53 @@ pub(crate) enum PcsSite {
     SwapCom { i: usize, j: usize },
     /// Replace a polynomial commitment with a witness commitment.
     ComFromW { i: usize },
+    /// Akita: `slot_evals[slot] += 1` in the `i`-th class opening.
+    SlotEval { i: usize, slot: usize },
+    /// Akita: an extra slot evaluation in the `i`-th class opening.
+    SlotEvalExtra { i: usize },
+    /// Akita: flip a byte of the `i`-th class opening's proof.
+    ClassProofByte { i: usize },
+    /// Akita: drop the `i`-th class opening.
+    ClassOpeningDropped { i: usize },
+    /// Akita: swap two class openings.
+    ClassOpeningSwap { i: usize, j: usize },
 }
 
-/// How a PCS exposes its opening proof to the sweep.
+/// A PCS-specific edit of the batch commitment.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum BatchSite {
+    /// Akita: the class's kind tag `+= 1`.
+    Kind { class: usize },
+    /// Akita: the class's variable count `+= 1`.
+    NumVars { class: usize },
+    /// Akita: the class's slot count `+= 1`.
+    SlotCount { class: usize },
+    /// Akita: flip a byte of the class commitment.
+    CommitmentByte { class: usize },
+    /// Akita: declare the class identically zero.
+    Zeroed { class: usize },
+    /// Akita: the same class from a second honest execution.
+    Replaced { class: usize },
+}
+
+/// How a PCS exposes its opening proof and batch commitment to the sweep.
 pub(crate) trait PcsMutations: CommitmentScheme<Commitment: PartialEq> {
     fn sites(proof: &Self::Proof) -> Vec<PcsSite>;
     fn apply(proof: &mut Self::Proof, site: PcsSite);
+
+    /// The batch commitment's sites; `other` is a second honest execution's.
+    fn batch_sites(
+        _batch: &Self::BatchCommitment,
+        _other: &Self::BatchCommitment,
+    ) -> Vec<BatchSite> {
+        vec![]
+    }
+    fn apply_batch(
+        _batch: &mut Self::BatchCommitment,
+        _other: &Self::BatchCommitment,
+        _site: BatchSite,
+    ) {
+    }
 }
 
 impl PcsMutations for HyperKZG<Bn254> {
@@ -65,6 +109,7 @@ impl PcsMutations for HyperKZG<Bn254> {
             PcsSite::SwapW { i, j } => p.w.swap(i, j),
             PcsSite::SwapCom { i, j } => p.com.swap(i, j),
             PcsSite::ComFromW { i } => p.com[i] = p.w[0],
+            _ => unreachable!("not a HyperKZG site"),
         }
     }
 }
@@ -74,6 +119,81 @@ impl PcsMutations for DoryScheme {
         vec![]
     }
     fn apply(_: &mut Self::Proof, _: PcsSite) {}
+}
+
+impl PcsMutations for AkitaScheme {
+    fn sites(p: &Self::Proof) -> Vec<PcsSite> {
+        let mut sites = vec![];
+        for (i, class) in p.classes.iter().enumerate() {
+            let last = class.slot_evals.len().saturating_sub(1);
+            for slot in [0, last] {
+                sites.push(PcsSite::SlotEval { i, slot });
+            }
+            sites.push(PcsSite::SlotEvalExtra { i });
+            if !class.proof.is_empty() {
+                sites.push(PcsSite::ClassProofByte { i });
+            }
+            sites.push(PcsSite::ClassOpeningDropped { i });
+        }
+        if p.classes.len() >= 2 {
+            sites.push(PcsSite::ClassOpeningSwap { i: 0, j: 1 });
+        }
+        sites
+    }
+
+    fn apply(p: &mut Self::Proof, site: PcsSite) {
+        let one = <Self as CommitmentScheme>::Field::one();
+        match site {
+            PcsSite::SlotEval { i, slot } => p.classes[i].slot_evals[slot] += one,
+            PcsSite::SlotEvalExtra { i } => p.classes[i].slot_evals.push(one),
+            PcsSite::ClassProofByte { i } => {
+                let proof = &mut p.classes[i].proof;
+                let mid = proof.len() / 2;
+                proof[mid] ^= 1;
+            }
+            PcsSite::ClassOpeningDropped { i } => {
+                p.classes.remove(i);
+            }
+            PcsSite::ClassOpeningSwap { i, j } => p.classes.swap(i, j),
+            _ => unreachable!("not an Akita site"),
+        }
+    }
+
+    fn batch_sites(batch: &Self::BatchCommitment, other: &Self::BatchCommitment) -> Vec<BatchSite> {
+        let mut sites = vec![];
+        for (class, c) in batch.classes.iter().enumerate() {
+            sites.push(BatchSite::Kind { class });
+            sites.push(BatchSite::NumVars { class });
+            sites.push(BatchSite::SlotCount { class });
+            if c.commitment.is_some() {
+                sites.push(BatchSite::CommitmentByte { class });
+                sites.push(BatchSite::Zeroed { class });
+            }
+            if other.classes.get(class).is_some_and(|o| o != c) {
+                sites.push(BatchSite::Replaced { class });
+            }
+        }
+        sites
+    }
+
+    fn apply_batch(
+        batch: &mut Self::BatchCommitment,
+        other: &Self::BatchCommitment,
+        site: BatchSite,
+    ) {
+        match site {
+            BatchSite::Kind { class } => batch.classes[class].kind += 1,
+            BatchSite::NumVars { class } => batch.classes[class].logical_num_vars += 1,
+            BatchSite::SlotCount { class } => batch.classes[class].slot_count += 1,
+            BatchSite::CommitmentByte { class } => {
+                let bytes = batch.classes[class].commitment.as_mut().expect("site");
+                let mid = bytes.len() / 2;
+                bytes[mid] ^= 1;
+            }
+            BatchSite::Zeroed { class } => batch.classes[class].commitment = None,
+            BatchSite::Replaced { class } => batch.classes[class] = other.classes[class].clone(),
+        }
+    }
 }
 
 /// One mutation of a proof or its IO.
@@ -108,6 +228,8 @@ pub(crate) enum Site {
     CommitmentReplaced { i: usize },
     /// Drop the last commitment.
     CommitmentDropped,
+    /// A PCS-level edit of the batch commitment.
+    BatchCommitment(BatchSite),
     /// Reduced-opening sumcheck coefficient `+= 1`.
     ReducedRoundCoeff { round: usize, k: usize },
     /// `sumcheck_claims[i] += 1`.
@@ -307,6 +429,9 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
     if n > 0 {
         sites.push((Site::CommitmentDropped, Expect::MustReject));
     }
+    for s in PCS::batch_sites(proof.batch_commitment(), other.batch_commitment()) {
+        sites.push((Site::BatchCommitment(s), Expect::MustReject));
+    }
 
     if let Some(rop) = proof.reduced_opening_proof() {
         for (round, poly) in rop.sumcheck_proof().compressed_polys.iter().enumerate() {
@@ -445,6 +570,9 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
         Site::CommitmentDropped => {
             proof.commitments_mut().pop();
         }
+        Site::BatchCommitment(s) => {
+            PCS::apply_batch(proof.batch_commitment_mut(), other.batch_commitment(), *s)
+        }
         Site::ReducedRoundCoeff { round, k } => {
             proof
                 .reduced_opening_proof_mut()
@@ -505,6 +633,7 @@ pub(crate) fn site_class(site: &Site) -> &'static str {
         Site::CommitmentSwap { .. } => "CommitmentSwap",
         Site::CommitmentReplaced { .. } => "CommitmentReplaced",
         Site::CommitmentDropped => "CommitmentDropped",
+        Site::BatchCommitment(_) => "BatchCommitment",
         Site::ReducedRoundCoeff { .. } => "ReducedRoundCoeff",
         Site::ReducedClaim { .. } => "ReducedClaim",
         Site::ReducedRemoved => "ReducedRemoved",

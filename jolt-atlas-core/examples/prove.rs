@@ -13,7 +13,7 @@
 //!
 //! Options:
 //! * `--model <dir>`          directory holding `network.onnx` (required)
-//! * `--pcs hyperkzg|dory`    commitment scheme (default `hyperkzg`)
+//! * `--pcs hyperkzg|dory|akita`  commitment scheme (default `hyperkzg`; Akita runs over Fp128)
 //! * `--seq-len N`            sequence length binding (default 16; ignored with `--input`)
 //! * `--input "<text>"`       tokenize with `<dir>/tokenizer.json`; sequence length = token count
 //! * `--srs-vars N`           over-provision the SRS (Dory: wider columns, fewer tier-2 pairings)
@@ -34,15 +34,22 @@ use common::utils::logging::setup_tracing;
 use jolt_atlas_core::loader::{load_imported, RunArgs};
 use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
-    proof_serialization::serialize_proof, prove, verify, AtlasProverPreprocessing,
+    proof_serialization::serialize_proof, prove, verify, AkitaScheme, AtlasProverPreprocessing,
     AtlasSharedPreprocessing, AtlasVerifierPreprocessing, Blake2bProver, Blake2bVerifier, Bn254,
-    DoryScheme, Fr, HyperKZG,
+    DoryScheme, HyperKZG,
 };
 use joltworks::poly::commitment::commitment_scheme::CommitmentScheme;
 
+#[derive(Clone, Copy)]
+enum Pcs {
+    HyperKzg,
+    Dory,
+    Akita,
+}
+
 struct Args {
     model_dir: PathBuf,
-    dory: bool,
+    pcs: Pcs,
     seq_len: usize,
     input: Option<String>,
     srs_vars: Option<usize>,
@@ -61,19 +68,20 @@ fn parse_args() -> Args {
     };
     let model_dir = PathBuf::from(value("--model").unwrap_or_else(|| {
         eprintln!(
-            "usage: prove --model <dir> [--pcs hyperkzg|dory] [--seq-len N] [--input TEXT] \
+            "usage: prove --model <dir> [--pcs hyperkzg|dory|akita] [--seq-len N] [--input TEXT] \
              [--srs-vars N] [--use-cache] [--stats] [--trace|--trace-terminal]"
         );
         std::process::exit(2);
     }));
-    let dory = match value("--pcs").as_deref() {
-        None | Some("hyperkzg") => false,
-        Some("dory") => true,
-        Some(other) => panic!("unknown --pcs {other:?} (hyperkzg|dory)"),
+    let pcs = match value("--pcs").as_deref() {
+        None | Some("hyperkzg") => Pcs::HyperKzg,
+        Some("dory") => Pcs::Dory,
+        Some("akita") => Pcs::Akita,
+        Some(other) => panic!("unknown --pcs {other:?} (hyperkzg|dory|akita)"),
     };
     Args {
         model_dir,
-        dory,
+        pcs,
         seq_len: value("--seq-len").map_or(16, |v| v.parse().expect("--seq-len N")),
         input: value("--input"),
         srs_vars: value("--srs-vars").map(|v| v.parse().expect("--srs-vars N")),
@@ -240,7 +248,7 @@ fn load(args: &Args, run_args: &RunArgs) -> (AtlasSharedPreprocessing, Vec<Input
 }
 
 /// Prove + verify with the chosen PCS, reporting timings and proof size.
-fn run<PCS: CommitmentScheme<Field = Fr>>(
+fn run<PCS: CommitmentScheme>(
     label: &str,
     shared: AtlasSharedPreprocessing,
     inputs: &[Tensor<i32>],
@@ -248,13 +256,13 @@ fn run<PCS: CommitmentScheme<Field = Fr>>(
 ) {
     let t = Instant::now();
     let prover_pp = match srs_vars {
-        Some(n) => AtlasProverPreprocessing::<Fr, PCS>::new_with_srs_num_vars(shared, n),
-        None => AtlasProverPreprocessing::<Fr, PCS>::new(shared),
+        Some(n) => AtlasProverPreprocessing::<PCS::Field, PCS>::new_with_srs_num_vars(shared, n),
+        None => AtlasProverPreprocessing::<PCS::Field, PCS>::new(shared),
     };
     println!("[{label}] prover setup: {:.2?}", t.elapsed());
 
     let t = Instant::now();
-    let (proof, io, _) = prove::<Fr, Blake2bProver, PCS>(&prover_pp, inputs);
+    let (proof, io, _) = prove::<PCS::Field, Blake2bProver, PCS>(&prover_pp, inputs);
     println!("[{label}] prove: {:.2?}", t.elapsed());
     let bytes = serialize_proof(&proof).expect("proof serializes");
     println!(
@@ -264,9 +272,9 @@ fn run<PCS: CommitmentScheme<Field = Fr>>(
         proof.proofs().len()
     );
 
-    let verifier_pp = AtlasVerifierPreprocessing::<Fr, PCS>::from(&prover_pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<PCS::Field, PCS>::from(&prover_pp);
     let t = Instant::now();
-    verify::<Fr, Blake2bVerifier, PCS>(&proof, &verifier_pp, &io, None)
+    verify::<PCS::Field, Blake2bVerifier, PCS>(&proof, &verifier_pp, &io, None)
         .expect("verification failed");
     println!("[{label}] verify: {:.2?}", t.elapsed());
     println!("Proof verified successfully!");
@@ -305,9 +313,9 @@ fn main() {
         println!("  input {:<16} {:?} {:?}", d.name, d.kind, t.dims());
     }
 
-    if args.dory {
-        run::<DoryScheme>("dory", shared, &inputs, args.srs_vars);
-    } else {
-        run::<HyperKZG<Bn254>>("hyperkzg", shared, &inputs, args.srs_vars);
+    match args.pcs {
+        Pcs::HyperKzg => run::<HyperKZG<Bn254>>("hyperkzg", shared, &inputs, args.srs_vars),
+        Pcs::Dory => run::<DoryScheme>("dory", shared, &inputs, args.srs_vars),
+        Pcs::Akita => run::<AkitaScheme>("akita", shared, &inputs, args.srs_vars),
     }
 }

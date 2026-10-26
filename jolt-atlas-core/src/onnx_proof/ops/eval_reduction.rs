@@ -360,6 +360,7 @@ mod tests {
         let partial_proof = ONNXProof::<_, HyperKZG<Bn254>>::from_parts(
             opening_claims,
             proofs,
+            (),
             vec![],
             eval_reduction_proofs,
             None,

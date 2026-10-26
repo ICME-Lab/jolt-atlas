@@ -993,6 +993,19 @@ where
             .sum()
     }
 
+    /// The variable count of each opened polynomial (aligned with `state.polynomials`): the round
+    /// count of the reduction instances that open it.
+    pub fn opened_num_vars<T: Transcript>(&self, state: &OpeningReductionState<F>) -> Vec<usize> {
+        let mut num_vars = BTreeMap::new();
+        for opening in self.sumchecks.values() {
+            let rounds = SumcheckInstanceVerifier::<F, T>::num_rounds(opening);
+            for poly in &opening.polynomials {
+                num_vars.insert(*poly, rounds);
+            }
+        }
+        state.polynomials.iter().map(|p| num_vars[p]).collect()
+    }
+
     #[tracing::instrument(skip_all, name = "VerifierOpeningAccumulator::verify_joint_opening")]
     /// Verifies the joint opening proof (Stage 8).
     pub fn verify_joint_opening<T: Transcript, PCS: CommitmentScheme<Field = F>>(

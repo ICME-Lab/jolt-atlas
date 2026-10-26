@@ -36,6 +36,9 @@ jolt-transcript = { workspace = true, features = ["bn254", "solinas", "transcrip
 jolt-utils.workspace = true
 jolt-poly = { workspace = true, features = ["parallel"] }
 jolt-sumcheck.workspace = true
+jolt-akita.workspace = true
+jolt-openings = { workspace = true, features = ["parallel"] }
+bincode.workspace = true
 spongefish = { version = "=0.8.0", default-features = false, features = ["keccak"] }
 dory = { package = "dory-pcs", version = "0.4.0", features = [
     "backends",

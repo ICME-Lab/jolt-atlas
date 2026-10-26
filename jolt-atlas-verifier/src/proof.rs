@@ -22,6 +22,8 @@ pub struct ONNXProof<F: JoltField, PCS: CommitmentScheme<Field = F>> {
     opening_claims: Claims<F>,
     /// Map of proof IDs to sumcheck instance proofs.
     proofs: BTreeMap<ProofId, SumcheckInstanceProof<F>>,
+    /// Commitment data shared by every witness polynomial (empty for homomorphic schemes).
+    batch_commitment: PCS::BatchCommitment,
     /// Polynomial commitments for witness polynomials.
     commitments: Vec<PCS::Commitment>,
     /// Evaluation reduction proofs h polynomials for each opening claim.
@@ -38,6 +40,7 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
     pub fn from_parts(
         opening_claims: Claims<F>,
         proofs: BTreeMap<ProofId, SumcheckInstanceProof<F>>,
+        batch_commitment: PCS::BatchCommitment,
         commitments: Vec<PCS::Commitment>,
         eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
         reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
@@ -46,6 +49,7 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
         Self {
             opening_claims,
             proofs,
+            batch_commitment,
             commitments,
             eval_reduction_proofs,
             reduced_opening_proof,
@@ -61,6 +65,11 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
     /// Sumcheck instance proofs, keyed by proof id.
     pub fn proofs(&self) -> &BTreeMap<ProofId, SumcheckInstanceProof<F>> {
         &self.proofs
+    }
+
+    /// Commitment data shared by every witness polynomial.
+    pub fn batch_commitment(&self) -> &PCS::BatchCommitment {
+        &self.batch_commitment
     }
 
     /// Witness polynomial commitments, in sorted `CommittedPoly` order.
@@ -95,6 +104,11 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
     /// Mutable sumcheck proofs.
     pub fn proofs_mut(&mut self) -> &mut BTreeMap<ProofId, SumcheckInstanceProof<F>> {
         &mut self.proofs
+    }
+
+    /// Mutable batch commitment.
+    pub fn batch_commitment_mut(&mut self) -> &mut PCS::BatchCommitment {
+        &mut self.batch_commitment
     }
 
     /// Mutable commitments.

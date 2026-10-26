@@ -64,3 +64,9 @@ pub trait VerifyingTranscript: Transcript {
 pub trait AppendToTranscript {
     fn append_to_transcript<ProofTranscript: Transcript>(&self, transcript: &mut ProofTranscript);
 }
+
+/// The empty batch commitment of a homomorphic scheme: absorbs nothing.
+impl AppendToTranscript for () {
+    fn append_to_transcript<ProofTranscript: Transcript>(&self, _transcript: &mut ProofTranscript) {
+    }
+}

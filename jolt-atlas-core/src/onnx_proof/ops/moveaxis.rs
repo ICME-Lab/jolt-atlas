@@ -1,12 +1,11 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     atlas_relation_types, impl_tie_proof_api,
     onnx_proof::{
         ops::{OperatorProofTrait, Prover, Verifier},
         relation::{
-            reduced_output_setup, AtlasRelation, EngineRelation, RelationExpr, RelationId,
-            RelationOpening, RelationSetup,
+            reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
+            RelationSetup, TieRelation,
         },
         ProofId,
     },
@@ -17,10 +16,7 @@ use jolt_claims::{opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use joltworks::{
     field::JoltField,
-    poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
+    poly::opening_proof::{OpeningAccumulator, OpeningId},
     subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
@@ -103,10 +99,15 @@ impl AtlasRelation for AxisPermutationRelation {
     }
 }
 
-impl EngineRelation for AxisPermutationRelation {
-    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
-        let operand = TraceView::operand_tensors(trace, &self.node)[0];
-        vec![MultilinearPolynomial::from(operand.padded_pow2())]
+impl TieRelation for AxisPermutationRelation {
+    fn claims<F: JoltField>(
+        &self,
+        _trace: &Trace,
+        _setup: &RelationSetup<F>,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        // The operand at the permuted point is the output at `r`.
+        vec![accumulator.get_node_output_opening(self.node.idx).1]
     }
 }
 

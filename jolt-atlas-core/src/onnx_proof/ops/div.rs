@@ -9,7 +9,7 @@ use crate::{
         relation::{
             prove_tie, verify_tie, AtlasRelation, EngineRelation, RelationChallenge,
             RelationDerived, RelationExpr, RelationId, RelationOpening, RelationParams,
-            RelationProver, RelationSetup, RelationVerifier,
+            RelationProver, RelationSetup, RelationVerifier, TieRelation,
         },
         trace_view::TraceView,
         ProofId, ProofType, Prover, Verifier,
@@ -345,10 +345,15 @@ impl AtlasRelation for DivQuotientRelation {
     }
 }
 
-impl EngineRelation for DivQuotientRelation {
-    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
-        let LayerData { output, .. } = TraceView::layer_data(trace, &self.node);
-        vec![MultilinearPolynomial::from(output.padded_pow2())]
+impl TieRelation for DivQuotientRelation {
+    fn claims<F: JoltField>(
+        &self,
+        _trace: &Trace,
+        _setup: &RelationSetup<F>,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        // The committed quotient is the node's output: its claim is the reduced one.
+        vec![accumulator.get_node_output_opening(self.node.idx).1]
     }
 }
 

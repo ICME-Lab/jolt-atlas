@@ -8,8 +8,8 @@ use crate::{
         },
         ops::OperatorProofTrait,
         relation::{
-            prove_tie, verify_tie, AtlasRelation, EngineRelation, RelationChallenge,
-            RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
+            prove_tie, verify_tie, AtlasRelation, RelationChallenge, RelationDerived, RelationExpr,
+            RelationId, RelationOpening, RelationSetup, TieRelation,
         },
         ProofId, Prover, Verifier,
     },
@@ -26,7 +26,7 @@ use jolt_field::Ring;
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{OpeningAccumulator, OpeningId},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
@@ -191,16 +191,18 @@ impl<S: AccumulationShape> AtlasRelation for AccumulationRelation<S> {
     }
 }
 
-impl<S: AccumulationShape> EngineRelation for AccumulationRelation<S> {
-    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+impl<S: AccumulationShape> TieRelation for AccumulationRelation<S> {
+    fn claims<F: JoltField>(
+        &self,
+        trace: &Trace,
+        setup: &RelationSetup<F>,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
-        let [left, right] = operands[..] else {
-            panic!("Expected two operands for {}", self.node.operator)
-        };
-        vec![
-            MultilinearPolynomial::from(left.padded_pow2()),
-            MultilinearPolynomial::from(right.padded_pow2()),
-        ]
+        operands[..2]
+            .iter()
+            .map(|operand| operand.evaluate_mle(&setup.incoming_point))
+            .collect()
     }
 }
 

@@ -5,8 +5,8 @@ use crate::{
     onnx_proof::{
         ops::{OperatorProofTrait, Prover, Verifier},
         relation::{
-            prove_tie, reduced_output_setup, verify_tie, AtlasRelation, EngineRelation,
-            RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
+            prove_tie, reduced_output_setup, verify_tie, AtlasRelation, RelationDerived,
+            RelationExpr, RelationId, RelationOpening, RelationSetup, TieRelation,
         },
         ProofId,
     },
@@ -19,7 +19,7 @@ use jolt_field::Ring;
 use joltworks::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial},
+        multilinear_polynomial::EvaluateMle,
         opening_proof::{OpeningAccumulator, OpeningId},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
@@ -168,10 +168,15 @@ impl AtlasRelation for BroadcastRelation {
     }
 }
 
-impl EngineRelation for BroadcastRelation {
-    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+impl TieRelation for BroadcastRelation {
+    fn claims<F: JoltField>(
+        &self,
+        trace: &Trace,
+        setup: &RelationSetup<F>,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
         let operand = TraceView::operand_tensors(trace, &self.shape.node)[0];
-        vec![MultilinearPolynomial::from(operand.padded_pow2())]
+        vec![operand.evaluate_mle(&self.split(&setup.incoming_point).0)]
     }
 }
 

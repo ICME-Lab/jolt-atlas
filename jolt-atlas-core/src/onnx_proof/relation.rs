@@ -30,9 +30,7 @@ use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
+        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, PolynomialId, ProverOpeningAccumulator,
             VerifierOpeningAccumulator, BIG_ENDIAN,
@@ -283,10 +281,23 @@ pub fn append_produced<F: JoltField, T: Transcript, R: AtlasRelation>(
     }
 }
 
-/// Prove a zero-round relation (a tie): append its produced openings, read off its witnesses
-/// at the incoming point. Nothing else enters the transcript; [`verify_tie`] checks the input
-/// claim against the output expression.
-pub fn prove_tie<F: JoltField, T: Transcript, R: EngineRelation>(
+/// A zero-round relation (a tie): its produced openings sit at points derived from the
+/// incoming point, and the verifier checks the input claim against the output expression there.
+pub trait TieRelation: AtlasRelation {
+    /// The prover's values of the produced openings, aligned with [`AtlasRelation::produced`]
+    /// at their [`opening_points`](AtlasRelation::opening_points): read off the trace, or taken
+    /// from claims the accumulator already holds where the tie fixes them.
+    fn claims<F: JoltField>(
+        &self,
+        trace: &Trace,
+        setup: &RelationSetup<F>,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F>;
+}
+
+/// Prove a tie: append its produced openings with their [`TieRelation::claims`]. Nothing else
+/// enters the transcript; [`verify_tie`] checks the input claim against the output expression.
+pub fn prove_tie<F: JoltField, T: Transcript, R: TieRelation>(
     relation: &R,
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,
@@ -295,13 +306,7 @@ pub fn prove_tie<F: JoltField, T: Transcript, R: EngineRelation>(
     assert_eq!(relation.rounds(), 0, "a tie has no rounds");
     note_dispatch(relation);
     let setup = relation.setup(&*accumulator, transcript);
-    let points = relation.opening_points(&setup, &[]);
-    let claims: Vec<F> = relation
-        .witnesses::<F>(trace)
-        .iter()
-        .zip(&points)
-        .map(|(witness, point)| witness.evaluate(point))
-        .collect();
+    let claims = relation.claims(trace, &setup, &*accumulator);
     append_produced(relation, &setup, accumulator, transcript, &[], &claims);
 }
 

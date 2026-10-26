@@ -12,6 +12,8 @@
 //!   binding tests, and pinned `known_gap_*` tests.
 //! * [`digests`]: cross-stage pins of the zoo's proof bytes and final
 //!   transcript state, so a coordinated prover+verifier change is visible.
+//! * [`rounds`]: native sumcheck members driven round by round at eq points
+//!   no end-to-end run reaches.
 //! * [`model_builder`]: programmatic model construction.
 //!
 //! This module is a descendant of `onnx_proof` so tests can reach the
@@ -27,6 +29,7 @@ pub(crate) mod op_kind;
 pub(crate) mod op_surface;
 mod op_surface_dory;
 pub(crate) mod probe;
+mod rounds;
 mod soundness;
 mod zoo;
 

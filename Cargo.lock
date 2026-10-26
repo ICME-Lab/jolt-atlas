@@ -1112,6 +1112,8 @@ dependencies = [
  "itertools 0.10.5",
  "jolt-atlas-verifier",
  "jolt-field",
+ "jolt-poly",
+ "jolt-sumcheck",
  "joltworks",
  "num",
  "num-derive",

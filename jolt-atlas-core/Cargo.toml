@@ -11,6 +11,8 @@ common.workspace = true
 joltworks = { workspace = true, features = ["prover"] }
 jolt-atlas-verifier.workspace = true
 jolt-field.workspace = true
+jolt-poly.workspace = true
+jolt-sumcheck.workspace = true
 
 # Cryptography and Math
 ark-bn254.workspace = true

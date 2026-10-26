@@ -12,8 +12,6 @@ use crate::{
             VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
         },
         ra_poly::RaPolynomial,
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
     },
     subprotocols::{
         mles_product_sum::compute_mles_product_sum,
@@ -23,6 +21,8 @@ use crate::{
     transcripts::Transcript,
 };
 use common::CommittedPoly;
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
 // Instruction read-access (RA) virtualization sumcheck
@@ -90,7 +90,10 @@ impl<F: JoltField> RaSumcheckProver<F> {
 
         Self {
             ra_i_polys,
-            eq_poly: GruenSplitEqPolynomial::new(&params.r_cycle.r, BindingOrder::LowToHigh),
+            eq_poly: GruenSplitEqPolynomial::new(
+                &params.r_cycle.r,
+                jolt_poly::BindingOrder::LowToHigh,
+            ),
             params,
         }
     }
@@ -101,19 +104,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RaSumcheckPro
         &self.params
     }
 
-    #[tracing::instrument(skip_all, name = "RaSumcheckProver::compute_message")]
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        let ra_i_polys = &self.ra_i_polys;
-        let eq_poly = &self.eq_poly;
-        compute_mles_product_sum(ra_i_polys, previous_claim, eq_poly)
-    }
-
-    #[tracing::instrument(skip_all, name = "RaSumcheckProver::ingest_challenge")]
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.ra_i_polys
-            .iter_mut()
-            .for_each(|p| p.bind_parallel(r_j, BindingOrder::LowToHigh));
-        self.eq_poly.bind(r_j);
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -143,6 +135,47 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RaSumcheckPro
                 vec![claim],
             );
         }
+    }
+}
+
+impl<F: JoltField> RaSumcheckProver<F> {
+    #[tracing::instrument(skip_all, name = "RaSumcheckProver::bind")]
+    fn bind(&mut self, r: F) {
+        let r_j = F::challenge_from_field(r);
+        self.ra_i_polys
+            .iter_mut()
+            .for_each(|p| p.bind_parallel(r_j, BindingOrder::LowToHigh));
+        self.eq_poly.bind(r);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for RaSumcheckProver<F> {
+    fn num_rounds(&self) -> usize {
+        self.params.num_rounds()
+    }
+
+    #[tracing::instrument(skip_all, name = "RaSumcheckProver::prove_round")]
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r);
+        }
+        compute_mles_product_sum(&self.ra_i_polys, previous_claim, &self.eq_poly).map_err(
+            |actual| SumcheckError::RoundCheckFailed {
+                round,
+                expected: previous_claim,
+                actual,
+            },
+        )
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind);
+        Ok(())
     }
 }
 

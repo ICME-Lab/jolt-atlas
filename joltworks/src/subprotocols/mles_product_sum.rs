@@ -2,24 +2,26 @@ use crate::{
     field::{BarrettReduce, FMAdd, JoltField},
     poly::{
         multilinear_polynomial::MultilinearPolynomial, ra_poly::RaPolynomial,
-        split_eq_poly::GruenSplitEqPolynomial, unipoly::UniPoly,
+        split_eq_poly::SplitEqUnreducedFold,
     },
     utils::accumulation::SmallAccumS,
 };
 use core::{mem::MaybeUninit, ptr};
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use num_traits::Zero;
 
 /// Computes the univariate polynomial `g(X) = sum_j eq((r', X, j), r) * prod_i mle_i(X, j)`.
 ///
-/// Note `claim` should equal `g(0) + g(1)`.
+/// Note `claim` should equal `g(0) + g(1)`; otherwise the error carries the actual
+/// `g(0) + g(1)` (see [`finish_mles_product_sum_from_evals`]).
 pub fn compute_mles_product_sum<F: JoltField>(
     mles: &[RaPolynomial<u8, F>],
     claim: F,
     eq_poly: &GruenSplitEqPolynomial<F>,
-) -> UniPoly<F> {
+) -> Result<UnivariatePoly<F>, F> {
     let d = mles.len();
 
-    // Evaluate g(X) / eq(X, r[round]) at [1, 2, ..., |mles| - 1, ∞] using split-eq fold.
+    // Evaluate q(X) = g(X) / l(X) at [1, 2, ..., |mles| - 1, ∞] using split-eq fold.
     //
     // We dispatch on `d` to allow specialized fast paths (e.g., the fully
     // stack-allocated `d = 16` implementation) while keeping the final
@@ -32,30 +34,44 @@ pub fn compute_mles_product_sum<F: JoltField>(
         _ => compute_mles_product_sum_evals_generic(mles, eq_poly),
     };
 
-    finish_mles_product_sum_from_evals(&sum_evals, claim, eq_poly)
+    finish_mles_product_sum_from_evals(&sum_evals, claim, eq_poly, || {
+        let [q_zero] = eq_poly.par_fold_out_in_unreduced::<1>(&|g| {
+            [mles
+                .iter()
+                .fold(F::one(), |acc, mle| acc * mle.get_bound_coeff(2 * g))]
+        });
+        q_zero
+    })
 }
 
-/// Computes the univariate polynomial `g(X) = sum_j eq((r', X, j), r) * prod_i mle_i(X, j)`.
+/// Computes the univariate polynomial `g(X) = sum_j eq((r', X, j), r) * mle(X, j)^d`.
 ///
-/// Note `claim` should equal `g(0) + g(1)`.
+/// Note `claim` should equal `g(0) + g(1)`; otherwise the error carries the actual
+/// `g(0) + g(1)` (see [`finish_mles_product_sum_from_evals`]).
 pub fn compute_mle_product_sum<F: JoltField>(
     d: usize,
     mle: &MultilinearPolynomial<F>,
     claim: F,
     eq_poly: &GruenSplitEqPolynomial<F>,
-) -> UniPoly<F> {
-    // Evaluate g(X) / eq(X, r[round]) at [1, 2, ..., |mles| - 1, ∞] using split-eq fold.
+) -> Result<UnivariatePoly<F>, F> {
+    // Evaluate q(X) = g(X) / l(X) at [1, 2, ..., |mles| - 1, ∞] using split-eq fold.
     //
     // We dispatch on `d` to allow specialized fast paths (e.g., the fully
     // stack-allocated `d = 16` implementation) while keeping the final
     // interpolation logic centralized.
     let sum_evals: Vec<F> = compute_mle_product_sum_evals_generic(d, mle, eq_poly);
 
-    finish_mles_product_sum_from_evals(&sum_evals, claim, eq_poly)
+    finish_mles_product_sum_from_evals(&sum_evals, claim, eq_poly, || {
+        let [q_zero] = eq_poly.par_fold_out_in_unreduced::<1>(&|g| {
+            let p0 = mle.get_bound_coeff(2 * g);
+            [(1..d).fold(p0, |acc, _| acc * p0)]
+        });
+        q_zero
+    })
 }
 
 /// Generic implementation of the split-eq fold that computes the evaluations
-/// of `g(X) / eq(X, r[round])` on the grid `[1, 2, ..., d - 1, ∞]` for
+/// of `q(X) = g(X) / l(X)` on the grid `[1, 2, ..., d - 1, ∞]` for
 /// arbitrary `d`.
 #[inline]
 fn compute_mles_product_sum_evals_generic<F: JoltField>(
@@ -75,7 +91,6 @@ fn compute_mles_product_sum_evals_generic<F: JoltField>(
         endpoints: Vec<F>,
     }
 
-    let current_scalar = eq_poly.get_current_scalar();
     eq_poly
         .par_fold_out_in(
             // Allocate one InnerAcc per `x_out` lane; its scratch buffers are
@@ -124,12 +139,12 @@ fn compute_mles_product_sum_evals_generic<F: JoltField>(
             },
         )
         .into_iter()
-        .map(|x| F::reduce_product_accum(x) * current_scalar)
+        .map(F::reduce_product_accum)
         .collect()
 }
 
 /// Generic implementation of the split-eq fold that computes the evaluations
-/// of `g(X) / eq(X, r[round])` on the grid `[1, 2, ..., d - 1, ∞]` for
+/// of `q(X) = g(X) / l(X)` on the grid `[1, 2, ..., d - 1, ∞]` for
 /// arbitrary `d`.
 #[inline]
 fn compute_mle_product_sum_evals_generic<F: JoltField>(
@@ -148,7 +163,6 @@ fn compute_mle_product_sum_evals_generic<F: JoltField>(
         endpoints: Vec<F>,
     }
 
-    let current_scalar = eq_poly.get_current_scalar();
     eq_poly
         .par_fold_out_in(
             // Allocate one InnerAcc per `x_out` lane; its scratch buffers are
@@ -197,7 +211,7 @@ fn compute_mle_product_sum_evals_generic<F: JoltField>(
             },
         )
         .into_iter()
-        .map(|x| F::reduce_product_accum(x) * current_scalar)
+        .map(F::reduce_product_accum)
         .collect()
 }
 
@@ -209,8 +223,6 @@ macro_rules! impl_mles_product_sum_evals_d {
             eq_poly: &GruenSplitEqPolynomial<F>,
         ) -> Vec<F> {
             debug_assert_eq!(mles.len(), $d);
-
-            let current_scalar = eq_poly.get_current_scalar();
 
             let sum_evals_arr: [F; $d] = eq_poly.par_fold_out_in_unreduced::<$d>(&|g| {
                 // Build pairs[(p0, p1); D] on the stack.
@@ -228,10 +240,7 @@ macro_rules! impl_mles_product_sum_evals_d {
                 endpoints
             });
 
-            sum_evals_arr
-                .into_iter()
-                .map(|x| x * current_scalar)
-                .collect()
+            sum_evals_arr.to_vec()
         }
     };
 }
@@ -270,8 +279,6 @@ macro_rules! impl_mles_sum_of_products_evals_d {
             debug_assert!(n_products > 0);
             debug_assert_eq!(mles.len(), n_products * $d);
 
-            let current_scalar = eq_poly.get_current_scalar();
-
             let sum_evals_arr: [F; $d] = eq_poly.par_fold_out_in_unreduced::<$d>(&|g| {
                 let mut sums = [F::zero(); $d];
 
@@ -298,10 +305,7 @@ macro_rules! impl_mles_sum_of_products_evals_d {
                 sums
             });
 
-            sum_evals_arr
-                .into_iter()
-                .map(|x| x * current_scalar)
-                .collect()
+            sum_evals_arr.to_vec()
         }
     };
 }
@@ -322,57 +326,40 @@ impl_mles_sum_of_products_evals_d!(
     eval_prod_16_assign
 );
 
-/// Given the evaluations of `g(X) / eq(X, r[round])` on the grid
-/// `[1, 2, ..., d - 1, ∞]`, recover the full univariate polynomial
-/// `g(X) = eq(X, r[round]) * (interpolated quotient)` such that
-/// `g(0) + g(1) = claim`.
+/// Given the evaluations of `q(X) = g(X) / l(X)` on the grid `[1, 2, ..., d - 1, ∞]`, where
+/// `l` is the split eq's current linear factor (bound prefix scalar included), recover
+/// `g(X) = l(X) · q(X)` such that `g(0) + g(1) = claim`.
+///
+/// `q(0)` follows from the claim by division by `l(0)`; when `l(0)` vanishes, `q_at_zero`
+/// evaluates it directly and the error carries the actual `g(0) + g(1)` if it misses the claim.
 #[inline]
 pub fn finish_mles_product_sum_from_evals<F: JoltField>(
     sum_evals: &[F],
     claim: F,
     eq_poly: &GruenSplitEqPolynomial<F>,
-) -> UniPoly<F> {
-    // Get r[round] from the eq polynomial and compute the 1-bit equality polynomial
-    // explicitly:
-    //   eq(0, r_round) = 1 - r_round
-    //   eq(1, r_round) = r_round
-    let r_round = eq_poly.get_current_w();
-    let eq_eval_at_0 = F::one() - r_round;
-    let eq_eval_at_1 = r_round;
-
-    // Obtain h(0) from the claim.
-    //
-    // For d > 1 the grid is U_d = [1, 2, …, d-1, ∞] so sum_evals[0] = h(1).
-    // For d = 1  the grid is U_1 = [∞]            so sum_evals[0] = h(∞).
-    //
-    // In both cases  claim = (1−r)·h(0) + r·h(1),  and h is degree-(d−1).
-    let eval_at_0 = if sum_evals.len() == 1 {
-        // d = 1: h is linear, h(X) = a + bX, with b = h(∞) = sum_evals[0].
-        // claim = h(0) + r·b  ⟹  h(0) = claim − r·b
-        claim - eq_eval_at_1 * sum_evals[0]
-    } else {
-        // d > 1: sum_evals[0] = h(1).
-        // claim = (1−r)·h(0) + r·h(1)  ⟹  h(0) = (claim − r·h(1)) / (1−r)
-        (claim - eq_eval_at_1 * sum_evals[0]) / eq_eval_at_0
-    };
-
-    // Interpolate the intermediate polynomial.
-    let mut toom_evals = Vec::with_capacity(sum_evals.len() + 1);
-    toom_evals.push(eval_at_0);
-    toom_evals.extend_from_slice(sum_evals);
-    let tmp_coeffs = UniPoly::from_evals_toom(&toom_evals).coeffs;
-
-    // Add in the missing eq(X, r[round]) factor.
-    // Note eq(X, r[round]) = (1 - r[round]) + (2r[round] - 1)X.
-    let constant_coeff = F::one() - r_round;
-    let x_coeff = r_round + r_round - F::one();
-    let mut coeffs = vec![F::zero(); tmp_coeffs.len() + 1];
-    for (i, coeff) in tmp_coeffs.into_iter().enumerate() {
-        coeffs[i] += coeff * constant_coeff;
-        coeffs[i + 1] += coeff * x_coeff;
+    q_at_zero: impl FnOnce() -> F,
+) -> Result<UnivariatePoly<F>, F> {
+    if sum_evals.len() > 1 {
+        return eq_poly.gruen_poly_from_evals(sum_evals, claim, q_at_zero);
     }
-
-    UniPoly::from_coeff(coeffs)
+    // d = 1: the grid is [∞], so q(X) = a + bX with b = sum_evals[0], and
+    // claim = l(0)·a + l(1)·(a + b) = (l(0) + l(1))·a + l(1)·b, where l(0) + l(1) is the scalar.
+    let (l_zero, l_one) = eq_poly.current_linear_evals();
+    let b = sum_evals[0];
+    let Some(scalar_inverse) = (l_zero + l_one).inverse() else {
+        return if claim.is_zero() {
+            Ok(UnivariatePoly::new(vec![F::zero(); 3]))
+        } else {
+            Err(F::zero())
+        };
+    };
+    let a = (claim - l_one * b) * scalar_inverse;
+    let l_slope = l_one - l_zero;
+    Ok(UnivariatePoly::new(vec![
+        a * l_zero,
+        a * l_slope + b * l_zero,
+        b * l_slope,
+    ]))
 }
 
 /// Evaluate the product of linear polynomials on the grid `U_D = [1, 2, ..., D - 1, ∞]`.
@@ -1339,8 +1326,9 @@ fn product_eval_univariate_naive_accumulate<F: JoltField>(
 #[cfg(test)]
 mod tests {
     use crate::field::bn254::Fr;
-    use ark_std::{test_rng, UniformRand, Zero};
+    use ark_std::{test_rng, One, UniformRand, Zero};
     use jolt_field::Field;
+    use jolt_poly::GruenSplitEqPolynomial;
     use std::array::from_fn;
 
     use crate::{
@@ -1352,7 +1340,6 @@ mod tests {
                 BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
             },
             ra_poly::RaPolynomial,
-            split_eq_poly::GruenSplitEqPolynomial,
         },
         subprotocols::mles_product_sum::{
             compute_mles_product_sum, compute_mles_product_sum_evals_d16,
@@ -1395,11 +1382,33 @@ mod tests {
         let eval = EqPolynomial::mle(challenge, r) * mle_challenge_product;
         let mles = mles.map(RaPolynomial::RoundN);
 
-        let eq_poly = GruenSplitEqPolynomial::new(r, BindingOrder::LowToHigh);
-        let sum_poly = compute_mles_product_sum(&mles, claim, &eq_poly);
-        let lhs = sum_poly.evaluate(&challenge[0]);
+        let r_field: Vec<Fr> = r.iter().map(|&c| c.into()).collect();
+        let eq_poly = GruenSplitEqPolynomial::new(&r_field, jolt_poly::BindingOrder::LowToHigh);
+        let sum_poly = compute_mles_product_sum(&mles, claim, &eq_poly).expect("honest claim");
+        let lhs = sum_poly.evaluate(challenge[0].into());
 
         assert_eq!(lhs, eval);
+    }
+
+    /// At an eq point of 1 the linear eq factor vanishes at 0, so `q(0)` cannot come from the
+    /// claim by division and is evaluated directly.
+    #[test]
+    fn product_sum_where_eq_vanishes_at_zero() {
+        let mut rng = &mut test_rng();
+        let r = [Fr::one()];
+        let mles: [_; 4] = from_fn(|_| random_mle(1, rng));
+        let claim = gen_product_mle(&mles).evaluate(&r);
+        let challenge: Fr = <Fr as JoltField>::Challenge::rand(&mut rng).into();
+        let expected = EqPolynomial::mle(&[challenge], &r)
+            * mles
+                .iter()
+                .map(|p| p.evaluate(&[challenge]))
+                .product::<Fr>();
+        let mles = mles.map(RaPolynomial::RoundN);
+
+        let eq_poly = GruenSplitEqPolynomial::new(&r, jolt_poly::BindingOrder::LowToHigh);
+        let sum_poly = compute_mles_product_sum(&mles, claim, &eq_poly).expect("honest claim");
+        assert_eq!(sum_poly.evaluate(challenge), expected);
     }
 
     // Keep tests ordered by increasing `N_MLE` for readability.
@@ -1441,7 +1450,8 @@ mod tests {
         let w: Vec<<Fr as JoltField>::Challenge> = (0..n_vars)
             .map(|_| <Fr as JoltField>::Challenge::rand(&mut rng))
             .collect();
-        let mut eq_poly = GruenSplitEqPolynomial::new(&w, BindingOrder::LowToHigh);
+        let w_field: Vec<Fr> = w.iter().map(|&c| c.into()).collect();
+        let mut eq_poly = GruenSplitEqPolynomial::new(&w_field, jolt_poly::BindingOrder::LowToHigh);
 
         // Number of product terms to sum; keep small for test runtime.
         let n_products = 3;
@@ -1484,7 +1494,7 @@ mod tests {
             for mle in mles.iter_mut() {
                 mle.bind_parallel(r_j, BindingOrder::LowToHigh);
             }
-            eq_poly.bind(r_j);
+            eq_poly.bind(r_j.into());
         }
     }
 

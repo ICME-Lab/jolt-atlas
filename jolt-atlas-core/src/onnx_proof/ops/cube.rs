@@ -6,6 +6,8 @@ use crate::{
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_trace::{op::Cube, trace::LayerData, Trace};
+use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -15,8 +17,6 @@ use joltworks::{
             OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
             BIG_ENDIAN, LITTLE_ENDIAN,
         },
-        split_eq_poly::GruenSplitEqPolynomial,
-        unipoly::UniPoly,
     },
     subprotocols::{
         mles_product_sum::compute_mle_product_sum,
@@ -90,8 +90,10 @@ impl<F: JoltField> CubeProver<F> {
     /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all, name = "CubeProver::initialize")]
     pub fn initialize(trace: &Trace, params: CubeParams<F>) -> Self {
-        let eq_r_node_output =
-            GruenSplitEqPolynomial::new(&params.r_node_output.r, BindingOrder::LowToHigh);
+        let eq_r_node_output = GruenSplitEqPolynomial::new(
+            &params.r_node_output.r,
+            jolt_poly::BindingOrder::LowToHigh,
+        );
         let LayerData {
             operands,
             output: _,
@@ -113,18 +115,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CubeProver<F>
         &self.params
     }
 
-    fn compute_message(&mut self, _round: usize, previous_claim: F) -> UniPoly<F> {
-        compute_mle_product_sum(
-            DEGREE_BOUND - 1,
-            &self.operand,
-            previous_claim,
-            &self.eq_r_node_output,
-        )
-    }
-
-    fn ingest_challenge(&mut self, r_j: F::Challenge, _round: usize) {
-        self.eq_r_node_output.bind(r_j);
-        self.operand.bind_parallel(r_j, BindingOrder::LowToHigh);
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        Some(self)
     }
 
     fn cache_openings(
@@ -139,6 +131,47 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CubeProver<F>
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
             .into_provider(transcript, opening_point);
         provider.append_nodeio(Target::Input(0), self.operand.final_claim());
+    }
+}
+
+impl<F: JoltField> CubeProver<F> {
+    fn bind(&mut self, r: F) {
+        let r_j = F::challenge_from_field(r);
+        self.eq_r_node_output.bind(r);
+        self.operand.bind_parallel(r_j, BindingOrder::LowToHigh);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for CubeProver<F> {
+    fn num_rounds(&self) -> usize {
+        self.params.num_rounds()
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r);
+        }
+        compute_mle_product_sum(
+            DEGREE_BOUND - 1,
+            &self.operand,
+            previous_claim,
+            &self.eq_r_node_output,
+        )
+        .map_err(|actual| SumcheckError::RoundCheckFailed {
+            round,
+            expected: previous_claim,
+            actual,
+        })
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind);
+        Ok(())
     }
 }
 

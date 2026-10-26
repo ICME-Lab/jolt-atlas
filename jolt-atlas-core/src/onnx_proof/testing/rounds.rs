@@ -1,10 +1,11 @@
 //! Native sumcheck members driven round by round, off the transcript, where the split-eq factor
 //! vanishes.
 //!
-//! An eq-point coordinate of 0 makes the Gruen linear factor vanish at 1 in the round that binds
-//! it, so the round polynomial cannot be recovered from the running claim by division and the
-//! member evaluates its inner polynomial at 1 directly. Random challenges land there with
-//! probability about 2⁻¹²⁵ per coordinate, so no end-to-end test reaches it.
+//! An eq-point coordinate of 0 (or 1) makes the Gruen linear factor vanish at 1 (or 0) in the
+//! round that binds it, so the round polynomial cannot be recovered from the running claim by
+//! division and the member evaluates its inner polynomial at that endpoint directly. Random
+//! challenges land there with probability about 2⁻¹²⁵ per coordinate, so no end-to-end test
+//! reaches it.
 
 use atlas_trace::{Model, Tensor};
 use jolt_field::{Fr, Ring};
@@ -20,6 +21,7 @@ use super::ModelBuilder;
 use crate::{
     node_view::ModelView,
     onnx_proof::ops::{
+        cube::{CubeParams, CubeProver},
         mul::{MulParams, MulProver},
         square::{SquareParams, SquareProver},
     },
@@ -59,7 +61,7 @@ fn random_challenge(rng: &mut StdRng) -> Fr {
 }
 
 /// A model with one node applied to `NUM_VARS`-variable inputs, its trace's operands as field
-/// vectors, an eq point whose first and last coordinates are 0 (the first and last rounds of a
+/// vectors, an eq point whose last coordinate is 1 and first is 0 (the first and last rounds of a
 /// low-to-high member bind them), and challenges.
 struct Fixture {
     model: Model,
@@ -88,7 +90,7 @@ impl Fixture {
             .collect();
         let mut r_node: Vec<Fr> = (0..NUM_VARS).map(|_| random_challenge(&mut rng)).collect();
         r_node[0] = Fr::zero();
-        r_node[NUM_VARS - 1] = Fr::zero();
+        r_node[NUM_VARS - 1] = Fr::one();
         let challenges = (0..NUM_VARS).map(|_| random_challenge(&mut rng)).collect();
         Self {
             model,
@@ -136,4 +138,18 @@ fn square_rounds_where_eq_vanishes() {
     };
     let mut prover = SquareProver::initialize(&f.trace, params);
     f.check(&mut prover, &[&f.operands[0], &f.operands[0]]);
+}
+
+#[test]
+fn cube_rounds_where_eq_vanishes() {
+    let f = Fixture::new(0xA17_0403, 1, |b, i| b.cube(i[0], 0));
+    let params = CubeParams {
+        r_node_output: OpeningPoint::new(f.r_node.clone()),
+        computation_node: f.model.view(f.node),
+    };
+    let mut prover = CubeProver::initialize(&f.trace, params);
+    f.check(
+        &mut prover,
+        &[&f.operands[0], &f.operands[0], &f.operands[0]],
+    );
 }

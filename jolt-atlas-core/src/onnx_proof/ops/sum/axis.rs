@@ -155,10 +155,6 @@ impl<F: JoltField> SumAxisProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SumAxisProver<F> {
-    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
-        Some(self)
-    }
-
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }

@@ -11,5 +11,4 @@ pub mod shout;
 pub mod sumcheck;
 pub mod sumcheck_prover;
 pub mod sumcheck_verifier;
-pub mod univariate_skip;
 pub mod upstream_sumcheck;

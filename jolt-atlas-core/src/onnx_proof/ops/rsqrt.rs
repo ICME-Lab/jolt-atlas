@@ -317,10 +317,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RsqrtProver<F
         &self.params
     }
 
-    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
-        Some(self)
-    }
-
     fn cache_openings(
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,

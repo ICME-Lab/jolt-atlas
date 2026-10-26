@@ -252,10 +252,6 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
 impl<F: JoltField, T: Transcript, Table: SmallActivationTable> SumcheckInstanceProver<F, T>
     for SmallTableProver<F, Table>
 {
-    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
-        Some(self)
-    }
-
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }

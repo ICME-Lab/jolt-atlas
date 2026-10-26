@@ -541,10 +541,6 @@ impl<F: JoltField> SplitProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SplitProver<F> {
-    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
-        Some(self)
-    }
-
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -816,10 +812,6 @@ impl<F: JoltField> ValueProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ValueProver<F> {
-    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
-        Some(self)
-    }
-
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }

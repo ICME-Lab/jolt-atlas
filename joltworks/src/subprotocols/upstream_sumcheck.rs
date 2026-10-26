@@ -6,21 +6,18 @@
 //!
 //! - [`FacadeTranscript`] presents one of our split transcripts as the facade for the duration of
 //!   an engine call. Its challenges are our 125-bit challenges (as field elements), each preceded
-//!   by the round's proof of work, so stage 3's per-round grind survives the engine swap.
-//! - [`InstanceMember`] runs one of our [`SumcheckInstanceProver`]s as an upstream batch member,
-//!   handing it its round challenges back in the optimized [`JoltField::Challenge`] form.
+//!   by the round's proof of work.
 //! - [`InstanceRounds`] schedules members sequentially or, for batches of independent instances,
 //!   in parallel.
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::utils::profiling::print_current_memory_usage;
 use crate::{
-    field::JoltField, poly::unipoly::CompressedUniPoly,
-    subprotocols::sumcheck_prover::SumcheckInstanceProver, transcripts::Transcript,
+    field::JoltField, poly::unipoly::CompressedUniPoly, transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
-use jolt_poly::{CompressedPoly, UnivariatePoly};
-use jolt_sumcheck::{MemberFinish, MemberRound, ProveRounds, RoundScheduler, SumcheckError};
+use jolt_poly::CompressedPoly;
+use jolt_sumcheck::{MemberFinish, MemberRound, RoundScheduler, SumcheckError};
 use rayon::prelude::*;
 use std::{marker::PhantomData, ptr::NonNull};
 
@@ -132,59 +129,13 @@ pub fn round_check_failed<F: JoltField>(
     }
 }
 
-/// One of our sumcheck instances as an upstream batch member: its own [`ProveRounds`] when it
-/// has one, otherwise its `compute_message`/`ingest_challenge`/`finalize`.
-pub struct InstanceMember<'a, F: JoltField, T: Transcript> {
-    instance: &'a mut dyn SumcheckInstanceProver<F, T>,
-}
-
-impl<'a, F: JoltField, T: Transcript> InstanceMember<'a, F, T> {
-    pub fn new(instance: &'a mut dyn SumcheckInstanceProver<F, T>) -> Self {
-        Self { instance }
-    }
-}
-
-impl<F: JoltField, T: Transcript> ProveRounds<F> for InstanceMember<'_, F, T> {
-    fn num_rounds(&self) -> usize {
-        self.instance.num_rounds()
-    }
-
-    fn prove_round(
-        &mut self,
-        bind: Option<F>,
-        round: usize,
-        previous_claim: F,
-    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
-        if let Some(rounds) = self.instance.rounds() {
-            return rounds.prove_round(bind, round, previous_claim);
-        }
-        if let Some(r) = bind {
-            self.instance
-                .ingest_challenge(F::challenge_from_field(r), round - 1);
-        }
-        let message = self.instance.compute_message(round, previous_claim);
-        Ok(UnivariatePoly::new(message.coeffs))
-    }
-
-    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        if let Some(rounds) = self.instance.rounds() {
-            return rounds.finish_rounds(bind);
-        }
-        let last = self.instance.num_rounds() - 1;
-        self.instance
-            .ingest_challenge(F::challenge_from_field(bind), last);
-        self.instance.finalize();
-        Ok(())
-    }
-}
-
 /// Round scheduling for our instances: in declaration order, or in parallel across members for
 /// batches of mutually independent instances (each member's own parallelism stays on; rayon's
 /// work stealing absorbs the nesting).
 ///
-/// Crate-private: parallel scheduling relies on every member being an [`InstanceMember`], whose
-/// instance is `Send + Sync` (see [`SendRound`]), which only this crate's batched sumcheck
-/// guarantees.
+/// Crate-private: parallel scheduling relies on every member being a [`SumcheckInstanceProver`](crate::subprotocols::sumcheck_prover::SumcheckInstanceProver)
+/// (which is `Send + Sync`) seen as its [`ProveRounds`](jolt_sumcheck::ProveRounds) supertrait (see [`SendRound`]), which only
+/// this crate's batched sumcheck guarantees.
 pub(crate) struct InstanceRounds {
     parallel: bool,
     round: usize,
@@ -199,9 +150,9 @@ impl InstanceRounds {
 /// A round handle sent to a rayon worker.
 struct SendRound<'s, T>(&'s mut T);
 
-// SAFETY: `InstanceRounds` only schedules `InstanceMember`s, whose instances are
-// `SumcheckInstanceProver: Send + Sync`; the remaining handle fields are field elements and
-// indices. Each handle is visited by exactly one worker.
+// SAFETY: `InstanceRounds` only schedules members that are `SumcheckInstanceProver: Send + Sync`
+// instances upcast to `ProveRounds`; the remaining handle fields are field elements and indices.
+// Each handle is visited by exactly one worker.
 unsafe impl<T> Send for SendRound<'_, T> {}
 
 impl<F: JoltField> RoundScheduler<F> for InstanceRounds {

@@ -193,10 +193,6 @@ impl<F: JoltField> SliceSumcheckProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SliceSumcheckProver<F> {
-    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
-        Some(self)
-    }
-
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }

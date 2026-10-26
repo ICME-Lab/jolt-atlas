@@ -9,7 +9,7 @@ use crate::{
     },
     subprotocols::upstream_sumcheck::{
         compressed_from_upstream, compressed_to_upstream, expect_engine, FacadeTranscript,
-        InstanceMember, InstanceRounds,
+        InstanceRounds,
     },
     subprotocols::{
         sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceVerifier,
@@ -98,13 +98,9 @@ impl BatchedSumcheck {
         const MANY_INSTANCES: usize = 8;
         let many_instances = parallel_instances && sumcheck_instances.len() >= MANY_INSTANCES;
         let challenges = {
-            let mut members: Vec<InstanceMember<'_, F, ProofTranscript>> = sumcheck_instances
+            let mut member_refs: Vec<&mut dyn ProveRounds<F>> = sumcheck_instances
                 .iter_mut()
-                .map(|sumcheck| InstanceMember::new(&mut **sumcheck))
-                .collect();
-            let mut member_refs: Vec<&mut dyn ProveRounds<F>> = members
-                .iter_mut()
-                .map(|member| member as &mut dyn ProveRounds<F>)
+                .map(|sumcheck| &mut **sumcheck as &mut dyn ProveRounds<F>)
                 .collect();
             let mut scheduler = InstanceRounds::new(many_instances);
             let ((proved, recorded), pow) = FacadeTranscript::<ProofTranscript, F>::scope(
@@ -274,8 +270,8 @@ impl Sumcheck {
         );
 
         let (proof, challenges) = {
-            let mut member = InstanceMember::new(&mut *sumcheck_instance);
-            let mut member_refs: Vec<&mut dyn ProveRounds<F>> = vec![&mut member];
+            let mut member_refs: Vec<&mut dyn ProveRounds<F>> =
+                vec![&mut *sumcheck_instance as &mut dyn ProveRounds<F>];
             let ((proved, recorded), pow) = FacadeTranscript::<ProofTranscript, F>::scope(
                 transcript,
                 round_pow_bits::<F>(degree),

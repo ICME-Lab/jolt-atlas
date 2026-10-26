@@ -383,10 +383,6 @@ impl<F: JoltField> CosProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for CosProver<F> {
-    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
-        Some(self)
-    }
-
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }

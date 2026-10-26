@@ -252,7 +252,11 @@ impl AtlasRelation for DivRelation {
 }
 
 impl EngineRelation for DivRelation {
-    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+    fn witnesses<F: JoltField>(
+        &self,
+        trace: &Trace,
+        _setup: &RelationSetup<F>,
+    ) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, output } = TraceView::layer_data(trace, &self.node);
         let [left, right] = operands[..] else {
             panic!("Expected two operands for Div operation")

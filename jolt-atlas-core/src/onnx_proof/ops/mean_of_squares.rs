@@ -37,6 +37,7 @@ use std::array;
 use atlas_trace::{op::MeanOfSquares, trace::LayerData, Op, Trace};
 
 use crate::{
+    atlas_relation_types,
     node_view::ComputationNode,
     onnx_proof::{
         clamp_lookups::{clamp_committed_polys, is_scalar, recover_small_int, verify_scalar_clamp},
@@ -47,29 +48,32 @@ use crate::{
             range_check_operands::{MeanOfSquaresRangeCheckOperands, RangeCheckOperands},
             RangeCheckProvider,
         },
+        relation::{
+            append_produced, note_dispatch, reduced_output_setup, relation_input_claim,
+            AtlasRelation, RelationDerived, RelationExpr, RelationId, RelationOpening,
+            RelationParams, RelationSetup, RelationVerifier,
+        },
         ProofId, ProofType,
     },
-    utils::opening_access::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
 use common::{consts::XLEN, parallel::par_enabled, CommittedPoly, VirtualPoly};
+use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     lookup_tables::unsigned_less_than::UnsignedLessThanTable,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN,
-        },
+        opening_proof::{OpeningAccumulator, OpeningId, ProverOpeningAccumulator},
     },
     subprotocols::{
         shout::RaOneHotEncoding,
         sumcheck::{Sumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
@@ -100,7 +104,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
         proofs.extend(pre_proofs);
 
         // (3) Reduction sumcheck `acc(r) = Σ eq·x²` (claim `rescaled·D + R`).
-        let params = MeanOfSquaresReductionParams::new(node.clone(), &prover.accumulator);
+        let params = RelationParams::new(
+            MeanOfSquaresRelation::new(node.clone()),
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
         let mut reduction = MeanOfSquaresReductionProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
             &mut reduction,
@@ -148,7 +156,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
             .proofs
             .get(&ProofId(node.idx, ProofType::RescaleArith))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let reduction = MeanOfSquaresReductionVerifier::new(node.clone(), &verifier.accumulator);
+        let reduction = RelationVerifier::<F, _>::new(
+            MeanOfSquaresRelation::new(node.clone()),
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
         Sumcheck::verify(
             proof,
             &reduction,
@@ -216,74 +228,141 @@ fn verify_scalar_remainder<F: JoltField>(r_claim: F, divisor: i64) -> Result<(),
 // Reduction sumcheck: acc(r) = Σ_{h,j} eq(r,h)·x[h,j]²
 // ---------------------------------------------------------------------------
 
-/// Parameters for the mean-of-squares reduction sumcheck.
-#[derive(Clone)]
-pub struct MeanOfSquaresReductionParams<F: JoltField> {
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
-    /// `D = N·2^S` — the rescale divisor (bound into the input claim).
-    divisor: i64,
-    /// Number of retained (output) variables — the eq cube, the high rounds.
-    log_retained: usize,
-    /// Number of reduced (summed) variables — the low rounds.
-    log_reduced: usize,
+crate::bind_relation!(MeanOfSquares, MeanOfSquaresRelation);
+
+/// The mean-of-squares reduction as a relation, binding high-to-low over the operand laid out
+/// `[retained (high), reduced (low)]`:
+///
+/// ```text
+/// input claim   rescaled(r₀)·D + rem(r₀)      (D = N·2^S, the rescale divisor)
+/// output claim  eq(r₀, r′_retained) · x(r′)²
+/// ```
+///
+/// [`MeanOfSquaresReductionProver`] is its prover; the verifier is the relation's.
+///
+/// **S ⊆ R.** The op accumulates `acc = Σ_reduced x²` in `i64` per retained index and splits it
+/// with `atlas_trace::semantics::fixed::rebase` by `D` into `rescaled·D + rem`, so
+/// `Σ eq(r₀, h)·x(h, j)²` over the hypercube is `acc(r₀)`; zero-padded lanes add nothing to the
+/// sum. The bound `rem < D` is the range check, outside the relation.
+pub struct MeanOfSquaresRelation {
+    node: ComputationNode,
 }
 
-impl<F: JoltField> MeanOfSquaresReductionParams<F> {
-    /// Build params from the node and accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
-        let Op::MeanOfSquares(op) = &computation_node.operator else {
-            panic!("MeanOfSquaresReductionParams: expected MeanOfSquares operator");
+impl MeanOfSquaresRelation {
+    fn op(&self) -> &MeanOfSquares {
+        let Op::MeanOfSquares(op) = &self.node.operator else {
+            panic!("expected MeanOfSquares operator")
         };
-        // The sumcheck cube splits the flat-padded operand into
-        // `[retained, reduced]`, so the *padded* reduced count sizes the low
-        // rounds. The divisor `D = count·2^S` stays semantic (any constant N):
-        // zero-padded lanes contribute nothing to `Σx²`.
+        op
+    }
+
+    /// The retained (output) variables: the eq cube, bound in the first rounds.
+    fn log_retained(&self) -> usize {
+        self.node.pow2_padded_num_output_elements().log_2()
+    }
+
+    /// The reduced (summed) variables, bound last.
+    fn log_reduced(&self) -> usize {
+        // The sumcheck cube splits the flat-padded operand into `[retained, reduced]`, so the
+        // padded reduced count sizes the low rounds; the divisor stays semantic.
+        let padded_count = self.op().padded_count;
         assert!(
-            op.padded_count.is_power_of_two(),
-            "mean-of-squares reduction requires a power-of-two padded reduced count, got {}",
-            op.padded_count
+            padded_count.is_power_of_two(),
+            "mean-of-squares reduction requires a power-of-two padded reduced count, got {padded_count}"
         );
-        let divisor = mos_divisor(op, computation_node.scale);
-        let log_reduced = op.padded_count.log_2();
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let r_node_output = accessor.get_reduced_opening().0;
-        let log_retained = r_node_output.r.len();
-        Self {
-            r_node_output,
-            computation_node,
-            divisor,
-            log_retained,
-            log_reduced,
-        }
+        padded_count.log_2()
+    }
+
+    fn ids(&self) -> OpeningIdBuilder<'_> {
+        OpeningIdBuilder::new(&self.node)
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for MeanOfSquaresReductionParams<F> {
+impl SymbolicSumcheck for MeanOfSquaresRelation {
+    atlas_relation_types!();
+    type Shape = ComputationNode;
+
+    fn new(node: ComputationNode) -> Self {
+        Self { node }
+    }
+
+    fn id() -> RelationId {
+        RelationId::MeanOfSquares
+    }
+
+    fn rounds(&self) -> usize {
+        self.log_retained() + self.log_reduced()
+    }
+
     fn degree(&self) -> usize {
         DEGREE
     }
 
-    /// The raw accumulation `acc(r) = rescaled(r)·D + R(r)` (the rescale seam).
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        let rescaled = accessor.get_advice(VirtualPoly::ClampAcc).1;
-        let remainder = accessor.get_advice(VirtualPoly::RescaleRemainder).1;
-        rescaled * F::from_u64(self.divisor as u64) + remainder
+    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
+        let divisor = mos_divisor(self.op(), self.node.scale);
+        let rescaled = self.ids().advice(VirtualPoly::ClampAcc);
+        let remainder = self.ids().advice(VirtualPoly::RescaleRemainder);
+        constant(F::from_u64(divisor as u64)) * opening(RelationOpening::Id(rescaled))
+            + opening(RelationOpening::Id(remainder))
     }
 
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::new(challenges.to_vec())
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.log_retained + self.log_reduced
+    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
+        let x = opening(RelationOpening::Id(self.produced()[0]));
+        derived(RelationDerived::RetainedEq) * x.clone() * x
     }
 }
 
-/// Prover for the mean-of-squares reduction sumcheck.
+impl AtlasRelation for MeanOfSquaresRelation {
+    type Spec = MeanOfSquares;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
+    }
+
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.node)
+    }
+
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![self.ids().nodeio(Target::Input(0))]
+    }
+
+    fn opening_points<F: JoltField>(
+        &self,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Vec<Vec<F>> {
+        vec![challenges.to_vec()]
+    }
+
+    fn derive<F: JoltField>(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> F {
+        match id {
+            RelationDerived::RetainedEq => {
+                EqPolynomial::mle(&setup.incoming_point, &challenges[..self.log_retained()])
+            }
+            other => panic!("a mean of squares derives no {other:?}"),
+        }
+    }
+}
+
+/// The specialized prover of a [`MeanOfSquaresRelation`]: the operand squared against the
+/// retained-dim eq table, read by index rather than expanded. Completeness-only:
+/// `relation_prover_equiv_mean_of_squares` checks its messages against the relation's reference
+/// messages.
 pub struct MeanOfSquaresReductionProver<F: JoltField> {
-    params: MeanOfSquaresReductionParams<F>,
+    relation: MeanOfSquaresRelation,
+    setup: RelationSetup<F>,
+    log_retained: usize,
+    log_reduced: usize,
     /// The (flat, padded) input operand, laid out `[retained (high), reduced (low)]`.
     operand: MultilinearPolynomial<F>,
     /// Eq-poly over the retained (output) variables.
@@ -295,24 +374,30 @@ pub struct MeanOfSquaresReductionProver<F: JoltField> {
 impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     /// Initialize by loading the operand and the retained-dim eq-poly.
     #[tracing::instrument(skip_all, name = "MeanOfSquaresReductionProver::initialize")]
-    pub fn initialize(trace: &Trace, params: MeanOfSquaresReductionParams<F>) -> Self {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
+    pub fn initialize(trace: &Trace, params: RelationParams<F, MeanOfSquaresRelation>) -> Self {
+        let (relation, setup) = params.into_parts();
+        note_dispatch(&relation);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &relation.node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for MeanOfSquares operation")
         };
+        let (log_retained, log_reduced) = (relation.log_retained(), relation.log_reduced());
         let operand = MultilinearPolynomial::from(operand.padded_pow2());
         assert_eq!(
             operand.get_num_vars(),
-            params.log_retained + params.log_reduced,
+            log_retained + log_reduced,
             "mean-of-squares operand size must equal retained·reduced (reduced count must be a power of two)"
         );
-        let eq = MultilinearPolynomial::from(EqPolynomial::evals(&params.r_node_output.r));
+        let eq = MultilinearPolynomial::from(EqPolynomial::evals(&setup.incoming_point));
         // Scalar output (`log_retained == 0`): there are no retained rounds to
         // bind, so the eq cube (over zero variables) is the constant 1 from the
         // start.
-        let eq_bound_claim = (params.log_retained == 0).then(F::one);
+        let eq_bound_claim = (log_retained == 0).then(F::one);
         Self {
-            params,
+            relation,
+            setup,
+            log_retained,
+            log_reduced,
             operand,
             eq,
             eq_bound_claim,
@@ -321,8 +406,12 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
 }
 
 impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MeanOfSquaresReductionProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+    fn degree(&self) -> usize {
+        self.relation.degree()
+    }
+
+    fn input_claim(&self, accumulator: &ProverOpeningAccumulator<F>) -> F {
+        relation_input_claim(&self.relation, &self.setup, accumulator)
     }
 
     fn cache_openings(
@@ -331,18 +420,21 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MeanOfSquares
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let point = OpeningPoint::new(sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, point);
-        provider.append_nodeio(Target::Input(0), self.operand.final_claim());
+        append_produced(
+            &self.relation,
+            &self.setup,
+            accumulator,
+            transcript,
+            sumcheck_challenges,
+            &[self.operand.final_claim()],
+        );
     }
 }
-
 impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     fn round_message(&mut self, round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let half = self.operand.len() / 2;
-        let log_retained = self.params.log_retained;
-        let log_reduced = self.params.log_reduced;
+        let log_retained = self.log_retained;
+        let log_reduced = self.log_reduced;
         let evals: [F; DEGREE] = (0..half)
             .into_par_iter()
             .with_min_len(par_enabled())
@@ -368,9 +460,9 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     fn bind(&mut self, r: F, round: usize) {
         let r_j = F::challenge_from_field(r);
         self.operand.bind_parallel(r_j, BindingOrder::HighToLow);
-        if round < self.params.log_retained {
+        if round < self.log_retained {
             self.eq.bind_parallel(r_j, BindingOrder::HighToLow);
-            if round == self.params.log_retained - 1 {
+            if round == self.log_retained - 1 {
                 self.eq_bound_claim = Some(self.eq.final_claim());
             }
         }
@@ -379,7 +471,7 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for MeanOfSquaresReductionProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.relation.rounds()
     }
 
     fn prove_round(
@@ -395,59 +487,7 @@ impl<F: JoltField> ProveRounds<F> for MeanOfSquaresReductionProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.relation.rounds() - 1);
         Ok(())
-    }
-}
-
-/// Verifier for the mean-of-squares reduction sumcheck.
-pub struct MeanOfSquaresReductionVerifier<F: JoltField> {
-    params: MeanOfSquaresReductionParams<F>,
-}
-
-impl<F: JoltField> MeanOfSquaresReductionVerifier<F> {
-    /// Create the verifier.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-    ) -> Self {
-        Self {
-            params: MeanOfSquaresReductionParams::new(computation_node, accumulator),
-        }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
-    for MeanOfSquaresReductionVerifier<F>
-{
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        // `eq(r, retained challenges) · operand²`, where the retained challenges
-        // are the high (first `log_retained`) sumcheck challenges.
-        let (r_retained, _r_reduced) = sumcheck_challenges.split_at(self.params.log_retained);
-        let eq_eval = EqPolynomial::mle(&self.params.r_node_output.r, r_retained);
-        let operand = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .get_nodeio(Target::Input(0))
-            .1;
-        eq_eval * operand * operand
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let point = OpeningPoint::new(sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, point);
-        provider.append_nodeio(Target::Input(0));
     }
 }

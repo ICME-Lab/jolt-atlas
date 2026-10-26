@@ -172,7 +172,11 @@ impl<S: OpSpec + ProductShape + 'static> AtlasRelation for ProductRelation<S> {
 }
 
 impl<S: OpSpec + ProductShape + 'static> EngineRelation for ProductRelation<S> {
-    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+    fn witnesses<F: JoltField>(
+        &self,
+        trace: &Trace,
+        _setup: &RelationSetup<F>,
+    ) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
         Self::operands()
             .into_iter()

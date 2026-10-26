@@ -116,7 +116,11 @@ impl AtlasRelation for IffRelation {
 }
 
 impl EngineRelation for IffRelation {
-    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+    fn witnesses<F: JoltField>(
+        &self,
+        trace: &Trace,
+        _setup: &RelationSetup<F>,
+    ) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
         let [mask, a, b] = operands[..] else {
             panic!("Expected three operands for Iff operation")

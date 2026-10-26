@@ -169,7 +169,11 @@ impl AtlasRelation for ConstantDivisionRelation {
 }
 
 impl EngineRelation for ConstantDivisionRelation {
-    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+    fn witnesses<F: JoltField>(
+        &self,
+        trace: &Trace,
+        _setup: &RelationSetup<F>,
+    ) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
         let left = operands[0].padded_pow2();
         let divisor = self.divisor();

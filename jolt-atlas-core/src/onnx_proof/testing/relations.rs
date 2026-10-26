@@ -36,12 +36,14 @@ use crate::{
             div::DivRelation,
             einsum::{dot::EinsumDotProver, ContractionRelation},
             iff::IffRelation,
+            mean_of_squares::{MeanOfSquaresReductionProver, MeanOfSquaresRelation},
             mul::MulRelation,
             reshape::ReshapeRelation,
             rsqrt::RsqrtRelation,
             scalar_const_div::ConstantDivisionRelation,
             slice::SliceRelation,
             square::SquareRelation,
+            sum::axis::SumAxisRelation,
         },
         relation::{
             AtlasRelation, EngineRelation, RelationChallenge, RelationExpr, RelationOpening,
@@ -107,6 +109,8 @@ fn relation_specs_match_their_dispatched_op_kind() {
         OpKind::Reshape,
         OpKind::Slice,
         OpKind::Concat,
+        OpKind::Sum,
+        OpKind::MeanOfSquares,
     ] {
         assert!(
             dispatches.iter().any(|&(k, _)| k == kind),
@@ -364,7 +368,7 @@ fn check_engine<R: EngineRelation>(relation: impl Fn() -> R, trace: &Trace, rng:
         challenges: vec![(RelationChallenge::Gamma, random_point(rng, 1)[0])],
     };
     let challenges = random_point(rng, rounds);
-    let witnesses = relation().witnesses::<Fr>(trace);
+    let witnesses = relation().witnesses::<Fr>(trace, &setup);
     let open = |i: usize, point: &[Fr]| witnesses[i].evaluate(point);
     let mut prover =
         RelationProver::initialize(trace, RelationParams::at(relation(), setup.clone()));
@@ -380,6 +384,12 @@ fn relation_prover_equiv_dense() {
         (vec![(vec![4, 8], SMALL)], |b, i| b.slice(i[0], 1, 2, 7)),
         (vec![(vec![4, 8], SMALL), (vec![4, 2], SMALL)], |b, i| {
             b.concat(&[i[0], i[1]], 1)
+        }),
+        (vec![(vec![4, 8], SMALL)], |b, i| {
+            b.sum(i[0], vec![1], vec![4])
+        }),
+        (vec![(vec![4, 8], SMALL)], |b, i| {
+            b.sum(i[0], vec![0], vec![8])
         }),
     ];
     for (seed, (dims, build)) in (0xA17_0621..).zip(cases) {
@@ -402,6 +412,13 @@ fn relation_prover_equiv_dense() {
             ),
             Op::Slice(_) => check_dense(
                 || SliceRelation::for_node(&model, node.clone()),
+                &trace,
+                &node,
+                &open,
+                rng,
+            ),
+            Op::Sum(_) => check_dense(
+                || SumAxisRelation::for_node(&model, node.clone()),
                 &trace,
                 &node,
                 &open,
@@ -435,6 +452,27 @@ fn check_dense<R: EngineRelation>(
     let mut prover =
         RelationProver::initialize(trace, RelationParams::at(relation(), setup.clone()));
     assert_matches_reference(&mut prover, &relation(), &setup, open, &challenges);
+}
+
+#[test]
+fn relation_prover_equiv_mean_of_squares() {
+    let (_, trace, node, mut rng) = single_node(0xA17_0631, &[(vec![8, 4], SMALL)], |b, i| {
+        b.mean_of_squares(i[0], vec![1], vec![8, 1])
+    });
+    let relation = || MeanOfSquaresRelation::new(node.clone());
+    let setup = RelationSetup {
+        incoming_point: random_point(&mut rng, node.pow2_padded_num_output_elements().log_2()),
+        challenges: Vec::new(),
+    };
+    let challenges = random_point(&mut rng, relation().rounds());
+    let LayerData { operands, .. } = TraceView::layer_data(&trace, &node);
+    let operand = MultilinearPolynomial::<Fr>::from(operands[0].padded_pow2());
+    let open = |_: usize, point: &[Fr]| operand.evaluate(point);
+    let mut prover = MeanOfSquaresReductionProver::initialize(
+        &trace,
+        RelationParams::at(relation(), setup.clone()),
+    );
+    assert_matches_reference(&mut prover, &relation(), &setup, &open, &challenges);
 }
 
 #[test]

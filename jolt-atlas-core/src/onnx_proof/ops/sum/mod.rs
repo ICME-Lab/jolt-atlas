@@ -16,14 +16,14 @@ use crate::{
             clamp_committed_polys, is_scalar, prove_append_acc, prove_clamp_lookup,
             verify_append_acc, verify_clamp_lookup, verify_scalar_clamp,
         },
-        ops::{
-            sum::axis::{SumAxisParams, SumAxisProver, SumAxisVerifier},
-            OperatorProofTrait,
-        },
+        ops::{sum::axis::SumAxisRelation, OperatorProofTrait},
+        relation::{RelationParams, RelationProver, RelationVerifier},
         ProofId, ProofType, Prover, Verifier,
     },
-    utils::{self, opening_access::AccOpeningAccessor},
+    utils::opening_access::AccOpeningAccessor,
 };
+
+crate::bind_relation!(Sum, SumAxisRelation);
 
 /// Axis-wise sum implementations for sumcheck protocol.
 pub mod axis;
@@ -37,7 +37,7 @@ pub mod axis;
 /// 1. **Clamp lookup** ([`ClampLookupProvider`], `ProofType::Execution`) +
 ///    **one-hot checks** (`ProofType::RaOneHotChecks`): prove
 ///    `output(r) = SatClamp(acc(r))` and tie `acc` ([`VirtualPoly::ClampAcc`]).
-/// 2. **Axis reduction** ([`SumAxisProver`], `ProofType::SumReduction`): prove
+/// 2. **Axis reduction** ([`SumAxisRelation`], `ProofType::SumReduction`): prove
 ///    `acc(r) = Σ_axis operand`, reducing to the operand opening. Its input claim
 ///    is `acc(r)` (the lookup's `raf`), not the node output.
 ///
@@ -52,8 +52,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let sum_config = utils::dims::sum_config(node, &prover.preprocessing.model);
-
         // (1+2) Prove `output = SatClamp(acc)`. Non-scalar: clamp lookup + one-hot.
         // Scalar: just append `acc` in the clear (verifier checks the clamp).
         let mut results = if is_scalar(node) {
@@ -70,8 +68,12 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
         };
 
         // (3) Axis reduction: acc(r) = Σ_axis operand (input claim = ClampAcc).
-        let params = SumAxisParams::new_clamped(node.clone(), sum_config, &prover.accumulator);
-        let mut reduction = SumAxisProver::initialize(&prover.trace, params, &prover.accumulator);
+        let params = RelationParams::<F, _>::new(
+            SumAxisRelation::for_node(&prover.preprocessing.model, node.clone()),
+            &prover.accumulator,
+            &mut prover.transcript,
+        );
+        let mut reduction = RelationProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
             &mut reduction,
             &mut prover.accumulator,
@@ -88,8 +90,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        let sum_config = utils::dims::sum_config(node, &verifier.preprocessing.model);
-
         // (1+2) Verify `output = SatClamp(acc)`.
         if is_scalar(node) {
             // `acc` opens in the clear: recover it and check the clamp directly.
@@ -115,8 +115,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
             .proofs
             .get(&ProofId(node.idx, ProofType::SumReduction))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let reduction =
-            SumAxisVerifier::new_clamped(node.clone(), sum_config, &verifier.accumulator);
+        let reduction = RelationVerifier::<F, _>::new(
+            SumAxisRelation::for_node(&verifier.preprocessing.model, node.clone()),
+            &verifier.accumulator,
+            &mut verifier.transcript,
+        );
         Sumcheck::verify(
             proof,
             &reduction,

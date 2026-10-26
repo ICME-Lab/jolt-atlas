@@ -11,6 +11,9 @@ final-status-level = "slow"
 inherits = "default"
 failure-output = "immediate-final"
 retries = 0
+# GitHub's 4-vCPU, 16 GB runners lose the job to memory starvation with four Akita
+# proofs in flight; two fit.
+test-threads = 2
 
 [profile.ci.junit]
 path = "junit.xml"

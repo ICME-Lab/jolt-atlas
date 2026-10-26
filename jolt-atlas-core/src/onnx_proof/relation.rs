@@ -30,7 +30,9 @@ use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, PolynomialId, ProverOpeningAccumulator,
             VerifierOpeningAccumulator, BIG_ENDIAN,
@@ -42,6 +44,7 @@ use joltworks::{
         upstream_sumcheck::round_check_failed,
     },
     transcripts::Transcript,
+    utils::errors::ProofVerifyError,
 };
 
 /// An opening a relation reads or produces.
@@ -80,6 +83,14 @@ pub enum RelationId {
     Rsqrt,
     /// An einsum contraction.
     Contraction,
+    /// Floor division `left = right·q + rem`.
+    Division,
+    /// A committed division quotient equal to the node's reduced output.
+    DivisionQuotient,
+    /// Selection `mask·a + (1 − mask)·b`.
+    Select,
+    /// The pre-clamp accumulation of a saturating add or subtract, `acc = left ± right`.
+    Accumulation,
 }
 
 /// A relation's expression over atlas openings.
@@ -144,13 +155,19 @@ pub trait AtlasRelation:
     fn produced(&self) -> Vec<OpeningId>;
 
     /// The big-endian point of each produced opening, aligned with [`Self::produced`], given the
-    /// sumcheck challenges in round order. Defaults to the low-to-high bound point for all.
+    /// sumcheck challenges in round order. Defaults to the low-to-high bound point for all, which
+    /// for a zero-round relation (a tie) is the incoming point.
     fn opening_points<F: JoltField>(
         &self,
-        _setup: &RelationSetup<F>,
+        setup: &RelationSetup<F>,
         challenges: &[F],
     ) -> Vec<Vec<F>> {
-        vec![low_to_high_point(challenges); self.produced().len()]
+        let point = if self.rounds() == 0 {
+            setup.incoming_point.clone()
+        } else {
+            low_to_high_point(challenges)
+        };
+        vec![point; self.produced().len()]
     }
 
     /// A derived scalar of the output expression, given the sumcheck challenges in round order.
@@ -221,6 +238,62 @@ pub fn append_produced<F: JoltField, T: Transcript, R: AtlasRelation>(
             PolynomialId::Committed(_) => accumulator.append_dense(transcript, id, point, claim),
         }
     }
+}
+
+/// Prove a zero-round relation (a tie): append its produced openings, read off its witnesses
+/// at the incoming point. Nothing else enters the transcript; [`verify_tie`] checks the input
+/// claim against the output expression.
+pub fn prove_tie<F: JoltField, T: Transcript, R: EngineRelation>(
+    relation: &R,
+    trace: &Trace,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+) {
+    assert_eq!(relation.rounds(), 0, "a tie has no rounds");
+    note_dispatch(relation);
+    let setup = relation.setup(&*accumulator, transcript);
+    let claims: Vec<F> = relation
+        .witnesses::<F>(trace)
+        .iter()
+        .map(|witness| witness.evaluate(&setup.incoming_point))
+        .collect();
+    append_produced(relation, &setup, accumulator, transcript, &[], &claims);
+}
+
+/// Verify a zero-round relation (a tie): append its produced openings at the incoming point and
+/// require the input claim to equal the output expression.
+pub fn verify_tie<F: JoltField, T: Transcript, R: AtlasRelation>(
+    relation: &R,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<(), ProofVerifyError> {
+    assert_eq!(relation.rounds(), 0, "a tie has no rounds");
+    let setup = relation.setup(&*accumulator, transcript);
+    let points = relation.opening_points(&setup, &[]);
+    for (id, point) in relation.produced().into_iter().zip(points) {
+        match id.polynomial {
+            PolynomialId::Virtual(_) => accumulator.append_virtual(
+                transcript,
+                id,
+                OpeningPoint::<BIG_ENDIAN, F>::new(point),
+            ),
+            PolynomialId::Committed(_) => accumulator.append_dense(transcript, id, point),
+        }
+    }
+    let input = relation_input_claim(relation, &setup, &*accumulator);
+    let output = relation.output_expression::<F>().evaluate(
+        |opening| resolve(&*accumulator, opening),
+        |challenge| setup.challenge(challenge),
+        |derived| relation.derive(derived, &setup, &[]),
+    );
+    if input != output {
+        return Err(ProofVerifyError::InvalidOpeningProof(format!(
+            "{:?} tie on node {} does not hold",
+            R::id(),
+            relation.node().idx
+        )));
+    }
+    Ok(())
 }
 
 /// Tell the test suite which relation ran for a node.

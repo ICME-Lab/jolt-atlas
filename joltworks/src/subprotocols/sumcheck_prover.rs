@@ -1,6 +1,7 @@
 use crate::poly::unipoly::UniPoly;
 use crate::subprotocols::sumcheck_verifier::SumcheckInstanceParams;
 use crate::transcripts::Transcript;
+use jolt_sumcheck::ProveRounds;
 
 use crate::{
     field::{JoltField, MaybeAllocative},
@@ -38,11 +39,22 @@ pub trait SumcheckInstanceProver<F: JoltField, T: Transcript>:
         max_num_rounds - self.num_rounds()
     }
 
+    /// The instance's rounds as an upstream batch member, for an instance that implements
+    /// [`ProveRounds`] itself. Such an instance leaves [`Self::compute_message`],
+    /// [`Self::ingest_challenge`] and [`Self::finalize`] unimplemented.
+    fn rounds(&mut self) -> Option<&mut dyn ProveRounds<F>> {
+        None
+    }
+
     /// Computes the prover's message for a specific round of the sumcheck protocol.
-    fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F>;
+    fn compute_message(&mut self, _round: usize, _previous_claim: F) -> UniPoly<F> {
+        unimplemented!("an instance without compute_message runs its rounds through rounds()")
+    }
 
     /// Ingest the verifier's challenge for a sumcheck round.
-    fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize);
+    fn ingest_challenge(&mut self, _r_j: F::Challenge, _round: usize) {
+        unimplemented!("an instance without ingest_challenge runs its rounds through rounds()")
+    }
 
     /// Finalize prover state after the last challenge has been ingested, but before
     /// [`Self::cache_openings`] is called.

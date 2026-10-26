@@ -119,7 +119,8 @@ pub(crate) fn expect_engine<F: JoltField, R>(res: Result<R, SumcheckError<F>>) -
     res.unwrap_or_else(|e| panic!("sumcheck prover: {e:?}"))
 }
 
-/// One of our sumcheck instances as an upstream batch member.
+/// One of our sumcheck instances as an upstream batch member: its own [`ProveRounds`] when it
+/// has one, otherwise its `compute_message`/`ingest_challenge`/`finalize`.
 pub struct InstanceMember<'a, F: JoltField, T: Transcript> {
     instance: &'a mut dyn SumcheckInstanceProver<F, T>,
 }
@@ -141,6 +142,9 @@ impl<F: JoltField, T: Transcript> ProveRounds<F> for InstanceMember<'_, F, T> {
         round: usize,
         previous_claim: F,
     ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(rounds) = self.instance.rounds() {
+            return rounds.prove_round(bind, round, previous_claim);
+        }
         if let Some(r) = bind {
             self.instance
                 .ingest_challenge(F::challenge_from_field(r), round - 1);
@@ -150,6 +154,9 @@ impl<F: JoltField, T: Transcript> ProveRounds<F> for InstanceMember<'_, F, T> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        if let Some(rounds) = self.instance.rounds() {
+            return rounds.finish_rounds(bind);
+        }
         let last = self.instance.num_rounds() - 1;
         self.instance
             .ingest_challenge(F::challenge_from_field(bind), last);

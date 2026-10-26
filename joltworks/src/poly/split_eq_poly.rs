@@ -597,6 +597,53 @@ impl<F: JoltField> GruenSplitEqPolynomial<F> {
     }
 }
 
+/// The delayed-reduction fold of [`GruenSplitEqPolynomial::par_fold_out_in_unreduced`], over
+/// upstream's split eq.
+pub trait SplitEqUnreducedFold<F: JoltField> {
+    /// `Σ_g eq(g) · per_g_values(g)` over the unbound groups, reducing once per `x_out` and once
+    /// at the end.
+    fn par_fold_out_in_unreduced<const NUM_OUT: usize>(
+        &self,
+        per_g_values: &(impl Fn(usize) -> [F; NUM_OUT] + Sync + Send),
+    ) -> [F; NUM_OUT];
+}
+
+impl<F: JoltField> SplitEqUnreducedFold<F> for jolt_poly::GruenSplitEqPolynomial<F> {
+    #[inline]
+    fn par_fold_out_in_unreduced<const NUM_OUT: usize>(
+        &self,
+        per_g_values: &(impl Fn(usize) -> [F; NUM_OUT] + Sync + Send),
+    ) -> [F; NUM_OUT] {
+        let e_out = self.e_out_current();
+        let e_in = self.e_in_current();
+        (0..e_out.len())
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|x_out| {
+                let mut inner = [F::UnreducedProductAccum::zero(); NUM_OUT];
+                for (x_in, e_in) in e_in.iter().enumerate() {
+                    let vals = per_g_values(self.group_index(x_out, x_in));
+                    for k in 0..NUM_OUT {
+                        inner[k] += e_in.mul_to_product_accum(vals[k]);
+                    }
+                }
+                let mut outer = [F::UnreducedProductAccum::zero(); NUM_OUT];
+                for k in 0..NUM_OUT {
+                    outer[k] = e_out[x_out].mul_to_product_accum(F::reduce_product_accum(inner[k]));
+                }
+                outer
+            })
+            .reduce_with(|mut a, b| {
+                for k in 0..NUM_OUT {
+                    a[k] += b[k];
+                }
+                a
+            })
+            .expect("par_fold_out_in_unreduced: empty E_out; invariant violation")
+            .map(F::reduce_product_accum)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

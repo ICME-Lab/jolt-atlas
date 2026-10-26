@@ -24,6 +24,7 @@ pub(crate) fn probe_models() -> Vec<ProbeModel> {
         attention_like(0x5EED_0001),
         reductions(0x5EED_0002),
         tables_and_layout(0x5EED_0003),
+        relation_flows(0x5EED_0004),
     ]
 }
 
@@ -33,6 +34,7 @@ pub(crate) fn probe_models_alt() -> Vec<ProbeModel> {
         attention_like(0xA17_0001),
         reductions(0xA17_0002),
         tables_and_layout(0xA17_0003),
+        relation_flows(0xA17_0004),
     ]
 }
 
@@ -69,6 +71,35 @@ fn attention_like(seed: u64) -> ProbeModel {
     ];
     ProbeModel {
         name: "attention_like",
+        model: b.build(),
+        inputs,
+    }
+}
+
+/// The claim flows a relation-defined op takes part in (`Mul`, see `onnx_proof::relation`):
+/// a fused product, whose input claim reads the node's quotient and remainder advice and whose
+/// remainder range check runs in the deferred batch after the node loop; a raw product with two
+/// consumers, whose input claim is the evaluation reduction's instance for its output; and an
+/// operand shared by a product and an add, whose reduction folds the relation's produced
+/// opening with the add's.
+fn relation_flows(seed: u64) -> ProbeModel {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![16]);
+    let y = b.input(vec![16]);
+    let shared = b.add(x, y);
+    let fused = b.mul(shared, y);
+    let raw = b.mul_raw(shared, x);
+    let first = b.add(raw, fused);
+    let second = b.sub(first, raw);
+    let out = b.add(second, shared);
+    b.mark_output(out);
+    let inputs = vec![
+        Tensor::random_range(&mut rng, &[16], -(1 << 7)..(1 << 7)),
+        Tensor::random_range(&mut rng, &[16], -(1 << 7)..(1 << 7)),
+    ];
+    ProbeModel {
+        name: "relation_flows",
         model: b.build(),
         inputs,
     }

@@ -123,6 +123,12 @@ impl ModelBuilder {
         self.push(Op::Mul(op::Mul { rebase: true }), vec![a, b], d)
     }
 
+    /// Raw (un-rescaled) product, the building block of decompositions.
+    pub fn mul_raw(&mut self, a: Wire, b: Wire) -> Wire {
+        let d = self.dims(a);
+        self.push(Op::Mul(op::Mul { rebase: false }), vec![a, b], d)
+    }
+
     /// Floor division.
     pub fn div(&mut self, a: Wire, b: Wire) -> Wire {
         let d = self.dims(a);

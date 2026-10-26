@@ -9,85 +9,36 @@
 
 use atlas_trace::{op::Reshape, trace::LayerData, Model, Trace};
 
-use crate::node_view::ComputationNode;
-use crate::node_view::ModelView;
+use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use crate::{
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
-    utils::opening_access::{AccOpeningAccessor, Target},
+    atlas_relation_types, impl_standard_sumcheck_proof_api,
+    onnx_proof::{
+        ops::OperatorProofTrait,
+        relation::{
+            reduced_output_setup, AtlasRelation, EngineRelation, RelationDerived, RelationExpr,
+            RelationId, RelationOpening, RelationSetup,
+        },
+        ProofId, ProofType, Prover, Verifier,
+    },
+    utils::opening_access::{OpeningIdBuilder, Target},
 };
-use common::parallel::par_enabled;
-use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
+use jolt_claims::{derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use joltworks::{
-    field::{ChallengeFieldOps, IntoOpening, JoltField},
+    field::{ChallengeFieldOps, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN, LITTLE_ENDIAN,
-        },
+        multilinear_polynomial::MultilinearPolynomial,
+        opening_proof::{OpeningAccumulator, OpeningId},
     },
-    subprotocols::{
-        sumcheck::Sumcheck,
-        sumcheck::SumcheckInstanceProof,
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use rayon::prelude::*;
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Reshape {
-    #[tracing::instrument(skip_all, name = "Reshape::prove")]
-    fn prove(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let params = ReshapeSumcheckParams::<F>::new(
-            node.clone(),
-            &prover.accumulator,
-            &prover.preprocessing.model,
-        );
-        let mut prover_sumcheck = ReshapeSumcheckProver::initialize(&prover.trace, params);
-        let (proof, _) = Sumcheck::prove(
-            &mut prover_sumcheck,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        vec![(ProofId(node.idx, ProofType::Execution), proof)]
-    }
-
-    #[tracing::instrument(skip_all, name = "Reshape::verify")]
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let verifier_sumcheck = ReshapeSumcheckVerifier::new(
-            node.clone(),
-            &verifier.accumulator,
-            &verifier.preprocessing.model,
-        );
-        Sumcheck::verify(
-            proof,
-            &verifier_sumcheck,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        Ok(())
-    }
-}
+impl_standard_sumcheck_proof_api!(Reshape, model_relation ReshapeRelation);
 
 /// Build a reshape selector vector over the padded input domain.
 ///
@@ -140,227 +91,100 @@ pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
     selector
 }
 
-/// Static metadata for the reshape selector sumcheck.
-#[derive(Clone)]
-pub struct ReshapeSumcheckParams<F: JoltField> {
-    /// Reshape computation node being proven.
-    pub computation_node: ComputationNode,
-    /// Output opening point challenge vector for this node.
-    pub r_output: OpeningPoint<BIG_ENDIAN, F>,
-    /// Original (unpadded) input shape used to build selector `Sa`.
-    pub input_raw_dims: Vec<usize>,
-    /// Original (unpadded) output shape used to build selector `Sb`.
-    pub output_raw_dims: Vec<usize>,
+/// A reshape node with its operand's and its own unpadded dims.
+pub struct ReshapeShape {
+    node: ComputationNode,
+    input_raw_dims: Vec<usize>,
 }
 
-impl<F: JoltField> ReshapeSumcheckParams<F> {
-    /// Build reshape sumcheck parameters from node/opening context and model metadata.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-        model: &Model,
-    ) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let r_output = accessor.get_reduced_opening().0;
-        let input_raw_dims = model.view(computation_node.inputs[0]).output_dims.clone();
-        let output_raw_dims = computation_node.output_dims.clone();
-        Self {
-            computation_node,
-            r_output,
+/// `Reshape` as a dense relation over the padded input domain:
+///
+/// ```text
+/// input claim   out(r₀)                (the reduced output opening)
+/// output claim  selector(r′) · in(r′)
+/// ```
+///
+/// where `selector` ([`build_reshape_selectors`]) places `eq(r₀, ·)` at the padded output cell
+/// each input element lands in.
+///
+/// **S ⊆ R.** A reshape moves raw elements in row-major order without changing them, so
+/// `out(r₀) = Σ_i selector(i)·in(i)` over the input domain.
+pub struct ReshapeRelation {
+    shape: ReshapeShape,
+}
+
+impl ReshapeRelation {
+    /// The relation of a reshape `node` of `model`.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
+        let input_raw_dims = model.view(node.inputs[0]).output_dims;
+        Self::new(ReshapeShape {
+            node,
             input_raw_dims,
-            output_raw_dims,
-        }
+        })
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for ReshapeSumcheckParams<F> {
+impl SymbolicSumcheck for ReshapeRelation {
+    atlas_relation_types!();
+    type Shape = ReshapeShape;
+
+    fn new(shape: ReshapeShape) -> Self {
+        Self { shape }
+    }
+
+    fn id() -> RelationId {
+        RelationId::Reshape
+    }
+
+    fn rounds(&self) -> usize {
+        self.shape.node.pow2_padded_num_output_elements().log_2()
+    }
+
     fn degree(&self) -> usize {
         2
     }
 
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        accessor.get_reduced_opening().1
+    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
+        opening(RelationOpening::ReducedNodeOutput(self.shape.node.idx))
     }
 
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.computation_node
-            .pow2_padded_num_output_elements()
-            .log_2()
-    }
-
-    // output = input_claim * selector_claim
-    // selector_claim is deterministic from public data (shapes + r_output), so Challenge(0).
-    // input_claim is an opening.
-}
-
-/// Prover skeleton for reshape sumcheck.
-pub struct ReshapeSumcheckProver<F: JoltField> {
-    /// Static sumcheck parameters.
-    pub params: ReshapeSumcheckParams<F>,
-    /// Input polynomial (padded MLE).
-    pub input_mle: MultilinearPolynomial<F>,
-    /// Selector polynomial mapping padded input coordinates to the output point.
-    pub selector_mle: MultilinearPolynomial<F>,
-}
-
-impl<F: JoltField> ReshapeSumcheckProver<F> {
-    /// Initialize reshape prover state from trace tensors and prepared parameters.
-    pub fn initialize(trace: &Trace, params: ReshapeSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
-        let [input] = operands[..] else {
-            panic!("Expected one operand for Reshape operation")
-        };
-
-        let input_mle = MultilinearPolynomial::from(input.padded_pow2());
-        let selector = build_reshape_selectors(input.dims(), output.dims(), &params.r_output.r);
-        let selector_mle = MultilinearPolynomial::from(selector);
-        assert_eq!(input_mle.len(), selector_mle.len());
-
-        Self {
-            params,
-            input_mle,
-            selector_mle,
-        }
+    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
+        derived(RelationDerived::Table(0)) * opening(RelationOpening::Id(self.produced()[0]))
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReshapeSumcheckProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl AtlasRelation for ReshapeRelation {
+    type Spec = Reshape;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
     }
 
-    fn cache_openings(
+    fn setup<F: JoltField, T: Transcript>(
         &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-        provider.append_nodeio(Target::Input(0), self.input_mle.final_claim());
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.shape.node)
+    }
+
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
+    }
+
+    fn table<F: JoltField>(&self, index: usize, setup: &RelationSetup<F>) -> Vec<F> {
+        assert_eq!(index, 0, "a reshape has one selector");
+        build_reshape_selectors(
+            &self.shape.input_raw_dims,
+            &self.shape.node.output_dims,
+            &setup.incoming_point,
+        )
     }
 }
 
-impl<F: JoltField> ReshapeSumcheckProver<F> {
-    fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
-        const DEGREE_BOUND: usize = 2;
-        let Self {
-            input_mle,
-            selector_mle,
-            ..
-        } = self;
-        let half_poly_len = input_mle.len() / 2;
-        let uni_poly_evals: [F; 2] = (0..half_poly_len)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|i| {
-                let a_evals = input_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                let selector_evals =
-                    selector_mle.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                [
-                    a_evals[0] * selector_evals[0],
-                    a_evals[1] * selector_evals[1],
-                ]
-            })
-            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
-        UnivariatePoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
-    }
-
-    fn bind(&mut self, r: F, _round: usize) {
-        let r_j = F::challenge_from_field(r);
-        self.input_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
-        self.selector_mle
-            .bind_parallel(r_j, BindingOrder::LowToHigh);
-    }
-}
-
-impl<F: JoltField> ProveRounds<F> for ReshapeSumcheckProver<F> {
-    fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
-    }
-
-    fn prove_round(
-        &mut self,
-        bind: Option<F>,
-        round: usize,
-        previous_claim: F,
-    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
-        if let Some(r) = bind {
-            self.bind(r, round - 1);
-        }
-        Ok(self.round_message(round, previous_claim))
-    }
-
-    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
-        Ok(())
-    }
-}
-
-/// Verifier skeleton for reshape sumcheck.
-pub struct ReshapeSumcheckVerifier<F: JoltField> {
-    /// Static sumcheck parameters.
-    pub params: ReshapeSumcheckParams<F>,
-}
-
-impl<F: JoltField> ReshapeSumcheckVerifier<F> {
-    /// Build the reshape sumcheck verifier from node/opening context and model metadata.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        model: &Model,
-    ) -> Self {
-        let params = ReshapeSumcheckParams::new(computation_node, accumulator, model);
-        Self { params }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReshapeSumcheckVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-
-        let input_claim = accessor.get_nodeio(Target::Input(0)).1;
-        let selector = build_reshape_selectors(
-            &self.params.input_raw_dims,
-            &self.params.output_raw_dims,
-            &self.params.r_output.r,
-        );
-        let selector_claim = MultilinearPolynomial::from(selector).evaluate(
-            &self
-                .params
-                .normalize_opening_point(&sumcheck_challenges.into_opening())
-                .r,
-        );
-        input_claim * selector_claim
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, opening_point);
-        provider.append_nodeio(Target::Input(0));
+impl EngineRelation for ReshapeRelation {
+    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.shape.node);
+        vec![MultilinearPolynomial::from(operands[0].padded_pow2())]
     }
 }

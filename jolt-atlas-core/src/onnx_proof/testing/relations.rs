@@ -31,13 +31,16 @@ use crate::{
     onnx_proof::{
         fused_rebase,
         ops::{
+            concat::ConcatRelation,
             cube::CubeRelation,
             div::DivRelation,
             einsum::{dot::EinsumDotProver, ContractionRelation},
             iff::IffRelation,
             mul::MulRelation,
+            reshape::ReshapeRelation,
             rsqrt::RsqrtRelation,
             scalar_const_div::ConstantDivisionRelation,
+            slice::SliceRelation,
             square::SquareRelation,
         },
         relation::{
@@ -101,6 +104,9 @@ fn relation_specs_match_their_dispatched_op_kind() {
         OpKind::MoveAxis,
         OpKind::Broadcast,
         OpKind::ScalarConstDiv,
+        OpKind::Reshape,
+        OpKind::Slice,
+        OpKind::Concat,
     ] {
         assert!(
             dispatches.iter().any(|&(k, _)| k == kind),
@@ -363,6 +369,72 @@ fn check_engine<R: EngineRelation>(relation: impl Fn() -> R, trace: &Trace, rng:
     let mut prover =
         RelationProver::initialize(trace, RelationParams::at(relation(), setup.clone()));
     assert_matches_reference(&mut prover, &relation(), &setup, &open, &challenges);
+}
+
+#[test]
+fn relation_prover_equiv_dense() {
+    let cases: Vec<SingleNodeCase> = vec![
+        (vec![(vec![4, 8], SMALL)], |b, i| {
+            b.reshape(i[0], vec![8, 4])
+        }),
+        (vec![(vec![4, 8], SMALL)], |b, i| b.slice(i[0], 1, 2, 7)),
+        (vec![(vec![4, 8], SMALL), (vec![4, 2], SMALL)], |b, i| {
+            b.concat(&[i[0], i[1]], 1)
+        }),
+    ];
+    for (seed, (dims, build)) in (0xA17_0621..).zip(cases) {
+        let (model, trace, node, mut rng) = single_node(seed, &dims, build);
+        let rng = &mut rng;
+        // Produced openings are operands, each read through its own MLE at its own point.
+        let LayerData { operands, .. } = TraceView::layer_data(&trace, &node);
+        let operands: Vec<MultilinearPolynomial<Fr>> = operands
+            .iter()
+            .map(|t| MultilinearPolynomial::from(t.padded_pow2()))
+            .collect();
+        let open = |i: usize, point: &[Fr]| operands[i].evaluate(point);
+        match node.operator {
+            Op::Reshape(_) => check_dense(
+                || ReshapeRelation::for_node(&model, node.clone()),
+                &trace,
+                &node,
+                &open,
+                rng,
+            ),
+            Op::Slice(_) => check_dense(
+                || SliceRelation::for_node(&model, node.clone()),
+                &trace,
+                &node,
+                &open,
+                rng,
+            ),
+            Op::Concat(_) => check_dense(
+                || ConcatRelation::for_node(&model, node.clone()),
+                &trace,
+                &node,
+                &open,
+                rng,
+            ),
+            ref other => panic!("no dense relation for {other}"),
+        }
+    }
+}
+
+/// The engine's messages for a dense `relation()` match its reference messages.
+fn check_dense<R: EngineRelation>(
+    relation: impl Fn() -> R,
+    trace: &Trace,
+    node: &ComputationNode,
+    open: &dyn Fn(usize, &[Fr]) -> Fr,
+    rng: &mut StdRng,
+) {
+    let setup = RelationSetup {
+        incoming_point: random_point(rng, node.pow2_padded_num_output_elements().log_2()),
+        challenges: Vec::new(),
+    };
+    let challenges = random_point(rng, relation().rounds());
+    let mut prover =
+        RelationProver::initialize(trace, RelationParams::at(relation(), setup.clone()));
+    assert_matches_reference(&mut prover, &relation(), &setup, open, &challenges);
 }
 
 #[test]

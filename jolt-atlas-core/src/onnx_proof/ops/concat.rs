@@ -1,391 +1,194 @@
-use crate::node_view::ComputationNode;
-use crate::node_view::ModelView;
+use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
-    opening_access::{AccOpeningAccessor, Target},
+    opening_access::{OpeningIdBuilder, Target},
+};
+use crate::{
+    atlas_relation_types, impl_standard_sumcheck_proof_api,
+    onnx_proof::{
+        ops::OperatorProofTrait,
+        relation::{
+            low_to_high_point, reduced_output_setup, AtlasRelation, EngineRelation,
+            RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
+        },
+        ProofId, ProofType, Prover, Verifier,
+    },
 };
 use atlas_trace::{op::Concat, trace::LayerData, Model, Op, Trace};
-use common::parallel::par_enabled;
-use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
+use jolt_claims::{derived, opening, Expr, SymbolicSumcheck};
+use jolt_field::Ring;
 use joltworks::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, ProverOpeningAccumulator, VerifierOpeningAccumulator,
-            BIG_ENDIAN, LITTLE_ENDIAN,
-        },
+        multilinear_polynomial::MultilinearPolynomial,
+        opening_proof::{OpeningAccumulator, OpeningId},
     },
-    subprotocols::{
-        sumcheck::Sumcheck,
-        sumcheck::SumcheckInstanceProof,
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
+    subprotocols::sumcheck::SumcheckInstanceProof,
     transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use rayon::prelude::*;
 
-use crate::onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier};
+impl_standard_sumcheck_proof_api!(Concat, model_relation ConcatRelation);
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Concat {
-    #[tracing::instrument(skip_all, name = "Concat::prove")]
-    fn prove(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let params = ConcatSumcheckParams::new(
-            node.clone(),
-            &prover.accumulator,
-            &prover.preprocessing.model,
-        );
-        let mut prover_sumcheck = ConcatSumcheckProver::initialize(&prover.trace, params);
-        let (proof, _) = Sumcheck::prove(
-            &mut prover_sumcheck,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        vec![(ProofId(node.idx, ProofType::Execution), proof)]
-    }
-
-    #[tracing::instrument(skip_all, name = "Concat::verify")]
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let verifier_sumcheck = ConcatSumcheckVerifier::new(
-            node.clone(),
-            &verifier.accumulator,
-            &verifier.preprocessing.model,
-        );
-        Sumcheck::verify(
-            proof,
-            &verifier_sumcheck,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        Ok(())
-    }
+/// A concat node with its operands' unpadded dims.
+pub struct ConcatShape {
+    node: ComputationNode,
+    input_raw_dims: Vec<Vec<usize>>,
 }
 
-/// Parameters for the concat selector sumcheck.
-#[derive(Clone)]
-pub struct ConcatSumcheckParams<F: JoltField> {
-    /// Concat node being proven.
-    pub computation_node: ComputationNode,
-    /// Reduced opening point for the concat output.
-    pub r_output: OpeningPoint<BIG_ENDIAN, F>,
-    /// Raw input shapes for each concat operand.
-    pub input_raw_dims: Vec<Vec<usize>>,
-    /// Raw output shape for the concat result.
-    pub output_raw_dims: Vec<usize>,
-    /// Normalized concat axis.
-    pub axis: usize,
-    /// Maximum padded input domain size, in variables.
-    pub max_input_num_vars: usize,
+/// `Concat` as a dense relation over the largest operand's padded domain:
+///
+/// ```text
+/// input claim   out(r₀)                (the reduced output opening)
+/// output claim  Σ_i selector_i(r′) · in_i(r′[..n_i])
+/// ```
+///
+/// Each operand is lifted to the largest domain by repeating it across the low variables, so
+/// its claim is its own MLE at the first `n_i` coordinates of `r′`; `selector_i` places
+/// `eq(r₀, ·)` at the output cell of each of its elements.
+///
+/// **S ⊆ R.** A concatenation copies each operand unchanged into its range of the axis, so
+/// `out(r₀) = Σ_i Σ_x selector_i(x)·in_i(x)`.
+pub struct ConcatRelation {
+    shape: ConcatShape,
 }
 
-impl<F: JoltField> ConcatSumcheckParams<F> {
-    /// Build concat sumcheck parameters from the model metadata and reduced output opening.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-        model: &Model,
-    ) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-        let Op::Concat(concat_op) = &computation_node.operator else {
+impl ConcatRelation {
+    /// The relation of a concat `node` of `model`.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
+        let input_raw_dims = model
+            .operand_views(&node)
+            .iter()
+            .map(|input| input.output_dims.clone())
+            .collect();
+        Self::new(ConcatShape {
+            node,
+            input_raw_dims,
+        })
+    }
+
+    fn axis(&self) -> usize {
+        let Op::Concat(op) = &self.shape.node.operator else {
             panic!("Expected Concat operator")
         };
-        let r_output = accessor.get_reduced_opening().0;
-        let input_raw_dims = model
-            .operand_views(&computation_node)
+        op.axis
+    }
+
+    fn input_num_vars(&self) -> Vec<usize> {
+        self.shape
+            .input_raw_dims
             .iter()
-            .map(|input_node| input_node.output_dims.clone())
-            .collect::<Vec<_>>();
-        let output_raw_dims = computation_node.output_dims.clone();
-        let axis = concat_op.axis; // already normalized to a non-negative index
+            .map(|dims| padded_domain_len(dims).log_2())
+            .collect()
+    }
+}
+
+impl SymbolicSumcheck for ConcatRelation {
+    atlas_relation_types!();
+    type Shape = ConcatShape;
+
+    fn new(shape: ConcatShape) -> Self {
+        let relation = Self { shape };
         validate_concat_shapes(
-            &input_raw_dims
+            &relation
+                .shape
+                .input_raw_dims
                 .iter()
                 .map(|dims| dims.as_slice())
                 .collect::<Vec<_>>(),
-            &output_raw_dims,
-            axis,
+            &relation.shape.node.output_dims,
+            relation.axis(),
         );
-        let max_input_num_vars = input_raw_dims
-            .iter()
-            .map(|dims| padded_domain_len(dims).log_2())
-            .max()
-            .unwrap_or(0);
-
-        Self {
-            computation_node,
-            r_output,
-            input_raw_dims,
-            output_raw_dims,
-            axis,
-            max_input_num_vars,
-        }
+        relation
     }
-}
 
-impl<F: JoltField> SumcheckInstanceParams<F> for ConcatSumcheckParams<F> {
+    fn id() -> RelationId {
+        RelationId::Concat
+    }
+
+    fn rounds(&self) -> usize {
+        self.input_num_vars().into_iter().max().unwrap_or(0)
+    }
+
     fn degree(&self) -> usize {
         2
     }
 
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        accessor.get_reduced_opening().1
+    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
+        opening(RelationOpening::ReducedNodeOutput(self.shape.node.idx))
     }
 
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.max_input_num_vars
-    }
-
-    // output = sum_i(selector_claim_i * input_claim_i)
-}
-
-struct ConcatInputTerm<F: JoltField> {
-    input_num_vars: usize,
-    input_mle: MultilinearPolynomial<F>,
-    selector_mle: MultilinearPolynomial<F>,
-}
-
-/// Prover state for the concat selector sumcheck.
-pub struct ConcatSumcheckProver<F: JoltField> {
-    /// Static concat parameters shared across all rounds.
-    pub params: ConcatSumcheckParams<F>,
-    input_terms: Vec<ConcatInputTerm<F>>,
-}
-
-impl<F: JoltField> ConcatSumcheckProver<F> {
-    /// Initialize prover state from trace tensors and prepared concat parameters.
-    pub fn initialize(trace: &Trace, params: ConcatSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
-        assert!(!operands.is_empty(), "Concat expects at least one operand");
-        assert_eq!(
-            operands.len(),
-            params.input_raw_dims.len(),
-            "Concat input shape count mismatch"
-        );
-
-        let output_padded_len = output.padded_pow2().len();
-        let max_input_domain_len = 1usize << params.max_input_num_vars;
-        assert!(
-            max_input_domain_len <= output_padded_len,
-            "Concat max input domain cannot exceed output padded domain"
-        );
-
-        let input_terms = operands
-            .iter()
+    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
+        self.produced()
+            .into_iter()
             .enumerate()
-            .map(|(input_idx, input_tensor)| {
-                let input_padded = input_tensor.padded_pow2();
-                let input_num_vars = input_padded.len().log_2();
-                let extended_input = extend_input_to_max_domain(
-                    input_padded.data(),
-                    input_num_vars,
-                    params.max_input_num_vars,
-                );
-                let selector = build_concat_selector(
-                    &params.input_raw_dims,
-                    &params.output_raw_dims,
-                    params.axis,
-                    input_idx,
-                    &params.r_output.r,
-                    params.max_input_num_vars,
-                );
-                ConcatInputTerm {
-                    input_num_vars,
-                    input_mle: MultilinearPolynomial::from(extended_input),
-                    selector_mle: MultilinearPolynomial::from(selector),
-                }
+            .fold(Expr::zero(), |sum, (i, id)| {
+                sum + derived(RelationDerived::Table(i)) * opening(RelationOpening::Id(id))
             })
-            .collect();
-
-        Self {
-            params,
-            input_terms,
-        }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ConcatSumcheckProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl AtlasRelation for ConcatRelation {
+    type Spec = Concat;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
     }
 
-    fn cache_openings(
+    fn setup<F: JoltField, T: Transcript>(
         &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let full_opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, Default::default()); // We will update the opening point for each input term
-        for (i, term) in self.input_terms.iter().enumerate() {
-            let live_opening_point = full_opening_point.r[..term.input_num_vars].to_vec().into();
-            provider.append_nodeio_at(
-                Target::Input(i),
-                live_opening_point,
-                term.input_mle.final_claim(),
-            );
-        }
-    }
-}
-
-impl<F: JoltField> ConcatSumcheckProver<F> {
-    fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
-        const DEGREE_BOUND: usize = 2;
-        let half_poly_len = self
-            .input_terms
-            .first()
-            .map(|term| term.input_mle.len() / 2)
-            .unwrap_or(0);
-        let uni_poly_evals: [F; 2] = (0..half_poly_len)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|i| {
-                let mut evals = [F::zero(); 2];
-                for term in &self.input_terms {
-                    let input_evals =
-                        term.input_mle
-                            .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                    let selector_evals =
-                        term.selector_mle
-                            .sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
-                    evals[0] += input_evals[0] * selector_evals[0];
-                    evals[1] += input_evals[1] * selector_evals[1];
-                }
-                evals
-            })
-            .reduce(|| [F::zero(); 2], |a, b| [a[0] + b[0], a[1] + b[1]]);
-
-        UnivariatePoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.shape.node)
     }
 
-    fn bind(&mut self, r: F, _round: usize) {
-        let r_j = F::challenge_from_field(r);
-        for term in &mut self.input_terms {
-            term.input_mle.bind_parallel(r_j, BindingOrder::LowToHigh);
-            term.selector_mle
-                .bind_parallel(r_j, BindingOrder::LowToHigh);
-        }
-    }
-}
-
-impl<F: JoltField> ProveRounds<F> for ConcatSumcheckProver<F> {
-    fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+    fn produced(&self) -> Vec<OpeningId> {
+        let ids = OpeningIdBuilder::new(&self.shape.node);
+        (0..self.shape.input_raw_dims.len())
+            .map(|i| ids.nodeio(Target::Input(i)))
+            .collect()
     }
 
-    fn prove_round(
-        &mut self,
-        bind: Option<F>,
-        round: usize,
-        previous_claim: F,
-    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
-        if let Some(r) = bind {
-            self.bind(r, round - 1);
-        }
-        Ok(self.round_message(round, previous_claim))
-    }
-
-    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
-        Ok(())
-    }
-}
-
-/// Verifier state for the concat selector sumcheck.
-pub struct ConcatSumcheckVerifier<F: JoltField> {
-    /// Static concat parameters shared across all rounds.
-    pub params: ConcatSumcheckParams<F>,
-}
-
-impl<F: JoltField> ConcatSumcheckVerifier<F> {
-    /// Build the concat verifier from the reduced output opening and model metadata.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        model: &Model,
-    ) -> Self {
-        let params = ConcatSumcheckParams::new(computation_node, accumulator, model);
-        Self { params }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumcheckVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
+    fn opening_points<F: JoltField>(
         &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let full_opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Vec<Vec<F>> {
+        let point = low_to_high_point(challenges);
+        self.input_num_vars()
+            .into_iter()
+            .map(|n| point[..n].to_vec())
+            .collect()
+    }
 
-        self.params.input_raw_dims.iter().enumerate().fold(
-            F::zero(),
-            |running, (input_idx, _input_raw_dims)| {
-                let input_claim = accessor.get_nodeio(Target::Input(input_idx)).1;
-
-                let selector = build_concat_selector(
-                    &self.params.input_raw_dims,
-                    &self.params.output_raw_dims,
-                    self.params.axis,
-                    input_idx,
-                    &self.params.r_output.r,
-                    self.params.max_input_num_vars,
-                );
-                let selector_claim =
-                    MultilinearPolynomial::from(selector).evaluate(&full_opening_point.r);
-                running + input_claim * selector_claim
-            },
+    fn table<F: JoltField>(&self, index: usize, setup: &RelationSetup<F>) -> Vec<F> {
+        build_concat_selector(
+            &self.shape.input_raw_dims,
+            &self.shape.node.output_dims,
+            self.axis(),
+            index,
+            &setup.incoming_point,
+            self.rounds(),
         )
     }
+}
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let full_opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, Default::default()); // We will update the opening point for each input term
-        for (input_idx, input_raw_dims) in self.params.input_raw_dims.iter().enumerate() {
-            let input_num_vars = padded_domain_len(input_raw_dims).log_2();
-            let live_opening_point = full_opening_point.r[..input_num_vars].to_vec().into();
-            provider.append_nodeio_at(Target::Input(input_idx), live_opening_point);
-        }
+impl EngineRelation for ConcatRelation {
+    fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>> {
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.shape.node);
+        let max_num_vars = self.rounds();
+        operands
+            .iter()
+            .map(|operand| {
+                let padded = operand.padded_pow2();
+                let extended =
+                    extend_input_to_max_domain(padded.data(), padded.len().log_2(), max_num_vars);
+                MultilinearPolynomial::from(extended)
+            })
+            .collect()
     }
 }
 

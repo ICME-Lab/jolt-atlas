@@ -1,0 +1,243 @@
+//! Pre-deserialization validation of proof-controlled Akita commitment
+//! payloads.
+//!
+//! Commitment lengths arrive inside the prover-controlled Jolt proof. The
+//! expected commitment shape is derived from Akita's trusted schedule before a
+//! backend deserializer can reserve payload-sized buffers. The backend
+//! argument bytes need no such guard: Akita's verifier parses them against the
+//! selected row's own grammar.
+
+use akita_config::{CommitmentConfig, TrustedScheduleCatalog};
+use akita_params::{
+    GroupCommitPhaseParams, OpeningClaimsLayout, OpeningScheduleSelection, PolynomialGroupLayout,
+};
+use akita_pcs::AkitaError;
+use akita_schedules::ResolvedScheduleRow;
+use jolt_field::Zero;
+use jolt_openings::OpeningsError;
+
+use crate::adapters::{
+    deserialize_akita, invalid_batch, AkitaBackendCommitment, AkitaBackendCommitmentPayload,
+    AkitaCommitment, AkitaField,
+};
+
+/// Deserializes the backend commitment only after its declared shape has been
+/// derived from the trusted resolved schedule.
+pub(crate) fn deserialize_checked_backend_payload<Cfg>(
+    schedules: &TrustedScheduleCatalog<Cfg>,
+    commitment: &AkitaCommitment,
+    selection: OpeningScheduleSelection,
+    statement_len: usize,
+    backend_point: &[AkitaField],
+) -> Result<AkitaBackendCommitment, OpeningsError>
+where
+    Cfg: CommitmentConfig<Field = AkitaField, ExtField = AkitaField>,
+{
+    let layout = OpeningClaimsLayout::new(backend_point.len(), statement_len)
+        .map_err(|err| invalid_batch(format!("Akita opening layout is invalid: {err}")))?;
+    let resolved = resolve_schedule_row(schedules, selection, &layout)
+        .map_err(|err| invalid_batch(format!("Akita schedule resolution failed: {err}")))?;
+    validate_commitment_profile_len(commitment, &resolved.profiles().final_group)?;
+    let backend_payload = deserialize_akita::<AkitaBackendCommitmentPayload>(
+        &commitment.serialized_backend_bytes,
+        &commitment.backend_coeff_len,
+    )?;
+    let backend_commitment =
+        AkitaBackendCommitment::new(resolved.profiles().final_group, backend_payload);
+    Ok(backend_commitment)
+}
+
+/// Guard and decode the ordered grouped root in public order
+/// `[auxiliary dense groups.., final streamed one-hot]`.
+pub(crate) fn deserialize_checked_grouped_backend_payload<Cfg>(
+    schedules: &TrustedScheduleCatalog<Cfg>,
+    auxiliary_groups: &[&AkitaCommitment],
+    main: &AkitaCommitment,
+    selection: OpeningScheduleSelection,
+) -> Result<(Vec<AkitaBackendCommitment>, AkitaBackendCommitment), OpeningsError>
+where
+    Cfg: CommitmentConfig<Field = AkitaField, ExtField = AkitaField>,
+{
+    let mut group_layouts = auxiliary_groups
+        .iter()
+        .map(|commitment| PolynomialGroupLayout::new(commitment.num_vars, commitment.poly_count))
+        .collect::<Vec<_>>();
+    group_layouts.push(PolynomialGroupLayout::new(main.num_vars, main.poly_count));
+    let layout = OpeningClaimsLayout::from_groups(group_layouts)
+        .map_err(|err| invalid_batch(format!("Akita grouped opening layout is invalid: {err}")))?;
+    let resolved = resolve_schedule_row(schedules, selection, &layout)
+        .map_err(|err| invalid_batch(format!("Akita grouped schedule resolution failed: {err}")))?;
+    let profiles = resolved.profiles();
+
+    let mut auxiliary_backend = Vec::with_capacity(auxiliary_groups.len());
+    for (commitment, profile) in auxiliary_groups.iter().zip(profiles.precommitteds.iter()) {
+        validate_commitment_profile_len(commitment, profile)?;
+        let payload = deserialize_akita::<AkitaBackendCommitmentPayload>(
+            &commitment.serialized_backend_bytes,
+            &commitment.backend_coeff_len,
+        )?;
+        auxiliary_backend.push(AkitaBackendCommitment::new(*profile, payload));
+    }
+    validate_commitment_profile_len(main, &profiles.final_group)?;
+    let main_payload = deserialize_akita::<AkitaBackendCommitmentPayload>(
+        &main.serialized_backend_bytes,
+        &main.backend_coeff_len,
+    )?;
+    let main_backend = AkitaBackendCommitment::new(profiles.final_group, main_payload);
+
+    Ok((auxiliary_backend, main_backend))
+}
+
+fn resolve_schedule_row<'a, Cfg>(
+    schedules: &'a TrustedScheduleCatalog<Cfg>,
+    selection: OpeningScheduleSelection,
+    layout: &OpeningClaimsLayout,
+) -> Result<&'a ResolvedScheduleRow, AkitaError>
+where
+    Cfg: CommitmentConfig<Field = AkitaField, ExtField = AkitaField>,
+{
+    let resolved = schedules.resolve_selection(selection)?;
+    resolved.validate_opening_layout(layout)?;
+    Ok(resolved)
+}
+
+fn validate_commitment_profile_len(
+    commitment: &AkitaCommitment,
+    profile: &GroupCommitPhaseParams,
+) -> Result<(), OpeningsError> {
+    let expected_coeff_len = expected_commitment_coeff_len_for_profile(profile)?;
+    if commitment.backend_coeff_len != expected_coeff_len {
+        return Err(invalid_batch(format!(
+            "Akita commitment declares {} backend coefficients but its frozen profile requires {expected_coeff_len}",
+            commitment.backend_coeff_len
+        )));
+    }
+    let expected_bytes = expected_coeff_len
+        .checked_mul(field_elem_bytes())
+        .ok_or_else(|| invalid_batch("Akita commitment byte size overflows"))?;
+    if commitment.serialized_backend_bytes.len() != expected_bytes {
+        return Err(invalid_batch(format!(
+            "Akita commitment has {} serialized bytes but its frozen profile requires {expected_bytes}",
+            commitment.serialized_backend_bytes.len()
+        )));
+    }
+    Ok(())
+}
+
+fn expected_commitment_coeff_len_for_profile(
+    profile: &GroupCommitPhaseParams,
+) -> Result<usize, OpeningsError> {
+    profile
+        .outer_compression_plan()
+        .map(|plan| plan.terminal_coefficients())
+        .map_err(|err| invalid_batch(format!("Akita commitment profile is invalid: {err}")))
+}
+
+fn field_elem_bytes() -> usize {
+    use akita_pcs::AkitaSerialize;
+    AkitaField::zero().compressed_size()
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(
+        clippy::expect_used,
+        reason = "tests assert successful schedule resolution"
+    )]
+
+    use super::*;
+    use akita_config::TrustedScheduleCatalog;
+    use akita_params::{ChunkedWitnessCfg, ScheduleLookupKey};
+    use jolt_field::Ring;
+
+    use crate::{
+        adapters::{AkitaBackendFlavor, AkitaConfig},
+        AkitaChunkProfile, AkitaScheduleArtifacts,
+    };
+
+    fn dense_commitment(num_vars: usize, poly_count: usize) -> AkitaCommitment {
+        AkitaCommitment {
+            backend_flavor: AkitaBackendFlavor::Dense,
+            layout_digest: [7; 32],
+            num_vars,
+            poly_count,
+            one_hot_k: 0,
+            backend_coeff_len: 0,
+            serialized_backend_bytes: Vec::new(),
+        }
+    }
+
+    fn point(num_vars: usize) -> Vec<AkitaField> {
+        (0..num_vars as u64).map(AkitaField::from_u64).collect()
+    }
+
+    fn dense_schedules() -> TrustedScheduleCatalog<AkitaConfig> {
+        let artifacts = AkitaScheduleArtifacts::from_directory(
+            AkitaScheduleArtifacts::packaged_directory(),
+            AkitaChunkProfile::new(8, 2),
+        )
+        .expect("workspace schedule artifacts");
+        TrustedScheduleCatalog::new(
+            artifacts.dense_catalog().expect("dense schedule catalog"),
+            ChunkedWitnessCfg {
+                num_chunks: 8,
+                num_activated_levels: 2,
+            },
+        )
+        .expect("typed dense schedule catalog")
+    }
+
+    fn test_selection(
+        schedules: &TrustedScheduleCatalog<AkitaConfig>,
+        num_vars: usize,
+        poly_count: usize,
+    ) -> OpeningScheduleSelection {
+        schedules
+            .resolve_key(&ScheduleLookupKey::single(PolynomialGroupLayout::new(
+                num_vars, poly_count,
+            )))
+            .expect("test schedule")
+            .selection()
+    }
+
+    fn resolved_dense(
+        num_vars: usize,
+        poly_count: usize,
+    ) -> (
+        AkitaCommitment,
+        Vec<AkitaField>,
+        OpeningClaimsLayout,
+        ResolvedScheduleRow,
+        TrustedScheduleCatalog<AkitaConfig>,
+    ) {
+        let schedules = dense_schedules();
+        let point = point(num_vars);
+        let layout = OpeningClaimsLayout::new(num_vars, poly_count).expect("layout");
+        let commitment = dense_commitment(num_vars, poly_count);
+        let resolved = resolve_schedule_row::<AkitaConfig>(
+            &schedules,
+            test_selection(&schedules, num_vars, poly_count),
+            &layout,
+        )
+        .expect("schedule");
+        (commitment, point, layout, resolved.clone(), schedules)
+    }
+
+    #[test]
+    fn commitment_byte_length_must_match_coeff_len() {
+        let (mut commitment, point, _, resolved, schedules) = resolved_dense(16, 2);
+        commitment.backend_coeff_len =
+            expected_commitment_coeff_len_for_profile(&resolved.profiles().final_group)
+                .expect("coefficients");
+        commitment.serialized_backend_bytes = vec![0u8; field_elem_bytes()];
+        let err = deserialize_checked_backend_payload(
+            &schedules,
+            &commitment,
+            resolved.selection(),
+            2,
+            &point,
+        )
+        .expect_err("truncated commitment bytes must be rejected");
+        assert!(err.to_string().contains("bytes"));
+    }
+}

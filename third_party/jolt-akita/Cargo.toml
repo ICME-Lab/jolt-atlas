@@ -1,0 +1,38 @@
+# Vendored from https://github.com/a16z/jolt crates/jolt-akita at rev
+# f3265b5a9981f0c1359f2b63008824616f0c82fa, with workspace dependency
+# inheritance resolved and the non-src targets removed (third_party/PINS.md).
+[package]
+name = "jolt-akita"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Akita batch opening adapter for the Jolt zkVM"
+
+[features]
+field-inline = []
+profiling = []
+
+[dependencies]
+akita-algebra = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
+akita-config = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
+akita-error = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
+akita-pcs = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false, features = ["parallel", "transcript-blake2b"] }
+akita-challenges = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
+akita-planner = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
+akita-schedules = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
+akita-types = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
+akita-params = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
+jolt-claims = { path = "../jolt-claims" }
+jolt-crypto = { path = "../jolt-crypto", default-features = false, features = ["parallel"] }
+jolt-field = { path = "../jolt-field", default-features = false, features = ["solinas"] }
+jolt-openings = { path = "../jolt-openings", default-features = false, features = ["parallel"] }
+jolt-poly = { path = "../jolt-poly", default-features = false }
+jolt-transcript = { path = "../jolt-transcript", default-features = false }
+rayon = "1.12.0"
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc", "rc"] }
+tracing = { version = "0.1.37", default-features = false, features = ["attributes"] }
+
+[dev-dependencies]
+bincode = { version = "2", features = ["serde"] }
+jolt-transcript = { path = "../jolt-transcript", default-features = false, features = ["transcript-blake2b"] }
+serde_json = { version = "1.0", features = ["std"] }

@@ -25,6 +25,7 @@ members = [
     "third_party/jolt-utils",
     "third_party/jolt-claims",
     "third_party/jolt-claims-derive",
+    "third_party/jolt-akita",
     "atlas-trace",
     "atlas-onnx-import",
     "common",
@@ -54,6 +55,7 @@ jolt-utils = { path = "./third_party/jolt-utils" }
 jolt-poly = { path = "./third_party/jolt-poly", default-features = false }
 jolt-sumcheck = { path = "./third_party/jolt-sumcheck" }
 jolt-claims = { path = "./third_party/jolt-claims" }
+jolt-akita = { path = "./third_party/jolt-akita" }
 
 # Cryptography and Math
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", default-features = false }
@@ -134,3 +136,9 @@ ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist
 ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
+
+# The Akita crates depend on jolt-field and jolt-poly by git; resolve them to the vendored copies
+# so the graph holds one of each (as upstream's own workspace does).
+[patch."https://github.com/a16z/jolt"]
+jolt-field = { path = "./third_party/jolt-field" }
+jolt-poly = { path = "./third_party/jolt-poly" }

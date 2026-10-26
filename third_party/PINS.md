@@ -20,6 +20,7 @@ owns the adoption order; `docs/upstream-inventory.md` records the divergence eac
 | `jolt-riscv` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
 | `jolt-lookup-tables` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
 | `jolt-r1cs` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
+| `jolt-akita` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 7a | Manifest only (below) |
 
 ## `jolt-field`
 
@@ -91,3 +92,20 @@ from upstream's:
   suite; the other five are `exclude`d from the workspace, because their upstream tests need
   crates not vendored here (`tracer`, `jolt-dory`), and the `benches/`, `fuzz/` and `tests/`
   targets of all seven are not vendored.
+
+## `jolt-akita`
+
+`src/` and `schedules/` are byte-identical to `crates/jolt-akita` at the pinned rev. It brings the
+LayerZero `akita-*` crates by git at rev `dfdbd7674cab5cfbe95243e947d1b10a982f232b` (the rev
+upstream's workspace pins). The manifest differs from upstream's:
+
+- workspace dependency inheritance is resolved to explicit versions, internal crates by path to
+  the vendored copies, the `akita-*` crates by git at the rev above;
+- `serde` takes the `alloc` and `rc` features explicitly (upstream's workspace `serde` carries
+  them), since the setups serialize `Arc`s;
+- the `tests/` target is not vendored and the `[lints] workspace = true` table is dropped; the
+  crate is a workspace member so its in-source tests run in the workspace suite.
+
+The `akita-*` crates name `jolt-field` and `jolt-poly` by git (`a16z/jolt`); the root
+`Cargo.toml` patches that source to the vendored copies, as upstream's own workspace does, so
+the graph holds one of each. Adopting them bumped `smallvec` to `1.16` in `Cargo.lock`.

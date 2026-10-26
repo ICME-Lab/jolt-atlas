@@ -4,7 +4,8 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
     Write,
 };
-use joltworks::{field::JoltField, poly::opening_proof::Openings};
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::opening_proof::Openings;
 
 // ---------------------------------------------------------------------------
 // ProofId / ProofType

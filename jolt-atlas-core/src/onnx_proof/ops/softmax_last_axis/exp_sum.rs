@@ -1,24 +1,23 @@
 use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_algebra::{
+    field::{IntoOpening, JoltField},
+    poly::{
+        eq_poly::EqPolynomial,
+        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        split_eq_poly::SplitEqUnreducedFold,
+    },
+    utils::thread::drop_in_background_thread,
+};
+use atlas_sumcheck::{
+    opening_proof::ProverOpeningAccumulator, sumcheck_prover::SumcheckInstanceProver,
+    sumcheck_verifier::SumcheckInstanceParams, upstream_sumcheck::round_check_failed,
+};
+use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::VirtualPoly;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::exp_sum::*;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
-use joltworks::{
-    field::{IntoOpening, JoltField},
-    poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::ProverOpeningAccumulator,
-        split_eq_poly::SplitEqUnreducedFold,
-    },
-    subprotocols::{
-        sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceParams,
-        upstream_sumcheck::round_check_failed,
-    },
-    transcripts::Transcript,
-    utils::thread::drop_in_background_thread,
-};
 use rayon::prelude::*;
 
 /// Prover for the exponential sum in softmax.

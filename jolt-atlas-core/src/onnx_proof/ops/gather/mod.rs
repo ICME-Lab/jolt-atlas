@@ -5,13 +5,7 @@ use crate::{
     onnx_proof::{ProofId, ProofType, Prover},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
-use common::parallel::par_enabled;
-use common::VirtualPoly;
-pub use jolt_atlas_verifier::onnx_proof::ops::gather::*;
-use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
-use joltworks::{
+use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
@@ -20,15 +14,21 @@ use joltworks::{
             BindingOrder, EvaluateMle, MultilinearPolynomial, PolynomialBinding,
             PolynomialEvaluation,
         },
-        opening_proof::{OpeningPoint, ProverOpeningAccumulator},
+        opening_point::OpeningPoint,
     },
-    subprotocols::{
-        sumcheck::SumcheckInstanceProof, sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::SumcheckInstanceParams,
-    },
-    transcripts::Transcript,
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
 };
+use atlas_sumcheck::{
+    opening_proof::ProverOpeningAccumulator, sumcheck::SumcheckInstanceProof,
+    sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceParams,
+};
+use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
+use atlas_transcript::Transcript;
+use common::parallel::par_enabled;
+use common::VirtualPoly;
+pub use jolt_atlas_verifier::onnx_proof::ops::gather::*;
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,

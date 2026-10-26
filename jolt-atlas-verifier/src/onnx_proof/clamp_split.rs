@@ -32,7 +32,7 @@
 //! `IND ∈ {0, 1}`.
 //!
 //! **Chunk check**: the Booleanity sumcheck over all chunks carries a linear
-//! term (see `joltworks::subprotocols::booleanity::LinearTerm`) that ties the
+//! term (see `atlas_sumcheck::booleanity::LinearTerm`) that ties the
 //! three virtual openings to the committed chunks — every chunk is opened once:
 //!
 //! ```text
@@ -61,27 +61,25 @@ use super::{
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_trace::{Model, Trace};
-use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
-use joltworks::subprotocols::booleanity::{LinearClaim, LinearTerm};
-use joltworks::{
-    config::{OneHotConfig, OneHotParams},
+use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{
         multilinear_polynomial::MultilinearPolynomial,
         one_hot_polynomial::OneHotPolynomial,
-        opening_proof::{
-            OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
-            BIG_ENDIAN, LITTLE_ENDIAN,
-        },
+        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
     },
-    subprotocols::{
-        booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier},
-        ps_shout::{CycleWeight, PackedSegment},
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
-    transcripts::Transcript,
 };
+use atlas_sumcheck::booleanity::{LinearClaim, LinearTerm};
+use atlas_sumcheck::{
+    booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier},
+    config::{OneHotConfig, OneHotParams},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    ps_shout::{CycleWeight, PackedSegment},
+    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+};
+use atlas_trace::{Model, Trace};
+use atlas_transcript::Transcript;
+use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
 
 /// Address width of the output range check (`out + 2^31 ∈ [0, 2^32)`).
@@ -778,14 +776,14 @@ pub fn exact_value_params<F: JoltField, T: Transcript>(
 pub fn verify_exact_nodes<F: JoltField>(
     bucket: &ClampBucket,
     accumulator: &dyn OpeningAccumulator<F>,
-) -> Result<(), joltworks::utils::errors::ProofVerifyError> {
+) -> Result<(), atlas_algebra::utils::errors::ProofVerifyError> {
     for n in &bucket.nodes {
         let acc = accumulator
             .get_virtual_polynomial_opening(acc_opening_id(n.idx))
             .1;
         let out = accumulator.get_node_output_opening(n.idx).1;
         if acc != out {
-            return Err(joltworks::utils::errors::ProofVerifyError::InvalidOpeningProof(
+            return Err(atlas_algebra::utils::errors::ProofVerifyError::InvalidOpeningProof(
                 format!(
                     "clamp bucket {} declared exact but node {}'s output differs from its accumulation",
                     bucket.idx, n.idx

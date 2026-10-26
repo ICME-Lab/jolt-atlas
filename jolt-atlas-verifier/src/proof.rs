@@ -2,11 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use joltworks::{
-    field::JoltField,
-    poly::commitment::commitment_scheme::CommitmentScheme,
-    subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
-};
+use atlas_algebra::field::JoltField;
+use atlas_pcs::commitment_scheme::CommitmentScheme;
+use atlas_sumcheck::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof};
 
 use crate::{Claims, ProofId};
 

@@ -34,12 +34,12 @@ use crate::{
     },
     utils::opening_access::AccOpeningAccessor,
 };
-use common::VirtualPoly;
-use joltworks::{
-    field::JoltField, poly::multilinear_polynomial::EvaluateMle,
-    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
-    utils::lookup_bits::LookupBits,
+use atlas_algebra::{
+    field::JoltField, poly::multilinear_polynomial::EvaluateMle, utils::lookup_bits::LookupBits,
 };
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
+use atlas_transcript::Transcript;
+use common::VirtualPoly;
 
 // ---------------------------------------------------------------------------
 // Prover / verifier orchestration (the stages around the arithmetic sumcheck)

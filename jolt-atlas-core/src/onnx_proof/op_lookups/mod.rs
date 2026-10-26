@@ -8,17 +8,18 @@
 use atlas_trace::{Tensor, Trace};
 pub use jolt_atlas_verifier::onnx_proof::op_lookups::*;
 
-use joltworks::{
-    field::JoltField,
-    lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
-    poly::{multilinear_polynomial::EvaluateMle, opening_proof::ProverOpeningAccumulator},
-    subprotocols::ps_shout::{
+use atlas_algebra::{
+    field::JoltField, poly::multilinear_polynomial::EvaluateMle, utils::lookup_bits::LookupBits,
+};
+use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
+use atlas_sumcheck::{
+    opening_proof::ProverOpeningAccumulator,
+    ps_shout::{
         unary::{ps_read_raf_prover, UnaryReadRafSumcheckProver},
         RafShoutProvider,
     },
-    transcripts::Transcript,
-    utils::lookup_bits::LookupBits,
 };
+use atlas_transcript::Transcript;
 
 /// Appends `witness`'s opening claim (evaluated at this provider's `r_cycle`) under
 /// `H::witness_opening_id`.

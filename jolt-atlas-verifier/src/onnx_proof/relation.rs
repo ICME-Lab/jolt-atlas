@@ -22,22 +22,22 @@
 //! reduction produces for it.
 
 use crate::node_view::ComputationNode;
-use atlas_trace::{op::OpSpec, Trace};
-use jolt_claims::{Expr, SymbolicSumcheck};
-use joltworks::{
+use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{
-            OpeningAccumulator, OpeningId, OpeningPoint, PolynomialId, VerifierOpeningAccumulator,
-            BIG_ENDIAN,
-        },
+        opening_point::{OpeningPoint, BIG_ENDIAN},
     },
-    subprotocols::sumcheck_verifier::SumcheckInstanceVerifier,
-    transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, OpeningId, PolynomialId, VerifierOpeningAccumulator},
+    sumcheck_verifier::SumcheckInstanceVerifier,
+};
+use atlas_trace::{op::OpSpec, Trace};
+use atlas_transcript::Transcript;
+use jolt_claims::{Expr, SymbolicSumcheck};
 
 /// An opening a relation reads or produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

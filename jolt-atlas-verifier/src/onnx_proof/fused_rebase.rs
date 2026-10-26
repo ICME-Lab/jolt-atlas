@@ -36,20 +36,21 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder},
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    utils::errors::ProofVerifyError,
+};
+use atlas_sumcheck::{
+    config::{OneHotConfig, OneHotParams},
+    identity_range_check::IdentityRCProvider,
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    shout::RaOneHotEncoding,
+};
+use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
 use jolt_claims::{constant, opening};
 use jolt_field::Ring;
-use joltworks::{
-    config::{OneHotConfig, OneHotParams},
-    field::JoltField,
-    poly::opening_proof::{
-        OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
-        BIG_ENDIAN,
-    },
-    subprotocols::{identity_range_check::IdentityRCProvider, shout::RaOneHotEncoding},
-    transcripts::Transcript,
-    utils::errors::ProofVerifyError,
-};
 
 /// Rebase width `S` (in bits) of a node's fused rescaling division at the
 /// model's log2 `scale`, or `None` when the operator does not fuse a

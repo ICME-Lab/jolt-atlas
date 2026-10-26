@@ -11,9 +11,10 @@
 //! 3. [`AtlasVerifierPreprocessing`] — adds the PCS verifier setup (VK).
 
 use crate::node_view::ModelView;
+use atlas_algebra::field::JoltField;
+use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_trace::Model;
 use common::CommittedPoly;
-use joltworks::{field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------

@@ -56,24 +56,24 @@ use crate::{
         ProofId, ProofType,
     },
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::{
+        eq_poly::EqPolynomial,
+        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+    },
+};
+use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+use atlas_sumcheck::{
+    opening_proof::ProverOpeningAccumulator,
+    sumcheck::{Sumcheck, SumcheckInstanceProof},
+    sumcheck_prover::SumcheckInstanceProver,
+};
+use atlas_transcript::Transcript;
 use common::{consts::XLEN, parallel::par_enabled};
 use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
-use joltworks::{
-    field::JoltField,
-    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
-    poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::ProverOpeningAccumulator,
-    },
-    subprotocols::{
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-    },
-    transcripts::Transcript,
-};
 use rayon::prelude::*;
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for MeanOfSquares {

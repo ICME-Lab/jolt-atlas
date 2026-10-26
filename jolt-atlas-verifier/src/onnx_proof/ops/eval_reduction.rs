@@ -1,11 +1,8 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::Verifier;
-use joltworks::{
-    field::JoltField,
-    subprotocols::evaluation_reduction::{EvalReductionProof, EvalReductionProtocol},
-    transcripts::Transcript,
-    utils::errors::ProofVerifyError,
-};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_sumcheck::evaluation_reduction::{EvalReductionProof, EvalReductionProtocol};
+use atlas_transcript::Transcript;
 
 /// Node-scoped evaluation reduction helper used by ONNX proving and verification.
 pub struct NodeEvalReduction;

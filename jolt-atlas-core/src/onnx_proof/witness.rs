@@ -34,17 +34,16 @@ use crate::{
     },
     utils::{adjusted_remainder, compute_lookup_indices_from_operands},
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
+    utils::{lookup_bits::LookupBits, math::Math},
+};
+use atlas_sumcheck::config::{OneHotConfig, OneHotParams};
 use common::{
     consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, TRIG_PERIOD_MODULUS, XLEN},
     parallel::par_enabled,
     CommittedPoly,
-};
-use joltworks::{
-    config::{OneHotConfig, OneHotParams},
-    field::JoltField,
-    poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
-    subprotocols,
-    utils::{lookup_bits::LookupBits, math::Math},
 };
 use rayon::prelude::*;
 
@@ -111,7 +110,7 @@ fn build_activation_small_rad_witness<F: JoltField>(
     let one_hot_params =
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_VARS);
     let h_indices =
-        subprotocols::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
+        atlas_sumcheck::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
         h_indices[d]
             .par_iter()
@@ -438,7 +437,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     &OneHotConfig::default(),
                     num_words.log_2(),
                 );
-                let h_indices = subprotocols::shout::compute_instruction_h_indices(
+                let h_indices = atlas_sumcheck::shout::compute_instruction_h_indices(
                     &lookup_indices,
                     &one_hot_params,
                 );
@@ -472,7 +471,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .collect();
                 let one_hot_params =
                     OneHotParams::from_config_and_log_K(&OneHotConfig::default(), COS_TABLE_VARS);
-                let h_indices = subprotocols::shout::compute_instruction_h_indices(
+                let h_indices = atlas_sumcheck::shout::compute_instruction_h_indices(
                     &lookup_indices,
                     &one_hot_params,
                 );
@@ -589,7 +588,7 @@ fn build_onehot_witness<F: JoltField>(
 ) -> MultilinearPolynomial<F> {
     let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k);
     let h_indices =
-        subprotocols::shout::compute_instruction_h_indices(lookup_indices, &one_hot_params);
+        atlas_sumcheck::shout::compute_instruction_h_indices(lookup_indices, &one_hot_params);
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
         h_indices[d]
             .par_iter()

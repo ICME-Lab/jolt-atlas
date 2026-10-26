@@ -13,12 +13,9 @@
 
 use atlas_trace::{trace::ModelExecutionIO, Tensor};
 
-use joltworks::{
-    field::JoltField,
-    poly::commitment::commitment_scheme::CommitmentScheme,
-    transcripts::{ProvingTranscript, VerifyingTranscript},
-    utils::errors::ProofVerifyError,
-};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_pcs::commitment_scheme::CommitmentScheme;
+use atlas_transcript::{ProvingTranscript, VerifyingTranscript};
 use std::collections::BTreeMap;
 
 // ── Submodules ───────────────────────────────────────────────────────────
@@ -56,11 +53,9 @@ pub use preprocessing::{
 pub use prover::Prover;
 pub use types::ProverDebugInfo;
 
-pub use joltworks::field::fp128::Fp128;
-pub use joltworks::{
-    poly::commitment::akita::AkitaScheme,
-    transcripts::{Blake2bProver, Blake2bVerifier},
-};
+pub use atlas_algebra::field::fp128::Fp128;
+pub use atlas_pcs::akita::AkitaScheme;
+pub use atlas_transcript::{Blake2bProver, Blake2bVerifier};
 
 // ── Core proof structures ────────────────────────────────────────────────
 

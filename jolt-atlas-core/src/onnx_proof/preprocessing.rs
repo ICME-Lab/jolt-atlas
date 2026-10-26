@@ -1,9 +1,10 @@
 //! Prover preprocessing: the shared model preprocessing plus the commitment scheme's prover
 //! setup. The shared and verifier halves live in `jolt-atlas-verifier`.
 
+use atlas_algebra::field::JoltField;
+use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_trace::Model;
 use jolt_atlas_verifier::node_view::ModelView;
-use joltworks::{field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme};
 
 pub use jolt_atlas_verifier::onnx_proof::preprocessing::*;
 

@@ -1,0 +1,610 @@
+use crate::{
+    booleanity::{
+        BooleanitySumcheckParams, BooleanitySumcheckProver, BooleanitySumcheckVerifier,
+        LinearClaim, LinearTerm,
+    },
+    config::OneHotParams,
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
+    ra_virtual::{RaSumcheckParams, RaSumcheckProver, RaSumcheckVerifier},
+    sumcheck_prover::SumcheckInstanceProver,
+    sumcheck_verifier::SumcheckInstanceVerifier,
+};
+use atlas_algebra::{
+    field::{FieldChallengeOps, IntoOpening, JoltField},
+    poly::{
+        eq_poly::EqPolynomial,
+        opening_point::{OpeningPoint, BIG_ENDIAN},
+    },
+    utils::thread::unsafe_allocate_zero_vec,
+};
+use atlas_transcript::Transcript;
+use common::parallel::par_enabled;
+use common::{CommittedPoly, VirtualPoly};
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
+use rayon::prelude::*;
+use std::array;
+
+use crate::{
+    opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumulator},
+    sumcheck_verifier::SumcheckInstanceParams,
+};
+use atlas_algebra::poly::{
+    identity_poly::IdentityPolynomial,
+    multilinear_polynomial::{
+        BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+    },
+};
+
+const READ_RAF_DEGREE_BOUND: usize = 2;
+
+pub fn read_raf_prover<F: JoltField, T: Transcript>(
+    provider: &impl ReadRafProvider<F>,
+    lookup_indices: &[usize],
+    table: &[i32],
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Box<dyn SumcheckInstanceProver<F, T>> {
+    let params = ReadRafParams::new(provider, accumulator, transcript);
+    Box::new(ReadRafProver::initialize(lookup_indices, table, params))
+}
+
+pub fn read_raf_verifier<F: JoltField, T: Transcript>(
+    provider: &impl ReadRafProvider<F>,
+    table: Vec<i32>,
+    accumulator: &VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Box<dyn SumcheckInstanceVerifier<F, T>> {
+    Box::new(ReadRafVerifier::new(
+        provider,
+        table,
+        accumulator,
+        transcript,
+    ))
+}
+
+// TODO: Have one-unified trait for read-raf and ra-one-hot checks.
+
+pub trait ReadRafProvider<F: JoltField>: Clone + Send + Sync + Sized {
+    /// Returns the opening claim for the rv claim
+    fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
+
+    /// Returns the opening claim for the raf claim
+    fn raf_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
+
+    /// Returns challenge used in the read-raf sum-check protocol
+    fn r(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
+
+    /// Returns the virtual polynomial and sumcheck id for the one-hot encoded read-address polynomial.
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
+
+    /// Log(table_size) for the shout lookup protocol.
+    ///
+    /// Also known as `num_rounds` for the read-raf sumcheck.
+    fn log_K(&self) -> usize;
+}
+
+/// Shared prover/verifier parameters for Shout.
+#[derive(Clone)]
+pub struct ReadRafParams<F: JoltField> {
+    r: Vec<F>,
+    gamma: F,
+    rv_claim: F,
+    raf_claim: F,
+    ra_vp: VirtualPoly,
+    ra_sid: SumcheckId,
+    log_K: usize,
+}
+
+impl<F: JoltField> ReadRafParams<F> {
+    /// Create new parameters for exponentiation lookups.
+    pub fn new(
+        provider: &impl ReadRafProvider<F>,
+        accumulator: &dyn OpeningAccumulator<F>,
+        transcript: &mut impl Transcript,
+    ) -> Self {
+        let gamma = transcript.challenge_scalar();
+        let (ra_vp, ra_sid) = provider.ra_poly();
+        Self {
+            r: provider.r(accumulator).r,
+            gamma,
+            rv_claim: provider.rv_claim(accumulator),
+            raf_claim: provider.raf_claim(accumulator),
+            ra_vp,
+            ra_sid,
+            log_K: provider.log_K(),
+        }
+    }
+}
+
+impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
+    fn degree(&self) -> usize {
+        READ_RAF_DEGREE_BOUND
+    }
+
+    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
+        self.rv_claim + self.gamma * self.raf_claim
+    }
+
+    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
+        OpeningPoint::<BIG_ENDIAN, F>::new(challenges.to_vec())
+    }
+
+    fn num_rounds(&self) -> usize {
+        self.log_K
+    }
+
+    // output = ra_claim * (val_claim + gamma * int_claim)
+    //        = Challenge(0) * Opening(ra)
+}
+
+/// Prover state for lookups into small tables.
+pub struct ReadRafProver<F: JoltField> {
+    params: ReadRafParams<F>,
+    val: MultilinearPolynomial<F>,
+    G: MultilinearPolynomial<F>,
+    int: IdentityPolynomial<F>,
+}
+
+impl<F: JoltField> ReadRafProver<F> {
+    #[tracing::instrument(name = "ReadRafProver::initialize", skip_all)]
+    /// Initialize the prover for lookups.
+    pub fn initialize(lookup_indices: &[usize], table: &[i32], params: ReadRafParams<F>) -> Self {
+        let table_size = 1 << params.log_K;
+        let E = EqPolynomial::evals(&params.r);
+        let G = lookup_indices
+            .par_iter()
+            .with_min_len(par_enabled())
+            .enumerate()
+            .fold(
+                || unsafe_allocate_zero_vec::<F>(table_size),
+                |mut local_G, (j, &lookup_index)| {
+                    local_G[lookup_index] += E[j];
+                    local_G
+                },
+            )
+            .reduce(
+                || unsafe_allocate_zero_vec::<F>(table_size),
+                |mut acc, local_G| {
+                    for (i, &val) in local_G.iter().enumerate() {
+                        acc[i] += val;
+                    }
+                    acc
+                },
+            );
+        let val = MultilinearPolynomial::from(table.to_vec());
+        Self {
+            int: IdentityPolynomial::new(params.log_K),
+            params,
+            val,
+            G: MultilinearPolynomial::from(G),
+        }
+    }
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut ProverOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let sc_challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
+        let opening_point = [&sc_challenges, self.params.r.as_slice()].concat();
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(self.params.ra_vp, self.params.ra_sid),
+            opening_point.into(),
+            self.G.final_claim(),
+        );
+    }
+}
+
+impl<F: JoltField> ReadRafProver<F> {
+    #[tracing::instrument(name = "ReadRafProver::round_message", skip_all)]
+    fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
+        let Self { G, val, int, .. } = self;
+        let half_poly_len = val.len() / 2;
+        let uni_poly_evals: [F; 2] = (0..half_poly_len)
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|i| {
+                let val_evals =
+                    val.sumcheck_evals(i, READ_RAF_DEGREE_BOUND, BindingOrder::HighToLow);
+                let g_evals = G.sumcheck_evals(i, READ_RAF_DEGREE_BOUND, BindingOrder::HighToLow);
+                let int_evals =
+                    int.sumcheck_evals(i, READ_RAF_DEGREE_BOUND, BindingOrder::HighToLow);
+                [
+                    g_evals[0] * (val_evals[0] + self.params.gamma * int_evals[0]),
+                    g_evals[1] * (val_evals[1] + self.params.gamma * int_evals[1]),
+                ]
+            })
+            .reduce(
+                || [F::zero(); 2],
+                |running, new| array::from_fn(|i| running[i] + new[i]),
+            );
+        UnivariatePoly::from_evals_and_hint(previous_claim, &uni_poly_evals)
+    }
+
+    fn bind(&mut self, r: F, _round: usize) {
+        let r_j = F::challenge_from_field(r);
+        self.val.bind_parallel(r_j, BindingOrder::HighToLow);
+        self.G.bind_parallel(r_j, BindingOrder::HighToLow);
+        self.int.bind_parallel(r_j, BindingOrder::HighToLow);
+    }
+}
+
+impl<F: JoltField> ProveRounds<F> for ReadRafProver<F> {
+    fn num_rounds(&self) -> usize {
+        SumcheckInstanceParams::num_rounds(&self.params)
+    }
+
+    fn prove_round(
+        &mut self,
+        bind: Option<F>,
+        round: usize,
+        previous_claim: F,
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
+        if let Some(r) = bind {
+            self.bind(r, round - 1);
+        }
+        Ok(self.round_message(round, previous_claim))
+    }
+
+    fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
+        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        Ok(())
+    }
+}
+
+/// Verifier for lookups into small tables
+pub struct ReadRafVerifier<F: JoltField> {
+    params: ReadRafParams<F>,
+    table: Vec<i32>,
+}
+
+impl<F: JoltField> ReadRafVerifier<F> {
+    /// Create new verifier for lookups into small tables.
+    pub fn new(
+        provider: &impl ReadRafProvider<F>,
+        table: Vec<i32>,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        transcript: &mut impl Transcript,
+    ) -> Self {
+        let params = ReadRafParams::new(provider, accumulator, transcript);
+        Self { params, table }
+    }
+}
+
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVerifier<F> {
+    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+        &self.params
+    }
+
+    fn expected_output_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        sumcheck_challenges: &[F::Challenge],
+    ) -> F {
+        let ra_claim = accumulator
+            .get_virtual_polynomial_opening(OpeningId::new(self.params.ra_vp, self.params.ra_sid))
+            .1;
+
+        let span = tracing::span!(tracing::Level::INFO, "ReadRafVerifier::val_evaluation");
+        let _guard = span.enter();
+        let val_claim =
+            MultilinearPolynomial::from(self.table.clone()).evaluate(sumcheck_challenges); // TODO: rm clone
+        drop(_guard);
+        drop(span);
+        let int_claim = IdentityPolynomial::new(self.params.log_K).evaluate(sumcheck_challenges);
+        ra_claim * (val_claim + self.params.gamma * int_claim)
+    }
+
+    fn cache_openings(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        sumcheck_challenges: &[F::Challenge],
+    ) {
+        let sc_challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
+        let opening_point = [&sc_challenges, self.params.r.as_slice()].concat();
+        accumulator.append_virtual(
+            transcript,
+            OpeningId::new(self.params.ra_vp, self.params.ra_sid),
+            opening_point.into(),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RaOneHotEncoding trait
+// ---------------------------------------------------------------------------
+
+/// Retrieves the existing opening for the given virtual opening id from the accumulator,
+/// with special handling for `VirtualPoly::NodeOutput`,
+/// where we recover the reduced opening point.
+fn resolve_vp_opening<F: JoltField>(
+    accumulator: &dyn OpeningAccumulator<F>,
+    opening_id: OpeningId,
+) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+    let virtual_poly = opening_id
+        .virtual_poly()
+        .expect("expected virtual polynomial");
+    if let Some(opening) = accumulator.try_get_virtual_polynomial_opening(opening_id) {
+        return opening;
+    }
+    if let VirtualPoly::NodeOutput(producer_idx) = virtual_poly {
+        accumulator.get_node_output_opening(producer_idx)
+    } else {
+        accumulator.get_virtual_polynomial_opening(opening_id)
+    }
+}
+
+/// Describes the polynomial configuration for the three RA one-hot sumchecks
+/// (RaVirtual, HammingWeight, Booleanity). Implementors specify which
+/// `CommittedPoly` / `VirtualPoly` variants to use, the split
+/// point for R_a, and the `OneHotParams`.
+pub trait RaOneHotEncoding {
+    /// The committed polynomial for the `d`-th one-hot decomposition chunk.
+    fn committed_poly(&self, d: usize) -> CommittedPoly;
+
+    /// The opening id whose opening point supplies
+    /// `r_cycle` for HammingWeight and Booleanity.
+    fn r_cycle_source(&self) -> OpeningId;
+
+    /// The opening id whose opening gives `(r, ra_claim)`
+    /// for RaVirtual. The point is split at `self.log_k()`.
+    fn ra_source(&self) -> OpeningId;
+
+    /// Split point: the first `log_k()` coordinates of the RA opening point
+    /// become `r_address`, the rest become `r_cycle` for RaVirtual.
+    fn log_k(&self) -> usize;
+
+    /// One-hot encoding parameters (chunk size, instruction_d, etc.).
+    fn one_hot_params(&self) -> OneHotParams;
+
+    /// The cycle point `r_cycle` for HammingWeight and Booleanity. By default
+    /// the opening point of [`Self::r_cycle_source`]; encodings whose cycle
+    /// space has no single node opening (packed instances) override it.
+    fn r_cycle<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> Vec<F> {
+        resolve_vp_opening(accumulator, self.r_cycle_source()).0.r
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic RA one-hot prover / verifier construction
+// ---------------------------------------------------------------------------
+
+/// The transcript challenges of the three RA one-hot sumchecks, drawn in the
+/// fixed order HammingWeight `gamma_powers`, Booleanity `gammas`, Booleanity
+/// `r_address` (RaVirtual draws none). Separating the draw from the (heavy)
+/// prover construction lets many instances be built in parallel after their
+/// challenges were drawn sequentially.
+pub struct RaOneHotChallenges<F: JoltField> {
+    pub gamma_powers: Vec<F>,
+    pub gammas: Vec<F::Challenge>,
+    pub r_address: Vec<F::Challenge>,
+}
+
+/// Draw the challenges for [`ra_onehot_provers_with`] / [`ra_onehot_verifiers_with`].
+pub fn ra_onehot_challenges<F: JoltField, T: Transcript>(
+    encoding: &impl RaOneHotEncoding,
+    transcript: &mut T,
+) -> RaOneHotChallenges<F> {
+    let one_hot_params = encoding.one_hot_params();
+    let d = one_hot_params.instruction_d;
+    let gamma_powers = transcript.challenge_scalar_powers(d);
+    let gammas = transcript.challenge_vector_optimized::<F>(d);
+    let r_address = transcript.challenge_vector_optimized::<F>(one_hot_params.log_k_chunk);
+    RaOneHotChallenges {
+        gamma_powers,
+        gammas,
+        r_address,
+    }
+}
+
+/// The three RA one-hot sumchecks' parameters, resolved from the accumulator
+/// (cheap; lets the heavy prover construction run without it, e.g. in parallel).
+pub type RaOneHotParams<F> = (RaSumcheckParams<F>, BooleanitySumcheckParams<F>);
+
+/// Resolve the RA one-hot parameters from the accumulator and drawn challenges.
+pub fn ra_onehot_params<F: JoltField>(
+    encoding: &impl RaOneHotEncoding,
+    accumulator: &dyn OpeningAccumulator<F>,
+    challenges: RaOneHotChallenges<F>,
+) -> RaOneHotParams<F> {
+    let one_hot_params = encoding.one_hot_params();
+    let d = one_hot_params.instruction_d;
+    let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
+
+    let r_cycle = encoding.r_cycle(accumulator);
+    // The Hamming-weight check (`Σ_k ra_d(k, r_cycle) = 1`, batched by
+    // `gamma_powers`) is folded into Booleanity as its linear term, so every
+    // chunk is opened once.
+    let hamming: F = challenges.gamma_powers.iter().sum();
+    let booleanity_params = BooleanitySumcheckParams {
+        linear: Some(LinearTerm {
+            gammas: challenges.gamma_powers,
+            weights: vec![F::zero(); d],
+            claim: LinearClaim::constant(hamming),
+        }),
+        d,
+        log_k_chunk: one_hot_params.log_k_chunk,
+        log_t: r_cycle.len(),
+        r_cycle,
+        r_address: challenges.r_address.into_opening(),
+        gammas: challenges.gammas,
+        polynomial_types: polynomial_types.clone(),
+        sumcheck_id: SumcheckId::Booleanity,
+    };
+    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(encoding.ra_source());
+    let (r_address_ra, r_cycle_ra) = r.split_at(encoding.log_k());
+    let ra_params = RaSumcheckParams {
+        r_address: r_address_ra,
+        r_cycle: r_cycle_ra,
+        one_hot_params,
+        ra_claim,
+        polynomial_types,
+    };
+    (ra_params, booleanity_params)
+}
+
+/// Build the RA one-hot sumcheck **provers** (RaVirtual, HammingWeight,
+/// Booleanity) from an [`RaOneHotEncoding`] and pre-computed `lookup_indices`.
+///
+/// Transcript challenge draw order:
+/// 1. HammingWeight — `gamma_powers`
+/// 2. Booleanity — `gammas`, then `r_address`
+/// 3. RaVirtual — no challenges
+///
+/// Returns `[RaVirtual, Booleanity (+ Hamming weight)]`.
+pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
+    encoding: &impl RaOneHotEncoding,
+    lookup_indices: &[usize],
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut T,
+) -> [Box<dyn SumcheckInstanceProver<F, T>>; 2] {
+    let challenges = ra_onehot_challenges::<F, T>(encoding, transcript);
+    ra_onehot_provers_with(encoding, lookup_indices, accumulator, challenges)
+}
+
+/// [`ra_onehot_provers`] with the challenges already drawn (no transcript).
+pub fn ra_onehot_provers_with<F: JoltField, T: Transcript>(
+    encoding: &impl RaOneHotEncoding,
+    lookup_indices: &[usize],
+    accumulator: &dyn OpeningAccumulator<F>,
+    challenges: RaOneHotChallenges<F>,
+) -> [Box<dyn SumcheckInstanceProver<F, T>>; 2] {
+    let params = ra_onehot_params(encoding, accumulator, challenges);
+    ra_onehot_provers_from_params(params, lookup_indices)
+}
+
+/// Build the RA one-hot provers from resolved parameters (no accumulator
+/// or transcript access — safe to run in parallel across instances).
+pub fn ra_onehot_provers_from_params<F: JoltField, T: Transcript>(
+    params: RaOneHotParams<F>,
+    lookup_indices: &[usize],
+) -> [Box<dyn SumcheckInstanceProver<F, T>>; 2] {
+    let (ra_params, booleanity_params) = params;
+    let one_hot_params = &ra_params.one_hot_params;
+
+    // --- Compute G and H_indices once (shared across both provers) ---
+    let G = compute_ra_evals(lookup_indices, one_hot_params, &booleanity_params.r_cycle);
+    let H_indices = compute_instruction_h_indices(lookup_indices, one_hot_params);
+
+    [
+        Box::new(RaSumcheckProver::gen(ra_params, H_indices.clone())),
+        Box::new(BooleanitySumcheckProver::gen(
+            booleanity_params,
+            G,
+            H_indices,
+        )),
+    ]
+}
+
+/// Build the RA one-hot sumcheck **verifiers** (RaVirtual,
+/// HammingWeight, Booleanity) from an [`RaOneHotEncoding`].
+///
+/// Transcript challenge draw order matches [`ra_onehot_provers`].
+///
+/// Returns `[RaVirtual, Booleanity (+ Hamming weight)]`.
+pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
+    encoding: &impl RaOneHotEncoding,
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut T,
+) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 2] {
+    let challenges = ra_onehot_challenges::<F, T>(encoding, transcript);
+    ra_onehot_verifiers_with(encoding, accumulator, challenges)
+}
+
+/// [`ra_onehot_verifiers`] with the challenges already drawn (no transcript).
+pub fn ra_onehot_verifiers_with<F: JoltField, T: Transcript>(
+    encoding: &impl RaOneHotEncoding,
+    accumulator: &dyn OpeningAccumulator<F>,
+    challenges: RaOneHotChallenges<F>,
+) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 2] {
+    ra_onehot_verifiers_with_params(ra_onehot_params(encoding, accumulator, challenges))
+}
+
+/// Build the RA one-hot verifiers from resolved parameters.
+pub fn ra_onehot_verifiers_with_params<F: JoltField, T: Transcript>(
+    params: RaOneHotParams<F>,
+) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 2] {
+    let (ra_params, booleanity_params) = params;
+    [
+        Box::new(RaSumcheckVerifier::new(ra_params)),
+        Box::new(BooleanitySumcheckVerifier::new(booleanity_params)),
+    ]
+}
+
+#[tracing::instrument(skip_all, name = "compute_instruction_h_indices")]
+pub fn compute_instruction_h_indices(
+    trace: &[usize],
+    one_hot_params: &OneHotParams,
+) -> Vec<Vec<Option<u8>>> {
+    (0..one_hot_params.instruction_d)
+        .map(|i| {
+            trace
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|lookup_index| {
+                    Some(one_hot_params.lookup_index_chunk(*lookup_index as u64, i))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[tracing::instrument(skip_all, name = "compute_ra_evals")]
+pub fn compute_ra_evals<F, U>(
+    trace: &[usize],
+    one_hot_params: &OneHotParams,
+    r_cycle: &[U],
+) -> Vec<Vec<F>>
+where
+    U: Copy + Send + Sync + Into<F>,
+    F: JoltField + FieldChallengeOps<U>,
+{
+    let eq_r_cycle = EqPolynomial::evals(r_cycle);
+
+    let T = trace.len();
+    let num_chunks = rayon::current_num_threads().next_power_of_two().min(T);
+    let chunk_size = (T / num_chunks).max(1);
+
+    trace
+        .par_chunks(chunk_size)
+        .enumerate()
+        .map(|(chunk_index, trace_chunk)| {
+            let mut result: Vec<Vec<F>> = (0..one_hot_params.instruction_d)
+                .map(|_| unsafe_allocate_zero_vec(one_hot_params.k_chunk))
+                .collect();
+            let offset = chunk_index * chunk_size;
+            for (j, lookup_index) in trace_chunk.iter().enumerate() {
+                for i in 0..one_hot_params.instruction_d {
+                    let k = one_hot_params.lookup_index_chunk(*lookup_index as u64, i);
+                    result[i][k as usize] += eq_r_cycle[offset + j];
+                }
+            }
+            result
+        })
+        .reduce(
+            || {
+                (0..one_hot_params.instruction_d)
+                    .map(|_| unsafe_allocate_zero_vec(one_hot_params.k_chunk))
+                    .collect()
+            },
+            |mut running, new| {
+                running.iter_mut().zip(new.into_iter()).for_each(|(x, y)| {
+                    x.par_iter_mut()
+                        .zip(y.into_par_iter())
+                        .with_min_len(par_enabled())
+                        .for_each(|(x, y)| *x += y)
+                });
+                running
+            },
+        )
+}

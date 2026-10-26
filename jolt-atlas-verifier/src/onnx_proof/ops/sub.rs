@@ -5,9 +5,10 @@ use crate::onnx_proof::{
     ops::add::{verify_accumulation, AccumulationRelation},
     Verifier,
 };
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_trace::op::Sub;
+use atlas_transcript::Transcript;
 use common::CommittedPoly;
-use joltworks::{field::JoltField, transcripts::Transcript, utils::errors::ProofVerifyError};
 
 crate::bind_relation!(Sub, AccumulationRelation<Sub>);
 

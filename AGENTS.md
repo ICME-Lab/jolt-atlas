@@ -81,21 +81,28 @@ Workspace members, in dependency order:
   `jolt-sumcheck`, `jolt-claims` (whose dependency cone, `jolt-openings`, `jolt-crypto`,
   `jolt-riscv`, `jolt-lookup-tables` and `jolt-r1cs`, is vendored but not workspace members), and
   `jolt-akita` (the lattice PCS adapter, over LayerZero's `akita-*` crates by git).
-- **joltworks** — the proof-system toolkit inherited from Jolt: `field`, `poly` (multilinear
-  polynomials and the `akita` commitment scheme over Fp128), `subprotocols` (sumcheck,
-  evaluation reduction), `lookup_tables`, `transcripts`, `config`. `transcripts` runs on upstream
-  `jolt-transcript`'s split surface: the prover uses a `ProvingTranscript` (spongefish
-  `ProverState`, proof-of-work grinding behind the `prover` feature), the verifier a
-  `VerifyingTranscript` over the proof's NARG string. `field::JoltField` extends upstream
-  `jolt_field::JoltField` (ring/field methods resolve to upstream's) and adds the
-  unreduced-product ladder and challenge types; `field::fp128` is the one implementation, the
-  128-bit Solinas field. No BN254 or curve crate is in the resolved dependency graph (checked in
-  CI); the vendored crates' optional `bn254` features stay off. `BatchedSumcheck`/`Sumcheck` drive upstream `jolt-sumcheck`'s engine
-  (`prove_batch`, `verify_compressed`) through `subprotocols::upstream_sumcheck`, which presents
-  our transcript as upstream's facade (grinding before each challenge). `SumcheckInstanceProver`
+- The proof-system toolkit inherited from Jolt, in dependency order:
+  - **atlas-algebra** — `field` (`JoltField`, which extends upstream `jolt_field::JoltField`
+    and adds the unreduced-product ladder and challenge types; `field::fp128`, the 128-bit
+    Solinas field, is the one implementation), `poly` (multilinear polynomials, opening points)
+    and `utils`. Fields and polynomials share a crate because `MultilinearPolynomial`'s `From`
+    impls overlap unless `JoltField` is local.
+  - **atlas-transcript** — the Fiat-Shamir transcript on upstream `jolt-transcript`'s split
+    surface: the prover uses a `ProvingTranscript` (spongefish `ProverState`, proof-of-work
+    grinding behind the `prover` feature), the verifier a `VerifyingTranscript` over the
+    proof's NARG string.
+  - **atlas-lookup-tables** — the prefix-suffix lookup tables.
+  - **atlas-sumcheck** — sumcheck instances and batching, the opening accumulators
+    (`opening_proof`), evaluation reduction, the one-hot and shout subprotocols, `config`.
+  - **atlas-pcs** — the `CommitmentScheme` interface, `akita` over Fp128, and the test `mock`.
+  No BN254 or curve crate is in the resolved dependency graph (checked in CI); the vendored
+  crates' optional `bn254` features stay off. `BatchedSumcheck`/`Sumcheck` drive upstream
+  `jolt-sumcheck`'s engine (`prove_batch`, `verify_compressed`) through
+  `atlas_sumcheck::upstream_sumcheck`, which presents our transcript as upstream's facade
+  (grinding before each challenge). `SumcheckInstanceProver`
   extends upstream's `ProveRounds`, so every prover instance computes its own round messages
   (upstream `UnivariatePoly`) over upstream's `GruenSplitEqPolynomial`; Gruen rounds go through
-  `poly::split_eq_poly::SplitEqUnreducedFold`, which takes the relation at the endpoint the
+  `atlas_algebra::poly::split_eq_poly::SplitEqUnreducedFold`, which takes the relation at the endpoint the
   round otherwise recovers by division.
 - **atlas-trace** — deterministic fixed-point IR, op semantics, and the trace engine. Owns the
   behavioral contract below.
@@ -146,7 +153,7 @@ root `Cargo.toml`.
   mutated (`proof_mutation_sweep`), the trace is tampered before proving
   (`witness_tamper_sweep`, via `prove_from_trace`), and every opening claim is forged
   at the accumulator (`opening_forgery_sweep`, via the test-feature hook
-  `joltworks::poly::opening_proof::forgery`). A new op or witness column is covered once it
+  `atlas_sumcheck::opening_proof::forgery`). A new op or witness column is covered once it
   appears in one of the probe models in `onnx_proof/testing/models.rs`; a new proof field needs a
   `mutate::Site`. Prover-side `#[cfg(test)]` self-checks use `probe_assert!` so a tampered proof
   still reaches the verifier.
@@ -170,7 +177,7 @@ root `Cargo.toml`.
 ## Development Guidelines
 
 - Performance is the product. Profile before optimizing; the sumcheck inner loops dominate
-  prover time, and small regressions in `joltworks/poly` multiply across every round.
+  prover time, and small regressions in `atlas-algebra/src/poly` multiply across every round.
 - Prefer `x.evaluate_mle(&r)` over building a polynomial from a clone just to evaluate it.
 - Tests assert against independent ground truth: the trace semantics, golden hashes, or
   algebraic properties. Never a second implementation of the rule under test.

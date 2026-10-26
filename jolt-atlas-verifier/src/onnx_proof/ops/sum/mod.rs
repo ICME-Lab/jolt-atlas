@@ -1,15 +1,13 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
-use atlas_trace::op::Sum;
-use common::{CommittedPoly, VirtualPoly};
-use joltworks::{
-    self,
-    field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
-    subprotocols::sumcheck::Sumcheck,
-    transcripts::Transcript,
-    utils::errors::ProofVerifyError,
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
+    sumcheck::Sumcheck,
 };
+use atlas_trace::op::Sum;
+use atlas_transcript::Transcript;
+use common::{CommittedPoly, VirtualPoly};
 
 use crate::{
     onnx_proof::{

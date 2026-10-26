@@ -2,11 +2,9 @@
 
 use std::time::Instant;
 
+use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
-use joltworks::{
-    poly::commitment::commitment_scheme::CommitmentScheme,
-    transcripts::{Blake2bProver, Blake2bVerifier},
-};
+use atlas_transcript::{Blake2bProver, Blake2bVerifier};
 
 use crate::onnx_proof::{
     proof_serialization::{deserialize_proof, serialize_proof},

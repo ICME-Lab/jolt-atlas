@@ -33,7 +33,7 @@ impl ProbeGuard {
             "probe mode is already active (nested or concurrent sweep)"
         );
         take_divergences();
-        joltworks::poly::opening_proof::forgery::set(None);
+        atlas_sumcheck::opening_proof::forgery::set(None);
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if !EXPECTING_PANIC.load(Ordering::SeqCst) {
@@ -51,7 +51,7 @@ impl Drop for ProbeGuard {
         if !std::thread::panicking() {
             drop(std::panic::take_hook());
         }
-        joltworks::poly::opening_proof::forgery::set(None);
+        atlas_sumcheck::opening_proof::forgery::set(None);
         jolt_atlas_verifier::probe::set_active(false);
     }
 }

@@ -1,12 +1,15 @@
 use crate::node_view::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
-use common::VirtualPoly;
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningPoint, SumcheckId, BIG_ENDIAN},
-    subprotocols::shout::ReadRafProvider,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
     utils::math::Math,
 };
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, SumcheckId},
+    shout::ReadRafProvider,
+};
+use common::VirtualPoly;
 pub use mult::{MultParams, MultVerifier};
 
 /// Exp multiplication relation prover/verifier.

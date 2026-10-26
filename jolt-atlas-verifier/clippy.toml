@@ -2,7 +2,7 @@
 # items of the vendored upstream crates (third_party/), which ship them unconditionally. A crate
 # vendored later adds its prover items here. CI's verifier-isolation job also rejects `::prover`
 # and `::witness` path segments in this crate's sources, the backstop for items this list misses.
-# `joltworks` prover APIs are review-held until stage 9 dissolves the crate. `allow-invalid`
+# `allow-invalid`
 # marks items behind jolt-sumcheck's `committed` feature, which no atlas build enables.
 disallowed-methods = [
     { path = "jolt_sumcheck::prover::prove_batch", reason = "prover-only" },

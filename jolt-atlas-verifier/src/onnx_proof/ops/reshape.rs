@@ -23,18 +23,15 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use jolt_claims::{derived, opening, SymbolicSumcheck};
-use jolt_field::Ring;
-use joltworks::{
+use atlas_algebra::{
     field::{ChallengeFieldOps, JoltField},
-    poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    transcripts::Transcript,
+    poly::{eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial},
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_transcript::Transcript;
+use jolt_claims::{derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 
 impl_standard_sumcheck_proof_api!(Reshape, model_relation ReshapeRelation);
 

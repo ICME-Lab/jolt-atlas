@@ -9,14 +9,14 @@ pub use jolt_atlas_verifier::onnx_proof::range_checking::*;
 
 use crate::onnx_proof::range_checking::range_check_operands::RangeCheckingOperandsTrait;
 use crate::onnx_proof::trace_view::TraceView;
-use common::consts::XLEN;
-use joltworks::{
-    field::JoltField,
-    lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
-    poly::opening_proof::ProverOpeningAccumulator,
-    subprotocols::ps_shout::binary::{ps_read_raf_prover, BinaryReadRafSumcheckProver},
-    transcripts::Transcript,
+use atlas_algebra::field::JoltField;
+use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
+use atlas_sumcheck::{
+    opening_proof::ProverOpeningAccumulator,
+    ps_shout::binary::{ps_read_raf_prover, BinaryReadRafSumcheckProver},
 };
+use atlas_transcript::Transcript;
+use common::consts::XLEN;
 
 /// Range-checking operands definitions for operations requiring bounds-checking.
 ///

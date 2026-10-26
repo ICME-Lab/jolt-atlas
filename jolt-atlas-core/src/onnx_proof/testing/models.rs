@@ -2,9 +2,9 @@
 //! graph a few dozen elements wide, so a prove costs a fraction of a second
 //! and a verify a few milliseconds.
 
+use atlas_lookup_tables::clamp::CLAMP_BOUND;
 use atlas_trace::{Model, Tensor};
 use common::consts::MODEL_SCALE;
-use joltworks::lookup_tables::clamp::CLAMP_BOUND;
 use rand::{rngs::StdRng, SeedableRng};
 
 use super::ModelBuilder;

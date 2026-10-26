@@ -9,13 +9,12 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
+use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_trace::{op::Add, trace::LayerData};
+use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::ops::add::*;
 use jolt_claims::SymbolicSumcheck;
-use joltworks::{
-    field::JoltField, poly::multilinear_polynomial::EvaluateMle,
-    subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
-};
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for Add {
     #[tracing::instrument(skip_all, name = "Add::prove")]

@@ -4,12 +4,9 @@ pub use jolt_atlas_verifier::onnx_proof::ops::eval_reduction::*;
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::Prover;
-use joltworks::{
-    field::JoltField,
-    poly::multilinear_polynomial::MultilinearPolynomial,
-    subprotocols::evaluation_reduction::{EvalReductionProof, EvalReductionProtocol},
-    transcripts::Transcript,
-};
+use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial};
+use atlas_sumcheck::evaluation_reduction::{EvalReductionProof, EvalReductionProtocol};
+use atlas_transcript::Transcript;
 
 /// Prover-side methods of [`NodeEvalReduction`].
 pub trait NodeEvalReductionProve {
@@ -38,9 +35,9 @@ impl NodeEvalReductionProve for NodeEvalReduction {
             let (r, claim) = (openings[0].0.clone(), openings[0].1);
             (
                 EvalReductionProof {
-                    h: joltworks::poly::unipoly::UniPoly::from_coeff(vec![claim]),
+                    h: atlas_algebra::poly::unipoly::UniPoly::from_coeff(vec![claim]),
                 },
-                joltworks::subprotocols::evaluation_reduction::ReducedInstance { r: r.r, claim },
+                atlas_sumcheck::evaluation_reduction::ReducedInstance { r: r.r, claim },
             )
         } else {
             let LayerData {
@@ -69,24 +66,24 @@ mod tests {
     use crate::onnx_proof::{
         prover, verifier, AtlasSharedPreprocessing, Claims, ONNXProof, ProofId, Verifier,
     };
+    use atlas_algebra::field::fp128::Fp128 as Fr;
+    use atlas_algebra::poly::{
+        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        opening_point::OpeningPoint,
+    };
+    use atlas_pcs::mock::MockCommitScheme;
+    use atlas_sumcheck::{
+        evaluation_reduction::EvalReductionProtocol,
+        opening_proof::{OpeningId, SumcheckId},
+        sumcheck::SumcheckInstanceProof,
+    };
     use atlas_trace::op::Add;
     use atlas_trace::trace::ModelExecutionIO;
     use atlas_trace::Model;
     use atlas_trace::Op;
     use atlas_trace::Tensor;
+    use atlas_transcript::{Blake2bProver, Blake2bVerifier, ProvingTranscript};
     use common::VirtualPoly;
-    use joltworks::field::fp128::Fp128 as Fr;
-    use joltworks::poly::commitment::mock::MockCommitScheme;
-    use joltworks::{
-        poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_proof::{OpeningId, OpeningPoint, SumcheckId},
-        },
-        subprotocols::{
-            evaluation_reduction::EvalReductionProtocol, sumcheck::SumcheckInstanceProof,
-        },
-        transcripts::{Blake2bProver, Blake2bVerifier, ProvingTranscript},
-    };
     use rand::{rngs::StdRng, SeedableRng};
     use std::collections::BTreeMap;
 

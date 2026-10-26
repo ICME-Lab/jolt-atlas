@@ -39,21 +39,23 @@ use crate::onnx_proof::relation::{
     append_produced, note_dispatch, relation_input_claim, AtlasRelation, RelationParams,
     RelationSetup,
 };
-use common::parallel::par_enabled;
-use jolt_claims::SymbolicSumcheck;
-use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
     poly::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
-        opening_proof::{OpeningPoint, ProverOpeningAccumulator},
+        opening_point::OpeningPoint,
     },
-    subprotocols::sumcheck_prover::SumcheckInstanceProver,
-    transcripts::Transcript,
 };
+use atlas_sumcheck::{
+    opening_proof::ProverOpeningAccumulator, sumcheck_prover::SumcheckInstanceProver,
+};
+use atlas_transcript::Transcript;
+use common::parallel::par_enabled;
+use jolt_claims::SymbolicSumcheck;
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
 /// The dot engine: the specialized prover of a

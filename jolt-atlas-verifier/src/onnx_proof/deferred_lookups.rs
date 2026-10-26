@@ -23,17 +23,16 @@ use crate::onnx_proof::{
     global_clamp::{clamp_buckets, remainder_buckets, ClampBucket},
     ProofId, ProofType, Verifier,
 };
-use joltworks::{
-    field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningPoint},
-    subprotocols::{
-        shout::{self, RaOneHotEncoding, RaOneHotParams},
-        sumcheck::BatchedSumcheck,
-        sumcheck_verifier::SumcheckInstanceVerifier,
-    },
-    transcripts::Transcript,
-    utils::errors::ProofVerifyError,
+use atlas_algebra::{
+    field::JoltField, poly::opening_point::OpeningPoint, utils::errors::ProofVerifyError,
 };
+use atlas_sumcheck::{
+    opening_proof::OpeningAccumulator,
+    shout::{self, RaOneHotEncoding, RaOneHotParams},
+    sumcheck::BatchedSumcheck,
+    sumcheck_verifier::SumcheckInstanceVerifier,
+};
+use atlas_transcript::Transcript;
 
 /// Node index under which the deferred (model-wide) lookup proofs are stored.
 pub const DEFERRED_PROOF_IDX: usize = usize::MAX;

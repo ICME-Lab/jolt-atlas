@@ -1,12 +1,16 @@
 use crate::node_view::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
-use common::{CommittedPoly, VirtualPoly};
-use joltworks::{
-    config::{OneHotConfig, OneHotParams},
+use atlas_algebra::{
     field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
-    subprotocols::{identity_range_check::IdentityRCProvider, shout::RaOneHotEncoding},
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
 };
+use atlas_sumcheck::{
+    config::{OneHotConfig, OneHotParams},
+    identity_range_check::IdentityRCProvider,
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
+    shout::RaOneHotEncoding,
+};
+use common::{CommittedPoly, VirtualPoly};
 
 // ---------------------------------------------------------------------------
 // Unified IdentityRCProvider

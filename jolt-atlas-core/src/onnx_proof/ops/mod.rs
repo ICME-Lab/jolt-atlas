@@ -138,11 +138,10 @@ use crate::node_view::ComputationNode;
 // Re-export handler types for convenient access
 
 // Re-export operator param/prover/verifier types for the handler macro
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::evaluation_reduction::EvalReductionProof;
+use atlas_transcript::Transcript;
 use eval_reduction::NodeEvalReduction;
-use joltworks::{
-    field::JoltField, subprotocols::evaluation_reduction::EvalReductionProof,
-    transcripts::Transcript,
-};
 
 use crate::onnx_proof::Prover;
 
@@ -264,7 +263,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
             },
             |node: &ComputationNode,
              _: &atlas_trace::Model,
-             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
              _: &mut T| {
                 use $crate::onnx_proof::ops::$verifier_ty;
                 $verifier_ty::new(node.clone(), accumulator)
@@ -285,7 +284,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
             },
             |node: &ComputationNode,
              _: &atlas_trace::Model,
-             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
              transcript: &mut T| {
                 $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
                     <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
@@ -309,7 +308,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
             },
             |node: &ComputationNode,
              model: &atlas_trace::Model,
-             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
              transcript: &mut T| {
                 $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
                     <$relation>::for_node(model, node.clone()),
@@ -328,7 +327,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
                 node: &ComputationNode,
                 prover: &mut Prover<F, T>,
             ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-                use joltworks::subprotocols::sumcheck::Sumcheck;
+                use atlas_sumcheck::sumcheck::Sumcheck;
 
                 let mut prover_sumcheck = ($make_prover)(node, &mut *prover);
                 let (proof, _) = Sumcheck::prove(
@@ -394,7 +393,7 @@ macro_rules! impl_fused_rescale_proof_api {
             },
             |node: &ComputationNode,
              _: &atlas_trace::Model,
-             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
              _: &mut T| {
                 use $crate::onnx_proof::ops::$verifier_ty;
                 $verifier_ty::new(node.clone(), accumulator)
@@ -415,7 +414,7 @@ macro_rules! impl_fused_rescale_proof_api {
             },
             |node: &ComputationNode,
              _: &atlas_trace::Model,
-             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
              transcript: &mut T| {
                 $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
                     <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
@@ -434,7 +433,7 @@ macro_rules! impl_fused_rescale_proof_api {
                 node: &ComputationNode,
                 prover: &mut Prover<F, T>,
             ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-                use joltworks::subprotocols::sumcheck::Sumcheck;
+                use atlas_sumcheck::sumcheck::Sumcheck;
                 use $crate::onnx_proof::{clamp_lookups::is_scalar, fused_rebase};
 
                 let fused = fused_rebase::fuses_rebase(node);

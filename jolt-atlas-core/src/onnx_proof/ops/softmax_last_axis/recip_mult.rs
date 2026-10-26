@@ -1,21 +1,20 @@
 use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_algebra::{
+    field::{IntoOpening, JoltField},
+    poly::{
+        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        split_eq_poly::SplitEqUnreducedFold,
+    },
+};
+use atlas_sumcheck::{
+    opening_proof::ProverOpeningAccumulator, sumcheck_prover::SumcheckInstanceProver,
+    sumcheck_verifier::SumcheckInstanceParams, upstream_sumcheck::round_check_failed,
+};
+use atlas_transcript::Transcript;
 use common::VirtualPoly;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::recip_mult::*;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
-use joltworks::{
-    field::{IntoOpening, JoltField},
-    poly::{
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::ProverOpeningAccumulator,
-        split_eq_poly::SplitEqUnreducedFold,
-    },
-    subprotocols::{
-        sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceParams,
-        upstream_sumcheck::round_check_failed,
-    },
-    transcripts::Transcript,
-};
 
 /// Prover state for reciprocal multiplication in softmax.
 ///

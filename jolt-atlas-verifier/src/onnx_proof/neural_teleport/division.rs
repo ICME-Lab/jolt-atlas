@@ -10,8 +10,9 @@ use atlas_trace::Tensor;
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::Verifier;
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
-use joltworks::{field::JoltField, transcripts::Transcript, utils::errors::ProofVerifyError};
 
 /// Computes quotient and remainder for neural teleportation division.
 /// Returns (quotient, remainder) where input = DIVISOR * quotient + remainder

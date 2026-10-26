@@ -1,6 +1,7 @@
 //! Prover debug state compared against the verifier in tests.
 
-use joltworks::{field::JoltField, poly::opening_proof::ProverOpeningAccumulator};
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::opening_proof::ProverOpeningAccumulator;
 
 // ---------------------------------------------------------------------------
 // ProverDebugInfo

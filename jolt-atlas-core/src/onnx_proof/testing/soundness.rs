@@ -20,12 +20,10 @@
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
+use atlas_sumcheck::opening_proof::{forgery, OpeningId};
 use atlas_trace::{trace::ModelExecutionIO, Model, NodeId, Tensor, Trace};
-use joltworks::poly::{
-    commitment::{akita::AkitaScheme, commitment_scheme::CommitmentScheme},
-    opening_proof::{forgery, OpeningId},
-};
-use joltworks::transcripts::{Blake2bProver, Blake2bVerifier};
+use atlas_transcript::{Blake2bProver, Blake2bVerifier};
 use rand::{rngs::StdRng, SeedableRng};
 use serial_test::serial;
 

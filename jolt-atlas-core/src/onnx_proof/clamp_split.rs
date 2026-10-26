@@ -32,7 +32,7 @@
 //! `IND ∈ {0, 1}`.
 //!
 //! **Chunk check**: the Booleanity sumcheck over all chunks carries a linear
-//! term (see `joltworks::subprotocols::booleanity::LinearTerm`) that ties the
+//! term (see `atlas_sumcheck::booleanity::LinearTerm`) that ties the
 //! three virtual openings to the committed chunks — every chunk is opened once:
 //!
 //! ```text
@@ -53,25 +53,25 @@
 //! Compared to the table lookup: no RaVirtual (the most expensive check), the
 //! dense chunk count drops from `w/4` to 8, and the `w/4` slack chunks are
 //! almost empty.
-use common::parallel::par_enabled;
-pub use jolt_atlas_verifier::onnx_proof::clamp_split::*;
-use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
-use joltworks::{
+use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::ProverOpeningAccumulator,
     },
-    subprotocols::{
-        booleanity::{BooleanitySumcheckParams, BooleanitySumcheckProver},
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::SumcheckInstanceParams,
-    },
-    transcripts::Transcript,
     utils::thread::unsafe_allocate_zero_vec,
 };
+use atlas_sumcheck::{
+    booleanity::{BooleanitySumcheckParams, BooleanitySumcheckProver},
+    opening_proof::ProverOpeningAccumulator,
+    sumcheck_prover::SumcheckInstanceProver,
+    sumcheck_verifier::SumcheckInstanceParams,
+};
+use atlas_transcript::Transcript;
+use common::parallel::par_enabled;
+pub use jolt_atlas_verifier::onnx_proof::clamp_split::*;
+use jolt_poly::UnivariatePoly;
+use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
 /// Prover of a bucket's split sumcheck.

@@ -8,11 +8,11 @@
 //! only smaller. The real downloads are `#[ignore]`d and run in the heavy
 //! CI job.
 
+use atlas_algebra::field::fp128::Fp128 as Fr;
 use atlas_onnx_import::fixtures::{standard_bindings, synth_inputs, GOLDEN_SEED};
 use atlas_onnx_import::ImportedModel;
+use atlas_pcs::akita::AkitaScheme;
 use atlas_trace::Tensor;
-use joltworks::field::fp128::Fp128 as Fr;
-use joltworks::poly::commitment::akita::AkitaScheme;
 
 use super::{prove_verify_roundtrip, RoundtripOptions};
 use crate::loader::{load_imported, RunArgs};
@@ -193,7 +193,7 @@ fn qwen() {
 fn input_binding_changes_transcript() {
     use crate::onnx_proof::append_inputs_to_transcript;
     use atlas_trace::trace::ModelExecutionIO;
-    use joltworks::transcripts::{Blake2bProver, ProvingTranscript, Transcript};
+    use atlas_transcript::{Blake2bProver, ProvingTranscript, Transcript};
 
     let io = |vals: &[i32]| ModelExecutionIO {
         inputs: vec![Tensor::from_slice(vals, &[vals.len()]).unwrap()],

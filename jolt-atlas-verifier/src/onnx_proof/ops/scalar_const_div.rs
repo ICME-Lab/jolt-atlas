@@ -12,20 +12,20 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::multilinear_polynomial::MultilinearPolynomial,
+    utils::{errors::ProofVerifyError, math::Math},
+};
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, OpeningId},
+    sumcheck::Sumcheck,
+};
 use atlas_trace::{op::ScalarConstDiv, semantics::fixed::rem_floor, trace::LayerData, Op, Trace};
+use atlas_transcript::Transcript;
 use common::CommittedPoly;
 use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
-use joltworks::{
-    field::JoltField,
-    poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    subprotocols::sumcheck::Sumcheck,
-    transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
-};
 
 crate::bind_relation!(ScalarConstDiv, ConstantDivisionRelation);
 

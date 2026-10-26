@@ -1,8 +1,8 @@
 //! Utility modules for dimension handling and tensor operations.
 
+use atlas_algebra::utils::{interleave_bits, lookup_bits::LookupBits};
 use atlas_trace::Tensor;
 use common::{consts::XLEN, parallel::par_enabled};
-use joltworks::utils::{interleave_bits, lookup_bits::LookupBits};
 use rayon::prelude::*;
 
 pub mod dims;

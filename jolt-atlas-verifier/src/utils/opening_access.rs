@@ -4,15 +4,16 @@
 //! with a small internal builder used to derive opening IDs consistently.
 
 use crate::node_view::ComputationNode;
-use common::VirtualPoly;
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
-    poly::opening_proof::{
-        OpeningAccumulator, OpeningId, OpeningPoint, PolynomialId, ProverOpeningAccumulator,
-        SumcheckId, VerifierOpeningAccumulator, BIG_ENDIAN,
-    },
-    transcripts::Transcript,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
 };
+use atlas_sumcheck::opening_proof::{
+    OpeningAccumulator, OpeningId, PolynomialId, ProverOpeningAccumulator, SumcheckId,
+    VerifierOpeningAccumulator,
+};
+use atlas_transcript::Transcript;
+use common::VirtualPoly;
 
 /// Selects the node index source used to build opening identifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -22,15 +22,17 @@ use crate::node_view::clamp_value_bound;
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_trace::{Model, Op};
-use common::{CommittedPoly, VirtualPoly};
-use joltworks::{
-    config::{OneHotConfig, OneHotParams},
+use atlas_algebra::{
     field::JoltField,
-    poly::opening_proof::OpeningAccumulator,
-    subprotocols::ps_shout::{CycleWeight, PackedSegment},
     utils::{lookup_bits::LookupBits, math::Math},
 };
+use atlas_sumcheck::{
+    config::{OneHotConfig, OneHotParams},
+    opening_proof::OpeningAccumulator,
+    ps_shout::{CycleWeight, PackedSegment},
+};
+use atlas_trace::{Model, Op};
+use common::{CommittedPoly, VirtualPoly};
 
 /// A node's segment inside a bucket's cycle space.
 #[derive(Clone, Debug)]

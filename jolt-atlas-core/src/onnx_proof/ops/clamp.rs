@@ -2,18 +2,16 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::op_lookups::OpLookupProve;
 use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::{op_lookups::OpLookupProvider, ProofId, ProofType, Prover};
-use atlas_trace::op::Clamp;
-pub use jolt_atlas_verifier::onnx_proof::ops::clamp::*;
-use joltworks::{
-    field::JoltField,
-    lookup_tables::clamp::{ClampTable, CLAMP_BOUND},
-    subprotocols::{
-        shout::{self},
-        sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-    },
-    transcripts::Transcript,
+use atlas_algebra::field::JoltField;
+use atlas_lookup_tables::clamp::{ClampTable, CLAMP_BOUND};
+use atlas_sumcheck::{
+    shout,
+    sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+    sumcheck_prover::SumcheckInstanceProver,
 };
+use atlas_trace::op::Clamp;
+use atlas_transcript::Transcript;
+pub use jolt_atlas_verifier::onnx_proof::ops::clamp::*;
 
 use common::consts::XLEN;
 

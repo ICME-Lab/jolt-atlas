@@ -12,19 +12,17 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::multilinear_polynomial::EvaluateMle,
+    utils::{errors::ProofVerifyError, math::Math},
+};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{op::Broadcast, Model, Tensor, Trace};
+use atlas_transcript::Transcript;
 use core::panic;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
-use joltworks::{
-    field::JoltField,
-    poly::{
-        multilinear_polynomial::EvaluateMle,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
-};
 
 crate::bind_relation!(Broadcast, BroadcastRelation);
 

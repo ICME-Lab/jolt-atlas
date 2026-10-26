@@ -28,6 +28,22 @@ use crate::{
     },
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_algebra::{
+    field::{IntoOpening, JoltField},
+    poly::{
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
+        opening_point::OpeningPoint,
+        signed_identity_poly::SignedIdentityPoly,
+    },
+};
+use atlas_lookup_tables::clamp::ActivationClampTable;
+use atlas_sumcheck::{
+    opening_proof::ProverOpeningAccumulator, sumcheck::SumcheckInstanceProof,
+    sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceParams,
+};
+use atlas_transcript::Transcript;
 use common::{
     consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, XLEN},
     parallel::par_enabled,
@@ -35,22 +51,6 @@ use common::{
 };
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
-use joltworks::{
-    field::{IntoOpening, JoltField},
-    lookup_tables::clamp::ActivationClampTable,
-    poly::{
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
-        opening_proof::{OpeningPoint, ProverOpeningAccumulator},
-        signed_identity_poly::SignedIdentityPoly,
-    },
-    subprotocols::{
-        sumcheck::SumcheckInstanceProof, sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::SumcheckInstanceParams,
-    },
-    transcripts::Transcript,
-};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 struct SmallTableProver<F: JoltField, Table> {

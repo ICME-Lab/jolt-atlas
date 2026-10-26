@@ -8,19 +8,22 @@ use super::{AtlasSharedPreprocessing, AtlasVerifierPreprocessing};
 use crate::node_view::ModelView;
 use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
 use crate::{ONNXProof, ProofId};
-use atlas_trace::{trace::ModelExecutionIO, Model};
-use common::{CommittedPoly, VirtualPoly};
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
     poly::{
-        commitment::commitment_scheme::CommitmentScheme,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator},
+        opening_point::OpeningPoint,
     },
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::{AppendToTranscript, Transcript, VerifyingTranscript},
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_pcs::commitment_scheme::CommitmentScheme;
+use atlas_sumcheck::{
+    opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    sumcheck::SumcheckInstanceProof,
+};
+use atlas_trace::{trace::ModelExecutionIO, Model};
+use atlas_transcript::{AppendToTranscript, Transcript, VerifyingTranscript};
+use common::{CommittedPoly, VirtualPoly};
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
@@ -46,7 +49,7 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
     /// Verifier instances built during the node loop, verified afterwards per batch.
     pub deferred_batches: BTreeMap<
         crate::onnx_proof::deferred_lookups::DeferredBatch,
-        Vec<Box<dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>>,
+        Vec<Box<dyn atlas_sumcheck::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>>,
     >,
     /// One-hot checks to verify right after their parent batch.
     pub deferred_onehots: Vec<crate::onnx_proof::deferred_lookups::DeferredOneHot>,
@@ -80,9 +83,7 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
     pub fn defer(
         &mut self,
         kind: crate::onnx_proof::deferred_lookups::DeferredBatch,
-        instance: Box<
-            dyn joltworks::subprotocols::sumcheck_verifier::SumcheckInstanceVerifier<F, T>,
-        >,
+        instance: Box<dyn atlas_sumcheck::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>,
     ) {
         self.deferred_batches
             .entry(kind)

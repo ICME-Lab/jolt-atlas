@@ -10,15 +10,11 @@ use ark_serialize::{
     Write,
 };
 
-use joltworks::{
-    field::JoltField,
-    poly::{
-        commitment::commitment_scheme::CommitmentScheme,
-        opening_proof::{OpeningId, OpeningPoint},
-    },
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    utils::serialization::deserialize_vec,
+use atlas_algebra::{
+    field::JoltField, poly::opening_point::OpeningPoint, utils::serialization::deserialize_vec,
 };
+use atlas_pcs::commitment_scheme::CommitmentScheme;
+use atlas_sumcheck::{opening_proof::OpeningId, sumcheck::SumcheckInstanceProof};
 
 use crate::{Claims, ONNXProof, ReducedOpeningProof};
 
@@ -360,7 +356,7 @@ mod tests {
         // A sumcheck proof claiming 2⁶⁴ − 1 rounds, with none behind the length.
         let bytes = u64::MAX.to_le_bytes();
         assert!(
-            SumcheckInstanceProof::<joltworks::field::fp128::Fp128>::deserialize_compressed(
+            SumcheckInstanceProof::<atlas_algebra::field::fp128::Fp128>::deserialize_compressed(
                 &bytes[..]
             )
             .is_err()

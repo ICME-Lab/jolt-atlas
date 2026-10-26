@@ -19,26 +19,26 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::{
+    field::{IntoOpening, JoltField},
+    poly::multilinear_polynomial::MultilinearPolynomial,
+    utils::{errors::ProofVerifyError, math::Math},
+};
+use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+use atlas_sumcheck::{
+    evaluation_reduction::EvalReductionProof,
+    opening_proof::{OpeningAccumulator, OpeningId},
+    shout::RaOneHotEncoding,
+    sumcheck::Sumcheck,
+};
 use atlas_trace::{op::Rsqrt, trace::LayerData, Op, Trace};
+use atlas_transcript::Transcript;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use jolt_claims::{
     challenge, constant, derived, opening, Expr, NoChallenges, NoInputs, NoOutputs,
     SymbolicSumcheck,
 };
 use jolt_field::Ring;
-use joltworks::{
-    field::{IntoOpening, JoltField},
-    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
-    poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    subprotocols::{
-        evaluation_reduction::EvalReductionProof, shout::RaOneHotEncoding, sumcheck::Sumcheck,
-    },
-    transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
-};
 
 /// Dividend `S³` of the fused rsqrt division relation, where `S = 2^scale` is the
 /// input's fixed-point scale.

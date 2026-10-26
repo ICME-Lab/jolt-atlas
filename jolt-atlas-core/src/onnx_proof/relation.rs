@@ -21,26 +21,26 @@
 //! [`OpeningId`]s or a node output's reduced opening, the instance the multi-consumer evaluation
 //! reduction produces for it.
 
+use atlas_algebra::{
+    field::{IntoOpening, JoltField},
+    poly::{
+        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        opening_point::{OpeningPoint, BIG_ENDIAN},
+        split_eq_poly::SplitEqUnreducedFold,
+    },
+};
+use atlas_sumcheck::{
+    opening_proof::{OpeningId, PolynomialId, ProverOpeningAccumulator},
+    sumcheck_prover::SumcheckInstanceProver,
+    upstream_sumcheck::round_check_failed,
+};
 use atlas_trace::Trace;
+use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::relation::*;
 use jolt_claims::Source;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
-use joltworks::{
-    field::{IntoOpening, JoltField},
-    poly::{
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_proof::{
-            OpeningId, OpeningPoint, PolynomialId, ProverOpeningAccumulator, BIG_ENDIAN,
-        },
-        split_eq_poly::SplitEqUnreducedFold,
-    },
-    subprotocols::{
-        sumcheck_prover::SumcheckInstanceProver, upstream_sumcheck::round_check_failed,
-    },
-    transcripts::Transcript,
-};
 use rayon::prelude::*;
 
 /// The [`SymbolicSumcheck`] items every atlas relation shares: the atlas id types and no

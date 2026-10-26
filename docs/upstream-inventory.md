@@ -171,6 +171,28 @@ crates with default features off, since they keep optional `bn254` features) and
 signed big integers and their `Allocative` derives, used by the Fp128 ladder and the small-scalar
 polynomials) and `ark-serialize`; `third_party/PINS.md` records it.
 
+## `joltworks` dissolved (stage 9)
+
+`joltworks` is gone; every module now lives in a named atlas crate:
+
+| `joltworks` module | Crate |
+|---|---|
+| `field/`, `utils/`, `poly/` (minus `commitment/`, `opening_proof.rs`) | `atlas-algebra` (`field`, `utils`, `poly`; `OpeningPoint` and the endianness markers moved from `opening_proof` into `poly::opening_point`) |
+| `transcripts/` | `atlas-transcript` (also `UniPoly`'s transcript absorption) |
+| `lookup_tables/` | `atlas-lookup-tables` |
+| `subprotocols/`, `poly/opening_proof.rs`, `config.rs` | `atlas-sumcheck` |
+| `poly/commitment/` | `atlas-pcs` |
+
+Fields, utilities and polynomials share a crate because `MultilinearPolynomial`'s concrete `From`
+impls overlap its generic one unless `JoltField` is local. The facade transcript's challenge draw
+became a function pointer (`FacadeTranscript::scope_with`) for the same reason: a trait with a
+blanket impl over `JoltField` plus Akita's impl for upstream's `Fp128` could not live outside the
+crate that defines `JoltField`. Tests that reached up the crate order moved to the crate they
+exercise (the lookup tables' read-raf sumchecks to `atlas-sumcheck`, the one-hot polynomial's
+opening-reduction check to `atlas-sumcheck`, the Fp128 transcript-challenge test to
+`atlas-transcript`). The PCS-generic `compute_joint_commitment`/`verify_joint_opening`, unused
+since BN254 removal, are deleted.
+
 ## Adoption sequence
 
 The ordering lives in one place: `specs/adoption-program.md` (ten stages, 0–9; stage 9 moves every atlas-only module below out of `joltworks` and deletes it). This inventory

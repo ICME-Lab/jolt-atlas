@@ -8,7 +8,7 @@
 //! TODO(#218): Remove auxiliary vectors and derive them inside the protocol.
 //!
 //! The saturating clamp `z_c = min(z, z_bound - 1)` (`z = max_k - x`) is proven via a
-//! `ClampBoundedTable` lookup (`joltworks::lookup_tables::clamp::SoftmaxClampTable`, via
+//! `ClampBoundedTable` lookup (`atlas_lookup_tables::clamp::SoftmaxClampTable`, via
 //! `significance_clamp::SoftmaxSignificanceClampOperands`) — see `significance_clamp.rs`'s module doc for the relation being
 //! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
@@ -30,36 +30,36 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use joltworks::{
+use atlas_lookup_tables::clamp::SoftmaxClampTable;
+use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
-    lookup_tables::clamp::SoftmaxClampTable,
-    poly::opening_proof::VerifierOpeningAccumulator,
+    opening_proof::VerifierOpeningAccumulator,
 };
 use std::collections::BTreeMap;
 
 use atlas_trace::op::SoftmaxLastAxis;
 
 use crate::node_view::ComputationNode;
+use atlas_algebra::{
+    field::JoltField,
+    poly::{
+        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial, PolynomialEvaluation},
+        opening_point::OpeningPoint,
+    },
+    utils::{errors::ProofVerifyError, math::Math},
+};
+use atlas_sumcheck::{
+    identity_range_check::identity_rangecheck_verifier,
+    shout,
+    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
+    sumcheck_verifier::SumcheckInstanceVerifier,
+};
+use atlas_transcript::Transcript;
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,
 };
 pub use exp_lut::{generate_exp_lut_decomposed, softmax_z, ExpLutDecomposed};
-use joltworks::{
-    field::JoltField,
-    poly::{
-        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::OpeningPoint,
-    },
-    subprotocols::{
-        identity_range_check::identity_rangecheck_verifier,
-        shout,
-        sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
-        sumcheck_verifier::SumcheckInstanceVerifier,
-    },
-    transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
-};
 
 /// Exp-LUT materialization and small softmax helpers.
 pub mod exp_lut;

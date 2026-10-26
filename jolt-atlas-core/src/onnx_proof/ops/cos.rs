@@ -19,31 +19,34 @@ use crate::{
     },
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_algebra::{
+    field::{IntoOpening, JoltField},
+    poly::{
+        identity_poly::IdentityPolynomial,
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
+        opening_point::OpeningPoint,
+    },
+};
+use atlas_lookup_tables::{
+    right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable,
+};
+use atlas_sumcheck::{
+    opening_proof::ProverOpeningAccumulator,
+    shout,
+    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
+    sumcheck_prover::SumcheckInstanceProver,
+    sumcheck_verifier::SumcheckInstanceParams,
+};
 use atlas_trace::{op::Cos, trace::LayerData, Tensor};
+use atlas_transcript::Transcript;
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
 use common::VirtualPoly;
 pub use jolt_atlas_verifier::onnx_proof::ops::cos::*;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
-use joltworks::{
-    field::{IntoOpening, JoltField},
-    lookup_tables::{right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable},
-    poly::{
-        identity_poly::IdentityPolynomial,
-        multilinear_polynomial::{
-            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-        },
-        opening_proof::{OpeningPoint, ProverOpeningAccumulator},
-    },
-    subprotocols::{
-        shout::{self},
-        sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::SumcheckInstanceParams,
-    },
-    transcripts::Transcript,
-};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for Cos {

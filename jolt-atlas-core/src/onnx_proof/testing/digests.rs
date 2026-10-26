@@ -8,12 +8,10 @@
 //! protocol-breaking change re-pins in its own commit, naming the cause.
 
 use atlas_onnx_import::fixtures::{synth_inputs, GOLDEN_SEED};
+use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_trace::{Model, Tensor};
+use atlas_transcript::Blake2bProver;
 use blake2::{digest::consts::U32, Blake2b, Digest};
-use joltworks::{
-    poly::commitment::{akita::AkitaScheme, commitment_scheme::CommitmentScheme},
-    transcripts::Blake2bProver,
-};
 
 use super::zoo::{op_gauntlet_inputs, zoo};
 use crate::onnx_proof::{

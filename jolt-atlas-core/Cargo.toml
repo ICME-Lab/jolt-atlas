@@ -8,7 +8,11 @@ edition = "2021"
 atlas-trace = { workspace = true, features = ["test-util"] }
 atlas-onnx-import.workspace = true
 common.workspace = true
-joltworks = { workspace = true, features = ["prover"] }
+atlas-algebra.workspace = true
+atlas-transcript = { workspace = true, features = ["prover"] }
+atlas-lookup-tables.workspace = true
+atlas-sumcheck.workspace = true
+atlas-pcs.workspace = true
 jolt-atlas-verifier.workspace = true
 jolt-field.workspace = true
 jolt-poly.workspace = true
@@ -56,8 +60,11 @@ serial_test.workspace = true
 jolt-atlas-verifier = { workspace = true, features = ["test-util"] }
 # Digest of serialized proofs in the cross-stage digest harness.
 blake2 = "0.10"
-# Enable test-feature for joltworks during tests only
-joltworks = { workspace = true, features = ["test-feature"] }
+# Test hooks of the proof-system crates (forgery, lockstep transcript history), tests only
+atlas-algebra = { workspace = true, features = ["test-feature"] }
+atlas-transcript = { workspace = true, features = ["test-feature"] }
+atlas-sumcheck = { workspace = true, features = ["test-feature"] }
+atlas-pcs = { workspace = true, features = ["test-feature"] }
 # Descriptor-driven zoo inputs shared with the importer's golden tests.
 atlas-onnx-import = { workspace = true, features = ["test-util"] }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }

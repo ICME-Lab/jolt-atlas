@@ -3,13 +3,13 @@
 //! This module centralizes helper functions used by activation ops, and periodic functions.
 
 use super::{n_bits_to_usize, usize_to_n_bits};
-use atlas_trace::Tensor;
-use common::parallel::par_enabled;
-use joltworks::{
+use atlas_algebra::{
     field::{FieldChallengeOps, JoltField},
     poly::eq_poly::EqPolynomial,
     utils::thread::unsafe_allocate_zero_vec,
 };
+use atlas_trace::Tensor;
+use common::parallel::par_enabled;
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,

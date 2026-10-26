@@ -23,17 +23,17 @@ use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupProv
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{deferred_lookups::VerifierLookupJob, Verifier};
-use atlas_trace::{op::sum_axes_i64, trace::LayerData, Op, Tensor, Trace};
-use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
-    poly::opening_proof::{
-        OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
-        BIG_ENDIAN,
-    },
-    transcripts::Transcript,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
+use atlas_sumcheck::opening_proof::{
+    OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator,
+};
+use atlas_trace::{op::sum_axes_i64, trace::LayerData, Op, Tensor, Trace};
+use atlas_transcript::Transcript;
+use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
 
 /// Widest address of the saturating-clamp lookup table (an i64 accumulation).
@@ -173,7 +173,7 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
 
     fn rv_claim<F: JoltField>(
         node: &ComputationNode,
-        accumulator: &dyn joltworks::poly::opening_proof::OpeningAccumulator<F>,
+        accumulator: &dyn atlas_sumcheck::opening_proof::OpeningAccumulator<F>,
     ) -> F {
         DefaultLookupOperands::rv_claim(node, accumulator)
     }

@@ -9,23 +9,24 @@ use crate::{
     },
     utils::compute_lookup_indices_from_operands,
 };
-use atlas_trace::{op::Clamp, Tensor, Trace};
-use common::{CommittedPoly, VirtualPoly};
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
-    lookup_tables::clamp::{ClampTable, CLAMP_BOUND},
-    poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, BIG_ENDIAN},
-    subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck},
-    },
-    transcripts::Transcript,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
+use atlas_lookup_tables::clamp::{ClampTable, CLAMP_BOUND};
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, OpeningId},
+    shout::{self, RaOneHotEncoding},
+    sumcheck::{BatchedSumcheck, Sumcheck},
+};
+use atlas_trace::{op::Clamp, Tensor, Trace};
+use atlas_transcript::Transcript;
+use common::{CommittedPoly, VirtualPoly};
 
 use common::consts::XLEN;
 
-/// Lookup helper for the ONNX `Clamp` op, backed by `joltworks::lookup_tables::clamp`'s
+/// Lookup helper for the ONNX `Clamp` op, backed by `atlas_lookup_tables::clamp`'s
 /// symmetric clamp table (`[-2^CLAMP_BOUND, 2^CLAMP_BOUND - 1]`).
 #[derive(Default)]
 pub struct SymmetricClampOperands;

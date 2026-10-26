@@ -8,14 +8,13 @@
 //! reaches it. [`gruen_endpoint_closures_agree_with_division`] checks every member's endpoint
 //! closure on the probe models and the op gauntlet instead, against the division it replaces.
 
+use atlas_algebra::field::fp128::Fp128 as Fr;
+use atlas_algebra::poly::{eq_poly::EqPolynomial, split_eq_poly::CHECK_GRUEN_ENDPOINTS};
+use atlas_pcs::akita::AkitaScheme;
 use atlas_trace::{Model, Tensor};
 use jolt_claims::SymbolicSumcheck;
 use jolt_field::Ring;
 use jolt_sumcheck::ProveRounds;
-use joltworks::field::fp128::Fp128 as Fr;
-use joltworks::poly::{
-    commitment::akita::AkitaScheme, eq_poly::EqPolynomial, split_eq_poly::CHECK_GRUEN_ENDPOINTS,
-};
 use num_traits::{One, Zero};
 use rand::{rngs::StdRng, SeedableRng};
 

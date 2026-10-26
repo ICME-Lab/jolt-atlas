@@ -1,17 +1,18 @@
 use crate::node_view::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
-use common::VirtualPoly;
-use joltworks::{
+use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
-        },
+        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
     },
-    subprotocols::sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    transcripts::Transcript,
 };
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
+    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+};
+use atlas_transcript::Transcript;
+use common::VirtualPoly;
 
 /// Degree of the exponentiation product sumcheck.
 pub const DEGREE_BOUND: usize = 3;

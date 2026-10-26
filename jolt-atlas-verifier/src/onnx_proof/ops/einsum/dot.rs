@@ -30,11 +30,11 @@
 
 use atlas_trace::Tensor;
 
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
     poly::{
         multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningPoint, BIG_ENDIAN},
+        opening_point::{OpeningPoint, BIG_ENDIAN},
     },
 };
 

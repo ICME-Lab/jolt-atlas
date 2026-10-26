@@ -4,14 +4,12 @@ use crate::onnx_proof::{
     relation::{RelationParams, RelationProver},
     ProofId, ProofType, Prover,
 };
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::sumcheck::{Sumcheck, SumcheckInstanceProof};
 use atlas_trace::op::ScalarConstDiv;
+use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::ops::scalar_const_div::*;
 use jolt_claims::SymbolicSumcheck;
-use joltworks::{
-    field::JoltField,
-    subprotocols::sumcheck::{Sumcheck, SumcheckInstanceProof},
-    transcripts::Transcript,
-};
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for ScalarConstDiv {
     #[tracing::instrument(skip_all, name = "ScalarConstDiv::prove")]

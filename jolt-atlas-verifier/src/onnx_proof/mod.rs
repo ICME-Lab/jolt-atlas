@@ -7,12 +7,9 @@
 
 use atlas_trace::trace::ModelExecutionIO;
 
-use joltworks::{
-    field::JoltField,
-    poly::commitment::commitment_scheme::CommitmentScheme,
-    transcripts::{Transcript, VerifyingTranscript},
-    utils::errors::ProofVerifyError,
-};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_pcs::commitment_scheme::CommitmentScheme;
+use atlas_transcript::{Transcript, VerifyingTranscript};
 
 // ── Submodules ───────────────────────────────────────────────────────────
 

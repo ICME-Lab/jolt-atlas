@@ -10,7 +10,7 @@ use atlas_trace::{Model, Op};
 
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
-use joltworks::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
+use atlas_algebra::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
 use rayon::prelude::*;
 
 /// Convert a row-major linear index into coordinates for the given dimensions.

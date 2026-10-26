@@ -6,12 +6,13 @@ use crate::onnx_proof::{
     },
     Verifier,
 };
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_trace::op::Sigmoid;
+use atlas_transcript::Transcript;
 use common::{
     consts::{ACTIVATION_TABLE_VARS, MODEL_SCALE},
     CommittedPoly,
 };
-use joltworks::{field::JoltField, transcripts::Transcript, utils::errors::ProofVerifyError};
 
 /// Marker implementing [`SmallActivationTable`] for Sigmoid's small dense lookup table.
 pub struct SigmoidTableMarker;

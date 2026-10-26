@@ -10,11 +10,9 @@ use crate::onnx_proof::{
     relation::RelationParams,
     ProofId, ProofType,
 };
-use joltworks::{
-    field::JoltField,
-    subprotocols::sumcheck::{Sumcheck, SumcheckInstanceProof},
-    transcripts::Transcript,
-};
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::sumcheck::{Sumcheck, SumcheckInstanceProof};
+use atlas_transcript::Transcript;
 
 pub mod abmk_abnk_abmn;
 /// Shared sumcheck engine for einsum contraction patterns.

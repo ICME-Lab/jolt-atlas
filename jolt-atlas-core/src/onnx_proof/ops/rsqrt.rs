@@ -16,19 +16,17 @@ use crate::{
         ProofId, ProofType, Prover,
     },
 };
+use atlas_algebra::field::JoltField;
+use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+use atlas_sumcheck::{
+    evaluation_reduction::EvalReductionProof,
+    sumcheck::{Sumcheck, SumcheckInstanceProof},
+};
 use atlas_trace::op::Rsqrt;
+use atlas_transcript::Transcript;
 use common::consts::XLEN;
 pub use jolt_atlas_verifier::onnx_proof::ops::rsqrt::*;
 use jolt_claims::SymbolicSumcheck;
-use joltworks::{
-    field::JoltField,
-    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
-    subprotocols::{
-        evaluation_reduction::EvalReductionProof,
-        sumcheck::{Sumcheck, SumcheckInstanceProof},
-    },
-    transcripts::Transcript,
-};
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for Rsqrt {
     #[tracing::instrument(skip_all, name = "Rsqrt::prove")]

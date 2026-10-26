@@ -1,12 +1,12 @@
 use super::*;
 use crate::onnx_proof::trace_view::TraceView;
+use atlas_sumcheck::{
+    shout,
+    sumcheck::{BatchedSumcheck, Sumcheck},
+};
 use atlas_trace::op::GatherLarge;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::large::*;
-use joltworks::subprotocols::{
-    shout::{self},
-    sumcheck::{BatchedSumcheck, Sumcheck},
-};
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherLarge {
     #[tracing::instrument(skip_all, name = "GatherLarge::prove")]

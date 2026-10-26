@@ -11,29 +11,29 @@ use crate::onnx_proof::{
     ProofId, ProofType, Verifier,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_trace::{op::Sin, Model};
-use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
-use common::{CommittedPoly, VirtualPoly};
-use joltworks::{
-    config::{OneHotConfig, OneHotParams},
+use atlas_algebra::{
     field::{IntoOpening, JoltField},
-    lookup_tables::{right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable},
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{
-            OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
-            BIG_ENDIAN, LITTLE_ENDIAN,
-        },
+        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
     },
-    subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::BatchedSumcheck,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
-    transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use atlas_lookup_tables::{
+    right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable,
+};
+use atlas_sumcheck::{
+    config::{OneHotConfig, OneHotParams},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    shout::{self, RaOneHotEncoding},
+    sumcheck::BatchedSumcheck,
+    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+};
+use atlas_trace::{op::Sin, Model};
+use atlas_transcript::Transcript;
+use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
+use common::{CommittedPoly, VirtualPoly};
 
 impl OpLayout for Sin {
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {

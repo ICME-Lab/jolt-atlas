@@ -25,18 +25,18 @@ use crate::onnx_proof::{
     global_clamp::{clamp_buckets, remainder_buckets, ClampBucket},
     ProofId, ProofType, Prover,
 };
-pub use jolt_atlas_verifier::onnx_proof::deferred_lookups::*;
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
-    poly::opening_proof::OpeningPoint,
-    subprotocols::{
-        shout::{self, RaOneHotParams},
-        sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
-        sumcheck_prover::SumcheckInstanceProver,
-    },
-    transcripts::Transcript,
+    poly::opening_point::OpeningPoint,
     utils::{lookup_bits::LookupBits, thread::drop_in_background_thread},
 };
+use atlas_sumcheck::{
+    shout::{self, RaOneHotParams},
+    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
+    sumcheck_prover::SumcheckInstanceProver,
+};
+use atlas_transcript::Transcript;
+pub use jolt_atlas_verifier::onnx_proof::deferred_lookups::*;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;

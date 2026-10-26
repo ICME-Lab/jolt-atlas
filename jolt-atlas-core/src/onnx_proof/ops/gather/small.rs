@@ -1,13 +1,13 @@
 use super::*;
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_trace::op::GatherSmall;
-pub use jolt_atlas_verifier::onnx_proof::ops::gather::small::*;
-use joltworks::subprotocols::{
+use atlas_sumcheck::{
     booleanity::SmallBooleanitySumcheckProver,
     hamming_booleanity::HammingBooleanitySumcheckProver,
     hamming_weight::HammingWeightSumcheckProver,
     sumcheck::{BatchedSumcheck, Sumcheck},
 };
+use atlas_trace::op::GatherSmall;
+pub use jolt_atlas_verifier::onnx_proof::ops::gather::small::*;
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherSmall {
     #[tracing::instrument(skip_all, name = "GatherSmall::prove")]

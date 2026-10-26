@@ -1,11 +1,11 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::{ops::Prover, relation::prove_tie, ProofId};
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_trace::op::Broadcast;
+use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::ops::broadcast::*;
-use joltworks::{
-    field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
-};
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for Broadcast {
     #[tracing::instrument(skip_all, name = "Broadcast::prove")]

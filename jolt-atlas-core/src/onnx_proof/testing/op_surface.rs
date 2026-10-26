@@ -17,12 +17,10 @@
 
 use std::collections::BTreeSet;
 
+use atlas_lookup_tables::clamp::CLAMP_BOUND;
+use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use common::consts::{ACTIVATION_BOUND, MODEL_SCALE, TRIG_PERIOD_MODULUS};
-use joltworks::{
-    lookup_tables::clamp::CLAMP_BOUND, poly::commitment::akita::AkitaScheme,
-    poly::commitment::commitment_scheme::CommitmentScheme,
-};
 use rand::{rngs::StdRng, SeedableRng};
 use strum::IntoEnumIterator;
 

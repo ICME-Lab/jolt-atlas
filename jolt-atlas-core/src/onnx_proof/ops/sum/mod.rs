@@ -1,12 +1,9 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::ProveOp;
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::sumcheck::{Sumcheck, SumcheckInstanceProof};
 use atlas_trace::op::Sum;
-use joltworks::{
-    self,
-    field::JoltField,
-    subprotocols::sumcheck::{Sumcheck, SumcheckInstanceProof},
-    transcripts::Transcript,
-};
+use atlas_transcript::Transcript;
 
 use crate::onnx_proof::{
     clamp_lookups::{is_scalar, prove_append_acc, prove_clamp_lookup},

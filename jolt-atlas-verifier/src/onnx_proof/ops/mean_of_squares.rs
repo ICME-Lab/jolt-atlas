@@ -54,20 +54,21 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::eq_poly::EqPolynomial,
+    utils::{errors::ProofVerifyError, math::Math},
+};
+use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, OpeningId},
+    shout::RaOneHotEncoding,
+    sumcheck::Sumcheck,
+};
+use atlas_transcript::Transcript;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
-use joltworks::{
-    field::JoltField,
-    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
-    poly::{
-        eq_poly::EqPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    subprotocols::{shout::RaOneHotEncoding, sumcheck::Sumcheck},
-    transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
-};
 
 /// Degree of the execution sumcheck.
 pub const DEGREE: usize = 3;

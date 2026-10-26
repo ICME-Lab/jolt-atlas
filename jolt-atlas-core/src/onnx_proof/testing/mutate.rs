@@ -8,13 +8,12 @@
 //! an orphan claim; a verifier panic is a robustness bug.
 
 use ark_std::One;
+use atlas_algebra::poly::opening_point::{OpeningPoint, BIG_ENDIAN};
+use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
+use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use common::VirtualPoly;
 use jolt_field::Ring;
-use joltworks::poly::{
-    commitment::{akita::AkitaScheme, commitment_scheme::CommitmentScheme},
-    opening_proof::{OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
-};
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
 use crate::onnx_proof::{ONNXProof, ProofId};

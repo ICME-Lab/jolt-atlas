@@ -1,5 +1,5 @@
 //! [`LookupOperandsTrait`] helper proving softmax's saturating clamp
-//! `z_c = min(z, z_bound - 1)` via [`joltworks::lookup_tables::clamp::SoftmaxClampTable`].
+//! `z_c = min(z, z_bound - 1)` via [`atlas_lookup_tables::clamp::SoftmaxClampTable`].
 //!
 //! This witness (`z = max_k - x`) is evaluated at the point softmax's exp-digit lookups
 //! (`SoftmaxZHi`/`SoftmaxZLo`) already converge to (`r2`), not this node's own output opening —
@@ -21,15 +21,16 @@ use crate::{
     onnx_proof::op_lookups::{DefaultLookupOperands, LookupOperandsTrait},
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    utils::lookup_bits::LookupBits,
+};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
 use atlas_trace::{Tensor, Trace};
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,
-};
-use joltworks::{
-    field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
-    utils::lookup_bits::LookupBits,
 };
 
 /// Precomputed-witness [`LookupOperandsTrait`] helper for softmax's saturating clamp.

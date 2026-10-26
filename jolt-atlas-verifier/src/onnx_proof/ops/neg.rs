@@ -10,18 +10,15 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{
     op::{Identity, Neg, OpSpec},
     Trace,
 };
+use atlas_transcript::Transcript;
 use jolt_claims::{constant, opening, SymbolicSumcheck};
 use jolt_field::Ring;
-use joltworks::{
-    field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningId},
-    transcripts::Transcript,
-    utils::errors::ProofVerifyError,
-};
 use std::marker::PhantomData;
 
 impl_tie_proof_api!(Neg, SignedCopyRelation<Neg>);

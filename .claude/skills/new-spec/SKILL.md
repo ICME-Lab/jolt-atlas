@@ -100,7 +100,7 @@ verifier time? Or is 'no regression' sufficient, and if so, which benchmark veri
 #### Design: Architecture
 Ask: "How does this fit into the existing system?" Use codebase exploration to suggest which
 crates and modules are affected. Ask about type parameters, trait implementations, module
-boundaries, and whether `joltworks` (shared toolkit) or `onnx_proof` (atlas-specific) should own
+boundaries, and whether the proof-system crates (`atlas-algebra`, `atlas-sumcheck`, `atlas-pcs`, ...) or `onnx_proof` (atlas-specific) should own
 the new code.
 
 #### Design: Alternatives Considered

@@ -4,17 +4,17 @@ use crate::{
     onnx_proof::ops::einsum::dot::{EinsumGeometry, EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
-use atlas_trace::Tensor;
-use common::parallel::par_enabled;
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningPoint, BIG_ENDIAN},
+        opening_point::{OpeningPoint, BIG_ENDIAN},
     },
     utils::math::Math,
 };
+use atlas_trace::Tensor;
+use common::parallel::par_enabled;
 use rayon::prelude::*;
 
 /// `k,nk->n`: contract the `k` axis of a vector with a matrix. The left operand

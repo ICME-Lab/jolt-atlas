@@ -1,0 +1,74 @@
+[package]
+name = "atlas-sumcheck"
+version = "0.1.0"
+edition = "2021"
+description = "Atlas sumcheck instances, the opening accumulators and the one-hot subprotocols."
+
+[features]
+allocative = ["atlas-algebra/allocative"]
+test-feature = ["atlas-algebra/test-feature", "atlas-transcript/test-feature"]
+
+[dependencies]
+# Internal
+common.workspace = true
+atlas-trace.workspace = true
+atlas-algebra.workspace = true
+atlas-transcript.workspace = true
+atlas-lookup-tables.workspace = true
+
+# Serialization
+serde.workspace = true
+
+# Cryptography and Math
+ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", features = ["std", "parallel", "asm"] }
+ark-serialize.workspace = true
+ark-std.workspace = true
+sha3 = "0.10.8"
+blake2 = "0.10"
+jolt-field = { workspace = true, features = ["solinas", "asm"] }
+jolt-transcript = { workspace = true, features = ["solinas", "transcript-blake2b", "transcript-keccak"] }
+jolt-utils.workspace = true
+jolt-poly = { workspace = true, features = ["parallel"] }
+jolt-sumcheck.workspace = true
+jolt-akita.workspace = true
+jolt-openings = { workspace = true, features = ["parallel"] }
+bincode.workspace = true
+spongefish = { version = "=0.8.0", default-features = false, features = ["keccak"] }
+
+# Numeric
+num.workspace = true
+num-derive.workspace = true
+num-traits.workspace = true
+
+# Parallel Processing
+rayon.workspace = true
+
+# Randomness
+rand.workspace = true
+rand_chacha = { version = "0.3.0", default-features = false }
+rand_core.workspace = true
+rand_distr = "0.4.3"
+
+# Tracing and Profiling
+tracing.workspace = true
+inferno = { version = "0.12.3", optional = true }
+allocative.workspace = true
+
+# Core Utilities
+thiserror = { workspace = true, default-features = true }
+strum.workspace = true
+strum_macros.workspace = true
+fixedbitset = "0.5.0"
+derive_more.workspace = true
+itertools.workspace = true
+
+# System and Platform
+sysinfo = { version = "0.30.8", optional = true }
+memory-stats = { version = "1.0.0", features = ["always_use_statm"] }
+
+# Testing
+serial_test.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+atlas-transcript = { workspace = true, features = ["prover", "test-feature"] }

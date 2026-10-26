@@ -8,30 +8,28 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::range_checking::range_check_operands::{
     RangeCheckOperands, RangeCheckingOperandsTrait,
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    utils::math::Math,
+};
+use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
+use atlas_sumcheck::{
+    config::OneHotParams,
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    ps_shout::{
+        binary::{
+            ps_read_raf_verifier, BinaryReadRafSumcheckVerifier, PrefixSuffixShoutProvider,
+            ReadRafClaims,
+        },
+        RafShoutProvider,
+    },
+    shout::RaOneHotEncoding,
+};
+use atlas_transcript::Transcript;
 use common::{
     consts::{LOG_K, XLEN},
     CommittedPoly, VirtualPoly,
-};
-use joltworks::{
-    config::OneHotParams,
-    field::JoltField,
-    lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
-    poly::opening_proof::{
-        OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
-        BIG_ENDIAN,
-    },
-    subprotocols::{
-        ps_shout::{
-            binary::{
-                ps_read_raf_verifier, BinaryReadRafSumcheckVerifier, PrefixSuffixShoutProvider,
-                ReadRafClaims,
-            },
-            RafShoutProvider,
-        },
-        shout::RaOneHotEncoding,
-    },
-    transcripts::Transcript,
-    utils::math::Math,
 };
 
 /// Range-checking operands definitions for operations requiring bounds-checking.

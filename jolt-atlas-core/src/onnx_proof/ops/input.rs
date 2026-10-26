@@ -6,11 +6,11 @@ use crate::onnx_proof::{
     relation::prove_tie,
     ProofId, Prover,
 };
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_trace::{op::Input, trace::LayerData};
+use atlas_transcript::Transcript;
 use jolt_claims::SymbolicSumcheck;
-use joltworks::{
-    field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
-};
 use std::sync::Arc;
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for Input {

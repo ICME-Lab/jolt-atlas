@@ -14,19 +14,16 @@ use crate::{
         ProofId, ProofType, Verifier,
     },
 };
-use atlas_trace::{op::Concat, trace::LayerData, Model, Op, Trace};
-use jolt_claims::{derived, opening, Expr, SymbolicSumcheck};
-use jolt_field::Ring;
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
-    poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    transcripts::Transcript,
+    poly::{eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial},
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_trace::{op::Concat, trace::LayerData, Model, Op, Trace};
+use atlas_transcript::Transcript;
+use jolt_claims::{derived, opening, Expr, SymbolicSumcheck};
+use jolt_field::Ring;
 
 impl_standard_sumcheck_proof_api!(Concat, model_relation ConcatRelation);
 

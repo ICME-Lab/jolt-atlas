@@ -445,8 +445,8 @@ canonical_serde_enum! {
         /// MLE of the pre-clamp **i64 accumulation** of a saturating `Add`/`Sub`.
         ///
         /// This is the `raf` (read-address-field) polynomial of the saturating-clamp
-        /// lookup: its values are the indices into [`SatClampTable`](joltworks). It is
-        /// tied to the operands by the linear identity `acc(r) = left(r) ± right(r)`,
+        /// lookup: its values are the indices into
+        /// `atlas_lookup_tables::clamp::SaturationTable`. It is tied to the operands by the linear identity `acc(r) = left(r) ± right(r)`,
         /// and the lookup proves `output(r) = clamp(acc(r))`.
         ///
         /// * `0` – node index

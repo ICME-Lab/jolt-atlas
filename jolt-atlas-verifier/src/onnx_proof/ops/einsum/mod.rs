@@ -25,16 +25,17 @@ use crate::{
         opening_access::{OpeningIdBuilder, Target},
     },
 };
+use atlas_algebra::{
+    field::JoltField, poly::opening_point::OpeningPoint, utils::errors::ProofVerifyError,
+};
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, OpeningId},
+    sumcheck::Sumcheck,
+};
+use atlas_transcript::Transcript;
 use common::CommittedPoly;
 use jolt_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
-use joltworks::{
-    field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint},
-    subprotocols::sumcheck::Sumcheck,
-    transcripts::Transcript,
-    utils::errors::ProofVerifyError,
-};
 
 pub mod abmk_abnk_abmn;
 /// Shared sumcheck engine for einsum contraction patterns.

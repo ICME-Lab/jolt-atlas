@@ -11,20 +11,18 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::multilinear_polynomial::MultilinearPolynomial,
+    utils::{errors::ProofVerifyError, math::Math},
+};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{op::Iff, trace::LayerData, Trace};
+use atlas_transcript::Transcript;
 use jolt_claims::{
     constant, derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck,
 };
 use jolt_field::Ring;
-use joltworks::{
-    field::JoltField,
-    poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
-};
 
 impl_standard_sumcheck_proof_api!(Iff, relation IffRelation);
 

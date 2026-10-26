@@ -12,12 +12,12 @@
 //!   probe models; the tests below pin the structure that makes it exercise each flow, so it
 //!   cannot stop doing so silently.
 
+use atlas_algebra::field::fp128::Fp128 as Fr;
+use atlas_pcs::akita::AkitaScheme;
+use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::Op;
 use common::VirtualPoly;
 use jolt_claims::{Source, SymbolicSumcheck};
-use joltworks::field::fp128::Fp128 as Fr;
-use joltworks::poly::commitment::akita::AkitaScheme;
-use joltworks::poly::opening_proof::{OpeningId, SumcheckId};
 use std::{ops::Range, sync::Mutex};
 use strum::IntoEnumIterator;
 
@@ -54,13 +54,13 @@ use crate::{
         trace_view::TraceView,
     },
 };
-use atlas_trace::{trace::LayerData, Model, Tensor, Trace};
-use jolt_field::Ring;
-use jolt_sumcheck::ProveRounds;
-use joltworks::{
+use atlas_algebra::{
     poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
     utils::math::Math,
 };
+use atlas_trace::{trace::LayerData, Model, Tensor, Trace};
+use jolt_field::Ring;
+use jolt_sumcheck::ProveRounds;
 use rand::{rngs::StdRng, SeedableRng};
 
 /// `(op kind of the node, the relation's Spec type)` for every relation the prover has run.

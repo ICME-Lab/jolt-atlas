@@ -1,13 +1,13 @@
 use super::*;
 use crate::node_view::ModelView;
-use atlas_trace::op::GatherSmall;
-use common::CommittedPoly;
-use joltworks::subprotocols::{
+use atlas_sumcheck::{
     booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier},
     hamming_booleanity::{HammingBooleanitySumcheckParams, HammingBooleanitySumcheckVerifier},
     hamming_weight::{HammingWeightSumcheckParams, HammingWeightSumcheckVerifier},
     sumcheck::{BatchedSumcheck, Sumcheck},
 };
+use atlas_trace::op::GatherSmall;
+use common::CommittedPoly;
 
 impl OpLayout for GatherSmall {
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {

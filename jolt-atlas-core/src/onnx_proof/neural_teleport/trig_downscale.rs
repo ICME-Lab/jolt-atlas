@@ -6,12 +6,11 @@
 //! `division.rs`'s `a = P·q + r` derivation.
 use crate::node_view::ComputationNode;
 use crate::{onnx_proof::Prover, utils::opening_access::AccOpeningAccessor};
+use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
 use atlas_trace::Tensor;
+use atlas_transcript::Transcript;
 use common::{consts::TRIG_DOWNSCALE_BITS, VirtualPoly};
 pub use jolt_atlas_verifier::onnx_proof::neural_teleport::trig_downscale::*;
-use joltworks::{
-    field::JoltField, poly::multilinear_polynomial::EvaluateMle, transcripts::Transcript,
-};
 
 /// Appends the downscaled value (`remainder >> TRIG_DOWNSCALE_BITS`) as a
 /// `VirtualPoly::TrigDownscaled` advice, evaluated at the node's standard reduced

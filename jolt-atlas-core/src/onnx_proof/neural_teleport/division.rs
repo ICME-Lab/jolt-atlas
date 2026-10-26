@@ -12,12 +12,12 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::Prover;
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
-use common::{CommittedPoly, VirtualPoly};
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
     poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-    transcripts::Transcript,
 };
+use atlas_transcript::Transcript;
+use common::{CommittedPoly, VirtualPoly};
 
 /// Caches the quotient's claim (`CommittedPoly::TeleportNodeQuotient`) at the node's
 /// standard reduced output-opening point, by directly evaluating the honest quotient tensor.

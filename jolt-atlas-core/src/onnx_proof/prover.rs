@@ -11,19 +11,20 @@ use super::{
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
-use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
-use common::{CommittedPoly, VirtualPoly};
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
-    poly::{
-        commitment::commitment_scheme::CommitmentScheme,
-        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial},
-        opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
-    },
-    subprotocols::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof},
-    transcripts::{AppendToTranscript, ProvingTranscript, Transcript},
+    poly::multilinear_polynomial::{EvaluateMle, MultilinearPolynomial},
     utils::math::Math,
 };
+use atlas_pcs::commitment_scheme::CommitmentScheme;
+use atlas_sumcheck::{
+    evaluation_reduction::EvalReductionProof,
+    opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
+    sumcheck::SumcheckInstanceProof,
+};
+use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
+use atlas_transcript::{AppendToTranscript, ProvingTranscript, Transcript};
+use common::{CommittedPoly, VirtualPoly};
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
@@ -48,7 +49,7 @@ pub struct Prover<F: JoltField, T: Transcript> {
     /// one batched sumcheck per [`DeferredBatch`](crate::onnx_proof::deferred_lookups::DeferredBatch).
     pub deferred_batches: BTreeMap<
         crate::onnx_proof::deferred_lookups::DeferredBatch,
-        Vec<Box<dyn joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>>>,
+        Vec<Box<dyn atlas_sumcheck::sumcheck_prover::SumcheckInstanceProver<F, T>>>,
     >,
     /// One-hot checks to build and prove right after their parent batch.
     pub deferred_onehots: Vec<(
@@ -78,7 +79,7 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
     pub fn defer(
         &mut self,
         kind: crate::onnx_proof::deferred_lookups::DeferredBatch,
-        instance: Box<dyn joltworks::subprotocols::sumcheck_prover::SumcheckInstanceProver<F, T>>,
+        instance: Box<dyn atlas_sumcheck::sumcheck_prover::SumcheckInstanceProver<F, T>>,
     ) {
         self.deferred_batches
             .entry(kind)

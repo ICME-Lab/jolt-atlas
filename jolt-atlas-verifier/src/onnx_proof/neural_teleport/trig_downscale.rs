@@ -11,16 +11,17 @@ use crate::{
     onnx_proof::{op_lookups::LookupOperandsTrait, Verifier},
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    utils::lookup_bits::LookupBits,
+};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
 use atlas_trace::{trace::LayerData, Tensor, Trace};
+use atlas_transcript::Transcript;
 use common::{
     consts::{TRIG_PERIOD_MODULUS, XLEN},
     CommittedPoly, VirtualPoly,
-};
-use joltworks::{
-    field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, BIG_ENDIAN},
-    transcripts::Transcript,
-    utils::lookup_bits::LookupBits,
 };
 
 /// `LookupOperandsTrait` helper for the trig downscale (right-shift) stage. Registers the

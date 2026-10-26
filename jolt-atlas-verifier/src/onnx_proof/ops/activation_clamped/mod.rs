@@ -26,28 +26,26 @@ use crate::{
     },
     utils::{compute_lookup_indices_from_operands, opening_access::AccOpeningAccessor},
 };
+use atlas_algebra::{
+    field::{IntoOpening, JoltField},
+    poly::{
+        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
+        signed_identity_poly::SignedIdentityPoly,
+    },
+    utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
+};
+use atlas_lookup_tables::clamp::ActivationClampTable;
+use atlas_sumcheck::{
+    config::{OneHotConfig, OneHotParams},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    shout::RaOneHotEncoding,
+    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+};
+use atlas_transcript::Transcript;
 use common::{
     consts::{ACTIVATION_TABLE_VARS, XLEN},
     CommittedPoly, VirtualPoly,
-};
-use joltworks::{
-    config::{OneHotConfig, OneHotParams},
-    field::{IntoOpening, JoltField},
-    lookup_tables::clamp::ActivationClampTable,
-    poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_proof::{
-            OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
-            BIG_ENDIAN, LITTLE_ENDIAN,
-        },
-        signed_identity_poly::SignedIdentityPoly,
-    },
-    subprotocols::{
-        shout::RaOneHotEncoding,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    },
-    transcripts::Transcript,
-    utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 use std::marker::PhantomData;
 

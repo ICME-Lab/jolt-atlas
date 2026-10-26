@@ -12,7 +12,11 @@ test-util = []
 [dependencies]
 atlas-trace.workspace = true
 common.workspace = true
-joltworks.workspace = true
+atlas-algebra.workspace = true
+atlas-transcript.workspace = true
+atlas-lookup-tables.workspace = true
+atlas-sumcheck.workspace = true
+atlas-pcs.workspace = true
 jolt-claims.workspace = true
 jolt-field.workspace = true
 jolt-poly.workspace = true

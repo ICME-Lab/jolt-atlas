@@ -26,17 +26,14 @@ use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
     clamp_split::NodeSplit, deferred_lookups::ProverLookupJob, ProofId, Prover,
 };
-use atlas_trace::{Tensor, Trace};
-pub use jolt_atlas_verifier::onnx_proof::clamp_lookups::*;
-use joltworks::{
-    field::JoltField,
-    poly::{
-        multilinear_polynomial::EvaluateMle,
-        opening_proof::{OpeningAccumulator, ProverOpeningAccumulator},
-    },
-    subprotocols::sumcheck::SumcheckInstanceProof,
-    transcripts::Transcript,
+use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, ProverOpeningAccumulator},
+    sumcheck::SumcheckInstanceProof,
 };
+use atlas_trace::{Tensor, Trace};
+use atlas_transcript::Transcript;
+pub use jolt_atlas_verifier::onnx_proof::clamp_lookups::*;
 
 /// Append the accumulation (`ClampAcc`) opening at the node output point `r`,
 /// returning the (padded) i64 intermediate for reuse.

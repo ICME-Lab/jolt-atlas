@@ -3,10 +3,10 @@ use crate::{
     impl_fused_rescale_proof_api,
     onnx_proof::{ProofId, ProofType, Prover},
 };
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_trace::op::Mul;
+use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::ops::mul::*;
-use joltworks::{
-    field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
-};
 
 impl_fused_rescale_proof_api!(Mul, relation MulRelation);

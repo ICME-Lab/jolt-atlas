@@ -1,11 +1,8 @@
 use crate::node_view::ComputationNode;
+use atlas_algebra::{field::JoltField, utils::lookup_bits::LookupBits};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
 use atlas_trace::{op::MeanOfSquares, NodeId, Op, Tensor, Trace};
 use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly, VirtualPoly};
-use joltworks::{
-    field::JoltField,
-    poly::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
-    utils::lookup_bits::LookupBits,
-};
 use num::integer::Roots;
 
 use crate::onnx_proof::ops::mean_of_squares::mos_divisor;

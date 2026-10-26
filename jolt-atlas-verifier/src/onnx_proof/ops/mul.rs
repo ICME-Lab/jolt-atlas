@@ -12,22 +12,20 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::{
+    field::JoltField,
+    poly::multilinear_polynomial::MultilinearPolynomial,
+    utils::{errors::ProofVerifyError, math::Math},
+};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{
     op::{And, Cube, Mul, OpSpec, Square},
     trace::LayerData,
     Trace,
 };
+use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
-use joltworks::{
-    field::JoltField,
-    poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
-};
 use std::marker::PhantomData;
 
 impl_fused_rescale_proof_api!(Mul, relation MulRelation);

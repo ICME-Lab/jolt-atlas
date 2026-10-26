@@ -5,9 +5,10 @@ use crate::onnx_proof::{
     relation::verify_tie,
     Verifier,
 };
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_trace::op::Input;
+use atlas_transcript::Transcript;
 use jolt_claims::SymbolicSumcheck;
-use joltworks::{field::JoltField, transcripts::Transcript, utils::errors::ProofVerifyError};
 use std::sync::Arc;
 
 crate::bind_relation!(Input, PublicRelation<Input>);

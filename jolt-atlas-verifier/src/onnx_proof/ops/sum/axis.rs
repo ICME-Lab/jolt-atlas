@@ -15,19 +15,19 @@ use crate::{
         opening_access::{OpeningIdBuilder, Target},
     },
 };
-use common::{parallel::par_enabled, VirtualPoly};
-use jolt_claims::{opening, SymbolicSumcheck};
-use jolt_field::Ring;
-use joltworks::{
+use atlas_algebra::{
     field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial},
-        opening_proof::{OpeningAccumulator, OpeningId},
     },
-    transcripts::Transcript,
     utils::math::Math,
 };
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_transcript::Transcript;
+use common::{parallel::par_enabled, VirtualPoly};
+use jolt_claims::{opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use rayon::prelude::*;
 
 /// A sum node with its normalized 2D shape and axis.

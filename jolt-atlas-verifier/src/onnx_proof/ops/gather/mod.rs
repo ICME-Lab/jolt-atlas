@@ -5,22 +5,22 @@ use crate::{
     onnx_proof::{ProofId, ProofType, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::{Model, Op};
-use common::VirtualPoly;
-use joltworks::{
+use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::PolynomialEvaluation,
-        opening_proof::{
-            OpeningAccumulator, OpeningPoint, SumcheckId, VerifierOpeningAccumulator, BIG_ENDIAN,
-            LITTLE_ENDIAN,
-        },
+        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
     },
-    subprotocols::sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
-    transcripts::Transcript,
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_sumcheck::{
+    opening_proof::{OpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
+    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+};
+use atlas_trace::{Model, Op};
+use atlas_transcript::Transcript;
+use common::VirtualPoly;
 
 /// Gather over a large dictionary (read-raf lookup).
 pub mod large;

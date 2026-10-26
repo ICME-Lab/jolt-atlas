@@ -10,21 +10,17 @@ use crate::{
         },
     },
 };
+use atlas_algebra::{
+    field::JoltField, poly::multilinear_polynomial::EvaluateMle, utils::errors::ProofVerifyError,
+};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{
     op::{Constant, OpSpec},
     Tensor, Trace,
 };
+use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
-use joltworks::{
-    field::JoltField,
-    poly::{
-        multilinear_polynomial::EvaluateMle,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    transcripts::Transcript,
-    utils::errors::ProofVerifyError,
-};
 use std::{marker::PhantomData, sync::Arc};
 
 crate::bind_relation!(Constant, PublicRelation<Constant>);

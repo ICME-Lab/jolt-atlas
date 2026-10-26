@@ -23,10 +23,10 @@ use super::{
     witness::build_one_hot_rad_witness,
 };
 use crate::node_view::ModelView;
+use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial};
 use atlas_trace::{Model, Trace};
 use common::CommittedPoly;
 pub use jolt_atlas_verifier::onnx_proof::global_clamp::*;
-use joltworks::{field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial};
 
 /// Witnesses for every bucket's chunk polynomials.
 #[tracing::instrument(skip_all, name = "global_clamp::bucket_witnesses")]

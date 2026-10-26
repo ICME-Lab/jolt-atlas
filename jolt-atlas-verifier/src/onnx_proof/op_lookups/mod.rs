@@ -10,28 +10,26 @@ use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::compute_lookup_indices_from_operands;
-use common::{consts::XLEN, CommittedPoly, VirtualPoly};
-use joltworks::{
-    config::OneHotParams,
+use atlas_algebra::{
     field::JoltField,
-    lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait},
-    poly::opening_proof::{
-        OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId, VerifierOpeningAccumulator,
-        BIG_ENDIAN,
-    },
-    subprotocols::{
-        ps_shout::{
-            unary::{
-                ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
-                UnaryReadRafSumcheckVerifier,
-            },
-            RafShoutProvider,
-        },
-        shout::RaOneHotEncoding,
-    },
-    transcripts::Transcript,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
     utils::lookup_bits::LookupBits,
 };
+use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
+use atlas_sumcheck::{
+    config::OneHotParams,
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    ps_shout::{
+        unary::{
+            ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
+            UnaryReadRafSumcheckVerifier,
+        },
+        RafShoutProvider,
+    },
+    shout::RaOneHotEncoding,
+};
+use atlas_transcript::Transcript;
+use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 
 /// Provider for proving correct execution of operations using prefix-suffix structured lookup tables.
 ///
@@ -363,7 +361,7 @@ impl<Helper: LookupOperandsTrait> OpLookupEncoding<Helper> {
 impl<Helper> OpLookupEncoding<Helper> {
     /// Creates a new operation lookup encoding with an explicit address width.
     pub fn with_log_k(computation_node: &ComputationNode, log_k: usize) -> Self {
-        use joltworks::utils::math::Math;
+        use atlas_algebra::utils::math::Math;
         Self {
             node_idx: computation_node.idx,
             log_t: computation_node.pow2_padded_num_output_elements().log_2(),

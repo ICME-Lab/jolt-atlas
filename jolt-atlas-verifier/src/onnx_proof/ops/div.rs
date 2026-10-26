@@ -17,25 +17,23 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::{
+    field::{IntoOpening, JoltField},
+    poly::multilinear_polynomial::MultilinearPolynomial,
+    utils::{errors::ProofVerifyError, math::Math},
+};
+use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+use atlas_sumcheck::{
+    evaluation_reduction::EvalReductionProof,
+    opening_proof::{OpeningAccumulator, OpeningId},
+    shout::{self, RaOneHotEncoding},
+    sumcheck::{BatchedSumcheck, Sumcheck},
+};
 use atlas_trace::{op::Div, semantics::fixed::rem_floor, trace::LayerData, Trace};
+use atlas_transcript::Transcript;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use jolt_claims::{derived, opening, Expr, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
-use joltworks::{
-    field::{IntoOpening, JoltField},
-    lookup_tables::unsigned_less_than::UnsignedLessThanTable,
-    poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_proof::{OpeningAccumulator, OpeningId},
-    },
-    subprotocols::{
-        evaluation_reduction::EvalReductionProof,
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck},
-    },
-    transcripts::Transcript,
-    utils::{errors::ProofVerifyError, math::Math},
-};
 
 impl OpLayout for Div {
     fn reduction_flow(&self) -> ReductionFlow {

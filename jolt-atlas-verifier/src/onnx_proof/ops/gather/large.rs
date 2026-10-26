@@ -1,14 +1,12 @@
 use super::*;
+use atlas_sumcheck::{
+    config::{OneHotConfig, OneHotParams},
+    opening_proof::OpeningId,
+    shout::{self, RaOneHotEncoding},
+    sumcheck::{BatchedSumcheck, Sumcheck},
+};
 use atlas_trace::op::GatherLarge;
 use common::CommittedPoly;
-use joltworks::{
-    config::{OneHotConfig, OneHotParams},
-    poly::opening_proof::OpeningId,
-    subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck},
-    },
-};
 
 impl OpLayout for GatherLarge {
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {

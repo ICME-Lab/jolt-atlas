@@ -4,19 +4,15 @@ use crate::onnx_proof::{
     op_lookups::{OpLookupEncoding, OpLookupProvider},
     ProofId, ProofType, Verifier,
 };
-use atlas_trace::op::ReLU;
-use common::CommittedPoly;
-use joltworks::{
-    self,
-    field::JoltField,
-    lookup_tables::relu::ReluTable,
-    subprotocols::{
-        shout::{self, RaOneHotEncoding},
-        sumcheck::{BatchedSumcheck, Sumcheck},
-    },
-    transcripts::Transcript,
-    utils::errors::ProofVerifyError,
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_lookup_tables::relu::ReluTable;
+use atlas_sumcheck::{
+    shout::{self, RaOneHotEncoding},
+    sumcheck::{BatchedSumcheck, Sumcheck},
 };
+use atlas_trace::op::ReLU;
+use atlas_transcript::Transcript;
+use common::CommittedPoly;
 
 use common::consts::XLEN;
 

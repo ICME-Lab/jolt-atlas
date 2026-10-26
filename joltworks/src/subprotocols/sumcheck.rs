@@ -15,7 +15,7 @@ use crate::{
         sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceVerifier,
     },
     transcripts::Transcript,
-    utils::errors::ProofVerifyError,
+    utils::{errors::ProofVerifyError, serialization::deserialize_vec},
 };
 use jolt_sumcheck::{
     prove_batch, BatchMember, BatchPrelude, BooleanHypercube, ClearSumcheckRecorder,
@@ -369,9 +369,28 @@ fn batch_prelude<F: JoltField>(
     expect_engine(BatchPrelude::try_new(members, max_num_rounds, max_degree))
 }
 
-#[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone)]
+#[derive(CanonicalSerialize, Debug, Clone)]
 pub struct SumcheckInstanceProof<F: JoltField> {
     pub compressed_polys: Vec<CompressedUniPoly<F>>,
+}
+
+impl<F: JoltField> Valid for SumcheckInstanceProof<F> {
+    fn check(&self) -> Result<(), SerializationError> {
+        self.compressed_polys.check()
+    }
+}
+
+impl<F: JoltField> CanonicalDeserialize for SumcheckInstanceProof<F> {
+    /// The round count is prover-supplied, so the rounds decode through [`deserialize_vec`].
+    fn deserialize_with_mode<R: Read>(
+        reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        Ok(Self {
+            compressed_polys: deserialize_vec(reader, compress, validate)?,
+        })
+    }
 }
 
 impl<F: JoltField> SumcheckInstanceProof<F> {

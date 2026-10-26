@@ -17,6 +17,7 @@ use joltworks::{
         opening_proof::{OpeningId, OpeningPoint},
     },
     subprotocols::sumcheck::SumcheckInstanceProof,
+    utils::serialization::deserialize_vec,
 };
 
 use crate::{Claims, ONNXProof, ReducedOpeningProof};
@@ -193,7 +194,7 @@ where
     ) -> Result<Self, SerializationError> {
         let sumcheck_proof =
             SumcheckInstanceProof::deserialize_with_mode(&mut reader, compress, validate)?;
-        let sumcheck_claims = Vec::deserialize_with_mode(&mut reader, compress, validate)?;
+        let sumcheck_claims = deserialize_vec(&mut reader, compress, validate)?;
         let joint_opening_proof =
             PCS::Proof::deserialize_with_mode(&mut reader, compress, validate)?;
         Ok(Self::from_parts(
@@ -282,10 +283,10 @@ where
     ) -> Result<Self, SerializationError> {
         let opening_claims = Claims::deserialize_with_mode(&mut reader, compress, validate)?;
         let proofs = deserialize_btreemap(&mut reader, compress, validate)?;
-        let commitments = Vec::deserialize_with_mode(&mut reader, compress, validate)?;
+        let commitments = deserialize_vec(&mut reader, compress, validate)?;
         let eval_reduction_proofs = deserialize_btreemap(&mut reader, compress, validate)?;
         let reduced_opening_proof = Option::deserialize_with_mode(&mut reader, compress, validate)?;
-        let narg = Vec::<u8>::deserialize_with_mode(&mut reader, compress, validate)?;
+        let narg = deserialize_vec::<u8, _>(&mut reader, compress, validate)?;
 
         Ok(Self::from_parts(
             opening_claims,
@@ -346,6 +347,18 @@ mod tests {
 
     fn decode(bytes: &[u8]) -> Result<BTreeMap<u64, u64>, SerializationError> {
         deserialize_btreemap(&mut &bytes[..], Compress::Yes, Validate::Yes)
+    }
+
+    #[test]
+    fn forged_lengths_are_rejected_without_allocating() {
+        // A sumcheck proof claiming 2⁶⁴ − 1 rounds, with none behind the length.
+        let bytes = u64::MAX.to_le_bytes();
+        assert!(
+            SumcheckInstanceProof::<joltworks::field::bn254::Fr>::deserialize_compressed(
+                &bytes[..]
+            )
+            .is_err()
+        );
     }
 
     #[test]

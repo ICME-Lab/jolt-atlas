@@ -13,20 +13,59 @@ use rand_core::{CryptoRng, RngCore};
 use rayon::prelude::*;
 
 use super::multilinear_polynomial::MultilinearPolynomial;
-use crate::utils::small_scalar::SmallScalar;
+use crate::utils::{serialization::deserialize_vec, small_scalar::SmallScalar};
 
 // ax^2 + bx + c stored as vec![c,b,a]
 // ax^3 + bx^2 + cx + d stored as vec![d,c,b,a]
-#[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone, PartialEq, Allocative)]
+#[derive(CanonicalSerialize, Debug, Clone, PartialEq, Allocative)]
 pub struct UniPoly<F: CanonicalSerialize + CanonicalDeserialize> {
     pub coeffs: Vec<F>,
 }
 
 // ax^2 + bx + c stored as vec![c,a]
 // ax^3 + bx^2 + cx + d stored as vec![d,b,a]
-#[derive(CanonicalSerialize, CanonicalDeserialize, Debug, Clone)]
+#[derive(CanonicalSerialize, Debug, Clone)]
 pub struct CompressedUniPoly<F: JoltField> {
     pub coeffs_except_linear_term: Vec<F>,
+}
+
+// Both polynomial types travel in proofs; their coefficient vectors decode with a length the
+// prover supplies, so they decode through `deserialize_vec`.
+
+impl<F: CanonicalSerialize + CanonicalDeserialize> Valid for UniPoly<F> {
+    fn check(&self) -> Result<(), SerializationError> {
+        self.coeffs.check()
+    }
+}
+
+impl<F: CanonicalSerialize + CanonicalDeserialize> CanonicalDeserialize for UniPoly<F> {
+    fn deserialize_with_mode<R: Read>(
+        reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        Ok(Self {
+            coeffs: deserialize_vec(reader, compress, validate)?,
+        })
+    }
+}
+
+impl<F: JoltField> Valid for CompressedUniPoly<F> {
+    fn check(&self) -> Result<(), SerializationError> {
+        self.coeffs_except_linear_term.check()
+    }
+}
+
+impl<F: JoltField> CanonicalDeserialize for CompressedUniPoly<F> {
+    fn deserialize_with_mode<R: Read>(
+        reader: R,
+        compress: Compress,
+        validate: Validate,
+    ) -> Result<Self, SerializationError> {
+        Ok(Self {
+            coeffs_except_linear_term: deserialize_vec(reader, compress, validate)?,
+        })
+    }
 }
 
 impl<F: CanonicalSerialize + CanonicalDeserialize + JoltField> Default for UniPoly<F> {

@@ -106,6 +106,10 @@ jobs:
     # end to end, and the importer's zoo gates and golden hashes.
     name: Test
     runs-on: ubuntu-latest
+    env:
+      # One opt-level-3 rustc of jolt-atlas-core's tests peaks near 8 GB; more than two at once
+      # starve the 16 GB runner until it drops the job.
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1

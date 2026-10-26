@@ -91,8 +91,11 @@ Workspace members, in dependency order:
   `ark_bn254::Fr` itself is not a `JoltField`); `field::fp128` is the 128-bit Solinas field for
   the lattice backend. `BatchedSumcheck`/`Sumcheck` drive upstream `jolt-sumcheck`'s engine
   (`prove_batch`, `verify_compressed`) through `subprotocols::upstream_sumcheck`, which presents
-  our transcript as upstream's facade (grinding before each challenge) and runs each
-  `SumcheckInstanceProver` as a batch member.
+  our transcript as upstream's facade (grinding before each challenge). `SumcheckInstanceProver`
+  extends upstream's `ProveRounds`, so every prover instance computes its own round messages
+  (upstream `UnivariatePoly`) over upstream's `GruenSplitEqPolynomial`; Gruen rounds go through
+  `poly::split_eq_poly::SplitEqUnreducedFold`, which takes the relation at the endpoint the
+  round otherwise recovers by division.
 - **atlas-trace** — deterministic fixed-point IR, op semantics, and the trace engine. Owns the
   behavioral contract below.
 - **atlas-onnx-import** — tract-free ONNX frontend: protobuf decode (prost, vendored proto),

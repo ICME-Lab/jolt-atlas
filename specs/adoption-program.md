@@ -198,7 +198,9 @@ what is specific).
   member; it is protocol-breaking (upstream's absorption labels) and re-pins. (3) Adoption then
   ports every op protocol and the joltworks sumcheck subprotocols onto upstream's
   round-scheduler traits and `jolt-poly` types, so it lands op family by op family, each PR
-  reproducing the digests and passing the performance gate. Upstream's exceptional-challenge fix
+  reproducing the digests and passing the performance gate. The operand polynomials stay ours
+  where `jolt-poly`'s full-field binding measured slower than our 125-bit-challenge binding; the
+  inventory records the measurement. Upstream's exceptional-challenge fix
   (`0337eda5`) and capped decoding of the sumcheck/polynomial proof types land with it. The
   split-eq delta is cheaper than the inventory feared — upstream `jolt-poly/split_eq.rs` already
   carries the Gruen machinery; remaining atlas fold-routine deltas are re-ported here.

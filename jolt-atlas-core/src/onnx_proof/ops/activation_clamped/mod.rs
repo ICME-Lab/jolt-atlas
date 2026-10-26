@@ -13,7 +13,9 @@
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
 //! `BatchedSumcheck` call.
 
-use atlas_trace::{trace::LayerData, Tensor, Trace};
+use crate::onnx_proof::op_lookups::OpLookupProve;
+use atlas_trace::{trace::LayerData, Trace};
+pub use jolt_atlas_verifier::onnx_proof::ops::activation_clamped::*;
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
@@ -21,167 +23,35 @@ use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
         neural_teleport::{n_bits_to_usize, utils::compute_ra_evals_nbits_2comp},
-        op_lookups::{
-            DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
-        },
-        ProofId, Prover, Verifier,
+        op_lookups::OpLookupProvider,
+        ProofId, Prover,
     },
-    utils::{compute_lookup_indices_from_operands, opening_access::AccOpeningAccessor},
+    utils::opening_access::AccOpeningAccessor,
 };
 use common::{
     consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, XLEN},
     parallel::par_enabled,
-    CommittedPoly, VirtualPoly,
+    VirtualPoly,
 };
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
-    config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
     lookup_tables::clamp::ActivationClampTable,
     poly::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
-        opening_proof::{
-            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
-        },
+        opening_proof::{OpeningPoint, ProverOpeningAccumulator},
         signed_identity_poly::SignedIdentityPoly,
     },
     subprotocols::{
-        shout::RaOneHotEncoding,
-        sumcheck::SumcheckInstanceProof,
-        sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        sumcheck::SumcheckInstanceProof, sumcheck_prover::SumcheckInstanceProver,
+        sumcheck_verifier::SumcheckInstanceParams,
     },
     transcripts::Transcript,
-    utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use std::marker::PhantomData;
-
-const EXEC_DEGREE_BOUND: usize = 2;
-
-/// A clamped-activation's small lookup table: `Table[i] = activation(i)`, for
-/// two's-complement `i` over [`ACTIVATION_TABLE_BOUND`] bits.
-pub trait SmallActivationTable: Send + Sync + 'static {
-    /// Materializes the full table (all `2^ACTIVATION_TABLE_BOUND` entries).
-    fn materialize() -> Vec<i32>;
-}
-
-fn clamped_opening_id(node_idx: usize) -> OpeningId {
-    OpeningId::new(
-        VirtualPoly::ActivationClampedOutput(node_idx),
-        SumcheckId::NodeExecution(node_idx),
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Stage: ActivationClamp -- prefix-suffix lookup proving the `ActivationClampedOutput`
-// advice equals `ActivationClampTable[raw_input]`, ties `clamped` back to the real input.
-// ---------------------------------------------------------------------------
-
-#[derive(Default)]
-pub(crate) struct ActivationClampOperands;
-
-impl LookupOperandsTrait for ActivationClampOperands {
-    const LOG_K: usize = XLEN;
-
-    fn rv_claim<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> F {
-        accumulator
-            .get_virtual_polynomial_opening(clamped_opening_id(node.idx))
-            .1
-    }
-
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::ActivationClampRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::ActivationClampRaD(node_idx, d)
-    }
-
-    fn witness_opening_id(node: &ComputationNode) -> OpeningId {
-        DefaultLookupOperands::witness_opening_id(node)
-    }
-
-    fn r_cycle<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
-        DefaultLookupOperands::r_cycle(node, accumulator)
-    }
-
-    fn r_cycle_source(node_idx: usize) -> OpeningId {
-        DefaultLookupOperands::r_cycle_source(node_idx)
-    }
-
-    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-        DefaultLookupOperands.witness(node, trace)
-    }
-
-    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
-        let operand = witness.map(|v| v as i32);
-        compute_lookup_indices_from_operands(&[&operand], false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Stage: Execution -- small dense-table lookup, gamma-batched with an identity
-// polynomial.
-// ---------------------------------------------------------------------------
-
-#[derive(Clone)]
-struct SmallTableParams<F: JoltField, Table> {
-    gamma: F,
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
-    _table: PhantomData<Table>,
-}
-
-impl<F: JoltField, Table: SmallActivationTable> SmallTableParams<F, Table> {
-    fn new(
-        computation_node: ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let gamma = transcript.challenge_scalar();
-        let (r_node_output, _) = accumulator.get_node_output_opening(computation_node.idx);
-        Self {
-            gamma,
-            r_node_output,
-            computation_node,
-            _table: PhantomData,
-        }
-    }
-}
-
-impl<F: JoltField, Table: SmallActivationTable> SumcheckInstanceParams<F>
-    for SmallTableParams<F, Table>
-{
-    fn degree(&self) -> usize {
-        EXEC_DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, rv_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        let (_, clamped_claim) = accumulator
-            .get_virtual_polynomial_opening(clamped_opening_id(self.computation_node.idx));
-        rv_claim + self.gamma * clamped_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        ACTIVATION_TABLE_VARS
-    }
-}
 
 struct SmallTableProver<F: JoltField, Table> {
     params: SmallTableParams<F, Table>,
@@ -344,101 +214,6 @@ impl<F: JoltField, Table: SmallActivationTable> ProveRounds<F> for SmallTablePro
     }
 }
 
-struct SmallTableVerifier<F: JoltField, Table> {
-    params: SmallTableParams<F, Table>,
-    table: MultilinearPolynomial<F>,
-}
-
-impl<F: JoltField, Table: SmallActivationTable> SmallTableVerifier<F, Table> {
-    fn new(
-        computation_node: ComputationNode,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let params = SmallTableParams::new(computation_node, accumulator, transcript);
-        accumulator.append_virtual(
-            transcript,
-            clamped_opening_id(params.computation_node.idx),
-            params.r_node_output.clone(),
-        );
-        let table = MultilinearPolynomial::from(Table::materialize());
-        Self { params, table }
-    }
-}
-
-impl<F: JoltField, T: Transcript, Table: SmallActivationTable> SumcheckInstanceVerifier<F, T>
-    for SmallTableVerifier<F, Table>
-{
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        let ra_claim = accessor.get_advice(VirtualPoly::ActivationSmallRa).1;
-        let table_claim = self.table.evaluate(&opening_point.r);
-        let int_eval = SignedIdentityPoly::new(ACTIVATION_TABLE_VARS).evaluate(&opening_point.r);
-
-        ra_claim * (table_claim + self.params.gamma * int_eval)
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let r = [
-            opening_point.r.as_slice(),
-            self.params.r_node_output.r.as_slice(),
-        ]
-        .concat();
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, OpeningPoint::new(r));
-        provider.append_advice(VirtualPoly::ActivationSmallRa);
-    }
-}
-
-pub(crate) struct SmallTableRaEncoding {
-    pub(crate) node_idx: usize,
-}
-
-impl RaOneHotEncoding for SmallTableRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::ActivationSmallRaD(self.node_idx, d)
-    }
-
-    fn r_cycle_source(&self) -> OpeningId {
-        clamped_opening_id(self.node_idx)
-    }
-
-    fn ra_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::ActivationSmallRa(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn log_k(&self) -> usize {
-        ACTIVATION_TABLE_VARS
-    }
-
-    fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_VARS)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Public entry points, called by the thin per-op `ProveOp`/`VerifyOp` impls.
 // ---------------------------------------------------------------------------
@@ -494,58 +269,4 @@ where
     ));
 
     Vec::new()
-}
-
-/// Verifier counterpart of [`prove_clamped_activation`].
-pub fn verify_clamped_activation<F, T, Table>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError>
-where
-    F: JoltField,
-    T: Transcript,
-    Table: SmallActivationTable,
-{
-    // Stage 1: Execution (verified in the deferred `ActivationExec` batch).
-    let exec_verifier = SmallTableVerifier::<F, Table>::new(
-        node.clone(),
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    );
-    verifier.defer(DeferredBatch::ActivationExec, Box::new(exec_verifier));
-
-    // Stage 2: ActivationClamp (deferred `ActivationClamp` batch).
-    let clamp_provider: OpLookupProvider<ActivationClampOperands> =
-        OpLookupProvider::new(node.clone());
-    let clamp_verifier_sumcheck = clamp_provider
-        .read_raf_verify::<F, T, ActivationClampTable<XLEN>, XLEN>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
-    verifier.defer(
-        DeferredBatch::ActivationClamp,
-        Box::new(clamp_verifier_sumcheck),
-    );
-
-    // Stage 3: one-hot checks, verified after their batches.
-    verifier
-        .deferred_onehots
-        .push(DeferredOneHot::ActivationSmall(node.idx));
-    verifier
-        .deferred_onehots
-        .push(DeferredOneHot::ActivationClamp(node.clone()));
-
-    Ok(())
-}
-
-/// Committed polynomials for a clamped-activation node (both stages' one-hot RaD chunks).
-pub fn clamped_activation_committed_polynomials(node: &ComputationNode) -> Vec<CommittedPoly> {
-    let clamp_encoding: OpLookupEncoding<ActivationClampOperands> = OpLookupEncoding::new(node);
-    let small_encoding = SmallTableRaEncoding { node_idx: node.idx };
-    let clamp_d = clamp_encoding.one_hot_params().instruction_d;
-    let small_d = small_encoding.one_hot_params().instruction_d;
-    let mut polys = vec![];
-    polys.extend((0..clamp_d).map(|i| CommittedPoly::ActivationClampRaD(node.idx, i)));
-    polys.extend((0..small_d).map(|i| CommittedPoly::ActivationSmallRaD(node.idx, i)));
-    polys
 }

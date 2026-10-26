@@ -1,14 +1,11 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::{ops::mul::ProductRelation, ProofId, ProofType, Prover, Verifier};
+use crate::onnx_proof::{ProofId, ProofType, Prover};
 use atlas_trace::op::And;
+pub use jolt_atlas_verifier::onnx_proof::ops::and::*;
 use joltworks::{
     field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,
-    utils::errors::ProofVerifyError,
 };
 
 use crate::impl_standard_sumcheck_proof_api;
-
-/// `And` on booleans is their product.
-pub type AndRelation = ProductRelation<And>;
 
 impl_standard_sumcheck_proof_api!(And, relation AndRelation);

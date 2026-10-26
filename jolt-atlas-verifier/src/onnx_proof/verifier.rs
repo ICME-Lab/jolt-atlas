@@ -1,12 +1,13 @@
 //! Verifier state and internal verification helpers for [`ONNXProof`].
 //!
 //! The public entry point is [`verify`](super::verify) (defined in the parent module).
-//! This file houses the [`Verifier`] struct and the private helper functions that
-//! `verify` delegates to.
+//! This file houses the [`Verifier`] struct and the helper functions that `verify`
+//! delegates to.
 
-use super::{AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof, ProofId};
+use super::{AtlasSharedPreprocessing, AtlasVerifierPreprocessing};
 use crate::node_view::ModelView;
 use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
+use crate::{ONNXProof, ProofId};
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -96,11 +97,7 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
 
 /// Populate the verifier accumulator with opening claims and
 /// commitments from the proof.
-pub(super) fn populate_accumulator<
-    F: JoltField,
-    T: Transcript,
-    PCS: CommitmentScheme<Field = F>,
->(
+pub fn populate_accumulator<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
     proof: &ONNXProof<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
 ) {
@@ -122,7 +119,7 @@ pub(super) fn populate_accumulator<
 }
 
 /// Verify that the output MLE evaluates correctly at the random challenge point τ.
-pub(crate) fn verify_output_claim<F: JoltField, T: Transcript>(
+pub fn verify_output_claim<F: JoltField, T: Transcript>(
     model: &Model,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
@@ -161,31 +158,21 @@ pub(crate) fn verify_output_claim<F: JoltField, T: Transcript>(
 
 /// Iterate over computation graph in reverse topological order and verify each operation.
 #[tracing::instrument(skip_all, name = "ONNXProof::verify_iop")]
-pub(crate) fn verify_iop<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+pub fn verify_iop<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
     proof: &ONNXProof<F, PCS>,
     model: &Model,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
     for node in model.views().iter().rev() {
-        let res = OperatorVerifier::verify(node, verifier, proof.eval_reduction_proofs());
-        #[cfg(test)]
-        if let Err(e) = &res {
-            if !crate::onnx_proof::testing::probe::active() {
-                println!("Verification failed at node {node:#?}: {e:?}");
-            }
-        }
-        res?;
+        OperatorVerifier::verify(node, verifier, proof.eval_reduction_proofs())
+            .inspect_err(|e| tracing::debug!(node = node.idx, ?e, "verification failed"))?;
     }
     crate::onnx_proof::deferred_lookups::verify_all(verifier)
 }
 
 /// Verify the reduced opening proof (sumcheck reduction + PCS verification).
 #[tracing::instrument(skip_all, name = "ONNXProof::verify_reduced_openings")]
-pub(super) fn verify_reduced_openings<
-    F: JoltField,
-    T: Transcript,
-    PCS: CommitmentScheme<Field = F>,
->(
+pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
     proof: &ONNXProof<F, PCS>,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
@@ -200,13 +187,8 @@ pub(super) fn verify_reduced_openings<
             reduced_opening_proof.sumcheck_proof(),
             &mut verifier.transcript,
         );
-        #[cfg(test)]
-        if let Err(e) = &reduction_res {
-            if !crate::onnx_proof::testing::probe::active() {
-                println!("Opening reduction via sumcheck failed: {e:?}");
-            }
-        }
-        let r_sumcheck = reduction_res?;
+        let r_sumcheck = reduction_res
+            .inspect_err(|e| tracing::debug!(?e, "opening reduction via sumcheck failed"))?;
 
         let verifier_state = verifier.accumulator.finalize_batch_opening_sumcheck(
             r_sumcheck,

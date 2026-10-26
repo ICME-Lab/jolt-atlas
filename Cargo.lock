@@ -1377,11 +1377,24 @@ name = "jolt-atlas-verifier"
 version = "0.1.0"
 dependencies = [
  "ark-serialize",
+ "ark-std",
  "atlas-trace",
  "common",
+ "derive_more",
+ "itertools 0.10.5",
+ "jolt-claims",
+ "jolt-field",
+ "jolt-poly",
+ "jolt-sumcheck",
  "joltworks",
+ "num",
+ "num-derive",
+ "num-traits",
  "rayon",
  "serde",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
+ "tracing",
 ]
 
 [[package]]

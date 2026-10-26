@@ -1,23 +1,29 @@
 use atlas_trace::trace::LayerData;
+pub use jolt_atlas_verifier::onnx_proof::ops::eval_reduction::*;
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
-use crate::onnx_proof::{Prover, Verifier};
+use crate::onnx_proof::Prover;
 use joltworks::{
     field::JoltField,
     poly::multilinear_polynomial::MultilinearPolynomial,
     subprotocols::evaluation_reduction::{EvalReductionProof, EvalReductionProtocol},
     transcripts::Transcript,
-    utils::errors::ProofVerifyError,
 };
 
-/// Node-scoped evaluation reduction helper used by ONNX proving and verification.
-pub struct NodeEvalReduction;
+/// Prover-side methods of [`NodeEvalReduction`].
+pub trait NodeEvalReductionProve {
+    /// Run node-output evaluation reduction on the prover side for the given node.
+    fn prove<F: JoltField, T: Transcript>(
+        prover: &mut Prover<F, T>,
+        computation_node: &ComputationNode,
+    ) -> EvalReductionProof<F>;
+}
 
-impl NodeEvalReduction {
+impl NodeEvalReductionProve for NodeEvalReduction {
     /// Run node-output evaluation reduction on the prover side for the given node.
     #[tracing::instrument(skip_all, name = "NodeEvalReduction::prove", fields(node = computation_node.idx))]
-    pub fn prove<F: JoltField, T: Transcript>(
+    fn prove<F: JoltField, T: Transcript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
     ) -> EvalReductionProof<F> {
@@ -53,29 +59,6 @@ impl NodeEvalReduction {
 
         proof
     }
-
-    /// Run node-output evaluation reduction on the verifier side for the given node.
-    pub fn verify<F: JoltField, T: Transcript>(
-        verifier: &mut Verifier<'_, F, T>,
-        computation_node: &ComputationNode,
-        eval_reduction_proof: &EvalReductionProof<F>,
-    ) -> Result<(), ProofVerifyError> {
-        let node_idx = computation_node.idx;
-        let openings = verifier.accumulator.get_node_openings(node_idx);
-
-        let reduced_instance = EvalReductionProtocol::verify(
-            &openings,
-            eval_reduction_proof,
-            &mut verifier.transcript,
-        )?;
-
-        verifier
-            .accumulator
-            .reduced_evaluations
-            .insert(node_idx, reduced_instance);
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -84,7 +67,7 @@ mod tests {
     use crate::node_view::ModelView;
     use crate::onnx_proof::testing::ModelBuilder;
     use crate::onnx_proof::{
-        prover, verifier, AtlasSharedPreprocessing, Claims, ONNXProof, ProofId,
+        prover, verifier, AtlasSharedPreprocessing, Claims, ONNXProof, ProofId, Verifier,
     };
     use atlas_trace::op::Add;
     use atlas_trace::trace::ModelExecutionIO;

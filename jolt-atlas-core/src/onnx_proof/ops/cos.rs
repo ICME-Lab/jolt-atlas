@@ -1,33 +1,32 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
+use crate::onnx_proof::op_lookups::OpLookupProve;
+use crate::onnx_proof::ops::ProveOp;
+use crate::onnx_proof::range_checking::RangeCheckProve;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         neural_teleport::{
             cos::{CosTable, COS_TABLE_VARS},
             division::{
-                cache_teleport_input_claim_prove, cache_teleport_quotient_prove,
-                cache_teleport_quotient_verify, compute_division, verify_teleport_input_claim,
+                cache_teleport_input_claim_prove, cache_teleport_quotient_prove, compute_division,
             },
-            trig_downscale::{
-                cache_downscaled_prove, cache_downscaled_verify, TrigDownscaleOperands,
-            },
+            trig_downscale::{cache_downscaled_prove, TrigDownscaleOperands},
             utils::compute_ra_evals_from_usize_indices,
         },
-        op_lookups::{OpLookupEncoding, OpLookupProvider},
+        op_lookups::OpLookupProvider,
         range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckProvider},
-        ProofId, ProofType, Prover, Verifier,
+        ProofId, ProofType, Prover,
     },
     utils::opening_access::AccOpeningAccessor,
 };
-use atlas_trace::{op::Cos, trace::LayerData, Model, Tensor};
+use atlas_trace::{op::Cos, trace::LayerData, Tensor};
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::parallel::par_enabled;
-use common::{CommittedPoly, VirtualPoly};
+use common::VirtualPoly;
+pub use jolt_atlas_verifier::onnx_proof::ops::cos::*;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use joltworks::{
-    config::{OneHotConfig, OneHotParams},
     field::{IntoOpening, JoltField},
     lookup_tables::{right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable},
     poly::{
@@ -35,38 +34,17 @@ use joltworks::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
-        opening_proof::{
-            OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
-            VerifierOpeningAccumulator, BIG_ENDIAN, LITTLE_ENDIAN,
-        },
+        opening_proof::{OpeningPoint, ProverOpeningAccumulator},
     },
     subprotocols::{
-        shout::{self, RaOneHotEncoding},
+        shout::{self},
         sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
         sumcheck_prover::SumcheckInstanceProver,
-        sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+        sumcheck_verifier::SumcheckInstanceParams,
     },
     transcripts::Transcript,
-    utils::errors::ProofVerifyError,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-
-impl OpLayout for Cos {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let cos_encoding = CosRaEncoding::new(node);
-        let rc_encoding = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node).encoding();
-        let dsc_encoding: OpLookupEncoding<TrigDownscaleOperands> =
-            OpLookupProvider::<TrigDownscaleOperands>::new(node.clone()).encoding();
-        let cos_d = cos_encoding.one_hot_params().instruction_d;
-        let rc_d = rc_encoding.one_hot_params().instruction_d;
-        let dsc_d = dsc_encoding.one_hot_params().instruction_d;
-        let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];
-        polys.extend((0..dsc_d).map(|i| CommittedPoly::TrigDownscaleRaD(node.idx, i)));
-        polys.extend((0..cos_d).map(|i| CommittedPoly::CosRaD(node.idx, i)));
-        polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
-        polys
-    }
-}
 
 impl<F: JoltField, T: Transcript> ProveOp<F, T> for Cos {
     fn prove(
@@ -169,155 +147,6 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Cos {
 
         results
     }
-}
-
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Cos {
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        if node.scale != MODEL_SCALE as u8 {
-            return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                "Cos teleportation verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} \
-                     (got {})",
-                node.scale
-            )));
-        }
-        // Plumbing: cache the quotient's claim.
-        cache_teleport_quotient_verify(node, verifier);
-
-        // Plumbing: downscale.
-        cache_downscaled_verify(node, verifier);
-
-        // Stage 1: batch every read-raf "value" sumcheck together — downscale, the Cos
-        // table lookup, and the remainder range-check.
-        let dsc_provider: OpLookupProvider<TrigDownscaleOperands> =
-            OpLookupProvider::new(node.clone());
-        let dsc_verifier = dsc_provider.read_raf_verify::<F, T, RightShiftTable<XLEN>, XLEN>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
-
-        let exec_sumcheck = CosVerifier::new(
-            node.clone(),
-            &verifier.preprocessing.model,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
-
-        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let rangecheck_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
-
-        let exec_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        BatchedSumcheck::verify(
-            exec_proof,
-            vec![&dsc_verifier, &exec_sumcheck, &rangecheck_verifier],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Stage 2: batch every one-hot correctness triple together — downscale, Cos,
-        // and the range-check.
-        let dsc_encoding = dsc_provider.encoding();
-        let cos_encoding = CosRaEncoding::new(node);
-        let rc_encoding = rc_provider.encoding();
-
-        let onehot_proof = verifier
-            .proofs
-            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let mut onehot_verifiers: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = Vec::new();
-        onehot_verifiers.extend(shout::ra_onehot_verifiers(
-            &dsc_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        ));
-        onehot_verifiers.extend(shout::ra_onehot_verifiers(
-            &cos_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        ));
-        onehot_verifiers.extend(shout::ra_onehot_verifiers(
-            &rc_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        ));
-        BatchedSumcheck::verify(
-            onehot_proof,
-            onehot_verifiers.iter().map(|v| &**v as _).collect(),
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Plumbing: derive `a`'s input claim now that `q` and `r` both hold claims at the
-        // node's reduced output-opening point.
-        verify_teleport_input_claim(node, verifier, TRIG_PERIOD_MODULUS as i32)?;
-
-        Ok(())
-    }
-}
-
-const DEGREE_BOUND: usize = 2;
-
-#[derive(Clone)]
-/// Parameters for the cosine trigonometric function.
-pub struct CosParams<F: JoltField> {
-    gamma: F,
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    computation_node: ComputationNode,
-}
-
-impl<F: JoltField> CosParams<F> {
-    /// Create a new CosParams instance for the given computation node.
-    pub fn new(
-        computation_node: ComputationNode,
-        _model: &Model,
-        accumulator: &impl OpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
-
-        let gamma = transcript.challenge_scalar();
-        let (r_node_output, _) = accessor.get_reduced_opening();
-
-        Self {
-            gamma,
-            r_node_output,
-            computation_node,
-        }
-    }
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for CosParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.computation_node);
-        let rv_claim = accessor.get_reduced_opening().1;
-
-        let downscaled_claim = accessor.get_advice(VirtualPoly::TrigDownscaled).1;
-
-        rv_claim + self.gamma * downscaled_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        COS_TABLE_VARS
-    }
-
-    // output = ra_claim * (table_claim + gamma * int_eval)
 }
 
 /// Read-Raf sumcheck prover for the Cos table lookup: `output[i] = CosTable[downscaled[i]]`.
@@ -472,108 +301,5 @@ impl<F: JoltField> ProveRounds<F> for CosProver<F> {
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
         self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
         Ok(())
-    }
-}
-
-/// Read-Raf sumcheck verifier for the Cos table lookup.
-pub struct CosVerifier<F: JoltField> {
-    params: CosParams<F>,
-    cos_table: MultilinearPolynomial<F>,
-}
-
-impl<F: JoltField> CosVerifier<F> {
-    /// Initialize the verifier state.
-    pub fn new(
-        computation_node: ComputationNode,
-        model: &Model,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let params = CosParams::new(computation_node, model, accumulator, transcript);
-        let cos_table = MultilinearPolynomial::from(CosTable::materialize());
-        Self { params, cos_table }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CosVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        let ra_claim = accessor.get_advice(VirtualPoly::CosRa).1;
-        let table_claim = self.cos_table.evaluate(&opening_point.r);
-        let int_eval = IdentityPolynomial::new(COS_TABLE_VARS).evaluate(&opening_point.r);
-
-        ra_claim * (table_claim + self.params.gamma * int_eval)
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let r = [
-            opening_point.r.as_slice(),
-            self.params.r_node_output.r.as_slice(),
-        ]
-        .concat();
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, OpeningPoint::new(r));
-        provider.append_advice(VirtualPoly::CosRa);
-    }
-}
-
-/// One-hot read-address encoding for the Cos table lookup.
-pub struct CosRaEncoding {
-    /// Index of the computation node in the trace.
-    pub node_idx: usize,
-}
-
-impl CosRaEncoding {
-    /// Create a new Cos table one-hot encoding for the given computation node.
-    pub fn new(node: &ComputationNode) -> Self {
-        Self { node_idx: node.idx }
-    }
-}
-
-impl RaOneHotEncoding for CosRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::CosRaD(self.node_idx, d)
-    }
-
-    fn r_cycle_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::TrigDownscaled(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn ra_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::CosRa(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn log_k(&self) -> usize {
-        COS_TABLE_VARS
-    }
-
-    fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), COS_TABLE_VARS)
     }
 }

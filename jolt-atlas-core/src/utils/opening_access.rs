@@ -25,7 +25,7 @@ pub enum Target {
 
 /// Struct-based opening ID factory scoped to one computation node.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct OpeningIdBuilder<'a> {
+pub struct OpeningIdBuilder<'a> {
     node: &'a ComputationNode,
     sumcheck_id: SumcheckId,
 }

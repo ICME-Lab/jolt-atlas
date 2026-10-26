@@ -32,6 +32,7 @@ pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;
 pub mod range_checking;
+pub mod relation;
 pub mod trace_view;
 pub mod witness;
 

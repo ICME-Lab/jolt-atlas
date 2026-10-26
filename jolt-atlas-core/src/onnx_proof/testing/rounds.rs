@@ -10,6 +10,7 @@
 
 use ark_bn254::Bn254;
 use atlas_trace::{Model, Tensor};
+use jolt_claims::SymbolicSumcheck;
 use jolt_field::{Fr, Ring};
 use jolt_sumcheck::ProveRounds;
 use joltworks::{
@@ -32,7 +33,7 @@ use crate::{
     node_view::ModelView,
     onnx_proof::ops::{
         cube::{CubeParams, CubeProver},
-        mul::{MulParams, MulProver},
+        mul::{MulParams, MulProver, MulRelation},
         square::{SquareParams, SquareProver},
     },
 };
@@ -131,10 +132,7 @@ impl Fixture {
 #[test]
 fn mul_rounds_where_eq_vanishes() {
     let f = Fixture::new(0xA17_0401, 2, |b, i| b.mul(i[0], i[1]));
-    let params = MulParams {
-        r_node_output: OpeningPoint::new(f.r_node.clone()),
-        computation_node: f.model.view(f.node),
-    };
+    let params = MulParams::at(MulRelation::new(f.model.view(f.node)), f.r_node.clone());
     let mut prover = MulProver::initialize(&f.trace, params);
     f.check(&mut prover, &[&f.operands[0], &f.operands[1]]);
 }

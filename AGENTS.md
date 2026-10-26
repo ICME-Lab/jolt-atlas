@@ -77,7 +77,8 @@ Workspace members, in dependency order:
 
 - **common** — shared constants and parallel helpers.
 - **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
-  (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`.
+  (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`, `jolt-utils`, `jolt-poly`,
+  `jolt-sumcheck`.
 - **joltworks** — the proof-system toolkit inherited from Jolt: `field`, `poly` (multilinear
   polynomials and commitment schemes), `subprotocols` (sumcheck, evaluation reduction),
   `lookup_tables`, `msm`, `transcripts`, `config`. `transcripts` runs on upstream
@@ -88,7 +89,10 @@ Workspace members, in dependency order:
   unreduced-product ladder and challenge types. The BN254 scalar is upstream `jolt_field::Fr`
   (`field::bn254`; its ladder runs on the private arkworks kernel in `field::ark`, and
   `ark_bn254::Fr` itself is not a `JoltField`); `field::fp128` is the 128-bit Solinas field for
-  the lattice backend.
+  the lattice backend. `BatchedSumcheck`/`Sumcheck` drive upstream `jolt-sumcheck`'s engine
+  (`prove_batch`, `verify_compressed`) through `subprotocols::upstream_sumcheck`, which presents
+  our transcript as upstream's facade (grinding before each challenge) and runs each
+  `SumcheckInstanceProver` as a batch member.
 - **atlas-trace** — deterministic fixed-point IR, op semantics, and the trace engine. Owns the
   behavioral contract below.
 - **atlas-onnx-import** — tract-free ONNX frontend: protobuf decode (prost, vendored proto),

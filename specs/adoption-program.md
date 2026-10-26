@@ -189,10 +189,14 @@ what is specific).
   PR unifies the field traits (our trait extends upstream's, the kernel stops being a
   `JoltField`, colliding methods resolve to upstream's). (2) `jolt-sumcheck` takes the facade
   `T: Transcript<Challenge = F>`, with no proof-of-work hook and full-field challenges, while
-  stage 3's rounds grind on the split transcript and bind with the 125-bit `MontU128Challenge`;
-  the vendored crate carries a recorded delta for both (a split-transcript adapter with a grind
-  hook, and an optimized-challenge round path), each kept only if it holds the performance line.
-  (3) Adoption ports every op protocol and the joltworks sumcheck subprotocols onto upstream's
+  stage 3's rounds grind on the split transcript and bind with the 125-bit `MontU128Challenge`.
+  Both are met on the atlas side, so the vendored crate carries no delta: a scoped facade view of
+  the split transcript grinds before each challenge it hands the engine, and a challenge's field
+  image keeps its Montgomery limbs, so `JoltField::challenge_from_field` recovers the
+  `MontU128Challenge` at no cost. The second PR swaps the batched-sumcheck driver onto upstream's
+  `prove_batch`/`verify_compressed` with every existing instance running as an upstream batch
+  member; it is protocol-breaking (upstream's absorption labels) and re-pins. (3) Adoption then
+  ports every op protocol and the joltworks sumcheck subprotocols onto upstream's
   round-scheduler traits and `jolt-poly` types, so it lands op family by op family, each PR
   reproducing the digests and passing the performance gate. Upstream's exceptional-challenge fix
   (`0337eda5`) and capped decoding of the sumcheck/polynomial proof types land with it. The

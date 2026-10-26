@@ -496,6 +496,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
                 $prover_ty::initialize(&prover.trace, params)
             },
             |node: &ComputationNode,
+             _: &atlas_trace::Model,
              accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
              _: &mut T| {
                 use $crate::onnx_proof::ops::$verifier_ty;
@@ -517,10 +518,36 @@ macro_rules! impl_standard_sumcheck_proof_api {
                 RelationProver::initialize(&prover.trace, params)
             },
             |node: &ComputationNode,
+             _: &atlas_trace::Model,
              accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
              transcript: &mut T| {
                 $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
                     <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
+                    accumulator,
+                    transcript,
+                )
+            }
+        );
+    };
+    ($inner_ty:ty, model_relation $relation:ty) => {
+        $crate::bind_relation!($inner_ty, $relation);
+        $crate::impl_standard_sumcheck_proof_api!(
+            @impl $inner_ty,
+            |node: &ComputationNode, prover: &mut Prover<F, T>| {
+                use $crate::onnx_proof::relation::{RelationParams, RelationProver};
+                let params = RelationParams::<F, $relation>::new(
+                    <$relation>::for_node(&prover.preprocessing.model, node.clone()),
+                    &prover.accumulator,
+                    &mut prover.transcript,
+                );
+                RelationProver::initialize(&prover.trace, params)
+            },
+            |node: &ComputationNode,
+             model: &atlas_trace::Model,
+             accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
+             transcript: &mut T| {
+                $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
+                    <$relation>::for_node(model, node.clone()),
                     accumulator,
                     transcript,
                 )
@@ -559,7 +586,12 @@ macro_rules! impl_standard_sumcheck_proof_api {
                     .get(&ProofId(node.idx, ProofType::Execution))
                     .ok_or(ProofVerifyError::MissingProof(node.idx))?;
                 let verifier_sumcheck =
-                    ($make_verifier)(node, &verifier.accumulator, &mut verifier.transcript);
+                    ($make_verifier)(
+                        node,
+                        &verifier.preprocessing.model,
+                        &verifier.accumulator,
+                        &mut verifier.transcript,
+                    );
                 Sumcheck::verify(
                     proof,
                     &verifier_sumcheck,
@@ -649,6 +681,7 @@ macro_rules! impl_fused_rescale_proof_api {
                 $prover_ty::initialize(&prover.trace, params)
             },
             |node: &ComputationNode,
+             _: &atlas_trace::Model,
              accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
              _: &mut T| {
                 use $crate::onnx_proof::ops::$verifier_ty;
@@ -670,6 +703,7 @@ macro_rules! impl_fused_rescale_proof_api {
                 RelationProver::initialize(&prover.trace, params)
             },
             |node: &ComputationNode,
+             _: &atlas_trace::Model,
              accumulator: &joltworks::poly::opening_proof::VerifierOpeningAccumulator<F>,
              transcript: &mut T| {
                 $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
@@ -738,7 +772,12 @@ macro_rules! impl_fused_rescale_proof_api {
                     .get(&ProofId(node.idx, ProofType::RescaleArith))
                     .ok_or(ProofVerifyError::MissingProof(node.idx))?;
                 let verifier_sumcheck =
-                    ($make_verifier)(node, &verifier.accumulator, &mut verifier.transcript);
+                    ($make_verifier)(
+                        node,
+                        &verifier.preprocessing.model,
+                        &verifier.accumulator,
+                        &mut verifier.transcript,
+                    );
                 Sumcheck::verify(
                     proof,
                     &verifier_sumcheck,

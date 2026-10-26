@@ -23,6 +23,7 @@
 
 use crate::node_view::ComputationNode;
 use atlas_trace::{op::OpSpec, Trace};
+use common::parallel::par_enabled;
 use jolt_claims::{Expr, Source, SymbolicSumcheck};
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
@@ -30,7 +31,9 @@ use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, PolynomialId, ProverOpeningAccumulator,
             VerifierOpeningAccumulator, BIG_ENDIAN,
@@ -44,6 +47,7 @@ use joltworks::{
     transcripts::Transcript,
     utils::errors::ProofVerifyError,
 };
+use rayon::prelude::*;
 
 /// An opening a relation reads or produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -67,6 +71,9 @@ pub enum RelationDerived {
     Public,
     /// The MLE of a broadcast's all-ones replication tensor at its replicated coordinates.
     BroadcastOnes,
+    /// The MLE of the relation's public table `i` ([`AtlasRelation::table`]) at the
+    /// low-to-high bound point.
+    Table(usize),
 }
 
 /// A Fiat-Shamir challenge a relation draws in its [`AtlasRelation::setup`].
@@ -105,6 +112,12 @@ pub enum RelationId {
     Broadcast,
     /// Division by a constant `left = d·q + rem`.
     ConstantDivision,
+    /// A reshape: the operand's elements at new padded positions.
+    Reshape,
+    /// A slice: a window of the operand.
+    Slice,
+    /// A concatenation of operands along an axis.
+    Concat,
 }
 
 /// A relation's expression over atlas openings.
@@ -195,13 +208,28 @@ pub trait AtlasRelation:
             RelationDerived::Eq => {
                 EqPolynomial::mle(&setup.incoming_point, &low_to_high_point(challenges))
             }
+            RelationDerived::Table(index) => MultilinearPolynomial::from(self.table(*index, setup))
+                .evaluate(&low_to_high_point(challenges)),
             other => panic!("{other:?} is not derived by this relation"),
         }
     }
+
+    /// Public table `index`, over the sumcheck's hypercube: data both sides build from the
+    /// setup (a selector placing eq evaluations at the cells an op moves), read by
+    /// [`RelationDerived::Table`].
+    fn table<F: JoltField>(&self, index: usize, _setup: &RelationSetup<F>) -> Vec<F> {
+        panic!("this relation has no table {index}")
+    }
 }
 
-/// A relation the engine proves: each output term is [`RelationDerived::Eq`] times at most three
-/// produced openings at the default bound point, with constant or challenge coefficients.
+/// A relation the engine proves, binding low-to-high with its produced openings at the bound
+/// point (or a prefix of it), in one of two shapes:
+///
+/// * **eq-weighted**: each output term is [`RelationDerived::Eq`] times at most three produced
+///   openings, with constant or challenge coefficients; the engine folds over a Gruen split eq;
+/// * **dense**: no term has an eq factor; each term multiplies produced openings and public
+///   tables ([`RelationDerived::Table`]), and the engine sends the message's evaluations at
+///   `0, 2, …, degree` with the claim as hint.
 pub trait EngineRelation: AtlasRelation {
     /// The witness behind each produced opening, aligned with [`AtlasRelation::produced`].
     fn witnesses<F: JoltField>(&self, trace: &Trace) -> Vec<MultilinearPolynomial<F>>;
@@ -355,7 +383,8 @@ pub(crate) fn note_dispatch<R: AtlasRelation>(relation: &R) {
 }
 
 /// One output term with the eq factor taken out and its challenges folded into the
-/// coefficient: `coefficient · Π wires`.
+/// coefficient: `coefficient · Π wires`. A wire indexes the produced openings' witnesses, then
+/// the public tables after them.
 struct SummandTerm<F> {
     coefficient: F,
     unit: bool,
@@ -378,9 +407,12 @@ impl<F: JoltField> SummandTerm<F> {
 fn compile_summand<F: JoltField>(
     expr: RelationExpr<F>,
     produced: &[OpeningId],
+    tables: &mut Vec<usize>,
     setup: &RelationSetup<F>,
-) -> Vec<SummandTerm<F>> {
-    expr.terms
+) -> (Vec<SummandTerm<F>>, bool) {
+    let mut eq_weighted = None;
+    let terms = expr
+        .terms
         .into_iter()
         .map(|term| {
             let mut coefficient = term.coefficient;
@@ -389,7 +421,15 @@ fn compile_summand<F: JoltField>(
             for factor in term.factors {
                 match factor {
                     Source::Derived(RelationDerived::Eq) => eq_factors += 1,
-                    Source::Derived(other) => panic!("the engine derives only Eq, not {other:?}"),
+                    Source::Derived(RelationDerived::Table(index)) => {
+                        let position =
+                            tables.iter().position(|&t| t == index).unwrap_or_else(|| {
+                                tables.push(index);
+                                tables.len() - 1
+                            });
+                        wires.push(produced.len() + position);
+                    }
+                    Source::Derived(other) => panic!("the engine cannot derive {other:?}"),
                     Source::Challenge(challenge) => coefficient *= setup.challenge(&challenge),
                     Source::Opening(RelationOpening::Id(id)) => wires.push(
                         produced
@@ -402,7 +442,16 @@ fn compile_summand<F: JoltField>(
                     }
                 }
             }
-            assert_eq!(eq_factors, 1, "each output term carries the eq factor once");
+            assert!(
+                eq_factors <= 1,
+                "an output term carries the eq factor at most once"
+            );
+            let term_eq_weighted = eq_factors == 1;
+            assert_eq!(
+                *eq_weighted.get_or_insert(term_eq_weighted),
+                term_eq_weighted,
+                "either every output term carries the eq factor or none does"
+            );
             assert!(wires.len() <= 3, "summand terms are at most cubic");
             SummandTerm {
                 unit: coefficient == F::one(),
@@ -410,7 +459,8 @@ fn compile_summand<F: JoltField>(
                 wires,
             }
         })
-        .collect()
+        .collect();
+    (terms, eq_weighted.unwrap_or(true))
 }
 
 /// A relation with its setup done: what both sides start from.
@@ -445,8 +495,11 @@ impl<F: JoltField, R: AtlasRelation> RelationParams<F, R> {
 pub struct RelationProver<F: JoltField, R: EngineRelation> {
     relation: R,
     setup: RelationSetup<F>,
-    eq: GruenSplitEqPolynomial<F>,
+    /// The Gruen split eq of an eq-weighted relation; `None` for a dense one.
+    eq: Option<GruenSplitEqPolynomial<F>>,
     summand: Vec<SummandTerm<F>>,
+    /// How many of the wires are produced openings' witnesses; the rest are public tables.
+    witness_count: usize,
     /// The most produced openings in one term: the summand's degree in each round variable,
     /// apart from eq.
     inner_degree: usize,
@@ -460,27 +513,44 @@ impl<F: JoltField, R: EngineRelation> RelationProver<F, R> {
         let (relation, setup) = params.into_parts();
         note_dispatch(&relation);
         let produced = relation.produced();
-        let summand = compile_summand(relation.output_expression::<F>(), &produced, &setup);
+        let mut tables = Vec::new();
+        let (summand, eq_weighted) = compile_summand(
+            relation.output_expression::<F>(),
+            &produced,
+            &mut tables,
+            &setup,
+        );
         let inner_degree = summand.iter().map(|t| t.wires.len()).max().unwrap_or(0);
+        let expected_degree = if eq_weighted {
+            inner_degree.max(1) + 1
+        } else {
+            inner_degree
+        };
         assert_eq!(
             relation.degree(),
-            inner_degree.max(1) + 1,
-            "an engine relation's degree is its summand's, eq included"
+            expected_degree,
+            "an engine relation's degree is its summand's"
         );
-        let wires = relation.witnesses(trace);
+        let mut wires = relation.witnesses(trace);
         assert_eq!(
             wires.len(),
             produced.len(),
             "one witness per produced opening"
         );
+        wires.extend(
+            tables
+                .iter()
+                .map(|&index| MultilinearPolynomial::from(relation.table(index, &setup))),
+        );
+        let eq = eq_weighted.then(|| {
+            GruenSplitEqPolynomial::new(&setup.incoming_point, jolt_poly::BindingOrder::LowToHigh)
+        });
         Self {
-            eq: GruenSplitEqPolynomial::new(
-                &setup.incoming_point,
-                jolt_poly::BindingOrder::LowToHigh,
-            ),
+            eq,
             relation,
             setup,
             summand,
+            witness_count: produced.len(),
             inner_degree,
             wires,
         }
@@ -488,7 +558,9 @@ impl<F: JoltField, R: EngineRelation> RelationProver<F, R> {
 
     fn bind(&mut self, r: F) {
         let r_j = F::challenge_from_field(r);
-        self.eq.bind(r);
+        if let Some(eq) = &mut self.eq {
+            eq.bind(r);
+        }
         for wire in &mut self.wires {
             wire.bind_parallel(r_j, BindingOrder::LowToHigh);
         }
@@ -517,6 +589,13 @@ impl<F: JoltField, R: EngineRelation> ProveRounds<F> for RelationProver<F, R> {
             ..
         } = self;
         let (summand, wires) = (&*summand, &*wires);
+        let Some(eq) = eq else {
+            return Ok(match self.relation.degree() {
+                2 => dense_message::<F, 2>(summand, wires, previous_claim),
+                3 => dense_message::<F, 3>(summand, wires, previous_claim),
+                degree => panic!("dense relations of degree {degree} are not supported"),
+            });
+        };
         let at = |g: usize, x: usize, wire: usize| wires[wire].get_bound_coeff(2 * g + x);
         let at_endpoint = |x: usize| {
             move |g: usize| -> F {
@@ -593,6 +672,42 @@ impl<F: JoltField, R: EngineRelation> ProveRounds<F> for RelationProver<F, R> {
     }
 }
 
+/// A dense relation's round message: `Σ_i Σ_terms coefficient · Π wires(i, X)` at
+/// `X = 0, 2, …, D`, interpolated with the claim as hint.
+fn dense_message<F: JoltField, const D: usize>(
+    summand: &[SummandTerm<F>],
+    wires: &[MultilinearPolynomial<F>],
+    previous_claim: F,
+) -> UnivariatePoly<F> {
+    let half = wires[0].len() / 2;
+    let evals: [F; D] = (0..half)
+        .into_par_iter()
+        .with_min_len(par_enabled())
+        .map(|i| {
+            let mut evals = [F::zero(); D];
+            for term in summand {
+                let mut product: Option<[F; D]> = None;
+                for &w in &term.wires {
+                    let wire = wires[w].sumcheck_evals_array::<D>(i, BindingOrder::LowToHigh);
+                    product = Some(match product {
+                        None => wire,
+                        Some(p) => std::array::from_fn(|k| p[k] * wire[k]),
+                    });
+                }
+                let product = product.unwrap_or([F::one(); D]);
+                for k in 0..D {
+                    evals[k] += term.scaled(product[k]);
+                }
+            }
+            evals
+        })
+        .reduce(
+            || [F::zero(); D],
+            |a, b| std::array::from_fn(|k| a[k] + b[k]),
+        );
+    UnivariatePoly::from_evals_and_hint(previous_claim, &evals)
+}
+
 impl<F: JoltField, T: Transcript, R: EngineRelation> SumcheckInstanceProver<F, T>
     for RelationProver<F, R>
 {
@@ -610,7 +725,10 @@ impl<F: JoltField, T: Transcript, R: EngineRelation> SumcheckInstanceProver<F, T
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let claims: Vec<F> = self.wires.iter().map(|w| w.final_claim()).collect();
+        let claims: Vec<F> = self.wires[..self.witness_count]
+            .iter()
+            .map(|w| w.final_claim())
+            .collect();
         append_produced(
             &self.relation,
             &self.setup,

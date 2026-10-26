@@ -17,7 +17,13 @@ use joltworks::subprotocols::{
     sumcheck::{BatchedSumcheck, Sumcheck},
 };
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherSmall {
+impl OpLayout for GatherSmall {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        vec![CommittedPoly::GatherRa(node.idx)]
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherSmall {
     #[tracing::instrument(skip_all, name = "GatherSmall::prove")]
     fn prove(
         &self,
@@ -65,7 +71,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherSmall {
 
         results
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherSmall {
     #[tracing::instrument(skip_all, name = "GatherSmall::verify")]
     fn verify(
         &self,
@@ -116,10 +124,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherSmall {
         )?;
 
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        vec![CommittedPoly::GatherRa(node.idx)]
     }
 }
 

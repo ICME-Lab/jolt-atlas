@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use atlas_trace::op::Sum;
 use common::{CommittedPoly, VirtualPoly};
 use joltworks::{
@@ -16,7 +17,7 @@ use crate::{
             clamp_committed_polys, is_scalar, prove_append_acc, prove_clamp_lookup,
             verify_append_acc, verify_clamp_lookup, verify_scalar_clamp,
         },
-        ops::{sum::axis::SumAxisRelation, OperatorProofTrait},
+        ops::sum::axis::SumAxisRelation,
         relation::{RelationParams, RelationProver, RelationVerifier},
         ProofId, ProofType, Prover, Verifier,
     },
@@ -45,7 +46,13 @@ pub mod axis;
 /// at `log_T = 0`): `acc` opens in the clear, so the verifier checks
 /// `output == SatClamp(acc)` directly — and the axis reduction still binds `acc`
 /// to the operand.
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
+impl OpLayout for Sum {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        clamp_committed_polys(node)
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Sum {
     #[tracing::instrument(skip_all, name = "Sum::prove")]
     fn prove(
         &self,
@@ -83,7 +90,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
 
         results
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sum {
     #[tracing::instrument(skip_all, name = "Sum::verify")]
     fn verify(
         &self,
@@ -127,9 +136,5 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sum {
             &mut verifier.transcript,
         )?;
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        clamp_committed_polys(node)
     }
 }

@@ -1,8 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::{
-    ops::{mul::ProductRelation, OperatorProofTrait},
-    ProofId, ProofType, Prover, Verifier,
-};
+use crate::onnx_proof::{ops::mul::ProductRelation, ProofId, ProofType, Prover, Verifier};
 use atlas_trace::op::And;
 use joltworks::{
     field::JoltField, subprotocols::sumcheck::SumcheckInstanceProof, transcripts::Transcript,

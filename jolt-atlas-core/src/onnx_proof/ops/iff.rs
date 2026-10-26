@@ -3,7 +3,6 @@ use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_standard_sumcheck_proof_api,
     onnx_proof::{
-        ops::OperatorProofTrait,
         relation::{
             AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup,

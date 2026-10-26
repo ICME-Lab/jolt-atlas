@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
     neural_teleport::{
@@ -11,7 +12,6 @@ use crate::onnx_proof::{
         utils::compute_ra_evals_from_usize_indices,
     },
     op_lookups::{OpLookupEncoding, OpLookupProvider},
-    ops::OperatorProofTrait,
     range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckProvider},
     ProofId, ProofType, Prover, Verifier,
 };
@@ -47,7 +47,24 @@ use joltworks::{
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
+impl OpLayout for Sin {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        let sin_encoding = SinRaEncoding::new(node);
+        let rc_encoding = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node).encoding();
+        let dsc_encoding: OpLookupEncoding<TrigDownscaleOperands> =
+            OpLookupProvider::<TrigDownscaleOperands>::new(node.clone()).encoding();
+        let sin_d = sin_encoding.one_hot_params().instruction_d;
+        let rc_d = rc_encoding.one_hot_params().instruction_d;
+        let dsc_d = dsc_encoding.one_hot_params().instruction_d;
+        let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];
+        polys.extend((0..dsc_d).map(|i| CommittedPoly::TrigDownscaleRaD(node.idx, i)));
+        polys.extend((0..sin_d).map(|i| CommittedPoly::SinRaD(node.idx, i)));
+        polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
+        polys
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Sin {
     fn prove(
         &self,
         node: &ComputationNode,
@@ -148,7 +165,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
 
         results
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sin {
     fn verify(
         &self,
         node: &ComputationNode,
@@ -238,21 +257,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sin {
         verify_teleport_input_claim(node, verifier, TRIG_PERIOD_MODULUS as i32)?;
 
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let sin_encoding = SinRaEncoding::new(node);
-        let rc_encoding = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node).encoding();
-        let dsc_encoding: OpLookupEncoding<TrigDownscaleOperands> =
-            OpLookupProvider::<TrigDownscaleOperands>::new(node.clone()).encoding();
-        let sin_d = sin_encoding.one_hot_params().instruction_d;
-        let rc_d = rc_encoding.one_hot_params().instruction_d;
-        let dsc_d = dsc_encoding.one_hot_params().instruction_d;
-        let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];
-        polys.extend((0..dsc_d).map(|i| CommittedPoly::TrigDownscaleRaD(node.idx, i)));
-        polys.extend((0..sin_d).map(|i| CommittedPoly::SinRaD(node.idx, i)));
-        polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
-        polys
     }
 }
 

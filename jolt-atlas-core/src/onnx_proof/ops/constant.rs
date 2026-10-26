@@ -1,8 +1,9 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::{
     atlas_relation_types,
     onnx_proof::{
-        ops::{OperatorProofTrait, Prover, Verifier},
+        ops::{Prover, Verifier},
         relation::{
             prove_tie, reduced_output_setup, verify_tie, AtlasRelation, RelationDerived,
             RelationExpr, RelationId, RelationOpening, RelationSetup, TieRelation,
@@ -30,7 +31,9 @@ use std::{marker::PhantomData, sync::Arc};
 
 crate::bind_relation!(Constant, PublicRelation<Constant>);
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Constant {
+impl OpLayout for Constant {}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Constant {
     #[tracing::instrument(skip_all, name = "Constant::prove")]
     fn prove(
         &self,
@@ -45,7 +48,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Constant {
         );
         Vec::new()
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Constant {
     #[tracing::instrument(skip_all, name = "Constant::verify")]
     fn verify(
         &self,

@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
@@ -6,7 +7,6 @@ use crate::{
             clamp_committed_polys, is_scalar, prove_clamp_lookup, verify_clamp_lookup,
             verify_scalar_clamp,
         },
-        ops::OperatorProofTrait,
         relation::{
             prove_tie, verify_tie, AtlasRelation, RelationChallenge, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup, TieRelation,
@@ -61,7 +61,13 @@ crate::bind_relation!(Add, AccumulationRelation<Add>);
 /// The accumulation is re-executed from the operands at proving time
 /// ([`clamp_intermediate`](crate::onnx_proof::clamp_lookups)); it is not stored
 /// in the trace.
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Add {
+impl OpLayout for Add {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        clamp_committed_polys(node)
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Add {
     #[tracing::instrument(skip_all, name = "Add::prove")]
     fn prove(
         &self,
@@ -70,7 +76,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Add {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         prove_accumulation::<Add, F, T>(node, prover)
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Add {
     #[tracing::instrument(skip_all, name = "Add::verify")]
     fn verify(
         &self,
@@ -78,10 +86,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Add {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         verify_accumulation::<Add, F, T>(node, verifier)
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        clamp_committed_polys(node)
     }
 }
 

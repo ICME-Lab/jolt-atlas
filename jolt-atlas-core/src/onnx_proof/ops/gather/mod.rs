@@ -1,8 +1,9 @@
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
-    onnx_proof::{ops::OperatorProofTrait, ProofId, ProofType, Prover, Verifier},
+    onnx_proof::{ProofId, ProofType, Prover, Verifier},
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_trace::{trace::LayerData, Model, Op, Tensor, Trace};

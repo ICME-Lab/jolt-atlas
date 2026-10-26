@@ -1,10 +1,8 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
-    ops::{
-        constant::{PublicRelation, PublicShape},
-        OperatorProofTrait,
-    },
+    ops::constant::{PublicRelation, PublicShape},
     relation::{prove_tie, verify_tie},
     ProofId, Prover, Verifier,
 };
@@ -18,7 +16,9 @@ use std::sync::Arc;
 
 crate::bind_relation!(Input, PublicRelation<Input>);
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
+impl OpLayout for Input {}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Input {
     #[tracing::instrument(skip_all, name = "Input::prove")]
     fn prove(
         &self,
@@ -35,7 +35,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Input {
         );
         Vec::new()
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Input {
     #[tracing::instrument(skip_all, name = "Input::verify")]
     fn verify(
         &self,

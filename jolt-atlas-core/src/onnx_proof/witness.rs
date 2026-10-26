@@ -136,7 +136,7 @@ fn build_activation_small_rad_witness<F: JoltField>(
 /// cached lookup tensor for every chunk. Non-fused polynomials fall back to
 /// [`WitnessGenerator::generate_witness`].
 #[tracing::instrument(skip_all, name = "generate_node_witnesses", fields(node = node.idx))]
-pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::Transcript>(
+pub(crate) fn generate_node_witnesses<F: JoltField>(
     node: &ComputationNode,
     model: &Model,
     trace: &Trace,
@@ -155,7 +155,7 @@ pub(crate) fn generate_node_witnesses<F: JoltField, T: joltworks::transcripts::T
     let mut remainder_indices: Option<Vec<usize>> = None;
     let mut mos_range_bits: Option<Vec<LookupBits>> = None;
 
-    NodeCommittedPolynomials::get_committed_polynomials::<F, T>(node)
+    NodeCommittedPolynomials::get_committed_polynomials(node)
         .into_iter()
         .map(|poly| {
             let witness = match &poly {

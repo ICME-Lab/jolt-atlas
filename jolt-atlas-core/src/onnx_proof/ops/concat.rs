@@ -7,7 +7,6 @@ use crate::utils::{
 use crate::{
     atlas_relation_types, impl_standard_sumcheck_proof_api,
     onnx_proof::{
-        ops::OperatorProofTrait,
         relation::{
             low_to_high_point, reduced_output_setup, AtlasRelation, EngineRelation,
             RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,

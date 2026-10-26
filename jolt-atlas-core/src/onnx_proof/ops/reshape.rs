@@ -15,7 +15,6 @@ use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use crate::{
     atlas_relation_types, impl_standard_sumcheck_proof_api,
     onnx_proof::{
-        ops::OperatorProofTrait,
         relation::{
             reduced_output_setup, AtlasRelation, EngineRelation, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup,

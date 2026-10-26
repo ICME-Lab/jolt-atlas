@@ -1,12 +1,11 @@
 //! # Neural Network Op Proofs Module
 //!
 //! This module contains proving and verification logic for all supported ONNX operations
-//! in the zero-knowledge proof system. Each operator module implements the [`OperatorProofTrait`]
-//! to provide:
+//! in the zero-knowledge proof system. Each operator implements three traits:
 //!
-//! - **Proving**: Generate sumcheck proofs for the operation's correctness
-//! - **Verification**: Verify sumcheck proofs from the prover
-//! - **Committed Polynomials**: Specify which polynomials need to be committed
+//! - [`OpLayout`]: the model-only facts (reduction flow, committed polynomials)
+//! - [`ProveOp`]: generate sumcheck proofs for the operation's correctness
+//! - [`VerifyOp`]: verify sumcheck proofs from the prover
 //!
 //! ## Op Categories
 //!
@@ -136,12 +135,9 @@ pub enum ReductionFlow {
     Custom,
 }
 
-/// Trait for handling operator proving and verification.
-///
-/// Each operator type implements this trait to encapsulate its specific
-/// proving and verification logic, which is then dispatched from the main
-/// proof module.
-pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
+/// The model-only facts about an operator's proof: which reduction flow it uses and which
+/// polynomials it commits. Prover and verifier read the same answers.
+pub trait OpLayout {
     /// Select the eval-reduction flow for this operator.
     ///
     /// `Default` uses `prove`/`verify` with reduction at the beginning.
@@ -150,6 +146,14 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
         ReductionFlow::Default
     }
 
+    /// Get the committed polynomials involved in this operator's proof.
+    fn get_committed_polynomials(&self, _node: &ComputationNode) -> Vec<CommittedPoly> {
+        vec![]
+    }
+}
+
+/// An operator's proving logic, dispatched from the main proof module.
+pub trait ProveOp<F: JoltField, T: Transcript>: OpLayout {
     /// Prove the operation for the given computation node.
     ///
     /// Returns a vector of (ProofId, Proof) pairs. Most operators return a single
@@ -172,7 +176,10 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
     ) -> (EvalReductionProof<F>, ExecutionProofs<F>) {
         panic!("Op selected custom reduction flow but did not implement prove_with_reduction")
     }
+}
 
+/// An operator's verification logic, dispatched from the main proof module.
+pub trait VerifyOp<F: JoltField, T: Transcript>: OpLayout {
     /// Verify the operation for the given computation node.
     fn verify(
         &self,
@@ -196,11 +203,6 @@ pub trait OperatorProofTrait<F: JoltField, T: Transcript> {
         _eval_reduction_proof: &EvalReductionProof<F>,
     ) -> Result<(), ProofVerifyError> {
         panic!("Op selected custom reduction flow but did not implement verify_with_reduction")
-    }
-
-    /// Get the committed polynomials involved in this operator's proof.
-    fn get_committed_polynomials(&self, _node: &ComputationNode) -> Vec<CommittedPoly> {
-        vec![]
     }
 }
 
@@ -267,12 +269,10 @@ impl NodeCommittedPolynomials {
     /// # Returns
     ///
     /// A vector of [`CommittedPoly`] instances that the prover must commit to
-    pub fn get_committed_polynomials<F: JoltField, T: Transcript>(
-        node: &ComputationNode,
-    ) -> Vec<CommittedPoly> {
-        dispatch_operator!(node, |inner| {
-            OperatorProofTrait::<F, T>::get_committed_polynomials(inner, node)
-        })
+    pub fn get_committed_polynomials(node: &ComputationNode) -> Vec<CommittedPoly> {
+        dispatch_operator!(node, |inner| OpLayout::get_committed_polynomials(
+            inner, node
+        ))
     }
 }
 
@@ -318,7 +318,7 @@ impl OperatorProver {
     where
         F: JoltField,
         T: Transcript,
-        O: OperatorProofTrait<F, T>,
+        O: ProveOp<F, T>,
     {
         match operator.reduction_flow() {
             ReductionFlow::Default => {
@@ -385,7 +385,7 @@ impl OperatorVerifier {
     where
         F: JoltField,
         T: Transcript,
-        O: OperatorProofTrait<F, T>,
+        O: VerifyOp<F, T>,
     {
         match operator.reduction_flow() {
             ReductionFlow::Default => {
@@ -479,7 +479,7 @@ macro_rules! impl_standard_params {
 
 pub use impl_standard_params;
 
-/// Macro to implement OperatorProofTrait for standard sumcheck-based operators.
+/// Macro to implement `OpLayout`, `ProveOp` and `VerifyOp` for standard sumcheck-based operators.
 ///
 /// These operators all follow the same pattern:
 /// 1. Create params from computation node and accumulator
@@ -555,7 +555,10 @@ macro_rules! impl_standard_sumcheck_proof_api {
         );
     };
     (@impl $inner_ty:ty, $make_prover:expr, $make_verifier:expr) => {
-        impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for $inner_ty {
+        impl $crate::onnx_proof::ops::OpLayout for $inner_ty {
+        }
+
+        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::ProveOp<F, T> for $inner_ty {
             #[tracing::instrument(skip(node, prover))]
             fn prove(
                 &self,
@@ -572,7 +575,9 @@ macro_rules! impl_standard_sumcheck_proof_api {
                 );
                 vec![(ProofId(node.idx, ProofType::Execution), proof)]
             }
+        }
 
+        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::VerifyOp<F, T> for $inner_ty {
             #[tracing::instrument(skip(node, verifier))]
             fn verify(
                 &self,
@@ -604,14 +609,16 @@ macro_rules! impl_standard_sumcheck_proof_api {
     };
 }
 
-/// Implement [`OperatorProofTrait`] for an op proven by a zero-round relation (a tie) built
+/// Implement [`ProveOp`]/[`VerifyOp`] for an op proven by a zero-round relation (a tie) built
 /// from its node: the prover appends the tie's openings, the verifier checks it.
 #[macro_export]
 macro_rules! impl_tie_proof_api {
     ($inner_ty:ty, $relation:ty) => {
         $crate::bind_relation!($inner_ty, $relation);
 
-        impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for $inner_ty {
+        impl $crate::onnx_proof::ops::OpLayout for $inner_ty {}
+
+        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::ProveOp<F, T> for $inner_ty {
             #[tracing::instrument(skip(node, prover))]
             fn prove(
                 &self,
@@ -626,7 +633,9 @@ macro_rules! impl_tie_proof_api {
                 );
                 Vec::new()
             }
+        }
 
+        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::VerifyOp<F, T> for $inner_ty {
             #[tracing::instrument(skip(node, verifier))]
             fn verify(
                 &self,
@@ -657,7 +666,7 @@ macro_rules! bind_relation {
 
 pub use impl_standard_sumcheck_proof_api;
 
-/// Macro to implement [`OperatorProofTrait`] for element-wise operators that
+/// Macro to implement [`ProveOp`]/[`VerifyOp`] for element-wise operators that
 /// fuse a rescaling division + saturating clamp (`Mul`, `Square`, `Cube`).
 ///
 /// Wraps the operator's own arithmetic sumcheck (`Params`/`Prover`/`Verifier`,
@@ -715,7 +724,16 @@ macro_rules! impl_fused_rescale_proof_api {
         );
     };
     (@impl $inner_ty:ty, $make_prover:expr, $make_verifier:expr) => {
-        impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for $inner_ty {
+        impl $crate::onnx_proof::ops::OpLayout for $inner_ty {
+            fn get_committed_polynomials(
+                &self,
+                node: &ComputationNode,
+            ) -> Vec<common::CommittedPoly> {
+                $crate::onnx_proof::fused_rebase::committed_polys(node)
+            }
+        }
+
+        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::ProveOp<F, T> for $inner_ty {
             #[tracing::instrument(skip(node, prover))]
             fn prove(
                 &self,
@@ -752,7 +770,9 @@ macro_rules! impl_fused_rescale_proof_api {
                 }
                 proofs
             }
+        }
 
+        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::VerifyOp<F, T> for $inner_ty {
             #[tracing::instrument(skip(node, verifier))]
             fn verify(
                 &self,
@@ -789,13 +809,6 @@ macro_rules! impl_fused_rescale_proof_api {
                     fused_rebase::verify_post(node, verifier)?;
                 }
                 Ok(())
-            }
-
-            fn get_committed_polynomials(
-                &self,
-                node: &ComputationNode,
-            ) -> Vec<common::CommittedPoly> {
-                $crate::onnx_proof::fused_rebase::committed_polys(node)
             }
         }
     };

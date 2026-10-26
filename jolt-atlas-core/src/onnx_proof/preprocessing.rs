@@ -13,10 +13,7 @@
 use crate::node_view::ModelView;
 use atlas_trace::Model;
 use common::CommittedPoly;
-use joltworks::{
-    field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme,
-    transcripts::Transcript,
-};
+use joltworks::{field::JoltField, poly::commitment::commitment_scheme::CommitmentScheme};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -55,15 +52,13 @@ impl AtlasSharedPreprocessing {
     }
 
     /// Get all committed polynomials required by the model's operations.
-    pub fn get_models_committed_polynomials<F: JoltField, T: Transcript>(
-        &self,
-    ) -> Vec<CommittedPoly> {
+    pub fn get_models_committed_polynomials(&self) -> Vec<CommittedPoly> {
         use crate::onnx_proof::ops::NodeCommittedPolynomials;
         let mut polys: Vec<CommittedPoly> = self
             .model
             .views()
             .iter()
-            .flat_map(|node| NodeCommittedPolynomials::get_committed_polynomials::<F, T>(node))
+            .flat_map(NodeCommittedPolynomials::get_committed_polynomials)
             .collect();
         polys.extend(crate::onnx_proof::global_clamp::bucket_committed_polys(
             &self.model,

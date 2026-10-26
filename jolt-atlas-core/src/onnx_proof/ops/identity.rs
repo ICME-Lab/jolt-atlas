@@ -1,10 +1,7 @@
 use crate::node_view::ComputationNode;
 use crate::{
     impl_tie_proof_api,
-    onnx_proof::{
-        ops::{neg::SignedCopyRelation, OperatorProofTrait},
-        ProofId, Prover, Verifier,
-    },
+    onnx_proof::{ops::neg::SignedCopyRelation, ProofId, Prover, Verifier},
 };
 use atlas_trace::op::Identity;
 use joltworks::{

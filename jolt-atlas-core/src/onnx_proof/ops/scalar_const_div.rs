@@ -1,9 +1,9 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     atlas_relation_types,
     onnx_proof::{
-        ops::OperatorProofTrait,
         relation::{
             reduced_output_setup, AtlasRelation, EngineRelation, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationParams, RelationProver, RelationSetup,
@@ -30,7 +30,13 @@ use joltworks::{
 
 crate::bind_relation!(ScalarConstDiv, ConstantDivisionRelation);
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDiv {
+impl OpLayout for ScalarConstDiv {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        vec![CommittedPoly::ScalarConstDivNodeRemainder(node.idx)]
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for ScalarConstDiv {
     #[tracing::instrument(skip_all, name = "ScalarConstDiv::prove")]
     fn prove(
         &self,
@@ -50,7 +56,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDiv {
         );
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ScalarConstDiv {
     #[tracing::instrument(skip_all, name = "ScalarConstDiv::verify")]
     fn verify(
         &self,
@@ -73,10 +81,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ScalarConstDiv {
             &mut verifier.transcript,
         )?;
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        vec![CommittedPoly::ScalarConstDivNodeRemainder(node.idx)]
     }
 }
 

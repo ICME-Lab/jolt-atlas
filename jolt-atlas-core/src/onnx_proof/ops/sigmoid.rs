@@ -1,11 +1,9 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::{
-    ops::{
-        activation_clamped::{
-            clamped_activation_committed_polynomials, prove_clamped_activation,
-            verify_clamped_activation, SmallActivationTable,
-        },
-        OperatorProofTrait,
+    ops::activation_clamped::{
+        clamped_activation_committed_polynomials, prove_clamped_activation,
+        verify_clamped_activation, SmallActivationTable,
     },
     ProofId, Prover, Verifier,
 };
@@ -33,7 +31,13 @@ impl SmallActivationTable for SigmoidTableMarker {
     }
 }
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
+impl OpLayout for Sigmoid {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        clamped_activation_committed_polynomials(node)
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Sigmoid {
     #[tracing::instrument(skip_all, name = "Sigmoid::prove")]
     fn prove(
         &self,
@@ -42,7 +46,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         prove_clamped_activation::<F, T, SigmoidTableMarker>(node, prover)
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sigmoid {
     #[tracing::instrument(skip_all, name = "Sigmoid::verify")]
     fn verify(
         &self,
@@ -50,9 +56,5 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sigmoid {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         verify_clamped_activation::<F, T, SigmoidTableMarker>(node, verifier)
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        clamped_activation_committed_polynomials(node)
     }
 }

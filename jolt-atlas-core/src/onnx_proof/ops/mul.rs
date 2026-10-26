@@ -4,7 +4,6 @@ use crate::{
     impl_fused_rescale_proof_api,
     onnx_proof::{
         fused_rebase,
-        ops::OperatorProofTrait,
         relation::{
             AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup,

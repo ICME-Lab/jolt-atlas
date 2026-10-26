@@ -1,10 +1,10 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::{
     onnx_proof::{
         op_lookups::{
             DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
         },
-        ops::OperatorProofTrait,
         ProofId, ProofType, Prover, Verifier,
     },
     utils::compute_lookup_indices_from_operands,
@@ -74,7 +74,17 @@ impl LookupOperandsTrait for SymmetricClampOperands {
     }
 }
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
+impl OpLayout for Clamp {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        let encoding = OpLookupEncoding::<SymmetricClampOperands>::new(node);
+        let d = encoding.one_hot_params().instruction_d;
+        (0..d)
+            .map(|i| CommittedPoly::SymmetricClampRaD(node.idx, i))
+            .collect()
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Clamp {
     #[tracing::instrument(skip_all, name = "Clamp::prove")]
     fn prove(
         &self,
@@ -124,7 +134,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
 
         results
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Clamp {
     #[tracing::instrument(skip_all, name = "Clamp::verify")]
     fn verify(
         &self,
@@ -167,13 +179,5 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Clamp {
         )?;
 
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let encoding = OpLookupEncoding::<SymmetricClampOperands>::new(node);
-        let d = encoding.one_hot_params().instruction_d;
-        (0..d)
-            .map(|i| CommittedPoly::SymmetricClampRaD(node.idx, i))
-            .collect()
     }
 }

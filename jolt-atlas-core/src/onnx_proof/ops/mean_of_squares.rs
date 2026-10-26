@@ -30,6 +30,7 @@
 //! while the divisor `D = N·2^S` uses the *semantic* count `N` (= `op.count`,
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 
 use crate::onnx_proof::trace_view::TraceView;
 use std::array;
@@ -43,7 +44,7 @@ use crate::{
         clamp_lookups::{clamp_committed_polys, is_scalar, recover_small_int, verify_scalar_clamp},
         deferred_lookups::{DeferredBatch, DeferredOneHot},
         fused_rebase,
-        ops::{OperatorProofTrait, Prover, Verifier},
+        ops::{Prover, Verifier},
         range_checking::{
             range_check_operands::{MeanOfSquaresRangeCheckOperands, RangeCheckOperands},
             RangeCheckProvider,
@@ -87,7 +88,24 @@ pub fn mos_divisor(op: &MeanOfSquares, scale: u8) -> i64 {
     (1i64 << scale) * op.count as i64
 }
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
+impl OpLayout for MeanOfSquares {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        // Saturating clamp one-hot (64-bit) ...
+        let mut polys = clamp_committed_polys(node);
+        // ... plus the `R < D` range-check one-hot (skipped for scalar outputs).
+        if !is_scalar(node) {
+            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let d = rc_operands
+                .get_encoding(node)
+                .one_hot_params()
+                .instruction_d;
+            polys.extend((0..d).map(|i| CommittedPoly::MeanOfSquaresRangeCheckRaD(node.idx, i)));
+        }
+        polys
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for MeanOfSquares {
     #[tracing::instrument(skip_all, name = "MeanOfSquares::prove")]
     fn prove(
         &self,
@@ -139,7 +157,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
 
         proofs
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for MeanOfSquares {
     #[tracing::instrument(skip_all, name = "MeanOfSquares::verify")]
     fn verify(
         &self,
@@ -191,21 +211,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
                 .push(DeferredOneHot::RangeCheck(rc_operands.get_encoding(node)));
         }
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        // Saturating clamp one-hot (64-bit) ...
-        let mut polys = clamp_committed_polys(node);
-        // ... plus the `R < D` range-check one-hot (skipped for scalar outputs).
-        if !is_scalar(node) {
-            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
-            let d = rc_operands
-                .get_encoding(node)
-                .one_hot_params()
-                .instruction_d;
-            polys.extend((0..d).map(|i| CommittedPoly::MeanOfSquaresRangeCheckRaD(node.idx, i)));
-        }
-        polys
     }
 }
 

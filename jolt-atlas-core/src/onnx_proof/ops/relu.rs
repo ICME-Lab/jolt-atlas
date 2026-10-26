@@ -1,7 +1,7 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::{
     op_lookups::{OpLookupEncoding, OpLookupProvider},
-    ops::OperatorProofTrait,
     ProofId, ProofType, Prover, Verifier,
 };
 use atlas_trace::op::ReLU;
@@ -21,7 +21,17 @@ use joltworks::{
 
 use common::consts::XLEN;
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
+impl OpLayout for ReLU {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        let encoding: OpLookupEncoding = OpLookupEncoding::new(node);
+        let d = encoding.one_hot_params().instruction_d;
+        (0..d)
+            .map(|i| CommittedPoly::NodeOutputRaD(node.idx, i))
+            .collect()
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for ReLU {
     #[tracing::instrument(skip_all, name = "ReLU::prove")]
     fn prove(
         &self,
@@ -69,7 +79,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
 
         results
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ReLU {
     #[tracing::instrument(skip_all, name = "ReLU::verify")]
     fn verify(
         &self,
@@ -109,13 +121,5 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for ReLU {
         )?;
 
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let encoding: OpLookupEncoding = OpLookupEncoding::new(node);
-        let d = encoding.one_hot_params().instruction_d;
-        (0..d)
-            .map(|i| CommittedPoly::NodeOutputRaD(node.idx, i))
-            .collect()
     }
 }

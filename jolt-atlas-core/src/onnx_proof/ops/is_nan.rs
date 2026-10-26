@@ -3,7 +3,6 @@ use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     atlas_relation_types, impl_tie_proof_api,
     onnx_proof::{
-        ops::OperatorProofTrait,
         relation::{
             reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
             RelationSetup, TieRelation,

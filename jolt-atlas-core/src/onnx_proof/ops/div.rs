@@ -1,7 +1,8 @@
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::{
     node_view::ComputationNode,
     onnx_proof::{
-        ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+        ops::{eval_reduction::NodeEvalReduction, ReductionFlow},
         range_checking::{
             range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
             RangeCheckProvider,
@@ -37,11 +38,25 @@ use joltworks::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
+impl OpLayout for Div {
     fn reduction_flow(&self) -> ReductionFlow {
         ReductionFlow::Custom
     }
 
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        let mut polys = vec![CommittedPoly::DivNodeQuotient(node.idx)];
+        if node.is_scalar() {
+            return polys;
+        }
+        let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
+        let encoding = rc_operands.get_encoding(node);
+        let d = encoding.one_hot_params().instruction_d;
+        polys.extend((0..d).map(|i| CommittedPoly::DivRangeCheckRaD(node.idx, i)));
+        polys
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Div {
     #[tracing::instrument(skip_all, name = "Div::prove")]
     fn prove(
         &self,
@@ -94,7 +109,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
         proofs.extend(prove_range_and_onehot(node, prover));
         (eval_reduction_proof, proofs)
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Div {
     #[tracing::instrument(skip_all, name = "Div::verify")]
     fn verify(
         &self,
@@ -142,18 +159,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Div {
 
         verify_range_and_onehot(node, verifier)?;
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let mut polys = vec![CommittedPoly::DivNodeQuotient(node.idx)];
-        if node.is_scalar() {
-            return polys;
-        }
-        let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
-        let encoding = rc_operands.get_encoding(node);
-        let d = encoding.one_hot_params().instruction_d;
-        polys.extend((0..d).map(|i| CommittedPoly::DivRangeCheckRaD(node.idx, i)));
-        polys
     }
 }
 

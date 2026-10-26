@@ -440,7 +440,7 @@ impl RaOneHotEncoding for SmallTableRaEncoding {
 }
 
 // ---------------------------------------------------------------------------
-// Public entry points, called by the thin per-op `OperatorProofTrait` impls.
+// Public entry points, called by the thin per-op `ProveOp`/`VerifyOp` impls.
 // ---------------------------------------------------------------------------
 
 /// Full (Execution + ActivationClamp) proof for a clamped-activation node: Execution

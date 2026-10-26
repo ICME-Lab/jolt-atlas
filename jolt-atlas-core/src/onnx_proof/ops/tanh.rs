@@ -1,11 +1,9 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::{
-    ops::{
-        activation_clamped::{
-            clamped_activation_committed_polynomials, prove_clamped_activation,
-            verify_clamped_activation, SmallActivationTable,
-        },
-        OperatorProofTrait,
+    ops::activation_clamped::{
+        clamped_activation_committed_polynomials, prove_clamped_activation,
+        verify_clamped_activation, SmallActivationTable,
     },
     ProofId, Prover, Verifier,
 };
@@ -33,7 +31,13 @@ impl SmallActivationTable for TanhTableMarker {
     }
 }
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
+impl OpLayout for Tanh {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        clamped_activation_committed_polynomials(node)
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Tanh {
     #[tracing::instrument(skip_all, name = "Tanh::prove")]
     fn prove(
         &self,
@@ -42,7 +46,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         prove_clamped_activation::<F, T, TanhTableMarker>(node, prover)
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Tanh {
     #[tracing::instrument(skip_all, name = "Tanh::verify")]
     fn verify(
         &self,
@@ -50,9 +56,5 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Tanh {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         verify_clamped_activation::<F, T, TanhTableMarker>(node, verifier)
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        clamped_activation_committed_polynomials(node)
     }
 }

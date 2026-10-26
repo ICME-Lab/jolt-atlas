@@ -12,7 +12,17 @@ use joltworks::{
     },
 };
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
+impl OpLayout for GatherLarge {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        let encoding = GatherRaEncoding::new(node);
+        let d = encoding.one_hot_params().instruction_d;
+        (0..d)
+            .map(|i| CommittedPoly::GatherRaD(node.idx, i))
+            .collect()
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherLarge {
     #[tracing::instrument(skip_all, name = "GatherLarge::prove")]
     fn prove(
         &self,
@@ -61,7 +71,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
 
         results
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherLarge {
     #[tracing::instrument(skip_all, name = "GatherLarge::verify")]
     fn verify(
         &self,
@@ -102,14 +114,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
         )?;
 
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let encoding = GatherRaEncoding::new(node);
-        let d = encoding.one_hot_params().instruction_d;
-        (0..d)
-            .map(|i| CommittedPoly::GatherRaD(node.idx, i))
-            .collect()
     }
 }
 

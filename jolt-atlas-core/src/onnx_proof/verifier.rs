@@ -216,7 +216,7 @@ pub(super) fn verify_reduced_openings<
 
         // Commitments are in sorted `CommittedPoly` order (the prover's
         // `poly_map`); the joint opening covers the opened subset.
-        let mut committed = pp.shared.get_models_committed_polynomials::<F, T>();
+        let mut committed = pp.shared.get_models_committed_polynomials();
         committed.sort();
         if committed.len() != proof.commitments().len() {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(

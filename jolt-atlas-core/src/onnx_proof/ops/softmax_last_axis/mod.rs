@@ -12,24 +12,22 @@
 //! `significance_clamp::SoftmaxSignificanceClampOperands`) — see `significance_clamp.rs`'s module doc for the relation being
 //! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 
 use crate::{
     onnx_proof::{
         deferred_lookups::{DeferredBatch, DeferredOneHot},
         op_lookups::OpLookupProvider,
-        ops::{
-            softmax_last_axis::{
-                exp_sum::{ExpSumParams, ExpSumProver, ExpSumVerifier},
-                exponentiation::{
-                    mult::{MultParams, MultProver, MultVerifier},
-                    ExpDigit, ExpReadRafProvider,
-                },
-                max::{MaxIndicatorParams, MaxIndicatorProver, MaxIndicatorVerifier},
-                rc::{SoftmaxRCProvider, SoftmaxRaEncoding},
-                recip_mult::{RecipMultParams, RecipMultProver, RecipMultVerifier},
-                significance_clamp::SoftmaxSignificanceClampOperands,
+        ops::softmax_last_axis::{
+            exp_sum::{ExpSumParams, ExpSumProver, ExpSumVerifier},
+            exponentiation::{
+                mult::{MultParams, MultProver, MultVerifier},
+                ExpDigit, ExpReadRafProvider,
             },
-            OperatorProofTrait,
+            max::{MaxIndicatorParams, MaxIndicatorProver, MaxIndicatorVerifier},
+            rc::{SoftmaxRCProvider, SoftmaxRaEncoding},
+            recip_mult::{RecipMultParams, RecipMultProver, RecipMultVerifier},
+            significance_clamp::SoftmaxSignificanceClampOperands,
         },
         trace_view::TraceView,
         ProofId, ProofType, Prover, Verifier,
@@ -86,7 +84,34 @@ pub mod significance_clamp;
 /// Softmax witness view and exp-LUT materialization.
 pub mod witness;
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
+impl OpLayout for SoftmaxLastAxis {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        let log_scale = node.scale as usize;
+        let decomp = generate_exp_lut_decomposed(1i32 << node.scale);
+        let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
+        let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
+        let idx = node.idx;
+
+        let mut polys = vec![];
+        for (log_k, ctor) in [
+            (
+                log_scale,
+                CommittedPoly::SoftmaxRemainderRaD as fn(usize, usize) -> _,
+            ),
+            (log_scale, CommittedPoly::SoftmaxExpRemainderRaD),
+            (XLEN, CommittedPoly::SoftmaxClampRaD),
+            (log_hi, CommittedPoly::SoftmaxZHiRaD),
+            (log_lo, CommittedPoly::SoftmaxZLoRaD),
+        ] {
+            let d =
+                OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
+            polys.extend((0..d).map(|i| ctor(idx, i)));
+        }
+        polys
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for SoftmaxLastAxis {
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::prove")]
     fn prove(
         &self,
@@ -114,7 +139,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
             .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx));
         SoftmaxLastAxisProver::new(node, witness.clone(), scale).prove(prover)
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for SoftmaxLastAxis {
     #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::verify")]
     fn verify(
         &self,
@@ -155,31 +182,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         }
         verifier.deferred_onehots.extend(onehots);
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let log_scale = node.scale as usize;
-        let decomp = generate_exp_lut_decomposed(1i32 << node.scale);
-        let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
-        let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
-        let idx = node.idx;
-
-        let mut polys = vec![];
-        for (log_k, ctor) in [
-            (
-                log_scale,
-                CommittedPoly::SoftmaxRemainderRaD as fn(usize, usize) -> _,
-            ),
-            (log_scale, CommittedPoly::SoftmaxExpRemainderRaD),
-            (XLEN, CommittedPoly::SoftmaxClampRaD),
-            (log_hi, CommittedPoly::SoftmaxZHiRaD),
-            (log_lo, CommittedPoly::SoftmaxZLoRaD),
-        ] {
-            let d =
-                OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
-            polys.extend((0..d).map(|i| ctor(idx, i)));
-        }
-        polys
     }
 }
 

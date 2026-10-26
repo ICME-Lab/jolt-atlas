@@ -1,10 +1,7 @@
 use crate::node_view::ComputationNode;
 use crate::{
     impl_fused_rescale_proof_api,
-    onnx_proof::{
-        ops::{mul::ProductRelation, OperatorProofTrait},
-        ProofId, ProofType, Prover, Verifier,
-    },
+    onnx_proof::{ops::mul::ProductRelation, ProofId, ProofType, Prover, Verifier},
 };
 use atlas_trace::op::Square;
 use joltworks::{

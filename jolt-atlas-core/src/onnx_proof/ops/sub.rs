@@ -1,10 +1,8 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::{
     clamp_lookups::clamp_committed_polys,
-    ops::{
-        add::{prove_accumulation, verify_accumulation, AccumulationRelation},
-        OperatorProofTrait,
-    },
+    ops::add::{prove_accumulation, verify_accumulation, AccumulationRelation},
     ProofId, Prover, Verifier,
 };
 use atlas_trace::op::Sub;
@@ -28,7 +26,13 @@ crate::bind_relation!(Sub, AccumulationRelation<Sub>);
 ///
 /// [`VirtualPoly::ClampAcc`]: common::VirtualPoly::ClampAcc
 /// [`VirtualPoly::ClampRa`]: common::VirtualPoly::ClampRa
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
+impl OpLayout for Sub {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        clamp_committed_polys(node)
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Sub {
     #[tracing::instrument(skip_all, name = "Sub::prove")]
     fn prove(
         &self,
@@ -37,7 +41,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         prove_accumulation::<Sub, F, T>(node, prover)
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sub {
     #[tracing::instrument(skip_all, name = "Sub::verify")]
     fn verify(
         &self,
@@ -45,9 +51,5 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Sub {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         verify_accumulation::<Sub, F, T>(node, verifier)
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        clamp_committed_polys(node)
     }
 }

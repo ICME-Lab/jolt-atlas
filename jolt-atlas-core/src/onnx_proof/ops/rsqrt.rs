@@ -1,9 +1,10 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
-        ops::{eval_reduction::NodeEvalReduction, OperatorProofTrait, ReductionFlow},
+        ops::{eval_reduction::NodeEvalReduction, ReductionFlow},
         range_checking::{
             range_check_operands::{
                 RangeCheckOperands, RiRangeCheckOperands, RsRangeCheckOperands,
@@ -55,11 +56,26 @@ pub fn rsqrt_dividend(node: &ComputationNode) -> i64 {
     1i64 << (3 * node.scale)
 }
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
+impl OpLayout for Rsqrt {
     fn reduction_flow(&self) -> ReductionFlow {
         ReductionFlow::Custom
     }
 
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        let mut polys = vec![CommittedPoly::RsqrtQuotient(node.idx)];
+
+        let rc_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
+        let encoding = rc_operands.get_encoding(node);
+        let d = encoding.one_hot_params().instruction_d;
+        for i in 0..d {
+            polys.push(CommittedPoly::SqrtDivRangeCheckRaD(node.idx, i));
+            polys.push(CommittedPoly::SqrtRangeCheckRaD(node.idx, i));
+        }
+        polys
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Rsqrt {
     #[tracing::instrument(skip_all, name = "Rsqrt::prove")]
     fn prove(
         &self,
@@ -97,7 +113,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         proofs.extend(prove_range_and_onehot(node, prover));
         (eval_reduction_proof, proofs)
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Rsqrt {
     #[tracing::instrument(skip_all, name = "Rsqrt::prove")]
     fn verify(
         &self,
@@ -133,19 +151,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Rsqrt {
         self.verify(node, verifier)?;
         NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
         verify_range_and_onehot(node, verifier)
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let mut polys = vec![CommittedPoly::RsqrtQuotient(node.idx)];
-
-        let rc_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
-        let encoding = rc_operands.get_encoding(node);
-        let d = encoding.one_hot_params().instruction_d;
-        for i in 0..d {
-            polys.push(CommittedPoly::SqrtDivRangeCheckRaD(node.idx, i));
-            polys.push(CommittedPoly::SqrtRangeCheckRaD(node.idx, i));
-        }
-        polys
     }
 }
 

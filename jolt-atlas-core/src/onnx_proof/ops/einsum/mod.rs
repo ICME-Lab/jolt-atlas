@@ -1,3 +1,4 @@
+use crate::onnx_proof::ops::{OpLayout, ProveOp, VerifyOp};
 use atlas_trace::{op::Einsum, Model, Op};
 
 use crate::node_view::ComputationNode;
@@ -12,7 +13,7 @@ use crate::{
                 k_nk_n::KNkNLayout,
                 mk_kn_mn::MkKnMnLayout,
             },
-            OperatorProofTrait, Prover, Verifier,
+            Prover, Verifier,
         },
         relation::{
             AtlasRelation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
@@ -54,7 +55,13 @@ pub mod mk_kn_mn;
 
 crate::bind_relation!(Einsum, ContractionRelation);
 
-impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
+impl OpLayout for Einsum {
+    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+        fused_rebase::committed_polys(node)
+    }
+}
+
+impl<F: JoltField, T: Transcript> ProveOp<F, T> for Einsum {
     #[tracing::instrument(skip_all, name = "Einsum::prove")]
     fn prove(
         &self,
@@ -89,7 +96,9 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
 
         proofs
     }
+}
 
+impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Einsum {
     #[tracing::instrument(skip_all, name = "Einsum::verify")]
     fn verify(
         &self,
@@ -121,10 +130,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
         }
 
         Ok(())
-    }
-
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        fused_rebase::committed_polys(node)
     }
 }
 

@@ -116,7 +116,7 @@ pub(super) fn commit_witness_polynomials<
     WitnessCommitments<PCS>,
     Vec<PCS::OpeningProofHint>,
 ) {
-    let poly_map = polynomial_map::<F, T>(model, trace);
+    let poly_map = polynomial_map::<F>(model, trace);
     let polys: Vec<&MultilinearPolynomial<F>> = poly_map.values().collect();
     let (batch, per_poly) = PCS::batch_commit_all(&polys, generators);
     let (commitments, hints): (Vec<_>, Vec<_>) = per_poly.into_iter().unzip();
@@ -289,7 +289,7 @@ pub(super) fn finalize_proof<
 }
 
 #[tracing::instrument(skip_all, name = "ONNXProof::polynomial_map")]
-pub(super) fn polynomial_map<F: JoltField, T: Transcript>(
+pub(super) fn polynomial_map<F: JoltField>(
     model: &Model,
     trace: &Trace,
 ) -> BTreeMap<CommittedPoly, MultilinearPolynomial<F>> {
@@ -310,7 +310,7 @@ pub(super) fn polynomial_map<F: JoltField, T: Transcript>(
         .views()
         .iter()
         .flat_map(|node| {
-            crate::onnx_proof::witness::generate_node_witnesses::<F, T>(node, model, trace)
+            crate::onnx_proof::witness::generate_node_witnesses::<F>(node, model, trace)
         })
         .collect();
     // Packed clamp buckets (model-level, not per node).

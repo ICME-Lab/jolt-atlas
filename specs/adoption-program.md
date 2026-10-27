@@ -304,22 +304,25 @@ what is specific).
   level by the path check and `clippy.toml`, not by separate prover crates or feature gates.
 - [ ] **Stage 10 — the legacy sumcheck layer retired** (one PR per step). Upstream has no layer
   between its relations and its engine: a relation (`ConcreteSumcheck` in `jolt-verifier`, over
-  a `jolt_claims::SymbolicSumcheck`) is driven identically by prover and verifier, stages call
-  `jolt_sumcheck::prove_batch` / `SumcheckVerifier` directly, and transcripts implement
-  `jolt_transcript::Transcript`. After stage 9 we still carry three layers on top of the engine,
-  retired in order: (a) `FacadeTranscript` — our prover and verifier transcripts implement
-  upstream's `Transcript` (`Challenge = F`) themselves, holding the proof-of-work difficulty for
-  the scope they serve; (b) the `BatchedSumcheck`/`Sumcheck` drivers — call sites run the
-  engine directly through a `BatchPrelude`; (c) `SumcheckInstanceProver`/
+  a `jolt_claims::SymbolicSumcheck`) is driven identically by prover and verifier, and stages
+  call `jolt_sumcheck::prove_batch` / `SumcheckVerifier` directly. After stage 9 we carry two
+  layers on top of the engine, retired in order: (a) `SumcheckInstanceProver`/
   `SumcheckInstanceVerifier`/`SumcheckInstanceParams` — every instance not yet a relation moves
   onto the relation engine, one family per PR: the one-hot checks (booleanity, Hamming
   booleanity, Hamming weight, `ra_virtual`), the read-raf lookups (`shout`, `ps_shout`, and the
   lookup family ReLU/Clamp/activation tables/Sin/Cos/Gather), `identity_range_check`,
-  `gamma_fold`, softmax's stages, and the opening reduction. Each family PR deletes its
+  `gamma_fold`, softmax's stages, and the opening reduction; (b) the `BatchedSumcheck`/
+  `Sumcheck` drivers — once every instance is a relation, the relation engine is their only
+  caller and runs the engine through a `BatchPrelude` itself. Each family PR deletes its
   hand-written verifier, carries the stage-6 migration checklist, and re-pins digests when the
   transcript order changes (protocol-breaking) or reproduces them (behavior-preserving). Done
-  when no `SumcheckInstance*` trait, `FacadeTranscript` or `BatchedSumcheck` remains and each
-  stage-9 `prover` submodule holds only relation-engine witnesses or is gone.
+  when no `SumcheckInstance*` trait or `BatchedSumcheck` remains and each stage-9 `prover`
+  submodule holds only relation-engine witnesses or is gone. Out of scope: `FacadeTranscript`.
+  It bridges our transcripts, which use `jolt-transcript`'s split prover/verifier surface
+  (stage 3), to the facade `Transcript` that `jolt-sumcheck` still takes; upstream marks that
+  facade legacy ("can be removed once all consumers migrate to the split-trait surface"), so the
+  bridge is deleted in the pin bump that brings a split-surface `jolt-sumcheck`, not by
+  implementing the legacy facade on our transcripts.
 
 Program definition of done (checkable): `joltworks` is gone — every inventory module replaced
 or in a named atlas-only crate; `jolt-atlas-core` contains no verification logic;

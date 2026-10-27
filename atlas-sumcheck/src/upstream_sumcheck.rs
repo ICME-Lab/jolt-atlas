@@ -23,6 +23,10 @@ use std::ptr::NonNull;
 
 /// One of our transcripts, presented as upstream's facade transcript while an engine call runs.
 ///
+/// The bridge exists because `jolt-sumcheck` still takes `jolt-transcript`'s facade `Transcript`,
+/// which upstream keeps only until its crates migrate to the split prover/verifier surface our
+/// transcripts implement; it goes when the pin moves to a split-surface `jolt-sumcheck`.
+///
 /// The facade trait requires `'static` and `Default`, which a borrow cannot provide, so the view
 /// holds a raw pointer to the borrowed transcript and exists only inside [`FacadeTranscript::scope`]:
 /// the caller never sees it by value, so it cannot outlive the borrow. A `Default` view is

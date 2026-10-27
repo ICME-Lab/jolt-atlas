@@ -1,15 +1,14 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::relation::prover::RelationWitness;
 use crate::{
-    opening_proof::{prover::ProverOpeningAccumulator, OpeningId, SumcheckId},
+    opening_proof::{prover::ProverOpeningAccumulator, SumcheckId},
     ps_shout::{CyclePoly, CycleWeight},
-    sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams,
     upstream_sumcheck::round_check_failed,
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -20,8 +19,8 @@ use atlas_algebra::{
         expanding_table::ExpandingTable, lookup_bits::LookupBits, thread::drop_in_background_thread,
     },
 };
-use atlas_transcript::Transcript;
 use common::{parallel::par_enabled, VirtualPoly};
+use jolt_claims::SymbolicSumcheck;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use std::array;
@@ -41,6 +40,7 @@ where
 {
     /// Shared params between prover and verifier, including table info and opening claims.
     params: IdentityRCParams<F>,
+    setup: RelationSetup<F>,
     /// Materialized `ra(k, j)` MLE over (address, cycle) after the first log(K) rounds.
     /// Present only in the last log(T) rounds.
     ra: Option<MultilinearPolynomial<F>>,
@@ -100,28 +100,23 @@ where
     }
 }
 
-impl<F: JoltField, FS: Transcript> SumcheckInstanceProver<F, FS> for IdentityRCProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+impl<F: JoltField> RelationWitness<F> for IdentityRCProver<F> {
+    type Relation = IdentityRCParams<F>;
+
+    fn relation(&self) -> &IdentityRCParams<F> {
         &self.params
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut FS,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id),
-            opening_point,
-            self.ra.as_ref().unwrap().final_claim(),
-        );
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.ra.as_ref().unwrap().final_claim()]
     }
 }
+
+crate::relation_witness_instance!([F: JoltField] IdentityRCProver<F>);
 
 impl<F: JoltField> IdentityRCProver<F> {
     #[tracing::instrument(skip_all, name = "InstructionIdentityRCProver::bind")]
@@ -172,7 +167,7 @@ impl<F: JoltField> IdentityRCProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for IdentityRCProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.params.rounds()
     }
 
     #[tracing::instrument(skip_all, name = "InstructionIdentityRCProver::prove_round")]
@@ -228,7 +223,7 @@ impl<F: JoltField> ProveRounds<F> for IdentityRCProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.params.rounds() - 1);
         Ok(())
     }
 }
@@ -285,6 +280,7 @@ where
             }
         };
         let mut res = Self {
+            setup: params.relation_setup(),
             phases: params.phases,
             lookup_indices,
             u_evals,

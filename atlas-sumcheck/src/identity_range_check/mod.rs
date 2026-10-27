@@ -5,7 +5,6 @@ use crate::{
         Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
         RelationOpening, RelationSetup, RelationVerifier,
     },
-    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_algebra::{
     field::JoltField,
@@ -113,35 +112,6 @@ pub fn default_phases(log_K: usize) -> usize {
     }
 }
 
-impl<F> SumcheckInstanceParams<F> for IdentityRCParams<F>
-where
-    F: JoltField,
-{
-    fn num_rounds(&self) -> usize {
-        self.log_K + self.log_T
-    }
-
-    // output = eq_eval * ra_claim * identity_eval = Challenge(0) * Opening(ra)
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.input_claim
-    }
-
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let (r_address_prime, r_node_output_prime) = challenges.split_at(self.log_K);
-        let r_node_output_prime = r_node_output_prime
-            .iter()
-            .copied()
-            .rev()
-            .collect::<Vec<_>>();
-        OpeningPoint::new([r_address_prime.to_vec(), r_node_output_prime].concat())
-    }
-}
-
 /// The identity range check as a relation: over the address-then-cycle hypercube,
 ///
 /// ```text
@@ -162,11 +132,16 @@ impl<F: JoltField> IdentityRCParams<F> {
 
     /// The relation these parameters instantiate, with its setup.
     pub fn into_verifier(self) -> IdentityRCVerifier<F> {
-        let setup = RelationSetup {
+        let setup = self.relation_setup();
+        RelationVerifier::at(self, setup)
+    }
+
+    /// The relation's setup: the input claim.
+    pub fn relation_setup(&self) -> RelationSetup<F> {
+        RelationSetup {
             incoming_point: Vec::new(),
             challenges: vec![(RelationChallenge::Claim, self.input_claim)],
-        };
-        RelationVerifier::at(self, setup)
+        }
     }
 }
 

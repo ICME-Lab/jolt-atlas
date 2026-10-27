@@ -1,14 +1,10 @@
 //! The prover side of [`super`].
 
 use super::*;
-use crate::{
-    opening_proof::{prover::ProverOpeningAccumulator, OpeningId},
-    sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams,
-    upstream_sumcheck::round_check_failed,
-};
+use crate::relation::prover::RelationWitness;
+use crate::upstream_sumcheck::round_check_failed;
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         dense_mlpoly::DensePolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -26,9 +22,9 @@ use atlas_lookup_tables::{
     prefixes::{PrefixCheckpoints, PrefixEval, Prefixes},
     JoltLookupTable, PrefixSuffixDecompositionTrait,
 };
-use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use itertools::Itertools;
+use jolt_claims::SymbolicSumcheck;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use std::array;
@@ -45,6 +41,7 @@ where
     PS: RafProverState<F>,
 {
     params: ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>,
+    setup: RelationSetup<F>,
     ra: Option<MultilinearPolynomial<F>>,
     r: Vec<F::Challenge>,
     u_evals: Vec<F>,
@@ -155,35 +152,40 @@ where
     }
 }
 
-impl<F: JoltField, FS: Transcript, LUT, const LOG_K: usize, const N: usize, VD, PS>
-    SumcheckInstanceProver<F, FS> for ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+impl<F, LUT, const LOG_K: usize, const N: usize, VD, PS> RelationWitness<F>
+    for ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
 where
+    F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
     VD: RafVerifierData<F>,
     PS: RafProverState<F>,
 {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+    type Relation = ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>;
+
+    fn relation(&self) -> &Self::Relation {
         &self.params
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut FS,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let id = OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
-        accumulator.append_virtual(
-            transcript,
-            id,
-            opening_point,
-            self.ra.as_ref().unwrap().final_claim(),
-        );
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.ra.as_ref().unwrap().final_claim()]
     }
 }
+
+crate::relation_witness_instance!(
+    [
+        F: JoltField,
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
+        const LOG_K: usize,
+        const N: usize,
+        VD: RafVerifierData<F>,
+        PS: RafProverState<F>
+    ]
+    ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+);
 
 impl<F: JoltField, LUT, const LOG_K: usize, const N: usize, VD, PS> ProveRounds<F>
     for ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
@@ -193,7 +195,7 @@ where
     PS: RafProverState<F>,
 {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.params.rounds()
     }
 
     #[tracing::instrument(skip_all, name = "InstructionReadRafSumcheckProver::prove_round")]
@@ -245,7 +247,7 @@ where
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.params.rounds() - 1);
         Ok(())
     }
 }
@@ -285,6 +287,7 @@ where
             }
         };
         let mut res = Self {
+            setup: params.relation_setup(),
             r: Vec::with_capacity(params.log_T + LOG_K),
             params,
             phases,

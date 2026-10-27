@@ -4,7 +4,6 @@ use crate::{
         Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
         RelationOpening, RelationSetup, RelationVerifier,
     },
-    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_algebra::{
     field::JoltField,
@@ -249,36 +248,6 @@ where
     }
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD> SumcheckInstanceParams<F>
-    for ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
-where
-    F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
-{
-    fn num_rounds(&self) -> usize {
-        LOG_K + self.log_T
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.rv_claim + self.gamma * self.raf.raf_input_claim(self.gamma)
-    }
-
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let (r_address_prime, r_node_output_prime) = challenges.split_at(LOG_K);
-        let r_node_output_prime = r_node_output_prime
-            .iter()
-            .copied()
-            .rev()
-            .collect::<Vec<_>>();
-        OpeningPoint::new([r_address_prime.to_vec(), r_node_output_prime].concat())
-    }
-}
-
 /// The prefix-suffix read-raf check as a relation: over the address-then-cycle hypercube,
 ///
 /// ```text
@@ -304,7 +273,13 @@ where
 
     /// The relation these parameters instantiate, with its setup.
     pub fn into_verifier(self) -> ReadRafSumcheckVerifier<F, LUT, LOG_K, N, VD> {
-        let setup = RelationSetup {
+        let setup = self.relation_setup();
+        RelationVerifier::at(self, setup)
+    }
+
+    /// The relation's setup: `γ`, the read-value claim and the RAF claim.
+    pub fn relation_setup(&self) -> RelationSetup<F> {
+        RelationSetup {
             incoming_point: Vec::new(),
             challenges: vec![
                 (RelationChallenge::Gamma, self.gamma),
@@ -314,8 +289,7 @@ where
                     self.raf.raf_input_claim(self.gamma),
                 ),
             ],
-        };
-        RelationVerifier::at(self, setup)
+        }
     }
 }
 

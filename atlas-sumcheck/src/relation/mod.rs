@@ -17,6 +17,9 @@
 //! [`OpeningId`]s or a node output's reduced opening, the instance the multi-consumer evaluation
 //! reduction produces for it.
 
+/// The prover side: witnesses that compute their own rounds for a relation.
+pub mod prover;
+
 use crate::{
     opening_proof::{OpeningAccumulator, OpeningId, PolynomialId, VerifierOpeningAccumulator},
     sumcheck_verifier::SumcheckInstanceVerifier,

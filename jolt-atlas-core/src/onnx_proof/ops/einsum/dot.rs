@@ -36,8 +36,7 @@ use atlas_trace::{trace::LayerData, Trace};
 
 use super::ContractionRelation;
 use crate::onnx_proof::relation::{
-    append_produced, note_dispatch, relation_input_claim, AtlasRelation, RelationParams,
-    RelationSetup,
+    note_dispatch, AtlasRelation, RelationParams, RelationSetup, RelationWitness,
 };
 use atlas_algebra::{
     field::JoltField,
@@ -48,10 +47,6 @@ use atlas_algebra::{
         opening_point::OpeningPoint,
     },
 };
-use atlas_sumcheck::{
-    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
-};
-use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
@@ -106,31 +101,23 @@ impl<F: JoltField> EinsumDotProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for EinsumDotProver<F> {
-    fn degree(&self) -> usize {
-        self.relation.degree()
+impl<F: JoltField> RelationWitness<F> for EinsumDotProver<F> {
+    type Relation = ContractionRelation;
+
+    fn relation(&self) -> &ContractionRelation {
+        &self.relation
     }
 
-    fn input_claim(&self, accumulator: &ProverOpeningAccumulator<F>) -> F {
-        relation_input_claim(&self.relation, &self.setup, accumulator)
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        append_produced(
-            &self.relation,
-            &self.setup,
-            accumulator,
-            transcript,
-            sumcheck_challenges,
-            &[self.left.final_claim(), self.right.final_claim()],
-        );
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.left.final_claim(), self.right.final_claim()]
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField] EinsumDotProver<F>);
 
 impl<F: JoltField> EinsumDotProver<F> {
     fn round_message(&mut self, round: usize, previous_claim: F) -> UnivariatePoly<F> {

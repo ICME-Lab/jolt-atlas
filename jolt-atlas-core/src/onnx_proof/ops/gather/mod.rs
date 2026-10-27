@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::ProveOp;
+use crate::onnx_proof::relation::{RelationChallenge, RelationParams, RelationSetup};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::opening_access::IntoProverProvider;
 use crate::{
@@ -7,7 +8,7 @@ use crate::{
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
@@ -21,14 +22,14 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::{
     opening_proof::prover::ProverOpeningAccumulator,
+    relation::prover::RelationWitness,
     sumcheck::{prover::SumcheckInstanceProver, SumcheckInstanceProof},
-    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
-use common::VirtualPoly;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::*;
+use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::{
@@ -49,21 +50,26 @@ pub mod small;
 /// Implements a Read-Raf sumcheck asserting that each output[i] corresponds to a lookup
 /// into the input dictionary at index input1[i].
 pub struct GatherProver<F: JoltField> {
-    params: GatherParams<F>,
+    relation: GatherRelation,
+    setup: RelationSetup<F>,
+    gamma: F,
     dictionary: MultilinearPolynomial<F>,
     index_onehot: MultilinearPolynomial<F>,
     identity: IdentityPolynomial<F>,
 }
 
 impl<F: JoltField> GatherProver<F> {
-    /// Initialize the prover with trace data, parameters, accumulator, and transcript.
+    /// Initialize the prover with trace data, the set-up relation, accumulator, and transcript.
     pub fn initialize(
         trace: &Trace,
-        params: GatherParams<F>,
+        params: RelationParams<F, GatherRelation>,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut impl Transcript,
     ) -> Self {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
+        let (relation, setup) = params.into_parts();
+        let gamma = setup.challenge(&RelationChallenge::Gamma);
+        let num_words = relation.num_words();
+        let LayerData { operands, .. } = TraceView::layer_data(trace, relation.node());
         let [dictionary, indexes] = operands[..] else {
             panic!("Expected two operands for Gather operation")
         };
@@ -71,23 +77,23 @@ impl<F: JoltField> GatherProver<F> {
         let dict_len = dictionary.dims()[0];
         let word_dim = dictionary.dims().iter().product::<usize>() / dict_len;
 
-        let (r_index, r_word) = params.r_node_output.r.split_at(params.lookup_vars);
+        let (r_index, r_word) = setup.incoming_point.split_at(relation.lookup_vars());
         assert_eq!(r_word.len(), word_dim.log_2());
 
         let padded_indexes = indexes.padded_pow2();
         let index_claim = padded_indexes.evaluate_mle(r_index);
 
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
+        let mut provider = AccOpeningAccessor::new(accumulator, relation.node())
             .into_provider(transcript, OpeningPoint::new(r_index.to_vec()));
         provider.append_nodeio(Target::Input(1), index_claim);
 
-        let index_onehot: Vec<F> = compute_ra_evals(r_index, &padded_indexes, params.num_words);
-        let dict: Vec<F> = fold_dictionary(r_word, dictionary, params.num_words);
+        let index_onehot: Vec<F> = compute_ra_evals(r_index, &padded_indexes, num_words);
+        let dict: Vec<F> = fold_dictionary(r_word, dictionary, num_words);
 
         let index_onehot = MultilinearPolynomial::from(index_onehot);
         let dictionary = MultilinearPolynomial::from(dict);
         assert_eq!(index_onehot.len(), dictionary.len());
-        let identity = IdentityPolynomial::new(params.num_words.log_2());
+        let identity = IdentityPolynomial::new(num_words.log_2());
 
         #[cfg(test)]
         {
@@ -97,16 +103,18 @@ impl<F: JoltField> GatherProver<F> {
                     let a = index_onehot.get_bound_coeff(i);
                     let b = dictionary.get_bound_coeff(i);
                     let int = F::from_u32(i as u32);
-                    a * (b + params.gamma * int)
+                    a * (b + gamma * int)
                 })
                 .sum();
             crate::onnx_proof::testing::probe::probe_assert_eq!(
-                rv_claim + params.gamma * index_claim,
+                rv_claim + gamma * index_claim,
                 claim
             )
         }
         Self {
-            params,
+            relation,
+            setup,
+            gamma,
             index_onehot,
             dictionary,
             identity,
@@ -114,39 +122,26 @@ impl<F: JoltField> GatherProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for GatherProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> RelationWitness<F> for GatherProver<F> {
+    type Relation = GatherRelation;
+
+    fn relation(&self) -> &GatherRelation {
+        &self.relation
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
 
-        let (r_index, r_word) = self
-            .params
-            .r_node_output
-            .r
-            .split_at(self.params.lookup_vars);
-
-        let r_idx_onehot = [&opening_point.r, r_index].concat().into();
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, Default::default());
-        provider.append_advice_at(
-            VirtualPoly::NodeOutputRa,
-            r_idx_onehot,
+    fn produced_claims(&self) -> Vec<F> {
+        vec![
             self.index_onehot.final_claim(),
-        );
-        let r_dict = [&opening_point.r, r_word].concat().into();
-        provider.append_nodeio_at(Target::Input(0), r_dict, self.dictionary.final_claim());
+            self.dictionary.final_claim(),
+        ]
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField] GatherProver<F>);
 
 impl<F: JoltField> GatherProver<F> {
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
@@ -168,8 +163,8 @@ impl<F: JoltField> GatherProver<F> {
                 let id_evals = identity.sumcheck_evals(i, DEGREE_BOUND, BindingOrder::LowToHigh);
 
                 [
-                    ra_evals[0] * (dict_evals[0] + id_evals[0] * self.params.gamma),
-                    ra_evals[1] * (dict_evals[1] + id_evals[1] * self.params.gamma),
+                    ra_evals[0] * (dict_evals[0] + id_evals[0] * self.gamma),
+                    ra_evals[1] * (dict_evals[1] + id_evals[1] * self.gamma),
                 ]
             })
             .reduce(
@@ -191,7 +186,7 @@ impl<F: JoltField> GatherProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for GatherProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.relation.rounds()
     }
 
     fn prove_round(
@@ -207,7 +202,7 @@ impl<F: JoltField> ProveRounds<F> for GatherProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.relation.rounds() - 1);
         Ok(())
     }
 }

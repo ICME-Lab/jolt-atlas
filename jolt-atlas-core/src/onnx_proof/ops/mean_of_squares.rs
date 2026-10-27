@@ -50,9 +50,7 @@ use crate::{
             range_check_operands::{MeanOfSquaresRangeCheckOperands, RangeCheckOperands},
             RangeCheckProvider,
         },
-        relation::{
-            append_produced, note_dispatch, relation_input_claim, RelationParams, RelationSetup,
-        },
+        relation::{note_dispatch, RelationParams, RelationSetup, RelationWitness},
         ProofId, ProofType,
     },
 };
@@ -64,10 +62,7 @@ use atlas_algebra::{
     },
 };
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-use atlas_sumcheck::{
-    opening_proof::prover::ProverOpeningAccumulator,
-    sumcheck::{prover::SumcheckInstanceProver, Sumcheck, SumcheckInstanceProof},
-};
+use atlas_sumcheck::sumcheck::{Sumcheck, SumcheckInstanceProof};
 use atlas_transcript::Transcript;
 use common::{consts::XLEN, parallel::par_enabled};
 use jolt_claims::SymbolicSumcheck;
@@ -180,31 +175,23 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MeanOfSquaresReductionProver<F> {
-    fn degree(&self) -> usize {
-        self.relation.degree()
+impl<F: JoltField> RelationWitness<F> for MeanOfSquaresReductionProver<F> {
+    type Relation = MeanOfSquaresRelation;
+
+    fn relation(&self) -> &MeanOfSquaresRelation {
+        &self.relation
     }
 
-    fn input_claim(&self, accumulator: &ProverOpeningAccumulator<F>) -> F {
-        relation_input_claim(&self.relation, &self.setup, accumulator)
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        append_produced(
-            &self.relation,
-            &self.setup,
-            accumulator,
-            transcript,
-            sumcheck_challenges,
-            &[self.operand.final_claim()],
-        );
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.operand.final_claim()]
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField] MeanOfSquaresReductionProver<F>);
 impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     fn round_message(&mut self, round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let half = self.operand.len() / 2;

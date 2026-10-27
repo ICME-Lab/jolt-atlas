@@ -17,9 +17,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherLarge {
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         let mut results = Vec::new();
 
-        let params = GatherParams::new(
-            node.clone(),
-            &prover.preprocessing.model,
+        let params = RelationParams::new(
+            GatherRelation::for_node(&prover.preprocessing.model, node.clone()),
             &prover.accumulator,
             &mut prover.transcript,
         );

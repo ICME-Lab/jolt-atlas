@@ -13,25 +13,24 @@
 //! `eq(r₀, r′)` times produced openings at the one low-to-high bound point `r′`. The engine,
 //! [`RelationProver`], owns that eq factor (an upstream Gruen split eq over `r₀`), binds every
 //! produced opening's witness and appends the openings in declared order. A relation of another
-//! shape keeps a specialized prover, which reads its input claim and appends its openings
-//! through [`relation_input_claim`] and [`append_produced`]; such a prover is completeness-only
-//! and is checked against the relation's reference messages (`relation_prover_equiv_*`).
+//! shape keeps a specialized prover, a [`RelationWitness`]: it computes its own round messages,
+//! and its input claim and opening appends come from the relation. Such a prover is
+//! completeness-only and is checked against the relation's reference messages
+//! (`relation_prover_equiv_*`).
 //!
 //! The claim store stays the atlas accumulator: a relation's openings are accumulator
 //! [`OpeningId`]s or a node output's reduced opening, the instance the multi-consumer evaluation
 //! reduction produces for it.
 
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_point::{OpeningPoint, BIG_ENDIAN},
         split_eq_poly::SplitEqUnreducedFold,
     },
 };
 use atlas_sumcheck::{
-    opening_proof::{prover::ProverOpeningAccumulator, OpeningId, PolynomialId},
-    sumcheck::prover::SumcheckInstanceProver,
+    opening_proof::{prover::ProverOpeningAccumulator, OpeningId},
     upstream_sumcheck::round_check_failed,
 };
 use atlas_trace::Trace;
@@ -58,28 +57,7 @@ macro_rules! atlas_relation_types {
     };
 }
 
-/// Append the relation's produced openings, with their `claims`, at their points.
-pub fn append_produced<F: JoltField, T: Transcript, R: AtlasRelation + Relation<F>>(
-    relation: &R,
-    setup: &RelationSetup<F>,
-    accumulator: &mut ProverOpeningAccumulator<F>,
-    transcript: &mut T,
-    sumcheck_challenges: &[F::Challenge],
-    claims: &[F],
-) {
-    let points = relation.opening_points(setup, &sumcheck_challenges.to_vec().into_opening());
-    for ((&id, point), &claim) in relation.produced().iter().zip(points).zip(claims) {
-        match id.polynomial {
-            PolynomialId::Virtual(_) => accumulator.append_virtual(
-                transcript,
-                id,
-                OpeningPoint::<BIG_ENDIAN, F>::new(point),
-                claim,
-            ),
-            PolynomialId::Committed(_) => accumulator.append_dense(transcript, id, point, claim),
-        }
-    }
-}
+pub use atlas_sumcheck::relation::prover::{append_produced, RelationWitness};
 
 /// Prove a tie: append its produced openings with their [`TieRelation::claims`]. Nothing else
 /// enters the transcript; [`verify_tie`] checks the input claim against the output expression.
@@ -292,37 +270,26 @@ impl<F: JoltField, R: EngineRelation<F>> ProveRounds<F> for RelationProver<F, R>
     }
 }
 
-impl<F: JoltField, T: Transcript, R: EngineRelation<F>> SumcheckInstanceProver<F, T>
-    for RelationProver<F, R>
-{
-    fn degree(&self) -> usize {
-        self.relation.degree()
+impl<F: JoltField, R: EngineRelation<F>> RelationWitness<F> for RelationProver<F, R> {
+    type Relation = R;
+
+    fn relation(&self) -> &R {
+        &self.relation
     }
 
-    fn input_claim(&self, accumulator: &ProverOpeningAccumulator<F>) -> F {
-        relation_input_claim(&self.relation, &self.setup, accumulator)
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let claims: Vec<F> = self.wires[..self.witness_count]
+    fn produced_claims(&self) -> Vec<F> {
+        self.wires[..self.witness_count]
             .iter()
             .map(|w| w.final_claim())
-            .collect();
-        append_produced(
-            &self.relation,
-            &self.setup,
-            accumulator,
-            transcript,
-            sumcheck_challenges,
-            &claims,
-        );
+            .collect()
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField, R: EngineRelation<F>] RelationProver<F, R>);
 
 /// One output term with the eq factor taken out and its challenges folded into the
 /// coefficient: `coefficient · Π wires`. A wire indexes the produced openings' witnesses, then

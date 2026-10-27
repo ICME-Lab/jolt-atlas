@@ -6,10 +6,10 @@ use rayon::prelude::*;
 use std::fmt::Debug;
 
 use crate::{
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     relation::{
         low_to_high_point, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
-        RelationOpening, RelationSetup, RelationVerifier,
+        RelationOpening, RelationSetup, RelationVerifier, SparseGroup,
     },
     sumcheck_verifier::SumcheckInstanceParams,
 };
@@ -20,7 +20,6 @@ use atlas_algebra::{
         opening_point::{OpeningPoint, BIG_ENDIAN},
     },
 };
-use atlas_transcript::Transcript;
 use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
@@ -227,19 +226,12 @@ impl<F: JoltField> Relation<F> for BooleanityRelation {
         vec![self.bound_point(challenges); self.d]
     }
 
-    fn append_produced_requests<T: Transcript>(
-        &self,
-        _setup: &RelationSetup<F>,
-        challenges: &[F],
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) {
-        accumulator.append_sparse(
-            transcript,
-            self.polynomial_types.clone(),
-            self.sumcheck_id,
-            self.bound_point(challenges),
-        );
+    fn sparse_groups(&self) -> Option<Vec<SparseGroup>> {
+        Some(vec![SparseGroup {
+            polynomials: self.polynomial_types.clone(),
+            sumcheck: self.sumcheck_id,
+            address_vars: self.log_k_chunk,
+        }])
     }
 
     fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
@@ -318,7 +310,7 @@ impl<F: JoltField> BooleanitySumcheckParams<F> {
 #[cfg(test)]
 mod tests {
     use super::prover::*;
-    use crate::opening_proof::prover::ProverOpeningAccumulator;
+    use crate::opening_proof::{prover::ProverOpeningAccumulator, VerifierOpeningAccumulator};
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use common::CommittedPoly;
     use rand::{rngs::StdRng, RngCore, SeedableRng};

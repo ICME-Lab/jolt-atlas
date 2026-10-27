@@ -21,7 +21,9 @@
 pub mod prover;
 
 use crate::{
-    opening_proof::{OpeningAccumulator, OpeningId, PolynomialId, VerifierOpeningAccumulator},
+    opening_proof::{
+        OpeningAccumulator, OpeningId, PolynomialId, SumcheckId, VerifierOpeningAccumulator,
+    },
     sumcheck_verifier::SumcheckInstanceVerifier,
 };
 use atlas_algebra::{
@@ -33,6 +35,7 @@ use atlas_algebra::{
     },
 };
 use atlas_transcript::Transcript;
+use common::CommittedPoly;
 use jolt_claims::{Expr, SymbolicSumcheck};
 
 /// An opening a relation reads or produces.
@@ -203,6 +206,35 @@ pub fn low_to_high_point<F: Copy>(challenges: &[F]) -> Vec<F> {
     challenges.iter().rev().copied().collect()
 }
 
+/// Committed openings appended together as one sparse one-hot group, at a point `address ‖ cycle`
+/// whose first `address_vars` coordinates are the address.
+pub struct SparseGroup {
+    /// The group's polynomials, in produced order.
+    pub polynomials: Vec<CommittedPoly>,
+    /// The sumcheck the openings come from.
+    pub sumcheck: SumcheckId,
+    /// Address variables of the group's point.
+    pub address_vars: usize,
+}
+
+/// Each group with its point: the point of its first produced opening (a group's openings share
+/// one point).
+pub fn group_points<F>(
+    groups: Vec<SparseGroup>,
+    points: Vec<Vec<F>>,
+) -> Vec<(SparseGroup, Vec<F>)> {
+    let mut points = points.into_iter();
+    groups
+        .into_iter()
+        .map(|group| {
+            let mut members = points.by_ref().take(group.polynomials.len());
+            let point = members.next().expect("a point per produced opening");
+            members.for_each(drop);
+            (group, point)
+        })
+        .collect()
+}
+
 /// The openings a relation produces: field-independent, so the relation's expressions name them.
 pub trait Produces {
     /// The openings the relation produces, in append (Fiat-Shamir) order. Every one appears in
@@ -234,8 +266,14 @@ pub trait Relation<F: JoltField>:
         vec![point; self.produced().len()]
     }
 
-    /// Append the produced openings at their points, in Fiat-Shamir order. Defaults to one
-    /// append per opening; a relation whose openings share an append (a one-hot group) says so.
+    /// The produced openings as sparse one-hot groups, in produced order, when they are appended
+    /// that way; `None` appends them one by one.
+    fn sparse_groups(&self) -> Option<Vec<SparseGroup>> {
+        None
+    }
+
+    /// Append the produced openings at their points, in Fiat-Shamir order: one append per
+    /// opening, or one per [`Self::sparse_groups`] group.
     fn append_produced_requests<T: Transcript>(
         &self,
         setup: &RelationSetup<F>,
@@ -244,6 +282,12 @@ pub trait Relation<F: JoltField>:
         transcript: &mut T,
     ) {
         let points = self.opening_points(setup, challenges);
+        if let Some(groups) = self.sparse_groups() {
+            for (group, point) in group_points(groups, points) {
+                accumulator.append_sparse(transcript, group.polynomials, group.sumcheck, point);
+            }
+            return;
+        }
         for (id, point) in self.produced().into_iter().zip(points) {
             match id.polynomial {
                 PolynomialId::Virtual(_) => accumulator.append_virtual(

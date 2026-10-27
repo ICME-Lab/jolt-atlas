@@ -5,18 +5,13 @@ use common::CommittedPoly;
 use rayon::prelude::*;
 
 use crate::{
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    opening_proof::{OpeningId, SumcheckId},
     relation::{
         low_to_high_point, Relation, RelationChallenge, RelationExpr, RelationId, RelationOpening,
-        RelationSetup, RelationVerifier,
+        RelationSetup, RelationVerifier, SparseGroup,
     },
-    sumcheck_verifier::SumcheckInstanceParams,
 };
-use atlas_algebra::{
-    field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
-};
-use atlas_transcript::Transcript;
+use atlas_algebra::field::JoltField;
 use jolt_claims::{challenge, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
@@ -30,29 +25,6 @@ pub struct HammingWeightSumcheckParams<F: JoltField> {
     pub polynomial_types: Vec<CommittedPoly>,
     pub sumcheck_id: SumcheckId,
     pub r_cycle: Vec<F>,
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for HammingWeightSumcheckParams<F> {
-    fn num_rounds(&self) -> usize {
-        self.num_rounds
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        // No consumer constructs a `RamHammingWeight` instance. A consumer
-        // whose input claim is another sumcheck's output should carry that
-        // claim's `OpeningId` in these params explicitly.
-        self.gamma_powers.iter().sum()
-    }
-
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    // output = Σ_{i=0}^{d-1} γ^i * ra_i
 }
 
 /// `Σ_i γ^i · Σ_k ra_i(k, r_cycle) = Σ_i γ^i`: each one-hot chunk has Hamming weight one.
@@ -69,6 +41,13 @@ pub struct HammingWeightRelation {
     num_rounds: usize,
     polynomial_types: Vec<CommittedPoly>,
     sumcheck_id: SumcheckId,
+}
+
+impl HammingWeightRelation {
+    /// The sumcheck the chunks' openings come from.
+    pub fn sumcheck_id(&self) -> SumcheckId {
+        self.sumcheck_id
+    }
 }
 
 impl SymbolicSumcheck for HammingWeightRelation {
@@ -123,20 +102,12 @@ impl<F: JoltField> Relation<F> for HammingWeightRelation {
         vec![point; self.d]
     }
 
-    fn append_produced_requests<T: Transcript>(
-        &self,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) {
-        let point = [low_to_high_point(challenges), setup.incoming_point.clone()].concat();
-        accumulator.append_sparse(
-            transcript,
-            self.polynomial_types.clone(),
-            self.sumcheck_id,
-            point,
-        );
+    fn sparse_groups(&self) -> Option<Vec<SparseGroup>> {
+        Some(vec![SparseGroup {
+            polynomials: self.polynomial_types.clone(),
+            sumcheck: self.sumcheck_id,
+            address_vars: self.num_rounds,
+        }])
     }
 }
 
@@ -145,7 +116,7 @@ pub type HammingWeightSumcheckVerifier<F> = RelationVerifier<F, HammingWeightRel
 
 impl<F: JoltField> HammingWeightSumcheckParams<F> {
     /// The relation these parameters instantiate, with its setup.
-    pub fn into_verifier(self) -> HammingWeightSumcheckVerifier<F> {
+    pub fn into_parts(self) -> (HammingWeightRelation, RelationSetup<F>) {
         let setup = RelationSetup {
             incoming_point: self.r_cycle,
             challenges: self
@@ -155,15 +126,19 @@ impl<F: JoltField> HammingWeightSumcheckParams<F> {
                 .map(|(i, gamma)| (RelationChallenge::Batching(i), gamma))
                 .collect(),
         };
-        RelationVerifier::at(
-            HammingWeightRelation {
-                d: self.d,
-                num_rounds: self.num_rounds,
-                polynomial_types: self.polynomial_types,
-                sumcheck_id: self.sumcheck_id,
-            },
-            setup,
-        )
+        let relation = HammingWeightRelation {
+            d: self.d,
+            num_rounds: self.num_rounds,
+            polynomial_types: self.polynomial_types,
+            sumcheck_id: self.sumcheck_id,
+        };
+        (relation, setup)
+    }
+
+    /// The verifier of the check.
+    pub fn into_verifier(self) -> HammingWeightSumcheckVerifier<F> {
+        let (relation, setup) = self.into_parts();
+        RelationVerifier::at(relation, setup)
     }
 }
 

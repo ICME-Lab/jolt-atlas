@@ -17,6 +17,22 @@ pub fn append_produced<F: JoltField, T: Transcript, R: Relation<F>>(
     claims: &[F],
 ) {
     let points = relation.opening_points(setup, &sumcheck_challenges.to_vec().into_opening());
+    if let Some(groups) = relation.sparse_groups() {
+        let mut claims = claims.iter().copied();
+        for (group, point) in group_points(groups, points) {
+            let (address, cycle) = point.split_at(group.address_vars);
+            let group_claims = claims.by_ref().take(group.polynomials.len()).collect();
+            accumulator.append_sparse(
+                transcript,
+                group.polynomials,
+                group.sumcheck,
+                address.to_vec(),
+                cycle.to_vec(),
+                group_claims,
+            );
+        }
+        return;
+    }
     for ((&id, point), &claim) in relation.produced().iter().zip(points).zip(claims) {
         match id.polynomial {
             PolynomialId::Virtual(_) => accumulator.append_virtual(

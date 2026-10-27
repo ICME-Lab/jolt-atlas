@@ -1,19 +1,15 @@
 //! The prover side of [`super`].
 
 use super::*;
-use crate::{
-    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams,
-};
+use crate::relation::prover::RelationWitness;
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
 };
-use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
@@ -21,56 +17,52 @@ use jolt_sumcheck::{ProveRounds, SumcheckError};
 #[derive(Allocative)]
 pub struct HammingWeightSumcheckProver<F: JoltField> {
     ra: Vec<MultilinearPolynomial<F>>,
+    gamma_powers: Vec<F>,
     #[allocative(skip)]
-    params: HammingWeightSumcheckParams<F>,
+    relation: HammingWeightRelation,
+    #[allocative(skip)]
+    setup: RelationSetup<F>,
 }
 
 impl<F: JoltField> HammingWeightSumcheckProver<F> {
     pub fn gen(params: HammingWeightSumcheckParams<F>, G: Vec<Vec<F>>) -> Self {
         let ra = G.into_iter().map(MultilinearPolynomial::from).collect();
-        Self { ra, params }
+        let gamma_powers = params.gamma_powers.clone();
+        let (relation, setup) = params.into_parts();
+        Self {
+            ra,
+            gamma_powers,
+            relation,
+            setup,
+        }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for HammingWeightSumcheckProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> RelationWitness<F> for HammingWeightSumcheckProver<F> {
+    type Relation = HammingWeightRelation;
+
+    fn relation(&self) -> &HammingWeightRelation {
+        &self.relation
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let claims: Vec<F> = self.ra.iter().map(|ra| ra.final_claim()).collect();
-
-        accumulator.append_sparse(
-            transcript,
-            self.params.polynomial_types.clone(),
-            self.params.sumcheck_id,
-            opening_point.r,
-            self.params.r_cycle.clone(),
-            claims,
-        );
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
     }
 
-    #[cfg(feature = "allocative")]
-    fn update_flamegraph(&self, flamegraph: &mut FlameGraphBuilder) {
-        flamegraph.visit_root(self);
+    fn produced_claims(&self) -> Vec<F> {
+        self.ra.iter().map(|ra| ra.final_claim()).collect()
     }
 }
+
+crate::relation_witness_instance!([F: JoltField] HammingWeightSumcheckProver<F>);
 
 impl<F: JoltField> HammingWeightSumcheckProver<F> {
-    #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::round_message", fields(variant = ?self.params.sumcheck_id))]
+    #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::round_message", fields(variant = ?self.relation.sumcheck_id()))]
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let prover_msg = self
             .ra
             .par_iter()
-            .zip(self.params.gamma_powers.par_iter())
+            .zip(self.gamma_powers.par_iter())
             .with_min_len(par_enabled())
             .map(|(ra, gamma)| {
                 let ra_sum = (0..ra.len() / 2)
@@ -89,7 +81,7 @@ impl<F: JoltField> HammingWeightSumcheckProver<F> {
         UnivariatePoly::from_evals_and_hint(previous_claim, &[eval_at_0])
     }
 
-    #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::bind", fields(variant = ?self.params.sumcheck_id))]
+    #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::bind", fields(variant = ?self.relation.sumcheck_id()))]
     fn bind(&mut self, r: F, _round: usize) {
         let r_j = F::challenge_from_field(r);
         self.ra
@@ -101,7 +93,7 @@ impl<F: JoltField> HammingWeightSumcheckProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for HammingWeightSumcheckProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.relation.rounds()
     }
 
     fn prove_round(
@@ -117,7 +109,7 @@ impl<F: JoltField> ProveRounds<F> for HammingWeightSumcheckProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.relation.rounds() - 1);
         Ok(())
     }
 }

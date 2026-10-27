@@ -1,10 +1,10 @@
 use crate::relation::Produces;
 use crate::{
     config::OneHotParams,
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     relation::{
         low_to_high_point, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
-        RelationOpening, RelationSetup, RelationVerifier,
+        RelationOpening, RelationSetup, RelationVerifier, SparseGroup,
     },
     sumcheck_verifier::SumcheckInstanceParams,
 };
@@ -15,7 +15,6 @@ use atlas_algebra::{
         opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
     },
 };
-use atlas_transcript::Transcript;
 use common::CommittedPoly;
 use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
@@ -140,25 +139,17 @@ impl<F: JoltField> Relation<F> for RaVirtualizationRelation {
             .collect()
     }
 
-    fn append_produced_requests<T: Transcript>(
-        &self,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) {
-        for (i, point) in self
-            .opening_points(setup, challenges)
-            .into_iter()
-            .enumerate()
-        {
-            accumulator.append_sparse(
-                transcript,
-                vec![self.polynomial_types[i]],
-                SumcheckId::RaVirtualization,
-                point,
-            );
-        }
+    fn sparse_groups(&self) -> Option<Vec<SparseGroup>> {
+        Some(
+            self.polynomial_types[..self.one_hot_params.instruction_d]
+                .iter()
+                .map(|&poly| SparseGroup {
+                    polynomials: vec![poly],
+                    sumcheck: SumcheckId::RaVirtualization,
+                    address_vars: self.one_hot_params.log_k_chunk,
+                })
+                .collect(),
+        )
     }
 
     fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
@@ -198,7 +189,7 @@ impl<F: JoltField> RaSumcheckParams<F> {
 #[cfg(test)]
 mod tests {
     use super::prover::*;
-    use crate::opening_proof::prover::ProverOpeningAccumulator;
+    use crate::opening_proof::{prover::ProverOpeningAccumulator, VerifierOpeningAccumulator};
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use common::parallel::par_enabled;
     use common::CommittedPoly;

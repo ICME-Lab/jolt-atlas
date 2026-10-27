@@ -5,23 +5,20 @@ use common::VirtualPoly;
 use rayon::prelude::*;
 
 use crate::{
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
+    opening_proof::{OpeningId, SumcheckId},
     relation::{
         Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId, RelationOpening,
         RelationSetup, RelationVerifier,
     },
-    sumcheck_verifier::SumcheckInstanceParams,
 };
-use atlas_algebra::{
-    field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
-};
+use atlas_algebra::field::JoltField;
 use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// Degree bound of the sumcheck round polynomials in [`HammingBooleanityRelation`].
 const DEGREE_BOUND: usize = 3;
 
+#[derive(Clone)]
 pub struct HammingBooleanitySumcheckParams<F: JoltField> {
     pub d: usize,
     pub num_rounds: usize,
@@ -29,27 +26,6 @@ pub struct HammingBooleanitySumcheckParams<F: JoltField> {
     pub polynomial_types: Vec<VirtualPoly>,
     pub sumcheck_id: SumcheckId,
     pub r_cycle: Vec<F>,
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for HammingBooleanitySumcheckParams<F> {
-    fn num_rounds(&self) -> usize {
-        self.num_rounds
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        F::zero()
-    }
-
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    // output = eq_eval * Σ_i gamma^i * hw_i * (hw_i - 1)
-    //        = Σ_i [Challenge(2i) * Opening(hw_i)^2 + Challenge(2i+1) * Opening(hw_i)]
 }
 
 /// `Σ_t eq(r_cycle, t) · Σ_i γ^i · hw_i(t)·(hw_i(t) − 1) = 0`: every Hamming-weight indicator
@@ -67,6 +43,13 @@ pub struct HammingBooleanityRelation {
     num_rounds: usize,
     polynomial_types: Vec<VirtualPoly>,
     sumcheck_id: SumcheckId,
+}
+
+impl HammingBooleanityRelation {
+    /// The sumcheck the indicators' openings come from.
+    pub fn sumcheck_id(&self) -> SumcheckId {
+        self.sumcheck_id
+    }
 }
 
 impl SymbolicSumcheck for HammingBooleanityRelation {
@@ -123,7 +106,7 @@ pub type HammingBooleanitySumcheckVerifier<F> = RelationVerifier<F, HammingBoole
 
 impl<F: JoltField> HammingBooleanitySumcheckParams<F> {
     /// The relation these parameters instantiate, with its setup.
-    pub fn into_verifier(self) -> HammingBooleanitySumcheckVerifier<F> {
+    pub fn into_parts(self) -> (HammingBooleanityRelation, RelationSetup<F>) {
         let setup = RelationSetup {
             incoming_point: self.r_cycle,
             challenges: self
@@ -133,15 +116,19 @@ impl<F: JoltField> HammingBooleanitySumcheckParams<F> {
                 .map(|(i, gamma)| (RelationChallenge::Batching(i), gamma))
                 .collect(),
         };
-        RelationVerifier::at(
-            HammingBooleanityRelation {
-                d: self.d,
-                num_rounds: self.num_rounds,
-                polynomial_types: self.polynomial_types,
-                sumcheck_id: self.sumcheck_id,
-            },
-            setup,
-        )
+        let relation = HammingBooleanityRelation {
+            d: self.d,
+            num_rounds: self.num_rounds,
+            polynomial_types: self.polynomial_types,
+            sumcheck_id: self.sumcheck_id,
+        };
+        (relation, setup)
+    }
+
+    /// The verifier of the check.
+    pub fn into_verifier(self) -> HammingBooleanitySumcheckVerifier<F> {
+        let (relation, setup) = self.into_parts();
+        RelationVerifier::at(relation, setup)
     }
 }
 
@@ -152,6 +139,7 @@ mod tests {
     use crate::opening_proof::VerifierOpeningAccumulator;
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::field::IntoOpening;
+    use atlas_algebra::poly::opening_point::{OpeningPoint, BIG_ENDIAN};
     use jolt_field::Ring;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
@@ -185,7 +173,7 @@ mod tests {
 
         let hw: Vec<Fr> = (0..T).map(|_| Fr::from_u32(rng.next_u32() % 2)).collect();
 
-        let mut prover = HammingBooleanitySumcheckProver::gen(params, vec![hw]);
+        let mut prover = HammingBooleanitySumcheckProver::gen(params.clone(), vec![hw]);
 
         let (proof, _) =
             Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
@@ -204,7 +192,7 @@ mod tests {
                 .insert(*key, (empty_point, *value));
         }
 
-        let verifier = prover.params.into_verifier();
+        let verifier = params.into_verifier();
         Sumcheck::verify(
             &proof,
             &verifier,

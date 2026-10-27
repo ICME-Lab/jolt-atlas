@@ -1,23 +1,18 @@
 //! The prover side of [`super`].
 
 use super::*;
-use crate::{
-    opening_proof::{prover::ProverOpeningAccumulator, OpeningId},
-    sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams,
-    upstream_sumcheck::round_check_failed,
-};
+use crate::relation::prover::RelationWitness;
+use crate::upstream_sumcheck::round_check_failed;
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         split_eq_poly::SplitEqUnreducedFold,
     },
 };
-use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
@@ -27,55 +22,49 @@ pub struct HammingBooleanitySumcheckProver<F: JoltField> {
     hw: Vec<MultilinearPolynomial<F>>,
     #[allocative(skip)]
     eq_r: GruenSplitEqPolynomial<F>,
+    gamma_powers: Vec<F>,
     #[allocative(skip)]
-    pub(super) params: HammingBooleanitySumcheckParams<F>,
+    relation: HammingBooleanityRelation,
+    #[allocative(skip)]
+    setup: RelationSetup<F>,
 }
 
 impl<F: JoltField> HammingBooleanitySumcheckProver<F> {
     pub fn gen(params: HammingBooleanitySumcheckParams<F>, G: Vec<Vec<F>>) -> Self {
         let hw = G.into_iter().map(MultilinearPolynomial::from).collect();
         let eq_r = GruenSplitEqPolynomial::new(&params.r_cycle, jolt_poly::BindingOrder::LowToHigh);
-
-        Self { hw, eq_r, params }
+        let gamma_powers = params.gamma_powers.clone();
+        let (relation, setup) = params.into_parts();
+        Self {
+            hw,
+            eq_r,
+            gamma_powers,
+            relation,
+            setup,
+        }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T>
-    for HammingBooleanitySumcheckProver<F>
-{
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> RelationWitness<F> for HammingBooleanitySumcheckProver<F> {
+    type Relation = HammingBooleanityRelation;
+
+    fn relation(&self) -> &HammingBooleanityRelation {
+        &self.relation
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let claims: Vec<F> = self.hw.iter().map(|hw| hw.final_claim()).collect();
-
-        self.params
-            .polynomial_types
-            .iter()
-            .zip(claims)
-            .for_each(|(&poly_type, claim)| {
-                let id = OpeningId::new(poly_type, self.params.sumcheck_id);
-                accumulator.append_virtual(transcript, id, opening_point.clone(), claim);
-            });
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
     }
 
-    #[cfg(feature = "allocative")]
-    fn update_flamegraph(&self, flamegraph: &mut FlameGraphBuilder) {
-        flamegraph.visit_root(self);
+    fn produced_claims(&self) -> Vec<F> {
+        self.hw.iter().map(|hw| hw.final_claim()).collect()
     }
 }
+
+crate::relation_witness_instance!([F: JoltField] HammingBooleanitySumcheckProver<F>);
 
 impl<F: JoltField> HammingBooleanitySumcheckProver<F> {
-    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::bind", fields(variant = ?self.params.sumcheck_id))]
+    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::bind", fields(variant = ?self.relation.sumcheck_id()))]
     fn bind(&mut self, r: F) {
         let r_j = F::challenge_from_field(r);
         self.hw
@@ -88,10 +77,10 @@ impl<F: JoltField> HammingBooleanitySumcheckProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for HammingBooleanitySumcheckProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.relation.rounds()
     }
 
-    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::prove_round", fields(variant = ?self.params.sumcheck_id))]
+    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::prove_round", fields(variant = ?self.relation.sumcheck_id()))]
     fn prove_round(
         &mut self,
         bind: Option<F>,
@@ -102,7 +91,7 @@ impl<F: JoltField> ProveRounds<F> for HammingBooleanitySumcheckProver<F> {
             self.bind(r);
         }
         let Self { hw, eq_r, .. } = self;
-        let gamma_powers = &self.params.gamma_powers;
+        let gamma_powers = &self.gamma_powers;
 
         let [q_constant, q_quadratic] = hw
             .par_iter()

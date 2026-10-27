@@ -24,7 +24,7 @@ use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use rayon::prelude::*;
 
-use crate::{opening_proof::VerifierOpeningAccumulator, sumcheck_verifier::SumcheckInstanceParams};
+use crate::opening_proof::VerifierOpeningAccumulator;
 use atlas_algebra::poly::{
     identity_poly::IdentityPolynomial,
     multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
@@ -93,27 +93,6 @@ impl<F: JoltField> ReadRafParams<F> {
             log_K: provider.log_K(),
         }
     }
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
-    fn degree(&self) -> usize {
-        READ_RAF_DEGREE_BOUND
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.rv_claim + self.gamma * self.raf_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<BIG_ENDIAN, F>::new(challenges.to_vec())
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.log_K
-    }
-
-    // output = ra_claim * (val_claim + gamma * int_claim)
-    //        = Challenge(0) * Opening(ra)
 }
 
 /// A lookup into a small public table as a relation: over the address hypercube,
@@ -198,6 +177,12 @@ pub type ReadRafVerifier<F> = RelationVerifier<F, ReadRafRelation>;
 impl<F: JoltField> ReadRafParams<F> {
     /// The relation these parameters instantiate over `table`, with its setup.
     pub fn into_verifier(self, table: Vec<i32>) -> ReadRafVerifier<F> {
+        let (relation, setup) = self.into_parts(table);
+        RelationVerifier::at(relation, setup)
+    }
+
+    /// The relation over `table` these parameters instantiate, with its setup.
+    pub fn into_parts(self, table: Vec<i32>) -> (ReadRafRelation, RelationSetup<F>) {
         let setup = RelationSetup {
             incoming_point: self.r,
             challenges: vec![
@@ -206,15 +191,13 @@ impl<F: JoltField> ReadRafParams<F> {
                 (RelationChallenge::SecondClaim, self.raf_claim),
             ],
         };
-        RelationVerifier::at(
-            ReadRafRelation {
-                table,
-                log_K: self.log_K,
-                ra_vp: self.ra_vp,
-                ra_sid: self.ra_sid,
-            },
-            setup,
-        )
+        let relation = ReadRafRelation {
+            table,
+            log_K: self.log_K,
+            ra_vp: self.ra_vp,
+            ra_sid: self.ra_sid,
+        };
+        (relation, setup)
     }
 }
 

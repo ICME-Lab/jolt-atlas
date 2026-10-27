@@ -1,14 +1,10 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::relation::prover::RelationWitness;
 use crate::{
-    booleanity::prover::BooleanitySumcheckProver,
-    opening_proof::{OpeningAccumulator, OpeningId},
-    ra_virtual::prover::RaSumcheckProver,
-    sumcheck::prover::SumcheckInstanceProver,
-};
-use crate::{
-    opening_proof::prover::ProverOpeningAccumulator, sumcheck_verifier::SumcheckInstanceParams,
+    booleanity::prover::BooleanitySumcheckProver, opening_proof::OpeningAccumulator,
+    ra_virtual::prover::RaSumcheckProver, sumcheck::prover::SumcheckInstanceProver,
 };
 use atlas_algebra::poly::{
     identity_poly::IdentityPolynomial,
@@ -17,9 +13,7 @@ use atlas_algebra::poly::{
     },
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
-    poly::eq_poly::EqPolynomial,
-    utils::thread::unsafe_allocate_zero_vec,
+    field::JoltField, poly::eq_poly::EqPolynomial, utils::thread::unsafe_allocate_zero_vec,
 };
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
@@ -40,7 +34,9 @@ pub fn read_raf_prover<F: JoltField, T: Transcript>(
 
 /// Prover state for lookups into small tables.
 pub struct ReadRafProver<F: JoltField> {
-    params: ReadRafParams<F>,
+    relation: ReadRafRelation,
+    setup: RelationSetup<F>,
+    gamma: F,
     val: MultilinearPolynomial<F>,
     G: MultilinearPolynomial<F>,
     int: IdentityPolynomial<F>,
@@ -73,36 +69,37 @@ impl<F: JoltField> ReadRafProver<F> {
                 },
             );
         let val = MultilinearPolynomial::from(table.to_vec());
+        let int = IdentityPolynomial::new(params.log_K);
+        let gamma = params.gamma;
+        let (relation, setup) = params.into_parts(table.to_vec());
         Self {
-            int: IdentityPolynomial::new(params.log_K),
-            params,
+            int,
+            relation,
+            setup,
+            gamma,
             val,
             G: MultilinearPolynomial::from(G),
         }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ReadRafProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> RelationWitness<F> for ReadRafProver<F> {
+    type Relation = ReadRafRelation;
+
+    fn relation(&self) -> &ReadRafRelation {
+        &self.relation
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let sc_challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
-        let opening_point = [&sc_challenges, self.params.r.as_slice()].concat();
-        accumulator.append_virtual(
-            transcript,
-            OpeningId::new(self.params.ra_vp, self.params.ra_sid),
-            opening_point.into(),
-            self.G.final_claim(),
-        );
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.G.final_claim()]
     }
 }
+
+crate::relation_witness_instance!([F: JoltField] ReadRafProver<F>);
 
 impl<F: JoltField> ReadRafProver<F> {
     #[tracing::instrument(name = "ReadRafProver::round_message", skip_all)]
@@ -119,8 +116,8 @@ impl<F: JoltField> ReadRafProver<F> {
                 let int_evals =
                     int.sumcheck_evals(i, READ_RAF_DEGREE_BOUND, BindingOrder::HighToLow);
                 [
-                    g_evals[0] * (val_evals[0] + self.params.gamma * int_evals[0]),
-                    g_evals[1] * (val_evals[1] + self.params.gamma * int_evals[1]),
+                    g_evals[0] * (val_evals[0] + self.gamma * int_evals[0]),
+                    g_evals[1] * (val_evals[1] + self.gamma * int_evals[1]),
                 ]
             })
             .reduce(
@@ -140,7 +137,7 @@ impl<F: JoltField> ReadRafProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for ReadRafProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.relation.rounds()
     }
 
     fn prove_round(
@@ -156,7 +153,7 @@ impl<F: JoltField> ProveRounds<F> for ReadRafProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.relation.rounds() - 1);
         Ok(())
     }
 }

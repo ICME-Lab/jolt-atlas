@@ -1,7 +1,11 @@
 use crate::node_view::ComputationNode;
-use crate::utils::opening_access::{AccOpeningAccessor, Target};
+use crate::onnx_proof::relation::{
+    low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
+    RelationId, RelationOpening, RelationSetup, RelationVerifier,
+};
+use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
@@ -9,11 +13,12 @@ use atlas_algebra::{
     utils::{index_to_field_bitvector, math::Math},
 };
 use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    opening_proof::{OpeningAccumulator, OpeningId},
+    sumcheck_verifier::SumcheckInstanceParams,
 };
-use atlas_transcript::Transcript;
 use common::VirtualPoly;
+use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 
 /// Degree of the max-indicator sumcheck.
 pub const DEGREE_BOUND: usize = 3;
@@ -99,71 +104,86 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MaxIndicatorParams<F> {
     // e_claim is verifier-computable from argmax_k, folded into Challenge(0)
 }
 
-/// Verifier for the max indicator sumcheck instance.
-pub struct MaxIndicatorVerifier<F: JoltField> {
-    params: MaxIndicatorParams<F>,
-}
-
-impl<F: JoltField> MaxIndicatorVerifier<F> {
-    /// Create new verifier for max indicator sumcheck.
-    pub fn new(
-        node: ComputationNode,
-        F_N: [usize; 2],
-        argmax_k: Vec<usize>,
-        input_claim: F,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Self {
-        let params = MaxIndicatorParams::new(node, F_N, argmax_k, input_claim, accumulator);
-        Self { params }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MaxIndicatorVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> MaxIndicatorParams<F> {
+    /// The verifier of the row maxima, set up at the exponent point's row coordinates.
+    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
+        let setup = RelationSetup {
+            incoming_point: self.r1_k.clone(),
+            challenges: vec![(RelationChallenge::Claim, self.input_claim)],
+        };
+        RelationVerifier::at(self, setup)
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .into_provider(transcript, opening_point);
-        provider.append_nodeio(Target::Input(0));
-    }
-
-    #[tracing::instrument(name = "SoftmaxLastAxisVerifier::expected_output_claim", skip_all)]
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let r_sc = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.node);
-        let X_claim = accessor.get_nodeio(Target::Input(0)).1;
-
-        // Evaluate e(r_sc) in O(F · log N) by exploiting sparsity:
-        // e has exactly F nonzero entries at positions k·N + argmax_k[k],
-        // so ẽ(r_k, r_j) = Σ_k eq(r_k, bits(k)) · eq(r_j, bits(argmax_k[k]))
-        let (r_k, r_j) = r_sc.split_at(self.params.log_F());
-        let eq_k_evals = EqPolynomial::evals(r_k);
-        let log_n = r_j.len();
-        let e_claim: F = eq_k_evals
+    /// `e(r)`, the argmax indicator's MLE, in `O(F·log N)`: `e` has one nonzero per row, at
+    /// `k·N + argmax_k[k]`, so `e(r_k, r_j) = Σ_k eq(r_k, k)·eq(r_j, argmax_k[k])`.
+    fn indicator_at(&self, r: &[F]) -> F {
+        let (r_k, r_j) = r.split_at(self.log_F());
+        EqPolynomial::evals(r_k)
             .iter()
-            .zip(self.params.argmax_k.iter())
+            .zip(self.argmax_k.iter())
             .map(|(&eq_k, &argmax_j)| {
-                let y = index_to_field_bitvector::<F>(argmax_j as u64, log_n);
+                let y = index_to_field_bitvector::<F>(argmax_j as u64, r_j.len());
                 eq_k * EqPolynomial::mle(r_j, &y)
             })
-            .sum();
-        EqPolynomial::mle(&self.params.r1_k, r_k) * e_claim * X_claim
+            .sum()
+    }
+}
+
+/// The row maxima as reads of the input at the public argmax:
+///
+/// ```text
+/// input claim   max(r_k)                              (verifier-computed from the claimed maxima)
+/// output claim  eq(r_k, ρ_k) · e(ρ) · x(ρ)            (e the argmax indicator)
+/// ```
+///
+/// **S ⊆ R.** `e` is one at each row's argmax and zero elsewhere, so `Σ_j e[k, j]·x[k, j]` is
+/// the input at the argmax, the claimed `max_k`.
+impl<F: JoltField> SymbolicSumcheck for MaxIndicatorParams<F> {
+    crate::atlas_relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
+    }
+
+    fn id() -> RelationId {
+        RelationId::SoftmaxMax
+    }
+
+    fn rounds(&self) -> usize {
+        self.F_N.iter().product::<usize>().log_2()
+    }
+
+    fn degree(&self) -> usize {
+        DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        challenge(RelationChallenge::Claim)
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        derived::<G, _, _, _>(RelationDerived::RetainedEq)
+            * derived(RelationDerived::Indicator)
+            * opening(RelationOpening::Id(self.produced()[0]))
+    }
+}
+
+impl<F: JoltField> Produces for MaxIndicatorParams<F> {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))]
+    }
+}
+
+impl<F: JoltField> Relation<F> for MaxIndicatorParams<F> {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        let point = low_to_high_point(challenges);
+        match id {
+            RelationDerived::RetainedEq => {
+                EqPolynomial::mle(&setup.incoming_point, &point[..self.log_F()])
+            }
+            RelationDerived::Indicator => self.indicator_at(&point),
+            other => panic!("{other:?} is not derived by this relation"),
+        }
     }
 }

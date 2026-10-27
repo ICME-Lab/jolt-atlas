@@ -1,18 +1,20 @@
 use crate::node_view::ComputationNode;
-use crate::utils::opening_access::AccOpeningAccessor;
+use crate::onnx_proof::relation::{
+    Produces, Relation, RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
+    RelationVerifier,
+};
+use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
-    poly::{
-        eq_poly::EqPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
-    },
+    field::JoltField,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
 };
 use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    opening_proof::{OpeningAccumulator, OpeningId},
+    sumcheck_verifier::SumcheckInstanceParams,
 };
-use atlas_transcript::Transcript;
 use common::VirtualPoly;
+use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 
 /// Degree of the exponentiation product sumcheck.
 pub const DEGREE_BOUND: usize = 3;
@@ -64,51 +66,71 @@ impl<F: JoltField> SumcheckInstanceParams<F> for MultParams<F> {
     // output = eq_eval * exp_hi * exp_lo = Challenge(0) * Opening(exp_hi) * Opening(exp_lo)
 }
 
-/// Verifier for softmax exp multiplication.
-pub struct MultVerifier<F: JoltField> {
-    params: MultParams<F>,
-}
+impl<F: JoltField> MultParams<F> {
+    /// The verifier of the product, set up at the exponent's opening point.
+    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
+        let setup = RelationSetup {
+            incoming_point: self.r.clone(),
+            challenges: vec![],
+        };
+        RelationVerifier::at(self, setup)
+    }
 
-impl<F: JoltField> MultVerifier<F> {
-    /// Create new verifier for softmax exp multiplication operation.
-    pub fn new(node: ComputationNode, S: i32, accumulator: &VerifierOpeningAccumulator<F>) -> Self {
-        let params = MultParams::new(node, S, accumulator);
-        Self { params }
+    fn advice(&self, poly: fn(usize) -> VirtualPoly) -> RelationOpening {
+        RelationOpening::Id(OpeningIdBuilder::new(&self.node).advice(poly))
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for MultVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+/// The exponent's split into its two table digits:
+///
+/// ```text
+/// input claim   S·exp_q(r) + R(r)
+/// output claim  eq(r, ρ) · exp_hi(ρ) · exp_lo(ρ)
+/// ```
+///
+/// **S ⊆ R.** The quantized exponent is the digits' product rescaled by `S`, with remainder `R`
+/// (range-checked elsewhere): `S·exp_q + R = exp_hi·exp_lo` on the hypercube.
+impl<F: JoltField> SymbolicSumcheck for MultParams<F> {
+    crate::atlas_relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .into_provider(transcript, opening_point);
-        provider.append_advice(VirtualPoly::SoftmaxExpHi);
-        provider.append_advice(VirtualPoly::SoftmaxExpLo);
+    fn id() -> RelationId {
+        RelationId::SoftmaxExpProduct
     }
 
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let r_sc = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.node);
-        let exp_hi_claim = accessor.get_advice(VirtualPoly::SoftmaxExpHi).1;
-        let exp_lo_claim = accessor.get_advice(VirtualPoly::SoftmaxExpLo).1;
-        EqPolynomial::mle(&self.params.r, &r_sc) * exp_lo_claim * exp_hi_claim
+    fn rounds(&self) -> usize {
+        self.r.len()
+    }
+
+    fn degree(&self) -> usize {
+        DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        constant::<G, _, _, _>(G::from_i64(self.S as i64))
+            * opening(self.advice(VirtualPoly::SoftmaxExpQ))
+            + opening(self.advice(VirtualPoly::SoftmaxExpRemainder))
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        derived::<G, _, _, _>(RelationDerived::Eq)
+            * opening(self.advice(VirtualPoly::SoftmaxExpHi))
+            * opening(self.advice(VirtualPoly::SoftmaxExpLo))
     }
 }
+
+impl<F: JoltField> Produces for MultParams<F> {
+    fn produced(&self) -> Vec<OpeningId> {
+        let builder = OpeningIdBuilder::new(&self.node);
+        vec![
+            builder.advice(VirtualPoly::SoftmaxExpHi),
+            builder.advice(VirtualPoly::SoftmaxExpLo),
+        ]
+    }
+}
+
+impl<F: JoltField> Relation<F> for MultParams<F> {}

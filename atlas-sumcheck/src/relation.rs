@@ -70,6 +70,11 @@ pub enum RelationDerived {
     Identity,
     /// A read-raf check's read-address claim at its bound address point.
     Raf,
+    /// The MLE of verifier-known per-row data at the row (leading) coordinates of the bound
+    /// point.
+    RowPublic,
+    /// The MLE of a public one-hot indicator at the bound point.
+    Indicator,
 }
 
 /// A coefficient of a relation: a Fiat-Shamir challenge drawn in its setup, or a field value its
@@ -155,6 +160,14 @@ pub enum RelationId {
     TrigTable,
     /// A gather's read of its dictionary.
     Gather,
+    /// Softmax: the output as the exponents times the rows' inverse sums.
+    SoftmaxRecipProduct,
+    /// Softmax: the row sums of the exponents.
+    SoftmaxExpSum,
+    /// Softmax: the row maxima read at the argmax.
+    SoftmaxMax,
+    /// Softmax: the exponent as the product of its two table digits.
+    SoftmaxExpProduct,
 }
 
 /// A relation's expression over atlas openings.

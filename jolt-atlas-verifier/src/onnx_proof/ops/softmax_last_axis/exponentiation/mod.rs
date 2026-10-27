@@ -10,7 +10,7 @@ use atlas_sumcheck::{
     shout::ReadRafProvider,
 };
 use common::VirtualPoly;
-pub use mult::{MultParams, MultVerifier};
+pub use mult::MultParams;
 
 /// Exp multiplication relation prover/verifier.
 pub mod mult;

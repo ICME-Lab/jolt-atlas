@@ -19,11 +19,11 @@ use crate::{
         deferred_lookups::{DeferredBatch, DeferredOneHot},
         op_lookups::OpLookupProvider,
         ops::softmax_last_axis::{
-            exp_sum::ExpSumVerifier,
-            exponentiation::{mult::MultVerifier, ExpDigit, ExpReadRafProvider},
-            max::MaxIndicatorVerifier,
+            exp_sum::ExpSumParams,
+            exponentiation::{mult::MultParams, ExpDigit, ExpReadRafProvider},
+            max::MaxIndicatorParams,
             rc::{SoftmaxRCProvider, SoftmaxRaEncoding},
-            recip_mult::RecipMultVerifier,
+            recip_mult::{RecipMultParams, RecipMultRelation},
             significance_clamp::SoftmaxSignificanceClampOperands,
         },
         ProofId, ProofType, Verifier,
@@ -389,20 +389,23 @@ impl SoftmaxLastAxisVerifier {
         scale_bits: i32,
     ) -> Result<Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>, ProofVerifyError> {
         let inv_sum = self.inv_sum_evals(&*accumulator)?;
-        let recip_mult_verifier = RecipMultVerifier::new(
-            self.computation_node.clone(),
-            self.scale,
-            self.F_N,
+        let recip_mult_verifier = RecipMultRelation::verifier(
+            RecipMultParams::new(
+                self.computation_node.clone(),
+                self.scale,
+                self.F_N,
+                &*accumulator,
+                transcript,
+            ),
             inv_sum,
-            &*accumulator,
-            transcript,
         );
-        let exp_sum_verifier = ExpSumVerifier::new(
+        let exp_sum_verifier = ExpSumParams::new(
             self.computation_node.clone(),
             self.F_N,
             &*accumulator,
             transcript,
-        );
+        )
+        .into_verifier();
         let rc_provider =
             SoftmaxRCProvider::remainder(self.computation_node.clone(), scale_bits as u8);
         let rc_R_verifier = identity_rangecheck_verifier(&rc_provider, accumulator);
@@ -442,16 +445,18 @@ impl SoftmaxLastAxisVerifier {
         let r1_k = r1.split_at(log_f).0;
 
         let max_k_eval = self.max_k.evaluate_mle(&r1_k.r);
-        let max_indicator_verifier = MaxIndicatorVerifier::new(
+        let max_indicator_verifier = MaxIndicatorParams::new(
             self.computation_node.clone(),
             self.F_N,
             self.argmax_k.clone(),
             max_k_eval,
             &*accumulator,
-        );
+        )
+        .into_verifier();
 
         let exp_mult_verifier =
-            MultVerifier::new(self.computation_node.clone(), self.scale, &*accumulator);
+            MultParams::new(self.computation_node.clone(), self.scale, &*accumulator)
+                .into_verifier();
 
         let rc_provider =
             SoftmaxRCProvider::exp_remainder(self.computation_node.clone(), scale_bits as u8);

@@ -1,7 +1,11 @@
 use crate::node_view::ComputationNode;
-use crate::utils::opening_access::AccOpeningAccessor;
+use crate::onnx_proof::relation::{
+    low_to_high_point, Produces, Relation, RelationDerived, RelationExpr, RelationId,
+    RelationOpening, RelationSetup, RelationVerifier,
+};
+use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
@@ -10,11 +14,13 @@ use atlas_algebra::{
     utils::math::Math,
 };
 use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    opening_proof::{OpeningAccumulator, OpeningId},
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
+use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 
 /// Degree of the reciprocal-multiplication sumcheck.
 pub const DEGREE_BOUND: usize = 3;
@@ -64,7 +70,7 @@ impl<F: JoltField> RecipMultParams<F> {
     }
 
     /// Returns log2 of the leading-dimension product `F`.
-    fn log_F(&self) -> usize {
+    pub fn log_F(&self) -> usize {
         self.F().log_2()
     }
 
@@ -100,67 +106,82 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RecipMultParams<F> {
     // Challenge(0) = eq_eval * inv_sum_claim (inv_sum is verifier-known)
 }
 
-/// Verifier for reciprocal multiplication in softmax.
-pub struct RecipMultVerifier<F: JoltField> {
+/// The softmax output as the exponents times the rows' inverse sums:
+///
+/// ```text
+/// input claim   S·out(r) + R(r)
+/// output claim  eq(r, ρ) · exp_q(ρ) · inv_sum(ρ_k)    (ρ_k the row coordinates of ρ)
+/// ```
+///
+/// **S ⊆ R.** `S·out[k, j] + R[k, j] = exp_q[k, j]·inv_sum[k]` on the hypercube, with remainder
+/// `R` range-checked elsewhere; `inv_sum` is verifier-computed from the claimed row sums.
+pub struct RecipMultRelation<F: JoltField> {
     params: RecipMultParams<F>,
-    /// Full inv_sum vector (F elements) — used to evaluate at r_sc_leading.
-    inv_sum_evals: Vec<F>,
+    inv_sum: Vec<F>,
 }
 
-impl<F: JoltField> RecipMultVerifier<F> {
-    /// Create new verifier for reciprocal multiplication.
-    pub fn new(
-        node: ComputationNode,
-        S: i32,
-        F_N: [usize; 2],
-        inv_sum_evals: Vec<F>,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let params = RecipMultParams::new(node, S, F_N, accumulator, transcript);
-        Self {
-            params,
-            inv_sum_evals,
+impl<F: JoltField> RecipMultRelation<F> {
+    /// The verifier of the product, set up at the reduced output point.
+    pub fn verifier(params: RecipMultParams<F>, inv_sum: Vec<F>) -> RelationVerifier<F, Self> {
+        let setup = RelationSetup {
+            incoming_point: params.r.clone(),
+            challenges: vec![],
+        };
+        RelationVerifier::at(Self { params, inv_sum }, setup)
+    }
+
+    fn advice(&self, poly: fn(usize) -> VirtualPoly) -> RelationOpening {
+        RelationOpening::Id(OpeningIdBuilder::new(&self.params.node).advice(poly))
+    }
+}
+
+impl<F: JoltField> SymbolicSumcheck for RecipMultRelation<F> {
+    crate::atlas_relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
+    }
+
+    fn id() -> RelationId {
+        RelationId::SoftmaxRecipProduct
+    }
+
+    fn rounds(&self) -> usize {
+        self.params.r.len()
+    }
+
+    fn degree(&self) -> usize {
+        DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        opening::<G, _, _, _>(RelationOpening::ReducedNodeOutput(self.params.node.idx))
+            * constant(G::from_i64(self.params.S as i64))
+            + opening(self.advice(VirtualPoly::SoftmaxRecipMultRemainder))
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        derived::<G, _, _, _>(RelationDerived::Eq)
+            * opening(self.advice(VirtualPoly::SoftmaxExpQ))
+            * derived(RelationDerived::RowPublic)
+    }
+}
+
+impl<F: JoltField> Produces for RecipMultRelation<F> {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningIdBuilder::new(&self.params.node).advice(VirtualPoly::SoftmaxExpQ)]
+    }
+}
+
+impl<F: JoltField> Relation<F> for RecipMultRelation<F> {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        let point = low_to_high_point(challenges);
+        match id {
+            RelationDerived::Eq => EqPolynomial::mle(&setup.incoming_point, &point),
+            RelationDerived::RowPublic => MultilinearPolynomial::from(self.inv_sum.clone())
+                .evaluate(&point[..self.params.log_F()]),
+            other => panic!("{other:?} is not derived by this relation"),
         }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RecipMultVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        // Only cache exp_q — inv_sum is verifier-known.
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .into_provider(transcript, opening_point);
-        provider.append_advice(VirtualPoly::SoftmaxExpQ);
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let r_sc = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let exp_q_claim = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .get_advice(VirtualPoly::SoftmaxExpQ)
-            .1;
-        // Evaluate inv_sum MLE at the leading part of the sumcheck challenge point.
-        let r_sc_leading = &r_sc[..self.params.log_F()];
-        let inv_sum_poly = MultilinearPolynomial::from(self.inv_sum_evals.clone());
-        let inv_sum_claim = inv_sum_poly.evaluate(r_sc_leading);
-        EqPolynomial::mle(&self.params.r, &r_sc) * (exp_q_claim * inv_sum_claim)
     }
 }

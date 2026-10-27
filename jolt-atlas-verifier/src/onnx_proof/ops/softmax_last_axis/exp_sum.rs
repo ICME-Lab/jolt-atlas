@@ -1,7 +1,11 @@
 use crate::node_view::ComputationNode;
-use crate::utils::opening_access::AccOpeningAccessor;
+use crate::onnx_proof::relation::{
+    low_to_high_point, Produces, Relation, RelationDerived, RelationExpr, RelationId,
+    RelationOpening, RelationSetup, RelationVerifier,
+};
+use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
@@ -9,11 +13,13 @@ use atlas_algebra::{
     utils::math::Math,
 };
 use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    opening_proof::{OpeningAccumulator, OpeningId},
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
+use jolt_claims::{derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 
 /// Degree of the exp-sum sumcheck.
 pub const DEGREE_BOUND: usize = 2;
@@ -76,56 +82,72 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ExpSumParams<F> {
     // output = eq_eval * exp_q = Challenge(0) * Opening(exp_q)
 }
 
-/// Verifier for exponential sum in softmax.
-pub struct ExpSumVerifier<F: JoltField> {
-    params: ExpSumParams<F>,
-}
-
-impl<F: JoltField> ExpSumVerifier<F> {
-    /// Create new verifier for exponential sum.
-    pub fn new(
-        node: ComputationNode,
-        F_N: [usize; 2],
-        accumulator: &VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let params = ExpSumParams::new(node, F_N, accumulator, transcript);
-        Self { params }
+impl<F: JoltField> ExpSumParams<F> {
+    /// The verifier of the row sums, set up at the reduced output's row coordinates.
+    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
+        let setup = RelationSetup {
+            incoming_point: self.r0_k.clone(),
+            challenges: vec![],
+        };
+        RelationVerifier::at(self, setup)
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ExpSumVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+/// The row sums of the quantized exponents:
+///
+/// ```text
+/// input claim   exp_sum(r_k)
+/// output claim  eq(r_k, ρ_k) · exp_q(ρ)              (ρ_k the row coordinates of ρ)
+/// ```
+///
+/// **S ⊆ R.** `exp_sum[k] = Σ_j exp_q[k, j]`, so summing `eq(r_k, k)·exp_q[k, j]` over the
+/// hypercube gives `exp_sum(r_k)`.
+impl<F: JoltField> SymbolicSumcheck for ExpSumParams<F> {
+    crate::atlas_relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .into_provider(transcript, opening_point);
-        provider.append_advice(VirtualPoly::SoftmaxExpQ);
+    fn id() -> RelationId {
+        RelationId::SoftmaxExpSum
     }
 
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let r_sc = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r;
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.node);
-        let exp_q_claim = accessor.get_advice(VirtualPoly::SoftmaxExpQ).1;
-        // Evaluate inv_sum MLE at the leading part of the sumcheck challenge point.
-        let r1_k = &r_sc[..self.params.log_F()];
-        EqPolynomial::mle(&self.params.r0_k, r1_k) * (exp_q_claim)
+    fn rounds(&self) -> usize {
+        self.log_F() + self.log_N()
+    }
+
+    fn degree(&self) -> usize {
+        DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        opening(RelationOpening::Id(
+            OpeningIdBuilder::new(&self.node).advice(VirtualPoly::SoftmaxExpSum),
+        ))
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        derived::<G, _, _, _>(RelationDerived::RetainedEq)
+            * opening(RelationOpening::Id(self.produced()[0]))
+    }
+}
+
+impl<F: JoltField> Produces for ExpSumParams<F> {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningIdBuilder::new(&self.node).advice(VirtualPoly::SoftmaxExpQ)]
+    }
+}
+
+impl<F: JoltField> Relation<F> for ExpSumParams<F> {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        match id {
+            RelationDerived::RetainedEq => EqPolynomial::mle(
+                &setup.incoming_point,
+                &low_to_high_point(challenges)[..self.log_F()],
+            ),
+            other => panic!("{other:?} is not derived by this relation"),
+        }
     }
 }

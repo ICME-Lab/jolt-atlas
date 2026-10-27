@@ -9,6 +9,7 @@ pub mod cos;
 pub mod division;
 pub mod sin;
 pub mod trig_downscale;
+pub mod trig_table;
 pub mod utils;
 
 use common::consts::MODEL_SCALE;

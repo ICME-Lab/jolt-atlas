@@ -1,5 +1,7 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::neural_teleport::trig_table::TrigTableRelation;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::RelationVerifier;
 use crate::{
     onnx_proof::{
         neural_teleport::{
@@ -14,12 +16,8 @@ use crate::{
     utils::opening_access::AccOpeningAccessor,
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
-    poly::{
-        identity_poly::IdentityPolynomial,
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
-    },
+    field::JoltField,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
     utils::errors::ProofVerifyError,
 };
 use atlas_lookup_tables::{
@@ -27,7 +25,7 @@ use atlas_lookup_tables::{
 };
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     shout::{self, RaOneHotEncoding},
     sumcheck::BatchedSumcheck,
     sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
@@ -36,6 +34,7 @@ use atlas_trace::{op::Cos, Model};
 use atlas_transcript::Transcript;
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
 use common::{CommittedPoly, VirtualPoly};
+use jolt_claims::SymbolicSumcheck;
 
 impl OpLayout for Cos {
     fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
@@ -82,10 +81,9 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Cos {
             &mut verifier.transcript,
         );
 
-        let exec_sumcheck = CosVerifier::new(
-            node.clone(),
-            &verifier.preprocessing.model,
-            &mut verifier.accumulator,
+        let exec_sumcheck = RelationVerifier::<F, TrigTableRelation<CosTable>>::new(
+            TrigTableRelation::new(node.clone()),
+            &verifier.accumulator,
             &mut verifier.transcript,
         );
 
@@ -205,68 +203,6 @@ impl<F: JoltField> SumcheckInstanceParams<F> for CosParams<F> {
     }
 
     // output = ra_claim * (table_claim + gamma * int_eval)
-}
-
-/// Read-Raf sumcheck verifier for the Cos table lookup.
-pub struct CosVerifier<F: JoltField> {
-    params: CosParams<F>,
-    cos_table: MultilinearPolynomial<F>,
-}
-
-impl<F: JoltField> CosVerifier<F> {
-    /// Initialize the verifier state.
-    pub fn new(
-        computation_node: ComputationNode,
-        model: &Model,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let params = CosParams::new(computation_node, model, accumulator, transcript);
-        let cos_table = MultilinearPolynomial::from(CosTable::materialize());
-        Self { params, cos_table }
-    }
-}
-
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for CosVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        let ra_claim = accessor.get_advice(VirtualPoly::CosRa).1;
-        let table_claim = self.cos_table.evaluate(&opening_point.r);
-        let int_eval = IdentityPolynomial::new(COS_TABLE_VARS).evaluate(&opening_point.r);
-
-        ra_claim * (table_claim + self.params.gamma * int_eval)
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let r = [
-            opening_point.r.as_slice(),
-            self.params.r_node_output.r.as_slice(),
-        ]
-        .concat();
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, OpeningPoint::new(r));
-        provider.append_advice(VirtualPoly::CosRa);
-    }
 }
 
 /// One-hot read-address encoding for the Cos table lookup.

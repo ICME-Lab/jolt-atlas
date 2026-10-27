@@ -151,6 +151,8 @@ pub enum RelationId {
     ClampSplit,
     /// A packed bucket's values opened at one point.
     PackedValue,
+    /// A teleported trigonometric op's table lookup.
+    TrigTable,
 }
 
 /// A relation's expression over atlas openings.

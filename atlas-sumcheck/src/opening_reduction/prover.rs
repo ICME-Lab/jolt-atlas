@@ -1,10 +1,9 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::relation::prover::RelationWitness;
 use crate::{
-    opening_proof::{prover::ProverOpeningAccumulator, Opening, OpeningId, SumcheckId},
-    sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams,
+    opening_proof::{prover::ProverOpeningAccumulator, OpeningId, SumcheckId},
     upstream_sumcheck::round_check_failed,
 };
 use allocative::Allocative;
@@ -51,30 +50,43 @@ where
     pub polynomials: Vec<CommittedPoly>,
     /// The ID of the sumcheck these openings originated from
     pub sumcheck_id: SumcheckId,
-    /// (point, `Σ_i coefficients[i]·claims[i]`)
-    pub opening: Opening<F>,
+    /// The group's opening point (big-endian).
+    pub point: Vec<F>,
     /// Per-polynomial claims at the point.
     pub claims: Vec<F>,
     /// Per-polynomial coefficients `ρ^i` (see [`Self::set_coefficients`]).
     pub coefficients: Vec<F>,
     pub sumcheck_claim: Option<F>,
+    #[allocative(skip)]
+    relation: OpeningReductionRelation,
+    #[allocative(skip)]
+    setup: RelationSetup<F>,
 }
 
-impl<F, T: Transcript> SumcheckInstanceProver<F, T> for OpeningProofReductionSumcheckProver<F>
-where
-    F: JoltField,
-{
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.opening
+impl<F: JoltField> RelationWitness<F> for OpeningProofReductionSumcheckProver<F> {
+    type Relation = OpeningReductionRelation;
+
+    fn relation(&self) -> &OpeningReductionRelation {
+        &self.relation
     }
 
-    fn cache_openings(
+    /// The point and the coefficients: the input claim's setup. The reduced claim the output
+    /// expression reads is the prover's own final claim, sent in the proof.
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        Vec::new()
+    }
+
+    /// The group produces no openings; its final claim is cached for the joint opening proof.
+    fn append_claims<T: Transcript>(
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
         _transcript: &mut T,
         _sumcheck_challenges: &[F::Challenge],
     ) {
-        // Cache the final sumcheck claim in the accumulator
         let claim = match &self.prover_state {
             ProverOpening::Dense(opening) => opening.final_claim(),
             ProverOpening::OneHot(opening) => opening.final_claim(),
@@ -82,6 +94,8 @@ where
         accumulator.cache_opening_reduction_claim(self.key(), claim);
     }
 }
+
+crate::relation_witness_instance!([F: JoltField] OpeningProofReductionSumcheckProver<F>);
 
 impl<F: JoltField> OpeningProofReductionSumcheckProver<F> {
     fn bind(&mut self, r: F, round: usize) {
@@ -95,7 +109,7 @@ impl<F: JoltField> OpeningProofReductionSumcheckProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for OpeningProofReductionSumcheckProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.opening)
+        self.relation.rounds()
     }
 
     fn prove_round(
@@ -115,7 +129,7 @@ impl<F: JoltField> ProveRounds<F> for OpeningProofReductionSumcheckProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.opening) - 1);
+        self.bind(bind, self.relation.rounds() - 1);
         Ok(())
     }
 }
@@ -442,15 +456,13 @@ where
             polynomial: None, // Defer initialization until opening proof reduction sumcheck
             eq_poly,
         };
-        Self {
-            polynomials: vec![polynomial],
+        Self::group(
+            vec![polynomial],
             sumcheck_id,
-            opening: (opening_point.into(), claim),
-            claims: vec![claim],
-            coefficients: vec![F::one()],
-            prover_state: opening.into(),
-            sumcheck_claim: None,
-        }
+            opening_point,
+            vec![claim],
+            opening.into(),
+        )
     }
 
     pub fn new_one_hot<U>(
@@ -466,15 +478,43 @@ where
     {
         assert_eq!(polynomials.len(), claims.len());
         let opening = OneHotPolynomialProverOpening::new(eq_address, eq_cycle);
-        let n = polynomials.len();
-        Self {
+        Self::group(
             polynomials,
             sumcheck_id,
-            opening: (opening_point.into(), claims.iter().copied().sum()),
+            opening_point,
             claims,
-            coefficients: vec![F::one(); n],
-            prover_state: opening.into(),
+            opening.into(),
+        )
+    }
+
+    fn group<U>(
+        polynomials: Vec<CommittedPoly>,
+        sumcheck_id: SumcheckId,
+        opening_point: Vec<U>,
+        claims: Vec<F>,
+        prover_state: ProverOpening<F>,
+    ) -> Self
+    where
+        U: Copy + Send + Sync + Into<F>,
+    {
+        let point: Vec<F> = opening_point.into_iter().map(Into::into).collect();
+        let coefficients = vec![F::one(); polynomials.len()];
+        let relation =
+            OpeningReductionRelation::group(polynomials.clone(), sumcheck_id, point.len());
+        let setup = RelationSetup {
+            incoming_point: point.clone(),
+            challenges: coefficient_challenges(&coefficients),
+        };
+        Self {
+            prover_state,
+            polynomials,
+            sumcheck_id,
+            point,
+            claims,
+            coefficients,
             sumcheck_claim: None,
+            relation,
+            setup,
         }
     }
 
@@ -483,7 +523,7 @@ where
         OpeningId::new(self.polynomials[0], self.sumcheck_id)
     }
 
-    /// Fix the in-group coefficients to `ρ^i` and the batched input claim.
+    /// Fix the in-group coefficients to `ρ^i`.
     pub fn set_coefficients(&mut self, rho: F) {
         let mut c = F::one();
         self.coefficients = (0..self.polynomials.len())
@@ -493,12 +533,7 @@ where
                 x
             })
             .collect();
-        self.opening.1 = self
-            .coefficients
-            .iter()
-            .zip(&self.claims)
-            .map(|(c, v)| *c * *v)
-            .sum();
+        self.setup.challenges = coefficient_challenges(&self.coefficients);
     }
 
     #[tracing::instrument(skip_all, name = "OpeningProofReductionSumcheck::prepare_sumcheck")]
@@ -513,14 +548,14 @@ where
             for (poly_id, claim) in self.polynomials.iter().zip(&self.claims) {
                 let poly = polynomials_map.get(poly_id).unwrap();
                 debug_assert_eq!(
-                    poly.evaluate(&self.opening.0.r),
+                    poly.evaluate(&self.point),
                     *claim,
                     "Evaluation mismatch for {:?} {:?}",
                     self.sumcheck_id,
                     poly_id,
                 );
                 let num_vars = poly.get_num_vars();
-                let opening_point_len = self.opening.0.len();
+                let opening_point_len = self.point.len();
                 debug_assert_eq!(
                     num_vars,
                     opening_point_len,

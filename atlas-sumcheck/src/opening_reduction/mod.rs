@@ -4,12 +4,11 @@
 //! The higher-level orchestration remains in `poly/opening_proof.rs`.
 
 use crate::{
-    opening_proof::{Opening, OpeningAccumulator, OpeningId, SumcheckId},
+    opening_proof::{OpeningId, SumcheckId},
     relation::{
         Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
         RelationOpening, RelationSetup, RelationVerifier,
     },
-    sumcheck_verifier::SumcheckInstanceParams,
 };
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
@@ -20,7 +19,6 @@ use atlas_algebra::{
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_point::{OpeningPoint, BIG_ENDIAN},
         ra_poly::RaPolynomial,
     },
     utils::{expanding_table::ExpandingTable, math::Math},
@@ -35,24 +33,6 @@ use std::ops::Mul;
 
 /// Degree of the sumcheck round polynomials in opening reduction.
 pub const OPENING_SUMCHECK_DEGREE: usize = 2;
-
-impl<F: JoltField> SumcheckInstanceParams<F> for Opening<F> {
-    fn degree(&self) -> usize {
-        OPENING_SUMCHECK_DEGREE
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.0.len()
-    }
-
-    fn input_claim(&self, _: &dyn OpeningAccumulator<F>) -> F {
-        self.1
-    }
-
-    fn normalize_opening_point(&self, _: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        unimplemented!("Unused")
-    }
-}
 
 /// `Σ_j eq(j)·value(j)` over the unbound half of a high-to-low split eq: `j` runs over the
 /// first half of the remaining hypercube (the current variable set to 0), weighted by the
@@ -147,17 +127,12 @@ impl<F: JoltField> OpeningReductionGroup<F> {
 
     /// The group's reduction check, set up with its point, coefficients and reduced claim.
     pub fn verifier(&self) -> RelationVerifier<F, OpeningReductionRelation> {
-        let relation = OpeningReductionRelation {
-            polynomials: self.polynomials.clone(),
-            sumcheck_id: self.sumcheck_id,
-            num_vars: self.num_vars(),
-        };
-        let mut challenges: Vec<(RelationChallenge, F)> = self
-            .coefficients
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| (RelationChallenge::ClaimCoefficient(i), c))
-            .collect();
+        let relation = OpeningReductionRelation::group(
+            self.polynomials.clone(),
+            self.sumcheck_id,
+            self.num_vars(),
+        );
+        let mut challenges = coefficient_challenges(&self.coefficients);
         challenges.push((
             RelationChallenge::Claim,
             self.sumcheck_claim
@@ -183,10 +158,35 @@ impl<F: JoltField> OpeningReductionGroup<F> {
 ///
 /// **S ⊆ R.** `Σ_i ρ^i·p_i(r) = Σ_x eq(r, x)·Σ_i ρ^i·p_i(x)`, and `c` is claimed to be the folded
 /// polynomial at the bound point; the joint opening proof checks it. Variables bind high to low.
+#[derive(Clone)]
 pub struct OpeningReductionRelation {
     polynomials: Vec<CommittedPoly>,
     sumcheck_id: SumcheckId,
     num_vars: usize,
+}
+
+impl OpeningReductionRelation {
+    /// The reduction of the group `polynomials` from `sumcheck_id`, over `num_vars` variables.
+    pub fn group(
+        polynomials: Vec<CommittedPoly>,
+        sumcheck_id: SumcheckId,
+        num_vars: usize,
+    ) -> Self {
+        Self {
+            polynomials,
+            sumcheck_id,
+            num_vars,
+        }
+    }
+}
+
+/// The in-group coefficients `ρ^i` as the relation's [`RelationChallenge::ClaimCoefficient`]s.
+pub fn coefficient_challenges<F: Copy>(coefficients: &[F]) -> Vec<(RelationChallenge, F)> {
+    coefficients
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| (RelationChallenge::ClaimCoefficient(i), c))
+        .collect()
 }
 
 impl SymbolicSumcheck for OpeningReductionRelation {

@@ -11,7 +11,7 @@
 //!
 //! Both stages proceed sumcheck-then-sumcheck (Execution, then ActivationClamp), with
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
-//! `BatchedSumcheck` call.
+//! batched sumcheck.
 
 use crate::onnx_proof::neural_teleport::small_table::SmallTableRelation;
 use crate::onnx_proof::op_lookups::OpLookupProve;
@@ -139,10 +139,6 @@ impl<F: JoltField, Table: SmallActivationTable> RelationWitness<F> for SmallTabl
     }
 }
 
-atlas_sumcheck::relation_witness_instance!(
-    [F: JoltField, Table: SmallActivationTable] SmallTableProver<F, Table>
-);
-
 impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let Self {
@@ -214,7 +210,7 @@ impl<F: JoltField, Table: SmallActivationTable> ProveRounds<F> for SmallTablePro
 
 /// Full (Execution + ActivationClamp) proof for a clamped-activation node: Execution
 /// establishes the clamped advice claim, ActivationClamp ties it back to the raw
-/// input, then both stages' one-hot checks are batched into one `BatchedSumcheck`.
+/// input, then both stages' one-hot checks are batched into one batched sumcheck.
 pub fn prove_clamped_activation<F, T, Table>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,

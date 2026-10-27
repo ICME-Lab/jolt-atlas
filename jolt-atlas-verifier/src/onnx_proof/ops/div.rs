@@ -25,11 +25,11 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+use atlas_sumcheck::relation::{verify_relation, verify_relation_batch};
 use atlas_sumcheck::{
     evaluation_reduction::EvalReductionProof,
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::{self, RaOneHotEncoding},
-    sumcheck::{BatchedSumcheck, Sumcheck},
 };
 use atlas_trace::{op::Div, semantics::fixed::rem_floor, trace::LayerData, Trace};
 use atlas_transcript::Transcript;
@@ -72,7 +72,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Div {
             &verifier.accumulator,
             &mut verifier.transcript,
         );
-        Sumcheck::verify(
+        verify_relation(
             proof,
             &exec_sumcheck,
             &mut verifier.accumulator,
@@ -333,7 +333,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
         );
-    Sumcheck::verify(
+    verify_relation(
         rangecheck_proof,
         &rangecheck_verifier,
         &mut verifier.accumulator,
@@ -348,7 +348,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
     let encoding = rc_operands.get_encoding(node);
     let [ra_sumcheck, bool_sumcheck] =
         shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
-    BatchedSumcheck::verify(
+    verify_relation_batch(
         ra_one_hot_proof,
         vec![&*ra_sumcheck, &*bool_sumcheck],
         &mut verifier.accumulator,

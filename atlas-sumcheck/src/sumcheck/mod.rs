@@ -1,11 +1,4 @@
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::type_complexity)]
-
-use crate::{
-    opening_proof::VerifierOpeningAccumulator,
-    sumcheck_verifier::SumcheckInstanceVerifier,
-    upstream_sumcheck::{compressed_to_upstream, expect_engine, FacadeTranscript},
-};
+use crate::upstream_sumcheck::{compressed_to_upstream, expect_engine, FacadeTranscript};
 use atlas_algebra::{
     field::JoltField,
     poly::unipoly::CompressedUniPoly,
@@ -18,92 +11,6 @@ use jolt_sumcheck::{
 };
 
 use ark_serialize::*;
-
-/// Implements the standard technique for batching parallel sumchecks to reduce
-/// verifier cost and proof size.
-///
-/// For details, refer to Jim Posen's ["Perspectives on Sumcheck Batching"](https://hackmd.io/s/HyxaupAAA).
-/// We do what they describe as "front-loaded" batch sumcheck.
-pub enum BatchedSumcheck {}
-impl BatchedSumcheck {
-    #[tracing::instrument(skip_all, name = "BatchedSumcheck::verify")]
-    pub fn verify<F: JoltField, ProofTranscript: Transcript>(
-        proof: &SumcheckInstanceProof<F>,
-        sumcheck_instances: Vec<&dyn SumcheckInstanceVerifier<F, ProofTranscript>>,
-        opening_accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut ProofTranscript,
-    ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
-        let max_degree = sumcheck_instances
-            .iter()
-            .map(|sumcheck| sumcheck.degree())
-            .max()
-            .unwrap();
-        let max_num_rounds = sumcheck_instances
-            .iter()
-            .map(|sumcheck| sumcheck.num_rounds())
-            .max()
-            .unwrap();
-
-        let input_claims: Vec<F> = sumcheck_instances
-            .iter()
-            .map(|sumcheck| sumcheck.input_claim(opening_accumulator))
-            .collect();
-        absorb_input_claims::<F, _>(
-            &mut ClearSumcheckRecorder::<F>::new(),
-            &input_claims,
-            transcript,
-        );
-
-        let batching_coeffs: Vec<F> = transcript.challenge_vector(sumcheck_instances.len());
-
-        // To see why we may need to scale by a power of two, consider a batch of
-        // two sumchecks:
-        //   claim_a = \sum_x P(x)             where x \in {0, 1}^M
-        //   claim_b = \sum_{x, y} Q(x, y)     where x \in {0, 1}^M, y \in {0, 1}^N
-        // Then the batched sumcheck is:
-        //   \sum_{x, y} A * P(x) + B * Q(x, y)  where A and B are batching coefficients
-        //   = A * \sum_y \sum_x P(x) + B * \sum_{x, y} Q(x, y)
-        //   = A * \sum_y claim_a + B * claim_b
-        //   = A * 2^N * claim_a + B * claim_b
-        let claim: F = sumcheck_instances
-            .iter()
-            .zip(input_claims.iter())
-            .zip(batching_coeffs.iter())
-            .map(|((sumcheck, input_claim), coeff)| {
-                input_claim.mul_pow_2(max_num_rounds - sumcheck.num_rounds()) * coeff
-            })
-            .sum();
-
-        let (output_claim, r_sumcheck) =
-            proof.verify(claim, max_num_rounds, max_degree, transcript)?;
-
-        let expected_output_claim = sumcheck_instances
-            .iter()
-            .zip(batching_coeffs.iter())
-            .map(|(sumcheck, coeff)| {
-                // If a sumcheck instance has fewer than `max_num_rounds`,
-                // we wait until there are <= `sumcheck.num_rounds()` left
-                // before binding its variables.
-                // So, the sumcheck *actually* uses just the last `sumcheck.num_rounds()`
-                // values of `r_sumcheck`.
-                let r_slice = &r_sumcheck[max_num_rounds - sumcheck.num_rounds()..];
-
-                // Cache polynomial opening claims, to be proven using either an
-                // opening proof or sumcheck (in the case of virtual polynomials).
-                sumcheck.cache_openings(opening_accumulator, transcript, r_slice);
-                let claim = sumcheck.expected_output_claim(opening_accumulator, r_slice);
-
-                claim * coeff
-            })
-            .sum();
-
-        if output_claim != expected_output_claim {
-            return Err(ProofVerifyError::SumcheckVerificationError);
-        }
-
-        Ok(r_sumcheck)
-    }
-}
 
 /// Security level the per-round proof of work targets.
 pub const ROUND_SECURITY_BITS: u32 = 128;
@@ -122,39 +29,9 @@ pub fn round_pow_bits<F: JoltField>(degree: usize) -> u32 {
     .expect("round degrees are far below the proof-of-work limit")
 }
 
-pub struct Sumcheck;
-
-impl Sumcheck {
-    #[tracing::instrument(skip_all, name = "Sumcheck::verify")]
-    pub fn verify<F: JoltField, ProofTranscript: Transcript>(
-        proof: &SumcheckInstanceProof<F>,
-        sumcheck_instance: &dyn SumcheckInstanceVerifier<F, ProofTranscript>,
-        opening_accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut ProofTranscript,
-    ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
-        let num_rounds = sumcheck_instance.num_rounds();
-        let input_claim = sumcheck_instance.input_claim(opening_accumulator);
-        absorb_input_claims::<F, _>(
-            &mut ClearSumcheckRecorder::<F>::new(),
-            &[input_claim],
-            transcript,
-        );
-        let degree_bound = sumcheck_instance.degree();
-        let (final_claim, r_sumcheck) =
-            proof.verify(input_claim, num_rounds, degree_bound, transcript)?;
-        sumcheck_instance.cache_openings(opening_accumulator, transcript, &r_sumcheck);
-        let expected_final_claim =
-            sumcheck_instance.expected_output_claim(opening_accumulator, &r_sumcheck);
-        if final_claim != expected_final_claim {
-            return Err(ProofVerifyError::SumcheckVerificationError);
-        }
-        Ok(r_sumcheck)
-    }
-}
-
 /// Absorb a batch's input claims the way upstream's clear recorder does (each under
 /// `b"sumcheck_claim"`), on the prover and the verifier alike.
-fn absorb_input_claims<F: JoltField, T: Transcript>(
+pub(crate) fn absorb_input_claims<F: JoltField, T: Transcript>(
     recorder: &mut ClearSumcheckRecorder<F>,
     input_claims: &[F],
     transcript: &mut T,
@@ -167,7 +44,7 @@ fn absorb_input_claims<F: JoltField, T: Transcript>(
 
 /// The upstream batch description of tail-aligned members (a member with fewer rounds is bound
 /// in the last `rounds` rounds) with the given input claims and batching coefficients.
-fn batch_prelude<F: JoltField>(
+pub(crate) fn batch_prelude<F: JoltField>(
     rounds: &[usize],
     input_claims: &[F],
     coefficients: &[F],
@@ -279,5 +156,3 @@ impl<F: JoltField> SumcheckInstanceProof<F> {
         Ok((evaluation.value, r))
     }
 }
-
-pub mod prover;

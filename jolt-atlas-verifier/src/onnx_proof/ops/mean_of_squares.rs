@@ -33,6 +33,7 @@
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
+use atlas_sumcheck::relation::verify_relation;
 
 use atlas_trace::{op::MeanOfSquares, Op};
 
@@ -65,7 +66,6 @@ use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::RaOneHotEncoding,
-    sumcheck::Sumcheck,
 };
 use atlas_transcript::Transcript;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
@@ -119,7 +119,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for MeanOfSquares {
             &verifier.accumulator,
             &mut verifier.transcript,
         );
-        Sumcheck::verify(
+        verify_relation(
             proof,
             &reduction,
             &mut verifier.accumulator,

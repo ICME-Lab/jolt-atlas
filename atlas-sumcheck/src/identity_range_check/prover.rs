@@ -116,8 +116,6 @@ impl<F: JoltField> RelationWitness<F> for IdentityRCProver<F> {
     }
 }
 
-crate::relation_witness_instance!([F: JoltField] IdentityRCProver<F>);
-
 impl<F: JoltField> IdentityRCProver<F> {
     #[tracing::instrument(skip_all, name = "InstructionIdentityRCProver::bind")]
     /// Binds the next variable (address or cycle) and advances state.

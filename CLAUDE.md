@@ -92,18 +92,22 @@ Workspace members, in dependency order:
     grinding behind the `prover` feature), the verifier a `VerifyingTranscript` over the
     proof's NARG string.
   - **atlas-lookup-tables** — the prefix-suffix lookup tables.
-  - **atlas-sumcheck** — sumcheck instances and batching, the opening accumulators
-    (`opening_proof`), evaluation reduction, the one-hot and shout subprotocols, `config`. As
+  - **atlas-sumcheck** — the relation core and its batched sumcheck (`relation`), the opening
+    accumulators (`opening_proof`), evaluation reduction, the one-hot and shout subprotocols,
+    `config`. As
     upstream's protocol crates do, it ships both sides; prover items live in each module's
     `prover` submodule, which the verifier may not name (CI path check).
   - **atlas-pcs** — the `CommitmentScheme` interface, `akita` over Fp128, and the test `mock`.
   No BN254 or curve crate is in the resolved dependency graph (checked in CI); the vendored
-  crates' optional `bn254` features stay off. `BatchedSumcheck`/`Sumcheck` drive upstream
-  `jolt-sumcheck`'s engine (`prove_batch`, `verify_compressed`) through
+  crates' optional `bn254` features stay off. Every sumcheck is a relation: the verifier runs
+  `relation::verify_relation{,_batch}` over `RelationVerifier`s, the prover
+  `relation::prover::prove_relation{,_batch,_batch_parallel}` over `RelationWitness`es, both
+  driving upstream `jolt-sumcheck`'s engine (`prove_batch`, `verify_compressed`) through
   `atlas_sumcheck::upstream_sumcheck`, which presents our transcript as upstream's facade
-  (grinding before each challenge). `SumcheckInstanceProver`
-  extends upstream's `ProveRounds`, so every prover instance computes its own round messages
-  (upstream `UnivariatePoly`) over upstream's `GruenSplitEqPolynomial`; Gruen rounds go through
+  (grinding before each challenge). A `RelationWitness` extends upstream's `ProveRounds`, so
+  every prover computes its own round messages (upstream `UnivariatePoly`) over upstream's
+  `GruenSplitEqPolynomial`, while its relation supplies the degree, input claim and opening
+  appends; Gruen rounds go through
   `atlas_algebra::poly::split_eq_poly::SplitEqUnreducedFold`, which takes the relation at the endpoint the
   round otherwise recovers by division.
 - **atlas-trace** — deterministic fixed-point IR, op semantics, and the trace engine. Owns the
@@ -169,15 +173,16 @@ root `Cargo.toml`.
   it must fail today and turn green when fixed. Never allowlist a sweep finding silently.
 - Lookup table generation has one owner in `atlas-trace`. Never regenerate or approximate a
   table on the prover side.
-- For ops migrated to a symbolic relation (`onnx_proof/relation.rs`, a `jolt_claims`
-  `SymbolicSumcheck` over atlas openings), the relation is the source of truth: the engine
-  derives both prover and verifier from it, and no hand-written verifier exists. The relation
-  core (`Relation`, `RelationVerifier`, the opening/derived/coefficient ids) is
-  `atlas_sumcheck::relation`; the one-hot checks (booleanity, Hamming booleanity, Hamming
-  weight, `ra_virtual`) are relations there, with their setup supplied by the caller. Each relation is
-  bound to its op by `type Spec` (checked at compile time and by
+- Every sumcheck is a symbolic relation (a `jolt_claims` `SymbolicSumcheck` over atlas
+  openings), and the relation is the source of truth: the verifier is derived from it
+  (`RelationVerifier`; no hand-written verifier exists), and a prover is either the engine's
+  `RelationProver` or a specialized `RelationWitness` that computes only its round messages.
+  The relation core (`Relation`, `RelationVerifier`, the opening/derived/coefficient ids, the
+  batched-sumcheck drivers) is `atlas_sumcheck::relation`; subprotocol relations (one-hot
+  checks, read-raf, range checks, opening reduction) take their setup from the caller. Each op
+  relation is bound to its op by `type Spec` (checked at compile time and by
   `relation_specs_match_their_dispatched_op_kind`) and documents its S ⊆ R argument;
-  `docs/pull-requests.md` §4 is the migration checklist.
+  `docs/pull-requests.md` §4 is the checklist for a new relation.
 
 ## Development Guidelines
 

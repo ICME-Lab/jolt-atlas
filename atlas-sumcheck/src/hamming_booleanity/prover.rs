@@ -61,8 +61,6 @@ impl<F: JoltField> RelationWitness<F> for HammingBooleanitySumcheckProver<F> {
     }
 }
 
-crate::relation_witness_instance!([F: JoltField] HammingBooleanitySumcheckProver<F>);
-
 impl<F: JoltField> HammingBooleanitySumcheckProver<F> {
     #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::bind", fields(variant = ?self.relation.sumcheck_id()))]
     fn bind(&mut self, r: F) {

@@ -15,10 +15,10 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 use atlas_lookup_tables::clamp::{ClampTable, CLAMP_BOUND};
+use atlas_sumcheck::relation::{verify_relation, verify_relation_batch};
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::{self, RaOneHotEncoding},
-    sumcheck::{BatchedSumcheck, Sumcheck},
 };
 use atlas_trace::{op::Clamp, Tensor, Trace};
 use atlas_transcript::Transcript;
@@ -104,7 +104,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Clamp {
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        Sumcheck::verify(
+        verify_relation(
             execution_proof,
             &verifier_sumcheck,
             &mut verifier.accumulator,
@@ -119,7 +119,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Clamp {
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        BatchedSumcheck::verify(
+        verify_relation_batch(
             ra_one_hot_proof,
             vec![&*ra_verifier, &*bool_verifier],
             &mut verifier.accumulator,

@@ -175,18 +175,6 @@ where
     }
 }
 
-crate::relation_witness_instance!(
-    [
-        F: JoltField,
-        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-        const LOG_K: usize,
-        const N: usize,
-        VD: RafVerifierData<F>,
-        PS: RafProverState<F>
-    ]
-    ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
-);
-
 impl<F: JoltField, LUT, const LOG_K: usize, const N: usize, VD, PS> ProveRounds<F>
     for ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
 where

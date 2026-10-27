@@ -17,14 +17,15 @@
 //! [`OpeningId`]s or a node output's reduced opening, the instance the multi-consumer evaluation
 //! reduction produces for it.
 
+/// The batched sumcheck over relations: the verifier's driver of the upstream engine.
+pub mod batch;
 /// The prover side: witnesses that compute their own rounds for a relation.
 pub mod prover;
 
-use crate::{
-    opening_proof::{
-        OpeningAccumulator, OpeningId, PolynomialId, SumcheckId, VerifierOpeningAccumulator,
-    },
-    sumcheck_verifier::SumcheckInstanceVerifier,
+pub use batch::{verify_relation, verify_relation_batch, DynRelationVerifier};
+
+use crate::opening_proof::{
+    OpeningAccumulator, OpeningId, PolynomialId, SumcheckId, VerifierOpeningAccumulator,
 };
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
@@ -420,46 +421,6 @@ impl<F: JoltField, R: Relation<F>> RelationVerifier<F, R> {
     /// The verifier for `relation` with the setup its caller supplies.
     pub fn at(relation: R, setup: RelationSetup<F>) -> Self {
         Self { relation, setup }
-    }
-}
-
-impl<F: JoltField, T: Transcript, R: Relation<F>> SumcheckInstanceVerifier<F, T>
-    for RelationVerifier<F, R>
-{
-    fn degree(&self) -> usize {
-        self.relation.degree()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.relation.rounds()
-    }
-
-    fn input_claim(&self, accumulator: &VerifierOpeningAccumulator<F>) -> F {
-        relation_input_claim(&self.relation, &self.setup, accumulator)
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
-        self.relation.output_expression::<F>().evaluate(
-            |opening| resolve(accumulator, opening),
-            |challenge| self.setup.challenge(challenge),
-            |derived| self.relation.derive(derived, &self.setup, &challenges),
-        )
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
-        self.relation
-            .append_produced_requests(&self.setup, &challenges, accumulator, transcript);
     }
 }
 

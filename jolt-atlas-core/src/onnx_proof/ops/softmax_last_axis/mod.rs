@@ -15,6 +15,7 @@
 use crate::onnx_proof::op_lookups::OpLookupProve;
 use crate::onnx_proof::ops::ProveOp;
 use crate::utils::opening_access::IntoProverProvider;
+use atlas_sumcheck::relation::prover::{prove_relation_batch, DynRelationWitness};
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::*;
 
 use crate::{
@@ -48,9 +49,8 @@ use atlas_algebra::{
     utils::{lookup_bits::LookupBits, math::Math},
 };
 use atlas_sumcheck::{
-    identity_range_check::prover::identity_rangecheck_prover,
-    shout,
-    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, SumcheckInstanceProof},
+    identity_range_check::prover::identity_rangecheck_prover, shout,
+    sumcheck::SumcheckInstanceProof,
 };
 use atlas_transcript::Transcript;
 use common::{
@@ -325,7 +325,7 @@ impl SoftmaxLastAxisProver {
         &mut self,
         prover: &mut Prover<F, T>,
         r_lookup_bits: Vec<LookupBits>,
-    ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
         let recip_mult_params = RecipMultParams::new(
             self.computation_node.clone(),
             self.scale,
@@ -390,7 +390,7 @@ impl SoftmaxLastAxisProver {
         prover: &mut Prover<F, T>,
         r_exp_lookup_bits: Vec<LookupBits>,
         r_indices: &[usize],
-    ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
         let [f, _n] = self.F_N;
         let log_f = f.log_2();
 
@@ -481,7 +481,7 @@ impl SoftmaxLastAxisProver {
         lut_data: &LookupTableData,
         r_exp_indices: &[usize],
         z_tensor: Tensor<i64>,
-    ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
         let hi_provider = ExpReadRafProvider {
             node: self.computation_node.clone(),
             table_size: lut_data.table_hi.len(),
@@ -556,7 +556,7 @@ impl SoftmaxLastAxisProver {
         prover: &mut Prover<F, T>,
         lut_data: &LookupTableData,
         significance_clamp_indices: &[usize],
-    ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut_data.table_hi.len().log_2());
         let [hi_ra_prover, hi_bool_prover] = shout::prover::ra_onehot_provers(
             &encoding,
@@ -595,12 +595,12 @@ impl SoftmaxLastAxisProver {
     }
 }
 
-/// Run `BatchedSumcheck::prove` with the standard boilerplate.
+/// Run [`prove_relation_batch`] with the standard boilerplate.
 fn run_batched_prove<F: JoltField, T: Transcript>(
-    instances: &mut [Box<dyn SumcheckInstanceProver<F, T>>],
+    instances: &mut [Box<dyn DynRelationWitness<F, T>>],
     prover: &mut Prover<F, T>,
 ) -> SumcheckInstanceProof<F> {
-    BatchedSumcheck::prove(
+    prove_relation_batch(
         instances.iter_mut().map(|v| &mut **v as _).collect(),
         &mut prover.accumulator,
         &mut prover.transcript,

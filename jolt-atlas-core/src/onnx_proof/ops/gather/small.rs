@@ -1,10 +1,10 @@
 use super::*;
 use crate::onnx_proof::trace_view::TraceView;
+use atlas_sumcheck::relation::prover::{prove_relation, prove_relation_batch, DynRelationWitness};
 use atlas_sumcheck::{
     booleanity::prover::SmallBooleanitySumcheckProver,
     hamming_booleanity::prover::HammingBooleanitySumcheckProver,
     hamming_weight::prover::HammingWeightSumcheckProver,
-    sumcheck::{BatchedSumcheck, Sumcheck},
 };
 use atlas_trace::op::GatherSmall;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::small::*;
@@ -29,7 +29,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherSmall {
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-        let (proof, _) = Sumcheck::prove(
+        let (proof, _) = prove_relation(
             &mut exec_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,
@@ -37,9 +37,9 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherSmall {
         results.push((ProofId(node.idx, ProofType::Execution), proof));
 
         let (hb_sumcheck, bool_sumcheck) = build_stage2_provers::<F>(node, prover);
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
+        let mut instances: Vec<Box<dyn DynRelationWitness<_, _>>> =
             vec![Box::new(hb_sumcheck), Box::new(bool_sumcheck)];
-        let (stage2_proof, _) = BatchedSumcheck::prove(
+        let (stage2_proof, _) = prove_relation_batch(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,
@@ -47,7 +47,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherSmall {
         results.push((ProofId(node.idx, ProofType::RaOneHotChecks), stage2_proof));
 
         let mut hw_sumcheck = build_stage3_prover::<F>(node, prover);
-        let (hw_proof, _) = Sumcheck::prove(
+        let (hw_proof, _) = prove_relation(
             &mut hw_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,

@@ -95,8 +95,6 @@ impl<F: JoltField> RelationWitness<F> for OpeningProofReductionSumcheckProver<F>
     }
 }
 
-crate::relation_witness_instance!([F: JoltField] OpeningProofReductionSumcheckProver<F>);
-
 impl<F: JoltField> OpeningProofReductionSumcheckProver<F> {
     fn bind(&mut self, r: F, round: usize) {
         let r_j = F::challenge_from_field(r);

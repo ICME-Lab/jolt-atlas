@@ -70,12 +70,12 @@ use atlas_algebra::{
     poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
 };
 use atlas_sumcheck::booleanity::{LinearClaim, LinearTerm};
+use atlas_sumcheck::relation::DynRelationVerifier;
 use atlas_sumcheck::{
     booleanity::BooleanitySumcheckParams,
     config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ps_shout::{CycleWeight, PackedSegment},
-    sumcheck_verifier::SumcheckInstanceVerifier,
 };
 use atlas_trace::{Model, Trace};
 use atlas_transcript::Transcript;
@@ -835,7 +835,7 @@ pub fn value_chunk_indices(values: &[u64], width: usize) -> Vec<Vec<Option<u8>>>
 /// Verifier counterpart of [`chunk_check_provers`].
 pub fn chunk_check_verifiers<F: JoltField, T: Transcript>(
     params: BooleanitySumcheckParams<F>,
-) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
+) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
     vec![Box::new(params.into_verifier())]
 }
 

@@ -197,11 +197,24 @@ The protocol crates ship both sides, as upstream's do (`jolt-sumcheck` has `prov
 `verifier` modules and no feature gate). In `atlas-sumcheck` every mixed module keeps its
 shared and verifier items and moves its prover items into a `prover` submodule (e.g.
 `booleanity::prover`, `opening_proof::prover::ProverOpeningAccumulator`,
-`sumcheck::prover::SumcheckInstanceProver`), so the verifier-isolation job's path check covers
-them; `jolt-atlas-verifier/clippy.toml` lists the prover methods on shared types
-(`BatchedSumcheck::prove`, `CommitmentScheme::commit`/`prove`, ...). Akita's `CommitmentScheme`
+`relation::prover::RelationWitness`), so the verifier-isolation job's path check covers them;
+`jolt-atlas-verifier/clippy.toml` lists the prover items it could still reach
+(`relation::prover::prove_relation`, `CommitmentScheme::commit`/`prove`, ...). Akita's `CommitmentScheme`
 impl stays one module (a trait impl cannot be split), covered by the list. The prover's opening
 provider moved from the verifier's `utils::opening_access` to core's (`IntoProverProvider`).
+
+## The sumcheck layer retired (stage 10)
+
+Every sumcheck instance is a relation (`atlas_sumcheck::relation`): its verifier is
+`RelationVerifier`, derived from the relation, and its prover the engine's `RelationProver` or a
+specialized `relation::prover::RelationWitness` that computes only its round messages (the
+relation supplies the degree, the input claim and where the produced openings sit, including
+sparse one-hot groups via `Relation::sparse_groups`). The drivers are relation functions over
+the type-erased forms: `verify_relation{,_batch}` over `DynRelationVerifier` and
+`prove_relation{,_batch,_batch_parallel}` over `DynRelationWitness` (a blanket impl over every
+witness). They run upstream's `prove_batch` / `verify_compressed` through a `BatchPrelude`;
+`BatchedSumcheck`, `Sumcheck` and the `SumcheckInstance{Prover,Verifier,Params}` traits are
+gone. `FacadeTranscript` stays until a split-surface `jolt-sumcheck` pin.
 
 ## Adoption sequence
 

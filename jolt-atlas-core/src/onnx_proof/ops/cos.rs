@@ -21,10 +21,8 @@ use atlas_algebra::field::JoltField;
 use atlas_lookup_tables::{
     right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable,
 };
-use atlas_sumcheck::{
-    shout,
-    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, SumcheckInstanceProof},
-};
+use atlas_sumcheck::relation::prover::{prove_relation_batch, DynRelationWitness};
+use atlas_sumcheck::{shout, sumcheck::SumcheckInstanceProof};
 use atlas_trace::{op::Cos, trace::LayerData};
 use atlas_transcript::Transcript;
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
@@ -81,12 +79,12 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Cos {
                 &mut prover.transcript,
             );
 
-        let mut exec_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = vec![
+        let mut exec_instances: Vec<Box<dyn DynRelationWitness<F, T>>> = vec![
             Box::new(dsc_exec),
             Box::new(cos_exec),
             Box::new(rangecheck_exec),
         ];
-        let (exec_proof, _) = BatchedSumcheck::prove(
+        let (exec_proof, _) = prove_relation_batch(
             exec_instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,
@@ -99,7 +97,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Cos {
         let cos_encoding = CosRaEncoding::new(node);
         let rc_encoding = rc_provider.encoding();
 
-        let mut onehot_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = Vec::new();
+        let mut onehot_instances: Vec<Box<dyn DynRelationWitness<F, T>>> = Vec::new();
         onehot_instances.extend(shout::prover::ra_onehot_provers(
             &dsc_encoding,
             &dsc_lookup_indices,
@@ -118,7 +116,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Cos {
             &prover.accumulator,
             &mut prover.transcript,
         ));
-        let (onehot_proof, _) = BatchedSumcheck::prove(
+        let (onehot_proof, _) = prove_relation_batch(
             onehot_instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,

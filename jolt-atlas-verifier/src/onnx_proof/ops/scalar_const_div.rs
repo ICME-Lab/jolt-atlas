@@ -19,10 +19,8 @@ use atlas_algebra::{
     poly::multilinear_polynomial::MultilinearPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    sumcheck::Sumcheck,
-};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_sumcheck::relation::verify_relation;
 use atlas_trace::{op::ScalarConstDiv, semantics::fixed::rem_floor, trace::LayerData, Op, Trace};
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
@@ -53,7 +51,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ScalarConstDiv {
             &verifier.accumulator,
             &mut verifier.transcript,
         );
-        Sumcheck::verify(
+        verify_relation(
             proof,
             &exec_sumcheck,
             &mut verifier.accumulator,

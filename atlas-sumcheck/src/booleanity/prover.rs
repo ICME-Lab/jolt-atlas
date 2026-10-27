@@ -81,11 +81,6 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Debug + Send + Sync + 'stat
     }
 }
 
-crate::relation_witness_instance!(
-    [F: JoltField, I: Into<usize> + Copy + Default + Debug + Send + Sync + 'static]
-    BooleanitySumcheckProver<F, I>
-);
-
 impl<F: JoltField, I: Into<usize> + Copy + Default + Debug + Send + Sync + 'static> ProveRounds<F>
     for BooleanitySumcheckProver<F, I>
 {

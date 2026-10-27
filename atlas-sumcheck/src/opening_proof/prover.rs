@@ -1,13 +1,14 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::relation::prover::prove_relation_batch;
 use crate::{
     evaluation_reduction::ReducedInstance,
     opening_reduction::{
         prover::{OpeningProofReductionSumcheckProver, ProverOpening},
         EqAddressState, EqCycleState, SharedDensePolynomial,
     },
-    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
+    sumcheck::SumcheckInstanceProof,
 };
 use allocative::Allocative;
 pub use atlas_algebra::poly::opening_point::{Endianness, OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN};
@@ -407,14 +408,14 @@ where
             write_flamegraph_svg(flamegraph, "stage7_start_flamechart.svg");
         }
 
-        // Temporarily take sumchecks so we can pass self to BatchedSumcheck::prove
+        // Temporarily take sumchecks so we can pass self to prove_relation_batch
         let mut sumchecks = std::mem::take(&mut self.sumchecks);
         let instances = sumchecks
             .iter_mut()
             .map(|(_, opening)| opening as &mut _)
             .collect();
 
-        let (sumcheck_proof, r_sumcheck) = BatchedSumcheck::prove(instances, self, transcript);
+        let (sumcheck_proof, r_sumcheck) = prove_relation_batch(instances, self, transcript);
 
         // Restore sumchecks (with cached claims from cache_openings)
         self.sumchecks = sumchecks;

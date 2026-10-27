@@ -175,12 +175,13 @@ mod tests {
     use crate::opening_proof::{
         prover::ProverOpeningAccumulator, OpeningAccumulator, VerifierOpeningAccumulator,
     };
+    use crate::relation::{prover::prove_relation, verify_relation};
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use common::parallel::par_enabled;
     use common::CommittedPoly;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
-    use crate::{config::OneHotConfig, sumcheck::Sumcheck};
+    use crate::config::OneHotConfig;
     use atlas_algebra::{
         field::{ChallengeFieldOps, FieldChallengeOps},
         poly::{
@@ -282,7 +283,7 @@ mod tests {
         let mut prover = RaSumcheckProver::gen(params.clone(), H_indices.clone());
 
         let (proof, _) =
-            Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
+            prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
         let mut verifier_transcript = Blake2bVerifier::new(b"", prover_transcript.narg().to_vec());
         let mut verifier_accumulator = VerifierOpeningAccumulator::new();
@@ -300,7 +301,7 @@ mod tests {
         }
 
         let verifier = params.into_verifier();
-        Sumcheck::verify(
+        verify_relation(
             &proof,
             &verifier,
             &mut verifier_accumulator,

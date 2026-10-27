@@ -54,8 +54,6 @@ impl<F: JoltField> RelationWitness<F> for HammingWeightSumcheckProver<F> {
     }
 }
 
-crate::relation_witness_instance!([F: JoltField] HammingWeightSumcheckProver<F>);
-
 impl<F: JoltField> HammingWeightSumcheckProver<F> {
     #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::round_message", fields(variant = ?self.relation.sumcheck_id()))]
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {

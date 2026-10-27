@@ -5,7 +5,8 @@ use crate::onnx_proof::{
     ProofId, ProofType, Prover,
 };
 use atlas_algebra::field::JoltField;
-use atlas_sumcheck::sumcheck::{Sumcheck, SumcheckInstanceProof};
+use atlas_sumcheck::relation::prover::prove_relation;
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_trace::op::ScalarConstDiv;
 use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::ops::scalar_const_div::*;
@@ -24,7 +25,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for ScalarConstDiv {
             &mut prover.transcript,
         );
         let mut exec_sumcheck = RelationProver::initialize(&prover.trace, params);
-        let (proof, _) = Sumcheck::prove(
+        let (proof, _) = prove_relation(
             &mut exec_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,

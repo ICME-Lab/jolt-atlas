@@ -55,8 +55,6 @@ impl<F: JoltField> RelationWitness<F> for MultProver<F> {
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField] MultProver<F>);
-
 impl<F: JoltField> MultProver<F> {
     fn bind(&mut self, r: F) {
         let r_j = F::challenge_from_field(r);

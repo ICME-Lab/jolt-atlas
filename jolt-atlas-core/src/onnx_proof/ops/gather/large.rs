@@ -1,9 +1,7 @@
 use super::*;
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_sumcheck::{
-    shout,
-    sumcheck::{BatchedSumcheck, Sumcheck},
-};
+use atlas_sumcheck::relation::prover::{prove_relation, prove_relation_batch, DynRelationWitness};
+use atlas_sumcheck::shout;
 use atlas_trace::op::GatherLarge;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::large::*;
@@ -28,7 +26,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherLarge {
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-        let (proof, _) = Sumcheck::prove(
+        let (proof, _) = prove_relation(
             &mut exec_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,
@@ -43,10 +41,9 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherLarge {
             &prover.accumulator,
             &mut prover.transcript,
         );
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![ra_prover, bool_prover];
+        let mut instances: Vec<Box<dyn DynRelationWitness<_, _>>> = vec![ra_prover, bool_prover];
 
-        let (stage2_proof, _) = BatchedSumcheck::prove(
+        let (stage2_proof, _) = prove_relation_batch(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,

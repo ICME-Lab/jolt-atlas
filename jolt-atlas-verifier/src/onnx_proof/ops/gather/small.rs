@@ -1,10 +1,10 @@
 use super::*;
 use crate::node_view::ModelView;
+use atlas_sumcheck::relation::{verify_relation, verify_relation_batch, DynRelationVerifier};
 use atlas_sumcheck::{
     booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier},
     hamming_booleanity::{HammingBooleanitySumcheckParams, HammingBooleanitySumcheckVerifier},
     hamming_weight::{HammingWeightSumcheckParams, HammingWeightSumcheckVerifier},
-    sumcheck::{BatchedSumcheck, Sumcheck},
 };
 use atlas_trace::op::GatherSmall;
 use common::CommittedPoly;
@@ -27,7 +27,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherSmall {
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let exec_sumcheck = gather_verifier(node, verifier);
-        Sumcheck::verify(
+        verify_relation(
             proof,
             &exec_sumcheck,
             &mut verifier.accumulator,
@@ -39,9 +39,8 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherSmall {
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let (hb_sumcheck, bool_sumcheck) = build_stage2_verifiers::<F>(node, verifier);
-        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-            vec![&hb_sumcheck, &bool_sumcheck];
-        BatchedSumcheck::verify(
+        let instances: Vec<&dyn DynRelationVerifier<F, T>> = vec![&hb_sumcheck, &bool_sumcheck];
+        verify_relation_batch(
             ra_one_hot_proof,
             instances,
             &mut verifier.accumulator,
@@ -53,7 +52,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherSmall {
             .get(&ProofId(node.idx, ProofType::RaHammingWeight))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let hw_sumcheck = build_stage3_verifier::<F>(node, verifier);
-        Sumcheck::verify(
+        verify_relation(
             hw_proof,
             &hw_sumcheck,
             &mut verifier.accumulator,

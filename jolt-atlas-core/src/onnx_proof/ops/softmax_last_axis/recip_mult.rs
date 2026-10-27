@@ -120,8 +120,6 @@ impl<F: JoltField> RelationWitness<F> for RecipMultProver<F> {
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField] RecipMultProver<F>);
-
 impl<F: JoltField> RecipMultProver<F> {
     /// Bind round `round`'s challenge.
     fn bind(&mut self, r: F, round: usize) {

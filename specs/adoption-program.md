@@ -302,7 +302,7 @@ what is specific).
   `atlas-lookup-tables`, `atlas-sumcheck`, `atlas-pcs`) ship both sides as `jolt-sumcheck` does,
   with prover items in `prover` submodules; the verifier's cone is held prover-free at item
   level by the path check and `clippy.toml`, not by separate prover crates or feature gates.
-- [ ] **Stage 10 — the legacy sumcheck layer retired** (one PR per step). Upstream has no layer
+- [x] **Stage 10 — the legacy sumcheck layer retired** (one PR per step). Upstream has no layer
   between its relations and its engine: a relation (`ConcreteSumcheck` in `jolt-verifier`, over
   a `jolt_claims::SymbolicSumcheck`) is driven identically by prover and verifier, and stages
   call `jolt_sumcheck::prove_batch` / `SumcheckVerifier` directly. After stage 9 we carry two
@@ -322,7 +322,14 @@ what is specific).
   (stage 3), to the facade `Transcript` that `jolt-sumcheck` still takes; upstream marks that
   facade legacy ("can be removed once all consumers migrate to the split-trait surface"), so the
   bridge is deleted in the pin bump that brings a split-surface `jolt-sumcheck`, not by
-  implementing the legacy facade on our transcripts.
+  implementing the legacy facade on our transcripts. Resolved in the PRs: (a) the verifier of every
+  instance is `RelationVerifier`; a prover that computes its own rounds is a
+  `relation::prover::RelationWitness` (its relation, setup and produced claims), and a relation
+  declares its sparse one-hot appends (`Relation::sparse_groups`) so both sides append them
+  alike; (b) `relation::verify_relation{,_batch}` and
+  `relation::prover::prove_relation{,_batch,_batch_parallel}` drive the engine over the
+  type-erased `DynRelationVerifier` / `DynRelationWitness`, and a single relation keeps its own
+  entry point (no batching coefficient drawn), so digests are unchanged.
 
 Program definition of done (checkable): `joltworks` is gone — every inventory module replaced
 or in a named atlas-only crate; `jolt-atlas-core` contains no verification logic;

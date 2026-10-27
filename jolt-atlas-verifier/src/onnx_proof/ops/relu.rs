@@ -6,10 +6,8 @@ use crate::onnx_proof::{
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_lookup_tables::relu::ReluTable;
-use atlas_sumcheck::{
-    shout::{self, RaOneHotEncoding},
-    sumcheck::{BatchedSumcheck, Sumcheck},
-};
+use atlas_sumcheck::relation::{verify_relation, verify_relation_batch};
+use atlas_sumcheck::shout::{self, RaOneHotEncoding};
 use atlas_trace::op::ReLU;
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
@@ -43,7 +41,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ReLU {
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        Sumcheck::verify(
+        verify_relation(
             execution_proof,
             &verifier_sumcheck,
             &mut verifier.accumulator,
@@ -58,7 +56,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ReLU {
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        BatchedSumcheck::verify(
+        verify_relation_batch(
             ra_one_hot_proof,
             vec![&*ra_verifier, &*bool_verifier],
             &mut verifier.accumulator,

@@ -1,10 +1,11 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::relation::prover::DynRelationWitness;
 use crate::relation::prover::RelationWitness;
 use crate::{
     booleanity::prover::BooleanitySumcheckProver, opening_proof::OpeningAccumulator,
-    ra_virtual::prover::RaSumcheckProver, sumcheck::prover::SumcheckInstanceProver,
+    ra_virtual::prover::RaSumcheckProver,
 };
 use atlas_algebra::poly::{
     identity_poly::IdentityPolynomial,
@@ -27,7 +28,7 @@ pub fn read_raf_prover<F: JoltField, T: Transcript>(
     table: &[i32],
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> Box<dyn SumcheckInstanceProver<F, T>> {
+) -> Box<dyn DynRelationWitness<F, T>> {
     let params = ReadRafParams::new(provider, accumulator, transcript);
     Box::new(ReadRafProver::initialize(lookup_indices, table, params))
 }
@@ -98,8 +99,6 @@ impl<F: JoltField> RelationWitness<F> for ReadRafProver<F> {
         vec![self.G.final_claim()]
     }
 }
-
-crate::relation_witness_instance!([F: JoltField] ReadRafProver<F>);
 
 impl<F: JoltField> ReadRafProver<F> {
     #[tracing::instrument(name = "ReadRafProver::round_message", skip_all)]
@@ -172,7 +171,7 @@ pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
     lookup_indices: &[usize],
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> [Box<dyn SumcheckInstanceProver<F, T>>; 2] {
+) -> [Box<dyn DynRelationWitness<F, T>>; 2] {
     let challenges = ra_onehot_challenges::<F, T>(encoding, transcript);
     ra_onehot_provers_with(encoding, lookup_indices, accumulator, challenges)
 }
@@ -183,7 +182,7 @@ pub fn ra_onehot_provers_with<F: JoltField, T: Transcript>(
     lookup_indices: &[usize],
     accumulator: &dyn OpeningAccumulator<F>,
     challenges: RaOneHotChallenges<F>,
-) -> [Box<dyn SumcheckInstanceProver<F, T>>; 2] {
+) -> [Box<dyn DynRelationWitness<F, T>>; 2] {
     let params = ra_onehot_params(encoding, accumulator, challenges);
     ra_onehot_provers_from_params(params, lookup_indices)
 }
@@ -193,7 +192,7 @@ pub fn ra_onehot_provers_with<F: JoltField, T: Transcript>(
 pub fn ra_onehot_provers_from_params<F: JoltField, T: Transcript>(
     params: RaOneHotParams<F>,
     lookup_indices: &[usize],
-) -> [Box<dyn SumcheckInstanceProver<F, T>>; 2] {
+) -> [Box<dyn DynRelationWitness<F, T>>; 2] {
     let (ra_params, booleanity_params) = params;
     let one_hot_params = &ra_params.one_hot_params;
 

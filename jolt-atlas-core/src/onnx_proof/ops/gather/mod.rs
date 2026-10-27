@@ -21,9 +21,8 @@ use atlas_algebra::{
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
 };
 use atlas_sumcheck::{
-    opening_proof::prover::ProverOpeningAccumulator,
-    relation::prover::RelationWitness,
-    sumcheck::{prover::SumcheckInstanceProver, SumcheckInstanceProof},
+    opening_proof::prover::ProverOpeningAccumulator, relation::prover::RelationWitness,
+    sumcheck::SumcheckInstanceProof,
 };
 use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
 use atlas_transcript::Transcript;
@@ -140,8 +139,6 @@ impl<F: JoltField> RelationWitness<F> for GatherProver<F> {
         ]
     }
 }
-
-atlas_sumcheck::relation_witness_instance!([F: JoltField] GatherProver<F>);
 
 impl<F: JoltField> GatherProver<F> {
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {

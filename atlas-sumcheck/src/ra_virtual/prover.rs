@@ -69,8 +69,6 @@ impl<F: JoltField> RelationWitness<F> for RaSumcheckProver<F> {
     }
 }
 
-crate::relation_witness_instance!([F: JoltField] RaSumcheckProver<F>);
-
 impl<F: JoltField> RaSumcheckProver<F> {
     #[tracing::instrument(skip_all, name = "RaSumcheckProver::bind")]
     fn bind(&mut self, r: F) {

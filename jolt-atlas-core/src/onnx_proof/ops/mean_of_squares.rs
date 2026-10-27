@@ -32,6 +32,7 @@
 //! `Σx²`, so the two are consistent.
 use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::range_checking::RangeCheckProve;
+use atlas_sumcheck::relation::prover::prove_relation;
 pub use jolt_atlas_verifier::onnx_proof::ops::mean_of_squares::*;
 
 use crate::onnx_proof::trace_view::TraceView;
@@ -62,7 +63,7 @@ use atlas_algebra::{
     },
 };
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-use atlas_sumcheck::sumcheck::{Sumcheck, SumcheckInstanceProof};
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_transcript::Transcript;
 use common::{consts::XLEN, parallel::par_enabled};
 use jolt_claims::SymbolicSumcheck;
@@ -93,7 +94,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for MeanOfSquares {
             &mut prover.transcript,
         );
         let mut reduction = MeanOfSquaresReductionProver::initialize(&prover.trace, params);
-        let (proof, _) = Sumcheck::prove(
+        let (proof, _) = prove_relation(
             &mut reduction,
             &mut prover.accumulator,
             &mut prover.transcript,
@@ -191,7 +192,6 @@ impl<F: JoltField> RelationWitness<F> for MeanOfSquaresReductionProver<F> {
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField] MeanOfSquaresReductionProver<F>);
 impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     fn round_message(&mut self, round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let half = self.operand.len() / 2;

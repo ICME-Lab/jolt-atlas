@@ -15,10 +15,9 @@ use crate::{
 };
 use atlas_algebra::field::JoltField;
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+use atlas_sumcheck::relation::prover::{prove_relation, prove_relation_batch, DynRelationWitness};
 use atlas_sumcheck::{
-    evaluation_reduction::EvalReductionProof,
-    shout,
-    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
+    evaluation_reduction::EvalReductionProof, shout, sumcheck::SumcheckInstanceProof,
 };
 use atlas_trace::op::Div;
 use atlas_transcript::Transcript;
@@ -42,7 +41,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Div {
             &mut prover.transcript,
         );
         let mut exec_sumcheck = RelationProver::initialize(&prover.trace, params);
-        let (proof, _) = Sumcheck::prove(
+        let (proof, _) = prove_relation(
             &mut exec_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,
@@ -94,7 +93,7 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
             &mut prover.accumulator,
             &mut prover.transcript,
         );
-    let (rangecheck_proof, _) = Sumcheck::prove(
+    let (rangecheck_proof, _) = prove_relation(
         &mut rangecheck_sumcheck,
         &mut prover.accumulator,
         &mut prover.transcript,
@@ -112,9 +111,8 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
         &mut prover.transcript,
     );
 
-    let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-        vec![ra_sumcheck, bool_sumcheck];
-    let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
+    let mut instances: Vec<Box<dyn DynRelationWitness<_, _>>> = vec![ra_sumcheck, bool_sumcheck];
+    let (ra_one_hot_proof, _) = prove_relation_batch(
         instances.iter_mut().map(|v| &mut **v as _).collect(),
         &mut prover.accumulator,
         &mut prover.transcript,

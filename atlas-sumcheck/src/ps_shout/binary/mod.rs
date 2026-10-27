@@ -92,6 +92,7 @@ pub type BinaryReadRafSumcheckVerifier<F, LUT> =
 
 #[cfg(test)]
 pub mod tests {
+    use crate::relation::{prover::prove_relation, verify_relation};
     use crate::{
         opening_proof::{
             prover::ProverOpeningAccumulator, OpeningAccumulator, SumcheckId,
@@ -104,7 +105,6 @@ pub mod tests {
             },
             RafShoutProvider,
         },
-        sumcheck::Sumcheck,
     };
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::{
@@ -150,7 +150,7 @@ pub mod tests {
             &mut prover_transcript,
         );
         let (proof, prover_challenges) =
-            Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
+            prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
         let (mut verifier_transcript, _) = new_test_transcript();
         let mut verifier_accumulator = VerifierOpeningAccumulator::new();
@@ -161,7 +161,7 @@ pub mod tests {
             &mut verifier_accumulator,
             &mut verifier_transcript,
         );
-        let verifier_challenges = Sumcheck::verify(
+        let verifier_challenges = verify_relation(
             &proof,
             &verifier,
             &mut verifier_accumulator,

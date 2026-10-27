@@ -1,3 +1,4 @@
+use crate::relation::DynRelationVerifier;
 use crate::{
     booleanity::{BooleanitySumcheckParams, LinearClaim, LinearTerm},
     config::OneHotParams,
@@ -7,7 +8,6 @@ use crate::{
         Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
         RelationOpening, RelationSetup, RelationVerifier,
     },
-    sumcheck_verifier::SumcheckInstanceVerifier,
 };
 use atlas_algebra::{
     field::{FieldChallengeOps, IntoOpening, JoltField},
@@ -37,7 +37,7 @@ pub fn read_raf_verifier<F: JoltField, T: Transcript>(
     table: Vec<i32>,
     accumulator: &VerifierOpeningAccumulator<F>,
     transcript: &mut T,
-) -> Box<dyn SumcheckInstanceVerifier<F, T>> {
+) -> Box<dyn DynRelationVerifier<F, T>> {
     Box::new(ReadRafParams::new(provider, accumulator, transcript).into_verifier(table))
 }
 
@@ -344,7 +344,7 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
     encoding: &impl RaOneHotEncoding,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 2] {
+) -> [Box<dyn DynRelationVerifier<F, T>>; 2] {
     let challenges = ra_onehot_challenges::<F, T>(encoding, transcript);
     ra_onehot_verifiers_with(encoding, accumulator, challenges)
 }
@@ -354,14 +354,14 @@ pub fn ra_onehot_verifiers_with<F: JoltField, T: Transcript>(
     encoding: &impl RaOneHotEncoding,
     accumulator: &dyn OpeningAccumulator<F>,
     challenges: RaOneHotChallenges<F>,
-) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 2] {
+) -> [Box<dyn DynRelationVerifier<F, T>>; 2] {
     ra_onehot_verifiers_with_params(ra_onehot_params(encoding, accumulator, challenges))
 }
 
 /// Build the RA one-hot verifiers from resolved parameters.
 pub fn ra_onehot_verifiers_with_params<F: JoltField, T: Transcript>(
     params: RaOneHotParams<F>,
-) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 2] {
+) -> [Box<dyn DynRelationVerifier<F, T>>; 2] {
     let (ra_params, booleanity_params) = params;
     [
         Box::new(ra_params.into_verifier()),

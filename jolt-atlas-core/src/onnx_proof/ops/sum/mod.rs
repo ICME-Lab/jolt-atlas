@@ -1,7 +1,8 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::ProveOp;
 use atlas_algebra::field::JoltField;
-use atlas_sumcheck::sumcheck::{Sumcheck, SumcheckInstanceProof};
+use atlas_sumcheck::relation::prover::prove_relation;
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_trace::op::Sum;
 use atlas_transcript::Transcript;
 
@@ -44,7 +45,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Sum {
             &mut prover.transcript,
         );
         let mut reduction = RelationProver::initialize(&prover.trace, params);
-        let (proof, _) = Sumcheck::prove(
+        let (proof, _) = prove_relation(
             &mut reduction,
             &mut prover.accumulator,
             &mut prover.transcript,

@@ -1,6 +1,7 @@
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
+use atlas_sumcheck::relation::verify_relation;
 use atlas_trace::{op::Einsum, Model, Op};
 
 use crate::node_view::ComputationNode;
@@ -30,10 +31,7 @@ use crate::{
 use atlas_algebra::{
     field::JoltField, poly::opening_point::OpeningPoint, utils::errors::ProofVerifyError,
 };
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    sumcheck::Sumcheck,
-};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
 use jolt_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
@@ -83,7 +81,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Einsum {
         let relation = ContractionRelation::for_node(&verifier.preprocessing.model, node.clone());
         let matmul =
             RelationVerifier::new(relation, &verifier.accumulator, &mut verifier.transcript);
-        Sumcheck::verify(
+        verify_relation(
             matmul_proof,
             &matmul,
             &mut verifier.accumulator,

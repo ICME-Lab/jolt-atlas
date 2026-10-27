@@ -89,8 +89,6 @@ impl<F: JoltField> RelationWitness<F> for ExpSumProver<F> {
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField] ExpSumProver<F>);
-
 impl<F: JoltField> ExpSumProver<F> {
     /// Bind round `round`'s challenge.
     fn bind(&mut self, r: F, round: usize) {

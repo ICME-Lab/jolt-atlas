@@ -17,6 +17,7 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;
+use atlas_sumcheck::relation::DynRelationVerifier;
 use atlas_sumcheck::{
     opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator},
     sumcheck::SumcheckInstanceProof,
@@ -49,7 +50,7 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
     /// Verifier instances built during the node loop, verified afterwards per batch.
     pub deferred_batches: BTreeMap<
         crate::onnx_proof::deferred_lookups::DeferredBatch,
-        Vec<Box<dyn atlas_sumcheck::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>>,
+        Vec<Box<dyn DynRelationVerifier<F, T>>>,
     >,
     /// One-hot checks to verify right after their parent batch.
     pub deferred_onehots: Vec<crate::onnx_proof::deferred_lookups::DeferredOneHot>,
@@ -83,7 +84,7 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
     pub fn defer(
         &mut self,
         kind: crate::onnx_proof::deferred_lookups::DeferredBatch,
-        instance: Box<dyn atlas_sumcheck::sumcheck_verifier::SumcheckInstanceVerifier<F, T>>,
+        instance: Box<dyn DynRelationVerifier<F, T>>,
     ) {
         self.deferred_batches
             .entry(kind)

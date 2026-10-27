@@ -62,10 +62,8 @@ use atlas_algebra::{
     },
     utils::thread::unsafe_allocate_zero_vec,
 };
-use atlas_sumcheck::{
-    booleanity::{prover::BooleanitySumcheckProver, BooleanitySumcheckParams},
-    sumcheck::prover::SumcheckInstanceProver,
-};
+use atlas_sumcheck::booleanity::{prover::BooleanitySumcheckProver, BooleanitySumcheckParams};
+use atlas_sumcheck::relation::prover::DynRelationWitness;
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::clamp_split::*;
@@ -118,8 +116,6 @@ impl<F: JoltField> RelationWitness<F> for SplitProver<F> {
         ]
     }
 }
-
-atlas_sumcheck::relation_witness_instance!([F: JoltField] SplitProver<F>);
 
 impl<F: JoltField> SplitProver<F> {
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
@@ -235,8 +231,6 @@ impl<F: JoltField> RelationWitness<F> for ValueProver<F> {
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField] ValueProver<F>);
-
 impl<F: JoltField> ValueProver<F> {
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let half = self.w.len() / 2;
@@ -288,7 +282,7 @@ impl<F: JoltField> ProveRounds<F> for ValueProver<F> {
 pub fn exact_chunk_check_provers<F: JoltField, T: Transcript>(
     params: BooleanitySumcheckParams<F>,
     split: &BucketSplit,
-) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     let values: Vec<u64> = split.out.iter().map(|&o| o as u64).collect();
     let indices = value_chunk_indices(&values, OUT_LOG_K);
     let g = compute_g(&indices, &params.r_cycle);
@@ -302,7 +296,7 @@ pub fn remainder_chunk_check_provers<F: JoltField, T: Transcript>(
     params: BooleanitySumcheckParams<F>,
     values: &[u64],
     width: usize,
-) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     let indices = value_chunk_indices(values, width);
     let g = compute_g(&indices, &params.r_cycle);
     vec![Box::new(BooleanitySumcheckProver::<F, u8>::gen(
@@ -319,7 +313,7 @@ pub fn remainder_chunk_check_provers<F: JoltField, T: Transcript>(
 pub fn chunk_check_provers<F: JoltField, T: Transcript>(
     params: BooleanitySumcheckParams<F>,
     split: &BucketSplit,
-) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
+) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     let indices = split.chunk_indices();
     let g = compute_g(&indices, &params.r_cycle);
     vec![Box::new(BooleanitySumcheckProver::<F, u8>::gen(

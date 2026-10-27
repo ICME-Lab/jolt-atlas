@@ -152,8 +152,6 @@ impl<F: JoltField, S: SmallTable> RelationWitness<F> for TrigTableProver<F, S> {
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField, S: SmallTable] TrigTableProver<F, S>);
-
 impl<F: JoltField, S: SmallTable> ProveRounds<F> for TrigTableProver<F, S> {
     fn num_rounds(&self) -> usize {
         self.relation.rounds()

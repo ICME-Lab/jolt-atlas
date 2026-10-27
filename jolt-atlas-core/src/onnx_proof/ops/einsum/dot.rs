@@ -117,8 +117,6 @@ impl<F: JoltField> RelationWitness<F> for EinsumDotProver<F> {
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField] EinsumDotProver<F>);
-
 impl<F: JoltField> EinsumDotProver<F> {
     fn round_message(&mut self, round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let half = self.left.len() / 2;

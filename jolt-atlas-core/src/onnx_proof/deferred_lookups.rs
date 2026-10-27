@@ -12,7 +12,7 @@
 //!
 //! Nodes now append their claims as before and register a [`ProverLookupJob`];
 //! after the IOP, [`prove_all`] runs every clamp read-raf as one
-//! [`BatchedSumcheck`], then every clamp one-hot check as one more, and the same
+//! one batched sumcheck, then every clamp one-hot check as one more, and the same
 //! pair for the rescale remainders. The verifier mirrors it in [`verify_all`]
 //! after its node loop. The batched sumcheck computes instance messages in
 //! parallel across instances, which is what turns the ~750 tiny sequential
@@ -30,9 +30,10 @@ use atlas_algebra::{
     poly::opening_point::OpeningPoint,
     utils::{lookup_bits::LookupBits, thread::drop_in_background_thread},
 };
+use atlas_sumcheck::relation::prover::{prove_relation_batch_parallel, DynRelationWitness};
 use atlas_sumcheck::{
     shout::{self, RaOneHotParams},
-    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, SumcheckInstanceProof},
+    sumcheck::SumcheckInstanceProof,
 };
 use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::deferred_lookups::*;
@@ -62,14 +63,14 @@ pub enum ProverLookupJob {
 }
 
 fn batched_prove<F: JoltField, T: Transcript>(
-    mut instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>>,
+    mut instances: Vec<Box<dyn DynRelationWitness<F, T>>>,
     prover: &mut Prover<F, T>,
     proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
     proof_type: ProofType,
 ) {
     let _s = tracing::span!(tracing::Level::INFO, "deferred::batched_prove", kind = ?proof_type)
         .entered();
-    let (proof, _) = BatchedSumcheck::prove_parallel_instances(
+    let (proof, _) = prove_relation_batch_parallel(
         instances.iter_mut().map(|v| &mut **v as _).collect(),
         &mut prover.accumulator,
         &mut prover.transcript,
@@ -174,7 +175,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             })
             .collect();
         drop(_p);
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
+        let instances: Vec<Box<dyn DynRelationWitness<F, T>>> = {
             let _span =
                 tracing::span!(tracing::Level::INFO, "deferred::build_clamp_split").entered();
             params
@@ -182,13 +183,12 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 .zip(splits.par_iter())
                 .map(|(p, s)| match p {
                     Params::Split(p) => {
-                        Box::new(SplitProver::new(p, s)) as Box<dyn SumcheckInstanceProver<F, T>>
+                        Box::new(SplitProver::new(p, s)) as Box<dyn DynRelationWitness<F, T>>
                     }
                     Params::Exact(p) => Box::new(ValueProver::new(
                         p,
                         s.out.iter().map(|&o| o as u64).collect(),
-                    ))
-                        as Box<dyn SumcheckInstanceProver<F, T>>,
+                    )) as Box<dyn DynRelationWitness<F, T>>,
                 })
                 .collect()
         };
@@ -213,7 +213,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 }
             })
             .collect();
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
+        let instances: Vec<Box<dyn DynRelationWitness<F, T>>> = {
             let _span =
                 tracing::span!(tracing::Level::INFO, "deferred::build_clamp_chunks").entered();
             params
@@ -270,15 +270,14 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 }
             })
             .collect();
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
+        let instances: Vec<Box<dyn DynRelationWitness<F, T>>> = {
             let _span =
                 tracing::span!(tracing::Level::INFO, "deferred::build_remainder_rc").entered();
             params
                 .into_par_iter()
                 .zip(values.par_iter())
                 .map(|(p, v)| {
-                    Box::new(ValueProver::new(p, v.clone()))
-                        as Box<dyn SumcheckInstanceProver<F, T>>
+                    Box::new(ValueProver::new(p, v.clone())) as Box<dyn DynRelationWitness<F, T>>
                 })
                 .collect()
         };
@@ -294,7 +293,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 )
             })
             .collect();
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
+        let instances: Vec<Box<dyn DynRelationWitness<F, T>>> = {
             let _span =
                 tracing::span!(tracing::Level::INFO, "deferred::build_remainder_onehot").entered();
             params
@@ -342,7 +341,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                 .map(|(j, _)| j.params::<F, T>(&prover.accumulator, &mut prover.transcript))
                 .collect()
         };
-        let instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = {
+        let instances: Vec<Box<dyn DynRelationWitness<F, T>>> = {
             let _s = tracing::span!(tracing::Level::INFO, "deferred::build_onehots", kind = ?kind)
                 .entered();
             params

@@ -18,10 +18,8 @@ use crate::{
 };
 use atlas_algebra::field::JoltField;
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-use atlas_sumcheck::{
-    evaluation_reduction::EvalReductionProof,
-    sumcheck::{Sumcheck, SumcheckInstanceProof},
-};
+use atlas_sumcheck::relation::prover::prove_relation;
+use atlas_sumcheck::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof};
 use atlas_trace::op::Rsqrt;
 use atlas_transcript::Transcript;
 use common::consts::XLEN;
@@ -43,7 +41,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Rsqrt {
             &mut prover.transcript,
         );
         let mut prover_sumcheck = RelationProver::initialize(&prover.trace, params);
-        let (proof, _) = Sumcheck::prove(
+        let (proof, _) = prove_relation(
             &mut prover_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,

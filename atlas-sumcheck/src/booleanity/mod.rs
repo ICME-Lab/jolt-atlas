@@ -286,7 +286,7 @@ mod tests {
     use common::CommittedPoly;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
-    use crate::sumcheck::Sumcheck;
+    use crate::relation::{prover::prove_relation, verify_relation};
     use atlas_algebra::{field::IntoOpening, utils::thread::unsafe_allocate_zero_vec};
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
@@ -342,7 +342,7 @@ mod tests {
         let mut prover = SmallBooleanitySumcheckProver::gen(params, vec![G], vec![H_indices]);
 
         let (proof, _) =
-            Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
+            prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
         let mut verifier_transcript = Blake2bVerifier::new(b"", prover_transcript.narg().to_vec());
         let mut verifier_accumulator = VerifierOpeningAccumulator::new();
@@ -360,7 +360,7 @@ mod tests {
         }
 
         let verifier = prover.params.into_verifier();
-        Sumcheck::verify(
+        verify_relation(
             &proof,
             &verifier,
             &mut verifier_accumulator,

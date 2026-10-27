@@ -289,8 +289,6 @@ impl<F: JoltField, R: EngineRelation<F>> RelationWitness<F> for RelationProver<F
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField, R: EngineRelation<F>] RelationProver<F, R>);
-
 /// One output term with the eq factor taken out and its challenges folded into the
 /// coefficient: `coefficient · Π wires`. A wire indexes the produced openings' witnesses, then
 /// the public tables after them.

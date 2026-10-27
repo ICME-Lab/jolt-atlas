@@ -11,7 +11,7 @@
 //!
 //! Both stages proceed sumcheck-then-sumcheck (Execution, then ActivationClamp), with
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
-//! `BatchedSumcheck` call.
+//! batched sumcheck.
 
 use atlas_trace::{Tensor, Trace};
 

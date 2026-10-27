@@ -12,7 +12,7 @@
 //!
 //! Nodes now append their claims as before and register a [`ProverLookupJob`];
 //! after the IOP, [`prove_all`] runs every clamp read-raf as one
-//! [`BatchedSumcheck`], then every clamp one-hot check as one more, and the same
+//! one batched sumcheck, then every clamp one-hot check as one more, and the same
 //! pair for the rescale remainders. The verifier mirrors it in [`verify_all`]
 //! after its node loop. The batched sumcheck computes instance messages in
 //! parallel across instances, which is what turns the ~750 tiny sequential
@@ -26,11 +26,10 @@ use crate::onnx_proof::{
 use atlas_algebra::{
     field::JoltField, poly::opening_point::OpeningPoint, utils::errors::ProofVerifyError,
 };
+use atlas_sumcheck::relation::{verify_relation_batch, DynRelationVerifier};
 use atlas_sumcheck::{
     opening_proof::OpeningAccumulator,
     shout::{self, RaOneHotEncoding, RaOneHotParams},
-    sumcheck::BatchedSumcheck,
-    sumcheck_verifier::SumcheckInstanceVerifier,
 };
 use atlas_transcript::Transcript;
 
@@ -178,7 +177,7 @@ pub enum VerifierLookupJob {
 }
 
 fn batched_verify<F: JoltField, T: Transcript>(
-    instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>,
+    instances: Vec<Box<dyn DynRelationVerifier<F, T>>>,
     verifier: &mut Verifier<'_, F, T>,
     proof_type: ProofType,
 ) -> Result<(), ProofVerifyError> {
@@ -186,7 +185,7 @@ fn batched_verify<F: JoltField, T: Transcript>(
         .proofs
         .get(&ProofId(DEFERRED_PROOF_IDX, proof_type))
         .ok_or(ProofVerifyError::MissingProof(DEFERRED_PROOF_IDX))?;
-    BatchedSumcheck::verify(
+    verify_relation_batch(
         proof,
         instances.iter().map(|v| &**v as _).collect(),
         &mut verifier.accumulator,
@@ -251,7 +250,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
             }
             exact.push(e);
         }
-        let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = buckets
+        let instances: Vec<Box<dyn DynRelationVerifier<F, T>>> = buckets
             .iter()
             .zip(&exact)
             .map(|(b, &e)| {
@@ -260,19 +259,19 @@ pub fn verify_all<F: JoltField, T: Transcript>(
                         b,
                         &verifier.accumulator,
                         &mut verifier.transcript,
-                    ))) as Box<dyn SumcheckInstanceVerifier<F, T>>
+                    ))) as Box<dyn DynRelationVerifier<F, T>>
                 } else {
                     Box::new(SplitParams::into_verifier(SplitParams::draw(
                         b,
                         &verifier.accumulator,
                         &mut verifier.transcript,
-                    ))) as Box<dyn SumcheckInstanceVerifier<F, T>>
+                    ))) as Box<dyn DynRelationVerifier<F, T>>
                 }
             })
             .collect();
         batched_verify(instances, verifier, ProofType::DeferredClampSplit)?;
 
-        let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
+        let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
             Vec::with_capacity(buckets.len());
         for (b, &e) in buckets.iter().zip(&exact) {
             let p = if e {
@@ -307,7 +306,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
     }
     if !rbuckets.is_empty() {
         let model = verifier.preprocessing.model();
-        let instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = rbuckets
+        let instances: Vec<Box<dyn DynRelationVerifier<F, T>>> = rbuckets
             .iter()
             .map(|b| {
                 let gammas: Vec<F> = verifier.transcript.challenge_scalar_powers(b.nodes.len());
@@ -318,12 +317,12 @@ pub fn verify_all<F: JoltField, T: Transcript>(
                     value_id: clamp_split::remainder_value_id(b.idx),
                     cycle,
                     input_claim,
-                })) as Box<dyn SumcheckInstanceVerifier<F, T>>
+                })) as Box<dyn DynRelationVerifier<F, T>>
             })
             .collect();
         batched_verify(instances, verifier, ProofType::DeferredRemainderRC)?;
 
-        let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
+        let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
             Vec::with_capacity(rbuckets.len());
         for b in &rbuckets {
             let p = clamp_split::remainder_chunk_check_params::<F, T>(
@@ -353,7 +352,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         if mine.is_empty() {
             continue;
         }
-        let mut instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> =
+        let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
             Vec::with_capacity(3 * mine.len());
         for j in &mine {
             let p = j.params::<F, T>(&verifier.accumulator, &mut verifier.transcript);

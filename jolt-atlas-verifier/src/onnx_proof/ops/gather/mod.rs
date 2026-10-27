@@ -17,10 +17,7 @@ use atlas_algebra::{
     },
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
-    sumcheck_verifier::SumcheckInstanceVerifier,
-};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
 use atlas_trace::{Model, Op};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;

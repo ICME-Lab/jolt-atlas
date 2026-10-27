@@ -1,10 +1,8 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
-    sumcheck::Sumcheck,
-};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
+use atlas_sumcheck::relation::verify_relation;
 use atlas_trace::op::Sum;
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
@@ -87,7 +85,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sum {
             &verifier.accumulator,
             &mut verifier.transcript,
         );
-        Sumcheck::verify(
+        verify_relation(
             proof,
             &reduction,
             &mut verifier.accumulator,

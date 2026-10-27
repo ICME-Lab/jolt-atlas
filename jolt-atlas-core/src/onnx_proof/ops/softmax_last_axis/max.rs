@@ -117,8 +117,6 @@ impl<F: JoltField> RelationWitness<F> for MaxIndicatorProver<F> {
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField] MaxIndicatorProver<F>);
-
 impl<F: JoltField> MaxIndicatorProver<F> {
     /// Bind round `round`'s challenge.
     fn bind(&mut self, r: F, round: usize) {

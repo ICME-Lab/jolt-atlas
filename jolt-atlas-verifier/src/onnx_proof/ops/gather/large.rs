@@ -1,9 +1,9 @@
 use super::*;
+use atlas_sumcheck::relation::{verify_relation, verify_relation_batch, DynRelationVerifier};
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::OpeningId,
     shout::{self, RaOneHotEncoding},
-    sumcheck::{BatchedSumcheck, Sumcheck},
 };
 use atlas_trace::op::GatherLarge;
 use common::CommittedPoly;
@@ -30,7 +30,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherLarge {
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let exec_sumcheck = gather_verifier(node, verifier);
-        Sumcheck::verify(
+        verify_relation(
             proof,
             &exec_sumcheck,
             &mut verifier.accumulator,
@@ -44,9 +44,8 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherLarge {
         let encoding = GatherRaEncoding::new(node);
         let [ra_verifier, bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
-        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
-            vec![&*ra_verifier, &*bool_verifier];
-        BatchedSumcheck::verify(
+        let instances: Vec<&dyn DynRelationVerifier<F, T>> = vec![&*ra_verifier, &*bool_verifier];
+        verify_relation_batch(
             ra_one_hot_proof,
             instances,
             &mut verifier.accumulator,

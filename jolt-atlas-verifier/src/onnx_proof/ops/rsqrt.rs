@@ -27,11 +27,11 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
+use atlas_sumcheck::relation::verify_relation;
 use atlas_sumcheck::{
     evaluation_reduction::EvalReductionProof,
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::RaOneHotEncoding,
-    sumcheck::Sumcheck,
 };
 use atlas_trace::{op::Rsqrt, trace::LayerData, Op, Trace};
 use atlas_transcript::Transcript;
@@ -91,7 +91,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Rsqrt {
             &verifier.accumulator,
             &mut verifier.transcript,
         );
-        Sumcheck::verify(
+        verify_relation(
             proof,
             &verifier_sumcheck,
             &mut verifier.accumulator,

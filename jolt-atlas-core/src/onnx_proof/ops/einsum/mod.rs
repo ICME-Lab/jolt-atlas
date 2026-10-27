@@ -1,4 +1,5 @@
 use crate::onnx_proof::ops::ProveOp;
+use atlas_sumcheck::relation::prover::prove_relation;
 use atlas_trace::op::Einsum;
 pub use jolt_atlas_verifier::onnx_proof::ops::einsum::*;
 
@@ -11,7 +12,7 @@ use crate::onnx_proof::{
     ProofId, ProofType,
 };
 use atlas_algebra::field::JoltField;
-use atlas_sumcheck::sumcheck::{Sumcheck, SumcheckInstanceProof};
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_transcript::Transcript;
 
 pub mod abmk_abnk_abmn;
@@ -44,7 +45,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Einsum {
         let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
         let mut matmul = EinsumDotProver::initialize(&prover.trace, params);
         let (matmul_proof, _) =
-            Sumcheck::prove(&mut matmul, &mut prover.accumulator, &mut prover.transcript);
+            prove_relation(&mut matmul, &mut prover.accumulator, &mut prover.transcript);
         proofs.push((ProofId(node.idx, ProofType::EinsumMatmul), matmul_proof));
 
         if fused && !is_scalar(node) {

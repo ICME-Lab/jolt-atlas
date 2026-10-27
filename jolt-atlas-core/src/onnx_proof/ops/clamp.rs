@@ -4,10 +4,8 @@ use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::{op_lookups::OpLookupProvider, ProofId, ProofType, Prover};
 use atlas_algebra::field::JoltField;
 use atlas_lookup_tables::clamp::{ClampTable, CLAMP_BOUND};
-use atlas_sumcheck::{
-    shout,
-    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-};
+use atlas_sumcheck::relation::prover::{prove_relation, prove_relation_batch, DynRelationWitness};
+use atlas_sumcheck::{shout, sumcheck::SumcheckInstanceProof};
 use atlas_trace::op::Clamp;
 use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::ops::clamp::*;
@@ -33,7 +31,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Clamp {
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );
-        let (execution_proof, _) = Sumcheck::prove(
+        let (execution_proof, _) = prove_relation(
             &mut execution_sumcheck,
             &mut prover.accumulator,
             &mut prover.transcript,
@@ -50,9 +48,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Clamp {
             &mut prover.transcript,
         );
 
-        let mut instances: Vec<Box<dyn SumcheckInstanceProver<_, _>>> =
-            vec![ra_prover, bool_prover];
-        let (ra_one_hot_proof, _) = BatchedSumcheck::prove(
+        let mut instances: Vec<Box<dyn DynRelationWitness<_, _>>> = vec![ra_prover, bool_prover];
+        let (ra_one_hot_proof, _) = prove_relation_batch(
             instances.iter_mut().map(|v| &mut **v as _).collect(),
             &mut prover.accumulator,
             &mut prover.transcript,

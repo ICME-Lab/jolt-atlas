@@ -13,6 +13,7 @@
 //! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use atlas_sumcheck::relation::{verify_relation_batch, DynRelationVerifier};
 
 use crate::{
     onnx_proof::{
@@ -49,10 +50,7 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::{
-    identity_range_check::identity_rangecheck_verifier,
-    shout,
-    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
-    sumcheck_verifier::SumcheckInstanceVerifier,
+    identity_range_check::identity_rangecheck_verifier, shout, sumcheck::SumcheckInstanceProof,
 };
 use atlas_transcript::Transcript;
 use common::{
@@ -178,13 +176,8 @@ impl SoftmaxLastAxisVerifier {
         transcript: &mut T,
         proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F>>,
         scale_bits: i32,
-    ) -> Result<
-        (
-            Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>,
-            Vec<DeferredOneHot>,
-        ),
-        ProofVerifyError,
-    > {
+    ) -> Result<(Vec<Box<dyn DynRelationVerifier<F, T>>>, Vec<DeferredOneHot>), ProofVerifyError>
+    {
         self.cache_exp_sum(accumulator, transcript)?;
         self.cache_R(accumulator, transcript);
         self.run_stage(
@@ -226,7 +219,7 @@ impl SoftmaxLastAxisVerifier {
     fn run_stage<F: JoltField, T: Transcript>(
         &self,
         proof_type: ProofType,
-        instances: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>,
+        instances: Vec<Box<dyn DynRelationVerifier<F, T>>>,
         proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F>>,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
@@ -234,9 +227,9 @@ impl SoftmaxLastAxisVerifier {
         let proof = proofs
             .get(&ProofId(self.idx(), proof_type))
             .ok_or(ProofVerifyError::MissingProof(self.idx()))?;
-        let refs: Vec<&dyn SumcheckInstanceVerifier<F, T>> =
+        let refs: Vec<&dyn DynRelationVerifier<F, T>> =
             instances.iter().map(|b| b.as_ref()).collect();
-        BatchedSumcheck::verify(proof, refs, accumulator, transcript)?;
+        verify_relation_batch(proof, refs, accumulator, transcript)?;
         Ok(())
     }
 }
@@ -387,7 +380,7 @@ impl SoftmaxLastAxisVerifier {
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
         scale_bits: i32,
-    ) -> Result<Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>, ProofVerifyError> {
+    ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
         let inv_sum = self.inv_sum_evals(&*accumulator)?;
         let recip_mult_verifier = RecipMultRelation::with_inv_sum(
             RecipMultParams::new(
@@ -437,7 +430,7 @@ impl SoftmaxLastAxisVerifier {
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
         scale_bits: i32,
-    ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
+    ) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
         let [f, _n] = self.F_N;
         let log_f = f.log_2();
 
@@ -498,7 +491,7 @@ impl SoftmaxLastAxisVerifier {
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
         lut: &VerifierLookupTableData,
-    ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
+    ) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
         let provider = ExpReadRafProvider {
             node: self.computation_node.clone(),
             table_size: lut.table_hi.len(),
@@ -574,7 +567,7 @@ impl SoftmaxLastAxisVerifier {
         accumulator: &VerifierOpeningAccumulator<F>,
         transcript: &mut T,
         lut: &VerifierLookupTableData,
-    ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
+    ) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut.table_hi.len().log_2());
         let [hi_ra_verifier, hi_bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, accumulator, transcript);

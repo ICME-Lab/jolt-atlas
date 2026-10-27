@@ -4,11 +4,10 @@
 //! A sumcheck reduces multiple opening proofs (multiple polynomials, not
 //! necessarily of the same size, each opened at a different point) into a single opening.
 
+use crate::relation::{verify_relation_batch, DynRelationVerifier};
 use crate::{
-    evaluation_reduction::ReducedInstance,
-    opening_reduction::OpeningReductionGroup,
-    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
-    sumcheck_verifier::SumcheckInstanceVerifier,
+    evaluation_reduction::ReducedInstance, opening_reduction::OpeningReductionGroup,
+    sumcheck::SumcheckInstanceProof,
 };
 use allocative::Allocative;
 use ark_serialize::{
@@ -411,11 +410,11 @@ where
             .values()
             .map(|group| group.verifier())
             .collect();
-        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = verifiers
+        let instances: Vec<&dyn DynRelationVerifier<F, T>> = verifiers
             .iter()
-            .map(|verifier| verifier as &dyn SumcheckInstanceVerifier<F, T>)
+            .map(|verifier| verifier as &dyn DynRelationVerifier<F, T>)
             .collect();
-        BatchedSumcheck::verify(sumcheck_proof, instances, self, transcript)
+        verify_relation_batch(sumcheck_proof, instances, self, transcript)
     }
 
     #[tracing::instrument(

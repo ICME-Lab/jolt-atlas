@@ -16,12 +16,11 @@ use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_lookup_tables::{
     right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable,
 };
+use atlas_sumcheck::relation::{verify_relation_batch, DynRelationVerifier};
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningId, SumcheckId},
     shout::{self, RaOneHotEncoding},
-    sumcheck::BatchedSumcheck,
-    sumcheck_verifier::SumcheckInstanceVerifier,
 };
 use atlas_trace::op::Cos;
 use atlas_transcript::Transcript;
@@ -90,7 +89,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Cos {
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        BatchedSumcheck::verify(
+        verify_relation_batch(
             exec_proof,
             vec![&dsc_verifier, &exec_sumcheck, &rangecheck_verifier],
             &mut verifier.accumulator,
@@ -107,7 +106,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Cos {
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let mut onehot_verifiers: Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> = Vec::new();
+        let mut onehot_verifiers: Vec<Box<dyn DynRelationVerifier<F, T>>> = Vec::new();
         onehot_verifiers.extend(shout::ra_onehot_verifiers(
             &dsc_encoding,
             &verifier.accumulator,
@@ -123,7 +122,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Cos {
             &verifier.accumulator,
             &mut verifier.transcript,
         ));
-        BatchedSumcheck::verify(
+        verify_relation_batch(
             onehot_proof,
             onehot_verifiers.iter().map(|v| &**v as _).collect(),
             &mut verifier.accumulator,

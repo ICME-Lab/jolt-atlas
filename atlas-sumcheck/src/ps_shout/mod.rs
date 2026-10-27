@@ -1,9 +1,13 @@
 use crate::{
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
+    relation::{
+        Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
+        RelationOpening, RelationSetup, RelationVerifier,
+    },
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::MultilinearPolynomial,
@@ -13,8 +17,9 @@ use atlas_algebra::{
     utils::{lookup_bits::LookupBits, thread::unsafe_allocate_zero_vec},
 };
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
-use atlas_transcript::Transcript;
 use common::{parallel::par_enabled, VirtualPoly};
+use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use jolt_poly::GruenSplitEqPolynomial;
 use rayon::prelude::*;
 
@@ -274,69 +279,123 @@ where
     }
 }
 
-/// Generic verifier for the Prefix-Suffix Read-RAF sumcheck.
-pub struct ReadRafSumcheckVerifier<F, LUT, const LOG_K: usize, const N: usize, VD>
+/// The prefix-suffix read-raf check as a relation: over the address-then-cycle hypercube,
+///
+/// ```text
+/// input claim   rv + γ·raf_input
+/// output claim  w(ρ_cycle) · ra(ρ) · (val(ρ_address) + γ·raf(ρ_address))
+/// ```
+///
+/// with `w` the [`CycleWeight`] and `ρ = (ρ_address, ρ_cycle)` the bound point (address in round
+/// order, cycle reversed). **S ⊆ R.** An honest `ra` is the one-hot encoding of the lookup
+/// addresses, so the sum over addresses reads the table value and the address at each cycle.
+/// The parameters carry their field data; the setup carries `γ` and both claims.
+impl<F, LUT, const LOG_K: usize, const N: usize, VD> ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
     VD: RafVerifierData<F>,
 {
-    params: ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>,
+    /// The bound point split into its address part (round order) and cycle part (reversed).
+    fn split_point(challenges: &[F]) -> (Vec<F>, Vec<F>) {
+        let (address, cycle) = challenges.split_at(LOG_K);
+        (address.to_vec(), cycle.iter().rev().copied().collect())
+    }
+
+    /// The relation these parameters instantiate, with its setup.
+    pub fn into_verifier(self) -> ReadRafSumcheckVerifier<F, LUT, LOG_K, N, VD> {
+        let setup = RelationSetup {
+            incoming_point: Vec::new(),
+            challenges: vec![
+                (RelationChallenge::Gamma, self.gamma),
+                (RelationChallenge::Claim, self.rv_claim),
+                (
+                    RelationChallenge::SecondClaim,
+                    self.raf.raf_input_claim(self.gamma),
+                ),
+            ],
+        };
+        RelationVerifier::at(self, setup)
+    }
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD> ReadRafSumcheckVerifier<F, LUT, LOG_K, N, VD>
+impl<F, LUT, const LOG_K: usize, const N: usize, VD> SymbolicSumcheck
+    for ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
     VD: RafVerifierData<F>,
 {
-    pub fn new(params: ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>) -> Self {
-        Self { params }
+    crate::relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
+    }
+
+    fn id() -> RelationId {
+        RelationId::PrefixSuffixReadRaf
+    }
+
+    fn rounds(&self) -> usize {
+        LOG_K + self.log_T
+    }
+
+    fn degree(&self) -> usize {
+        DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        challenge::<G, _, _, _>(RelationChallenge::Claim)
+            + challenge::<G, _, _, _>(RelationChallenge::Gamma)
+                * challenge(RelationChallenge::SecondClaim)
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        derived::<G, _, _, _>(RelationDerived::CycleEq)
+            * opening(RelationOpening::Id(self.produced()[0]))
+            * (derived::<G, _, _, _>(RelationDerived::Table(0))
+                + challenge::<G, _, _, _>(RelationChallenge::Gamma) * derived(RelationDerived::Raf))
     }
 }
 
-impl<F: JoltField, FS: Transcript, LUT, const LOG_K: usize, const N: usize, VD>
-    SumcheckInstanceVerifier<F, FS> for ReadRafSumcheckVerifier<F, LUT, LOG_K, N, VD>
+impl<F, LUT, const LOG_K: usize, const N: usize, VD> Produces
+    for ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
 where
+    F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
     VD: RafVerifierData<F>,
 {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let (r_address_prime, r_node_output_prime) = opening_point.split_at(LOG_K);
-        let id = OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
-        let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(id);
-        let val_claim = self.params.table.evaluate_mle(&r_address_prime.r);
-        let eq_eval = self.params.cycle.mle(&r_node_output_prime.r);
-        let raf_claim = self
-            .params
-            .raf
-            .raf_claim_at(&r_address_prime.r, self.params.gamma);
-        eq_eval * ra_claim * (val_claim + self.params.gamma * raf_claim)
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut FS,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let id = OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id);
-        accumulator.append_virtual(transcript, id, opening_point);
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningId::new(self.polynomial_type, self.sumcheck_id)]
     }
 }
+
+impl<F, LUT, const LOG_K: usize, const N: usize, VD> Relation<F>
+    for ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
+where
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N> + Send + Sync,
+    VD: RafVerifierData<F>,
+{
+    fn opening_points(&self, _setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+        let (address, cycle) = Self::split_point(challenges);
+        vec![[address, cycle].concat()]
+    }
+
+    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        let (address, cycle) = Self::split_point(challenges);
+        match id {
+            RelationDerived::Table(0) => self.table.evaluate_mle(&address),
+            RelationDerived::CycleEq => self.cycle.mle(&cycle),
+            RelationDerived::Raf => self.raf.raf_claim_at(&address, self.gamma),
+            other => panic!("{other:?} is not derived by this relation"),
+        }
+    }
+}
+
+/// The verifier of a prefix-suffix read-raf check: its relation.
+pub type ReadRafSumcheckVerifier<F, LUT, const LOG_K: usize, const N: usize, VD> =
+    RelationVerifier<F, ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>>;
 
 pub mod prover;

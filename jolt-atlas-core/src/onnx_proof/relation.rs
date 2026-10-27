@@ -52,7 +52,7 @@ macro_rules! atlas_relation_types {
         type OpeningId = $crate::onnx_proof::relation::RelationOpening;
         type DerivedId = $crate::onnx_proof::relation::RelationDerived;
         type ChallengeId = $crate::onnx_proof::relation::RelationChallenge;
-        type Challenges<F> = jolt_claims::NoChallenges<F>;
+        type Challenges<C> = jolt_claims::NoChallenges<C>;
         type Inputs<C> = jolt_claims::NoInputs<C>;
         type Outputs<C> = jolt_claims::NoOutputs<C>;
     };

@@ -84,7 +84,7 @@ pub fn ps_read_raf_verifier<
         claims.rv_claim,
         raf,
     );
-    ReadRafSumcheckVerifier::new(params)
+    params.into_verifier()
 }
 
 pub type BinaryReadRafSumcheckVerifier<F, LUT> =

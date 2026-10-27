@@ -93,7 +93,7 @@ pub fn ps_read_raf_verifier_with_gamma<
         claims.rv_claim,
         raf,
     );
-    ReadRafSumcheckVerifier::new(params)
+    params.into_verifier()
 }
 
 pub fn ps_read_raf_verifier<
@@ -125,7 +125,7 @@ pub fn ps_read_raf_verifier<
         claims.rv_claim,
         raf,
     );
-    ReadRafSumcheckVerifier::new(params)
+    params.into_verifier()
 }
 
 pub type UnaryReadRafSumcheckVerifier<F, LUT, const LOG_K: usize> =

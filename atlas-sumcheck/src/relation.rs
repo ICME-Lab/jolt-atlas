@@ -66,6 +66,10 @@ pub enum RelationDerived {
     CycleEq,
     /// The address index `Σ_j 2^j·r_j` at the bound address coordinates.
     AddressIndex,
+    /// The identity polynomial `Σ_j 2^j·r_j` over a read-raf check's address point.
+    Identity,
+    /// A read-raf check's read-address claim at its bound address point.
+    Raf,
 }
 
 /// A coefficient of a relation: a Fiat-Shamir challenge drawn in its setup, or a field value its
@@ -86,6 +90,8 @@ pub enum RelationChallenge {
     ClaimCoefficient(usize),
     /// A claimed sum supplied as a value.
     Claim,
+    /// A second claim supplied as a value.
+    SecondClaim,
 }
 
 /// The names relations are registered under.
@@ -135,6 +141,10 @@ pub enum RelationId {
     HammingWeight,
     /// A virtual read-address polynomial is the product of its one-hot chunks.
     RaVirtualization,
+    /// A lookup into a small table: read value plus `γ`·read address.
+    ReadRaf,
+    /// A prefix-suffix lookup into a large table: read value plus `γ`·read address.
+    PrefixSuffixReadRaf,
 }
 
 /// A relation's expression over atlas openings.
@@ -390,7 +400,7 @@ macro_rules! relation_types {
         type OpeningId = $crate::relation::RelationOpening;
         type DerivedId = $crate::relation::RelationDerived;
         type ChallengeId = $crate::relation::RelationChallenge;
-        type Challenges<F> = jolt_claims::NoChallenges<F>;
+        type Challenges<C> = jolt_claims::NoChallenges<C>;
         type Inputs<C> = jolt_claims::NoInputs<C>;
         type Outputs<C> = jolt_claims::NoOutputs<C>;
     };

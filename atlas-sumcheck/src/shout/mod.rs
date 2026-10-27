@@ -3,6 +3,10 @@ use crate::{
     config::OneHotParams,
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ra_virtual::RaSumcheckParams,
+    relation::{
+        Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
+        RelationOpening, RelationSetup, RelationVerifier,
+    },
     sumcheck_verifier::SumcheckInstanceVerifier,
 };
 use atlas_algebra::{
@@ -16,6 +20,8 @@ use atlas_algebra::{
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
+use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use rayon::prelude::*;
 
 use crate::{opening_proof::VerifierOpeningAccumulator, sumcheck_verifier::SumcheckInstanceParams};
@@ -32,12 +38,7 @@ pub fn read_raf_verifier<F: JoltField, T: Transcript>(
     accumulator: &VerifierOpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Box<dyn SumcheckInstanceVerifier<F, T>> {
-    Box::new(ReadRafVerifier::new(
-        provider,
-        table,
-        accumulator,
-        transcript,
-    ))
+    Box::new(ReadRafParams::new(provider, accumulator, transcript).into_verifier(table))
 }
 
 // TODO: Have one-unified trait for read-raf and ra-one-hot checks.
@@ -115,62 +116,105 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ReadRafParams<F> {
     //        = Challenge(0) * Opening(ra)
 }
 
-/// Verifier for lookups into small tables
-pub struct ReadRafVerifier<F: JoltField> {
-    params: ReadRafParams<F>,
+/// A lookup into a small public table as a relation: over the address hypercube,
+///
+/// ```text
+/// input claim   rv + γ·raf
+/// output claim  ra(ρ, r) · (val(ρ) + γ·id(ρ))
+/// ```
+///
+/// with `ρ` the bound address point in round order, `val` the table's MLE and `id` the identity
+/// polynomial. **S ⊆ R.** An honest `ra` is the one-hot encoding of the lookup addresses, so the
+/// sum over addresses reads the table value and the address. The setup's incoming point is the
+/// lookup's cycle point `r`; its coefficients are `γ`, `rv` and `raf`.
+pub struct ReadRafRelation {
     table: Vec<i32>,
+    log_K: usize,
+    ra_vp: VirtualPoly,
+    ra_sid: SumcheckId,
 }
 
-impl<F: JoltField> ReadRafVerifier<F> {
-    /// Create new verifier for lookups into small tables.
-    pub fn new(
-        provider: &impl ReadRafProvider<F>,
-        table: Vec<i32>,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let params = ReadRafParams::new(provider, accumulator, transcript);
-        Self { params, table }
+impl SymbolicSumcheck for ReadRafRelation {
+    crate::relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
+    }
+
+    fn id() -> RelationId {
+        RelationId::ReadRaf
+    }
+
+    fn rounds(&self) -> usize {
+        self.log_K
+    }
+
+    fn degree(&self) -> usize {
+        READ_RAF_DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        challenge::<G, _, _, _>(RelationChallenge::Claim)
+            + challenge::<G, _, _, _>(RelationChallenge::Gamma)
+                * challenge(RelationChallenge::SecondClaim)
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        opening::<G, _, _, _>(RelationOpening::Id(self.produced()[0]))
+            * (derived::<G, _, _, _>(RelationDerived::Table(0))
+                + challenge::<G, _, _, _>(RelationChallenge::Gamma)
+                    * derived(RelationDerived::Identity))
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ReadRafVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl Produces for ReadRafRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningId::new(self.ra_vp, self.ra_sid)]
+    }
+}
+
+impl<F: JoltField> Relation<F> for ReadRafRelation {
+    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+        vec![[challenges, setup.incoming_point.as_slice()].concat()]
     }
 
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let ra_claim = accumulator
-            .get_virtual_polynomial_opening(OpeningId::new(self.params.ra_vp, self.params.ra_sid))
-            .1;
-
-        let span = tracing::span!(tracing::Level::INFO, "ReadRafVerifier::val_evaluation");
-        let _guard = span.enter();
-        let val_claim =
-            MultilinearPolynomial::from(self.table.clone()).evaluate(sumcheck_challenges); // TODO: rm clone
-        drop(_guard);
-        drop(span);
-        let int_claim = IdentityPolynomial::new(self.params.log_K).evaluate(sumcheck_challenges);
-        ra_claim * (val_claim + self.params.gamma * int_claim)
+    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        match id {
+            RelationDerived::Table(0) => {
+                let _span = tracing::span!(tracing::Level::INFO, "ReadRafVerifier::val_evaluation")
+                    .entered();
+                MultilinearPolynomial::from(self.table.clone()).evaluate(challenges)
+            }
+            RelationDerived::Identity => IdentityPolynomial::new(self.log_K).evaluate(challenges),
+            other => panic!("{other:?} is not derived by this relation"),
+        }
     }
+}
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let sc_challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
-        let opening_point = [&sc_challenges, self.params.r.as_slice()].concat();
-        accumulator.append_virtual(
-            transcript,
-            OpeningId::new(self.params.ra_vp, self.params.ra_sid),
-            opening_point.into(),
-        );
+/// Verifier for lookups into small tables: the [`ReadRafRelation`].
+pub type ReadRafVerifier<F> = RelationVerifier<F, ReadRafRelation>;
+
+impl<F: JoltField> ReadRafParams<F> {
+    /// The relation these parameters instantiate over `table`, with its setup.
+    pub fn into_verifier(self, table: Vec<i32>) -> ReadRafVerifier<F> {
+        let setup = RelationSetup {
+            incoming_point: self.r,
+            challenges: vec![
+                (RelationChallenge::Gamma, self.gamma),
+                (RelationChallenge::Claim, self.rv_claim),
+                (RelationChallenge::SecondClaim, self.raf_claim),
+            ],
+        };
+        RelationVerifier::at(
+            ReadRafRelation {
+                table,
+                log_K: self.log_K,
+                ra_vp: self.ra_vp,
+                ra_sid: self.ra_sid,
+            },
+            setup,
+        )
     }
 }
 

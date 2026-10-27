@@ -19,7 +19,7 @@
 //! sumchecks into a few large parallel ones.
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    clamp_split::{self, SplitParams, SplitVerifier, ValueParams, ValueVerifier},
+    clamp_split::{self, SplitParams, ValueParams},
     global_clamp::{clamp_buckets, remainder_buckets, ClampBucket},
     ProofId, ProofType, Verifier,
 };
@@ -256,13 +256,13 @@ pub fn verify_all<F: JoltField, T: Transcript>(
             .zip(&exact)
             .map(|(b, &e)| {
                 if e {
-                    Box::new(ValueVerifier::new(clamp_split::exact_value_params(
+                    Box::new(ValueParams::into_verifier(clamp_split::exact_value_params(
                         b,
                         &verifier.accumulator,
                         &mut verifier.transcript,
                     ))) as Box<dyn SumcheckInstanceVerifier<F, T>>
                 } else {
-                    Box::new(SplitVerifier::new(SplitParams::draw(
+                    Box::new(SplitParams::into_verifier(SplitParams::draw(
                         b,
                         &verifier.accumulator,
                         &mut verifier.transcript,
@@ -313,7 +313,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
                 let gammas: Vec<F> = verifier.transcript.challenge_scalar_powers(b.nodes.len());
                 let (input_claim, cycle) =
                     b.remainder_inputs(&gammas, &verifier.accumulator, model);
-                Box::new(ValueVerifier::new(ValueParams {
+                Box::new(ValueParams::into_verifier(ValueParams {
                     bucket_idx: b.idx,
                     value_id: clamp_split::remainder_value_id(b.idx),
                     cycle,

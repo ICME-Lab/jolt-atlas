@@ -147,6 +147,10 @@ pub enum RelationId {
     PrefixSuffixReadRaf,
     /// A value is in range: its one-hot address decomposition recovers it.
     IdentityRangeCheck,
+    /// A clamp bucket's split of its accumulations into output, slack and saturation indicator.
+    ClampSplit,
+    /// A packed bucket's values opened at one point.
+    PackedValue,
 }
 
 /// A relation's expression over atlas openings.

@@ -60,6 +60,10 @@ use super::{
 };
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
+use crate::onnx_proof::relation::{
+    low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
+    RelationId, RelationOpening, RelationSetup, RelationVerifier,
+};
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
@@ -73,13 +77,15 @@ use atlas_sumcheck::booleanity::{LinearClaim, LinearTerm};
 use atlas_sumcheck::{
     booleanity::BooleanitySumcheckParams,
     config::{OneHotConfig, OneHotParams},
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ps_shout::{CycleWeight, PackedSegment},
     sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
 };
 use atlas_trace::{Model, Trace};
 use atlas_transcript::Transcript;
 use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
+use jolt_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use rayon::prelude::*;
 
 /// Address width of the output range check (`out + 2^31 ∈ [0, 2^32)`).
@@ -437,14 +443,6 @@ impl<F: JoltField> SplitParams<F> {
             m,
         )
     }
-
-    /// `OUT + β₁/M·IND·S·(2·OUT − M) + β₂·IND·OUT·(OUT − M) + β₃·IND·(1 − IND)`.
-    fn combine(&self, out: F, slack: F, ind: F) -> F {
-        let (b1, b2, b3, m) = self.coefficients();
-        out + b1 * ind * slack * (out + out - m)
-            + b2 * ind * out * (out - m)
-            + b3 * ind * (F::one() - ind)
-    }
 }
 
 impl<F: JoltField> SumcheckInstanceParams<F> for SplitParams<F> {
@@ -465,53 +463,90 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SplitParams<F> {
     }
 }
 
-/// Verifier of a bucket's split sumcheck.
-pub struct SplitVerifier<F: JoltField> {
-    params: SplitParams<F>,
-}
-
-impl<F: JoltField> SplitVerifier<F> {
-    /// Build from resolved parameters.
-    pub fn new(params: SplitParams<F>) -> Self {
-        Self { params }
+/// A bucket's split sumcheck as a relation:
+///
+/// ```text
+/// input claim   Σ_n γ_n·[out_n(r_n) + 2^31 + β₁·(acc_n(r_n) − out_n(r_n))]
+/// output claim  W(r′) · (OUT + β₁/M·IND·S·(2·OUT − M) + β₂·IND·OUT·(OUT − M) + β₃·IND·(1 − IND))
+/// ```
+///
+/// at the low-to-high bound point `r′`, with `W` the packed cycle weight (see the module docs for
+/// the S ⊆ R argument). The parameters carry the cycle weight; the setup carries the input claim
+/// and the three coefficients.
+impl<F: JoltField> SplitParams<F> {
+    /// The relation these parameters instantiate, with its setup.
+    pub fn into_verifier(self) -> SplitVerifier<F> {
+        let (b1, b2, b3, _) = self.coefficients();
+        let setup = RelationSetup {
+            incoming_point: Vec::new(),
+            challenges: vec![
+                (RelationChallenge::Claim, self.input_claim),
+                (RelationChallenge::Batching(0), b1),
+                (RelationChallenge::Batching(1), b2),
+                (RelationChallenge::Batching(2), b3),
+            ],
+        };
+        RelationVerifier::at(self, setup)
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for SplitVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> SymbolicSumcheck for SplitParams<F> {
+    crate::atlas_relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
     }
 
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let r = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let b = self.params.bucket_idx;
-        let out = accumulator.get_virtual_polynomial_opening(out_id(b)).1;
-        let slack = accumulator.get_virtual_polynomial_opening(slack_id(b)).1;
-        let ind = accumulator.get_virtual_polynomial_opening(ind_id(b)).1;
-        self.params.cycle.mle(&r.r) * self.params.combine(out, slack, ind)
+    fn id() -> RelationId {
+        RelationId::ClampSplit
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let r = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let b = self.params.bucket_idx;
-        accumulator.append_virtual(transcript, out_id(b), r.clone());
-        accumulator.append_virtual(transcript, slack_id(b), r.clone());
-        accumulator.append_virtual(transcript, ind_id(b), r);
+    fn rounds(&self) -> usize {
+        self.cycle.log_T()
+    }
+
+    fn degree(&self) -> usize {
+        4
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        challenge(RelationChallenge::Claim)
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        let b = self.bucket_idx;
+        let out = || opening::<G, _, _, _>(RelationOpening::Id(out_id(b)));
+        let slack = || opening::<G, _, _, _>(RelationOpening::Id(slack_id(b)));
+        let ind = || opening::<G, _, _, _>(RelationOpening::Id(ind_id(b)));
+        let m = || constant::<G, _, _, _>(G::from_u64(OUT_MAX));
+        let beta = |i| challenge::<G, _, _, _>(RelationChallenge::Batching(i));
+        derived::<G, _, _, _>(RelationDerived::CycleEq)
+            * (out()
+                + beta(0) * ind() * slack() * (out() + out() - m())
+                + beta(1) * ind() * out() * (out() - m())
+                + beta(2) * ind() * (constant(G::one()) - ind()))
     }
 }
+
+impl<F: JoltField> Produces for SplitParams<F> {
+    fn produced(&self) -> Vec<OpeningId> {
+        let b = self.bucket_idx;
+        vec![out_id(b), slack_id(b), ind_id(b)]
+    }
+}
+
+impl<F: JoltField> Relation<F> for SplitParams<F> {
+    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        match id {
+            RelationDerived::CycleEq => self.cycle.mle(&low_to_high_point(challenges)),
+            other => panic!("{other:?} is not derived by this relation"),
+        }
+    }
+}
+
+/// Verifier of a bucket's split sumcheck: its relation.
+pub type SplitVerifier<F> = RelationVerifier<F, SplitParams<F>>;
 
 // ---------------------------------------------------------------------------
 // Chunk checks: Booleanity with the Hamming / chunk-value linear term
@@ -619,49 +654,68 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ValueParams<F> {
     }
 }
 
-/// Verifier of the value sumcheck.
-pub struct ValueVerifier<F: JoltField> {
-    params: ValueParams<F>,
-}
-
-impl<F: JoltField> ValueVerifier<F> {
-    /// Build from resolved parameters.
-    pub fn new(params: ValueParams<F>) -> Self {
-        Self { params }
+/// The value sumcheck as a relation: `Σ_n γ_n·V_n(r_n)` against `W(r′)·V(r′)` at the
+/// low-to-high bound point `r′`, with `W` the packed cycle weight. **S ⊆ R.** `W` places each
+/// node's eq weight on its own segment, so the sum is the batched claims. The parameters carry the
+/// cycle weight; the setup carries the input claim.
+impl<F: JoltField> ValueParams<F> {
+    /// The relation these parameters instantiate, with its setup.
+    pub fn into_verifier(self) -> ValueVerifier<F> {
+        let setup = RelationSetup {
+            incoming_point: Vec::new(),
+            challenges: vec![(RelationChallenge::Claim, self.input_claim)],
+        };
+        RelationVerifier::at(self, setup)
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ValueVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> SymbolicSumcheck for ValueParams<F> {
+    crate::atlas_relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
     }
 
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let r = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let value = accumulator
-            .get_virtual_polynomial_opening(self.params.value_id)
-            .1;
-        self.params.cycle.mle(&r.r) * value
+    fn id() -> RelationId {
+        RelationId::PackedValue
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let r = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(transcript, self.params.value_id, r);
+    fn rounds(&self) -> usize {
+        self.cycle.log_T()
+    }
+
+    fn degree(&self) -> usize {
+        2
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        challenge(RelationChallenge::Claim)
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        derived::<G, _, _, _>(RelationDerived::CycleEq)
+            * opening(RelationOpening::Id(self.value_id))
     }
 }
+
+impl<F: JoltField> Produces for ValueParams<F> {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![self.value_id]
+    }
+}
+
+impl<F: JoltField> Relation<F> for ValueParams<F> {
+    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        match id {
+            RelationDerived::CycleEq => self.cycle.mle(&low_to_high_point(challenges)),
+            other => panic!("{other:?} is not derived by this relation"),
+        }
+    }
+}
+
+/// Verifier of the value sumcheck: its relation.
+pub type ValueVerifier<F> = RelationVerifier<F, ValueParams<F>>;
 
 /// Draw a packed value range check's chunk-check challenges and resolve the
 /// Booleanity parameters (linear term: Hamming weight 1 and the chunked

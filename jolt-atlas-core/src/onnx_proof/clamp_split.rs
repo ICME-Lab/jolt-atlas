@@ -62,9 +62,9 @@ use atlas_algebra::{
     utils::thread::unsafe_allocate_zero_vec,
 };
 use atlas_sumcheck::{
-    booleanity::{BooleanitySumcheckParams, BooleanitySumcheckProver},
-    opening_proof::ProverOpeningAccumulator,
-    sumcheck_prover::SumcheckInstanceProver,
+    booleanity::{prover::BooleanitySumcheckProver, BooleanitySumcheckParams},
+    opening_proof::prover::ProverOpeningAccumulator,
+    sumcheck::prover::SumcheckInstanceProver,
     sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_transcript::Transcript;

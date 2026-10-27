@@ -1,9 +1,9 @@
 use super::*;
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_sumcheck::{
-    booleanity::SmallBooleanitySumcheckProver,
-    hamming_booleanity::HammingBooleanitySumcheckProver,
-    hamming_weight::HammingWeightSumcheckProver,
+    booleanity::prover::SmallBooleanitySumcheckProver,
+    hamming_booleanity::prover::HammingBooleanitySumcheckProver,
+    hamming_weight::prover::HammingWeightSumcheckProver,
     sumcheck::{BatchedSumcheck, Sumcheck},
 };
 use atlas_trace::op::GatherSmall;

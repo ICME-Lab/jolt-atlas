@@ -270,17 +270,6 @@ fn group_by_variable<F: JoltField, Ref: AsRef<[F]>>(evaluation_points: &[Ref]) -
 pub struct EvalReductionProtocol;
 
 impl EvalReductionProtocol {
-    pub fn prove<F: JoltField, T: Transcript>(
-        openings: &[&Opening<F>],
-        output_mle: MultilinearPolynomial<F>,
-        transcript: &mut T,
-    ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>), ProvingError> {
-        let witness = EvalReductionWitness::new(output_mle);
-        let instance = EvalReductionInstance::new(openings);
-
-        instance.prove(&witness, transcript)
-    }
-
     pub fn verify<F: JoltField, T: Transcript>(
         openings: &[&Opening<F>],
         proof: &EvalReductionProof<F>,
@@ -612,3 +601,5 @@ mod tests {
         assert_eq!(reduced_verifier, reduced);
     }
 }
+
+pub mod prover;

@@ -14,6 +14,7 @@
 //! `BatchedSumcheck` call.
 
 use crate::onnx_proof::op_lookups::OpLookupProve;
+use crate::utils::opening_access::IntoProverProvider;
 use atlas_trace::{trace::LayerData, Trace};
 pub use jolt_atlas_verifier::onnx_proof::ops::activation_clamped::*;
 
@@ -40,8 +41,9 @@ use atlas_algebra::{
 };
 use atlas_lookup_tables::clamp::ActivationClampTable;
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator, sumcheck::SumcheckInstanceProof,
-    sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceParams,
+    opening_proof::prover::ProverOpeningAccumulator,
+    sumcheck::{prover::SumcheckInstanceProver, SumcheckInstanceProof},
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_transcript::Transcript;
 use common::{

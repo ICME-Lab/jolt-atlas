@@ -1,14 +1,27 @@
-# The verifier's dependency cone stays prover-free at item level: these are the public prover
-# items of the vendored upstream crates (third_party/), which ship them unconditionally. A crate
-# vendored later adds its prover items here. CI's verifier-isolation job also rejects `::prover`
-# and `::witness` path segments in this crate's sources, the backstop for items this list misses.
-# `allow-invalid`
-# marks items behind jolt-sumcheck's `committed` feature, which no atlas build enables.
+# The verifier's dependency cone stays prover-free at item level. The protocol crates ship both
+# sides, as upstream's do: the vendored upstream crates (third_party/) and our atlas-* crates.
+# Our crates keep prover items in `prover` submodules, which CI's verifier-isolation job rejects
+# by path (`::prover` / `::witness` segments in this crate's sources); this list names the public
+# prover items that live elsewhere: the vendored crates' prover surface, and our prover methods
+# on shared types. A crate vendored later adds its prover items here. `allow-invalid` marks
+# items behind a feature the verifier's build leaves off (jolt-sumcheck's `committed`,
+# atlas-transcript's `prover`).
 disallowed-methods = [
     { path = "jolt_sumcheck::prover::prove_batch", reason = "prover-only" },
     { path = "jolt_sumcheck::prover::prove_uniskip_clear", reason = "prover-only" },
     { path = "jolt_sumcheck::prover::prove_uniskip_committed", reason = "prover-only", allow-invalid = true },
     { path = "jolt_transcript::setup::prover_transcript", reason = "prover-only" },
+    { path = "atlas_sumcheck::sumcheck::BatchedSumcheck::prove", reason = "prover-only" },
+    { path = "atlas_sumcheck::sumcheck::BatchedSumcheck::prove_parallel_instances", reason = "prover-only" },
+    { path = "atlas_sumcheck::sumcheck::Sumcheck::prove", reason = "prover-only" },
+    { path = "atlas_sumcheck::evaluation_reduction::EvalReductionProtocol::prove", reason = "prover-only" },
+    { path = "atlas_pcs::commitment_scheme::CommitmentScheme::setup_prover", reason = "prover-only" },
+    { path = "atlas_pcs::commitment_scheme::CommitmentScheme::commit", reason = "prover-only" },
+    { path = "atlas_pcs::commitment_scheme::CommitmentScheme::batch_commit", reason = "prover-only" },
+    { path = "atlas_pcs::commitment_scheme::CommitmentScheme::batch_commit_all", reason = "prover-only" },
+    { path = "atlas_pcs::commitment_scheme::CommitmentScheme::combine_hints", reason = "prover-only" },
+    { path = "atlas_pcs::commitment_scheme::CommitmentScheme::prove", reason = "prover-only" },
+    { path = "atlas_pcs::commitment_scheme::CommitmentScheme::prove_rlc", reason = "prover-only" },
 ]
 disallowed-types = [
     { path = "jolt_sumcheck::prover::ProveRounds", reason = "prover-only" },
@@ -27,4 +40,7 @@ disallowed-types = [
     { path = "jolt_sumcheck::committed::CommittedSumcheckWitness", reason = "prover-only" },
     { path = "jolt_sumcheck::committed::CommittedRoundWitness", reason = "prover-only" },
     { path = "jolt_transcript::prover::ProverTranscript", reason = "prover-only" },
+    { path = "atlas_transcript::sponge::SpongeProver", reason = "prover-only", allow-invalid = true },
+    { path = "atlas_transcript::transcript::ProvingTranscript", reason = "prover-only" },
+    { path = "atlas_pcs::commitment_scheme::StreamingCommitmentScheme", reason = "prover-only" },
 ]

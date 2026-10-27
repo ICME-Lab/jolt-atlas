@@ -14,6 +14,7 @@
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
 use crate::onnx_proof::op_lookups::OpLookupProve;
 use crate::onnx_proof::ops::ProveOp;
+use crate::utils::opening_access::IntoProverProvider;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::*;
 
 use crate::{
@@ -47,10 +48,9 @@ use atlas_algebra::{
     utils::{lookup_bits::LookupBits, math::Math},
 };
 use atlas_sumcheck::{
-    identity_range_check::identity_rangecheck_prover,
+    identity_range_check::prover::identity_rangecheck_prover,
     shout,
-    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
-    sumcheck_prover::SumcheckInstanceProver,
+    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, SumcheckInstanceProof},
 };
 use atlas_transcript::Transcript;
 use common::{
@@ -430,7 +430,7 @@ impl SoftmaxLastAxisProver {
             identity_rangecheck_prover(&provider, r_exp_lookup_bits, &mut prover.accumulator);
 
         let encoding = SoftmaxRaEncoding::remainder(self.idx(), prover.preprocessing.scale());
-        let [R_ra_prover, R_bool_prover] = shout::ra_onehot_provers(
+        let [R_ra_prover, R_bool_prover] = shout::prover::ra_onehot_provers(
             &encoding,
             r_indices,
             &prover.accumulator,
@@ -487,7 +487,7 @@ impl SoftmaxLastAxisProver {
             table_size: lut_data.table_hi.len(),
             digit: ExpDigit::Hi,
         };
-        let hi_prover = shout::read_raf_prover(
+        let hi_prover = shout::prover::read_raf_prover(
             &hi_provider,
             &lut_data.z_hi_indices,
             &lut_data.table_hi,
@@ -500,7 +500,7 @@ impl SoftmaxLastAxisProver {
             table_size: lut_data.table_lo.len(),
             digit: ExpDigit::Lo,
         };
-        let lo_prover = shout::read_raf_prover(
+        let lo_prover = shout::prover::read_raf_prover(
             &lo_provider,
             &lut_data.z_lo_indices,
             &lut_data.table_lo,
@@ -520,7 +520,7 @@ impl SoftmaxLastAxisProver {
             );
 
         let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), prover.preprocessing.scale());
-        let [exp_r_ra_prover, exp_r_bool_prover] = shout::ra_onehot_provers(
+        let [exp_r_ra_prover, exp_r_bool_prover] = shout::prover::ra_onehot_provers(
             &encoding,
             r_exp_indices,
             &prover.accumulator,
@@ -558,7 +558,7 @@ impl SoftmaxLastAxisProver {
         significance_clamp_indices: &[usize],
     ) -> Vec<Box<dyn SumcheckInstanceProver<F, T>>> {
         let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut_data.table_hi.len().log_2());
-        let [hi_ra_prover, hi_bool_prover] = shout::ra_onehot_provers(
+        let [hi_ra_prover, hi_bool_prover] = shout::prover::ra_onehot_provers(
             &encoding,
             &lut_data.z_hi_indices,
             &prover.accumulator,
@@ -566,7 +566,7 @@ impl SoftmaxLastAxisProver {
         );
 
         let encoding = SoftmaxRaEncoding::exp_lo(self.idx(), lut_data.table_lo.len().log_2());
-        let [lo_ra_prover, lo_bool_prover] = shout::ra_onehot_provers(
+        let [lo_ra_prover, lo_bool_prover] = shout::prover::ra_onehot_provers(
             &encoding,
             &lut_data.z_lo_indices,
             &prover.accumulator,
@@ -577,7 +577,7 @@ impl SoftmaxLastAxisProver {
             OpLookupProvider::new(self.computation_node.clone());
         let encoding = significance_clamp_provider.encoding();
         let [significance_clamp_ra_prover, significance_clamp_bool_prover] =
-            shout::ra_onehot_provers(
+            shout::prover::ra_onehot_provers(
                 &encoding,
                 significance_clamp_indices,
                 &prover.accumulator,

@@ -17,6 +17,7 @@ use crate::onnx_proof::{
     ProofId, ProofType, Prover,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
+use crate::utils::opening_access::IntoProverProvider;
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -31,10 +32,9 @@ use atlas_lookup_tables::{
     right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable,
 };
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator,
+    opening_proof::prover::ProverOpeningAccumulator,
     shout,
-    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
-    sumcheck_prover::SumcheckInstanceProver,
+    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, SumcheckInstanceProof},
     sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_trace::{op::Sin, trace::LayerData, Tensor};
@@ -117,19 +117,19 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Sin {
         let rc_encoding = rc_provider.encoding();
 
         let mut onehot_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = Vec::new();
-        onehot_instances.extend(shout::ra_onehot_provers(
+        onehot_instances.extend(shout::prover::ra_onehot_provers(
             &dsc_encoding,
             &dsc_lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         ));
-        onehot_instances.extend(shout::ra_onehot_provers(
+        onehot_instances.extend(shout::prover::ra_onehot_provers(
             &sin_encoding,
             &sin_lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         ));
-        onehot_instances.extend(shout::ra_onehot_provers(
+        onehot_instances.extend(shout::prover::ra_onehot_provers(
             &rc_encoding,
             &rc_lookup_indices,
             &prover.accumulator,

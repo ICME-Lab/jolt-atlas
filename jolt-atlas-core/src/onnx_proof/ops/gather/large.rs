@@ -38,7 +38,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherLarge {
 
         let encoding = GatherRaEncoding::new(node);
         let lookup_indices = gather_lookup_indices(node, &prover.trace);
-        let [ra_prover, bool_prover] = shout::ra_onehot_provers(
+        let [ra_prover, bool_prover] = shout::prover::ra_onehot_provers(
             &encoding,
             &lookup_indices,
             &prover.accumulator,

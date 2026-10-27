@@ -49,7 +49,7 @@ use atlas_algebra::{
     },
 };
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator, sumcheck_prover::SumcheckInstanceProver,
+    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
 };
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;

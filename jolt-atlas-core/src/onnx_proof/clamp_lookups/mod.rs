@@ -28,7 +28,7 @@ use crate::onnx_proof::{
 };
 use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
 use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, ProverOpeningAccumulator},
+    opening_proof::{prover::ProverOpeningAccumulator, OpeningAccumulator},
     sumcheck::SumcheckInstanceProof,
 };
 use atlas_trace::{Tensor, Trace};

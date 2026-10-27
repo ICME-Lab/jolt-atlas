@@ -18,8 +18,7 @@ use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 use atlas_sumcheck::{
     evaluation_reduction::EvalReductionProof,
     shout,
-    sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-    sumcheck_prover::SumcheckInstanceProver,
+    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
 };
 use atlas_trace::op::Div;
 use atlas_transcript::Transcript;
@@ -106,7 +105,7 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
     let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
     let encoding = rc_operands.get_encoding(node);
 
-    let [ra_sumcheck, bool_sumcheck] = shout::ra_onehot_provers(
+    let [ra_sumcheck, bool_sumcheck] = shout::prover::ra_onehot_provers(
         &encoding,
         &lookup_indices,
         &prover.accumulator,

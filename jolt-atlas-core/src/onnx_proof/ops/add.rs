@@ -1,6 +1,7 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::trace_view::TraceView;
+use crate::utils::opening_access::IntoProverProvider;
 use crate::{
     onnx_proof::{
         clamp_lookups::{is_scalar, prove_clamp_lookup},

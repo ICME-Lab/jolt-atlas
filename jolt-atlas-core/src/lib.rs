@@ -19,6 +19,8 @@
 pub mod loader;
 pub mod onnx_proof;
 
-pub use jolt_atlas_verifier::{node_view, utils};
+pub mod utils;
+
+pub use jolt_atlas_verifier::node_view;
 
 pub use onnx_proof::{prove, verify};

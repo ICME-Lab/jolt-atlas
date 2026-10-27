@@ -30,8 +30,8 @@ use atlas_algebra::{
     },
 };
 use atlas_sumcheck::{
-    opening_proof::{OpeningId, PolynomialId, ProverOpeningAccumulator},
-    sumcheck_prover::SumcheckInstanceProver,
+    opening_proof::{prover::ProverOpeningAccumulator, OpeningId, PolynomialId},
+    sumcheck::prover::SumcheckInstanceProver,
     upstream_sumcheck::round_check_failed,
 };
 use atlas_trace::Trace;

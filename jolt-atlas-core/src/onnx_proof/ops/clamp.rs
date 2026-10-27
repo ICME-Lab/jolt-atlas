@@ -6,8 +6,7 @@ use atlas_algebra::field::JoltField;
 use atlas_lookup_tables::clamp::{ClampTable, CLAMP_BOUND};
 use atlas_sumcheck::{
     shout,
-    sumcheck::{BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
-    sumcheck_prover::SumcheckInstanceProver,
+    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, Sumcheck, SumcheckInstanceProof},
 };
 use atlas_trace::op::Clamp;
 use atlas_transcript::Transcript;
@@ -44,7 +43,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Clamp {
         // RaOneHotChecks proof
         let encoding = provider.encoding();
 
-        let [ra_prover, bool_prover] = shout::ra_onehot_provers(
+        let [ra_prover, bool_prover] = shout::prover::ra_onehot_provers(
             &encoding,
             &lookup_indices,
             &prover.accumulator,

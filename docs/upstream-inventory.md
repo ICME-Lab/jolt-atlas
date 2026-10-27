@@ -193,9 +193,19 @@ opening-reduction check to `atlas-sumcheck`, the Fp128 transcript-challenge test
 `atlas-transcript`). The PCS-generic `compute_joint_commitment`/`verify_joint_opening`, unused
 since BN254 removal, are deleted.
 
+The protocol crates ship both sides, as upstream's do (`jolt-sumcheck` has `prover` and
+`verifier` modules and no feature gate). In `atlas-sumcheck` every mixed module keeps its
+shared and verifier items and moves its prover items into a `prover` submodule (e.g.
+`booleanity::prover`, `opening_proof::prover::ProverOpeningAccumulator`,
+`sumcheck::prover::SumcheckInstanceProver`), so the verifier-isolation job's path check covers
+them; `jolt-atlas-verifier/clippy.toml` lists the prover methods on shared types
+(`BatchedSumcheck::prove`, `CommitmentScheme::commit`/`prove`, ...). Akita's `CommitmentScheme`
+impl stays one module (a trait impl cannot be split), covered by the list. The prover's opening
+provider moved from the verifier's `utils::opening_access` to core's (`IntoProverProvider`).
+
 ## Adoption sequence
 
-The ordering lives in one place: `specs/adoption-program.md` (ten stages, 0–9; stage 9 moves every atlas-only module below out of `joltworks` and deletes it). This inventory
+The ordering lives in one place: `specs/adoption-program.md` (eleven stages, 0–10; stage 9 moves every atlas-only module below out of `joltworks` and deletes it, stage 10 retires the sumcheck layer we keep on top of upstream's engine). This inventory
 is its factual basis — the bucket table above feeds each stage's delta checklist, and the fix
 triage above is resolved at its stage 0.
 

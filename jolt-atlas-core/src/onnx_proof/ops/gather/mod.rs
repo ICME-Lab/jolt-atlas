@@ -1,6 +1,7 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::trace_view::TraceView;
+use crate::utils::opening_access::IntoProverProvider;
 use crate::{
     onnx_proof::{ProofId, ProofType, Prover},
     utils::opening_access::{AccOpeningAccessor, Target},
@@ -19,8 +20,9 @@ use atlas_algebra::{
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
 };
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator, sumcheck::SumcheckInstanceProof,
-    sumcheck_prover::SumcheckInstanceProver, sumcheck_verifier::SumcheckInstanceParams,
+    opening_proof::prover::ProverOpeningAccumulator,
+    sumcheck::{prover::SumcheckInstanceProver, SumcheckInstanceProof},
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
 use atlas_transcript::Transcript;

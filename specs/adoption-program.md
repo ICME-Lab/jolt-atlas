@@ -32,7 +32,7 @@ implementation PR is stage 1, the verifier boundary.
 
 ### Goal
 
-Execute ten stages (0–9) that end with: the proof-system toolkit as vendored, rev-pinned
+Execute eleven stages (0–10) that end with: the proof-system toolkit as vendored, rev-pinned
 upstream crates plus named atlas-only crates; every algebraic-identity op defined by a symbolic
 relation bound to its `atlas_trace` op spec, with the verifier side derived from the relation
 and never hand-written; `jolt-atlas-verifier` holding all verification, its dependency cone
@@ -297,7 +297,29 @@ what is specific).
   split are fixed in the PR. `joltworks` is then deleted from the workspace, the inventory's
   bucket table records each module's destination crate, and the isolation CI job rejects any
   prover-side atlas crate in `jolt-atlas-verifier`'s resolved graph — retiring the
-  review-held "`joltworks` prover APIs" exception. Behavior-preserving (digests).
+  review-held "`joltworks` prover APIs" exception. Behavior-preserving (digests). Resolved in
+  the PR, following upstream: the protocol crates (`atlas-algebra`, `atlas-transcript`,
+  `atlas-lookup-tables`, `atlas-sumcheck`, `atlas-pcs`) ship both sides as `jolt-sumcheck` does,
+  with prover items in `prover` submodules; the verifier's cone is held prover-free at item
+  level by the path check and `clippy.toml`, not by separate prover crates or feature gates.
+- [ ] **Stage 10 — the legacy sumcheck layer retired** (one PR per step). Upstream has no layer
+  between its relations and its engine: a relation (`ConcreteSumcheck` in `jolt-verifier`, over
+  a `jolt_claims::SymbolicSumcheck`) is driven identically by prover and verifier, stages call
+  `jolt_sumcheck::prove_batch` / `SumcheckVerifier` directly, and transcripts implement
+  `jolt_transcript::Transcript`. After stage 9 we still carry three layers on top of the engine,
+  retired in order: (a) `FacadeTranscript` — our prover and verifier transcripts implement
+  upstream's `Transcript` (`Challenge = F`) themselves, holding the proof-of-work difficulty for
+  the scope they serve; (b) the `BatchedSumcheck`/`Sumcheck` drivers — call sites run the
+  engine directly through a `BatchPrelude`; (c) `SumcheckInstanceProver`/
+  `SumcheckInstanceVerifier`/`SumcheckInstanceParams` — every instance not yet a relation moves
+  onto the relation engine, one family per PR: the one-hot checks (booleanity, Hamming
+  booleanity, Hamming weight, `ra_virtual`), the read-raf lookups (`shout`, `ps_shout`, and the
+  lookup family ReLU/Clamp/activation tables/Sin/Cos/Gather), `identity_range_check`,
+  `gamma_fold`, softmax's stages, and the opening reduction. Each family PR deletes its
+  hand-written verifier, carries the stage-6 migration checklist, and re-pins digests when the
+  transcript order changes (protocol-breaking) or reproduces them (behavior-preserving). Done
+  when no `SumcheckInstance*` trait, `FacadeTranscript` or `BatchedSumcheck` remains and each
+  stage-9 `prover` submodule holds only relation-engine witnesses or is gone.
 
 Program definition of done (checkable): `joltworks` is gone — every inventory module replaced
 or in a named atlas-only crate; `jolt-atlas-core` contains no verification logic;
@@ -460,7 +482,7 @@ Program order: stages 0 and 1 can start today. Stages 2→5 are sequential; the 
 begin during stage 4. Stage 6's families are sequential PRs. Stage 7a may be developed and
 land after 5, in parallel with 6; 7b lands after 7a. Gates follow the cutover: any stage-6
 family landing after 7a reproduces Akita digests, runs the GPT-2 Akita heavy job, and measures
-against the Akita baseline. Stage 8 lands after 7b, and stage 9 lands last. Each stage PR enumerates its atlas
+against the Akita baseline. Stage 8 lands after 7b, then stage 9, and stage 10 last. Each stage PR enumerates its atlas
 deltas from the inventory as a checklist.
 
 ## References

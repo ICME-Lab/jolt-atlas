@@ -1,6 +1,8 @@
 //! `OneHotPolynomial` against its dense equivalent, through the opening-reduction prover.
 
-use crate::opening_reduction::{EqAddressState, EqCycleState, OneHotPolynomialProverOpening};
+use crate::opening_reduction::{
+    prover::OneHotPolynomialProverOpening, EqAddressState, EqCycleState,
+};
 use ark_std::{test_rng, Zero};
 use atlas_algebra::field::fp128::Fp128 as Fr;
 use atlas_algebra::field::JoltField;

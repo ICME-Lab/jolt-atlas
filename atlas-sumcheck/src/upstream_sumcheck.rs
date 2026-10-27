@@ -157,7 +157,7 @@ pub fn round_check_failed<F: JoltField>(
 /// batches of mutually independent instances (each member's own parallelism stays on; rayon's
 /// work stealing absorbs the nesting).
 ///
-/// Crate-private: parallel scheduling relies on every member being a [`SumcheckInstanceProver`](crate::sumcheck_prover::SumcheckInstanceProver)
+/// Crate-private: parallel scheduling relies on every member being a [`SumcheckInstanceProver`](crate::sumcheck::prover::SumcheckInstanceProver)
 /// (which is `Send + Sync`) seen as its [`ProveRounds`](jolt_sumcheck::ProveRounds) supertrait (see [`SendRound`]), which only
 /// this crate's batched sumcheck guarantees.
 pub(crate) struct InstanceRounds {

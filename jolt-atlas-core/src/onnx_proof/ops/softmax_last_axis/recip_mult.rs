@@ -1,4 +1,5 @@
 use crate::utils::opening_access::AccOpeningAccessor;
+use crate::utils::opening_access::IntoProverProvider;
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{
@@ -7,7 +8,7 @@ use atlas_algebra::{
     },
 };
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator, sumcheck_prover::SumcheckInstanceProver,
+    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
     sumcheck_verifier::SumcheckInstanceParams, upstream_sumcheck::round_check_failed,
 };
 use atlas_transcript::Transcript;

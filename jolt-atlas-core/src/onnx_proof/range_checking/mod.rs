@@ -12,8 +12,8 @@ use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::field::JoltField;
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator,
-    ps_shout::binary::{ps_read_raf_prover, BinaryReadRafSumcheckProver},
+    opening_proof::prover::ProverOpeningAccumulator,
+    ps_shout::binary::prover::{ps_read_raf_prover, BinaryReadRafSumcheckProver},
 };
 use atlas_transcript::Transcript;
 use common::consts::XLEN;

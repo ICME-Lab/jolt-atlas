@@ -21,6 +21,7 @@
 //! Scalar nodes (`log_T = 0`) skip the one-hot reductions and open `rescaled` and
 //! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
 
+use crate::utils::opening_access::IntoProverProvider;
 use atlas_trace::{Tensor, Trace};
 pub use jolt_atlas_verifier::onnx_proof::fused_rebase::*;
 

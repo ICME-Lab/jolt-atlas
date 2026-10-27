@@ -13,9 +13,9 @@ use atlas_algebra::{
 };
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator,
+    opening_proof::prover::ProverOpeningAccumulator,
     ps_shout::{
-        unary::{ps_read_raf_prover, UnaryReadRafSumcheckProver},
+        unary::prover::{ps_read_raf_prover, UnaryReadRafSumcheckProver},
         RafShoutProvider,
     },
 };

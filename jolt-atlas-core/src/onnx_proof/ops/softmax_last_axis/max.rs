@@ -1,3 +1,4 @@
+use crate::utils::opening_access::IntoProverProvider;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::max::*;
 use std::array;
@@ -15,7 +16,7 @@ use atlas_algebra::{
     utils::thread::drop_in_background_thread,
 };
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator, sumcheck_prover::SumcheckInstanceProver,
+    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
     sumcheck_verifier::SumcheckInstanceParams, upstream_sumcheck::round_check_failed,
 };
 use atlas_transcript::Transcript;

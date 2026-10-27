@@ -93,7 +93,9 @@ Workspace members, in dependency order:
     proof's NARG string.
   - **atlas-lookup-tables** — the prefix-suffix lookup tables.
   - **atlas-sumcheck** — sumcheck instances and batching, the opening accumulators
-    (`opening_proof`), evaluation reduction, the one-hot and shout subprotocols, `config`.
+    (`opening_proof`), evaluation reduction, the one-hot and shout subprotocols, `config`. As
+    upstream's protocol crates do, it ships both sides; prover items live in each module's
+    `prover` submodule, which the verifier may not name (CI path check).
   - **atlas-pcs** — the `CommitmentScheme` interface, `akita` over Fp128, and the test `mock`.
   No BN254 or curve crate is in the resolved dependency graph (checked in CI); the vendored
   crates' optional `bn254` features stay off. `BatchedSumcheck`/`Sumcheck` drive upstream
@@ -117,8 +119,8 @@ Workspace members, in dependency order:
   the `Verifier` state, `verify`/`verify_with`, and the shared and verifier preprocessing; also
   `node_view` and `utils`. Every proof field is private (`from_parts` + `&` accessors; `&mut` and
   the `probe` self-check state behind the `test-util` feature). No prover dependency: CI checks
-  it builds in isolation, `clippy.toml` disallows the vendored crates' prover items, and CI
-  rejects `prover`/`witness` module paths in its sources.
+  it builds in isolation, `clippy.toml` disallows prover items of the vendored and atlas
+  protocol crates, and CI rejects `prover`/`witness` module paths in its sources.
 - **jolt-atlas-core** — the prover. `onnx_proof` mirrors the verifier crate's module tree: each
   module glob-re-exports its verifier counterpart and adds the prover side (`ProveOp` impls,
   prover instances, extension traits such as `OpLookupProve` for prover methods on shared

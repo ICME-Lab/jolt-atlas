@@ -65,9 +65,8 @@ use atlas_algebra::{
 };
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator,
-    sumcheck::{Sumcheck, SumcheckInstanceProof},
-    sumcheck_prover::SumcheckInstanceProver,
+    opening_proof::prover::ProverOpeningAccumulator,
+    sumcheck::{prover::SumcheckInstanceProver, Sumcheck, SumcheckInstanceProof},
 };
 use atlas_transcript::Transcript;
 use common::{consts::XLEN, parallel::par_enabled};

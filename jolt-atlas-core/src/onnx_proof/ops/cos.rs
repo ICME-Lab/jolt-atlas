@@ -3,6 +3,7 @@ use crate::onnx_proof::op_lookups::OpLookupProve;
 use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::range_checking::RangeCheckProve;
 use crate::onnx_proof::trace_view::TraceView;
+use crate::utils::opening_access::IntoProverProvider;
 use crate::{
     onnx_proof::{
         neural_teleport::{
@@ -33,10 +34,9 @@ use atlas_lookup_tables::{
     right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable,
 };
 use atlas_sumcheck::{
-    opening_proof::ProverOpeningAccumulator,
+    opening_proof::prover::ProverOpeningAccumulator,
     shout,
-    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
-    sumcheck_prover::SumcheckInstanceProver,
+    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, SumcheckInstanceProof},
     sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_trace::{op::Cos, trace::LayerData, Tensor};
@@ -119,19 +119,19 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Cos {
         let rc_encoding = rc_provider.encoding();
 
         let mut onehot_instances: Vec<Box<dyn SumcheckInstanceProver<F, T>>> = Vec::new();
-        onehot_instances.extend(shout::ra_onehot_provers(
+        onehot_instances.extend(shout::prover::ra_onehot_provers(
             &dsc_encoding,
             &dsc_lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         ));
-        onehot_instances.extend(shout::ra_onehot_provers(
+        onehot_instances.extend(shout::prover::ra_onehot_provers(
             &cos_encoding,
             &cos_lookup_indices,
             &prover.accumulator,
             &mut prover.transcript,
         ));
-        onehot_instances.extend(shout::ra_onehot_provers(
+        onehot_instances.extend(shout::prover::ra_onehot_provers(
             &rc_encoding,
             &rc_lookup_indices,
             &prover.accumulator,

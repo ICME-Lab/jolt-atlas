@@ -1,7 +1,7 @@
 //! Prover debug state compared against the verifier in tests.
 
 use atlas_algebra::field::JoltField;
-use atlas_sumcheck::opening_proof::ProverOpeningAccumulator;
+use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
 
 // ---------------------------------------------------------------------------
 // ProverDebugInfo

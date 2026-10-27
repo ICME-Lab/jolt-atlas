@@ -5,6 +5,7 @@
 //! lookup reads. Also establishes `r`'s claim (`VirtualPoly::TeleportRemainder`) for
 //! `division.rs`'s `a = P·q + r` derivation.
 use crate::node_view::ComputationNode;
+use crate::utils::opening_access::IntoProverProvider;
 use crate::{onnx_proof::Prover, utils::opening_access::AccOpeningAccessor};
 use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
 use atlas_trace::Tensor;

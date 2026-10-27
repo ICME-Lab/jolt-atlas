@@ -32,8 +32,7 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::{
     shout::{self, RaOneHotParams},
-    sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
-    sumcheck_prover::SumcheckInstanceProver,
+    sumcheck::{prover::SumcheckInstanceProver, BatchedSumcheck, SumcheckInstanceProof},
 };
 use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::deferred_lookups::*;
@@ -349,7 +348,9 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             params
                 .into_par_iter()
                 .zip(mine.par_iter())
-                .flat_map_iter(|(p, (_, idx))| shout::ra_onehot_provers_from_params::<F, T>(p, idx))
+                .flat_map_iter(|(p, (_, idx))| {
+                    shout::prover::ra_onehot_provers_from_params::<F, T>(p, idx)
+                })
                 .collect()
         };
         let proof_type = mine[0].0.proof_type();

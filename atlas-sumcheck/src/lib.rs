@@ -24,6 +24,5 @@ pub mod ps_shout;
 pub mod ra_virtual;
 pub mod shout;
 pub mod sumcheck;
-pub mod sumcheck_prover;
 pub mod sumcheck_verifier;
 pub mod upstream_sumcheck;

@@ -10,6 +10,7 @@ use super::{
 };
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
+use crate::utils::opening_access::IntoProverProvider;
 use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
 use atlas_algebra::{
     field::JoltField,
@@ -19,7 +20,7 @@ use atlas_algebra::{
 use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_sumcheck::{
     evaluation_reduction::EvalReductionProof,
-    opening_proof::{OpeningId, ProverOpeningAccumulator, SumcheckId},
+    opening_proof::{prover::ProverOpeningAccumulator, OpeningId, SumcheckId},
     sumcheck::SumcheckInstanceProof,
 };
 use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
@@ -49,7 +50,7 @@ pub struct Prover<F: JoltField, T: Transcript> {
     /// one batched sumcheck per [`DeferredBatch`](crate::onnx_proof::deferred_lookups::DeferredBatch).
     pub deferred_batches: BTreeMap<
         crate::onnx_proof::deferred_lookups::DeferredBatch,
-        Vec<Box<dyn atlas_sumcheck::sumcheck_prover::SumcheckInstanceProver<F, T>>>,
+        Vec<Box<dyn atlas_sumcheck::sumcheck::prover::SumcheckInstanceProver<F, T>>>,
     >,
     /// One-hot checks to build and prove right after their parent batch.
     pub deferred_onehots: Vec<(
@@ -79,7 +80,7 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
     pub fn defer(
         &mut self,
         kind: crate::onnx_proof::deferred_lookups::DeferredBatch,
-        instance: Box<dyn atlas_sumcheck::sumcheck_prover::SumcheckInstanceProver<F, T>>,
+        instance: Box<dyn atlas_sumcheck::sumcheck::prover::SumcheckInstanceProver<F, T>>,
     ) {
         self.deferred_batches
             .entry(kind)

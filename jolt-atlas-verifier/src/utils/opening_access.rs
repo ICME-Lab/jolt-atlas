@@ -9,8 +9,7 @@ use atlas_algebra::{
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
 };
 use atlas_sumcheck::opening_proof::{
-    OpeningAccumulator, OpeningId, PolynomialId, ProverOpeningAccumulator, SumcheckId,
-    VerifierOpeningAccumulator,
+    OpeningAccumulator, OpeningId, PolynomialId, SumcheckId, VerifierOpeningAccumulator,
 };
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
@@ -117,13 +116,18 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
         }
     }
 
+    /// The opening-id builder for this accessor's node.
+    pub fn builder(&self) -> &OpeningIdBuilder<'a> {
+        &self.builder
+    }
+
     /// Access the underlying accumulator reference held by this claim accessor.
     fn acc(&self) -> &Acc {
         self.accumulator.as_ref()
     }
 
     /// Access the underlying mutable accumulator reference held by this claim accessor, if any.
-    fn acc_mut(&mut self) -> &mut Acc {
+    pub fn acc_mut(&mut self) -> &mut Acc {
         self.accumulator
             .as_mut()
             .expect("Accumulator reference is not mutable")
@@ -162,18 +166,6 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
             PolynomialId::Virtual(_) => self.acc().get_virtual_polynomial_opening(opening_id),
             PolynomialId::Committed(_) => self.acc().get_committed_polynomial_opening(opening_id),
         }
-    }
-}
-
-impl<'a, F: JoltField> AccOpeningAccessor<'a, F, ProverOpeningAccumulator<F>> {
-    /// Convert this accessor into a prover provider that can append openings
-    /// to the accumulator using `transcript` and `opening_point`.
-    pub fn into_provider(
-        self,
-        transcript: &'a mut impl Transcript,
-        opening_point: OpeningPoint<BIG_ENDIAN, F>,
-    ) -> ProverAccOpeningProvider<'a, F, impl Transcript> {
-        ProverAccOpeningProvider::from_accessor(self, transcript, opening_point)
     }
 }
 
@@ -228,109 +220,6 @@ macro_rules! impl_accessor_methods {
         }
     };
 }
-
-// Prover providers extend the shared accessor with append operations that
-// also carry claimed values into the accumulator.
-/// Prover-side helper that couples a node-scoped opening builder with a
-/// mutable opening accumulator.
-pub struct ProverAccOpeningProvider<'a, F: JoltField, T: Transcript> {
-    accessor: AccOpeningAccessor<'a, F, ProverOpeningAccumulator<F>>,
-    transcript: &'a mut T,
-    opening_point: OpeningPoint<BIG_ENDIAN, F>,
-}
-
-impl<'a, F: JoltField, T: Transcript> ProverAccOpeningProvider<'a, F, T> {
-    fn from_accessor(
-        accessor: AccOpeningAccessor<'a, F, ProverOpeningAccumulator<F>>,
-        transcript: &'a mut T,
-        opening_point: OpeningPoint<BIG_ENDIAN, F>,
-    ) -> Self {
-        Self {
-            accessor,
-            transcript,
-            opening_point,
-        }
-    }
-
-    /// Append a node I/O opening with its claimed value to the prover accumulator at the provider's current opening point.
-    pub fn append_nodeio(&mut self, target: Target, claim: F) {
-        self.append_nodeio_at(target, self.opening_point.clone(), claim);
-    }
-
-    /// Append a node I/O opening with its claimed value to the prover accumulator at an explicit opening point.
-    pub fn append_nodeio_at(
-        &mut self,
-        target: Target,
-        opening_point: OpeningPoint<BIG_ENDIAN, F>,
-        claim: F,
-    ) {
-        let opening_id = self.accessor.builder.nodeio(target);
-        self.accessor
-            .acc_mut()
-            .append_virtual(self.transcript, opening_id, opening_point, claim);
-    }
-
-    /// Append an advice opening with its claimed value to the prover accumulator at the provider's current opening point.
-    pub fn append_advice<Poly>(&mut self, poly_ctor: impl FnOnce(usize) -> Poly, claim: F)
-    where
-        Poly: Into<PolynomialId>,
-    {
-        self.append_advice_at(poly_ctor, self.opening_point.clone(), claim);
-    }
-
-    /// Append an advice opening with its claimed value to the prover accumulator at an explicit opening point.
-    pub fn append_advice_at<Poly>(
-        &mut self,
-        poly_ctor: impl FnOnce(usize) -> Poly,
-        opening_point: OpeningPoint<BIG_ENDIAN, F>,
-        claim: F,
-    ) where
-        Poly: Into<PolynomialId>,
-    {
-        let opening_id = self.accessor.builder.advice(poly_ctor);
-        match opening_id.polynomial {
-            PolynomialId::Virtual(_) => self.accessor.acc_mut().append_virtual(
-                self.transcript,
-                opening_id,
-                opening_point,
-                claim,
-            ),
-            // TODO(AntoineF4C5): split committed advice handling between dense and one-hot
-            // encodings. append_dense is correct for the current dense-only callsites.
-            PolynomialId::Committed(_) => self.accessor.acc_mut().append_dense(
-                self.transcript,
-                opening_id,
-                opening_point.r.clone(),
-                claim,
-            ),
-        }
-    }
-
-    /// Append an arbitrary opening with its claimed value to the prover accumulator.
-    ///
-    /// The opening ID can be either virtual or committed, and is appended
-    /// at this provider's current opening point.
-    pub fn append_custom(&mut self, opening_id: impl Into<OpeningId>, claim: F) {
-        let opening_id = opening_id.into();
-        match opening_id.polynomial {
-            PolynomialId::Virtual(_) => self.accessor.acc_mut().append_virtual(
-                self.transcript,
-                opening_id,
-                self.opening_point.clone(),
-                claim,
-            ),
-            // TODO(AntoineF4C5): consider OneHot/Dense different cases
-            PolynomialId::Committed(_) => self.accessor.acc_mut().append_dense(
-                self.transcript,
-                opening_id,
-                self.opening_point.r.clone(),
-                claim,
-            ),
-        }
-    }
-}
-
-impl_accessor_methods!(ProverAccOpeningProvider);
 
 // Verifier providers use the same accessor pattern, but append only opening
 // requests because the claimed evaluations are supplied later by verification.

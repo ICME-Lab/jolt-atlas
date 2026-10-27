@@ -1,4 +1,5 @@
 use crate::node_view::{ComputationNode, ModelView};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
@@ -126,19 +127,17 @@ impl SymbolicSumcheck for ConcatRelation {
     }
 }
 
-impl Relation for ConcatRelation {
+impl Produces for ConcatRelation {
     fn produced(&self) -> Vec<OpeningId> {
         let ids = OpeningIdBuilder::new(&self.shape.node);
         (0..self.shape.input_raw_dims.len())
             .map(|i| ids.nodeio(Target::Input(i)))
             .collect()
     }
+}
 
-    fn opening_points<F: JoltField>(
-        &self,
-        _setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Vec<Vec<F>> {
+impl<F: JoltField> Relation<F> for ConcatRelation {
+    fn opening_points(&self, _setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
         let point = low_to_high_point(challenges);
         self.input_num_vars()
             .into_iter()
@@ -146,7 +145,7 @@ impl Relation for ConcatRelation {
             .collect()
     }
 
-    fn table<F: JoltField>(&self, index: usize, setup: &RelationSetup<F>) -> Vec<F> {
+    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Vec<F> {
         build_concat_selector(
             &self.shape.input_raw_dims,
             &self.shape.node.output_dims,
@@ -158,8 +157,8 @@ impl Relation for ConcatRelation {
     }
 }
 
-impl SetupRelation for ConcatRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> SetupRelation<F> for ConcatRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -176,12 +175,8 @@ impl AtlasRelation for ConcatRelation {
     }
 }
 
-impl EngineRelation for ConcatRelation {
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        _setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+impl<F: JoltField> EngineRelation<F> for ConcatRelation {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.shape.node);
         let max_num_vars = self.rounds();
         operands

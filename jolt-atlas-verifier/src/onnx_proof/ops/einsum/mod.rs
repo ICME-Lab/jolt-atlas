@@ -1,4 +1,5 @@
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use atlas_trace::{op::Einsum, Model, Op};
 
@@ -194,31 +195,24 @@ impl SymbolicSumcheck for ContractionRelation {
     }
 }
 
-impl Relation for ContractionRelation {
+impl Produces for ContractionRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![
             self.ids().nodeio(Target::Input(0)),
             self.ids().nodeio(Target::Input(1)),
         ]
     }
+}
 
-    fn opening_points<F: JoltField>(
-        &self,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Vec<Vec<F>> {
+impl<F: JoltField> Relation<F> for ContractionRelation {
+    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
         let (left, right) = self
             .layout::<F>()
             .operand_points(&OpeningPoint::new(setup.incoming_point.clone()), challenges);
         vec![left, right]
     }
 
-    fn derive<F: JoltField>(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> F {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
         match id {
             RelationDerived::ContractionEq => self
                 .layout::<F>()
@@ -228,8 +222,8 @@ impl Relation for ContractionRelation {
     }
 }
 
-impl SetupRelation for ContractionRelation {
-    fn setup<F: JoltField, Tr: Transcript>(
+impl<F: JoltField> SetupRelation<F> for ContractionRelation {
+    fn setup<Tr: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut Tr,

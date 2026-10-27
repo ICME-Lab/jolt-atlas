@@ -1,3 +1,4 @@
+use crate::relation::Produces;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use common::CommittedPoly;
@@ -107,24 +108,22 @@ impl SymbolicSumcheck for HammingWeightRelation {
     }
 }
 
-impl Relation for HammingWeightRelation {
+impl Produces for HammingWeightRelation {
     fn produced(&self) -> Vec<OpeningId> {
         self.polynomial_types
             .iter()
             .map(|&poly| OpeningId::new(poly, self.sumcheck_id))
             .collect()
     }
+}
 
-    fn opening_points<F: JoltField>(
-        &self,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Vec<Vec<F>> {
+impl<F: JoltField> Relation<F> for HammingWeightRelation {
+    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
         let point = [low_to_high_point(challenges), setup.incoming_point.clone()].concat();
         vec![point; self.d]
     }
 
-    fn append_produced_requests<F: JoltField, T: Transcript>(
+    fn append_produced_requests<T: Transcript>(
         &self,
         setup: &RelationSetup<F>,
         challenges: &[F],

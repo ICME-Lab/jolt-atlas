@@ -31,6 +31,7 @@
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 
 use atlas_trace::{op::MeanOfSquares, Op};
@@ -255,25 +256,18 @@ impl SymbolicSumcheck for MeanOfSquaresRelation {
     }
 }
 
-impl Relation for MeanOfSquaresRelation {
+impl Produces for MeanOfSquaresRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![self.ids().nodeio(Target::Input(0))]
     }
+}
 
-    fn opening_points<F: JoltField>(
-        &self,
-        _setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Vec<Vec<F>> {
+impl<F: JoltField> Relation<F> for MeanOfSquaresRelation {
+    fn opening_points(&self, _setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
         vec![challenges.to_vec()]
     }
 
-    fn derive<F: JoltField>(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> F {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
         match id {
             RelationDerived::RetainedEq => {
                 EqPolynomial::mle(&setup.incoming_point, &challenges[..self.log_retained()])
@@ -283,8 +277,8 @@ impl Relation for MeanOfSquaresRelation {
     }
 }
 
-impl SetupRelation for MeanOfSquaresRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> SetupRelation<F> for MeanOfSquaresRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,

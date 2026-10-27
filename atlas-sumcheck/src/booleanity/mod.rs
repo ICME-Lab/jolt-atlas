@@ -1,3 +1,4 @@
+use crate::relation::Produces;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use common::CommittedPoly;
@@ -212,23 +213,21 @@ impl SymbolicSumcheck for BooleanityRelation {
     }
 }
 
-impl Relation for BooleanityRelation {
+impl Produces for BooleanityRelation {
     fn produced(&self) -> Vec<OpeningId> {
         self.polynomial_types
             .iter()
             .map(|&poly| OpeningId::new(poly, self.sumcheck_id))
             .collect()
     }
+}
 
-    fn opening_points<F: JoltField>(
-        &self,
-        _setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Vec<Vec<F>> {
+impl<F: JoltField> Relation<F> for BooleanityRelation {
+    fn opening_points(&self, _setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
         vec![self.bound_point(challenges); self.d]
     }
 
-    fn append_produced_requests<F: JoltField, T: Transcript>(
+    fn append_produced_requests<T: Transcript>(
         &self,
         _setup: &RelationSetup<F>,
         challenges: &[F],
@@ -243,12 +242,7 @@ impl Relation for BooleanityRelation {
         );
     }
 
-    fn derive<F: JoltField>(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> F {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
         let (r_address, r_cycle) = setup.incoming_point.split_at(self.log_k_chunk);
         match id {
             // The challenges in round order against each part of the incoming point reversed.

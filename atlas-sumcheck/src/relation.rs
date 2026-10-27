@@ -165,28 +165,29 @@ pub fn low_to_high_point<F: Copy>(challenges: &[F]) -> Vec<F> {
     challenges.iter().rev().copied().collect()
 }
 
-/// A sumcheck instance as a symbolic relation over atlas openings.
-pub trait Relation:
+/// The openings a relation produces: field-independent, so the relation's expressions name them.
+pub trait Produces {
+    /// The openings the relation produces, in append (Fiat-Shamir) order. Every one appears in
+    /// the output expression; an opening may repeat (an op whose operands are one node).
+    fn produced(&self) -> Vec<OpeningId>;
+}
+
+/// A sumcheck instance as a symbolic relation over atlas openings, over the field `F` (as
+/// upstream's `ConcreteSumcheck<F>`: a relation may carry field data its derived values read).
+pub trait Relation<F: JoltField>:
     SymbolicSumcheck<
         RelationId = RelationId,
         OpeningId = RelationOpening,
         DerivedId = RelationDerived,
         ChallengeId = RelationChallenge,
-    > + Send
+    > + Produces
+    + Send
     + Sync
 {
-    /// The openings the relation produces, in append (Fiat-Shamir) order. Every one appears in
-    /// the output expression; an opening may repeat (an op whose operands are one node).
-    fn produced(&self) -> Vec<OpeningId>;
-
     /// The big-endian point of each produced opening, aligned with [`Self::produced`], given the
     /// sumcheck challenges in round order. Defaults to the low-to-high bound point for all, which
     /// for a zero-round relation (a tie) is the incoming point.
-    fn opening_points<F: JoltField>(
-        &self,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Vec<Vec<F>> {
+    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
         let point = if self.rounds() == 0 {
             setup.incoming_point.clone()
         } else {
@@ -197,7 +198,7 @@ pub trait Relation:
 
     /// Append the produced openings at their points, in Fiat-Shamir order. Defaults to one
     /// append per opening; a relation whose openings share an append (a one-hot group) says so.
-    fn append_produced_requests<F: JoltField, T: Transcript>(
+    fn append_produced_requests<T: Transcript>(
         &self,
         setup: &RelationSetup<F>,
         challenges: &[F],
@@ -218,12 +219,7 @@ pub trait Relation:
     }
 
     /// A derived scalar of the output expression, given the sumcheck challenges in round order.
-    fn derive<F: JoltField>(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> F {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
         match id {
             RelationDerived::Eq => {
                 EqPolynomial::mle(&setup.incoming_point, &low_to_high_point(challenges))
@@ -237,16 +233,16 @@ pub trait Relation:
     /// Public table `index`, over the sumcheck's hypercube: data both sides build from the
     /// setup (a selector placing eq evaluations at the cells an op moves), read by
     /// [`RelationDerived::Table`].
-    fn table<F: JoltField>(&self, index: usize, _setup: &RelationSetup<F>) -> Vec<F> {
+    fn table(&self, index: usize, _setup: &RelationSetup<F>) -> Vec<F> {
         panic!("this relation has no table {index}")
     }
 }
 
 /// A relation that draws its own setup.
-pub trait SetupRelation: Relation {
+pub trait SetupRelation<F: JoltField>: Relation<F> {
     /// The incoming point and challenges, in protocol order: read from the accumulator, drawn
     /// from the transcript, or both. Prover and verifier run it at the same transcript state.
-    fn setup<F: JoltField, T: Transcript>(
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
@@ -268,7 +264,7 @@ pub fn resolve<F: JoltField>(
 }
 
 /// The relation's input claim: its input expression over the accumulator's openings.
-pub fn relation_input_claim<F: JoltField, R: Relation>(
+pub fn relation_input_claim<F: JoltField, R: Relation<F>>(
     relation: &R,
     setup: &RelationSetup<F>,
     accumulator: &dyn OpeningAccumulator<F>,
@@ -281,12 +277,12 @@ pub fn relation_input_claim<F: JoltField, R: Relation>(
 }
 
 /// A relation with its setup done: what both sides start from.
-pub struct RelationParams<F: JoltField, R: Relation> {
+pub struct RelationParams<F: JoltField, R: Relation<F>> {
     relation: R,
     setup: RelationSetup<F>,
 }
 
-impl<F: JoltField, R: SetupRelation> RelationParams<F, R> {
+impl<F: JoltField, R: SetupRelation<F>> RelationParams<F, R> {
     /// `relation`, set up against the accumulator and transcript.
     pub fn new<T: Transcript>(
         relation: R,
@@ -298,7 +294,7 @@ impl<F: JoltField, R: SetupRelation> RelationParams<F, R> {
     }
 }
 
-impl<F: JoltField, R: Relation> RelationParams<F, R> {
+impl<F: JoltField, R: Relation<F>> RelationParams<F, R> {
     /// The relation with an explicit setup.
     pub fn at(relation: R, setup: RelationSetup<F>) -> Self {
         Self { relation, setup }
@@ -321,12 +317,12 @@ impl<F: JoltField, R: Relation> RelationParams<F, R> {
 }
 
 /// The verifier of a relation: its output expression at the bound point.
-pub struct RelationVerifier<F: JoltField, R: Relation> {
+pub struct RelationVerifier<F: JoltField, R: Relation<F>> {
     relation: R,
     setup: RelationSetup<F>,
 }
 
-impl<F: JoltField, R: SetupRelation> RelationVerifier<F, R> {
+impl<F: JoltField, R: SetupRelation<F>> RelationVerifier<F, R> {
     /// The verifier for `relation`, set up against the accumulator and transcript.
     pub fn new<T: Transcript>(
         relation: R,
@@ -338,14 +334,14 @@ impl<F: JoltField, R: SetupRelation> RelationVerifier<F, R> {
     }
 }
 
-impl<F: JoltField, R: Relation> RelationVerifier<F, R> {
+impl<F: JoltField, R: Relation<F>> RelationVerifier<F, R> {
     /// The verifier for `relation` with the setup its caller supplies.
     pub fn at(relation: R, setup: RelationSetup<F>) -> Self {
         Self { relation, setup }
     }
 }
 
-impl<F: JoltField, T: Transcript, R: Relation> SumcheckInstanceVerifier<F, T>
+impl<F: JoltField, T: Transcript, R: Relation<F>> SumcheckInstanceVerifier<F, T>
     for RelationVerifier<F, R>
 {
     fn degree(&self) -> usize {

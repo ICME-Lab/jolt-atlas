@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
@@ -87,7 +88,7 @@ impl SymbolicSumcheck for IffRelation {
     }
 }
 
-impl Relation for IffRelation {
+impl Produces for IffRelation {
     fn produced(&self) -> Vec<OpeningId> {
         (0..3)
             .map(|position| self.ids().nodeio(Target::Input(position)))
@@ -95,8 +96,10 @@ impl Relation for IffRelation {
     }
 }
 
-impl SetupRelation for IffRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> Relation<F> for IffRelation {}
+
+impl<F: JoltField> SetupRelation<F> for IffRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -116,12 +119,8 @@ impl AtlasRelation for IffRelation {
     }
 }
 
-impl EngineRelation for IffRelation {
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        _setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+impl<F: JoltField> EngineRelation<F> for IffRelation {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
         let [mask, a, b] = operands[..] else {
             panic!("Expected three operands for Iff operation")

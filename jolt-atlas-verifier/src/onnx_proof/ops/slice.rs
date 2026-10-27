@@ -1,4 +1,5 @@
 use crate::node_view::{ComputationNode, ModelView};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
@@ -111,12 +112,14 @@ impl SymbolicSumcheck for SliceRelation {
     }
 }
 
-impl Relation for SliceRelation {
+impl Produces for SliceRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
     }
+}
 
-    fn table<F: JoltField>(&self, index: usize, setup: &RelationSetup<F>) -> Vec<F> {
+impl<F: JoltField> Relation<F> for SliceRelation {
+    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Vec<F> {
         assert_eq!(index, 0, "a slice has one selector");
         let (axis, start, _) = self.window();
         build_slice_selector(
@@ -129,8 +132,8 @@ impl Relation for SliceRelation {
     }
 }
 
-impl SetupRelation for SliceRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> SetupRelation<F> for SliceRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -147,12 +150,8 @@ impl AtlasRelation for SliceRelation {
     }
 }
 
-impl EngineRelation for SliceRelation {
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        _setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+impl<F: JoltField> EngineRelation<F> for SliceRelation {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.shape.node);
         vec![MultilinearPolynomial::from(operands[0].padded_pow2())]
     }

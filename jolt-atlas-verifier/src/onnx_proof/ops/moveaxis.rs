@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     atlas_relation_types, impl_tie_proof_api,
@@ -66,16 +67,14 @@ impl SymbolicSumcheck for AxisPermutationRelation {
     }
 }
 
-impl Relation for AxisPermutationRelation {
+impl Produces for AxisPermutationRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))]
     }
+}
 
-    fn opening_points<F: JoltField>(
-        &self,
-        setup: &RelationSetup<F>,
-        _challenges: &[F],
-    ) -> Vec<Vec<F>> {
+impl<F: JoltField> Relation<F> for AxisPermutationRelation {
+    fn opening_points(&self, setup: &RelationSetup<F>, _challenges: &[F]) -> Vec<Vec<F>> {
         vec![permute_challenge_groups(
             &self.node.output_dims,
             &setup.incoming_point,
@@ -84,8 +83,8 @@ impl Relation for AxisPermutationRelation {
     }
 }
 
-impl SetupRelation for AxisPermutationRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> SetupRelation<F> for AxisPermutationRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -102,8 +101,8 @@ impl AtlasRelation for AxisPermutationRelation {
     }
 }
 
-impl TieRelation for AxisPermutationRelation {
-    fn claims<F: JoltField>(
+impl<F: JoltField> TieRelation<F> for AxisPermutationRelation {
+    fn claims(
         &self,
         _trace: &Trace,
         _setup: &RelationSetup<F>,

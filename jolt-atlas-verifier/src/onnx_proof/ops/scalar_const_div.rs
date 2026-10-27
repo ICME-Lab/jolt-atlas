@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
@@ -126,7 +127,7 @@ impl SymbolicSumcheck for ConstantDivisionRelation {
     }
 }
 
-impl Relation for ConstantDivisionRelation {
+impl Produces for ConstantDivisionRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![
             self.ids().nodeio(Target::Input(0)),
@@ -136,8 +137,10 @@ impl Relation for ConstantDivisionRelation {
     }
 }
 
-impl SetupRelation for ConstantDivisionRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> Relation<F> for ConstantDivisionRelation {}
+
+impl<F: JoltField> SetupRelation<F> for ConstantDivisionRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -154,12 +157,8 @@ impl AtlasRelation for ConstantDivisionRelation {
     }
 }
 
-impl EngineRelation for ConstantDivisionRelation {
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        _setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+impl<F: JoltField> EngineRelation<F> for ConstantDivisionRelation {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
         let left = operands[0].padded_pow2();
         let divisor = self.divisor();

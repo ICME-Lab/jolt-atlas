@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
@@ -153,7 +154,7 @@ impl<S: AccumulationShape> SymbolicSumcheck for AccumulationRelation<S> {
     }
 }
 
-impl<S: AccumulationShape> Relation for AccumulationRelation<S> {
+impl<S: AccumulationShape> Produces for AccumulationRelation<S> {
     fn produced(&self) -> Vec<OpeningId> {
         vec![
             self.ids().nodeio(Target::Input(0)),
@@ -162,8 +163,10 @@ impl<S: AccumulationShape> Relation for AccumulationRelation<S> {
     }
 }
 
-impl<S: AccumulationShape> SetupRelation for AccumulationRelation<S> {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField, S: AccumulationShape> Relation<F> for AccumulationRelation<S> {}
+
+impl<F: JoltField, S: AccumulationShape> SetupRelation<F> for AccumulationRelation<S> {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -183,8 +186,8 @@ impl<S: AccumulationShape> AtlasRelation for AccumulationRelation<S> {
     }
 }
 
-impl<S: AccumulationShape> TieRelation for AccumulationRelation<S> {
-    fn claims<F: JoltField>(
+impl<F: JoltField, S: AccumulationShape> TieRelation<F> for AccumulationRelation<S> {
+    fn claims(
         &self,
         trace: &Trace,
         setup: &RelationSetup<F>,

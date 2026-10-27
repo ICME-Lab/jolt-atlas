@@ -1,3 +1,4 @@
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 
@@ -95,16 +96,14 @@ impl SymbolicSumcheck for SumAxisRelation {
     }
 }
 
-impl Relation for SumAxisRelation {
+impl Produces for SumAxisRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![self.ids().nodeio(Target::Input(0))]
     }
+}
 
-    fn opening_points<F: JoltField>(
-        &self,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Vec<Vec<F>> {
+impl<F: JoltField> Relation<F> for SumAxisRelation {
+    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
         let r = &setup.incoming_point;
         vec![match self.shape.config.axis() {
             SumAxis::Axis0 => [challenges, r.as_slice()].concat(),
@@ -113,8 +112,8 @@ impl Relation for SumAxisRelation {
     }
 }
 
-impl SetupRelation for SumAxisRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> SetupRelation<F> for SumAxisRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -131,13 +130,9 @@ impl AtlasRelation for SumAxisRelation {
     }
 }
 
-impl EngineRelation for SumAxisRelation {
+impl<F: JoltField> EngineRelation<F> for SumAxisRelation {
     /// The operand folded at the output point along the kept axis, over the summed axis.
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+    fn witnesses(&self, trace: &Trace, setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.shape.node);
         let operand = operands[0];
         let [m, n] = self.shape.config.operand_dims()[..] else {

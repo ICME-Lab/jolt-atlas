@@ -1,5 +1,6 @@
 use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
@@ -109,25 +110,18 @@ impl SymbolicSumcheck for BroadcastRelation {
     }
 }
 
-impl Relation for BroadcastRelation {
+impl Produces for BroadcastRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
     }
+}
 
-    fn opening_points<F: JoltField>(
-        &self,
-        setup: &RelationSetup<F>,
-        _challenges: &[F],
-    ) -> Vec<Vec<F>> {
+impl<F: JoltField> Relation<F> for BroadcastRelation {
+    fn opening_points(&self, setup: &RelationSetup<F>, _challenges: &[F]) -> Vec<Vec<F>> {
         vec![self.split(&setup.incoming_point).0]
     }
 
-    fn derive<F: JoltField>(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        _challenges: &[F],
-    ) -> F {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, _challenges: &[F]) -> F {
         match id {
             RelationDerived::BroadcastOnes => {
                 let ones =
@@ -139,8 +133,8 @@ impl Relation for BroadcastRelation {
     }
 }
 
-impl SetupRelation for BroadcastRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> SetupRelation<F> for BroadcastRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -157,8 +151,8 @@ impl AtlasRelation for BroadcastRelation {
     }
 }
 
-impl TieRelation for BroadcastRelation {
-    fn claims<F: JoltField>(
+impl<F: JoltField> TieRelation<F> for BroadcastRelation {
+    fn claims(
         &self,
         trace: &Trace,
         setup: &RelationSetup<F>,

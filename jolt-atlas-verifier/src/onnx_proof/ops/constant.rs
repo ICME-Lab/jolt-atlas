@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     atlas_relation_types,
@@ -103,17 +104,14 @@ impl<S: OpSpec + 'static> SymbolicSumcheck for PublicRelation<S> {
     }
 }
 
-impl<S: OpSpec + 'static> Relation for PublicRelation<S> {
+impl<S: OpSpec + 'static> Produces for PublicRelation<S> {
     fn produced(&self) -> Vec<OpeningId> {
         Vec::new()
     }
+}
 
-    fn derive<F: JoltField>(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        _challenges: &[F],
-    ) -> F {
+impl<F: JoltField, S: OpSpec + 'static> Relation<F> for PublicRelation<S> {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, _challenges: &[F]) -> F {
         match id {
             RelationDerived::Public => self.shape.value.evaluate_mle(&setup.incoming_point),
             other => panic!("public data derives no {other:?}"),
@@ -121,8 +119,8 @@ impl<S: OpSpec + 'static> Relation for PublicRelation<S> {
     }
 }
 
-impl<S: OpSpec + 'static> SetupRelation for PublicRelation<S> {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField, S: OpSpec + 'static> SetupRelation<F> for PublicRelation<S> {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -139,8 +137,8 @@ impl<S: OpSpec + 'static> AtlasRelation for PublicRelation<S> {
     }
 }
 
-impl<S: OpSpec + 'static> TieRelation for PublicRelation<S> {
-    fn claims<F: JoltField>(
+impl<F: JoltField, S: OpSpec + 'static> TieRelation<F> for PublicRelation<S> {
+    fn claims(
         &self,
         _trace: &Trace,
         _setup: &RelationSetup<F>,

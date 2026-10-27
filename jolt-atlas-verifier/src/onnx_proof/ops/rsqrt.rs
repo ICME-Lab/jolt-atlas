@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
@@ -205,7 +206,7 @@ impl SymbolicSumcheck for RsqrtRelation {
     }
 }
 
-impl Relation for RsqrtRelation {
+impl Produces for RsqrtRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![
             self.ids().nodeio(Target::Input(0)),
@@ -217,8 +218,10 @@ impl Relation for RsqrtRelation {
     }
 }
 
-impl SetupRelation for RsqrtRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> Relation<F> for RsqrtRelation {}
+
+impl<F: JoltField> SetupRelation<F> for RsqrtRelation {
+    fn setup<T: Transcript>(
         &self,
         _accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
@@ -274,12 +277,8 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
     Ok(())
 }
 
-impl EngineRelation for RsqrtRelation {
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        _setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+impl<F: JoltField> EngineRelation<F> for RsqrtRelation {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, output } = TraceView::layer_data(trace, &self.node);
         let [input] = operands[..] else {
             panic!("Expected one operand for Rsqrt operation")

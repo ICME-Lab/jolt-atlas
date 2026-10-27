@@ -7,6 +7,7 @@
 //!
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use atlas_trace::{op::Reshape, trace::LayerData, Model, Trace};
 
@@ -149,12 +150,14 @@ impl SymbolicSumcheck for ReshapeRelation {
     }
 }
 
-impl Relation for ReshapeRelation {
+impl Produces for ReshapeRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
     }
+}
 
-    fn table<F: JoltField>(&self, index: usize, setup: &RelationSetup<F>) -> Vec<F> {
+impl<F: JoltField> Relation<F> for ReshapeRelation {
+    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Vec<F> {
         assert_eq!(index, 0, "a reshape has one selector");
         build_reshape_selectors(
             &self.shape.input_raw_dims,
@@ -164,8 +167,8 @@ impl Relation for ReshapeRelation {
     }
 }
 
-impl SetupRelation for ReshapeRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> SetupRelation<F> for ReshapeRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -182,12 +185,8 @@ impl AtlasRelation for ReshapeRelation {
     }
 }
 
-impl EngineRelation for ReshapeRelation {
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        _setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+impl<F: JoltField> EngineRelation<F> for ReshapeRelation {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.shape.node);
         vec![MultilinearPolynomial::from(operands[0].padded_pow2())]
     }

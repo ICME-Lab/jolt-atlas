@@ -37,13 +37,22 @@ use atlas_sumcheck::opening_proof::{OpeningAccumulator, PolynomialId, VerifierOp
 pub use atlas_sumcheck::relation::*;
 use atlas_trace::{op::OpSpec, Trace};
 use atlas_transcript::Transcript;
+use jolt_claims::SymbolicSumcheck;
 
 /// An op protocol as a symbolic relation on one computation node.
 ///
 /// Each relation documents its **S ⊆ R** argument: every execution of the op's semantics
 /// (`atlas_trace::semantics`, through [`Self::Spec`]) satisfies the relation, so an honest prover
 /// always succeeds. That is a review obligation; the compiler checks only the op binding.
-pub trait AtlasRelation: SetupRelation {
+pub trait AtlasRelation:
+    SymbolicSumcheck<
+        RelationId = RelationId,
+        OpeningId = RelationOpening,
+        DerivedId = RelationDerived,
+        ChallengeId = RelationChallenge,
+    > + Send
+    + Sync
+{
     /// The op this relation proves. The dispatch macros require it to be the op the relation is
     /// dispatched for.
     type Spec: OpSpec + 'static;
@@ -60,14 +69,10 @@ pub trait AtlasRelation: SetupRelation {
 /// * **dense**: no term has an eq factor; each term multiplies produced openings and public
 ///   tables ([`RelationDerived::Table`]), and the engine sends the message's evaluations at
 ///   `0, 2, …, degree` with the claim as hint.
-pub trait EngineRelation: AtlasRelation {
+pub trait EngineRelation<F: JoltField>: AtlasRelation + SetupRelation<F> {
     /// The witness behind each produced opening, aligned with [`AtlasRelation::produced`]: a
     /// polynomial over the sumcheck's hypercube whose final bound value is the opening's claim.
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>>;
+    fn witnesses(&self, trace: &Trace, setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>>;
 
     /// The order a dense relation binds its variables in (an eq-weighted one binds
     /// low-to-high).
@@ -105,11 +110,11 @@ macro_rules! atlas_relation_types {
 
 /// A zero-round relation (a tie): its produced openings sit at points derived from the
 /// incoming point, and the verifier checks the input claim against the output expression there.
-pub trait TieRelation: AtlasRelation {
+pub trait TieRelation<F: JoltField>: AtlasRelation + SetupRelation<F> {
     /// The prover's values of the produced openings, aligned with [`AtlasRelation::produced`]
     /// at their [`opening_points`](AtlasRelation::opening_points): read off the trace, or taken
     /// from claims the accumulator already holds where the tie fixes them.
-    fn claims<F: JoltField>(
+    fn claims(
         &self,
         trace: &Trace,
         setup: &RelationSetup<F>,
@@ -119,7 +124,7 @@ pub trait TieRelation: AtlasRelation {
 
 /// Verify a zero-round relation (a tie): append its produced openings at the incoming point and
 /// require the input claim to equal the output expression.
-pub fn verify_tie<F: JoltField, T: Transcript, R: AtlasRelation>(
+pub fn verify_tie<F: JoltField, T: Transcript, R: AtlasRelation + SetupRelation<F>>(
     relation: &R,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,

@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
@@ -142,7 +143,7 @@ impl<S: OpSpec + ProductShape + 'static> SymbolicSumcheck for ProductRelation<S>
     }
 }
 
-impl<S: OpSpec + ProductShape + 'static> Relation for ProductRelation<S> {
+impl<S: OpSpec + ProductShape + 'static> Produces for ProductRelation<S> {
     fn produced(&self) -> Vec<OpeningId> {
         Self::operands()
             .into_iter()
@@ -151,8 +152,10 @@ impl<S: OpSpec + ProductShape + 'static> Relation for ProductRelation<S> {
     }
 }
 
-impl<S: OpSpec + ProductShape + 'static> SetupRelation for ProductRelation<S> {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField, S: OpSpec + ProductShape + 'static> Relation<F> for ProductRelation<S> {}
+
+impl<F: JoltField, S: OpSpec + ProductShape + 'static> SetupRelation<F> for ProductRelation<S> {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -172,12 +175,8 @@ impl<S: OpSpec + ProductShape + 'static> AtlasRelation for ProductRelation<S> {
     }
 }
 
-impl<S: OpSpec + ProductShape + 'static> EngineRelation for ProductRelation<S> {
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        _setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+impl<F: JoltField, S: OpSpec + ProductShape + 'static> EngineRelation<F> for ProductRelation<S> {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
         Self::operands()
             .into_iter()

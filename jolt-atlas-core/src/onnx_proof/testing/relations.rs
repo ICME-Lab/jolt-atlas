@@ -48,8 +48,8 @@ use crate::{
             sum::axis::SumAxisRelation,
         },
         relation::{
-            AtlasRelation, EngineRelation, RelationChallenge, RelationExpr, RelationOpening,
-            RelationParams, RelationProver, RelationSetup,
+            AtlasRelation, EngineRelation, Relation, RelationChallenge, RelationExpr,
+            RelationOpening, RelationParams, RelationProver, RelationSetup,
         },
         trace_view::TraceView,
     },
@@ -254,7 +254,7 @@ fn produced_opening_joins_a_shared_operand_reduction() {
 /// `0..=degree`: round `j`'s message at `x` sums the output expression over every point whose
 /// first `j` coordinates are `challenges[..j]`, whose `j`-th is `x`, and whose rest is Boolean,
 /// with each produced opening read through `open(position, point)`.
-fn reference_messages<R: AtlasRelation>(
+fn reference_messages<R: AtlasRelation + Relation<Fr>>(
     relation: &R,
     setup: &RelationSetup<Fr>,
     open: &dyn Fn(usize, &[Fr]) -> Fr,
@@ -301,7 +301,7 @@ fn reference_messages<R: AtlasRelation>(
 
 /// Drive `member` on `challenges` and check every round message against the relation's
 /// reference messages.
-fn assert_matches_reference<R: AtlasRelation>(
+fn assert_matches_reference<R: AtlasRelation + Relation<Fr>>(
     member: &mut dyn ProveRounds<Fr>,
     relation: &R,
     setup: &RelationSetup<Fr>,
@@ -403,14 +403,14 @@ fn relation_prover_equiv_engine() {
 }
 
 /// The engine's messages for `relation()` match its reference messages.
-fn check_engine<R: EngineRelation>(relation: impl Fn() -> R, trace: &Trace, rng: &mut StdRng) {
+fn check_engine<R: EngineRelation<Fr>>(relation: impl Fn() -> R, trace: &Trace, rng: &mut StdRng) {
     let rounds = relation().rounds();
     let setup = RelationSetup {
         incoming_point: random_point(rng, rounds),
         challenges: vec![(RelationChallenge::Gamma, random_point(rng, 1)[0])],
     };
     let challenges = random_point(rng, rounds);
-    let witnesses = relation().witnesses::<Fr>(trace, &setup);
+    let witnesses = relation().witnesses(trace, &setup);
     let open = |i: usize, point: &[Fr]| witnesses[i].evaluate(point);
     let mut prover =
         RelationProver::initialize(trace, RelationParams::at(relation(), setup.clone()));
@@ -479,7 +479,7 @@ fn relation_prover_equiv_dense() {
 }
 
 /// The engine's messages for a dense `relation()` match its reference messages.
-fn check_dense<R: EngineRelation>(
+fn check_dense<R: EngineRelation<Fr>>(
     relation: impl Fn() -> R,
     trace: &Trace,
     node: &ComputationNode,

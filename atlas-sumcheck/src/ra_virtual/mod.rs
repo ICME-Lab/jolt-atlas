@@ -1,3 +1,4 @@
+use crate::relation::Produces;
 use crate::{
     config::OneHotParams,
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
@@ -120,19 +121,17 @@ impl SymbolicSumcheck for RaVirtualizationRelation {
     }
 }
 
-impl Relation for RaVirtualizationRelation {
+impl Produces for RaVirtualizationRelation {
     fn produced(&self) -> Vec<OpeningId> {
         self.polynomial_types[..self.one_hot_params.instruction_d]
             .iter()
             .map(|&poly| OpeningId::new(poly, SumcheckId::RaVirtualization))
             .collect()
     }
+}
 
-    fn opening_points<F: JoltField>(
-        &self,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Vec<Vec<F>> {
+impl<F: JoltField> Relation<F> for RaVirtualizationRelation {
+    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
         let r_cycle = low_to_high_point(challenges);
         self.one_hot_params
             .compute_r_address_chunks(&setup.incoming_point[..self.address_len])
@@ -141,7 +140,7 @@ impl Relation for RaVirtualizationRelation {
             .collect()
     }
 
-    fn append_produced_requests<F: JoltField, T: Transcript>(
+    fn append_produced_requests<T: Transcript>(
         &self,
         setup: &RelationSetup<F>,
         challenges: &[F],
@@ -162,12 +161,7 @@ impl Relation for RaVirtualizationRelation {
         }
     }
 
-    fn derive<F: JoltField>(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> F {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
         match id {
             RelationDerived::CycleEq => {
                 EqPolynomial::mle(&self.cycle_point(setup), &low_to_high_point(challenges))

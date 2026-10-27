@@ -1,4 +1,5 @@
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     node_view::ComputationNode,
@@ -169,7 +170,7 @@ impl SymbolicSumcheck for DivRelation {
     }
 }
 
-impl Relation for DivRelation {
+impl Produces for DivRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![
             self.ids().nodeio(Target::Input(0)),
@@ -180,8 +181,10 @@ impl Relation for DivRelation {
     }
 }
 
-impl SetupRelation for DivRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> Relation<F> for DivRelation {}
+
+impl<F: JoltField> SetupRelation<F> for DivRelation {
+    fn setup<T: Transcript>(
         &self,
         _accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
@@ -203,12 +206,8 @@ impl AtlasRelation for DivRelation {
     }
 }
 
-impl EngineRelation for DivRelation {
-    fn witnesses<F: JoltField>(
-        &self,
-        trace: &Trace,
-        _setup: &RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+impl<F: JoltField> EngineRelation<F> for DivRelation {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, output } = TraceView::layer_data(trace, &self.node);
         let [left, right] = operands[..] else {
             panic!("Expected two operands for Div operation")
@@ -278,14 +277,16 @@ impl SymbolicSumcheck for DivQuotientRelation {
     }
 }
 
-impl Relation for DivQuotientRelation {
+impl Produces for DivQuotientRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.node).advice(CommittedPoly::DivNodeQuotient)]
     }
 }
 
-impl SetupRelation for DivQuotientRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> Relation<F> for DivQuotientRelation {}
+
+impl<F: JoltField> SetupRelation<F> for DivQuotientRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -305,8 +306,8 @@ impl AtlasRelation for DivQuotientRelation {
     }
 }
 
-impl TieRelation for DivQuotientRelation {
-    fn claims<F: JoltField>(
+impl<F: JoltField> TieRelation<F> for DivQuotientRelation {
+    fn claims(
         &self,
         _trace: &Trace,
         _setup: &RelationSetup<F>,

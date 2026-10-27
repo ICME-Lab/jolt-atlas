@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
@@ -67,14 +68,16 @@ impl SymbolicSumcheck for ZeroOutputRelation {
     }
 }
 
-impl Relation for ZeroOutputRelation {
+impl Produces for ZeroOutputRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))]
     }
 }
 
-impl SetupRelation for ZeroOutputRelation {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField> Relation<F> for ZeroOutputRelation {}
+
+impl<F: JoltField> SetupRelation<F> for ZeroOutputRelation {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -91,8 +94,8 @@ impl AtlasRelation for ZeroOutputRelation {
     }
 }
 
-impl TieRelation for ZeroOutputRelation {
-    fn claims<F: JoltField>(
+impl<F: JoltField> TieRelation<F> for ZeroOutputRelation {
+    fn claims(
         &self,
         trace: &Trace,
         setup: &RelationSetup<F>,

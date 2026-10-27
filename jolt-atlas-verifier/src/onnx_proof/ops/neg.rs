@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     atlas_relation_types, impl_tie_proof_api,
@@ -87,14 +88,16 @@ impl<S: CopySign> SymbolicSumcheck for SignedCopyRelation<S> {
     }
 }
 
-impl<S: CopySign> Relation for SignedCopyRelation<S> {
+impl<S: CopySign> Produces for SignedCopyRelation<S> {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))]
     }
 }
 
-impl<S: CopySign> SetupRelation for SignedCopyRelation<S> {
-    fn setup<F: JoltField, T: Transcript>(
+impl<F: JoltField, S: CopySign> Relation<F> for SignedCopyRelation<S> {}
+
+impl<F: JoltField, S: CopySign> SetupRelation<F> for SignedCopyRelation<S> {
+    fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
@@ -111,8 +114,8 @@ impl<S: CopySign> AtlasRelation for SignedCopyRelation<S> {
     }
 }
 
-impl<S: CopySign> TieRelation for SignedCopyRelation<S> {
-    fn claims<F: JoltField>(
+impl<F: JoltField, S: CopySign> TieRelation<F> for SignedCopyRelation<S> {
+    fn claims(
         &self,
         _trace: &Trace,
         _setup: &RelationSetup<F>,

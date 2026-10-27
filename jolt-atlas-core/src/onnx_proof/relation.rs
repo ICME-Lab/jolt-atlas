@@ -59,7 +59,7 @@ macro_rules! atlas_relation_types {
 }
 
 /// Append the relation's produced openings, with their `claims`, at their points.
-pub fn append_produced<F: JoltField, T: Transcript, R: AtlasRelation>(
+pub fn append_produced<F: JoltField, T: Transcript, R: AtlasRelation + Relation<F>>(
     relation: &R,
     setup: &RelationSetup<F>,
     accumulator: &mut ProverOpeningAccumulator<F>,
@@ -83,7 +83,7 @@ pub fn append_produced<F: JoltField, T: Transcript, R: AtlasRelation>(
 
 /// Prove a tie: append its produced openings with their [`TieRelation::claims`]. Nothing else
 /// enters the transcript; [`verify_tie`] checks the input claim against the output expression.
-pub fn prove_tie<F: JoltField, T: Transcript, R: TieRelation>(
+pub fn prove_tie<F: JoltField, T: Transcript, R: TieRelation<F>>(
     relation: &R,
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,
@@ -105,7 +105,7 @@ pub(crate) fn note_dispatch<R: AtlasRelation>(relation: &R) {
 }
 
 /// The engine's prover for an [`EngineRelation`]: its summand folded over the split eq.
-pub struct RelationProver<F: JoltField, R: EngineRelation> {
+pub struct RelationProver<F: JoltField, R: EngineRelation<F>> {
     relation: R,
     setup: RelationSetup<F>,
     /// The Gruen split eq of an eq-weighted relation; `None` for a dense one.
@@ -119,7 +119,7 @@ pub struct RelationProver<F: JoltField, R: EngineRelation> {
     wires: Vec<MultilinearPolynomial<F>>,
 }
 
-impl<F: JoltField, R: EngineRelation> RelationProver<F, R> {
+impl<F: JoltField, R: EngineRelation<F>> RelationProver<F, R> {
     /// The prover for `params`, its witnesses read from `trace`.
     #[tracing::instrument(skip_all, name = "RelationProver::initialize")]
     pub fn initialize(trace: &Trace, params: RelationParams<F, R>) -> Self {
@@ -185,7 +185,7 @@ impl<F: JoltField, R: EngineRelation> RelationProver<F, R> {
     }
 }
 
-impl<F: JoltField, R: EngineRelation> ProveRounds<F> for RelationProver<F, R> {
+impl<F: JoltField, R: EngineRelation<F>> ProveRounds<F> for RelationProver<F, R> {
     fn num_rounds(&self) -> usize {
         self.relation.rounds()
     }
@@ -292,7 +292,7 @@ impl<F: JoltField, R: EngineRelation> ProveRounds<F> for RelationProver<F, R> {
     }
 }
 
-impl<F: JoltField, T: Transcript, R: EngineRelation> SumcheckInstanceProver<F, T>
+impl<F: JoltField, T: Transcript, R: EngineRelation<F>> SumcheckInstanceProver<F, T>
     for RelationProver<F, R>
 {
     fn degree(&self) -> usize {

@@ -1,3 +1,4 @@
+use crate::relation::Produces;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use common::VirtualPoly;
@@ -106,7 +107,7 @@ impl SymbolicSumcheck for HammingBooleanityRelation {
     }
 }
 
-impl Relation for HammingBooleanityRelation {
+impl Produces for HammingBooleanityRelation {
     fn produced(&self) -> Vec<OpeningId> {
         self.polynomial_types
             .iter()
@@ -114,6 +115,8 @@ impl Relation for HammingBooleanityRelation {
             .collect()
     }
 }
+
+impl<F: JoltField> Relation<F> for HammingBooleanityRelation {}
 
 /// The verifier of a Hamming-booleanity check: its relation.
 pub type HammingBooleanitySumcheckVerifier<F> = RelationVerifier<F, HammingBooleanityRelation>;

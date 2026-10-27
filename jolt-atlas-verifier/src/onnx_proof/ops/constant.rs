@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     atlas_relation_types,
     onnx_proof::{
@@ -102,21 +103,7 @@ impl<S: OpSpec + 'static> SymbolicSumcheck for PublicRelation<S> {
     }
 }
 
-impl<S: OpSpec + 'static> AtlasRelation for PublicRelation<S> {
-    type Spec = S;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-
-    fn setup<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        reduced_output_setup(accumulator, &self.shape.node)
-    }
-
+impl<S: OpSpec + 'static> Relation for PublicRelation<S> {
     fn produced(&self) -> Vec<OpeningId> {
         Vec::new()
     }
@@ -131,6 +118,24 @@ impl<S: OpSpec + 'static> AtlasRelation for PublicRelation<S> {
             RelationDerived::Public => self.shape.value.evaluate_mle(&setup.incoming_point),
             other => panic!("public data derives no {other:?}"),
         }
+    }
+}
+
+impl<S: OpSpec + 'static> SetupRelation for PublicRelation<S> {
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.shape.node)
+    }
+}
+
+impl<S: OpSpec + 'static> AtlasRelation for PublicRelation<S> {
+    type Spec = S;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
     }
 }
 

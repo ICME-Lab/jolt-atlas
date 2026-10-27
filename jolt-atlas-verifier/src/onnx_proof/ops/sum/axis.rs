@@ -1,3 +1,4 @@
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 
 use atlas_trace::{op::Sum, trace::LayerData, Model, Trace};
@@ -94,21 +95,7 @@ impl SymbolicSumcheck for SumAxisRelation {
     }
 }
 
-impl AtlasRelation for SumAxisRelation {
-    type Spec = Sum;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-
-    fn setup<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        reduced_output_setup(accumulator, &self.shape.node)
-    }
-
+impl Relation for SumAxisRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![self.ids().nodeio(Target::Input(0))]
     }
@@ -123,6 +110,24 @@ impl AtlasRelation for SumAxisRelation {
             SumAxis::Axis0 => [challenges, r.as_slice()].concat(),
             SumAxis::Axis1 => [r.as_slice(), challenges].concat(),
         }]
+    }
+}
+
+impl SetupRelation for SumAxisRelation {
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.shape.node)
+    }
+}
+
+impl AtlasRelation for SumAxisRelation {
+    type Spec = Sum;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
     }
 }
 

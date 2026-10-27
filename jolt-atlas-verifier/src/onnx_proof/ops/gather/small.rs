@@ -101,8 +101,8 @@ pub fn build_stage2_verifiers<F: JoltField>(
         &mut verifier.transcript,
     );
 
-    let hb_sumcheck = HammingBooleanitySumcheckVerifier::new(hb_params);
-    let bool_sumcheck = BooleanitySumcheckVerifier::new(bool_params);
+    let hb_sumcheck = hb_params.into_verifier();
+    let bool_sumcheck = bool_params.into_verifier();
 
     (hb_sumcheck, bool_sumcheck)
 }
@@ -182,7 +182,7 @@ pub fn build_stage3_verifier<F: JoltField>(
         &mut verifier.transcript,
     );
 
-    HammingWeightSumcheckVerifier::new(hw_params)
+    hw_params.into_verifier()
 }
 
 /// Hamming-weight parameters of the read addresses.

@@ -30,6 +30,7 @@ jolt-transcript = { workspace = true, features = ["solinas", "transcript-blake2b
 jolt-utils.workspace = true
 jolt-poly = { workspace = true, features = ["parallel"] }
 jolt-sumcheck.workspace = true
+jolt-claims.workspace = true
 jolt-akita.workspace = true
 jolt-openings = { workspace = true, features = ["parallel"] }
 bincode.workspace = true

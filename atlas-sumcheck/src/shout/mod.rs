@@ -1,8 +1,8 @@
 use crate::{
-    booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier, LinearClaim, LinearTerm},
+    booleanity::{BooleanitySumcheckParams, LinearClaim, LinearTerm},
     config::OneHotParams,
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
-    ra_virtual::{RaSumcheckParams, RaSumcheckVerifier},
+    ra_virtual::RaSumcheckParams,
     sumcheck_verifier::SumcheckInstanceVerifier,
 };
 use atlas_algebra::{
@@ -337,8 +337,8 @@ pub fn ra_onehot_verifiers_with_params<F: JoltField, T: Transcript>(
 ) -> [Box<dyn SumcheckInstanceVerifier<F, T>>; 2] {
     let (ra_params, booleanity_params) = params;
     [
-        Box::new(RaSumcheckVerifier::new(ra_params)),
-        Box::new(BooleanitySumcheckVerifier::new(booleanity_params)),
+        Box::new(ra_params.into_verifier()),
+        Box::new(booleanity_params.into_verifier()),
     ]
 }
 

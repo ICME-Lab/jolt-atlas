@@ -7,6 +7,7 @@
 //!
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use atlas_trace::{op::Reshape, trace::LayerData, Model, Trace};
 
 use crate::node_view::{ComputationNode, ModelView};
@@ -148,21 +149,7 @@ impl SymbolicSumcheck for ReshapeRelation {
     }
 }
 
-impl AtlasRelation for ReshapeRelation {
-    type Spec = Reshape;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-
-    fn setup<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        reduced_output_setup(accumulator, &self.shape.node)
-    }
-
+impl Relation for ReshapeRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
     }
@@ -174,6 +161,24 @@ impl AtlasRelation for ReshapeRelation {
             &self.shape.node.output_dims,
             &setup.incoming_point,
         )
+    }
+}
+
+impl SetupRelation for ReshapeRelation {
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.shape.node)
+    }
+}
+
+impl AtlasRelation for ReshapeRelation {
+    type Spec = Reshape;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
     }
 }
 

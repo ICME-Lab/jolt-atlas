@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     atlas_relation_types,
@@ -125,13 +126,17 @@ impl SymbolicSumcheck for ConstantDivisionRelation {
     }
 }
 
-impl AtlasRelation for ConstantDivisionRelation {
-    type Spec = ScalarConstDiv;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
+impl Relation for ConstantDivisionRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![
+            self.ids().nodeio(Target::Input(0)),
+            self.ids()
+                .advice(CommittedPoly::ScalarConstDivNodeRemainder),
+        ]
     }
+}
 
+impl SetupRelation for ConstantDivisionRelation {
     fn setup<F: JoltField, T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -139,13 +144,13 @@ impl AtlasRelation for ConstantDivisionRelation {
     ) -> RelationSetup<F> {
         reduced_output_setup(accumulator, &self.node)
     }
+}
 
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![
-            self.ids().nodeio(Target::Input(0)),
-            self.ids()
-                .advice(CommittedPoly::ScalarConstDivNodeRemainder),
-        ]
+impl AtlasRelation for ConstantDivisionRelation {
+    type Spec = ScalarConstDiv;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
@@ -152,13 +153,16 @@ impl<S: AccumulationShape> SymbolicSumcheck for AccumulationRelation<S> {
     }
 }
 
-impl<S: AccumulationShape> AtlasRelation for AccumulationRelation<S> {
-    type Spec = S;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
+impl<S: AccumulationShape> Relation for AccumulationRelation<S> {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![
+            self.ids().nodeio(Target::Input(0)),
+            self.ids().nodeio(Target::Input(1)),
+        ]
     }
+}
 
+impl<S: AccumulationShape> SetupRelation for AccumulationRelation<S> {
     fn setup<F: JoltField, T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -169,12 +173,13 @@ impl<S: AccumulationShape> AtlasRelation for AccumulationRelation<S> {
             challenges: Vec::new(),
         }
     }
+}
 
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![
-            self.ids().nodeio(Target::Input(0)),
-            self.ids().nodeio(Target::Input(1)),
-        ]
+impl<S: AccumulationShape> AtlasRelation for AccumulationRelation<S> {
+    type Spec = S;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 }
 

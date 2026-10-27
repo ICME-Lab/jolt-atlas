@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_standard_sumcheck_proof_api,
@@ -86,13 +87,15 @@ impl SymbolicSumcheck for IffRelation {
     }
 }
 
-impl AtlasRelation for IffRelation {
-    type Spec = Iff;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
+impl Relation for IffRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        (0..3)
+            .map(|position| self.ids().nodeio(Target::Input(position)))
+            .collect()
     }
+}
 
+impl SetupRelation for IffRelation {
     fn setup<F: JoltField, T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -103,11 +106,13 @@ impl AtlasRelation for IffRelation {
             challenges: Vec::new(),
         }
     }
+}
 
-    fn produced(&self) -> Vec<OpeningId> {
-        (0..3)
-            .map(|position| self.ids().nodeio(Target::Input(position)))
-            .collect()
+impl AtlasRelation for IffRelation {
+    type Spec = Iff;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 }
 

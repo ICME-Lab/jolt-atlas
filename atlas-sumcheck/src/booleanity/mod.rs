@@ -2,22 +2,28 @@
 use allocative::FlameGraphBuilder;
 use common::CommittedPoly;
 use rayon::prelude::*;
-use std::{fmt::Debug, iter::zip};
+use std::fmt::Debug;
 
 use crate::{
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    relation::{
+        low_to_high_point, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
+        RelationOpening, RelationSetup, RelationVerifier,
+    },
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         opening_point::{OpeningPoint, BIG_ENDIAN},
     },
 };
 use atlas_transcript::Transcript;
+use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 
-/// Degree bound of the sumcheck round polynomials in [`BooleanitySumcheckVerifier`].
+/// Degree bound of the sumcheck round polynomials in [`BooleanityRelation`].
 const DEGREE_BOUND: usize = 3;
 
 /// The input claim of a [`LinearTerm`]: `constant + Σ coef·claim(id)` over
@@ -112,85 +118,206 @@ impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
     // where Challenge(2i) = eq_eval * γ_i, Challenge(2i+1) = -eq_eval * γ_i
 }
 
-pub struct BooleanitySumcheckVerifier<F: JoltField> {
-    params: BooleanitySumcheckParams<F>,
+/// `Σ_{k,t} eq((r_address, r_cycle), (k, t)) · Σ_i γ_i·(ra_i(k,t)² − ra_i(k,t)) = 0`: every one-hot
+/// chunk is boolean, optionally with a [`LinearTerm`] sharing the chunks' single opening.
+///
+/// ```text
+/// input claim   linear claim (0 without a linear term)
+/// output claim  eq(r_address‖r_cycle, ρ) · Σ_i γ_i·(ra_i(ρ)² − ra_i(ρ))
+///             + eq(r_cycle, ρ_cycle) · Σ_i ra_i(ρ)·(γ′_i + w_i·k(ρ_address))
+/// ```
+///
+/// with `ρ = (ρ_address, ρ_cycle)` the bound point (each part low-to-high) and
+/// `k(ρ_address) = Σ_j 2^j·ρ_j` the address index.
+///
+/// **S ⊆ R.** An honest chunk is `0` or `1` everywhere, so the booleanity summands vanish; the
+/// linear term sums `Σ_k (γ′_i + w_i·k)·ra_i(k, r_cycle)`, which the caller's claim states for an
+/// honest one-hot chunk. The setup's incoming point is `r_address ‖ r_cycle`; the coefficients
+/// are `γ_i` ([`RelationChallenge::Batching`]), `γ′_i` ([`RelationChallenge::SecondBatching`]),
+/// `w_i` ([`RelationChallenge::Weight`]) and the linear claim's constant and coefficients.
+pub struct BooleanityRelation {
+    d: usize,
+    log_k_chunk: usize,
+    log_t: usize,
+    /// The virtual openings of the linear claim, when there is a linear term.
+    linear: Option<Vec<OpeningId>>,
+    polynomial_types: Vec<CommittedPoly>,
+    sumcheck_id: SumcheckId,
 }
 
-impl<F: JoltField> BooleanitySumcheckVerifier<F> {
-    pub fn new(params: BooleanitySumcheckParams<F>) -> Self {
-        Self { params }
+impl BooleanityRelation {
+    fn ra<G: Ring>(&self, i: usize) -> RelationExpr<G> {
+        opening(RelationOpening::Id(OpeningId::new(
+            self.polynomial_types[i],
+            self.sumcheck_id,
+        )))
+    }
+
+    /// The bound point in opening order: each part's challenges, last first.
+    fn bound_point<F: Copy>(&self, challenges: &[F]) -> Vec<F> {
+        let (address, cycle) = challenges.split_at(self.log_k_chunk);
+        [low_to_high_point(address), low_to_high_point(cycle)].concat()
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanitySumcheckVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl SymbolicSumcheck for BooleanityRelation {
+    crate::relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
     }
 
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let ra_claims = self
-            .params
-            .polynomial_types
-            .iter()
-            .map(|poly_type| {
-                let id = OpeningId::new(*poly_type, self.params.sumcheck_id);
-                accumulator.get_committed_polynomial_opening(id).1
-            })
-            .collect::<Vec<F>>();
+    fn id() -> RelationId {
+        RelationId::Booleanity
+    }
 
-        let combined_r: Vec<F> = self
-            .params
-            .r_address
-            .iter()
-            .cloned()
-            .rev()
-            .chain(self.params.r_cycle.iter().cloned().rev())
-            .collect();
+    fn rounds(&self) -> usize {
+        self.log_k_chunk + self.log_t
+    }
 
-        let booleanity = EqPolynomial::<F>::mle(sumcheck_challenges, &combined_r)
-            * zip(&self.params.gammas, &ra_claims)
-                .map(|(gamma, ra)| (ra.square() - *ra) * gamma)
-                .sum::<F>();
-        let Some(lin) = &self.params.linear else {
-            return booleanity;
+    fn degree(&self) -> usize {
+        DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        let Some(terms) = &self.linear else {
+            return RelationExpr::zero();
         };
-        let (r_address, r_cycle) = sumcheck_challenges.split_at(self.params.log_k_chunk);
-        // `k` at the (low-to-high bound) address point: Σ_j 2^j·r_j.
-        let k: F = r_address
-            .iter()
-            .enumerate()
-            .map(|(j, c)| F::from_u64(1u64 << j) * (*c).into())
-            .sum();
-        let r_cycle_rev: Vec<F> = self.params.r_cycle.iter().cloned().rev().collect();
-        let eq_cycle = EqPolynomial::<F>::mle(r_cycle, &r_cycle_rev);
-        let linear: F = ra_claims
-            .iter()
-            .zip(&lin.gammas)
-            .zip(&lin.weights)
-            .map(|((ra, gamma), weight)| *ra * (*gamma + *weight * k))
-            .sum();
-        booleanity + eq_cycle * linear
+        terms.iter().enumerate().fold(
+            challenge(RelationChallenge::ClaimConstant),
+            |acc, (j, &id)| {
+                acc + challenge::<G, _, _, _>(RelationChallenge::ClaimCoefficient(j))
+                    * opening(RelationOpening::Id(id))
+            },
+        )
     }
 
-    fn cache_openings(
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        let booleanity = (0..self.d).fold(RelationExpr::zero(), |acc, i| {
+            acc + challenge::<G, _, _, _>(RelationChallenge::Batching(i))
+                * (self.ra::<G>(i) * self.ra::<G>(i) - self.ra::<G>(i))
+        });
+        let output = derived::<G, _, _, _>(RelationDerived::OneHotEq) * booleanity;
+        if self.linear.is_none() {
+            return output;
+        }
+        let linear = (0..self.d).fold(RelationExpr::zero(), |acc, i| {
+            acc + self.ra::<G>(i)
+                * (challenge::<G, _, _, _>(RelationChallenge::SecondBatching(i))
+                    + challenge::<G, _, _, _>(RelationChallenge::Weight(i))
+                        * derived(RelationDerived::AddressIndex))
+        });
+        output + derived::<G, _, _, _>(RelationDerived::CycleEq) * linear
+    }
+}
+
+impl Relation for BooleanityRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        self.polynomial_types
+            .iter()
+            .map(|&poly| OpeningId::new(poly, self.sumcheck_id))
+            .collect()
+    }
+
+    fn opening_points<F: JoltField>(
         &self,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Vec<Vec<F>> {
+        vec![self.bound_point(challenges); self.d]
+    }
+
+    fn append_produced_requests<F: JoltField, T: Transcript>(
+        &self,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
     ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
         accumulator.append_sparse(
             transcript,
-            self.params.polynomial_types.clone(),
-            self.params.sumcheck_id,
-            opening_point.r,
+            self.polynomial_types.clone(),
+            self.sumcheck_id,
+            self.bound_point(challenges),
         );
+    }
+
+    fn derive<F: JoltField>(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> F {
+        let (r_address, r_cycle) = setup.incoming_point.split_at(self.log_k_chunk);
+        match id {
+            // The challenges in round order against each part of the incoming point reversed.
+            RelationDerived::OneHotEq => {
+                let combined: Vec<F> = r_address
+                    .iter()
+                    .rev()
+                    .chain(r_cycle.iter().rev())
+                    .copied()
+                    .collect();
+                EqPolynomial::mle(challenges, &combined)
+            }
+            RelationDerived::CycleEq => {
+                let r_cycle_rev: Vec<F> = r_cycle.iter().rev().copied().collect();
+                EqPolynomial::mle(&challenges[self.log_k_chunk..], &r_cycle_rev)
+            }
+            RelationDerived::AddressIndex => challenges[..self.log_k_chunk]
+                .iter()
+                .enumerate()
+                .map(|(j, c)| F::from_u64(1u64 << j) * *c)
+                .sum(),
+            other => panic!("{other:?} is not derived by this relation"),
+        }
+    }
+}
+
+/// The verifier of a booleanity check: its relation.
+pub type BooleanitySumcheckVerifier<F> = RelationVerifier<F, BooleanityRelation>;
+
+impl<F: JoltField> BooleanitySumcheckParams<F> {
+    /// The relation these parameters instantiate, with its setup.
+    pub fn into_verifier(self) -> BooleanitySumcheckVerifier<F> {
+        let mut challenges: Vec<(RelationChallenge, F)> = self
+            .gammas
+            .iter()
+            .enumerate()
+            .map(|(i, gamma)| (RelationChallenge::Batching(i), (*gamma).into()))
+            .collect();
+        let linear = self.linear.map(|lin| {
+            challenges.push((RelationChallenge::ClaimConstant, lin.claim.constant));
+            for (i, (gamma, weight)) in lin.gammas.iter().zip(&lin.weights).enumerate() {
+                challenges.push((RelationChallenge::SecondBatching(i), *gamma));
+                challenges.push((RelationChallenge::Weight(i), *weight));
+            }
+            lin.claim
+                .terms
+                .iter()
+                .enumerate()
+                .map(|(j, (id, coefficient))| {
+                    challenges.push((RelationChallenge::ClaimCoefficient(j), *coefficient));
+                    *id
+                })
+                .collect()
+        });
+        let setup = RelationSetup {
+            incoming_point: [self.r_address, self.r_cycle].concat(),
+            challenges,
+        };
+        RelationVerifier::at(
+            BooleanityRelation {
+                d: self.d,
+                log_k_chunk: self.log_k_chunk,
+                log_t: self.log_t,
+                linear,
+                polynomial_types: self.polynomial_types,
+                sumcheck_id: self.sumcheck_id,
+            },
+            setup,
+        )
     }
 }
 
@@ -275,7 +402,7 @@ mod tests {
                 .insert(*key, (empty_point, *value));
         }
 
-        let verifier = BooleanitySumcheckVerifier::new(prover.params);
+        let verifier = prover.params.into_verifier();
         Sumcheck::verify(
             &proof,
             &verifier,

@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_fused_rescale_proof_api,
@@ -141,13 +142,16 @@ impl<S: OpSpec + ProductShape + 'static> SymbolicSumcheck for ProductRelation<S>
     }
 }
 
-impl<S: OpSpec + ProductShape + 'static> AtlasRelation for ProductRelation<S> {
-    type Spec = S;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
+impl<S: OpSpec + ProductShape + 'static> Relation for ProductRelation<S> {
+    fn produced(&self) -> Vec<OpeningId> {
+        Self::operands()
+            .into_iter()
+            .map(|position| self.ids().nodeio(Target::Input(position)))
+            .collect()
     }
+}
 
+impl<S: OpSpec + ProductShape + 'static> SetupRelation for ProductRelation<S> {
     fn setup<F: JoltField, T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -158,12 +162,13 @@ impl<S: OpSpec + ProductShape + 'static> AtlasRelation for ProductRelation<S> {
             challenges: Vec::new(),
         }
     }
+}
 
-    fn produced(&self) -> Vec<OpeningId> {
-        Self::operands()
-            .into_iter()
-            .map(|position| self.ids().nodeio(Target::Input(position)))
-            .collect()
+impl<S: OpSpec + ProductShape + 'static> AtlasRelation for ProductRelation<S> {
+    type Spec = S;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 }
 

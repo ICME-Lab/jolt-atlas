@@ -1,10 +1,14 @@
 use crate::{
     config::OneHotParams,
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    relation::{
+        low_to_high_point, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
+        RelationOpening, RelationSetup, RelationVerifier,
+    },
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
@@ -12,6 +16,8 @@ use atlas_algebra::{
 };
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
+use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use rayon::prelude::*;
 
 // Instruction read-access (RA) virtualization sumcheck
@@ -53,70 +59,145 @@ impl<F: JoltField> SumcheckInstanceParams<F> for RaSumcheckParams<F> {
     //        = Challenge(0) * Opening(ra_0) * Opening(ra_1) * ... * Opening(ra_{d-1})
 }
 
-pub struct RaSumcheckVerifier<F: JoltField> {
-    params: RaSumcheckParams<F>,
+/// `Σ_j eq(r_cycle, j) · Π_i ra_i(r_{address,i}, j) = ra(r_address, r_cycle)`: a virtual
+/// read-address polynomial is the product of its one-hot chunks.
+///
+/// ```text
+/// input claim   ra_claim                         (the virtual polynomial's opening)
+/// output claim  eq(r_cycle, r′) · Π_i ra_i(r_{address,i}, r′)   (r′ the low-to-high bound point)
+/// ```
+///
+/// **S ⊆ R.** An honest address decomposes into its chunks, and the one-hot encoding of the
+/// address is the product of the chunks' encodings. The setup's incoming point is
+/// `r_address ‖ r_cycle`; `ra_claim` is [`RelationChallenge::Claim`].
+pub struct RaVirtualizationRelation {
+    one_hot_params: OneHotParams,
+    address_len: usize,
+    cycle_len: usize,
+    polynomial_types: Vec<CommittedPoly>,
 }
 
-impl<F: JoltField> RaSumcheckVerifier<F> {
-    pub fn new(params: RaSumcheckParams<F>) -> Self {
-        Self { params }
+impl RaVirtualizationRelation {
+    fn cycle_point<F: Copy>(&self, setup: &RelationSetup<F>) -> Vec<F> {
+        setup.incoming_point[self.address_len..].to_vec()
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for RaSumcheckVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl SymbolicSumcheck for RaVirtualizationRelation {
+    crate::relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
     }
 
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let r = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let eq_eval = EqPolynomial::mle_endian(&self.params.r_cycle, &r);
-        let ra_claim_prod: F = (0..self.params.one_hot_params.instruction_d)
-            .map(|i| {
-                let id = OpeningId::new(
-                    self.params.polynomial_types[i],
+    fn id() -> RelationId {
+        RelationId::RaVirtualization
+    }
+
+    fn rounds(&self) -> usize {
+        self.cycle_len
+    }
+
+    fn degree(&self) -> usize {
+        self.one_hot_params.instruction_d + 1
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        challenge(RelationChallenge::Claim)
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        (0..self.one_hot_params.instruction_d).fold(
+            derived::<G, _, _, _>(RelationDerived::CycleEq),
+            |acc, i| {
+                acc * opening::<G, _, _, _>(RelationOpening::Id(OpeningId::new(
+                    self.polynomial_types[i],
                     SumcheckId::RaVirtualization,
-                );
-                let (_, ra_i_claim) = accumulator.get_committed_polynomial_opening(id);
-                ra_i_claim
-            })
-            .product();
+                )))
+            },
+        )
+    }
+}
 
-        eq_eval * ra_claim_prod
+impl Relation for RaVirtualizationRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        self.polynomial_types[..self.one_hot_params.instruction_d]
+            .iter()
+            .map(|&poly| OpeningId::new(poly, SumcheckId::RaVirtualization))
+            .collect()
     }
 
-    fn cache_openings(
+    fn opening_points<F: JoltField>(
         &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Vec<Vec<F>> {
+        let r_cycle = low_to_high_point(challenges);
+        self.one_hot_params
+            .compute_r_address_chunks(&setup.incoming_point[..self.address_len])
+            .iter()
+            .map(|r_address| [r_address.as_slice(), r_cycle.as_slice()].concat())
+            .collect()
+    }
+
+    fn append_produced_requests<F: JoltField, T: Transcript>(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
     ) {
-        let r_cycle = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        // Compute r_address_chunks with proper padding
-        let r_address_chunks = self
-            .params
-            .one_hot_params
-            .compute_r_address_chunks(&self.params.r_address.r);
-
-        for (i, r_address) in r_address_chunks.iter().enumerate() {
-            let opening_point = [r_address.as_slice(), r_cycle.r.as_slice()].concat();
-
+        for (i, point) in self
+            .opening_points(setup, challenges)
+            .into_iter()
+            .enumerate()
+        {
             accumulator.append_sparse(
                 transcript,
-                vec![self.params.polynomial_types[i]],
+                vec![self.polynomial_types[i]],
                 SumcheckId::RaVirtualization,
-                opening_point,
+                point,
             );
         }
+    }
+
+    fn derive<F: JoltField>(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> F {
+        match id {
+            RelationDerived::CycleEq => {
+                EqPolynomial::mle(&self.cycle_point(setup), &low_to_high_point(challenges))
+            }
+            other => panic!("{other:?} is not derived by this relation"),
+        }
+    }
+}
+
+/// The verifier of a read-address virtualization: its relation.
+pub type RaSumcheckVerifier<F> = RelationVerifier<F, RaVirtualizationRelation>;
+
+impl<F: JoltField> RaSumcheckParams<F> {
+    /// The relation these parameters instantiate, with its setup.
+    pub fn into_verifier(self) -> RaSumcheckVerifier<F> {
+        let address_len = self.r_address.len();
+        let cycle_len = self.r_cycle.len();
+        let setup = RelationSetup {
+            incoming_point: [self.r_address.r, self.r_cycle.r].concat(),
+            challenges: vec![(RelationChallenge::Claim, self.ra_claim)],
+        };
+        RelationVerifier::at(
+            RaVirtualizationRelation {
+                one_hot_params: self.one_hot_params,
+                address_len,
+                cycle_len,
+                polynomial_types: self.polynomial_types,
+            },
+            setup,
+        )
     }
 }
 
@@ -248,7 +329,7 @@ mod tests {
                 .insert(*key, (empty_point, *value));
         }
 
-        let verifier = RaSumcheckVerifier::new(prover.params);
+        let verifier = prover.params.into_verifier();
         Sumcheck::verify(
             &proof,
             &verifier,

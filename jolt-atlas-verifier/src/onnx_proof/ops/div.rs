@@ -1,4 +1,5 @@
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     node_view::ComputationNode,
     onnx_proof::{
@@ -168,13 +169,18 @@ impl SymbolicSumcheck for DivRelation {
     }
 }
 
-impl AtlasRelation for DivRelation {
-    type Spec = Div;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
+impl Relation for DivRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![
+            self.ids().nodeio(Target::Input(0)),
+            self.ids().nodeio(Target::Input(1)),
+            self.ids().nodeio(Target::Current),
+            self.ids().advice(VirtualPoly::DivRemainder),
+        ]
     }
+}
 
+impl SetupRelation for DivRelation {
     fn setup<F: JoltField, T: Transcript>(
         &self,
         _accumulator: &dyn OpeningAccumulator<F>,
@@ -187,14 +193,13 @@ impl AtlasRelation for DivRelation {
             challenges: Vec::new(),
         }
     }
+}
 
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![
-            self.ids().nodeio(Target::Input(0)),
-            self.ids().nodeio(Target::Input(1)),
-            self.ids().nodeio(Target::Current),
-            self.ids().advice(VirtualPoly::DivRemainder),
-        ]
+impl AtlasRelation for DivRelation {
+    type Spec = Div;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 }
 
@@ -273,13 +278,13 @@ impl SymbolicSumcheck for DivQuotientRelation {
     }
 }
 
-impl AtlasRelation for DivQuotientRelation {
-    type Spec = Div;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
+impl Relation for DivQuotientRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningIdBuilder::new(&self.node).advice(CommittedPoly::DivNodeQuotient)]
     }
+}
 
+impl SetupRelation for DivQuotientRelation {
     fn setup<F: JoltField, T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -290,9 +295,13 @@ impl AtlasRelation for DivQuotientRelation {
             challenges: Vec::new(),
         }
     }
+}
 
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![OpeningIdBuilder::new(&self.node).advice(CommittedPoly::DivNodeQuotient)]
+impl AtlasRelation for DivQuotientRelation {
+    type Spec = Div;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 }
 

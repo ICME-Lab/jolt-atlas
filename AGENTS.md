@@ -171,7 +171,10 @@ root `Cargo.toml`.
   table on the prover side.
 - For ops migrated to a symbolic relation (`onnx_proof/relation.rs`, a `jolt_claims`
   `SymbolicSumcheck` over atlas openings), the relation is the source of truth: the engine
-  derives both prover and verifier from it, and no hand-written verifier exists. Each relation is
+  derives both prover and verifier from it, and no hand-written verifier exists. The relation
+  core (`Relation`, `RelationVerifier`, the opening/derived/coefficient ids) is
+  `atlas_sumcheck::relation`; the one-hot checks (booleanity, Hamming booleanity, Hamming
+  weight, `ra_virtual`) are relations there, with their setup supplied by the caller. Each relation is
   bound to its op by `type Spec` (checked at compile time and by
   `relation_specs_match_their_dispatched_op_kind`) and documents its S ⊆ R argument;
   `docs/pull-requests.md` §4 is the migration checklist.

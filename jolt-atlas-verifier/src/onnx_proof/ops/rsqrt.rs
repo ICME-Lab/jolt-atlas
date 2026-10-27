@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
@@ -204,13 +205,19 @@ impl SymbolicSumcheck for RsqrtRelation {
     }
 }
 
-impl AtlasRelation for RsqrtRelation {
-    type Spec = Rsqrt;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
+impl Relation for RsqrtRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![
+            self.ids().nodeio(Target::Input(0)),
+            self.ids().advice(CommittedPoly::RsqrtQuotient),
+            self.ids().nodeio(Target::Current),
+            self.ids().advice(VirtualPoly::DivRemainder),
+            self.ids().advice(VirtualPoly::SqrtRemainder),
+        ]
     }
+}
 
+impl SetupRelation for RsqrtRelation {
     fn setup<F: JoltField, T: Transcript>(
         &self,
         _accumulator: &dyn OpeningAccumulator<F>,
@@ -225,15 +232,13 @@ impl AtlasRelation for RsqrtRelation {
             challenges: vec![(RelationChallenge::Gamma, gamma)],
         }
     }
+}
 
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![
-            self.ids().nodeio(Target::Input(0)),
-            self.ids().advice(CommittedPoly::RsqrtQuotient),
-            self.ids().nodeio(Target::Current),
-            self.ids().advice(VirtualPoly::DivRemainder),
-            self.ids().advice(VirtualPoly::SqrtRemainder),
-        ]
+impl AtlasRelation for RsqrtRelation {
+    type Spec = Rsqrt;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 }
 

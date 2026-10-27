@@ -1,5 +1,6 @@
 use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     atlas_relation_types,
@@ -108,21 +109,7 @@ impl SymbolicSumcheck for BroadcastRelation {
     }
 }
 
-impl AtlasRelation for BroadcastRelation {
-    type Spec = Broadcast;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-
-    fn setup<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        reduced_output_setup(accumulator, &self.shape.node)
-    }
-
+impl Relation for BroadcastRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
     }
@@ -149,6 +136,24 @@ impl AtlasRelation for BroadcastRelation {
             }
             other => panic!("a broadcast derives no {other:?}"),
         }
+    }
+}
+
+impl SetupRelation for BroadcastRelation {
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.shape.node)
+    }
+}
+
+impl AtlasRelation for BroadcastRelation {
+    type Spec = Broadcast;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
     }
 }
 

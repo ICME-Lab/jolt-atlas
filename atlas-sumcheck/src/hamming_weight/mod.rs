@@ -2,19 +2,24 @@
 use allocative::FlameGraphBuilder;
 use common::CommittedPoly;
 use rayon::prelude::*;
-use std::iter::zip;
 
 use crate::{
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    relation::{
+        low_to_high_point, Relation, RelationChallenge, RelationExpr, RelationId, RelationOpening,
+        RelationSetup, RelationVerifier,
+    },
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
 };
 use atlas_transcript::Transcript;
+use jolt_claims::{challenge, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 
-/// Degree bound of the sumcheck round polynomials in [`HammingWeightSumcheckVerifier`].
+/// Degree bound of the sumcheck round polynomials in [`HammingWeightRelation`].
 const DEGREE_BOUND: usize = 1;
 
 pub struct HammingWeightSumcheckParams<F: JoltField> {
@@ -49,60 +54,117 @@ impl<F: JoltField> SumcheckInstanceParams<F> for HammingWeightSumcheckParams<F> 
     // output = Σ_{i=0}^{d-1} γ^i * ra_i
 }
 
-pub struct HammingWeightSumcheckVerifier<F: JoltField> {
-    params: HammingWeightSumcheckParams<F>,
+/// `Σ_i γ^i · Σ_k ra_i(k, r_cycle) = Σ_i γ^i`: each one-hot chunk has Hamming weight one.
+///
+/// ```text
+/// input claim   Σ_i γ^i
+/// output claim  Σ_i γ^i · ra_i(r′, r_cycle)        (r′ the low-to-high bound address point)
+/// ```
+///
+/// **S ⊆ R.** An honest chunk is one-hot in every cycle, so its sum over the address is one.
+/// The setup's incoming point is `r_cycle`; `γ^i` are [`RelationChallenge::Batching`].
+pub struct HammingWeightRelation {
+    d: usize,
+    num_rounds: usize,
+    polynomial_types: Vec<CommittedPoly>,
+    sumcheck_id: SumcheckId,
 }
 
-impl<F: JoltField> HammingWeightSumcheckVerifier<F> {
-    pub fn new(params: HammingWeightSumcheckParams<F>) -> Self {
-        Self { params }
+impl SymbolicSumcheck for HammingWeightRelation {
+    crate::relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
+    }
+
+    fn id() -> RelationId {
+        RelationId::HammingWeight
+    }
+
+    fn rounds(&self) -> usize {
+        self.num_rounds
+    }
+
+    fn degree(&self) -> usize {
+        DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        (0..self.d).fold(RelationExpr::zero(), |acc, i| {
+            acc + challenge(RelationChallenge::Batching(i))
+        })
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        (0..self.d).fold(RelationExpr::zero(), |acc, i| {
+            acc + challenge::<G, _, _, _>(RelationChallenge::Batching(i))
+                * opening(RelationOpening::Id(OpeningId::new(
+                    self.polynomial_types[i],
+                    self.sumcheck_id,
+                )))
+        })
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
-    for HammingWeightSumcheckVerifier<F>
-{
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl Relation for HammingWeightRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        self.polynomial_types
+            .iter()
+            .map(|&poly| OpeningId::new(poly, self.sumcheck_id))
+            .collect()
     }
 
-    fn expected_output_claim(
+    fn opening_points<F: JoltField>(
         &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        _sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let ra_claims = (0..self.params.d).map(|i| {
-            let id = OpeningId::new(self.params.polynomial_types[i], self.params.sumcheck_id);
-            accumulator.get_committed_polynomial_opening(id).1
-        });
-
-        // Compute batched claim: sum_{i=0}^{d-1} gamma^i * ra_i
-        zip(ra_claims, &self.params.gamma_powers)
-            .map(|(ra_claim, gamma)| ra_claim * gamma)
-            .sum()
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Vec<Vec<F>> {
+        let point = [low_to_high_point(challenges), setup.incoming_point.clone()].concat();
+        vec![point; self.d]
     }
 
-    fn cache_openings(
+    fn append_produced_requests<F: JoltField, T: Transcript>(
         &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
     ) {
-        let r = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening())
-            .r
-            .iter()
-            .cloned()
-            .chain(self.params.r_cycle.iter().cloned())
-            .collect::<Vec<_>>();
-
+        let point = [low_to_high_point(challenges), setup.incoming_point.clone()].concat();
         accumulator.append_sparse(
             transcript,
-            self.params.polynomial_types.clone(),
-            self.params.sumcheck_id,
-            r,
+            self.polynomial_types.clone(),
+            self.sumcheck_id,
+            point,
         );
+    }
+}
+
+/// The verifier of a Hamming-weight check: its relation.
+pub type HammingWeightSumcheckVerifier<F> = RelationVerifier<F, HammingWeightRelation>;
+
+impl<F: JoltField> HammingWeightSumcheckParams<F> {
+    /// The relation these parameters instantiate, with its setup.
+    pub fn into_verifier(self) -> HammingWeightSumcheckVerifier<F> {
+        let setup = RelationSetup {
+            incoming_point: self.r_cycle,
+            challenges: self
+                .gamma_powers
+                .into_iter()
+                .enumerate()
+                .map(|(i, gamma)| (RelationChallenge::Batching(i), gamma))
+                .collect(),
+        };
+        RelationVerifier::at(
+            HammingWeightRelation {
+                d: self.d,
+                num_rounds: self.num_rounds,
+                polynomial_types: self.polynomial_types,
+                sumcheck_id: self.sumcheck_id,
+            },
+            setup,
+        )
     }
 }
 

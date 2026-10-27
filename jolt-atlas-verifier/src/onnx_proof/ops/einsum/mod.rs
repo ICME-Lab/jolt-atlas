@@ -1,4 +1,5 @@
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use atlas_trace::{op::Einsum, Model, Op};
 
 use crate::node_view::ComputationNode;
@@ -193,24 +194,7 @@ impl SymbolicSumcheck for ContractionRelation {
     }
 }
 
-impl AtlasRelation for ContractionRelation {
-    type Spec = Einsum;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-
-    fn setup<F: JoltField, Tr: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut Tr,
-    ) -> RelationSetup<F> {
-        RelationSetup {
-            incoming_point: accumulator.get_node_output_opening(self.shape.node.idx).0.r,
-            challenges: Vec::new(),
-        }
-    }
-
+impl Relation for ContractionRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![
             self.ids().nodeio(Target::Input(0)),
@@ -241,6 +225,27 @@ impl AtlasRelation for ContractionRelation {
                 .output_eq(&OpeningPoint::new(setup.incoming_point.clone()), challenges),
             other => panic!("a contraction derives no {other:?}"),
         }
+    }
+}
+
+impl SetupRelation for ContractionRelation {
+    fn setup<F: JoltField, Tr: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut Tr,
+    ) -> RelationSetup<F> {
+        RelationSetup {
+            incoming_point: accumulator.get_node_output_opening(self.shape.node.idx).0.r,
+            challenges: Vec::new(),
+        }
+    }
+}
+
+impl AtlasRelation for ContractionRelation {
+    type Spec = Einsum;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
     }
 }
 

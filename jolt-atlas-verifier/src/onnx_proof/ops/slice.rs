@@ -1,4 +1,5 @@
 use crate::node_view::{ComputationNode, ModelView};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
@@ -110,21 +111,7 @@ impl SymbolicSumcheck for SliceRelation {
     }
 }
 
-impl AtlasRelation for SliceRelation {
-    type Spec = Slice;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-
-    fn setup<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        reduced_output_setup(accumulator, &self.shape.node)
-    }
-
+impl Relation for SliceRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
     }
@@ -139,6 +126,24 @@ impl AtlasRelation for SliceRelation {
             start,
             &setup.incoming_point,
         )
+    }
+}
+
+impl SetupRelation for SliceRelation {
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.shape.node)
+    }
+}
+
+impl AtlasRelation for SliceRelation {
+    type Spec = Slice;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
     }
 }
 

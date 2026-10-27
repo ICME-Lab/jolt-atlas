@@ -22,6 +22,7 @@ pub mod opening_proof;
 pub mod opening_reduction;
 pub mod ps_shout;
 pub mod ra_virtual;
+pub mod relation;
 pub mod shout;
 pub mod sumcheck;
 pub mod sumcheck_verifier;

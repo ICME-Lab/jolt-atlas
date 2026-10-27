@@ -642,6 +642,7 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-akita",
+ "jolt-claims",
  "jolt-field",
  "jolt-openings",
  "jolt-poly",

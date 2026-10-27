@@ -31,6 +31,7 @@
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 
 use atlas_trace::{op::MeanOfSquares, Op};
 
@@ -254,21 +255,7 @@ impl SymbolicSumcheck for MeanOfSquaresRelation {
     }
 }
 
-impl AtlasRelation for MeanOfSquaresRelation {
-    type Spec = MeanOfSquares;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
-    }
-
-    fn setup<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        reduced_output_setup(accumulator, &self.node)
-    }
-
+impl Relation for MeanOfSquaresRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![self.ids().nodeio(Target::Input(0))]
     }
@@ -293,5 +280,23 @@ impl AtlasRelation for MeanOfSquaresRelation {
             }
             other => panic!("a mean of squares derives no {other:?}"),
         }
+    }
+}
+
+impl SetupRelation for MeanOfSquaresRelation {
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.node)
+    }
+}
+
+impl AtlasRelation for MeanOfSquaresRelation {
+    type Spec = MeanOfSquares;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 }

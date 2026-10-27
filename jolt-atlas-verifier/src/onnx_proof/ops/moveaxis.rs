@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     atlas_relation_types, impl_tie_proof_api,
     onnx_proof::{
@@ -65,21 +66,7 @@ impl SymbolicSumcheck for AxisPermutationRelation {
     }
 }
 
-impl AtlasRelation for AxisPermutationRelation {
-    type Spec = MoveAxis;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
-    }
-
-    fn setup<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        reduced_output_setup(accumulator, &self.node)
-    }
-
+impl Relation for AxisPermutationRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))]
     }
@@ -94,6 +81,24 @@ impl AtlasRelation for AxisPermutationRelation {
             &setup.incoming_point,
             &self.node.operator,
         )]
+    }
+}
+
+impl SetupRelation for AxisPermutationRelation {
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.node)
+    }
+}
+
+impl AtlasRelation for AxisPermutationRelation {
+    type Spec = MoveAxis;
+
+    fn node(&self) -> &ComputationNode {
+        &self.node
     }
 }
 

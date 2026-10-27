@@ -71,7 +71,7 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::booleanity::{LinearClaim, LinearTerm};
 use atlas_sumcheck::{
-    booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier},
+    booleanity::BooleanitySumcheckParams,
     config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
     ps_shout::{CycleWeight, PackedSegment},
@@ -812,7 +812,7 @@ pub fn value_chunk_indices(values: &[u64], width: usize) -> Vec<Vec<Option<u8>>>
 pub fn chunk_check_verifiers<F: JoltField, T: Transcript>(
     params: BooleanitySumcheckParams<F>,
 ) -> Vec<Box<dyn SumcheckInstanceVerifier<F, T>>> {
-    vec![Box::new(BooleanitySumcheckVerifier::new(params))]
+    vec![Box::new(params.into_verifier())]
 }
 
 /// A model *output* node whose public output has no saturated element proves

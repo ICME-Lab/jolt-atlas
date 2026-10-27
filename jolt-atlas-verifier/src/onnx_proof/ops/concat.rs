@@ -1,4 +1,5 @@
 use crate::node_view::{ComputationNode, ModelView};
+use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
@@ -125,21 +126,7 @@ impl SymbolicSumcheck for ConcatRelation {
     }
 }
 
-impl AtlasRelation for ConcatRelation {
-    type Spec = Concat;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-
-    fn setup<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        reduced_output_setup(accumulator, &self.shape.node)
-    }
-
+impl Relation for ConcatRelation {
     fn produced(&self) -> Vec<OpeningId> {
         let ids = OpeningIdBuilder::new(&self.shape.node);
         (0..self.shape.input_raw_dims.len())
@@ -168,6 +155,24 @@ impl AtlasRelation for ConcatRelation {
             &setup.incoming_point,
             self.rounds(),
         )
+    }
+}
+
+impl SetupRelation for ConcatRelation {
+    fn setup<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        _transcript: &mut T,
+    ) -> RelationSetup<F> {
+        reduced_output_setup(accumulator, &self.shape.node)
+    }
+}
+
+impl AtlasRelation for ConcatRelation {
+    type Spec = Concat;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
     }
 }
 

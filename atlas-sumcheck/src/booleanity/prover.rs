@@ -1,16 +1,14 @@
 //! The prover side of [`super`].
 
 use super::*;
-use crate::{
-    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams, upstream_sumcheck::round_check_failed,
-};
+use crate::relation::prover::RelationWitness;
+use crate::upstream_sumcheck::round_check_failed;
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         ra_poly::RaPolynomial,
@@ -18,7 +16,6 @@ use atlas_algebra::{
     },
     utils::{expanding_table::ExpandingTable, thread::drop_in_background_thread},
 };
-use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
@@ -60,49 +57,40 @@ pub struct BooleanitySumcheckProver<
     lin_c: Vec<F>,
     #[allocative(skip)]
     pub(super) params: BooleanitySumcheckParams<F>,
+    #[allocative(skip)]
+    relation: BooleanityRelation,
+    #[allocative(skip)]
+    setup: RelationSetup<F>,
 }
 
-impl<
-        F: JoltField,
-        T: Transcript,
-        I: Into<usize> + Copy + Default + Debug + Send + Sync + 'static,
-    > SumcheckInstanceProver<F, T> for BooleanitySumcheckProver<F, I>
+impl<F: JoltField, I: Into<usize> + Copy + Default + Debug + Send + Sync + 'static>
+    RelationWitness<F> for BooleanitySumcheckProver<F, I>
 {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+    type Relation = BooleanityRelation;
+
+    fn relation(&self) -> &BooleanityRelation {
+        &self.relation
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let claims: Vec<F> = self.H.iter().map(|H| H.final_claim()).collect();
-        accumulator.append_sparse(
-            transcript,
-            self.params.polynomial_types.clone(),
-            self.params.sumcheck_id,
-            opening_point.r[..self.params.log_k_chunk].to_vec(),
-            opening_point.r[self.params.log_k_chunk..].to_vec(),
-            claims,
-        );
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
     }
 
-    #[cfg(feature = "allocative")]
-    fn update_flamegraph(&self, flamegraph: &mut FlameGraphBuilder) {
-        flamegraph.visit_root(self);
+    fn produced_claims(&self) -> Vec<F> {
+        self.H.iter().map(|H| H.final_claim()).collect()
     }
 }
+
+crate::relation_witness_instance!(
+    [F: JoltField, I: Into<usize> + Copy + Default + Debug + Send + Sync + 'static]
+    BooleanitySumcheckProver<F, I>
+);
 
 impl<F: JoltField, I: Into<usize> + Copy + Default + Debug + Send + Sync + 'static> ProveRounds<F>
     for BooleanitySumcheckProver<F, I>
 {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.relation.rounds()
     }
 
     #[tracing::instrument(skip_all, name = "BooleanitySumcheckProver::prove_round", fields(variant = ?self.params.sumcheck_id))]
@@ -126,7 +114,7 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Debug + Send + Sync + 'stat
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.relation.rounds() - 1);
         Ok(())
     }
 }
@@ -158,6 +146,7 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
             (Vec::new(), MultilinearPolynomial::from(vec![F::zero(); 2]))
         };
 
+        let (relation, setup) = params.clone().into_parts();
         Self {
             B,
             D: D_poly,
@@ -169,6 +158,8 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
             lin_g,
             lin_id,
             lin_c: Vec::new(),
+            relation,
+            setup,
             params,
         }
     }

@@ -1,22 +1,16 @@
 //! The prover side of [`super`].
 
 use super::*;
-use crate::{
-    mles_product_sum::compute_mles_product_sum,
-    opening_proof::{prover::ProverOpeningAccumulator, SumcheckId},
-    sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams,
-    upstream_sumcheck::round_check_failed,
-};
+use crate::relation::prover::RelationWitness;
+use crate::{mles_product_sum::compute_mles_product_sum, upstream_sumcheck::round_check_failed};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, PolynomialBinding},
         ra_poly::RaPolynomial,
     },
 };
-use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
@@ -25,7 +19,8 @@ use std::sync::Arc;
 pub struct RaSumcheckProver<F: JoltField> {
     ra_i_polys: Vec<RaPolynomial<u8, F>>,
     eq_poly: GruenSplitEqPolynomial<F>,
-    pub(super) params: RaSumcheckParams<F>,
+    relation: RaVirtualizationRelation,
+    setup: RelationSetup<F>,
 }
 
 impl<F: JoltField> RaSumcheckProver<F> {
@@ -46,51 +41,35 @@ impl<F: JoltField> RaSumcheckProver<F> {
             })
             .collect();
 
+        let eq_poly =
+            GruenSplitEqPolynomial::new(&params.r_cycle.r, jolt_poly::BindingOrder::LowToHigh);
+        let (relation, setup) = params.into_parts();
         Self {
             ra_i_polys,
-            eq_poly: GruenSplitEqPolynomial::new(
-                &params.r_cycle.r,
-                jolt_poly::BindingOrder::LowToHigh,
-            ),
-            params,
+            eq_poly,
+            relation,
+            setup,
         }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RaSumcheckProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> RelationWitness<F> for RaSumcheckProver<F> {
+    type Relation = RaVirtualizationRelation;
+
+    fn relation(&self) -> &RaVirtualizationRelation {
+        &self.relation
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let r_cycle = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
 
-        // Compute r_address_chunks with proper padding
-        let r_address_chunks = self
-            .params
-            .one_hot_params
-            .compute_r_address_chunks(&self.params.r_address.r);
-
-        for (i, r_address) in r_address_chunks.into_iter().enumerate() {
-            let claim = self.ra_i_polys[i].final_claim();
-            accumulator.append_sparse(
-                transcript,
-                vec![self.params.polynomial_types[i]],
-                SumcheckId::RaVirtualization,
-                r_address,
-                r_cycle.r.clone(),
-                vec![claim],
-            );
-        }
+    fn produced_claims(&self) -> Vec<F> {
+        self.ra_i_polys.iter().map(|ra| ra.final_claim()).collect()
     }
 }
+
+crate::relation_witness_instance!([F: JoltField] RaSumcheckProver<F>);
 
 impl<F: JoltField> RaSumcheckProver<F> {
     #[tracing::instrument(skip_all, name = "RaSumcheckProver::bind")]
@@ -105,7 +84,7 @@ impl<F: JoltField> RaSumcheckProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for RaSumcheckProver<F> {
     fn num_rounds(&self) -> usize {
-        self.params.num_rounds()
+        self.relation.rounds()
     }
 
     #[tracing::instrument(skip_all, name = "RaSumcheckProver::prove_round")]

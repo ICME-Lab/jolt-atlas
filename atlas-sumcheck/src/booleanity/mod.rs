@@ -11,15 +11,8 @@ use crate::{
         low_to_high_point, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
         RelationOpening, RelationSetup, RelationVerifier, SparseGroup,
     },
-    sumcheck_verifier::SumcheckInstanceParams,
 };
-use atlas_algebra::{
-    field::JoltField,
-    poly::{
-        eq_poly::EqPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN},
-    },
-};
+use atlas_algebra::{field::JoltField, poly::eq_poly::EqPolynomial};
 use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
@@ -69,6 +62,7 @@ pub struct LinearTerm<F: JoltField> {
     pub claim: LinearClaim<F>,
 }
 
+#[derive(Clone)]
 pub struct BooleanitySumcheckParams<F: JoltField> {
     /// Optional linear check sharing the chunks' opening (see [`LinearTerm`]).
     pub linear: Option<LinearTerm<F>>,
@@ -88,34 +82,6 @@ pub struct BooleanitySumcheckParams<F: JoltField> {
     pub polynomial_types: Vec<CommittedPoly>,
     /// Sumcheck ID for opening accumulator
     pub sumcheck_id: SumcheckId,
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for BooleanitySumcheckParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.log_k_chunk + self.log_t
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.linear
-            .as_ref()
-            .map_or(F::zero(), |l| l.claim.evaluate(accumulator))
-    }
-
-    fn normalize_opening_point(&self, sumcheck_challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        let mut opening_point = sumcheck_challenges.to_vec();
-        opening_point[..self.log_k_chunk].reverse();
-        opening_point[self.log_k_chunk..].reverse();
-        opening_point.into()
-    }
-
-    // output = eq_eval * Σ_i γ_i * (ra_i² - ra_i)
-    //        = Σ_i [ Challenge(2i) * Opening(ra_i) * Opening(ra_i)
-    //              + Challenge(2i+1) * Opening(ra_i) ]
-    // where Challenge(2i) = eq_eval * γ_i, Challenge(2i+1) = -eq_eval * γ_i
 }
 
 /// `Σ_{k,t} eq((r_address, r_cycle), (k, t)) · Σ_i γ_i·(ra_i(k,t)² − ra_i(k,t)) = 0`: every one-hot
@@ -265,8 +231,14 @@ impl<F: JoltField> Relation<F> for BooleanityRelation {
 pub type BooleanitySumcheckVerifier<F> = RelationVerifier<F, BooleanityRelation>;
 
 impl<F: JoltField> BooleanitySumcheckParams<F> {
-    /// The relation these parameters instantiate, with its setup.
+    /// The verifier of the check.
     pub fn into_verifier(self) -> BooleanitySumcheckVerifier<F> {
+        let (relation, setup) = self.into_parts();
+        RelationVerifier::at(relation, setup)
+    }
+
+    /// The relation these parameters instantiate, with its setup.
+    pub fn into_parts(self) -> (BooleanityRelation, RelationSetup<F>) {
         let mut challenges: Vec<(RelationChallenge, F)> = self
             .gammas
             .iter()
@@ -293,17 +265,15 @@ impl<F: JoltField> BooleanitySumcheckParams<F> {
             incoming_point: [self.r_address, self.r_cycle].concat(),
             challenges,
         };
-        RelationVerifier::at(
-            BooleanityRelation {
-                d: self.d,
-                log_k_chunk: self.log_k_chunk,
-                log_t: self.log_t,
-                linear,
-                polynomial_types: self.polynomial_types,
-                sumcheck_id: self.sumcheck_id,
-            },
-            setup,
-        )
+        let relation = BooleanityRelation {
+            d: self.d,
+            log_k_chunk: self.log_k_chunk,
+            log_t: self.log_t,
+            linear,
+            polynomial_types: self.polynomial_types,
+            sumcheck_id: self.sumcheck_id,
+        };
+        (relation, setup)
     }
 }
 
@@ -312,6 +282,7 @@ mod tests {
     use super::prover::*;
     use crate::opening_proof::{prover::ProverOpeningAccumulator, VerifierOpeningAccumulator};
     use atlas_algebra::field::fp128::Fp128 as Fr;
+    use atlas_algebra::poly::opening_point::{OpeningPoint, BIG_ENDIAN};
     use common::CommittedPoly;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 

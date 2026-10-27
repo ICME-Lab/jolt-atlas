@@ -1,18 +1,17 @@
 use crate::relation::Produces;
 use crate::{
     config::OneHotParams,
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
+    opening_proof::{OpeningId, SumcheckId},
     relation::{
         low_to_high_point, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
         RelationOpening, RelationSetup, RelationVerifier, SparseGroup,
     },
-    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_algebra::{
     field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
+        opening_point::{OpeningPoint, BIG_ENDIAN},
     },
 };
 use common::CommittedPoly;
@@ -29,6 +28,7 @@ use rayon::prelude::*;
 // - ra_i are MLEs of chunk-wise access indicators (1 on matching {0,1}-points).
 // - ra_claim is the claimed evaluation of the virtual read-access polynomial from the read-raf sumcheck.
 
+#[derive(Clone)]
 pub struct RaSumcheckParams<F: JoltField> {
     pub r_address: OpeningPoint<BIG_ENDIAN, F>,
     pub r_cycle: OpeningPoint<BIG_ENDIAN, F>,
@@ -36,27 +36,6 @@ pub struct RaSumcheckParams<F: JoltField> {
     pub ra_claim: F,
     /// Polynomial types for opening accumulator
     pub polynomial_types: Vec<CommittedPoly>,
-}
-
-impl<F: JoltField> SumcheckInstanceParams<F> for RaSumcheckParams<F> {
-    fn num_rounds(&self) -> usize {
-        self.r_cycle.len()
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.ra_claim
-    }
-
-    fn degree(&self) -> usize {
-        self.one_hot_params.instruction_d + 1
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    // output = eq_eval * ∏_{i=0}^{d-1} ra_i
-    //        = Challenge(0) * Opening(ra_0) * Opening(ra_1) * ... * Opening(ra_{d-1})
 }
 
 /// `Σ_j eq(r_cycle, j) · Π_i ra_i(r_{address,i}, j) = ra(r_address, r_cycle)`: a virtual
@@ -166,30 +145,36 @@ impl<F: JoltField> Relation<F> for RaVirtualizationRelation {
 pub type RaSumcheckVerifier<F> = RelationVerifier<F, RaVirtualizationRelation>;
 
 impl<F: JoltField> RaSumcheckParams<F> {
-    /// The relation these parameters instantiate, with its setup.
+    /// The verifier of the check.
     pub fn into_verifier(self) -> RaSumcheckVerifier<F> {
+        let (relation, setup) = self.into_parts();
+        RelationVerifier::at(relation, setup)
+    }
+
+    /// The relation these parameters instantiate, with its setup.
+    pub fn into_parts(self) -> (RaVirtualizationRelation, RelationSetup<F>) {
         let address_len = self.r_address.len();
         let cycle_len = self.r_cycle.len();
         let setup = RelationSetup {
             incoming_point: [self.r_address.r, self.r_cycle.r].concat(),
             challenges: vec![(RelationChallenge::Claim, self.ra_claim)],
         };
-        RelationVerifier::at(
-            RaVirtualizationRelation {
-                one_hot_params: self.one_hot_params,
-                address_len,
-                cycle_len,
-                polynomial_types: self.polynomial_types,
-            },
-            setup,
-        )
+        let relation = RaVirtualizationRelation {
+            one_hot_params: self.one_hot_params,
+            address_len,
+            cycle_len,
+            polynomial_types: self.polynomial_types,
+        };
+        (relation, setup)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::prover::*;
-    use crate::opening_proof::{prover::ProverOpeningAccumulator, VerifierOpeningAccumulator};
+    use crate::opening_proof::{
+        prover::ProverOpeningAccumulator, OpeningAccumulator, VerifierOpeningAccumulator,
+    };
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use common::parallel::par_enabled;
     use common::CommittedPoly;
@@ -294,7 +279,7 @@ mod tests {
             ],
         };
 
-        let mut prover = RaSumcheckProver::gen(params, H_indices.clone());
+        let mut prover = RaSumcheckProver::gen(params.clone(), H_indices.clone());
 
         let (proof, _) =
             Sumcheck::prove(&mut prover, &mut prover_accumulator, &mut prover_transcript);
@@ -314,7 +299,7 @@ mod tests {
                 .insert(*key, (empty_point, *value));
         }
 
-        let verifier = prover.params.into_verifier();
+        let verifier = params.into_verifier();
         Sumcheck::verify(
             &proof,
             &verifier,

@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::neural_teleport::trig_table::TrigTableRelation;
+use crate::onnx_proof::neural_teleport::small_table::SmallTableRelation;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use crate::onnx_proof::relation::RelationVerifier;
 use crate::onnx_proof::{
@@ -74,8 +74,8 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sin {
             &mut verifier.transcript,
         );
 
-        let exec_sumcheck = RelationVerifier::<F, TrigTableRelation<SinTable>>::new(
-            TrigTableRelation::new(node.clone()),
+        let exec_sumcheck = RelationVerifier::<F, SmallTableRelation<SinTable>>::new(
+            SmallTableRelation::new(node.clone()),
             &verifier.accumulator,
             &mut verifier.transcript,
         );

@@ -1,5 +1,5 @@
-//! The execution check of a teleported trigonometric op (Sin, Cos): a read-raf lookup of the
-//! downscaled input into the op's public table, as a relation.
+//! A lookup into a small public table (a teleported Sin or Cos, a clamped activation): a
+//! read-raf check of the looked-up addresses against the op's output, as a relation.
 
 use super::{
     cos::{CosTable, COS_TABLE_VARS},
@@ -16,6 +16,7 @@ use atlas_algebra::{
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        signed_identity_poly::SignedIdentityPoly,
     },
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
@@ -25,48 +26,62 @@ use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use std::marker::PhantomData;
 
-/// A teleported trigonometric op's public table.
-pub trait TrigTable: Send + Sync + 'static {
+/// A small public lookup table and where an op reads it.
+pub trait SmallTable: Send + Sync + 'static {
     /// Address variables of the table.
     const VARS: usize;
     /// The advice polynomial of the lookup's one-hot read addresses.
     const RA: fn(usize) -> VirtualPoly;
+    /// Whether addresses are two's complement, so the address identity is signed.
+    const SIGNED: bool;
     /// The table's values.
     fn materialize() -> Vec<i32>;
+    /// The opening of the looked-up addresses at the node's output point.
+    fn address(node: &ComputationNode) -> OpeningId;
 }
 
-impl TrigTable for CosTable {
+impl SmallTable for CosTable {
     const VARS: usize = COS_TABLE_VARS;
     const RA: fn(usize) -> VirtualPoly = VirtualPoly::CosRa;
+    const SIGNED: bool = false;
     fn materialize() -> Vec<i32> {
         CosTable::materialize()
     }
-}
-
-impl TrigTable for SinTable {
-    const VARS: usize = SIN_TABLE_VARS;
-    const RA: fn(usize) -> VirtualPoly = VirtualPoly::SinRa;
-    fn materialize() -> Vec<i32> {
-        SinTable::materialize()
+    fn address(node: &ComputationNode) -> OpeningId {
+        OpeningIdBuilder::new(node).advice(VirtualPoly::TrigDownscaled)
     }
 }
 
-/// The trigonometric table lookup of a teleported Sin or Cos:
+impl SmallTable for SinTable {
+    const VARS: usize = SIN_TABLE_VARS;
+    const RA: fn(usize) -> VirtualPoly = VirtualPoly::SinRa;
+    const SIGNED: bool = false;
+    fn materialize() -> Vec<i32> {
+        SinTable::materialize()
+    }
+    fn address(node: &ComputationNode) -> OpeningId {
+        OpeningIdBuilder::new(node).advice(VirtualPoly::TrigDownscaled)
+    }
+}
+
+/// A small-table lookup:
 ///
 /// ```text
-/// input claim   out(r_out) + γ·downscaled(r_out)      (the reduced output, the downscaled input)
-/// output claim  ra(ρ) · (table(ρ) + γ·id(ρ))         (ρ the low-to-high bound address point)
+/// input claim   out(r_out) + γ·address(r_out)          (the reduced output, the read addresses)
+/// output claim  ra(ρ ‖ r_out) · (table(ρ) + γ·id(ρ))  (ρ the low-to-high bound address point)
 /// ```
 ///
-/// **S ⊆ R.** The op's output is the table read at the downscaled input, so an honest one-hot
-/// `ra` reads the output and the address. The setup draws `γ` and takes the reduced output point
-/// as its incoming point; `ra` opens at `ρ ‖ r_out`.
-pub struct TrigTableRelation<S> {
+/// with `id` the signed identity for two's-complement addresses.
+///
+/// **S ⊆ R.** The op's output is the table read at the addresses, so an honest one-hot `ra`
+/// reads the output and, through the identity, the addresses. The setup draws `γ` and takes the
+/// reduced output point as its incoming point.
+pub struct SmallTableRelation<S> {
     node: ComputationNode,
     _table: PhantomData<fn() -> S>,
 }
 
-impl<S: TrigTable> TrigTableRelation<S> {
+impl<S: SmallTable> SmallTableRelation<S> {
     /// The trig node.
     pub fn node(&self) -> &ComputationNode {
         &self.node
@@ -75,13 +90,9 @@ impl<S: TrigTable> TrigTableRelation<S> {
     fn ra(&self) -> OpeningId {
         OpeningIdBuilder::new(&self.node).advice(S::RA)
     }
-
-    fn downscaled(&self) -> OpeningId {
-        OpeningIdBuilder::new(&self.node).advice(VirtualPoly::TrigDownscaled)
-    }
 }
 
-impl<S: TrigTable> SymbolicSumcheck for TrigTableRelation<S> {
+impl<S: SmallTable> SymbolicSumcheck for SmallTableRelation<S> {
     crate::atlas_relation_types!();
     type Shape = ComputationNode;
 
@@ -93,7 +104,7 @@ impl<S: TrigTable> SymbolicSumcheck for TrigTableRelation<S> {
     }
 
     fn id() -> RelationId {
-        RelationId::TrigTable
+        RelationId::SmallTable
     }
 
     fn rounds(&self) -> usize {
@@ -107,7 +118,7 @@ impl<S: TrigTable> SymbolicSumcheck for TrigTableRelation<S> {
     fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
         opening::<G, _, _, _>(RelationOpening::ReducedNodeOutput(self.node.idx))
             + challenge::<G, _, _, _>(RelationChallenge::Gamma)
-                * opening(RelationOpening::Id(self.downscaled()))
+                * opening(RelationOpening::Id(S::address(&self.node)))
     }
 
     fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
@@ -118,13 +129,13 @@ impl<S: TrigTable> SymbolicSumcheck for TrigTableRelation<S> {
     }
 }
 
-impl<S: TrigTable> Produces for TrigTableRelation<S> {
+impl<S: SmallTable> Produces for SmallTableRelation<S> {
     fn produced(&self) -> Vec<OpeningId> {
         vec![self.ra()]
     }
 }
 
-impl<F: JoltField, S: TrigTable> Relation<F> for TrigTableRelation<S> {
+impl<F: JoltField, S: SmallTable> Relation<F> for SmallTableRelation<S> {
     fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
         vec![[low_to_high_point(challenges), setup.incoming_point.clone()].concat()]
     }
@@ -135,13 +146,16 @@ impl<F: JoltField, S: TrigTable> Relation<F> for TrigTableRelation<S> {
             RelationDerived::Table(0) => {
                 MultilinearPolynomial::<F>::from(S::materialize()).evaluate(&point)
             }
+            RelationDerived::Identity if S::SIGNED => {
+                SignedIdentityPoly::new(S::VARS).evaluate(&point)
+            }
             RelationDerived::Identity => IdentityPolynomial::new(S::VARS).evaluate(&point),
             other => panic!("{other:?} is not derived by this relation"),
         }
     }
 }
 
-impl<F: JoltField, S: TrigTable> SetupRelation<F> for TrigTableRelation<S> {
+impl<F: JoltField, S: SmallTable> SetupRelation<F> for SmallTableRelation<S> {
     fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,

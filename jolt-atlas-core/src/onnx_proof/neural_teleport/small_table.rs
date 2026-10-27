@@ -20,7 +20,7 @@ use atlas_trace::Tensor;
 use common::parallel::par_enabled;
 #[cfg(test)]
 use common::VirtualPoly;
-pub use jolt_atlas_verifier::onnx_proof::neural_teleport::trig_table::*;
+pub use jolt_atlas_verifier::onnx_proof::neural_teleport::small_table::*;
 use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
@@ -30,8 +30,8 @@ use rayon::prelude::*;
 const DEGREE: usize = 2;
 
 /// Read-raf prover for a trig table lookup: `output[i] = S::table[downscaled[i]]`.
-pub struct TrigTableProver<F: JoltField, S: TrigTable> {
-    relation: TrigTableRelation<S>,
+pub struct TrigTableProver<F: JoltField, S: SmallTable> {
+    relation: SmallTableRelation<S>,
     setup: RelationSetup<F>,
     gamma: F,
     table: MultilinearPolynomial<F>,
@@ -39,11 +39,11 @@ pub struct TrigTableProver<F: JoltField, S: TrigTable> {
     identity: IdentityPolynomial<F>,
 }
 
-impl<F: JoltField, S: TrigTable> TrigTableProver<F, S> {
+impl<F: JoltField, S: SmallTable> TrigTableProver<F, S> {
     /// The prover for the downscaled input's lookup, and the lookup indices.
     pub fn initialize(
         downscaled: &Tensor<i32>,
-        params: RelationParams<F, TrigTableRelation<S>>,
+        params: RelationParams<F, SmallTableRelation<S>>,
         _accumulator: &mut ProverOpeningAccumulator<F>,
     ) -> (Self, Vec<usize>) {
         let (relation, setup) = params.into_parts();
@@ -136,10 +136,10 @@ impl<F: JoltField, S: TrigTable> TrigTableProver<F, S> {
     }
 }
 
-impl<F: JoltField, S: TrigTable> RelationWitness<F> for TrigTableProver<F, S> {
-    type Relation = TrigTableRelation<S>;
+impl<F: JoltField, S: SmallTable> RelationWitness<F> for TrigTableProver<F, S> {
+    type Relation = SmallTableRelation<S>;
 
-    fn relation(&self) -> &TrigTableRelation<S> {
+    fn relation(&self) -> &SmallTableRelation<S> {
         &self.relation
     }
 
@@ -152,9 +152,9 @@ impl<F: JoltField, S: TrigTable> RelationWitness<F> for TrigTableProver<F, S> {
     }
 }
 
-atlas_sumcheck::relation_witness_instance!([F: JoltField, S: TrigTable] TrigTableProver<F, S>);
+atlas_sumcheck::relation_witness_instance!([F: JoltField, S: SmallTable] TrigTableProver<F, S>);
 
-impl<F: JoltField, S: TrigTable> ProveRounds<F> for TrigTableProver<F, S> {
+impl<F: JoltField, S: SmallTable> ProveRounds<F> for TrigTableProver<F, S> {
     fn num_rounds(&self) -> usize {
         self.relation.rounds()
     }

@@ -16,23 +16,21 @@
 use atlas_trace::{Tensor, Trace};
 
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::neural_teleport::small_table::{SmallTable, SmallTableRelation};
+use crate::onnx_proof::relation::{RelationParams, RelationVerifier};
 use crate::{
-    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
+        deferred_lookups::{DeferredBatch, DeferredOneHot},
         op_lookups::{
             DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
         },
         Verifier,
     },
-    utils::{compute_lookup_indices_from_operands, opening_access::AccOpeningAccessor},
+    utils::compute_lookup_indices_from_operands,
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
-    poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
-        signed_identity_poly::SignedIdentityPoly,
-    },
+    field::JoltField,
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
     utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
 };
 use atlas_lookup_tables::clamp::ActivationClampTable;
@@ -40,14 +38,13 @@ use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
     shout::RaOneHotEncoding,
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
 };
 use atlas_transcript::Transcript;
 use common::{
     consts::{ACTIVATION_TABLE_VARS, XLEN},
     CommittedPoly, VirtualPoly,
 };
-use std::marker::PhantomData;
+use jolt_claims::SymbolicSumcheck;
 
 /// Degree of the small-table execution sumcheck.
 pub const EXEC_DEGREE_BOUND: usize = 2;
@@ -126,124 +123,45 @@ impl LookupOperandsTrait for ActivationClampOperands {
 // polynomial.
 // ---------------------------------------------------------------------------
 
-/// Parameters of the small-table execution sumcheck.
-#[derive(Clone)]
-pub struct SmallTableParams<F: JoltField, Table> {
-    /// Batching challenge.
-    pub gamma: F,
-    /// The node output's reduced opening point.
-    pub r_node_output: OpeningPoint<BIG_ENDIAN, F>,
-    /// The node being proven.
-    pub computation_node: ComputationNode,
-    _table: PhantomData<Table>,
-}
-
-impl<F: JoltField, Table: SmallActivationTable> SmallTableParams<F, Table> {
-    /// Read the node's reduced output opening and draw the batching challenge.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let gamma = transcript.challenge_scalar();
-        let (r_node_output, _) = accumulator.get_node_output_opening(computation_node.idx);
-        Self {
-            gamma,
-            r_node_output,
-            computation_node,
-            _table: PhantomData,
-        }
+impl<Table: SmallActivationTable> SmallTable for Table {
+    const VARS: usize = ACTIVATION_TABLE_VARS;
+    const RA: fn(usize) -> VirtualPoly = VirtualPoly::ActivationSmallRa;
+    const SIGNED: bool = true;
+    fn materialize() -> Vec<i32> {
+        <Table as SmallActivationTable>::materialize()
+    }
+    fn address(node: &ComputationNode) -> OpeningId {
+        clamped_opening_id(node.idx)
     }
 }
 
-impl<F: JoltField, Table: SmallActivationTable> SumcheckInstanceParams<F>
-    for SmallTableParams<F, Table>
-{
-    fn degree(&self) -> usize {
-        EXEC_DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let (_, rv_claim) = accumulator.get_node_output_opening(self.computation_node.idx);
-        let (_, clamped_claim) = accumulator
-            .get_virtual_polynomial_opening(clamped_opening_id(self.computation_node.idx));
-        rv_claim + self.gamma * clamped_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        ACTIVATION_TABLE_VARS
-    }
+/// The execution check's relation, set up: `γ` drawn, the reduced output point read. Both sides
+/// then append the clamped input's opening at that point before the sumcheck.
+pub fn small_table_params<F: JoltField, Table: SmallActivationTable>(
+    node: &ComputationNode,
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut impl Transcript,
+) -> RelationParams<F, SmallTableRelation<Table>> {
+    RelationParams::new(
+        SmallTableRelation::new(node.clone()),
+        accumulator,
+        transcript,
+    )
 }
 
-struct SmallTableVerifier<F: JoltField, Table> {
-    params: SmallTableParams<F, Table>,
-    table: MultilinearPolynomial<F>,
-}
-
-impl<F: JoltField, Table: SmallActivationTable> SmallTableVerifier<F, Table> {
-    /// Read the node's reduced output opening and draw the batching challenge.
-    pub fn new(
-        computation_node: ComputationNode,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let params = SmallTableParams::new(computation_node, accumulator, transcript);
-        accumulator.append_virtual(
-            transcript,
-            clamped_opening_id(params.computation_node.idx),
-            params.r_node_output.clone(),
-        );
-        let table = MultilinearPolynomial::from(Table::materialize());
-        Self { params, table }
-    }
-}
-
-impl<F: JoltField, T: Transcript, Table: SmallActivationTable> SumcheckInstanceVerifier<F, T>
-    for SmallTableVerifier<F, Table>
-{
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
-    }
-
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        let ra_claim = accessor.get_advice(VirtualPoly::ActivationSmallRa).1;
-        let table_claim = self.table.evaluate(&opening_point.r);
-        let int_eval = SignedIdentityPoly::new(ACTIVATION_TABLE_VARS).evaluate(&opening_point.r);
-
-        ra_claim * (table_claim + self.params.gamma * int_eval)
-    }
-
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let r = [
-            opening_point.r.as_slice(),
-            self.params.r_node_output.r.as_slice(),
-        ]
-        .concat();
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, OpeningPoint::new(r));
-        provider.append_advice(VirtualPoly::ActivationSmallRa);
-    }
+fn small_table_verifier<F: JoltField, Table: SmallActivationTable>(
+    node: &ComputationNode,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut impl Transcript,
+) -> RelationVerifier<F, SmallTableRelation<Table>> {
+    let (relation, setup) =
+        small_table_params::<F, Table>(node, accumulator, transcript).into_parts();
+    accumulator.append_virtual(
+        transcript,
+        clamped_opening_id(node.idx),
+        OpeningPoint::new(setup.incoming_point.clone()),
+    );
+    RelationVerifier::at(relation, setup)
 }
 
 /// One-hot encoding of the small table's read addresses.
@@ -288,11 +206,8 @@ where
     Table: SmallActivationTable,
 {
     // Stage 1: Execution (verified in the deferred `ActivationExec` batch).
-    let exec_verifier = SmallTableVerifier::<F, Table>::new(
-        node.clone(),
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    );
+    let exec_verifier =
+        small_table_verifier::<F, Table>(node, &mut verifier.accumulator, &mut verifier.transcript);
     verifier.defer(DeferredBatch::ActivationExec, Box::new(exec_verifier));
 
     // Stage 2: ActivationClamp (deferred `ActivationClamp` batch).

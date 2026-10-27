@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::neural_teleport::trig_table::{TrigTableProver, TrigTableRelation};
+use crate::onnx_proof::neural_teleport::small_table::{SmallTableRelation, TrigTableProver};
 use crate::onnx_proof::op_lookups::OpLookupProve;
 use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::range_checking::RangeCheckProve;
@@ -66,7 +66,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Sin {
             );
 
         let params = RelationParams::new(
-            TrigTableRelation::<SinTable>::new(node.clone()),
+            SmallTableRelation::<SinTable>::new(node.clone()),
             &prover.accumulator,
             &mut prover.transcript,
         );

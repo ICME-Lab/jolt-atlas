@@ -159,8 +159,8 @@ pub enum RelationId {
     ClampSplit,
     /// A packed bucket's values opened at one point.
     PackedValue,
-    /// A teleported trigonometric op's table lookup.
-    TrigTable,
+    /// A lookup into a small public table (a teleported trig op, a clamped activation).
+    SmallTable,
     /// A gather's read of its dictionary.
     Gather,
     /// Softmax: the output as the exponents times the rows' inverse sums.

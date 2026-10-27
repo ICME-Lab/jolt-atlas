@@ -1,18 +1,23 @@
 use crate::{
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
     ps_shout::CycleWeight,
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    relation::{
+        Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
+        RelationOpening, RelationSetup, RelationVerifier,
+    },
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::PolynomialEvaluation,
         opening_point::{OpeningPoint, BIG_ENDIAN},
     },
 };
-use atlas_transcript::Transcript;
 use common::VirtualPoly;
+use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use rayon::prelude::*;
 
 const DEGREE_BOUND: usize = 2;
@@ -137,65 +142,91 @@ where
     }
 }
 
-/// Verifier for the Prefix suffix Read-raf checking sum-check protocol.
-pub struct IdentityRCVerifier<F>
-where
-    F: JoltField,
-{
-    params: IdentityRCParams<F>,
-}
+/// The identity range check as a relation: over the address-then-cycle hypercube,
+///
+/// ```text
+/// input claim   the range-checked opening's claim
+/// output claim  w(ρ_cycle) · ra(ρ) · id(ρ_address)
+/// ```
+///
+/// with `w` the [`CycleWeight`], `id` the identity polynomial and `ρ = (ρ_address, ρ_cycle)` the
+/// bound point (address in round order, cycle reversed). **S ⊆ R.** An honest `ra` is the one-hot
+/// encoding of in-range values, so the sum over addresses recovers each value; an out-of-range
+/// value has no address. The parameters carry the cycle weight; the setup carries the claim.
+impl<F: JoltField> IdentityRCParams<F> {
+    /// The bound point split into its address part (round order) and cycle part (reversed).
+    fn split_point(&self, challenges: &[F]) -> (Vec<F>, Vec<F>) {
+        let (address, cycle) = challenges.split_at(self.log_K);
+        (address.to_vec(), cycle.iter().rev().copied().collect())
+    }
 
-impl<F> IdentityRCVerifier<F>
-where
-    F: JoltField,
-{
-    /// Creates a new Prefix suffix Read-raf checking verifier.
-    pub fn new(params: IdentityRCParams<F>) -> Self {
-        Self { params }
+    /// The relation these parameters instantiate, with its setup.
+    pub fn into_verifier(self) -> IdentityRCVerifier<F> {
+        let setup = RelationSetup {
+            incoming_point: Vec::new(),
+            challenges: vec![(RelationChallenge::Claim, self.input_claim)],
+        };
+        RelationVerifier::at(self, setup)
     }
 }
 
-impl<F: JoltField, FS: Transcript> SumcheckInstanceVerifier<F, FS> for IdentityRCVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> SymbolicSumcheck for IdentityRCParams<F> {
+    crate::relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut FS,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            OpeningId::new(self.params.polynomial_type, self.params.sumcheck_id),
-            opening_point,
-        );
+    fn id() -> RelationId {
+        RelationId::IdentityRangeCheck
     }
 
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let (r_address_prime, r_node_output_prime) = opening_point.split_at(self.params.log_K);
-        let (_, ra_claim) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
-            self.params.polynomial_type,
-            self.params.sumcheck_id,
-        ));
-        let eq_eval = self.params.cycle.mle(&r_node_output_prime.r);
-        let identity_poly_eval =
-            IdentityPolynomial::<F>::new(self.params.log_K).evaluate(&r_address_prime.r);
-        let raf_claim = identity_poly_eval;
-        eq_eval * ra_claim * raf_claim
+    fn rounds(&self) -> usize {
+        self.log_K + self.log_T
+    }
+
+    fn degree(&self) -> usize {
+        DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        challenge(RelationChallenge::Claim)
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        derived::<G, _, _, _>(RelationDerived::CycleEq)
+            * opening(RelationOpening::Id(self.produced()[0]))
+            * derived(RelationDerived::Identity)
     }
 }
+
+impl<F: JoltField> Produces for IdentityRCParams<F> {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![OpeningId::new(self.polynomial_type, self.sumcheck_id)]
+    }
+}
+
+impl<F: JoltField> Relation<F> for IdentityRCParams<F> {
+    fn opening_points(&self, _setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+        let (address, cycle) = self.split_point(challenges);
+        vec![[address, cycle].concat()]
+    }
+
+    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        let (address, cycle) = self.split_point(challenges);
+        match id {
+            RelationDerived::CycleEq => self.cycle.mle(&cycle),
+            RelationDerived::Identity => {
+                IdentityPolynomial::<F>::new(self.log_K).evaluate(&address)
+            }
+            other => panic!("{other:?} is not derived by this relation"),
+        }
+    }
+}
+
+/// The verifier of an identity range check: its relation.
+pub type IdentityRCVerifier<F> = RelationVerifier<F, IdentityRCParams<F>>;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ReadRafClaims<F>
@@ -239,16 +270,14 @@ pub fn identity_rangecheck_verifier_with_cycle<F: JoltField>(
     ra_poly: (VirtualPoly, SumcheckId),
     input_claim: F,
 ) -> IdentityRCVerifier<F> {
-    let params = IdentityRCParams::from_parts_with_cycle(cycle, log_K, ra_poly, input_claim);
-    IdentityRCVerifier::new(params)
+    IdentityRCParams::from_parts_with_cycle(cycle, log_K, ra_poly, input_claim).into_verifier()
 }
 
 pub fn identity_rangecheck_verifier<F: JoltField>(
     provider: &impl IdentityRCProvider<F>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
 ) -> IdentityRCVerifier<F> {
-    let params = IdentityRCParams::new(provider, accumulator);
-    IdentityRCVerifier::new(params)
+    IdentityRCParams::new(provider, accumulator).into_verifier()
 }
 
 pub mod prover;

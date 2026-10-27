@@ -67,6 +67,11 @@ pub struct TrigTableRelation<S> {
 }
 
 impl<S: TrigTable> TrigTableRelation<S> {
+    /// The trig node.
+    pub fn node(&self) -> &ComputationNode {
+        &self.node
+    }
+
     fn ra(&self) -> OpeningId {
         OpeningIdBuilder::new(&self.node).advice(S::RA)
     }

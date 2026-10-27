@@ -29,12 +29,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherLarge {
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let exec_sumcheck = GatherVerifier::new(
-            node.clone(),
-            &verifier.preprocessing.model,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
+        let exec_sumcheck = gather_verifier(node, verifier);
         Sumcheck::verify(
             proof,
             &exec_sumcheck,

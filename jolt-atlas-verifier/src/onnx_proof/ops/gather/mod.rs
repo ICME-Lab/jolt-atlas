@@ -1,9 +1,13 @@
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::{
+    low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
+    RelationId, RelationOpening, RelationParams, RelationSetup, RelationVerifier, SetupRelation,
+};
 use crate::{
     onnx_proof::{ProofId, ProofType, Verifier},
-    utils::opening_access::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
@@ -15,12 +19,14 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
 };
 use atlas_trace::{Model, Op};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
+use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 
 /// Gather over a large dictionary (read-raf lookup).
 pub mod large;
@@ -106,77 +112,140 @@ impl<F: JoltField> SumcheckInstanceParams<F> for GatherParams<F> {
     //          + Challenge(1) * Opening(ra)
 }
 
-/// Verifier for gather sumcheck protocol.
+/// The dictionary shape of a gather node.
+pub struct GatherShape {
+    node: ComputationNode,
+    lookup_vars: usize,
+    num_words: usize,
+}
+
+/// The read of a gather's indices from its dictionary:
 ///
-/// Verifies that the prover's claims are consistent with the gather (indexed lookup) operation.
-pub struct GatherVerifier<F: JoltField> {
-    params: GatherParams<F>,
+/// ```text
+/// input claim   out(r_out) + γ·index(r_index)           (r_out = r_index ‖ r_word)
+/// output claim  ra(ρ ‖ r_index) · (dict(ρ ‖ r_word) + γ·id(ρ))
+/// ```
+///
+/// **S ⊆ R.** Each output row is the dictionary row its index names, so an honest one-hot `ra`
+/// reads the output rows and, through the identity, the indices. The setup draws `γ` and takes
+/// the reduced output point as its incoming point; the index opening at `r_index` is appended
+/// by [`gather_verifier`] between the setup and the sumcheck.
+pub struct GatherRelation {
+    shape: GatherShape,
 }
 
-impl<F: JoltField> GatherVerifier<F> {
-    /// Create a new verifier for the gather operation, caching index operand openings.
-    pub fn new(
-        computation_node: ComputationNode,
-        model: &Model,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
-    ) -> Self {
-        let params = GatherParams::new(computation_node, model, accumulator, transcript);
+impl GatherRelation {
+    /// The relation of a gather `node` of `model`.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
+        let dict_len = match &node.operator {
+            Op::GatherSmall(gather_op) => gather_op.dict_len,
+            Op::GatherLarge(gather_op) => gather_op.dict_len,
+            _ => panic!("Expected Gather operator"),
+        };
+        let lookup_vars = model
+            .view(node.inputs[1])
+            .pow2_padded_num_output_elements()
+            .log_2();
+        Self::new(GatherShape {
+            node,
+            lookup_vars,
+            num_words: dict_len.next_power_of_two(),
+        })
+    }
 
-        let (r_index, _) = params.r_node_output.r.split_at(params.lookup_vars);
-        let mut provider = AccOpeningAccessor::new(accumulator, &params.computation_node)
-            .into_provider(transcript, OpeningPoint::new(r_index.to_vec()));
-        provider.append_nodeio(Target::Input(1));
-
-        Self { params }
+    fn builder(&self) -> OpeningIdBuilder<'_> {
+        OpeningIdBuilder::new(&self.shape.node)
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for GatherVerifier<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl SymbolicSumcheck for GatherRelation {
+    crate::atlas_relation_types!();
+    type Shape = GatherShape;
+
+    fn new(shape: GatherShape) -> Self {
+        Self { shape }
     }
 
-    fn expected_output_claim(
-        &self,
-        accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
-
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        let ra_claim = accessor.get_advice(VirtualPoly::NodeOutputRa).1;
-        let int_eval =
-            IdentityPolynomial::new(self.params.num_words.log_2()).evaluate(&opening_point.r);
-        let dict_claim = accessor.get_nodeio(Target::Input(0)).1;
-
-        ra_claim * (dict_claim + self.params.gamma * int_eval)
+    fn id() -> RelationId {
+        RelationId::Gather
     }
 
-    fn cache_openings(
+    fn rounds(&self) -> usize {
+        self.shape.num_words.log_2()
+    }
+
+    fn degree(&self) -> usize {
+        DEGREE_BOUND
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        opening::<G, _, _, _>(RelationOpening::ReducedNodeOutput(self.shape.node.idx))
+            + challenge::<G, _, _, _>(RelationChallenge::Gamma)
+                * opening(RelationOpening::Id(self.builder().nodeio(Target::Input(1))))
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        let [ra, dict] = [0, 1].map(|i| RelationOpening::Id(self.produced()[i]));
+        opening::<G, _, _, _>(ra)
+            * (opening::<G, _, _, _>(dict)
+                + challenge::<G, _, _, _>(RelationChallenge::Gamma)
+                    * derived(RelationDerived::Identity))
+    }
+}
+
+impl Produces for GatherRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![
+            self.builder().advice(VirtualPoly::NodeOutputRa),
+            self.builder().nodeio(Target::Input(0)),
+        ]
+    }
+}
+
+impl<F: JoltField> Relation<F> for GatherRelation {
+    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+        let rho = low_to_high_point(challenges);
+        let (r_index, r_word) = setup.incoming_point.split_at(self.shape.lookup_vars);
+        vec![[&rho, r_index].concat(), [&rho, r_word].concat()]
+    }
+
+    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        match id {
+            RelationDerived::Identity => IdentityPolynomial::new(self.shape.num_words.log_2())
+                .evaluate(&low_to_high_point(challenges)),
+            other => panic!("{other:?} is not derived by this relation"),
+        }
+    }
+}
+
+impl<F: JoltField> SetupRelation<F> for GatherRelation {
+    fn setup<T: Transcript>(
         &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
+        accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-
-        let (r_index, r_word) = self
-            .params
-            .r_node_output
-            .r
-            .split_at(self.params.lookup_vars);
-        let r_idx_onehot = [&opening_point.r, r_index].concat().into();
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
-            .into_provider(transcript, Default::default());
-        provider.append_advice_at(VirtualPoly::NodeOutputRa, r_idx_onehot);
-
-        let r_dict = [&opening_point.r, r_word].concat().into();
-        provider.append_nodeio_at(Target::Input(0), r_dict);
+    ) -> RelationSetup<F> {
+        let gamma = transcript.challenge_scalar();
+        let (r_node_output, _) =
+            AccOpeningAccessor::new(accumulator, &self.shape.node).get_reduced_opening();
+        RelationSetup {
+            incoming_point: r_node_output.r,
+            challenges: vec![(RelationChallenge::Gamma, gamma)],
+        }
     }
+}
+
+/// The execution verifier of a gather `node`: the relation set up, then the index opening
+/// appended at the output point's index coordinates.
+pub fn gather_verifier<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    verifier: &mut Verifier<'_, F, T>,
+) -> RelationVerifier<F, GatherRelation> {
+    let relation = GatherRelation::for_node(&verifier.preprocessing.model, node.clone());
+    let (relation, setup) =
+        RelationParams::new(relation, &verifier.accumulator, &mut verifier.transcript).into_parts();
+    let r_index = setup.incoming_point[..relation.shape.lookup_vars].to_vec();
+    AccOpeningAccessor::new(&mut verifier.accumulator, node)
+        .into_provider(&mut verifier.transcript, OpeningPoint::new(r_index))
+        .append_nodeio(Target::Input(1));
+    RelationVerifier::at(relation, setup)
 }

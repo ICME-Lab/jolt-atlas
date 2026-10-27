@@ -153,6 +153,8 @@ pub enum RelationId {
     PackedValue,
     /// A teleported trigonometric op's table lookup.
     TrigTable,
+    /// A gather's read of its dictionary.
+    Gather,
 }
 
 /// A relation's expression over atlas openings.

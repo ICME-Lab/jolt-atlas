@@ -53,8 +53,9 @@
 //! Compared to the table lookup: no RaVirtual (the most expensive check), the
 //! dense chunk count drops from `w/4` to 8, and the `w/4` slack chunks are
 //! almost empty.
+use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -63,13 +64,12 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::{
     booleanity::{prover::BooleanitySumcheckProver, BooleanitySumcheckParams},
-    opening_proof::prover::ProverOpeningAccumulator,
     sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams,
 };
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::clamp_split::*;
+use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
@@ -77,6 +77,7 @@ use rayon::prelude::*;
 /// Prover of a bucket's split sumcheck.
 pub struct SplitProver<F: JoltField> {
     params: SplitParams<F>,
+    setup: RelationSetup<F>,
     w: MultilinearPolynomial<F>,
     out: MultilinearPolynomial<F>,
     slack: MultilinearPolynomial<F>,
@@ -88,6 +89,7 @@ impl<F: JoltField> SplitProver<F> {
     pub fn new(params: SplitParams<F>, split: &BucketSplit) -> Self {
         let w = MultilinearPolynomial::from(params.cycle.evals());
         Self {
+            setup: params.relation_setup(),
             params,
             w,
             out: MultilinearPolynomial::from(split.out.clone()),
@@ -97,26 +99,27 @@ impl<F: JoltField> SplitProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for SplitProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+impl<F: JoltField> RelationWitness<F> for SplitProver<F> {
+    type Relation = SplitParams<F>;
+
+    fn relation(&self) -> &SplitParams<F> {
         &self.params
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let r = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let b = self.params.bucket_idx;
-        accumulator.append_virtual(transcript, out_id(b), r.clone(), self.out.final_claim());
-        accumulator.append_virtual(transcript, slack_id(b), r.clone(), self.slack.final_claim());
-        accumulator.append_virtual(transcript, ind_id(b), r, self.ind.final_claim());
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        vec![
+            self.out.final_claim(),
+            self.slack.final_claim(),
+            self.ind.final_claim(),
+        ]
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField] SplitProver<F>);
 
 impl<F: JoltField> SplitProver<F> {
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
@@ -174,7 +177,7 @@ impl<F: JoltField> SplitProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for SplitProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.params.rounds()
     }
 
     fn prove_round(
@@ -190,7 +193,7 @@ impl<F: JoltField> ProveRounds<F> for SplitProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.params.rounds() - 1);
         Ok(())
     }
 }
@@ -198,6 +201,7 @@ impl<F: JoltField> ProveRounds<F> for SplitProver<F> {
 /// Prover of the value sumcheck.
 pub struct ValueProver<F: JoltField> {
     params: ValueParams<F>,
+    setup: RelationSetup<F>,
     w: MultilinearPolynomial<F>,
     value: MultilinearPolynomial<F>,
 }
@@ -207,6 +211,7 @@ impl<F: JoltField> ValueProver<F> {
     pub fn new(params: ValueParams<F>, values: Vec<u64>) -> Self {
         let w = MultilinearPolynomial::from(params.cycle.evals());
         Self {
+            setup: params.relation_setup(),
             params,
             w,
             value: MultilinearPolynomial::from(values),
@@ -214,28 +219,23 @@ impl<F: JoltField> ValueProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ValueProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+impl<F: JoltField> RelationWitness<F> for ValueProver<F> {
+    type Relation = ValueParams<F>;
+
+    fn relation(&self) -> &ValueParams<F> {
         &self.params
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let r = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        accumulator.append_virtual(
-            transcript,
-            self.params.value_id,
-            r,
-            self.value.final_claim(),
-        );
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.value.final_claim()]
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField] ValueProver<F>);
 
 impl<F: JoltField> ValueProver<F> {
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
@@ -263,7 +263,7 @@ impl<F: JoltField> ValueProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for ValueProver<F> {
     fn num_rounds(&self) -> usize {
-        SumcheckInstanceParams::num_rounds(&self.params)
+        self.params.rounds()
     }
 
     fn prove_round(
@@ -279,7 +279,7 @@ impl<F: JoltField> ProveRounds<F> for ValueProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, SumcheckInstanceParams::num_rounds(&self.params) - 1);
+        self.bind(bind, self.params.rounds() - 1);
         Ok(())
     }
 }

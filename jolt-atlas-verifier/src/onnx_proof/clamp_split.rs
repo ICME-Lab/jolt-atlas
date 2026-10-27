@@ -67,11 +67,7 @@ use crate::onnx_proof::relation::{
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
-    poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        one_hot_polynomial::OneHotPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
-    },
+    poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
 };
 use atlas_sumcheck::booleanity::{LinearClaim, LinearTerm};
 use atlas_sumcheck::{
@@ -79,7 +75,7 @@ use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ps_shout::{CycleWeight, PackedSegment},
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    sumcheck_verifier::SumcheckInstanceVerifier,
 };
 use atlas_trace::{Model, Trace};
 use atlas_transcript::Transcript;
@@ -445,24 +441,6 @@ impl<F: JoltField> SplitParams<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for SplitParams<F> {
-    fn degree(&self) -> usize {
-        4
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.cycle.log_T()
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.input_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-}
-
 /// A bucket's split sumcheck as a relation:
 ///
 /// ```text
@@ -476,8 +454,14 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SplitParams<F> {
 impl<F: JoltField> SplitParams<F> {
     /// The relation these parameters instantiate, with its setup.
     pub fn into_verifier(self) -> SplitVerifier<F> {
+        let setup = self.relation_setup();
+        RelationVerifier::at(self, setup)
+    }
+
+    /// The relation's setup: the input claim and the identities' coefficients.
+    pub fn relation_setup(&self) -> RelationSetup<F> {
         let (b1, b2, b3, _) = self.coefficients();
-        let setup = RelationSetup {
+        RelationSetup {
             incoming_point: Vec::new(),
             challenges: vec![
                 (RelationChallenge::Claim, self.input_claim),
@@ -485,8 +469,7 @@ impl<F: JoltField> SplitParams<F> {
                 (RelationChallenge::Batching(1), b2),
                 (RelationChallenge::Batching(2), b3),
             ],
-        };
-        RelationVerifier::at(self, setup)
+        }
     }
 }
 
@@ -636,24 +619,6 @@ pub struct ValueParams<F: JoltField> {
     pub input_claim: F,
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for ValueParams<F> {
-    fn degree(&self) -> usize {
-        2
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.cycle.log_T()
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.input_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-}
-
 /// The value sumcheck as a relation: `Σ_n γ_n·V_n(r_n)` against `W(r′)·V(r′)` at the
 /// low-to-high bound point `r′`, with `W` the packed cycle weight. **S ⊆ R.** `W` places each
 /// node's eq weight on its own segment, so the sum is the batched claims. The parameters carry the
@@ -661,11 +626,16 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ValueParams<F> {
 impl<F: JoltField> ValueParams<F> {
     /// The relation these parameters instantiate, with its setup.
     pub fn into_verifier(self) -> ValueVerifier<F> {
-        let setup = RelationSetup {
+        let setup = self.relation_setup();
+        RelationVerifier::at(self, setup)
+    }
+
+    /// The relation's setup: the input claim.
+    pub fn relation_setup(&self) -> RelationSetup<F> {
+        RelationSetup {
             incoming_point: Vec::new(),
             challenges: vec![(RelationChallenge::Claim, self.input_claim)],
-        };
-        RelationVerifier::at(self, setup)
+        }
     }
 }
 

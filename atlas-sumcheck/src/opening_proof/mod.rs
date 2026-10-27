@@ -6,7 +6,7 @@
 
 use crate::{
     evaluation_reduction::ReducedInstance,
-    opening_reduction::OpeningProofReductionSumcheckVerifier,
+    opening_reduction::OpeningReductionGroup,
     sumcheck::{BatchedSumcheck, SumcheckInstanceProof},
     sumcheck_verifier::SumcheckInstanceVerifier,
 };
@@ -77,7 +77,7 @@ where
     F: JoltField,
 {
     /// See `ProverOpeningAccumulator::sumchecks`.
-    sumchecks: BTreeMap<OpeningId, OpeningProofReductionSumcheckVerifier<F>>,
+    sumchecks: BTreeMap<OpeningId, OpeningReductionGroup<F>>,
     pub openings: Openings<F>,
     /// Ids bound by an `append_*` call, to reject one id bound at two
     /// different points (see [`Self::mark_appended`]).
@@ -257,27 +257,19 @@ where
     {
         let point = OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone());
         self.mark_appended(opening_id, &point.r);
-        let claim = if let Some((_, claim)) = self.openings.get(&opening_id) {
-            // The claim was pre-loaded from the proof.
-            let claim = *claim;
-            transcript.append_scalar(&claim);
-            self.openings.insert(opening_id, (point, claim));
-            claim
-        } else {
+        let Some(&(_, claim)) = self.openings.get(&opening_id) else {
             panic!("Tried to populate dense opening for non-existent key: {opening_id:?}");
         };
+        // The claim was pre-loaded from the proof.
+        transcript.append_scalar(&claim);
+        self.openings.insert(opening_id, (point, claim));
 
         let polynomial = opening_id
             .committed_poly()
             .expect("expected committed polynomial");
         self.sumchecks.insert(
             opening_id,
-            OpeningProofReductionSumcheckVerifier::new(
-                vec![polynomial],
-                opening_id.sumcheck,
-                opening_point,
-                vec![claim],
-            ),
+            OpeningReductionGroup::new(vec![polynomial], opening_id.sumcheck, opening_point),
         );
     }
 
@@ -297,7 +289,6 @@ where
         U: Copy + Send + Sync + Into<F>,
     {
         let point_f: Vec<F> = opening_point.iter().map(|u| (*u).into()).collect();
-        let mut claims = Vec::with_capacity(polynomials.len());
         for label in polynomials.iter().copied() {
             let key = OpeningId::new(label, sumcheck);
             self.mark_appended(key, &point_f);
@@ -316,17 +307,11 @@ where
                     claim,
                 ),
             );
-            claims.push(claim);
         }
         let key = OpeningId::new(polynomials[0], sumcheck);
         self.sumchecks.insert(
             key,
-            OpeningProofReductionSumcheckVerifier::new(
-                polynomials,
-                sumcheck,
-                opening_point,
-                claims,
-            ),
+            OpeningReductionGroup::new(polynomials, sumcheck, opening_point),
         );
     }
 
@@ -417,24 +402,20 @@ where
         name = "VerifierOpeningAccumulator::verify_batch_opening_sumcheck"
     )]
     pub fn verify_batch_opening_sumcheck<T: Transcript>(
-        &self,
+        &mut self,
         sumcheck_proof: &SumcheckInstanceProof<F>,
         transcript: &mut T,
     ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
-        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = self
+        let verifiers: Vec<_> = self
             .sumchecks
             .values()
-            .map(|opening| {
-                let instance: &dyn SumcheckInstanceVerifier<F, T> = opening;
-                instance
-            })
+            .map(|group| group.verifier())
             .collect();
-        BatchedSumcheck::verify(
-            sumcheck_proof,
-            instances,
-            &mut VerifierOpeningAccumulator::new(),
-            transcript,
-        )
+        let instances: Vec<&dyn SumcheckInstanceVerifier<F, T>> = verifiers
+            .iter()
+            .map(|verifier| verifier as &dyn SumcheckInstanceVerifier<F, T>)
+            .collect();
+        BatchedSumcheck::verify(sumcheck_proof, instances, self, transcript)
     }
 
     #[tracing::instrument(
@@ -471,11 +452,11 @@ where
     // ========== Batch Opening Verification ==========
 
     /// Computes the joint claim for the batch opening verification.
-    pub fn compute_joint_claim<T: Transcript>(&self, state: &OpeningReductionState<F>) -> F {
+    pub fn compute_joint_claim(&self, state: &OpeningReductionState<F>) -> F {
         let num_sumcheck_rounds = self
             .sumchecks
             .values()
-            .map(|opening| SumcheckInstanceVerifier::<F, T>::num_rounds(opening))
+            .map(OpeningReductionGroup::num_vars)
             .max()
             .unwrap();
 
@@ -485,8 +466,7 @@ where
             .zip(state.sumcheck_claims.iter())
             .zip(self.sumchecks.values())
             .map(|((coeff, claim), opening)| {
-                let r_slice = &state.r_sumcheck
-                    [..num_sumcheck_rounds - SumcheckInstanceVerifier::<F, T>::num_rounds(opening)];
+                let r_slice = &state.r_sumcheck[..num_sumcheck_rounds - opening.num_vars()];
                 let lagrange_eval: F = r_slice.iter().map(|r| F::one() - r).product();
                 *coeff * claim * lagrange_eval
             })
@@ -495,10 +475,10 @@ where
 
     /// The variable count of each opened polynomial (aligned with `state.polynomials`): the round
     /// count of the reduction instances that open it.
-    pub fn opened_num_vars<T: Transcript>(&self, state: &OpeningReductionState<F>) -> Vec<usize> {
+    pub fn opened_num_vars(&self, state: &OpeningReductionState<F>) -> Vec<usize> {
         let mut num_vars = BTreeMap::new();
         for opening in self.sumchecks.values() {
-            let rounds = SumcheckInstanceVerifier::<F, T>::num_rounds(opening);
+            let rounds = opening.num_vars();
             for poly in &opening.polynomials {
                 num_vars.insert(*poly, rounds);
             }

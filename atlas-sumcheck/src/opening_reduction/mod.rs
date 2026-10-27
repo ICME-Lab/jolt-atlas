@@ -4,10 +4,12 @@
 //! The higher-level orchestration remains in `poly/opening_proof.rs`.
 
 use crate::{
-    opening_proof::{
-        Opening, OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator,
+    opening_proof::{Opening, OpeningAccumulator, OpeningId, SumcheckId},
+    relation::{
+        Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
+        RelationOpening, RelationSetup, RelationVerifier,
     },
-    sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
+    sumcheck_verifier::SumcheckInstanceParams,
 };
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
@@ -23,9 +25,10 @@ use atlas_algebra::{
     },
     utils::{expanding_table::ExpandingTable, math::Math},
 };
-use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
+use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
+use jolt_field::Ring;
 use jolt_poly::GruenSplitEqPolynomial;
 use rayon::prelude::*;
 use std::ops::Mul;
@@ -89,7 +92,7 @@ fn fold_high_to_low<F: JoltField>(
 }
 
 /// Verifier state for one group of openings in the batch opening reduction sumcheck.
-pub struct OpeningProofReductionSumcheckVerifier<F>
+pub struct OpeningReductionGroup<F>
 where
     F: JoltField,
 {
@@ -97,31 +100,24 @@ where
     pub polynomials: Vec<CommittedPoly>,
     /// The ID of the sumcheck these openings originated from
     pub sumcheck_id: SumcheckId,
-    opening: Opening<F>,
-    /// Per-polynomial claims at the point.
-    pub claims: Vec<F>,
+    /// The group's opening point (big-endian).
+    pub point: Vec<F>,
     /// Per-polynomial coefficients `ρ^i`.
     pub coefficients: Vec<F>,
+    /// The group's reduced claim, from the proof.
     pub sumcheck_claim: Option<F>,
 }
 
-impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
-    pub fn new<U>(
-        polynomials: Vec<CommittedPoly>,
-        sumcheck_id: SumcheckId,
-        opening_point: Vec<U>,
-        claims: Vec<F>,
-    ) -> Self
+impl<F: JoltField> OpeningReductionGroup<F> {
+    pub fn new<U>(polynomials: Vec<CommittedPoly>, sumcheck_id: SumcheckId, point: Vec<U>) -> Self
     where
         U: Copy + Send + Sync + Into<F>,
     {
-        assert_eq!(polynomials.len(), claims.len());
         let n = polynomials.len();
         Self {
             polynomials,
             sumcheck_id,
-            opening: (opening_point.into(), claims.iter().copied().sum()),
-            claims,
+            point: point.into_iter().map(Into::into).collect(),
             coefficients: vec![F::one(); n],
             sumcheck_claim: None,
         }
@@ -132,7 +128,12 @@ impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
         OpeningId::new(self.polynomials[0], self.sumcheck_id)
     }
 
-    /// Fix the in-group coefficients to `ρ^i` and the batched input claim.
+    /// The number of variables of the group's polynomials.
+    pub fn num_vars(&self) -> usize {
+        self.point.len()
+    }
+
+    /// Fix the in-group coefficients to `ρ^i`.
     pub fn set_coefficients(&mut self, rho: F) {
         let mut c = F::one();
         self.coefficients = (0..self.polynomials.len())
@@ -142,37 +143,101 @@ impl<F: JoltField> OpeningProofReductionSumcheckVerifier<F> {
                 x
             })
             .collect();
-        self.opening.1 = self
+    }
+
+    /// The group's reduction check, set up with its point, coefficients and reduced claim.
+    pub fn verifier(&self) -> RelationVerifier<F, OpeningReductionRelation> {
+        let relation = OpeningReductionRelation {
+            polynomials: self.polynomials.clone(),
+            sumcheck_id: self.sumcheck_id,
+            num_vars: self.num_vars(),
+        };
+        let mut challenges: Vec<(RelationChallenge, F)> = self
             .coefficients
             .iter()
-            .zip(&self.claims)
-            .map(|(c, v)| *c * *v)
-            .sum();
+            .enumerate()
+            .map(|(i, &c)| (RelationChallenge::ClaimCoefficient(i), c))
+            .collect();
+        challenges.push((
+            RelationChallenge::Claim,
+            self.sumcheck_claim
+                .expect("the reduced claims are loaded before the sumcheck"),
+        ));
+        RelationVerifier::at(
+            relation,
+            RelationSetup {
+                incoming_point: self.point.clone(),
+                challenges,
+            },
+        )
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T>
-    for OpeningProofReductionSumcheckVerifier<F>
-{
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.opening
+/// One group's opening reduction: the group's openings at its point `r`, folded by `ρ^i`, reduced
+/// to the group's claim at the bound point.
+///
+/// ```text
+/// input claim   Σ_i ρ^i · p_i(r)
+/// output claim  eq(r, ρ′) · c                         (c the group's reduced claim, from the proof)
+/// ```
+///
+/// **S ⊆ R.** `Σ_i ρ^i·p_i(r) = Σ_x eq(r, x)·Σ_i ρ^i·p_i(x)`, and `c` is claimed to be the folded
+/// polynomial at the bound point; the joint opening proof checks it. Variables bind high to low.
+pub struct OpeningReductionRelation {
+    polynomials: Vec<CommittedPoly>,
+    sumcheck_id: SumcheckId,
+    num_vars: usize,
+}
+
+impl SymbolicSumcheck for OpeningReductionRelation {
+    crate::relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
     }
 
-    fn expected_output_claim(
-        &self,
-        _accumulator: &VerifierOpeningAccumulator<F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let eq_eval = EqPolynomial::<F>::mle(&self.opening.0.r, sumcheck_challenges);
-        eq_eval * self.sumcheck_claim.unwrap()
+    fn id() -> RelationId {
+        RelationId::OpeningReduction
     }
 
-    fn cache_openings(
-        &self,
-        _accumulator: &mut VerifierOpeningAccumulator<F>,
-        _transcript: &mut T,
-        _sumcheck_challenges: &[F::Challenge],
-    ) {
+    fn rounds(&self) -> usize {
+        self.num_vars
+    }
+
+    fn degree(&self) -> usize {
+        OPENING_SUMCHECK_DEGREE
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        self.polynomials
+            .iter()
+            .enumerate()
+            .map(|(i, &poly)| {
+                challenge::<G, _, _, _>(RelationChallenge::ClaimCoefficient(i))
+                    * opening(RelationOpening::Id(OpeningId::new(poly, self.sumcheck_id)))
+            })
+            .reduce(|sum, term| sum + term)
+            .expect("an opening group is not empty")
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        derived::<G, _, _, _>(RelationDerived::Eq) * challenge(RelationChallenge::Claim)
+    }
+}
+
+impl Produces for OpeningReductionRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        vec![]
+    }
+}
+
+impl<F: JoltField> Relation<F> for OpeningReductionRelation {
+    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
+        match id {
+            RelationDerived::Eq => EqPolynomial::mle(&setup.incoming_point, challenges),
+            other => panic!("{other:?} is not derived by this relation"),
+        }
     }
 }
 
@@ -434,7 +499,7 @@ mod tests {
         // The reduced claim is the RLC of the committed polynomials at the sumcheck point.
         assert_eq!(
             rlc.evaluate(&verifier_state.r_sumcheck),
-            verifier_opening_accumulator.compute_joint_claim::<Blake2bVerifier>(&verifier_state)
+            verifier_opening_accumulator.compute_joint_claim(&verifier_state)
         );
     }
 
@@ -598,7 +663,7 @@ mod tests {
         // The reduced claim is the RLC of the committed polynomials at the sumcheck point.
         assert_eq!(
             rlc.evaluate(&verifier_state.r_sumcheck),
-            verifier_opening_accumulator.compute_joint_claim::<Blake2bVerifier>(&verifier_state)
+            verifier_opening_accumulator.compute_joint_claim(&verifier_state)
         );
     }
 
@@ -761,7 +826,7 @@ mod tests {
         // The reduced claim is the RLC of the committed polynomials at the sumcheck point.
         assert_eq!(
             rlc.evaluate(&verifier_state.r_sumcheck),
-            verifier_opening_accumulator.compute_joint_claim::<Blake2bVerifier>(&verifier_state)
+            verifier_opening_accumulator.compute_joint_claim(&verifier_state)
         );
     }
 }

@@ -168,6 +168,8 @@ pub enum RelationId {
     SoftmaxMax,
     /// Softmax: the exponent as the product of its two table digits.
     SoftmaxExpProduct,
+    /// A group of committed openings reduced to one claim for the joint opening proof.
+    OpeningReduction,
 }
 
 /// A relation's expression over atlas openings.

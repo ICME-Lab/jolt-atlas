@@ -224,10 +224,8 @@ pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentSchem
                 })
             })
             .collect::<Result<_, _>>()?;
-        let joint_claim = verifier
-            .accumulator
-            .compute_joint_claim::<T>(&verifier_state);
-        let num_vars = verifier.accumulator.opened_num_vars::<T>(&verifier_state);
+        let joint_claim = verifier.accumulator.compute_joint_claim(&verifier_state);
+        let num_vars = verifier.accumulator.opened_num_vars(&verifier_state);
         PCS::verify_rlc(
             reduced_opening_proof.joint_opening_proof(),
             &pp.generators,

@@ -6,16 +6,10 @@ use crate::onnx_proof::relation::{
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target};
 use atlas_algebra::{
     field::JoltField,
-    poly::{
-        eq_poly::EqPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
-    },
+    poly::eq_poly::EqPolynomial,
     utils::{index_to_field_bitvector, math::Math},
 };
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    sumcheck_verifier::SumcheckInstanceParams,
-};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use common::VirtualPoly;
 use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
@@ -83,34 +77,18 @@ impl<F: JoltField> MaxIndicatorParams<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for MaxIndicatorParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, _accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.input_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.F_N.iter().product::<usize>().log_2()
-    }
-
-    // output = eq(r1_k, r_k) * e_claim * X_claim = Challenge(0) * Opening(X)
-    // e_claim is verifier-computable from argmax_k, folded into Challenge(0)
-}
-
 impl<F: JoltField> MaxIndicatorParams<F> {
-    /// The verifier of the row maxima, set up at the exponent point's row coordinates.
-    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
-        let setup = RelationSetup {
+    /// The relation's setup: the exponent point's row coordinates and the claimed maxima there.
+    pub fn relation_setup(&self) -> RelationSetup<F> {
+        RelationSetup {
             incoming_point: self.r1_k.clone(),
             challenges: vec![(RelationChallenge::Claim, self.input_claim)],
-        };
+        }
+    }
+
+    /// The verifier of the row maxima.
+    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
+        let setup = self.relation_setup();
         RelationVerifier::at(self, setup)
     }
 

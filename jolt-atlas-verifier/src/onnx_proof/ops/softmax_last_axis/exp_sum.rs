@@ -4,18 +4,8 @@ use crate::onnx_proof::relation::{
     RelationOpening, RelationSetup, RelationVerifier,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
-use atlas_algebra::{
-    field::JoltField,
-    poly::{
-        eq_poly::EqPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
-    },
-    utils::math::Math,
-};
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    sumcheck_verifier::SumcheckInstanceParams,
-};
+use atlas_algebra::{field::JoltField, poly::eq_poly::EqPolynomial, utils::math::Math};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
@@ -51,7 +41,7 @@ impl<F: JoltField> ExpSumParams<F> {
     }
 
     /// Returns log2 of the leading-dimension product `F`.
-    fn log_F(&self) -> usize {
+    pub fn log_F(&self) -> usize {
         self.F_N[0].log_2()
     }
 
@@ -61,34 +51,18 @@ impl<F: JoltField> ExpSumParams<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for ExpSumParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.node);
-        accessor.get_advice(VirtualPoly::SoftmaxExpSum).1
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.log_F() + self.log_N()
-    }
-
-    // output = eq_eval * exp_q = Challenge(0) * Opening(exp_q)
-}
-
 impl<F: JoltField> ExpSumParams<F> {
-    /// The verifier of the row sums, set up at the reduced output's row coordinates.
-    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
-        let setup = RelationSetup {
+    /// The relation's setup: the reduced output's row coordinates.
+    pub fn relation_setup(&self) -> RelationSetup<F> {
+        RelationSetup {
             incoming_point: self.r0_k.clone(),
             challenges: vec![],
-        };
+        }
+    }
+
+    /// The verifier of the row sums.
+    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
+        let setup = self.relation_setup();
         RelationVerifier::at(self, setup)
     }
 }

@@ -9,14 +9,10 @@ use atlas_algebra::{
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
     },
     utils::math::Math,
 };
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    sumcheck_verifier::SumcheckInstanceParams,
-};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
 use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
@@ -80,32 +76,6 @@ impl<F: JoltField> RecipMultParams<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for RecipMultParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.node);
-        let softmax_claim = accessor.get_reduced_opening().1;
-        let R_claim = accessor
-            .get_advice(VirtualPoly::SoftmaxRecipMultRemainder)
-            .1;
-        softmax_claim * F::from_i32(self.S) + R_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.r.len()
-    }
-
-    // output = eq_eval * exp_q * inv_sum = Challenge(0) * Opening(exp_q)
-    // Challenge(0) = eq_eval * inv_sum_claim (inv_sum is verifier-known)
-}
-
 /// The softmax output as the exponents times the rows' inverse sums:
 ///
 /// ```text
@@ -121,13 +91,28 @@ pub struct RecipMultRelation<F: JoltField> {
 }
 
 impl<F: JoltField> RecipMultRelation<F> {
-    /// The verifier of the product, set up at the reduced output point.
-    pub fn verifier(params: RecipMultParams<F>, inv_sum: Vec<F>) -> RelationVerifier<F, Self> {
-        let setup = RelationSetup {
-            incoming_point: params.r.clone(),
+    /// The relation over `params`, with the rows' inverse sums.
+    pub fn with_inv_sum(params: RecipMultParams<F>, inv_sum: Vec<F>) -> Self {
+        Self { params, inv_sum }
+    }
+
+    /// The parameters.
+    pub fn params(&self) -> &RecipMultParams<F> {
+        &self.params
+    }
+
+    /// The relation's setup: the reduced output point.
+    pub fn relation_setup(&self) -> RelationSetup<F> {
+        RelationSetup {
+            incoming_point: self.params.r.clone(),
             challenges: vec![],
-        };
-        RelationVerifier::at(Self { params, inv_sum }, setup)
+        }
+    }
+
+    /// The verifier of the product.
+    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
+        let setup = self.relation_setup();
+        RelationVerifier::at(self, setup)
     }
 
     fn advice(&self, poly: fn(usize) -> VirtualPoly) -> RelationOpening {

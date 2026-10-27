@@ -1,25 +1,21 @@
-use crate::utils::opening_access::AccOpeningAccessor;
-use crate::utils::opening_access::IntoProverProvider;
+use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         split_eq_poly::SplitEqUnreducedFold,
     },
 };
-use atlas_sumcheck::{
-    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams, upstream_sumcheck::round_check_failed,
-};
-use atlas_transcript::Transcript;
-use common::VirtualPoly;
+use atlas_sumcheck::upstream_sumcheck::round_check_failed;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::exponentiation::mult::*;
+use jolt_claims::SymbolicSumcheck;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 
 /// Prover state for softmax exp multiplication.
 pub struct MultProver<F: JoltField> {
     params: MultParams<F>,
+    setup: RelationSetup<F>,
     eq: GruenSplitEqPolynomial<F>,
     // log(F * N) variables
     exp_hi: MultilinearPolynomial<F>,
@@ -34,6 +30,7 @@ impl<F: JoltField> MultProver<F> {
         let exp_hi = MultilinearPolynomial::from(exp_hi);
         let exp_lo = MultilinearPolynomial::from(exp_lo);
         Self {
+            setup: params.relation_setup(),
             params,
             eq,
             exp_hi,
@@ -42,26 +39,23 @@ impl<F: JoltField> MultProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MultProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+impl<F: JoltField> RelationWitness<F> for MultProver<F> {
+    type Relation = MultParams<F>;
+
+    fn relation(&self) -> &MultParams<F> {
         &self.params
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .into_provider(transcript, opening_point);
-        provider.append_advice(VirtualPoly::SoftmaxExpHi, self.exp_hi.final_claim());
-        provider.append_advice(VirtualPoly::SoftmaxExpLo, self.exp_lo.final_claim());
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.exp_hi.final_claim(), self.exp_lo.final_claim()]
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField] MultProver<F>);
 
 impl<F: JoltField> MultProver<F> {
     fn bind(&mut self, r: F) {
@@ -74,7 +68,7 @@ impl<F: JoltField> MultProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for MultProver<F> {
     fn num_rounds(&self) -> usize {
-        self.params.num_rounds()
+        self.params.rounds()
     }
 
     fn prove_round(

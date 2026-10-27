@@ -1,11 +1,11 @@
-use crate::utils::opening_access::IntoProverProvider;
+use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::max::*;
+use jolt_claims::SymbolicSumcheck;
 use std::array;
 
-use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{
@@ -15,11 +15,7 @@ use atlas_algebra::{
     },
     utils::thread::drop_in_background_thread,
 };
-use atlas_sumcheck::{
-    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams, upstream_sumcheck::round_check_failed,
-};
-use atlas_transcript::Transcript;
+use atlas_sumcheck::upstream_sumcheck::round_check_failed;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
@@ -27,6 +23,7 @@ use rayon::prelude::*;
 /// Prover for the max indicator sumcheck instance.
 pub struct MaxIndicatorProver<F: JoltField> {
     params: MaxIndicatorParams<F>,
+    setup: RelationSetup<F>,
     eq: Vec<F>,
     gs_eq: Option<GruenSplitEqPolynomial<F>>,
     // log(F * N) variables
@@ -43,6 +40,7 @@ impl<F: JoltField> MaxIndicatorProver<F> {
         // Take e out of params — the prover never reads params.e again
         let e = MultilinearPolynomial::from(std::mem::take(&mut params.e));
         Self {
+            setup: params.relation_setup(),
             params,
             eq,
             gs_eq: None,
@@ -103,25 +101,23 @@ impl<F: JoltField> MaxIndicatorProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for MaxIndicatorProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+impl<F: JoltField> RelationWitness<F> for MaxIndicatorProver<F> {
+    type Relation = MaxIndicatorParams<F>;
+
+    fn relation(&self) -> &MaxIndicatorParams<F> {
         &self.params
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .into_provider(transcript, opening_point);
-        provider.append_nodeio(Target::Input(0), self.X.final_claim());
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.X.final_claim()]
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField] MaxIndicatorProver<F>);
 
 impl<F: JoltField> MaxIndicatorProver<F> {
     /// Bind round `round`'s challenge.
@@ -145,7 +141,7 @@ impl<F: JoltField> MaxIndicatorProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for MaxIndicatorProver<F> {
     fn num_rounds(&self) -> usize {
-        self.params.num_rounds()
+        self.params.rounds()
     }
 
     #[tracing::instrument(name = "MaxIndicatorProver::prove_round", skip_all)]
@@ -167,7 +163,7 @@ impl<F: JoltField> ProveRounds<F> for MaxIndicatorProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, self.params.num_rounds() - 1);
+        self.bind(bind, self.params.rounds() - 1);
         Ok(())
     }
 }

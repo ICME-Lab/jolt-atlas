@@ -1,19 +1,14 @@
-use crate::utils::opening_access::AccOpeningAccessor;
-use crate::utils::opening_access::IntoProverProvider;
+use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         split_eq_poly::SplitEqUnreducedFold,
     },
 };
-use atlas_sumcheck::{
-    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams, upstream_sumcheck::round_check_failed,
-};
-use atlas_transcript::Transcript;
-use common::VirtualPoly;
+use atlas_sumcheck::upstream_sumcheck::round_check_failed;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::recip_mult::*;
+use jolt_claims::SymbolicSumcheck;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 
@@ -23,7 +18,8 @@ use jolt_sumcheck::{ProveRounds, SumcheckError};
 /// `inv_sum` is verifier-known (derived from prover-sent `exp_sum_q`), but
 /// the prover still needs the polynomial for sumcheck round computation.
 pub struct RecipMultProver<F: JoltField> {
-    params: RecipMultParams<F>,
+    relation: RecipMultRelation<F>,
+    setup: RelationSetup<F>,
     eq: GruenSplitEqPolynomial<F>,
     // log(F * N) variables
     exp_q: MultilinearPolynomial<F>,
@@ -36,9 +32,14 @@ impl<F: JoltField> RecipMultProver<F> {
     pub fn initialize(exp_q: Vec<i32>, inv_sum: Vec<i32>, params: RecipMultParams<F>) -> Self {
         let eq = GruenSplitEqPolynomial::new(&params.r, jolt_poly::BindingOrder::LowToHigh);
         let exp_q = MultilinearPolynomial::from(exp_q);
+        let relation = RecipMultRelation::with_inv_sum(
+            params,
+            inv_sum.iter().map(|&v| F::from_i32(v)).collect(),
+        );
         let inv_sum = MultilinearPolynomial::from(inv_sum);
         Self {
-            params,
+            setup: relation.relation_setup(),
+            relation,
             eq,
             exp_q,
             inv_sum,
@@ -51,7 +52,7 @@ impl<F: JoltField> RecipMultProver<F> {
         previous_claim: F,
     ) -> Result<UnivariatePoly<F>, F> {
         let m = round + 1;
-        let log_N = self.params.log_N();
+        let log_N = self.relation.params().log_N();
         let Self {
             eq, exp_q, inv_sum, ..
         } = self;
@@ -103,26 +104,23 @@ impl<F: JoltField> RecipMultProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for RecipMultProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
-        &self.params
+impl<F: JoltField> RelationWitness<F> for RecipMultProver<F> {
+    type Relation = RecipMultRelation<F>;
+
+    fn relation(&self) -> &RecipMultRelation<F> {
+        &self.relation
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        // Only cache exp_q — inv_sum is verifier-known (derived from sent exp_sum_q).
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .into_provider(transcript, opening_point);
-        provider.append_advice(VirtualPoly::SoftmaxExpQ, self.exp_q.final_claim());
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.exp_q.final_claim()]
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField] RecipMultProver<F>);
 
 impl<F: JoltField> RecipMultProver<F> {
     /// Bind round `round`'s challenge.
@@ -130,7 +128,7 @@ impl<F: JoltField> RecipMultProver<F> {
         let r_j = F::challenge_from_field(r);
         self.eq.bind(r);
         self.exp_q.bind_parallel(r_j, BindingOrder::LowToHigh);
-        if round >= self.params.log_N() {
+        if round >= self.relation.params().log_N() {
             self.inv_sum.bind_parallel(r_j, BindingOrder::LowToHigh);
         }
     }
@@ -138,7 +136,7 @@ impl<F: JoltField> RecipMultProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for RecipMultProver<F> {
     fn num_rounds(&self) -> usize {
-        self.params.num_rounds()
+        self.relation.rounds()
     }
 
     #[tracing::instrument(name = "RecipMultProver::prove_round", skip_all)]
@@ -151,7 +149,7 @@ impl<F: JoltField> ProveRounds<F> for RecipMultProver<F> {
         if let Some(r) = bind {
             self.bind(r, round - 1);
         }
-        if round < self.params.log_N() {
+        if round < self.relation.params().log_N() {
             self.compute_phase_1_message(round, previous_claim)
         } else {
             self.compute_phase_2_message(previous_claim)
@@ -160,7 +158,7 @@ impl<F: JoltField> ProveRounds<F> for RecipMultProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, self.params.num_rounds() - 1);
+        self.bind(bind, self.relation.rounds() - 1);
         Ok(())
     }
 }

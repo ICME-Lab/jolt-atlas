@@ -1,7 +1,6 @@
-use crate::utils::opening_access::AccOpeningAccessor;
-use crate::utils::opening_access::IntoProverProvider;
+use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -9,14 +8,10 @@ use atlas_algebra::{
     },
     utils::thread::drop_in_background_thread,
 };
-use atlas_sumcheck::{
-    opening_proof::prover::ProverOpeningAccumulator, sumcheck::prover::SumcheckInstanceProver,
-    sumcheck_verifier::SumcheckInstanceParams, upstream_sumcheck::round_check_failed,
-};
-use atlas_transcript::Transcript;
+use atlas_sumcheck::upstream_sumcheck::round_check_failed;
 use common::parallel::par_enabled;
-use common::VirtualPoly;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::exp_sum::*;
+use jolt_claims::SymbolicSumcheck;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
@@ -24,6 +19,7 @@ use rayon::prelude::*;
 /// Prover for the exponential sum in softmax.
 pub struct ExpSumProver<F: JoltField> {
     params: ExpSumParams<F>,
+    setup: RelationSetup<F>,
     gs_eq_r0_k: Option<GruenSplitEqPolynomial<F>>,
     eq_r0_k: Vec<F>,
     // log(F * N) variables
@@ -36,6 +32,7 @@ impl<F: JoltField> ExpSumProver<F> {
         let eq_r0_k = EqPolynomial::evals(&params.r0_k);
         let exp_q = MultilinearPolynomial::from(exp_q);
         Self {
+            setup: params.relation_setup(),
             params,
             eq_r0_k,
             gs_eq_r0_k: None,
@@ -76,25 +73,23 @@ impl<F: JoltField> ExpSumProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ExpSumProver<F> {
-    fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
+impl<F: JoltField> RelationWitness<F> for ExpSumProver<F> {
+    type Relation = ExpSumParams<F>;
+
+    fn relation(&self) -> &ExpSumParams<F> {
         &self.params
     }
 
-    fn cache_openings(
-        &self,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-        sumcheck_challenges: &[F::Challenge],
-    ) {
-        let opening_point = self
-            .params
-            .normalize_opening_point(&sumcheck_challenges.into_opening());
-        let mut provider = AccOpeningAccessor::new(accumulator, &self.params.node)
-            .into_provider(transcript, opening_point);
-        provider.append_advice(VirtualPoly::SoftmaxExpQ, self.exp_q.final_claim());
+    fn setup(&self) -> &RelationSetup<F> {
+        &self.setup
+    }
+
+    fn produced_claims(&self) -> Vec<F> {
+        vec![self.exp_q.final_claim()]
     }
 }
+
+atlas_sumcheck::relation_witness_instance!([F: JoltField] ExpSumProver<F>);
 
 impl<F: JoltField> ExpSumProver<F> {
     /// Bind round `round`'s challenge.
@@ -117,7 +112,7 @@ impl<F: JoltField> ExpSumProver<F> {
 
 impl<F: JoltField> ProveRounds<F> for ExpSumProver<F> {
     fn num_rounds(&self) -> usize {
-        self.params.num_rounds()
+        self.params.rounds()
     }
 
     #[tracing::instrument(name = "ExpSumProver::prove_round", skip_all)]
@@ -139,7 +134,7 @@ impl<F: JoltField> ProveRounds<F> for ExpSumProver<F> {
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
-        self.bind(bind, self.params.num_rounds() - 1);
+        self.bind(bind, self.params.rounds() - 1);
         Ok(())
     }
 }

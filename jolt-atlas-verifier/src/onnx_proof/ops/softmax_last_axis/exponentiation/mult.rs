@@ -4,14 +4,8 @@ use crate::onnx_proof::relation::{
     RelationVerifier,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
-use atlas_algebra::{
-    field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN},
-};
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    sumcheck_verifier::SumcheckInstanceParams,
-};
+use atlas_algebra::field::JoltField;
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use common::VirtualPoly;
 use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
@@ -43,36 +37,18 @@ impl<F: JoltField> MultParams<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for MultParams<F> {
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        let accessor = AccOpeningAccessor::new(accumulator, &self.node);
-        let exp_q_claim = accessor.get_advice(VirtualPoly::SoftmaxExpQ).1;
-        let R_claim = accessor.get_advice(VirtualPoly::SoftmaxExpRemainder).1;
-        exp_q_claim * F::from_i32(self.S) + R_claim
-    }
-
-    fn normalize_opening_point(&self, challenges: &[F]) -> OpeningPoint<BIG_ENDIAN, F> {
-        OpeningPoint::<LITTLE_ENDIAN, F>::new(challenges.to_vec()).match_endianness()
-    }
-
-    fn num_rounds(&self) -> usize {
-        self.r.len()
-    }
-
-    // output = eq_eval * exp_hi * exp_lo = Challenge(0) * Opening(exp_hi) * Opening(exp_lo)
-}
-
 impl<F: JoltField> MultParams<F> {
-    /// The verifier of the product, set up at the exponent's opening point.
-    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
-        let setup = RelationSetup {
+    /// The relation's setup: the exponent's opening point.
+    pub fn relation_setup(&self) -> RelationSetup<F> {
+        RelationSetup {
             incoming_point: self.r.clone(),
             challenges: vec![],
-        };
+        }
+    }
+
+    /// The verifier of the product.
+    pub fn into_verifier(self) -> RelationVerifier<F, Self> {
+        let setup = self.relation_setup();
         RelationVerifier::at(self, setup)
     }
 

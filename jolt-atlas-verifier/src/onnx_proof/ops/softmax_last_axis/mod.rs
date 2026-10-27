@@ -389,7 +389,7 @@ impl SoftmaxLastAxisVerifier {
         scale_bits: i32,
     ) -> Result<Vec<Box<dyn SumcheckInstanceVerifier<F, T>>>, ProofVerifyError> {
         let inv_sum = self.inv_sum_evals(&*accumulator)?;
-        let recip_mult_verifier = RecipMultRelation::verifier(
+        let recip_mult_verifier = RecipMultRelation::with_inv_sum(
             RecipMultParams::new(
                 self.computation_node.clone(),
                 self.scale,
@@ -398,7 +398,8 @@ impl SoftmaxLastAxisVerifier {
                 transcript,
             ),
             inv_sum,
-        );
+        )
+        .into_verifier();
         let exp_sum_verifier = ExpSumParams::new(
             self.computation_node.clone(),
             self.F_N,

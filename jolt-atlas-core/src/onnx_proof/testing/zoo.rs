@@ -187,11 +187,10 @@ fn qwen() {
 
 // ── temporary proof pin (specs/dims-disambiguate.md) ─────────────────────
 
-/// FNV-1a over the serialized proof of `model` on its golden inputs.
-fn proof_hash<PCS>(name: &str) -> u64
-where
-    PCS: joltworks::poly::commitment::commitment_scheme::CommitmentScheme<Field = Fr>,
-{
+/// FNV-1a over the HyperKZG proof of `model` on its golden inputs. Not Dory:
+/// its setup is random per machine (cached under `~/.cache/dory`), so its
+/// proof bytes differ between hosts.
+fn proof_hash(name: &str) -> u64 {
     use crate::onnx_proof::{
         proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
         ONNXProof,
@@ -201,8 +200,9 @@ where
     let imported = zoo(name, 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
     let shared = AtlasSharedPreprocessing::preprocess(imported.model);
-    let prover_pp = AtlasProverPreprocessing::<Fr, PCS>::new(shared);
-    let (proof, _, _) = ONNXProof::<Fr, Blake2bTranscript, PCS>::prove(&prover_pp, &inputs);
+    let prover_pp = AtlasProverPreprocessing::<Fr, HyperKZG<Bn254>>::new(shared);
+    let (proof, _, _) =
+        ONNXProof::<Fr, Blake2bTranscript, HyperKZG<Bn254>>::prove(&prover_pp, &inputs);
     let bytes = serialize_proof(&proof).expect("proof serializes");
     bytes.iter().fold(0xcbf29ce484222325, |hash: u64, &byte| {
         (hash ^ byte as u64).wrapping_mul(0x100000001b3)
@@ -217,16 +217,11 @@ where
 fn temp_proof_hash_pinned() {
     let pinned: [(&str, u64); 4] = [
         ("op_gauntlet", 0x3fc34b82384aa883),
-        ("gpt2-tiny", 0xcecf09e435f837ac),
-        ("qwen2-tiny", 0x910eb90bab82ad2c),
+        ("gpt2-tiny", 0xc2f740d60d15144c),
+        ("qwen2-tiny", 0xb4c74790ede2ece3),
         ("bge-tiny", 0x9977f497f54a4cd7),
     ];
-    let got = [
-        proof_hash::<HyperKZG<Bn254>>("op_gauntlet"),
-        proof_hash::<DoryScheme>("gpt2-tiny"),
-        proof_hash::<DoryScheme>("qwen2-tiny"),
-        proof_hash::<HyperKZG<Bn254>>("bge-tiny"),
-    ];
+    let got: Vec<u64> = pinned.iter().map(|(name, _)| proof_hash(name)).collect();
     for ((name, expected), got) in pinned.iter().zip(got) {
         assert_eq!(got, *expected, "{name}: proof bytes changed ({got:#018x})");
     }

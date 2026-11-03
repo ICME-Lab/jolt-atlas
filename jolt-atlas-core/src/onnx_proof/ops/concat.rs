@@ -115,9 +115,9 @@ impl<F: JoltField> ConcatSumcheckParams<F> {
         let input_raw_dims = model
             .operand_views(&computation_node)
             .iter()
-            .map(|input_node| input_node.raw_or_padded_outdims().to_vec())
+            .map(|input_node| input_node.physical_outdims().to_vec())
             .collect::<Vec<_>>();
-        let output_raw_dims = computation_node.raw_or_padded_outdims().to_vec();
+        let output_raw_dims = computation_node.physical_outdims().to_vec();
         let axis = concat_op.axis; // already normalized to a non-negative index
         validate_concat_shapes(
             &input_raw_dims

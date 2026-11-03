@@ -183,7 +183,7 @@ pub(crate) fn build_stage2_verifiers<F: JoltField>(
     let dict = &model.view(computation_node.inputs[0]);
     let indices = model.view(computation_node.inputs[1]);
 
-    let num_words = dict.raw_or_padded_outdims()[gather_op.axis];
+    let num_words = dict.physical_outdims()[gather_op.axis];
     let num_lookups = indices.pow2_padded_num_output_elements();
 
     let hb_params = ra_hamming_bool_params::<F>(
@@ -294,7 +294,7 @@ pub(crate) fn build_stage3_verifier<F: JoltField>(
     let model = &verifier.preprocessing.model;
     let dict = &model.view(computation_node.inputs[0]);
 
-    let num_words = dict.raw_or_padded_outdims()[gather_op.axis];
+    let num_words = dict.physical_outdims()[gather_op.axis];
 
     let hw_params = ra_hamming_weight_params::<F>(
         computation_node,
@@ -322,7 +322,7 @@ pub(crate) fn build_stage2_verifiers_zk<F: JoltField>(
     };
     let dict = &model.view(computation_node.inputs[0]);
     let indices = model.view(computation_node.inputs[1]);
-    let num_words = dict.raw_or_padded_outdims()[gather_op.axis];
+    let num_words = dict.physical_outdims()[gather_op.axis];
     let num_lookups = indices.pow2_padded_num_output_elements();
 
     let hb_params =
@@ -353,7 +353,7 @@ pub(crate) fn build_stage3_verifier_zk<F: JoltField>(
         panic!("Expected GatherSmall operator")
     };
     let dict = &model.view(computation_node.inputs[0]);
-    let num_words = dict.raw_or_padded_outdims()[gather_op.axis];
+    let num_words = dict.physical_outdims()[gather_op.axis];
     let hw_params =
         ra_hamming_weight_params::<F>(computation_node, num_words, accumulator, transcript);
     HammingWeightSumcheckVerifier::new(hw_params)

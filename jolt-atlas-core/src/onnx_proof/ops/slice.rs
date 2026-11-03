@@ -119,9 +119,9 @@ impl<F: JoltField> SliceSumcheckParams<F> {
         let r_output = accessor.get_reduced_opening().0;
         let input_raw_dims = model
             .view(computation_node.inputs[0])
-            .raw_or_padded_outdims()
+            .physical_outdims()
             .to_vec();
-        let output_raw_dims = computation_node.raw_or_padded_outdims().to_vec();
+        let output_raw_dims = computation_node.physical_outdims().to_vec();
         validate_slice_shapes(&input_raw_dims, &output_raw_dims, axis, start, end);
         Self {
             computation_node,

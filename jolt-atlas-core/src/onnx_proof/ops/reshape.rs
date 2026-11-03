@@ -249,13 +249,17 @@ pub struct ReshapeSumcheckProver<F: JoltField> {
 impl<F: JoltField> ReshapeSumcheckProver<F> {
     /// Initialize reshape prover state from trace tensors and prepared parameters.
     pub fn initialize(trace: &Trace, params: ReshapeSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
             panic!("Expected one operand for Reshape operation")
         };
 
         let input_mle = MultilinearPolynomial::from(input.padded_pow2());
-        let selector = build_reshape_selectors(input.dims(), output.dims(), &params.r_output.r);
+        let selector = build_reshape_selectors(
+            &params.input_raw_dims,
+            &params.output_raw_dims,
+            &params.r_output.r,
+        );
         let selector_mle = MultilinearPolynomial::from(selector);
         assert_eq!(input_mle.len(), selector_mle.len());
 

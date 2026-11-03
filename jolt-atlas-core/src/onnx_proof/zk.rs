@@ -1776,7 +1776,11 @@ pub fn prove_zk(
                     .contains_key(&node.idx)
                 {
                     use crate::onnx_proof::ops::broadcast::{BroadcastParams, BroadcastProver};
-                    let params = BroadcastParams::new(node.clone(), &prover.accumulator);
+                    let params = BroadcastParams::new(
+                        node.clone(),
+                        &prover.accumulator,
+                        &prover.preprocessing.model,
+                    );
                     let bp = BroadcastProver::initialize(&prover.trace, params);
                     bp.prove(&mut prover.accumulator, &mut prover.transcript);
                 }

@@ -134,11 +134,12 @@ pub(crate) fn build_stage2_provers<F: JoltField>(
         panic!("Expected GatherSmall operator")
     };
     let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, computation_node);
-    let [dict, indexes] = operands[..] else {
+    let [_, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };
-    let num_words = dict.dims()[gather_op.axis];
-    let num_lookups = indexes.len();
+    let model = &prover.preprocessing.model;
+    let num_words = model.view(computation_node.inputs[0]).physical_outdims()[gather_op.axis];
+    let num_lookups = model.view(computation_node.inputs[1]).num_output_elements();
 
     let hb_params = ra_hamming_bool_params::<F>(
         computation_node,
@@ -267,10 +268,14 @@ pub(crate) fn build_stage3_prover<F: JoltField>(
         panic!("Expected GatherSmall operator")
     };
     let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, computation_node);
-    let [dict, indexes] = operands[..] else {
+    let [_, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };
-    let num_words = dict.dims()[gather_op.axis];
+    let num_words = prover
+        .preprocessing
+        .model
+        .view(computation_node.inputs[0])
+        .physical_outdims()[gather_op.axis];
 
     let hw_params = ra_hamming_weight_params::<F>(
         computation_node,

@@ -146,8 +146,9 @@ impl<F: JoltField> BroadcastVerifier<F> {
         model: &Model,
     ) -> Self {
         let params = BroadcastParams::new(computation_node, accumulator);
-        let input_dims = &model.view(params.computation_node.inputs[0]).output_dims;
-        let output_dims = &params.computation_node.output_dims;
+        let input_node = model.view(params.computation_node.inputs[0]);
+        let input_dims = input_node.raw_or_padded_outdims();
+        let output_dims = params.computation_node.raw_or_padded_outdims();
 
         let broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
 

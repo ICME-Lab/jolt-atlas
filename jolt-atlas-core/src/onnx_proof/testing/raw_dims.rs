@@ -24,15 +24,15 @@ fn assert_raw_dims(name: &str, unpadded: &Model) {
     let padded = padded_twin(unpadded);
     for (i, &id) in unpadded.inputs().iter().enumerate() {
         assert_eq!(
-            padded.io_dims().inputs[i],
-            unpadded[id].output_dims,
+            padded.raw_input_dims()[i],
+            unpadded[id].raw_or_padded_outdims(),
             "{name}: input {i} dims"
         );
     }
     for (i, &id) in unpadded.outputs().iter().enumerate() {
         assert_eq!(
-            padded.io_dims().outputs[i],
-            unpadded[id].output_dims,
+            padded.raw_output_dims()[i],
+            unpadded[id].raw_or_padded_outdims(),
             "{name}: output {i} dims"
         );
     }

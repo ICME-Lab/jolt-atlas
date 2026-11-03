@@ -54,16 +54,8 @@ fn graph_spec() -> impl Strategy<Value = GraphSpec> {
 fn build_graph(spec: &GraphSpec) -> Graph {
     let dims = spec.dims.clone();
     let mut nodes = vec![
-        Node {
-            op: Op::Input(op::Input),
-            inputs: vec![],
-            output_dims: dims.clone(),
-        },
-        Node {
-            op: Op::Input(op::Input),
-            inputs: vec![],
-            output_dims: dims.clone(),
-        },
+        Node::new(Op::Input(op::Input), vec![], dims.clone()),
+        Node::new(Op::Input(op::Input), vec![], dims.clone()),
     ];
     let b = NodeId(1);
     let mut tip = NodeId(0);
@@ -116,11 +108,7 @@ fn build_graph(spec: &GraphSpec) -> Graph {
             }
         };
         // Reductions change dims; chain only while dims match for binaries.
-        nodes.push(Node {
-            op,
-            inputs,
-            output_dims: out_dims.clone(),
-        });
+        nodes.push(Node::new(op, inputs, out_dims.clone()));
         if out_dims == dims {
             tip = id;
         } else {
@@ -167,7 +155,7 @@ proptest! {
         // Every node's padded output, cropped to the unpadded dims, must
         // equal the unpadded output.
         for (id, node, _) in unpadded.nodes() {
-            let logical = &node.output_dims;
+            let logical = node.raw_or_padded_outdims();
             let cropped = t_pad.output(id).crop_to(logical).unwrap();
             prop_assert_eq!(
                 cropped.data(),

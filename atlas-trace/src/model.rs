@@ -35,12 +35,12 @@ impl Model {
             inputs: graph
                 .inputs
                 .iter()
-                .map(|&id| graph.node(id).output_dims.clone())
+                .map(|&id| graph.node(id).raw_or_padded_outdims().to_vec())
                 .collect(),
             outputs: graph
                 .outputs
                 .iter()
-                .map(|&id| graph.node(id).output_dims.clone())
+                .map(|&id| graph.node(id).raw_or_padded_outdims().to_vec())
                 .collect(),
         };
 
@@ -78,9 +78,14 @@ impl Model {
         self.version
     }
 
-    /// Original (pre-padding) IO dims.
-    pub fn io_dims(&self) -> &IoDims {
-        &self.io
+    /// Raw dims of each graph input, in `graph.inputs` order.
+    pub fn raw_input_dims(&self) -> Vec<&[usize]> {
+        self.io.inputs.iter().map(Vec::as_slice).collect()
+    }
+
+    /// Raw dims of each graph output, in `graph.outputs` order.
+    pub fn raw_output_dims(&self) -> Vec<&[usize]> {
+        self.io.outputs.iter().map(Vec::as_slice).collect()
     }
 
     /// A node together with its analysis results.
@@ -119,7 +124,7 @@ fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
         let input_dims: Vec<&[usize]> = node
             .inputs
             .iter()
-            .map(|&id| graph.node(id).output_dims.as_slice())
+            .map(|&id| graph.node(id).raw_or_padded_outdims())
             .collect();
         let inferred =
             node.op
@@ -130,12 +135,12 @@ fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
                     op: node.op.to_string(),
                     source,
                 })?;
-        if inferred != node.output_dims {
+        if inferred != node.raw_or_padded_outdims() {
             return Err(CompileError::ShapeMismatch {
                 node: NodeId(i as u32),
                 op: node.op.to_string(),
                 inferred,
-                declared: node.output_dims.clone(),
+                declared: node.raw_or_padded_outdims().to_vec(),
             });
         }
     }
@@ -194,7 +199,7 @@ fn annotate_clamp_widths(graph: &Graph, scale: Scale) -> Vec<NodeMeta> {
             let input_dims: Vec<&[usize]> = node
                 .inputs
                 .iter()
-                .map(|&id| graph.node(id).output_dims.as_slice())
+                .map(|&id| graph.node(id).raw_or_padded_outdims())
                 .collect();
             let input_consts: Vec<Option<&Tensor<i32>>> = node
                 .inputs
@@ -294,11 +299,11 @@ pub struct NodeMeta {
 
 /// Original (pre-padding) IO dims, for padding inputs and cropping outputs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IoDims {
+struct IoDims {
     /// Original dims per graph input (same order as `graph.inputs`).
-    pub inputs: Vec<Vec<usize>>,
+    inputs: Vec<Vec<usize>>,
     /// Original dims per graph output (same order as `graph.outputs`).
-    pub outputs: Vec<Vec<usize>>,
+    outputs: Vec<Vec<usize>>,
 }
 
 #[cfg(test)]

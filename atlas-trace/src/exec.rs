@@ -64,16 +64,17 @@ impl Model {
             });
         }
         let mut padded_inputs = BTreeMap::new();
+        let raw_input_dims = self.raw_input_dims();
         for (i, (tensor, &node_id)) in inputs.iter().zip(&graph.inputs).enumerate() {
-            let expected = &self.io_dims().inputs[i];
-            if tensor.dims() != expected.as_slice() {
+            let expected = raw_input_dims[i];
+            if tensor.dims() != expected {
                 return Err(ExecError::InputShape {
                     index: i,
-                    expected: expected.clone(),
+                    expected: expected.to_vec(),
                     got: tensor.dims().to_vec(),
                 });
             }
-            let target = &graph.node(node_id).output_dims;
+            let target = graph.node(node_id).raw_or_padded_outdims();
             let padded = tensor.pad_to(target).expect("padded dims grow every dim");
             padded_inputs.insert(node_id, padded);
         }
@@ -96,7 +97,7 @@ impl Model {
             .graph()
             .outputs
             .iter()
-            .zip(&self.io_dims().outputs)
+            .zip(self.raw_output_dims())
             .map(|(&id, original)| {
                 trace
                     .output(id)
@@ -134,10 +135,10 @@ fn eval_node(
 fn check_output_dims(id: NodeId, node: &Node, output: &Tensor<i32>) {
     assert_eq!(
         output.dims(),
-        node.output_dims.as_slice(),
+        node.raw_or_padded_outdims(),
         "node {id} ({}) produced {:?}, declared {:?}",
         node.op,
         output.dims(),
-        node.output_dims
+        node.raw_or_padded_outdims()
     );
 }

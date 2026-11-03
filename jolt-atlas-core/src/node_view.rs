@@ -19,8 +19,7 @@ pub struct ComputationNode {
     pub operator: Op,
     /// Operand node indices.
     pub inputs: Vec<usize>,
-    /// Output dims (padded when the model was compiled with padding).
-    pub output_dims: Vec<usize>,
+    output_dims: Vec<usize>,
     /// Saturating-clamp lookup width in bits (64 when unclamped).
     pub sat_clamp_bits: usize,
     /// The model's global fixed-point scale (log2). Carried per node so
@@ -42,14 +41,19 @@ impl ComputationNode {
         }
     }
 
+    /// Output dims: raw, or padded when the model was compiled with padding.
+    pub fn raw_or_padded_outdims(&self) -> &[usize] {
+        &self.output_dims
+    }
+
     /// Total output elements at the declared dims.
     pub fn num_output_elements(&self) -> usize {
-        self.output_dims.iter().product()
+        self.raw_or_padded_outdims().iter().product()
     }
 
     /// Total output elements after per-dimension power-of-two padding.
     pub fn pow2_padded_num_output_elements(&self) -> usize {
-        self.output_dims
+        self.raw_or_padded_outdims()
             .iter()
             .map(|d| d.next_power_of_two())
             .product()
@@ -102,7 +106,7 @@ impl ModelView for atlas_trace::Model {
             idx,
             operator: node.op.clone(),
             inputs: node.inputs.iter().map(|i| i.index()).collect(),
-            output_dims: node.output_dims.clone(),
+            output_dims: node.raw_or_padded_outdims().to_vec(),
             sat_clamp_bits: meta.sat_clamp_bits.map(|w| w.bits()).unwrap_or(64),
             scale: self.scale_log2(),
         }
@@ -167,13 +171,13 @@ impl ModelView for atlas_trace::Model {
             Op::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
             Op::GatherSmall(_) => {
                 let input_nodes = self.operand_views(node);
-                let num_words = input_nodes[0].output_dims[0];
+                let num_words = input_nodes[0].raw_or_padded_outdims()[0];
                 let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                 log_2(num_words) + log_2(num_indices)
             }
             Op::GatherLarge(_) => {
                 let input_nodes = self.operand_views(node);
-                let num_words = input_nodes[0].output_dims[0].next_power_of_two();
+                let num_words = input_nodes[0].raw_or_padded_outdims()[0].next_power_of_two();
                 let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                 log_2(num_words) + log_2(num_indices)
             }
@@ -191,7 +195,7 @@ impl ModelView for atlas_trace::Model {
                 node.idx,
                 node.operator.to_string(),
                 node.inputs,
-                node.output_dims,
+                node.raw_or_padded_outdims(),
                 node.sat_clamp_bits,
             );
         }
@@ -207,7 +211,7 @@ pub fn clamp_value_bound(model: &atlas_trace::Model, node: &ComputationNode) -> 
     let input_dims: Vec<&[usize]> = node
         .inputs
         .iter()
-        .map(|&i| operand(i).output_dims.as_slice())
+        .map(|&i| operand(i).raw_or_padded_outdims())
         .collect();
     let input_consts: Vec<Option<&Tensor<i32>>> = node
         .inputs

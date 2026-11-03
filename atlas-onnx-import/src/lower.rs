@@ -135,11 +135,7 @@ struct Lowerer<'g> {
 
 impl<'g> Lowerer<'g> {
     fn push(&mut self, op: Op, inputs: Vec<NodeId>, output_dims: Vec<usize>) -> NodeId {
-        self.nodes.push(Node {
-            op,
-            inputs,
-            output_dims,
-        });
+        self.nodes.push(Node::new(op, inputs, output_dims));
         NodeId(self.nodes.len() as u32 - 1)
     }
 

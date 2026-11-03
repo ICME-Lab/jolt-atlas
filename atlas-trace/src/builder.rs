@@ -31,11 +31,8 @@ impl GraphBuilder {
     /// Add a graph input with the given (unpadded) dims.
     pub fn input(&mut self, dims: &[usize]) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
-        self.nodes.push(Node {
-            op: Op::Input(op::Input),
-            inputs: vec![],
-            output_dims: dims.to_vec(),
-        });
+        self.nodes
+            .push(Node::new(Op::Input(op::Input), vec![], dims.to_vec()));
         self.inputs.push(id);
         id
     }
@@ -58,7 +55,7 @@ impl GraphBuilder {
     pub fn push(&mut self, op: Op, inputs: &[NodeId]) -> NodeId {
         let input_dims: Vec<&[usize]> = inputs
             .iter()
-            .map(|id| self.nodes[id.index()].output_dims.as_slice())
+            .map(|id| self.nodes[id.index()].raw_or_padded_outdims())
             .collect();
         let dims = op
             .spec()
@@ -69,11 +66,7 @@ impl GraphBuilder {
 
     fn push_with_dims(&mut self, op: Op, inputs: &[NodeId], dims: Vec<usize>) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
-        self.nodes.push(Node {
-            op,
-            inputs: inputs.to_vec(),
-            output_dims: dims,
-        });
+        self.nodes.push(Node::new(op, inputs.to_vec(), dims));
         id
     }
 

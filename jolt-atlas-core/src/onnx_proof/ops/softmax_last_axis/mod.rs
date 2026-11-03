@@ -100,7 +100,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         // The masked (non-full-row) softmax needs a selector polynomial in
         // these sumchecks; until that lands, only full rows are provable —
         // the same capability the old pipeline actually had.
-        let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+        let last_dim = *node
+            .raw_or_padded_outdims()
+            .last()
+            .expect("softmax rank >= 1");
         assert!(
             self.active_len.is_none_or(|n| n == last_dim),
             "masked softmax (active_len {:?} of {last_dim}) is not yet provable; \
@@ -129,7 +132,10 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for SoftmaxLastAxis {
         // *unmasked* relations, so a model declaring a masked softmax must
         // be rejected here too (deserialized preprocessing bypasses the
         // preprocess()-time assert).
-        let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+        let last_dim = *node
+            .raw_or_padded_outdims()
+            .last()
+            .expect("softmax rank >= 1");
         if self.active_len.is_some_and(|n| n != last_dim) {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "masked softmax (active_len {:?} of {last_dim}) is not yet verifiable",
@@ -407,7 +413,7 @@ impl SoftmaxLastAxisProver {
         scale: i32,
     ) -> Self {
         let (&n, leading_dims) = node
-            .output_dims
+            .raw_or_padded_outdims()
             .split_last()
             .expect("softmax node must have at least one output dimension");
         let f = leading_dims.iter().product::<usize>();
@@ -796,7 +802,7 @@ impl SoftmaxLastAxisVerifier {
         transcript: &mut T,
     ) -> Self {
         let (&n, leading_dims) = node
-            .output_dims
+            .raw_or_padded_outdims()
             .split_last()
             .expect("softmax node must have at least one output dimension");
         let f = leading_dims.iter().product::<usize>();

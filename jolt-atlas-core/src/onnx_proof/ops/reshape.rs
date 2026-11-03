@@ -165,8 +165,11 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_output = accessor.get_reduced_opening().0;
-        let input_raw_dims = model.view(computation_node.inputs[0]).output_dims.clone();
-        let output_raw_dims = computation_node.output_dims.clone();
+        let input_raw_dims = model
+            .view(computation_node.inputs[0])
+            .raw_or_padded_outdims()
+            .to_vec();
+        let output_raw_dims = computation_node.raw_or_padded_outdims().to_vec();
         Self {
             computation_node,
             r_output,

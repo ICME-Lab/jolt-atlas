@@ -42,7 +42,10 @@ impl AtlasSharedPreprocessing {
     pub fn preprocess(model: Model) -> Self {
         for (id, node, _) in model.nodes() {
             if let atlas_trace::Op::SoftmaxLastAxis(s) = &node.op {
-                let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+                let last_dim = *node
+                    .raw_or_padded_outdims()
+                    .last()
+                    .expect("softmax rank >= 1");
                 assert!(
                     s.active_len.is_none_or(|n| n == last_dim),
                     "node {id:?}: masked softmax (active_len {:?} of {last_dim}) is not yet \

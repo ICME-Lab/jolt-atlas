@@ -369,19 +369,7 @@ impl<'g> Lowerer<'g> {
                     .map(|&a| a as usize)
                     .collect();
                 let count = node.attr_int("count").ok_or_else(unlowered)? as usize;
-                let in_dims = lower_dims(self.g.dims(node.inputs[0]).expect("analyzed"));
-                let padded_count = axes
-                    .iter()
-                    .map(|&a| in_dims.get(a).copied().unwrap_or(1).next_power_of_two())
-                    .product();
-                direct(
-                    self,
-                    Op::MeanOfSquares(op::MeanOfSquares {
-                        axes,
-                        count,
-                        padded_count,
-                    }),
-                )?
+                direct(self, Op::MeanOfSquares(op::MeanOfSquares { axes, count }))?
             }
             "atlas.Einsum" => {
                 // Einsum has no raw (rebase-free) form: its eval always

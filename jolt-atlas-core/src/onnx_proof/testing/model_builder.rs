@@ -227,16 +227,8 @@ impl ModelBuilder {
     ) -> Wire {
         let input_dims = self.dims(input);
         let count: usize = axes.iter().map(|&ax| input_dims[ax]).product();
-        let padded_count: usize = axes
-            .iter()
-            .map(|&ax| input_dims[ax].next_power_of_two())
-            .product();
         self.push(
-            Op::MeanOfSquares(op::MeanOfSquares {
-                axes,
-                count,
-                padded_count,
-            }),
+            Op::MeanOfSquares(op::MeanOfSquares { axes, count }),
             vec![input],
             output_dims,
         )

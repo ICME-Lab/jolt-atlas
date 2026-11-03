@@ -162,8 +162,10 @@ impl fmt::Display for Reshape {
 }
 
 impl OpSpec for Reshape {
-    fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        Ok(Eval::plain(inputs[0].clone().reshape(&self.shape)?))
+    fn eval(&self, inputs: &[&Tensor<i32>], ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
+        Ok(Eval::plain(
+            inputs[0].clone().reshape(&ctx.physical(&self.shape))?,
+        ))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -203,7 +205,6 @@ impl OpSpec for Reshape {
                 padded_shape,
             ));
         }
-        self.shape = padded_shape;
         Ok(())
     }
 }
@@ -215,8 +216,8 @@ impl fmt::Display for Broadcast {
 }
 
 impl OpSpec for Broadcast {
-    fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        Ok(Eval::plain(inputs[0].expand(&self.shape)?))
+    fn eval(&self, inputs: &[&Tensor<i32>], ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
+        Ok(Eval::plain(inputs[0].expand(&ctx.physical(&self.shape))?))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -239,11 +240,6 @@ impl OpSpec for Broadcast {
 
     fn padding(&self) -> PadBehavior {
         PadBehavior::Structural
-    }
-
-    fn apply_padding(&mut self, _ctx: &PadCtx<'_>) -> Result<(), String> {
-        self.shape = padded_dims(&self.shape);
-        Ok(())
     }
 }
 

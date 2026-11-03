@@ -30,13 +30,10 @@ impl Model {
     /// Compile a graph: validate, check shapes, pad, annotate clamp widths.
     pub fn compile(mut graph: Graph, opts: CompileOptions) -> Result<Model, CompileError> {
         graph.validate()?;
-        check_shapes(&graph, Layout::Raw)?;
+        check_shapes(&graph)?;
 
         let layout = if opts.pad_pow2 {
             pad_graph(&mut graph)?;
-            // The padded op fields must still shape-check on padded dims;
-            // this catches rewrites that diverge from the padded operands.
-            check_shapes(&graph, Layout::Padded)?;
             Layout::Padded
         } else {
             Layout::Raw
@@ -121,18 +118,17 @@ impl Model {
 }
 
 /// Infer every node's shape from its operands and compare with the declared
-/// dims, both under `layout` (Input nodes keep their declaration).
-fn check_shapes(graph: &Graph, layout: Layout) -> Result<(), CompileError> {
+/// dims (Input nodes keep their declaration).
+fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
     for (i, node) in graph.nodes.iter().enumerate() {
         if matches!(node.op, Op::Input(_)) {
             continue;
         }
-        let input_dims: Vec<Vec<usize>> = node
+        let input_dims: Vec<&[usize]> = node
             .inputs
             .iter()
-            .map(|&id| layout.physical(graph.node(id).raw_outdims()))
+            .map(|&id| graph.node(id).raw_outdims())
             .collect();
-        let input_dims: Vec<&[usize]> = input_dims.iter().map(Vec::as_slice).collect();
         let inferred =
             node.op
                 .spec()
@@ -142,21 +138,20 @@ fn check_shapes(graph: &Graph, layout: Layout) -> Result<(), CompileError> {
                     op: node.op.to_string(),
                     source,
                 })?;
-        let declared = layout.physical(node.raw_outdims());
-        if inferred != declared {
+        if inferred != node.raw_outdims() {
             return Err(CompileError::ShapeMismatch {
                 node: NodeId(i as u32),
                 op: node.op.to_string(),
                 inferred,
-                declared,
+                declared: node.raw_outdims().to_vec(),
             });
         }
     }
     Ok(())
 }
 
-/// Rewrite each op's shape-carrying fields for power-of-two padding; node
-/// dims stay raw.
+/// Let each op validate (and softmax record its live width for) power-of-two
+/// padding; node dims and op fields stay raw.
 ///
 /// KNOWN GAP: this pass does not verify that padded lanes stay inert. An op
 /// that writes live values into padded lanes (`Broadcast` expanding a
@@ -330,7 +325,6 @@ mod tests {
             Op::MeanOfSquares(op::MeanOfSquares {
                 axes: vec![1],
                 count: 4,
-                padded_count: 4,
             }),
             &[x],
         );

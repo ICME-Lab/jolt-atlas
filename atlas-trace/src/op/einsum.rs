@@ -369,6 +369,7 @@ mod tests {
             scale: Scale::new(4).unwrap(),
             version: SemVersion::V1,
             tables: cache,
+            layout: crate::layout::Layout::Raw,
         }
     }
 

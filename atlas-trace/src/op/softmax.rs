@@ -203,6 +203,7 @@ mod tests {
             scale: Scale::new(scale).unwrap(),
             version: SemVersion::V1,
             tables: &cache,
+            layout: crate::layout::Layout::Raw,
         };
         let out = SoftmaxLastAxis { active_len }
             .eval(&[&input], &ctx)
@@ -280,6 +281,7 @@ mod tests {
             scale: Scale::new(14).unwrap(),
             version: SemVersion::V1,
             tables: &cache,
+            layout: crate::layout::Layout::Raw,
         };
         let op = SoftmaxLastAxis { active_len: None };
         let err = match op.eval(&[&input], &ctx) {

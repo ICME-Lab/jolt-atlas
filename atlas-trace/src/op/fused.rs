@@ -199,12 +199,6 @@ impl OpSpec for MeanOfSquares {
         if self.count == 0 {
             return Err("count must be positive".into());
         }
-        if self.padded_count < self.count {
-            return Err(format!(
-                "padded_count {} below count {}",
-                self.padded_count, self.count
-            ));
-        }
         Ok(())
     }
 
@@ -213,21 +207,9 @@ impl OpSpec for MeanOfSquares {
     }
 
     fn padding(&self) -> PadBehavior {
-        // Masks internally: `count` is the semantic denominator while the
-        // reduction runs over the padded cube (`padded_count`).
+        // Masks internally: `count` is the raw denominator while the
+        // reduction runs over the padded cube.
         PadBehavior::NeedsMask
-    }
-
-    fn apply_padding(&mut self, ctx: &super::PadCtx<'_>) -> Result<(), String> {
-        // Keep `count` (semantic); recompute `padded_count` from the padded
-        // input dims so hand-built graphs stay consistent.
-        let input = ctx.input_dims[0];
-        self.padded_count = self
-            .axes
-            .iter()
-            .map(|&a| input.get(a).copied().unwrap_or(1).next_power_of_two())
-            .product();
-        Ok(())
     }
 
     fn rebase_divisor(&self, scale: Scale) -> Option<i64> {

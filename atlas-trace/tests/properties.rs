@@ -100,7 +100,6 @@ fn build_graph(spec: &GraphSpec) -> Graph {
                     Op::MeanOfSquares(op::MeanOfSquares {
                         axes: vec![axis],
                         count,
-                        padded_count: count.next_power_of_two(),
                     }),
                     vec![tip],
                     od,

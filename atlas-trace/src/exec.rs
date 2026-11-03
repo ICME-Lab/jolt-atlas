@@ -86,6 +86,7 @@ impl Model {
             scale: self.scale(),
             version: self.version(),
             tables: &self.tables,
+            layout: self.layout(),
         }
     }
 

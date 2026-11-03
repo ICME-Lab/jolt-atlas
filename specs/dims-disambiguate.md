@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @AntoineF4C5                   |
 | Created     | 2026-10-26                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          | #401                           |
 | Depends on  | —                              |
 | Supersedes  | —                              |

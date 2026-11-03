@@ -5,7 +5,7 @@ use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::{op::Slice, trace::LayerData, Model, Op, Trace};
+use atlas_trace::{op::Slice, padded_dims, trace::LayerData, Model, Op, Trace};
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -150,9 +150,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for SliceSumcheckParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.input_raw_dims
+        padded_dims(&self.input_raw_dims)
             .iter()
-            .map(|dim| dim.next_power_of_two())
             .product::<usize>()
             .log_2()
     }
@@ -358,14 +357,8 @@ fn build_slice_selector<F: JoltField>(
     r_output: &[F],
 ) -> Vec<F> {
     let input_raw_len: usize = input_raw_dims.iter().product();
-    let input_padded_dims: Vec<usize> = input_raw_dims
-        .iter()
-        .map(|dim| dim.next_power_of_two())
-        .collect();
-    let output_padded_dims: Vec<usize> = output_raw_dims
-        .iter()
-        .map(|dim| dim.next_power_of_two())
-        .collect();
+    let input_padded_dims = padded_dims(input_raw_dims);
+    let output_padded_dims = padded_dims(output_raw_dims);
     let input_domain_len: usize = input_padded_dims.iter().product();
     let output_domain_len: usize = output_padded_dims.iter().product();
     let output_num_vars = output_domain_len.log_2();

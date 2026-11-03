@@ -8,6 +8,7 @@ use crate::{
     error::CompileError,
     graph::{Graph, Node},
     id::{NodeId, Scale, SemVersion},
+    layout::{Layout, padded_dims},
     op::{BoundCtx, Op, PadCtx, TableCache},
     tensor::Tensor,
 };
@@ -20,6 +21,7 @@ pub struct Model {
     version: SemVersion,
     meta: Vec<NodeMeta>,
     io: IoDims,
+    layout: Layout,
     /// Memoized activation tables (regenerated on demand; not serialized).
     #[serde(skip)]
     pub(crate) tables: TableCache,
@@ -59,8 +61,23 @@ impl Model {
             version: opts.version,
             meta,
             io,
+            layout: if opts.pad_pow2 {
+                Layout::Padded
+            } else {
+                Layout::Raw
+            },
             tables: TableCache::default(),
         })
+    }
+
+    /// How the model's tensors are laid out.
+    pub fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    /// The dims of node `id`'s output tensor as the executor produces it.
+    pub fn physical_dims(&self, id: NodeId) -> Vec<usize> {
+        self.graph.node(id).raw_or_padded_outdims().to_vec()
     }
 
     /// The compiled (padded) graph.
@@ -181,11 +198,7 @@ fn pad_graph(graph: &mut Graph) -> Result<(), CompileError> {
                 op: node.op.to_string(),
                 reason,
             })?;
-        node.output_dims = node
-            .output_dims
-            .iter()
-            .map(|d| d.next_power_of_two())
-            .collect();
+        node.output_dims = padded_dims(&node.output_dims);
     }
     Ok(())
 }

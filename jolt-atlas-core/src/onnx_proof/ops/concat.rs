@@ -5,7 +5,7 @@ use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{AccOpeningAccessor, Target},
 };
-use atlas_trace::{op::Concat, trace::LayerData, Model, Op, Trace};
+use atlas_trace::{op::Concat, padded_dims, trace::LayerData, Model, Op, Trace};
 use common::parallel::par_enabled;
 #[cfg(feature = "zk")]
 use joltworks::subprotocols::blindfold::{
@@ -415,7 +415,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ConcatSumch
 }
 
 fn padded_domain_len(dims: &[usize]) -> usize {
-    dims.iter().map(|dim| dim.next_power_of_two()).product()
+    padded_dims(dims).iter().product()
 }
 
 fn extend_input_to_max_domain<T: Copy>(
@@ -445,17 +445,11 @@ fn build_concat_selector<F: JoltField>(
         .get(input_idx)
         .unwrap_or_else(|| panic!("Concat input_idx {input_idx} out of range"));
     let input_raw_len: usize = input_raw_dims.iter().product();
-    let input_padded_dims: Vec<usize> = input_raw_dims
-        .iter()
-        .map(|dim| dim.next_power_of_two())
-        .collect();
+    let input_padded_dims = padded_dims(input_raw_dims);
     let input_domain_len: usize = input_padded_dims.iter().product();
     let input_num_vars = input_domain_len.log_2();
 
-    let output_padded_dims: Vec<usize> = output_raw_dims
-        .iter()
-        .map(|dim| dim.next_power_of_two())
-        .collect();
+    let output_padded_dims = padded_dims(output_raw_dims);
     let output_domain_len: usize = output_padded_dims.iter().product();
     let output_num_vars = output_domain_len.log_2();
     assert_eq!(

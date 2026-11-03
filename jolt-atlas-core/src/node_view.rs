@@ -53,9 +53,8 @@ impl ComputationNode {
 
     /// Total output elements after per-dimension power-of-two padding.
     pub fn pow2_padded_num_output_elements(&self) -> usize {
-        self.raw_or_padded_outdims()
+        atlas_trace::padded_dims(self.raw_or_padded_outdims())
             .iter()
-            .map(|d| d.next_power_of_two())
             .product()
     }
 

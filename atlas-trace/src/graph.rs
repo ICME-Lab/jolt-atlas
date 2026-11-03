@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{error::GraphError, id::NodeId, op::Op};
+use crate::{error::GraphError, id::NodeId, layout::padded_dims, op::Op};
 
 /// One node: an operator applied to earlier nodes' outputs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -147,10 +147,7 @@ impl Node {
 
     /// Total output elements after per-dimension power-of-two padding.
     pub fn pow2_padded_num_output_elements(&self) -> usize {
-        self.raw_or_padded_outdims()
-            .iter()
-            .map(|d| d.next_power_of_two())
-            .product()
+        padded_dims(self.raw_or_padded_outdims()).iter().product()
     }
 
     /// Whether the node produces a single element.

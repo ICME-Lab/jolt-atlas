@@ -7,7 +7,7 @@
 //!
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
-use atlas_trace::{op::Reshape, trace::LayerData, Model, Trace};
+use atlas_trace::{op::Reshape, padded_dims, trace::LayerData, Model, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
@@ -113,14 +113,8 @@ pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
         "Reshape selector requires equal raw element counts"
     );
 
-    let input_padded_dims: Vec<usize> = input_raw_dims
-        .iter()
-        .map(|d| d.next_power_of_two())
-        .collect();
-    let output_padded_dims: Vec<usize> = output_raw_dims
-        .iter()
-        .map(|d| d.next_power_of_two())
-        .collect();
+    let input_padded_dims = padded_dims(input_raw_dims);
+    let output_padded_dims = padded_dims(output_raw_dims);
     let input_padded_len: usize = input_padded_dims.iter().product();
     let output_padded_len: usize = output_padded_dims.iter().product();
     assert_eq!(

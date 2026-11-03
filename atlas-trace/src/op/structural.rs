@@ -4,6 +4,7 @@ use std::fmt;
 
 use crate::{
     error::{KernelError, ShapeError},
+    layout::padded_dims,
     tensor::{self, Tensor},
 };
 
@@ -11,11 +12,6 @@ use super::{
     Broadcast, Concat, Constant, Eval, EvalCtx, GatherLarge, GatherSmall, Identity, Input,
     MoveAxis, OpSpec, PadBehavior, PadCtx, Reshape, Slice, same_dims,
 };
-
-/// Pad each dim to its next power of two.
-fn pow2_dims(dims: &[usize]) -> Vec<usize> {
-    dims.iter().map(|d| d.next_power_of_two()).collect()
-}
 
 /// Factor a reshape into balanced groups (standard reshape grouping: the
 /// smallest consecutive axis runs with equal products) and verify padding
@@ -197,13 +193,13 @@ impl OpSpec for Reshape {
         // padding lands *inside* the merged dimension and the layout
         // scrambles (e.g. merging a grouped-heads axis `[2, 7] -> [14]`).
         check_pad_coherent_reshape(ctx.input_dims[0], &self.shape)?;
-        let padded_shape = pow2_dims(&self.shape);
-        let padded_in: usize = pow2_dims(ctx.input_dims[0]).iter().product();
+        let padded_shape = padded_dims(&self.shape);
+        let padded_in: usize = padded_dims(ctx.input_dims[0]).iter().product();
         let padded_out: usize = padded_shape.iter().product();
         if padded_in != padded_out {
             return Err(format!(
                 "padded reshape element count mismatch: input {:?} ({padded_in} elements) vs target {:?} ({padded_out} elements)",
-                pow2_dims(ctx.input_dims[0]),
+                padded_dims(ctx.input_dims[0]),
                 padded_shape,
             ));
         }
@@ -246,7 +242,7 @@ impl OpSpec for Broadcast {
     }
 
     fn apply_padding(&mut self, _ctx: &PadCtx<'_>) -> Result<(), String> {
-        self.shape = pow2_dims(&self.shape);
+        self.shape = padded_dims(&self.shape);
         Ok(())
     }
 }

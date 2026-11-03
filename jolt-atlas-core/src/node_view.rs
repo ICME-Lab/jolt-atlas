@@ -44,6 +44,11 @@ impl ComputationNode {
         }
     }
 
+    /// Raw output dims.
+    pub fn raw_outdims(&self) -> &[usize] {
+        &self.output_dims
+    }
+
     /// Dims of the output tensor as the executor produces it.
     pub fn physical_outdims(&self) -> Vec<usize> {
         self.layout.physical(&self.output_dims)
@@ -56,7 +61,9 @@ impl ComputationNode {
 
     /// Total output elements after per-dimension power-of-two padding.
     pub fn pow2_padded_num_output_elements(&self) -> usize {
-        atlas_trace::padded_dims(&self.output_dims).iter().product()
+        atlas_trace::padded_dims(self.raw_outdims())
+            .iter()
+            .product()
     }
 
     /// Whether the node produces a single element.
@@ -106,7 +113,7 @@ impl ModelView for atlas_trace::Model {
             idx,
             operator: node.op.clone(),
             inputs: node.inputs.iter().map(|i| i.index()).collect(),
-            output_dims: node.raw_or_padded_outdims().to_vec(),
+            output_dims: self.raw_dims(id).to_vec(),
             layout: self.layout(),
             sat_clamp_bits: meta.sat_clamp_bits.map(|w| w.bits()).unwrap_or(64),
             scale: self.scale_log2(),

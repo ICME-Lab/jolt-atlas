@@ -155,7 +155,7 @@ proptest! {
         // Every node's padded output, cropped to the unpadded dims, must
         // equal the unpadded output.
         for (id, node, _) in unpadded.nodes() {
-            let logical = node.raw_or_padded_outdims();
+            let logical = node.raw_outdims();
             let cropped = t_pad.output(id).crop_to(logical).unwrap();
             prop_assert_eq!(
                 cropped.data(),

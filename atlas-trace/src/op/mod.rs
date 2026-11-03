@@ -54,7 +54,7 @@ pub trait OpSpec: fmt::Display {
     fn padding(&self) -> PadBehavior;
 
     /// Rewrite shape-carrying fields when the compile-time padding pass
-    /// runs. Called before the node's `output_dims` are padded.
+    /// runs; the node's dims stay raw.
     fn apply_padding(&mut self, _ctx: &PadCtx<'_>) -> Result<(), String> {
         Ok(())
     }
@@ -140,7 +140,7 @@ pub struct EvalCtx<'a> {
 pub struct BoundCtx<'a> {
     /// The model's global fixed-point scale.
     pub scale: Scale,
-    /// Each operand's (padded) dims.
+    /// Each operand's physical dims.
     pub input_dims: Vec<&'a [usize]>,
     /// Each operand's constant data, when the operand is a `Constant` node.
     pub input_consts: Vec<Option<&'a Tensor<i32>>>,

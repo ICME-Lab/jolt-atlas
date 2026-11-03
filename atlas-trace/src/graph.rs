@@ -12,8 +12,7 @@ pub struct Node {
     pub op: Op,
     /// Operand node ids, all strictly smaller than this node's id.
     pub inputs: Vec<NodeId>,
-    /// Output dims (logical before padding; padded after compile).
-    pub(crate) output_dims: Vec<usize>,
+    output_dims: Vec<usize>,
 }
 
 /// A topologically ordered computation graph.
@@ -126,7 +125,7 @@ fn invalid_io(node: NodeId, reason: impl Into<String>) -> GraphError {
 }
 
 impl Node {
-    /// A node applying `op` to `inputs`, with output dims `output_dims`.
+    /// A node applying `op` to `inputs`, with raw output dims `output_dims`.
     pub fn new(op: Op, inputs: Vec<NodeId>, output_dims: Vec<usize>) -> Self {
         Node {
             op,
@@ -135,19 +134,19 @@ impl Node {
         }
     }
 
-    /// Output dims: raw, or padded when the model was compiled with padding.
-    pub fn raw_or_padded_outdims(&self) -> &[usize] {
+    /// Raw output dims; compiling with padding leaves them unchanged.
+    pub fn raw_outdims(&self) -> &[usize] {
         &self.output_dims
     }
 
-    /// Total output elements at the declared dims.
+    /// Total output elements at the raw dims.
     pub fn num_output_elements(&self) -> usize {
-        self.raw_or_padded_outdims().iter().product()
+        self.raw_outdims().iter().product()
     }
 
     /// Total output elements after per-dimension power-of-two padding.
     pub fn pow2_padded_num_output_elements(&self) -> usize {
-        padded_dims(self.raw_or_padded_outdims()).iter().product()
+        padded_dims(self.raw_outdims()).iter().product()
     }
 
     /// Whether the node produces a single element.

@@ -39,7 +39,7 @@ impl ModelBuilder {
     }
 
     fn dims(&self, w: Wire) -> Vec<usize> {
-        self.nodes[w].raw_or_padded_outdims().to_vec()
+        self.nodes[w].raw_outdims().to_vec()
     }
 
     fn push(&mut self, op: Op, inputs: Vec<Wire>, output_dims: Vec<usize>) -> Wire {

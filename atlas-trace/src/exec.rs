@@ -38,7 +38,7 @@ impl Model {
                 }
                 eval.output
             };
-            check_output_dims(id, node, &output);
+            check_output_dims(id, node, &self.physical_dims(id), &output);
             outputs.push(output);
         }
 
@@ -50,8 +50,8 @@ impl Model {
         })
     }
 
-    /// Validate `inputs` against the model's original dims and pad each to
-    /// its Input node's compiled dims, keyed by that node's id.
+    /// Validate `inputs` against the model's raw input dims and pad each to
+    /// its Input node's physical dims, keyed by that node's id.
     fn pad_inputs(
         &self,
         inputs: &[Tensor<i32>],
@@ -74,8 +74,8 @@ impl Model {
                     got: tensor.dims().to_vec(),
                 });
             }
-            let target = graph.node(node_id).raw_or_padded_outdims();
-            let padded = tensor.pad_to(target).expect("padded dims grow every dim");
+            let target = self.physical_dims(node_id);
+            let padded = tensor.pad_to(&target).expect("padded dims grow every dim");
             padded_inputs.insert(node_id, padded);
         }
         Ok(padded_inputs)
@@ -89,8 +89,8 @@ impl Model {
         }
     }
 
-    /// Execute and return just the graph outputs, cropped back to their
-    /// original (unpadded) dims.
+    /// Execute and return just the graph outputs, cropped back to their raw
+    /// dims.
     pub fn forward(&self, inputs: &[Tensor<i32>]) -> Result<Vec<Tensor<i32>>, ExecError> {
         let trace = self.trace(inputs)?;
         Ok(self
@@ -98,11 +98,11 @@ impl Model {
             .outputs
             .iter()
             .zip(self.raw_output_dims())
-            .map(|(&id, original)| {
+            .map(|(&id, raw)| {
                 trace
                     .output(id)
-                    .crop_to(original)
-                    .expect("original dims never exceed padded dims")
+                    .crop_to(raw)
+                    .expect("raw dims never exceed physical dims")
             })
             .collect())
     }
@@ -130,15 +130,15 @@ fn eval_node(
         })
 }
 
-/// The kernel's output must land on the declared dims; a mismatch is an
-/// internal invariant violation, not a user error.
-fn check_output_dims(id: NodeId, node: &Node, output: &Tensor<i32>) {
+/// The kernel's output must land on the node's physical dims; a mismatch is
+/// an internal invariant violation, not a user error.
+fn check_output_dims(id: NodeId, node: &Node, physical: &[usize], output: &Tensor<i32>) {
     assert_eq!(
         output.dims(),
-        node.raw_or_padded_outdims(),
+        physical,
         "node {id} ({}) produced {:?}, declared {:?}",
         node.op,
         output.dims(),
-        node.raw_or_padded_outdims()
+        physical
     );
 }

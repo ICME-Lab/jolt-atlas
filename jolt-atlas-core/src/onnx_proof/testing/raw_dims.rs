@@ -22,17 +22,24 @@ fn padded_twin(unpadded: &Model) -> Model {
 
 fn assert_raw_dims(name: &str, unpadded: &Model) {
     let padded = padded_twin(unpadded);
+    for (id, _, _) in unpadded.nodes() {
+        assert_eq!(
+            padded.raw_dims(id),
+            unpadded.raw_dims(id),
+            "{name}: node {id} dims"
+        );
+    }
     for (i, &id) in unpadded.inputs().iter().enumerate() {
         assert_eq!(
             padded.raw_input_dims()[i],
-            unpadded[id].raw_or_padded_outdims(),
+            unpadded.raw_dims(id),
             "{name}: input {i} dims"
         );
     }
     for (i, &id) in unpadded.outputs().iter().enumerate() {
         assert_eq!(
             padded.raw_output_dims()[i],
-            unpadded[id].raw_or_padded_outdims(),
+            unpadded.raw_dims(id),
             "{name}: output {i} dims"
         );
     }

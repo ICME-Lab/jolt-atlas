@@ -55,7 +55,7 @@ impl GraphBuilder {
     pub fn push(&mut self, op: Op, inputs: &[NodeId]) -> NodeId {
         let input_dims: Vec<&[usize]> = inputs
             .iter()
-            .map(|id| self.nodes[id.index()].raw_or_padded_outdims())
+            .map(|id| self.nodes[id.index()].raw_outdims())
             .collect();
         let dims = op
             .spec()

@@ -8,7 +8,7 @@ use crate::{
     error::CompileError,
     graph::{Graph, Node},
     id::{NodeId, Scale, SemVersion},
-    layout::{Layout, padded_dims},
+    layout::Layout,
     op::{BoundCtx, Op, PadCtx, TableCache},
     tensor::Tensor,
 };
@@ -20,7 +20,6 @@ pub struct Model {
     scale: Scale,
     version: SemVersion,
     meta: Vec<NodeMeta>,
-    io: IoDims,
     layout: Layout,
     /// Memoized activation tables (regenerated on demand; not serialized).
     #[serde(skip)]
@@ -31,41 +30,26 @@ impl Model {
     /// Compile a graph: validate, check shapes, pad, annotate clamp widths.
     pub fn compile(mut graph: Graph, opts: CompileOptions) -> Result<Model, CompileError> {
         graph.validate()?;
-        check_shapes(&graph)?;
+        check_shapes(&graph, Layout::Raw)?;
 
-        let io = IoDims {
-            inputs: graph
-                .inputs
-                .iter()
-                .map(|&id| graph.node(id).raw_or_padded_outdims().to_vec())
-                .collect(),
-            outputs: graph
-                .outputs
-                .iter()
-                .map(|&id| graph.node(id).raw_or_padded_outdims().to_vec())
-                .collect(),
+        let layout = if opts.pad_pow2 {
+            pad_graph(&mut graph)?;
+            // The padded op fields must still shape-check on padded dims;
+            // this catches rewrites that diverge from the padded operands.
+            check_shapes(&graph, Layout::Padded)?;
+            Layout::Padded
+        } else {
+            Layout::Raw
         };
 
-        if opts.pad_pow2 {
-            pad_graph(&mut graph)?;
-            // The padded graph must still shape-check; this catches shape
-            // rewrites that diverge from the padded operand dims.
-            check_shapes(&graph)?;
-        }
-
-        let meta = annotate_clamp_widths(&graph, opts.scale);
+        let meta = annotate_clamp_widths(&graph, opts.scale, layout);
 
         Ok(Model {
             graph,
             scale: opts.scale,
             version: opts.version,
             meta,
-            io,
-            layout: if opts.pad_pow2 {
-                Layout::Padded
-            } else {
-                Layout::Raw
-            },
+            layout,
             tables: TableCache::default(),
         })
     }
@@ -75,12 +59,17 @@ impl Model {
         self.layout
     }
 
-    /// The dims of node `id`'s output tensor as the executor produces it.
-    pub fn physical_dims(&self, id: NodeId) -> Vec<usize> {
-        self.graph.node(id).raw_or_padded_outdims().to_vec()
+    /// The raw dims of node `id`'s output.
+    pub fn raw_dims(&self, id: NodeId) -> &[usize] {
+        self.graph.node(id).raw_outdims()
     }
 
-    /// The compiled (padded) graph.
+    /// The dims of node `id`'s output tensor as the executor produces it.
+    pub fn physical_dims(&self, id: NodeId) -> Vec<usize> {
+        self.layout.physical(self.raw_dims(id))
+    }
+
+    /// The compiled graph; node dims are raw.
     pub fn graph(&self) -> &Graph {
         &self.graph
     }
@@ -97,12 +86,12 @@ impl Model {
 
     /// Raw dims of each graph input, in `graph.inputs` order.
     pub fn raw_input_dims(&self) -> Vec<&[usize]> {
-        self.io.inputs.iter().map(Vec::as_slice).collect()
+        self.inputs().iter().map(|&id| self.raw_dims(id)).collect()
     }
 
     /// Raw dims of each graph output, in `graph.outputs` order.
     pub fn raw_output_dims(&self) -> Vec<&[usize]> {
-        self.io.outputs.iter().map(Vec::as_slice).collect()
+        self.outputs().iter().map(|&id| self.raw_dims(id)).collect()
     }
 
     /// A node together with its analysis results.
@@ -132,17 +121,18 @@ impl Model {
 }
 
 /// Infer every node's shape from its operands and compare with the declared
-/// dims (Input nodes keep their declaration).
-fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
+/// dims, both under `layout` (Input nodes keep their declaration).
+fn check_shapes(graph: &Graph, layout: Layout) -> Result<(), CompileError> {
     for (i, node) in graph.nodes.iter().enumerate() {
         if matches!(node.op, Op::Input(_)) {
             continue;
         }
-        let input_dims: Vec<&[usize]> = node
+        let input_dims: Vec<Vec<usize>> = node
             .inputs
             .iter()
-            .map(|&id| graph.node(id).raw_or_padded_outdims())
+            .map(|&id| layout.physical(graph.node(id).raw_outdims()))
             .collect();
+        let input_dims: Vec<&[usize]> = input_dims.iter().map(Vec::as_slice).collect();
         let inferred =
             node.op
                 .spec()
@@ -152,20 +142,21 @@ fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
                     op: node.op.to_string(),
                     source,
                 })?;
-        if inferred != node.raw_or_padded_outdims() {
+        let declared = layout.physical(node.raw_outdims());
+        if inferred != declared {
             return Err(CompileError::ShapeMismatch {
                 node: NodeId(i as u32),
                 op: node.op.to_string(),
                 inferred,
-                declared: node.raw_or_padded_outdims().to_vec(),
+                declared,
             });
         }
     }
     Ok(())
 }
 
-/// Pad every dimension to the next power of two: rewrite each op's
-/// shape-carrying fields, then pad the node's output dims.
+/// Rewrite each op's shape-carrying fields for power-of-two padding; node
+/// dims stay raw.
 ///
 /// KNOWN GAP: this pass does not verify that padded lanes stay inert. An op
 /// that writes live values into padded lanes (`Broadcast` expanding a
@@ -177,17 +168,21 @@ fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
 /// designed fix (see the ignored `broadcast_fill_inflates_padded_reduction`
 /// test below, which pins the failing case).
 fn pad_graph(graph: &mut Graph) -> Result<(), CompileError> {
-    let originals: Vec<Vec<usize>> = graph.nodes.iter().map(|n| n.output_dims.clone()).collect();
+    let raw: Vec<Vec<usize>> = graph
+        .nodes
+        .iter()
+        .map(|n| n.raw_outdims().to_vec())
+        .collect();
 
     for i in 0..graph.nodes.len() {
         let input_dims: Vec<&[usize]> = graph.nodes[i]
             .inputs
             .iter()
-            .map(|&id| originals[id.index()].as_slice())
+            .map(|&id| raw[id.index()].as_slice())
             .collect();
         let ctx = PadCtx {
             input_dims,
-            output_dims: &originals[i],
+            output_dims: &raw[i],
         };
         let node = &mut graph.nodes[i];
         node.op
@@ -198,22 +193,23 @@ fn pad_graph(graph: &mut Graph) -> Result<(), CompileError> {
                 op: node.op.to_string(),
                 reason,
             })?;
-        node.output_dims = padded_dims(&node.output_dims);
     }
     Ok(())
 }
 
-/// Fold [`crate::op::OpSpec::clamp_bound`] over the graph.
-fn annotate_clamp_widths(graph: &Graph, scale: Scale) -> Vec<NodeMeta> {
+/// Fold [`crate::op::OpSpec::clamp_bound`] over the graph, on the dims the
+/// executor computes with under `layout`.
+fn annotate_clamp_widths(graph: &Graph, scale: Scale, layout: Layout) -> Vec<NodeMeta> {
     graph
         .nodes
         .iter()
         .map(|node| {
-            let input_dims: Vec<&[usize]> = node
+            let input_dims: Vec<Vec<usize>> = node
                 .inputs
                 .iter()
-                .map(|&id| graph.node(id).raw_or_padded_outdims())
+                .map(|&id| layout.physical(graph.node(id).raw_outdims()))
                 .collect();
+            let input_dims: Vec<&[usize]> = input_dims.iter().map(Vec::as_slice).collect();
             let input_consts: Vec<Option<&Tensor<i32>>> = node
                 .inputs
                 .iter()
@@ -308,15 +304,6 @@ impl ClampWidth {
 pub struct NodeMeta {
     /// Width of the node's saturating-clamp lookup; `None` = no clamp.
     pub sat_clamp_bits: Option<ClampWidth>,
-}
-
-/// Original (pre-padding) IO dims, for padding inputs and cropping outputs.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct IoDims {
-    /// Original dims per graph input (same order as `graph.inputs`).
-    inputs: Vec<Vec<usize>>,
-    /// Original dims per graph output (same order as `graph.outputs`).
-    outputs: Vec<Vec<usize>>,
 }
 
 #[cfg(test)]

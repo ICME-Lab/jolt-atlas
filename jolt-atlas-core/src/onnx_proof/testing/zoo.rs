@@ -185,6 +185,53 @@ fn qwen() {
     prove_verify_roundtrip::<DoryScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
+// ── temporary proof pin (specs/dims-disambiguate.md) ─────────────────────
+
+/// FNV-1a over the serialized proof of `model` on its golden inputs.
+fn proof_hash<PCS>(name: &str) -> u64
+where
+    PCS: joltworks::poly::commitment::commitment_scheme::CommitmentScheme<Field = Fr>,
+{
+    use crate::onnx_proof::{
+        proof_serialization::serialize_proof, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+        ONNXProof,
+    };
+    use joltworks::transcripts::Blake2bTranscript;
+
+    let imported = zoo(name, 16);
+    let inputs = synth_inputs(&imported, GOLDEN_SEED);
+    let shared = AtlasSharedPreprocessing::preprocess(imported.model);
+    let prover_pp = AtlasProverPreprocessing::<Fr, PCS>::new(shared);
+    let (proof, _, _) = ONNXProof::<Fr, Blake2bTranscript, PCS>::prove(&prover_pp, &inputs);
+    let bytes = serialize_proof(&proof).expect("proof serializes");
+    bytes.iter().fold(0xcbf29ce484222325, |hash: u64, &byte| {
+        (hash ^ byte as u64).wrapping_mul(0x100000001b3)
+    })
+}
+
+/// TEMPORARY: pins every checked-in zoo model's serialized proof to its bytes
+/// on `main` before the raw/padded dims refactor of
+/// `specs/dims-disambiguate.md` (invariant A), so each commit of that refactor
+/// is shown to prove byte-identically. A follow-up PR removes it.
+#[test]
+fn temp_proof_hash_pinned() {
+    let pinned: [(&str, u64); 4] = [
+        ("op_gauntlet", 0x3fc34b82384aa883),
+        ("gpt2-tiny", 0xcecf09e435f837ac),
+        ("qwen2-tiny", 0x910eb90bab82ad2c),
+        ("bge-tiny", 0x9977f497f54a4cd7),
+    ];
+    let got = [
+        proof_hash::<HyperKZG<Bn254>>("op_gauntlet"),
+        proof_hash::<DoryScheme>("gpt2-tiny"),
+        proof_hash::<DoryScheme>("qwen2-tiny"),
+        proof_hash::<HyperKZG<Bn254>>("bge-tiny"),
+    ];
+    for ((name, expected), got) in pinned.iter().zip(got) {
+        assert_eq!(got, *expected, "{name}: proof bytes changed ({got:#018x})");
+    }
+}
+
 // ── transcript binding (issue #230) ──────────────────────────────────────
 
 /// Changing one input element must change the first derived challenge: the

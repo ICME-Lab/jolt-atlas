@@ -388,6 +388,19 @@ fn structural(
     (b.build(), vec![Tensor::random_small(rng, dims)])
 }
 
+/// [`structural`] built with the production padding pass.
+fn structural_padded(
+    rng: &mut StdRng,
+    dims: &[usize],
+    op: impl FnOnce(&mut ModelBuilder, usize) -> usize,
+) -> (Model, Vec<Tensor<i32>>) {
+    let mut b = ModelBuilder::new();
+    let i = b.input(dims.to_vec());
+    let o = op(&mut b, i);
+    b.mark_output(o);
+    (b.build_padded(), vec![Tensor::random_small(rng, dims)])
+}
+
 fn concat_model(rng: &mut StdRng, shapes: &[&[usize]], axis: isize) -> (Model, Vec<Tensor<i32>>) {
     let mut b = ModelBuilder::new();
     let ins: Vec<usize> = shapes.iter().map(|s| b.input(s.to_vec())).collect();
@@ -705,6 +718,27 @@ op_surface! {
         let o = b.add(i, c);
         b.mark_output(o);
         (b.build_padded(), vec![Tensor::random_small(rng, &[T_ODD])])
+    };
+    padded_reshape_3x8_to_24: Reshape => |rng| structural_padded(rng, &[3, 8], |b, i| b.reshape(i, vec![24]));
+    padded_broadcast_3x1_to_3x8: Broadcast => |rng| structural_padded(rng, &[3, 1], |b, i| b.broadcast(i, vec![3, 8]));
+    padded_slice_3x8_ax1_0_4: Slice => |rng| structural_padded(rng, &[3, 8], |b, i| b.slice(i, 1, 0, 4));
+    padded_concat_3x4_3x3_ax1: Concat => |rng| {
+        let mut b = ModelBuilder::new();
+        let x = b.input(vec![3, 4]);
+        let y = b.input(vec![3, 3]);
+        let o = b.concat(&[x, y], 1);
+        b.mark_output(o);
+        let inputs = vec![Tensor::random_small(rng, &[3, 4]), Tensor::random_small(rng, &[3, 3])];
+        (b.build_padded(), inputs)
+    };
+    /// Only a leading axis is non-power-of-two: a non-power-of-two last axis
+    /// is masked softmax, rejected as `softmax_masked_rejected` pins.
+    padded_softmax_3x8: SoftmaxLastAxis => |rng| {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![3, 8]);
+        let o = b.softmax_last_axis(i);
+        b.mark_output(o);
+        (b.build_padded(), vec![Tensor::random_range(rng, &[3, 8], -(1 << 15)..(1 << 15))])
     };
 }
 

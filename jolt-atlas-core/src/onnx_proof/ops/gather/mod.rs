@@ -46,6 +46,52 @@ use rayon::{
 pub(crate) mod large;
 pub(crate) mod small;
 
+/// Makes the prover cheat on one lane whose index is 0. A dead address sets a chunk
+/// bit above `log_K`. The lane's chunks go hot at one and its entry leaves `ra`, so
+/// the lane reads no row.
+#[cfg(test)]
+pub(crate) mod dead_address_forgery {
+    use super::*;
+    use joltworks::config::OneHotParams;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const NO_LANE: usize = usize::MAX;
+    static LANE: AtomicUsize = AtomicUsize::new(NO_LANE);
+
+    /// Selects the lane to forge; `None` clears it.
+    pub(crate) fn set(lane: Option<usize>) {
+        LANE.store(lane.unwrap_or(NO_LANE), Ordering::SeqCst);
+    }
+
+    fn lane() -> Option<usize> {
+        Some(LANE.load(Ordering::SeqCst)).filter(|&lane| lane != NO_LANE)
+    }
+
+    /// Replaces the selected lane's index with a dead address: only the top chunk's
+    /// top bit set.
+    pub(crate) fn forge_lookup_indices(
+        mut lookup_indices: Vec<usize>,
+        params: &OneHotParams,
+    ) -> Vec<usize> {
+        if let Some(lane) = lane() {
+            lookup_indices[lane] = 1 << (params.instruction_d * params.log_k_chunk - 1);
+        }
+        lookup_indices
+    }
+
+    /// Removes the selected lane's entry from `ra(a, r_index)`.
+    pub(crate) fn forge_ra_evals<F: JoltField>(
+        mut ra: Vec<F>,
+        r_index: &[F],
+        indexes: &Tensor<i32>,
+    ) -> Vec<F> {
+        if let Some(lane) = lane() {
+            ra[indexes.data()[lane] as usize] -= EqPolynomial::<F>::evals(r_index)[lane];
+        }
+        ra
+    }
+}
+
 const DEGREE_BOUND: usize = 2;
 
 /// Parameters for proving gather (indexed lookup) operations.
@@ -191,6 +237,9 @@ impl<F: JoltField> GatherProver<F> {
         provider.append_nodeio(Target::Input(1), index_claim);
 
         let index_onehot: Vec<F> = compute_ra_evals(r_index, &padded_indexes, params.num_words);
+        #[cfg(test)]
+        let index_onehot =
+            dead_address_forgery::forge_ra_evals(index_onehot, r_index, &padded_indexes);
         let dict: Vec<F> = fold_dictionary(r_word, dictionary, params.num_words);
 
         let index_onehot = MultilinearPolynomial::from(index_onehot);

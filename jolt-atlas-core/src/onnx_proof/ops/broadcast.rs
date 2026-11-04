@@ -1,6 +1,6 @@
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_trace::{op::Broadcast, trace::LayerData, Model, Tensor, Trace};
+use atlas_trace::{op::Broadcast, Model, Tensor, Trace};
 use core::panic;
 
 use crate::node_view::ComputationNode;
@@ -32,7 +32,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F, T>)> {
-        let params = BroadcastParams::new(node.clone(), &prover.accumulator);
+        let params = BroadcastParams::new(
+            node.clone(),
+            &prover.accumulator,
+            &prover.preprocessing.model,
+        );
         let broadcast_prover = BroadcastProver::initialize(&prover.trace, params);
         broadcast_prover.prove(&mut prover.accumulator, &mut prover.transcript);
         // Broadcast doesn't produce a sumcheck proof
@@ -60,16 +64,27 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Broadcast {
 pub struct BroadcastParams<F: JoltField> {
     r_output: Vec<F>,
     computation_node: ComputationNode,
+    input_dims: Vec<usize>,
 }
 
 impl<F: JoltField> BroadcastParams<F> {
-    /// Create new broadcast parameters from a computation node and opening accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
+    /// Create new broadcast parameters from a computation node, opening
+    /// accumulator, and the model it belongs to.
+    pub fn new(
+        computation_node: ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+        model: &Model,
+    ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_output = accessor.get_reduced_opening().0.r;
+        let input_dims = model
+            .view(computation_node.inputs[0])
+            .physical_outdims()
+            .to_vec();
         Self {
             r_output,
             computation_node,
+            input_dims,
         }
     }
 }
@@ -87,17 +102,16 @@ impl<F: JoltField> BroadcastProver<F> {
     /// Initialize the prover with trace data and parameters.
     #[tracing::instrument(skip_all)]
     pub fn initialize(trace: &Trace, params: BroadcastParams<F>) -> Self {
-        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
-        let [operand] = operands[..] else {
+        let layer = TraceView::layer_data(trace, &params.computation_node);
+        let [operand] = layer.operands[..] else {
             panic!("Expected one operand for Broadcast operation")
         };
 
-        let input_dims = operand.dims();
-        let output_dims = output.dims();
-        let broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
+        let output_dims = params.computation_node.physical_outdims();
+        let broadcast_tensor = build_broadcast_tensor(&params.input_dims, &output_dims);
 
         let (r_input, _r_broadcast) =
-            split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
+            split_broadcast_vars::<F>(&output_dims, broadcast_tensor.dims(), &params.r_output);
 
         let claim_A = operand.evaluate_mle(&r_input);
 
@@ -105,7 +119,7 @@ impl<F: JoltField> BroadcastProver<F> {
         {
             // Ensure the broadcast tensor is correctly built,
             // Tensors are correctly padded, and the spliting of r_input/r_broadcast is correct
-            let claim_O = output.evaluate_mle(&params.r_output);
+            let claim_O = layer.output.evaluate_mle(&params.r_output);
             let eval_I = broadcast_tensor.evaluate_mle(&_r_broadcast);
             crate::onnx_proof::testing::probe::probe_assert_eq!(claim_O, claim_A * eval_I);
         }
@@ -145,14 +159,13 @@ impl<F: JoltField> BroadcastVerifier<F> {
         accumulator: &VerifierOpeningAccumulator<F>,
         model: &Model,
     ) -> Self {
-        let params = BroadcastParams::new(computation_node, accumulator);
-        let input_dims = &model.view(params.computation_node.inputs[0]).output_dims;
-        let output_dims = &params.computation_node.output_dims;
+        let params = BroadcastParams::new(computation_node, accumulator, model);
+        let output_dims = params.computation_node.physical_outdims();
 
-        let broadcast_tensor = build_broadcast_tensor(input_dims, output_dims);
+        let broadcast_tensor = build_broadcast_tensor(&params.input_dims, &output_dims);
 
         let (r_input, r_broadcast) =
-            split_broadcast_vars::<F>(output_dims, broadcast_tensor.dims(), &params.r_output);
+            split_broadcast_vars::<F>(&output_dims, broadcast_tensor.dims(), &params.r_output);
 
         let eval_I = broadcast_tensor.evaluate_mle(&r_broadcast);
 

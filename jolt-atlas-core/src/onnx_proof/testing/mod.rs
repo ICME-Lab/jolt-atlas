@@ -23,6 +23,7 @@ pub(crate) mod op_kind;
 pub(crate) mod op_surface;
 mod op_surface_dory;
 pub(crate) mod probe;
+mod raw_dims;
 mod soundness;
 mod zoo;
 

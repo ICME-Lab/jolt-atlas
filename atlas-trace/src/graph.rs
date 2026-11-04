@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{error::GraphError, id::NodeId, op::Op};
+use crate::{error::GraphError, id::NodeId, layout::padded_dims, op::Op};
 
 /// One node: an operator applied to earlier nodes' outputs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -12,8 +12,7 @@ pub struct Node {
     pub op: Op,
     /// Operand node ids, all strictly smaller than this node's id.
     pub inputs: Vec<NodeId>,
-    /// Output dims (logical before padding; padded after compile).
-    pub output_dims: Vec<usize>,
+    output_dims: Vec<usize>,
 }
 
 /// A topologically ordered computation graph.
@@ -126,17 +125,28 @@ fn invalid_io(node: NodeId, reason: impl Into<String>) -> GraphError {
 }
 
 impl Node {
-    /// Total output elements at the declared dims.
+    /// A node applying `op` to `inputs`, with raw output dims `output_dims`.
+    pub fn new(op: Op, inputs: Vec<NodeId>, output_dims: Vec<usize>) -> Self {
+        Node {
+            op,
+            inputs,
+            output_dims,
+        }
+    }
+
+    /// Raw output dims; compiling with padding leaves them unchanged.
+    pub fn raw_outdims(&self) -> &[usize] {
+        &self.output_dims
+    }
+
+    /// Total output elements at the raw dims.
     pub fn num_output_elements(&self) -> usize {
-        self.output_dims.iter().product()
+        self.raw_outdims().iter().product()
     }
 
     /// Total output elements after per-dimension power-of-two padding.
     pub fn pow2_padded_num_output_elements(&self) -> usize {
-        self.output_dims
-            .iter()
-            .map(|d| d.next_power_of_two())
-            .product()
+        padded_dims(self.raw_outdims()).iter().product()
     }
 
     /// Whether the node produces a single element.

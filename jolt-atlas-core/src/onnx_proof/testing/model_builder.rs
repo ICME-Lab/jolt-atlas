@@ -39,16 +39,16 @@ impl ModelBuilder {
     }
 
     fn dims(&self, w: Wire) -> Vec<usize> {
-        self.nodes[w].output_dims.clone()
+        self.nodes[w].raw_outdims().to_vec()
     }
 
     fn push(&mut self, op: Op, inputs: Vec<Wire>, output_dims: Vec<usize>) -> Wire {
         let id = self.nodes.len();
-        self.nodes.push(Node {
+        self.nodes.push(Node::new(
             op,
-            inputs: inputs.into_iter().map(|i| NodeId(i as u32)).collect(),
+            inputs.into_iter().map(|i| NodeId(i as u32)).collect(),
             output_dims,
-        });
+        ));
         id
     }
 
@@ -227,16 +227,8 @@ impl ModelBuilder {
     ) -> Wire {
         let input_dims = self.dims(input);
         let count: usize = axes.iter().map(|&ax| input_dims[ax]).product();
-        let padded_count: usize = axes
-            .iter()
-            .map(|&ax| input_dims[ax].next_power_of_two())
-            .product();
         self.push(
-            Op::MeanOfSquares(op::MeanOfSquares {
-                axes,
-                count,
-                padded_count,
-            }),
+            Op::MeanOfSquares(op::MeanOfSquares { axes, count }),
             vec![input],
             output_dims,
         )

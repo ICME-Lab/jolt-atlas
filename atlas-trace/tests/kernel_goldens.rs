@@ -120,7 +120,6 @@ fn structural_and_einsum_golden() {
         Op::MeanOfSquares(op::MeanOfSquares {
             axes: vec![1],
             count: 4,
-            padded_count: 4,
         }),
         &[matmul],
     );

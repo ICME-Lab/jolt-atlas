@@ -63,6 +63,7 @@ mod tests {
             scale: Scale::new(8).unwrap(),
             version: SemVersion::V1,
             tables: &cache,
+            layout: crate::layout::Layout::Raw,
         };
         let x = Tensor::new(vec![0, 256, -256, 1 << 12, -(1 << 12)], &[5]).unwrap();
         let out = Tanh.eval(&[&x], &ctx).unwrap().output;

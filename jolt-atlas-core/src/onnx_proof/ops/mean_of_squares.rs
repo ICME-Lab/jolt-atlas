@@ -25,16 +25,16 @@
 //!    lookup; `D` is a constant, so the Teleport-style
 //!    [`MeanOfSquaresRangeCheckOperands`] is used).
 //!
-//! The reduction sums over the *padded* reduced cube (`op.padded_count`, a power
-//! of two so the flat-padded operand splits cleanly into `[retained, reduced]`),
-//! while the divisor `D = N·2^S` uses the *semantic* count `N` (= `op.count`,
-//! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
-//! `Σx²`, so the two are consistent.
+//! The reduction sums over the *padded* reduced cube (the padded extents of the
+//! reduced axes, a power of two so the flat-padded operand splits cleanly into
+//! `[retained, reduced]`), while the divisor `D = N·2^S` uses the raw count `N`
+//! (= `op.count`, any constant — e.g. GPT-2's 768). Zero-padded lanes
+//! contribute nothing to `Σx²`, so the two are consistent.
 
 use crate::onnx_proof::trace_view::TraceView;
 use std::array;
 
-use atlas_trace::{op::MeanOfSquares, trace::LayerData, Op, Trace};
+use atlas_trace::{op::MeanOfSquares, padded_dims, trace::LayerData, Model, NodeId, Op, Trace};
 
 use crate::{
     node_view::ComputationNode,
@@ -99,7 +99,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
         proofs.extend(pre_proofs);
 
         // (3) Reduction sumcheck `acc(r) = Σ eq·x²` (claim `rescaled·D + R`).
-        let params = MeanOfSquaresReductionParams::new(node.clone(), &prover.accumulator);
+        let params = MeanOfSquaresReductionParams::new(
+            node.clone(),
+            &prover.accumulator,
+            &prover.preprocessing.model,
+        );
         let mut reduction = MeanOfSquaresReductionProver::initialize(&prover.trace, params);
         let (proof, _) = Sumcheck::prove(
             &mut reduction,
@@ -147,7 +151,11 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for MeanOfSquares {
             .proofs
             .get(&ProofId(node.idx, ProofType::RescaleArith))
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let reduction = MeanOfSquaresReductionVerifier::new(node.clone(), &verifier.accumulator);
+        let reduction = MeanOfSquaresReductionVerifier::new(
+            node.clone(),
+            &verifier.accumulator,
+            &verifier.preprocessing.model,
+        );
         Sumcheck::verify(
             proof,
             &reduction,
@@ -229,22 +237,23 @@ pub struct MeanOfSquaresReductionParams<F: JoltField> {
 }
 
 impl<F: JoltField> MeanOfSquaresReductionParams<F> {
-    /// Build params from the node and accumulator.
-    pub fn new(computation_node: ComputationNode, accumulator: &dyn OpeningAccumulator<F>) -> Self {
+    /// Build params from the node, accumulator, and the model it belongs to.
+    pub fn new(
+        computation_node: ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+        model: &Model,
+    ) -> Self {
         let Op::MeanOfSquares(op) = &computation_node.operator else {
             panic!("MeanOfSquaresReductionParams: expected MeanOfSquares operator");
         };
         // The sumcheck cube splits the flat-padded operand into
         // `[retained, reduced]`, so the *padded* reduced count sizes the low
-        // rounds. The divisor `D = count·2^S` stays semantic (any constant N):
+        // rounds. The divisor `D = count·2^S` stays raw (any constant N):
         // zero-padded lanes contribute nothing to `Σx²`.
-        assert!(
-            op.padded_count.is_power_of_two(),
-            "mean-of-squares reduction requires a power-of-two padded reduced count, got {}",
-            op.padded_count
-        );
+        let input_dims = padded_dims(model.raw_dims(NodeId(computation_node.inputs[0] as u32)));
+        let padded_count: usize = op.axes.iter().map(|&a| input_dims[a]).product();
         let divisor = mos_divisor(op, computation_node.scale);
-        let log_reduced = op.padded_count.log_2();
+        let log_reduced = padded_count.log_2();
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_node_output = accessor.get_reduced_opening().0;
         let log_retained = r_node_output.r.len();
@@ -383,9 +392,10 @@ impl<F: JoltField> MeanOfSquaresReductionVerifier<F> {
     pub fn new(
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
+        model: &Model,
     ) -> Self {
         Self {
-            params: MeanOfSquaresReductionParams::new(computation_node, accumulator),
+            params: MeanOfSquaresReductionParams::new(computation_node, accumulator, model),
         }
     }
 }

@@ -343,9 +343,9 @@ impl<T: Element> Tensor<T> {
 
     /// Zero-pad every dimension to the next power of two.
     pub fn padded_pow2(&self) -> Self {
-        let target: Vec<usize> = self.dims.iter().map(|d| d.next_power_of_two()).collect();
         // Infallible: every target dim >= the current dim.
-        self.pad_to(&target).expect("pow2 pad grows every dim")
+        self.pad_to(&crate::layout::padded_dims(&self.dims))
+            .expect("pow2 pad grows every dim")
     }
 
     /// Crop to `target` dims (each target dim <= the current dim; same

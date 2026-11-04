@@ -7,7 +7,7 @@
 //!
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
-use atlas_trace::{op::Reshape, trace::LayerData, Model, Trace};
+use atlas_trace::{op::Reshape, padded_dims, trace::LayerData, Model, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
@@ -113,14 +113,8 @@ pub(crate) fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
         "Reshape selector requires equal raw element counts"
     );
 
-    let input_padded_dims: Vec<usize> = input_raw_dims
-        .iter()
-        .map(|d| d.next_power_of_two())
-        .collect();
-    let output_padded_dims: Vec<usize> = output_raw_dims
-        .iter()
-        .map(|d| d.next_power_of_two())
-        .collect();
+    let input_padded_dims = padded_dims(input_raw_dims);
+    let output_padded_dims = padded_dims(output_raw_dims);
     let input_padded_len: usize = input_padded_dims.iter().product();
     let output_padded_len: usize = output_padded_dims.iter().product();
     assert_eq!(
@@ -165,8 +159,11 @@ impl<F: JoltField> ReshapeSumcheckParams<F> {
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_output = accessor.get_reduced_opening().0;
-        let input_raw_dims = model.view(computation_node.inputs[0]).output_dims.clone();
-        let output_raw_dims = computation_node.output_dims.clone();
+        let input_raw_dims = model
+            .view(computation_node.inputs[0])
+            .physical_outdims()
+            .to_vec();
+        let output_raw_dims = computation_node.physical_outdims().to_vec();
         Self {
             computation_node,
             r_output,
@@ -252,13 +249,17 @@ pub struct ReshapeSumcheckProver<F: JoltField> {
 impl<F: JoltField> ReshapeSumcheckProver<F> {
     /// Initialize reshape prover state from trace tensors and prepared parameters.
     pub fn initialize(trace: &Trace, params: ReshapeSumcheckParams<F>) -> Self {
-        let LayerData { operands, output } = TraceView::layer_data(trace, &params.computation_node);
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [input] = operands[..] else {
             panic!("Expected one operand for Reshape operation")
         };
 
         let input_mle = MultilinearPolynomial::from(input.padded_pow2());
-        let selector = build_reshape_selectors(input.dims(), output.dims(), &params.r_output.r);
+        let selector = build_reshape_selectors(
+            &params.input_raw_dims,
+            &params.output_raw_dims,
+            &params.r_output.r,
+        );
         let selector_mle = MultilinearPolynomial::from(selector);
         assert_eq!(input_mle.len(), selector_mle.len());
 

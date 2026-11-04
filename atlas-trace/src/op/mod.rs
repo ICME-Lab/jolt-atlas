@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{KernelError, ShapeError},
     id::{Scale, SemVersion},
+    layout::Layout,
     semantics::tables::{self, ActivationTable, ExpLutDecomposed, TableKind},
     tensor::Tensor,
     trace::NodeAux,
@@ -53,8 +54,9 @@ pub trait OpSpec: fmt::Display {
     /// Padding behavior class (see [`PadBehavior`]).
     fn padding(&self) -> PadBehavior;
 
-    /// Rewrite shape-carrying fields when the compile-time padding pass
-    /// runs. Called before the node's `output_dims` are padded.
+    /// Check that the op stays coherent when the compile-time padding pass
+    /// runs. Its fields and the node's dims stay raw; only softmax records
+    /// its live width here.
     fn apply_padding(&mut self, _ctx: &PadCtx<'_>) -> Result<(), String> {
         Ok(())
     }
@@ -134,13 +136,22 @@ pub struct EvalCtx<'a> {
     /// Memoized activation tables (generation is deterministic, so caching
     /// is purely an optimization).
     pub tables: &'a TableCache,
+    /// How the model's tensors are laid out.
+    pub layout: Layout,
+}
+
+impl EvalCtx<'_> {
+    /// The dims a tensor with raw dims `raw` has in this execution.
+    pub fn physical(&self, raw: &[usize]) -> Vec<usize> {
+        self.layout.physical(raw)
+    }
 }
 
 /// Inputs to the static clamp-width bound analysis.
 pub struct BoundCtx<'a> {
     /// The model's global fixed-point scale.
     pub scale: Scale,
-    /// Each operand's (padded) dims.
+    /// Each operand's physical dims.
     pub input_dims: Vec<&'a [usize]>,
     /// Each operand's constant data, when the operand is a `Constant` node.
     pub input_consts: Vec<Option<&'a Tensor<i32>>>,
@@ -150,7 +161,7 @@ pub struct BoundCtx<'a> {
 ///
 /// This classification is *declared documentation plus per-op masking*, not
 /// a property the padding pass enforces: [`crate::model`]'s `pad_graph`
-/// rewrites shapes via [`OpSpec::apply_padding`] but never consults this
+/// calls [`OpSpec::apply_padding`] but never consults this
 /// variant. Each `NeedsMask` op masks itself (softmax via `active_len`,
 /// mean-of-squares via `count`); `ConstantFill` and the non-zero padded
 /// lanes a `Broadcast`/`Gather` can produce rely on downstream absorption
@@ -162,12 +173,13 @@ pub enum PadBehavior {
     /// Zero inputs in padded lanes produce zero outputs in padded lanes
     /// (elementwise arithmetic, einsum against zero-padded weights, …).
     ZeroPreserving,
-    /// Pure index plumbing; the op's shape-carrying fields are rewritten by
-    /// [`OpSpec::apply_padding`] (reshape, broadcast, slice, concat, …).
+    /// Pure index plumbing; the op's shape-carrying fields hold raw dims and
+    /// its kernel resolves them with [`EvalCtx::physical`] (reshape,
+    /// broadcast, slice, concat, …).
     Structural,
     /// Padded lanes would corrupt the result unless the op masks them
-    /// internally (softmax via `active_len`, mean-of-squares via `count`
-    /// vs `padded_count`).
+    /// internally (softmax via `active_len`, mean-of-squares via its raw
+    /// `count`).
     NeedsMask,
     /// Padded (zero) lanes map to the op's value at zero, which is not zero
     /// (sigmoid: `S/2`; cos: `S`). Deterministic and identical to the old
@@ -176,11 +188,11 @@ pub enum PadBehavior {
     ConstantFill,
 }
 
-/// What the padding pass tells an op when rewriting it.
+/// What the padding pass tells an op when checking it.
 pub struct PadCtx<'a> {
-    /// Each operand's dims before padding.
+    /// Each operand's raw dims.
     pub input_dims: Vec<&'a [usize]>,
-    /// This node's output dims before padding.
+    /// This node's raw output dims.
     pub output_dims: &'a [usize],
 }
 
@@ -303,10 +315,9 @@ define_ops! {
     /// Sum over axes (i64 accumulate, saturating clamp).
     Sum { axes: Vec<usize> },
     /// Fused mean of squares over axes: `Σx²` in i64, floor-divide by
-    /// `count·2^s`, saturating clamp. `count` is the semantic element count
-    /// (the mean denominator); `padded_count` is the power-of-two-rounded
-    /// product the prover's sumcheck cube uses.
-    MeanOfSquares { axes: Vec<usize>, count: usize, padded_count: usize },
+    /// `count·2^s`, saturating clamp. `count` is the raw element count over
+    /// the reduced axes (the mean denominator).
+    MeanOfSquares { axes: Vec<usize>, count: usize },
     /// Integer softmax over the last axis with full witness capture.
     /// `active_len` masks power-of-two padding on the last axis
     /// (`None` = the whole row is live).

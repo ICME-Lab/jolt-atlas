@@ -115,13 +115,13 @@ fn extract_mk_kn_mn_dims(computation_node: &ComputationNode, model: &Model) -> E
     let _a_node = &model.view(a_idx);
     let b_node = &model.view(b_idx);
     assert_eq!(
-        computation_node.output_dims.len(),
+        computation_node.physical_outdims().len(),
         2,
         "mk,kn->mn expects a rank-2 output"
     );
-    let m = computation_node.output_dims[0];
-    let k = b_node.output_dims[0];
-    let n = b_node.output_dims[1];
+    let m = computation_node.physical_outdims()[0];
+    let k = b_node.physical_outdims()[0];
+    let n = b_node.physical_outdims()[1];
     EinsumDims::new(vec![m, k], vec![k, n], vec![m, n])
 }
 
@@ -131,17 +131,17 @@ fn extract_k_nk_n_dims(computation_node: &ComputationNode, model: &Model) -> Ein
     };
     let a_node = &model.view(a_idx);
     let b_node = &model.view(b_idx);
-    let n = b_node.output_dims[0];
-    let k = b_node.output_dims[1];
+    let n = b_node.physical_outdims()[0];
+    let k = b_node.physical_outdims()[1];
     // The k,nk->n layout is strictly vector-matrix: it folds only the k axis,
     // so a left operand with m > 1 rows would feed m*k coefficients into a
     // log(k)-round sumcheck. Fail here, at dispatch, rather than deep inside
     // the dot engine.
     assert_eq!(
-        a_node.output_dims.iter().product::<usize>(),
+        a_node.physical_outdims().iter().product::<usize>(),
         k,
         "mk,nk->mn is only provable with m == 1 (vector-matrix); got left dims {:?}",
-        a_node.output_dims
+        a_node.physical_outdims()
     );
     EinsumDims::new(vec![k], vec![n, k], vec![n])
 }
@@ -152,10 +152,10 @@ fn extract_amk_ank_amn_dims(computation_node: &ComputationNode, model: &Model) -
     };
     let a_node = &model.view(a_idx);
     let b_node = &model.view(b_idx);
-    let a = a_node.output_dims[0];
-    let m = a_node.output_dims[1];
-    let k = a_node.output_dims[2];
-    let n = b_node.output_dims[1];
+    let a = a_node.physical_outdims()[0];
+    let m = a_node.physical_outdims()[1];
+    let k = a_node.physical_outdims()[2];
+    let n = b_node.physical_outdims()[1];
     EinsumDims::new(vec![a, m, k], vec![a, n, k], vec![a, m, n])
 }
 
@@ -165,11 +165,11 @@ fn extract_abmk_abnk_abmn_dims(computation_node: &ComputationNode, model: &Model
     };
     let a_node = &model.view(a_idx);
     let b_node = &model.view(b_idx);
-    let a = a_node.output_dims[0];
-    let b = a_node.output_dims[1];
-    let m = a_node.output_dims[2];
-    let k = a_node.output_dims[3];
-    let n = b_node.output_dims[2];
+    let a = a_node.physical_outdims()[0];
+    let b = a_node.physical_outdims()[1];
+    let m = a_node.physical_outdims()[2];
+    let k = a_node.physical_outdims()[3];
+    let n = b_node.physical_outdims()[2];
 
     EinsumDims::new(vec![a * b, m, k], vec![a * b, n, k], vec![a * b, m, n])
 }
@@ -298,15 +298,16 @@ pub fn sum_config(computation_node: &ComputationNode, model: &Model) -> SumConfi
     };
 
     // Get dimension information from the model
-    let input_dims = &model.view(input_idx).output_dims;
-    let output_dims = &computation_node.output_dims;
+    let input_node = model.view(input_idx);
+    let input_dims = input_node.physical_outdims();
+    let output_dims = computation_node.physical_outdims();
     let ndim = input_dims.len();
 
     // Validate axis is within bounds
     assert!(axis < ndim, "Axis {axis} out of bounds for {ndim}D tensor");
 
     // Normalize to 2D representation for the prover
-    let (axis, operand_dims, output_dims) = normalize_sum_to_2d(axis, input_dims, output_dims);
+    let (axis, operand_dims, output_dims) = normalize_sum_to_2d(axis, &input_dims, &output_dims);
 
     SumConfig {
         dims: SumDims::new(operand_dims, output_dims),

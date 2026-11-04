@@ -16,8 +16,11 @@
 //!   [`semantics`], versioned by [`id::SemVersion`]. The prover materializes
 //!   its tables by calling the same functions, so tracer and prover agree
 //!   bit for bit by construction — no platform floating point anywhere.
-//! - Dimensions are padded per-dimension to powers of two at compile time;
-//!   every op declares how it behaves under padding.
+//! - Dimensions stored in the IR are raw. When a model is compiled with
+//!   padding, tensors are physically padded per-dimension to powers of two,
+//!   and padded dims are always derived from raw ones
+//!   ([`layout::padded_dims`]); every op declares how it behaves under
+//!   padding.
 
 #![warn(missing_docs)]
 
@@ -27,6 +30,7 @@ pub mod error;
 mod exec;
 pub mod graph;
 pub mod id;
+pub mod layout;
 pub mod model;
 pub mod op;
 pub mod semantics;
@@ -37,6 +41,7 @@ pub mod trace;
 pub use builder::GraphBuilder;
 pub use graph::{Graph, Node};
 pub use id::{NodeId, Scale, SemVersion};
+pub use layout::{Layout, padded_dims};
 pub use model::{ClampWidth, CompileOptions, Model, NodeMeta};
 pub use op::Op;
 pub use tensor::Tensor;

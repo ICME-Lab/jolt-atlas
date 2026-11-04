@@ -6,7 +6,7 @@
 //! that bundle, built on demand by [`ModelView::view`]; the model itself is
 //! stored and serialized only as the raw `atlas_trace::Model`.
 
-use atlas_trace::{Op, Tensor};
+use atlas_trace::{Layout, Op, Tensor};
 use serde::{Deserialize, Serialize};
 
 /// A node viewed the way the proof layer consumes it: with its index,
@@ -19,8 +19,8 @@ pub struct ComputationNode {
     pub operator: Op,
     /// Operand node indices.
     pub inputs: Vec<usize>,
-    /// Output dims (padded when the model was compiled with padding).
-    pub output_dims: Vec<usize>,
+    output_dims: Vec<usize>,
+    layout: Layout,
     /// Saturating-clamp lookup width in bits (64 when unclamped).
     pub sat_clamp_bits: usize,
     /// The model's global fixed-point scale (log2). Carried per node so
@@ -30,28 +30,39 @@ pub struct ComputationNode {
 }
 
 impl ComputationNode {
-    /// Construct a node view at the default model scale.
+    /// Construct a node view at the default model scale, in an unpadded
+    /// layout.
     pub fn new(idx: usize, operator: Op, inputs: Vec<usize>, output_dims: Vec<usize>) -> Self {
         Self {
             idx,
             operator,
             inputs,
             output_dims,
+            layout: Layout::Raw,
             sat_clamp_bits: 64,
             scale: common::consts::MODEL_SCALE as u8,
         }
     }
 
-    /// Total output elements at the declared dims.
+    /// Raw output dims.
+    pub fn raw_outdims(&self) -> &[usize] {
+        &self.output_dims
+    }
+
+    /// Dims of the output tensor as the executor produces it.
+    pub fn physical_outdims(&self) -> Vec<usize> {
+        self.layout.physical(&self.output_dims)
+    }
+
+    /// Total output elements of the physical output tensor.
     pub fn num_output_elements(&self) -> usize {
-        self.output_dims.iter().product()
+        self.physical_outdims().iter().product()
     }
 
     /// Total output elements after per-dimension power-of-two padding.
     pub fn pow2_padded_num_output_elements(&self) -> usize {
-        self.output_dims
+        atlas_trace::padded_dims(self.raw_outdims())
             .iter()
-            .map(|d| d.next_power_of_two())
             .product()
     }
 
@@ -102,7 +113,8 @@ impl ModelView for atlas_trace::Model {
             idx,
             operator: node.op.clone(),
             inputs: node.inputs.iter().map(|i| i.index()).collect(),
-            output_dims: node.output_dims.clone(),
+            output_dims: self.raw_dims(id).to_vec(),
+            layout: self.layout(),
             sat_clamp_bits: meta.sat_clamp_bits.map(|w| w.bits()).unwrap_or(64),
             scale: self.scale_log2(),
         }
@@ -167,13 +179,13 @@ impl ModelView for atlas_trace::Model {
             Op::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
             Op::GatherSmall(_) => {
                 let input_nodes = self.operand_views(node);
-                let num_words = input_nodes[0].output_dims[0];
+                let num_words = input_nodes[0].physical_outdims()[0];
                 let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                 log_2(num_words) + log_2(num_indices)
             }
             Op::GatherLarge(_) => {
                 let input_nodes = self.operand_views(node);
-                let num_words = input_nodes[0].output_dims[0].next_power_of_two();
+                let num_words = input_nodes[0].physical_outdims()[0].next_power_of_two();
                 let num_indices = input_nodes[1].pow2_padded_num_output_elements();
                 log_2(num_words) + log_2(num_indices)
             }
@@ -191,7 +203,7 @@ impl ModelView for atlas_trace::Model {
                 node.idx,
                 node.operator.to_string(),
                 node.inputs,
-                node.output_dims,
+                node.physical_outdims(),
                 node.sat_clamp_bits,
             );
         }
@@ -204,11 +216,12 @@ impl ModelView for atlas_trace::Model {
 pub fn clamp_value_bound(model: &atlas_trace::Model, node: &ComputationNode) -> Option<u128> {
     let graph = model.graph();
     let operand = |i: usize| &graph.nodes[i];
-    let input_dims: Vec<&[usize]> = node
+    let physical_input_dims: Vec<Vec<usize>> = node
         .inputs
         .iter()
-        .map(|&i| operand(i).output_dims.as_slice())
+        .map(|&i| model.physical_dims(atlas_trace::NodeId(i as u32)))
         .collect();
+    let input_dims: Vec<&[usize]> = physical_input_dims.iter().map(Vec::as_slice).collect();
     let input_consts: Vec<Option<&Tensor<i32>>> = node
         .inputs
         .iter()

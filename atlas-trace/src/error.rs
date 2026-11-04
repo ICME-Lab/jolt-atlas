@@ -157,7 +157,7 @@ pub enum CompileError {
         /// Shape the graph declared.
         declared: Vec<usize>,
     },
-    /// The padding pass could not rewrite an op's shape-carrying fields.
+    /// The op is not coherent under power-of-two padding.
     #[error("node {node} ({op}): padding failed: {reason}")]
     Padding {
         /// Offending node.

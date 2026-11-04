@@ -11,7 +11,10 @@ use crate::{
     field::{IntoOpening, JoltField},
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        identity_poly::IdentityPolynomial,
+        multilinear_polynomial::{
+            BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
+        },
         opening_proof::{
             OpeningAccumulator, OpeningId, OpeningPoint, ProverOpeningAccumulator, SumcheckId,
             VerifierOpeningAccumulator, BIG_ENDIAN,
@@ -209,7 +212,7 @@ pub struct BooleanitySumcheckProver<
     /// Linear term, phase 1: `G` per chunk as a polynomial over the address.
     lin_g: Vec<MultilinearPolynomial<F>>,
     /// Linear term, phase 1: the address `k` as a polynomial.
-    lin_id: MultilinearPolynomial<F>,
+    lin_id: IdentityPolynomial<F>,
     /// Linear term, phase 2: per-chunk coefficients `γ'_d + w_d·k(r_address')`.
     lin_c: Vec<F>,
     #[allocative(skip)]
@@ -231,16 +234,14 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
         let mut F = ExpandingTable::new(k_chunk, BindingOrder::LowToHigh);
         F.reset(F::one());
 
-        let (lin_g, lin_id) = if params.linear.is_some() {
-            (
-                G.iter()
-                    .map(|g| MultilinearPolynomial::from(g.clone()))
-                    .collect(),
-                MultilinearPolynomial::from((0..k_chunk as u64).collect::<Vec<u64>>()),
-            )
+        let lin_g = if params.linear.is_some() {
+            G.iter()
+                .map(|g| MultilinearPolynomial::from(g.clone()))
+                .collect()
         } else {
-            (Vec::new(), MultilinearPolynomial::from(vec![F::zero(); 2]))
+            Vec::new()
         };
+        let lin_id = IdentityPolynomial::new(params.log_k_chunk);
 
         Self {
             B,
@@ -262,19 +263,20 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
         let Some(lin) = &self.params.linear else {
             return [F::zero(); 4];
         };
-        let half = self.lin_id.len() / 2;
+        let half = self.lin_g[0].len() / 2;
         let mut evals = [F::zero(); 4];
         for g in 0..half {
-            let k0 = self.lin_id.get_bound_coeff(2 * g);
-            let kd = self.lin_id.get_bound_coeff(2 * g + 1) - k0;
+            // The values at x = 0, 2, 3.
+            let k_evals = self.lin_id.sumcheck_evals(g, 3, BindingOrder::LowToHigh);
+            let (k0, k_slope) = (k_evals[0], k_evals[2] - k_evals[1]);
             for ((ra, gamma), weight) in self.lin_g.iter().zip(&lin.gammas).zip(&lin.weights) {
                 let r0 = ra.get_bound_coeff(2 * g);
-                let rd = ra.get_bound_coeff(2 * g + 1) - r0;
+                let r_slope = ra.get_bound_coeff(2 * g + 1) - r0;
                 let (mut k, mut r) = (k0, r0);
                 for e in evals.iter_mut() {
                     *e += r * (*gamma + *weight * k);
-                    k += kd;
-                    r += rd;
+                    k += k_slope;
+                    r += r_slope;
                 }
             }
         }
@@ -430,7 +432,7 @@ impl<
             self.F.update(r_j);
 
             if let Some(lin) = &self.params.linear {
-                self.lin_id.bind_parallel(r_j, BindingOrder::LowToHigh);
+                self.lin_id.bind(r_j, BindingOrder::LowToHigh);
                 self.lin_g
                     .iter_mut()
                     .for_each(|g| g.bind_parallel(r_j, BindingOrder::LowToHigh));
@@ -542,12 +544,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityS
             return booleanity;
         };
         let (r_address, r_cycle) = sumcheck_challenges.split_at(self.params.log_k_chunk);
-        // `k` at the (low-to-high bound) address point: Σ_j 2^j·r_j.
-        let k: F = r_address
-            .iter()
-            .enumerate()
-            .map(|(j, c)| F::from_u64(1u64 << j) * (*c).into())
-            .sum();
+        let r_address_rev: Vec<F::Challenge> = r_address.iter().rev().copied().collect();
+        let k = IdentityPolynomial::<F>::new(self.params.log_k_chunk).evaluate(&r_address_rev);
         let r_cycle_rev: Vec<F> = self.params.r_cycle.iter().cloned().rev().collect();
         let eq_cycle = EqPolynomial::<F>::mle(r_cycle, &r_cycle_rev);
         let linear: F = ra_claims

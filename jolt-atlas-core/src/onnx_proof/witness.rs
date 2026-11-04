@@ -438,12 +438,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     &OneHotConfig::default(),
                     num_words.log_2(),
                 );
-                #[cfg(test)]
-                let lookup_indices =
-                    crate::onnx_proof::ops::gather::dead_address_forgery::forge_lookup_indices(
-                        lookup_indices,
-                        &one_hot_params,
-                    );
                 let h_indices = subprotocols::shout::compute_instruction_h_indices(
                     &lookup_indices,
                     &one_hot_params,

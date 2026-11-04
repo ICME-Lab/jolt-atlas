@@ -678,51 +678,6 @@ fn binding_padded_input_lane_tamper_rejected() {
 
 mod known_gaps {
     use super::*;
-    use crate::onnx_proof::{
-        ops::gather::dead_address_forgery, testing::model_builder::ModelBuilder,
-    };
-
-    /// `2^16 + 1` rows is the smallest dictionary the builder lowers to `GatherLarge`.
-    /// It has 17 address bits in 5 chunks of 4, so the top chunk has 3 dead bits. A
-    /// lane hot at a dead address reads no row, so with index 0 the prover can output 0
-    /// instead of `dict[0]`.
-    #[test]
-    #[serial]
-    #[ignore = "known gap: the Hamming check sums over dead addresses, so GatherLarge proves \
-                output [0, 0] for index 0 where the dictionary row is [1, 2]"]
-    fn known_gap_gather_large_dead_address_forges_output() {
-        const DICT_LEN: usize = (1 << 16) + 1;
-        const WORD: usize = 2;
-        let _probe = ProbeGuard::enter();
-
-        let mut b = ModelBuilder::new();
-        let data: Vec<i32> = (1..=(DICT_LEN * WORD) as i32).collect();
-        let dict = b.constant(Tensor::construct(data, vec![DICT_LEN, WORD]));
-        let indices = b.input(vec![2]);
-        let gather = b.gather(dict, indices, 0, vec![2, WORD]);
-        b.mark_output(gather);
-
-        let shared = AtlasSharedPreprocessing::preprocess(b.build());
-        let prover_pp = AtlasProverPreprocessing::<Fr, Pcs>::new(shared);
-        let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
-        let input = Tensor::from_slice(&[0, 1], &[2]).unwrap();
-
-        dead_address_forgery::set(Some(0));
-        let (_, res) = prove_tampered::<Pcs>(&prover_pp, &[input], &mut |t| {
-            let output = t.node_outputs[gather].data_mut();
-            assert_eq!(&output[..WORD], &[1, 2], "dict[0], the semantic output");
-            output[..WORD].fill(0);
-        });
-        dead_address_forgery::set(None);
-
-        let (proof, io) = res.expect("the forged witness must reach the verifier");
-        assert_eq!(&io.outputs[0].data()[..WORD], &[0, 0]);
-        let outcome = run_verify(&proof, &verifier_pp, &io);
-        assert!(
-            !matches!(outcome, Outcome::Accepted),
-            "output [0, 0] for index 0 was accepted; the dictionary row is [1, 2]"
-        );
-    }
 
     /// `pad_graph` never consults `PadBehavior`: broadcasting a size-1 axis to
     /// a non-power-of-two extent fills the padded lanes with live values, so

@@ -42,11 +42,6 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for GatherLarge {
 
         let encoding = GatherRaEncoding::new(node);
         let lookup_indices = gather_lookup_indices(node, &prover.trace);
-        #[cfg(test)]
-        let lookup_indices = super::dead_address_forgery::forge_lookup_indices(
-            lookup_indices,
-            &encoding.one_hot_params(),
-        );
         let [ra_prover, bool_prover] = shout::ra_onehot_provers(
             &encoding,
             &lookup_indices,

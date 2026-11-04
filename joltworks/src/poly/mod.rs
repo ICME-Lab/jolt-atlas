@@ -1,3 +1,4 @@
+pub mod address_selector;
 pub mod commitment;
 pub mod compact_polynomial;
 pub mod dense_mlpoly;

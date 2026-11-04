@@ -435,14 +435,15 @@ pub fn ra_onehot_params<F: JoltField>(
     let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
 
     let r_cycle = encoding.r_cycle(accumulator);
-    // The Hamming-weight check (`Σ_k ra_d(k, r_cycle) = 1`, batched by
-    // `gamma_powers`) is folded into Booleanity as its linear term, so every
+    // The Hamming-weight check over live addresses (`Σ_k W_d(k)·ra_d(k, r_cycle) = 1`,
+    // batched by `gamma_powers`) is folded into Booleanity as its linear term, so every
     // chunk is opened once.
     let hamming: F = challenges.gamma_powers.iter().sum();
     let booleanity_params = BooleanitySumcheckParams {
         linear: Some(LinearTerm {
             gammas: challenges.gamma_powers,
             weights: vec![F::zero(); d],
+            dead_bits: d * one_hot_params.log_k_chunk - encoding.log_k(),
             claim: LinearClaim::constant(hamming),
         }),
         d,
@@ -620,4 +621,174 @@ where
                 running
             },
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::OneHotConfig, subprotocols::sumcheck::BatchedSumcheck,
+        transcripts::Blake2bTranscript, utils::errors::ProofVerifyError,
+    };
+    use ark_bn254::Fr;
+
+    const LOG_T: usize = 3;
+    /// `log_k` values leaving 3, 2 and 2 dead bits (chunk bits above `log_k`) in the
+    /// top 4-bit chunk.
+    const LOG_K_WITH_DEAD_BITS: [usize; 3] = [1, 6, 18];
+
+    struct TestEncoding {
+        log_k: usize,
+    }
+
+    impl RaOneHotEncoding for TestEncoding {
+        fn committed_poly(&self, d: usize) -> CommittedPoly {
+            CommittedPoly::GatherRaD(0, d)
+        }
+
+        fn r_cycle_source(&self) -> OpeningId {
+            OpeningId::new(VirtualPoly::NodeOutput(1), SumcheckId::NodeExecution(0))
+        }
+
+        fn ra_source(&self) -> OpeningId {
+            OpeningId::new(VirtualPoly::NodeOutputRa(0), SumcheckId::NodeExecution(0))
+        }
+
+        fn log_k(&self) -> usize {
+            self.log_k
+        }
+
+        fn one_hot_params(&self) -> OneHotParams {
+            OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_k)
+        }
+    }
+
+    /// `ra(r_a, r_cycle)` computed from the chunks: their product at `r_a`, with the
+    /// top chunk's dead bits fixed to 0.
+    fn virtual_ra_claim(
+        lookup_indices: &[usize],
+        params: &OneHotParams,
+        r_a: &[Fr],
+        r_cycle: &[Fr],
+    ) -> Fr {
+        let eq_chunks: Vec<Vec<Fr>> = params
+            .compute_r_address_chunks::<Fr, Fr>(r_a)
+            .iter()
+            .map(|chunk| EqPolynomial::evals(chunk))
+            .collect();
+        let eq_cycle: Vec<Fr> = EqPolynomial::evals(r_cycle);
+        lookup_indices
+            .iter()
+            .enumerate()
+            .map(|(j, &index)| {
+                let read: Fr = eq_chunks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, eq)| eq[params.lookup_index_chunk(index as u64, i) as usize])
+                    .product();
+                eq_cycle[j] * read
+            })
+            .sum()
+    }
+
+    /// Proves and verifies the one-hot checks for an `ra` claim at a random `(r_a, r_cycle)`.
+    fn verify_one_hot_checks(
+        log_k: usize,
+        lookup_indices: &[usize],
+    ) -> Result<(), ProofVerifyError> {
+        let encoding = TestEncoding { log_k };
+        let params = encoding.one_hot_params();
+
+        let mut prover_transcript = Blake2bTranscript::default();
+        let r_a: Vec<Fr> = prover_transcript
+            .challenge_vector_optimized::<Fr>(log_k)
+            .into_opening();
+        let r_cycle: Vec<Fr> = prover_transcript
+            .challenge_vector_optimized::<Fr>(LOG_T)
+            .into_opening();
+        let ra_claim = virtual_ra_claim(lookup_indices, &params, &r_a, &r_cycle);
+
+        // The openings a preceding read-raf would have produced.
+        let seeds = [
+            (encoding.r_cycle_source(), r_cycle.clone(), Fr::from(0u64)),
+            (encoding.ra_source(), [r_a, r_cycle].concat(), ra_claim),
+        ];
+
+        let mut prover_accumulator = ProverOpeningAccumulator::new();
+        for (id, point, claim) in &seeds {
+            prover_accumulator
+                .openings
+                .insert(*id, (OpeningPoint::new(point.clone()), *claim));
+        }
+        let mut instances = ra_onehot_provers(
+            &encoding,
+            lookup_indices,
+            &prover_accumulator,
+            &mut prover_transcript,
+        );
+        let (proof, _) = BatchedSumcheck::prove(
+            instances.iter_mut().map(|v| &mut **v as _).collect(),
+            &mut prover_accumulator,
+            &mut prover_transcript,
+        );
+
+        let mut verifier_transcript = Blake2bTranscript::default();
+        let _: Vec<<Fr as JoltField>::Challenge> =
+            verifier_transcript.challenge_vector_optimized::<Fr>(log_k);
+        let _: Vec<<Fr as JoltField>::Challenge> =
+            verifier_transcript.challenge_vector_optimized::<Fr>(LOG_T);
+        let mut verifier_accumulator = VerifierOpeningAccumulator::new();
+        for (key, (_, claim)) in &prover_accumulator.openings {
+            verifier_accumulator
+                .openings
+                .insert(*key, (OpeningPoint::default(), *claim));
+        }
+        for (id, point, claim) in &seeds {
+            verifier_accumulator
+                .openings
+                .insert(*id, (OpeningPoint::new(point.clone()), *claim));
+        }
+        let [ra_verifier, bool_verifier] =
+            ra_onehot_verifiers(&encoding, &verifier_accumulator, &mut verifier_transcript);
+        BatchedSumcheck::verify(
+            &proof,
+            vec![&*ra_verifier, &*bool_verifier],
+            &mut verifier_accumulator,
+            &mut verifier_transcript,
+        )
+        .map(|_| ())
+    }
+
+    fn honest_indices(log_k: usize) -> Vec<usize> {
+        [0usize, 5, 63, 17, 0, 33, 2, 40]
+            .iter()
+            .map(|index| index % (1 << log_k))
+            .collect()
+    }
+
+    #[test]
+    fn one_hot_checks_accept_honest_indices() {
+        for log_k in LOG_K_WITH_DEAD_BITS {
+            verify_one_hot_checks(log_k, &honest_indices(log_k))
+                .unwrap_or_else(|e| panic!("log_k = {log_k}: {e:?}"));
+        }
+    }
+
+    /// A lane hot at a dead address reads no row, so its read and raf are 0, while
+    /// each of its chunks still sums to 1.
+    #[test]
+    fn one_hot_checks_reject_hot_dead_address() {
+        for log_k in LOG_K_WITH_DEAD_BITS {
+            let params = TestEncoding { log_k }.one_hot_params();
+            let top_bit = params.instruction_d * params.log_k_chunk - 1;
+            assert!(top_bit >= log_k, "log_k = {log_k} must leave a dead bit");
+
+            let mut indices = honest_indices(log_k);
+            indices[4] = 1 << top_bit;
+            assert!(
+                verify_one_hot_checks(log_k, &indices).is_err(),
+                "log_k = {log_k}: a lane hot at a dead address was accepted"
+            );
+        }
+    }
 }

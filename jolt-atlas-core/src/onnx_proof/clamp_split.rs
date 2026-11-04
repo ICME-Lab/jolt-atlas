@@ -705,6 +705,7 @@ pub fn chunk_check_params<F: JoltField, T: Transcript>(
         linear: Some(LinearTerm {
             gammas: gamma_powers,
             weights,
+            dead_bits: 0,
             claim,
         }),
         d,
@@ -903,6 +904,7 @@ pub fn value_chunk_check_params<F: JoltField, T: Transcript>(
         linear: Some(LinearTerm {
             gammas: gamma_powers,
             weights,
+            dead_bits: 0,
             claim,
         }),
         d,

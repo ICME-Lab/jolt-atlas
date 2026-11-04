@@ -10,6 +10,7 @@ use std::{fmt::Debug, iter::zip, sync::Arc};
 use crate::{
     field::{IntoOpening, JoltField},
     poly::{
+        address_selector::AddressSelector,
         eq_poly::EqPolynomial,
         identity_poly::IdentityPolynomial,
         multilinear_polynomial::{
@@ -66,20 +67,35 @@ impl<F: JoltField> LinearClaim<F> {
 /// `G` / `H` tables and its single opening of every chunk:
 ///
 /// ```text
-/// Σ_{k,t} Σ_d (γ'_d + w_d·k) · eq(r_cycle, t) · ra_d(k, t) = claim
+/// Σ_{k,t} Σ_d (γ'_d·W_d(k) + w_d·k) · eq(r_cycle, t) · ra_d(k, t) = claim
 /// ```
 ///
-/// With `w = 0` this is the Hamming-weight check (`Σ_k ra_d(k, r_cycle)`
-/// batched by `γ'`); with `w_d = β·2^{shift_d}` it also recovers the chunked
-/// value `Σ_d 2^{shift_d}·Σ_k k·ra_d(k, r_cycle)`.
+/// With `w = 0` this is the Hamming-weight check over live addresses
+/// (`Σ_k W_d(k)·ra_d(k, r_cycle)` batched by `γ'`); with `w_d = β·2^{shift_d}` it
+/// also recovers the chunked value `Σ_d 2^{shift_d}·Σ_k k·ra_d(k, r_cycle)`.
+///
+/// `W_0` is the [`AddressSelector`] of chunk 0, whose top bits the read fixes to 0
+/// when the address width is not a multiple of the chunk width. `W_d = 1` for the
+/// other chunks.
 #[derive(Clone, Debug)]
 pub struct LinearTerm<F: JoltField> {
     /// Per-chunk Hamming batching coefficients `γ'_d`.
     pub gammas: Vec<F>,
     /// Per-chunk value weights `w_d`.
     pub weights: Vec<F>,
+    /// Number of dead top bits in chunk 0.
+    pub dead_bits: usize,
     /// The claimed sum.
     pub claim: LinearClaim<F>,
+}
+
+impl<F: JoltField> LinearTerm<F> {
+    /// `γ'_d·W_d + w_d·k` at an address where `W_0 = selector` and `k = address`.
+    fn chunk_coefficient(&self, chunk: usize, selector: F, address: F) -> F {
+        let gamma = self.gammas[chunk];
+        let gamma = if chunk == 0 { gamma * selector } else { gamma };
+        gamma + self.weights[chunk] * address
+    }
 }
 
 pub struct BooleanitySumcheckParams<F: JoltField> {
@@ -213,7 +229,9 @@ pub struct BooleanitySumcheckProver<
     lin_g: Vec<MultilinearPolynomial<F>>,
     /// Linear term, phase 1: the address `k` as a polynomial.
     lin_id: IdentityPolynomial<F>,
-    /// Linear term, phase 2: per-chunk coefficients `γ'_d + w_d·k(r_address')`.
+    /// Linear term, phase 1: the selector `W_0`.
+    addr_selector: AddressSelector<F>,
+    /// Linear term, phase 2: per-chunk coefficients `γ'_d·W_d(r_address') + w_d·k(r_address')`.
     lin_c: Vec<F>,
     #[allocative(skip)]
     params: BooleanitySumcheckParams<F>,
@@ -242,6 +260,8 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
             Vec::new()
         };
         let lin_id = IdentityPolynomial::new(params.log_k_chunk);
+        let dead_bits = params.linear.as_ref().map_or(0, |lin| lin.dead_bits);
+        let addr_selector = AddressSelector::new(params.log_k_chunk, dead_bits);
 
         Self {
             B,
@@ -253,6 +273,7 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
             eq_r_r: F::zero(),
             lin_g,
             lin_id,
+            addr_selector,
             lin_c: Vec::new(),
             params,
         }
@@ -269,13 +290,18 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
             // The values at x = 0, 2, 3.
             let k_evals = self.lin_id.sumcheck_evals(g, 3, BindingOrder::LowToHigh);
             let (k0, k_slope) = (k_evals[0], k_evals[2] - k_evals[1]);
-            for ((ra, gamma), weight) in self.lin_g.iter().zip(&lin.gammas).zip(&lin.weights) {
+            let s_evals = self
+                .addr_selector
+                .sumcheck_evals(g, 3, BindingOrder::LowToHigh);
+            let (s0, s_slope) = (s_evals[0], s_evals[2] - s_evals[1]);
+            for (chunk, ra) in self.lin_g.iter().enumerate() {
                 let r0 = ra.get_bound_coeff(2 * g);
                 let r_slope = ra.get_bound_coeff(2 * g + 1) - r0;
-                let (mut k, mut r) = (k0, r0);
+                let (mut k, mut s, mut r) = (k0, s0, r0);
                 for e in evals.iter_mut() {
-                    *e += r * (*gamma + *weight * k);
+                    *e += r * lin.chunk_coefficient(chunk, s, k);
                     k += k_slope;
+                    s += s_slope;
                     r += r_slope;
                 }
             }
@@ -433,13 +459,15 @@ impl<
 
             if let Some(lin) = &self.params.linear {
                 self.lin_id.bind(r_j, BindingOrder::LowToHigh);
+                self.addr_selector.bind(r_j, BindingOrder::LowToHigh);
                 self.lin_g
                     .iter_mut()
                     .for_each(|g| g.bind_parallel(r_j, BindingOrder::LowToHigh));
                 if round == self.params.log_k_chunk - 1 {
                     let k = self.lin_id.final_claim();
-                    self.lin_c = zip(&lin.gammas, &lin.weights)
-                        .map(|(g, w)| *g + *w * k)
+                    let selector = self.addr_selector.final_claim();
+                    self.lin_c = (0..self.params.d)
+                        .map(|chunk| lin.chunk_coefficient(chunk, selector, k))
                         .collect();
                     self.lin_g = Vec::new();
                 }
@@ -546,13 +574,14 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for BooleanityS
         let (r_address, r_cycle) = sumcheck_challenges.split_at(self.params.log_k_chunk);
         let r_address_rev: Vec<F::Challenge> = r_address.iter().rev().copied().collect();
         let k = IdentityPolynomial::<F>::new(self.params.log_k_chunk).evaluate(&r_address_rev);
+        let selector = AddressSelector::<F>::new(self.params.log_k_chunk, lin.dead_bits)
+            .evaluate(&r_address_rev);
         let r_cycle_rev: Vec<F> = self.params.r_cycle.iter().cloned().rev().collect();
         let eq_cycle = EqPolynomial::<F>::mle(r_cycle, &r_cycle_rev);
         let linear: F = ra_claims
             .iter()
-            .zip(&lin.gammas)
-            .zip(&lin.weights)
-            .map(|((ra, gamma), weight)| *ra * (*gamma + *weight * k))
+            .enumerate()
+            .map(|(chunk, ra)| *ra * lin.chunk_coefficient(chunk, selector, k))
             .sum();
         booleanity + eq_cycle * linear
     }

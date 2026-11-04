@@ -435,14 +435,15 @@ pub fn ra_onehot_params<F: JoltField>(
     let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
 
     let r_cycle = encoding.r_cycle(accumulator);
-    // The Hamming-weight check (`Σ_k ra_d(k, r_cycle) = 1`, batched by
-    // `gamma_powers`) is folded into Booleanity as its linear term, so every
+    // The Hamming-weight check over live addresses (`Σ_k W_d(k)·ra_d(k, r_cycle) = 1`,
+    // batched by `gamma_powers`) is folded into Booleanity as its linear term, so every
     // chunk is opened once.
     let hamming: F = challenges.gamma_powers.iter().sum();
     let booleanity_params = BooleanitySumcheckParams {
         linear: Some(LinearTerm {
             gammas: challenges.gamma_powers,
             weights: vec![F::zero(); d],
+            dead_bits: d * one_hot_params.log_k_chunk - encoding.log_k(),
             claim: LinearClaim::constant(hamming),
         }),
         d,
@@ -776,8 +777,7 @@ mod tests {
     /// A lane hot at a dead address reads no row, so its read and raf are 0, while
     /// each of its chunks still sums to 1.
     #[test]
-    #[ignore = "known gap: the Hamming check sums over dead addresses, so a lane hot at one is accepted"]
-    fn known_gap_one_hot_rejects_hot_dead_address() {
+    fn one_hot_checks_reject_hot_dead_address() {
         for log_k in LOG_K_WITH_DEAD_BITS {
             let params = TestEncoding { log_k }.one_hot_params();
             let top_bit = params.instruction_d * params.log_k_chunk - 1;

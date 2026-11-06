@@ -2,25 +2,20 @@ use std::sync::Arc;
 
 use atlas_trace::{op::Einsum, Model, Op, Trace};
 
-use crate::node_view::ComputationNode;
+use crate::node_view::{ComputationNode, ModelView};
 use crate::{
     onnx_proof::{
         clamp_lookups::is_scalar,
         fused_rebase,
         ops::{
-            einsum::{
-                abmk_abnk_abmn::AbmkAbnkAbmnLayout,
-                contraction::{
-                    ContractionParams, ContractionProver, ContractionVerifier, EinsumLayout,
-                },
-                k_nk_n::KNkNLayout,
-                mk_kn_mn::MkKnMnLayout,
+            einsum::contraction::{
+                Contraction, ContractionParams, ContractionProver, ContractionVerifier,
             },
             OperatorProofTrait, Prover, Verifier,
         },
         ProofId, ProofType,
     },
-    utils::dims::{lookup_einsum_config, EinsumDims},
+    utils::dims::lookup_einsum_config,
 };
 use common::CommittedPoly;
 use joltworks::{
@@ -35,22 +30,9 @@ use joltworks::{
     utils::errors::ProofVerifyError,
 };
 
-/// `abmk,abnk->abmn` layout (batched matmul; also covers `amk,ank->amn`).
-pub mod abmk_abnk_abmn;
-/// Shared sumcheck engine for einsum contraction patterns.
+/// Shared sumcheck engine for einsum contractions.
 pub mod contraction;
-/// `k,nk->n` layout (vector-matrix multiply).
-pub mod k_nk_n;
-/// `mk,kn->mn` layout (matrix-matrix multiply).
-pub mod mk_kn_mn;
-
-// atlas-onnx-import lowers every einsum to one of four canonical full-letter
-// equations (`CANONICAL_EINSUMS` in its lower.rs); EINSUM_REGISTRY maps each
-// onto one of the three layouts above:
-// - mk,kn->mn       → mk_kn_mn
-// - mk,nk->mn       → k_nk_n   (vector-matrix; m == 1 enforced at dispatch)
-// - amk,ank->amn    → abmk_abnk_abmn (batch pack 1×a)
-// - abmk,abnk->abmn → abmk_abnk_abmn
+mod named_point;
 
 impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     #[tracing::instrument(skip_all, name = "Einsum::prove")]
@@ -142,33 +124,27 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     }
 }
 
-/// Returns the canonical einsum equation of a node, panicking if the node is
-/// not an Einsum operator.
-fn einsum_equation(computation_node: &ComputationNode) -> String {
-    match &computation_node.operator {
-        Op::Einsum(Einsum { equation, .. }) => equation.to_string(),
-        _ => panic!("Unexpected operator"),
-    }
-}
-
-/// Build the [`EinsumLayout`] for a canonical equation; every registered
-/// equation is handled by the shared [`contraction`] engine.
-fn einsum_layout<F: JoltField>(
-    equation: &str,
-    einsum_dims: &EinsumDims,
-) -> Arc<dyn EinsumLayout<F>> {
-    match equation {
-        "mk,kn->mn" => Arc::new(MkKnMnLayout::new(einsum_dims)),
-        "k,nk->n" => Arc::new(KNkNLayout::new(einsum_dims)),
-        "abmk,abnk->abmn" => Arc::new(AbmkAbnkAbmnLayout::new(einsum_dims)),
-        other => panic!("unexpected canonical einsum equation: {other}"),
-    }
+/// Derive the [`Contraction`] of an einsum node.
+///
+/// The registry lookup and its dims extractor only gate the accepted equations
+/// (and `m == 1` for `mk,nk->mn`); this gate is temporary.
+fn einsum_contraction(computation_node: &ComputationNode, model: &Model) -> Contraction {
+    let Op::Einsum(Einsum { equation, .. }) = &computation_node.operator else {
+        panic!("Unexpected operator")
+    };
+    let config = lookup_einsum_config(&equation.to_string());
+    (config.dims_extractor)(computation_node, model);
+    let [left, right] = computation_node.inputs[..] else {
+        panic!("Expected two operands for einsum operation")
+    };
+    Contraction::new(
+        equation,
+        &model.view(left).physical_outdims(),
+        &model.view(right).physical_outdims(),
+    )
 }
 
 /// Prover dispatcher for the Einsum contraction (matmul) sumcheck.
-///
-/// Every contraction pattern routes through the shared [`contraction`] engine via its
-/// [`EinsumLayout`].
 pub struct EinsumProver;
 
 impl EinsumProver {
@@ -179,9 +155,7 @@ impl EinsumProver {
         computation_node: ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Box<dyn SumcheckInstanceProver<F, T>> {
-        let config = lookup_einsum_config(&einsum_equation(&computation_node));
-        let einsum_dims = (config.dims_extractor)(&computation_node, model);
-        let layout = einsum_layout::<F>(config.equation, &einsum_dims);
+        let layout = Arc::new(einsum_contraction(&computation_node, model));
         let params = ContractionParams::new(computation_node, layout, accumulator);
         Box::new(ContractionProver::initialize(trace, params))
     }
@@ -197,9 +171,7 @@ impl EinsumVerifier {
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Box<dyn SumcheckInstanceVerifier<F, T>> {
-        let config = lookup_einsum_config(&einsum_equation(&computation_node));
-        let einsum_dims = (config.dims_extractor)(&computation_node, model);
-        let layout = einsum_layout::<F>(config.equation, &einsum_dims);
+        let layout = Arc::new(einsum_contraction(&computation_node, model));
         Box::new(ContractionVerifier::new(
             computation_node,
             layout,

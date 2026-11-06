@@ -1,49 +1,74 @@
-//! Shared sumcheck engine for einsum *contraction* patterns.
+//! The einsum contraction sumcheck: one protocol for every two-operand einsum,
+//! driven by the role of each letter.
 //!
-//! Every einsum we prove reduces to the **same** sumcheck. After the operands are
-//! "folded" at the output randomness, the claim is
+//! ## Roles
+//!
+//! Every letter has exactly one role:
+//! - **batch**: in both operands and the output;
+//! - **contracted**: in both operands, not in the output;
+//! - **free**: in one operand and the output.
+//!
+//! ## Points
+//!
+//! Both points are `NamedPoint`s: the axis of letter `c` owns `log2(size of c)`
+//! coordinates.
+//! - `r_output`, the output opening point, has one axis per output letter (batch
+//!   and free letters).
+//! - `r_sumcheck`, the sumcheck challenges, has the axes `[batch…, contracted…]`,
+//!   each role in left-operand letter order.
+//!
+//! ## Claim
+//!
+//! With `acc` the raw `i64` accumulation of the einsum, and `L'`, `R'` the
+//! operands folded over their free axes,
 //!
 //! ```text
-//! claim = Σ_h  L(h) · R(h) · EQ(h)
+//! acc(r_output) = Σ_{s ∈ [batch, contracted]} eq(r_output.batch, s.batch) · L'(s) · R'(s)
 //! ```
 //!
-//! over the contraction(+batch) hypercube `h`. The patterns differ in only three
-//! places, captured by the [`EinsumLayout`] trait:
+//! The `eq` factor makes the sumcheck degree 3 when the equation has batch
+//! letters; otherwise it is a degree-2 dot product. The batch axes come first,
+//! so the `eq` table only has `2^log_batch` entries and is a scalar once they
+//! are bound. The initial claim is recovered from the fused rescale's advice by
+//! [`fused_rebase::fused_input_claim`].
 //!
-//! 1. **fold** — building `L`, `R`, and the optional batch `EQ` from the operand
-//!    tensors and the node-output point ([`EinsumLayout::fold`]).
-//! 2. **eq schedule** — where the `EQ` cube sits in the round order, or whether it
-//!    is absent (a plain degree-2 dot product). See [`EqSchedule`].
-//! 3. **scatter** — mapping the final sumcheck point back to the two operand
-//!    opening points ([`EinsumLayout::operand_points`]).
+//! ## Fold
 //!
-//! Everything else — the `Params` boilerplate, the multiply-accumulate message
-//! loop, challenge ingestion, the BlindFold (`zk`) constraints — is written once,
-//! here. This is the generalization of the per-variant engine that
-//! [`rbmk_rbnk_bmn`](super::rbmk_rbnk_bmn) already used for three patterns.
+//! For an operand `X`,
 //!
-//! ## Where the claim comes from
+//! ```text
+//! X'(s) = Σ_f eq(r_output[free axes of X], f) · X[index(s, f)]
+//! ```
 //!
-//! The sumcheck's initial claim is `input_claim` (today: the node-output opening).
-//! Fusing the rescaling division + clamp into the einsum (issue #190) only changes
-//! *that* value — `rescaled(r)·2^S + R(r)` instead of `output(r)` — while the
-//! `Σ L·R` body stays identical. That seam is centralized in
-//! [`ContractionParams::input_claim`].
+//! Tensors are row-major, so a flat index is `Σ_axis coordinate · stride`. The
+//! sumcheck axes and the free axes of `X` are disjoint, hence
+//! `index(s, f) = offset_sumcheck[s] + offset_free[f]`.
+//!
+//! ## Opening points
+//!
+//! After the last round the verifier checks
+//! `eq(r_output.batch, r_sumcheck.batch) · L(p_L) · R(p_R)`. Axis by axis in the
+//! operand's order, `p_X` takes the coordinates of `r_output` for a free letter
+//! and those of `r_sumcheck` for a batch or contracted letter.
 
 use crate::onnx_proof::trace_view::TraceView;
-use std::{array, sync::Arc};
+use std::{array, collections::BTreeMap, sync::Arc};
 
-use atlas_trace::{trace::LayerData, Tensor, Trace};
+use atlas_trace::{op::EinsumEq, trace::LayerData, Tensor, Trace};
 
 use crate::node_view::ComputationNode;
 use crate::{
-    onnx_proof::fused_rebase,
+    onnx_proof::{
+        fused_rebase,
+        ops::einsum::named_point::{axis_of, Letter, NamedPoint},
+    },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use common::parallel::par_enabled;
 use joltworks::{
     field::{IntoOpening, JoltField},
     poly::{
+        eq_poly::EqPolynomial,
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -58,6 +83,7 @@ use joltworks::{
         sumcheck_verifier::{SumcheckInstanceParams, SumcheckInstanceVerifier},
     },
     transcripts::Transcript,
+    utils::math::Math,
 };
 use rayon::prelude::*;
 
@@ -120,8 +146,6 @@ pub struct Folded<F: JoltField> {
 }
 
 /// Per-pattern description of an einsum contraction sumcheck.
-///
-/// See the [module docs](self) for how the engine uses these hooks.
 pub trait EinsumLayout<F: JoltField>: Send + Sync {
     /// Number of sumcheck rounds (`log` of the contraction(+batch) cube size).
     fn num_rounds(&self) -> usize;
@@ -154,7 +178,213 @@ pub trait EinsumLayout<F: JoltField>: Send + Sync {
     ) -> F;
 }
 
-/// Shared parameters for any einsum contraction sumcheck.
+/// The letter roles of a two-operand einsum, and the sumcheck they define. See
+/// the [module docs](self).
+pub struct Contraction {
+    left: Vec<Letter>,
+    right: Vec<Letter>,
+    output: Vec<Letter>,
+    batch: Vec<Letter>,
+    contracted: Vec<Letter>,
+    /// Physical size of each letter.
+    sizes: BTreeMap<Letter, usize>,
+}
+
+impl Contraction {
+    /// Derive the roles of `equation` over operands of physical dims `left_dims` and `right_dims`.
+    pub fn new(equation: &EinsumEq, left_dims: &[usize], right_dims: &[usize]) -> Self {
+        let letters = |term: &[u8]| term.iter().map(|&c| char::from(c)).collect::<Vec<Letter>>();
+        let [left, right] = equation.operands() else {
+            panic!("einsum {equation} does not have two operands");
+        };
+        let (left, right) = (letters(left), letters(right));
+        let output = letters(equation.output());
+        let sizes = left
+            .iter()
+            .copied()
+            .zip(left_dims.iter().copied())
+            .chain(right.iter().copied().zip(right_dims.iter().copied()))
+            .collect();
+        let shared = || left.iter().copied().filter(|c| right.contains(c));
+        let batch = shared().filter(|c| output.contains(c)).collect();
+        let contracted = shared().filter(|c| !output.contains(c)).collect();
+        Self {
+            left,
+            right,
+            output,
+            batch,
+            contracted,
+            sizes,
+        }
+    }
+
+    /// The axes of `r_sumcheck`.
+    fn sumcheck_letters(&self) -> Vec<Letter> {
+        [self.batch.as_slice(), self.contracted.as_slice()].concat()
+    }
+
+    /// The free letters of an operand, in its axis order.
+    fn free_letters(&self, operand: &[Letter]) -> Vec<Letter> {
+        let sumcheck_letters = self.sumcheck_letters();
+        operand
+            .iter()
+            .copied()
+            .filter(|c| !sumcheck_letters.contains(c))
+            .collect()
+    }
+
+    fn dims(&self, letters: &[Letter]) -> Vec<usize> {
+        letters.iter().map(|c| self.sizes[c]).collect()
+    }
+
+    fn num_vars(&self, letters: &[Letter]) -> usize {
+        letters.iter().map(|c| self.sizes[c].log_2()).sum()
+    }
+
+    fn r_output<F>(&self, r_node_output: OpeningPoint<BIG_ENDIAN, F>) -> NamedPoint<F>
+    where
+        F: JoltField,
+    {
+        NamedPoint::new(
+            r_node_output.r,
+            self.output.clone(),
+            &self.dims(&self.output),
+        )
+    }
+
+    fn r_sumcheck<F: JoltField>(&self, sumcheck_challenges: &[F]) -> NamedPoint<F> {
+        let letters = self.sumcheck_letters();
+        let dims = self.dims(&letters);
+        NamedPoint::new(sumcheck_challenges.to_vec(), letters, &dims)
+    }
+
+    /// For every coordinate of the axes `letters`, enumerated in row-major
+    /// order, the flat offset of that coordinate in `operand`.
+    fn offsets(&self, operand: &[Letter], letters: &[Letter]) -> Vec<usize> {
+        letters.iter().fold(vec![0], |table, c| {
+            let stride: usize = self
+                .dims(&operand[axis_of(operand, *c) + 1..])
+                .iter()
+                .product();
+            table
+                .iter()
+                .flat_map(|base| (0..self.sizes[c]).map(move |coord| base + coord * stride))
+                .collect()
+        })
+    }
+
+    /// `X'(s) = Σ_f eq(r_output[free axes of X], f) · X[offset_sumcheck[s] + offset_free[f]]`.
+    fn fold_operand<F: JoltField>(
+        &self,
+        tensor: &Tensor<i32>,
+        operand: &[Letter],
+        r_output: &NamedPoint<F>,
+    ) -> MultilinearPolynomial<F> {
+        let free = self.free_letters(operand);
+        let offset_sumcheck = self.offsets(operand, &self.sumcheck_letters());
+        let offset_free = self.offsets(operand, &free);
+        let eq_free = EqPolynomial::<F>::evals(&r_output.coords(&free));
+        let folded: Vec<F> = offset_sumcheck
+            .par_iter()
+            .with_min_len(par_enabled())
+            .map(|base| {
+                offset_free
+                    .iter()
+                    .zip(&eq_free)
+                    .map(|(offset, eq)| eq.mul_i64(tensor[base + offset] as i64))
+                    .sum()
+            })
+            .collect();
+        MultilinearPolynomial::from(folded)
+    }
+
+    /// The opening point `p_X` of an operand.
+    fn operand_point<F: JoltField>(
+        &self,
+        operand: &[Letter],
+        r_output: &NamedPoint<F>,
+        r_sumcheck: &NamedPoint<F>,
+    ) -> Vec<F> {
+        let sumcheck_letters = self.sumcheck_letters();
+        operand
+            .iter()
+            .flat_map(|c| {
+                if sumcheck_letters.contains(c) {
+                    r_sumcheck.axis(*c)
+                } else {
+                    r_output.axis(*c)
+                }
+            })
+            .copied()
+            .collect()
+    }
+
+    /// `eq(r_output.batch, r_sumcheck.batch)`.
+    fn batch_eq<F: JoltField>(&self, r_output: &NamedPoint<F>, r_sumcheck: &NamedPoint<F>) -> F {
+        EqPolynomial::mle(
+            &r_output.coords(&self.batch),
+            &r_sumcheck.coords(&self.batch),
+        )
+    }
+}
+
+impl<F: JoltField> EinsumLayout<F> for Contraction {
+    fn num_rounds(&self) -> usize {
+        self.num_vars(&self.sumcheck_letters())
+    }
+
+    fn schedule(&self) -> EqSchedule {
+        if self.batch.is_empty() {
+            EqSchedule::None
+        } else {
+            EqSchedule::High {
+                log_eq: self.num_vars(&self.batch),
+                low_bits: self.num_vars(&self.contracted),
+            }
+        }
+    }
+
+    fn fold(
+        &self,
+        left_operand: &Tensor<i32>,
+        right_operand: &Tensor<i32>,
+        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+    ) -> Folded<F> {
+        let r_output = self.r_output(r_node_output.clone());
+        Folded {
+            left: self.fold_operand(left_operand, &self.left, &r_output),
+            right: self.fold_operand(right_operand, &self.right, &r_output),
+            eq: (!self.batch.is_empty()).then(|| {
+                MultilinearPolynomial::from(EqPolynomial::<F>::evals(&r_output.coords(&self.batch)))
+            }),
+        }
+    }
+
+    fn operand_points(
+        &self,
+        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+        sumcheck_challenges: &[F],
+    ) -> (Vec<F>, Vec<F>) {
+        let r_output = self.r_output(r_node_output.clone());
+        let r_sumcheck = self.r_sumcheck(sumcheck_challenges);
+        (
+            self.operand_point(&self.left, &r_output, &r_sumcheck),
+            self.operand_point(&self.right, &r_output, &r_sumcheck),
+        )
+    }
+
+    fn output_eq(
+        &self,
+        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+        sumcheck_challenges: &[F::Challenge],
+    ) -> F {
+        let r_output = self.r_output(r_node_output.clone());
+        let r_sumcheck = self.r_sumcheck(&sumcheck_challenges.into_opening());
+        self.batch_eq(&r_output, &r_sumcheck)
+    }
+}
+
+/// Parameters of the contraction sumcheck.
 #[derive(Clone)]
 pub struct ContractionParams<F: JoltField> {
     r_node_output: OpeningPoint<BIG_ENDIAN, F>,
@@ -184,11 +414,11 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
         self.layout.schedule().degree()
     }
 
-    /// The sumcheck's initial claim: the raw accumulation `acc(r) = Σ_k L·R`.
+    /// The sumcheck's initial claim: the raw accumulation `acc(r_output)`.
     ///
     /// The einsum fuses an i64 accumulate + rescaling division + saturating
-    /// clamp; [`fused_rebase::fused_input_claim`] recovers `acc(r)` from the
-    /// pre-clamp `rescaled` and remainder advice .
+    /// clamp; [`fused_rebase::fused_input_claim`] recovers `acc(r_output)` from
+    /// the pre-clamp `rescaled` and remainder advice.
     fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
         fused_rebase::fused_input_claim(accumulator, &self.computation_node)
     }
@@ -220,8 +450,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
         let builder = OpeningIdBuilder::new(&self.computation_node);
         let left = ValueSource::Opening(builder.nodeio(Target::Input(0)));
         let right = ValueSource::Opening(builder.nodeio(Target::Input(1)));
-        // With an EQ factor the claim is scaled by the (eq) challenge value;
-        // a plain dot product is just the operand product.
+        // With batch letters the claim is scaled by the batch eq value; a plain
+        // dot product is just the operand product.
         let term = if self.layout.schedule().has_eq() {
             ProductTerm::scaled(ValueSource::Challenge(0), vec![left, right])
         } else {
@@ -242,18 +472,19 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
     }
 }
 
-/// Prover for any einsum contraction sumcheck.
+/// Prover of the contraction sumcheck.
 pub struct ContractionProver<F: JoltField> {
     params: ContractionParams<F>,
     left: MultilinearPolynomial<F>,
     right: MultilinearPolynomial<F>,
+    /// `eq(r_output.batch, ·)`, present when the equation has batch letters.
     eq: Option<MultilinearPolynomial<F>>,
     /// `EQ` final claim, cached once the `EQ` cube is fully bound (High schedule).
     eq_bound_claim: Option<F>,
 }
 
 impl<F: JoltField> ContractionProver<F> {
-    /// Initialize the prover by folding the operands at the output randomness.
+    /// Initialize the prover by folding the operands at `r_output`.
     #[tracing::instrument(skip_all, name = "ContractionProver::initialize")]
     pub fn initialize(trace: &Trace, params: ContractionParams<F>) -> Self {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
@@ -399,7 +630,7 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
     }
 }
 
-/// Verifier for any einsum contraction sumcheck.
+/// Verifier of the contraction sumcheck.
 pub struct ContractionVerifier<F: JoltField> {
     params: ContractionParams<F>,
 }
@@ -457,5 +688,59 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for Contraction
             Target::Input(1),
             self.params.normalize_opening_point(&right_point),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_bn254::Fr;
+    use ark_std::UniformRand;
+    use joltworks::poly::multilinear_polynomial::EvaluateMle;
+    use rand::{rngs::StdRng, SeedableRng};
+
+    /// Each folded operand, evaluated at `r_sumcheck`, must equal the operand's
+    /// own MLE at the opening point the letter roles assign to it.
+    #[test]
+    fn folded_operands_match_their_mle_at_the_opening_point() {
+        let cases: [(&str, &[usize], &[usize]); 10] = [
+            ("mk,kn->mn", &[4, 8], &[8, 2]),
+            ("mk,nk->mn", &[4, 8], &[2, 8]),
+            ("km,kn->mn", &[8, 4], &[8, 2]),
+            ("k,nk->n", &[8], &[4, 8]),
+            ("amk,ank->amn", &[1, 4, 1], &[1, 2, 1]),
+            ("abmk,abnk->abmn", &[2, 2, 4, 4], &[2, 2, 8, 4]),
+            ("bmk,kbn->nbm", &[2, 4, 8], &[8, 2, 4]),
+            ("ab,ab->a", &[4, 8], &[4, 8]),
+            ("ab,b->a", &[4, 8], &[8]),
+            ("k,k->", &[8], &[8]),
+        ];
+        let mut rng = StdRng::seed_from_u64(0xE1_0001);
+        for (equation, left_dims, right_dims) in cases {
+            let contraction = Contraction::new(&equation.parse().unwrap(), left_dims, right_dims);
+            let left = Tensor::<i32>::random_small(&mut rng, left_dims);
+            let right = Tensor::<i32>::random_small(&mut rng, right_dims);
+            let mut random_point =
+                |len: usize| -> Vec<Fr> { (0..len).map(|_| Fr::rand(&mut rng)).collect() };
+            let r_node_output =
+                OpeningPoint::new(random_point(contraction.num_vars(&contraction.output)));
+            let r_sumcheck = random_point(EinsumLayout::<Fr>::num_rounds(&contraction));
+
+            let folded = contraction.fold(&left, &right, &r_node_output);
+            let (left_point, right_point) = contraction.operand_points(&r_node_output, &r_sumcheck);
+
+            let left_claim: Fr = left.evaluate_mle(&left_point);
+            let right_claim: Fr = right.evaluate_mle(&right_point);
+            assert_eq!(
+                folded.left.evaluate(&r_sumcheck),
+                left_claim,
+                "{equation} left"
+            );
+            assert_eq!(
+                folded.right.evaluate(&r_sumcheck),
+                right_claim,
+                "{equation} right"
+            );
+        }
     }
 }

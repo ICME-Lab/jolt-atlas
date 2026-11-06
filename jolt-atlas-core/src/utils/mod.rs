@@ -7,6 +7,7 @@ use rayon::prelude::*;
 
 pub mod dims;
 pub mod opening_access;
+pub mod tensor_point;
 
 /// Computes the floored (Euclidean-style) remainder of `a / b`.
 ///

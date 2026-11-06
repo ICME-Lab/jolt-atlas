@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use atlas_trace::{op::Einsum, Model, Op, Trace};
 
 use crate::node_view::{ComputationNode, ModelView};
@@ -155,8 +153,8 @@ impl EinsumProver {
         computation_node: ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Box<dyn SumcheckInstanceProver<F, T>> {
-        let layout = Arc::new(einsum_contraction(&computation_node, model));
-        let params = ContractionParams::new(computation_node, layout, accumulator);
+        let contraction = einsum_contraction(&computation_node, model);
+        let params = ContractionParams::new(computation_node, contraction, accumulator);
         Box::new(ContractionProver::initialize(trace, params))
     }
 }
@@ -171,10 +169,10 @@ impl EinsumVerifier {
         computation_node: ComputationNode,
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Box<dyn SumcheckInstanceVerifier<F, T>> {
-        let layout = Arc::new(einsum_contraction(&computation_node, model));
+        let contraction = einsum_contraction(&computation_node, model);
         Box::new(ContractionVerifier::new(
             computation_node,
-            layout,
+            contraction,
             accumulator,
         ))
     }

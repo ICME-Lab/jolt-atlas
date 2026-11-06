@@ -52,7 +52,7 @@
 //! and those of `r_sumcheck` for a batch or contracted letter.
 
 use crate::onnx_proof::trace_view::TraceView;
-use std::{array, collections::BTreeMap, sync::Arc};
+use std::{array, collections::BTreeMap};
 
 use atlas_trace::{op::EinsumEq, trace::LayerData, Tensor, Trace};
 
@@ -92,92 +92,6 @@ use joltworks::subprotocols::blindfold::{
     InputClaimConstraint, OutputClaimConstraint, ProductTerm, ValueSource,
 };
 
-/// The eq-poly binding schedule within the (HighToLow) sumcheck round order.
-///
-/// The contraction cube is bound high-to-low. The batch `EQ` cube, when present,
-/// occupies a contiguous range of rounds; the two layouts in use differ in
-/// whether that range is at the top or the bottom of the round order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EqSchedule {
-    /// No `EQ` factor: a plain degree-2 dot product over the contraction cube.
-    None,
-    /// `EQ` cube occupies the **first** `log_eq` rounds (high bits) and is bound
-    /// first; afterwards the cached scalar is reused.
-    High {
-        /// Number of rounds the `EQ` cube spans (its bit-width).
-        log_eq: usize,
-        /// Number of contraction bits below the `EQ` cube, used to index `EQ`.
-        low_bits: usize,
-    },
-    /// `EQ` cube occupies the **last** `log_b` rounds (low bits) and is bound
-    /// last; during the first `log_k` rounds `EQ` is read by coefficient.
-    Low {
-        /// Number of contraction rounds above the `EQ` cube (bound before `EQ`).
-        log_k: usize,
-        /// Number of rounds the `EQ` cube spans (its bit-width).
-        log_b: usize,
-    },
-}
-
-impl EqSchedule {
-    /// Whether this schedule carries an `EQ` factor (degree 3 vs degree 2).
-    pub fn has_eq(&self) -> bool {
-        !matches!(self, EqSchedule::None)
-    }
-
-    /// The sumcheck degree implied by this schedule.
-    pub fn degree(&self) -> usize {
-        if self.has_eq() {
-            3
-        } else {
-            2
-        }
-    }
-}
-
-/// Operands folded at the output randomness into MLEs over the sumcheck cube.
-pub struct Folded<F: JoltField> {
-    /// Left operand folded over the contraction(+batch) cube.
-    pub left: MultilinearPolynomial<F>,
-    /// Right operand folded over the contraction(+batch) cube.
-    pub right: MultilinearPolynomial<F>,
-    /// Batch eq-poly, present iff the schedule is not [`EqSchedule::None`].
-    pub eq: Option<MultilinearPolynomial<F>>,
-}
-
-/// Per-pattern description of an einsum contraction sumcheck.
-pub trait EinsumLayout<F: JoltField>: Send + Sync {
-    /// Number of sumcheck rounds (`log` of the contraction(+batch) cube size).
-    fn num_rounds(&self) -> usize;
-
-    /// The eq-poly binding schedule for this pattern.
-    fn schedule(&self) -> EqSchedule;
-
-    /// Fold the two operand tensors at `r_node_output` into the sumcheck MLEs.
-    fn fold(
-        &self,
-        left_operand: &Tensor<i32>,
-        right_operand: &Tensor<i32>,
-        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-    ) -> Folded<F>;
-
-    /// Map the final sumcheck point back to the `(left, right)` operand opening
-    /// points. `sumcheck_challenges` is the post-protocol challenge vector.
-    fn operand_points(
-        &self,
-        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-        sumcheck_challenges: &[F],
-    ) -> (Vec<F>, Vec<F>);
-
-    /// The `EQ` factor multiplying `left·right` in the output claim
-    /// (`F::one()` when the schedule carries no `EQ`).
-    fn output_eq(
-        &self,
-        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F;
-}
-
 /// The letter roles of a two-operand einsum, and the sumcheck they define. See
 /// the [module docs](self).
 pub struct Contraction {
@@ -188,6 +102,8 @@ pub struct Contraction {
     contracted: Vec<Letter>,
     /// Physical size of each letter.
     sizes: BTreeMap<Letter, usize>,
+    log_batch: usize,
+    log_contracted: usize,
 }
 
 impl Contraction {
@@ -199,15 +115,17 @@ impl Contraction {
         };
         let (left, right) = (letters(left), letters(right));
         let output = letters(equation.output());
-        let sizes = left
+        let sizes: BTreeMap<Letter, usize> = left
             .iter()
             .copied()
             .zip(left_dims.iter().copied())
             .chain(right.iter().copied().zip(right_dims.iter().copied()))
             .collect();
         let shared = || left.iter().copied().filter(|c| right.contains(c));
-        let batch = shared().filter(|c| output.contains(c)).collect();
-        let contracted = shared().filter(|c| !output.contains(c)).collect();
+        let batch: Vec<Letter> = shared().filter(|c| output.contains(c)).collect();
+        let contracted: Vec<Letter> = shared().filter(|c| !output.contains(c)).collect();
+        let num_vars = |term: &[Letter]| -> usize { term.iter().map(|c| sizes[c].log_2()).sum() };
+        let (log_batch, log_contracted) = (num_vars(&batch), num_vars(&contracted));
         Self {
             left,
             right,
@@ -215,7 +133,17 @@ impl Contraction {
             batch,
             contracted,
             sizes,
+            log_batch,
+            log_contracted,
         }
+    }
+
+    fn num_rounds(&self) -> usize {
+        self.log_batch + self.log_contracted
+    }
+
+    fn has_batch(&self) -> bool {
+        !self.batch.is_empty()
     }
 
     /// The axes of `r_sumcheck`.
@@ -235,10 +163,6 @@ impl Contraction {
 
     fn dims(&self, letters: &[Letter]) -> Vec<usize> {
         letters.iter().map(|c| self.sizes[c]).collect()
-    }
-
-    fn num_vars(&self, letters: &[Letter]) -> usize {
-        letters.iter().map(|c| self.sizes[c].log_2()).sum()
     }
 
     fn r_output<F>(&self, r_node_output: OpeningPoint<BIG_ENDIAN, F>) -> NamedPoint<F>
@@ -328,75 +252,18 @@ impl Contraction {
     }
 }
 
-impl<F: JoltField> EinsumLayout<F> for Contraction {
-    fn num_rounds(&self) -> usize {
-        self.num_vars(&self.sumcheck_letters())
-    }
-
-    fn schedule(&self) -> EqSchedule {
-        if self.batch.is_empty() {
-            EqSchedule::None
-        } else {
-            EqSchedule::High {
-                log_eq: self.num_vars(&self.batch),
-                low_bits: self.num_vars(&self.contracted),
-            }
-        }
-    }
-
-    fn fold(
-        &self,
-        left_operand: &Tensor<i32>,
-        right_operand: &Tensor<i32>,
-        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-    ) -> Folded<F> {
-        let r_output = self.r_output(r_node_output.clone());
-        Folded {
-            left: self.fold_operand(left_operand, &self.left, &r_output),
-            right: self.fold_operand(right_operand, &self.right, &r_output),
-            eq: (!self.batch.is_empty()).then(|| {
-                MultilinearPolynomial::from(EqPolynomial::<F>::evals(&r_output.coords(&self.batch)))
-            }),
-        }
-    }
-
-    fn operand_points(
-        &self,
-        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-        sumcheck_challenges: &[F],
-    ) -> (Vec<F>, Vec<F>) {
-        let r_output = self.r_output(r_node_output.clone());
-        let r_sumcheck = self.r_sumcheck(sumcheck_challenges);
-        (
-            self.operand_point(&self.left, &r_output, &r_sumcheck),
-            self.operand_point(&self.right, &r_output, &r_sumcheck),
-        )
-    }
-
-    fn output_eq(
-        &self,
-        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-        sumcheck_challenges: &[F::Challenge],
-    ) -> F {
-        let r_output = self.r_output(r_node_output.clone());
-        let r_sumcheck = self.r_sumcheck(&sumcheck_challenges.into_opening());
-        self.batch_eq(&r_output, &r_sumcheck)
-    }
-}
-
 /// Parameters of the contraction sumcheck.
-#[derive(Clone)]
 pub struct ContractionParams<F: JoltField> {
     r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
-    layout: Arc<dyn EinsumLayout<F>>,
+    contraction: Contraction,
 }
 
 impl<F: JoltField> ContractionParams<F> {
-    /// Create params for the given pattern `layout`.
+    /// Create the params of an einsum node.
     pub fn new(
         computation_node: ComputationNode,
-        layout: Arc<dyn EinsumLayout<F>>,
+        contraction: Contraction,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
@@ -404,14 +271,18 @@ impl<F: JoltField> ContractionParams<F> {
         Self {
             r_node_output,
             computation_node,
-            layout,
+            contraction,
         }
     }
 }
 
 impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
     fn degree(&self) -> usize {
-        self.layout.schedule().degree()
+        if self.contraction.has_batch() {
+            3
+        } else {
+            2
+        }
     }
 
     /// The sumcheck's initial claim: the raw accumulation `acc(r_output)`.
@@ -428,7 +299,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
     }
 
     fn num_rounds(&self) -> usize {
-        self.layout.num_rounds()
+        self.contraction.num_rounds()
     }
 
     #[cfg(feature = "zk")]
@@ -452,7 +323,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
         let right = ValueSource::Opening(builder.nodeio(Target::Input(1)));
         // With batch letters the claim is scaled by the batch eq value; a plain
         // dot product is just the operand product.
-        let term = if self.layout.schedule().has_eq() {
+        let term = if self.contraction.has_batch() {
             ProductTerm::scaled(ValueSource::Challenge(0), vec![left, right])
         } else {
             ProductTerm::product(vec![left, right])
@@ -462,10 +333,12 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
 
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        if self.layout.schedule().has_eq() {
-            vec![self
-                .layout
-                .output_eq(&self.r_node_output, sumcheck_challenges)]
+        if self.contraction.has_batch() {
+            let r_output = self.contraction.r_output(self.r_node_output.clone());
+            let r_sumcheck = self
+                .contraction
+                .r_sumcheck(&sumcheck_challenges.into_opening());
+            vec![self.contraction.batch_eq(&r_output, &r_sumcheck)]
         } else {
             vec![]
         }
@@ -489,10 +362,15 @@ impl<F: JoltField> ContractionProver<F> {
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for einsum operation")
         };
-        let Folded { left, right, eq } =
-            params
-                .layout
-                .fold(left_operand, right_operand, &params.r_node_output);
+        let contraction = &params.contraction;
+        let r_output = contraction.r_output(params.r_node_output.clone());
+        let left = contraction.fold_operand(left_operand, &contraction.left, &r_output);
+        let right = contraction.fold_operand(right_operand, &contraction.right, &r_output);
+        let eq = contraction.has_batch().then(|| {
+            MultilinearPolynomial::from(EqPolynomial::<F>::evals(
+                &r_output.coords(&contraction.batch),
+            ))
+        });
 
         Self {
             params,
@@ -510,8 +388,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
 
     fn compute_message(&mut self, round: usize, previous_claim: F) -> UniPoly<F> {
         let half = self.left.len() / 2;
-        match self.params.layout.schedule() {
-            EqSchedule::None => {
+        match &self.eq {
+            None => {
                 let evals: [F; 2] = (0..half)
                     .into_par_iter()
                     .with_min_len(par_enabled())
@@ -523,10 +401,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
                     .reduce(|| [F::zero(); 2], |a, b| array::from_fn(|i| a[i] + b[i]));
                 UniPoly::from_evals_and_hint(previous_claim, &evals)
             }
-            EqSchedule::High { log_eq, low_bits } => {
-                let eq = self.eq.as_ref().expect("eq poly must exist");
+            Some(eq) => {
+                let log_batch = self.params.contraction.log_batch;
+                let log_contracted = self.params.contraction.log_contracted;
                 // `eq` is a single value once the batch axes are bound.
-                let eq_bound = (round >= log_eq).then(|| eq.final_claim());
+                let eq_bound = (round >= log_batch).then(|| eq.final_claim());
                 let evals: [F; 3] = (0..half)
                     .into_par_iter()
                     .with_min_len(par_enabled())
@@ -539,31 +418,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
                             .sumcheck_evals_array::<3>(i, BindingOrder::HighToLow);
                         let e = match eq_bound {
                             Some(value) => [value; 3],
-                            None => {
-                                eq.sumcheck_evals_array::<3>(i >> low_bits, BindingOrder::HighToLow)
-                            }
-                        };
-                        [l[0] * r[0] * e[0], l[1] * r[1] * e[1], l[2] * r[2] * e[2]]
-                    })
-                    .reduce(|| [F::zero(); 3], |a, b| array::from_fn(|i| a[i] + b[i]));
-                UniPoly::from_evals_and_hint(previous_claim, &evals)
-            }
-            EqSchedule::Low { log_k, log_b } => {
-                let eq = self.eq.as_ref().expect("eq poly must exist");
-                let evals: [F; 3] = (0..half)
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|jh| {
-                        let l = self
-                            .left
-                            .sumcheck_evals_array::<3>(jh, BindingOrder::HighToLow);
-                        let r = self
-                            .right
-                            .sumcheck_evals_array::<3>(jh, BindingOrder::HighToLow);
-                        let e = if round < log_k {
-                            [eq.get_bound_coeff(jh & ((1 << log_b) - 1)); 3]
-                        } else {
-                            eq.sumcheck_evals_array::<3>(jh, BindingOrder::HighToLow)
+                            None => eq.sumcheck_evals_array::<3>(
+                                i >> log_contracted,
+                                BindingOrder::HighToLow,
+                            ),
                         };
                         [l[0] * r[0] * e[0], l[1] * r[1] * e[1], l[2] * r[2] * e[2]]
                     })
@@ -576,22 +434,9 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
     fn ingest_challenge(&mut self, r_j: F::Challenge, round: usize) {
         self.left.bind_parallel(r_j, BindingOrder::HighToLow);
         self.right.bind_parallel(r_j, BindingOrder::HighToLow);
-        match self.params.layout.schedule() {
-            EqSchedule::None => {}
-            EqSchedule::High { log_eq, .. } => {
-                if round < log_eq {
-                    let eq = self.eq.as_mut().expect("eq poly must exist");
-                    eq.bind_parallel(r_j, BindingOrder::HighToLow);
-                }
-            }
-            EqSchedule::Low { log_k, .. } => {
-                if round >= log_k {
-                    self.eq
-                        .as_mut()
-                        .expect("eq poly must exist")
-                        .bind_parallel(r_j, BindingOrder::HighToLow);
-                }
-            }
+        if round < self.params.contraction.log_batch {
+            let eq = self.eq.as_mut().expect("eq poly must exist");
+            eq.bind_parallel(r_j, BindingOrder::HighToLow);
         }
     }
 
@@ -601,11 +446,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let sumcheck_challenges = sumcheck_challenges.into_opening();
-        let (left_point, right_point) = self
-            .params
-            .layout
-            .operand_points(&self.params.r_node_output, &sumcheck_challenges);
+        let contraction = &self.params.contraction;
+        let r_output = contraction.r_output(self.params.r_node_output.clone());
+        let r_sumcheck = contraction.r_sumcheck(&sumcheck_challenges.into_opening());
+        let left_point = contraction.operand_point(&contraction.left, &r_output, &r_sumcheck);
+        let right_point = contraction.operand_point(&contraction.right, &r_output, &r_sumcheck);
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
             .into_provider(transcript, Default::default());
         provider.append_nodeio_at(
@@ -627,13 +472,13 @@ pub struct ContractionVerifier<F: JoltField> {
 }
 
 impl<F: JoltField> ContractionVerifier<F> {
-    /// Create a verifier for the given pattern `layout`.
+    /// Create the verifier of an einsum node.
     pub fn new(
         computation_node: ComputationNode,
-        layout: Arc<dyn EinsumLayout<F>>,
+        contraction: Contraction,
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Self {
-        let params = ContractionParams::new(computation_node, layout, accumulator);
+        let params = ContractionParams::new(computation_node, contraction, accumulator);
         Self { params }
     }
 }
@@ -651,11 +496,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for Contraction
         let accessor = AccOpeningAccessor::new(accumulator, &self.params.computation_node);
         let left = accessor.get_nodeio(Target::Input(0)).1;
         let right = accessor.get_nodeio(Target::Input(1)).1;
-        let eq = self
-            .params
-            .layout
-            .output_eq(&self.params.r_node_output, sumcheck_challenges);
-        left * right * eq
+        let contraction = &self.params.contraction;
+        let r_output = contraction.r_output(self.params.r_node_output.clone());
+        let r_sumcheck = contraction.r_sumcheck(&sumcheck_challenges.into_opening());
+        left * right * contraction.batch_eq(&r_output, &r_sumcheck)
     }
 
     fn cache_openings(
@@ -664,11 +508,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for Contraction
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
     ) {
-        let sumcheck_challenges = sumcheck_challenges.into_opening();
-        let (left_point, right_point) = self
-            .params
-            .layout
-            .operand_points(&self.params.r_node_output, &sumcheck_challenges);
+        let contraction = &self.params.contraction;
+        let r_output = contraction.r_output(self.params.r_node_output.clone());
+        let r_sumcheck = contraction.r_sumcheck(&sumcheck_challenges.into_opening());
+        let left_point = contraction.operand_point(&contraction.left, &r_output, &r_sumcheck);
+        let right_point = contraction.operand_point(&contraction.right, &r_output, &r_sumcheck);
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
             .into_provider(transcript, Default::default());
         provider.append_nodeio_at(
@@ -713,25 +557,24 @@ mod tests {
             let right = Tensor::<i32>::random_small(&mut rng, right_dims);
             let mut random_point =
                 |len: usize| -> Vec<Fr> { (0..len).map(|_| Fr::rand(&mut rng)).collect() };
-            let r_node_output =
-                OpeningPoint::new(random_point(contraction.num_vars(&contraction.output)));
-            let r_sumcheck = random_point(EinsumLayout::<Fr>::num_rounds(&contraction));
+            let num_output_vars = contraction
+                .output
+                .iter()
+                .map(|c| contraction.sizes[c].log_2())
+                .sum();
+            let r_output = contraction.r_output(OpeningPoint::new(random_point(num_output_vars)));
+            let z = random_point(contraction.num_rounds());
+            let r_sumcheck = contraction.r_sumcheck(&z);
 
-            let folded = contraction.fold(&left, &right, &r_node_output);
-            let (left_point, right_point) = contraction.operand_points(&r_node_output, &r_sumcheck);
+            let left_folded = contraction.fold_operand(&left, &contraction.left, &r_output);
+            let right_folded = contraction.fold_operand(&right, &contraction.right, &r_output);
+            let left_point = contraction.operand_point(&contraction.left, &r_output, &r_sumcheck);
+            let right_point = contraction.operand_point(&contraction.right, &r_output, &r_sumcheck);
 
             let left_claim: Fr = left.evaluate_mle(&left_point);
             let right_claim: Fr = right.evaluate_mle(&right_point);
-            assert_eq!(
-                folded.left.evaluate(&r_sumcheck),
-                left_claim,
-                "{equation} left"
-            );
-            assert_eq!(
-                folded.right.evaluate(&r_sumcheck),
-                right_claim,
-                "{equation} right"
-            );
+            assert_eq!(left_folded.evaluate(&z), left_claim, "{equation} left");
+            assert_eq!(right_folded.evaluate(&z), right_claim, "{equation} right");
         }
     }
 }

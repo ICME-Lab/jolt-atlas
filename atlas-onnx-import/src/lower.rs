@@ -5,6 +5,8 @@
 //! - quantizes constants (floats scale by `2^s`, integers stay raw);
 //! - inserts explicit `Broadcast` nodes so every elementwise op receives
 //!   operands already at its output shape (the prover's assumption);
+//! - lowers `MatMul` and `Gemm` to one `Einsum` whose equation expresses the
+//!   operands as they are (a `Gemm` bias becomes an `Add` after it);
 //! - splits multi-axis ONNX slices into chains of single-axis slices.
 
 use std::collections::HashMap;
@@ -119,6 +121,39 @@ fn lower_dims(dims: &[usize]) -> Vec<usize> {
     }
 }
 
+/// Letters of the batch axes of a `MatMul`; none of them is `m`, `k` or `n`.
+const BATCH_LETTERS: &str = "abcdefgh";
+
+/// The einsum equation of a `MatMul`, following numpy: a 1-D operand has no `m`
+/// or `n`, and batch axes align from the right.
+fn matmul_equation(left: &[usize], right: &[usize]) -> Result<String, String> {
+    match (left.len(), right.len()) {
+        (1, 1) => Ok("k,k->".to_string()),
+        (1, 2) => Ok("k,kn->n".to_string()),
+        (2, 1) => Ok("mk,k->m".to_string()),
+        (r, s) if r >= 2 && s >= 2 => {
+            let (left_batch, right_batch) = (&left[..r - 2], &right[..s - 2]);
+            let shared = left_batch.len().min(right_batch.len());
+            if left_batch[left_batch.len() - shared..] != right_batch[right_batch.len() - shared..]
+            {
+                return Err(format!(
+                    "matmul batch axes of {left:?} and {right:?} differ; \
+                     broadcasting them needs an explicit Broadcast"
+                ));
+            }
+            // `batch` names the longer operand's batch axes; the shorter one
+            // uses its last letters.
+            let batch = BATCH_LETTERS
+                .get(..left_batch.len().max(right_batch.len()))
+                .ok_or_else(|| format!("matmul of {left:?} and {right:?} has too many axes"))?;
+            let left_letters = &batch[batch.len() - left_batch.len()..];
+            let right_letters = &batch[batch.len() - right_batch.len()..];
+            Ok(format!("{left_letters}mk,{right_letters}kn->{batch}mn"))
+        }
+        _ => Err(format!("unsupported matmul of {left:?} and {right:?}")),
+    }
+}
+
 struct Lowerer<'g> {
     g: &'g IGraph,
     scale: Scale,
@@ -217,6 +252,21 @@ impl<'g> Lowerer<'g> {
             .g
             .info(node.outputs[0])
             .is_none_or(|i| i.dtype == crate::graph::DType::F32);
+
+        // Einsum has no raw (rebase-free) form: its eval always divides the
+        // contraction by 2^scale, so an integer contraction would silently
+        // shrink every product by that factor.
+        let einsum = |me: &mut Self, equation: String| -> Result<NodeId, ImportError> {
+            if !scaled {
+                return Err(attr_err(format!(
+                    "{} over non-float operands would be rebased by 2^scale",
+                    node.op
+                )));
+            }
+            let equation = equation.parse::<op::EinsumEq>().map_err(attr_err)?;
+            let operands = vec![me.resolve(node.inputs[0])?, me.resolve(node.inputs[1])?];
+            Ok(me.push(Op::Einsum(op::Einsum { equation }), operands, out.clone()))
+        };
 
         let id = match node.op.as_str() {
             "Add" => elementwise(self, Op::Add(op::Add))?,
@@ -365,20 +415,38 @@ impl<'g> Lowerer<'g> {
                 let count = node.attr_int("count").ok_or_else(unlowered)? as usize;
                 direct(self, Op::MeanOfSquares(op::MeanOfSquares { axes, count }))?
             }
-            "atlas.Einsum" => {
-                // Einsum has no raw (rebase-free) form: its eval always
-                // divides the contraction by 2^scale. An integer einsum
-                // would silently shrink every product by that factor.
-                if !scaled {
-                    return Err(attr_err(
-                        "einsum over non-float operands would be rebased by 2^scale".into(),
-                    ));
+            "MatMul" => {
+                let equation = matmul_equation(
+                    self.g.dims(node.inputs[0]).expect("analyzed"),
+                    self.g.dims(node.inputs[1]).expect("analyzed"),
+                )
+                .map_err(attr_err)?;
+                einsum(self, equation)?
+            }
+            "Gemm" => {
+                if node.attr_float("alpha").unwrap_or(1.0) != 1.0
+                    || node.attr_float("beta").unwrap_or(1.0) != 1.0
+                {
+                    return Err(attr_err("Gemm with alpha/beta != 1 unsupported".into()));
                 }
-                let Some(crate::graph::Attr::Str(eq)) = node.attrs.get("equation") else {
-                    return Err(unlowered());
+                let left = if node.attr_int("transA").unwrap_or(0) != 0 {
+                    "km"
+                } else {
+                    "mk"
                 };
-                let equation = eq.parse::<op::EinsumEq>().map_err(attr_err)?;
-                direct(self, Op::Einsum(op::Einsum { equation }))?
+                let right = if node.attr_int("transB").unwrap_or(0) != 0 {
+                    "nk"
+                } else {
+                    "kn"
+                };
+                let contraction = einsum(self, format!("{left},{right}->mn"))?;
+                match node.inputs.get(2) {
+                    Some(&bias) => {
+                        let bias = self.resolve_broadcast(bias, &out)?;
+                        self.push(Op::Add(op::Add), vec![contraction, bias], out.clone())
+                    }
+                    None => contraction,
+                }
             }
             _ => return Err(unlowered()),
         };
@@ -390,7 +458,154 @@ impl<'g> Lowerer<'g> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{ConstData, ConstTensor, DType, TensorInfo};
+    use crate::graph::{Attr, ConstData, ConstTensor, DType, EdgeId, INode, TensorInfo};
+
+    fn const_edge(g: &mut IGraph, name: &str, dims: &[usize]) -> EdgeId {
+        let e = g.edge_by_name(name);
+        g.edge_mut(e).info = Some(TensorInfo {
+            dtype: DType::F32,
+            dims: dims.to_vec(),
+        });
+        g.edge_mut(e).konst = Some(ConstTensor {
+            dtype: DType::F32,
+            dims: dims.to_vec(),
+            data: ConstData::F32(vec![1.0; dims.iter().product()]),
+        });
+        e
+    }
+
+    /// Lower one `op` over constant operands of `dims`; `dims[2]` is a bias.
+    fn lower_matmul(op: &str, attrs: &[(&str, i64)], dims: &[&[usize]], out: &[usize]) -> Vec<Op> {
+        let mut g = IGraph::default();
+        let inputs = dims
+            .iter()
+            .enumerate()
+            .map(|(i, dims)| const_edge(&mut g, &format!("operand{i}"), dims))
+            .collect();
+        let output = g.edge_by_name("out");
+        g.edge_mut(output).info = Some(TensorInfo {
+            dtype: DType::F32,
+            dims: out.to_vec(),
+        });
+        g.push_node(INode {
+            name: "mm".into(),
+            op: op.into(),
+            attrs: attrs
+                .iter()
+                .map(|(name, value)| (name.to_string(), Attr::Int(*value)))
+                .collect(),
+            inputs,
+            outputs: vec![output],
+        });
+        g.outputs.push(output);
+        lower(&g, Scale::new(14).unwrap(), &[])
+            .expect("matmul lowers")
+            .graph
+            .nodes
+            .into_iter()
+            .map(|node| node.op)
+            .filter(|op| !matches!(op, Op::Constant(_)))
+            .collect()
+    }
+
+    fn equation(op: &Op) -> String {
+        let Op::Einsum(einsum) = op else {
+            panic!("expected an einsum, got {op:?}");
+        };
+        einsum.equation.to_string()
+    }
+
+    #[test]
+    fn matmul_lowers_to_one_einsum_without_added_nodes() {
+        type Case = (
+            &'static [usize],
+            &'static [usize],
+            &'static [usize],
+            &'static str,
+        );
+        let cases: [Case; 7] = [
+            (&[2, 4], &[4, 8], &[2, 8], "mk,kn->mn"),
+            (&[3, 2, 4], &[3, 4, 8], &[3, 2, 8], "amk,akn->amn"),
+            (
+                &[5, 3, 2, 4],
+                &[5, 3, 4, 8],
+                &[5, 3, 2, 8],
+                "abmk,abkn->abmn",
+            ),
+            (&[3, 2, 4], &[4, 8], &[3, 2, 8], "amk,kn->amn"),
+            (&[4], &[4, 8], &[8], "k,kn->n"),
+            (&[2, 4], &[4], &[2], "mk,k->m"),
+            (&[4], &[4], &[], "k,k->"),
+        ];
+        for (left, right, out, expected) in cases {
+            let ops = lower_matmul("MatMul", &[], &[left, right], out);
+            assert_eq!(ops.len(), 1, "{expected}");
+            assert_eq!(equation(&ops[0]), expected);
+        }
+    }
+
+    #[test]
+    fn gemm_expresses_transposes_in_the_equation() {
+        let cases = [
+            (0, 0, [2usize, 4], [4usize, 8], "mk,kn->mn"),
+            (1, 0, [4, 2], [4, 8], "km,kn->mn"),
+            (0, 1, [2, 4], [8, 4], "mk,nk->mn"),
+            (1, 1, [4, 2], [8, 4], "km,nk->mn"),
+        ];
+        for (trans_a, trans_b, left, right, expected) in cases {
+            let attrs = [("transA", trans_a), ("transB", trans_b)];
+            let ops = lower_matmul("Gemm", &attrs, &[&left, &right], &[2, 8]);
+            assert_eq!(ops.len(), 1, "{expected}");
+            assert_eq!(equation(&ops[0]), expected);
+        }
+    }
+
+    #[test]
+    fn gemm_bias_is_an_add_after_the_einsum() {
+        let ops = lower_matmul("Gemm", &[], &[&[2, 4], &[4, 8], &[2, 8]], &[2, 8]);
+        assert_eq!(ops.len(), 2);
+        assert_eq!(equation(&ops[0]), "mk,kn->mn");
+        assert!(matches!(ops[1], Op::Add(_)));
+    }
+
+    #[test]
+    fn broadcast_batch_axes_are_rejected() {
+        assert!(matmul_equation(&[1, 2, 4], &[3, 4, 8]).is_err());
+    }
+
+    // An integer MatMul must be rejected: an einsum always rebases by 2^scale,
+    // which would silently divide raw integer products.
+    #[test]
+    fn integer_matmul_is_rejected() {
+        let mut g = IGraph::default();
+        let info = TensorInfo {
+            dtype: DType::I64,
+            dims: vec![2, 2],
+        };
+        let a = g.fresh_edge("a", info.clone());
+        let b = g.fresh_edge("b", info.clone());
+        for operand in [a, b] {
+            g.edge_mut(operand).konst = Some(ConstTensor {
+                dtype: DType::I64,
+                dims: vec![2, 2],
+                data: ConstData::I64(vec![1; 4]),
+            });
+        }
+        let out = g.fresh_edge("out", info);
+        g.push_node(INode {
+            name: "mm".into(),
+            op: "MatMul".into(),
+            attrs: Default::default(),
+            inputs: vec![a, b],
+            outputs: vec![out],
+        });
+        g.outputs.push(out);
+        let result = lower(&g, Scale::new(14).unwrap(), &[]);
+        assert!(matches!(
+            result,
+            Err(ImportError::Pass { pass: "lower", .. })
+        ));
+    }
 
     // A graph output that is a constant edge (an initializer, or a value
     // analysis fully folded) has no producing node; lowering must

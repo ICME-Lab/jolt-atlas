@@ -91,7 +91,6 @@ fn gpt2_tiny_dory() {
         &[
             "elide",
             "norm_fusion",
-            "matmul_gemm_to_einsum",
             "slice_through_projection",
             "split_to_slices",
         ],
@@ -101,7 +100,7 @@ fn gpt2_tiny_dory() {
 }
 
 /// Qwen2 architecture (2 layers, 56 hidden, 7 query heads over 1 KV head):
-/// GQA ratio 7 → `repeat_to_gather` + the `amk,ank->amn` outer-product
+/// GQA ratio 7 → `repeat_to_gather` + the `amk,akn->amn` outer-product
 /// einsum (the path PR #382 broke with no test), RoPE Cos/Sin over scaled
 /// position ids, RMSNorm, SiLU, tied embeddings.
 #[test]
@@ -119,7 +118,7 @@ fn qwen2_tiny_dory() {
     assert!(
         einsum_equations(&imported)
             .iter()
-            .any(|e| e == "amk,ank->amn"),
+            .any(|e| e == "amk,akn->amn"),
         "qwen2-tiny must lower the GQA outer-product einsum"
     );
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
@@ -151,10 +150,7 @@ fn known_gap_qwen2_tiny_seq12() {
 #[test]
 fn bge_tiny() {
     let imported = zoo("bge-tiny", 16);
-    assert_passes_fired(
-        &imported,
-        &["norm_fusion", "rsqrt_eps_floor", "matmul_gemm_to_einsum"],
-    );
+    assert_passes_fired(&imported, &["norm_fusion", "rsqrt_eps_floor"]);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
     prove_verify_roundtrip::<HyperKZG<Bn254>>(imported.model, &inputs, RoundtripOptions::default());
 }

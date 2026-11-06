@@ -4,9 +4,8 @@
 //! guards, because the passes define the statement that gets proven.
 //!
 //! Passes may introduce `atlas.*` ops (`atlas.Sum`, `atlas.MeanOfSquares`,
-//! `atlas.Rsqrt`, `atlas.Einsum`, `atlas.MoveAxis`, `atlas.Broadcast`,
-//! `atlas.Descale`); `lower.rs` is the single choke point that verifies the
-//! final surface.
+//! `atlas.Rsqrt`, `atlas.MoveAxis`, `atlas.Broadcast`, `atlas.Descale`);
+//! `lower.rs` is the single choke point that verifies the final surface.
 
 use crate::{
     error::ImportError,
@@ -45,7 +44,6 @@ pub fn run_all(g: &mut IGraph, scale: Scale) -> Result<Vec<PassReport>, ImportEr
         ("norm_fusion", Plain(norm_fusion)),
         ("div_rewrites", Scaled(div_rewrites)),
         ("rsqrt_eps_floor", Scaled(rsqrt_eps_floor)),
-        ("matmul_gemm_to_einsum", Plain(matmul_gemm_to_einsum)),
         ("slice_through_projection", Plain(slice_through_projection)),
         ("transpose_to_moveaxis", Plain(transpose_to_moveaxis)),
         ("expand_to_broadcast", Plain(expand_to_broadcast)),
@@ -751,210 +749,6 @@ fn rsqrt_eps_floor(g: &mut IGraph, scale: Scale) -> Result<usize, ImportError> {
     Ok(rewrites)
 }
 
-/// Whether `perm` swaps only the last two axes.
-fn is_last_two_swap(perm: &[usize]) -> bool {
-    let r = perm.len();
-    r >= 2
-        && perm[r - 1] == r - 2
-        && perm[r - 2] == r - 1
-        && perm[..r - 2].iter().enumerate().all(|(i, &p)| p == i)
-}
-
-/// MatMul / Gemm → canonical `atlas.Einsum`, absorbing a last-two-axes
-/// Transpose on the RHS (the Q·Kᵀ attention pattern) into the equation.
-///
-/// Every emitted equation names every axis of every operand — no dropped
-/// letters, no size-1 reinterpretation. Non-canonical layouts get explicit
-/// Reshape/MoveAxis nodes instead of exotic equations.
-fn matmul_gemm_to_einsum(g: &mut IGraph) -> Result<usize, ImportError> {
-    let mut rewrites = 0;
-    for idx in 0..g.nodes.len() {
-        let Some(node) = g.nodes[idx].as_ref() else {
-            continue;
-        };
-        if node.op != "MatMul" && node.op != "Gemm" {
-            continue;
-        }
-        let name = node.name.clone();
-        let out = node.outputs[0];
-        let is_gemm = node.op == "Gemm";
-        // atlas.Einsum has no raw (rebase-free) form: its eval always divides
-        // the contraction by 2^scale, so an integer matmul's result would be
-        // silently shrunk by that factor. Reject it (lowering gates this too).
-        if g.info(out).is_some_and(|i| i.dtype != DType::F32) {
-            return Err(ImportError::Pass {
-                pass: "matmul_gemm_to_einsum",
-                node: name,
-                reason: format!(
-                    "{} over non-float operands cannot be lowered: \
-                     einsum always rebases by 2^scale",
-                    if is_gemm { "Gemm" } else { "MatMul" }
-                ),
-            });
-        }
-        let (mut a, mut b) = (node.inputs[0], node.inputs[1]);
-        let bias = if is_gemm {
-            node.inputs.get(2).copied()
-        } else {
-            None
-        };
-
-        if is_gemm {
-            let node = g.nodes[idx].as_ref().expect("live");
-            if node.attr_float("alpha").unwrap_or(1.0) != 1.0
-                || node.attr_float("beta").unwrap_or(1.0) != 1.0
-            {
-                return Err(ImportError::Pass {
-                    pass: "matmul_gemm_to_einsum",
-                    node: name,
-                    reason: "Gemm with alpha/beta != 1 unsupported".into(),
-                });
-            }
-            if node.attr_int("transA").unwrap_or(0) != 0 {
-                return Err(ImportError::Pass {
-                    pass: "matmul_gemm_to_einsum",
-                    node: name,
-                    reason: "Gemm transA unsupported".into(),
-                });
-            }
-        }
-
-        // Gemm transB needs no materialization: `A·Bᵀ` is the canonical
-        // "mk,nk->mn" contraction with B used as stored.
-        let b_transposed = is_gemm
-            && g.nodes[idx]
-                .as_ref()
-                .expect("live")
-                .attr_int("transB")
-                .unwrap_or(0)
-                != 0;
-
-        // Absorb Transpose(last two axes) feeding the RHS: both RHS layouts
-        // ("kn"/"nk") are canonical. The LHS has no "km" einsum, so a
-        // transposed LHS keeps its Transpose (it becomes a MoveAxis) rather
-        // than being absorbed into an equation lowering would reject.
-        let mut b_swapped = b_transposed;
-        if let Some((_, p)) = g.producer(b)
-            && (p.op == "Transpose")
-            && p.attrs.get("perm").is_some_and(|attr| {
-                matches!(attr, Attr::Ints(perm)
-                    if is_last_two_swap(&perm.iter().map(|&v| v as usize).collect::<Vec<_>>()))
-            })
-        {
-            b = p.inputs[0];
-            b_swapped = !b_swapped;
-        }
-
-        let mut a_dims = dims_of(g, a);
-        let b_dims = dims_of(g, b);
-
-        // Linear-projection pattern: [1,…,1,m,k] · [k,n] (or transposed
-        // RHS). Squeeze the unit batch dims, contract in 2-D, and reshape
-        // back — the same shape tract reached via RmAxis/AddAxis.
-        let mut restore_shape: Option<Vec<usize>> = None;
-        if b_dims.len() == 2
-            && a_dims.len() > 2
-            && a_dims[..a_dims.len() - 2].iter().all(|&d| d == 1)
-        {
-            let squeezed: Vec<usize> = a_dims[a_dims.len() - 2..].to_vec();
-            let sq_edge = g.fresh_edge(&format!("{name}/squeeze"), f32_info(&squeezed));
-            add_reshape_to_edge(g, &format!("{name}/squeeze"), a, sq_edge, &squeezed);
-            a = sq_edge;
-            a_dims = squeezed;
-            restore_shape = Some(dims_of(g, out));
-        }
-        let (ra, rb) = (a_dims.len(), b_dims.len());
-
-        // Canonical equations: batch letters a, b, …; then m/k on the LHS
-        // and k/n on the RHS (swap on a transposed operand).
-        let batch = &b"abcd"[..];
-        let equation = match (ra, rb) {
-            (2, 2) => {
-                let rhs = if b_swapped { "nk" } else { "kn" };
-                format!("mk,{rhs}->mn")
-            }
-            (r, s) if r == s && (3..=4).contains(&r) => {
-                // Batched forms normalize to a contraction-last RHS
-                // ("…nk"), the one layout family the proof system supports
-                // (`rbmk,rbnk->bmn`). An RHS that arrives in `…kn` layout
-                // (no transpose to absorb, e.g. attention·V) gets an
-                // explicit MoveAxis — a cheap structural node — instead of
-                // its own einsum layout.
-                if !b_swapped {
-                    let mut t_dims = b_dims.clone();
-                    t_dims.swap(r - 2, r - 1);
-                    let t = g.fresh_edge(&format!("{name}/rhsT"), f32_info(&t_dims));
-                    g.push_node(INode {
-                        name: format!("{name}/rhsT"),
-                        op: "atlas.MoveAxis".into(),
-                        attrs: [
-                            ("source".to_string(), Attr::Int((r - 2) as i64)),
-                            ("destination".to_string(), Attr::Int((r - 1) as i64)),
-                        ]
-                        .into(),
-                        inputs: vec![b],
-                        outputs: vec![t],
-                    });
-                    b = t;
-                }
-                let batch_letters: String = batch[..r - 2].iter().map(|&c| c as char).collect();
-                format!("{batch_letters}mk,{batch_letters}nk->{batch_letters}mn")
-            }
-            _ => {
-                return Err(ImportError::Pass {
-                    pass: "matmul_gemm_to_einsum",
-                    node: name,
-                    reason: format!(
-                        "unsupported MatMul ranks {ra}x{rb} (dims {a_dims:?} · {b_dims:?}); \
-                         broadcasted-batch matmul needs an explicit Broadcast"
-                    ),
-                });
-            }
-        };
-
-        // Where the contraction result lands: directly on `out`, or on a
-        // fresh edge when a bias add or a batch-dim restore follows.
-        // (restore and bias never combine: Gemm is always rank 2.)
-        let einsum_out = match (&restore_shape, bias) {
-            (Some(full), None) => {
-                let m = full[full.len() - 2];
-                let n = full[full.len() - 1];
-                g.fresh_edge(&format!("{name}/mm2d"), f32_info(&[m, n]))
-            }
-            (None, Some(_)) => g.fresh_edge(&format!("{name}/mm"), f32_info(&dims_of(g, out))),
-            (None, None) => out,
-            (Some(_), Some(_)) => {
-                return Err(ImportError::Pass {
-                    pass: "matmul_gemm_to_einsum",
-                    node: name,
-                    reason: "batched Gemm with bias unsupported".into(),
-                });
-            }
-        };
-        g.push_node(INode {
-            name: format!("{name}/einsum"),
-            op: "atlas.Einsum".into(),
-            attrs: [("equation".to_string(), Attr::Str(equation))].into(),
-            inputs: vec![a, b],
-            outputs: vec![einsum_out],
-        });
-        if let Some(bias) = bias {
-            g.push_node(INode {
-                name: format!("{name}/bias"),
-                op: "Add".into(),
-                attrs: Default::default(),
-                inputs: vec![einsum_out, bias],
-                outputs: vec![out],
-            });
-        } else if restore_shape.is_some() {
-            add_reshape_to(g, &format!("{name}/unsqueeze"), einsum_out, out);
-        }
-        g.remove_node(idx);
-        rewrites += 1;
-    }
-    Ok(rewrites)
-}
-
 /// A last-axis slice of a linear projection becomes a projection against
 /// the sliced weight (and sliced bias): `Slice(x·W + b)` → `x·W' + b'`.
 ///
@@ -988,14 +782,14 @@ fn slice_through_projection(g: &mut IGraph) -> Result<usize, ImportError> {
         }
 
         // Match, walking through at most one bias Add and one Reshape in
-        // any order: input ← {Add(·, bias const), Reshape}* ← atlas.Einsum.
+        // any order: input ← {Add(·, bias const), Reshape}* ← MatMul / Gemm.
         // Slicing the last axis commutes with both (the Reshape must leave
         // the last axis unchanged — checked), so the rebuild can use a
-        // fixed einsum → bias → reshape order.
+        // fixed projection → bias → reshape order.
         let mut inner = input;
         let mut bias: Option<EdgeId> = None;
         let mut through_reshape = false;
-        let einsum_node = loop {
+        let projection = loop {
             let Some((_, p)) = g.producer(inner) else {
                 break None;
             };
@@ -1021,33 +815,33 @@ fn slice_through_projection(g: &mut IGraph) -> Result<usize, ImportError> {
                     through_reshape = true;
                     inner = p.inputs[0];
                 }
-                "atlas.Einsum" => break Some(p.clone()),
+                "MatMul" | "Gemm" => break Some(p.clone()),
                 _ => break None,
             }
         };
-        let Some(einsum_node) = einsum_node else {
+        let Some(projection) = projection else {
             continue;
         };
-        let Some(Attr::Str(eq)) = einsum_node.attrs.get("equation") else {
-            continue;
-        };
-        // The output letter `n` must be the last axis of the contraction
-        // output and come from the RHS weight: "…k,kn->…n" (n = W dim 1) or
-        // "…k,nk->…n" (n = W dim 0).
-        let Some((_, rhs_and_out)) = eq.split_once(',') else {
-            continue;
-        };
-        let Some((rhs_letters, _)) = rhs_and_out.split_once("->") else {
-            continue;
-        };
-        let n_axis = match rhs_letters {
-            "kn" => 1,
-            "nk" => 0,
-            _ => continue,
-        };
-        let w_edge = einsum_node.inputs[1];
+        // A Gemm carries its bias as a third input.
+        if let Some(&gemm_bias) = projection.inputs.get(2) {
+            if bias.is_some() || g.konst(gemm_bias).is_none() {
+                continue;
+            }
+            bias = Some(gemm_bias);
+        }
+        // The last output axis `n` comes from the rank-2 weight: its second
+        // axis, or its first under Gemm's `transB`.
+        let w_edge = projection.inputs[1];
         let Some(w) = g.konst(w_edge) else {
             continue;
+        };
+        if w.dims.len() != 2 {
+            continue;
+        }
+        let n_axis = if projection.attr_int("transB").unwrap_or(0) != 0 {
+            0
+        } else {
+            1
         };
         let Some(w_vals) = w.as_f32s() else { continue };
 
@@ -1112,12 +906,12 @@ fn slice_through_projection(g: &mut IGraph) -> Result<usize, ImportError> {
             None => None,
         };
 
-        // Rebuild the sliced projection (einsum' → [reshape] → [bias add]),
+        // Rebuild the sliced projection (projection' → [bias add] → [reshape]),
         // writing into the slice's output edge. The original projection
         // stays for other users and falls to DCE once every slice rewrites.
         let extent = end - start;
-        let mut mm_dims = dims_of(g, einsum_node.outputs[0]);
-        *mm_dims.last_mut().expect("einsum output rank >= 1") = extent;
+        let mut mm_dims = dims_of(g, projection.outputs[0]);
+        *mm_dims.last_mut().expect("projection output rank >= 1") = extent;
         let needs_tail = through_reshape || bias_new.is_some();
         let mm_out = if needs_tail {
             g.fresh_edge(&format!("{name}/mm"), f32_info(&mm_dims))
@@ -1125,10 +919,10 @@ fn slice_through_projection(g: &mut IGraph) -> Result<usize, ImportError> {
             out
         };
         g.push_node(INode {
-            name: format!("{name}/einsum"),
-            op: "atlas.Einsum".into(),
-            attrs: einsum_node.attrs.clone(),
-            inputs: vec![einsum_node.inputs[0], w_new],
+            name: format!("{name}/projection"),
+            op: projection.op.clone(),
+            attrs: projection.attrs.clone(),
+            inputs: vec![projection.inputs[0], w_new],
             outputs: vec![mm_out],
         });
         let mut current = mm_out;
@@ -1596,34 +1390,95 @@ impl std::fmt::Display for Edge {
 mod tests {
     use super::*;
 
-    // An integer MatMul must be rejected: atlas.Einsum always rebases by
-    // 2^scale, which would silently divide raw integer products.
-    #[test]
-    fn integer_matmul_is_rejected() {
+    fn f32_const(g: &mut IGraph, hint: &str, dims: &[usize], data: Vec<f32>) -> EdgeId {
+        let e = g.fresh_edge(hint, f32_info(dims));
+        g.edge_mut(e).konst = Some(ConstTensor {
+            dtype: DType::F32,
+            dims: dims.to_vec(),
+            data: ConstData::F32(data),
+        });
+        e
+    }
+
+    /// `Slice(0..3)` of the last axis of a projection against a `[2, 6]` or
+    /// (`transB`) `[6, 2]` weight, with a `[6]` bias.
+    fn sliced_projection(op: &str, trans_b: bool) -> (IGraph, EdgeId) {
         let mut g = IGraph::default();
-        let info = TensorInfo {
-            dtype: DType::I64,
-            dims: vec![2, 2],
-        };
-        let a = g.fresh_edge("a", info.clone());
-        let b = g.fresh_edge("b", info.clone());
-        let out = g.fresh_edge("out", info);
+        let x = g.fresh_edge("x", f32_info(&[4, 2]));
+        let w_dims: &[usize] = if trans_b { &[6, 2] } else { &[2, 6] };
+        let w = f32_const(&mut g, "w", w_dims, (0..12).map(|v| v as f32).collect());
+        let bias = f32_const(&mut g, "bias", &[6], (0..6).map(|v| v as f32).collect());
+        let projected = g.fresh_edge("projected", f32_info(&[4, 6]));
+        let mut inputs = vec![x, w];
+        if op == "Gemm" {
+            inputs.push(bias);
+        }
         g.push_node(INode {
-            name: "mm".into(),
-            op: "MatMul".into(),
-            attrs: Default::default(),
-            inputs: vec![a, b],
+            name: "projection".into(),
+            op: op.into(),
+            attrs: [("transB".to_string(), Attr::Int(trans_b as i64))].into(),
+            inputs,
+            outputs: vec![projected],
+        });
+        let mut slice_input = projected;
+        if op == "MatMul" {
+            slice_input = g.fresh_edge("biased", f32_info(&[4, 6]));
+            g.push_node(INode {
+                name: "add".into(),
+                op: "Add".into(),
+                attrs: Default::default(),
+                inputs: vec![projected, bias],
+                outputs: vec![slice_input],
+            });
+        }
+        let out = g.fresh_edge("out", f32_info(&[4, 3]));
+        g.push_node(INode {
+            name: "slice".into(),
+            op: "atlas.Slice".into(),
+            attrs: [
+                ("axis".to_string(), Attr::Int(1)),
+                ("start".to_string(), Attr::Int(0)),
+                ("end".to_string(), Attr::Int(3)),
+            ]
+            .into(),
+            inputs: vec![slice_input],
             outputs: vec![out],
         });
         g.outputs.push(out);
-        let err = matmul_gemm_to_einsum(&mut g).unwrap_err();
-        assert!(matches!(
-            err,
-            ImportError::Pass {
-                pass: "matmul_gemm_to_einsum",
-                ..
-            }
-        ));
+        (g, out)
+    }
+
+    /// The output is `Add(projection against the sliced weight, sliced bias)`.
+    fn assert_slice_moved_into_projection(g: &IGraph, out: EdgeId, op: &str, w_data: &[f32]) {
+        let (_, add) = g.producer(out).expect("rewritten output");
+        assert_eq!(add.op, "Add");
+        assert_eq!(
+            g.konst(add.inputs[1]).and_then(|b| b.as_f32s()),
+            Some(&[0.0, 1.0, 2.0][..])
+        );
+        let (_, projection) = g.producer(add.inputs[0]).expect("projection");
+        assert_eq!(projection.op, op);
+        assert_eq!(projection.inputs.len(), 2);
+        assert_eq!(
+            g.konst(projection.inputs[1]).and_then(|w| w.as_f32s()),
+            Some(w_data)
+        );
+    }
+
+    #[test]
+    fn slice_moves_into_a_matmul_with_a_bias_add() {
+        let (mut g, out) = sliced_projection("MatMul", false);
+        assert_eq!(slice_through_projection(&mut g).unwrap(), 1);
+        let columns = [0.0, 1.0, 2.0, 6.0, 7.0, 8.0];
+        assert_slice_moved_into_projection(&g, out, "MatMul", &columns);
+    }
+
+    #[test]
+    fn slice_moves_into_a_gemm_along_the_trans_b_axis() {
+        let (mut g, out) = sliced_projection("Gemm", true);
+        assert_eq!(slice_through_projection(&mut g).unwrap(), 1);
+        let rows = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        assert_slice_moved_into_projection(&g, out, "Gemm", &rows);
     }
 
     // Div by a constant whose reciprocal is below the fixed-point resolution

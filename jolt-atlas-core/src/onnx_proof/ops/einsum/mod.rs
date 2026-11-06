@@ -154,7 +154,8 @@ impl EinsumProver {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Box<dyn SumcheckInstanceProver<F, T>> {
         let contraction = einsum_contraction(&computation_node, model);
-        let params = ContractionParams::new(computation_node, contraction, accumulator);
+        let params =
+            ContractionParams::from_accumulator(computation_node, contraction, accumulator);
         Box::new(ContractionProver::initialize(trace, params))
     }
 }

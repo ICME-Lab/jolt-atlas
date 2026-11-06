@@ -254,25 +254,34 @@ impl Contraction {
 
 /// Parameters of the contraction sumcheck.
 pub struct ContractionParams<F: JoltField> {
-    r_node_output: OpeningPoint<BIG_ENDIAN, F>,
+    r_output: NamedPoint<F>,
     computation_node: ComputationNode,
     contraction: Contraction,
 }
 
 impl<F: JoltField> ContractionParams<F> {
-    /// Create the params of an einsum node.
+    /// Create the params of an einsum node opened at `r_node_output`.
     pub fn new(
+        computation_node: ComputationNode,
+        contraction: Contraction,
+        r_node_output: OpeningPoint<BIG_ENDIAN, F>,
+    ) -> Self {
+        Self {
+            r_output: contraction.r_output(r_node_output),
+            computation_node,
+            contraction,
+        }
+    }
+
+    /// Create the params of an einsum node at its opening in `accumulator`.
+    pub fn from_accumulator(
         computation_node: ComputationNode,
         contraction: Contraction,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
         let accessor = AccOpeningAccessor::new(accumulator, &computation_node);
         let r_node_output = accessor.get_reduced_opening().0;
-        Self {
-            r_node_output,
-            computation_node,
-            contraction,
-        }
+        Self::new(computation_node, contraction, r_node_output)
     }
 }
 
@@ -334,11 +343,10 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
         if self.contraction.has_batch() {
-            let r_output = self.contraction.r_output(self.r_node_output.clone());
             let r_sumcheck = self
                 .contraction
                 .r_sumcheck(&sumcheck_challenges.into_opening());
-            vec![self.contraction.batch_eq(&r_output, &r_sumcheck)]
+            vec![self.contraction.batch_eq(&self.r_output, &r_sumcheck)]
         } else {
             vec![]
         }
@@ -363,9 +371,9 @@ impl<F: JoltField> ContractionProver<F> {
             panic!("Expected two operands for einsum operation")
         };
         let contraction = &params.contraction;
-        let r_output = contraction.r_output(params.r_node_output.clone());
-        let left = contraction.fold_operand(left_operand, &contraction.left, &r_output);
-        let right = contraction.fold_operand(right_operand, &contraction.right, &r_output);
+        let r_output = &params.r_output;
+        let left = contraction.fold_operand(left_operand, &contraction.left, r_output);
+        let right = contraction.fold_operand(right_operand, &contraction.right, r_output);
         let eq = contraction.has_batch().then(|| {
             MultilinearPolynomial::from(EqPolynomial::<F>::evals(
                 &r_output.coords(&contraction.batch),
@@ -447,10 +455,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
         sumcheck_challenges: &[F::Challenge],
     ) {
         let contraction = &self.params.contraction;
-        let r_output = contraction.r_output(self.params.r_node_output.clone());
+        let r_output = &self.params.r_output;
         let r_sumcheck = contraction.r_sumcheck(&sumcheck_challenges.into_opening());
-        let left_point = contraction.operand_point(&contraction.left, &r_output, &r_sumcheck);
-        let right_point = contraction.operand_point(&contraction.right, &r_output, &r_sumcheck);
+        let left_point = contraction.operand_point(&contraction.left, r_output, &r_sumcheck);
+        let right_point = contraction.operand_point(&contraction.right, r_output, &r_sumcheck);
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
             .into_provider(transcript, Default::default());
         provider.append_nodeio_at(
@@ -478,7 +486,8 @@ impl<F: JoltField> ContractionVerifier<F> {
         contraction: Contraction,
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Self {
-        let params = ContractionParams::new(computation_node, contraction, accumulator);
+        let params =
+            ContractionParams::from_accumulator(computation_node, contraction, accumulator);
         Self { params }
     }
 }
@@ -497,9 +506,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for Contraction
         let left = accessor.get_nodeio(Target::Input(0)).1;
         let right = accessor.get_nodeio(Target::Input(1)).1;
         let contraction = &self.params.contraction;
-        let r_output = contraction.r_output(self.params.r_node_output.clone());
         let r_sumcheck = contraction.r_sumcheck(&sumcheck_challenges.into_opening());
-        left * right * contraction.batch_eq(&r_output, &r_sumcheck)
+        left * right * contraction.batch_eq(&self.params.r_output, &r_sumcheck)
     }
 
     fn cache_openings(
@@ -509,10 +517,10 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for Contraction
         sumcheck_challenges: &[F::Challenge],
     ) {
         let contraction = &self.params.contraction;
-        let r_output = contraction.r_output(self.params.r_node_output.clone());
+        let r_output = &self.params.r_output;
         let r_sumcheck = contraction.r_sumcheck(&sumcheck_challenges.into_opening());
-        let left_point = contraction.operand_point(&contraction.left, &r_output, &r_sumcheck);
-        let right_point = contraction.operand_point(&contraction.right, &r_output, &r_sumcheck);
+        let left_point = contraction.operand_point(&contraction.left, r_output, &r_sumcheck);
+        let right_point = contraction.operand_point(&contraction.right, r_output, &r_sumcheck);
         let mut provider = AccOpeningAccessor::new(accumulator, &self.params.computation_node)
             .into_provider(transcript, Default::default());
         provider.append_nodeio_at(

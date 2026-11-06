@@ -1,19 +1,16 @@
 use atlas_trace::{op::Einsum, Model, Op, Trace};
 
 use crate::node_view::{ComputationNode, ModelView};
-use crate::{
-    onnx_proof::{
-        clamp_lookups::is_scalar,
-        fused_rebase,
-        ops::{
-            einsum::contraction::{
-                Contraction, ContractionParams, ContractionProver, ContractionVerifier,
-            },
-            OperatorProofTrait, Prover, Verifier,
+use crate::onnx_proof::{
+    clamp_lookups::is_scalar,
+    fused_rebase,
+    ops::{
+        einsum::contraction::{
+            Contraction, ContractionParams, ContractionProver, ContractionVerifier,
         },
-        ProofId, ProofType,
+        OperatorProofTrait, Prover, Verifier,
     },
-    utils::dims::lookup_einsum_config,
+    ProofId, ProofType,
 };
 use common::CommittedPoly;
 use joltworks::{
@@ -122,18 +119,13 @@ impl<F: JoltField, T: Transcript> OperatorProofTrait<F, T> for Einsum {
     }
 }
 
-/// Derive the [`Contraction`] of an einsum node.
-///
-/// The registry lookup and its dims extractor only gate the accepted equations
-/// (and `m == 1` for `mk,nk->mn`); this gate is temporary.
+/// Derive the [`Contraction`] of an einsum node. Panics on an unsupported equation.
 fn einsum_contraction(computation_node: &ComputationNode, model: &Model) -> Contraction {
     let Op::Einsum(Einsum { equation, .. }) = &computation_node.operator else {
         panic!("Unexpected operator")
     };
-    let config = lookup_einsum_config(&equation.to_string());
-    (config.dims_extractor)(computation_node, model);
     let [left, right] = computation_node.inputs[..] else {
-        panic!("Expected two operands for einsum operation")
+        panic!("einsum {equation} does not have two operands")
     };
     Contraction::new(
         equation,

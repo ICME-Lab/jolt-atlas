@@ -360,6 +360,16 @@ fn einsum_model(
     (b.build(), vec![Tensor::random_small(rng, lhs)])
 }
 
+fn einsum_three_operands(rng: &mut StdRng) -> (Model, Vec<Tensor<i32>>) {
+    let mut b = ModelBuilder::new();
+    let i = b.input(vec![2, 4]);
+    let c = b.constant(Tensor::random_small(rng, &[4, 8]));
+    let d = b.constant(Tensor::random_small(rng, &[8, 2]));
+    let o = b.einsum("ab,bc,cd->ad", vec![i, c, d], vec![2, 2]);
+    b.mark_output(o);
+    (b.build(), vec![Tensor::random_small(rng, &[2, 4])])
+}
+
 fn einsum_const(
     eq: &str,
     lhs: &[usize],
@@ -628,7 +638,10 @@ op_surface! {
     /// 151936-row embedding is the only zoo user).
     gather_large_dict65537: GatherLarge => |rng| gather_model(rng, &[1, 2], 65_537, 2);
 
-    // Einsum: the four importer-canonical equations plus the shared `k,nk->n` layout.
+    // Einsum: one protocol driven by letter roles. The rows cover free and contracted
+    // letters on either side of an operand, batch letters in leading and inner positions,
+    // size-1 batch and contracted letters, no free letter, a rank-1 operand and a scalar
+    // output. Three operands and a letter summed in only one operand are rejected.
     einsum_mk_kn_mn_16x32x64: Einsum => |rng| einsum_model(rng, "mk,kn->mn", &[16, 32], &[32, 64], &[16, 64]);
     #[ignore = "non-power-of-two einsum path not supported"]
     einsum_mk_kn_mn_non_pow2: Einsum => |rng| einsum_model(rng, "mk,kn->mn", &[33, 65], &[65, 17], &[33, 17]);
@@ -637,14 +650,21 @@ op_surface! {
     einsum_k_nk_n_128x256: Einsum => |rng| einsum_model(rng, "k,nk->n", &[128], &[256, 128], &[256]);
     #[ignore = "non-power-of-two einsum path not supported"]
     einsum_k_nk_n_non_pow2: Einsum => |rng| einsum_model(rng, "k,nk->n", &[65], &[33, 65], &[33]);
-    /// The importer-canonical transposed-weight form, provable for `m == 1`.
     einsum_mk_nk_mn_m1: Einsum => |rng| einsum_model(rng, "mk,nk->mn", &[1, 128], &[256, 128], &[1, 256]);
-    #[should_panic(expected = "only provable with m == 1")]
-    einsum_mk_nk_mn_m2_rejected: Einsum => |rng| einsum_model(rng, "mk,nk->mn", &[2, 128], &[256, 128], &[2, 256]);
+    einsum_mk_nk_mn_m2: Einsum => |rng| einsum_model(rng, "mk,nk->mn", &[2, 128], &[256, 128], &[2, 256]);
+    einsum_km_kn_mn: Einsum => |rng| einsum_model(rng, "km,kn->mn", &[8, 4], &[8, 2], &[4, 2]);
     einsum_abmk_abnk_abmn: Einsum => |rng| einsum_model(rng, "abmk,abnk->abmn", &[2, 2, 4, 4], &[2, 2, 8, 4], &[2, 2, 4, 8]);
     einsum_amk_ank_amn: Einsum => |rng| einsum_model(rng, "amk,ank->amn", &[4, 4, 8], &[4, 8, 8], &[4, 4, 8]);
-    /// Qwen2's GQA outer product (`k = 1`, no eq-pack variables).
+    /// Qwen2's GQA outer product (`a = k = 1`, no sumcheck rounds).
     einsum_amk_ank_amn_qwen_outer_product: Einsum => |rng| einsum_model(rng, "amk,ank->amn", &[1, 32, 1], &[1, 16, 1], &[1, 32, 16]);
+    einsum_bmk_kbn_nbm: Einsum => |rng| einsum_model(rng, "bmk,kbn->nbm", &[2, 4, 8], &[8, 2, 4], &[4, 2, 4]);
+    einsum_ab_ab_a: Einsum => |rng| einsum_model(rng, "ab,ab->a", &[4, 8], &[4, 8], &[4]);
+    einsum_ab_b_a: Einsum => |rng| einsum_model(rng, "ab,b->a", &[4, 8], &[8], &[4]);
+    einsum_k_k_scalar: Einsum => |rng| einsum_model(rng, "k,k->", &[8], &[8], &[1]);
+    #[should_panic(expected = "does not have two operands")]
+    einsum_three_operands_rejected: Einsum => |rng| einsum_three_operands(rng);
+    #[should_panic(expected = "sums letter a in only one operand")]
+    einsum_summed_in_one_operand_rejected: Einsum => |rng| einsum_model(rng, "ab,bc->c", &[4, 8], &[8, 2], &[2]);
 
     // Structural ops
     broadcast_4_to_8x4: Broadcast => |rng| structural(rng, &[4], |b, i| b.broadcast(i, vec![8, 4]));

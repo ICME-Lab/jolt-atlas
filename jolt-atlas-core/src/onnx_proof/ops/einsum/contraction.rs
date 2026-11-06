@@ -115,6 +115,13 @@ impl Contraction {
         };
         let (left, right) = (letters(left), letters(right));
         let output = letters(equation.output());
+        for c in left.iter().chain(&right) {
+            let in_both = left.contains(c) && right.contains(c);
+            assert!(
+                in_both || output.contains(c),
+                "einsum {equation} sums letter {c} in only one operand"
+            );
+        }
         let sizes: BTreeMap<Letter, usize> = left
             .iter()
             .copied()

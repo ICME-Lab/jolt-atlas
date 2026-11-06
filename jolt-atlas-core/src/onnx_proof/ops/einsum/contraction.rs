@@ -28,7 +28,7 @@
 //! Fusing the rescaling division + clamp into the einsum (issue #190) only changes
 //! *that* value — `rescaled(r)·2^S + R(r)` instead of `output(r)` — while the
 //! `Σ L·R` body stays identical. That seam is centralized in
-//! [`EinsumDotParams::input_claim`].
+//! [`ContractionParams::input_claim`].
 
 use crate::onnx_proof::trace_view::TraceView;
 use std::{array, sync::Arc};
@@ -156,13 +156,13 @@ pub trait EinsumLayout<F: JoltField>: Send + Sync {
 
 /// Shared parameters for any einsum contraction sumcheck.
 #[derive(Clone)]
-pub struct EinsumDotParams<F: JoltField> {
+pub struct ContractionParams<F: JoltField> {
     r_node_output: OpeningPoint<BIG_ENDIAN, F>,
     computation_node: ComputationNode,
     layout: Arc<dyn EinsumLayout<F>>,
 }
 
-impl<F: JoltField> EinsumDotParams<F> {
+impl<F: JoltField> ContractionParams<F> {
     /// Create params for the given pattern `layout`.
     pub fn new(
         computation_node: ComputationNode,
@@ -179,7 +179,7 @@ impl<F: JoltField> EinsumDotParams<F> {
     }
 }
 
-impl<F: JoltField> SumcheckInstanceParams<F> for EinsumDotParams<F> {
+impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
     fn degree(&self) -> usize {
         self.layout.schedule().degree()
     }
@@ -243,8 +243,8 @@ impl<F: JoltField> SumcheckInstanceParams<F> for EinsumDotParams<F> {
 }
 
 /// Prover for any einsum contraction sumcheck.
-pub struct EinsumDotProver<F: JoltField> {
-    params: EinsumDotParams<F>,
+pub struct ContractionProver<F: JoltField> {
+    params: ContractionParams<F>,
     left: MultilinearPolynomial<F>,
     right: MultilinearPolynomial<F>,
     eq: Option<MultilinearPolynomial<F>>,
@@ -252,10 +252,10 @@ pub struct EinsumDotProver<F: JoltField> {
     eq_bound_claim: Option<F>,
 }
 
-impl<F: JoltField> EinsumDotProver<F> {
+impl<F: JoltField> ContractionProver<F> {
     /// Initialize the prover by folding the operands at the output randomness.
-    #[tracing::instrument(skip_all, name = "EinsumDotProver::initialize")]
-    pub fn initialize(trace: &Trace, params: EinsumDotParams<F>) -> Self {
+    #[tracing::instrument(skip_all, name = "ContractionProver::initialize")]
+    pub fn initialize(trace: &Trace, params: ContractionParams<F>) -> Self {
         let LayerData { operands, .. } = TraceView::layer_data(trace, &params.computation_node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for einsum operation")
@@ -281,7 +281,7 @@ impl<F: JoltField> EinsumDotProver<F> {
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for EinsumDotProver<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionProver<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }
@@ -400,23 +400,23 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for EinsumDotProv
 }
 
 /// Verifier for any einsum contraction sumcheck.
-pub struct EinsumDotVerifier<F: JoltField> {
-    params: EinsumDotParams<F>,
+pub struct ContractionVerifier<F: JoltField> {
+    params: ContractionParams<F>,
 }
 
-impl<F: JoltField> EinsumDotVerifier<F> {
+impl<F: JoltField> ContractionVerifier<F> {
     /// Create a verifier for the given pattern `layout`.
     pub fn new(
         computation_node: ComputationNode,
         layout: Arc<dyn EinsumLayout<F>>,
         accumulator: &VerifierOpeningAccumulator<F>,
     ) -> Self {
-        let params = EinsumDotParams::new(computation_node, layout, accumulator);
+        let params = ContractionParams::new(computation_node, layout, accumulator);
         Self { params }
     }
 }
 
-impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for EinsumDotVerifier<F> {
+impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for ContractionVerifier<F> {
     fn get_params(&self) -> &dyn SumcheckInstanceParams<F> {
         &self.params
     }

@@ -1,7 +1,7 @@
-//! `mk,kn->mn` layout (standard matrix multiply) for the einsum [`dot`](super::dot) engine.
+//! `mk,kn->mn` layout (standard matrix multiply) for the einsum [`contraction`](super::contraction) engine.
 
 use crate::{
-    onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
+    onnx_proof::ops::einsum::contraction::{EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
 use atlas_trace::Tensor;

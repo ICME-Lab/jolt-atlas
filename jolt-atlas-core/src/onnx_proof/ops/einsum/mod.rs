@@ -10,7 +10,9 @@ use crate::{
         ops::{
             einsum::{
                 abmk_abnk_abmn::AbmkAbnkAbmnLayout,
-                dot::{EinsumDotParams, EinsumDotProver, EinsumDotVerifier, EinsumLayout},
+                contraction::{
+                    ContractionParams, ContractionProver, ContractionVerifier, EinsumLayout,
+                },
                 k_nk_n::KNkNLayout,
                 mk_kn_mn::MkKnMnLayout,
             },
@@ -36,7 +38,7 @@ use joltworks::{
 /// `abmk,abnk->abmn` layout (batched matmul; also covers `amk,ank->amn`).
 pub mod abmk_abnk_abmn;
 /// Shared sumcheck engine for einsum contraction patterns.
-pub mod dot;
+pub mod contraction;
 /// `k,nk->n` layout (vector-matrix multiply).
 pub mod k_nk_n;
 /// `mk,kn->mn` layout (matrix-matrix multiply).
@@ -150,7 +152,7 @@ fn einsum_equation(computation_node: &ComputationNode) -> String {
 }
 
 /// Build the [`EinsumLayout`] for a canonical equation; every registered
-/// equation is handled by the shared [`dot`] engine.
+/// equation is handled by the shared [`contraction`] engine.
 fn einsum_layout<F: JoltField>(
     equation: &str,
     einsum_dims: &EinsumDims,
@@ -165,7 +167,7 @@ fn einsum_layout<F: JoltField>(
 
 /// Prover dispatcher for the Einsum contraction (matmul) sumcheck.
 ///
-/// Every contraction pattern routes through the shared [`dot`] engine via its
+/// Every contraction pattern routes through the shared [`contraction`] engine via its
 /// [`EinsumLayout`].
 pub struct EinsumProver;
 
@@ -180,8 +182,8 @@ impl EinsumProver {
         let config = lookup_einsum_config(&einsum_equation(&computation_node));
         let einsum_dims = (config.dims_extractor)(&computation_node, model);
         let layout = einsum_layout::<F>(config.equation, &einsum_dims);
-        let params = EinsumDotParams::new(computation_node, layout, accumulator);
-        Box::new(EinsumDotProver::initialize(trace, params))
+        let params = ContractionParams::new(computation_node, layout, accumulator);
+        Box::new(ContractionProver::initialize(trace, params))
     }
 }
 
@@ -198,7 +200,7 @@ impl EinsumVerifier {
         let config = lookup_einsum_config(&einsum_equation(&computation_node));
         let einsum_dims = (config.dims_extractor)(&computation_node, model);
         let layout = einsum_layout::<F>(config.equation, &einsum_dims);
-        Box::new(EinsumDotVerifier::new(
+        Box::new(ContractionVerifier::new(
             computation_node,
             layout,
             accumulator,

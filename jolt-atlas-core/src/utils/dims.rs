@@ -136,7 +136,7 @@ fn extract_k_nk_n_dims(computation_node: &ComputationNode, model: &Model) -> Ein
     // The k,nk->n layout is strictly vector-matrix: it folds only the k axis,
     // so a left operand with m > 1 rows would feed m*k coefficients into a
     // log(k)-round sumcheck. Fail here, at dispatch, rather than deep inside
-    // the dot engine.
+    // the contraction engine.
     assert_eq!(
         a_node.physical_outdims().iter().product::<usize>(),
         k,

@@ -1,4 +1,4 @@
-//! `abmk,abnk->abmn` layout for the einsum [`dot`](super::dot) engine: a
+//! `abmk,abnk->abmn` layout for the einsum [`contraction`](super::contraction) engine: a
 //! batched matmul (RHS contraction-last) whose retained batch axes are packed
 //! in front of both operands and the output. The rank-3 form `amk,ank->amn`
 //! is the identical layout with a batch pack of `(1, a)` — the flattened
@@ -8,7 +8,7 @@
 //! ([`EqSchedule::High`]); the contraction axis `k` follows.
 
 use crate::{
-    onnx_proof::ops::einsum::dot::{EinsumLayout, EqSchedule, Folded},
+    onnx_proof::ops::einsum::contraction::{EinsumLayout, EqSchedule, Folded},
     utils::dims::EinsumDims,
 };
 use atlas_trace::Tensor;

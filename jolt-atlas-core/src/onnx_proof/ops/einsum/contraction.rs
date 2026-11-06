@@ -27,7 +27,7 @@
 //! ```
 //!
 //! The `eq` factor makes the sumcheck degree 3 when the equation has batch
-//! letters; otherwise it is a degree-2 dot product. The batch axes come first,
+//! bits; otherwise it is a degree-2 dot product. The batch axes come first,
 //! so the `eq` table only has `2^log_batch` entries and is a scalar once they
 //! are bound. The initial claim is recovered from the fused rescale's advice by
 //! [`fused_rebase::fused_input_claim`].
@@ -142,8 +142,9 @@ impl Contraction {
         self.log_batch + self.log_contracted
     }
 
-    fn has_batch(&self) -> bool {
-        !self.batch.is_empty()
+    /// Whether a batch axis adds sumcheck variables: a size-1 batch letter has none.
+    fn has_batch_bits(&self) -> bool {
+        self.log_batch > 0
     }
 
     /// The axes of `r_sumcheck`.
@@ -287,7 +288,7 @@ impl<F: JoltField> ContractionParams<F> {
 
 impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
     fn degree(&self) -> usize {
-        if self.contraction.has_batch() {
+        if self.contraction.has_batch_bits() {
             3
         } else {
             2
@@ -330,9 +331,9 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
         let builder = OpeningIdBuilder::new(&self.computation_node);
         let left = ValueSource::Opening(builder.nodeio(Target::Input(0)));
         let right = ValueSource::Opening(builder.nodeio(Target::Input(1)));
-        // With batch letters the claim is scaled by the batch eq value; a plain
-        // dot product is just the operand product.
-        let term = if self.contraction.has_batch() {
+        // With batch bits the claim is scaled by the batch eq value; a plain dot
+        // product is just the operand product.
+        let term = if self.contraction.has_batch_bits() {
             ProductTerm::scaled(ValueSource::Challenge(0), vec![left, right])
         } else {
             ProductTerm::product(vec![left, right])
@@ -342,7 +343,7 @@ impl<F: JoltField> SumcheckInstanceParams<F> for ContractionParams<F> {
 
     #[cfg(feature = "zk")]
     fn output_constraint_challenge_values(&self, sumcheck_challenges: &[F::Challenge]) -> Vec<F> {
-        if self.contraction.has_batch() {
+        if self.contraction.has_batch_bits() {
             let r_sumcheck = self
                 .contraction
                 .r_sumcheck(&sumcheck_challenges.into_opening());
@@ -358,7 +359,7 @@ pub struct ContractionProver<F: JoltField> {
     params: ContractionParams<F>,
     left: MultilinearPolynomial<F>,
     right: MultilinearPolynomial<F>,
-    /// `eq(r_output.batch, ·)`, present when the equation has batch letters.
+    /// `eq(r_output.batch, ·)`, present when the equation has batch bits.
     eq: Option<MultilinearPolynomial<F>>,
 }
 
@@ -374,7 +375,7 @@ impl<F: JoltField> ContractionProver<F> {
         let r_output = &params.r_output;
         let left = contraction.fold_operand(left_operand, &contraction.left, r_output);
         let right = contraction.fold_operand(right_operand, &contraction.right, r_output);
-        let eq = contraction.has_batch().then(|| {
+        let eq = contraction.has_batch_bits().then(|| {
             MultilinearPolynomial::from(EqPolynomial::<F>::evals(
                 &r_output.coords(&contraction.batch),
             ))
@@ -537,10 +538,32 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceVerifier<F, T> for Contraction
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{node_view::ModelView, onnx_proof::testing::ModelBuilder};
     use ark_bn254::Fr;
     use ark_std::UniformRand;
     use joltworks::poly::multilinear_polynomial::EvaluateMle;
     use rand::{rngs::StdRng, SeedableRng};
+
+    /// A size-1 batch letter adds no sumcheck variable, so no `eq` factor.
+    #[test]
+    fn degree_is_3_only_with_batch_bits() {
+        let equation = "amk,ank->amn";
+        for (a, degree) in [(1, 2), (2, 3)] {
+            let (left_dims, right_dims) = ([a, 4, 8], [a, 2, 8]);
+            let mut b = ModelBuilder::new();
+            let left = b.input(left_dims.to_vec());
+            let right = b.input(right_dims.to_vec());
+            let node = b.einsum(equation, vec![left, right], vec![a, 4, 2]);
+            b.mark_output(node);
+            let model = b.build();
+
+            let contraction = Contraction::new(&equation.parse().unwrap(), &left_dims, &right_dims);
+            let r_node_output =
+                OpeningPoint::<BIG_ENDIAN, Fr>::new(vec![Fr::from(1u64); a.log_2() + 3]);
+            let params = ContractionParams::new(model.view(node), contraction, r_node_output);
+            assert_eq!(params.degree(), degree, "a = {a}");
+        }
+    }
 
     /// Each folded operand, evaluated at `r_sumcheck`, must equal the operand's
     /// own MLE at the opening point the letter roles assign to it.

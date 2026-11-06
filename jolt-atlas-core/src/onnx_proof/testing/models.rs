@@ -24,6 +24,7 @@ pub(crate) fn probe_models() -> Vec<ProbeModel> {
         attention_like(0x5EED_0001),
         reductions(0x5EED_0002),
         tables_and_layout(0x5EED_0003),
+        batched_einsum(0x5EED_0004),
     ]
 }
 
@@ -33,6 +34,7 @@ pub(crate) fn probe_models_alt() -> Vec<ProbeModel> {
         attention_like(0xA17_0001),
         reductions(0xA17_0002),
         tables_and_layout(0xA17_0003),
+        batched_einsum(0xA17_0004),
     ]
 }
 
@@ -141,6 +143,27 @@ fn tables_and_layout(seed: u64) -> ProbeModel {
     ];
     ProbeModel {
         name: "tables_and_layout",
+        model: b.build(),
+        inputs,
+    }
+}
+
+/// An einsum with batch (`b`), contracted (`k`) and free (`m`, `n`) letters,
+/// permuted across its terms.
+fn batched_einsum(seed: u64) -> ProbeModel {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![2, 4, 8]);
+    let w = b.constant(Tensor::random_small(&mut rng, &[8, 2, 4]));
+    let out = b.einsum("bmk,kbn->nbm", vec![x, w], vec![4, 2, 4]);
+    b.mark_output(out);
+    let inputs = vec![Tensor::random_range(
+        &mut rng,
+        &[2, 4, 8],
+        -(1 << 12)..(1 << 12),
+    )];
+    ProbeModel {
+        name: "batched_einsum",
         model: b.build(),
         inputs,
     }

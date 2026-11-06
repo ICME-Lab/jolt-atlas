@@ -479,8 +479,6 @@ pub struct ContractionProver<F: JoltField> {
     right: MultilinearPolynomial<F>,
     /// `eq(r_output.batch, ·)`, present when the equation has batch letters.
     eq: Option<MultilinearPolynomial<F>>,
-    /// `EQ` final claim, cached once the `EQ` cube is fully bound (High schedule).
-    eq_bound_claim: Option<F>,
 }
 
 impl<F: JoltField> ContractionProver<F> {
@@ -495,19 +493,12 @@ impl<F: JoltField> ContractionProver<F> {
             params
                 .layout
                 .fold(left_operand, right_operand, &params.r_node_output);
-        let eq_bound_claim = match params.layout.schedule() {
-            EqSchedule::High { log_eq: 0, .. } => {
-                Some(eq.as_ref().expect("eq poly must exist").final_claim())
-            }
-            _ => None,
-        };
 
         Self {
             params,
             left,
             right,
             eq,
-            eq_bound_claim,
         }
     }
 }
@@ -534,6 +525,8 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
             }
             EqSchedule::High { log_eq, low_bits } => {
                 let eq = self.eq.as_ref().expect("eq poly must exist");
+                // `eq` is a single value once the batch axes are bound.
+                let eq_bound = (round >= log_eq).then(|| eq.final_claim());
                 let evals: [F; 3] = (0..half)
                     .into_par_iter()
                     .with_min_len(par_enabled())
@@ -544,10 +537,11 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
                         let r = self
                             .right
                             .sumcheck_evals_array::<3>(i, BindingOrder::HighToLow);
-                        let e = if round < log_eq {
-                            eq.sumcheck_evals_array::<3>(i >> low_bits, BindingOrder::HighToLow)
-                        } else {
-                            [self.eq_bound_claim.expect("eq claim should be cached"); 3]
+                        let e = match eq_bound {
+                            Some(value) => [value; 3],
+                            None => {
+                                eq.sumcheck_evals_array::<3>(i >> low_bits, BindingOrder::HighToLow)
+                            }
                         };
                         [l[0] * r[0] * e[0], l[1] * r[1] * e[1], l[2] * r[2] * e[2]]
                     })
@@ -588,9 +582,6 @@ impl<F: JoltField, T: Transcript> SumcheckInstanceProver<F, T> for ContractionPr
                 if round < log_eq {
                     let eq = self.eq.as_mut().expect("eq poly must exist");
                     eq.bind_parallel(r_j, BindingOrder::HighToLow);
-                    if round == log_eq - 1 {
-                        self.eq_bound_claim = Some(eq.final_claim());
-                    }
                 }
             }
             EqSchedule::Low { log_k, .. } => {

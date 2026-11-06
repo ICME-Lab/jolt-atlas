@@ -119,7 +119,7 @@ cargo run --release --package atlas-onnx-import --example dump_lowered_ops -- \
     models/gpt2/network.onnx batch_size=1 sequence_length=16 past_sequence_length=0
 ```
 
-You should see the lowered op inventory and the canonical einsum equations.
+You should see the lowered op inventory and the einsum equations.
 
 5. Prove & verify GPT-2:
 

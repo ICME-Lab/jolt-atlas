@@ -5,8 +5,6 @@
 //! - quantizes constants (floats scale by `2^s`, integers stay raw);
 //! - inserts explicit `Broadcast` nodes so every elementwise op receives
 //!   operands already at its output shape (the prover's assumption);
-//! - gates einsum equations to the canonical set (full-letter equations
-//!   only — no dropped letters, no size-1 reinterpretation);
 //! - splits multi-axis ONNX slices into chains of single-axis slices.
 
 use std::collections::HashMap;
@@ -19,10 +17,6 @@ use crate::{
     inputs::InputDescriptor,
     quantize::quantize_const,
 };
-
-/// Einsum equations the proof layer supports. The matmul pass only emits
-/// these; the gate makes that a checked invariant rather than a convention.
-const CANONICAL_EINSUMS: &[&str] = &["mk,kn->mn", "mk,nk->mn", "amk,ank->amn", "abmk,abnk->abmn"];
 
 /// Gather dictionaries up to this many (power-of-two-rounded) rows prove
 /// with the small-table path; larger ones use the large path. Old-crate
@@ -383,11 +377,6 @@ impl<'g> Lowerer<'g> {
                 let Some(crate::graph::Attr::Str(eq)) = node.attrs.get("equation") else {
                     return Err(unlowered());
                 };
-                if !CANONICAL_EINSUMS.contains(&eq.as_str()) {
-                    return Err(attr_err(format!(
-                        "einsum {eq:?} is outside the canonical set {CANONICAL_EINSUMS:?}"
-                    )));
-                }
                 let equation = eq.parse::<op::EinsumEq>().map_err(attr_err)?;
                 direct(self, Op::Einsum(op::Einsum { equation }))?
             }

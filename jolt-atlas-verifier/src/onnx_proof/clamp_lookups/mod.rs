@@ -125,14 +125,6 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
     }
 }
 
-/// A clamped node commits **no** per-node polynomials: its clamp one-hots live
-/// in a packed bucket (see [`global_clamp`](crate::onnx_proof::global_clamp)),
-/// whose chunks are listed at the model level by
-/// `global_clamp::bucket_committed_polys`.
-pub fn clamp_committed_polys(_node: &ComputationNode) -> Vec<CommittedPoly> {
-    Vec::new()
-}
-
 /// Verify a scalar node's clamp directly: `output_claim == SatClamp(combined)`,
 /// where `combined` is the in-the-clear accumulation (`left ± right`, or the
 /// axis sum). `op` names the operator for error messages.

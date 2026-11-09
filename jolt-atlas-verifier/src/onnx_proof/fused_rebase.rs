@@ -29,7 +29,7 @@ use crate::{
     onnx_proof::relation::{RelationExpr, RelationOpening},
     utils::opening_access::OpeningIdBuilder,
 };
-use common::{CommittedPoly, VirtualPoly};
+use common::VirtualPoly;
 use jolt_claims::{constant, opening};
 use jolt_field::Ring;
 
@@ -78,14 +78,4 @@ pub fn input_expression<F: Ring>(node: &ComputationNode) -> RelationExpr<F> {
         }
         _ => opening(RelationOpening::ReducedNodeOutput(node.idx)),
     }
-}
-
-/// The committed one-hot decomposition polynomials a fused node must commit to:
-/// the rescaling-remainder range check (`bits`-wide address) plus the saturating
-/// clamp (64-bit address). Empty for non-fused or scalar nodes.
-pub fn committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
-    // Both the clamp and the remainder one-hots are committed per packed
-    // bucket at the model level (see `global_clamp`), never per node.
-    let _ = node;
-    Vec::new()
 }

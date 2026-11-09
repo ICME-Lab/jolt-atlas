@@ -116,27 +116,27 @@ Each invariant names the mechanism that holds it.
 The main list is **stage 1, prover code out of the verifier crate**, ticked by the stage 1
 PR. It is code motion: behavior-preserving, digests unchanged.
 
-- [ ] `jolt-atlas-verifier/clippy.toml` `disallowed-types` lists `atlas_trace::trace::Trace`,
+- [x] `jolt-atlas-verifier/clippy.toml` `disallowed-types` lists `atlas_trace::trace::Trace`,
   `atlas_trace::trace::FusedIntermediates`, `atlas_trace::trace::NodeAux` and
   `atlas_trace::trace::SoftmaxWitness`; the `verifier-isolation` job's grep rejects
   `trace::Trace` in the crate's sources; both are green.
-- [ ] `EngineRelation::witnesses` and `TieRelation::claims` no longer exist in the verifier
+- [x] `EngineRelation::witnesses` and `TieRelation::claims` no longer exist in the verifier
   crate. Core defines the extension traits `RelationWitnesses` (the engine relation's witness
   polynomials from the trace) and `TieClaims` (a tie's produced claims from the trace), on the
   `OpLookupProve` / `RangeCheckProve` precedent, implements them for every relation, and
   `RelationProver::initialize` and `prove_tie` bound on them.
-- [ ] Every function or method in the verifier crate that took a `&Trace` is in core: the
+- [x] Every function or method in the verifier crate that took a `&Trace` is in core: the
   split and bucket witnesses (`NodeSplit::from_trace`, `BucketSplit::from_trace`,
   `witness_polys`, `chunk_indices`, `saturated`, `empty_witness_polys`,
   `value_chunk_indices`, `exact_output_prover`), the clamp intermediates
   (`clamp_intermediate`, `clamp_lookup_bits`), the range-check and op-lookup index builders, the activation, trig-downscale, softmax significance-clamp,
   sum-axis and einsum witness helpers, and `trace_view.rs` whole. The PR body lists each item
   with its destination; `docs/verifier.md` records the list.
-- [ ] `probe.rs`, `probe_assert!` and `probe_assert_eq!` live in `jolt-atlas-core`; the
+- [x] `probe.rs`, `probe_assert!` and `probe_assert_eq!` live in `jolt-atlas-core`; the
   verifier's `test-util` feature provides only the `&mut` proof accessors.
-- [ ] The verifier's `Cargo.toml` lists no dependency only the moved code used; `rayon` is
+- [x] The verifier's `Cargo.toml` lists no dependency only the moved code used; `rayon` is
   gone unless the PR names a verifier-side use that stays.
-- [ ] `docs/verifier.md` exists: the audit reading order (entry point, interpreter, relation
+- [x] `docs/verifier.md` exists: the audit reading order (entry point, interpreter, relation
   core, lookup machinery, proof object), the trust-perimeter statement (which crates and which
   of their items a verdict depends on), and the stage 1 inventory. `CLAUDE.md`'s crate-map
   paragraph for `jolt-atlas-verifier` says the crate is Trace-free and points at the doc.

@@ -1,4 +1,5 @@
 use crate::node_view::{ComputationNode, ModelView};
+use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::utils::{
@@ -6,13 +7,13 @@ use crate::utils::{
     opening_access::{OpeningIdBuilder, Target},
 };
 use crate::{
-    atlas_relation_types, impl_standard_sumcheck_proof_api,
+    atlas_relation_types,
     onnx_proof::{
         relation::{
             reduced_output_setup, AtlasRelation, EngineRelation, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup,
         },
-        ProofId, ProofType, Verifier,
+        ProofType,
     },
 };
 use atlas_algebra::{
@@ -26,7 +27,24 @@ use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
-impl_standard_sumcheck_proof_api!(Slice, model_relation SliceRelation);
+crate::impl_plan_op!(Slice, SliceRelation);
+
+impl OpPlan for Slice {
+    fn plan(
+        &self,
+        node: &ComputationNode,
+        model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Relation {
+                proof: ProofType::Execution,
+                relation: OpRelation::Slice(SliceRelation::for_node(model, node.clone())?),
+            },
+        ]))
+    }
+}
 
 /// A slice node with its window and its operand's unpadded dims, validated against the slice
 /// shape rules.

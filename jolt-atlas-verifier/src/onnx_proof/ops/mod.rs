@@ -24,9 +24,10 @@
 //! ## Architecture
 //!
 //! Every operator's protocol is a relation (`onnx_proof::relation`): its claim algebra, from
-//! which the verifier is derived. Most operators bind theirs with the
-//! [`impl_standard_sumcheck_proof_api`], [`impl_fused_rescale_proof_api`] or
-//! [`impl_tie_proof_api`] macro; the rest set up their relations in hand-written `ProveOp` /
+//! which the verifier is derived. An operator whose verification is a plan
+//! (`onnx_proof::plan`: ordered steps over relations, run by the verifier's interpreter and
+//! walked by the prover) binds it with `impl_plan_op`; the fused-rescale operators use
+//! [`impl_fused_rescale_proof_api`]; the rest set up their relations in hand-written `ProveOp` /
 //! `VerifyOp` impls.
 
 /// Shared plumbing for the clamped Erf/Sigmoid/Tanh variants.
@@ -306,121 +307,6 @@ impl OperatorVerifier {
     }
 }
 
-/// Macro to implement `OpLayout`, `ProveOp` and `VerifyOp` for an operator proven by one relation
-/// built from its node (`relation`) or from its node and the model (`model_relation`): the
-/// relation is set up, proven with `prove_relation` on the engine's `RelationProver`, and checked
-/// with [`verify_relation`](atlas_sumcheck::relation::verify_relation).
-#[macro_export]
-macro_rules! impl_standard_sumcheck_proof_api {
-    ($inner_ty:ty, relation $relation:ty) => {
-        $crate::bind_relation!($inner_ty, $relation);
-        $crate::impl_standard_sumcheck_proof_api!(
-            @impl $inner_ty,
-            |node: &ComputationNode, prover: &mut Prover<F, T>| {
-                use $crate::onnx_proof::relation::{RelationParams};
-                let params = RelationParams::<F, $relation>::new(
-                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
-                    &prover.accumulator,
-                    &mut prover.transcript,
-                );
-                RelationProver::initialize(&prover.trace, params)
-            },
-            |node: &ComputationNode,
-             _: &atlas_trace::Model,
-             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
-             transcript: &mut T| {
-                $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
-                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
-                    accumulator,
-                    transcript,
-                )
-            }
-        );
-    };
-    ($inner_ty:ty, model_relation $relation:ty) => {
-        $crate::bind_relation!($inner_ty, $relation);
-        $crate::impl_standard_sumcheck_proof_api!(
-            @impl $inner_ty,
-            |node: &ComputationNode, prover: &mut Prover<F, T>| {
-                use $crate::onnx_proof::relation::{RelationParams};
-                let params = RelationParams::<F, $relation>::new(
-                    <$relation>::for_node(&prover.preprocessing.model, node.clone()),
-                    &prover.accumulator,
-                    &mut prover.transcript,
-                );
-                RelationProver::initialize(&prover.trace, params)
-            },
-            |node: &ComputationNode,
-             model: &atlas_trace::Model,
-             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
-             transcript: &mut T| {
-                $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
-                    <$relation>::for_node(model, node.clone())?,
-                    accumulator,
-                    transcript,
-                )
-            }
-        );
-    };
-    (@impl $inner_ty:ty, $make_prover:expr, $make_verifier:expr) => {
-        impl $crate::onnx_proof::ops::OpLayout for $inner_ty {
-        }
-
-        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::VerifyOp<F, T> for $inner_ty {
-            #[tracing::instrument(skip(node, verifier))]
-            fn verify(
-                &self,
-                node: &ComputationNode,
-                verifier: &mut Verifier<'_, F, T>,
-            ) -> Result<(), ProofVerifyError> {
-                use atlas_sumcheck::relation::verify_relation;
-
-                let proof = verifier.proofs.take(ProofId(node.idx, ProofType::Execution))?;
-                let verifier_sumcheck =
-                    ($make_verifier)(
-                        node,
-                        &verifier.preprocessing.model,
-                        &verifier.accumulator,
-                        &mut verifier.transcript,
-                    )?;
-                verify_relation(
-                    proof,
-                    &verifier_sumcheck,
-                    &mut verifier.accumulator,
-                    &mut verifier.transcript,
-                )?;
-                Ok(())
-            }
-        }
-    };
-}
-
-/// Implement [`ProveOp`]/[`VerifyOp`] for an op proven by a zero-round relation (a tie) built
-/// from its node: the prover appends the tie's openings, the verifier checks it.
-#[macro_export]
-macro_rules! impl_tie_proof_api {
-    ($inner_ty:ty, $relation:ty) => {
-        $crate::bind_relation!($inner_ty, $relation);
-
-        impl $crate::onnx_proof::ops::OpLayout for $inner_ty {}
-
-        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::VerifyOp<F, T> for $inner_ty {
-            #[tracing::instrument(skip(node, verifier))]
-            fn verify(
-                &self,
-                node: &ComputationNode,
-                verifier: &mut Verifier<'_, F, T>,
-            ) -> Result<(), ProofVerifyError> {
-                $crate::onnx_proof::relation::verify_tie(
-                    &<$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
-                    &mut verifier.accumulator,
-                    &mut verifier.transcript,
-                )
-            }
-        }
-    };
-}
-
 /// Compile-time op binding of a relation-dispatched op: the relation's
 /// [`Spec`](crate::onnx_proof::relation::AtlasRelation::Spec) must be the op it is dispatched for.
 #[macro_export]
@@ -432,8 +318,6 @@ macro_rules! bind_relation {
         };
     };
 }
-
-pub use impl_standard_sumcheck_proof_api;
 
 /// Macro to implement [`ProveOp`]/[`VerifyOp`] for element-wise operators that
 /// fuse a rescaling division + saturating clamp (`Mul`, `Square`, `Cube`).

@@ -1,4 +1,5 @@
 use crate::node_view::{ComputationNode, ModelView};
+use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::utils::{
@@ -6,13 +7,13 @@ use crate::utils::{
     opening_access::{OpeningIdBuilder, Target},
 };
 use crate::{
-    atlas_relation_types, impl_standard_sumcheck_proof_api,
+    atlas_relation_types,
     onnx_proof::{
         relation::{
             low_to_high_point, reduced_output_setup, AtlasRelation, EngineRelation,
             RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
         },
-        ProofId, ProofType, Verifier,
+        ProofType,
     },
 };
 use atlas_algebra::{
@@ -26,7 +27,24 @@ use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, Expr, SymbolicSumcheck};
 use jolt_field::Ring;
 
-impl_standard_sumcheck_proof_api!(Concat, model_relation ConcatRelation);
+crate::impl_plan_op!(Concat, ConcatRelation);
+
+impl OpPlan for Concat {
+    fn plan(
+        &self,
+        node: &ComputationNode,
+        model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Relation {
+                proof: ProofType::Execution,
+                relation: OpRelation::Concat(ConcatRelation::for_node(model, node.clone())?),
+            },
+        ]))
+    }
+}
 
 /// A concat node with its axis and its operands' unpadded dims, validated against the concat
 /// shape rules.

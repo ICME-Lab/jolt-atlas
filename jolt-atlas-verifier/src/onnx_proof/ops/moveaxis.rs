@@ -1,14 +1,12 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
-    atlas_relation_types, impl_tie_proof_api,
-    onnx_proof::{
-        ops::Verifier,
-        relation::{
-            reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
-            RelationSetup, TieRelation,
-        },
+    atlas_relation_types,
+    onnx_proof::relation::{
+        reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
+        RelationSetup, TieRelation,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -22,7 +20,23 @@ use atlas_transcript::Transcript;
 use jolt_claims::{opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
-impl_tie_proof_api!(MoveAxis, AxisPermutationRelation);
+crate::impl_plan_op!(MoveAxis, AxisPermutationRelation);
+
+impl OpPlan for MoveAxis {
+    fn plan(
+        &self,
+        node: &ComputationNode,
+        _model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Tie {
+                relation: OpTie::AxisPermutation(AxisPermutationRelation::new(node.clone())),
+            },
+        ]))
+    }
+}
 
 /// `MoveAxis` as a tie: the output at `r` is the operand at `r` with its per-axis coordinate
 /// groups permuted back.

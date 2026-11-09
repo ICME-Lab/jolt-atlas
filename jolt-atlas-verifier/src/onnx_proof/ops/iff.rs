@@ -1,14 +1,14 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
-    impl_standard_sumcheck_proof_api,
     onnx_proof::{
         relation::{
             AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup,
         },
-        ProofId, ProofType, Verifier,
+        ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -24,7 +24,24 @@ use jolt_claims::{
 };
 use jolt_field::Ring;
 
-impl_standard_sumcheck_proof_api!(Iff, relation IffRelation);
+crate::impl_plan_op!(Iff, IffRelation);
+
+impl OpPlan for Iff {
+    fn plan(
+        &self,
+        node: &ComputationNode,
+        _model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Relation {
+                proof: ProofType::Execution,
+                relation: OpRelation::Iff(IffRelation::new(node.clone())),
+            },
+        ]))
+    }
+}
 
 /// Conditional selection `out = mask ? a : b` as a relation:
 ///

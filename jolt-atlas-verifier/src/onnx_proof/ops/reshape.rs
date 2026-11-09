@@ -7,6 +7,7 @@
 //!
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
+use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use atlas_trace::{op::Reshape, Model};
@@ -14,13 +15,13 @@ use atlas_trace::{op::Reshape, Model};
 use crate::node_view::{ComputationNode, ModelView};
 use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use crate::{
-    atlas_relation_types, impl_standard_sumcheck_proof_api,
+    atlas_relation_types,
     onnx_proof::{
         relation::{
             reduced_output_setup, AtlasRelation, EngineRelation, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup,
         },
-        ProofId, ProofType, Verifier,
+        ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -34,7 +35,24 @@ use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
-impl_standard_sumcheck_proof_api!(Reshape, model_relation ReshapeRelation);
+crate::impl_plan_op!(Reshape, ReshapeRelation);
+
+impl OpPlan for Reshape {
+    fn plan(
+        &self,
+        node: &ComputationNode,
+        model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Relation {
+                proof: ProofType::Execution,
+                relation: OpRelation::Reshape(ReshapeRelation::for_node(model, node.clone())?),
+            },
+        ]))
+    }
+}
 
 /// Build a reshape selector vector over the padded input domain.
 ///

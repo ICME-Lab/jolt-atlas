@@ -24,9 +24,10 @@
 //! ## Architecture
 //!
 //! Every operator's protocol is a relation (`onnx_proof::relation`): its claim algebra, from
-//! which the verifier is derived. Most operators bind theirs with the
-//! [`impl_standard_sumcheck_proof_api`], [`impl_fused_rescale_proof_api`] or
-//! [`impl_tie_proof_api`] macro; the rest set up their relations in hand-written `ProveOp` /
+//! which the verifier is derived. An operator whose verification is a plan
+//! (`onnx_proof::plan`: ordered steps over relations, run by the verifier's interpreter and
+//! walked by the prover) binds it with `impl_plan_op`; the fused-rescale operators use
+//! [`impl_fused_rescale_proof_api`]; the rest set up their relations in hand-written `ProveOp` /
 //! `VerifyOp` impls.
 
 use crate::onnx_proof::ops::eval_reduction::NodeEvalReductionProve;
@@ -138,6 +139,13 @@ use atlas_sumcheck::evaluation_reduction::EvalReductionProof;
 use atlas_transcript::Transcript;
 use eval_reduction::NodeEvalReduction;
 
+use crate::onnx_proof::{
+    plan::{OpRelation, OpTie, Plan, Step},
+    relation::{prove_tie, RelationParams, RelationProver, RelationWitnesses},
+    ProofId,
+};
+use atlas_sumcheck::relation::prover::{prove_relation, DynRelationWitness};
+
 use crate::onnx_proof::Prover;
 
 /// Dispatches on every `Op` variant, binding the inner value to `$inner`
@@ -240,112 +248,101 @@ impl OperatorProver {
     }
 }
 
-/// Macro to implement `OpLayout`, `ProveOp` and `VerifyOp` for an operator proven by one relation
-/// built from its node (`relation`) or from its node and the model (`model_relation`): the
-/// relation is set up, proven with [`prove_relation`](atlas_sumcheck::relation::prover::prove_relation)
-/// on the engine's [`RelationProver`](crate::onnx_proof::relation::RelationProver), and checked
-/// with [`verify_relation`](atlas_sumcheck::relation::verify_relation).
-#[macro_export]
-macro_rules! impl_standard_sumcheck_proof_api {
-    ($inner_ty:ty, relation $relation:ty) => {
-        $crate::impl_standard_sumcheck_proof_api!(
-            @impl $inner_ty,
-            |node: &ComputationNode, prover: &mut Prover<F, T>| {
-                use $crate::onnx_proof::relation::{RelationParams, RelationProver};
-                let params = RelationParams::<F, $relation>::new(
-                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
-                    &prover.accumulator,
-                    &mut prover.transcript,
-                );
-                RelationProver::initialize(&prover.trace, params)
-            },
-            |node: &ComputationNode,
-             _: &atlas_trace::Model,
-             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
-             transcript: &mut T| {
-                $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
-                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
-                    accumulator,
-                    transcript,
-                )
-            }
-        );
-    };
-    ($inner_ty:ty, model_relation $relation:ty) => {
-        $crate::impl_standard_sumcheck_proof_api!(
-            @impl $inner_ty,
-            |node: &ComputationNode, prover: &mut Prover<F, T>| {
-                use $crate::onnx_proof::relation::{RelationParams, RelationProver};
-                let params = RelationParams::<F, $relation>::new(
-                    <$relation>::for_node(&prover.preprocessing.model, node.clone())
-.expect("the model\'s nodes have the shapes their ops prove"),
-                    &prover.accumulator,
-                    &mut prover.transcript,
-                );
-                RelationProver::initialize(&prover.trace, params)
-            },
-            |node: &ComputationNode,
-             model: &atlas_trace::Model,
-             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
-             transcript: &mut T| {
-                $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
-                    <$relation>::for_node(model, node.clone())
-.expect("the model\'s nodes have the shapes their ops prove"),
-                    accumulator,
-                    transcript,
-                )
-            }
-        );
-    };
-    (@impl $inner_ty:ty, $make_prover:expr, $make_verifier:expr) => {
-
-        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::ProveOp<F, T> for $inner_ty {
-            #[tracing::instrument(skip(node, prover))]
-            fn prove(
-                &self,
-                node: &ComputationNode,
-                prover: &mut Prover<F, T>,
-            ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-                use atlas_sumcheck::relation::prover::prove_relation;
-
-                let mut prover_sumcheck = ($make_prover)(node, &mut *prover);
-                let (proof, _) = prove_relation(
-                    &mut prover_sumcheck,
+/// Walk `node`'s plan on the prover side: every step the verifier's interpreter
+/// ([`Verifier::run_plan`](crate::onnx_proof::Verifier::run_plan)) runs, in the same order, with
+/// the relations' witnesses.
+#[tracing::instrument(skip_all, name = "prove_plan", fields(node = node.idx, op = %node.operator))]
+pub fn prove_plan<F: JoltField, T: Transcript>(
+    node: &ComputationNode,
+    prover: &mut Prover<F, T>,
+    plan: Plan,
+) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
+    let mut reduction = None;
+    let mut proofs = Vec::new();
+    for step in plan.0 {
+        match step {
+            Step::Reduce => reduction = NodeEvalReduction::prove(prover, node),
+            Step::Relation { proof, relation } => {
+                let mut witness = relation_witness(relation, prover);
+                let (sumcheck, _) = prove_relation(
+                    witness.as_mut(),
                     &mut prover.accumulator,
                     &mut prover.transcript,
                 );
-                vec![(ProofId(node.idx, ProofType::Execution), proof)]
+                proofs.push((ProofId(node.idx, proof), sumcheck));
             }
+            Step::Tie { relation } => prove_op_tie(&relation, prover),
         }
-
-    };
+    }
+    (reduction, proofs)
 }
 
-/// Implement [`ProveOp`]/[`VerifyOp`] for an op proven by a zero-round relation (a tie) built
-/// from its node: the prover appends the tie's openings, the verifier checks it.
+/// The engine's prover of a plan relation, set up against the prover's accumulator and
+/// transcript.
+fn relation_witness<F: JoltField, T: Transcript>(
+    relation: OpRelation,
+    prover: &mut Prover<F, T>,
+) -> Box<dyn DynRelationWitness<F, T>> {
+    fn engine<F: JoltField, T: Transcript, R: RelationWitnesses<F> + 'static>(
+        relation: R,
+        prover: &mut Prover<F, T>,
+    ) -> Box<dyn DynRelationWitness<F, T>> {
+        let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
+        Box::new(RelationProver::initialize(&prover.trace, params))
+    }
+    match relation {
+        OpRelation::And(relation) => engine(relation, prover),
+        OpRelation::Concat(relation) => engine(relation, prover),
+        OpRelation::Iff(relation) => engine(relation, prover),
+        OpRelation::Reshape(relation) => engine(relation, prover),
+        OpRelation::Slice(relation) => engine(relation, prover),
+    }
+}
+
+/// Append a plan tie's produced openings with the prover's claims.
+fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prover<F, T>) {
+    let Prover {
+        trace,
+        accumulator,
+        transcript,
+        ..
+    } = prover;
+    match relation {
+        OpTie::AxisPermutation(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::Identity(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::Neg(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::ZeroOutput(relation) => prove_tie(relation, trace, accumulator, transcript),
+    }
+}
+
+/// Implement [`ProveOp`] for a plan-verified op: the prover walks the op's
+/// [`OpPlan`](crate::onnx_proof::plan::OpPlan).
 #[macro_export]
-macro_rules! impl_tie_proof_api {
-    ($inner_ty:ty, $relation:ty) => {
-        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::ProveOp<F, T> for $inner_ty {
-            #[tracing::instrument(skip(node, prover))]
-            fn prove(
+macro_rules! impl_plan_op_prover {
+    ($inner_ty:ty) => {
+        impl<F: atlas_algebra::field::JoltField, T: atlas_transcript::Transcript>
+            $crate::onnx_proof::ops::ProveOp<F, T> for $inner_ty
+        {
+            fn prove_with_reduction(
                 &self,
-                node: &ComputationNode,
-                prover: &mut Prover<F, T>,
-            ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-                $crate::onnx_proof::relation::prove_tie(
-                    &<$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
-                    &prover.trace,
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-                Vec::new()
+                node: &$crate::node_view::ComputationNode,
+                prover: &mut $crate::onnx_proof::Prover<F, T>,
+            ) -> (
+                Option<atlas_sumcheck::evaluation_reduction::EvalReductionProof<F>>,
+                $crate::onnx_proof::ops::ExecutionProofs<F>,
+            ) {
+                let plan = $crate::onnx_proof::plan::OpPlan::plan(
+                    self,
+                    node,
+                    prover.preprocessing.model(),
+                    &prover.io,
+                )
+                .expect("the prover's model has a plan for every node");
+                $crate::onnx_proof::ops::prove_plan(node, prover, plan)
             }
         }
     };
 }
-
-pub use impl_standard_sumcheck_proof_api;
 
 /// Macro to implement [`ProveOp`]/[`VerifyOp`] for element-wise operators that
 /// fuse a rescaling division + saturating clamp (`Mul`, `Square`, `Cube`).

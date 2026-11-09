@@ -1,14 +1,12 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
-    atlas_relation_types, impl_tie_proof_api,
-    onnx_proof::{
-        relation::{
-            reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
-            RelationSetup, TieRelation,
-        },
-        Verifier,
+    atlas_relation_types,
+    onnx_proof::relation::{
+        reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
+        RelationSetup, TieRelation,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -20,7 +18,23 @@ use jolt_claims::{constant, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use std::marker::PhantomData;
 
-impl_tie_proof_api!(Neg, SignedCopyRelation<Neg>);
+crate::impl_plan_op!(Neg, SignedCopyRelation<Neg>);
+
+impl OpPlan for Neg {
+    fn plan(
+        &self,
+        node: &ComputationNode,
+        _model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Tie {
+                relation: OpTie::Neg(SignedCopyRelation::<Neg>::new(node.clone())),
+            },
+        ]))
+    }
+}
 
 /// An op whose output is `±` its single operand.
 pub trait CopySign: OpSpec + 'static {

@@ -40,6 +40,8 @@ pub struct Prover<F: JoltField, T: Transcript> {
     pub trace: Trace,
     /// Shared preprocessing data (model structure).
     pub preprocessing: AtlasSharedPreprocessing,
+    /// The public IO of the execution: the statement the plans are built for.
+    pub io: ModelExecutionIO,
     /// Opening accumulator for batching polynomial openings.
     pub accumulator: ProverOpeningAccumulator<F>,
     /// Interactive proof transcript.
@@ -67,6 +69,7 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
         T: ProvingTranscript,
     {
         Self {
+            io: trace.io(preprocessing.model()),
             trace,
             preprocessing,
             accumulator: ProverOpeningAccumulator::new(),

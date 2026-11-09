@@ -1,14 +1,12 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
-    atlas_relation_types, impl_tie_proof_api,
-    onnx_proof::{
-        relation::{
-            reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
-            RelationSetup, TieRelation,
-        },
-        Verifier,
+    atlas_relation_types,
+    onnx_proof::relation::{
+        reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
+        RelationSetup, TieRelation,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -19,7 +17,23 @@ use atlas_transcript::Transcript;
 use jolt_claims::{opening, Expr, SymbolicSumcheck};
 use jolt_field::Ring;
 
-impl_tie_proof_api!(IsNan, ZeroOutputRelation);
+crate::impl_plan_op!(IsNan, ZeroOutputRelation);
+
+impl OpPlan for IsNan {
+    fn plan(
+        &self,
+        node: &ComputationNode,
+        _model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Tie {
+                relation: OpTie::ZeroOutput(ZeroOutputRelation::new(node.clone())),
+            },
+        ]))
+    }
+}
 
 /// `IsNan` as a tie at the output point `r`: its output is zero everywhere.
 ///

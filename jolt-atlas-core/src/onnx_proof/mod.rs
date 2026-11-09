@@ -45,7 +45,7 @@ pub(crate) mod testing;
 // ── Re-exports ───────────────────────────────────────────────────────────
 
 pub use jolt_atlas_verifier::onnx_proof::{
-    append_inputs_to_transcript, verifier, verify_with, Verifier,
+    append_inputs_to_transcript, plan, verifier, verify_with, Verifier,
 };
 pub use jolt_atlas_verifier::{
     proof_serialization, Claims, ONNXProof, ProofId, ProofType, ReducedOpeningProof,

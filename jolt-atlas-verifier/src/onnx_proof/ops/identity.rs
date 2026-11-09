@@ -1,10 +1,27 @@
 use crate::node_view::ComputationNode;
-use crate::{
-    impl_tie_proof_api,
-    onnx_proof::{ops::neg::SignedCopyRelation, Verifier},
-};
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use crate::onnx_proof::ops::neg::SignedCopyRelation;
+use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::op::Identity;
-use atlas_transcript::Transcript;
 
-impl_tie_proof_api!(Identity, SignedCopyRelation<Identity>);
+crate::impl_plan_op!(Identity, SignedCopyRelation<Identity>);
+
+impl OpPlan for Identity {
+    fn plan(
+        &self,
+        node: &ComputationNode,
+        _model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Tie {
+                relation: OpTie::Identity(
+                    <SignedCopyRelation<Identity> as jolt_claims::SymbolicSumcheck>::new(
+                        node.clone(),
+                    ),
+                ),
+            },
+        ]))
+    }
+}

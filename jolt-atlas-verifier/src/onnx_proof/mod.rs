@@ -21,6 +21,7 @@ pub mod global_clamp;
 pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;
+pub mod plan;
 pub mod preprocessing;
 pub mod range_checking;
 pub mod relation;

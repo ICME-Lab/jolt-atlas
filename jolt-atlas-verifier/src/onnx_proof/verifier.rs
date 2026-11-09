@@ -4,7 +4,12 @@
 //! This file houses the [`Verifier`] struct and the helper functions that `verify`
 //! delegates to.
 
-use super::{AtlasSharedPreprocessing, AtlasVerifierPreprocessing};
+use super::{
+    ops::eval_reduction::NodeEvalReduction,
+    plan::{Plan, Step},
+    AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
+};
+use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
 use crate::{ONNXProof, ProofId};
@@ -17,7 +22,7 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;
-use atlas_sumcheck::relation::DynRelationVerifier;
+use atlas_sumcheck::relation::{verify_relation, DynRelationVerifier};
 use atlas_sumcheck::{
     evaluation_reduction::EvalReductionProof,
     opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator},
@@ -111,6 +116,32 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
         }
         if let Some(id) = self.accumulator.first_unbound_claim() {
             return Err(ProofVerifyError::UnboundClaim(format!("{id:?}")));
+        }
+        Ok(())
+    }
+}
+
+impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
+    /// The interpreter: run `node`'s plan, step by step, in transcript order.
+    #[tracing::instrument(skip_all, name = "Verifier::run_plan", fields(node = node.idx))]
+    pub fn run_plan(&mut self, node: &ComputationNode, plan: Plan) -> Result<(), ProofVerifyError> {
+        for step in plan.0 {
+            match step {
+                Step::Reduce => NodeEvalReduction::verify(self, node)?,
+                Step::Relation { proof, relation } => {
+                    let relation = relation.verifier(&self.accumulator, &mut self.transcript)?;
+                    let proof = self.proofs.take(ProofId(node.idx, proof))?;
+                    verify_relation(
+                        proof,
+                        relation.as_ref(),
+                        &mut self.accumulator,
+                        &mut self.transcript,
+                    )?;
+                }
+                Step::Tie { relation } => {
+                    relation.verify(&mut self.accumulator, &mut self.transcript)?
+                }
+            }
         }
         Ok(())
     }

@@ -49,6 +49,22 @@ The crate has no prover code. Three mechanisms hold that:
 5. **Proof object**: `proof.rs`, `types.rs` (`ProofId`, `ProofType`, `Claims`) and
    `proof_serialization.rs` (the wire format).
 
+## Plans
+
+An op's verification is a `Plan` (`onnx_proof/plan.rs`): an ordered list of `Step`s over
+relations, built by `OpPlan::plan(node, model, io)` before the transcript runs. `Reduce` is the
+node's evaluation reduction, `Relation` a sumcheck stored under a `ProofType`, `Tie` a
+zero-round identity. Steps hold relations (the closed enums `OpRelation` and `OpTie`), never
+closures; whatever depends on earlier claims or on challenges is read and drawn in the
+relation's `setup` when the interpreter reaches the step. `Verifier::run_plan` in
+`onnx_proof/verifier.rs` is the interpreter; the prover's `ops::prove_plan` walks the same
+plan with the relations' witnesses, so an op's transcript order is its plan's step order on
+both sides.
+
+Plan-verified today: `And`, `Concat`, `Iff`, `Reshape`, `Slice`, `Identity`, `Neg`, `IsNan`,
+`MoveAxis`. The other ops still verify through hand-written `VerifyOp` impls and the deferral
+queues in `deferred_lookups.rs`.
+
 ## Proof-shape rules
 
 - **No panic.** The crate denies `clippy::{unwrap_used, expect_used, panic, unreachable,

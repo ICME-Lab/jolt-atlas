@@ -78,8 +78,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sum {
         // (3) Axis reduction.
         let proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::SumReduction))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::SumReduction))?;
         let reduction = RelationVerifier::<F, _>::new(
             SumAxisRelation::for_node(&verifier.preprocessing.model, node.clone()),
             &verifier.accumulator,

@@ -39,8 +39,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ReLU {
         )?;
         let execution_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::Execution))?;
         verify_relation(
             execution_proof,
             &verifier_sumcheck,
@@ -54,8 +53,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ReLU {
             shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript)?;
         let ra_one_hot_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
         verify_relation_batch(
             ra_one_hot_proof,
             vec![&*ra_verifier, &*bool_verifier],

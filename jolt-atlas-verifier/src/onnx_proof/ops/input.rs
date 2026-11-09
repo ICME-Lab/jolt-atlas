@@ -28,7 +28,12 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Input {
             .iter()
             .position(|&idx| idx == node.idx)
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let shape = PublicShape::new(node.clone(), Arc::new(verifier.io.inputs[position].clone()));
+        let input = verifier
+            .io
+            .inputs
+            .get(position)
+            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        let shape = PublicShape::new(node.clone(), Arc::new(input.clone()));
         verify_tie(
             &PublicRelation::<Input>::new(shape),
             &mut verifier.accumulator,

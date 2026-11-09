@@ -112,8 +112,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for MeanOfSquares {
         // (3) Reduction sumcheck.
         let proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::RescaleArith))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::RescaleArith))?;
         let reduction = RelationVerifier::<F, _>::new(
             MeanOfSquaresRelation::new(node.clone()),
             &verifier.accumulator,

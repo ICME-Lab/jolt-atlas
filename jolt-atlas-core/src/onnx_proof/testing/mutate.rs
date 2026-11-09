@@ -11,12 +11,12 @@ use ark_std::One;
 use atlas_algebra::poly::opening_point::{OpeningPoint, BIG_ENDIAN};
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
-use atlas_trace::{trace::ModelExecutionIO, Model};
+use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use common::VirtualPoly;
 use jolt_field::Ring;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
-use crate::onnx_proof::{ONNXProof, ProofId};
+use crate::onnx_proof::{ONNXProof, ProofId, ProofType};
 
 /// A PCS-specific edit of the joint opening proof.
 #[derive(Clone, Copy, Debug)]
@@ -153,6 +153,8 @@ pub(crate) enum Site {
     ClaimRemoved(OpeningId),
     /// Insert a claim for an id nothing consumes.
     ClaimOrphan,
+    /// Insert a sumcheck proof under an id nothing consumes.
+    ProofOrphan,
     /// One compressed round-polynomial coefficient `+= 1`.
     RoundCoeff {
         proof: ProofId,
@@ -169,6 +171,8 @@ pub(crate) enum Site {
     EvalRedCoeff { node: usize, k: usize },
     /// Remove a node's evaluation-reduction proof.
     EvalRedRemoved { node: usize },
+    /// Insert an evaluation-reduction proof for a node with a single claim on its output.
+    EvalRedOrphan { node: usize },
     /// Swap two commitments.
     CommitmentSwap { i: usize, j: usize },
     /// Replace a commitment with the same polynomial's commitment from a
@@ -200,21 +204,12 @@ pub(crate) enum Site {
     IoInput { tensor: usize, elem: usize },
     /// `io.input_indices[i] += 1`.
     IoInputIndex { i: usize },
-}
-
-/// What the verifier must do with a mutated proof.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Expect {
-    /// `Err`, never `Ok`, never a panic.
-    MustReject,
-    /// `Err` or a panic, never `Ok`. A *structurally* malformed proof (a
-    /// missing opening claim) currently panics inside the accumulator
-    /// instead of returning an error; that is a robustness issue tracked
-    /// separately from soundness, so the sweep counts panics here.
-    RejectOrPanic,
-    /// `Ok` or `Err`, never a panic. Used for fields the verifier is known
-    /// not to read (reported, so the list cannot grow unnoticed).
-    Tolerated,
+    /// No output tensor.
+    IoOutputCount,
+    /// The output tensor truncated by one element (a shape the model does not produce).
+    IoOutputShape,
+    /// The last input tensor dropped.
+    IoInputCount,
 }
 
 /// Whether to enumerate every site (`JOLT_SOUNDNESS_EXHAUSTIVE=1`).
@@ -269,7 +264,8 @@ fn consumer_counts(model: &Model) -> Vec<usize> {
     counts
 }
 
-/// Every mutation site of `proof` / `io`, with its expectation. Round
+/// Every mutation site of `proof` / `io`. The verifier must reject each one with an `Err`:
+/// never accept, never panic. Round
 /// coefficients are sampled (first round, last round, two random rounds per
 /// proof) unless exhaustive.
 pub(crate) fn enumerate_sites<PCS: PcsMutations>(
@@ -277,7 +273,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
     other: &ONNXProof<PCS::Field, PCS>,
     io: &ModelExecutionIO,
     model: &Model,
-) -> Vec<(Site, Expect)> {
+) -> Vec<Site> {
     let mut rng = StdRng::seed_from_u64(sampling_seed());
     let all = exhaustive();
     let mut sites = vec![];
@@ -285,11 +281,12 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
     let mut strata = std::collections::HashSet::new();
     for id in proof.opening_claims().openings().keys() {
         if all || strata.insert(opening_stratum(id, model)) {
-            sites.push((Site::Claim(*id), Expect::MustReject));
-            sites.push((Site::ClaimRemoved(*id), Expect::RejectOrPanic));
+            sites.push(Site::Claim(*id));
+            sites.push(Site::ClaimRemoved(*id));
         }
     }
-    sites.push((Site::ClaimOrphan, Expect::Tolerated));
+    sites.push(Site::ClaimOrphan);
+    sites.push(Site::ProofOrphan);
 
     for (id, sc) in proof.proofs() {
         let rounds = sc.compressed_polys.len();
@@ -307,42 +304,37 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
         };
         for round in chosen {
             for k in 0..sc.compressed_polys[round].coeffs_except_linear_term.len() {
-                sites.push((
-                    Site::RoundCoeff {
-                        proof: id.clone(),
-                        round,
-                        k,
-                    },
-                    Expect::MustReject,
-                ));
+                sites.push(Site::RoundCoeff {
+                    proof: id.clone(),
+                    round,
+                    k,
+                });
             }
         }
         if rounds > 0 {
-            sites.push((
-                Site::RoundExtraCoeff {
-                    proof: id.clone(),
-                    round: 0,
-                },
-                Expect::MustReject,
-            ));
-            sites.push((Site::RoundDropped { proof: id.clone() }, Expect::MustReject));
+            sites.push(Site::RoundExtraCoeff {
+                proof: id.clone(),
+                round: 0,
+            });
+            sites.push(Site::RoundDropped { proof: id.clone() });
         }
-        sites.push((Site::ProofRemoved { proof: id.clone() }, Expect::MustReject));
+        sites.push(Site::ProofRemoved { proof: id.clone() });
     }
 
     let consumers = consumer_counts(model);
     for (node, er) in proof.eval_reduction_proofs() {
-        // A single-consumer node's `h` is never read (short path in the
-        // eval-reduction verifier): a documented dead field.
-        let expect = if consumers[*node] > 1 {
-            Expect::MustReject
-        } else {
-            Expect::Tolerated
-        };
         for k in 0..er.h.coeffs.len() {
-            sites.push((Site::EvalRedCoeff { node: *node, k }, expect));
+            sites.push(Site::EvalRedCoeff { node: *node, k });
         }
-        sites.push((Site::EvalRedRemoved { node: *node }, Expect::MustReject));
+        sites.push(Site::EvalRedRemoved { node: *node });
+    }
+    // A node whose single claim needs no reduction: an entry for it is never read.
+    if let Some(node) = (0..consumers.len())
+        .find(|node| consumers[*node] == 1 && !proof.eval_reduction_proofs().contains_key(node))
+    {
+        if proof.eval_reduction_proofs().values().next().is_some() {
+            sites.push(Site::EvalRedOrphan { node });
+        }
     }
 
     // Swapping or replacing a commitment is a no-op when the two polynomials
@@ -360,7 +352,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
             pairs.choose_multiple(&mut rng, 24).copied().collect()
         };
         for (i, j) in chosen {
-            sites.push((Site::CommitmentSwap { i, j }, Expect::MustReject));
+            sites.push(Site::CommitmentSwap { i, j });
         }
     }
     let replaceable: Vec<usize> = (0..n)
@@ -372,19 +364,19 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
         replaceable.choose_multiple(&mut rng, 16).copied().collect()
     };
     for i in chosen {
-        sites.push((Site::CommitmentReplaced { i }, Expect::MustReject));
+        sites.push(Site::CommitmentReplaced { i });
     }
     if n > 0 {
-        sites.push((Site::CommitmentDropped, Expect::MustReject));
+        sites.push(Site::CommitmentDropped);
     }
     for s in PCS::batch_sites(proof.batch_commitment(), other.batch_commitment()) {
-        sites.push((Site::BatchCommitment(s), Expect::MustReject));
+        sites.push(Site::BatchCommitment(s));
     }
 
     if let Some(rop) = proof.reduced_opening_proof() {
         for (round, poly) in rop.sumcheck_proof().compressed_polys.iter().enumerate() {
             for k in 0..poly.coeffs_except_linear_term.len() {
-                sites.push((Site::ReducedRoundCoeff { round, k }, Expect::MustReject));
+                sites.push(Site::ReducedRoundCoeff { round, k });
             }
         }
         let claims = rop.sumcheck_claims().len();
@@ -398,41 +390,44 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
                 .collect()
         };
         for i in chosen {
-            sites.push((Site::ReducedClaim { i }, Expect::MustReject));
+            sites.push(Site::ReducedClaim { i });
         }
-        sites.push((Site::ReducedRemoved, Expect::MustReject));
-        sites.push((Site::ReducedSpliced, Expect::MustReject));
+        sites.push(Site::ReducedRemoved);
+        sites.push(Site::ReducedSpliced);
         for s in PCS::sites(rop.joint_opening_proof()) {
-            sites.push((Site::ReducedPcs(s), Expect::MustReject));
+            sites.push(Site::ReducedPcs(s));
         }
     }
 
     let narg_len = proof.narg().len();
     if narg_len > 0 {
         for i in [0, narg_len / 2, narg_len - 1] {
-            sites.push((Site::NargByte { i }, Expect::MustReject));
+            sites.push(Site::NargByte { i });
         }
-        sites.push((Site::NargTruncated, Expect::MustReject));
+        sites.push(Site::NargTruncated);
     }
-    sites.push((Site::NargExtended, Expect::MustReject));
+    sites.push(Site::NargExtended);
 
     let out_len = io.outputs[0].data().len();
     for elem in [0, out_len / 2, out_len - 1] {
-        sites.push((Site::IoOutput { elem }, Expect::MustReject));
+        sites.push(Site::IoOutput { elem });
     }
     for (tensor, t) in io.inputs.iter().enumerate() {
         let len = t.data().len();
         for elem in [0, len / 2, len - 1] {
-            sites.push((Site::IoInput { tensor, elem }, Expect::MustReject));
+            sites.push(Site::IoInput { tensor, elem });
         }
     }
     for i in 0..io.input_indices.len() {
-        sites.push((Site::IoInputIndex { i }, Expect::MustReject));
+        sites.push(Site::IoInputIndex { i });
     }
+    sites.push(Site::IoOutputCount);
+    sites.push(Site::IoOutputShape);
+    sites.push(Site::IoInputCount);
 
     // Dedupe sites that collapsed onto the same element.
     let mut seen = std::collections::HashSet::new();
-    sites.retain(|(s, _)| seen.insert(format!("{s:?}")));
+    sites.retain(|s| seen.insert(format!("{s:?}")));
     sites
 }
 
@@ -497,6 +492,12 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
                 .compressed_polys
                 .pop();
         }
+        Site::ProofOrphan => {
+            let donor = proof.proofs().values().next().expect("site").clone();
+            proof
+                .proofs_mut()
+                .insert(ProofId(usize::MAX - 7, ProofType::Execution), donor);
+        }
         Site::ProofRemoved { proof: id } => {
             proof.proofs_mut().remove(id);
         }
@@ -507,6 +508,15 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
                 .expect("site")
                 .h
                 .coeffs[*k] += one
+        }
+        Site::EvalRedOrphan { node } => {
+            let donor = proof
+                .eval_reduction_proofs()
+                .values()
+                .next()
+                .expect("site")
+                .clone();
+            proof.eval_reduction_proofs_mut().insert(*node, donor);
         }
         Site::EvalRedRemoved { node } => {
             proof.eval_reduction_proofs_mut().remove(node);
@@ -563,6 +573,15 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
             d[*elem] = d[*elem].wrapping_add(1);
         }
         Site::IoInputIndex { i } => io.input_indices[*i] += 1,
+        Site::IoOutputCount => io.outputs.clear(),
+        Site::IoOutputShape => {
+            let out = &io.outputs[0];
+            let len = out.data().len() - 1;
+            io.outputs[0] = Tensor::from_slice(&out.data()[..len], &[len]).expect("site");
+        }
+        Site::IoInputCount => {
+            io.inputs.pop();
+        }
     }
 }
 
@@ -575,9 +594,11 @@ pub(crate) fn site_class(site: &Site) -> &'static str {
         Site::RoundCoeff { .. } => "RoundCoeff",
         Site::RoundExtraCoeff { .. } => "RoundExtraCoeff",
         Site::RoundDropped { .. } => "RoundDropped",
+        Site::ProofOrphan => "ProofOrphan",
         Site::ProofRemoved { .. } => "ProofRemoved",
         Site::EvalRedCoeff { .. } => "EvalRedCoeff",
         Site::EvalRedRemoved { .. } => "EvalRedRemoved",
+        Site::EvalRedOrphan { .. } => "EvalRedOrphan",
         Site::CommitmentSwap { .. } => "CommitmentSwap",
         Site::CommitmentReplaced { .. } => "CommitmentReplaced",
         Site::CommitmentDropped => "CommitmentDropped",
@@ -593,5 +614,8 @@ pub(crate) fn site_class(site: &Site) -> &'static str {
         Site::IoOutput { .. } => "IoOutput",
         Site::IoInput { .. } => "IoInput",
         Site::IoInputIndex { .. } => "IoInputIndex",
+        Site::IoOutputCount => "IoOutputCount",
+        Site::IoOutputShape => "IoOutputShape",
+        Site::IoInputCount => "IoInputCount",
     }
 }

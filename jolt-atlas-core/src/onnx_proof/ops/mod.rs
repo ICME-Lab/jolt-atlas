@@ -54,7 +54,7 @@ pub trait ProveOp<F: JoltField, T: Transcript>: OpLayout {
         &self,
         _node: &ComputationNode,
         _prover: &mut Prover<F, T>,
-    ) -> (EvalReductionProof<F>, ExecutionProofs<F>) {
+    ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
         panic!("Op selected custom reduction flow but did not implement prove_with_reduction")
     }
 }
@@ -208,7 +208,7 @@ impl OperatorProver {
     pub fn prove<F, T>(
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> (EvalReductionProof<F>, ExecutionProofs<F>)
+    ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>)
     where
         F: JoltField,
         T: Transcript,
@@ -222,7 +222,7 @@ impl OperatorProver {
         operator: &O,
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
-    ) -> (EvalReductionProof<F>, ExecutionProofs<F>)
+    ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>)
     where
         F: JoltField,
         T: Transcript,

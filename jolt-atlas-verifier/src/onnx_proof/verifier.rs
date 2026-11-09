@@ -19,13 +19,14 @@ use atlas_algebra::{
 use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_sumcheck::relation::DynRelationVerifier;
 use atlas_sumcheck::{
+    evaluation_reduction::EvalReductionProof,
     opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator},
     sumcheck::SumcheckInstanceProof,
 };
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use atlas_transcript::{AppendToTranscript, Transcript, VerifyingTranscript};
 use common::{CommittedPoly, VirtualPoly};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 // ---------------------------------------------------------------------------
 // Verifier state
@@ -40,8 +41,10 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
     pub accumulator: VerifierOpeningAccumulator<F>,
     /// Interactive proof transcript.
     pub transcript: T,
-    /// Map of proof IDs to sumcheck proofs.
-    pub proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F>>,
+    /// The proof's sumcheck proofs, each taken exactly once.
+    pub proofs: ProofLedger<'a, ProofId, SumcheckInstanceProof<F>>,
+    /// The proof's evaluation-reduction proofs by node, each taken exactly once.
+    pub eval_reductions: ProofLedger<'a, usize, EvalReductionProof<F>>,
     /// Model execution inputs and outputs.
     pub io: &'a ModelExecutionIO,
     /// Lookups registered during the node loop, verified afterwards in one
@@ -62,6 +65,7 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
     pub fn new(
         preprocessing: &'a AtlasSharedPreprocessing,
         proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F>>,
+        eval_reductions: &'a BTreeMap<usize, EvalReductionProof<F>>,
         io: &'a ModelExecutionIO,
         narg: &[u8],
     ) -> Self
@@ -72,7 +76,8 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
             preprocessing,
             accumulator: VerifierOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof", narg.to_vec()),
-            proofs,
+            proofs: ProofLedger::new(proofs),
+            eval_reductions: ProofLedger::new(eval_reductions),
             io,
             deferred: Vec::new(),
             deferred_batches: BTreeMap::new(),
@@ -90,6 +95,62 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
             .entry(kind)
             .or_default()
             .push(instance);
+    }
+}
+
+impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
+    /// The drain check: the proof was consumed exactly. `Err` if a sumcheck proof or an
+    /// evaluation-reduction proof was never taken, or an opening claim was never bound to a
+    /// point.
+    pub fn check_consumed(&self) -> Result<(), ProofVerifyError> {
+        if let Some(id) = self.proofs.first_unconsumed() {
+            return Err(ProofVerifyError::UnconsumedProof(format!("{id:?}")));
+        }
+        if let Some(node) = self.eval_reductions.first_unconsumed() {
+            return Err(ProofVerifyError::UnconsumedEvalReduction(*node));
+        }
+        if let Some(id) = self.accumulator.first_unbound_claim() {
+            return Err(ProofVerifyError::UnboundClaim(format!("{id:?}")));
+        }
+        Ok(())
+    }
+}
+
+/// A keyed part of the proof with its consumption record: every entry is taken exactly once.
+pub struct ProofLedger<'a, K, V> {
+    entries: &'a BTreeMap<K, V>,
+    consumed: BTreeSet<K>,
+}
+
+impl<'a, K: Ord + Clone + std::fmt::Debug, V> ProofLedger<'a, K, V> {
+    fn new(entries: &'a BTreeMap<K, V>) -> Self {
+        Self {
+            entries,
+            consumed: BTreeSet::new(),
+        }
+    }
+
+    /// Take the entry under `key`. `Err` if the proof carries none, or it was already taken.
+    pub fn take(&mut self, key: K) -> Result<&'a V, ProofVerifyError> {
+        let entry = self
+            .entries
+            .get(&key)
+            .ok_or_else(|| ProofVerifyError::Malformed(format!("missing proof entry {key:?}")))?;
+        if !self.consumed.insert(key.clone()) {
+            return Err(ProofVerifyError::Malformed(format!(
+                "proof entry {key:?} taken twice"
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Whether the proof carries an entry under `key`.
+    pub fn contains(&self, key: &K) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    fn first_unconsumed(&self) -> Option<&'a K> {
+        self.entries.keys().find(|key| !self.consumed.contains(key))
     }
 }
 
@@ -120,12 +181,41 @@ pub fn populate_accumulator<F: JoltField, T: Transcript, PCS: CommitmentScheme<F
     }
 }
 
+/// The public IO names the model's inputs and outputs, in order, with one tensor of the node's
+/// dims for each.
+pub fn check_io_shape(model: &Model, io: &ModelExecutionIO) -> Result<(), ProofVerifyError> {
+    let malformed = |what: &str| Err(ProofVerifyError::Malformed(format!("public IO: {what}")));
+    if io.input_indices != model.input_indices() {
+        return malformed("input indices are not the model's");
+    }
+    if io.output_indices != model.output_indices() {
+        return malformed("output indices are not the model's");
+    }
+    if io.inputs.len() != io.input_indices.len() || io.outputs.len() != io.output_indices.len() {
+        return malformed("tensor count does not match the index count");
+    }
+    let tensors = io.inputs.iter().chain(&io.outputs);
+    let indices = io.input_indices.iter().chain(&io.output_indices);
+    for (tensor, &idx) in tensors.zip(indices) {
+        if tensor.dims() != model.view(idx).output_dims.as_slice() {
+            return malformed("a tensor does not have its node's dims");
+        }
+    }
+    Ok(())
+}
+
 /// Verify that the output MLE evaluates correctly at the random challenge point τ.
 pub fn verify_output_claim<F: JoltField, T: Transcript>(
     model: &Model,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    let output_index = model.output_indices()[0];
+    let (Some(&output_index), Some(output)) =
+        (model.output_indices().first(), verifier.io.outputs.first())
+    else {
+        return Err(ProofVerifyError::Malformed(
+            "the model has no output".to_string(),
+        ));
+    };
     let output_computation_node = &model.view(output_index);
     let r_node_output = verifier.transcript.challenge_vector_optimized::<F>(
         output_computation_node
@@ -133,7 +223,7 @@ pub fn verify_output_claim<F: JoltField, T: Transcript>(
             .log_2(),
     );
     let expected_output_claim =
-        MultilinearPolynomial::from(verifier.io.outputs[0].padded_pow2()).evaluate(&r_node_output);
+        MultilinearPolynomial::from(output.padded_pow2()).evaluate(&r_node_output);
 
     let output_opening_id = OpeningId::new(
         VirtualPoly::NodeOutput(output_computation_node.idx),
@@ -160,13 +250,12 @@ pub fn verify_output_claim<F: JoltField, T: Transcript>(
 
 /// Iterate over computation graph in reverse topological order and verify each operation.
 #[tracing::instrument(skip_all, name = "ONNXProof::verify_iop")]
-pub fn verify_iop<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
-    proof: &ONNXProof<F, PCS>,
+pub fn verify_iop<F: JoltField, T: Transcript>(
     model: &Model,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
     for node in model.views().iter().rev() {
-        OperatorVerifier::verify(node, verifier, proof.eval_reduction_proofs())
+        OperatorVerifier::verify(node, verifier)
             .inspect_err(|e| tracing::debug!(node = node.idx, ?e, "verification failed"))?;
     }
     crate::onnx_proof::deferred_lookups::verify_all(verifier)

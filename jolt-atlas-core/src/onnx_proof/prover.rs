@@ -178,7 +178,9 @@ pub(crate) fn iop<F: JoltField, T: Transcript>(
 ) {
     for node in model.views().iter().rev() {
         let (eval_reduction_proof, execution_proofs) = OperatorProver::prove(node, prover);
-        eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
+        if let Some(eval_reduction_proof) = eval_reduction_proof {
+            eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
+        }
         proofs.extend(execution_proofs);
     }
     crate::onnx_proof::deferred_lookups::prove_all(prover, proofs);

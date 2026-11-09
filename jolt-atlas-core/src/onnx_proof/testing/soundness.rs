@@ -33,8 +33,7 @@ use super::{
         sub_const_model, ProbeModel,
     },
     mutate::{
-        apply_site, enumerate_sites, exhaustive, opening_stratum, site_class, Expect, PcsMutations,
-        Site,
+        apply_site, enumerate_sites, exhaustive, opening_stratum, site_class, PcsMutations, Site,
     },
     probe::{self, ProbeGuard},
 };
@@ -167,8 +166,8 @@ fn proof_mutation_sweep_for<PCS: PcsMutations>() {
         // Sequential on purpose: a verifier crash (stack overflow) must be
         // attributable to the site being tried, which the exhaustive run
         // logs site by site.
-        let mut outcomes: Vec<(Site, Expect, Outcome)> = Vec::with_capacity(sites.len());
-        for (site, expect) in sites {
+        let mut outcomes: Vec<(Site, Outcome)> = Vec::with_capacity(sites.len());
+        for site in sites {
             if exhaustive() {
                 eprintln!("  [{}] trying {site:?}", h.name);
             }
@@ -176,22 +175,15 @@ fn proof_mutation_sweep_for<PCS: PcsMutations>() {
             let mut io = h.io.clone();
             apply_site(&mut proof, &mut io, &other, &site);
             let outcome = run_verify(&proof, &h.verifier_pp, &io);
-            outcomes.push((site, expect, outcome));
+            outcomes.push((site, outcome));
         }
 
         let mut rows: BTreeMap<&'static str, (usize, usize)> = BTreeMap::new();
-        let mut panics_tolerated = 0usize;
         let mut model_violations = vec![];
-        for (site, expect, outcome) in &outcomes {
-            let ok = match (expect, outcome) {
-                (Expect::RejectOrPanic, Outcome::VerifierPanicked(_)) => {
-                    panics_tolerated += 1;
-                    true
-                }
-                (_, Outcome::VerifierPanicked(_)) => false,
-                (Expect::MustReject | Expect::RejectOrPanic, Outcome::Accepted) => false,
-                _ => true,
-            };
+        for (site, outcome) in &outcomes {
+            // Every site must be rejected with an `Err`: an accept is a soundness hole, a
+            // panic a verifier crash.
+            let ok = matches!(outcome, Outcome::Rejected(_));
             let row = rows.entry(site_class(site)).or_default();
             row.0 += 1;
             if ok {
@@ -203,9 +195,6 @@ fn proof_mutation_sweep_for<PCS: PcsMutations>() {
         for v in &model_violations {
             println!("  VIOLATION {v}");
         }
-        println!(
-            "  structural removals that panicked the verifier (tolerated): {panics_tolerated}"
-        );
         violations.extend(model_violations);
         report(
             &format!(
@@ -220,11 +209,6 @@ fn proof_mutation_sweep_for<PCS: PcsMutations>() {
             ),
             &rows,
         );
-        let tolerated_accepts = outcomes
-            .iter()
-            .filter(|(_, e, o)| *e == Expect::Tolerated && matches!(o, Outcome::Accepted))
-            .count();
-        println!("  tolerated dead-field accepts: {tolerated_accepts}");
     }
     assert!(
         violations.is_empty(),

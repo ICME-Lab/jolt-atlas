@@ -42,8 +42,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ScalarConstDiv {
     ) -> Result<(), ProofVerifyError> {
         let proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::Execution))?;
         let exec_sumcheck = RelationVerifier::<F, _>::new(
             ConstantDivisionRelation::new(node.clone()),
             &verifier.accumulator,

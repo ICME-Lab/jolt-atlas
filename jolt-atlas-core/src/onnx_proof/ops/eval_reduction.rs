@@ -10,11 +10,12 @@ use atlas_transcript::Transcript;
 
 /// Prover-side methods of [`NodeEvalReduction`].
 pub trait NodeEvalReductionProve {
-    /// Run node-output evaluation reduction on the prover side for the given node.
+    /// Run node-output evaluation reduction on the prover side for the given node. A node with
+    /// a single claim on its output needs no proof: the claim is the reduced instance.
     fn prove<F: JoltField, T: Transcript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
-    ) -> EvalReductionProof<F>;
+    ) -> Option<EvalReductionProof<F>>;
 }
 
 impl NodeEvalReductionProve for NodeEvalReduction {
@@ -23,7 +24,7 @@ impl NodeEvalReductionProve for NodeEvalReduction {
     fn prove<F: JoltField, T: Transcript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
-    ) -> EvalReductionProof<F> {
+    ) -> Option<EvalReductionProof<F>> {
         let node_idx = computation_node.idx;
         let openings = prover.accumulator.get_node_openings(node_idx);
 
@@ -34,9 +35,7 @@ impl NodeEvalReductionProve for NodeEvalReduction {
         let (proof, reduced) = if openings.len() == 1 {
             let (r, claim) = (openings[0].0.clone(), openings[0].1);
             (
-                EvalReductionProof {
-                    h: atlas_algebra::poly::unipoly::UniPoly::from_coeff(vec![claim]),
-                },
+                None,
                 atlas_sumcheck::evaluation_reduction::ReducedInstance { r: r.r, claim },
             )
         } else {
@@ -45,8 +44,10 @@ impl NodeEvalReductionProve for NodeEvalReduction {
                 output,
             } = TraceView::layer_data(&prover.trace, computation_node);
             let output_mle = MultilinearPolynomial::from(output.padded_pow2());
-            EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
-                .expect("Proving evaluation reduction should not fail")
+            let (proof, reduced) =
+                EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
+                    .expect("Proving evaluation reduction should not fail");
+            (Some(proof), reduced)
         };
 
         prover
@@ -73,7 +74,6 @@ mod tests {
     };
     use atlas_pcs::mock::MockCommitScheme;
     use atlas_sumcheck::{
-        evaluation_reduction::EvalReductionProtocol,
         opening_proof::{OpeningId, SumcheckId},
         sumcheck::SumcheckInstanceProof,
     };
@@ -235,7 +235,14 @@ mod tests {
         };
 
         let proofs = BTreeMap::new();
-        let mut verifier = Verifier::<Fr, Blake2bVerifier>::new(&preprocessing, &proofs, &io, &[]);
+        let eval_reductions = BTreeMap::new();
+        let mut verifier = Verifier::<Fr, Blake2bVerifier>::new(
+            &preprocessing,
+            &proofs,
+            &eval_reductions,
+            &io,
+            &[],
+        );
 
         let producer_node = ComputationNode::new(producer_idx, Op::Add(Add), vec![], vec![n]);
 
@@ -253,15 +260,7 @@ mod tests {
         let opening = (OpeningPoint::new(point.clone()), claim);
         verifier.accumulator.openings.insert(key, opening);
 
-        let mut prover_transcript = Blake2bProver::new(b"ONNXProof");
-        let (proof, _reduced_prover) = EvalReductionProtocol::prove(
-            &verifier.accumulator.get_node_openings(producer_idx),
-            output_mle,
-            &mut prover_transcript,
-        )
-        .expect("single opening should be propagated by prover-side protocol");
-
-        NodeEvalReduction::verify(&mut verifier, &producer_node, &proof)
+        NodeEvalReduction::verify(&mut verifier, &producer_node)
             .expect("single opening should be accepted and propagated by verifier");
 
         let reduced = verifier
@@ -299,7 +298,8 @@ mod tests {
 
         prover::iop(&model, &mut prover, &mut proofs, &mut eval_reduction_proofs);
 
-        assert!(eval_reduction_proofs.contains_key(&output_idx));
+        // A single claim is its own reduced instance: no proof entry.
+        assert!(!eval_reduction_proofs.contains_key(&output_idx));
     }
 
     #[test]
@@ -344,13 +344,14 @@ mod tests {
         let mut verifier = Verifier::<_, Blake2bVerifier>::new(
             &shared,
             partial_proof.proofs(),
+            partial_proof.eval_reduction_proofs(),
             &io,
             partial_proof.narg(),
         );
         verifier::populate_accumulator(&partial_proof, &mut verifier);
         verifier::verify_output_claim(shared.model(), &mut verifier)
             .expect("verify_output_claim should succeed for consistent partial proof state");
-        verifier::verify_iop(&partial_proof, shared.model(), &mut verifier)
+        verifier::verify_iop(shared.model(), &mut verifier)
             .expect("verify_iop should succeed in isolation after output-claim initialization");
 
         let output_idx = shared.model().output_indices()[0];

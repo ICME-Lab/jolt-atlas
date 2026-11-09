@@ -25,7 +25,6 @@ use atlas_algebra::{
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 use atlas_sumcheck::relation::{verify_relation, verify_relation_batch};
 use atlas_sumcheck::{
-    evaluation_reduction::EvalReductionProof,
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::{self, RaOneHotEncoding},
 };
@@ -63,8 +62,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Div {
         // Execution verification
         let proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::Execution))?;
         let exec_sumcheck = RelationVerifier::<F, _>::new(
             DivRelation::new(node.clone()),
             &verifier.accumulator,
@@ -84,11 +82,10 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Div {
         &self,
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
-        eval_reduction_proof: &EvalReductionProof<F>,
     ) -> Result<(), ProofVerifyError> {
         self.verify(node, verifier)?;
 
-        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
+        NodeEvalReduction::verify(verifier, node)?;
         verify_tie(
             &DivQuotientRelation::new(node.clone()),
             &mut verifier.accumulator,
@@ -292,8 +289,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
 ) -> Result<(), ProofVerifyError> {
     let rangecheck_proof = verifier
         .proofs
-        .get(&ProofId(node.idx, ProofType::RangeCheck))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        .take(ProofId(node.idx, ProofType::RangeCheck))?;
 
     let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
     let rangecheck_verifier = rangecheck_provider
@@ -310,8 +306,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
 
     let ra_one_hot_proof = verifier
         .proofs
-        .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-        .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+        .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
     let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
     let encoding = rc_operands.get_encoding(node);
     let [ra_sumcheck, bool_sumcheck] =

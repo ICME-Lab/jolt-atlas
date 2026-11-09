@@ -184,8 +184,7 @@ fn batched_verify<F: JoltField, T: Transcript>(
 ) -> Result<(), ProofVerifyError> {
     let proof = verifier
         .proofs
-        .get(&ProofId(DEFERRED_PROOF_IDX, proof_type))
-        .ok_or(ProofVerifyError::MissingProof(DEFERRED_PROOF_IDX))?;
+        .take(ProofId(DEFERRED_PROOF_IDX, proof_type))?;
     verify_relation_batch(
         proof,
         instances.iter().map(|v| &**v as _).collect(),

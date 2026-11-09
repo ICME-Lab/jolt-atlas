@@ -58,7 +58,7 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Rsqrt {
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> (
-        EvalReductionProof<F>,
+        Option<EvalReductionProof<F>>,
         Vec<(ProofId, SumcheckInstanceProof<F>)>,
     ) {
         let mut proofs = self.prove(node, prover);

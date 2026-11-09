@@ -233,6 +233,14 @@ where
         }
     }
 
+    /// A claim loaded from the proof that no append bound to a point, if any.
+    pub fn first_unbound_claim(&self) -> Option<OpeningId> {
+        self.openings
+            .keys()
+            .find(|id| !self.appended.contains(id))
+            .copied()
+    }
+
     pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {
         let lo = OpeningId::new(
             VirtualPoly::NodeOutput(node_idx),

@@ -27,7 +27,6 @@ use atlas_algebra::{
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 use atlas_sumcheck::relation::verify_relation;
 use atlas_sumcheck::{
-    evaluation_reduction::EvalReductionProof,
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::RaOneHotEncoding,
 };
@@ -82,8 +81,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Rsqrt {
         // Execution proof
         let proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::Execution))?;
         let verifier_sumcheck = RelationVerifier::<F, _>::new(
             RsqrtRelation::new(node.clone()),
             &verifier.accumulator,
@@ -103,10 +101,9 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Rsqrt {
         &self,
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
-        eval_reduction_proof: &EvalReductionProof<F>,
     ) -> Result<(), ProofVerifyError> {
         self.verify(node, verifier)?;
-        NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
+        NodeEvalReduction::verify(verifier, node)?;
         verify_range_and_onehot(node, verifier)
     }
 }

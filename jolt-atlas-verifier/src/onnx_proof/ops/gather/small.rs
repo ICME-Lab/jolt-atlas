@@ -25,8 +25,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherSmall {
     ) -> Result<(), ProofVerifyError> {
         let proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::Execution))?;
         let exec_sumcheck = gather_verifier(node, verifier)?;
         verify_relation(
             proof,
@@ -37,8 +36,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherSmall {
 
         let ra_one_hot_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
         let (hb_sumcheck, bool_sumcheck) = build_stage2_verifiers::<F>(node, verifier)?;
         let instances: Vec<&dyn DynRelationVerifier<F, T>> = vec![&hb_sumcheck, &bool_sumcheck];
         verify_relation_batch(
@@ -50,8 +48,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherSmall {
 
         let hw_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::RaHammingWeight))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::RaHammingWeight))?;
         let hw_sumcheck = build_stage3_verifier::<F>(node, verifier)?;
         verify_relation(
             hw_proof,

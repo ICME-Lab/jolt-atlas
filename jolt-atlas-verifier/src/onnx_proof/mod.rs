@@ -110,8 +110,17 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     io: &ModelExecutionIO,
     setup: impl FnOnce(&mut Verifier<'_, F, T>),
 ) -> Result<(), ProofVerifyError> {
-    let mut verifier: Verifier<F, T> = Verifier::new(&pp.shared, proof.proofs(), io, proof.narg());
+    let mut verifier: Verifier<F, T> = Verifier::new(
+        &pp.shared,
+        proof.proofs(),
+        proof.eval_reduction_proofs(),
+        io,
+        proof.narg(),
+    );
     setup(&mut verifier);
+
+    // The public IO has the model's shape: everything after this indexes it freely.
+    verifier::check_io_shape(pp.model(), io)?;
 
     // Bind public inputs into the transcript before any challenge (issue #230).
     // Must mirror the prover's first append, after `setup` installs any expected
@@ -125,10 +134,13 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     verifier::verify_output_claim(pp.model(), &mut verifier)?;
 
     // Verify each operation in reverse topological order
-    verifier::verify_iop(proof, pp.model(), &mut verifier)?;
+    verifier::verify_iop(pp.model(), &mut verifier)?;
 
     // Verify reduced opening proof
     verifier::verify_reduced_openings(proof, pp, &mut verifier)?;
+
+    // The proof was consumed exactly: no sumcheck or reduction proof left over, no claim unbound.
+    verifier.check_consumed()?;
 
     // Every proof-of-work nonce in the NARG string must have been read.
     verifier.transcript.finish()

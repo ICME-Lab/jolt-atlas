@@ -105,11 +105,10 @@ use crate::node_view::ComputationNode;
 
 // Re-export operator param/prover/verifier types for the handler macro
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_sumcheck::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof};
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
 use eval_reduction::NodeEvalReduction;
-use std::collections::BTreeMap;
 
 use crate::onnx_proof::{ProofId, Verifier};
 
@@ -166,7 +165,6 @@ pub trait VerifyOp<F: JoltField, T: Transcript>: OpLayout {
         &self,
         _node: &ComputationNode,
         _verifier: &mut Verifier<'_, F, T>,
-        _eval_reduction_proof: &EvalReductionProof<F>,
     ) -> Result<(), ProofVerifyError> {
         panic!("Op selected custom reduction flow but did not implement verify_with_reduction")
     }
@@ -265,24 +263,13 @@ impl OperatorVerifier {
     pub fn verify<F, T>(
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
-        eval_reduction_proofs: &BTreeMap<usize, EvalReductionProof<F>>,
     ) -> Result<(), ProofVerifyError>
     where
         F: JoltField,
         T: Transcript,
     {
-        let eval_reduction_proof = eval_reduction_proofs.get(&node.idx).ok_or_else(|| {
-            ProofVerifyError::InvalidOpeningProof(format!(
-                "Missing evaluation reduction proof for node index {}",
-                node.idx
-            ))
-        })?;
-
         dispatch_operator!(node, |inner| Self::verify_and_reduce_node(
-            inner,
-            node,
-            verifier,
-            eval_reduction_proof
+            inner, node, verifier
         ))
     }
 
@@ -290,7 +277,6 @@ impl OperatorVerifier {
         operator: &O,
         node: &ComputationNode,
         verifier: &mut Verifier<'_, F, T>,
-        eval_reduction_proof: &EvalReductionProof<F>,
     ) -> Result<(), ProofVerifyError>
     where
         F: JoltField,
@@ -299,12 +285,10 @@ impl OperatorVerifier {
     {
         match operator.reduction_flow() {
             ReductionFlow::Default => {
-                NodeEvalReduction::verify(verifier, node, eval_reduction_proof)?;
+                NodeEvalReduction::verify(verifier, node)?;
                 operator.verify(node, verifier)
             }
-            ReductionFlow::Custom => {
-                operator.verify_with_reduction(node, verifier, eval_reduction_proof)
-            }
+            ReductionFlow::Custom => operator.verify_with_reduction(node, verifier),
         }
     }
 }
@@ -378,10 +362,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
             ) -> Result<(), ProofVerifyError> {
                 use atlas_sumcheck::relation::verify_relation;
 
-                let proof = verifier
-                    .proofs
-                    .get(&ProofId(node.idx, ProofType::Execution))
-                    .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+                let proof = verifier.proofs.take(ProofId(node.idx, ProofType::Execution))?;
                 let verifier_sumcheck =
                     ($make_verifier)(
                         node,
@@ -505,10 +486,7 @@ macro_rules! impl_fused_rescale_proof_api {
                     fused_rebase::verify_pre(node, verifier)?;
                 }
 
-                let proof = verifier
-                    .proofs
-                    .get(&ProofId(node.idx, ProofType::RescaleArith))
-                    .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+                let proof = verifier.proofs.take(ProofId(node.idx, ProofType::RescaleArith))?;
                 let verifier_sumcheck =
                     ($make_verifier)(
                         node,

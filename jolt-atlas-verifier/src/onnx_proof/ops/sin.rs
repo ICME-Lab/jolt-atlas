@@ -88,8 +88,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sin {
 
         let sin_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::Execution))?;
         verify_relation_batch(
             sin_proof,
             vec![&dsc_verifier, &exec_sumcheck, &rangecheck_verifier],
@@ -105,8 +104,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sin {
 
         let onehot_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
         let mut onehot_verifiers: Vec<Box<dyn DynRelationVerifier<F, T>>> = Vec::new();
         onehot_verifiers.extend(shout::ra_onehot_verifiers(
             &dsc_encoding,

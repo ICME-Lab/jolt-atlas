@@ -27,8 +27,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherLarge {
     ) -> Result<(), ProofVerifyError> {
         let proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::Execution))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::Execution))?;
         let exec_sumcheck = gather_verifier(node, verifier)?;
         verify_relation(
             proof,
@@ -39,8 +38,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherLarge {
 
         let ra_one_hot_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::RaOneHotChecks))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
         let encoding = GatherRaEncoding::new(node);
         let [ra_verifier, bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript)?;

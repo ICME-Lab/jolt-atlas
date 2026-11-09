@@ -15,6 +15,7 @@
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use atlas_sumcheck::relation::{verify_relation_batch, DynRelationVerifier};
 
+use crate::onnx_proof::verifier::ProofLedger;
 use crate::{
     onnx_proof::{
         deferred_lookups::{DeferredBatch, DeferredOneHot},
@@ -36,7 +37,6 @@ use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::VerifierOpeningAccumulator,
 };
-use std::collections::BTreeMap;
 
 use atlas_trace::op::SoftmaxLastAxis;
 
@@ -134,7 +134,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for SoftmaxLastAxis {
         let (stage3, onehots) = sm.verify(
             &mut verifier.accumulator,
             &mut verifier.transcript,
-            verifier.proofs,
+            &mut verifier.proofs,
             scale_bits as i32,
         )?;
         for instance in stage3 {
@@ -174,7 +174,7 @@ impl SoftmaxLastAxisVerifier {
         &mut self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-        proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F>>,
+        proofs: &mut ProofLedger<'_, ProofId, SumcheckInstanceProof<F>>,
         scale_bits: i32,
     ) -> Result<(Vec<Box<dyn DynRelationVerifier<F, T>>>, Vec<DeferredOneHot>), ProofVerifyError>
     {
@@ -220,13 +220,11 @@ impl SoftmaxLastAxisVerifier {
         &self,
         proof_type: ProofType,
         instances: Vec<Box<dyn DynRelationVerifier<F, T>>>,
-        proofs: &BTreeMap<ProofId, SumcheckInstanceProof<F>>,
+        proofs: &mut ProofLedger<'_, ProofId, SumcheckInstanceProof<F>>,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
-        let proof = proofs
-            .get(&ProofId(self.idx(), proof_type))
-            .ok_or(ProofVerifyError::MissingProof(self.idx()))?;
+        let proof = proofs.take(ProofId(self.idx(), proof_type))?;
         let refs: Vec<&dyn DynRelationVerifier<F, T>> =
             instances.iter().map(|b| b.as_ref()).collect();
         verify_relation_batch(proof, refs, accumulator, transcript)?;

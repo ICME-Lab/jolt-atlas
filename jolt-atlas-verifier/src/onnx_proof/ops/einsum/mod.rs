@@ -76,8 +76,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Einsum {
 
         let matmul_proof = verifier
             .proofs
-            .get(&ProofId(node.idx, ProofType::EinsumMatmul))
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
+            .take(ProofId(node.idx, ProofType::EinsumMatmul))?;
         let relation = ContractionRelation::for_node(&verifier.preprocessing.model, node.clone());
         let matmul =
             RelationVerifier::new(relation, &verifier.accumulator, &mut verifier.transcript)?;

@@ -106,7 +106,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for MeanOfSquares {
         if !scalar {
             // Built now, proven after the node loop (`RangeCheck` batch); its
             // one-hot checks follow that batch.
-            let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node)
+                .expect("the node\'s operator is the one its range check proves");
             let (rc_sumcheck, lookup_indices) = rc_provider
                 .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
                     &prover.trace,
@@ -114,7 +115,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for MeanOfSquares {
                     &mut prover.transcript,
                 );
             prover.defer(DeferredBatch::RangeCheck, Box::new(rc_sumcheck));
-            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node)
+                .expect("the node\'s operator is the one its range check proves");
             prover.deferred_onehots.push((
                 DeferredOneHot::RangeCheck(rc_operands.get_encoding(node)),
                 lookup_indices,

@@ -30,6 +30,8 @@ use jolt_field::Ring;
 pub struct SumShape {
     node: ComputationNode,
     config: SumConfig,
+    /// Length of the summed axis of the normalized operand.
+    axis_len: usize,
 }
 
 /// The axis reduction of a saturating sum as a dense relation, binding the summed axis
@@ -47,10 +49,25 @@ pub struct SumAxisRelation {
 }
 
 impl SumAxisRelation {
-    /// The relation of a sum `node` of `model`.
-    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
-        let config = utils::dims::sum_config(&node, model);
-        Self::new(SumShape { node, config })
+    /// The relation of a sum `node` of `model`. `Err` if the node is not a single-axis sum the
+    /// reduction supports.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
+        let config = utils::dims::sum_config(&node, model)?;
+        let axis_len = config
+            .operand_dims()
+            .get(config.axis().axis_index())
+            .copied()
+            .ok_or_else(|| {
+                ProofVerifyError::Malformed(format!(
+                    "model: sum node {}: the summed axis is not an operand axis",
+                    node.idx
+                ))
+            })?;
+        Ok(Self::new(SumShape {
+            node,
+            config,
+            axis_len,
+        }))
     }
 
     /// The sum's normalized 2D shape and axis.
@@ -76,8 +93,7 @@ impl SymbolicSumcheck for SumAxisRelation {
     }
 
     fn rounds(&self) -> usize {
-        let config = &self.shape.config;
-        config.operand_dims()[config.axis().axis_index()].log_2()
+        self.shape.axis_len.log_2()
     }
 
     fn degree(&self) -> usize {
@@ -91,7 +107,7 @@ impl SymbolicSumcheck for SumAxisRelation {
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::Id(self.produced()[0]))
+        opening(RelationOpening::Id(self.ids().nodeio(Target::Input(0))))
     }
 }
 
@@ -102,12 +118,16 @@ impl Produces for SumAxisRelation {
 }
 
 impl<F: JoltField> Relation<F> for SumAxisRelation {
-    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+    fn opening_points(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
         let r = &setup.incoming_point;
-        vec![match self.shape.config.axis() {
+        Ok(vec![match self.shape.config.axis() {
             SumAxis::Axis0 => [challenges, r.as_slice()].concat(),
             SumAxis::Axis1 => [r.as_slice(), challenges].concat(),
-        }]
+        }])
     }
 }
 

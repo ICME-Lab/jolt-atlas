@@ -7,7 +7,7 @@ use crate::{
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
-    utils::math::Math,
+    utils::{errors::ProofVerifyError, math::Math},
 };
 
 /// `k,nk->n`: contract the `k` axis of a vector with a matrix. The left operand
@@ -20,12 +20,15 @@ pub struct KNkNLayout {
 }
 
 impl KNkNLayout {
-    /// Build the layout from the canonical einsum dims.
-    pub fn new(dims: &EinsumDims) -> Self {
-        Self {
-            n: dims.output()[0],
-            k: dims.left_operand()[0],
-        }
+    /// Build the layout from the canonical einsum dims. `Err` if they are not
+    /// `left = [k]`, `output = [n]`.
+    pub fn new(dims: &EinsumDims) -> Result<Self, ProofVerifyError> {
+        let ([n], [k]) = (dims.output(), dims.left_operand()) else {
+            return Err(ProofVerifyError::Malformed(format!(
+                "model: einsum k,nk->n over dims {dims:?}"
+            )));
+        };
+        Ok(Self { n: *n, k: *k })
     }
 }
 

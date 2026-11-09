@@ -11,7 +11,7 @@
 //! 3. [`AtlasVerifierPreprocessing`] — adds the PCS verifier setup (VK).
 
 use crate::node_view::ModelView;
-use atlas_algebra::field::JoltField;
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_trace::Model;
 use common::CommittedPoly;
@@ -40,7 +40,8 @@ impl AtlasSharedPreprocessing {
     pub fn preprocess(model: Model) -> Self {
         for (id, node, _) in model.nodes() {
             if let atlas_trace::Op::SoftmaxLastAxis(s) = &node.op {
-                let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+                // A rank-0 tensor is one element: its last axis has length one.
+                let last_dim = node.output_dims.last().copied().unwrap_or(1);
                 assert!(
                     s.active_len.is_none_or(|n| n == last_dim),
                     "node {id:?}: masked softmax (active_len {:?} of {last_dim}) is not yet \
@@ -52,19 +53,18 @@ impl AtlasSharedPreprocessing {
         Self { model }
     }
 
-    /// Get all committed polynomials required by the model's operations.
-    pub fn get_models_committed_polynomials(&self) -> Vec<CommittedPoly> {
+    /// Get all committed polynomials required by the model's operations. `Err` if a node does
+    /// not have the shape its operator proves.
+    pub fn get_models_committed_polynomials(&self) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         use crate::onnx_proof::ops::NodeCommittedPolynomials;
-        let mut polys: Vec<CommittedPoly> = self
-            .model
-            .views()
-            .iter()
-            .flat_map(NodeCommittedPolynomials::get_committed_polynomials)
-            .collect();
+        let mut polys: Vec<CommittedPoly> = Vec::new();
+        for node in &self.model.views() {
+            polys.extend(NodeCommittedPolynomials::get_committed_polynomials(node)?);
+        }
         polys.extend(crate::onnx_proof::global_clamp::bucket_committed_polys(
             &self.model,
-        ));
-        polys
+        )?);
+        Ok(polys)
     }
 
     /// Get the model

@@ -1,4 +1,5 @@
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use atlas_sumcheck::relation::verify_relation;
@@ -11,7 +12,7 @@ use crate::{
         ops::{
             einsum::{
                 abmk_abnk_abmn::AbmkAbnkAbmnLayout,
-                dot::{EinsumGeometry, EinsumLayout},
+                dot::{EinsumGeometry, EinsumLayout, EqSchedule},
                 k_nk_n::KNkNLayout,
                 mk_kn_mn::MkKnMnLayout,
             },
@@ -56,8 +57,11 @@ pub mod mk_kn_mn;
 crate::bind_relation!(Einsum, ContractionRelation);
 
 impl OpLayout for Einsum {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        fused_rebase::committed_polys(node)
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(fused_rebase::committed_polys(node))
     }
 }
 
@@ -77,7 +81,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Einsum {
         let matmul_proof = verifier
             .proofs
             .take(ProofId(node.idx, ProofType::EinsumMatmul))?;
-        let relation = ContractionRelation::for_node(&verifier.preprocessing.model, node.clone());
+        let relation = ContractionRelation::for_node(&verifier.preprocessing.model, node.clone())?;
         let matmul =
             RelationVerifier::new(relation, &verifier.accumulator, &mut verifier.transcript)?;
         verify_relation(
@@ -95,19 +99,25 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Einsum {
     }
 }
 
-fn einsum_equation(computation_node: &ComputationNode) -> String {
+fn einsum_equation(computation_node: &ComputationNode) -> Result<String, ProofVerifyError> {
     match &computation_node.operator {
-        Op::Einsum(Einsum { equation, .. }) => equation.to_string(),
-        _ => panic!("Unexpected operator"),
+        Op::Einsum(Einsum { equation, .. }) => Ok(equation.to_string()),
+        other => Err(ProofVerifyError::Malformed(format!(
+            "model: node {} is {other}, not an einsum",
+            computation_node.idx
+        ))),
     }
 }
 
-/// The canonical pattern an einsum node contracts, with its dims.
+/// The canonical pattern an einsum node contracts, with its dims and the round geometry of
+/// the pattern's layout over them.
 #[derive(Clone)]
 pub struct ContractionShape {
     node: ComputationNode,
     equation: &'static str,
     dims: EinsumDims,
+    num_rounds: usize,
+    schedule: EqSchedule,
 }
 
 /// An einsum contraction as a relation:
@@ -129,19 +139,22 @@ pub struct ContractionShape {
 /// included (the clamp acts on `q`, outside the relation).
 pub struct ContractionRelation {
     shape: ContractionShape,
-    geometry: Box<dyn EinsumGeometry>,
 }
 
 impl ContractionRelation {
-    /// The relation of an einsum `node` of `model`.
-    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
-        let config = lookup_einsum_config(&einsum_equation(&node));
-        let dims = (config.dims_extractor)(&node, model);
-        Self::new(ContractionShape {
+    /// The relation of an einsum `node` of `model`. `Err` if the node is not an einsum of a
+    /// registered equation over operands of that equation's shape.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
+        let config = lookup_einsum_config(&einsum_equation(&node)?)?;
+        let dims = (config.dims_extractor)(&node, model)?;
+        let geometry = einsum_geometry(config.equation, &dims)?;
+        Ok(Self::new(ContractionShape {
             node,
             equation: config.equation,
             dims,
-        })
+            num_rounds: geometry.num_rounds(),
+            schedule: geometry.schedule(),
+        }))
     }
 
     /// The canonical equation the node contracts.
@@ -154,8 +167,8 @@ impl ContractionRelation {
         &self.shape.dims
     }
 
-    /// The pattern's layout at field `F`.
-    pub fn layout<F: JoltField>(&self) -> Box<dyn EinsumLayout<F>> {
+    /// The pattern's layout at field `F`. `Err` if the dims are not the equation's.
+    pub fn layout<F: JoltField>(&self) -> Result<Box<dyn EinsumLayout<F>>, ProofVerifyError> {
         einsum_layout(self.shape.equation, &self.shape.dims)
     }
 
@@ -175,8 +188,7 @@ impl SymbolicSumcheck for ContractionRelation {
     type Outputs<C> = NoOutputs<C>;
 
     fn new(shape: ContractionShape) -> Self {
-        let geometry = einsum_geometry(shape.equation, &shape.dims);
-        Self { shape, geometry }
+        Self { shape }
     }
 
     fn id() -> RelationId {
@@ -184,11 +196,11 @@ impl SymbolicSumcheck for ContractionRelation {
     }
 
     fn rounds(&self) -> usize {
-        self.geometry.num_rounds()
+        self.shape.num_rounds
     }
 
     fn degree(&self) -> usize {
-        self.geometry.schedule().degree()
+        self.shape.schedule.degree()
     }
 
     fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
@@ -212,20 +224,29 @@ impl Produces for ContractionRelation {
 }
 
 impl<F: JoltField> Relation<F> for ContractionRelation {
-    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+    fn opening_points(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
         let (left, right) = self
-            .layout::<F>()
+            .layout::<F>()?
             .operand_points(&OpeningPoint::new(setup.incoming_point.clone()), challenges);
-        vec![left, right]
+        Ok(vec![left, right])
     }
 
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::ContractionEq => self
-                .layout::<F>()
+                .layout::<F>()?
                 .output_eq(&OpeningPoint::new(setup.incoming_point.clone()), challenges),
-            other => panic!("a contraction derives no {other:?}"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 
@@ -253,26 +274,37 @@ impl AtlasRelation for ContractionRelation {
     }
 }
 
-/// The round geometry of a canonical equation's layout.
-fn einsum_geometry(equation: &str, einsum_dims: &EinsumDims) -> Box<dyn EinsumGeometry> {
-    match equation {
-        "mk,kn->mn" => Box::new(MkKnMnLayout::new(einsum_dims)),
-        "k,nk->n" => Box::new(KNkNLayout::new(einsum_dims)),
-        "abmk,abnk->abmn" => Box::new(AbmkAbnkAbmnLayout::new(einsum_dims)),
-        other => panic!("unexpected canonical einsum equation: {other}"),
-    }
+fn unexpected_equation(equation: &str) -> ProofVerifyError {
+    ProofVerifyError::Malformed(format!(
+        "model: unexpected canonical einsum equation: {equation}"
+    ))
+}
+
+/// The round geometry of a canonical equation's layout. `Err` if the equation is not
+/// canonical or the dims are not its.
+fn einsum_geometry(
+    equation: &str,
+    einsum_dims: &EinsumDims,
+) -> Result<Box<dyn EinsumGeometry>, ProofVerifyError> {
+    Ok(match equation {
+        "mk,kn->mn" => Box::new(MkKnMnLayout::new(einsum_dims)?),
+        "k,nk->n" => Box::new(KNkNLayout::new(einsum_dims)?),
+        "abmk,abnk->abmn" => Box::new(AbmkAbnkAbmnLayout::new(einsum_dims)?),
+        other => return Err(unexpected_equation(other)),
+    })
 }
 
 /// Build the [`EinsumLayout`] for a canonical equation; every registered
-/// equation is handled by the shared [`dot`] engine.
+/// equation is handled by the shared [`dot`] engine. `Err` if the equation is not canonical or
+/// the dims are not its.
 fn einsum_layout<F: JoltField>(
     equation: &str,
     einsum_dims: &EinsumDims,
-) -> Box<dyn EinsumLayout<F>> {
-    match equation {
-        "mk,kn->mn" => Box::new(MkKnMnLayout::new(einsum_dims)),
-        "k,nk->n" => Box::new(KNkNLayout::new(einsum_dims)),
-        "abmk,abnk->abmn" => Box::new(AbmkAbnkAbmnLayout::new(einsum_dims)),
-        other => panic!("unexpected canonical einsum equation: {other}"),
-    }
+) -> Result<Box<dyn EinsumLayout<F>>, ProofVerifyError> {
+    Ok(match equation {
+        "mk,kn->mn" => Box::new(MkKnMnLayout::new(einsum_dims)?),
+        "k,nk->n" => Box::new(KNkNLayout::new(einsum_dims)?),
+        "abmk,abnk->abmn" => Box::new(AbmkAbnkAbmnLayout::new(einsum_dims)?),
+        other => return Err(unexpected_equation(other)),
+    })
 }

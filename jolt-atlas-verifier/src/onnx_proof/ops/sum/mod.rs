@@ -43,8 +43,11 @@ pub mod axis;
 /// `output == SatClamp(acc)` directly — and the axis reduction still binds `acc`
 /// to the operand.
 impl OpLayout for Sum {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        clamp_committed_polys(node)
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(clamp_committed_polys(node))
     }
 }
 
@@ -80,7 +83,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sum {
             .proofs
             .take(ProofId(node.idx, ProofType::SumReduction))?;
         let reduction = RelationVerifier::<F, _>::new(
-            SumAxisRelation::for_node(&verifier.preprocessing.model, node.clone()),
+            SumAxisRelation::for_node(&verifier.preprocessing.model, node.clone())?,
             &verifier.accumulator,
             &mut verifier.transcript,
         )?;

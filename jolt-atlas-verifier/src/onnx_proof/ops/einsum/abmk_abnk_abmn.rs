@@ -17,7 +17,7 @@ use atlas_algebra::{
         eq_poly::EqPolynomial,
         opening_point::{OpeningPoint, BIG_ENDIAN},
     },
-    utils::math::Math,
+    utils::{errors::ProofVerifyError, math::Math},
 };
 
 /// Batched matmul layout: `out[h,i,l] = Σ_j left[h,i,j]·right[h,l,j]` with the
@@ -35,29 +35,39 @@ pub struct AbmkAbnkAbmnLayout {
 
 impl AbmkAbnkAbmnLayout {
     /// Build the layout from the canonical einsum dims. The extractors hand us
-    /// `left = [ab, m, k]`, `right = [ab, n, k]`, `output = [ab, m, n]`.
-    pub fn new(dims: &EinsumDims) -> Self {
-        assert_eq!(
-            dims.left_operand()[0],
-            dims.right_operand()[0],
-            "abmk,abnk->abmn requires both operands to share the batch pack"
-        );
-        assert_eq!(
-            dims.left_operand()[0],
-            dims.output()[0],
-            "abmk,abnk->abmn requires the operand batch pack to match the output"
-        );
-        assert_eq!(
-            dims.left_operand()[2],
-            dims.right_operand()[2],
-            "abmk,abnk->abmn requires both operands to share the contraction axis"
-        );
-        Self {
-            log_ab: dims.output()[0].log_2(),
-            log_m: dims.output()[1].log_2(),
-            log_n: dims.output()[2].log_2(),
-            log_k: dims.left_operand()[2].log_2(),
+    /// `left = [ab, m, k]`, `right = [ab, n, k]`, `output = [ab, m, n]`; `Err` otherwise.
+    pub fn new(dims: &EinsumDims) -> Result<Self, ProofVerifyError> {
+        let unsupported = |what: &str| {
+            ProofVerifyError::Malformed(format!(
+                "model: einsum abmk,abnk->abmn over dims {dims:?}: {what}"
+            ))
+        };
+        let ([left_ab, _, left_k], [right_ab, _, right_k], [ab, m, n]) =
+            (dims.left_operand(), dims.right_operand(), dims.output())
+        else {
+            return Err(unsupported("expects rank-3 flattened dims"));
+        };
+        if left_ab != right_ab {
+            return Err(unsupported(
+                "requires both operands to share the batch pack",
+            ));
         }
+        if left_ab != ab {
+            return Err(unsupported(
+                "requires the operand batch pack to match the output",
+            ));
+        }
+        if left_k != right_k {
+            return Err(unsupported(
+                "requires both operands to share the contraction axis",
+            ));
+        }
+        Ok(Self {
+            log_ab: ab.log_2(),
+            log_m: m.log_2(),
+            log_n: n.log_2(),
+            log_k: left_k.log_2(),
+        })
     }
 }
 

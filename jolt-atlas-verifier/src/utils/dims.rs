@@ -6,6 +6,7 @@
 //! the flattened dimensions that layout folds over. The module also normalizes
 //! multi-dimensional sum operations to a 2D representation.
 
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::{Model, Op};
 
 use crate::node_view::ComputationNode;
@@ -14,26 +15,53 @@ use crate::node_view::ModelView;
 /// Convert a row-major linear index into coordinates for the given dimensions.
 pub fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
     let mut coord = vec![0; dims.len()];
-    for axis in (0..dims.len()).rev() {
-        coord[axis] = index % dims[axis];
-        index /= dims[axis];
+    for (c, &dim) in coord.iter_mut().zip(dims).rev() {
+        *c = index % dim;
+        index /= dim;
     }
     coord
 }
 
-/// Convert row-major coordinates into a linear index for the given dimensions.
-pub fn coord_to_linear(coord: &[usize], dims: &[usize]) -> usize {
+/// Convert row-major coordinates into a linear index for the given dimensions. `Err` if
+/// `coord` and `dims` differ in rank.
+pub fn coord_to_linear(coord: &[usize], dims: &[usize]) -> Result<usize, ProofVerifyError> {
+    if coord.len() != dims.len() {
+        return Err(ProofVerifyError::Malformed(format!(
+            "model: a rank-{} coordinate into dims {dims:?}",
+            coord.len()
+        )));
+    }
     let mut index = 0usize;
     let mut stride = 1usize;
-    for axis in (0..dims.len()).rev() {
-        index += coord[axis] * stride;
-        stride *= dims[axis];
+    for (&c, &dim) in coord.iter().zip(dims).rev() {
+        index += c * stride;
+        stride *= dim;
     }
-    index
+    Ok(index)
 }
 
-/// Function type for extracting dimension information from a computation node.
-pub type DimExtractor = fn(&ComputationNode, &Model) -> EinsumDims;
+/// Function type for extracting dimension information from a computation node. `Err` if the
+/// node's operands do not have the equation's shape.
+pub type DimExtractor = fn(&ComputationNode, &Model) -> Result<EinsumDims, ProofVerifyError>;
+
+fn unsupported_einsum(equation: &str, what: impl std::fmt::Display) -> ProofVerifyError {
+    ProofVerifyError::Malformed(format!("model: einsum {equation}: {what}"))
+}
+
+/// The two operand views of an einsum node.
+fn einsum_operands(
+    computation_node: &ComputationNode,
+    model: &Model,
+    equation: &str,
+) -> Result<[ComputationNode; 2], ProofVerifyError> {
+    let [a_idx, b_idx] = computation_node.inputs.as_slice() else {
+        return Err(unsupported_einsum(equation, "expected exactly two inputs"));
+    };
+    if *a_idx >= model.num_nodes() || *b_idx >= model.num_nodes() {
+        return Err(unsupported_einsum(equation, "an operand is not a node"));
+    }
+    Ok([model.view(*a_idx), model.view(*b_idx)])
+}
 
 /// Configuration for different einsum equation types
 #[derive(Debug, Clone)]
@@ -94,82 +122,101 @@ pub static EINSUM_REGISTRY: &[(&str, EinsumConfig)] = &[
 
 /// Look up the canonical [`EinsumConfig`] for a raw ONNX einsum `equation`.
 ///
-/// Panics if the pattern is not registered, i.e. not supported by the Einsum
+/// `Err` if the pattern is not registered, i.e. not supported by the Einsum
 /// proof system.
-pub fn lookup_einsum_config(equation: &str) -> &'static EinsumConfig {
+pub fn lookup_einsum_config(equation: &str) -> Result<&'static EinsumConfig, ProofVerifyError> {
     EINSUM_REGISTRY
         .iter()
         .find(|(pattern, _)| *pattern == equation)
         .map(|(_, config)| config)
-        .unwrap_or_else(|| {
-            panic!("Einsum equation ({equation}) not supported by Einsum proof system")
+        .ok_or_else(|| {
+            unsupported_einsum(
+                equation,
+                "equation not supported by the einsum proof system",
+            )
         })
 }
 
-fn extract_mk_kn_mn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
-    let [a_idx, b_idx] = computation_node.inputs[..] else {
-        panic!("Expected exactly two inputs for mk,kn->mk operation")
+fn extract_mk_kn_mn_dims(
+    computation_node: &ComputationNode,
+    model: &Model,
+) -> Result<EinsumDims, ProofVerifyError> {
+    let equation = "mk,kn->mn";
+    let [_a_node, b_node] = einsum_operands(computation_node, model, equation)?;
+    let ([m, _], [k, n]) = (
+        computation_node.output_dims.as_slice(),
+        b_node.output_dims.as_slice(),
+    ) else {
+        return Err(unsupported_einsum(
+            equation,
+            "expects a rank-2 output and a rank-2 right operand",
+        ));
     };
-    let _a_node = &model.view(a_idx);
-    let b_node = &model.view(b_idx);
-    assert_eq!(
-        computation_node.output_dims.len(),
-        2,
-        "mk,kn->mn expects a rank-2 output"
-    );
-    let m = computation_node.output_dims[0];
-    let k = b_node.output_dims[0];
-    let n = b_node.output_dims[1];
-    EinsumDims::new(vec![m, k], vec![k, n], vec![m, n])
+    Ok(EinsumDims::new(vec![*m, *k], vec![*k, *n], vec![*m, *n]))
 }
 
-fn extract_k_nk_n_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
-    let [a_idx, b_idx] = computation_node.inputs[..] else {
-        panic!("Expected exactly two inputs for k,nk->n operation")
+fn extract_k_nk_n_dims(
+    computation_node: &ComputationNode,
+    model: &Model,
+) -> Result<EinsumDims, ProofVerifyError> {
+    let equation = "k,nk->n";
+    let [a_node, b_node] = einsum_operands(computation_node, model, equation)?;
+    let [n, k] = b_node.output_dims.as_slice() else {
+        return Err(unsupported_einsum(
+            equation,
+            "expects a rank-2 right operand",
+        ));
     };
-    let a_node = &model.view(a_idx);
-    let b_node = &model.view(b_idx);
-    let n = b_node.output_dims[0];
-    let k = b_node.output_dims[1];
     // The k,nk->n layout is strictly vector-matrix: it folds only the k axis,
     // so a left operand with m > 1 rows would feed m*k coefficients into a
     // log(k)-round sumcheck. Fail here, at dispatch, rather than deep inside
     // the dot engine.
-    assert_eq!(
-        a_node.output_dims.iter().product::<usize>(),
-        k,
-        "mk,nk->mn is only provable with m == 1 (vector-matrix); got left dims {:?}",
-        a_node.output_dims
-    );
-    EinsumDims::new(vec![k], vec![n, k], vec![n])
+    if a_node.output_dims.iter().product::<usize>() != *k {
+        return Err(unsupported_einsum(
+            equation,
+            format!(
+                "mk,nk->mn is only provable with m == 1 (vector-matrix); got left dims {:?}",
+                a_node.output_dims
+            ),
+        ));
+    }
+    Ok(EinsumDims::new(vec![*k], vec![*n, *k], vec![*n]))
 }
 
-fn extract_amk_ank_amn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
-    let [a_idx, b_idx] = computation_node.inputs[..] else {
-        panic!("Expected exactly two inputs for amk,ank->amn operation")
+fn extract_amk_ank_amn_dims(
+    computation_node: &ComputationNode,
+    model: &Model,
+) -> Result<EinsumDims, ProofVerifyError> {
+    let equation = "amk,ank->amn";
+    let [a_node, b_node] = einsum_operands(computation_node, model, equation)?;
+    let ([a, m, k], [_, n, _]) = (a_node.output_dims.as_slice(), b_node.output_dims.as_slice())
+    else {
+        return Err(unsupported_einsum(equation, "expects rank-3 operands"));
     };
-    let a_node = &model.view(a_idx);
-    let b_node = &model.view(b_idx);
-    let a = a_node.output_dims[0];
-    let m = a_node.output_dims[1];
-    let k = a_node.output_dims[2];
-    let n = b_node.output_dims[1];
-    EinsumDims::new(vec![a, m, k], vec![a, n, k], vec![a, m, n])
+    Ok(EinsumDims::new(
+        vec![*a, *m, *k],
+        vec![*a, *n, *k],
+        vec![*a, *m, *n],
+    ))
 }
 
-fn extract_abmk_abnk_abmn_dims(computation_node: &ComputationNode, model: &Model) -> EinsumDims {
-    let [a_idx, b_idx] = computation_node.inputs[..] else {
-        panic!("Expected exactly two inputs for abmk,abnk->abmn operation")
+fn extract_abmk_abnk_abmn_dims(
+    computation_node: &ComputationNode,
+    model: &Model,
+) -> Result<EinsumDims, ProofVerifyError> {
+    let equation = "abmk,abnk->abmn";
+    let [a_node, b_node] = einsum_operands(computation_node, model, equation)?;
+    let ([a, b, m, k], [_, _, n, _]) =
+        (a_node.output_dims.as_slice(), b_node.output_dims.as_slice())
+    else {
+        return Err(unsupported_einsum(equation, "expects rank-4 operands"));
     };
-    let a_node = &model.view(a_idx);
-    let b_node = &model.view(b_idx);
-    let a = a_node.output_dims[0];
-    let b = a_node.output_dims[1];
-    let m = a_node.output_dims[2];
-    let k = a_node.output_dims[3];
-    let n = b_node.output_dims[2];
 
-    EinsumDims::new(vec![a * b, m, k], vec![a * b, n, k], vec![a * b, m, n])
+    Ok(EinsumDims::new(
+        vec![a * b, *m, *k],
+        vec![a * b, *n, *k],
+        vec![a * b, *m, *n],
+    ))
 }
 
 /// Stores preprocessed dims (from the Model) for einsum equations
@@ -272,44 +319,57 @@ impl SumDims {
 ///
 /// A `SumConfig` containing normalized dimensions and the adjusted axis index.
 ///
-/// # Panics
+/// # Errors
 ///
 /// - If the computation node doesn't have exactly one input
 /// - If the operator is not a `Sum` operator
 /// - If the sum operation has multiple axes (only single-axis sum is supported)
 /// - If the axis is out of bounds for the input tensor's dimensionality
 /// - If the input has 3+ dimensions and the leading dimension is not 1
-pub fn sum_config(computation_node: &ComputationNode, model: &Model) -> SumConfig {
+pub fn sum_config(
+    computation_node: &ComputationNode,
+    model: &Model,
+) -> Result<SumConfig, ProofVerifyError> {
+    let unsupported = |what: String| ProofVerifyError::Malformed(format!("model: sum: {what}"));
     // Extract the single input index
-    let [input_idx] = computation_node.inputs[..] else {
-        panic!("Expected exactly one input for Sum operation")
+    let [input_idx] = computation_node.inputs.as_slice() else {
+        return Err(unsupported("expected exactly one input".into()));
     };
+    if *input_idx >= model.num_nodes() {
+        return Err(unsupported("the operand is not a node".into()));
+    }
 
     // Ensure we have a Sum operator and extract it
     let Op::Sum(sum_operator) = &computation_node.operator else {
-        panic!("Expected Sum operator")
+        return Err(unsupported("expected a Sum operator".into()));
     };
 
     // Extract the single axis (multi-axis sum not yet supported)
-    let [axis] = sum_operator.axes[..] else {
-        unimplemented!("Only single-axis sum is currently supported")
+    let [axis] = sum_operator.axes.as_slice() else {
+        return Err(unsupported(
+            "only single-axis sum is currently supported".into(),
+        ));
     };
 
     // Get dimension information from the model
-    let input_dims = &model.view(input_idx).output_dims;
+    let input_dims = &model.view(*input_idx).output_dims;
     let output_dims = &computation_node.output_dims;
     let ndim = input_dims.len();
 
     // Validate axis is within bounds
-    assert!(axis < ndim, "Axis {axis} out of bounds for {ndim}D tensor");
+    if *axis >= ndim {
+        return Err(unsupported(format!(
+            "axis {axis} out of bounds for {ndim}D tensor"
+        )));
+    }
 
     // Normalize to 2D representation for the prover
-    let (axis, operand_dims, output_dims) = normalize_sum_to_2d(axis, input_dims, output_dims);
+    let (axis, operand_dims, output_dims) = normalize_sum_to_2d(*axis, input_dims, output_dims)?;
 
-    SumConfig {
+    Ok(SumConfig {
         dims: SumDims::new(operand_dims, output_dims),
         axis,
-    }
+    })
 }
 
 /// Recursively normalizes sum dimensions down to 2D
@@ -319,25 +379,39 @@ pub fn sum_config(computation_node: &ComputationNode, model: &Model) -> SumConfi
 /// - **3D+**: Strips the leading batch dimension (must be 1) and recurses,
 ///   so 4D, 5D, etc. are automatically supported without new match arms (as long as the batch dimension is 1).
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `input_dims` has 3 or more dimensions and the leading dimension is not 1.
+/// If `input_dims` has 3 or more dimensions and the leading dimension is not 1, if the axis is
+/// that leading dimension, or if the dims are rank 0.
 fn normalize_sum_to_2d(
     axis: usize,
     input_dims: &[usize],
     output_dims: &[usize],
-) -> (SumAxis, Vec<usize>, Vec<usize>) {
-    match input_dims.len() {
-        1 => (SumAxis::Axis0, vec![input_dims[0], 1], vec![1]),
-        2 => (axis.into(), input_dims.to_vec(), output_dims.to_vec()),
-        ndim => {
-            if input_dims[0] != 1 {
-                unimplemented!(
-                    "Only batch size of 1 is supported for {ndim}D tensors in Sum operations, but got leading dimension of {}",
-                    input_dims[0]
-                );
+) -> Result<(SumAxis, Vec<usize>, Vec<usize>), ProofVerifyError> {
+    let unsupported = |what: String| ProofVerifyError::Malformed(format!("model: sum: {what}"));
+    match input_dims {
+        [] => Err(unsupported("a rank-0 operand".into())),
+        [len] => Ok((SumAxis::Axis0, vec![*len, 1], vec![1])),
+        [_, _] => Ok((
+            SumAxis::try_from(axis)?,
+            input_dims.to_vec(),
+            output_dims.to_vec(),
+        )),
+        [leading, inner_dims @ ..] => {
+            if *leading != 1 {
+                return Err(unsupported(format!(
+                    "only batch size of 1 is supported for {}D tensors, but got leading dimension of {leading}",
+                    input_dims.len()
+                )));
             }
-            normalize_sum_to_2d(axis - 1, &input_dims[1..], &output_dims[1..])
+            let (Some(axis), Some((_, inner_output_dims))) =
+                (axis.checked_sub(1), output_dims.split_first())
+            else {
+                return Err(unsupported(
+                    "the batch dimension of a 3D+ tensor cannot be summed".into(),
+                ));
+            };
+            normalize_sum_to_2d(axis, inner_dims, inner_output_dims)
         }
     }
 }
@@ -361,12 +435,16 @@ impl SumAxis {
     }
 }
 
-impl From<usize> for SumAxis {
-    fn from(axis: usize) -> Self {
+impl TryFrom<usize> for SumAxis {
+    type Error = ProofVerifyError;
+
+    fn try_from(axis: usize) -> Result<Self, ProofVerifyError> {
         match axis {
-            0 => SumAxis::Axis0,
-            1 => SumAxis::Axis1,
-            _ => panic!("Invalid axis index: {axis}"),
+            0 => Ok(SumAxis::Axis0),
+            1 => Ok(SumAxis::Axis1),
+            _ => Err(ProofVerifyError::Malformed(format!(
+                "model: sum: invalid axis index {axis}"
+            ))),
         }
     }
 }
@@ -384,6 +462,7 @@ pub struct SumDims {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::EINSUM_REGISTRY;
 

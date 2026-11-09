@@ -61,12 +61,15 @@ impl LookupOperandsTrait for SymmetricClampOperands {
 }
 
 impl OpLayout for Clamp {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         let encoding = OpLookupEncoding::<SymmetricClampOperands>::new(node);
         let d = encoding.one_hot_params().instruction_d;
-        (0..d)
+        Ok((0..d)
             .map(|i| CommittedPoly::SymmetricClampRaD(node.idx, i))
-            .collect()
+            .collect())
     }
 }
 

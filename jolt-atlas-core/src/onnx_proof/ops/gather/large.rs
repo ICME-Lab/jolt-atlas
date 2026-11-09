@@ -16,7 +16,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherLarge {
         let mut results = Vec::new();
 
         let params = RelationParams::new(
-            GatherRelation::for_node(&prover.preprocessing.model, node.clone()),
+            GatherRelation::for_node(&prover.preprocessing.model, node.clone())
+                .expect("the model\'s nodes have the shapes their ops prove"),
             &prover.accumulator,
             &mut prover.transcript,
         );
@@ -33,7 +34,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherLarge {
         );
         results.push((ProofId(node.idx, ProofType::Execution), proof));
 
-        let encoding = GatherRaEncoding::new(node);
+        let encoding =
+            GatherRaEncoding::new(node).expect("the node is a large gather with an index operand");
         let lookup_indices = gather_lookup_indices(node, &prover.trace);
         let [ra_prover, bool_prover] = shout::prover::ra_onehot_provers(
             &encoding,

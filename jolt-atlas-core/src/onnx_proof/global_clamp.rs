@@ -38,6 +38,7 @@ pub fn bucket_witnesses<F: JoltField>(
     trace: &Trace,
 ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
     clamp_buckets(model)
+        .expect("the model's nodes have the shapes their ops prove")
         .iter()
         .chain(remainder_buckets(model).iter())
         .flat_map(|bucket| match bucket.kind {

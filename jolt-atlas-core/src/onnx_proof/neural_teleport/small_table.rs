@@ -53,7 +53,9 @@ impl<F: JoltField, S: SmallTable> TrigTableProver<F, S> {
             .iter()
             .all(|&x| (0..table_size as i32).contains(&x)));
 
-        let table = MultilinearPolynomial::from(S::materialize());
+        let table = MultilinearPolynomial::from(
+            S::materialize().expect("the semantics define the table at the model scale"),
+        );
         let lookup_indices: Vec<usize> = downscaled
             .par_iter()
             .with_min_len(par_enabled())

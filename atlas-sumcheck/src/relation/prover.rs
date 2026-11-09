@@ -23,10 +23,13 @@ pub fn append_produced<F: JoltField, T: Transcript, R: Relation<F>>(
     sumcheck_challenges: &[F::Challenge],
     claims: &[F],
 ) {
-    let points = relation.opening_points(setup, &sumcheck_challenges.to_vec().into_opening());
+    let points = relation
+        .opening_points(setup, &sumcheck_challenges.to_vec().into_opening())
+        .expect("the prover's relation places its own openings");
     if let Some(groups) = relation.sparse_groups() {
         let mut claims = claims.iter().copied();
-        for (group, point) in group_points(groups, points) {
+        let groups = group_points(groups, points).expect("a point per produced opening");
+        for (group, point) in groups {
             let (address, cycle) = point.split_at(group.address_vars);
             let group_claims = claims.by_ref().take(group.polynomials.len()).collect();
             accumulator.append_sparse(

@@ -1,3 +1,4 @@
+use crate::relation::not_derived;
 use crate::relation::Produces;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
@@ -191,8 +192,12 @@ impl Produces for BooleanityRelation {
 }
 
 impl<F: JoltField> Relation<F> for BooleanityRelation {
-    fn opening_points(&self, _setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
-        vec![self.bound_point(challenges); self.d]
+    fn opening_points(
+        &self,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+        Ok(vec![self.bound_point(challenges); self.d])
     }
 
     fn sparse_groups(&self) -> Option<Vec<SparseGroup>> {
@@ -203,9 +208,14 @@ impl<F: JoltField> Relation<F> for BooleanityRelation {
         }])
     }
 
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
         let (r_address, r_cycle) = setup.incoming_point.split_at(self.log_k_chunk);
-        match id {
+        Ok(match id {
             // The challenges in round order against each part of the incoming point reversed.
             RelationDerived::OneHotEq => {
                 let combined: Vec<F> = r_address
@@ -225,8 +235,8 @@ impl<F: JoltField> Relation<F> for BooleanityRelation {
                 .enumerate()
                 .map(|(j, c)| F::from_u64(1u64 << j) * *c)
                 .sum(),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 

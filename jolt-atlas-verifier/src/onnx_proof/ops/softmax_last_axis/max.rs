@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
     RelationId, RelationOpening, RelationSetup, RelationVerifier,
@@ -53,10 +54,24 @@ impl<F: JoltField> MaxIndicatorParams<F> {
         let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ)?.0;
         let r1_k = r1.split_at(log_f).0.r;
 
+        if argmax_k.len() != F {
+            return Err(ProofVerifyError::Malformed(format!(
+                "softmax: {} argmax indices for {F} rows",
+                argmax_k.len()
+            )));
+        }
         let mut e: Vec<u32> = vec![0; F * N];
         // Only set the argmax positions — everything else is already 0
-        for k in 0..F {
-            e[k * N + argmax_k[k]] = 1;
+        for (k, &argmax) in argmax_k.iter().enumerate() {
+            let cell = e
+                .get_mut(k * N + argmax)
+                .filter(|_| argmax < N)
+                .ok_or_else(|| {
+                    ProofVerifyError::Malformed(format!(
+                        "softmax: row {k} claims argmax {argmax}, outside its {N} entries"
+                    ))
+                })?;
+            *cell = 1;
         }
         Ok(Self {
             r1_k: r1_k.to_vec(),
@@ -145,7 +160,9 @@ impl<F: JoltField> SymbolicSumcheck for MaxIndicatorParams<F> {
     fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
         derived::<G, _, _, _>(RelationDerived::RetainedEq)
             * derived(RelationDerived::Indicator)
-            * opening(RelationOpening::Id(self.produced()[0]))
+            * opening(RelationOpening::Id(
+                OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0)),
+            ))
     }
 }
 
@@ -156,14 +173,20 @@ impl<F: JoltField> Produces for MaxIndicatorParams<F> {
 }
 
 impl<F: JoltField> Relation<F> for MaxIndicatorParams<F> {
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
         let point = low_to_high_point(challenges);
-        match id {
-            RelationDerived::RetainedEq => {
-                EqPolynomial::mle(&setup.incoming_point, &point[..self.log_F()])
-            }
+        Ok(match id {
+            RelationDerived::RetainedEq => EqPolynomial::mle(
+                &setup.incoming_point,
+                super::row_coordinates(&point, self.log_F())?,
+            ),
             RelationDerived::Indicator => self.indicator_at(&point),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }

@@ -19,6 +19,15 @@
     type_alias_bounds
 )]
 #![warn(missing_docs)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::indexing_slicing
+)]
 
 pub mod node_view;
 pub mod onnx_proof;

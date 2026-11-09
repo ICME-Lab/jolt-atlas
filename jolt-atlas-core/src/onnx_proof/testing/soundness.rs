@@ -734,3 +734,53 @@ mod known_gaps {
         );
     }
 }
+
+// ── fuzz regressions ─────────────────────────────────────────────────────
+
+/// Replay the `verify` fuzz target's driver (`onnx_proof::fuzz`) on the honest input, on fixed
+/// truncations, byte flips and IO edits of it, and on every checked-in regression input
+/// (`fuzz/regressions/`). The verifier returning at all is the property: a panic fails the test.
+#[test]
+fn fuzz_regressions_replay() {
+    use crate::onnx_proof::fuzz::{VerifyTarget, HEADER_LEN};
+    use atlas_algebra::field::fp128::Fp128;
+    use atlas_pcs::akita::AkitaScheme;
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let target = VerifyTarget::<Fp128, AkitaScheme>::new(&manifest_dir.join(".."));
+    let seed = target.seed().to_vec();
+    assert!(
+        matches!(target.run(&seed), Some(Ok(()))),
+        "the honest input must verify"
+    );
+
+    // Every IO edit of the honest proof is rejected.
+    for kind in 1..=7u8 {
+        let mut input = seed.clone();
+        input[..5].copy_from_slice(&[kind, 0, 1, 0, 1]);
+        assert!(
+            !matches!(target.run(&input), Some(Ok(()))),
+            "IO edit {kind} was accepted"
+        );
+    }
+    // Truncations and byte flips spread over the proof: any verdict, no panic.
+    let len = seed.len();
+    for cut in [HEADER_LEN, HEADER_LEN + 1, len / 4, len / 2, len - 1] {
+        let _ = target.run(&seed[..cut]);
+    }
+    for step in 0..64 {
+        let mut input = seed.clone();
+        let at = HEADER_LEN + step * (len - HEADER_LEN) / 64;
+        input[at] ^= 0x80;
+        let _ = target.run(&input);
+    }
+
+    let regressions = manifest_dir.join("fuzz/regressions");
+    for entry in std::fs::read_dir(&regressions).expect("fuzz/regressions exists") {
+        let path = entry.expect("readable entry").path();
+        if path.file_name().is_some_and(|name| name == ".gitkeep") {
+            continue;
+        }
+        let _ = target.run(&std::fs::read(&path).expect("readable regression input"));
+    }
+}

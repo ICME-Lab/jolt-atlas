@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationDerived, RelationExpr, RelationId,
     RelationOpening, RelationSetup, RelationVerifier,
@@ -106,7 +107,9 @@ impl<F: JoltField> SymbolicSumcheck for ExpSumParams<F> {
 
     fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
         derived::<G, _, _, _>(RelationDerived::RetainedEq)
-            * opening(RelationOpening::Id(self.produced()[0]))
+            * opening(RelationOpening::Id(
+                OpeningIdBuilder::new(&self.node).advice(VirtualPoly::SoftmaxExpQ),
+            ))
     }
 }
 
@@ -117,13 +120,18 @@ impl<F: JoltField> Produces for ExpSumParams<F> {
 }
 
 impl<F: JoltField> Relation<F> for ExpSumParams<F> {
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::RetainedEq => EqPolynomial::mle(
                 &setup.incoming_point,
-                &low_to_high_point(challenges)[..self.log_F()],
+                super::row_coordinates(&low_to_high_point(challenges), self.log_F())?,
             ),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }

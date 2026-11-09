@@ -41,7 +41,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Einsum {
             None
         };
 
-        let relation = ContractionRelation::for_node(&prover.preprocessing.model, node.clone());
+        let relation = ContractionRelation::for_node(&prover.preprocessing.model, node.clone())
+            .expect("the model\'s nodes have the shapes their ops prove");
         let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
         let mut matmul = EinsumDotProver::initialize(&prover.trace, params);
         let (matmul_proof, _) =

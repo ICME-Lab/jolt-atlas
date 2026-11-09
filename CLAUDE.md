@@ -166,6 +166,14 @@ root `Cargo.toml`.
   appears in one of the probe models in `onnx_proof/testing/models.rs`; a new proof field needs a
   `mutate::Site`. Prover-side `#[cfg(test)]` self-checks use `probe_assert!` so a tampered proof
   still reaches the verifier.
+- The verifier rejects, never panics, and consumes the proof exactly. `jolt-atlas-verifier`
+  denies `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!`/indexing at the crate root with no
+  `#[allow]` outside tests; a missing claim or proof entry and a public IO of the wrong shape
+  are `Err`s; `verify` ends with the drain check (every sumcheck and evaluation-reduction
+  proof taken exactly once, every opening claim bound to a point). Every `mutate::Site` must
+  be rejected with an `Err` (no tolerance list), every `ProofType` is emitted for some
+  checked-in model (`proof_types_all_exercised`), and `fuzz_regressions_replay` replays the
+  `verify` fuzz target's driver (`jolt-atlas-core/fuzz/`, run by hand, not in CI).
 - Every `atlas_trace::Op` variant has a row in `onnx_proof/testing/op_surface.rs`; `OpKind::of`
   is a wildcard-free match, so adding a variant fails to compile until the table declares a
   stance (a proving case, an `#[ignore]` with its reason, or an expected rejection).

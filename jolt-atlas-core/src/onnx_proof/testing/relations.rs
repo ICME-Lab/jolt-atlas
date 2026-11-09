@@ -263,7 +263,7 @@ fn reference_messages<R: AtlasRelation + Relation<Fr>>(
     let produced = relation.produced();
     let output = relation.output_expression::<Fr>();
     let summand = |point: &[Fr]| {
-        let points = relation.opening_points(setup, point);
+        let points = relation.opening_points(setup, point).unwrap();
         let values: Vec<Fr> = (0..produced.len()).map(|i| open(i, &points[i])).collect();
         output.evaluate(
             |opening| match opening {
@@ -273,7 +273,7 @@ fn reference_messages<R: AtlasRelation + Relation<Fr>>(
                 }
             },
             |challenge| setup.challenge(challenge),
-            |derived| relation.derive(derived, setup, point),
+            |derived| relation.derive(derived, setup, point).unwrap(),
         )
     };
     let rounds = relation.rounds();
@@ -450,28 +450,40 @@ fn relation_prover_equiv_dense() {
         let open = |i: usize, point: &[Fr]| operands[i].evaluate(point);
         match node.operator {
             Op::Reshape(_) => check_dense(
-                || ReshapeRelation::for_node(&model, node.clone()),
+                || {
+                    ReshapeRelation::for_node(&model, node.clone())
+                        .expect("the model\'s nodes have the shapes their ops prove")
+                },
                 &trace,
                 &node,
                 &open,
                 rng,
             ),
             Op::Slice(_) => check_dense(
-                || SliceRelation::for_node(&model, node.clone()),
+                || {
+                    SliceRelation::for_node(&model, node.clone())
+                        .expect("the model\'s nodes have the shapes their ops prove")
+                },
                 &trace,
                 &node,
                 &open,
                 rng,
             ),
             Op::Sum(_) => check_dense(
-                || SumAxisRelation::for_node(&model, node.clone()),
+                || {
+                    SumAxisRelation::for_node(&model, node.clone())
+                        .expect("the model\'s nodes have the shapes their ops prove")
+                },
                 &trace,
                 &node,
                 &open,
                 rng,
             ),
             Op::Concat(_) => check_dense(
-                || ConcatRelation::for_node(&model, node.clone()),
+                || {
+                    ConcatRelation::for_node(&model, node.clone())
+                        .expect("the model\'s nodes have the shapes their ops prove")
+                },
                 &trace,
                 &node,
                 &open,
@@ -537,7 +549,10 @@ fn relation_prover_equiv_contraction() {
     ];
     for (seed, (dims, build)) in (0xA17_0611..).zip(cases) {
         let (model, trace, node, mut rng) = single_node(seed, &dims, build);
-        let relation = || ContractionRelation::for_node(&model, node.clone());
+        let relation = || {
+            ContractionRelation::for_node(&model, node.clone())
+                .expect("the model\'s nodes have the shapes their ops prove")
+        };
         let setup = RelationSetup {
             incoming_point: random_point(&mut rng, node.pow2_padded_num_output_elements().log_2()),
             challenges: Vec::new(),

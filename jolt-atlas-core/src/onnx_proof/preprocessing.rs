@@ -32,7 +32,10 @@ where
     /// commitment scheme's setup for the model's maximum number of variables.
     #[tracing::instrument(skip_all, name = "AtlasProverPreprocessing::gen")]
     pub fn new(shared: AtlasSharedPreprocessing) -> AtlasProverPreprocessing<F, PCS> {
-        let max_num_vars = shared.model.max_num_vars();
+        let max_num_vars = shared
+            .model
+            .max_num_vars()
+            .expect("the model's nodes have the shapes their ops prove");
         tracing::info!("Prover preprocessing: max_num_vars = {max_num_vars}");
         let generators = PCS::setup_prover(max_num_vars);
         AtlasProverPreprocessing { generators, shared }

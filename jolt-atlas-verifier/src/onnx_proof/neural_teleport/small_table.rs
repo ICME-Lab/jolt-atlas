@@ -6,6 +6,7 @@ use super::{
     sin::{SinTable, SIN_TABLE_VARS},
 };
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
     RelationId, RelationOpening, RelationSetup, SetupRelation,
@@ -35,8 +36,8 @@ pub trait SmallTable: Send + Sync + 'static {
     const RA: fn(usize) -> VirtualPoly;
     /// Whether addresses are two's complement, so the address identity is signed.
     const SIGNED: bool;
-    /// The table's values.
-    fn materialize() -> Vec<i32>;
+    /// The table's values. `Err` if the table's scale is not one the semantics define.
+    fn materialize() -> Result<Vec<i32>, ProofVerifyError>;
     /// The opening of the looked-up addresses at the node's output point.
     fn address(node: &ComputationNode) -> OpeningId;
 }
@@ -45,7 +46,7 @@ impl SmallTable for CosTable {
     const VARS: usize = COS_TABLE_VARS;
     const RA: fn(usize) -> VirtualPoly = VirtualPoly::CosRa;
     const SIGNED: bool = false;
-    fn materialize() -> Vec<i32> {
+    fn materialize() -> Result<Vec<i32>, ProofVerifyError> {
         CosTable::materialize()
     }
     fn address(node: &ComputationNode) -> OpeningId {
@@ -57,7 +58,7 @@ impl SmallTable for SinTable {
     const VARS: usize = SIN_TABLE_VARS;
     const RA: fn(usize) -> VirtualPoly = VirtualPoly::SinRa;
     const SIGNED: bool = false;
-    fn materialize() -> Vec<i32> {
+    fn materialize() -> Result<Vec<i32>, ProofVerifyError> {
         SinTable::materialize()
     }
     fn address(node: &ComputationNode) -> OpeningId {
@@ -137,22 +138,35 @@ impl<S: SmallTable> Produces for SmallTableRelation<S> {
 }
 
 impl<F: JoltField, S: SmallTable> Relation<F> for SmallTableRelation<S> {
-    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
-        vec![[low_to_high_point(challenges), setup.incoming_point.clone()].concat()]
+    fn opening_points(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+        Ok(vec![[
+            low_to_high_point(challenges),
+            setup.incoming_point.clone(),
+        ]
+        .concat()])
     }
 
-    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
         let point = low_to_high_point(challenges);
-        match id {
+        Ok(match id {
             RelationDerived::Table(0) => {
-                MultilinearPolynomial::<F>::from(S::materialize()).evaluate(&point)
+                MultilinearPolynomial::<F>::from(S::materialize()?).evaluate(&point)
             }
             RelationDerived::Identity if S::SIGNED => {
                 SignedIdentityPoly::new(S::VARS).evaluate(&point)
             }
             RelationDerived::Identity => IdentityPolynomial::new(S::VARS).evaluate(&point),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 

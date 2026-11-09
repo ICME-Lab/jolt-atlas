@@ -220,21 +220,28 @@ pub struct SparseGroup {
 }
 
 /// Each group with its point: the point of its first produced opening (a group's openings share
-/// one point).
+/// one point). `Err` if a group has no point.
 pub fn group_points<F>(
     groups: Vec<SparseGroup>,
     points: Vec<Vec<F>>,
-) -> Vec<(SparseGroup, Vec<F>)> {
+) -> Result<Vec<(SparseGroup, Vec<F>)>, ProofVerifyError> {
     let mut points = points.into_iter();
     groups
         .into_iter()
         .map(|group| {
             let mut members = points.by_ref().take(group.polynomials.len());
-            let point = members.next().expect("a point per produced opening");
+            let point = members.next().ok_or_else(|| {
+                ProofVerifyError::Malformed("a sparse group has no produced opening point".into())
+            })?;
             members.for_each(drop);
-            (group, point)
+            Ok((group, point))
         })
         .collect()
+}
+
+/// The error of a relation asked for a derived scalar its expressions do not name.
+pub fn not_derived(id: &RelationDerived) -> ProofVerifyError {
+    ProofVerifyError::Malformed(format!("{id:?} is not derived by this relation"))
 }
 
 /// The openings a relation produces: field-independent, so the relation's expressions name them.
@@ -258,14 +265,19 @@ pub trait Relation<F: JoltField>:
 {
     /// The big-endian point of each produced opening, aligned with [`Self::produced`], given the
     /// sumcheck challenges in round order. Defaults to the low-to-high bound point for all, which
-    /// for a zero-round relation (a tie) is the incoming point.
-    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+    /// for a zero-round relation (a tie) is the incoming point. `Err` if the setup or the
+    /// challenges do not have the shape the relation places its openings by.
+    fn opening_points(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
         let point = if self.rounds() == 0 {
             setup.incoming_point.clone()
         } else {
             low_to_high_point(challenges)
         };
-        vec![point; self.produced().len()]
+        Ok(vec![point; self.produced().len()])
     }
 
     /// The produced openings as sparse one-hot groups, in produced order, when they are appended
@@ -283,9 +295,9 @@ pub trait Relation<F: JoltField>:
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
-        let points = self.opening_points(setup, challenges);
+        let points = self.opening_points(setup, challenges)?;
         if let Some(groups) = self.sparse_groups() {
-            for (group, point) in group_points(groups, points) {
+            for (group, point) in group_points(groups, points)? {
                 accumulator.append_sparse(transcript, group.polynomials, group.sumcheck, point)?;
             }
             return Ok(());
@@ -304,22 +316,32 @@ pub trait Relation<F: JoltField>:
     }
 
     /// A derived scalar of the output expression, given the sumcheck challenges in round order.
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    /// `Err` for an id the relation does not derive, or one it cannot compute from this setup.
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::Eq => {
                 EqPolynomial::mle(&setup.incoming_point, &low_to_high_point(challenges))
             }
-            RelationDerived::Table(index) => MultilinearPolynomial::from(self.table(*index, setup))
-                .evaluate(&low_to_high_point(challenges)),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            RelationDerived::Table(index) => {
+                MultilinearPolynomial::from(self.table(*index, setup)?)
+                    .evaluate(&low_to_high_point(challenges))
+            }
+            other => return Err(not_derived(other)),
+        })
     }
 
     /// Public table `index`, over the sumcheck's hypercube: data both sides build from the
     /// setup (a selector placing eq evaluations at the cells an op moves), read by
-    /// [`RelationDerived::Table`].
-    fn table(&self, index: usize, _setup: &RelationSetup<F>) -> Vec<F> {
-        panic!("this relation has no table {index}")
+    /// [`RelationDerived::Table`]. `Err` if the relation has no such table.
+    fn table(&self, index: usize, _setup: &RelationSetup<F>) -> Result<Vec<F>, ProofVerifyError> {
+        Err(ProofVerifyError::Malformed(format!(
+            "this relation has no table {index}"
+        )))
     }
 }
 
@@ -349,21 +371,31 @@ pub fn resolve<F: JoltField>(
     })
 }
 
-/// `expr` over the accumulator's openings: every opening it names is resolved first (`Err` if
-/// one is missing), then the expression is evaluated.
+/// `expr` over the accumulator's openings: every opening it names is resolved and every derived
+/// scalar it names is computed first (`Err` if an opening is missing or `derive` fails), then the
+/// expression is evaluated.
 pub fn evaluate_expression<F: JoltField>(
     expr: RelationExpr<F>,
     accumulator: &dyn OpeningAccumulator<F>,
     challenge: impl Fn(&RelationChallenge) -> F,
-    derive: impl Fn(&RelationDerived) -> F,
+    derive: impl Fn(&RelationDerived) -> Result<F, ProofVerifyError>,
 ) -> Result<F, ProofVerifyError> {
     let mut resolved: Vec<(RelationOpening, F)> = Vec::new();
+    let mut derived: Vec<(RelationDerived, F)> = Vec::new();
     for term in &expr.terms {
         for factor in &term.factors {
-            if let Source::Opening(opening) = factor {
-                if !resolved.iter().any(|(id, _)| id == opening) {
-                    resolved.push((*opening, resolve(accumulator, opening)?));
+            match factor {
+                Source::Opening(opening) => {
+                    if !resolved.iter().any(|(id, _)| id == opening) {
+                        resolved.push((*opening, resolve(accumulator, opening)?));
+                    }
                 }
+                Source::Derived(id) => {
+                    if !derived.iter().any(|(computed, _)| computed == id) {
+                        derived.push((*id, derive(id)?));
+                    }
+                }
+                Source::Challenge(_) => {}
             }
         }
     }
@@ -375,7 +407,12 @@ pub fn evaluate_expression<F: JoltField>(
                 .map_or(F::zero(), |(_, value)| *value)
         },
         challenge,
-        derive,
+        |id| {
+            derived
+                .iter()
+                .find(|(computed, _)| computed == id)
+                .map_or(F::zero(), |(_, value)| *value)
+        },
     ))
 }
 
@@ -389,7 +426,11 @@ pub fn relation_input_claim<F: JoltField, R: Relation<F>>(
         relation.input_expression::<F>(),
         accumulator,
         |challenge| setup.challenge(challenge),
-        |derived| panic!("the input claim is taken before binding: no {derived:?} term"),
+        |derived| {
+            Err(ProofVerifyError::Malformed(format!(
+                "the input claim is taken before binding: no {derived:?} term"
+            )))
+        },
     )
 }
 

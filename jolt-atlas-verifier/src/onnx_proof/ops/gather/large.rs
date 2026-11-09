@@ -9,12 +9,15 @@ use atlas_trace::op::GatherLarge;
 use common::CommittedPoly;
 
 impl OpLayout for GatherLarge {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        let encoding = GatherRaEncoding::new(node);
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        let encoding = GatherRaEncoding::new(node)?;
         let d = encoding.one_hot_params().instruction_d;
-        (0..d)
+        Ok((0..d)
             .map(|i| CommittedPoly::GatherRaD(node.idx, i))
-            .collect()
+            .collect())
     }
 }
 
@@ -39,7 +42,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherLarge {
         let ra_one_hot_proof = verifier
             .proofs
             .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
-        let encoding = GatherRaEncoding::new(node);
+        let encoding = GatherRaEncoding::new(node)?;
         let [ra_verifier, bool_verifier] =
             shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript)?;
         let instances: Vec<&dyn DynRelationVerifier<F, T>> = vec![&*ra_verifier, &*bool_verifier];
@@ -62,17 +65,24 @@ pub struct GatherRaEncoding {
 }
 
 impl GatherRaEncoding {
-    /// The encoding for the node's dictionary.
-    pub fn new(computation_node: &ComputationNode) -> Self {
-        let gather_op = match &computation_node.operator {
-            Op::GatherLarge(gather_op) => gather_op,
-            _ => panic!("Expected GatherLarge operator"),
+    /// The encoding for the node's dictionary. `Err` if the node is not a large gather with
+    /// an index operand.
+    pub fn new(computation_node: &ComputationNode) -> Result<Self, ProofVerifyError> {
+        let Op::GatherLarge(gather_op) = &computation_node.operator else {
+            return Err(unsupported(
+                computation_node,
+                "expected a GatherLarge operator",
+            ));
         };
-        Self {
+        let index_input_idx = *computation_node
+            .inputs
+            .get(1)
+            .ok_or_else(|| unsupported(computation_node, "no index operand"))?;
+        Ok(Self {
             node_idx: computation_node.idx,
-            index_input_idx: computation_node.inputs[1],
+            index_input_idx,
             num_words: gather_op.dict_len.next_power_of_two(),
-        }
+        })
     }
 }
 

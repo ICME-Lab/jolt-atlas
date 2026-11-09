@@ -31,6 +31,7 @@
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use atlas_sumcheck::relation::verify_relation;
@@ -81,19 +82,22 @@ pub fn mos_divisor(op: &MeanOfSquares, scale: u8) -> i64 {
 }
 
 impl OpLayout for MeanOfSquares {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         // Saturating clamp one-hot (64-bit) ...
         let mut polys = clamp_committed_polys(node);
         // ... plus the `R < D` range-check one-hot (skipped for scalar outputs).
         if !is_scalar(node) {
-            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node)?;
             let d = rc_operands
                 .get_encoding(node)
                 .one_hot_params()
                 .instruction_d;
             polys.extend((0..d).map(|i| CommittedPoly::MeanOfSquaresRangeCheckRaD(node.idx, i)));
         }
-        polys
+        Ok(polys)
     }
 }
 
@@ -136,13 +140,13 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for MeanOfSquares {
             let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder)?.1;
             verify_scalar_remainder(r_claim, mos_divisor(self, node.scale))?;
         } else {
-            let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node)?;
             let rc_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
                 &mut verifier.accumulator,
                 &mut verifier.transcript,
             )?;
             verifier.defer(DeferredBatch::RangeCheck, Box::new(rc_verifier));
-            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
+            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node)?;
             verifier
                 .deferred_onehots
                 .push(DeferredOneHot::RangeCheck(rc_operands.get_encoding(node)));
@@ -189,14 +193,19 @@ crate::bind_relation!(MeanOfSquares, MeanOfSquaresRelation);
 pub struct MeanOfSquaresRelation {
     /// The node being proven.
     pub node: ComputationNode,
+    /// The rescale divisor `D` and log₂ of the padded reduced count; `None` unless the node is
+    /// a mean of squares with a power-of-two padded reduced count, which the setup requires.
+    reduction: Option<(i64, usize)>,
 }
 
 impl MeanOfSquaresRelation {
-    fn op(&self) -> &MeanOfSquares {
-        let Op::MeanOfSquares(op) = &self.node.operator else {
-            panic!("expected MeanOfSquares operator")
-        };
-        op
+    fn reduction(&self) -> Result<(i64, usize), ProofVerifyError> {
+        self.reduction.ok_or_else(|| {
+            ProofVerifyError::Malformed(format!(
+                "model: node {} is not a mean of squares with a power-of-two padded reduced count",
+                self.node.idx
+            ))
+        })
     }
 
     /// The retained (output) variables: the eq cube, bound in the first rounds.
@@ -207,13 +216,9 @@ impl MeanOfSquaresRelation {
     /// The reduced (summed) variables, bound last.
     pub fn log_reduced(&self) -> usize {
         // The sumcheck cube splits the flat-padded operand into `[retained, reduced]`, so the
-        // padded reduced count sizes the low rounds; the divisor stays semantic.
-        let padded_count = self.op().padded_count;
-        assert!(
-            padded_count.is_power_of_two(),
-            "mean-of-squares reduction requires a power-of-two padded reduced count, got {padded_count}"
-        );
-        padded_count.log_2()
+        // padded reduced count sizes the low rounds; the divisor stays semantic. The setup
+        // rejects a node without a reduction, so the zero is never proven against.
+        self.reduction.map_or(0, |(_, log_reduced)| log_reduced)
     }
 
     fn ids(&self) -> OpeningIdBuilder<'_> {
@@ -226,7 +231,13 @@ impl SymbolicSumcheck for MeanOfSquaresRelation {
     type Shape = ComputationNode;
 
     fn new(node: ComputationNode) -> Self {
-        Self { node }
+        let reduction = match &node.operator {
+            Op::MeanOfSquares(op) if op.padded_count.is_power_of_two() => {
+                Some((mos_divisor(op, node.scale), op.padded_count.log_2()))
+            }
+            _ => None,
+        };
+        Self { node, reduction }
     }
 
     fn id() -> RelationId {
@@ -242,7 +253,8 @@ impl SymbolicSumcheck for MeanOfSquaresRelation {
     }
 
     fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        let divisor = mos_divisor(self.op(), self.node.scale);
+        // The setup rejects a node without a reduction, so the zero is never proven against.
+        let divisor = self.reduction.map_or(0, |(divisor, _)| divisor);
         let rescaled = self.ids().advice(VirtualPoly::ClampAcc);
         let remainder = self.ids().advice(VirtualPoly::RescaleRemainder);
         constant(F::from_u64(divisor as u64)) * opening(RelationOpening::Id(rescaled))
@@ -250,7 +262,7 @@ impl SymbolicSumcheck for MeanOfSquaresRelation {
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        let x = opening(RelationOpening::Id(self.produced()[0]));
+        let x = opening(RelationOpening::Id(self.ids().nodeio(Target::Input(0))));
         derived(RelationDerived::RetainedEq) * x.clone() * x
     }
 }
@@ -262,17 +274,33 @@ impl Produces for MeanOfSquaresRelation {
 }
 
 impl<F: JoltField> Relation<F> for MeanOfSquaresRelation {
-    fn opening_points(&self, _setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
-        vec![challenges.to_vec()]
+    fn opening_points(
+        &self,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+        Ok(vec![challenges.to_vec()])
     }
 
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::RetainedEq => {
-                EqPolynomial::mle(&setup.incoming_point, &challenges[..self.log_retained()])
+                let retained = challenges.get(..self.log_retained()).ok_or_else(|| {
+                    ProofVerifyError::Malformed(format!(
+                        "mean of squares: {} challenges for {} retained variables",
+                        challenges.len(),
+                        self.log_retained()
+                    ))
+                })?;
+                EqPolynomial::mle(&setup.incoming_point, retained)
             }
-            other => panic!("a mean of squares derives no {other:?}"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 
@@ -282,6 +310,7 @@ impl<F: JoltField> SetupRelation<F> for MeanOfSquaresRelation {
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
     ) -> Result<RelationSetup<F>, ProofVerifyError> {
+        self.reduction()?;
         reduced_output_setup(accumulator, &self.node)
     }
 }

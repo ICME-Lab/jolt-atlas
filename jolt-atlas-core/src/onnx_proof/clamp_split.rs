@@ -94,7 +94,7 @@ impl<F: JoltField> SplitProver<F> {
     pub fn new(params: SplitParams<F>, split: &BucketSplit) -> Self {
         let w = MultilinearPolynomial::from(params.cycle.evals());
         Self {
-            setup: params.relation_setup(),
+            setup: params.relation_setup().expect("2^32 − 1 is invertible"),
             params,
             w,
             out: MultilinearPolynomial::from(split.out.clone()),
@@ -126,7 +126,7 @@ impl<F: JoltField> RelationWitness<F> for SplitProver<F> {
 
 impl<F: JoltField> SplitProver<F> {
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
-        let (b1, b2, b3, m) = self.params.coefficients();
+        let (b1, b2, b3, m) = self.params.coefficients().expect("2^32 − 1 is invertible");
         let half = self.w.len() / 2;
         let evals = (0..half)
             .into_par_iter()

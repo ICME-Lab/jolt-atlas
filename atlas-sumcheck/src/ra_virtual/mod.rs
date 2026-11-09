@@ -1,3 +1,4 @@
+use crate::relation::not_derived;
 use crate::relation::Produces;
 use crate::{
     config::OneHotParams,
@@ -7,6 +8,7 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier, SparseGroup,
     },
 };
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -109,13 +111,18 @@ impl Produces for RaVirtualizationRelation {
 }
 
 impl<F: JoltField> Relation<F> for RaVirtualizationRelation {
-    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+    fn opening_points(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
         let r_cycle = low_to_high_point(challenges);
-        self.one_hot_params
+        Ok(self
+            .one_hot_params
             .compute_r_address_chunks(&setup.incoming_point[..self.address_len])
             .iter()
             .map(|r_address| [r_address.as_slice(), r_cycle.as_slice()].concat())
-            .collect()
+            .collect())
     }
 
     fn sparse_groups(&self) -> Option<Vec<SparseGroup>> {
@@ -131,13 +138,18 @@ impl<F: JoltField> Relation<F> for RaVirtualizationRelation {
         )
     }
 
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::CycleEq => {
                 EqPolynomial::mle(&self.cycle_point(setup), &low_to_high_point(challenges))
             }
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 

@@ -120,6 +120,7 @@ impl<'a, F: JoltField, T: Transcript> ProverAccOpeningProvider<'a, F, T> {
         let opening_id = self.accessor.builder().nodeio(target);
         self.accessor
             .acc_mut()
+            .expect("a prover provider holds a mutable accumulator")
             .append_virtual(self.transcript, opening_id, opening_point, claim);
     }
 
@@ -142,20 +143,18 @@ impl<'a, F: JoltField, T: Transcript> ProverAccOpeningProvider<'a, F, T> {
     {
         let opening_id = self.accessor.builder().advice(poly_ctor);
         match opening_id.polynomial {
-            PolynomialId::Virtual(_) => self.accessor.acc_mut().append_virtual(
-                self.transcript,
-                opening_id,
-                opening_point,
-                claim,
-            ),
+            PolynomialId::Virtual(_) => self
+                .accessor
+                .acc_mut()
+                .expect("a prover provider holds a mutable accumulator")
+                .append_virtual(self.transcript, opening_id, opening_point, claim),
             // TODO(AntoineF4C5): split committed advice handling between dense and one-hot
             // encodings. append_dense is correct for the current dense-only callsites.
-            PolynomialId::Committed(_) => self.accessor.acc_mut().append_dense(
-                self.transcript,
-                opening_id,
-                opening_point.r.clone(),
-                claim,
-            ),
+            PolynomialId::Committed(_) => self
+                .accessor
+                .acc_mut()
+                .expect("a prover provider holds a mutable accumulator")
+                .append_dense(self.transcript, opening_id, opening_point.r.clone(), claim),
         }
     }
 
@@ -166,19 +165,27 @@ impl<'a, F: JoltField, T: Transcript> ProverAccOpeningProvider<'a, F, T> {
     pub fn append_custom(&mut self, opening_id: impl Into<OpeningId>, claim: F) {
         let opening_id = opening_id.into();
         match opening_id.polynomial {
-            PolynomialId::Virtual(_) => self.accessor.acc_mut().append_virtual(
-                self.transcript,
-                opening_id,
-                self.opening_point.clone(),
-                claim,
-            ),
+            PolynomialId::Virtual(_) => self
+                .accessor
+                .acc_mut()
+                .expect("a prover provider holds a mutable accumulator")
+                .append_virtual(
+                    self.transcript,
+                    opening_id,
+                    self.opening_point.clone(),
+                    claim,
+                ),
             // TODO(AntoineF4C5): consider OneHot/Dense different cases
-            PolynomialId::Committed(_) => self.accessor.acc_mut().append_dense(
-                self.transcript,
-                opening_id,
-                self.opening_point.r.clone(),
-                claim,
-            ),
+            PolynomialId::Committed(_) => self
+                .accessor
+                .acc_mut()
+                .expect("a prover provider holds a mutable accumulator")
+                .append_dense(
+                    self.transcript,
+                    opening_id,
+                    self.opening_point.r.clone(),
+                    claim,
+                ),
         }
     }
 }

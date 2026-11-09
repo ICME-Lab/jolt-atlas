@@ -114,9 +114,16 @@ pub fn verify_tie<F: JoltField, T: Transcript, R: AtlasRelation + SetupRelation<
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<(), ProofVerifyError> {
-    assert_eq!(relation.rounds(), 0, "a tie has no rounds");
+    if relation.rounds() != 0 {
+        return Err(ProofVerifyError::Malformed(format!(
+            "{:?} on node {} is not a tie: it has {} rounds",
+            R::id(),
+            relation.node().idx,
+            relation.rounds()
+        )));
+    }
     let setup = relation.setup(&*accumulator, transcript)?;
-    let points = relation.opening_points(&setup, &[]);
+    let points = relation.opening_points(&setup, &[])?;
     for (id, point) in relation.produced().into_iter().zip(points) {
         match id.polynomial {
             PolynomialId::Virtual(_) => accumulator.append_virtual(

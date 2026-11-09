@@ -38,8 +38,11 @@ pub struct RangeCheckOperandsBase {
 /// Common accessors (`transform_operand_claims`,
 /// `compute_lookup_indices`) are provided as defaults.
 pub trait RangeCheckingOperandsTrait {
-    /// Create a new instance of the implementing type from a computation node.
-    fn new(node: &ComputationNode) -> Self;
+    /// Create a new instance of the implementing type from a computation node. `Err` if the
+    /// node's operator is not one the operands range-check.
+    fn new(node: &ComputationNode) -> Result<Self, ProofVerifyError>
+    where
+        Self: Sized;
 
     /// Create a new base instance from a computation node.
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase;
@@ -50,9 +53,16 @@ pub trait RangeCheckingOperandsTrait {
     /// Optional transformation applied to the operand claims before returning.
     ///
     /// Override this for operations where the range-check bound is not directly
-    /// the right operand (e.g., for sqrt range-check, the bound is `2·v̂ + 1`).
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        (claims[0], claims[1])
+    /// the right operand (e.g., for sqrt range-check, the bound is `2·v̂ + 1`). `Err` if
+    /// `claims` lacks an operand the range check reads.
+    fn transform_operand_claims<F: JoltField>(
+        &self,
+        claims: Vec<F>,
+    ) -> Result<(F, F), ProofVerifyError> {
+        let [left_claim, right_claim] = claims.as_slice() else {
+            return Err(operand_claim_count(2, claims.len()));
+        };
+        Ok((*left_claim, *right_claim))
     }
 
     /// Optional transformation applied to the claim of the range-check output before returning.
@@ -61,6 +71,19 @@ pub trait RangeCheckingOperandsTrait {
     fn transform_output_claim<F: JoltField>(claim: F) -> F {
         claim
     }
+}
+
+fn operand_claim_count(expected: usize, got: usize) -> ProofVerifyError {
+    ProofVerifyError::Malformed(format!(
+        "a range check reads {expected} operand claims, got {got}"
+    ))
+}
+
+fn unexpected_operator(expected: &str, node: &ComputationNode) -> ProofVerifyError {
+    ProofVerifyError::Malformed(format!(
+        "model: node {} range check expects {expected}, got {}",
+        node.idx, node.operator
+    ))
 }
 
 /// Operands for division range-checking.
@@ -82,15 +105,15 @@ pub struct RiRangeCheckOperands;
 pub struct RsRangeCheckOperands;
 
 impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
-    fn new(_node: &ComputationNode) -> Self {
-        Self
+    fn new(_node: &ComputationNode) -> Result<Self, ProofVerifyError> {
+        Ok(Self)
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
         RangeCheckOperandsBase {
             node_idx: node.idx,
             remainder: VirtualPoly::DivRemainder(node.idx),
-            bound: Some(VirtualPoly::NodeOutput(node.inputs[1])),
+            bound: Some(VirtualPoly::NodeOutput(node.input(1))),
             virtual_ra: VirtualPoly::DivRangeCheckRa(node.idx),
             operator: node.operator.clone(),
         }
@@ -102,18 +125,18 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
 }
 
 impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
-    fn new(node: &ComputationNode) -> Self {
+    fn new(node: &ComputationNode) -> Result<Self, ProofVerifyError> {
         let Op::Rsqrt(_) = &node.operator else {
-            panic!("Expected Rsqrt operator");
+            return Err(unexpected_operator("Rsqrt", node));
         };
-        Self
+        Ok(Self)
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
         RangeCheckOperandsBase {
             node_idx: node.idx,
             remainder: VirtualPoly::DivRemainder(node.idx),
-            bound: Some(VirtualPoly::NodeOutput(node.inputs[0])),
+            bound: Some(VirtualPoly::NodeOutput(node.input(0))),
             virtual_ra: VirtualPoly::DivRangeCheckRa(node.idx),
             operator: node.operator.clone(),
         }
@@ -125,11 +148,11 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
 }
 
 impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
-    fn new(node: &ComputationNode) -> Self {
+    fn new(node: &ComputationNode) -> Result<Self, ProofVerifyError> {
         let Op::Rsqrt(_) = &node.operator else {
-            panic!("Expected Sqrt operator");
+            return Err(unexpected_operator("Rsqrt", node));
         };
-        Self
+        Ok(Self)
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
@@ -143,10 +166,14 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
     }
 
     /// For sqrt range check: the bound is `2·v̂ + 1`, not just `v̂`.
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        let left_claim = claims[0];
-        let right_claim = claims[1];
-        (left_claim, right_claim + right_claim + F::one())
+    fn transform_operand_claims<F: JoltField>(
+        &self,
+        claims: Vec<F>,
+    ) -> Result<(F, F), ProofVerifyError> {
+        let [left_claim, right_claim] = claims.as_slice() else {
+            return Err(operand_claim_count(2, claims.len()));
+        };
+        Ok((*left_claim, *right_claim + *right_claim + F::one()))
     }
 
     fn rad_poly(index: usize, d: usize) -> CommittedPoly {
@@ -169,15 +196,14 @@ pub struct MeanOfSquaresRangeCheckOperands {
 }
 
 impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
-    fn new(node: &ComputationNode) -> Self {
-        let op = match &node.operator {
-            Op::MeanOfSquares(op) => op.clone(),
-            other => panic!("MeanOfSquares range check: unexpected operator {other:?}"),
+    fn new(node: &ComputationNode) -> Result<Self, ProofVerifyError> {
+        let Op::MeanOfSquares(op) = &node.operator else {
+            return Err(unexpected_operator("MeanOfSquares", node));
         };
-        Self {
-            op,
+        Ok(Self {
+            op: op.clone(),
             scale: node.scale,
-        }
+        })
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
@@ -190,13 +216,18 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
         }
     }
 
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        let left_claim = claims[0];
+    fn transform_operand_claims<F: JoltField>(
+        &self,
+        claims: Vec<F>,
+    ) -> Result<(F, F), ProofVerifyError> {
+        let left_claim = claims
+            .first()
+            .ok_or_else(|| operand_claim_count(1, claims.len()))?;
 
-        (
-            left_claim,
-            F::from_i32(i32_divisor(mos_divisor(&self.op, self.scale))),
-        )
+        Ok((
+            *left_claim,
+            F::from_i32(i32_divisor(mos_divisor(&self.op, self.scale))?),
+        ))
     }
 
     fn rad_poly(index: usize, d: usize) -> CommittedPoly {
@@ -204,8 +235,12 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
     }
 }
 
-fn i32_divisor(divisor: i64) -> i32 {
-    i32::try_from(divisor).expect("MeanOfSquares divisor N·2^S must fit i32 for the range check")
+fn i32_divisor(divisor: i64) -> Result<i32, ProofVerifyError> {
+    i32::try_from(divisor).map_err(|_| {
+        ProofVerifyError::Malformed(format!(
+            "model: MeanOfSquares divisor N·2^S = {divisor} must fit i32 for the range check"
+        ))
+    })
 }
 
 /// Operands for neural teleportation (cos/sin) range-checking.
@@ -216,14 +251,12 @@ pub struct TeleportRangeCheckOperands {
 }
 
 impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
-    fn new(node: &ComputationNode) -> Self {
+    fn new(node: &ComputationNode) -> Result<Self, ProofVerifyError> {
         let tau = match &node.operator {
             Op::Cos(_) | Op::Sin(_) => TRIG_PERIOD_MODULUS as i32,
-            _ => {
-                panic!("Expected Cos or Sin operator for neural teleportation division")
-            }
+            _ => return Err(unexpected_operator("Cos or Sin", node)),
         };
-        Self { tau }
+        Ok(Self { tau })
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
@@ -237,10 +270,15 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
         }
     }
 
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        let left_claim = claims[0];
+    fn transform_operand_claims<F: JoltField>(
+        &self,
+        claims: Vec<F>,
+    ) -> Result<(F, F), ProofVerifyError> {
+        let left_claim = claims
+            .first()
+            .ok_or_else(|| operand_claim_count(1, claims.len()))?;
 
-        (left_claim, F::from_i32(self.tau))
+        Ok((*left_claim, F::from_i32(self.tau)))
     }
 
     fn rad_poly(index: usize, d: usize) -> CommittedPoly {
@@ -255,13 +293,19 @@ pub struct RangeCheckOperands<Helper: RangeCheckingOperandsTrait> {
 }
 
 impl<H: RangeCheckingOperandsTrait> RangeCheckOperands<H> {
-    /// Create a new range-checking operands instance from a computation node.
-    pub fn new(node: &ComputationNode) -> Self {
+    /// Create a new range-checking operands instance from a computation node. `Err` if the
+    /// node's operator is not one `H` range-checks.
+    pub fn new(node: &ComputationNode) -> Result<Self, ProofVerifyError> {
         let base = H::new_params(node);
-        Self {
+        Ok(Self {
             base,
-            helper: H::new(node),
-        }
+            helper: H::new(node)?,
+        })
+    }
+
+    /// The virtual polynomial being range-checked.
+    pub fn remainder(&self) -> VirtualPoly {
+        self.base.remainder
     }
 
     /// Get the index of the computation node associated with this range-checking operands.
@@ -300,7 +344,7 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckOperands<H> {
             })
             .collect::<Result<Vec<_>, ProofVerifyError>>()?;
 
-        Ok(self.helper.transform_operand_claims(operand_claims))
+        self.helper.transform_operand_claims(operand_claims)
     }
 
     /// Gets the RA one hot encoding for one-hotness checks

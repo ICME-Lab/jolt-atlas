@@ -163,7 +163,9 @@ pub fn verify_post<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    let bits = rebase_bits(node).expect("fused op");
+    let bits = rebase_bits(node).ok_or_else(|| {
+        ProofVerifyError::Malformed(format!("model: node {} is not a fused op", node.idx))
+    })?;
 
     if is_scalar(node) {
         let accessor = AccOpeningAccessor::new(&verifier.accumulator, node);

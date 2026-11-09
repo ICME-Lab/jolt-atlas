@@ -75,7 +75,8 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
     // Both range checks are built now (challenges drawn, operand claims
     // appended) and proven after the node loop in the `RangeCheck` batch; their
     // one-hot checks follow that batch.
-    let div_rangecheck_provider = RangeCheckProvider::<RiRangeCheckOperands>::new(node);
+    let div_rangecheck_provider = RangeCheckProvider::<RiRangeCheckOperands>::new(node)
+        .expect("the node\'s operator is the one its range check proves");
     let (div_rc_prover, div_lookup_indices) = div_rangecheck_provider
         .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
             &prover.trace,
@@ -84,7 +85,8 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
         );
     prover.defer(DeferredBatch::RangeCheck, Box::new(div_rc_prover));
 
-    let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node);
+    let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node)
+        .expect("the node\'s operator is the one its range check proves");
     let (sqrt_rc_prover, sqrt_lookup_indices) = sqrt_rangecheck_provider
         .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
             &prover.trace,
@@ -93,12 +95,14 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
         );
     prover.defer(DeferredBatch::RangeCheck, Box::new(sqrt_rc_prover));
 
-    let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
+    let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node)
+        .expect("the node\'s operator is the one its range check proves");
     prover.deferred_onehots.push((
         DeferredOneHot::RangeCheck(div_operands.get_encoding(node)),
         div_lookup_indices,
     ));
-    let sqrt_operands = RangeCheckOperands::<RsRangeCheckOperands>::new(node);
+    let sqrt_operands = RangeCheckOperands::<RsRangeCheckOperands>::new(node)
+        .expect("the node\'s operator is the one its range check proves");
     prover.deferred_onehots.push((
         DeferredOneHot::RangeCheck(sqrt_operands.get_encoding(node)),
         sqrt_lookup_indices,

@@ -3,6 +3,14 @@
 //! This module centralizes helper functions used by activation ops, and periodic functions.
 
 use super::usize_to_n_bits;
+use atlas_algebra::utils::errors::ProofVerifyError;
+
+/// The fixed-point scale `2^scale` of a semantics table; `Err` outside the range the semantics
+/// define.
+pub fn table_scale(scale: u8) -> Result<atlas_trace::Scale, ProofVerifyError> {
+    atlas_trace::Scale::new(scale)
+        .map_err(|e| ProofVerifyError::Malformed(format!("model: table scale: {e}")))
+}
 
 /// Build a signed two's-complement lookup table for a unary activation.
 ///
@@ -10,21 +18,25 @@ use super::usize_to_n_bits;
 /// outputs are quantized at the model scale `2^scale`. Entries come from the
 /// deterministic integer tables in [`atlas_trace::semantics`] — the same
 /// functions the tracer's kernels look up, so prover tables and trace values
-/// agree bit for bit by construction.
+/// agree bit for bit by construction. `Err` if `scale` is outside the semantics' range.
 pub fn materialize_signed_activation_table(
     log_table_size: usize,
     tau: i32,
     scale: u8,
     kind: atlas_trace::semantics::tables::TableKind,
-) -> Vec<i32> {
-    assert_eq!(tau, 1, "scaled activation tables are materialized per-op");
+) -> Result<Vec<i32>, ProofVerifyError> {
+    if tau != 1 {
+        return Err(ProofVerifyError::Malformed(format!(
+            "scaled activation tables are materialized per-op, got tau = {tau}"
+        )));
+    }
     let table = atlas_trace::semantics::tables::table(
         kind,
-        atlas_trace::Scale::new(scale).expect("scale in range"),
+        table_scale(scale)?,
         atlas_trace::SemVersion::V1,
     );
     let table_size = 1usize << log_table_size;
-    (0..table_size)
+    Ok((0..table_size)
         .map(|i| table.lookup(usize_to_n_bits(i, log_table_size)))
-        .collect()
+        .collect())
 }

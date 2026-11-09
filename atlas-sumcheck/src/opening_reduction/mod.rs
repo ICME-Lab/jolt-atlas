@@ -3,6 +3,7 @@
 //! This module contains the sumcheck-specific logic for the batch opening reduction protocol.
 //! The higher-level orchestration remains in `poly/opening_proof.rs`.
 
+use crate::relation::not_derived;
 use crate::{
     opening_proof::{OpeningId, SumcheckId},
     relation::{
@@ -14,6 +15,7 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -233,11 +235,16 @@ impl Produces for OpeningReductionRelation {
 }
 
 impl<F: JoltField> Relation<F> for OpeningReductionRelation {
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::Eq => EqPolynomial::mle(&setup.incoming_point, challenges),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 

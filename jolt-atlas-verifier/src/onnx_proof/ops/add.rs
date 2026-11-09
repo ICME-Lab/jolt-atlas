@@ -51,8 +51,11 @@ crate::bind_relation!(Add, AccumulationRelation<Add>);
 /// ([`clamp_intermediate`](crate::onnx_proof::clamp_lookups)); it is not stored
 /// in the trace.
 impl OpLayout for Add {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        clamp_committed_polys(node)
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(clamp_committed_polys(node))
     }
 }
 

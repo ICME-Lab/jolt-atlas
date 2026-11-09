@@ -28,8 +28,11 @@ use jolt_field::Ring;
 crate::bind_relation!(ScalarConstDiv, ConstantDivisionRelation);
 
 impl OpLayout for ScalarConstDiv {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        vec![CommittedPoly::ScalarConstDivNodeRemainder(node.idx)]
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(vec![CommittedPoly::ScalarConstDivNodeRemainder(node.idx)])
     }
 }
 
@@ -71,15 +74,20 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ScalarConstDiv {
 /// relation preserves.
 pub struct ConstantDivisionRelation {
     node: ComputationNode,
+    /// The node's constant divisor; `None` unless the node is a `ScalarConstDiv`, which the
+    /// setup requires.
+    divisor: Option<i32>,
 }
 
 impl ConstantDivisionRelation {
-    /// The constant divisor.
-    pub fn divisor(&self) -> i32 {
-        let Op::ScalarConstDiv(op) = &self.node.operator else {
-            panic!("Expected ScalarConstDiv operator")
-        };
-        op.divisor
+    /// The constant divisor. `Err` if the node is not a `ScalarConstDiv`.
+    pub fn divisor(&self) -> Result<i32, ProofVerifyError> {
+        self.divisor.ok_or_else(|| {
+            ProofVerifyError::Malformed(format!(
+                "model: node {} is {}, not a ScalarConstDiv",
+                self.node.idx, self.node.operator
+            ))
+        })
     }
 
     fn ids(&self) -> OpeningIdBuilder<'_> {
@@ -92,7 +100,11 @@ impl SymbolicSumcheck for ConstantDivisionRelation {
     type Shape = ComputationNode;
 
     fn new(node: ComputationNode) -> Self {
-        Self { node }
+        let divisor = match &node.operator {
+            Op::ScalarConstDiv(op) => Some(op.divisor),
+            _ => None,
+        };
+        Self { node, divisor }
     }
 
     fn id() -> RelationId {
@@ -108,7 +120,8 @@ impl SymbolicSumcheck for ConstantDivisionRelation {
     }
 
     fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        constant(F::from_i64(self.divisor() as i64))
+        // The setup rejects a node without a divisor, so the zero is never proven against.
+        constant(F::from_i64(self.divisor.unwrap_or(0) as i64))
             * opening(RelationOpening::ReducedNodeOutput(self.node.idx))
     }
 
@@ -141,6 +154,7 @@ impl<F: JoltField> SetupRelation<F> for ConstantDivisionRelation {
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
     ) -> Result<RelationSetup<F>, ProofVerifyError> {
+        self.divisor()?;
         reduced_output_setup(accumulator, &self.node)
     }
 }

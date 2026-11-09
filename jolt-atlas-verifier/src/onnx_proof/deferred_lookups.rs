@@ -210,7 +210,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
 
     let model = verifier.preprocessing.model();
     let registered: std::collections::BTreeSet<usize> = clamp.iter().map(|n| n.idx).collect();
-    let full_buckets = clamp_buckets(model);
+    let full_buckets = clamp_buckets(model)?;
     let bucketed: std::collections::BTreeSet<usize> = full_buckets
         .iter()
         .flat_map(|b| b.nodes.iter().map(|n| n.idx))
@@ -265,7 +265,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
                         b,
                         &verifier.accumulator,
                         &mut verifier.transcript,
-                    )?)) as Box<dyn DynRelationVerifier<F, T>>
+                    )?)?) as Box<dyn DynRelationVerifier<F, T>>
                 })
             })
             .collect::<Result<_, ProofVerifyError>>()?;
@@ -349,16 +349,17 @@ pub fn verify_all<F: JoltField, T: Transcript>(
             }
         }
         let mine: Vec<&DeferredOneHot> = onehots.iter().filter(|j| j.parent() == kind).collect();
-        if mine.is_empty() {
+        let Some(first) = mine.first() else {
             continue;
-        }
+        };
+        let proof_type = first.proof_type();
         let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
             Vec::with_capacity(3 * mine.len());
         for j in &mine {
             let p = j.params::<F, T>(&verifier.accumulator, &mut verifier.transcript)?;
             instances.extend(shout::ra_onehot_verifiers_with_params::<F, T>(p));
         }
-        batched_verify(instances, verifier, mine[0].proof_type())?;
+        batched_verify(instances, verifier, proof_type)?;
     }
     Ok(())
 }

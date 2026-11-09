@@ -77,7 +77,9 @@ impl<F: JoltField> EinsumDotProver<F> {
     pub fn initialize(trace: &Trace, params: RelationParams<F, ContractionRelation>) -> Self {
         let (relation, setup) = params.into_parts();
         note_dispatch(&relation);
-        let layout = relation.layout::<F>();
+        let layout = relation
+            .layout::<F>()
+            .expect("the relation\'s dims are its equation\'s");
         let LayerData { operands, .. } = TraceView::layer_data(trace, relation.node());
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for einsum operation")
@@ -264,11 +266,15 @@ fn fold_operands<F: JoltField>(
 ) -> Folded<F> {
     let dims = relation.dims();
     match relation.equation() {
-        "mk,kn->mn" => MkKnMnLayout::new(dims).fold(left_operand, right_operand, r_node_output),
-        "k,nk->n" => KNkNLayout::new(dims).fold(left_operand, right_operand, r_node_output),
-        "abmk,abnk->abmn" => {
-            AbmkAbnkAbmnLayout::new(dims).fold(left_operand, right_operand, r_node_output)
-        }
+        "mk,kn->mn" => MkKnMnLayout::new(dims)
+            .expect("the dims are the equation\'s")
+            .fold(left_operand, right_operand, r_node_output),
+        "k,nk->n" => KNkNLayout::new(dims)
+            .expect("the dims are the equation\'s")
+            .fold(left_operand, right_operand, r_node_output),
+        "abmk,abnk->abmn" => AbmkAbnkAbmnLayout::new(dims)
+            .expect("the dims are the equation\'s")
+            .fold(left_operand, right_operand, r_node_output),
         other => panic!("unexpected canonical einsum equation: {other}"),
     }
 }

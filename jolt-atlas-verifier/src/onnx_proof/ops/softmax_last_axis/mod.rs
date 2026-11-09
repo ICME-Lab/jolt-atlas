@@ -74,10 +74,23 @@ pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
 pub mod significance_clamp;
 
+/// The leading `log_f` (row) coordinates of a bound point; `Err` if the point is shorter.
+fn row_coordinates<F>(point: &[F], log_f: usize) -> Result<&[F], ProofVerifyError> {
+    point.get(..log_f).ok_or_else(|| {
+        ProofVerifyError::Malformed(format!(
+            "softmax: a point of {} coordinates has no {log_f} row coordinates",
+            point.len()
+        ))
+    })
+}
+
 impl OpLayout for SoftmaxLastAxis {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         let log_scale = node.scale as usize;
-        let decomp = generate_exp_lut_decomposed(1i32 << node.scale);
+        let decomp = generate_exp_lut_decomposed(1i32 << node.scale)?;
         let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
         let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
         let idx = node.idx;
@@ -97,7 +110,7 @@ impl OpLayout for SoftmaxLastAxis {
                 OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
             polys.extend((0..d).map(|i| ctor(idx, i)));
         }
-        polys
+        Ok(polys)
     }
 }
 
@@ -116,7 +129,9 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for SoftmaxLastAxis {
         // *unmasked* relations, so a model declaring a masked softmax must
         // be rejected here too (deserialized preprocessing bypasses the
         // preprocess()-time assert).
-        let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
+        let last_dim = *node.output_dims.last().ok_or_else(|| {
+            ProofVerifyError::Malformed(format!("model: softmax node {} has rank 0", node.idx))
+        })?;
         if self.active_len.is_some_and(|n| n != last_dim) {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "masked softmax (active_len {:?} of {last_dim}) is not yet verifiable",
@@ -188,7 +203,7 @@ impl SoftmaxLastAxisVerifier {
             transcript,
         )?;
 
-        let lut = VerifierLookupTableData::new(self.scale);
+        let lut = VerifierLookupTableData::new(self.scale)?;
 
         self.cache_r_exp(accumulator, transcript)?;
         self.run_stage(
@@ -248,10 +263,9 @@ impl SoftmaxLastAxisVerifier {
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<Self, ProofVerifyError> {
-        let (&n, leading_dims) = node
-            .output_dims
-            .split_last()
-            .expect("softmax node must have at least one output dimension");
+        let (&n, leading_dims) = node.output_dims.split_last().ok_or_else(|| {
+            ProofVerifyError::Malformed(format!("model: softmax node {} has rank 0", node.idx))
+        })?;
         let f = leading_dims.iter().product::<usize>();
 
         let accessor = AccOpeningAccessor::new(&mut *accumulator, node);
@@ -271,11 +285,15 @@ impl SoftmaxLastAxisVerifier {
         ) -> Result<Vec<u64>, ProofVerifyError> {
             (0..f)
                 .map(|k| {
-                    Ok(accessor
+                    accessor
                         .get_advice(|idx| vp_fn(idx, k))?
                         .1
                         .to_u64()
-                        .expect("auxiliary scalar should fit within 64 bits"))
+                        .ok_or_else(|| {
+                            ProofVerifyError::Malformed(format!(
+                                "softmax auxiliary scalar {k} does not fit within 64 bits"
+                            ))
+                        })
                 })
                 .collect()
         }
@@ -319,10 +337,9 @@ impl SoftmaxLastAxisVerifier {
                 let exp_sum_q_k = accessor
                     .get_advice(|idx| VirtualPoly::SoftmaxSumOutput(idx, k))?
                     .1;
-                let exp_sum_q_int = exp_sum_q_k
-                    .to_u64()
-                    .expect("exp_sum_q[k] should fit in u64")
-                    as i64;
+                let exp_sum_q_int = exp_sum_q_k.to_u64().ok_or_else(|| {
+                    ProofVerifyError::Malformed(format!("exp_sum_q[{k}] does not fit in u64"))
+                })? as i64;
                 if exp_sum_q_int == 0 {
                     return Err(ProofVerifyError::InvalidOpeningProof(format!(
                         "exp_sum_q[{k}] is zero, cannot compute inv_sum"
@@ -611,13 +628,14 @@ pub struct VerifierLookupTableData {
 }
 
 impl VerifierLookupTableData {
-    /// The decomposed exp tables at `scale`.
-    pub fn new(scale: i32) -> Self {
-        let decomp = generate_exp_lut_decomposed(scale);
+    /// The decomposed exp tables at `scale`. `Err` unless `scale` is a power of two the
+    /// semantics define the tables for.
+    pub fn new(scale: i32) -> Result<Self, ProofVerifyError> {
+        let decomp = generate_exp_lut_decomposed(scale)?;
         let mut table_hi = decomp.lut_hi;
         table_hi.resize(table_hi.len().next_power_of_two(), 0);
         let mut table_lo = decomp.lut_lo;
         table_lo.resize(table_lo.len().next_power_of_two(), 0);
-        Self { table_hi, table_lo }
+        Ok(Self { table_hi, table_lo })
     }
 }

@@ -45,8 +45,9 @@ pub const EXEC_DEGREE_BOUND: usize = 2;
 /// A clamped-activation's small lookup table: `Table[i] = activation(i)`, for
 /// two's-complement `i` over [`ACTIVATION_TABLE_BOUND`] bits.
 pub trait SmallActivationTable: Send + Sync + 'static {
-    /// Materializes the full table (all `2^ACTIVATION_TABLE_BOUND` entries).
-    fn materialize() -> Vec<i32>;
+    /// Materializes the full table (all `2^ACTIVATION_TABLE_BOUND` entries). `Err` if the
+    /// table's scale is not one the semantics define.
+    fn materialize() -> Result<Vec<i32>, ProofVerifyError>;
 }
 
 /// Opening of the clamped input the activation table is read at.
@@ -111,7 +112,7 @@ impl<Table: SmallActivationTable> SmallTable for Table {
     const VARS: usize = ACTIVATION_TABLE_VARS;
     const RA: fn(usize) -> VirtualPoly = VirtualPoly::ActivationSmallRa;
     const SIGNED: bool = true;
-    fn materialize() -> Vec<i32> {
+    fn materialize() -> Result<Vec<i32>, ProofVerifyError> {
         <Table as SmallActivationTable>::materialize()
     }
     fn address(node: &ComputationNode) -> OpeningId {

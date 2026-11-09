@@ -1,6 +1,7 @@
 //! Cosine lookup table for neural teleportation, sized to the downscaled remainder
 //! (see [`super::trig_downscale`]); rescaled back up to `2^MODEL_SCALE` precision.
 
+use atlas_algebra::utils::errors::ProofVerifyError;
 use common::consts::{MODEL_SCALE, TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS};
 
 /// Lookup table bit width for cosine teleportation, after downscaling.
@@ -25,14 +26,23 @@ impl CosTable {
     /// Materialize the lookup table from the deterministic integer trig
     /// table in [`atlas_trace::semantics`] (entries already carry the
     /// `2^TRIG_DOWNSCALE_BITS` rescale), extended by the same rule up to the
-    /// power-of-two table size.
-    pub fn materialize() -> Vec<i32> {
+    /// power-of-two table size. `Err` if the semantics define no such table.
+    pub fn materialize() -> Result<Vec<i32>, ProofVerifyError> {
         let table = atlas_trace::semantics::tables::table(
             atlas_trace::semantics::tables::TableKind::Cos,
-            atlas_trace::Scale::new(MODEL_SCALE as u8).expect("scale in range"),
+            super::utils::table_scale(MODEL_SCALE as u8)?,
             atlas_trace::SemVersion::V1,
         );
-        assert!(table.entries.len() >= Self::table_size());
-        table.entries[..Self::table_size()].to_vec()
+        table
+            .entries
+            .get(..Self::table_size())
+            .map(<[i32]>::to_vec)
+            .ok_or_else(|| {
+                ProofVerifyError::Malformed(format!(
+                    "the cos table has {} entries, fewer than its {} addresses",
+                    table.entries.len(),
+                    Self::table_size()
+                ))
+            })
     }
 }

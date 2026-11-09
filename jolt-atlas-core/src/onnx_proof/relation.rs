@@ -150,11 +150,13 @@ impl<F: JoltField, R: RelationWitnesses<F>> RelationProver<F, R> {
             produced.len(),
             "one witness per produced opening"
         );
-        wires.extend(
-            tables
-                .iter()
-                .map(|&index| MultilinearPolynomial::from(relation.table(index, &setup))),
-        );
+        wires.extend(tables.iter().map(|&index| {
+            MultilinearPolynomial::from(
+                relation
+                    .table(index, &setup)
+                    .expect("the relation builds the tables its expression names"),
+            )
+        }));
         assert!(
             !eq_weighted || relation.binding_order() == BindingOrder::LowToHigh,
             "an eq-weighted relation binds low-to-high"

@@ -19,7 +19,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherSmall {
         let mut results = Vec::new();
 
         let params = RelationParams::new(
-            GatherRelation::for_node(&prover.preprocessing.model, node.clone()),
+            GatherRelation::for_node(&prover.preprocessing.model, node.clone())
+                .expect("the model\'s nodes have the shapes their ops prove"),
             &prover.accumulator,
             &mut prover.transcript,
         );

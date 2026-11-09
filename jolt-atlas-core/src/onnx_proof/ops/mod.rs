@@ -277,7 +277,8 @@ macro_rules! impl_standard_sumcheck_proof_api {
             |node: &ComputationNode, prover: &mut Prover<F, T>| {
                 use $crate::onnx_proof::relation::{RelationParams, RelationProver};
                 let params = RelationParams::<F, $relation>::new(
-                    <$relation>::for_node(&prover.preprocessing.model, node.clone()),
+                    <$relation>::for_node(&prover.preprocessing.model, node.clone())
+.expect("the model\'s nodes have the shapes their ops prove"),
                     &prover.accumulator,
                     &mut prover.transcript,
                 );
@@ -288,7 +289,8 @@ macro_rules! impl_standard_sumcheck_proof_api {
              accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
              transcript: &mut T| {
                 $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
-                    <$relation>::for_node(model, node.clone()),
+                    <$relation>::for_node(model, node.clone())
+.expect("the model\'s nodes have the shapes their ops prove"),
                     accumulator,
                     transcript,
                 )

@@ -90,7 +90,8 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
 ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
     let mut results = Vec::new();
 
-    let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
+    let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node)
+        .expect("the node\'s operator is the one its range check proves");
     let (mut rangecheck_sumcheck, lookup_indices) = rangecheck_provider
         .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
             &prover.trace,
@@ -105,7 +106,8 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
 
     results.push((ProofId(node.idx, ProofType::RangeCheck), rangecheck_proof));
 
-    let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
+    let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node)
+        .expect("the node\'s operator is the one its range check proves");
     let encoding = rc_operands.get_encoding(node);
 
     let [ra_sumcheck, bool_sumcheck] = shout::prover::ra_onehot_provers(

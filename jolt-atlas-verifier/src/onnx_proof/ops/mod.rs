@@ -137,36 +137,46 @@ pub trait OpLayout {
         ReductionFlow::Default
     }
 
-    /// Get the committed polynomials involved in this operator's proof.
-    fn get_committed_polynomials(&self, _node: &ComputationNode) -> Vec<CommittedPoly> {
-        vec![]
+    /// Get the committed polynomials involved in this operator's proof. `Err` if the node does
+    /// not have the shape the operator proves.
+    fn get_committed_polynomials(
+        &self,
+        _node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(vec![])
     }
 }
 
 /// An operator's verification logic, dispatched from the main proof module.
 pub trait VerifyOp<F: JoltField, T: Transcript>: OpLayout {
-    /// Verify the operation for the given computation node.
+    /// Verify the operation for the given computation node. An operator on the default
+    /// reduction flow implements it; the default body rejects.
     fn verify(
         &self,
-        _node: &ComputationNode,
+        node: &ComputationNode,
         _verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        panic!(
-            "Op selected default reduction flow but did not implement verify; either implement verify or switch reduction_flow to Custom and implement verify_with_reduction"
-        )
+        Err(ProofVerifyError::Malformed(format!(
+            "model: node {} selected the default reduction flow but its operator implements no verify",
+            node.idx
+        )))
     }
 
     /// Verify the operation and its node eval-reduction proof.
     ///
     /// Default behavior verifies eval reduction before operator verification.
     /// Operators that need additional openings can override this method and place
-    /// `NodeEvalReduction::verify` at the matching verifier step.
+    /// `NodeEvalReduction::verify` at the matching verifier step. An operator on the custom
+    /// reduction flow implements it; the default body rejects.
     fn verify_with_reduction(
         &self,
-        _node: &ComputationNode,
+        node: &ComputationNode,
         _verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
-        panic!("Op selected custom reduction flow but did not implement verify_with_reduction")
+        Err(ProofVerifyError::Malformed(format!(
+            "model: node {} selected the custom reduction flow but its operator implements no verify_with_reduction",
+            node.idx
+        )))
     }
 }
 
@@ -232,8 +242,11 @@ impl NodeCommittedPolynomials {
     ///
     /// # Returns
     ///
-    /// A vector of [`CommittedPoly`] instances that the prover must commit to
-    pub fn get_committed_polynomials(node: &ComputationNode) -> Vec<CommittedPoly> {
+    /// A vector of [`CommittedPoly`] instances that the prover must commit to; `Err` if the
+    /// node does not have the shape its operator proves.
+    pub fn get_committed_polynomials(
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         dispatch_operator!(node, |inner| OpLayout::get_committed_polynomials(
             inner, node
         ))
@@ -342,7 +355,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
              accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
              transcript: &mut T| {
                 $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
-                    <$relation>::for_node(model, node.clone()),
+                    <$relation>::for_node(model, node.clone())?,
                     accumulator,
                     transcript,
                 )
@@ -466,8 +479,8 @@ macro_rules! impl_fused_rescale_proof_api {
             fn get_committed_polynomials(
                 &self,
                 node: &ComputationNode,
-            ) -> Vec<common::CommittedPoly> {
-                $crate::onnx_proof::fused_rebase::committed_polys(node)
+            ) -> Result<Vec<common::CommittedPoly>, ProofVerifyError> {
+                Ok($crate::onnx_proof::fused_rebase::committed_polys(node))
             }
         }
 

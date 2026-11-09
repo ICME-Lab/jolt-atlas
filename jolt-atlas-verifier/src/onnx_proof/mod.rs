@@ -119,7 +119,8 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     );
     setup(&mut verifier);
 
-    // The public IO has the model's shape: everything after this indexes it freely.
+    // Every node has the operands its op takes, and the public IO has the model's shape.
+    crate::node_view::check_model_shape(pp.model())?;
     verifier::check_io_shape(pp.model(), io)?;
 
     // Bind public inputs into the transcript before any challenge (issue #230).

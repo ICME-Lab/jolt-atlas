@@ -1,4 +1,5 @@
 use crate::opening_proof::missing_claim;
+use crate::relation::not_derived;
 use crate::relation::DynRelationVerifier;
 use crate::{
     booleanity::{BooleanitySumcheckParams, LinearClaim, LinearTerm},
@@ -165,20 +166,29 @@ impl Produces for ReadRafRelation {
 }
 
 impl<F: JoltField> Relation<F> for ReadRafRelation {
-    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
-        vec![[challenges, setup.incoming_point.as_slice()].concat()]
+    fn opening_points(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+        Ok(vec![[challenges, setup.incoming_point.as_slice()].concat()])
     }
 
-    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::Table(0) => {
                 let _span = tracing::span!(tracing::Level::INFO, "ReadRafVerifier::val_evaluation")
                     .entered();
                 MultilinearPolynomial::from(self.table.clone()).evaluate(challenges)
             }
             RelationDerived::Identity => IdentityPolynomial::new(self.log_K).evaluate(challenges),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 

@@ -45,7 +45,7 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
         let accessor = AccOpeningAccessor::new(accumulator, node);
         let z_hi_claim = accessor.get_advice(VirtualPoly::SoftmaxZHi)?.1;
         let z_lo_claim = accessor.get_advice(VirtualPoly::SoftmaxZLo)?.1;
-        let base = generate_exp_lut_decomposed(1i32 << MODEL_SCALE).base;
+        let base = generate_exp_lut_decomposed(1i32 << MODEL_SCALE)?.base;
         Ok(z_hi_claim * F::from_u64(base as u64) + z_lo_claim)
     }
 

@@ -45,17 +45,21 @@ impl_standard_sumcheck_proof_api!(Reshape, model_relation ReshapeRelation);
 ///
 /// This gives a selector MLE such that:
 /// `out(r_output) = Σ_i selector(i) * input(i)`.
+///
+/// `Err` if the dims are not a reshape of one another or `r_output` is not a point of the
+/// padded output domain.
 pub fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
     input_raw_dims: &[usize],
     output_raw_dims: &[usize],
     r_output: &[F],
-) -> Vec<F> {
+) -> Result<Vec<F>, ProofVerifyError> {
+    let unsupported =
+        |what: &str| ProofVerifyError::Malformed(format!("model: reshape selector: {what}"));
     let input_raw_len: usize = input_raw_dims.iter().product();
     let output_raw_len: usize = output_raw_dims.iter().product();
-    assert_eq!(
-        input_raw_len, output_raw_len,
-        "Reshape selector requires equal raw element counts"
-    );
+    if input_raw_len != output_raw_len {
+        return Err(unsupported("requires equal raw element counts"));
+    }
 
     let input_padded_dims: Vec<usize> = input_raw_dims
         .iter()
@@ -67,10 +71,9 @@ pub fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
         .collect();
     let input_padded_len: usize = input_padded_dims.iter().product();
     let output_padded_len: usize = output_padded_dims.iter().product();
-    assert_eq!(
-        input_padded_len, output_padded_len,
-        "Reshape selector requires equal padded domain sizes"
-    );
+    if input_padded_len != output_padded_len {
+        return Err(unsupported("requires equal padded domain sizes"));
+    }
 
     // Selector values are zero on padding cells by default.
     let mut selector = vec![F::zero(); input_padded_len];
@@ -79,12 +82,18 @@ pub fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
     for t in 0..input_raw_len {
         let input_coord = linear_to_coord(t, input_raw_dims);
         let output_coord = linear_to_coord(t, output_raw_dims);
-        let input_padded_index = coord_to_linear(&input_coord, &input_padded_dims);
-        let output_padded_index = coord_to_linear(&output_coord, &output_padded_dims);
-        selector[input_padded_index] = eq_evals[output_padded_index];
+        let input_padded_index = coord_to_linear(&input_coord, &input_padded_dims)?;
+        let output_padded_index = coord_to_linear(&output_coord, &output_padded_dims)?;
+        let (Some(cell), Some(eq)) = (
+            selector.get_mut(input_padded_index),
+            eq_evals.get(output_padded_index),
+        ) else {
+            return Err(unsupported("an element outside the padded domain"));
+        };
+        *cell = *eq;
     }
 
-    selector
+    Ok(selector)
 }
 
 /// A reshape node with its operand's and its own unpadded dims.
@@ -110,13 +119,29 @@ pub struct ReshapeRelation {
 }
 
 impl ReshapeRelation {
-    /// The relation of a reshape `node` of `model`.
-    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
-        let input_raw_dims = model.view(node.inputs[0]).output_dims;
-        Self::new(ReshapeShape {
+    /// The relation of a reshape `node` of `model`. `Err` if the node's operand is not a node
+    /// of the model.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
+        let input = node
+            .inputs
+            .first()
+            .copied()
+            .filter(|&input| input < model.num_nodes())
+            .ok_or_else(|| {
+                ProofVerifyError::Malformed(format!(
+                    "model: reshape node {}: the operand is not a node",
+                    node.idx
+                ))
+            })?;
+        let input_raw_dims = model.view(input).output_dims;
+        Ok(Self::new(ReshapeShape {
             node,
             input_raw_dims,
-        })
+        }))
+    }
+
+    fn input(&self) -> OpeningId {
+        OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))
     }
 }
 
@@ -145,19 +170,23 @@ impl SymbolicSumcheck for ReshapeRelation {
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        derived(RelationDerived::Table(0)) * opening(RelationOpening::Id(self.produced()[0]))
+        derived(RelationDerived::Table(0)) * opening(RelationOpening::Id(self.input()))
     }
 }
 
 impl Produces for ReshapeRelation {
     fn produced(&self) -> Vec<OpeningId> {
-        vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
+        vec![self.input()]
     }
 }
 
 impl<F: JoltField> Relation<F> for ReshapeRelation {
-    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Vec<F> {
-        assert_eq!(index, 0, "a reshape has one selector");
+    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Result<Vec<F>, ProofVerifyError> {
+        if index != 0 {
+            return Err(ProofVerifyError::Malformed(format!(
+                "a reshape has one selector, no table {index}"
+            )));
+        }
         build_reshape_selectors(
             &self.shape.input_raw_dims,
             &self.shape.node.output_dims,

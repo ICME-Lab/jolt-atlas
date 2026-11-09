@@ -39,16 +39,19 @@ impl OpLayout for Div {
         ReductionFlow::Custom
     }
 
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         let mut polys = vec![CommittedPoly::DivNodeQuotient(node.idx)];
         if node.is_scalar() {
-            return polys;
+            return Ok(polys);
         }
-        let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
+        let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node)?;
         let encoding = rc_operands.get_encoding(node);
         let d = encoding.one_hot_params().instruction_d;
         polys.extend((0..d).map(|i| CommittedPoly::DivRangeCheckRaD(node.idx, i)));
-        polys
+        Ok(polys)
     }
 }
 
@@ -248,13 +251,19 @@ impl SymbolicSumcheck for DivQuotientRelation {
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::Id(self.produced()[0]))
+        opening(RelationOpening::Id(self.quotient()))
+    }
+}
+
+impl DivQuotientRelation {
+    fn quotient(&self) -> OpeningId {
+        OpeningIdBuilder::new(&self.node).advice(CommittedPoly::DivNodeQuotient)
     }
 }
 
 impl Produces for DivQuotientRelation {
     fn produced(&self) -> Vec<OpeningId> {
-        vec![OpeningIdBuilder::new(&self.node).advice(CommittedPoly::DivNodeQuotient)]
+        vec![self.quotient()]
     }
 }
 
@@ -291,7 +300,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         .proofs
         .take(ProofId(node.idx, ProofType::RangeCheck))?;
 
-    let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node);
+    let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node)?;
     let rangecheck_verifier = rangecheck_provider
         .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
             &mut verifier.accumulator,
@@ -307,7 +316,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
     let ra_one_hot_proof = verifier
         .proofs
         .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
-    let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
+    let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node)?;
     let encoding = rc_operands.get_encoding(node);
     let [ra_sumcheck, bool_sumcheck] =
         shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript)?;

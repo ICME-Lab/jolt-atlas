@@ -7,8 +7,8 @@ use crate::{
     onnx_proof::{
         ops::Verifier,
         relation::{
-            reduced_output_setup, verify_tie, AtlasRelation, RelationDerived, RelationExpr,
-            RelationId, RelationOpening, RelationSetup, TieRelation,
+            not_derived, reduced_output_setup, verify_tie, AtlasRelation, RelationDerived,
+            RelationExpr, RelationId, RelationOpening, RelationSetup, TieRelation,
         },
     },
 };
@@ -111,11 +111,16 @@ impl<S: OpSpec + 'static> Produces for PublicRelation<S> {
 }
 
 impl<F: JoltField, S: OpSpec + 'static> Relation<F> for PublicRelation<S> {
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, _challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        _challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::Public => self.shape.value.evaluate_mle(&setup.incoming_point),
-            other => panic!("public data derives no {other:?}"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 

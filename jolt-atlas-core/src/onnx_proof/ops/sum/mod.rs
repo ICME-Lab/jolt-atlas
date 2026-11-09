@@ -40,7 +40,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Sum {
 
         // (3) Axis reduction: acc(r) = Σ_axis operand (input claim = ClampAcc).
         let params = RelationParams::<F, _>::new(
-            SumAxisRelation::for_node(&prover.preprocessing.model, node.clone()),
+            SumAxisRelation::for_node(&prover.preprocessing.model, node.clone())
+                .expect("the model\'s nodes have the shapes their ops prove"),
             &prover.accumulator,
             &mut prover.transcript,
         );

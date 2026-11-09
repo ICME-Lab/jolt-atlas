@@ -25,8 +25,11 @@ crate::bind_relation!(Sub, AccumulationRelation<Sub>);
 /// [`VirtualPoly::ClampAcc`]: common::VirtualPoly::ClampAcc
 /// [`VirtualPoly::ClampRa`]: common::VirtualPoly::ClampRa
 impl OpLayout for Sub {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        clamp_committed_polys(node)
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(clamp_committed_polys(node))
     }
 }
 

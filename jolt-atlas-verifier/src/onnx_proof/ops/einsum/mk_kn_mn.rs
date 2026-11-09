@@ -7,7 +7,7 @@ use crate::{
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
-    utils::math::Math,
+    utils::{errors::ProofVerifyError, math::Math},
 };
 
 /// `mk,kn->mn`: contract the shared `k` axis of two matrices.
@@ -21,13 +21,19 @@ pub struct MkKnMnLayout {
 }
 
 impl MkKnMnLayout {
-    /// Build the layout from the canonical einsum dims.
-    pub fn new(dims: &EinsumDims) -> Self {
-        Self {
-            m: dims.output()[0],
-            n: dims.output()[1],
-            k: dims.right_operand()[0],
-        }
+    /// Build the layout from the canonical einsum dims. `Err` if they are not
+    /// `right = [k, n]`, `output = [m, n]`.
+    pub fn new(dims: &EinsumDims) -> Result<Self, ProofVerifyError> {
+        let ([m, n], [k, _]) = (dims.output(), dims.right_operand()) else {
+            return Err(ProofVerifyError::Malformed(format!(
+                "model: einsum mk,kn->mn over dims {dims:?}"
+            )));
+        };
+        Ok(Self {
+            m: *m,
+            n: *n,
+            k: *k,
+        })
     }
 }
 

@@ -83,7 +83,12 @@ fn tokenize(model_dir: &std::path::Path, text: &str) -> Vec<i32> {
 fn print_stats(model: &Model) {
     use jolt_atlas_core::onnx_proof::global_clamp::{clamp_buckets, remainder_buckets};
     println!("{}", model.pretty_print());
-    println!("max num vars: {}", model.max_num_vars());
+    println!(
+        "max num vars: {}",
+        model
+            .max_num_vars()
+            .expect("the model's nodes have the shapes their ops prove")
+    );
     let op_name = |idx: usize| {
         let op = format!("{:?}", model.view(idx).operator);
         op.split(|c: char| !c.is_alphanumeric())
@@ -93,7 +98,10 @@ fn print_stats(model: &Model) {
     };
     let mut hist: std::collections::BTreeMap<(String, usize), usize> = Default::default();
     for node in &model.views() {
-        if jolt_atlas_core::node_view::clamp_value_bound(model, node).is_some() {
+        if jolt_atlas_core::node_view::clamp_value_bound(model, node)
+            .expect("the model's nodes have the shapes their ops prove")
+            .is_some()
+        {
             *hist
                 .entry((op_name(node.idx), node.sat_clamp_bits))
                 .or_default() += 1;
@@ -105,6 +113,7 @@ fn print_stats(model: &Model) {
     }
     println!("packed buckets (kind idx width log_t nodes | largest node):");
     for b in clamp_buckets(model)
+        .expect("the model's nodes have the shapes their ops prove")
         .iter()
         .chain(remainder_buckets(model).iter())
     {

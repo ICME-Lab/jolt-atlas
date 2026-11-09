@@ -57,17 +57,20 @@ impl OpLayout for Rsqrt {
         ReductionFlow::Custom
     }
 
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         let mut polys = vec![CommittedPoly::RsqrtQuotient(node.idx)];
 
-        let rc_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
+        let rc_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node)?;
         let encoding = rc_operands.get_encoding(node);
         let d = encoding.one_hot_params().instruction_d;
         for i in 0..d {
             polys.push(CommittedPoly::SqrtDivRangeCheckRaD(node.idx, i));
             polys.push(CommittedPoly::SqrtRangeCheckRaD(node.idx, i));
         }
-        polys
+        Ok(polys)
     }
 }
 
@@ -244,7 +247,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    let div_rangecheck_provider = RangeCheckProvider::<RiRangeCheckOperands>::new(node);
+    let div_rangecheck_provider = RangeCheckProvider::<RiRangeCheckOperands>::new(node)?;
     let div_rc_verifier = div_rangecheck_provider
         .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
             &mut verifier.accumulator,
@@ -252,7 +255,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         )?;
     verifier.defer(DeferredBatch::RangeCheck, Box::new(div_rc_verifier));
 
-    let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node);
+    let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node)?;
     let sqrt_rc_verifier = sqrt_rangecheck_provider
         .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
             &mut verifier.accumulator,
@@ -260,11 +263,11 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         )?;
     verifier.defer(DeferredBatch::RangeCheck, Box::new(sqrt_rc_verifier));
 
-    let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);
+    let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node)?;
     verifier
         .deferred_onehots
         .push(DeferredOneHot::RangeCheck(div_operands.get_encoding(node)));
-    let sqrt_operands = RangeCheckOperands::<RsRangeCheckOperands>::new(node);
+    let sqrt_operands = RangeCheckOperands::<RsRangeCheckOperands>::new(node)?;
     verifier
         .deferred_onehots
         .push(DeferredOneHot::RangeCheck(sqrt_operands.get_encoding(node)));

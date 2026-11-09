@@ -106,7 +106,8 @@ pub fn prove_all<F: JoltField, T: Transcript>(
         clamp.into_iter().map(|(n, s)| (n.idx, s)).collect();
     // Exact outputs (see `clamp_split::exact_output_prover`) register no
     // split and are gaps; a bucket with no live node is skipped entirely.
-    let full_buckets = clamp_buckets(model);
+    let full_buckets =
+        clamp_buckets(model).expect("the model's nodes have the shapes their ops prove");
     for b in &full_buckets {
         for n in &b.nodes {
             assert!(

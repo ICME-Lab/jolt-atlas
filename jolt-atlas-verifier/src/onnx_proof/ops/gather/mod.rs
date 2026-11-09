@@ -1,6 +1,7 @@
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
     RelationId, RelationOpening, RelationSetup, RelationVerifier, SetupRelation,
@@ -32,6 +33,25 @@ pub mod small;
 /// Degree of the execution sumcheck.
 pub const DEGREE_BOUND: usize = 2;
 
+fn unsupported(node: &ComputationNode, what: impl std::fmt::Display) -> ProofVerifyError {
+    ProofVerifyError::Malformed(format!("model: gather node {}: {what}", node.idx))
+}
+
+/// The view of a gather node's operand `position` (0 the dictionary, 1 the indices); `Err` if
+/// it is not a node of the model.
+fn operand(
+    model: &Model,
+    node: &ComputationNode,
+    position: usize,
+) -> Result<ComputationNode, ProofVerifyError> {
+    node.inputs
+        .get(position)
+        .copied()
+        .filter(|&input| input < model.num_nodes())
+        .map(|input| model.view(input))
+        .ok_or_else(|| unsupported(node, format!("operand {position} is not a node")))
+}
+
 /// The dictionary shape of a gather node.
 pub struct GatherShape {
     node: ComputationNode,
@@ -55,22 +75,21 @@ pub struct GatherRelation {
 }
 
 impl GatherRelation {
-    /// The relation of a gather `node` of `model`.
-    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
+    /// The relation of a gather `node` of `model`. `Err` if the node is not a gather or its
+    /// index operand is not a node of the model.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
         let dict_len = match &node.operator {
             Op::GatherSmall(gather_op) => gather_op.dict_len,
             Op::GatherLarge(gather_op) => gather_op.dict_len,
-            _ => panic!("Expected Gather operator"),
+            _ => return Err(unsupported(&node, "expected a Gather operator")),
         };
-        let lookup_vars = model
-            .view(node.inputs[1])
-            .pow2_padded_num_output_elements()
-            .log_2();
-        Self::new(GatherShape {
+        let indices = operand(model, &node, 1)?;
+        let lookup_vars = indices.pow2_padded_num_output_elements().log_2();
+        Ok(Self::new(GatherShape {
             node,
             lookup_vars,
             num_words: dict_len.next_power_of_two(),
-        })
+        }))
     }
 
     /// The gather node.
@@ -120,7 +139,8 @@ impl SymbolicSumcheck for GatherRelation {
     }
 
     fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
-        let [ra, dict] = [0, 1].map(|i| RelationOpening::Id(self.produced()[i]));
+        let ra = RelationOpening::Id(self.builder().advice(VirtualPoly::NodeOutputRa));
+        let dict = RelationOpening::Id(self.builder().nodeio(Target::Input(0)));
         opening::<G, _, _, _>(ra)
             * (opening::<G, _, _, _>(dict)
                 + challenge::<G, _, _, _>(RelationChallenge::Gamma)
@@ -138,18 +158,35 @@ impl Produces for GatherRelation {
 }
 
 impl<F: JoltField> Relation<F> for GatherRelation {
-    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+    fn opening_points(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
         let rho = low_to_high_point(challenges);
-        let (r_index, r_word) = setup.incoming_point.split_at(self.shape.lookup_vars);
-        vec![[&rho, r_index].concat(), [&rho, r_word].concat()]
+        let (r_index, r_word) = setup
+            .incoming_point
+            .split_at_checked(self.shape.lookup_vars)
+            .ok_or_else(|| {
+                unsupported(
+                    &self.shape.node,
+                    "the output point is shorter than the index variables",
+                )
+            })?;
+        Ok(vec![[&rho, r_index].concat(), [&rho, r_word].concat()])
     }
 
-    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::Identity => IdentityPolynomial::new(self.shape.num_words.log_2())
                 .evaluate(&low_to_high_point(challenges)),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 
@@ -176,9 +213,13 @@ pub fn gather_verifier<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<RelationVerifier<F, GatherRelation>, ProofVerifyError> {
-    let relation = GatherRelation::for_node(&verifier.preprocessing.model, node.clone());
+    let relation = GatherRelation::for_node(&verifier.preprocessing.model, node.clone())?;
     let setup = relation.setup(&verifier.accumulator, &mut verifier.transcript)?;
-    let r_index = setup.incoming_point[..relation.shape.lookup_vars].to_vec();
+    let r_index = setup
+        .incoming_point
+        .get(..relation.shape.lookup_vars)
+        .ok_or_else(|| unsupported(node, "the output point is shorter than the index variables"))?
+        .to_vec();
     AccOpeningAccessor::new(&mut verifier.accumulator, node)
         .into_provider(&mut verifier.transcript, OpeningPoint::new(r_index))
         .append_nodeio(Target::Input(1))?;

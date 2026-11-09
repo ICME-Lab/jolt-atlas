@@ -102,7 +102,9 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
             clamped_claim,
         );
 
-        let table = MultilinearPolynomial::from(Table::materialize());
+        let table = MultilinearPolynomial::from(
+            Table::materialize().expect("the semantics define the table at the model scale"),
+        );
         let input_onehot: Vec<F> =
             compute_ra_evals_nbits_2comp(&r_node_output.r, &clamped_tensor, ACTIVATION_TABLE_VARS);
         let input_onehot = MultilinearPolynomial::from(input_onehot);

@@ -71,7 +71,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Sin {
         let (sin_exec, sin_lookup_indices) =
             TrigTableProver::initialize(&downscaled, params, &mut prover.accumulator);
 
-        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node)
+            .expect("the node\'s operator is the one its range check proves");
         let (rangecheck_exec, rc_lookup_indices) = rc_provider
             .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
                 &prover.trace,

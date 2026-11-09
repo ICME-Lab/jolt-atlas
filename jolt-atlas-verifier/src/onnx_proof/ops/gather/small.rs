@@ -1,5 +1,4 @@
 use super::*;
-use crate::node_view::ModelView;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::relation::{verify_relation, verify_relation_batch, DynRelationVerifier};
 use atlas_sumcheck::{
@@ -11,8 +10,11 @@ use atlas_trace::op::GatherSmall;
 use common::CommittedPoly;
 
 impl OpLayout for GatherSmall {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        vec![CommittedPoly::GatherRa(node.idx)]
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(vec![CommittedPoly::GatherRa(node.idx)])
     }
 }
 
@@ -61,6 +63,25 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherSmall {
     }
 }
 
+/// The dictionary rows of a small gather: its dictionary operand's dim along the gather axis.
+/// `Err` if the node is not a small gather over a dictionary with that axis.
+fn dictionary_words(
+    model: &Model,
+    computation_node: &ComputationNode,
+) -> Result<usize, ProofVerifyError> {
+    let Op::GatherSmall(gather_op) = &computation_node.operator else {
+        return Err(unsupported(
+            computation_node,
+            "expected a GatherSmall operator",
+        ));
+    };
+    operand(model, computation_node, 0)?
+        .output_dims
+        .get(gather_op.axis)
+        .copied()
+        .ok_or_else(|| unsupported(computation_node, "the gather axis is not a dictionary axis"))
+}
+
 /// The second-stage verifier instances (one-hot checks) of a small gather.
 /// `Err` if the accumulator lacks a claim it reads.
 pub fn build_stage2_verifiers<F: JoltField>(
@@ -73,15 +94,9 @@ pub fn build_stage2_verifiers<F: JoltField>(
     ),
     ProofVerifyError,
 > {
-    let Op::GatherSmall(gather_op) = &computation_node.operator else {
-        panic!("Expected GatherSmall operator")
-    };
     let model = &verifier.preprocessing.model;
-    let dict = &model.view(computation_node.inputs[0]);
-    let indices = model.view(computation_node.inputs[1]);
-
-    let num_words = dict.output_dims[gather_op.axis];
-    let num_lookups = indices.pow2_padded_num_output_elements();
+    let num_words = dictionary_words(model, computation_node)?;
+    let num_lookups = operand(model, computation_node, 1)?.pow2_padded_num_output_elements();
 
     let hb_params = ra_hamming_bool_params::<F>(
         computation_node,
@@ -166,13 +181,7 @@ pub fn build_stage3_verifier<F: JoltField>(
     computation_node: &ComputationNode,
     verifier: &mut Verifier<'_, F, impl Transcript>,
 ) -> Result<HammingWeightSumcheckVerifier<F>, ProofVerifyError> {
-    let Op::GatherSmall(gather_op) = &computation_node.operator else {
-        panic!("Expected GatherSmall operator")
-    };
-    let model = &verifier.preprocessing.model;
-    let dict = &model.view(computation_node.inputs[0]);
-
-    let num_words = dict.output_dims[gather_op.axis];
+    let num_words = dictionary_words(&verifier.preprocessing.model, computation_node)?;
 
     let hw_params = ra_hamming_weight_params::<F>(
         computation_node,

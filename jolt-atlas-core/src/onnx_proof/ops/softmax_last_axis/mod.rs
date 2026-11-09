@@ -240,7 +240,8 @@ impl SoftmaxLastAxisProver {
             computation_node: node.clone(),
             scale,
             F_N: [f, n],
-            lut: generate_exp_lut_decomposed(scale),
+            lut: generate_exp_lut_decomposed(scale)
+                .expect("the softmax multiplier is a scale the semantics define"),
             witness,
         }
     }

@@ -29,9 +29,12 @@ use common::{CommittedPoly, VirtualPoly};
 use jolt_claims::SymbolicSumcheck;
 
 impl OpLayout for Cos {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         let cos_encoding = CosRaEncoding::new(node);
-        let rc_encoding = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node).encoding();
+        let rc_encoding = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node)?.encoding();
         let dsc_encoding: OpLookupEncoding<TrigDownscaleOperands> =
             OpLookupProvider::<TrigDownscaleOperands>::new(node.clone()).encoding();
         let cos_d = cos_encoding.one_hot_params().instruction_d;
@@ -41,7 +44,7 @@ impl OpLayout for Cos {
         polys.extend((0..dsc_d).map(|i| CommittedPoly::TrigDownscaleRaD(node.idx, i)));
         polys.extend((0..cos_d).map(|i| CommittedPoly::CosRaD(node.idx, i)));
         polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
-        polys
+        Ok(polys)
     }
 }
 
@@ -79,7 +82,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Cos {
             &mut verifier.transcript,
         )?;
 
-        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
+        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node)?;
         let rangecheck_verifier = rc_provider
             .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
                 &mut verifier.accumulator,

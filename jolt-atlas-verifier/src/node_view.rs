@@ -6,6 +6,7 @@
 //! that bundle, built on demand by [`ModelView::view`]; the model itself is
 //! stored and serialized only as the raw `atlas_trace::Model`.
 
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::{Op, Tensor};
 use serde::{Deserialize, Serialize};
 
@@ -59,6 +60,26 @@ impl ComputationNode {
     pub fn is_scalar(&self) -> bool {
         self.num_output_elements() == 1
     }
+
+    /// The node index of operand `position`. A position past the node's operands gives
+    /// `usize::MAX`, the index of no node, so no accumulator holds an opening keyed by it.
+    pub fn input(&self, position: usize) -> usize {
+        self.inputs.get(position).copied().unwrap_or(usize::MAX)
+    }
+}
+
+/// Every node's operands are earlier nodes: the topological order `atlas_trace::Model::compile`
+/// establishes, checked again on the model the verifier is handed.
+pub fn check_model_shape(model: &atlas_trace::Model) -> Result<(), ProofVerifyError> {
+    for (idx, node) in model.graph().nodes.iter().enumerate() {
+        if node.inputs.iter().any(|input| input.index() >= idx) {
+            return Err(ProofVerifyError::Malformed(format!(
+                "model: node {idx} ({}) has an operand that is not an earlier node",
+                node.op
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Proof-layer accessors over a compiled [`atlas_trace::Model`].
@@ -77,11 +98,16 @@ pub trait ModelView {
     fn input_indices(&self) -> Vec<usize>;
     /// Graph output node indices.
     fn output_indices(&self) -> Vec<usize>;
-    /// Max committed-poly variable count over all nodes (SRS sizing).
-    fn max_num_vars(&self) -> usize;
+    /// Max committed-poly variable count over all nodes (SRS sizing). `Err` if a node's
+    /// operands do not have the shape its op takes.
+    fn max_num_vars(&self) -> Result<usize, ProofVerifyError>;
     /// Number of variables of the largest committed polynomial this node
-    /// contributes (1 when it commits nothing).
-    fn node_committed_poly_num_vars(&self, node: &ComputationNode) -> usize;
+    /// contributes (1 when it commits nothing). `Err` if the node's operands do not have the
+    /// shape its op takes.
+    fn node_committed_poly_num_vars(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<usize, ProofVerifyError>;
     /// One line per node.
     fn pretty_print(&self) -> String;
 }
@@ -124,24 +150,52 @@ impl ModelView for atlas_trace::Model {
         self.outputs().iter().map(|i| i.index()).collect()
     }
 
-    fn max_num_vars(&self) -> usize {
-        (0..self.num_nodes())
-            .map(|i| self.node_committed_poly_num_vars(&self.view(i)))
-            .max()
-            .unwrap_or(1)
+    fn max_num_vars(&self) -> Result<usize, ProofVerifyError> {
+        let mut max = None;
+        for i in 0..self.num_nodes() {
+            max = max.max(Some(self.node_committed_poly_num_vars(&self.view(i))?));
+        }
+        Ok(max.unwrap_or(1))
     }
 
-    fn node_committed_poly_num_vars(&self, node: &ComputationNode) -> usize {
+    fn node_committed_poly_num_vars(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<usize, ProofVerifyError> {
         use common::consts::LOG_K_CHUNK;
+        // Of a nonzero count: a padded element count is at least one, and `gather_sizes`
+        // rejects an empty dictionary.
         let log_2 = |x: usize| {
-            assert_ne!(x, 0);
             if x.is_power_of_two() {
                 x.trailing_zeros() as usize
             } else {
                 (usize::BITS - x.leading_zeros()) as usize
             }
         };
-        match &node.operator {
+        // A gather's dictionary size (its leading dim) and padded index count.
+        let gather_sizes = || -> Result<(usize, usize), ProofVerifyError> {
+            let input_nodes = self.operand_views(node);
+            let (Some(dictionary), Some(indices)) = (input_nodes.first(), input_nodes.get(1))
+            else {
+                return Err(ProofVerifyError::Malformed(format!(
+                    "model: gather node {} needs a dictionary and an index operand",
+                    node.idx
+                )));
+            };
+            let num_words = dictionary
+                .output_dims
+                .first()
+                .copied()
+                .filter(|&num_words| num_words != 0)
+                .ok_or_else(|| {
+                    ProofVerifyError::Malformed(format!(
+                        "model: gather node {} has an empty dictionary",
+                        node.idx
+                    ))
+                })?;
+            Ok((num_words, indices.pow2_padded_num_output_elements()))
+        };
+        Ok(match &node.operator {
             Op::Tanh(_)
             | Op::Cos(_)
             | Op::Div(_)
@@ -166,19 +220,15 @@ impl ModelView for atlas_trace::Model {
             }
             Op::ScalarConstDiv(_) => log_2(node.pow2_padded_num_output_elements()),
             Op::GatherSmall(_) => {
-                let input_nodes = self.operand_views(node);
-                let num_words = input_nodes[0].output_dims[0];
-                let num_indices = input_nodes[1].pow2_padded_num_output_elements();
+                let (num_words, num_indices) = gather_sizes()?;
                 log_2(num_words) + log_2(num_indices)
             }
             Op::GatherLarge(_) => {
-                let input_nodes = self.operand_views(node);
-                let num_words = input_nodes[0].output_dims[0].next_power_of_two();
-                let num_indices = input_nodes[1].pow2_padded_num_output_elements();
-                log_2(num_words) + log_2(num_indices)
+                let (num_words, num_indices) = gather_sizes()?;
+                log_2(num_words.next_power_of_two()) + log_2(num_indices)
             }
             _ => 1,
-        }
+        })
     }
 
     fn pretty_print(&self) -> String {
@@ -200,27 +250,32 @@ impl ModelView for atlas_trace::Model {
 }
 
 /// Sound magnitude bound on a node's pre-clamp value, or `None` for
-/// unclamped nodes. Delegates to the op's own `clamp_bound`.
-pub fn clamp_value_bound(model: &atlas_trace::Model, node: &ComputationNode) -> Option<u128> {
+/// unclamped nodes. Delegates to the op's own `clamp_bound`. `Err` if an operand of the node is
+/// not a node of the model.
+pub fn clamp_value_bound(
+    model: &atlas_trace::Model,
+    node: &ComputationNode,
+) -> Result<Option<u128>, ProofVerifyError> {
     let graph = model.graph();
-    let operand = |i: usize| &graph.nodes[i];
-    let input_dims: Vec<&[usize]> = node
-        .inputs
-        .iter()
-        .map(|&i| operand(i).output_dims.as_slice())
-        .collect();
-    let input_consts: Vec<Option<&Tensor<i32>>> = node
-        .inputs
-        .iter()
-        .map(|&i| match &operand(i).op {
+    let mut input_dims: Vec<&[usize]> = Vec::with_capacity(node.inputs.len());
+    let mut input_consts: Vec<Option<&Tensor<i32>>> = Vec::with_capacity(node.inputs.len());
+    for &i in &node.inputs {
+        let operand = graph.nodes.get(i).ok_or_else(|| {
+            ProofVerifyError::Malformed(format!(
+                "model: node {} has operand {i}, which is not a node",
+                node.idx
+            ))
+        })?;
+        input_dims.push(operand.output_dims.as_slice());
+        input_consts.push(match &operand.op {
             Op::Constant(c) => Some(c.0.as_ref()),
             _ => None,
-        })
-        .collect();
+        });
+    }
     let ctx = atlas_trace::op::BoundCtx {
         scale: model.scale(),
         input_dims,
         input_consts,
     };
-    node.operator.spec().clamp_bound(&ctx)
+    Ok(node.operator.spec().clamp_bound(&ctx))
 }

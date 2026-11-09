@@ -109,7 +109,8 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
     /// # Returns
     ///
     /// A new [`RangeCheckProvider`] instance configured for the given node with the
-    /// appropriate operands implementation.
+    /// appropriate operands implementation; `Err` if the node's operator is not one `H`
+    /// range-checks.
     ///
     /// # Type Parameters
     ///
@@ -126,11 +127,11 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
     /// let div_node = trace.get_computation_node(node_idx);
     /// let provider = RangeCheckProvider::<DivRangeCheckOperands>::new(&div_node);
     /// ```
-    pub fn new(computation_node: &ComputationNode) -> Self {
-        Self {
-            operands: RangeCheckOperands::new(computation_node),
+    pub fn new(computation_node: &ComputationNode) -> Result<Self, ProofVerifyError> {
+        Ok(Self {
+            operands: RangeCheckOperands::new(computation_node)?,
             computation_node: computation_node.clone(),
-        }
+        })
     }
 
     /// Builds the [`RangeCheckEncoding`] for this provider's node, using the same operands
@@ -165,7 +166,7 @@ where
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
         let id = OpeningId::new(
-            self.operands.get_input_operands_id()[0],
+            self.operands.remainder(),
             SumcheckId::NodeExecution(self.operands.node_idx()),
         );
         let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(id)?;

@@ -43,7 +43,7 @@ impl<F: JoltField> RelationWitnesses<F> for ConstantDivisionRelation {
     fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, .. } = TraceView::layer_data(trace, self.node());
         let left = operands[0].padded_pow2();
-        let divisor = self.divisor();
+        let divisor = self.divisor().expect("the node is a ScalarConstDiv");
         let remainder: Vec<i32> = left.iter().map(|&a| rem_floor(a, divisor)).collect();
         vec![
             MultilinearPolynomial::from(left),

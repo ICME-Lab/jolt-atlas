@@ -57,6 +57,7 @@ use super::{
     clamp_lookups::acc_opening_id, deferred_lookups::DEFERRED_PROOF_IDX, global_clamp::ClampBucket,
 };
 use crate::node_view::ModelView;
+use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
     RelationId, RelationOpening, RelationSetup, RelationVerifier,
@@ -129,6 +130,20 @@ pub fn slack_id(bucket_idx: usize) -> OpeningId {
 /// Opening of a bucket's packed saturation-indicator column.
 pub fn ind_id(bucket_idx: usize) -> OpeningId {
     OpeningId::new(VirtualPoly::GlobalClampInd(bucket_idx), split_sumcheck_id())
+}
+
+/// A member node's opening point has one coordinate per variable of its padded output.
+fn check_point_len(
+    node: &super::global_clamp::BucketNode,
+    len: usize,
+) -> Result<(), ProofVerifyError> {
+    if len != node.log_t {
+        return Err(ProofVerifyError::Malformed(format!(
+            "node {} opening point has {len} coordinates, expected {}",
+            node.idx, node.log_t
+        )));
+    }
+    Ok(())
 }
 
 /// Opening id of the bucket's prover-declared "exact" flag.
@@ -220,7 +235,7 @@ impl<F: JoltField> SplitParams<F> {
             let (r, out_claim) = accumulator.get_node_output_opening(n.idx)?;
             let (_, acc_claim) =
                 accumulator.get_virtual_polynomial_opening(acc_opening_id(n.idx))?;
-            assert_eq!(r.len(), n.log_t, "node {} opening point length", n.idx);
+            check_point_len(n, r.len())?;
             input_claim += *gamma * (out_claim + offset + betas[0] * (acc_claim - out_claim));
             segments.push(PackedSegment {
                 gamma: *gamma,
@@ -240,15 +255,13 @@ impl<F: JoltField> SplitParams<F> {
         })
     }
 
-    /// `β₁/M`, `β₂`, `β₃` and `M` as field elements.
-    pub fn coefficients(&self) -> (F, F, F, F) {
+    /// `β₁/M`, `β₂`, `β₃` and `M` as field elements. `Err` if `M = 2^32 − 1` is zero in `F`.
+    pub fn coefficients(&self) -> Result<(F, F, F, F), ProofVerifyError> {
         let m = F::from_u64(OUT_MAX);
-        (
-            self.betas[0] * m.inverse().expect("2^32 − 1 is invertible"),
-            self.betas[1],
-            self.betas[2],
-            m,
-        )
+        let m_inverse = m.inverse().ok_or_else(|| {
+            ProofVerifyError::Malformed("2^32 − 1 is not invertible in the field".into())
+        })?;
+        Ok((self.betas[0] * m_inverse, self.betas[1], self.betas[2], m))
     }
 }
 
@@ -263,16 +276,18 @@ impl<F: JoltField> SplitParams<F> {
 /// the S ⊆ R argument). The parameters carry the cycle weight; the setup carries the input claim
 /// and the three coefficients.
 impl<F: JoltField> SplitParams<F> {
-    /// The relation these parameters instantiate, with its setup.
-    pub fn into_verifier(self) -> SplitVerifier<F> {
-        let setup = self.relation_setup();
-        RelationVerifier::at(self, setup)
+    /// The relation these parameters instantiate, with its setup. `Err` as
+    /// [`Self::coefficients`].
+    pub fn into_verifier(self) -> Result<SplitVerifier<F>, ProofVerifyError> {
+        let setup = self.relation_setup()?;
+        Ok(RelationVerifier::at(self, setup))
     }
 
-    /// The relation's setup: the input claim and the identities' coefficients.
-    pub fn relation_setup(&self) -> RelationSetup<F> {
-        let (b1, b2, b3, _) = self.coefficients();
-        RelationSetup {
+    /// The relation's setup: the input claim and the identities' coefficients. `Err` as
+    /// [`Self::coefficients`].
+    pub fn relation_setup(&self) -> Result<RelationSetup<F>, ProofVerifyError> {
+        let (b1, b2, b3, _) = self.coefficients()?;
+        Ok(RelationSetup {
             incoming_point: Vec::new(),
             challenges: vec![
                 (RelationChallenge::Claim, self.input_claim),
@@ -280,7 +295,7 @@ impl<F: JoltField> SplitParams<F> {
                 (RelationChallenge::Batching(1), b2),
                 (RelationChallenge::Batching(2), b3),
             ],
-        }
+        })
     }
 }
 
@@ -331,11 +346,16 @@ impl<F: JoltField> Produces for SplitParams<F> {
 }
 
 impl<F: JoltField> Relation<F> for SplitParams<F> {
-    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::CycleEq => self.cycle.mle(&low_to_high_point(challenges)),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 
@@ -377,10 +397,15 @@ pub fn chunk_check_params<F: JoltField, T: Transcript>(
         )
         .collect();
     // Σ_{d<8} γ^d·1 + Σ_{d≥8} γ^d·IND(r') + β_o·OUT(r') + β_s·S(r')
+    let (out_gammas, slack_gammas) = gamma_powers.split_at_checked(n_out).ok_or_else(|| {
+        ProofVerifyError::Malformed(format!(
+            "clamp bucket {b}: {d} chunk polynomials, fewer than the {n_out} output chunks"
+        ))
+    })?;
     let claim = LinearClaim {
-        constant: gamma_powers[..n_out].iter().copied().sum(),
+        constant: out_gammas.iter().copied().sum(),
         terms: vec![
-            (ind_id(b), gamma_powers[n_out..].iter().copied().sum()),
+            (ind_id(b), slack_gammas.iter().copied().sum()),
             (out_id(b), beta_out),
             (slack_id(b), beta_slack),
         ],
@@ -488,11 +513,16 @@ impl<F: JoltField> Produces for ValueParams<F> {
 }
 
 impl<F: JoltField> Relation<F> for ValueParams<F> {
-    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::CycleEq => self.cycle.mle(&low_to_high_point(challenges)),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 
@@ -592,7 +622,7 @@ pub fn exact_value_params<F: JoltField, T: Transcript>(
     let mut segments = Vec::with_capacity(bucket.nodes.len());
     for (n, gamma) in bucket.nodes.iter().zip(&gammas) {
         let (r, out_claim) = accumulator.get_node_output_opening(n.idx)?;
-        assert_eq!(r.len(), n.log_t, "node {} opening point length", n.idx);
+        check_point_len(n, r.len())?;
         input_claim += *gamma * (out_claim + offset);
         segments.push(PackedSegment {
             gamma: *gamma,

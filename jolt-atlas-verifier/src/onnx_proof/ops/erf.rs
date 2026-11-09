@@ -18,7 +18,7 @@ use common::{
 pub struct ErfTableMarker;
 
 impl SmallActivationTable for ErfTableMarker {
-    fn materialize() -> Vec<i32> {
+    fn materialize() -> Result<Vec<i32>, ProofVerifyError> {
         crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table(
             ACTIVATION_TABLE_VARS,
             1,
@@ -29,8 +29,11 @@ impl SmallActivationTable for ErfTableMarker {
 }
 
 impl OpLayout for Erf {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
-        clamped_activation_committed_polynomials(node)
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(clamped_activation_committed_polynomials(node))
     }
 }
 

@@ -45,7 +45,7 @@ impl<'a> OpeningIdBuilder<'a> {
     pub fn nodeio(&self, target: Target) -> OpeningId {
         let node_idx = match target {
             Target::Current => self.node.idx,
-            Target::Input(position) => self.node.inputs[position],
+            Target::Input(position) => self.node.input(position),
         };
         OpeningId::new(VirtualPoly::NodeOutput(node_idx), self.sumcheck_id)
     }
@@ -127,11 +127,12 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
         self.accumulator.as_ref()
     }
 
-    /// Access the underlying mutable accumulator reference held by this claim accessor, if any.
-    pub fn acc_mut(&mut self) -> &mut Acc {
-        self.accumulator
-            .as_mut()
-            .expect("Accumulator reference is not mutable")
+    /// Access the underlying mutable accumulator reference held by this claim accessor; `Err`
+    /// if it was built from a shared reference.
+    pub fn acc_mut(&mut self) -> Result<&mut Acc, ProofVerifyError> {
+        self.accumulator.as_mut().ok_or_else(|| {
+            ProofVerifyError::Malformed("the accumulator reference is not mutable".into())
+        })
     }
 
     /// Read the reduced opening claim for the current node. `Err` if the accumulator lacks it.
@@ -266,16 +267,16 @@ impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
 
     /// Append a node I/O opening request to the verifier accumulator at the provider's current opening point.
     ///
-    /// Panics if this provider was created from an immutable reference; `Err` if the
-    /// accumulator lacks the claim.
+    /// `Err` if this provider was created from an immutable reference or the accumulator
+    /// lacks the claim.
     pub fn append_nodeio(&mut self, target: Target) -> Result<(), ProofVerifyError> {
         self.append_nodeio_at(target, self.opening_point.clone())
     }
 
     /// Append a node I/O opening request to the verifier accumulator at provided point.
     ///
-    /// Panics if this provider was created from an immutable reference; `Err` if the
-    /// accumulator lacks the claim.
+    /// `Err` if this provider was created from an immutable reference or the accumulator
+    /// lacks the claim.
     pub fn append_nodeio_at(
         &mut self,
         target: Target,
@@ -283,14 +284,14 @@ impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
     ) -> Result<(), ProofVerifyError> {
         let opening_id = self.accessor.builder.nodeio(target);
         self.accessor
-            .acc_mut()
+            .acc_mut()?
             .append_virtual(self.transcript, opening_id, opening_point)
     }
 
     /// Append an advice opening request to the verifier accumulator at the provider's current opening point.
     ///
-    /// Panics if this provider was created from an immutable reference; `Err` if the
-    /// accumulator lacks the claim.
+    /// `Err` if this provider was created from an immutable reference or the accumulator
+    /// lacks the claim.
     pub fn append_advice<Poly>(
         &mut self,
         poly_ctor: impl FnOnce(usize) -> Poly,
@@ -303,8 +304,8 @@ impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
 
     /// Append an advice opening request to the verifier accumulator at provided point.
     ///
-    /// Panics if this provider was created from an immutable reference; `Err` if the
-    /// accumulator lacks the claim.
+    /// `Err` if this provider was created from an immutable reference or the accumulator
+    /// lacks the claim.
     pub fn append_advice_at<Poly>(
         &mut self,
         poly_ctor: impl FnOnce(usize) -> Poly,
@@ -317,12 +318,12 @@ impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
         match opening_id.polynomial {
             PolynomialId::Virtual(_) => {
                 self.accessor
-                    .acc_mut()
+                    .acc_mut()?
                     .append_virtual(self.transcript, opening_id, opening_point)
             }
             // TODO(AntoineF4C5): split committed advice handling between dense and one-hot
             // encodings. append_dense is correct for the current dense-only callsites.
-            PolynomialId::Committed(_) => self.accessor.acc_mut().append_dense(
+            PolynomialId::Committed(_) => self.accessor.acc_mut()?.append_dense(
                 self.transcript,
                 opening_id,
                 opening_point.r.clone(),
@@ -332,21 +333,21 @@ impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
 
     /// Append an arbitrary opening request to the verifier accumulator.
     ///
-    /// Panics if this provider was created from an immutable reference; `Err` if the
-    /// accumulator lacks the claim.
+    /// `Err` if this provider was created from an immutable reference or the accumulator
+    /// lacks the claim.
     pub fn append_custom(
         &mut self,
         opening_id: impl Into<OpeningId>,
     ) -> Result<(), ProofVerifyError> {
         let opening_id = opening_id.into();
         match opening_id.polynomial {
-            PolynomialId::Virtual(_) => self.accessor.acc_mut().append_virtual(
+            PolynomialId::Virtual(_) => self.accessor.acc_mut()?.append_virtual(
                 self.transcript,
                 opening_id,
                 self.opening_point.clone(),
             ),
             // TODO(AntoineF4C5): consider OneHot/Dense different cases
-            PolynomialId::Committed(_) => self.accessor.acc_mut().append_dense(
+            PolynomialId::Committed(_) => self.accessor.acc_mut()?.append_dense(
                 self.transcript,
                 opening_id,
                 self.opening_point.r.clone(),

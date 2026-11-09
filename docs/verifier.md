@@ -49,6 +49,33 @@ The crate has no prover code. Three mechanisms hold that:
 5. **Proof object**: `proof.rs`, `types.rs` (`ProofId`, `ProofType`, `Claims`) and
    `proof_serialization.rs` (the wire format).
 
+## Proof-shape rules
+
+- **No panic.** The crate denies `clippy::{unwrap_used, expect_used, panic, unreachable,
+  unimplemented, todo, indexing_slicing}` at its root, with no `#[allow]` outside tests. The
+  accumulator getters and appends, `SetupRelation::setup`, and `Relation::{opening_points,
+  derive, table}` return `Result`; an expression is evaluated only after every opening and
+  derived value it names has been resolved (`atlas_sumcheck::relation::evaluate_expression`).
+  Prover code `expect`s the same calls: a missing claim there is a prover bug.
+- **Checked inputs.** `verify` first checks that every node's operands are earlier nodes
+  (`node_view::check_model_shape`) and that the public IO names the model's inputs and
+  outputs with one tensor of the node's dims each (`verifier::check_io_shape`).
+- **Exact consumption.** Sumcheck proofs and evaluation-reduction proofs are read through
+  `ProofLedger::take`, which fails on a missing entry and on a second take.
+  `Verifier::check_consumed` ends `verify`: an entry never taken, or an opening claim no append
+  bound to a point, is an `Err`.
+- **No dead fields.** A node with a single claim on its output has no evaluation-reduction
+  entry (the claim is the reduced instance). Every `ProofType` is emitted for some checked-in
+  model; deleted tags (1, 7, 8, 11, 13) do not deserialize.
+- **What holds it.** The mutation sweep requires an `Err` at every site (no tolerance), with
+  orphan sites for claims, sumcheck proofs and reduction proofs and count/shape sites for the
+  IO; `proof_types_all_exercised`; `fuzz_regressions_replay` and the cargo-fuzz target in
+  `jolt-atlas-core/fuzz/`.
+
+Outside the lints' reach, and model- or code-driven rather than proof-driven: `assert!`s on
+model constants, `Math::log_2`, `Model::node` indexing in `atlas-trace`, and slicing inside
+`atlas-sumcheck`'s subprotocols.
+
 ## What moved out (the Trace-free inventory)
 
 Everything in the crate that took an `atlas_trace::Trace`, with its destination in

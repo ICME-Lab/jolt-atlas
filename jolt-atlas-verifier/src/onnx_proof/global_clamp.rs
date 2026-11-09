@@ -69,15 +69,16 @@ pub struct ClampBucket {
 
 /// Partition the model's clamped (non-scalar) nodes into buckets: grouped by
 /// width, packed first-fit-decreasing by padded size into a capacity equal to
-/// the largest clamped node (so offsets are automatically aligned).
-pub fn clamp_buckets(model: &Model) -> Vec<ClampBucket> {
-    let clamped: Vec<(usize, usize, usize)> = model
-        .views()
-        .iter()
-        .filter(|n| clamp_value_bound(model, n).is_some() && !is_scalar(n))
-        .map(|n| (n.idx, n.sat_clamp_bits, n.pow2_padded_num_output_elements()))
-        .collect();
-    pack_buckets(BucketKind::Clamp, clamped)
+/// the largest clamped node (so offsets are automatically aligned). `Err` if a node's operand
+/// is not a node of the model.
+pub fn clamp_buckets(model: &Model) -> Result<Vec<ClampBucket>, ProofVerifyError> {
+    let mut clamped: Vec<(usize, usize, usize)> = Vec::new();
+    for n in &model.views() {
+        if clamp_value_bound(model, n)?.is_some() && !is_scalar(n) {
+            clamped.push((n.idx, n.sat_clamp_bits, n.pow2_padded_num_output_elements()));
+        }
+    }
+    Ok(pack_buckets(BucketKind::Clamp, clamped))
 }
 
 /// Whether `node` proves a fused rescale remainder range check (Einsum / Mul /
@@ -97,12 +98,12 @@ pub fn remainder_buckets(model: &Model) -> Vec<ClampBucket> {
         .views()
         .iter()
         .filter(|n| has_remainder_rc(n))
-        .map(|n| {
-            (
+        .filter_map(|n| {
+            Some((
                 n.idx,
-                rebase_bits(n).unwrap() as usize,
+                rebase_bits(n)? as usize,
                 n.pow2_padded_num_output_elements(),
-            )
+            ))
         })
         .collect();
     pack_buckets(BucketKind::Remainder, items)
@@ -111,10 +112,9 @@ pub fn remainder_buckets(model: &Model) -> Vec<ClampBucket> {
 /// First-fit-decreasing packing of `(node, width, padded size)` items, grouped
 /// by width, into a capacity equal to the largest item.
 fn pack_buckets(kind: BucketKind, clamped: Vec<(usize, usize, usize)>) -> Vec<ClampBucket> {
-    if clamped.is_empty() {
+    let Some(capacity) = clamped.iter().map(|c| c.2).max() else {
         return Vec::new();
-    }
-    let capacity = clamped.iter().map(|c| c.2).max().unwrap();
+    };
     let mut widths: Vec<usize> = clamped.iter().map(|c| c.1).collect();
     widths.sort_unstable();
     widths.dedup();
@@ -195,14 +195,27 @@ impl ClampBucket {
         accumulator: &dyn OpeningAccumulator<F>,
         model: &Model,
     ) -> Result<(F, CycleWeight<F>), ProofVerifyError> {
-        assert_eq!(gammas.len(), self.nodes.len());
+        if gammas.len() != self.nodes.len() {
+            return Err(ProofVerifyError::Malformed(format!(
+                "{} batching coefficients for a bucket of {} nodes",
+                gammas.len(),
+                self.nodes.len()
+            )));
+        }
         let mut input_claim = F::zero();
         let mut segments = Vec::with_capacity(self.nodes.len());
         for (n, gamma) in self.nodes.iter().zip(gammas) {
             let node = &model.view(n.idx);
             let (r, claim) = AccOpeningAccessor::new(accumulator, node)
                 .get_advice(VirtualPoly::RescaleRemainder)?;
-            assert_eq!(r.len(), n.log_t, "node {} remainder point length", n.idx);
+            if r.len() != n.log_t {
+                return Err(ProofVerifyError::Malformed(format!(
+                    "node {} remainder point has {} coordinates, expected {}",
+                    n.idx,
+                    r.len(),
+                    n.log_t
+                )));
+            }
             input_claim += *gamma * claim;
             segments.push(PackedSegment {
                 gamma: *gamma,
@@ -222,11 +235,12 @@ impl ClampBucket {
 }
 
 /// All buckets' committed polynomials (the model-level replacement for the
-/// per-node `ClampRaD` / `RescaleRemainderRaD` chunks).
-pub fn bucket_committed_polys(model: &Model) -> Vec<CommittedPoly> {
-    clamp_buckets(model)
+/// per-node `ClampRaD` / `RescaleRemainderRaD` chunks). `Err` if a node's operand is not a node
+/// of the model.
+pub fn bucket_committed_polys(model: &Model) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+    Ok(clamp_buckets(model)?
         .iter()
         .chain(remainder_buckets(model).iter())
         .flat_map(ClampBucket::committed_polys)
-        .collect()
+        .collect())
 }

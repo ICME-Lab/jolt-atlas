@@ -1,6 +1,7 @@
 use crate::relation::Produces;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
+use atlas_algebra::utils::errors::ProofVerifyError;
 use common::CommittedPoly;
 use rayon::prelude::*;
 
@@ -97,9 +98,13 @@ impl Produces for HammingWeightRelation {
 }
 
 impl<F: JoltField> Relation<F> for HammingWeightRelation {
-    fn opening_points(&self, setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+    fn opening_points(
+        &self,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
         let point = [low_to_high_point(challenges), setup.incoming_point.clone()].concat();
-        vec![point; self.d]
+        Ok(vec![point; self.d])
     }
 
     fn sparse_groups(&self) -> Option<Vec<SparseGroup>> {

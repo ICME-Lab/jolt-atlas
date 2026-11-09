@@ -15,7 +15,8 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Broadcast {
         prover: &mut Prover<F, T>,
     ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
         prove_tie(
-            &BroadcastRelation::for_node(&prover.preprocessing.model, node.clone()),
+            &BroadcastRelation::for_node(&prover.preprocessing.model, node.clone())
+                .expect("the model\'s nodes have the shapes their ops prove"),
             &prover.trace,
             &mut prover.accumulator,
             &mut prover.transcript,
@@ -38,6 +39,9 @@ impl<F: JoltField> TieClaims<F> for BroadcastRelation {
         _accumulator: &dyn OpeningAccumulator<F>,
     ) -> Vec<F> {
         let operand = TraceView::operand_tensors(trace, self.node())[0];
-        vec![operand.evaluate_mle(&self.split(&setup.incoming_point).0)]
+        let (r_input, _) = self
+            .split(&setup.incoming_point)
+            .expect("the incoming point is a point of the node's padded domain");
+        vec![operand.evaluate_mle(&r_input)]
     }
 }

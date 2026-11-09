@@ -1,3 +1,4 @@
+use crate::relation::not_derived;
 use crate::{
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
     ps_shout::CycleWeight,
@@ -184,20 +185,29 @@ impl<F: JoltField> Produces for IdentityRCParams<F> {
 }
 
 impl<F: JoltField> Relation<F> for IdentityRCParams<F> {
-    fn opening_points(&self, _setup: &RelationSetup<F>, challenges: &[F]) -> Vec<Vec<F>> {
+    fn opening_points(
+        &self,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
         let (address, cycle) = self.split_point(challenges);
-        vec![[address, cycle].concat()]
+        Ok(vec![[address, cycle].concat()])
     }
 
-    fn derive(&self, id: &RelationDerived, _setup: &RelationSetup<F>, challenges: &[F]) -> F {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        _setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
         let (address, cycle) = self.split_point(challenges);
-        match id {
+        Ok(match id {
             RelationDerived::CycleEq => self.cycle.mle(&cycle),
             RelationDerived::Identity => {
                 IdentityPolynomial::<F>::new(self.log_K).evaluate(&address)
             }
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 

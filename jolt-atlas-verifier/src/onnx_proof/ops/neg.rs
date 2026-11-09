@@ -81,13 +81,19 @@ impl<S: CopySign> SymbolicSumcheck for SignedCopyRelation<S> {
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        constant(F::from_i64(S::SIGN)) * opening(RelationOpening::Id(self.produced()[0]))
+        constant(F::from_i64(S::SIGN)) * opening(RelationOpening::Id(self.input()))
+    }
+}
+
+impl<S: CopySign> SignedCopyRelation<S> {
+    fn input(&self) -> OpeningId {
+        OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))
     }
 }
 
 impl<S: CopySign> Produces for SignedCopyRelation<S> {
     fn produced(&self) -> Vec<OpeningId> {
-        vec![OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))]
+        vec![self.input()]
     }
 }
 

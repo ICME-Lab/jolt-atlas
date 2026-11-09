@@ -15,12 +15,15 @@ use common::CommittedPoly;
 use common::consts::XLEN;
 
 impl OpLayout for ReLU {
-    fn get_committed_polynomials(&self, node: &ComputationNode) -> Vec<CommittedPoly> {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         let encoding: OpLookupEncoding = OpLookupEncoding::new(node);
         let d = encoding.one_hot_params().instruction_d;
-        (0..d)
+        Ok((0..d)
             .map(|i| CommittedPoly::NodeOutputRaD(node.idx, i))
-            .collect()
+            .collect())
     }
 }
 

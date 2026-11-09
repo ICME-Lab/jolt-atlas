@@ -7,8 +7,8 @@ use crate::{
     onnx_proof::{
         ops::Verifier,
         relation::{
-            reduced_output_setup, verify_tie, AtlasRelation, RelationDerived, RelationExpr,
-            RelationId, RelationOpening, RelationSetup, TieRelation,
+            not_derived, reduced_output_setup, verify_tie, AtlasRelation, RelationDerived,
+            RelationExpr, RelationId, RelationOpening, RelationSetup, TieRelation,
         },
     },
     utils::opening_access::{OpeningIdBuilder, Target},
@@ -21,7 +21,6 @@ use atlas_algebra::{
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{op::Broadcast, Model, Tensor};
 use atlas_transcript::Transcript;
-use core::panic;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
@@ -37,7 +36,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Broadcast {
         verifier: &mut Verifier<'_, F, T>,
     ) -> Result<(), ProofVerifyError> {
         verify_tie(
-            &BroadcastRelation::for_node(&verifier.preprocessing.model, node.clone()),
+            &BroadcastRelation::for_node(&verifier.preprocessing.model, node.clone())?,
             &mut verifier.accumulator,
             &mut verifier.transcript,
         )
@@ -65,19 +64,38 @@ pub struct BroadcastRelation {
 }
 
 impl BroadcastRelation {
-    /// The relation of a broadcast `node` of `model`.
-    pub fn for_node(model: &Model, node: ComputationNode) -> Self {
-        let input_dims = model.view(node.inputs[0]).output_dims;
-        Self::new(BroadcastShape { node, input_dims })
+    /// The relation of a broadcast `node` of `model`. `Err` if the node's operand is not a node
+    /// of the model.
+    pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
+        let input = node
+            .inputs
+            .first()
+            .copied()
+            .filter(|&input| input < model.num_nodes())
+            .ok_or_else(|| unsupported("the operand is not a node"))?;
+        let input_dims = model.view(input).output_dims;
+        Ok(Self::new(BroadcastShape { node, input_dims }))
     }
 
     /// `(r_input, r_broadcast)`: the incoming point split into the operand's coordinates and the
-    /// broadcast ones.
-    pub fn split<F: JoltField>(&self, r_output: &[F]) -> (Vec<F>, Vec<F>) {
+    /// broadcast ones. `Err` if the operand's dims do not broadcast to the node's, or
+    /// `r_output` is not a point of the node's padded domain.
+    pub fn split<F: JoltField>(
+        &self,
+        r_output: &[F],
+    ) -> Result<(Vec<F>, Vec<F>), ProofVerifyError> {
         let output_dims = &self.shape.node.output_dims;
-        let ones = build_broadcast_tensor(&self.shape.input_dims, output_dims);
+        let ones = build_broadcast_tensor(&self.shape.input_dims, output_dims)?;
         split_broadcast_vars(output_dims, ones.dims(), r_output)
     }
+
+    fn input(&self) -> OpeningId {
+        OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))
+    }
+}
+
+fn unsupported(what: impl std::fmt::Display) -> ProofVerifyError {
+    ProofVerifyError::Malformed(format!("model: broadcast: {what}"))
 }
 
 impl SymbolicSumcheck for BroadcastRelation {
@@ -105,30 +123,39 @@ impl SymbolicSumcheck for BroadcastRelation {
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        derived(RelationDerived::BroadcastOnes) * opening(RelationOpening::Id(self.produced()[0]))
+        derived(RelationDerived::BroadcastOnes) * opening(RelationOpening::Id(self.input()))
     }
 }
 
 impl Produces for BroadcastRelation {
     fn produced(&self) -> Vec<OpeningId> {
-        vec![OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))]
+        vec![self.input()]
     }
 }
 
 impl<F: JoltField> Relation<F> for BroadcastRelation {
-    fn opening_points(&self, setup: &RelationSetup<F>, _challenges: &[F]) -> Vec<Vec<F>> {
-        vec![self.split(&setup.incoming_point).0]
+    fn opening_points(
+        &self,
+        setup: &RelationSetup<F>,
+        _challenges: &[F],
+    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+        Ok(vec![self.split(&setup.incoming_point)?.0])
     }
 
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, _challenges: &[F]) -> F {
-        match id {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        _challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        Ok(match id {
             RelationDerived::BroadcastOnes => {
                 let ones =
-                    build_broadcast_tensor(&self.shape.input_dims, &self.shape.node.output_dims);
-                ones.evaluate_mle(&self.split(&setup.incoming_point).1)
+                    build_broadcast_tensor(&self.shape.input_dims, &self.shape.node.output_dims)?;
+                ones.evaluate_mle(&self.split(&setup.incoming_point)?.1)
             }
-            other => panic!("a broadcast derives no {other:?}"),
-        }
+            other => return Err(not_derived(other)),
+        })
     }
 }
 
@@ -155,11 +182,15 @@ impl<F: JoltField> TieRelation<F> for BroadcastRelation {}
 /// Builds a unit tensor used for broadcast operation
 ///
 /// # Returns
-/// A tensor of dimensions equal to the broadcasted dimensions, filled with ones.
-fn build_broadcast_tensor(input_dims: &[usize], target_dims: &[usize]) -> Tensor<i32> {
-    let bc_dims = get_broadcast_dims(input_dims, target_dims);
+/// A tensor of dimensions equal to the broadcasted dimensions, filled with ones; `Err` if the
+/// input dims do not broadcast to the target dims.
+fn build_broadcast_tensor(
+    input_dims: &[usize],
+    target_dims: &[usize],
+) -> Result<Tensor<i32>, ProofVerifyError> {
+    let bc_dims = get_broadcast_dims(input_dims, target_dims)?;
     let num_elems: usize = bc_dims.iter().product();
-    Tensor::from_slice(&vec![1i32; num_elems], &bc_dims).unwrap()
+    Tensor::from_slice(&vec![1i32; num_elems], &bc_dims).map_err(unsupported)
 }
 
 /// Computes the broadcast dimensions
@@ -168,26 +199,30 @@ fn build_broadcast_tensor(input_dims: &[usize], target_dims: &[usize]) -> Tensor
 /// An array of dimensions, where each dimensions is either 1 if no broadcast is needed in that dimension,
 /// or the target dimension otherwise.
 ///
-fn get_broadcast_dims(input_dims: &[usize], target_dims: &[usize]) -> Vec<usize> {
-    assert!(input_dims.len() <= target_dims.len());
+fn get_broadcast_dims(
+    input_dims: &[usize],
+    target_dims: &[usize],
+) -> Result<Vec<usize>, ProofVerifyError> {
+    if input_dims.len() > target_dims.len() {
+        return Err(unsupported("the operand has a higher rank than the output"));
+    }
 
     let mut broadcast_dims = target_dims.to_vec();
-    for ((i, &target_dim), &input_dim) in target_dims
-        .iter()
-        .enumerate()
+    for ((broadcast_dim, &target_dim), &input_dim) in broadcast_dims
+        .iter_mut()
+        .zip(target_dims)
         .rev()
         .zip(input_dims.iter().rev())
     {
         if input_dim == target_dim {
-            broadcast_dims[i] = 1;
+            *broadcast_dim = 1;
         } else if input_dim != 1 {
-            panic!(
-                "Input dimension {} is not broadcastable to target dimension {}",
-                input_dim, target_dim
-            );
+            return Err(unsupported(format!(
+                "input dimension {input_dim} is not broadcastable to target dimension {target_dim}"
+            )));
         }
     }
-    broadcast_dims
+    Ok(broadcast_dims)
 }
 
 /// Splits the opening point r_output into two parts:
@@ -197,22 +232,28 @@ fn split_broadcast_vars<F: JoltField>(
     output_dims: &[usize],
     broadcast_dims: &[usize],
     r_output: &[F],
-) -> (Vec<F>, Vec<F>) {
+) -> Result<(Vec<F>, Vec<F>), ProofVerifyError> {
     let mut r_input: Vec<F> = Vec::new();
     let mut r_broadcast: Vec<F> = Vec::new();
     let mut idx = 0;
     for (&output_dim, &broadcast_dim) in output_dims.iter().zip(broadcast_dims.iter()) {
         let dim_vars = output_dim.log_2();
+        let vars = r_output.get(idx..idx + dim_vars).ok_or_else(|| {
+            unsupported(format!(
+                "a point of {} coordinates for output dims {output_dims:?}",
+                r_output.len()
+            ))
+        })?;
 
         // Select which variables correspond to broadcasted dimensions
         if broadcast_dim == 1 {
             // This dimension is not broadcasted, evaluating the input polynomial on associated variables
-            r_input.extend(&r_output[idx..idx + dim_vars]);
+            r_input.extend(vars);
         } else {
             // This dimension is broadcasted, we evaluate the broadcast polynomial on associated variables
-            r_broadcast.extend(&r_output[idx..idx + dim_vars]);
+            r_broadcast.extend(vars);
         }
         idx += dim_vars;
     }
-    (r_input, r_broadcast)
+    Ok((r_input, r_broadcast))
 }

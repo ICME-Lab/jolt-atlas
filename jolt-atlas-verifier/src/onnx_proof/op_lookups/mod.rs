@@ -90,9 +90,19 @@ pub trait LookupOperandsTrait {
     ) -> Result<F, ProofVerifyError>;
 
     /// Transforms the operand claims, accounting for lookup-specific adjustments (e.g., offsetting).
-    /// Identity by default; override only if the lookup needs a claim-space transform.
-    fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
-        (claims[0], claims[1])
+    /// Identity by default; override only if the lookup needs a claim-space transform. `Err`
+    /// unless `claims` is the two operand claims.
+    fn transform_operand_claims<F: JoltField>(
+        &self,
+        claims: Vec<F>,
+    ) -> Result<(F, F), ProofVerifyError> {
+        let [left_claim, right_claim] = claims.as_slice() else {
+            return Err(ProofVerifyError::Malformed(format!(
+                "a lookup reads 2 operand claims, got {}",
+                claims.len()
+            )));
+        };
+        Ok((*left_claim, *right_claim))
     }
 
     /// Transforms the output claim, accounting for lookup-specific adjustments (e.g., offsetting).
@@ -161,7 +171,7 @@ impl LookupOperandsTrait for DefaultLookupOperands {
     /// The node's own first input, at this node's execution binding.
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
         OpeningId::new(
-            VirtualPoly::NodeOutput(node.inputs[0]),
+            VirtualPoly::NodeOutput(node.input(0)),
             SumcheckId::NodeExecution(node.idx),
         )
     }
@@ -309,7 +319,7 @@ where
         let rv_claim = self.helper.transform_output_claim(rv_claim);
         let (_, operand_claim) = self
             .helper
-            .transform_operand_claims(vec![F::zero(), operand_claim]);
+            .transform_operand_claims(vec![F::zero(), operand_claim])?;
 
         Ok(ReadRafClaims {
             rv_claim,
@@ -392,16 +402,20 @@ impl<Helper: LookupOperandsTrait> RaOneHotEncoding for OpLookupEncoding<Helper> 
 /// Some operations store operands with interleaved bits for prefix-suffix decomposition
 /// . This trait provides a method to check if a node uses this representation.
 pub trait InterleavedBitsMarker {
-    /// Returns `true` if the operands are stored with interleaved bits.
-    fn is_interleaved_operands(&self) -> bool;
+    /// Returns `true` if the operands are stored with interleaved bits. `Err` for an operator
+    /// with no prefix-suffix operand lookup.
+    fn is_interleaved_operands(&self) -> Result<bool, ProofVerifyError>;
 }
 
 impl InterleavedBitsMarker for ComputationNode {
-    fn is_interleaved_operands(&self) -> bool {
-        match self.operator {
-            Op::ReLU(_) => false,
-            Op::Clamp(_) => false,
-            _ => unimplemented!(),
+    fn is_interleaved_operands(&self) -> Result<bool, ProofVerifyError> {
+        match &self.operator {
+            Op::ReLU(_) => Ok(false),
+            Op::Clamp(_) => Ok(false),
+            other => Err(ProofVerifyError::Malformed(format!(
+                "model: node {} is {other}, which has no operand lookup",
+                self.idx
+            ))),
         }
     }
 }

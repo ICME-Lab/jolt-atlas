@@ -152,6 +152,7 @@ pub(crate) fn generate_node_witnesses<F: JoltField>(
     let mut mos_range_bits: Option<Vec<LookupBits>> = None;
 
     NodeCommittedPolynomials::get_committed_polynomials(node)
+        .expect("the model's nodes have the shapes their ops prove")
         .into_iter()
         .map(|poly| {
             let witness = match &poly {
@@ -511,7 +512,8 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             CommittedPoly::SoftmaxZHiRaD(node_idx, d) => {
                 let node = &model.view(*node_idx);
                 let st = softmax_last_axis_full_trace(node, trace);
-                let decomp = generate_exp_lut_decomposed(st.scale as i32);
+                let decomp = generate_exp_lut_decomposed(st.scale as i32)
+                    .expect("the softmax multiplier is a scale the semantics define");
                 let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
                 let lookup_indices: Vec<usize> = st.z_hi.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_hi, *d)
@@ -519,7 +521,8 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             CommittedPoly::SoftmaxZLoRaD(node_idx, d) => {
                 let node = &model.view(*node_idx);
                 let st = softmax_last_axis_full_trace(node, trace);
-                let decomp = generate_exp_lut_decomposed(st.scale as i32);
+                let decomp = generate_exp_lut_decomposed(st.scale as i32)
+                    .expect("the softmax multiplier is a scale the semantics define");
                 let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
                 let lookup_indices: Vec<usize> = st.z_lo.iter().map(|&v| v as usize).collect();
                 build_onehot_witness(&lookup_indices, log_lo, *d)

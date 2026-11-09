@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationDerived, RelationExpr, RelationId,
     RelationOpening, RelationSetup, RelationVerifier,
@@ -162,13 +163,18 @@ impl<F: JoltField> Produces for RecipMultRelation<F> {
 }
 
 impl<F: JoltField> Relation<F> for RecipMultRelation<F> {
-    fn derive(&self, id: &RelationDerived, setup: &RelationSetup<F>, challenges: &[F]) -> F {
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
         let point = low_to_high_point(challenges);
-        match id {
+        Ok(match id {
             RelationDerived::Eq => EqPolynomial::mle(&setup.incoming_point, &point),
             RelationDerived::RowPublic => MultilinearPolynomial::from(self.inv_sum.clone())
-                .evaluate(&point[..self.params.log_F()]),
-            other => panic!("{other:?} is not derived by this relation"),
-        }
+                .evaluate(super::row_coordinates(&point, self.params.log_F())?),
+            other => return Err(not_derived(other)),
+        })
     }
 }

@@ -1,0 +1,39 @@
+[package]
+name = "jolt-atlas-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+jolt-atlas-core = { path = "..", features = ["fuzz"] }
+
+[[bin]]
+name = "verify"
+path = "fuzz_targets/verify.rs"
+test = false
+doc = false
+bench = false
+
+# Standalone workspace: the fuzz profile and nightly sanitizer flags must not
+# leak into the main workspace. The root [patch] set (the arkworks fork) is
+# repeated here because a patch section only applies from the workspace root.
+[workspace]
+members = ["."]
+
+[patch.crates-io]
+ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
+
+[patch."https://github.com/a16z/jolt"]
+jolt-field = { path = "../../third_party/jolt-field" }
+jolt-poly = { path = "../../third_party/jolt-poly" }
+
+[profile.release]
+debug = 1

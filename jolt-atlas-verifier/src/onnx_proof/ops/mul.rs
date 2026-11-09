@@ -1,7 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_fused_rescale_proof_api,
     onnx_proof::{
@@ -16,15 +15,10 @@ use crate::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::multilinear_polynomial::MultilinearPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{
-    op::{And, Cube, Mul, OpSpec, Square},
-    trace::LayerData,
-    Trace,
-};
+use atlas_trace::op::{And, Cube, Mul, OpSpec, Square};
 use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
@@ -87,7 +81,7 @@ impl<S: ProductShape> ProductRelation<S> {
     }
 
     /// The operand positions the product reads, each once, in first-factor order.
-    fn operands() -> Vec<usize> {
+    pub fn operands() -> Vec<usize> {
         let mut operands = Vec::new();
         for &position in S::FACTORS {
             if !operands.contains(&position) {
@@ -175,12 +169,4 @@ impl<S: OpSpec + ProductShape + 'static> AtlasRelation for ProductRelation<S> {
     }
 }
 
-impl<F: JoltField, S: OpSpec + ProductShape + 'static> EngineRelation<F> for ProductRelation<S> {
-    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
-        Self::operands()
-            .into_iter()
-            .map(|position| MultilinearPolynomial::from(operands[position].padded_pow2()))
-            .collect()
-    }
-}
+impl<F: JoltField, S: OpSpec + ProductShape + 'static> EngineRelation<F> for ProductRelation<S> {}

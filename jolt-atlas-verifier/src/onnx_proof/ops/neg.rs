@@ -14,10 +14,7 @@ use crate::{
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{
-    op::{Identity, Neg, OpSpec},
-    Trace,
-};
+use atlas_trace::op::{Identity, Neg, OpSpec};
 use atlas_transcript::Transcript;
 use jolt_claims::{constant, opening, SymbolicSumcheck};
 use jolt_field::Ring;
@@ -114,15 +111,4 @@ impl<S: CopySign> AtlasRelation for SignedCopyRelation<S> {
     }
 }
 
-impl<F: JoltField, S: CopySign> TieRelation<F> for SignedCopyRelation<S> {
-    fn claims(
-        &self,
-        _trace: &Trace,
-        _setup: &RelationSetup<F>,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        // operand(r) = ±out(r): the reduced output claim, signed.
-        let output = accumulator.get_node_output_opening(self.node.idx).1;
-        vec![F::from_i64(S::SIGN) * output]
-    }
-}
+impl<F: JoltField, S: CopySign> TieRelation<F> for SignedCopyRelation<S> {}

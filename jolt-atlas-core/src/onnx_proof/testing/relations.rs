@@ -48,8 +48,8 @@ use crate::{
             sum::axis::SumAxisRelation,
         },
         relation::{
-            AtlasRelation, EngineRelation, Relation, RelationChallenge, RelationExpr,
-            RelationOpening, RelationParams, RelationProver, RelationSetup,
+            AtlasRelation, Relation, RelationChallenge, RelationExpr, RelationOpening,
+            RelationParams, RelationProver, RelationSetup, RelationWitnesses,
         },
         trace_view::TraceView,
     },
@@ -403,7 +403,11 @@ fn relation_prover_equiv_engine() {
 }
 
 /// The engine's messages for `relation()` match its reference messages.
-fn check_engine<R: EngineRelation<Fr>>(relation: impl Fn() -> R, trace: &Trace, rng: &mut StdRng) {
+fn check_engine<R: RelationWitnesses<Fr>>(
+    relation: impl Fn() -> R,
+    trace: &Trace,
+    rng: &mut StdRng,
+) {
     let rounds = relation().rounds();
     let setup = RelationSetup {
         incoming_point: random_point(rng, rounds),
@@ -479,7 +483,7 @@ fn relation_prover_equiv_dense() {
 }
 
 /// The engine's messages for a dense `relation()` match its reference messages.
-fn check_dense<R: EngineRelation<Fr>>(
+fn check_dense<R: RelationWitnesses<Fr>>(
     relation: impl Fn() -> R,
     trace: &Trace,
     node: &ComputationNode,

@@ -17,7 +17,7 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{op::MoveAxis, Op, Trace};
+use atlas_trace::{op::MoveAxis, Op};
 use atlas_transcript::Transcript;
 use jolt_claims::{opening, SymbolicSumcheck};
 use jolt_field::Ring;
@@ -101,17 +101,7 @@ impl AtlasRelation for AxisPermutationRelation {
     }
 }
 
-impl<F: JoltField> TieRelation<F> for AxisPermutationRelation {
-    fn claims(
-        &self,
-        _trace: &Trace,
-        _setup: &RelationSetup<F>,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        // The operand at the permuted point is the output at `r`.
-        vec![accumulator.get_node_output_opening(self.node.idx).1]
-    }
-}
+impl<F: JoltField> TieRelation<F> for AxisPermutationRelation {}
 
 /// Permutes challenge variable groups to reverse the moveaxis transformation
 fn permute_challenge_groups<F: JoltField>(

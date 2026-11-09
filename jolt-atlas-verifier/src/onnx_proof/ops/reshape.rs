@@ -9,10 +9,9 @@
 
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use atlas_trace::{op::Reshape, trace::LayerData, Model, Trace};
+use atlas_trace::{op::Reshape, Model};
 
 use crate::node_view::{ComputationNode, ModelView};
-use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::dims::{coord_to_linear, linear_to_coord};
 use crate::{
     atlas_relation_types, impl_standard_sumcheck_proof_api,
@@ -27,7 +26,7 @@ use crate::{
 };
 use atlas_algebra::{
     field::{ChallengeFieldOps, JoltField},
-    poly::{eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial},
+    poly::eq_poly::EqPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
@@ -185,9 +184,4 @@ impl AtlasRelation for ReshapeRelation {
     }
 }
 
-impl<F: JoltField> EngineRelation<F> for ReshapeRelation {
-    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.shape.node);
-        vec![MultilinearPolynomial::from(operands[0].padded_pow2())]
-    }
-}
+impl<F: JoltField> EngineRelation<F> for ReshapeRelation {}

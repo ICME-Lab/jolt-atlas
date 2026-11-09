@@ -24,3 +24,19 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Constant {
         Vec::new()
     }
 }
+
+use crate::onnx_proof::relation::{RelationSetup, TieClaims};
+use atlas_sumcheck::opening_proof::OpeningAccumulator;
+use atlas_trace::op::OpSpec;
+use atlas_trace::Trace;
+
+impl<F: JoltField, S: OpSpec + 'static> TieClaims<F> for PublicRelation<S> {
+    fn claims(
+        &self,
+        _trace: &Trace,
+        _setup: &RelationSetup<F>,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        Vec::new()
+    }
+}

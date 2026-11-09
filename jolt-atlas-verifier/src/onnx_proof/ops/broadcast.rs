@@ -2,7 +2,6 @@ use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     atlas_relation_types,
     onnx_proof::{
@@ -20,7 +19,7 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{op::Broadcast, Model, Tensor, Trace};
+use atlas_trace::{op::Broadcast, Model, Tensor};
 use atlas_transcript::Transcript;
 use core::panic;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
@@ -74,7 +73,7 @@ impl BroadcastRelation {
 
     /// `(r_input, r_broadcast)`: the incoming point split into the operand's coordinates and the
     /// broadcast ones.
-    fn split<F: JoltField>(&self, r_output: &[F]) -> (Vec<F>, Vec<F>) {
+    pub fn split<F: JoltField>(&self, r_output: &[F]) -> (Vec<F>, Vec<F>) {
         let output_dims = &self.shape.node.output_dims;
         let ones = build_broadcast_tensor(&self.shape.input_dims, output_dims);
         split_broadcast_vars(output_dims, ones.dims(), r_output)
@@ -151,17 +150,7 @@ impl AtlasRelation for BroadcastRelation {
     }
 }
 
-impl<F: JoltField> TieRelation<F> for BroadcastRelation {
-    fn claims(
-        &self,
-        trace: &Trace,
-        setup: &RelationSetup<F>,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        let operand = TraceView::operand_tensors(trace, &self.shape.node)[0];
-        vec![operand.evaluate_mle(&self.split(&setup.incoming_point).0)]
-    }
-}
+impl<F: JoltField> TieRelation<F> for BroadcastRelation {}
 
 /// Builds a unit tensor used for broadcast operation
 ///

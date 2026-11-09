@@ -18,7 +18,7 @@ use atlas_algebra::{
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{
     op::{Constant, OpSpec},
-    Tensor, Trace,
+    Tensor,
 };
 use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
@@ -137,13 +137,4 @@ impl<S: OpSpec + 'static> AtlasRelation for PublicRelation<S> {
     }
 }
 
-impl<F: JoltField, S: OpSpec + 'static> TieRelation<F> for PublicRelation<S> {
-    fn claims(
-        &self,
-        _trace: &Trace,
-        _setup: &RelationSetup<F>,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        Vec::new()
-    }
-}
+impl<F: JoltField, S: OpSpec + 'static> TieRelation<F> for PublicRelation<S> {}

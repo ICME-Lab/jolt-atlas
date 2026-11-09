@@ -2,7 +2,6 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         clamp_lookups::{
@@ -16,15 +15,9 @@ use crate::{
     },
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
-use atlas_algebra::{
-    field::JoltField, poly::multilinear_polynomial::EvaluateMle, utils::errors::ProofVerifyError,
-};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{
-    op::{Add, OpSpec, Sub},
-    trace::LayerData,
-    Trace,
-};
+use atlas_trace::op::{Add, OpSpec, Sub};
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
 use jolt_claims::{constant, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
@@ -186,20 +179,7 @@ impl<S: AccumulationShape> AtlasRelation for AccumulationRelation<S> {
     }
 }
 
-impl<F: JoltField, S: AccumulationShape> TieRelation<F> for AccumulationRelation<S> {
-    fn claims(
-        &self,
-        trace: &Trace,
-        setup: &RelationSetup<F>,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
-        operands[..2]
-            .iter()
-            .map(|operand| operand.evaluate_mle(&setup.incoming_point))
-            .collect()
-    }
-}
+impl<F: JoltField, S: AccumulationShape> TieRelation<F> for AccumulationRelation<S> {}
 
 /// Verify a saturating `left ± right`: the clamp lookup and the accumulation tie, or for a
 /// scalar node the clamp recomputed from the operands in the clear.

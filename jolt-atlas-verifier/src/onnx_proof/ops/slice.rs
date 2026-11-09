@@ -1,7 +1,6 @@
 use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{OpeningIdBuilder, Target},
@@ -18,11 +17,11 @@ use crate::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::{eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial},
+    poly::eq_poly::EqPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{op::Slice, trace::LayerData, Model, Op, Trace};
+use atlas_trace::{op::Slice, Model, Op};
 use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
@@ -150,12 +149,7 @@ impl AtlasRelation for SliceRelation {
     }
 }
 
-impl<F: JoltField> EngineRelation<F> for SliceRelation {
-    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.shape.node);
-        vec![MultilinearPolynomial::from(operands[0].padded_pow2())]
-    }
-}
+impl<F: JoltField> EngineRelation<F> for SliceRelation {}
 
 fn build_slice_selector<F: JoltField>(
     input_raw_dims: &[usize],

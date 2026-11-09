@@ -30,7 +30,7 @@ use atlas_algebra::{
     },
 };
 use atlas_sumcheck::{
-    opening_proof::{prover::ProverOpeningAccumulator, OpeningId},
+    opening_proof::{prover::ProverOpeningAccumulator, OpeningAccumulator, OpeningId},
     upstream_sumcheck::round_check_failed,
 };
 use atlas_trace::Trace;
@@ -59,9 +59,29 @@ macro_rules! atlas_relation_types {
 
 pub use atlas_sumcheck::relation::prover::{append_produced, RelationWitness};
 
-/// Prove a tie: append its produced openings with their [`TieRelation::claims`]. Nothing else
+/// The prover's side of an [`EngineRelation`]: its witness polynomials, read from the trace.
+pub trait RelationWitnesses<F: JoltField>: EngineRelation<F> {
+    /// The witness behind each produced opening, aligned with [`AtlasRelation::produced`]: a
+    /// polynomial over the sumcheck's hypercube whose final bound value is the opening's claim.
+    fn witnesses(&self, trace: &Trace, setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>>;
+}
+
+/// The prover's side of a [`TieRelation`]: the values of its produced openings.
+pub trait TieClaims<F: JoltField>: TieRelation<F> {
+    /// The prover's values of the produced openings, aligned with [`AtlasRelation::produced`]
+    /// at their [`opening_points`](AtlasRelation::opening_points): read off the trace, or taken
+    /// from claims the accumulator already holds where the tie fixes them.
+    fn claims(
+        &self,
+        trace: &Trace,
+        setup: &RelationSetup<F>,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F>;
+}
+
+/// Prove a tie: append its produced openings with their [`TieClaims::claims`]. Nothing else
 /// enters the transcript; [`verify_tie`] checks the input claim against the output expression.
-pub fn prove_tie<F: JoltField, T: Transcript, R: TieRelation<F>>(
+pub fn prove_tie<F: JoltField, T: Transcript, R: TieClaims<F>>(
     relation: &R,
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,
@@ -83,7 +103,7 @@ pub(crate) fn note_dispatch<R: AtlasRelation>(relation: &R) {
 }
 
 /// The engine's prover for an [`EngineRelation`]: its summand folded over the split eq.
-pub struct RelationProver<F: JoltField, R: EngineRelation<F>> {
+pub struct RelationProver<F: JoltField, R: RelationWitnesses<F>> {
     relation: R,
     setup: RelationSetup<F>,
     /// The Gruen split eq of an eq-weighted relation; `None` for a dense one.
@@ -97,7 +117,7 @@ pub struct RelationProver<F: JoltField, R: EngineRelation<F>> {
     wires: Vec<MultilinearPolynomial<F>>,
 }
 
-impl<F: JoltField, R: EngineRelation<F>> RelationProver<F, R> {
+impl<F: JoltField, R: RelationWitnesses<F>> RelationProver<F, R> {
     /// The prover for `params`, its witnesses read from `trace`.
     #[tracing::instrument(skip_all, name = "RelationProver::initialize")]
     pub fn initialize(trace: &Trace, params: RelationParams<F, R>) -> Self {
@@ -163,7 +183,7 @@ impl<F: JoltField, R: EngineRelation<F>> RelationProver<F, R> {
     }
 }
 
-impl<F: JoltField, R: EngineRelation<F>> ProveRounds<F> for RelationProver<F, R> {
+impl<F: JoltField, R: RelationWitnesses<F>> ProveRounds<F> for RelationProver<F, R> {
     fn num_rounds(&self) -> usize {
         self.relation.rounds()
     }
@@ -270,7 +290,7 @@ impl<F: JoltField, R: EngineRelation<F>> ProveRounds<F> for RelationProver<F, R>
     }
 }
 
-impl<F: JoltField, R: EngineRelation<F>> RelationWitness<F> for RelationProver<F, R> {
+impl<F: JoltField, R: RelationWitnesses<F>> RelationWitness<F> for RelationProver<F, R> {
     type Relation = R;
 
     fn relation(&self) -> &R {

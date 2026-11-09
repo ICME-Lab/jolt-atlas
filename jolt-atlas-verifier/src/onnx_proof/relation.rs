@@ -24,7 +24,6 @@
 //! reduction produces for it.
 
 use crate::node_view::ComputationNode;
-use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -35,7 +34,7 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, PolynomialId, VerifierOpeningAccumulator};
 pub use atlas_sumcheck::relation::*;
-use atlas_trace::{op::OpSpec, Trace};
+use atlas_trace::op::OpSpec;
 use atlas_transcript::Transcript;
 use jolt_claims::SymbolicSumcheck;
 
@@ -70,10 +69,6 @@ pub trait AtlasRelation:
 ///   tables ([`RelationDerived::Table`]), and the engine sends the message's evaluations at
 ///   `0, 2, …, degree` with the claim as hint.
 pub trait EngineRelation<F: JoltField>: AtlasRelation + SetupRelation<F> {
-    /// The witness behind each produced opening, aligned with [`AtlasRelation::produced`]: a
-    /// polynomial over the sumcheck's hypercube whose final bound value is the opening's claim.
-    fn witnesses(&self, trace: &Trace, setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>>;
-
     /// The order a dense relation binds its variables in (an eq-weighted one binds
     /// low-to-high).
     fn binding_order(&self) -> BindingOrder {
@@ -110,17 +105,7 @@ macro_rules! atlas_relation_types {
 
 /// A zero-round relation (a tie): its produced openings sit at points derived from the
 /// incoming point, and the verifier checks the input claim against the output expression there.
-pub trait TieRelation<F: JoltField>: AtlasRelation + SetupRelation<F> {
-    /// The prover's values of the produced openings, aligned with [`AtlasRelation::produced`]
-    /// at their [`opening_points`](AtlasRelation::opening_points): read off the trace, or taken
-    /// from claims the accumulator already holds where the tie fixes them.
-    fn claims(
-        &self,
-        trace: &Trace,
-        setup: &RelationSetup<F>,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F>;
-}
+pub trait TieRelation<F: JoltField>: AtlasRelation + SetupRelation<F> {}
 
 /// Verify a zero-round relation (a tie): append its produced openings at the incoming point and
 /// require the input claim to equal the output expression.

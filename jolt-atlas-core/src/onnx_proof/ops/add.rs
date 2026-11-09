@@ -58,3 +58,23 @@ pub(crate) fn prove_accumulation<S: AccumulationShape, F: JoltField, T: Transcri
     );
     results
 }
+
+impl<F: JoltField, S: AccumulationShape> crate::onnx_proof::relation::TieClaims<F>
+    for AccumulationRelation<S>
+{
+    fn claims(
+        &self,
+        trace: &atlas_trace::Trace,
+        setup: &crate::onnx_proof::relation::RelationSetup<F>,
+        _accumulator: &dyn atlas_sumcheck::opening_proof::OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        let LayerData { operands, .. } = TraceView::layer_data(
+            trace,
+            crate::onnx_proof::relation::AtlasRelation::node(self),
+        );
+        operands[..2]
+            .iter()
+            .map(|operand| operand.evaluate_mle(&setup.incoming_point))
+            .collect()
+    }
+}

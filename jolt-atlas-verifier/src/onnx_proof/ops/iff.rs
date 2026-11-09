@@ -1,7 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     impl_standard_sumcheck_proof_api,
     onnx_proof::{
@@ -15,11 +14,10 @@ use crate::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::multilinear_polynomial::MultilinearPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{op::Iff, trace::LayerData, Trace};
+use atlas_trace::op::Iff;
 use atlas_transcript::Transcript;
 use jolt_claims::{
     constant, derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck,
@@ -119,14 +117,4 @@ impl AtlasRelation for IffRelation {
     }
 }
 
-impl<F: JoltField> EngineRelation<F> for IffRelation {
-    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
-        let [mask, a, b] = operands[..] else {
-            panic!("Expected three operands for Iff operation")
-        };
-        [mask, a, b]
-            .map(|operand| MultilinearPolynomial::from(operand.padded_pow2()))
-            .into()
-    }
-}
+impl<F: JoltField> EngineRelation<F> for IffRelation {}

@@ -1,7 +1,6 @@
 use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::{
     dims::{coord_to_linear, linear_to_coord},
     opening_access::{OpeningIdBuilder, Target},
@@ -18,11 +17,11 @@ use crate::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::{eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial},
+    poly::eq_poly::EqPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{op::Concat, trace::LayerData, Model, Op, Trace};
+use atlas_trace::{op::Concat, Model, Op};
 use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, Expr, SymbolicSumcheck};
 use jolt_field::Ring;
@@ -175,39 +174,10 @@ impl AtlasRelation for ConcatRelation {
     }
 }
 
-impl<F: JoltField> EngineRelation<F> for ConcatRelation {
-    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.shape.node);
-        let max_num_vars = self.rounds();
-        operands
-            .iter()
-            .map(|operand| {
-                let padded = operand.padded_pow2();
-                let extended =
-                    extend_input_to_max_domain(padded.data(), padded.len().log_2(), max_num_vars);
-                MultilinearPolynomial::from(extended)
-            })
-            .collect()
-    }
-}
+impl<F: JoltField> EngineRelation<F> for ConcatRelation {}
 
 fn padded_domain_len(dims: &[usize]) -> usize {
     dims.iter().map(|dim| dim.next_power_of_two()).product()
-}
-
-fn extend_input_to_max_domain<T: Copy>(
-    input_padded: &[T],
-    input_num_vars: usize,
-    max_num_vars: usize,
-) -> Vec<T> {
-    let pad_repeat = 1usize << (max_num_vars - input_num_vars);
-    let mut extended = Vec::with_capacity(input_padded.len() * pad_repeat);
-    for value in input_padded {
-        for _ in 0..pad_repeat {
-            extended.push(*value);
-        }
-    }
-    extended
 }
 
 fn build_concat_selector<F: JoltField>(

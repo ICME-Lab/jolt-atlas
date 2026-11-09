@@ -23,3 +23,21 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Broadcast {
         Vec::new()
     }
 }
+
+use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, TieClaims};
+use crate::onnx_proof::trace_view::TraceView;
+use atlas_algebra::poly::multilinear_polynomial::EvaluateMle;
+use atlas_sumcheck::opening_proof::OpeningAccumulator;
+use atlas_trace::Trace;
+
+impl<F: JoltField> TieClaims<F> for BroadcastRelation {
+    fn claims(
+        &self,
+        trace: &Trace,
+        setup: &RelationSetup<F>,
+        _accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        let operand = TraceView::operand_tensors(trace, self.node())[0];
+        vec![operand.evaluate_mle(&self.split(&setup.incoming_point).0)]
+    }
+}

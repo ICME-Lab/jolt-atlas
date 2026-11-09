@@ -33,3 +33,21 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for ScalarConstDiv {
         vec![(ProofId(node.idx, ProofType::Execution), proof)]
     }
 }
+
+use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, RelationWitnesses};
+use crate::onnx_proof::trace_view::TraceView;
+use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
+use atlas_trace::{semantics::fixed::rem_floor, trace::LayerData, Trace};
+
+impl<F: JoltField> RelationWitnesses<F> for ConstantDivisionRelation {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
+        let LayerData { operands, .. } = TraceView::layer_data(trace, self.node());
+        let left = operands[0].padded_pow2();
+        let divisor = self.divisor();
+        let remainder: Vec<i32> = left.iter().map(|&a| rem_floor(a, divisor)).collect();
+        vec![
+            MultilinearPolynomial::from(left),
+            MultilinearPolynomial::from(remainder),
+        ]
+    }
+}

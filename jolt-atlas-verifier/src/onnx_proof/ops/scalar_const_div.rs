@@ -2,7 +2,6 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     atlas_relation_types,
     onnx_proof::{
@@ -16,12 +15,11 @@ use crate::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::multilinear_polynomial::MultilinearPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_sumcheck::relation::verify_relation;
-use atlas_trace::{op::ScalarConstDiv, semantics::fixed::rem_floor, trace::LayerData, Op, Trace};
+use atlas_trace::{op::ScalarConstDiv, Op};
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
 use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
@@ -77,7 +75,8 @@ pub struct ConstantDivisionRelation {
 }
 
 impl ConstantDivisionRelation {
-    fn divisor(&self) -> i32 {
+    /// The constant divisor.
+    pub fn divisor(&self) -> i32 {
         let Op::ScalarConstDiv(op) = &self.node.operator else {
             panic!("Expected ScalarConstDiv operator")
         };
@@ -155,15 +154,4 @@ impl AtlasRelation for ConstantDivisionRelation {
     }
 }
 
-impl<F: JoltField> EngineRelation<F> for ConstantDivisionRelation {
-    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, &self.node);
-        let left = operands[0].padded_pow2();
-        let divisor = self.divisor();
-        let remainder: Vec<i32> = left.iter().map(|&a| rem_floor(a, divisor)).collect();
-        vec![
-            MultilinearPolynomial::from(left),
-            MultilinearPolynomial::from(remainder),
-        ]
-    }
-}
+impl<F: JoltField> EngineRelation<F> for ConstantDivisionRelation {}

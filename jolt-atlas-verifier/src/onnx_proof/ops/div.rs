@@ -14,14 +14,12 @@ use crate::{
             RelationExpr, RelationId, RelationOpening, RelationSetup, RelationVerifier,
             TieRelation,
         },
-        trace_view::TraceView,
         ProofId, ProofType, Verifier,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
-    poly::multilinear_polynomial::MultilinearPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
@@ -31,7 +29,7 @@ use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::{self, RaOneHotEncoding},
 };
-use atlas_trace::{op::Div, semantics::fixed::rem_floor, trace::LayerData, Trace};
+use atlas_trace::op::Div;
 use atlas_transcript::Transcript;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 use jolt_claims::{derived, opening, Expr, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
@@ -206,27 +204,7 @@ impl AtlasRelation for DivRelation {
     }
 }
 
-impl<F: JoltField> EngineRelation<F> for DivRelation {
-    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
-        let LayerData { operands, output } = TraceView::layer_data(trace, &self.node);
-        let [left, right] = operands[..] else {
-            panic!("Expected two operands for Div operation")
-        };
-        let remainder: Vec<i32> = left
-            .padded_pow2()
-            .iter()
-            .zip(right.padded_pow2().iter())
-            // Padding lanes divide 0 by 0: no remainder.
-            .map(|(&a, &b)| if b == 0 { 0 } else { rem_floor(a, b) })
-            .collect();
-        vec![
-            MultilinearPolynomial::from(left.padded_pow2()),
-            MultilinearPolynomial::from(right.padded_pow2()),
-            MultilinearPolynomial::from(output.padded_pow2()),
-            MultilinearPolynomial::from(remainder),
-        ]
-    }
-}
+impl<F: JoltField> EngineRelation<F> for DivRelation {}
 
 // TODO: Reduce two claims to 1 via 4.5.2 PAZK for Quotient polynomial openings
 
@@ -306,17 +284,7 @@ impl AtlasRelation for DivQuotientRelation {
     }
 }
 
-impl<F: JoltField> TieRelation<F> for DivQuotientRelation {
-    fn claims(
-        &self,
-        _trace: &Trace,
-        _setup: &RelationSetup<F>,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        // The committed quotient is the node's output: its claim is the reduced one.
-        vec![accumulator.get_node_output_opening(self.node.idx).1]
-    }
-}
+impl<F: JoltField> TieRelation<F> for DivQuotientRelation {}
 
 fn verify_range_and_onehot<F: JoltField, T: Transcript>(
     node: &ComputationNode,

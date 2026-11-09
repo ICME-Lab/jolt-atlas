@@ -16,7 +16,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) use jolt_atlas_verifier::probe::take_divergences;
-pub(crate) use jolt_atlas_verifier::probe_assert_eq;
+pub(crate) use jolt_atlas_verifier::{probe_assert, probe_assert_eq};
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);
 

@@ -1,7 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     atlas_relation_types, impl_tie_proof_api,
     onnx_proof::{
@@ -13,11 +12,9 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_algebra::{
-    field::JoltField, poly::multilinear_polynomial::EvaluateMle, utils::errors::ProofVerifyError,
-};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{op::IsNan, Trace};
+use atlas_trace::op::IsNan;
 use atlas_transcript::Transcript;
 use jolt_claims::{opening, Expr, SymbolicSumcheck};
 use jolt_field::Ring;
@@ -94,14 +91,4 @@ impl AtlasRelation for ZeroOutputRelation {
     }
 }
 
-impl<F: JoltField> TieRelation<F> for ZeroOutputRelation {
-    fn claims(
-        &self,
-        trace: &Trace,
-        setup: &RelationSetup<F>,
-        _accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        let operand = TraceView::operand_tensors(trace, &self.node)[0];
-        vec![operand.evaluate_mle(&setup.incoming_point)]
-    }
-}
+impl<F: JoltField> TieRelation<F> for ZeroOutputRelation {}

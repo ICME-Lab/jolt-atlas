@@ -5,7 +5,10 @@
 //! verifies correct reads from lookup tables and combines multiple claims using
 //! gamma batching for efficiency.
 
-use atlas_trace::{Tensor, Trace};
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
+use crate::utils::compute_lookup_indices_from_operands;
+use atlas_trace::{trace::LayerData, Tensor, Trace};
 pub use jolt_atlas_verifier::onnx_proof::op_lookups::*;
 
 use atlas_algebra::{
@@ -96,7 +99,7 @@ pub trait OpLookupProve {
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default;
 }
 
-impl<H: LookupOperandsTrait> OpLookupProve for OpLookupProvider<H> {
+impl<H: LookupWitness> OpLookupProve for OpLookupProvider<H> {
     /// Combined prover flow: appends RAF claims + computes lookup indices + creates sumcheck prover.
     ///
     /// Returns `(sumcheck_prover, lookup_indices)` where `lookup_indices` can be reused
@@ -168,5 +171,31 @@ impl<H: LookupOperandsTrait> OpLookupProve for OpLookupProvider<H> {
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
     {
         ps_read_raf_prover(self, lookup_bits, accumulator, transcript)
+    }
+}
+
+/// The prover's side of a [`LookupOperandsTrait`] helper: its lookup witness and indices.
+pub trait LookupWitness: LookupOperandsTrait {
+    /// The polynomial that is evaluated at `r_cycle` to produce the "raf" claim of the read-raf sumcheck.
+    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64>;
+
+    /// Computes the `LookupBits` used for the read-raf sumcheck + one-hot checks, from
+    /// `witness` (the same value [`Self::witness`] already computed).
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits>;
+}
+
+impl LookupWitness for DefaultLookupOperands {
+    /// Reads the node's first operand tensor directly from the trace.
+    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+        let LayerData {
+            output: _,
+            operands,
+        } = TraceView::layer_data(trace, node);
+        operands[0].padded_pow2().map(|v| v as i64)
+    }
+
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
+        let operand = witness.map(|v| v as i32);
+        compute_lookup_indices_from_operands(&[&operand], false)
     }
 }

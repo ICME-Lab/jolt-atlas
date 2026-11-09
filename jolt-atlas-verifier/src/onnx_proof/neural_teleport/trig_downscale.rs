@@ -4,9 +4,7 @@
 //! `downscaled = remainder >> TRIG_DOWNSCALE_BITS` — the smaller index the Cos/Sin table
 //! lookup reads. Also establishes `r`'s claim (`VirtualPoly::TeleportRemainder`) for
 //! `division.rs`'s `a = P·q + r` derivation.
-use super::division::compute_division;
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{op_lookups::LookupOperandsTrait, Verifier},
     utils::opening_access::AccOpeningAccessor,
@@ -14,15 +12,10 @@ use crate::{
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
-    utils::lookup_bits::LookupBits,
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
-use atlas_trace::{trace::LayerData, Tensor, Trace};
 use atlas_transcript::Transcript;
-use common::{
-    consts::{TRIG_PERIOD_MODULUS, XLEN},
-    CommittedPoly, VirtualPoly,
-};
+use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 
 /// `LookupOperandsTrait` helper for the trig downscale (right-shift) stage. Registers the
 /// remainder witness/address claim under `VirtualPoly::TeleportRemainder`, and the
@@ -72,20 +65,6 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
             VirtualPoly::NodeOutput(node_idx),
             SumcheckId::NodeExecution(node_idx),
         )
-    }
-
-    /// The teleportation remainder, re-derived from the trace (not stored separately).
-    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-        let LayerData { operands, .. } = TraceView::layer_data(trace, node);
-        let (_quotient, remainder) = compute_division(operands[0], TRIG_PERIOD_MODULUS as i32);
-        remainder.map(|v| v as i64)
-    }
-
-    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
-        witness
-            .iter()
-            .map(|&v| LookupBits::new(v as u64, XLEN))
-            .collect()
     }
 }
 

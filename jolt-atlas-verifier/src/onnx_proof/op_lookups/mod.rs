@@ -5,15 +5,12 @@
 //! verifies correct reads from lookup tables and combines multiple claims using
 //! gamma batching for efficiency.
 
-use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
+use atlas_trace::Op;
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::trace_view::TraceView;
-use crate::utils::compute_lookup_indices_from_operands;
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
-    utils::lookup_bits::LookupBits,
 };
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_sumcheck::{
@@ -127,13 +124,6 @@ pub trait LookupOperandsTrait {
     /// as [`Self::r_cycle`].
     fn r_cycle_source(node_idx: usize) -> OpeningId;
 
-    /// The polynomial that is evaluated at `r_cycle` to produce the "raf" claim of the read-raf sumcheck.
-    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64>;
-
-    /// Computes the `LookupBits` used for the read-raf sumcheck + one-hot checks, from
-    /// `witness` (the same value [`Self::witness`] already computed).
-    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits>;
-
     /// This helper's lookup address width. [`Self::LOG_K`] by default; helpers
     /// whose width varies per node (the saturating clamp) override it.
     fn log_k(&self) -> usize {
@@ -183,20 +173,6 @@ impl LookupOperandsTrait for DefaultLookupOperands {
             VirtualPoly::NodeOutput(node_idx),
             SumcheckId::NodeExecution(node_idx),
         )
-    }
-
-    /// Reads the node's first operand tensor directly from the trace.
-    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-        let LayerData {
-            output: _,
-            operands,
-        } = TraceView::layer_data(trace, node);
-        operands[0].padded_pow2().map(|v| v as i64)
-    }
-
-    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
-        let operand = witness.map(|v| v as i32);
-        compute_lookup_indices_from_operands(&[&operand], false)
     }
 }
 

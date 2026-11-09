@@ -10,8 +10,6 @@ use atlas_trace::{Model, Op};
 
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
-use atlas_algebra::{field::JoltField, utils::thread::unsafe_allocate_zero_vec};
-use rayon::prelude::*;
 
 /// Convert a row-major linear index into coordinates for the given dimensions.
 pub fn linear_to_coord(mut index: usize, dims: &[usize]) -> Vec<usize> {
@@ -383,44 +381,6 @@ pub struct SumDims {
     pub operand: Vec<usize>,
     /// Dimensions of the output tensor (normalized to 2D)
     pub output: Vec<usize>,
-}
-
-/// Transposes a flattened matrix stored in row-major order.
-///
-/// # Arguments
-/// * `flat_vector` - The input vector representing a flattened matrix in row-major order
-/// * `num_rows` - The number of rows in the original matrix
-/// * `num_cols` - The number of columns in the original matrix
-///
-/// # Returns
-/// A new vector representing the transposed matrix in row-major order
-pub fn transpose_flat_matrix<F: JoltField>(
-    flat_vector: Vec<F>,
-    num_rows: usize,
-    num_cols: usize,
-) -> Vec<F> {
-    const MIN_SIZE_FOR_PARALLEL: usize = 1024;
-
-    let mut transposed = unsafe_allocate_zero_vec(num_rows * num_cols);
-    let total_size = num_rows * num_cols;
-
-    if total_size >= MIN_SIZE_FOR_PARALLEL {
-        transposed
-            .par_chunks_mut(num_rows)
-            .enumerate()
-            .for_each(|(j, col)| {
-                for i in 0..num_rows {
-                    col[i] = flat_vector[i * num_cols + j];
-                }
-            });
-    } else {
-        for i in 0..num_rows {
-            for j in 0..num_cols {
-                transposed[j * num_rows + i] = flat_vector[i * num_cols + j];
-            }
-        }
-    }
-    transposed
 }
 
 #[cfg(test)]

@@ -5,14 +5,14 @@ use crate::utils::opening_access::IntoProverProvider;
 use crate::{
     onnx_proof::{
         clamp_lookups::{is_scalar, prove_clamp_lookup},
-        relation::prove_tie,
+        relation::{prove_tie, AtlasRelation, RelationSetup, TieClaims},
         ProofId, Prover,
     },
     utils::opening_access::{AccOpeningAccessor, Target},
 };
 use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
-use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
-use atlas_trace::{op::Add, trace::LayerData};
+use atlas_sumcheck::{opening_proof::OpeningAccumulator, sumcheck::SumcheckInstanceProof};
+use atlas_trace::{op::Add, trace::LayerData, Trace};
 use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::ops::add::*;
 use jolt_claims::SymbolicSumcheck;
@@ -59,19 +59,14 @@ pub(crate) fn prove_accumulation<S: AccumulationShape, F: JoltField, T: Transcri
     results
 }
 
-impl<F: JoltField, S: AccumulationShape> crate::onnx_proof::relation::TieClaims<F>
-    for AccumulationRelation<S>
-{
+impl<F: JoltField, S: AccumulationShape> TieClaims<F> for AccumulationRelation<S> {
     fn claims(
         &self,
-        trace: &atlas_trace::Trace,
-        setup: &crate::onnx_proof::relation::RelationSetup<F>,
-        _accumulator: &dyn atlas_sumcheck::opening_proof::OpeningAccumulator<F>,
+        trace: &Trace,
+        setup: &RelationSetup<F>,
+        _accumulator: &dyn OpeningAccumulator<F>,
     ) -> Vec<F> {
-        let LayerData { operands, .. } = TraceView::layer_data(
-            trace,
-            crate::onnx_proof::relation::AtlasRelation::node(self),
-        );
+        let LayerData { operands, .. } = TraceView::layer_data(trace, self.node());
         operands[..2]
             .iter()
             .map(|operand| operand.evaluate_mle(&setup.incoming_point))

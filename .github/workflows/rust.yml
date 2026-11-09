@@ -83,6 +83,13 @@ jobs:
             echo "jolt-atlas-verifier names a ::prover or ::witness path" >&2
             exit 1
           fi
+      - name: No execution trace in the verifier's sources
+        # The backstop for jolt-atlas-verifier/clippy.toml's Trace-free `disallowed-types`.
+        run: |
+          if grep -rnE '\btrace::Trace\b|\bTrace\b *[,;}]' jolt-atlas-verifier/src --include='*.rs'; then
+            echo "jolt-atlas-verifier names atlas_trace's Trace" >&2
+            exit 1
+          fi
       - name: No BN254 curve crates in any member's dependency graph
         # Vendored upstream crates keep optional BN254 features, so they are resolved with their
         # default features off; atlas crates are resolved as built.

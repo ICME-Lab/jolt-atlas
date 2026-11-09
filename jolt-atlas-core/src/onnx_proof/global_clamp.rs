@@ -23,7 +23,10 @@ use super::{
     witness::build_one_hot_rad_witness,
 };
 use crate::node_view::ModelView;
-use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial};
+use atlas_algebra::{
+    field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial,
+    utils::lookup_bits::LookupBits,
+};
 use atlas_trace::{Model, Trace};
 use common::CommittedPoly;
 pub use jolt_atlas_verifier::onnx_proof::global_clamp::*;
@@ -48,7 +51,7 @@ pub fn bucket_witnesses<F: JoltField>(
                 }
             }
             BucketKind::Remainder => {
-                let bits = bucket.assemble_bits(|idx| {
+                let bits = assemble_bits(bucket, |idx| {
                     remainder_lookup_bits(
                         &rebase_remainder(&model.view(idx), trace),
                         bucket.width as i32,
@@ -65,4 +68,19 @@ pub fn bucket_witnesses<F: JoltField>(
             }
         })
         .collect()
+}
+
+/// Lay each node's lookup addresses into the bucket's cycle space; the
+/// unused tail holds index-0 lookups.
+pub fn assemble_bits(
+    bucket: &ClampBucket,
+    mut per_node: impl FnMut(usize) -> Vec<LookupBits>,
+) -> Vec<LookupBits> {
+    let mut bits = vec![LookupBits::new(0, bucket.width); bucket.cycle_len()];
+    for n in &bucket.nodes {
+        let b = per_node(n.idx);
+        assert_eq!(b.len(), 1 << n.log_t, "node {} lookup count", n.idx);
+        bits[n.offset..n.offset + b.len()].copy_from_slice(&b);
+    }
+    bits
 }

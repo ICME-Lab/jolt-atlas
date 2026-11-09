@@ -22,10 +22,7 @@ use crate::node_view::clamp_value_bound;
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_algebra::{
-    field::JoltField,
-    utils::{lookup_bits::LookupBits, math::Math},
-};
+use atlas_algebra::{field::JoltField, utils::math::Math};
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::OpeningAccumulator,
@@ -186,21 +183,6 @@ impl ClampBucket {
     /// Size of the bucket's cycle space.
     pub fn cycle_len(&self) -> usize {
         1 << self.log_t
-    }
-
-    /// Lay each node's lookup addresses into the bucket's cycle space; the
-    /// unused tail holds index-0 lookups.
-    pub fn assemble_bits(
-        &self,
-        mut per_node: impl FnMut(usize) -> Vec<LookupBits>,
-    ) -> Vec<LookupBits> {
-        let mut bits = vec![LookupBits::new(0, self.width); self.cycle_len()];
-        for n in &self.nodes {
-            let b = per_node(n.idx);
-            assert_eq!(b.len(), 1 << n.log_t, "node {} lookup count", n.idx);
-            bits[n.offset..n.offset + b.len()].copy_from_slice(&b);
-        }
-        bits
     }
 
     /// The packed remainder range check's input claim `Σ_n γ_n·R_n(r_n)` and

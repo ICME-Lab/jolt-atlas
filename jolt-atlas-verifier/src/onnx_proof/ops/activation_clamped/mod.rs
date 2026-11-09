@@ -13,25 +13,18 @@
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
 //! batched sumcheck.
 
-use atlas_trace::{Tensor, Trace};
-
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::neural_teleport::small_table::{SmallTable, SmallTableRelation};
 use crate::onnx_proof::relation::{RelationParams, RelationVerifier};
-use crate::{
-    onnx_proof::{
-        deferred_lookups::{DeferredBatch, DeferredOneHot},
-        op_lookups::{
-            DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
-        },
-        Verifier,
-    },
-    utils::compute_lookup_indices_from_operands,
+use crate::onnx_proof::{
+    deferred_lookups::{DeferredBatch, DeferredOneHot},
+    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider},
+    Verifier,
 };
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
-    utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
+    utils::errors::ProofVerifyError,
 };
 use atlas_lookup_tables::clamp::ActivationClampTable;
 use atlas_sumcheck::{
@@ -106,15 +99,6 @@ impl LookupOperandsTrait for ActivationClampOperands {
 
     fn r_cycle_source(node_idx: usize) -> OpeningId {
         DefaultLookupOperands::r_cycle_source(node_idx)
-    }
-
-    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-        DefaultLookupOperands.witness(node, trace)
-    }
-
-    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
-        let operand = witness.map(|v| v as i32);
-        compute_lookup_indices_from_operands(&[&operand], false)
     }
 }
 

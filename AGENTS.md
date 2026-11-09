@@ -121,14 +121,17 @@ Workspace members, in dependency order:
   `proof_serialization`, and `onnx_proof` — every op's `OpLayout` and `VerifyOp`, the relations
   and their parameters, the lookup/clamp/range-check/deferred-batch machinery's verifier sides,
   the `Verifier` state, `verify`/`verify_with`, and the shared and verifier preprocessing; also
-  `node_view` and `utils`. Every proof field is private (`from_parts` + `&` accessors; `&mut` and
-  the `probe` self-check state behind the `test-util` feature). No prover dependency: CI checks
-  it builds in isolation, `clippy.toml` disallows prover items of the vendored and atlas
-  protocol crates, and CI rejects `prover`/`witness` module paths in its sources.
+  `node_view` and `utils`. Every proof field is private (`from_parts` + `&` accessors; `&mut`
+  behind the `test-util` feature). No prover dependency and no prover code: the crate is
+  Trace-free (nothing in it names `atlas_trace::Trace` or its witness types; witness
+  construction is in `jolt-atlas-core`). CI checks it builds in isolation, `clippy.toml`
+  disallows the trace types and the prover items of the vendored and atlas protocol crates, and
+  CI rejects `prover`/`witness` module paths and `Trace` in its sources. `docs/verifier.md` is
+  the audit reading order and the trust-perimeter statement.
 - **jolt-atlas-core** — the prover. `onnx_proof` mirrors the verifier crate's module tree: each
   module glob-re-exports its verifier counterpart and adds the prover side (`ProveOp` impls,
-  prover instances, extension traits such as `OpLookupProve` for prover methods on shared
-  types), with `prover.rs`, `witness.rs`, `preprocessing.rs` (prover setup) and `types.rs`.
+  prover instances, extension traits such as `RelationWitnesses`, `TieClaims` and
+  `OpLookupProve` for prover methods on shared types), with `prover.rs`, `witness.rs`, `preprocessing.rs` (prover setup) and `types.rs`.
   `prove` and the free `verify` (adding the test-only lockstep debug comparison) are re-exported
   at the crate root. The whole test suite is under `onnx_proof/testing/`; the `prove` example is
   in `examples/`.

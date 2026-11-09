@@ -6,6 +6,10 @@
 # on shared types. A crate vendored later adds its prover items here. `allow-invalid` marks
 # items behind a feature the verifier's build leaves off (jolt-sumcheck's `committed`,
 # atlas-transcript's `prover`).
+#
+# The crate is also Trace-free: nothing here names the execution trace or its witness types, so
+# witness construction lives in jolt-atlas-core (`disallowed-types` below; CI greps for
+# `trace::Trace` as the backstop).
 disallowed-methods = [
     { path = "jolt_sumcheck::prover::prove_batch", reason = "prover-only" },
     { path = "jolt_sumcheck::prover::prove_uniskip_clear", reason = "prover-only" },
@@ -24,6 +28,10 @@ disallowed-methods = [
     { path = "atlas_pcs::commitment_scheme::CommitmentScheme::prove_rlc", reason = "prover-only" },
 ]
 disallowed-types = [
+    { path = "atlas_trace::trace::Trace", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
+    { path = "atlas_trace::trace::FusedIntermediates", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
+    { path = "atlas_trace::trace::NodeAux", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
+    { path = "atlas_trace::trace::SoftmaxWitness", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
     { path = "jolt_sumcheck::prover::ProveRounds", reason = "prover-only" },
     { path = "jolt_sumcheck::prover::MemberRound", reason = "prover-only" },
     { path = "jolt_sumcheck::prover::MemberFinish", reason = "prover-only" },

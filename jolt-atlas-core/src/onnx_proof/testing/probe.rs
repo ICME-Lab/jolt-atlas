@@ -7,16 +7,65 @@
 //! probe mode those checks record a divergence instead of panicking, so the
 //! tampered proof reaches the verifier, which is the oracle under test.
 //!
-//! The probe state and the `probe_assert!` macros live in
-//! [`jolt_atlas_verifier::probe`], so self-checks on either side of the crate
-//! boundary share it; this module owns the guard. State is process-global;
-//! nextest runs each test in its own process; under plain `cargo test` the
-//! sweeps are `#[serial]`.
+//! State is process-global: the self-checks run inside rayon closures, so a
+//! thread-local would miss them. nextest runs each test in its own process;
+//! under plain `cargo test` the sweeps are `#[serial]`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 
-pub(crate) use jolt_atlas_verifier::probe::take_divergences;
-pub(crate) use jolt_atlas_verifier::{probe_assert, probe_assert_eq};
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+static DIVERGENCES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Switch probe mode; returns the previous state.
+fn set_active(on: bool) -> bool {
+    ACTIVE.swap(on, Ordering::SeqCst)
+}
+
+/// Whether probe mode is on.
+pub(crate) fn active() -> bool {
+    ACTIVE.load(Ordering::Relaxed)
+}
+
+/// Record a prover self-check that would have fired.
+pub(crate) fn note_divergence(site: &str) {
+    DIVERGENCES.lock().unwrap().push(site.to_string());
+}
+
+/// Drain the recorded divergences.
+pub(crate) fn take_divergences() -> Vec<String> {
+    std::mem::take(&mut *DIVERGENCES.lock().unwrap())
+}
+
+/// `assert!` outside probe mode; a recorded divergence inside it.
+macro_rules! probe_assert {
+    ($cond:expr $(, $($arg:tt)+)?) => {
+        if $crate::onnx_proof::testing::probe::active() {
+            if !($cond) {
+                $crate::onnx_proof::testing::probe::note_divergence(concat!(file!(), ":", line!()));
+            }
+        } else {
+            assert!($cond $(, $($arg)+)?);
+        }
+    };
+}
+
+/// `assert_eq!` outside probe mode; a recorded divergence inside it.
+macro_rules! probe_assert_eq {
+    ($left:expr, $right:expr $(, $($arg:tt)+)?) => {
+        if $crate::onnx_proof::testing::probe::active() {
+            if $left != $right {
+                $crate::onnx_proof::testing::probe::note_divergence(concat!(file!(), ":", line!()));
+            }
+        } else {
+            assert_eq!($left, $right $(, $($arg)+)?);
+        }
+    };
+}
+
+pub(crate) use {probe_assert, probe_assert_eq};
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);
 
@@ -29,7 +78,7 @@ pub(crate) struct ProbeGuard(());
 impl ProbeGuard {
     pub(crate) fn enter() -> Self {
         assert!(
-            !jolt_atlas_verifier::probe::set_active(true),
+            !set_active(true),
             "probe mode is already active (nested or concurrent sweep)"
         );
         take_divergences();
@@ -52,7 +101,7 @@ impl Drop for ProbeGuard {
             drop(std::panic::take_hook());
         }
         atlas_sumcheck::opening_proof::forgery::set(None);
-        jolt_atlas_verifier::probe::set_active(false);
+        set_active(false);
     }
 }
 

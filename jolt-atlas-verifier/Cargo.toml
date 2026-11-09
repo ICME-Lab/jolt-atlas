@@ -5,8 +5,7 @@ edition = "2021"
 description = "The jolt-atlas proof object, its wire format and its verifier, with no prover dependency."
 
 [features]
-# `&mut` proof-field accessors and the prover self-checks' probe state for the soundness
-# harness. Inert unless called.
+# `&mut` proof-field accessors for the soundness harness. Inert unless called.
 test-util = []
 
 [dependencies]
@@ -25,10 +24,8 @@ ark-serialize.workspace = true
 ark-std.workspace = true
 derive_more.workspace = true
 itertools.workspace = true
-num.workspace = true
 num-derive.workspace = true
 num-traits.workspace = true
-rayon.workspace = true
 serde.workspace = true
 strum.workspace = true
 strum_macros.workspace = true

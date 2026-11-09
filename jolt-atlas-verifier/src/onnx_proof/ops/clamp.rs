@@ -1,18 +1,13 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
-use crate::{
-    onnx_proof::{
-        op_lookups::{
-            DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider,
-        },
-        ProofId, ProofType, Verifier,
-    },
-    utils::compute_lookup_indices_from_operands,
+use crate::onnx_proof::{
+    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider},
+    ProofId, ProofType, Verifier,
 };
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
-    utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
+    utils::errors::ProofVerifyError,
 };
 use atlas_lookup_tables::clamp::{ClampTable, CLAMP_BOUND};
 use atlas_sumcheck::relation::{verify_relation, verify_relation_batch};
@@ -20,7 +15,7 @@ use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::{self, RaOneHotEncoding},
 };
-use atlas_trace::{op::Clamp, Tensor, Trace};
+use atlas_trace::op::Clamp;
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
 
@@ -62,15 +57,6 @@ impl LookupOperandsTrait for SymmetricClampOperands {
 
     fn r_cycle_source(node_idx: usize) -> OpeningId {
         DefaultLookupOperands::r_cycle_source(node_idx)
-    }
-
-    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-        DefaultLookupOperands.witness(node, trace)
-    }
-
-    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
-        let operand = witness.map(|v| v as i32);
-        compute_lookup_indices_from_operands(&[&operand], false)
     }
 }
 

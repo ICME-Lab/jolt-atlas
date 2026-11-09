@@ -8,29 +8,29 @@
 //! ([`EqSchedule::High`]); the contraction axis `k` follows.
 
 use crate::{
-    onnx_proof::ops::einsum::dot::{EinsumGeometry, EinsumLayout, EqSchedule, Folded},
+    onnx_proof::ops::einsum::dot::{EinsumGeometry, EinsumLayout, EqSchedule},
     utils::dims::EinsumDims,
 };
 use atlas_algebra::{
     field::JoltField,
     poly::{
         eq_poly::EqPolynomial,
-        multilinear_polynomial::MultilinearPolynomial,
         opening_point::{OpeningPoint, BIG_ENDIAN},
     },
     utils::math::Math,
 };
-use atlas_trace::Tensor;
-use common::parallel::par_enabled;
-use rayon::prelude::*;
 
 /// Batched matmul layout: `out[h,i,l] = Σ_j left[h,i,j]·right[h,l,j]` with the
 /// batch pack `h` flattened into the leading axis by the dims extractor.
 pub struct AbmkAbnkAbmnLayout {
-    log_ab: usize,
-    log_m: usize,
-    log_n: usize,
-    log_k: usize,
+    /// log₂ of the batch pack.
+    pub log_ab: usize,
+    /// log₂ of the output rows.
+    pub log_m: usize,
+    /// log₂ of the output columns.
+    pub log_n: usize,
+    /// log₂ of the contracted axis.
+    pub log_k: usize,
 }
 
 impl AbmkAbnkAbmnLayout {
@@ -75,58 +75,6 @@ impl EinsumGeometry for AbmkAbnkAbmnLayout {
 }
 
 impl<F: JoltField> EinsumLayout<F> for AbmkAbnkAbmnLayout {
-    fn fold(
-        &self,
-        left_operand: &Tensor<i32>,
-        right_operand: &Tensor<i32>,
-        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-    ) -> Folded<F> {
-        let batch = 1usize << self.log_ab;
-        let m = 1usize << self.log_m;
-        let n = 1usize << self.log_n;
-        let k = 1usize << self.log_k;
-
-        let (r_ab, r_mn) = r_node_output.split_at(self.log_ab);
-        let (r_m, r_n) = r_mn.split_at(self.log_m);
-        let eq_r_ab = EqPolynomial::evals(&r_ab.r);
-        let eq_r_m = EqPolynomial::evals(&r_m.r);
-        let eq_r_n = EqPolynomial::evals(&r_n.r);
-
-        let left: Vec<F> = (0..batch * k)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|hj| {
-                let h = hj / k;
-                let j = hj % k;
-                let mut sum = F::zero();
-                for i in 0..m {
-                    let idx = (h * m + i) * k + j;
-                    sum += eq_r_m[i].mul_i64(left_operand[idx] as i64);
-                }
-                sum
-            })
-            .collect();
-        let right: Vec<F> = (0..batch * k)
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|hj| {
-                let h = hj / k;
-                let j = hj % k;
-                let mut sum = F::zero();
-                for l in 0..n {
-                    let idx = (h * n + l) * k + j;
-                    sum += eq_r_n[l].mul_i64(right_operand[idx] as i64);
-                }
-                sum
-            })
-            .collect();
-        Folded {
-            left: MultilinearPolynomial::from(left),
-            right: MultilinearPolynomial::from(right),
-            eq: Some(MultilinearPolynomial::from(eq_r_ab)),
-        }
-    }
-
     fn operand_points(
         &self,
         r_node_output: &OpeningPoint<BIG_ENDIAN, F>,

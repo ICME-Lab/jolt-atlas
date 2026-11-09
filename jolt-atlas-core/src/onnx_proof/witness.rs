@@ -27,8 +27,8 @@ use crate::{
         ops::rsqrt::rsqrt_dividend,
         ops::softmax_last_axis::{generate_exp_lut_decomposed, softmax_z},
         range_checking::range_check_operands::{
-            DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
-            RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
+            range_check_lookup_indices, DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands,
+            RangeCheckWitness, RiRangeCheckOperands, RsRangeCheckOperands,
             TeleportRangeCheckOperands,
         },
     },
@@ -52,7 +52,7 @@ use rayon::prelude::*;
 /// Every range-check variant (`DivRangeCheckRaD`, `SqrtRangeCheckRaD`, etc.) follows the
 /// same three steps: get operand tensors via the trait, compute lookup indices, then call
 /// `build_one_hot_rad_witness`. This helper collapses all four arms to a single call site.
-fn build_range_check_rad_witness<F: JoltField, H: RangeCheckingOperandsTrait>(
+fn build_range_check_rad_witness<F: JoltField, H: RangeCheckWitness>(
     model: &Model,
     trace: &Trace,
     node_idx: usize,
@@ -60,14 +60,11 @@ fn build_range_check_rad_witness<F: JoltField, H: RangeCheckingOperandsTrait>(
 ) -> MultilinearPolynomial<F> {
     let computation_node = &model.view(node_idx);
     let inputs = TraceView::padded_operand_tensors(trace, computation_node);
-    let rc_operands = RangeCheckOperands::<H>::new(computation_node);
-
-    let [left_operand, right_operand] = rc_operands
-        .build_lookup_operands(trace, &inputs)
+    let [left_operand, right_operand] = H::build_lookup_operands(computation_node, trace, &inputs)
         .try_into()
         .expect("Expected two operands for range-checking");
 
-    let lookup_indices = rc_operands.compute_lookup_indices(&left_operand, &right_operand);
+    let lookup_indices = range_check_lookup_indices(&left_operand, &right_operand);
     build_one_hot_rad_witness(&lookup_indices, d, LOG_K)
 }
 
@@ -196,14 +193,15 @@ pub(crate) fn generate_node_witnesses<F: JoltField>(
                 CommittedPoly::MeanOfSquaresRangeCheckRaD(_, d) => {
                     let bits = mos_range_bits.get_or_insert_with(|| {
                         let padded_operands = TraceView::padded_operand_tensors(trace, node);
-                        let rc_operands =
-                            RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
-                        let [left, right] = rc_operands
-                            .build_lookup_operands(trace, &padded_operands)
-                            .try_into()
-                            .unwrap();
+                        let [left, right] = MeanOfSquaresRangeCheckOperands::build_lookup_operands(
+                            node,
+                            trace,
+                            &padded_operands,
+                        )
+                        .try_into()
+                        .unwrap();
 
-                        rc_operands.compute_lookup_indices(&left, &right)
+                        range_check_lookup_indices(&left, &right)
                     });
                     build_one_hot_rad_witness(bits, *d, LOG_K)
                 }

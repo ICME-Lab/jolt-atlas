@@ -5,11 +5,17 @@
 //! lookup reads. Also establishes `r`'s claim (`VirtualPoly::TeleportRemainder`) for
 //! `division.rs`'s `a = P·q + r` derivation.
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::neural_teleport::division::compute_division;
+use crate::onnx_proof::op_lookups::LookupWitness;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::opening_access::IntoProverProvider;
 use crate::{onnx_proof::Prover, utils::opening_access::AccOpeningAccessor};
+use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
 use atlas_trace::Tensor;
+use atlas_trace::{trace::LayerData, Trace};
 use atlas_transcript::Transcript;
+use common::consts::{TRIG_PERIOD_MODULUS, XLEN};
 use common::{consts::TRIG_DOWNSCALE_BITS, VirtualPoly};
 pub use jolt_atlas_verifier::onnx_proof::neural_teleport::trig_downscale::*;
 
@@ -29,4 +35,20 @@ pub fn cache_downscaled_prove<F: JoltField, T: Transcript>(
     let mut provider = accessor.into_provider(&mut prover.transcript, r_node_output);
     provider.append_advice(VirtualPoly::TrigDownscaled, eval);
     downscaled
+}
+
+impl LookupWitness for TrigDownscaleOperands {
+    /// The teleportation remainder, re-derived from the trace (not stored separately).
+    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+        let LayerData { operands, .. } = TraceView::layer_data(trace, node);
+        let (_quotient, remainder) = compute_division(operands[0], TRIG_PERIOD_MODULUS as i32);
+        remainder.map(|v| v as i64)
+    }
+
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
+        witness
+            .iter()
+            .map(|&v| LookupBits::new(v as u64, XLEN))
+            .collect()
+    }
 }

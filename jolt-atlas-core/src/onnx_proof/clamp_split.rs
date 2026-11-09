@@ -53,7 +53,12 @@
 //! Compared to the table lookup: no RaVirtual (the most expensive check), the
 //! dense chunk count drops from `w/4` to 8, and the `w/4` slack chunks are
 //! almost empty.
+use crate::node_view::{ComputationNode, ModelView};
+use crate::onnx_proof::clamp_lookups::clamp_intermediate;
+use crate::onnx_proof::global_clamp::ClampBucket;
 use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
+use crate::onnx_proof::trace_view::TraceView;
+use atlas_algebra::poly::one_hot_polynomial::OneHotPolynomial;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -64,8 +69,10 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::booleanity::{prover::BooleanitySumcheckProver, BooleanitySumcheckParams};
 use atlas_sumcheck::relation::prover::DynRelationWitness;
+use atlas_trace::{Model, Trace};
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
+use common::CommittedPoly;
 pub use jolt_atlas_verifier::onnx_proof::clamp_split::*;
 use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
@@ -353,4 +360,217 @@ fn compute_g<F: JoltField>(chunks: &[Vec<Option<u8>>], r_cycle: &[F]) -> Vec<Vec
                 )
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Witness
+// ---------------------------------------------------------------------------
+
+const OFFSET: i64 = 1 << 31;
+
+/// A node's split witness over its (power-of-two padded) output.
+#[derive(Clone, Debug)]
+pub struct NodeSplit {
+    /// `out + 2^31`.
+    pub out: Vec<u32>,
+    /// `|acc − out|` on saturated elements, `0` elsewhere.
+    pub slack: Vec<u64>,
+    /// `1` on saturated elements.
+    pub ind: Vec<u8>,
+}
+
+impl NodeSplit {
+    /// From the padded pre-clamp accumulation and the padded node output.
+    /// (Deliberately no consistency check: a tampered trace must be caught by
+    /// the verifier, not by the prover's witness generation.)
+    pub fn new(acc: &[i64], out: &[i32]) -> Self {
+        assert_eq!(acc.len(), out.len(), "clamp split: acc / out length");
+        let (out_v, (slack, ind)): (Vec<u32>, (Vec<u64>, Vec<u8>)) = acc
+            .par_iter()
+            .zip(out.par_iter())
+            .with_min_len(par_enabled())
+            .map(|(&q, &o)| {
+                let saturated = q > i32::MAX as i64 || q < i32::MIN as i64;
+                let slack = if saturated { q.abs_diff(o as i64) } else { 0 };
+                ((o as i64 + OFFSET) as u32, (slack, saturated as u8))
+            })
+            .unzip();
+        Self {
+            out: out_v,
+            slack,
+            ind,
+        }
+    }
+
+    /// Re-derive the node's split witness from the trace.
+    pub fn from_trace(node: &ComputationNode, trace: &Trace) -> Self {
+        let acc = clamp_intermediate(node, trace);
+        let out = TraceView::layer_data(trace, node).output.padded_pow2();
+        Self::new(acc.data(), out.data())
+    }
+}
+
+/// A bucket's assembled split witness (gaps: interior zeros).
+#[derive(Clone, Debug)]
+pub struct BucketSplit {
+    /// Bucket clamp width (slack address bits).
+    pub width: usize,
+    /// `out + 2^31` per cycle.
+    pub out: Vec<u32>,
+    /// Saturation slack per cycle.
+    pub slack: Vec<u64>,
+    /// Saturation indicator per cycle.
+    pub ind: Vec<u8>,
+}
+
+impl BucketSplit {
+    /// Lay each node's split into the bucket's cycle space (`None`: the node
+    /// is a gap — an exact output, see [`exact_output_prover`]).
+    pub fn assemble(
+        bucket: &ClampBucket,
+        mut per_node: impl FnMut(usize) -> Option<NodeSplit>,
+    ) -> Self {
+        let len = bucket.cycle_len();
+        let mut out = vec![OFFSET as u32; len];
+        let mut slack = vec![0u64; len];
+        let mut ind = vec![0u8; len];
+        for n in &bucket.nodes {
+            let Some(s) = per_node(n.idx) else {
+                continue;
+            };
+            assert_eq!(s.out.len(), 1 << n.log_t, "node {} split length", n.idx);
+            out[n.offset..n.offset + s.out.len()].copy_from_slice(&s.out);
+            slack[n.offset..n.offset + s.slack.len()].copy_from_slice(&s.slack);
+            ind[n.offset..n.offset + s.ind.len()].copy_from_slice(&s.ind);
+        }
+        let saturated: usize = ind.iter().map(|&i| i as usize).sum();
+        tracing::info!(
+            bucket = bucket.idx,
+            width = bucket.width,
+            log_t = bucket.log_t,
+            nodes = bucket.nodes.len(),
+            saturated,
+            "clamp bucket split"
+        );
+        Self {
+            width: bucket.width,
+            out,
+            slack,
+            ind,
+        }
+    }
+
+    /// From the trace (commit-time witness generation); exact outputs are gaps.
+    pub fn from_trace(bucket: &ClampBucket, trace: &Trace, model: &Model) -> Self {
+        Self::assemble(bucket, |idx| {
+            (!exact_output_prover(model, trace, idx))
+                .then(|| NodeSplit::from_trace(&model.view(idx), trace))
+        })
+    }
+
+    /// The chunk polynomials of a bucket with no live node: never opened, so
+    /// committed empty (all `None`).
+    pub fn empty_witness_polys<F: JoltField>(
+        bucket: &ClampBucket,
+    ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
+        let k_chunk = one_hot_params(OUT_LOG_K).k_chunk;
+        chunk_polys(bucket)
+            .into_iter()
+            .map(|poly| {
+                (
+                    poly,
+                    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                        vec![None; bucket.cycle_len()],
+                        k_chunk,
+                    )),
+                )
+            })
+            .collect()
+    }
+
+    /// The `d`-th chunk index of every cycle: output chunks (`d < 8`, always
+    /// set), then slack chunks (`None` on interior cycles).
+    pub fn chunk_indices(&self) -> Vec<Vec<Option<u8>>> {
+        let out_params = one_hot_params(OUT_LOG_K);
+        let slack_params = one_hot_params(self.width);
+        let mut chunks: Vec<Vec<Option<u8>>> = (0..out_params.instruction_d)
+            .map(|d| {
+                self.out
+                    .par_iter()
+                    .with_min_len(par_enabled())
+                    .map(|&o| Some(out_params.lookup_index_chunk(o as u64, d)))
+                    .collect()
+            })
+            .collect();
+        chunks.extend((0..slack_params.instruction_d).map(|d| {
+            self.slack
+                .par_iter()
+                .zip(self.ind.par_iter())
+                .with_min_len(par_enabled())
+                .map(|(&s, &i)| (i == 1).then(|| slack_params.lookup_index_chunk(s, d)))
+                .collect()
+        }));
+        chunks
+    }
+
+    /// Whether any cycle is saturated (else the bucket is proven exactly and
+    /// its slack chunks stay empty and unopened).
+    pub fn saturated(&self) -> bool {
+        self.ind.contains(&1)
+    }
+
+    /// The bucket's committed one-hot chunk polynomials.
+    pub fn witness_polys<F: JoltField>(
+        &self,
+        bucket: &ClampBucket,
+    ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
+        let k_chunk = one_hot_params(OUT_LOG_K).k_chunk;
+        let indices = if self.saturated() {
+            self.chunk_indices()
+        } else {
+            // Exact bucket: the slack chunks stay empty and are never opened.
+            let values: Vec<u64> = self.out.iter().map(|&o| o as u64).collect();
+            let mut idx = value_chunk_indices(&values, OUT_LOG_K);
+            idx.extend((0..num_slack_chunks(self.width)).map(|_| vec![None; self.out.len()]));
+            idx
+        };
+        chunk_polys(bucket)
+            .into_iter()
+            .zip(indices)
+            .map(|(poly, idx)| {
+                let idx: Vec<Option<u16>> = idx.into_iter().map(|x| x.map(u16::from)).collect();
+                (
+                    poly,
+                    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(idx, k_chunk)),
+                )
+            })
+            .collect()
+    }
+}
+
+/// The `d`-th chunk index of every packed value (always set).
+pub fn value_chunk_indices(values: &[u64], width: usize) -> Vec<Vec<Option<u8>>> {
+    let params = one_hot_params(width);
+    (0..params.instruction_d)
+        .map(|d| {
+            values
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|&v| Some(params.lookup_index_chunk(v, d)))
+                .collect()
+        })
+        .collect()
+}
+
+/// A model *output* node whose public output has no saturated element proves
+/// its clamp *exactly* — `ClampAcc(r) = out(r)` — instead of through the
+/// bucket: the verifier knows `out` (an `i32` tensor without `±2^31`), so
+/// `SatClamp(acc) = out` is equivalent to `acc = out`. Such a node is a gap
+/// in its clamp bucket (prover side: from the trace).
+pub fn exact_output_prover(model: &Model, trace: &Trace, node_idx: usize) -> bool {
+    model.output_indices().contains(&node_idx)
+        && trace
+            .node_outputs
+            .get(node_idx)
+            .is_some_and(|t| unsaturated(t.data()))
 }

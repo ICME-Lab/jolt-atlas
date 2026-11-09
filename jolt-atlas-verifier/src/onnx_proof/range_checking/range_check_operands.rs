@@ -1,15 +1,11 @@
 use crate::node_view::ComputationNode;
-use atlas_algebra::{field::JoltField, utils::lookup_bits::LookupBits};
+use atlas_algebra::field::JoltField;
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
-use atlas_trace::{op::MeanOfSquares, NodeId, Op, Tensor, Trace};
+use atlas_trace::{op::MeanOfSquares, Op};
 use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly, VirtualPoly};
-use num::integer::Roots;
 
 use crate::onnx_proof::ops::mean_of_squares::mos_divisor;
-use crate::{
-    onnx_proof::{neural_teleport::division::compute_division, range_checking::RangeCheckEncoding},
-    utils::{adjusted_remainder, compute_lookup_indices_from_operands},
-};
+use crate::onnx_proof::range_checking::RangeCheckEncoding;
 
 /// Common fields shared by all range-checking operand types.
 ///
@@ -47,17 +43,6 @@ pub trait RangeCheckingOperandsTrait {
     /// Create a new base instance from a computation node.
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase;
 
-    // NOTE: In the future, range-checks with a constant value such as "tau" (neural teleportation) may be proven using a single-operand lookup table (#253).
-    // Hence, "build_lookup_operands" returns a vector of tensors, to account for both cases.
-    /// Builds the encoding operands for the lookup table from the model's
-    /// operand tensors. `trace` is available so implementations can reuse
-    /// trace-captured intermediates instead of re-executing kernels.
-    fn build_lookup_operands(
-        &self,
-        trace: &Trace,
-        operand_tensors: &[Tensor<i32>],
-    ) -> Vec<Tensor<i32>>;
-
     /// Get the committed polynomial for the d-th dimension of the range-check read-address.
     fn rad_poly(index: usize, d: usize) -> CommittedPoly;
 
@@ -87,17 +72,13 @@ pub struct DivRangeCheckOperands;
 ///
 /// For the quotient `q = ⌊S³ / x̂⌋`, verifies the division remainder
 /// `r = S³ mod x̂` satisfies `0 ≤ r < x̂`.
-pub struct RiRangeCheckOperands {
-    scale: u8,
-}
+pub struct RiRangeCheckOperands;
 
 /// Operands for the fused rsqrt square-root range-check.
 ///
 /// For the output `v̂ = ⌊√q⌋` of the quotient `q = ⌊S³ / x̂⌋`, verifies that the
 /// remainder `r = q - v̂²` satisfies `0 ≤ r ≤ 2·v̂`.
-pub struct RsRangeCheckOperands {
-    scale: u8,
-}
+pub struct RsRangeCheckOperands;
 
 impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
     fn new(_node: &ComputationNode) -> Self {
@@ -114,29 +95,6 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
         }
     }
 
-    fn build_lookup_operands(
-        &self,
-        _trace: &Trace,
-        operand_tensors: &[Tensor<i32>],
-    ) -> Vec<Tensor<i32>> {
-        assert_eq!(
-            operand_tensors.len(),
-            2,
-            "Expected exactly two operand tensors"
-        );
-        let dividend = &operand_tensors[0];
-        let divisor = &operand_tensors[1];
-
-        let remainder_data: Vec<i32> = dividend
-            .iter()
-            .zip(divisor.iter())
-            .map(|(&a, &b)| adjusted_remainder(a, b))
-            .collect();
-        let remainder = Tensor::<i32>::construct(remainder_data, dividend.dims().to_vec());
-
-        vec![remainder, divisor.clone()]
-    }
-
     fn rad_poly(index: usize, d: usize) -> CommittedPoly {
         CommittedPoly::DivRangeCheckRaD(index, d)
     }
@@ -144,11 +102,10 @@ impl RangeCheckingOperandsTrait for DivRangeCheckOperands {
 
 impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
-        let Op::Rsqrt(inner) = &node.operator else {
+        let Op::Rsqrt(_) = &node.operator else {
             panic!("Expected Rsqrt operator");
         };
-        let _ = inner;
-        Self { scale: node.scale }
+        Self
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
@@ -161,30 +118,6 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
         }
     }
 
-    fn build_lookup_operands(
-        &self,
-        _trace: &Trace,
-        operand_tensors: &[Tensor<i32>],
-    ) -> Vec<Tensor<i32>> {
-        assert_eq!(
-            operand_tensors.len(),
-            1,
-            "Expected exactly one operand tensor"
-        );
-        let input_tensor = &operand_tensors[0];
-
-        let s_cubed = 1i64 << (3 * self.scale);
-        let remainder = {
-            let data: Vec<i32> = input_tensor
-                .iter()
-                .map(|&x| (s_cubed % x as i64) as i32)
-                .collect();
-            Tensor::<i32>::construct(data, input_tensor.dims().to_vec())
-        };
-
-        vec![remainder, input_tensor.clone()]
-    }
-
     fn rad_poly(index: usize, d: usize) -> CommittedPoly {
         CommittedPoly::SqrtDivRangeCheckRaD(index, d)
     }
@@ -192,11 +125,10 @@ impl RangeCheckingOperandsTrait for RiRangeCheckOperands {
 
 impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
     fn new(node: &ComputationNode) -> Self {
-        let Op::Rsqrt(inner) = &node.operator else {
+        let Op::Rsqrt(_) = &node.operator else {
             panic!("Expected Sqrt operator");
         };
-        let _ = inner;
-        Self { scale: node.scale }
+        Self
     }
 
     fn new_params(node: &ComputationNode) -> RangeCheckOperandsBase {
@@ -216,45 +148,6 @@ impl RangeCheckingOperandsTrait for RsRangeCheckOperands {
         (left_claim, right_claim + right_claim + F::one())
     }
 
-    fn build_lookup_operands(
-        &self,
-        _trace: &Trace,
-        operand_tensors: &[Tensor<i32>],
-    ) -> Vec<Tensor<i32>> {
-        assert_eq!(
-            operand_tensors.len(),
-            1,
-            "Expected exactly one operand tensor"
-        );
-        let input_tensor = &operand_tensors[0];
-
-        let s_cubed = 1i64 << (3 * self.scale);
-        // `quotient = ⌊S³ / x̂⌋` and `out²` can exceed i32 at higher scales, so both
-        // are computed in i64. The remainder `quotient − out²` is small (< 2·out+1).
-
-        let (remainder, bound) = {
-            let (rem_data, bound_data): (Vec<i32>, Vec<i32>) = input_tensor
-                .iter()
-                .map(|&inv| {
-                    let inv_qsq = s_cubed / inv as i64;
-                    let v = inv_qsq.sqrt();
-
-                    // Quantized sqrt(x) outputs v such that v² ≤ x < (v+1)²,
-                    // hence the remainder r = x - v² satisfies 0 ≤ r < 2v + 1.
-                    let upper_bound = (2 * v + 1) as i32;
-
-                    ((inv_qsq - v * v) as i32, upper_bound)
-                })
-                .unzip();
-            (
-                Tensor::<i32>::construct(rem_data, input_tensor.dims().to_vec()),
-                Tensor::<i32>::construct(bound_data, input_tensor.dims().to_vec()),
-            )
-        };
-
-        vec![remainder, bound]
-    }
-
     fn rad_poly(index: usize, d: usize) -> CommittedPoly {
         CommittedPoly::SqrtRangeCheckRaD(index, d)
     }
@@ -272,8 +165,6 @@ pub struct MeanOfSquaresRangeCheckOperands {
     op: MeanOfSquares,
     /// The model's log2 fixed-point scale.
     scale: u8,
-    /// The node's index, for fetching its trace-captured fused intermediates.
-    node_idx: usize,
 }
 
 impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
@@ -285,7 +176,6 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
         Self {
             op,
             scale: node.scale,
-            node_idx: node.idx,
         }
     }
 
@@ -297,31 +187,6 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
             virtual_ra: VirtualPoly::MeanOfSquaresRangeCheckRa(node.idx),
             operator: node.operator.clone(),
         }
-    }
-
-    fn build_lookup_operands(
-        &self,
-        trace: &Trace,
-        _operand_tensors: &[Tensor<i32>],
-    ) -> Vec<Tensor<i32>> {
-        // The executor always captures the fused intermediates; read the
-        // rescaling remainder from the trace instead of re-executing the
-        // whole O(count·elements) mean-of-squares kernel.
-        let remainder = trace
-            .fused(NodeId(self.node_idx as u32))
-            .unwrap_or_else(|| {
-                panic!(
-                    "mean-of-squares node {} has no fused intermediates in the trace",
-                    self.node_idx
-                )
-            })
-            .remainder
-            .clone();
-        let divisor_i32 = mean_of_squares_divisor_i32(&self.op, self.scale);
-        let bound = Tensor::construct(vec![divisor_i32], vec![1])
-            .expand(remainder.dims())
-            .unwrap();
-        vec![remainder, bound]
     }
 
     fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
@@ -336,12 +201,6 @@ impl RangeCheckingOperandsTrait for MeanOfSquaresRangeCheckOperands {
     fn rad_poly(index: usize, d: usize) -> CommittedPoly {
         CommittedPoly::MeanOfSquaresRangeCheckRaD(index, d)
     }
-}
-
-/// The fused mean-of-squares divisor `D = N·2^S` as an `i32` (the range-check
-/// value domain), recovered from the operator's stored count + scale.
-fn mean_of_squares_divisor_i32(op: &atlas_trace::op::MeanOfSquares, scale: u8) -> i32 {
-    i32_divisor(mos_divisor(op, scale))
 }
 
 fn i32_divisor(divisor: i64) -> i32 {
@@ -375,26 +234,6 @@ impl RangeCheckingOperandsTrait for TeleportRangeCheckOperands {
             virtual_ra: VirtualPoly::TeleportRangeCheckRa(node.idx),
             operator: node.operator.clone(),
         }
-    }
-
-    fn build_lookup_operands(
-        &self,
-        _trace: &Trace,
-        operand_tensors: &[Tensor<i32>],
-    ) -> Vec<Tensor<i32>> {
-        assert_eq!(
-            operand_tensors.len(),
-            1,
-            "Expected exactly one operand tensor for neural teleportation"
-        );
-        let input_tensor = &operand_tensors[0];
-
-        let (_, remainder) = compute_division(input_tensor, self.tau);
-        let divisor_tensor = Tensor::construct(vec![self.tau], vec![1])
-            .expand(input_tensor.dims())
-            .unwrap();
-
-        vec![remainder, divisor_tensor]
     }
 
     fn transform_operand_claims<F: JoltField>(&self, claims: Vec<F>) -> (F, F) {
@@ -457,24 +296,6 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckOperands<H> {
             .collect::<Vec<_>>();
 
         self.helper.transform_operand_claims(operand_claims)
-    }
-
-    /// Computes the lookup operand tensors from the node input operands.
-    pub fn build_lookup_operands(
-        &self,
-        trace: &Trace,
-        operand_tensors: &[Tensor<i32>],
-    ) -> Vec<Tensor<i32>> {
-        self.helper.build_lookup_operands(trace, operand_tensors)
-    }
-
-    /// Computes the interleaved one-hot encoding required to perform the range-checking lookup.
-    pub fn compute_lookup_indices(
-        &self,
-        left_operand: &Tensor<i32>,
-        right_operand: &Tensor<i32>,
-    ) -> Vec<LookupBits> {
-        compute_lookup_indices_from_operands(&[left_operand, right_operand], true)
     }
 
     /// Gets the RA one hot encoding for one-hotness checks

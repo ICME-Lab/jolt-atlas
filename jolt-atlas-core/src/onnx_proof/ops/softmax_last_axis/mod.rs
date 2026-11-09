@@ -12,7 +12,7 @@
 //! `significance_clamp::SoftmaxSignificanceClampOperands`) — see `significance_clamp.rs`'s module doc for the relation being
 //! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
-use crate::onnx_proof::op_lookups::OpLookupProve;
+use crate::onnx_proof::op_lookups::{LookupWitness, OpLookupProve};
 use crate::onnx_proof::ops::ProveOp;
 use crate::utils::opening_access::IntoProverProvider;
 use atlas_sumcheck::relation::prover::{prove_relation_batch, DynRelationWitness};
@@ -508,13 +508,16 @@ impl SoftmaxLastAxisProver {
             &mut prover.transcript,
         );
 
-        let significance_clamp_provider = OpLookupProvider::with_helper(
-            self.computation_node.clone(),
-            SoftmaxSignificanceClampOperands::new(z_tensor),
+        let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
+            OpLookupProvider::new(self.computation_node.clone());
+        significance_clamp_provider.append_witness_claim_for(
+            &z_tensor,
+            &mut prover.accumulator,
+            &mut prover.transcript,
         );
-        let (significance_clamp_prover, _) = significance_clamp_provider
-            .read_raf_prove::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
-                &prover.trace,
+        let significance_clamp_prover = significance_clamp_provider
+            .read_raf_prover_from_bits::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
+                significance_clamp_provider.helper.lookup_bits(&z_tensor),
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );

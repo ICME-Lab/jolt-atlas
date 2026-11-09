@@ -28,14 +28,9 @@
 //! output claim `L·R·EQ` at the scattered operand points. This engine is the
 //! relation's specialized prover; the verifier is the relation's.
 
-use atlas_trace::Tensor;
-
 use atlas_algebra::{
     field::JoltField,
-    poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN},
-    },
+    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
 };
 
 /// The eq-poly binding schedule within the (HighToLow) sumcheck round order.
@@ -81,16 +76,6 @@ impl EqSchedule {
     }
 }
 
-/// Operands folded at the output randomness into MLEs over the sumcheck cube.
-pub struct Folded<F: JoltField> {
-    /// Left operand folded over the contraction(+batch) cube.
-    pub left: MultilinearPolynomial<F>,
-    /// Right operand folded over the contraction(+batch) cube.
-    pub right: MultilinearPolynomial<F>,
-    /// Batch eq-poly, present iff the schedule is not [`EqSchedule::None`].
-    pub eq: Option<MultilinearPolynomial<F>>,
-}
-
 /// The field-independent half of an einsum contraction pattern: its round geometry.
 ///
 /// See the [module docs](self) for how the engine uses these hooks.
@@ -104,14 +89,6 @@ pub trait EinsumGeometry: Send + Sync {
 
 /// The field-dependent half of an einsum contraction pattern.
 pub trait EinsumLayout<F: JoltField>: EinsumGeometry {
-    /// Fold the two operand tensors at `r_node_output` into the sumcheck MLEs.
-    fn fold(
-        &self,
-        left_operand: &Tensor<i32>,
-        right_operand: &Tensor<i32>,
-        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
-    ) -> Folded<F>;
-
     /// Map the final sumcheck point back to the `(left, right)` operand opening
     /// points. `sumcheck_challenges` is the post-protocol challenge vector.
     fn operand_points(

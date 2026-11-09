@@ -1,12 +1,16 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::op_lookups::OpLookupProve;
+use crate::onnx_proof::op_lookups::{DefaultLookupOperands, LookupWitness};
 use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::{op_lookups::OpLookupProvider, ProofId, ProofType, Prover};
+use crate::utils::compute_lookup_indices_from_operands;
 use atlas_algebra::field::JoltField;
+use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_lookup_tables::clamp::{ClampTable, CLAMP_BOUND};
 use atlas_sumcheck::relation::prover::{prove_relation, prove_relation_batch, DynRelationWitness};
 use atlas_sumcheck::{shout, sumcheck::SumcheckInstanceProof};
 use atlas_trace::op::Clamp;
+use atlas_trace::{Tensor, Trace};
 use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::ops::clamp::*;
 
@@ -60,5 +64,16 @@ impl<F: JoltField, T: Transcript> ProveOp<F, T> for Clamp {
         ));
 
         results
+    }
+}
+
+impl LookupWitness for SymmetricClampOperands {
+    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+        LookupWitness::witness(&DefaultLookupOperands, node, trace)
+    }
+
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
+        let operand = witness.map(|v| v as i32);
+        compute_lookup_indices_from_operands(&[&operand], false)
     }
 }

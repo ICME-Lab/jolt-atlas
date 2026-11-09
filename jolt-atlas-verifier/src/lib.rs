@@ -9,8 +9,7 @@
 //! isolation, and `clippy.toml` disallows the vendored crates' prover items.
 //! Every proof field is private; `jolt-atlas-core` builds proofs through
 //! `from_parts` and reads them through `&` accessors. The `test-util` feature
-//! adds `&mut` accessors and the `probe` self-check state for the soundness
-//! harness.
+//! adds `&mut` accessors for the soundness harness.
 
 #![allow(
     clippy::len_without_is_empty,
@@ -23,8 +22,6 @@
 
 pub mod node_view;
 pub mod onnx_proof;
-#[cfg(feature = "test-util")]
-pub mod probe;
 mod proof;
 pub mod proof_serialization;
 mod types;

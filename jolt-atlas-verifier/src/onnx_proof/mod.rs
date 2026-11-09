@@ -24,7 +24,6 @@ pub mod ops;
 pub mod preprocessing;
 pub mod range_checking;
 pub mod relation;
-pub mod trace_view;
 pub mod verifier;
 
 // ── Re-exports ───────────────────────────────────────────────────────────

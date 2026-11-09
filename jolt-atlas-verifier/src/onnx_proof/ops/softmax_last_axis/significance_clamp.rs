@@ -18,39 +18,21 @@
 use super::exp_lut::generate_exp_lut_decomposed;
 use crate::node_view::ComputationNode;
 use crate::{
-    onnx_proof::op_lookups::{DefaultLookupOperands, LookupOperandsTrait},
-    utils::opening_access::AccOpeningAccessor,
+    onnx_proof::op_lookups::LookupOperandsTrait, utils::opening_access::AccOpeningAccessor,
 };
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
-    utils::lookup_bits::LookupBits,
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
-use atlas_trace::{Tensor, Trace};
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,
 };
 
-/// Precomputed-witness [`LookupOperandsTrait`] helper for softmax's saturating clamp.
-///
-/// `z` is computed by the caller (`softmax_z(x, max_k, last_dim)`) since the caller already has
-/// both operands from `SoftmaxLastAxisTrace` — `witness()` returns it directly, ignoring the
-/// `&Trace` parameter (mirrors `SaturatingAccClampOperands`'s `precomputed` field). `Option`
-/// (rather than a bare `Tensor`) so `OpLookupProvider::new`/`.encoding()`'s `H: Default` bound is
-/// satisfiable for verifier-only call sites, which never call `witness()`.
+/// [`LookupOperandsTrait`] helper for softmax's saturating clamp of the shifted logits `z`.
 #[derive(Default)]
-pub struct SoftmaxSignificanceClampOperands {
-    z: Option<Tensor<i64>>,
-}
-
-impl SoftmaxSignificanceClampOperands {
-    /// The clamp operands for the shifted logits `z`.
-    pub fn new(z: Tensor<i64>) -> Self {
-        Self { z: Some(z) }
-    }
-}
+pub struct SoftmaxSignificanceClampOperands;
 
 impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
     const LOG_K: usize = XLEN;
@@ -97,15 +79,5 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
             VirtualPoly::SoftmaxZHi(node_idx),
             SumcheckId::NodeExecution(node_idx),
         )
-    }
-
-    fn witness(&self, _node: &ComputationNode, _trace: &Trace) -> Tensor<i64> {
-        self.z
-            .clone()
-            .expect("SoftmaxSignificanceClampOperands::witness called without a precomputed z (verifier-only helper)")
-    }
-
-    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
-        DefaultLookupOperands.lookup_bits(witness)
     }
 }

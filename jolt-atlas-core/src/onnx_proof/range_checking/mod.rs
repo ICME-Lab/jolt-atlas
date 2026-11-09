@@ -7,7 +7,9 @@
 use atlas_trace::Trace;
 pub use jolt_atlas_verifier::onnx_proof::range_checking::*;
 
-use crate::onnx_proof::range_checking::range_check_operands::RangeCheckingOperandsTrait;
+use crate::onnx_proof::range_checking::range_check_operands::{
+    range_check_lookup_indices, RangeCheckWitness,
+};
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::field::JoltField;
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
@@ -42,7 +44,7 @@ pub trait RangeCheckProve {
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default;
 }
 
-impl<H: RangeCheckingOperandsTrait> RangeCheckProve for RangeCheckProvider<H> {
+impl<H: RangeCheckWitness> RangeCheckProve for RangeCheckProvider<H> {
     /// Combined prover flow: appends RAF claims + computes lookup indices + creates sumcheck prover.
     ///
     /// Returns `(sumcheck_prover, lookup_indices)` where `lookup_indices` can be reused
@@ -59,11 +61,10 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProve for RangeCheckProvider<H> {
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
         let padded_operands = TraceView::padded_operand_tensors(trace, &self.computation_node);
-        let lookup_operands = self.operands.build_lookup_operands(trace, &padded_operands);
+        let lookup_operands =
+            H::build_lookup_operands(&self.computation_node, trace, &padded_operands);
 
-        let lookup_bits = self
-            .operands
-            .compute_lookup_indices(&lookup_operands[0], &lookup_operands[1]);
+        let lookup_bits = range_check_lookup_indices(&lookup_operands[0], &lookup_operands[1]);
         let lookup_indices: Vec<usize> = lookup_bits.iter().map(|&x| x.into()).collect();
         let prover = ps_read_raf_prover(self, lookup_bits, accumulator, transcript);
         (prover, lookup_indices)

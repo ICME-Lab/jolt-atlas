@@ -21,20 +21,17 @@
 
 use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupProvider};
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{deferred_lookups::VerifierLookupJob, Verifier};
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
-    utils::{errors::ProofVerifyError, lookup_bits::LookupBits},
+    utils::errors::ProofVerifyError,
 };
 use atlas_sumcheck::opening_proof::{
     OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator,
 };
-use atlas_trace::{op::sum_axes_i64, trace::LayerData, Op, Tensor, Trace};
 use atlas_transcript::Transcript;
-use common::{parallel::par_enabled, CommittedPoly, VirtualPoly};
-use rayon::prelude::*;
+use common::{CommittedPoly, VirtualPoly};
 
 /// Widest address of the saturating-clamp lookup table (an i64 accumulation).
 /// Individual nodes use `node.sat_clamp_bits ∈ {40, 48, 56, 64}` (see
@@ -78,61 +75,6 @@ pub fn acc_opening_id(node_idx: usize) -> OpeningId {
     )
 }
 
-/// Re-execute the node's saturating accumulation and return the **padded** i64
-/// intermediate (pre-clamp) tensor — the `raf`/lookup-index polynomial.
-///
-/// - `Add`/`Sub`: element-wise `left ± right` (via [`sat_binop_intermediate`]).
-/// - `Sum`: the un-clamped sum over the reduced axes (via [`sum_axes_i64`]).
-///
-/// The padding (to the next power of two) matches the node-output MLE domain, so
-/// the accumulation and output polynomials share the same `log_T`.
-/// Pre-clamp `i64` accumulation of a binary saturating Add/Sub — the clamp
-/// lookup index the prover re-derives.
-fn sat_binop_intermediate(operator: &Op, lhs: &Tensor<i32>, rhs: &Tensor<i32>) -> Tensor<i64> {
-    let combine: fn(i64, i64) -> i64 = match operator {
-        Op::Add(_) => |a, b| a + b,
-        Op::Sub(_) => |a, b| a - b,
-        other => panic!("sat_binop_intermediate: expected Add or Sub, got {other}"),
-    };
-    lhs.zip_map(rhs, |a, b| combine(a as i64, b as i64))
-        .expect("sat_binop_intermediate: operand dims must match")
-}
-
-/// The node's pre-clamp `i64` accumulation, re-executed from its operands in the trace.
-pub fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-    // Fused rescale ops: the trace already holds the pre-clamp quotient.
-    if let Some(cached) = trace.fused_intermediates(node.idx) {
-        return cached.quotient.padded_pow2();
-    }
-    let LayerData { operands, .. } = TraceView::layer_data(trace, node);
-    let raw = match &node.operator {
-        Op::Add(_) | Op::Sub(_) => {
-            let [left, right] = operands[..] else {
-                panic!(
-                    "clamp lookup (Add/Sub) expects two operands, got {}",
-                    operands.len()
-                )
-            };
-            sat_binop_intermediate(&node.operator, left, right)
-        }
-        Op::Sum(s) => {
-            let [operand] = operands[..] else {
-                panic!(
-                    "clamp lookup (Sum) expects one operand, got {}",
-                    operands.len()
-                )
-            };
-            sum_axes_i64(operand, &s.axes)
-        }
-        // Einsum / Mul / Square / Cube / MeanOfSquares: the pre-clamp value
-        // is always captured in the trace (handled by the cache hit above).
-        other => panic!(
-            "clamp lookup: unsupported operator {other} (fused ops must carry trace intermediates)"
-        ),
-    };
-    raw.padded_pow2()
-}
-
 /// Verifier counterpart of [`prove_append_acc`]: append the `ClampAcc` opening
 /// point (claim is loaded from the proof's opening claims).
 pub fn verify_append_acc<F, T>(
@@ -150,10 +92,6 @@ pub fn verify_append_acc<F, T>(
 /// [`LookupOperandsTrait`] helper for the 64-bit accumulator-sourced saturating clamp, backed
 /// by [`SaturationTable`].
 pub struct SaturatingAccClampOperands {
-    /// Set by fused callers (`fused_rebase`) that already computed the pre-clamp
-    /// intermediate, to avoid re-deriving it. `None` re-executes via
-    /// [`clamp_intermediate`].
-    precomputed: Option<Tensor<i64>>,
     /// Lookup address width for this node (`node.sat_clamp_bits`).
     log_k: usize,
 }
@@ -162,7 +100,6 @@ impl SaturatingAccClampOperands {
     /// Helper for `node`, using its statically derived clamp width.
     pub fn for_node(node: &ComputationNode) -> Self {
         Self {
-            precomputed: None,
             log_k: node.sat_clamp_bits,
         }
     }
@@ -201,32 +138,9 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
         DefaultLookupOperands::r_cycle_source(node_idx)
     }
 
-    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-        self.precomputed
-            .clone()
-            .unwrap_or_else(|| clamp_intermediate(node, trace))
-    }
-
-    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
-        clamp_lookup_bits(witness, self.log_k)
-    }
-
     fn log_k(&self) -> usize {
         self.log_k
     }
-}
-
-/// Clamp lookup indices: each i64 accumulation value's low `bits` bits (its
-/// two's-complement encoding at the node's clamp width — see
-/// `crate::node_view`), the address into
-/// [`SaturationTable`]. Shared with `witness.rs`'s `ClampRaD` witness generation.
-pub fn clamp_lookup_bits(intermediate: &Tensor<i64>, bits: usize) -> Vec<LookupBits> {
-    intermediate
-        .data()
-        .par_iter()
-        .with_min_len(par_enabled())
-        .map(|&v| LookupBits::new(v as u64, bits))
-        .collect()
 }
 
 /// Verifier counterpart of [`prove_clamp_lookup`]: appends the `raf` opening

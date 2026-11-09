@@ -13,7 +13,7 @@ use crate::{
             },
             RangeCheckProvider,
         },
-        relation::{RelationParams, RelationProver},
+        relation::{RelationParams, RelationProver, RelationSetup, RelationWitnesses},
         ProofId, ProofType, Prover,
     },
 };
@@ -22,7 +22,7 @@ use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
 use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 use atlas_sumcheck::relation::prover::prove_relation;
 use atlas_sumcheck::{evaluation_reduction::EvalReductionProof, sumcheck::SumcheckInstanceProof};
-use atlas_trace::{op::Rsqrt, trace::LayerData};
+use atlas_trace::{op::Rsqrt, trace::LayerData, Trace};
 use atlas_transcript::Transcript;
 use common::consts::XLEN;
 pub use jolt_atlas_verifier::onnx_proof::ops::rsqrt::*;
@@ -107,12 +107,8 @@ fn prove_range_and_onehot<F: JoltField, T: Transcript>(
     Vec::new()
 }
 
-impl<F: JoltField> crate::onnx_proof::relation::RelationWitnesses<F> for RsqrtRelation {
-    fn witnesses(
-        &self,
-        trace: &atlas_trace::Trace,
-        _setup: &crate::onnx_proof::relation::RelationSetup<F>,
-    ) -> Vec<MultilinearPolynomial<F>> {
+impl<F: JoltField> RelationWitnesses<F> for RsqrtRelation {
+    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
         let LayerData { operands, output } = TraceView::layer_data(trace, &self.node);
         let [input] = operands[..] else {
             panic!("Expected one operand for Rsqrt operation")

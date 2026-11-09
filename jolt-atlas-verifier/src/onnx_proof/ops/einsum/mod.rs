@@ -145,6 +145,16 @@ impl ContractionRelation {
         })
     }
 
+    /// The canonical equation the node contracts.
+    pub fn equation(&self) -> &'static str {
+        self.shape.equation
+    }
+
+    /// The flattened dims the pattern's layout folds over.
+    pub fn dims(&self) -> &EinsumDims {
+        &self.shape.dims
+    }
+
     /// The pattern's layout at field `F`.
     pub fn layout<F: JoltField>(&self) -> Box<dyn EinsumLayout<F>> {
         einsum_layout(self.shape.equation, &self.shape.dims)

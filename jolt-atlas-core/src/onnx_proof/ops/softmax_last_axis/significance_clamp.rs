@@ -16,3 +16,32 @@
 //! `operand_link` in `mod.rs`.
 
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::significance_clamp::*;
+
+use super::softmax_z;
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::op_lookups::{DefaultLookupOperands, LookupWitness};
+use crate::onnx_proof::trace_view::TraceView;
+use atlas_algebra::utils::lookup_bits::LookupBits;
+use atlas_trace::{Tensor, Trace};
+
+impl LookupWitness for SoftmaxSignificanceClampOperands {
+    /// The shifted logits `z = max_k − x`, from the node's softmax witness in the trace.
+    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+        let st = trace
+            .softmax_witness(node.idx)
+            .expect("softmax node has a softmax witness in the trace");
+        let last_dim = *node
+            .output_dims
+            .last()
+            .expect("softmax output has a last axis");
+        let z = softmax_z(&st.x, &st.max_k, last_dim);
+        Tensor::from_slice(&z, &[z.len()])
+            .expect("softmax_z tensor construction")
+            .padded_pow2()
+            .map(|v| v as i64)
+    }
+
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
+        crate::onnx_proof::op_lookups::LookupWitness::lookup_bits(&DefaultLookupOperands, witness)
+    }
+}

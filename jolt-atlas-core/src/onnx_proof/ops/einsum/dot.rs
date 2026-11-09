@@ -32,9 +32,12 @@ use crate::onnx_proof::trace_view::TraceView;
 pub use jolt_atlas_verifier::onnx_proof::ops::einsum::dot::*;
 use std::array;
 
-use atlas_trace::{trace::LayerData, Trace};
+use atlas_trace::{trace::LayerData, Tensor, Trace};
 
-use super::ContractionRelation;
+use super::{
+    abmk_abnk_abmn::AbmkAbnkAbmnLayout, k_nk_n::KNkNLayout, mk_kn_mn::MkKnMnLayout,
+    ContractionRelation,
+};
 use crate::onnx_proof::relation::{
     note_dispatch, AtlasRelation, RelationParams, RelationSetup, RelationWitness,
 };
@@ -44,7 +47,7 @@ use atlas_algebra::{
         multilinear_polynomial::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
-        opening_point::OpeningPoint,
+        opening_point::{OpeningPoint, BIG_ENDIAN},
     },
 };
 use common::parallel::par_enabled;
@@ -80,7 +83,8 @@ impl<F: JoltField> EinsumDotProver<F> {
             panic!("Expected two operands for einsum operation")
         };
         let r_node_output = OpeningPoint::new(setup.incoming_point.clone());
-        let Folded { left, right, eq } = layout.fold(left_operand, right_operand, &r_node_output);
+        let Folded { left, right, eq } =
+            fold_operands(&relation, left_operand, right_operand, &r_node_output);
         let schedule = layout.schedule();
         let eq_bound_claim = match schedule {
             EqSchedule::High { log_eq: 0, .. } => {
@@ -227,5 +231,44 @@ impl<F: JoltField> ProveRounds<F> for EinsumDotProver<F> {
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
         self.bind(bind, self.relation.rounds() - 1);
         Ok(())
+    }
+}
+
+/// Operands folded at the output randomness into MLEs over the sumcheck cube.
+pub struct Folded<F: JoltField> {
+    /// Left operand folded over the contraction(+batch) cube.
+    pub left: MultilinearPolynomial<F>,
+    /// Right operand folded over the contraction(+batch) cube.
+    pub right: MultilinearPolynomial<F>,
+    /// Batch eq-poly, present iff the schedule is not [`EqSchedule::None`].
+    pub eq: Option<MultilinearPolynomial<F>>,
+}
+
+/// The prover's side of an einsum layout: folding the operands into the sumcheck MLEs.
+pub trait EinsumFold<F: JoltField> {
+    /// Fold the two operand tensors at `r_node_output` into the sumcheck MLEs.
+    fn fold(
+        &self,
+        left_operand: &Tensor<i32>,
+        right_operand: &Tensor<i32>,
+        r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+    ) -> Folded<F>;
+}
+
+/// Fold `relation`'s operands with its canonical equation's layout.
+fn fold_operands<F: JoltField>(
+    relation: &ContractionRelation,
+    left_operand: &Tensor<i32>,
+    right_operand: &Tensor<i32>,
+    r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+) -> Folded<F> {
+    let dims = relation.dims();
+    match relation.equation() {
+        "mk,kn->mn" => MkKnMnLayout::new(dims).fold(left_operand, right_operand, r_node_output),
+        "k,nk->n" => KNkNLayout::new(dims).fold(left_operand, right_operand, r_node_output),
+        "abmk,abnk->abmn" => {
+            AbmkAbnkAbmnLayout::new(dims).fold(left_operand, right_operand, r_node_output)
+        }
+        other => panic!("unexpected canonical einsum equation: {other}"),
     }
 }

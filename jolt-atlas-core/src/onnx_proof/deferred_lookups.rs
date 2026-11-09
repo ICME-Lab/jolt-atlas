@@ -388,7 +388,9 @@ fn assemble_buckets(
         .zip(per_bucket.into_par_iter())
         .map(|(b, mut owned)| {
             let mut by_idx: HashMap<usize, Vec<LookupBits>> = owned.drain(..).collect();
-            let bits = b.assemble_bits(|idx| by_idx.remove(&idx).unwrap());
+            let bits = crate::onnx_proof::global_clamp::assemble_bits(b, |idx| {
+                by_idx.remove(&idx).unwrap()
+            });
             let indices: Vec<usize> = bits.iter().map(|&x| x.into()).collect();
             (bits, indices)
         })

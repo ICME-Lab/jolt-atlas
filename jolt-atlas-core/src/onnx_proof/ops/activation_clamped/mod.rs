@@ -23,6 +23,7 @@ pub use jolt_atlas_verifier::onnx_proof::ops::activation_clamped::*;
 use jolt_claims::SymbolicSumcheck;
 
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::op_lookups::{DefaultLookupOperands, LookupWitness};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
     deferred_lookups::{DeferredBatch, DeferredOneHot},
@@ -30,6 +31,8 @@ use crate::onnx_proof::{
     op_lookups::OpLookupProvider,
     ProofId, Prover,
 };
+use crate::utils::compute_lookup_indices_from_operands;
+use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -44,6 +47,7 @@ use atlas_lookup_tables::clamp::ActivationClampTable;
 use atlas_sumcheck::{
     opening_proof::prover::ProverOpeningAccumulator, sumcheck::SumcheckInstanceProof,
 };
+use atlas_trace::Tensor;
 use atlas_transcript::Transcript;
 use common::{
     consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, XLEN},
@@ -255,4 +259,15 @@ where
     ));
 
     Vec::new()
+}
+
+impl LookupWitness for ActivationClampOperands {
+    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+        LookupWitness::witness(&DefaultLookupOperands, node, trace)
+    }
+
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
+        let operand = witness.map(|v| v as i32);
+        compute_lookup_indices_from_operands(&[&operand], false)
+    }
 }

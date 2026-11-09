@@ -1,15 +1,12 @@
 use crate::node_view::{ComputationNode, ModelView};
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     atlas_relation_types,
-    onnx_proof::{
-        ops::Verifier,
-        relation::{
-            not_derived, reduced_output_setup, verify_tie, AtlasRelation, RelationDerived,
-            RelationExpr, RelationId, RelationOpening, RelationSetup, TieRelation,
-        },
+    onnx_proof::relation::{
+        not_derived, reduced_output_setup, AtlasRelation, RelationDerived, RelationExpr,
+        RelationId, RelationOpening, RelationSetup, TieRelation,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -24,22 +21,21 @@ use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
-crate::bind_relation!(Broadcast, BroadcastRelation);
+crate::impl_plan_op!(Broadcast, BroadcastRelation);
 
-impl OpLayout for Broadcast {}
-
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Broadcast {
-    #[tracing::instrument(skip_all, name = "Broadcast::verify")]
-    fn verify(
+impl OpPlan for Broadcast {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        verify_tie(
-            &BroadcastRelation::for_node(&verifier.preprocessing.model, node.clone())?,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )
+        model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Tie {
+                relation: OpTie::Broadcast(BroadcastRelation::for_node(model, node.clone())?),
+            },
+        ]))
     }
 }
 

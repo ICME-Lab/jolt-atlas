@@ -292,6 +292,7 @@ fn relation_witness<F: JoltField, T: Transcript>(
     }
     match relation {
         OpRelation::And(relation) => engine(relation, prover),
+        OpRelation::ConstantDivision(relation) => engine(relation, prover),
         OpRelation::Concat(relation) => engine(relation, prover),
         OpRelation::Iff(relation) => engine(relation, prover),
         OpRelation::Reshape(relation) => engine(relation, prover),
@@ -309,6 +310,9 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
     } = prover;
     match relation {
         OpTie::AxisPermutation(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::Broadcast(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::Constant(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::Input(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Identity(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Neg(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::ZeroOutput(relation) => prove_tie(relation, trace, accumulator, transcript),

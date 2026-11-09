@@ -1,43 +1,40 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
-use crate::onnx_proof::{
-    ops::constant::{PublicRelation, PublicShape},
-    relation::verify_tie,
-    Verifier,
-};
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use crate::onnx_proof::ops::constant::{PublicRelation, PublicShape};
+use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::op::Input;
-use atlas_transcript::Transcript;
 use jolt_claims::SymbolicSumcheck;
 use std::sync::Arc;
 
-crate::bind_relation!(Input, PublicRelation<Input>);
+crate::impl_plan_op!(Input, PublicRelation<Input>);
 
-impl OpLayout for Input {}
-
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Input {
-    #[tracing::instrument(skip_all, name = "Input::verify")]
-    fn verify(
+impl OpPlan for Input {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let position = verifier
-            .io
+        _model: &atlas_trace::Model,
+        io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        // The public tensor the IO carries for this input node.
+        let input = io
             .input_indices
             .iter()
             .position(|&idx| idx == node.idx)
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let input = verifier
-            .io
-            .inputs
-            .get(position)
-            .ok_or(ProofVerifyError::MissingProof(node.idx))?;
-        let shape = PublicShape::new(node.clone(), Arc::new(input.clone()));
-        verify_tie(
-            &PublicRelation::<Input>::new(shape),
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )
+            .and_then(|position| io.inputs.get(position))
+            .ok_or_else(|| {
+                ProofVerifyError::Malformed(format!(
+                    "public IO: no tensor for input node {}",
+                    node.idx
+                ))
+            })?;
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Tie {
+                relation: OpTie::Input(PublicRelation::new(PublicShape::new(
+                    node.clone(),
+                    Arc::new(input.clone()),
+                ))),
+            },
+        ]))
     }
 }

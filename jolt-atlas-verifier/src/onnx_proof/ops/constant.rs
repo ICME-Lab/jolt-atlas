@@ -1,15 +1,12 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     atlas_relation_types,
-    onnx_proof::{
-        ops::Verifier,
-        relation::{
-            not_derived, reduced_output_setup, verify_tie, AtlasRelation, RelationDerived,
-            RelationExpr, RelationId, RelationOpening, RelationSetup, TieRelation,
-        },
+    onnx_proof::relation::{
+        not_derived, reduced_output_setup, AtlasRelation, RelationDerived, RelationExpr,
+        RelationId, RelationOpening, RelationSetup, TieRelation,
     },
 };
 use atlas_algebra::{
@@ -25,22 +22,24 @@ use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use std::{marker::PhantomData, sync::Arc};
 
-crate::bind_relation!(Constant, PublicRelation<Constant>);
+crate::impl_plan_op!(Constant, PublicRelation<Constant>);
 
-impl OpLayout for Constant {}
-
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Constant {
-    #[tracing::instrument(skip_all, name = "Constant::verify")]
-    fn verify(
+impl OpPlan for Constant {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        verify_tie(
-            &PublicRelation::<Constant>::new(PublicShape::new(node.clone(), self.0.clone())),
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )
+        _model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Tie {
+                relation: OpTie::Constant(PublicRelation::new(PublicShape::new(
+                    node.clone(),
+                    self.0.clone(),
+                ))),
+            },
+        ]))
     }
 }
 

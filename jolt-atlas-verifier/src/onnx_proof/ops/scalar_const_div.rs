@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
@@ -7,9 +8,9 @@ use crate::{
     onnx_proof::{
         relation::{
             reduced_output_setup, AtlasRelation, EngineRelation, RelationDerived, RelationExpr,
-            RelationId, RelationOpening, RelationSetup, RelationVerifier,
+            RelationId, RelationOpening, RelationSetup,
         },
-        ProofId, ProofType, Verifier,
+        ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -18,7 +19,6 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_sumcheck::relation::verify_relation;
 use atlas_trace::{op::ScalarConstDiv, Op};
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
@@ -28,6 +28,10 @@ use jolt_field::Ring;
 crate::bind_relation!(ScalarConstDiv, ConstantDivisionRelation);
 
 impl OpLayout for ScalarConstDiv {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -36,28 +40,22 @@ impl OpLayout for ScalarConstDiv {
     }
 }
 
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ScalarConstDiv {
-    #[tracing::instrument(skip_all, name = "ScalarConstDiv::verify")]
-    fn verify(
+crate::impl_plan_op!(@verify ScalarConstDiv);
+
+impl OpPlan for ScalarConstDiv {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::Execution))?;
-        let exec_sumcheck = RelationVerifier::<F, _>::new(
-            ConstantDivisionRelation::new(node.clone()),
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        verify_relation(
-            proof,
-            &exec_sumcheck,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        Ok(())
+        _model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Relation {
+                proof: ProofType::Execution,
+                relation: OpRelation::ConstantDivision(ConstantDivisionRelation::new(node.clone())),
+            },
+        ]))
     }
 }
 

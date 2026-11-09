@@ -61,8 +61,8 @@ relation's `setup` when the interpreter reaches the step. `Verifier::run_plan` i
 plan with the relations' witnesses, so an op's transcript order is its plan's step order on
 both sides.
 
-Plan-verified today: `And`, `Concat`, `Iff`, `Reshape`, `Slice`, `Identity`, `Neg`, `IsNan`,
-`MoveAxis`. The other ops still verify through hand-written `VerifyOp` impls and the deferral
+Plan-verified today: `And`, `Concat`, `Iff`, `Reshape`, `Slice`, `ScalarConstDiv`, `Identity`,
+`Neg`, `IsNan`, `MoveAxis`, `Broadcast`, `Constant`, `Input`. The other ops still verify through hand-written `VerifyOp` impls and the deferral
 queues in `deferred_lookups.rs`.
 
 ## Proof-shape rules

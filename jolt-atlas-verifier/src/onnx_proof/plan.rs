@@ -14,9 +14,10 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     ops::{
-        and::AndRelation, concat::ConcatRelation, iff::IffRelation, is_nan::ZeroOutputRelation,
+        and::AndRelation, broadcast::BroadcastRelation, concat::ConcatRelation,
+        constant::PublicRelation, iff::IffRelation, is_nan::ZeroOutputRelation,
         moveaxis::AxisPermutationRelation, neg::SignedCopyRelation, reshape::ReshapeRelation,
-        slice::SliceRelation,
+        scalar_const_div::ConstantDivisionRelation, slice::SliceRelation,
     },
     relation::{verify_tie, RelationVerifier},
     ProofType,
@@ -24,7 +25,7 @@ use crate::onnx_proof::{
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_sumcheck::{opening_proof::VerifierOpeningAccumulator, relation::DynRelationVerifier};
 use atlas_trace::{
-    op::{Identity, Neg},
+    op::{Constant, Identity, Input, Neg},
     trace::ModelExecutionIO,
     Model,
 };
@@ -66,6 +67,8 @@ pub trait OpPlan {
 pub enum OpRelation {
     /// `And`: the product of two booleans.
     And(AndRelation),
+    /// `ScalarConstDiv`: the quotient by a constant.
+    ConstantDivision(ConstantDivisionRelation),
     /// `Concat`: each operand selected into its slot.
     Concat(ConcatRelation),
     /// `Iff`: the masked select.
@@ -85,6 +88,9 @@ impl OpRelation {
     ) -> Result<Box<dyn DynRelationVerifier<F, T>>, ProofVerifyError> {
         Ok(match self {
             Self::And(relation) => {
+                Box::new(RelationVerifier::new(relation, accumulator, transcript)?)
+            }
+            Self::ConstantDivision(relation) => {
                 Box::new(RelationVerifier::new(relation, accumulator, transcript)?)
             }
             Self::Concat(relation) => {
@@ -107,6 +113,12 @@ impl OpRelation {
 pub enum OpTie {
     /// `MoveAxis`: the operand at the permuted point.
     AxisPermutation(AxisPermutationRelation),
+    /// `Broadcast`: the operand replicated along the broadcast axes.
+    Broadcast(BroadcastRelation),
+    /// `Constant`: the output is the model's constant.
+    Constant(PublicRelation<Constant>),
+    /// `Input`: the output is the public input.
+    Input(PublicRelation<Input>),
     /// `Identity`: the operand is the output.
     Identity(SignedCopyRelation<Identity>),
     /// `Neg`: the operand is the output, negated.
@@ -124,6 +136,9 @@ impl OpTie {
     ) -> Result<(), ProofVerifyError> {
         match self {
             Self::AxisPermutation(relation) => verify_tie(relation, accumulator, transcript),
+            Self::Broadcast(relation) => verify_tie(relation, accumulator, transcript),
+            Self::Constant(relation) => verify_tie(relation, accumulator, transcript),
+            Self::Input(relation) => verify_tie(relation, accumulator, transcript),
             Self::Identity(relation) => verify_tie(relation, accumulator, transcript),
             Self::Neg(relation) => verify_tie(relation, accumulator, transcript),
             Self::ZeroOutput(relation) => verify_tie(relation, accumulator, transcript),
@@ -133,6 +148,7 @@ impl OpTie {
 
 /// Bind a plan-verified op: its [`OpPlan`] is its whole verification, evaluation reduction
 /// included, and `$relation` (a relation of the plan) is checked to be a relation of that op.
+/// The `@verify` arm alone is for an op that writes its own `OpLayout` (committed polynomials).
 #[macro_export]
 macro_rules! impl_plan_op {
     ($inner_ty:ty, $relation:ty) => {
@@ -144,6 +160,9 @@ macro_rules! impl_plan_op {
             }
         }
 
+        $crate::impl_plan_op!(@verify $inner_ty);
+    };
+    (@verify $inner_ty:ty) => {
         impl<F: atlas_algebra::field::JoltField, T: atlas_transcript::Transcript>
             $crate::onnx_proof::ops::VerifyOp<F, T> for $inner_ty
         {

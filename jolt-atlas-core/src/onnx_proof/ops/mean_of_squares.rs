@@ -30,9 +30,6 @@
 //! while the divisor `D = N·2^S` uses the *semantic* count `N` (= `op.count`,
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
-use crate::onnx_proof::ops::ProveOp;
-use crate::onnx_proof::range_checking::RangeCheckProve;
-use atlas_sumcheck::relation::prover::prove_relation;
 pub use jolt_atlas_verifier::onnx_proof::ops::mean_of_squares::*;
 
 use crate::onnx_proof::trace_view::TraceView;
@@ -40,21 +37,7 @@ use std::array;
 
 use atlas_trace::{op::MeanOfSquares, trace::LayerData, Trace};
 
-use crate::{
-    node_view::ComputationNode,
-    onnx_proof::{
-        clamp_lookups::is_scalar,
-        deferred_lookups::{DeferredBatch, DeferredOneHot},
-        fused_rebase,
-        ops::Prover,
-        range_checking::{
-            range_check_operands::{MeanOfSquaresRangeCheckOperands, RangeCheckOperands},
-            RangeCheckProvider,
-        },
-        relation::{note_dispatch, RelationParams, RelationSetup, RelationWitness},
-        ProofId, ProofType,
-    },
-};
+use crate::onnx_proof::relation::{note_dispatch, RelationParams, RelationSetup, RelationWitness};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -62,70 +45,13 @@ use atlas_algebra::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
     },
 };
-use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
-use atlas_transcript::Transcript;
-use common::{consts::XLEN, parallel::par_enabled};
+use common::parallel::par_enabled;
 use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
-impl<F: JoltField, T: Transcript> ProveOp<F, T> for MeanOfSquares {
-    #[tracing::instrument(skip_all, name = "MeanOfSquares::prove")]
-    fn prove(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let scalar = is_scalar(node);
-        let mut proofs = Vec::new();
-
-        // (1+2) Append `R` (RescaleRemainder) + `rescaled` (ClampAcc) and prove
-        // the clamp `out = SatClamp(rescaled)`. The returned remainder is
-        // unused: MoS range-checks `R < D` via its own operand-based lookup.
-        let (pre_proofs, _remainder) = fused_rebase::prove_pre(node, prover);
-        proofs.extend(pre_proofs);
-
-        // (3) Reduction sumcheck `acc(r) = Σ eq·x²` (claim `rescaled·D + R`).
-        let params = RelationParams::new(
-            MeanOfSquaresRelation::new(node.clone()),
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-        let mut reduction = MeanOfSquaresReductionProver::initialize(&prover.trace, params);
-        let (proof, _) = prove_relation(
-            &mut reduction,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        proofs.push((ProofId(node.idx, ProofType::RescaleArith), proof));
-
-        // (4) Remainder range check `R < D`. Scalar outputs prove it in the clear
-        // (the one-hot reduction degenerates), checked by the verifier.
-        if !scalar {
-            // Built now, proven after the node loop (`RangeCheck` batch); its
-            // one-hot checks follow that batch.
-            let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node)
-                .expect("the node\'s operator is the one its range check proves");
-            let (rc_sumcheck, lookup_indices) = rc_provider
-                .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
-                    &prover.trace,
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-            prover.defer(DeferredBatch::RangeCheck, Box::new(rc_sumcheck));
-            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node)
-                .expect("the node\'s operator is the one its range check proves");
-            prover.deferred_onehots.push((
-                DeferredOneHot::RangeCheck(rc_operands.get_encoding(node)),
-                lookup_indices,
-            ));
-        }
-
-        proofs
-    }
-}
+crate::impl_plan_op_prover!(MeanOfSquares);
 
 /// The specialized prover of a [`MeanOfSquaresRelation`]: the operand squared against the
 /// retained-dim eq table, read by index rather than expanded. Completeness-only:

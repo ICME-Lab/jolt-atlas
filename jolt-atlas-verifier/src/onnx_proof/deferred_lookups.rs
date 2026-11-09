@@ -1,365 +1,160 @@
-//! Deferred, batched lookup sub-protocols.
+//! The post-loop plan: batched lookup sub-protocols.
 //!
-//! Every clamped / fused-rescale node used to run its own lookup sumchecks
-//! inline (a clamp read-raf, its three one-hot checks, a remainder range check
-//! and its three one-hot checks): ~5 sumchecks × ~750 nodes, each with 64+
-//! rounds whose per-round work is far too small to amortize the per-round
-//! overhead (transcript, allocation, rayon fan-out). The claims those lookups
-//! consume (the node's output opening, `ClampAcc`, `RescaleRemainder`) are all
-//! appended during the node's own turn in the IOP and never change afterwards,
-//! and the lookups only *produce* claims on their own committed one-hots — so
-//! they can be taken out of the node loop entirely.
+//! A clamped or fused-rescale node's lookup sumchecks (a clamp read-raf, a remainder range
+//! check, their one-hot checks) consume claims appended during the node's own turn in the IOP
+//! and produce claims only on their own committed one-hots, so they need not run in the node
+//! loop: a plan step [`Step::Defer`](super::plan::Step::Defer) queues its relation for one of
+//! the [`DeferredBatch`]es, and every batch is proven as one batched sumcheck after the loop,
+//! in this module's order. The saturating clamps and the rescale remainders are packed further,
+//! into model-level buckets ([`global_clamp`](super::global_clamp)); [`plan`] builds their steps
+//! from the model and the public IO, with nothing to register during the loop.
 //!
-//! Nodes now append their claims as before and register a [`ProverLookupJob`];
-//! after the IOP, [`prove_all`] runs every clamp read-raf as one
-//! one batched sumcheck, then every clamp one-hot check as one more, and the same
-//! pair for the rescale remainders. The verifier mirrors it in [`verify_all`]
-//! after its node loop. The batched sumcheck computes instance messages in
-//! parallel across instances, which is what turns the ~750 tiny sequential
-//! sumchecks into a few large parallel ones.
-use crate::node_view::ComputationNode;
+//! The prover walks the same plan (`jolt_atlas_core::onnx_proof::deferred_lookups`), proving
+//! every batch with `prove_relation_batch_parallel`: instance messages are computed in parallel
+//! across instances, which turns hundreds of tiny sequential sumchecks into a few large
+//! parallel ones.
 use crate::onnx_proof::{
-    clamp_split::{self, SplitParams, ValueParams},
+    clamp_split,
     global_clamp::{clamp_buckets, remainder_buckets, ClampBucket},
-    ProofId, ProofType, Verifier,
+    plan::{OpOpen, OpRelation, OpTie, Plan, Step},
+    ProofType,
 };
-use atlas_algebra::{
-    field::JoltField, poly::opening_point::OpeningPoint, utils::errors::ProofVerifyError,
-};
-use atlas_sumcheck::relation::{verify_relation_batch, DynRelationVerifier};
-use atlas_sumcheck::{
-    opening_proof::OpeningAccumulator,
-    shout::{self, RaOneHotEncoding, RaOneHotParams},
-};
-use atlas_transcript::Transcript;
+use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_trace::{trace::ModelExecutionIO, Model};
 
 /// Node index under which the deferred (model-wide) lookup proofs are stored.
 pub const DEFERRED_PROOF_IDX: usize = usize::MAX;
 
-/// A batch of sumcheck instances built during the node loop (their transcript
-/// challenges drawn there, on both sides) and proven after it as one batched
-/// sumcheck. Batches run in this enum's order.
+/// When a deferred relation is set up (its claims read, its challenges drawn).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeferredSetup {
+    /// In the node's turn, when the interpreter reaches the `Defer` step.
+    InNodeLoop,
+    /// When the batch runs, after the batch that produces the claims it reads.
+    AtBatch,
+}
+
+/// A batch of sumcheck instances proven after the node loop as one batched sumcheck. Batches
+/// run in this enum's order; a one-hot batch directly follows the batch producing the `ra`
+/// claims it checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DeferredBatch {
     /// Clamped-activation small-table execution sumchecks.
     ActivationExec,
+    /// The one-hot checks of [`Self::ActivationExec`]'s read addresses.
+    ActivationExecRaChecks,
     /// Clamped-activation clamp read-rafs.
     ActivationClamp,
+    /// The one-hot checks of [`Self::ActivationClamp`]'s read addresses.
+    ActivationClampRaChecks,
     /// Operand range checks (MeanOfSquares remainder, Rsqrt div / sqrt).
     RangeCheck,
+    /// The one-hot checks of [`Self::RangeCheck`]'s read addresses.
+    RangeCheckRaChecks,
     /// Softmax stage 3: exp-digit lookups + significance-clamp read-raf.
     SoftmaxStage3,
+    /// Softmax stage 4: the one-hot checks of stage 3's read addresses.
+    SoftmaxRaChecks,
 }
 
 impl DeferredBatch {
+    /// Every batch, in run order.
+    pub const ALL: [Self; 8] = [
+        Self::ActivationExec,
+        Self::ActivationExecRaChecks,
+        Self::ActivationClamp,
+        Self::ActivationClampRaChecks,
+        Self::RangeCheck,
+        Self::RangeCheckRaChecks,
+        Self::SoftmaxStage3,
+        Self::SoftmaxRaChecks,
+    ];
+
     /// The proof slot this batch's sumcheck is stored under.
     pub fn proof_type(self) -> ProofType {
         match self {
             Self::ActivationExec => ProofType::DeferredActivationExec,
+            Self::ActivationExecRaChecks => ProofType::DeferredActivationSmallRaChecks,
             Self::ActivationClamp => ProofType::DeferredActivationClamp,
+            Self::ActivationClampRaChecks => ProofType::DeferredActivationClampRaChecks,
             Self::RangeCheck => ProofType::DeferredRangeCheck,
+            Self::RangeCheckRaChecks => ProofType::DeferredRangeCheckRaChecks,
             Self::SoftmaxStage3 => ProofType::DeferredSoftmaxStage3,
+            Self::SoftmaxRaChecks => ProofType::DeferredSoftmaxRaChecks,
         }
     }
-}
 
-/// A one-hot check whose `ra` claim is produced by a deferred batch; built and
-/// proven right after that batch.
-#[derive(Clone)]
-pub enum DeferredOneHot {
-    /// Activation small-table stage of node `idx`.
-    ActivationSmall(usize),
-    /// Activation clamp stage of `node`.
-    ActivationClamp(ComputationNode),
-    /// A range check's one-hot encoding.
-    RangeCheck(crate::onnx_proof::range_checking::RangeCheckEncoding),
-    /// Softmax exp high-digit table of node `idx` (`log2` table size).
-    SoftmaxExpHi(usize, usize),
-    /// Softmax exp low-digit table of node `idx` (`log2` table size).
-    SoftmaxExpLo(usize, usize),
-    /// Softmax significance clamp of `node`.
-    SoftmaxClamp(ComputationNode),
-}
-
-impl DeferredOneHot {
-    /// The batch whose sumcheck produces this check's `ra` claim.
-    pub fn parent(&self) -> DeferredBatch {
+    /// When this batch's relations are set up: the one-hot batches read the `ra` claim their
+    /// parent batch produces, so they wait for it; the others draw their challenges in the
+    /// node's turn.
+    pub fn setup(self) -> DeferredSetup {
         match self {
-            Self::ActivationSmall(_) => DeferredBatch::ActivationExec,
-            Self::ActivationClamp(_) => DeferredBatch::ActivationClamp,
-            Self::RangeCheck(_) => DeferredBatch::RangeCheck,
-            Self::SoftmaxExpHi(..) | Self::SoftmaxExpLo(..) | Self::SoftmaxClamp(_) => {
-                DeferredBatch::SoftmaxStage3
-            }
-        }
-    }
-
-    /// The proof slot this check's one-hot sumcheck is stored under.
-    pub fn proof_type(&self) -> ProofType {
-        match self {
-            Self::ActivationSmall(_) => ProofType::DeferredActivationSmallRaChecks,
-            Self::ActivationClamp(_) => ProofType::DeferredActivationClampRaChecks,
-            Self::RangeCheck(_) => ProofType::DeferredRangeCheckRaChecks,
-            Self::SoftmaxExpHi(..) | Self::SoftmaxExpLo(..) | Self::SoftmaxClamp(_) => {
-                ProofType::DeferredSoftmaxRaChecks
-            }
-        }
-    }
-
-    /// Draw this check's challenges and resolve its params (sequential part). `Err` if the
-    /// accumulator lacks a claim the check reads.
-    pub fn params<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<RaOneHotParams<F>, ProofVerifyError> {
-        use crate::onnx_proof::{
-            op_lookups::OpLookupEncoding,
-            ops::{
-                activation_clamped::{ActivationClampOperands, SmallTableRaEncoding},
-                softmax_last_axis::{
-                    rc::SoftmaxRaEncoding, significance_clamp::SoftmaxSignificanceClampOperands,
-                },
-            },
-        };
-        fn go<F: JoltField, T: Transcript>(
-            enc: &impl RaOneHotEncoding,
-            accumulator: &dyn OpeningAccumulator<F>,
-            transcript: &mut T,
-        ) -> Result<RaOneHotParams<F>, ProofVerifyError> {
-            let ch = shout::ra_onehot_challenges::<F, T>(enc, transcript);
-            shout::ra_onehot_params(enc, accumulator, ch)
-        }
-        match self {
-            Self::ActivationSmall(idx) => go(
-                &SmallTableRaEncoding { node_idx: *idx },
-                accumulator,
-                transcript,
-            ),
-            Self::ActivationClamp(node) => go(
-                &OpLookupEncoding::<ActivationClampOperands>::new(node),
-                accumulator,
-                transcript,
-            ),
-            Self::RangeCheck(enc) => go(enc, accumulator, transcript),
-            Self::SoftmaxExpHi(idx, log_k) => go(
-                &SoftmaxRaEncoding::exp_hi(*idx, *log_k),
-                accumulator,
-                transcript,
-            ),
-            Self::SoftmaxExpLo(idx, log_k) => go(
-                &SoftmaxRaEncoding::exp_lo(*idx, *log_k),
-                accumulator,
-                transcript,
-            ),
-            Self::SoftmaxClamp(node) => go(
-                &OpLookupEncoding::<SoftmaxSignificanceClampOperands>::new(node),
-                accumulator,
-                transcript,
-            ),
+            Self::ActivationExec
+            | Self::ActivationClamp
+            | Self::RangeCheck
+            | Self::SoftmaxStage3 => DeferredSetup::InNodeLoop,
+            Self::ActivationExecRaChecks
+            | Self::ActivationClampRaChecks
+            | Self::RangeCheckRaChecks
+            | Self::SoftmaxRaChecks => DeferredSetup::AtBatch,
         }
     }
 }
 
-/// Verifier-side counterpart of [`ProverLookupJob`].
-pub enum VerifierLookupJob {
-    /// See [`ProverLookupJob::Clamp`].
-    Clamp {
-        /// The clamped node.
-        node: ComputationNode,
-    },
-    /// See [`ProverLookupJob::RescaleRemainder`].
-    RescaleRemainder {
-        /// The fused node.
-        node: ComputationNode,
-        /// Width of the rebase.
-        bits: i32,
-    },
-}
-
-fn batched_verify<F: JoltField, T: Transcript>(
-    instances: Vec<Box<dyn DynRelationVerifier<F, T>>>,
-    verifier: &mut Verifier<'_, F, T>,
-    proof_type: ProofType,
-) -> Result<(), ProofVerifyError> {
-    let proof = verifier
-        .proofs
-        .take(ProofId(DEFERRED_PROOF_IDX, proof_type))?;
-    verify_relation_batch(
-        proof,
-        instances.iter().map(|v| &**v as _).collect(),
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-    Ok(())
-}
-
-/// Verifier counterpart of [`prove_all`].
-#[tracing::instrument(skip_all, name = "deferred_lookups::verify_all")]
-pub fn verify_all<F: JoltField, T: Transcript>(
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    let mut clamp: Vec<ComputationNode> = Vec::new();
-    let mut remainder: Vec<(ComputationNode, i32)> = Vec::new();
-    for job in std::mem::take(&mut verifier.deferred) {
-        match job {
-            VerifierLookupJob::Clamp { node } => clamp.push(node),
-            VerifierLookupJob::RescaleRemainder { node, bits } => remainder.push((node, bits)),
-        }
-    }
-
-    let model = verifier.preprocessing.model();
-    let registered: std::collections::BTreeSet<usize> = clamp.iter().map(|n| n.idx).collect();
-    let full_buckets = clamp_buckets(model)?;
-    let bucketed: std::collections::BTreeSet<usize> = full_buckets
+/// The post-loop plan over the packed clamp and remainder buckets, from the model and the
+/// public IO: per live clamp bucket its exact flag and the exact check, then the bucket
+/// value sumchecks as one batch and the chunk checks as another; then the same pair for the
+/// remainder buckets. A clamp bucket is live when one of its nodes is not an unsaturated
+/// model output (those tie `acc = out` in their own turn). The deferred batches follow,
+/// run by the interpreter from its queue.
+pub fn plan(model: &Model, io: &ModelExecutionIO) -> Result<Plan, ProofVerifyError> {
+    let mut steps = Vec::new();
+    let buckets: Vec<ClampBucket> = clamp_buckets(model)?
         .iter()
-        .flat_map(|b| b.nodes.iter().map(|n| n.idx))
-        .filter(|&idx| !clamp_split::exact_output_verifier(model, verifier.io, idx))
-        .collect();
-    if registered != bucketed {
-        return Err(ProofVerifyError::InvalidOpeningProof(
-            "clamp lookup registrations do not match the model's clamp buckets".to_string(),
-        ));
-    }
-    let buckets: Vec<ClampBucket> = full_buckets
-        .iter()
-        .filter_map(|b| clamp_split::live_bucket(b, |idx| registered.contains(&idx)))
+        .filter_map(|bucket| {
+            clamp_split::live_bucket(bucket, |idx| {
+                !clamp_split::exact_output_verifier(model, io, idx)
+            })
+        })
         .collect();
     if !buckets.is_empty() {
-        let mut exact: Vec<bool> = Vec::with_capacity(buckets.len());
-        for b in &buckets {
-            let id = clamp_split::exact_flag_id(b.idx);
-            verifier.accumulator.append_virtual(
-                &mut verifier.transcript,
-                id,
-                OpeningPoint::new(Vec::<F>::new()),
-            )?;
-            let flag = verifier.accumulator.get_virtual_polynomial_opening(id)?.1;
-            let e = if flag == F::one() {
-                true
-            } else if flag == F::zero() {
-                false
-            } else {
-                return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                    "clamp bucket {}: exact flag must be 0 or 1",
-                    b.idx
-                )));
-            };
-            if e {
-                clamp_split::verify_exact_nodes(b, &verifier.accumulator)?;
-            }
-            exact.push(e);
+        for bucket in &buckets {
+            steps.push(Step::Open(OpOpen::ClampExactFlag(bucket.idx)));
+            steps.push(Step::Tie {
+                relation: OpTie::ClampBucketExact(bucket.clone()),
+            });
         }
-        let instances: Vec<Box<dyn DynRelationVerifier<F, T>>> = buckets
-            .iter()
-            .zip(&exact)
-            .map(|(b, &e)| {
-                Ok(if e {
-                    Box::new(ValueParams::into_verifier(clamp_split::exact_value_params(
-                        b,
-                        &verifier.accumulator,
-                        &mut verifier.transcript,
-                    )?)) as Box<dyn DynRelationVerifier<F, T>>
-                } else {
-                    Box::new(SplitParams::into_verifier(SplitParams::draw(
-                        b,
-                        &verifier.accumulator,
-                        &mut verifier.transcript,
-                    )?)?) as Box<dyn DynRelationVerifier<F, T>>
-                })
-            })
-            .collect::<Result<_, ProofVerifyError>>()?;
-        batched_verify(instances, verifier, ProofType::DeferredClampSplit)?;
-
-        let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
-            Vec::with_capacity(buckets.len());
-        for (b, &e) in buckets.iter().zip(&exact) {
-            let p = if e {
-                clamp_split::exact_chunk_check_params::<F, T>(
-                    b,
-                    &verifier.accumulator,
-                    &mut verifier.transcript,
-                )
-            } else {
-                clamp_split::chunk_check_params::<F, T>(
-                    b,
-                    &verifier.accumulator,
-                    &mut verifier.transcript,
-                )
-            };
-            instances.extend(clamp_split::chunk_check_verifiers::<F, T>(p?));
-        }
-        batched_verify(instances, verifier, ProofType::DeferredClampChunkChecks)?;
+        steps.push(Step::Batch {
+            proof: ProofType::DeferredClampSplit,
+            relations: buckets
+                .iter()
+                .map(|bucket| OpRelation::ClampBucketValue(bucket.clone()))
+                .collect(),
+        });
+        steps.push(Step::Batch {
+            proof: ProofType::DeferredClampChunkChecks,
+            relations: buckets
+                .into_iter()
+                .map(OpRelation::ClampBucketChunks)
+                .collect(),
+        });
     }
-
-    let rbuckets = remainder_buckets(verifier.preprocessing.model());
-    let registered: std::collections::BTreeSet<usize> =
-        remainder.iter().map(|(n, _)| n.idx).collect();
-    let bucketed: std::collections::BTreeSet<usize> = rbuckets
-        .iter()
-        .flat_map(|b| b.nodes.iter().map(|n| n.idx))
-        .collect();
-    if registered != bucketed {
-        return Err(ProofVerifyError::InvalidOpeningProof(
-            "remainder lookup registrations do not match the model's remainder buckets".to_string(),
-        ));
-    }
+    let rbuckets = remainder_buckets(model);
     if !rbuckets.is_empty() {
-        let model = verifier.preprocessing.model();
-        let instances: Vec<Box<dyn DynRelationVerifier<F, T>>> = rbuckets
-            .iter()
-            .map(|b| {
-                let gammas: Vec<F> = verifier.transcript.challenge_scalar_powers(b.nodes.len());
-                let (input_claim, cycle) =
-                    b.remainder_inputs(&gammas, &verifier.accumulator, model)?;
-                Ok(Box::new(ValueParams::into_verifier(ValueParams {
-                    bucket_idx: b.idx,
-                    value_id: clamp_split::remainder_value_id(b.idx),
-                    cycle,
-                    input_claim,
-                })) as Box<dyn DynRelationVerifier<F, T>>)
-            })
-            .collect::<Result<_, ProofVerifyError>>()?;
-        batched_verify(instances, verifier, ProofType::DeferredRemainderRC)?;
-
-        let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
-            Vec::with_capacity(rbuckets.len());
-        for b in &rbuckets {
-            let p = clamp_split::remainder_chunk_check_params::<F, T>(
-                b,
-                &verifier.accumulator,
-                &mut verifier.transcript,
-            )?;
-            instances.extend(clamp_split::chunk_check_verifiers::<F, T>(p));
-        }
-        batched_verify(instances, verifier, ProofType::DeferredRemainderRaChecks)?;
+        steps.push(Step::Batch {
+            proof: ProofType::DeferredRemainderRC,
+            relations: rbuckets
+                .iter()
+                .map(|bucket| OpRelation::RemainderBucketValue(bucket.clone()))
+                .collect(),
+        });
+        steps.push(Step::Batch {
+            proof: ProofType::DeferredRemainderRaChecks,
+            relations: rbuckets
+                .into_iter()
+                .map(OpRelation::RemainderBucketChunks)
+                .collect(),
+        });
     }
-
-    let mut batches = std::mem::take(&mut verifier.deferred_batches);
-    let onehots = std::mem::take(&mut verifier.deferred_onehots);
-    for kind in [
-        DeferredBatch::ActivationExec,
-        DeferredBatch::ActivationClamp,
-        DeferredBatch::RangeCheck,
-        DeferredBatch::SoftmaxStage3,
-    ] {
-        if let Some(instances) = batches.remove(&kind) {
-            if !instances.is_empty() {
-                batched_verify(instances, verifier, kind.proof_type())?;
-            }
-        }
-        let mine: Vec<&DeferredOneHot> = onehots.iter().filter(|j| j.parent() == kind).collect();
-        let Some(first) = mine.first() else {
-            continue;
-        };
-        let proof_type = first.proof_type();
-        let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
-            Vec::with_capacity(3 * mine.len());
-        for j in &mine {
-            let p = j.params::<F, T>(&verifier.accumulator, &mut verifier.transcript)?;
-            instances.extend(shout::ra_onehot_verifiers_with_params::<F, T>(p));
-        }
-        batched_verify(instances, verifier, proof_type)?;
-    }
-    Ok(())
+    Ok(Plan(steps))
 }

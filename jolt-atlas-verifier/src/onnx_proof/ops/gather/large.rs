@@ -1,14 +1,19 @@
 use super::*;
-use atlas_sumcheck::relation::{verify_relation, verify_relation_batch, DynRelationVerifier};
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::OpeningId,
-    shout::{self, RaOneHotEncoding},
+    shout::RaOneHotEncoding,
 };
 use atlas_trace::op::GatherLarge;
 use common::CommittedPoly;
 
+crate::impl_plan_op!(@verify GatherLarge);
+
 impl OpLayout for GatherLarge {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -21,39 +26,26 @@ impl OpLayout for GatherLarge {
     }
 }
 
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherLarge {
-    #[tracing::instrument(skip_all, name = "GatherLarge::verify")]
-    fn verify(
+/// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its
+/// read addresses as one batch.
+impl OpPlan for GatherLarge {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::Execution))?;
-        let exec_sumcheck = gather_verifier(node, verifier)?;
-        verify_relation(
-            proof,
-            &exec_sumcheck,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        let ra_one_hot_proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
-        let encoding = GatherRaEncoding::new(node)?;
-        let [ra_verifier, bool_verifier] =
-            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript)?;
-        let instances: Vec<&dyn DynRelationVerifier<F, T>> = vec![&*ra_verifier, &*bool_verifier];
-        verify_relation_batch(
-            ra_one_hot_proof,
-            instances,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        Ok(())
+        model: &Model,
+        _io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Relation {
+                proof: ProofType::Execution,
+                relation: OpRelation::Gather(GatherRelation::for_node(model, node.clone())?),
+            },
+            Step::Batch {
+                proof: ProofType::RaOneHotChecks,
+                relations: vec![OpRelation::GatherLargeOneHot(node.clone())],
+            },
+        ]))
     }
 }
 

@@ -14,9 +14,10 @@
 //!
 //! `rescaled` is the pre-clamp value ([`VirtualPoly::ClampAcc`]), recovered as the
 //! floor-rebased accumulation; `R` is the rescaling remainder, appended as advice
-//! ([`VirtualPoly::RescaleRemainder`]) and range-checked. The arithmetic sumcheck
-//! reads both back through [`fused_input_claim`] so its initial claim is the raw
-//! `acc(r)` while its `Σ L·R` body is unchanged.
+//! ([`VirtualPoly::RescaleRemainder`]) and range-checked. The arithmetic relation's input
+//! expression is [`input_expression`], so its initial claim is the raw `acc(r)` while its
+//! `Σ L·R` body is unchanged. The sequence is the plan
+//! [`fused_rescale_plan`](super::plan::fused_rescale_plan).
 //!
 //! Scalar nodes (`log_T = 0`) skip the one-hot reductions and open `rescaled` and
 //! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
@@ -25,29 +26,9 @@ use atlas_trace::Op;
 
 use crate::{
     node_view::ComputationNode,
-    onnx_proof::{
-        clamp_lookups::{
-            is_scalar, recover_small_int, verify_append_acc, verify_clamp_lookup,
-            verify_scalar_clamp,
-        },
-        deferred_lookups::VerifierLookupJob,
-        relation::{RelationExpr, RelationOpening},
-        Verifier,
-    },
-    utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder},
+    onnx_proof::relation::{RelationExpr, RelationOpening},
+    utils::opening_access::OpeningIdBuilder,
 };
-use atlas_algebra::{
-    field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
-    utils::errors::ProofVerifyError,
-};
-use atlas_sumcheck::{
-    config::{OneHotConfig, OneHotParams},
-    identity_range_check::IdentityRCProvider,
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
-    shout::RaOneHotEncoding,
-};
-use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
 use jolt_claims::{constant, opening};
 use jolt_field::Ring;
@@ -83,40 +64,7 @@ pub fn fuses_rebase(node: &ComputationNode) -> bool {
     rebase_bits(node).is_some_and(|b| b > 0)
 }
 
-/// Human-readable operator name for scalar-clamp error messages.
-fn op_name(op: &Op) -> &'static str {
-    match op {
-        Op::Einsum(_) => "Einsum",
-        Op::Mul(_) => "Mul",
-        Op::Square(_) => "Square",
-        Op::Cube(_) => "Cube",
-        _ => "rescale-op",
-    }
-}
-
-/// The arithmetic sumcheck's initial claim: the raw accumulation `acc(r)`.
-///
-/// For a fused op this is `rescaled(r)·2^S + R(r)`, recovered from the pre-clamp
-/// `rescaled` ([`VirtualPoly::ClampAcc`]) and the remainder advice
-/// ([`VirtualPoly::RescaleRemainder`]). For a non-fused (`bits == 0`) op it is
-/// just the node-output opening, leaving the legacy raw-product behavior intact.
-/// `Err` if the accumulator lacks a claim it reads.
-pub fn fused_input_claim<F: JoltField>(
-    accumulator: &dyn OpeningAccumulator<F>,
-    node: &ComputationNode,
-) -> Result<F, ProofVerifyError> {
-    let accessor = AccOpeningAccessor::new(accumulator, node);
-    match rebase_bits(node) {
-        Some(bits) if bits > 0 => {
-            let rescaled = accessor.get_advice(VirtualPoly::ClampAcc)?.1;
-            let remainder = accessor.get_advice(VirtualPoly::RescaleRemainder)?.1;
-            Ok(rescaled * F::from_u64(1u64 << bits) + remainder)
-        }
-        _ => Ok(accessor.get_reduced_opening()?.1),
-    }
-}
-
-/// [`fused_input_claim`] as a relation's input expression: `q(r₀)·2^S + rem(r₀)` over the
+/// The arithmetic relation's input expression: `q(r₀)·2^S + rem(r₀)` over the
 /// node's pre-clamp quotient and remainder advice, or the reduced output opening when the node
 /// does not fuse a rescale.
 pub fn input_expression<F: Ring>(node: &ComputationNode) -> RelationExpr<F> {
@@ -140,171 +88,4 @@ pub fn committed_polys(node: &ComputationNode) -> Vec<CommittedPoly> {
     // bucket at the model level (see `global_clamp`), never per node.
     let _ = node;
     Vec::new()
-}
-
-/// Verifier counterpart of [`prove_pre`].
-pub fn verify_pre<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    cache_remainder_verify(node, &mut verifier.accumulator, &mut verifier.transcript)?;
-    if is_scalar(node) {
-        verify_append_acc(node, &mut verifier.accumulator, &mut verifier.transcript)?;
-    } else {
-        verify_clamp_lookup(node, verifier)?;
-    }
-    Ok(())
-}
-
-/// Verifier counterpart of [`prove_remainder_rc`], plus the scalar fallback:
-/// for a scalar node `rescaled` and `R` are opened in the clear, so check
-/// `R ∈ [0, 2^S)` and `output == SatClamp(rescaled)` directly.
-pub fn verify_post<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    let bits = rebase_bits(node).ok_or_else(|| {
-        ProofVerifyError::Malformed(format!("model: node {} is not a fused op", node.idx))
-    })?;
-
-    if is_scalar(node) {
-        let accessor = AccOpeningAccessor::new(&verifier.accumulator, node);
-        let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder)?.1;
-        verify_scalar_remainder(r_claim, bits)?;
-        let rescaled_claim = accessor.get_advice(VirtualPoly::ClampAcc)?.1;
-        let output_claim = accessor.get_reduced_opening()?.1;
-        verify_scalar_clamp(rescaled_claim, output_claim, op_name(&node.operator))?;
-        return Ok(());
-    }
-
-    verifier.deferred.push(VerifierLookupJob::RescaleRemainder {
-        node: node.clone(),
-        bits,
-    });
-    Ok(())
-}
-
-/// Verifier counterpart of [`cache_remainder_prove`]: append the remainder
-/// opening point (its claim is loaded from the proof's opening claims).
-/// `Err` if the accumulator lacks a claim it reads.
-fn cache_remainder_verify<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    accumulator: &mut VerifierOpeningAccumulator<F>,
-    transcript: &mut T,
-) -> Result<(), ProofVerifyError> {
-    let accessor = AccOpeningAccessor::new(&mut *accumulator, node);
-    let r0 = accessor.get_reduced_opening()?.0;
-    let mut provider = accessor.into_provider(transcript, r0);
-    provider.append_advice(VirtualPoly::RescaleRemainder)?;
-    Ok(())
-}
-
-/// Verify a scalar node's remainder directly: `R ∈ [0, 2^S)`.
-///
-/// Used when the output is a single element (`log_T = 0`), where the one-hot
-/// range-check degenerates. `R` is opened in the clear, so the verifier recovers
-/// the small integer and bounds it (mirrors the clamp scalar fallback).
-fn verify_scalar_remainder<F: JoltField>(r_claim: F, bits: i32) -> Result<(), ProofVerifyError> {
-    let value = recover_small_int(r_claim).ok_or_else(|| {
-        ProofVerifyError::InvalidOpeningProof(
-            "fused rescale (scalar): remainder claim is not a small integer".to_string(),
-        )
-    })?;
-    if value < 0 || value >= (1i64 << bits) {
-        return Err(ProofVerifyError::InvalidOpeningProof(
-            "fused rescale (scalar): remainder must lie in [0, 2^S)".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// Identity range-check provider for a fused rescaling remainder.
-///
-/// `log_K = bits`: the check proves `R ∈ [0, 2^bits)`.
-pub struct RescaleRemainderRCProvider {
-    node: ComputationNode,
-    log_k: usize,
-}
-
-impl RescaleRemainderRCProvider {
-    /// Create the provider for a `bits`-wide (`2^bits` divisor) rebase.
-    pub fn new(node: ComputationNode, bits: i32) -> Self {
-        Self {
-            node,
-            log_k: bits as usize,
-        }
-    }
-}
-
-impl<F: JoltField> IdentityRCProvider<F> for RescaleRemainderRCProvider {
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError> {
-        Ok(AccOpeningAccessor::new(accumulator, &self.node)
-            .get_advice(VirtualPoly::RescaleRemainder)?
-            .1)
-    }
-
-    fn log_K(&self) -> usize {
-        self.log_k
-    }
-
-    fn r_cycle(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
-        Ok(AccOpeningAccessor::new(accumulator, &self.node)
-            .get_advice(VirtualPoly::RescaleRemainder)?
-            .0)
-    }
-
-    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
-        (
-            VirtualPoly::RescaleRemainderRa(self.node.idx),
-            SumcheckId::NodeExecution(self.node.idx),
-        )
-    }
-}
-
-/// One-hot encoding for a fused rescaling-remainder range check.
-pub struct RescaleRemainderRaEncoding {
-    node_idx: usize,
-    log_k: usize,
-}
-
-impl RescaleRemainderRaEncoding {
-    /// Create the encoding for a `bits`-wide rebase.
-    pub fn new(node_idx: usize, bits: i32) -> Self {
-        Self {
-            node_idx,
-            log_k: bits as usize,
-        }
-    }
-}
-
-impl RaOneHotEncoding for RescaleRemainderRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::RescaleRemainderRaD(self.node_idx, d)
-    }
-
-    fn r_cycle_source(&self) -> OpeningId {
-        // The remainder is opened at the node-output point.
-        OpeningId::new(
-            VirtualPoly::NodeOutput(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn ra_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::RescaleRemainderRa(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn log_k(&self) -> usize {
-        self.log_k
-    }
-
-    fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_k)
-    }
 }

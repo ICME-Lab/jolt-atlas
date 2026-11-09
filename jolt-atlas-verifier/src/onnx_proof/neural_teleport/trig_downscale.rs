@@ -6,8 +6,7 @@
 //! `division.rs`'s `a = P·q + r` derivation.
 use crate::node_view::ComputationNode;
 use crate::{
-    onnx_proof::{op_lookups::LookupOperandsTrait, Verifier},
-    utils::opening_access::AccOpeningAccessor,
+    onnx_proof::op_lookups::LookupOperandsTrait, utils::opening_access::AccOpeningAccessor,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
@@ -15,7 +14,6 @@ use atlas_algebra::{
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
-use atlas_transcript::Transcript;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 
 /// `LookupOperandsTrait` helper for the trig downscale (right-shift) stage. Registers the
@@ -67,17 +65,4 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
             SumcheckId::NodeExecution(node_idx),
         )
     }
-}
-
-/// Verifier counterpart of [`cache_downscaled_prove`].
-/// `Err` if the accumulator lacks a claim it reads.
-pub fn cache_downscaled_verify<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
-    let (r_node_output, _) = accessor.get_reduced_opening()?;
-    let mut provider = accessor.into_provider(&mut verifier.transcript, r_node_output);
-    provider.append_advice(VirtualPoly::TrigDownscaled)?;
-    Ok(())
 }

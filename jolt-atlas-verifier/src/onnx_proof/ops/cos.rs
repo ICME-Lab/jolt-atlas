@@ -1,34 +1,31 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::neural_teleport::small_table::SmallTableRelation;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
-use crate::onnx_proof::relation::RelationVerifier;
+use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
 use crate::onnx_proof::{
     neural_teleport::{
-        cos::{CosTable, COS_TABLE_VARS},
-        division::{cache_teleport_quotient_verify, verify_teleport_input_claim},
-        trig_downscale::{cache_downscaled_verify, TrigDownscaleOperands},
+        cos::COS_TABLE_VARS, division::TeleportInputRelation, trig_downscale::TrigDownscaleOperands,
     },
     op_lookups::{OpLookupEncoding, OpLookupProvider},
+    plan::{OpLookup, OpOpen, OpPlan, OpRangeCheck, OpRelation, OpTie, OpTrig, Plan, Step},
     range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckProvider},
-    ProofId, ProofType, Verifier,
+    ProofType,
 };
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_lookup_tables::{
-    right_shift::RightShiftTable, unsigned_less_than::UnsignedLessThanTable,
-};
-use atlas_sumcheck::relation::{verify_relation_batch, DynRelationVerifier};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningId, SumcheckId},
-    shout::{self, RaOneHotEncoding},
+    shout::RaOneHotEncoding,
 };
-use atlas_trace::op::Cos;
-use atlas_transcript::Transcript;
-use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS, XLEN};
+use atlas_trace::{op::Cos, trace::ModelExecutionIO, Model};
+use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS};
 use common::{CommittedPoly, VirtualPoly};
-use jolt_claims::SymbolicSumcheck;
+
+crate::impl_plan_op!(@verify Cos);
 
 impl OpLayout for Cos {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -48,12 +45,18 @@ impl OpLayout for Cos {
     }
 }
 
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Cos {
-    fn verify(
+/// The plan: the evaluation reduction; the teleport quotient and the downscaled remainder
+/// opened at the reduced output point; one batch of the read-raf "value" sumchecks (downscale,
+/// the Cos table, the remainder range check); one batch of their one-hot checks; then the
+/// teleport identity `a = P·q + r` in the clear, once `q` and `r` both hold claims at the
+/// reduced output point.
+impl OpPlan for Cos {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
+        _model: &Model,
+        _io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
         if node.scale != MODEL_SCALE as u8 {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "Cos teleportation verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} \
@@ -61,81 +64,33 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Cos {
                 node.scale
             )));
         }
-        // Plumbing: cache the quotient's claim.
-        cache_teleport_quotient_verify(node, verifier)?;
-
-        // Plumbing: downscale.
-        cache_downscaled_verify(node, verifier)?;
-
-        // Stage 1: batch every read-raf "value" sumcheck together — downscale, the Cos
-        // table lookup, and the remainder range-check.
-        let dsc_provider: OpLookupProvider<TrigDownscaleOperands> =
-            OpLookupProvider::new(node.clone());
-        let dsc_verifier = dsc_provider.read_raf_verify::<F, T, RightShiftTable<XLEN>, XLEN>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        let exec_sumcheck = RelationVerifier::<F, SmallTableRelation<CosTable>>::new(
-            SmallTableRelation::new(node.clone()),
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node)?;
-        let rangecheck_verifier = rc_provider
-            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-                &mut verifier.accumulator,
-                &mut verifier.transcript,
-            )?;
-
-        let exec_proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::Execution))?;
-        verify_relation_batch(
-            exec_proof,
-            vec![&dsc_verifier, &exec_sumcheck, &rangecheck_verifier],
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Stage 2: batch every one-hot correctness triple together — downscale, Cos,
-        // and the range-check.
-        let dsc_encoding = dsc_provider.encoding();
-        let cos_encoding = CosRaEncoding::new(node);
-        let rc_encoding = rc_provider.encoding();
-
-        let onehot_proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
-        let mut onehot_verifiers: Vec<Box<dyn DynRelationVerifier<F, T>>> = Vec::new();
-        onehot_verifiers.extend(shout::ra_onehot_verifiers(
-            &dsc_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        )?);
-        onehot_verifiers.extend(shout::ra_onehot_verifiers(
-            &cos_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        )?);
-        onehot_verifiers.extend(shout::ra_onehot_verifiers(
-            &rc_encoding,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        )?);
-        verify_relation_batch(
-            onehot_proof,
-            onehot_verifiers.iter().map(|v| &**v as _).collect(),
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // Plumbing: derive `a`'s input claim now that `q` and `r` both hold claims at the
-        // node's reduced output-opening point.
-        verify_teleport_input_claim(node, verifier, TRIG_PERIOD_MODULUS as i32)?;
-
-        Ok(())
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Open(OpOpen::TeleportQuotient(node.clone())),
+            Step::Open(OpOpen::TrigDownscaled(node.clone())),
+            Step::Batch {
+                proof: ProofType::Execution,
+                relations: vec![
+                    OpRelation::Lookup(OpLookup::TrigDownscale, node.clone()),
+                    OpRelation::Trig(OpTrig::Cos, node.clone()),
+                    OpRelation::RangeCheck(OpRangeCheck::Teleport, node.clone()),
+                ],
+            },
+            Step::Batch {
+                proof: ProofType::RaOneHotChecks,
+                relations: vec![
+                    OpRelation::LookupOneHot(OpLookup::TrigDownscale, node.clone()),
+                    OpRelation::TrigOneHot(OpTrig::Cos, node.clone()),
+                    OpRelation::RangeCheckOneHot(OpRangeCheck::Teleport, node.clone()),
+                ],
+            },
+            Step::Tie {
+                relation: OpTie::TeleportInput(TeleportInputRelation {
+                    node: node.clone(),
+                    tau: TRIG_PERIOD_MODULUS as i32,
+                }),
+            },
+        ]))
     }
 }
 

@@ -1,12 +1,8 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::ProveOp;
 use crate::onnx_proof::relation::{RelationChallenge, RelationParams, RelationSetup};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::opening_access::IntoProverProvider;
-use crate::{
-    onnx_proof::{ProofId, ProofType, Prover},
-    utils::opening_access::{AccOpeningAccessor, Target},
-};
+use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -22,7 +18,6 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::{
     opening_proof::prover::ProverOpeningAccumulator, relation::prover::RelationWitness,
-    sumcheck::SumcheckInstanceProof,
 };
 use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
 use atlas_transcript::Transcript;

@@ -14,7 +14,6 @@
 //! batched sumcheck.
 
 use crate::onnx_proof::neural_teleport::small_table::SmallTableRelation;
-use crate::onnx_proof::op_lookups::OpLookupProve;
 use crate::onnx_proof::relation::{
     RelationChallenge, RelationParams, RelationSetup, RelationWitness,
 };
@@ -23,14 +22,9 @@ pub use jolt_atlas_verifier::onnx_proof::ops::activation_clamped::*;
 use jolt_claims::SymbolicSumcheck;
 
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::neural_teleport::{n_bits_to_usize, utils::compute_ra_evals_nbits_2comp};
 use crate::onnx_proof::op_lookups::{DefaultLookupOperands, LookupWitness};
 use crate::onnx_proof::trace_view::TraceView;
-use crate::onnx_proof::{
-    deferred_lookups::{DeferredBatch, DeferredOneHot},
-    neural_teleport::{n_bits_to_usize, utils::compute_ra_evals_nbits_2comp},
-    op_lookups::OpLookupProvider,
-    ProofId, Prover,
-};
 use crate::utils::compute_lookup_indices_from_operands;
 use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_algebra::{
@@ -43,21 +37,20 @@ use atlas_algebra::{
         signed_identity_poly::SignedIdentityPoly,
     },
 };
-use atlas_lookup_tables::clamp::ActivationClampTable;
-use atlas_sumcheck::{
-    opening_proof::prover::ProverOpeningAccumulator, sumcheck::SumcheckInstanceProof,
-};
+use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
 use atlas_trace::Tensor;
 use atlas_transcript::Transcript;
 use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, XLEN},
+    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS},
     parallel::par_enabled,
 };
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
-struct SmallTableProver<F: JoltField, Table: SmallActivationTable> {
+/// The execution check's prover: `output = Table[clamped]` over the small activation table,
+/// the clamped input's one-hot encoding against the table and the signed identity.
+pub struct SmallTableProver<F: JoltField, Table: SmallActivationTable> {
     relation: SmallTableRelation<Table>,
     setup: RelationSetup<F>,
     gamma: F,
@@ -66,13 +59,13 @@ struct SmallTableProver<F: JoltField, Table: SmallActivationTable> {
     identity: SignedIdentityPoly<F>,
     /// Lookup indices for this stage's one-hot checks, so the caller can reuse them
     /// without recomputing from the trace.
-    lookup_indices: Vec<usize>,
+    pub lookup_indices: Vec<usize>,
 }
 
 impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
     /// Computes the clamped tensor and registers its advice claim at `r_node_output`;
     /// the `ActivationClamp` stage then ties that claim back to `raw_input`.
-    fn initialize(
+    pub fn initialize(
         params: RelationParams<F, SmallTableRelation<Table>>,
         trace: &Trace,
         accumulator: &mut ProverOpeningAccumulator<F>,
@@ -208,60 +201,6 @@ impl<F: JoltField, Table: SmallActivationTable> ProveRounds<F> for SmallTablePro
         self.bind(bind, self.relation.rounds() - 1);
         Ok(())
     }
-}
-
-// ---------------------------------------------------------------------------
-// Public entry points, called by the thin per-op `ProveOp`/`VerifyOp` impls.
-// ---------------------------------------------------------------------------
-
-/// Full (Execution + ActivationClamp) proof for a clamped-activation node: Execution
-/// establishes the clamped advice claim, ActivationClamp ties it back to the raw
-/// input, then both stages' one-hot checks are batched into one batched sumcheck.
-pub fn prove_clamped_activation<F, T, Table>(
-    node: &ComputationNode,
-    prover: &mut Prover<F, T>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F>)>
-where
-    F: JoltField,
-    T: Transcript,
-    Table: SmallActivationTable,
-{
-    // Stage 1: Execution -- output = SmallTable[clamped]. Built here (its
-    // challenge is drawn now, its `clamped` advice claim appended now), proven
-    // after the node loop in the `ActivationExec` batch.
-    let params = small_table_params::<F, Table>(node, &prover.accumulator, &mut prover.transcript)
-        .expect("the prover holds every claim it reads");
-    let exec_sumcheck = SmallTableProver::<F, Table>::initialize(
-        params,
-        &prover.trace,
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    );
-    let small_indices = exec_sumcheck.lookup_indices.clone();
-    prover.defer(DeferredBatch::ActivationExec, Box::new(exec_sumcheck));
-
-    // Stage 2: ActivationClamp -- clamped = ActivationClampTable[raw_input].
-    // Same: built now, proven in the `ActivationClamp` batch.
-    let clamp_provider: OpLookupProvider<ActivationClampOperands> =
-        OpLookupProvider::new(node.clone());
-    let (clamp_sumcheck, clamp_lookup_indices) = clamp_provider
-        .read_raf_prove::<F, T, ActivationClampTable<XLEN>, XLEN>(
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-    prover.defer(DeferredBatch::ActivationClamp, Box::new(clamp_sumcheck));
-
-    // Stage 3: both stages' one-hot checks, built and proven after their batches.
-    prover
-        .deferred_onehots
-        .push((DeferredOneHot::ActivationSmall(node.idx), small_indices));
-    prover.deferred_onehots.push((
-        DeferredOneHot::ActivationClamp(node.clone()),
-        clamp_lookup_indices,
-    ));
-
-    Vec::new()
 }
 
 impl LookupWitness for ActivationClampOperands {

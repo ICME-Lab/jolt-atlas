@@ -1,30 +1,31 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     onnx_proof::{
-        clamp_lookups::{
-            clamp_committed_polys, is_scalar, verify_clamp_lookup, verify_scalar_clamp,
-        },
+        clamp_lookups::is_scalar,
+        plan::{clamp_steps, OpPlan, OpTie, Plan, Step},
         relation::{
-            verify_tie, AtlasRelation, RelationChallenge, RelationDerived, RelationExpr,
-            RelationId, RelationOpening, RelationSetup, TieRelation,
+            AtlasRelation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
+            RelationOpening, RelationSetup, TieRelation,
         },
-        Verifier,
     },
-    utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
+    utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::op::{Add, OpSpec, Sub};
+use atlas_trace::{
+    op::{Add, OpSpec, Sub},
+    trace::ModelExecutionIO,
+    Model,
+};
 use atlas_transcript::Transcript;
-use common::{CommittedPoly, VirtualPoly};
+use common::VirtualPoly;
 use jolt_claims::{constant, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
 use std::marker::PhantomData;
 
-crate::bind_relation!(Add, AccumulationRelation<Add>);
+crate::impl_plan_op!(Add, AccumulationRelation<Add>);
 
 /// Proof for saturating element-wise addition: `output = SatClamp(left + right)`.
 ///
@@ -50,23 +51,14 @@ crate::bind_relation!(Add, AccumulationRelation<Add>);
 /// The accumulation is re-executed from the operands at proving time
 /// ([`clamp_intermediate`](crate::onnx_proof::clamp_lookups)); it is not stored
 /// in the trace.
-impl OpLayout for Add {
-    fn get_committed_polynomials(
+impl OpPlan for Add {
+    fn plan(
         &self,
         node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(clamp_committed_polys(node))
-    }
-}
-
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Add {
-    #[tracing::instrument(skip_all, name = "Add::verify")]
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        verify_accumulation::<Add, F, T>(node, verifier)
+        model: &Model,
+        io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(accumulation_plan::<Add>(node, model, io))
     }
 }
 
@@ -74,14 +66,50 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Add {
 pub trait AccumulationShape: OpSpec + 'static {
     /// `+1` for `Add`, `−1` for `Sub`.
     const SIGN: i64;
+
+    /// The plan step tying the pre-clamp accumulation to the operands.
+    fn accumulation_tie(node: &ComputationNode) -> OpTie;
 }
 
 impl AccumulationShape for Add {
     const SIGN: i64 = 1;
+
+    fn accumulation_tie(node: &ComputationNode) -> OpTie {
+        OpTie::AddAccumulation(AccumulationRelation::new(node.clone()))
+    }
 }
 
 impl AccumulationShape for Sub {
     const SIGN: i64 = -1;
+
+    fn accumulation_tie(node: &ComputationNode) -> OpTie {
+        OpTie::SubAccumulation(AccumulationRelation::new(node.clone()))
+    }
+}
+
+/// The plan of a saturating `left ± right`: the evaluation reduction, then the clamp steps and
+/// the accumulation tie, or for a scalar node the clamp recomputed from the operands in the
+/// clear.
+pub fn accumulation_plan<S: AccumulationShape>(
+    node: &ComputationNode,
+    model: &Model,
+    io: &ModelExecutionIO,
+) -> Plan {
+    let mut steps = vec![Step::Reduce];
+    if is_scalar(node) {
+        steps.push(Step::Tie {
+            relation: OpTie::ScalarAccumulation {
+                node: node.clone(),
+                sign: S::SIGN,
+            },
+        });
+    } else {
+        steps.extend(clamp_steps(node, model, io));
+        steps.push(Step::Tie {
+            relation: S::accumulation_tie(node),
+        });
+    }
+    Plan(steps)
 }
 
 /// The pre-clamp accumulation of a non-scalar saturating `left ± right`, a tie at the output
@@ -183,30 +211,3 @@ impl<S: AccumulationShape> AtlasRelation for AccumulationRelation<S> {
 }
 
 impl<F: JoltField, S: AccumulationShape> TieRelation<F> for AccumulationRelation<S> {}
-
-/// Verify a saturating `left ± right`: the clamp lookup and the accumulation tie, or for a
-/// scalar node the clamp recomputed from the operands in the clear.
-pub fn verify_accumulation<S: AccumulationShape, F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    if is_scalar(node) {
-        let (opening_point, output_claim) =
-            AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening()?;
-        let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
-            .into_provider(&mut verifier.transcript, opening_point);
-        provider.append_nodeio(Target::Input(0))?;
-        provider.append_nodeio(Target::Input(1))?;
-        let left_claim = provider.get_nodeio(Target::Input(0))?.1;
-        let right_claim = provider.get_nodeio(Target::Input(1))?.1;
-        drop(provider);
-        let acc = left_claim + F::from_i64(S::SIGN) * right_claim;
-        return verify_scalar_clamp(acc, output_claim, &node.operator.to_string());
-    }
-    verify_clamp_lookup(node, verifier)?;
-    verify_tie(
-        &AccumulationRelation::<S>::new(node.clone()),
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )
-}

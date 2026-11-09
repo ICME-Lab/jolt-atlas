@@ -1,6 +1,5 @@
 use super::*;
 use atlas_algebra::utils::errors::ProofVerifyError;
-use atlas_sumcheck::relation::{verify_relation, verify_relation_batch, DynRelationVerifier};
 use atlas_sumcheck::{
     booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier},
     hamming_booleanity::{HammingBooleanitySumcheckParams, HammingBooleanitySumcheckVerifier},
@@ -9,7 +8,13 @@ use atlas_sumcheck::{
 use atlas_trace::op::GatherSmall;
 use common::CommittedPoly;
 
+crate::impl_plan_op!(@verify GatherSmall);
+
 impl OpLayout for GatherSmall {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -18,48 +23,54 @@ impl OpLayout for GatherSmall {
     }
 }
 
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for GatherSmall {
-    #[tracing::instrument(skip_all, name = "GatherSmall::verify")]
-    fn verify(
+/// The plan: the evaluation reduction, the dictionary read, the one-hot checks of its `ra`
+/// (Hamming-Booleanity and Booleanity as one batch), then the Hamming-weight check.
+impl OpPlan for GatherSmall {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::Execution))?;
-        let exec_sumcheck = gather_verifier(node, verifier)?;
-        verify_relation(
-            proof,
-            &exec_sumcheck,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
+        model: &Model,
+        _io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        let shape = GatherSmallShape::for_node(model, node)?;
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Relation {
+                proof: ProofType::Execution,
+                relation: OpRelation::Gather(GatherRelation::for_node(model, node.clone())?),
+            },
+            Step::Batch {
+                proof: ProofType::RaOneHotChecks,
+                relations: vec![OpRelation::GatherSmallOneHot(shape.clone())],
+            },
+            Step::Relation {
+                proof: ProofType::RaHammingWeight,
+                relation: OpRelation::GatherSmallHammingWeight(shape),
+            },
+        ]))
+    }
+}
 
-        let ra_one_hot_proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
-        let (hb_sumcheck, bool_sumcheck) = build_stage2_verifiers::<F>(node, verifier)?;
-        let instances: Vec<&dyn DynRelationVerifier<F, T>> = vec![&hb_sumcheck, &bool_sumcheck];
-        verify_relation_batch(
-            ra_one_hot_proof,
-            instances,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
+/// A small gather's one-hot layout: the node, its dictionary rows and its lookup count.
+#[derive(Clone)]
+pub struct GatherSmallShape {
+    /// The gather node.
+    pub node: ComputationNode,
+    /// The dictionary rows (the one-hot width).
+    pub num_words: usize,
+    /// The padded number of lookups (the one-hot cycles).
+    pub num_lookups: usize,
+}
 
-        let hw_proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::RaHammingWeight))?;
-        let hw_sumcheck = build_stage3_verifier::<F>(node, verifier)?;
-        verify_relation(
-            hw_proof,
-            &hw_sumcheck,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        Ok(())
+impl GatherSmallShape {
+    /// The layout of a small gather `node` of `model`. `Err` if the node is not a small gather
+    /// over a dictionary and an index operand.
+    pub fn for_node(model: &Model, node: &ComputationNode) -> Result<Self, ProofVerifyError> {
+        Ok(Self {
+            node: node.clone(),
+            num_words: dictionary_words(model, node)?,
+            num_lookups: operand(model, node, 1)?.pow2_padded_num_output_elements(),
+        })
     }
 }
 
@@ -85,8 +96,9 @@ fn dictionary_words(
 /// The second-stage verifier instances (one-hot checks) of a small gather.
 /// `Err` if the accumulator lacks a claim it reads.
 pub fn build_stage2_verifiers<F: JoltField>(
-    computation_node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, impl Transcript>,
+    shape: &GatherSmallShape,
+    accumulator: &VerifierOpeningAccumulator<F>,
+    transcript: &mut impl Transcript,
 ) -> Result<
     (
         HammingBooleanitySumcheckVerifier<F>,
@@ -94,28 +106,16 @@ pub fn build_stage2_verifiers<F: JoltField>(
     ),
     ProofVerifyError,
 > {
-    let model = &verifier.preprocessing.model;
-    let num_words = dictionary_words(model, computation_node)?;
-    let num_lookups = operand(model, computation_node, 1)?.pow2_padded_num_output_elements();
-
-    let hb_params = ra_hamming_bool_params::<F>(
-        computation_node,
-        num_lookups,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
+    let hb_params =
+        ra_hamming_bool_params::<F>(&shape.node, shape.num_lookups, accumulator, transcript)?;
     let bool_params = ra_booleanity_params::<F>(
-        computation_node,
-        num_words,
-        num_lookups,
-        &verifier.accumulator,
-        &mut verifier.transcript,
+        &shape.node,
+        shape.num_words,
+        shape.num_lookups,
+        accumulator,
+        transcript,
     )?;
-
-    let hb_sumcheck = hb_params.into_verifier();
-    let bool_sumcheck = bool_params.into_verifier();
-
-    Ok((hb_sumcheck, bool_sumcheck))
+    Ok((hb_params.into_verifier(), bool_params.into_verifier()))
 }
 
 /// Hamming-booleanity parameters of the read addresses.
@@ -178,18 +178,12 @@ pub fn ra_booleanity_params<F: JoltField>(
 /// The third-stage verifier instance (Hamming weight) of a small gather.
 /// `Err` if the accumulator lacks a claim it reads.
 pub fn build_stage3_verifier<F: JoltField>(
-    computation_node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, impl Transcript>,
+    shape: &GatherSmallShape,
+    accumulator: &VerifierOpeningAccumulator<F>,
+    transcript: &mut impl Transcript,
 ) -> Result<HammingWeightSumcheckVerifier<F>, ProofVerifyError> {
-    let num_words = dictionary_words(&verifier.preprocessing.model, computation_node)?;
-
-    let hw_params = ra_hamming_weight_params::<F>(
-        computation_node,
-        num_words,
-        &verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
+    let hw_params =
+        ra_hamming_weight_params::<F>(&shape.node, shape.num_words, accumulator, transcript)?;
     Ok(hw_params.into_verifier())
 }
 

@@ -1,14 +1,13 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
 use crate::onnx_proof::{
     ops::activation_clamped::{
-        clamped_activation_committed_polynomials, verify_clamped_activation, SmallActivationTable,
+        clamped_activation_committed_polynomials, clamped_activation_plan, SmallActivationTable,
     },
-    Verifier,
+    plan::{OpActivation, OpPlan, Plan},
 };
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_trace::op::Sigmoid;
-use atlas_transcript::Transcript;
+use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_trace::{op::Sigmoid, trace::ModelExecutionIO, Model};
 use common::{
     consts::{ACTIVATION_TABLE_VARS, MODEL_SCALE},
     CommittedPoly,
@@ -28,7 +27,13 @@ impl SmallActivationTable for SigmoidTableMarker {
     }
 }
 
+crate::impl_plan_op!(@verify Sigmoid);
+
 impl OpLayout for Sigmoid {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -37,13 +42,13 @@ impl OpLayout for Sigmoid {
     }
 }
 
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sigmoid {
-    #[tracing::instrument(skip_all, name = "Sigmoid::verify")]
-    fn verify(
+impl OpPlan for Sigmoid {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        verify_clamped_activation::<F, T, SigmoidTableMarker>(node, verifier)
+        _model: &Model,
+        _io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(clamped_activation_plan(node, OpActivation::Sigmoid))
     }
 }

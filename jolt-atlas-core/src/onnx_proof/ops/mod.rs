@@ -1,11 +1,9 @@
 //! # Neural Network Op Proofs Module
 //!
-//! This module contains proving and verification logic for all supported ONNX operations
-//! in the zero-knowledge proof system. Each operator implements three traits:
-//!
-//! - [`OpLayout`]: the model-only facts (reduction flow, committed polynomials)
-//! - [`ProveOp`]: generate sumcheck proofs for the operation's correctness
-//! - [`VerifyOp`]: verify sumcheck proofs from the prover
+//! The prover side of every supported ONNX operation. The verifier crate defines each op's
+//! relations, its [`OpLayout`] (committed polynomials) and its [`OpPlan`]; this module walks
+//! the plan with the relations' witnesses ([`prove_plan`]), so an op's transcript order is its
+//! plan's step order on both sides.
 //!
 //! ## Op Categories
 //!
@@ -24,11 +22,11 @@
 //! ## Architecture
 //!
 //! Every operator's protocol is a relation (`onnx_proof::relation`): its claim algebra, from
-//! which the verifier is derived. An operator whose verification is a plan
-//! (`onnx_proof::plan`: ordered steps over relations, run by the verifier's interpreter and
-//! walked by the prover) binds it with `impl_plan_op`; the fused-rescale operators use
-//! [`impl_fused_rescale_proof_api`]; the rest set up their relations in hand-written `ProveOp` /
-//! `VerifyOp` impls.
+//! which the verifier is derived. A generic relation is proven by
+//! [`RelationProver`](crate::onnx_proof::relation::RelationProver) over its
+//! [`RelationWitnesses`]; a specialized witness (the einsum dot engine, the mean-of-squares
+//! reduction, the lookup provers) attaches at its [`OpRelation`] variant in
+//! [`relation_witnesses`]. Every op binds its plan with [`impl_plan_op_prover!`].
 
 use crate::onnx_proof::ops::eval_reduction::NodeEvalReductionProve;
 pub use jolt_atlas_verifier::onnx_proof::ops::*;
@@ -131,31 +129,78 @@ pub mod tanh;
 use atlas_trace::Op;
 
 use crate::node_view::ComputationNode;
-// Re-export handler types for convenient access
 
-// Re-export operator param/prover/verifier types for the handler macro
-use atlas_algebra::field::JoltField;
+use atlas_algebra::{
+    field::JoltField,
+    poly::{multilinear_polynomial::EvaluateMle, opening_point::OpeningPoint},
+    utils::thread::drop_in_background_thread,
+};
 use atlas_sumcheck::evaluation_reduction::EvalReductionProof;
 use atlas_transcript::Transcript;
 use eval_reduction::NodeEvalReduction;
 
 use crate::onnx_proof::{
+    clamp_lookups::{clamp_intermediate, SaturatingAccClampOperands},
+    clamp_split::{self, BucketSplit, SplitParams, SplitProver, ValueParams, ValueProver},
+    deferred_lookups::{DeferredBatch, DeferredSetup, DEFERRED_PROOF_IDX},
+    fused_rebase::rebase_remainder,
+    neural_teleport::{
+        cos::CosTable,
+        division::compute_division,
+        sin::SinTable,
+        small_table::{SmallTableRelation, TrigTableProver},
+        trig_downscale::TrigDownscaleOperands,
+    },
     op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProve, OpLookupProvider},
-    ops::clamp::SymmetricClampOperands,
-    plan::{OpLookup, OpRangeCheck, OpRelation, OpTie, Plan, Step},
+    ops::softmax_last_axis::SoftmaxRelation,
+    ops::{
+        activation_clamped::{
+            small_table_params, ActivationClampOperands, SmallActivationTable, SmallTableProver,
+            SmallTableRaEncoding,
+        },
+        clamp::SymmetricClampOperands,
+        cos::CosRaEncoding,
+        einsum::dot::EinsumDotProver,
+        erf::ErfTableMarker,
+        gather::GatherProver,
+        mean_of_squares::MeanOfSquaresReductionProver,
+        sigmoid::SigmoidTableMarker,
+        sin::SinRaEncoding,
+        softmax_last_axis::SoftmaxAddresses,
+        tanh::TanhTableMarker,
+    },
+    plan::{OpActivation, OpLookup, OpOpen, OpRangeCheck, OpRelation, OpTie, OpTrig, Plan, Step},
     range_checking::{
-        range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
+        range_check_operands::RangeCheckWitness,
+        range_check_operands::{
+            DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
+            RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
+            TeleportRangeCheckOperands,
+        },
         RangeCheckProve, RangeCheckProvider,
     },
     relation::{prove_tie, RelationParams, RelationProver, RelationWitnesses},
+    trace_view::TraceView,
     ProofId,
 };
+use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider, Target};
 use atlas_lookup_tables::{
-    clamp::ClampTable, relu::ReluTable, unsigned_less_than::UnsignedLessThanTable,
+    clamp::{ActivationClampTable, ClampTable},
+    relu::ReluTable,
+    right_shift::RightShiftTable,
+    unsigned_less_than::UnsignedLessThanTable,
 };
-use atlas_sumcheck::relation::prover::{prove_relation, prove_relation_batch, DynRelationWitness};
-use atlas_sumcheck::shout;
-use common::consts::XLEN;
+use atlas_sumcheck::booleanity::BooleanitySumcheckParams;
+use atlas_sumcheck::relation::prover::{
+    prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
+};
+use atlas_sumcheck::shout::{self, RaOneHotEncoding, RaOneHotParams};
+use atlas_trace::trace::LayerData;
+use common::consts::{TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS, XLEN};
+use common::{CommittedPoly, VirtualPoly};
+use jolt_claims::SymbolicSumcheck;
+use rayon::prelude::*;
+use std::collections::BTreeMap;
 
 use crate::onnx_proof::Prover;
 
@@ -259,6 +304,31 @@ impl OperatorProver {
     }
 }
 
+/// The read addresses a lookup leaves for its one-hot checks, keyed by the lookup and its
+/// node (`usize::MAX` for a model-level one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Addresses {
+    /// An [`OpRelation::Lookup`].
+    Lookup(OpLookup),
+    /// An [`OpRelation::RangeCheck`].
+    RangeCheck(OpRangeCheck),
+    /// An [`OpRelation::SmallActivation`].
+    SmallActivation,
+    /// An [`OpRelation::Trig`].
+    Trig,
+    /// A softmax stage's lookup.
+    Softmax(SoftmaxAddresses),
+}
+
+/// A queued deferred relation on the prover's side: its witnesses built in the node's turn,
+/// or the relation waiting for its batch.
+pub enum Deferred<F: JoltField, T: Transcript> {
+    /// Built in the node's turn.
+    Ready(Vec<Box<dyn DynRelationWitness<F, T>>>),
+    /// Built when its batch runs.
+    Pending(Box<OpRelation>),
+}
+
 /// Walk `node`'s plan on the prover side: every step the verifier's interpreter
 /// ([`Verifier::run_plan`](crate::onnx_proof::Verifier::run_plan)) runs, in the same order, with
 /// the relations' witnesses.
@@ -268,56 +338,357 @@ pub fn prove_plan<F: JoltField, T: Transcript>(
     prover: &mut Prover<F, T>,
     plan: Plan,
 ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
+    prove_steps(prover, node.idx, Some(node), plan.0)
+}
+
+/// Run `steps` whose sumcheck proofs are stored under `proof_idx`; `node` is the node of a
+/// node plan (`None` for the post-loop plan, which has no evaluation reduction).
+pub fn prove_steps<F: JoltField, T: Transcript>(
+    prover: &mut Prover<F, T>,
+    proof_idx: usize,
+    node: Option<&ComputationNode>,
+    steps: Vec<Step>,
+) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
     let mut reduction = None;
     let mut proofs = Vec::new();
-    // The read addresses of the node's lookup, kept for its one-hot checks.
-    let mut lookup_indices = Vec::new();
-    for step in plan.0 {
+    for step in steps {
         match step {
-            Step::Reduce => reduction = NodeEvalReduction::prove(prover, node),
+            Step::Reduce => {
+                let node = node.expect("the post-loop plan has no node to reduce");
+                reduction = NodeEvalReduction::prove(prover, node);
+            }
+            Step::Open(open) => prove_open(&open, prover),
             Step::Relation { proof, relation } => {
-                let mut witnesses = relation_witnesses(relation, prover, &mut lookup_indices);
+                let mut witnesses = relation_witnesses(relation, prover);
                 let [witness] = witnesses.as_mut_slice() else {
-                    panic!(
-                        "node {}'s {proof:?} step is not a single relation",
-                        node.idx
-                    )
+                    panic!("node {proof_idx}'s {proof:?} step is not a single relation")
                 };
                 let (sumcheck, _) = prove_relation(
                     witness.as_mut(),
                     &mut prover.accumulator,
                     &mut prover.transcript,
                 );
-                proofs.push((ProofId(node.idx, proof), sumcheck));
+                proofs.push((ProofId(proof_idx, proof), sumcheck));
             }
             Step::Batch { proof, relations } => {
-                let mut witnesses = Vec::new();
-                for relation in relations {
-                    witnesses.extend(relation_witnesses(relation, prover, &mut lookup_indices));
-                }
-                let (sumcheck, _) = prove_relation_batch(
-                    witnesses
-                        .iter_mut()
-                        .map(|witness| &mut **witness as _)
-                        .collect(),
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-                proofs.push((ProofId(node.idx, proof), sumcheck));
+                let prepared: Vec<Prepared<F, T>> = relations
+                    .into_iter()
+                    .map(|relation| prepare(relation, prover))
+                    .collect();
+                let witnesses = build_all(prepared, prover);
+                proofs.push((ProofId(proof_idx, proof), prove_batch(witnesses, prover)));
             }
             Step::Tie { relation } => prove_op_tie(&relation, prover),
+            Step::Defer { batch, relation } => {
+                let item = match batch.setup() {
+                    DeferredSetup::InNodeLoop => {
+                        Deferred::Ready(relation_witnesses(relation, prover))
+                    }
+                    DeferredSetup::AtBatch => Deferred::Pending(Box::new(relation)),
+                };
+                prover.deferred.entry(batch).or_default().push(item);
+            }
         }
     }
     (reduction, proofs)
 }
 
-/// The provers of a plan relation (one, or the two of a one-hot check), set up against the
-/// prover's accumulator and transcript. A lookup leaves its read addresses in `lookup_indices`
-/// for the one-hot checks that follow it.
-fn relation_witnesses<F: JoltField, T: Transcript>(
+/// Prove the deferral queue: every batch in [`DeferredBatch`] order, as one batched sumcheck
+/// each, stored under [`DEFERRED_PROOF_IDX`].
+pub fn prove_deferred_batches<F: JoltField, T: Transcript>(
+    prover: &mut Prover<F, T>,
+) -> ExecutionProofs<F> {
+    let mut proofs = Vec::new();
+    let mut queue = std::mem::take(&mut prover.deferred);
+    for batch in DeferredBatch::ALL {
+        let Some(deferred) = queue.remove(&batch) else {
+            continue;
+        };
+        let _span =
+            tracing::span!(tracing::Level::INFO, "deferred::batch", kind = ?batch).entered();
+        let prepared: Vec<Prepared<F, T>> = deferred
+            .into_iter()
+            .map(|item| match item {
+                Deferred::Ready(witnesses) => Prepared::Ready(witnesses),
+                Deferred::Pending(relation) => prepare(*relation, prover),
+            })
+            .collect();
+        let witnesses = build_all(prepared, prover);
+        proofs.push((
+            ProofId(DEFERRED_PROOF_IDX, batch.proof_type()),
+            prove_batch(witnesses, prover),
+        ));
+    }
+    proofs
+}
+
+/// Prove `witnesses` as one batched sumcheck, instance messages computed in parallel across
+/// instances.
+fn prove_batch<F: JoltField, T: Transcript>(
+    mut witnesses: Vec<Box<dyn DynRelationWitness<F, T>>>,
+    prover: &mut Prover<F, T>,
+) -> atlas_sumcheck::sumcheck::SumcheckInstanceProof<F> {
+    let (proof, _) = if witnesses.len() > 1 {
+        prove_relation_batch_parallel(
+            witnesses.iter_mut().map(|w| &mut **w as _).collect(),
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        )
+    } else {
+        prove_relation_batch(
+            witnesses.iter_mut().map(|w| &mut **w as _).collect(),
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        )
+    };
+    drop_in_background_thread(witnesses);
+    proof
+}
+
+/// A relation of a batch after its sequential part (claims read, challenges drawn, openings
+/// appended): its witnesses, or the parameters its heavy construction runs from in parallel.
+enum Prepared<F: JoltField, T: Transcript> {
+    /// Witnesses built already.
+    Ready(Vec<Box<dyn DynRelationWitness<F, T>>>),
+    /// A one-hot check's parameters and its lookup's read addresses.
+    OneHot(RaOneHotParams<F>, Vec<usize>),
+    /// A clamp bucket's split (or, when exact, value) sumcheck parameters.
+    ClampValue(ClampValueParams<F>, usize),
+    /// A clamp bucket's chunk-check parameters.
+    ClampChunks(BooleanitySumcheckParams<F>, usize, bool),
+    /// A remainder bucket's value sumcheck parameters.
+    RemainderValue(ValueParams<F>, usize),
+    /// A remainder bucket's chunk-check parameters.
+    RemainderChunks(BooleanitySumcheckParams<F>, usize),
+}
+
+enum ClampValueParams<F: JoltField> {
+    Split(SplitParams<F>),
+    Exact(ValueParams<F>),
+}
+
+/// The sequential part of a batch relation's prover.
+fn prepare<F: JoltField, T: Transcript>(
     relation: OpRelation,
     prover: &mut Prover<F, T>,
-    lookup_indices: &mut Vec<usize>,
+) -> Prepared<F, T> {
+    let expect = "the prover holds every claim it reads";
+    fn onehot<F: JoltField, T: Transcript>(
+        encoding: &impl RaOneHotEncoding,
+        key: Addresses,
+        node_idx: usize,
+        prover: &mut Prover<F, T>,
+    ) -> Prepared<F, T> {
+        let challenges = shout::ra_onehot_challenges::<F, T>(encoding, &mut prover.transcript);
+        let params = shout::ra_onehot_params(encoding, &prover.accumulator, challenges)
+            .expect("the prover holds the one-hot checks' claims");
+        Prepared::OneHot(params, prover.take_addresses(key, node_idx))
+    }
+    fn range_check_onehot<F: JoltField, T: Transcript, H: RangeCheckingOperandsTrait>(
+        kind: OpRangeCheck,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Prepared<F, T> {
+        let encoding = RangeCheckOperands::<H>::new(node)
+            .expect("the prover's model has a range check for the node")
+            .get_encoding(node);
+        onehot(&encoding, Addresses::RangeCheck(kind), node.idx, prover)
+    }
+    match relation {
+        OpRelation::LookupOneHot(kind @ OpLookup::Relu, node) => onehot(
+            &OpLookupEncoding::<DefaultLookupOperands>::new(&node),
+            Addresses::Lookup(kind),
+            node.idx,
+            prover,
+        ),
+        OpRelation::LookupOneHot(kind @ OpLookup::SymmetricClamp, node) => onehot(
+            &OpLookupEncoding::<SymmetricClampOperands>::new(&node),
+            Addresses::Lookup(kind),
+            node.idx,
+            prover,
+        ),
+        OpRelation::LookupOneHot(kind @ OpLookup::ActivationClamp, node) => onehot(
+            &OpLookupEncoding::<ActivationClampOperands>::new(&node),
+            Addresses::Lookup(kind),
+            node.idx,
+            prover,
+        ),
+        OpRelation::LookupOneHot(kind @ OpLookup::TrigDownscale, node) => onehot(
+            &OpLookupEncoding::<TrigDownscaleOperands>::new(&node),
+            Addresses::Lookup(kind),
+            node.idx,
+            prover,
+        ),
+        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::Div, node) => {
+            range_check_onehot::<F, T, DivRangeCheckOperands>(kind, &node, prover)
+        }
+        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::MeanOfSquares, node) => {
+            range_check_onehot::<F, T, MeanOfSquaresRangeCheckOperands>(kind, &node, prover)
+        }
+        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::RsqrtDiv, node) => {
+            range_check_onehot::<F, T, RiRangeCheckOperands>(kind, &node, prover)
+        }
+        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::RsqrtSqrt, node) => {
+            range_check_onehot::<F, T, RsRangeCheckOperands>(kind, &node, prover)
+        }
+        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::Teleport, node) => {
+            range_check_onehot::<F, T, TeleportRangeCheckOperands>(kind, &node, prover)
+        }
+        OpRelation::SmallActivationOneHot(node) => onehot(
+            &SmallTableRaEncoding { node_idx: node.idx },
+            Addresses::SmallActivation,
+            node.idx,
+            prover,
+        ),
+        OpRelation::TrigOneHot(OpTrig::Cos, node) => onehot(
+            &CosRaEncoding::new(&node),
+            Addresses::Trig,
+            node.idx,
+            prover,
+        ),
+        OpRelation::TrigOneHot(OpTrig::Sin, node) => onehot(
+            &SinRaEncoding::new(&node),
+            Addresses::Trig,
+            node.idx,
+            prover,
+        ),
+        OpRelation::ClampBucketValue(bucket) => {
+            let params = if prover.clamp_split(bucket.idx).saturated() {
+                ClampValueParams::Split(
+                    SplitParams::draw(&bucket, &prover.accumulator, &mut prover.transcript)
+                        .expect(expect),
+                )
+            } else {
+                ClampValueParams::Exact(
+                    clamp_split::exact_value_params(
+                        &bucket,
+                        &prover.accumulator,
+                        &mut prover.transcript,
+                    )
+                    .expect(expect),
+                )
+            };
+            Prepared::ClampValue(params, bucket.idx)
+        }
+        OpRelation::ClampBucketChunks(bucket) => {
+            let exact = !prover.clamp_split(bucket.idx).saturated();
+            let params = if exact {
+                clamp_split::exact_chunk_check_params::<F, T>(
+                    &bucket,
+                    &prover.accumulator,
+                    &mut prover.transcript,
+                )
+            } else {
+                clamp_split::chunk_check_params::<F, T>(
+                    &bucket,
+                    &prover.accumulator,
+                    &mut prover.transcript,
+                )
+            }
+            .expect(expect);
+            Prepared::ClampChunks(params, bucket.idx, exact)
+        }
+        OpRelation::RemainderBucketValue(bucket) => Prepared::RemainderValue(
+            clamp_split::remainder_value_params(
+                &bucket,
+                &prover.accumulator,
+                &mut prover.transcript,
+            )
+            .expect(expect),
+            bucket.idx,
+        ),
+        OpRelation::RemainderBucketChunks(bucket) => Prepared::RemainderChunks(
+            clamp_split::remainder_chunk_check_params::<F, T>(
+                &bucket,
+                &prover.accumulator,
+                &mut prover.transcript,
+            )
+            .expect(expect),
+            bucket.idx,
+        ),
+        other => Prepared::Ready(relation_witnesses(other, prover)),
+    }
+}
+
+/// The heavy part of a batch's provers, in parallel across the batch.
+fn build_all<F: JoltField, T: Transcript>(
+    prepared: Vec<Prepared<F, T>>,
+    prover: &Prover<F, T>,
+) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
+    let _span = tracing::span!(tracing::Level::INFO, "deferred::build").entered();
+    let buckets = BucketWitnesses {
+        clamp_splits: &prover.clamp_splits,
+        remainder_values: &prover.remainder_values,
+    };
+    prepared
+        .into_par_iter()
+        .flat_map_iter(|p| match p {
+            Prepared::Ready(witnesses) => witnesses,
+            Prepared::OneHot(params, indices) => {
+                shout::prover::ra_onehot_provers_from_params::<F, T>(params, &indices).into()
+            }
+            Prepared::ClampValue(params, bucket) => {
+                let split = buckets.clamp_split(bucket);
+                vec![match params {
+                    ClampValueParams::Split(p) => {
+                        Box::new(SplitProver::new(p, split)) as Box<dyn DynRelationWitness<F, T>>
+                    }
+                    ClampValueParams::Exact(p) => Box::new(ValueProver::new(
+                        p,
+                        split.out.iter().map(|&o| o as u64).collect(),
+                    ))
+                        as Box<dyn DynRelationWitness<F, T>>,
+                }]
+            }
+            Prepared::ClampChunks(params, bucket, exact) => {
+                let split = buckets.clamp_split(bucket);
+                if exact {
+                    clamp_split::exact_chunk_check_provers::<F, T>(params, split)
+                } else {
+                    clamp_split::chunk_check_provers::<F, T>(params, split)
+                }
+            }
+            Prepared::RemainderValue(params, bucket) => {
+                let (values, _) = buckets.remainder_values(bucket);
+                vec![Box::new(ValueProver::new(params, values.to_vec()))
+                    as Box<dyn DynRelationWitness<F, T>>]
+            }
+            Prepared::RemainderChunks(params, bucket) => {
+                let (values, width) = buckets.remainder_values(bucket);
+                clamp_split::remainder_chunk_check_provers::<F, T>(params, values, width)
+            }
+        })
+        .collect()
+}
+
+/// The bucket witnesses the post-loop plan's provers read (shared across the parallel build).
+struct BucketWitnesses<'a> {
+    clamp_splits: &'a BTreeMap<usize, BucketSplit>,
+    remainder_values: &'a BTreeMap<usize, (Vec<u64>, usize)>,
+}
+
+impl BucketWitnesses<'_> {
+    fn clamp_split(&self, bucket_idx: usize) -> &BucketSplit {
+        self.clamp_splits
+            .get(&bucket_idx)
+            .unwrap_or_else(|| panic!("clamp bucket {bucket_idx} has no split witness"))
+    }
+
+    fn remainder_values(&self, bucket_idx: usize) -> (&[u64], usize) {
+        let (values, width) = self
+            .remainder_values
+            .get(&bucket_idx)
+            .unwrap_or_else(|| panic!("remainder bucket {bucket_idx} has no values"));
+        (values, *width)
+    }
+}
+
+/// The provers of a plan relation (one, or the several of a stage or a one-hot check), set up
+/// against the prover's accumulator and transcript. A lookup leaves its read addresses on the
+/// prover for the one-hot checks that follow it.
+pub fn relation_witnesses<F: JoltField, T: Transcript>(
+    relation: OpRelation,
+    prover: &mut Prover<F, T>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     fn engine<F: JoltField, T: Transcript, R: RelationWitnesses<F> + 'static>(
         relation: R,
@@ -326,75 +697,296 @@ fn relation_witnesses<F: JoltField, T: Transcript>(
         let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
         vec![Box::new(RelationProver::initialize(&prover.trace, params))]
     }
-    match relation {
-        OpRelation::And(relation) => engine(relation, prover),
-        OpRelation::ConstantDivision(relation) => engine(relation, prover),
-        OpRelation::Concat(relation) => engine(relation, prover),
-        OpRelation::Div(relation) => engine(relation, prover),
-        OpRelation::Iff(relation) => engine(relation, prover),
-        OpRelation::Lookup(OpLookup::Relu, node) => {
-            let (witness, indices) = OpLookupProvider::<DefaultLookupOperands>::new(node)
-                .read_raf_prove::<F, T, ReluTable<XLEN>, XLEN>(
-                    &prover.trace,
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-            *lookup_indices = indices;
-            vec![Box::new(witness)]
-        }
-        OpRelation::Lookup(OpLookup::SymmetricClamp, node) => {
-            let (witness, indices) = OpLookupProvider::<SymmetricClampOperands>::new(node)
-                .read_raf_prove::<F, T, ClampTable<XLEN>, XLEN>(
+    fn lookup<F: JoltField, T: Transcript, H, LUT>(
+        kind: OpLookup,
+        node: ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<Box<dyn DynRelationWitness<F, T>>>
+    where
+        H: Default + crate::onnx_proof::op_lookups::LookupWitness,
+        LUT: atlas_lookup_tables::JoltLookupTable
+            + atlas_lookup_tables::PrefixSuffixDecompositionTrait<XLEN>
+            + Default
+            + 'static,
+    {
+        let node_idx = node.idx;
+        let (witness, indices) = OpLookupProvider::<H>::new(node)
+            .read_raf_prove::<F, T, LUT, XLEN>(
                 &prover.trace,
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );
-            *lookup_indices = indices;
-            vec![Box::new(witness)]
-        }
-        OpRelation::LookupOneHot(OpLookup::Relu, node) => shout::prover::ra_onehot_provers(
-            &OpLookupEncoding::<DefaultLookupOperands>::new(&node),
-            lookup_indices,
+        prover.leave_addresses(Addresses::Lookup(kind), node_idx, indices);
+        vec![Box::new(witness)]
+    }
+    fn range_check<F: JoltField, T: Transcript, H: RangeCheckWitness>(
+        kind: OpRangeCheck,
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
+        let (witness, indices) = RangeCheckProvider::<H>::new(node)
+            .expect("the prover's model has a range check for the node")
+            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+        prover.leave_addresses(Addresses::RangeCheck(kind), node.idx, indices);
+        vec![Box::new(witness)]
+    }
+    fn small_activation<F: JoltField, T: Transcript, Table: SmallActivationTable>(
+        node: &ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
+        let params =
+            small_table_params::<F, Table>(node, &prover.accumulator, &mut prover.transcript)
+                .expect("the prover holds every claim it reads");
+        let exec = SmallTableProver::<F, Table>::initialize(
+            params,
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        );
+        prover.leave_addresses(
+            Addresses::SmallActivation,
+            node.idx,
+            exec.lookup_indices.clone(),
+        );
+        vec![Box::new(exec)]
+    }
+    fn trig<
+        F: JoltField,
+        T: Transcript,
+        Table: crate::onnx_proof::neural_teleport::small_table::SmallTable,
+    >(
+        node: ComputationNode,
+        prover: &mut Prover<F, T>,
+    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
+        let node_idx = node.idx;
+        let downscaled = trig_downscaled(&node, &prover.trace);
+        let params = RelationParams::new(
+            SmallTableRelation::<Table>::new(node),
             &prover.accumulator,
             &mut prover.transcript,
-        )
-        .into(),
-        OpRelation::LookupOneHot(OpLookup::SymmetricClamp, node) => {
+        );
+        let (exec, indices) =
+            TrigTableProver::initialize(&downscaled, params, &mut prover.accumulator);
+        prover.leave_addresses(Addresses::Trig, node_idx, indices);
+        vec![Box::new(exec)]
+    }
+    match relation {
+        OpRelation::And(relation) => engine(relation, prover),
+        OpRelation::ConstantDivision(relation) => engine(relation, prover),
+        OpRelation::Concat(relation) => engine(relation, prover),
+        OpRelation::Contraction(relation) => {
+            let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
+            vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
+        }
+        OpRelation::Cube(relation) => engine(relation, prover),
+        OpRelation::Div(relation) => engine(relation, prover),
+        OpRelation::Gather(relation) => {
+            let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
+            vec![Box::new(GatherProver::initialize(
+                &prover.trace,
+                params,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            ))]
+        }
+        OpRelation::GatherLargeOneHot(node) => {
+            let encoding = gather::large::GatherRaEncoding::new(&node)
+                .expect("the node is a large gather with an index operand");
+            let indices = gather::large::gather_lookup_indices(&node, &prover.trace);
             shout::prover::ra_onehot_provers(
-                &OpLookupEncoding::<SymmetricClampOperands>::new(&node),
-                lookup_indices,
+                &encoding,
+                &indices,
                 &prover.accumulator,
                 &mut prover.transcript,
             )
             .into()
         }
-        OpRelation::RangeCheck(OpRangeCheck::Div, node) => {
-            let (witness, indices) = RangeCheckProvider::<DivRangeCheckOperands>::new(&node)
-                .expect("the prover's model has a range check for the node")
-                .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
-                    &prover.trace,
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-            *lookup_indices = indices;
-            vec![Box::new(witness)]
+        OpRelation::GatherSmallOneHot(shape) => {
+            let (hamming_booleanity, booleanity) = gather::small::build_stage2_provers::<F>(
+                &shape.node,
+                &prover.trace,
+                &prover.accumulator,
+                &mut prover.transcript,
+            );
+            vec![Box::new(hamming_booleanity), Box::new(booleanity)]
         }
-        OpRelation::RangeCheckOneHot(OpRangeCheck::Div, node) => shout::prover::ra_onehot_provers(
-            &RangeCheckOperands::<DivRangeCheckOperands>::new(&node)
-                .expect("the prover's model has a range check for the node")
-                .get_encoding(&node),
-            lookup_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        )
-        .into(),
+        OpRelation::GatherSmallHammingWeight(shape) => {
+            vec![Box::new(gather::small::build_stage3_prover::<F>(
+                &shape.node,
+                &prover.trace,
+                &prover.accumulator,
+                &mut prover.transcript,
+            ))]
+        }
+        OpRelation::Iff(relation) => engine(relation, prover),
+        OpRelation::Lookup(kind @ OpLookup::Relu, node) => {
+            lookup::<F, T, DefaultLookupOperands, ReluTable<XLEN>>(kind, node, prover)
+        }
+        OpRelation::Lookup(kind @ OpLookup::SymmetricClamp, node) => {
+            lookup::<F, T, SymmetricClampOperands, ClampTable<XLEN>>(kind, node, prover)
+        }
+        OpRelation::Lookup(kind @ OpLookup::ActivationClamp, node) => {
+            lookup::<F, T, ActivationClampOperands, ActivationClampTable<XLEN>>(kind, node, prover)
+        }
+        OpRelation::Lookup(kind @ OpLookup::TrigDownscale, node) => {
+            lookup::<F, T, TrigDownscaleOperands, RightShiftTable<XLEN>>(kind, node, prover)
+        }
+        OpRelation::MeanOfSquares(relation) => {
+            let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
+            vec![Box::new(MeanOfSquaresReductionProver::initialize(
+                &prover.trace,
+                params,
+            ))]
+        }
+        OpRelation::Mul(relation) => engine(relation, prover),
+        OpRelation::RangeCheck(kind @ OpRangeCheck::Div, node) => {
+            range_check::<F, T, DivRangeCheckOperands>(kind, &node, prover)
+        }
+        OpRelation::RangeCheck(kind @ OpRangeCheck::MeanOfSquares, node) => {
+            range_check::<F, T, MeanOfSquaresRangeCheckOperands>(kind, &node, prover)
+        }
+        OpRelation::RangeCheck(kind @ OpRangeCheck::RsqrtDiv, node) => {
+            range_check::<F, T, RiRangeCheckOperands>(kind, &node, prover)
+        }
+        OpRelation::RangeCheck(kind @ OpRangeCheck::RsqrtSqrt, node) => {
+            range_check::<F, T, RsRangeCheckOperands>(kind, &node, prover)
+        }
+        OpRelation::RangeCheck(kind @ OpRangeCheck::Teleport, node) => {
+            range_check::<F, T, TeleportRangeCheckOperands>(kind, &node, prover)
+        }
         OpRelation::Reshape(relation) => engine(relation, prover),
+        OpRelation::Rsqrt(relation) => engine(relation, prover),
         OpRelation::Slice(relation) => engine(relation, prover),
+        OpRelation::SmallActivation(OpActivation::Erf, node) => {
+            small_activation::<F, T, ErfTableMarker>(&node, prover)
+        }
+        OpRelation::SmallActivation(OpActivation::Sigmoid, node) => {
+            small_activation::<F, T, SigmoidTableMarker>(&node, prover)
+        }
+        OpRelation::SmallActivation(OpActivation::Tanh, node) => {
+            small_activation::<F, T, TanhTableMarker>(&node, prover)
+        }
+        OpRelation::Softmax(relation) => {
+            let Prover {
+                trace,
+                accumulator,
+                transcript,
+                lookup_addresses,
+                ..
+            } = prover;
+            let node_idx = match &relation {
+                SoftmaxRelation::Stage1(s)
+                | SoftmaxRelation::Stage2(s)
+                | SoftmaxRelation::Stage3(s)
+                | SoftmaxRelation::ExpHiOneHot(s)
+                | SoftmaxRelation::ExpLoOneHot(s)
+                | SoftmaxRelation::ClampOneHot(s) => s.idx(),
+            };
+            let (witnesses, left) = softmax_last_axis::prove_relation(
+                &relation,
+                trace,
+                accumulator,
+                transcript,
+                &mut |key| lookup_addresses.remove(&(Addresses::Softmax(key), node_idx)),
+            );
+            for (key, indices) in left {
+                prover.leave_addresses(Addresses::Softmax(key), node_idx, indices);
+            }
+            witnesses
+        }
+        OpRelation::Square(relation) => engine(relation, prover),
+        OpRelation::SumAxis(relation) => engine(relation, prover),
+        OpRelation::Trig(OpTrig::Cos, node) => trig::<F, T, CosTable>(node, prover),
+        OpRelation::Trig(OpTrig::Sin, node) => trig::<F, T, SinTable>(node, prover),
+        one_hot @ (OpRelation::LookupOneHot(..)
+        | OpRelation::RangeCheckOneHot(..)
+        | OpRelation::SmallActivationOneHot(_)
+        | OpRelation::TrigOneHot(..)
+        | OpRelation::ClampBucketValue(_)
+        | OpRelation::ClampBucketChunks(_)
+        | OpRelation::RemainderBucketValue(_)
+        | OpRelation::RemainderBucketChunks(_)) => {
+            let prepared = prepare(one_hot, prover);
+            build_all(vec![prepared], prover)
+        }
     }
 }
 
-/// Append a plan tie's produced openings with the prover's claims.
+/// A trig node's downscaled teleport remainder, `(input mod P) >> TRIG_DOWNSCALE_BITS`.
+fn trig_downscaled(node: &ComputationNode, trace: &atlas_trace::Trace) -> atlas_trace::Tensor<i32> {
+    let LayerData { operands, .. } = TraceView::layer_data(trace, node);
+    let (_quotient, remainder) = compute_division(operands[0], TRIG_PERIOD_MODULUS as i32);
+    remainder.map(|v| v >> TRIG_DOWNSCALE_BITS)
+}
+
+/// Append a plan opening's claims from the trace.
+fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F, T>) {
+    let expect = "the prover holds every claim it reads";
+    match open {
+        OpOpen::ClampAcc(node) => {
+            let witness = clamp_intermediate(node, &prover.trace);
+            OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node))
+                .append_witness_claim_for(
+                    &witness,
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
+        }
+        OpOpen::RescaleRemainder(node) => {
+            let remainder = rebase_remainder(node, &prover.trace);
+            let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+            let r0 = accessor.get_reduced_opening().expect(expect).0;
+            let eval = remainder.evaluate_mle(&r0.r);
+            accessor
+                .into_provider(&mut prover.transcript, r0)
+                .append_advice(VirtualPoly::RescaleRemainder, eval);
+        }
+        OpOpen::TeleportQuotient(node) => {
+            let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
+            let (quotient, _remainder) = compute_division(operands[0], TRIG_PERIOD_MODULUS as i32);
+            let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+            let r0 = accessor.get_reduced_opening().expect(expect).0;
+            let eval = quotient.evaluate_mle(&r0.r);
+            accessor
+                .into_provider(&mut prover.transcript, r0)
+                .append_advice(CommittedPoly::TeleportNodeQuotient, eval);
+        }
+        OpOpen::TrigDownscaled(node) => {
+            let downscaled = trig_downscaled(node, &prover.trace);
+            let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+            let r0 = accessor.get_reduced_opening().expect(expect).0;
+            let eval = downscaled.evaluate_mle(&r0.r);
+            accessor
+                .into_provider(&mut prover.transcript, r0)
+                .append_advice(VirtualPoly::TrigDownscaled, eval);
+        }
+        OpOpen::Softmax(open) => softmax_last_axis::prove_open(
+            open,
+            &prover.trace,
+            &mut prover.accumulator,
+            &mut prover.transcript,
+        ),
+        OpOpen::ClampExactFlag(bucket_idx) => {
+            let exact = !prover.clamp_split(*bucket_idx).saturated();
+            prover.accumulator.append_virtual(
+                &mut prover.transcript,
+                clamp_split::exact_flag_id(*bucket_idx),
+                OpeningPoint::new(Vec::<F>::new()),
+                if exact { F::one() } else { F::zero() },
+            );
+        }
+    }
+}
+
+/// Append a plan tie's produced openings with the prover's claims. An in-the-clear check
+/// (a scalar clamp, an exact output, a bucket's exact flag) produces nothing here: its
+/// openings are earlier steps'.
 fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prover<F, T>) {
+    let expect = "the prover holds every claim it reads";
     let Prover {
         trace,
         accumulator,
@@ -402,6 +994,7 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
         ..
     } = prover;
     match relation {
+        OpTie::AddAccumulation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::AxisPermutation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Broadcast(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Constant(relation) => prove_tie(relation, trace, accumulator, transcript),
@@ -409,7 +1002,45 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
         OpTie::DivQuotient(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Identity(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Neg(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::SubAccumulation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::ZeroOutput(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::ScalarAccumulation { node, .. } => {
+            let (opening_point, _claim) = AccOpeningAccessor::new(&*accumulator, node)
+                .get_reduced_opening()
+                .expect(expect);
+            let LayerData { operands, .. } = TraceView::layer_data(trace, node);
+            let [left, right] = operands[..] else {
+                panic!("Expected two operands for {}", node.operator)
+            };
+            let left_claim = left.evaluate_mle(&opening_point.r);
+            let right_claim = right.evaluate_mle(&opening_point.r);
+            let mut provider =
+                AccOpeningAccessor::new(accumulator, node).into_provider(transcript, opening_point);
+            provider.append_nodeio(Target::Input(0), left_claim);
+            provider.append_nodeio(Target::Input(1), right_claim);
+        }
+        OpTie::TeleportInput(relation) => {
+            let node = &relation.node;
+            let accessor = AccOpeningAccessor::new(&*accumulator, node);
+            let (r_node_output, _) = accessor.get_reduced_opening().expect(expect);
+            let q_claim = accessor
+                .get_advice(CommittedPoly::TeleportNodeQuotient)
+                .expect(expect)
+                .1;
+            let r_claim = accessor
+                .get_advice(VirtualPoly::TeleportRemainder)
+                .expect(expect)
+                .1;
+            let a_claim = F::from_i32(relation.tau) * q_claim + r_claim;
+            AccOpeningAccessor::new(accumulator, node)
+                .into_provider(transcript, r_node_output)
+                .append_nodeio(Target::Input(0), a_claim);
+        }
+        OpTie::Softmax(tie) => softmax_last_axis::prove_tie(tie),
+        OpTie::ScalarClamp(_)
+        | OpTie::ScalarRemainder { .. }
+        | OpTie::ExactClampOutput(_)
+        | OpTie::ClampBucketExact(_) => {}
     }
 }
 
@@ -441,87 +1072,3 @@ macro_rules! impl_plan_op_prover {
         }
     };
 }
-
-/// Macro to implement [`ProveOp`]/[`VerifyOp`] for element-wise operators that
-/// fuse a rescaling division + saturating clamp (`Mul`, `Square`, `Cube`).
-///
-/// Wraps the operator's own arithmetic relation (emitted under [`ProofType::RescaleArith`]) with the shared
-/// [`fused_rebase`](crate::onnx_proof::fused_rebase) stages:
-///
-/// 1. `prove_pre` — append the remainder advice + discharge the clamp.
-/// 2. the operator's arithmetic sumcheck (`acc(r) = rescaled·2^S + R`).
-/// 3. `prove_remainder_rc` — range-check the remainder (non-scalar only).
-///
-/// When the operator is *not* fused (`scale == 0`, a raw building-block product),
-/// only step (2) runs and its claim is the plain node-output opening.
-#[macro_export]
-macro_rules! impl_fused_rescale_proof_api {
-    ($inner_ty:ty, relation $relation:ty) => {
-        $crate::impl_fused_rescale_proof_api!(
-            @impl $inner_ty,
-            |node: &ComputationNode, prover: &mut Prover<F, T>| {
-                use $crate::onnx_proof::relation::{RelationParams, RelationProver};
-                let params = RelationParams::<F, $relation>::new(
-                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
-                    &prover.accumulator,
-                    &mut prover.transcript,
-                );
-                RelationProver::initialize(&prover.trace, params)
-            },
-            |node: &ComputationNode,
-             _: &atlas_trace::Model,
-             accumulator: &atlas_sumcheck::opening_proof::VerifierOpeningAccumulator<F>,
-             transcript: &mut T| {
-                $crate::onnx_proof::relation::RelationVerifier::<F, $relation>::new(
-                    <$relation as jolt_claims::SymbolicSumcheck>::new(node.clone()),
-                    accumulator,
-                    transcript,
-                )
-            }
-        );
-    };
-    (@impl $inner_ty:ty, $make_prover:expr, $make_verifier:expr) => {
-
-        impl<F: JoltField, T: Transcript> $crate::onnx_proof::ops::ProveOp<F, T> for $inner_ty {
-            #[tracing::instrument(skip(node, prover))]
-            fn prove(
-                &self,
-                node: &ComputationNode,
-                prover: &mut Prover<F, T>,
-            ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-                use atlas_sumcheck::relation::prover::prove_relation;
-                use $crate::onnx_proof::{clamp_lookups::is_scalar, fused_rebase};
-
-                let fused = fused_rebase::fuses_rebase(node);
-                let mut proofs = Vec::new();
-                let remainder = if fused {
-                    let (pre_proofs, remainder) = fused_rebase::prove_pre(node, prover);
-                    proofs.extend(pre_proofs);
-                    Some(remainder)
-                } else {
-                    None
-                };
-
-                let mut prover_sumcheck = ($make_prover)(node, &mut *prover);
-                let (proof, _) = prove_relation(
-                    &mut prover_sumcheck,
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-                proofs.push((ProofId(node.idx, ProofType::RescaleArith), proof));
-
-                if fused && !is_scalar(node) {
-                    proofs.extend(fused_rebase::prove_remainder_rc(
-                        node,
-                        prover,
-                        remainder.as_ref().expect("fused"),
-                    ));
-                }
-                proofs
-            }
-        }
-
-    };
-}
-
-pub use impl_fused_rescale_proof_api;

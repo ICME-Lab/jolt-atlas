@@ -71,3 +71,25 @@ A PR that moves an op onto a symbolic relation (`onnx_proof/relation.rs`) also m
 - **4.5 Fast paths.** A specialized prover path for a relation is completeness-only and has a
   `relation_prover_equiv_*` test comparing it with the engine's.
 
+
+## 5. Verifier changes
+
+A PR that adds an op, a proof field or a check to `jolt-atlas-verifier` also meets
+(`docs/verifier.md` is the reading order and the trust-perimeter statement):
+
+- **5.1 A plan.** The op's verification is its `OpPlan::plan` (`onnx_proof/plan.rs`): ordered
+  `Step`s over relations held in the closed enums `OpRelation`, `OpTie` and `OpOpen`, built
+  from the model and the public IO alone. No step holds a closure; whatever depends on earlier
+  claims or on challenges is read and drawn in the relation's `setup` when the interpreter
+  reaches the step. The prover walks the same plan (`jolt-atlas-core`'s `ops::prove_plan`),
+  attaching a specialized witness at its `OpRelation` variant.
+- **5.2 Relations.** Every sumcheck of the plan is a relation meeting §4; an in-the-clear check
+  is an `OpTie` that reads its claims from the accumulator and returns `Err`.
+- **5.3 Coverage.** A node of the op is in a probe model (`onnx_proof/testing/models.rs`) or the
+  op gauntlet, so the soundness sweeps, `op_surface.rs` and `proof_types_all_exercised` see it; a
+  new proof field has a `mutate::Site`, and every site is rejected (no tolerance list).
+- **5.4 No new allow.** The crate-root `deny` lints stay on with no `#[allow]` outside
+  `#[cfg(test)]`; a missing claim, proof entry or malformed input is an `Err`. The crate stays
+  Trace-free: witness code goes to `jolt-atlas-core`.
+- **5.5 Digests.** A behavior-preserving change keeps `testing/digests.rs` unchanged; a
+  protocol-breaking change re-pins them in its own commit and says so.

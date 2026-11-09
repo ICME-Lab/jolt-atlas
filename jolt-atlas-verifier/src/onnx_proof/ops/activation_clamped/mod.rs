@@ -9,24 +9,23 @@
 //!    `Clamp`), which soundly ties `clamped` back to the real input rather than just
 //!    asserting it.
 //!
-//! Both stages proceed sumcheck-then-sumcheck (Execution, then ActivationClamp), with
-//! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
-//! batched sumcheck.
+//! Both stages are deferred to the post-loop batches ([`clamped_activation_plan`]): every
+//! node's Execution sumchecks form one batched sumcheck, then their one-hot
+//! (`ra`/`hw`/`bool`) checks, then the ActivationClamp read-rafs, then theirs.
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::neural_teleport::small_table::{SmallTable, SmallTableRelation};
 use crate::onnx_proof::relation::{RelationParams, RelationVerifier, SetupRelation};
 use crate::onnx_proof::{
-    deferred_lookups::{DeferredBatch, DeferredOneHot},
-    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider},
-    Verifier,
+    deferred_lookups::DeferredBatch,
+    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding},
+    plan::{OpActivation, OpLookup, OpRelation, Plan, Step},
 };
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
     utils::errors::ProofVerifyError,
 };
-use atlas_lookup_tables::clamp::ActivationClampTable;
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
@@ -133,7 +132,9 @@ pub fn small_table_params<F: JoltField, Table: SmallActivationTable>(
     Ok(RelationParams::at(relation, setup))
 }
 
-fn small_table_verifier<F: JoltField, Table: SmallActivationTable>(
+/// The execution check's verifier: set up, with the clamped input's opening appended at the
+/// reduced output point. `Err` if the accumulator lacks a claim it reads.
+pub fn small_table_verifier<F: JoltField, Table: SmallActivationTable>(
     node: &ComputationNode,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut impl Transcript,
@@ -179,46 +180,28 @@ impl RaOneHotEncoding for SmallTableRaEncoding {
     }
 }
 
-/// Verifier counterpart of [`prove_clamped_activation`].
-pub fn verify_clamped_activation<F, T, Table>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError>
-where
-    F: JoltField,
-    T: Transcript,
-    Table: SmallActivationTable,
-{
-    // Stage 1: Execution (verified in the deferred `ActivationExec` batch).
-    let exec_verifier = small_table_verifier::<F, Table>(
-        node,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-    verifier.defer(DeferredBatch::ActivationExec, Box::new(exec_verifier));
-
-    // Stage 2: ActivationClamp (deferred `ActivationClamp` batch).
-    let clamp_provider: OpLookupProvider<ActivationClampOperands> =
-        OpLookupProvider::new(node.clone());
-    let clamp_verifier_sumcheck = clamp_provider
-        .read_raf_verify::<F, T, ActivationClampTable<XLEN>, XLEN>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-    verifier.defer(
-        DeferredBatch::ActivationClamp,
-        Box::new(clamp_verifier_sumcheck),
-    );
-
-    // Stage 3: one-hot checks, verified after their batches.
-    verifier
-        .deferred_onehots
-        .push(DeferredOneHot::ActivationSmall(node.idx));
-    verifier
-        .deferred_onehots
-        .push(DeferredOneHot::ActivationClamp(node.clone()));
-
-    Ok(())
+/// The plan of a clamped activation reading `table`: the evaluation reduction, then the two
+/// stages and their one-hot checks, each queued for its post-loop batch.
+pub fn clamped_activation_plan(node: &ComputationNode, table: OpActivation) -> Plan {
+    Plan(vec![
+        Step::Reduce,
+        Step::Defer {
+            batch: DeferredBatch::ActivationExec,
+            relation: OpRelation::SmallActivation(table, node.clone()),
+        },
+        Step::Defer {
+            batch: DeferredBatch::ActivationExecRaChecks,
+            relation: OpRelation::SmallActivationOneHot(node.clone()),
+        },
+        Step::Defer {
+            batch: DeferredBatch::ActivationClamp,
+            relation: OpRelation::Lookup(OpLookup::ActivationClamp, node.clone()),
+        },
+        Step::Defer {
+            batch: DeferredBatch::ActivationClampRaChecks,
+            relation: OpRelation::LookupOneHot(OpLookup::ActivationClamp, node.clone()),
+        },
+    ])
 }
 
 /// Committed polynomials for a clamped-activation node (both stages' one-hot RaD chunks).

@@ -19,18 +19,14 @@
 //! The one-hot read-address checks are over a 64-bit address, so the decomposition has
 //! `64 / log_k_chunk` committed chunks ([`CommittedPoly::ClampRaD`]).
 
-use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupProvider};
+use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait};
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::{deferred_lookups::VerifierLookupJob, Verifier};
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
     utils::errors::ProofVerifyError,
 };
-use atlas_sumcheck::opening_proof::{
-    OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator,
-};
-use atlas_transcript::Transcript;
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
 use common::{CommittedPoly, VirtualPoly};
 
 /// Widest address of the saturating-clamp lookup table (an i64 accumulation).
@@ -73,22 +69,6 @@ pub fn acc_opening_id(node_idx: usize) -> OpeningId {
         VirtualPoly::ClampAcc(node_idx),
         SumcheckId::NodeExecution(node_idx),
     )
-}
-
-/// Verifier counterpart of [`prove_append_acc`]: append the `ClampAcc` opening
-/// point (claim is loaded from the proof's opening claims).
-/// `Err` if the accumulator lacks a claim it reads.
-pub fn verify_append_acc<F, T>(
-    node: &ComputationNode,
-    accumulator: &mut VerifierOpeningAccumulator<F>,
-    transcript: &mut T,
-) -> Result<(), ProofVerifyError>
-where
-    F: JoltField,
-    T: Transcript,
-{
-    let r = accumulator.get_node_output_opening(node.idx)?.0;
-    accumulator.append_virtual(transcript, acc_opening_id(node.idx), r)
 }
 
 /// [`LookupOperandsTrait`] helper for the 64-bit accumulator-sourced saturating clamp, backed
@@ -143,40 +123,6 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
     fn log_k(&self) -> usize {
         self.log_k
     }
-}
-
-/// Verifier counterpart of [`prove_clamp_lookup`]: appends the `raf` opening
-/// and registers the deferred lookup for
-/// [`deferred_lookups::verify_all`](crate::onnx_proof::deferred_lookups::verify_all).
-pub fn verify_clamp_lookup<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    let provider =
-        OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node));
-    provider.append_witness_claim_verifier(&mut verifier.accumulator, &mut verifier.transcript)?;
-    if crate::onnx_proof::clamp_split::exact_output_verifier(
-        verifier.preprocessing.model(),
-        verifier.io,
-        node.idx,
-    ) {
-        let acc = verifier
-            .accumulator
-            .get_virtual_polynomial_opening(acc_opening_id(node.idx))?
-            .1;
-        let out = verifier.accumulator.get_node_output_opening(node.idx)?.1;
-        if acc != out {
-            return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                "output node {}: unsaturated public output must equal the pre-clamp accumulation",
-                node.idx
-            )));
-        }
-        return Ok(());
-    }
-    verifier
-        .deferred
-        .push(VerifierLookupJob::Clamp { node: node.clone() });
-    Ok(())
 }
 
 /// A clamped node commits **no** per-node polynomials: its clamp one-hots live

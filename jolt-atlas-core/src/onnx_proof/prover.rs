@@ -10,15 +10,19 @@ use super::{
 };
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
+use crate::onnx_proof::{
+    clamp_split::BucketSplit,
+    deferred_lookups::DeferredBatch,
+    ops::{Addresses, Deferred, OperatorProver},
+};
+use crate::utils::opening_access::AccOpeningAccessor;
 use crate::utils::opening_access::IntoProverProvider;
-use crate::{onnx_proof::ops::OperatorProver, utils::opening_access::AccOpeningAccessor};
 use atlas_algebra::{
     field::JoltField,
     poly::multilinear_polynomial::{EvaluateMle, MultilinearPolynomial},
     utils::math::Math,
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;
-use atlas_sumcheck::relation::prover::DynRelationWitness;
 use atlas_sumcheck::{
     evaluation_reduction::EvalReductionProof,
     opening_proof::{prover::ProverOpeningAccumulator, OpeningId, SumcheckId},
@@ -46,20 +50,16 @@ pub struct Prover<F: JoltField, T: Transcript> {
     pub accumulator: ProverOpeningAccumulator<F>,
     /// Interactive proof transcript.
     pub transcript: T,
-    /// Lookups registered during the node loop, proven afterwards in one batch
-    /// (see [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
-    pub deferred: Vec<crate::onnx_proof::deferred_lookups::ProverLookupJob>,
-    /// Sumcheck instances built during the node loop and proven afterwards,
-    /// one batched sumcheck per [`DeferredBatch`](crate::onnx_proof::deferred_lookups::DeferredBatch).
-    pub deferred_batches: BTreeMap<
-        crate::onnx_proof::deferred_lookups::DeferredBatch,
-        Vec<Box<dyn DynRelationWitness<F, T>>>,
-    >,
-    /// One-hot checks to build and prove right after their parent batch.
-    pub deferred_onehots: Vec<(
-        crate::onnx_proof::deferred_lookups::DeferredOneHot,
-        Vec<usize>,
-    )>,
+    /// The deferral queue: relations the node loop's `Defer` steps queued, proven after the
+    /// loop as one batched sumcheck per batch (see
+    /// [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
+    pub deferred: BTreeMap<DeferredBatch, Vec<Deferred<F, T>>>,
+    /// The read addresses each lookup left for its one-hot checks, by lookup and node.
+    pub lookup_addresses: BTreeMap<(Addresses, usize), Vec<usize>>,
+    /// The live clamp buckets' split witnesses, by bucket, for the post-loop plan.
+    pub clamp_splits: BTreeMap<usize, BucketSplit>,
+    /// The remainder buckets' packed values and widths, by bucket, for the post-loop plan.
+    pub remainder_values: BTreeMap<usize, (Vec<u64>, usize)>,
 }
 
 impl<F: JoltField, T: Transcript> Prover<F, T> {
@@ -74,22 +74,36 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
             preprocessing,
             accumulator: ProverOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof"),
-            deferred: Vec::new(),
-            deferred_batches: BTreeMap::new(),
-            deferred_onehots: Vec::new(),
+            deferred: BTreeMap::new(),
+            lookup_addresses: BTreeMap::new(),
+            clamp_splits: BTreeMap::new(),
+            remainder_values: BTreeMap::new(),
         }
     }
 
-    /// Queue a node-loop-built sumcheck instance for the deferred batch `kind`.
-    pub fn defer(
-        &mut self,
-        kind: crate::onnx_proof::deferred_lookups::DeferredBatch,
-        instance: Box<dyn DynRelationWitness<F, T>>,
-    ) {
-        self.deferred_batches
-            .entry(kind)
-            .or_default()
-            .push(instance);
+    /// Leave a lookup's read addresses for its one-hot checks.
+    pub fn leave_addresses(&mut self, key: Addresses, node_idx: usize, indices: Vec<usize>) {
+        let previous = self.lookup_addresses.insert((key, node_idx), indices);
+        assert!(
+            previous.is_none(),
+            "node {node_idx}: the {key:?} addresses were left twice"
+        );
+    }
+
+    /// Take the read addresses a lookup left for this one-hot check.
+    pub fn take_addresses(&mut self, key: Addresses, node_idx: usize) -> Vec<usize> {
+        self.lookup_addresses
+            .remove(&(key, node_idx))
+            .unwrap_or_else(|| {
+                panic!("node {node_idx}: the {key:?} addresses were not left by their lookup")
+            })
+    }
+
+    /// A live clamp bucket's split witness (built by the post-loop plan).
+    pub fn clamp_split(&self, bucket_idx: usize) -> &BucketSplit {
+        self.clamp_splits
+            .get(&bucket_idx)
+            .unwrap_or_else(|| panic!("clamp bucket {bucket_idx} has no split witness"))
     }
 }
 

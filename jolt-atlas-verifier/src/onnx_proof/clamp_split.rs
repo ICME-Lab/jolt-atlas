@@ -642,6 +642,45 @@ pub fn exact_value_params<F: JoltField, T: Transcript>(
     })
 }
 
+/// A bucket's exact flag, read from its opening: `true` when the prover declared every
+/// element unsaturated. `Err` if the flag is not a bit or was never appended.
+pub fn exact_flag<F: JoltField>(
+    bucket: &ClampBucket,
+    accumulator: &dyn OpeningAccumulator<F>,
+) -> Result<bool, ProofVerifyError> {
+    let flag = accumulator
+        .get_virtual_polynomial_opening(exact_flag_id(bucket.idx))?
+        .1;
+    if flag == F::one() {
+        Ok(true)
+    } else if flag == F::zero() {
+        Ok(false)
+    } else {
+        Err(ProofVerifyError::InvalidOpeningProof(format!(
+            "clamp bucket {}: exact flag must be 0 or 1",
+            bucket.idx
+        )))
+    }
+}
+
+/// Parameters of a remainder bucket's range check: the value sumcheck over the packed
+/// remainders, its input claim `Σ_n γ_n·R_n(r_n)` with `γ` drawn here.
+/// `Err` if the accumulator lacks a claim it reads.
+pub fn remainder_value_params<F: JoltField, T: Transcript>(
+    bucket: &ClampBucket,
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<ValueParams<F>, ProofVerifyError> {
+    let gammas: Vec<F> = transcript.challenge_scalar_powers(bucket.nodes.len());
+    let (input_claim, cycle) = bucket.remainder_inputs(&gammas, accumulator)?;
+    Ok(ValueParams {
+        bucket_idx: bucket.idx,
+        value_id: remainder_value_id(bucket.idx),
+        cycle,
+        input_claim,
+    })
+}
+
 /// Verifier side of an exact bucket's per-node identity `ClampAcc(r_n) = out_n(r_n)`.
 pub fn verify_exact_nodes<F: JoltField>(
     bucket: &ClampBucket,

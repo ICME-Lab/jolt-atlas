@@ -21,12 +21,11 @@ use super::{clamp_lookups::is_scalar, clamp_split, fused_rebase::rebase_bits};
 use crate::node_view::clamp_value_bound;
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
-use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{field::JoltField, utils::math::Math};
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
-    opening_proof::OpeningAccumulator,
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ps_shout::{CycleWeight, PackedSegment},
 };
 use atlas_trace::{Model, Op};
@@ -193,7 +192,6 @@ impl ClampBucket {
         &self,
         gammas: &[F],
         accumulator: &dyn OpeningAccumulator<F>,
-        model: &Model,
     ) -> Result<(F, CycleWeight<F>), ProofVerifyError> {
         if gammas.len() != self.nodes.len() {
             return Err(ProofVerifyError::Malformed(format!(
@@ -205,9 +203,10 @@ impl ClampBucket {
         let mut input_claim = F::zero();
         let mut segments = Vec::with_capacity(self.nodes.len());
         for (n, gamma) in self.nodes.iter().zip(gammas) {
-            let node = &model.view(n.idx);
-            let (r, claim) = AccOpeningAccessor::new(accumulator, node)
-                .get_advice(VirtualPoly::RescaleRemainder)?;
+            let (r, claim) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
+                VirtualPoly::RescaleRemainder(n.idx),
+                SumcheckId::NodeExecution(n.idx),
+            ))?;
             if r.len() != n.log_t {
                 return Err(ProofVerifyError::Malformed(format!(
                     "node {} remainder point has {} coordinates, expected {}",

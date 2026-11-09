@@ -1,22 +1,17 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
-    onnx_proof::deferred_lookups::{DeferredBatch, DeferredOneHot},
     onnx_proof::{
-        ops::{eval_reduction::NodeEvalReduction, ReductionFlow},
-        range_checking::{
-            range_check_operands::{
-                RangeCheckOperands, RiRangeCheckOperands, RsRangeCheckOperands,
-            },
-            RangeCheckProvider,
-        },
+        deferred_lookups::DeferredBatch,
+        plan::{OpPlan, OpRangeCheck, OpRelation, Plan, Step},
+        range_checking::range_check_operands::{RangeCheckOperands, RiRangeCheckOperands},
         relation::{
             AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
-            RelationId, RelationOpening, RelationSetup, RelationVerifier,
+            RelationId, RelationOpening, RelationSetup,
         },
-        ProofId, ProofType, Verifier,
+        ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -24,15 +19,13 @@ use atlas_algebra::{
     field::{IntoOpening, JoltField},
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-use atlas_sumcheck::relation::verify_relation;
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::RaOneHotEncoding,
 };
-use atlas_trace::{op::Rsqrt, Op};
+use atlas_trace::{op::Rsqrt, trace::ModelExecutionIO, Model, Op};
 use atlas_transcript::Transcript;
-use common::{consts::XLEN, CommittedPoly, VirtualPoly};
+use common::{CommittedPoly, VirtualPoly};
 use jolt_claims::{
     challenge, constant, derived, opening, Expr, NoChallenges, NoInputs, NoOutputs,
     SymbolicSumcheck,
@@ -52,9 +45,11 @@ pub fn rsqrt_dividend(node: &ComputationNode) -> i64 {
     1i64 << (3 * node.scale)
 }
 
+crate::impl_plan_op!(@verify Rsqrt);
+
 impl OpLayout for Rsqrt {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
+    fn reduction_flow(&self) -> crate::onnx_proof::ops::ReductionFlow {
+        crate::onnx_proof::ops::ReductionFlow::Custom
     }
 
     fn get_committed_polynomials(
@@ -74,40 +69,39 @@ impl OpLayout for Rsqrt {
     }
 }
 
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Rsqrt {
-    #[tracing::instrument(skip_all, name = "Rsqrt::prove")]
-    fn verify(
+/// The plan: the fused relation's sumcheck (its point drawn from the transcript), then the
+/// evaluation reduction, then the two remainder range checks and their one-hot checks, deferred
+/// to the post-loop range-check batches.
+impl OpPlan for Rsqrt {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        // Execution proof
-        let proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::Execution))?;
-        let verifier_sumcheck = RelationVerifier::<F, _>::new(
-            RsqrtRelation::new(node.clone()),
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        verify_relation(
-            proof,
-            &verifier_sumcheck,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        Ok(())
-    }
-
-    fn verify_with_reduction(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        self.verify(node, verifier)?;
-        NodeEvalReduction::verify(verifier, node)?;
-        verify_range_and_onehot(node, verifier)
+        _model: &Model,
+        _io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(Plan(vec![
+            Step::Relation {
+                proof: ProofType::Execution,
+                relation: OpRelation::Rsqrt(RsqrtRelation::new(node.clone())),
+            },
+            Step::Reduce,
+            Step::Defer {
+                batch: DeferredBatch::RangeCheck,
+                relation: OpRelation::RangeCheck(OpRangeCheck::RsqrtDiv, node.clone()),
+            },
+            Step::Defer {
+                batch: DeferredBatch::RangeCheckRaChecks,
+                relation: OpRelation::RangeCheckOneHot(OpRangeCheck::RsqrtDiv, node.clone()),
+            },
+            Step::Defer {
+                batch: DeferredBatch::RangeCheck,
+                relation: OpRelation::RangeCheck(OpRangeCheck::RsqrtSqrt, node.clone()),
+            },
+            Step::Defer {
+                batch: DeferredBatch::RangeCheckRaChecks,
+                relation: OpRelation::RangeCheckOneHot(OpRangeCheck::RsqrtSqrt, node.clone()),
+            },
+        ]))
     }
 }
 
@@ -241,38 +235,6 @@ impl AtlasRelation for RsqrtRelation {
     fn node(&self) -> &ComputationNode {
         &self.node
     }
-}
-
-fn verify_range_and_onehot<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    let div_rangecheck_provider = RangeCheckProvider::<RiRangeCheckOperands>::new(node)?;
-    let div_rc_verifier = div_rangecheck_provider
-        .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-    verifier.defer(DeferredBatch::RangeCheck, Box::new(div_rc_verifier));
-
-    let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node)?;
-    let sqrt_rc_verifier = sqrt_rangecheck_provider
-        .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-    verifier.defer(DeferredBatch::RangeCheck, Box::new(sqrt_rc_verifier));
-
-    let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node)?;
-    verifier
-        .deferred_onehots
-        .push(DeferredOneHot::RangeCheck(div_operands.get_encoding(node)));
-    let sqrt_operands = RangeCheckOperands::<RsRangeCheckOperands>::new(node)?;
-    verifier
-        .deferred_onehots
-        .push(DeferredOneHot::RangeCheck(sqrt_operands.get_encoding(node)));
-
-    Ok(())
 }
 
 impl<F: JoltField> EngineRelation<F> for RsqrtRelation {}

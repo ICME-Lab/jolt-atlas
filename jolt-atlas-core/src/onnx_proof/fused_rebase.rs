@@ -12,115 +12,17 @@
 //! R ∈ [0, 2^S)                        (identity range-check on the remainder)
 //! ```
 //!
-//! `rescaled` is the pre-clamp value ([`VirtualPoly::ClampAcc`]), recovered as the
+//! `rescaled` is the pre-clamp value (`VirtualPoly::ClampAcc`), recovered as the
 //! floor-rebased accumulation; `R` is the rescaling remainder, appended as advice
-//! ([`VirtualPoly::RescaleRemainder`]) and range-checked. The arithmetic sumcheck
-//! reads both back through [`fused_input_claim`] so its initial claim is the raw
-//! `acc(r)` while its `Σ L·R` body is unchanged.
-//!
-//! Scalar nodes (`log_T = 0`) skip the one-hot reductions and open `rescaled` and
-//! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
+//! (`VirtualPoly::RescaleRemainder`) and range-checked. The prover's side of the plan is in
+//! `ops::prove_plan`; this module holds the trace intermediates it reads.
 
-use crate::utils::opening_access::IntoProverProvider;
 use atlas_trace::{Tensor, Trace};
 pub use jolt_atlas_verifier::onnx_proof::fused_rebase::*;
 
-use crate::{
-    node_view::ComputationNode,
-    onnx_proof::{
-        clamp_lookups::{is_scalar, prove_append_acc, prove_clamp_lookup},
-        deferred_lookups::ProverLookupJob,
-        trace_view::TraceView,
-        ProofId, Prover,
-    },
-    utils::opening_access::AccOpeningAccessor,
-};
-use atlas_algebra::{
-    field::JoltField, poly::multilinear_polynomial::EvaluateMle, utils::lookup_bits::LookupBits,
-};
-use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
-use atlas_transcript::Transcript;
-use common::VirtualPoly;
-
-// ---------------------------------------------------------------------------
-// Prover / verifier orchestration (the stages around the arithmetic sumcheck)
-// ---------------------------------------------------------------------------
-
-/// Stage (1)+(2): append the remainder `R` advice and discharge the clamp
-/// `output = SatClamp(rescaled)`. For a scalar node the clamp is checked in the
-/// clear (only `rescaled` is appended); otherwise the clamp lookup
-/// (`Execution` + `RaOneHotChecks`) is proven. Run *before* the operator's
-/// arithmetic sumcheck so [`fused_input_claim`] can read both advices.
-///
-/// Also returns the (padded) remainder tensor so [`prove_remainder_rc`] can
-/// reuse it instead of re-running the accumulation.
-pub fn prove_pre<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    prover: &mut Prover<F, T>,
-) -> (crate::onnx_proof::ops::ExecutionProofs<F>, Tensor<i32>) {
-    let RebaseIntermediates {
-        quotient,
-        remainder,
-    } = rebase_intermediates(node, &prover.trace);
-    cache_remainder_prove(node, prover, &remainder);
-    let proofs = if is_scalar(node) {
-        prove_append_acc(
-            node,
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-            Some(quotient),
-        );
-        Vec::new()
-    } else {
-        prove_clamp_lookup(node, prover, Some(quotient))
-    };
-    (proofs, remainder)
-}
-
-/// Stage (4)+(5): the rescaling-remainder range check `R ∈ [0, 2^S)`
-/// (`RangeCheck`) and its read-address one-hot checks
-/// (`RescaleRemainderRaChecks`). Run *after* the operator's arithmetic sumcheck;
-/// only for non-scalar nodes. `remainder` is the padded tensor returned by
-/// [`prove_pre`].
-pub fn prove_remainder_rc<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    prover: &mut Prover<F, T>,
-    remainder: &Tensor<i32>,
-) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-    let bits = rebase_bits(node).expect("fused op");
-    let lookup_bits = remainder_lookup_bits(remainder, bits);
-    // Deferred: proven after the node loop as part of the batched remainder
-    // range check + one-hot checks (see `deferred_lookups`).
-    prover.deferred.push(ProverLookupJob::RescaleRemainder {
-        node: node.clone(),
-        bits,
-        lookup_bits,
-    });
-    Vec::new()
-}
-
-// ---------------------------------------------------------------------------
-// Internals
-// ---------------------------------------------------------------------------
-
-/// Append the rescaling remainder `R` (padded to the node-output cycle domain,
-/// as produced by [`rebase_intermediates`]) as a virtual advice opening at the
-/// output point.
-fn cache_remainder_prove<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    prover: &mut Prover<F, T>,
-    remainder: &Tensor<i32>,
-) {
-    let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-    let r0 = accessor
-        .get_reduced_opening()
-        .expect("the prover holds every claim it reads")
-        .0;
-    let eval = remainder.evaluate_mle(&r0.r);
-    let mut provider = accessor.into_provider(&mut prover.transcript, r0);
-    provider.append_advice(VirtualPoly::RescaleRemainder, eval);
-}
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::trace_view::TraceView;
+use atlas_algebra::utils::lookup_bits::LookupBits;
 
 /// Both fused-rescale intermediates — the pre-clamp quotient `rescaled = acc div D`
 /// and the remainder `R = acc mod D` — derived from **one** accumulation pass and
@@ -149,13 +51,6 @@ pub(crate) fn try_rebase_intermediates(
         quotient: cached.quotient.padded_pow2(),
         remainder: cached.remainder.padded_pow2(),
     })
-}
-
-/// Panicking variant of [`try_rebase_intermediates`] for callers that know the
-/// node fuses a rescale.
-pub(crate) fn rebase_intermediates(node: &ComputationNode, trace: &Trace) -> RebaseIntermediates {
-    try_rebase_intermediates(node, trace)
-        .unwrap_or_else(|| panic!("fused_rebase: unsupported operator {}", node.operator))
 }
 
 /// The operator's rescaling remainder `R = acc mod D`, padded to the node-output

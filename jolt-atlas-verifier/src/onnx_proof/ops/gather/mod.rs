@@ -1,13 +1,14 @@
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
     RelationId, RelationOpening, RelationSetup, RelationVerifier, SetupRelation,
 };
 use crate::{
-    onnx_proof::{ProofId, ProofType, Verifier},
+    onnx_proof::ProofType,
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
 use atlas_algebra::{
@@ -18,8 +19,10 @@ use atlas_algebra::{
     },
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
-use atlas_trace::{Model, Op};
+use atlas_sumcheck::opening_proof::{
+    OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator,
+};
+use atlas_trace::{trace::ModelExecutionIO, Model, Op};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
 use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
@@ -210,18 +213,19 @@ impl<F: JoltField> SetupRelation<F> for GatherRelation {
 /// appended at the output point's index coordinates.
 /// `Err` if the accumulator lacks a claim it reads.
 pub fn gather_verifier<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
+    relation: GatherRelation,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
 ) -> Result<RelationVerifier<F, GatherRelation>, ProofVerifyError> {
-    let relation = GatherRelation::for_node(&verifier.preprocessing.model, node.clone())?;
-    let setup = relation.setup(&verifier.accumulator, &mut verifier.transcript)?;
+    let setup = relation.setup(accumulator, transcript)?;
+    let node = &relation.shape.node;
     let r_index = setup
         .incoming_point
         .get(..relation.shape.lookup_vars)
         .ok_or_else(|| unsupported(node, "the output point is shorter than the index variables"))?
         .to_vec();
-    AccOpeningAccessor::new(&mut verifier.accumulator, node)
-        .into_provider(&mut verifier.transcript, OpeningPoint::new(r_index))
+    AccOpeningAccessor::new(accumulator, node)
+        .into_provider(transcript, OpeningPoint::new(r_index))
         .append_nodeio(Target::Input(1))?;
     Ok(RelationVerifier::at(relation, setup))
 }

@@ -1,16 +1,12 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use crate::onnx_proof::{
-    clamp_lookups::clamp_committed_polys,
-    ops::add::{verify_accumulation, AccumulationRelation},
-    Verifier,
+    ops::add::{accumulation_plan, AccumulationRelation},
+    plan::{OpPlan, Plan},
 };
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_trace::op::Sub;
-use atlas_transcript::Transcript;
-use common::CommittedPoly;
+use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_trace::{op::Sub, trace::ModelExecutionIO, Model};
 
-crate::bind_relation!(Sub, AccumulationRelation<Sub>);
+crate::impl_plan_op!(Sub, AccumulationRelation<Sub>);
 
 /// Proof for saturating element-wise subtraction: `output = SatClamp(left - right)`.
 ///
@@ -24,22 +20,14 @@ crate::bind_relation!(Sub, AccumulationRelation<Sub>);
 ///
 /// [`VirtualPoly::ClampAcc`]: common::VirtualPoly::ClampAcc
 /// [`VirtualPoly::ClampRa`]: common::VirtualPoly::ClampRa
-impl OpLayout for Sub {
-    fn get_committed_polynomials(
+/// [`CommittedPoly::ClampRaD`]: common::CommittedPoly::ClampRaD
+impl OpPlan for Sub {
+    fn plan(
         &self,
         node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(clamp_committed_polys(node))
-    }
-}
-
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sub {
-    #[tracing::instrument(skip_all, name = "Sub::verify")]
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        verify_accumulation::<Sub, F, T>(node, verifier)
+        model: &Model,
+        io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(accumulation_plan::<Sub>(node, model, io))
     }
 }

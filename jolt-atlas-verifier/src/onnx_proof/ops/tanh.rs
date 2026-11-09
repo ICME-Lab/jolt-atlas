@@ -1,14 +1,13 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
 use crate::onnx_proof::{
     ops::activation_clamped::{
-        clamped_activation_committed_polynomials, verify_clamped_activation, SmallActivationTable,
+        clamped_activation_committed_polynomials, clamped_activation_plan, SmallActivationTable,
     },
-    Verifier,
+    plan::{OpActivation, OpPlan, Plan},
 };
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_trace::op::Tanh;
-use atlas_transcript::Transcript;
+use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_trace::{op::Tanh, trace::ModelExecutionIO, Model};
 use common::{
     consts::{ACTIVATION_TABLE_VARS, MODEL_SCALE},
     CommittedPoly,
@@ -28,7 +27,13 @@ impl SmallActivationTable for TanhTableMarker {
     }
 }
 
+crate::impl_plan_op!(@verify Tanh);
+
 impl OpLayout for Tanh {
+    fn reduction_flow(&self) -> ReductionFlow {
+        ReductionFlow::Custom
+    }
+
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -37,13 +42,13 @@ impl OpLayout for Tanh {
     }
 }
 
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Tanh {
-    #[tracing::instrument(skip_all, name = "Tanh::verify")]
-    fn verify(
+impl OpPlan for Tanh {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        verify_clamped_activation::<F, T, TanhTableMarker>(node, verifier)
+        _model: &Model,
+        _io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        Ok(clamped_activation_plan(node, OpActivation::Tanh))
     }
 }

@@ -1,26 +1,14 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
-use atlas_sumcheck::relation::verify_relation;
-use atlas_trace::op::Sum;
-use atlas_transcript::Transcript;
-use common::{CommittedPoly, VirtualPoly};
-
-use crate::{
-    onnx_proof::{
-        clamp_lookups::{
-            clamp_committed_polys, is_scalar, verify_append_acc, verify_clamp_lookup,
-            verify_scalar_clamp,
-        },
-        ops::sum::axis::SumAxisRelation,
-        relation::RelationVerifier,
-        ProofId, ProofType, Verifier,
-    },
-    utils::opening_access::AccOpeningAccessor,
+use crate::onnx_proof::{
+    clamp_lookups::is_scalar,
+    ops::sum::axis::SumAxisRelation,
+    plan::{clamp_steps, OpOpen, OpPlan, OpRelation, OpTie, Plan, Step},
+    ProofType,
 };
+use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_trace::{op::Sum, trace::ModelExecutionIO, Model};
 
-crate::bind_relation!(Sum, SumAxisRelation);
+crate::impl_plan_op!(Sum, SumAxisRelation);
 
 /// Axis-wise sum implementations for sumcheck protocol.
 pub mod axis;
@@ -42,57 +30,29 @@ pub mod axis;
 /// at `log_T = 0`): `acc` opens in the clear, so the verifier checks
 /// `output == SatClamp(acc)` directly — and the axis reduction still binds `acc`
 /// to the operand.
-impl OpLayout for Sum {
-    fn get_committed_polynomials(
+impl OpPlan for Sum {
+    fn plan(
         &self,
         node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(clamp_committed_polys(node))
-    }
-}
-
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sum {
-    #[tracing::instrument(skip_all, name = "Sum::verify")]
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        // (1+2) Verify `output = SatClamp(acc)`.
+        model: &Model,
+        io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        let mut steps = vec![Step::Reduce];
+        // (1+2) `output = SatClamp(acc)`.
         if is_scalar(node) {
             // `acc` opens in the clear: recover it and check the clamp directly.
-            verify_append_acc(node, &mut verifier.accumulator, &mut verifier.transcript)?;
-            let acc_id = OpeningId::new(
-                VirtualPoly::ClampAcc(node.idx),
-                SumcheckId::NodeExecution(node.idx),
-            );
-            let acc_claim = verifier
-                .accumulator
-                .get_virtual_polynomial_opening(acc_id)?
-                .1;
-            let output_claim = AccOpeningAccessor::new(&verifier.accumulator, node)
-                .get_reduced_opening()?
-                .1;
-            verify_scalar_clamp(acc_claim, output_claim, "Sum")?;
+            steps.push(Step::Open(OpOpen::ClampAcc(node.clone())));
+            steps.push(Step::Tie {
+                relation: OpTie::ScalarClamp(node.clone()),
+            });
         } else {
-            verify_clamp_lookup(node, verifier)?;
+            steps.extend(clamp_steps(node, model, io));
         }
-
         // (3) Axis reduction.
-        let proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::SumReduction))?;
-        let reduction = RelationVerifier::<F, _>::new(
-            SumAxisRelation::for_node(&verifier.preprocessing.model, node.clone())?,
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        verify_relation(
-            proof,
-            &reduction,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        Ok(())
+        steps.push(Step::Relation {
+            proof: ProofType::SumReduction,
+            relation: OpRelation::SumAxis(SumAxisRelation::for_node(model, node.clone())?),
+        });
+        Ok(Plan(steps))
     }
 }

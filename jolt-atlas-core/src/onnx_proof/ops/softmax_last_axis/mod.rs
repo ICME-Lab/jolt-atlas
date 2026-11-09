@@ -12,15 +12,18 @@
 //! `significance_clamp::SoftmaxSignificanceClampOperands`) — see `significance_clamp.rs`'s module doc for the relation being
 //! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
+//!
+//! The prover walks the verifier's plan: each [`SoftmaxOpen`], [`SoftmaxRelation`] and
+//! [`SoftmaxTie`] step has its prover function here, reading the node's
+//! [`SoftmaxWitness`](atlas_trace::SoftmaxWitness) from the trace.
 use crate::onnx_proof::op_lookups::{LookupWitness, OpLookupProve};
-use crate::onnx_proof::ops::ProveOp;
+use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::opening_access::IntoProverProvider;
-use atlas_sumcheck::relation::prover::{prove_relation_batch, DynRelationWitness};
+use atlas_sumcheck::relation::prover::DynRelationWitness;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::*;
 
 use crate::{
     onnx_proof::{
-        deferred_lookups::{DeferredBatch, DeferredOneHot},
         op_lookups::OpLookupProvider,
         ops::softmax_last_axis::{
             exp_sum::{ExpSumParams, ExpSumProver},
@@ -33,30 +36,21 @@ use crate::{
             recip_mult::{RecipMultParams, RecipMultProver},
             significance_clamp::SoftmaxSignificanceClampOperands,
         },
-        trace_view::TraceView,
-        ProofId, ProofType, Prover,
     },
     utils::{compute_lookup_indices_from_operands, opening_access::AccOpeningAccessor},
 };
 use atlas_lookup_tables::clamp::SoftmaxClampTable;
+use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
+use atlas_trace::{op::SoftmaxLastAxis, SoftmaxWitness, Tensor, Trace};
 
-use atlas_trace::{op::SoftmaxLastAxis, Tensor};
-
-use crate::node_view::ComputationNode;
 use atlas_algebra::{
     field::JoltField,
     poly::{multilinear_polynomial::EvaluateMle, opening_point::OpeningPoint},
     utils::{lookup_bits::LookupBits, math::Math},
 };
-use atlas_sumcheck::{
-    identity_range_check::prover::identity_rangecheck_prover, shout,
-    sumcheck::SumcheckInstanceProof,
-};
+use atlas_sumcheck::{identity_range_check::prover::identity_rangecheck_prover, shout};
 use atlas_transcript::Transcript;
-use common::{
-    consts::{MODEL_SCALE, XLEN},
-    VirtualPoly,
-};
+use common::{consts::XLEN, VirtualPoly};
 
 /// exp_sum(r0_k) = sum_{k,j} eq(r0_k, k) * exp_q[k,j]
 pub mod exp_sum;
@@ -71,564 +65,353 @@ pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
 pub mod significance_clamp;
 
-impl<F: JoltField, T: Transcript> ProveOp<F, T> for SoftmaxLastAxis {
-    #[tracing::instrument(skip_all, name = "SoftmaxLastAxis::prove")]
-    fn prove(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        debug_assert_eq!(
-            node.scale, MODEL_SCALE as u8,
-            "SoftmaxLastAxis only supports the currently-compiled MODEL_SCALE={MODEL_SCALE}"
-        );
-        // The masked (non-full-row) softmax needs a selector polynomial in
-        // these sumchecks; until that lands, only full rows are provable —
-        // the same capability the old pipeline actually had.
-        let last_dim = *node.output_dims.last().expect("softmax rank >= 1");
-        assert!(
-            self.active_len.is_none_or(|n| n == last_dim),
-            "masked softmax (active_len {:?} of {last_dim}) is not yet provable; \
-             use a power-of-two softmax axis",
-            self.active_len
-        );
-        let scale = 1i32 << node.scale;
-        let witness = prover
-            .trace
-            .softmax_witness(node.idx)
-            .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx));
-        SoftmaxLastAxisProver::new(node, witness.clone(), scale).prove(prover)
+crate::impl_plan_op_prover!(SoftmaxLastAxis);
+
+/// The node's softmax witness, captured by the executor.
+fn witness<'a>(shape: &SoftmaxShape, trace: &'a Trace) -> &'a SoftmaxWitness {
+    trace
+        .softmax_witness(shape.idx())
+        .unwrap_or_else(|| panic!("softmax node {} has no trace witness", shape.idx()))
+}
+
+/// The read addresses a softmax stage leaves for its one-hot checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SoftmaxAddresses {
+    /// Stage 3's high exp-digit lookup.
+    ExpHi,
+    /// Stage 3's low exp-digit lookup.
+    ExpLo,
+    /// Stage 3's significance clamp.
+    Clamp,
+}
+
+/// Append a [`SoftmaxOpen`]'s openings with the witness's claims.
+///
+/// The auxiliary scalars are sent as `F::from_u32(v as u32)` rather than `from_i32`: `max_k`
+/// can be negative, and a two's-complement `u32` stays in `[0, 2^32)`, which the verifier
+/// recovers with `to_u64() as i32`; `from_i32` of a negative value would be `p − |v|`, which
+/// does not roundtrip through `to_u64()`.
+pub fn prove_open<F: JoltField, T: Transcript>(
+    open: &SoftmaxOpen,
+    trace: &Trace,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+) {
+    let expect = "the prover holds every claim it reads";
+    match open {
+        SoftmaxOpen::Aux(shape) => {
+            let w = witness(shape, trace);
+            let [f, _] = shape.F_N;
+            let mut provider = AccOpeningAccessor::new(accumulator, &shape.node)
+                .into_provider(transcript, OpeningPoint::default());
+            for k in 0..f {
+                provider.append_advice(
+                    |idx| VirtualPoly::SoftmaxSumOutput(idx, k),
+                    F::from_u32(w.exp_sum_q[k] as u32),
+                );
+                provider.append_advice(
+                    |idx| VirtualPoly::SoftmaxMaxOutput(idx, k),
+                    F::from_u32(w.max_k[k] as u32),
+                );
+                provider.append_advice(
+                    |idx| VirtualPoly::SoftmaxMaxIndex(idx, k),
+                    F::from_u32(w.argmax_k[k] as u32),
+                );
+            }
+        }
+        SoftmaxOpen::ExpSum(shape) => {
+            let w = witness(shape, trace);
+            let accessor = AccOpeningAccessor::new(accumulator, &shape.node);
+            let r0 = accessor.get_reduced_opening().expect(expect).0;
+            let r_lead = r0.split_at(shape.F_N[0].log_2()).0;
+            let eval = w.exp_sum_q.evaluate_mle(&r_lead.r);
+            accessor
+                .into_provider(transcript, r_lead)
+                .append_advice(VirtualPoly::SoftmaxExpSum, eval);
+        }
+        SoftmaxOpen::RecipMultRemainder(shape) => {
+            let w = witness(shape, trace);
+            let accessor = AccOpeningAccessor::new(accumulator, &shape.node);
+            let r0 = accessor.get_reduced_opening().expect(expect).0;
+            let eval = w.r.evaluate_mle(&r0.r);
+            accessor
+                .into_provider(transcript, r0)
+                .append_advice(VirtualPoly::SoftmaxRecipMultRemainder, eval);
+        }
+        SoftmaxOpen::ExpRemainder(shape) => {
+            let w = witness(shape, trace);
+            let accessor = AccOpeningAccessor::new(accumulator, &shape.node);
+            let r1 = accessor
+                .get_advice(VirtualPoly::SoftmaxExpQ)
+                .expect(expect)
+                .0;
+            let eval = w.r_exp.evaluate_mle(&r1.r);
+            accessor
+                .into_provider(transcript, r1)
+                .append_advice(VirtualPoly::SoftmaxExpRemainder, eval);
+        }
+        SoftmaxOpen::ZHiLo(shape) => {
+            let w = witness(shape, trace);
+            let accessor = AccOpeningAccessor::new(accumulator, &shape.node);
+            let r2 = accessor
+                .get_advice(VirtualPoly::SoftmaxExpHi)
+                .expect(expect)
+                .0;
+            let z_hi_eval = w.z_hi.evaluate_mle(&r2.r);
+            let z_lo_eval = w.z_lo.evaluate_mle(&r2.r);
+            let mut provider = accessor.into_provider(transcript, r2);
+            provider.append_advice(VirtualPoly::SoftmaxZHi, z_hi_eval);
+            provider.append_advice(VirtualPoly::SoftmaxZLo, z_lo_eval);
+        }
     }
 }
 
-pub(crate) struct SoftmaxLastAxisProver {
-    pub(crate) computation_node: ComputationNode,
-    pub(crate) scale: i32,
-    pub(crate) F_N: [usize; 2],
-    pub(crate) witness: atlas_trace::SoftmaxWitness,
-    pub(crate) lut: ExpLutDecomposed,
-}
+/// A stage's provers and the read addresses it leaves for its one-hot checks.
+pub type StageProvers<F, T> = (
+    Vec<Box<dyn DynRelationWitness<F, T>>>,
+    Vec<(SoftmaxAddresses, Vec<usize>)>,
+);
 
-impl SoftmaxLastAxisProver {
-    #[inline]
-    fn idx(&self) -> usize {
-        self.computation_node.idx
-    }
+/// The provers of a [`SoftmaxRelation`], set up in the stage's order; the read addresses a
+/// stage leaves for its one-hot checks are returned beside them, and a one-hot stage takes
+/// its addresses from `addresses`.
+pub fn prove_relation<F: JoltField, T: Transcript>(
+    relation: &SoftmaxRelation,
+    trace: &Trace,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+    addresses: &mut impl FnMut(SoftmaxAddresses) -> Option<Vec<usize>>,
+) -> StageProvers<F, T> {
+    let expect = "the prover holds every claim it reads";
+    let taken = |addresses: &mut dyn FnMut(SoftmaxAddresses) -> Option<Vec<usize>>,
+                 key: SoftmaxAddresses| {
+        addresses(key).unwrap_or_else(|| {
+            panic!("softmax: the {key:?} addresses were not left by their lookup")
+        })
+    };
+    match relation {
+        SoftmaxRelation::Stage1(shape) => {
+            let w = witness(shape, trace);
+            let recip_mult_params = RecipMultParams::new(
+                shape.node.clone(),
+                shape.scale,
+                shape.F_N,
+                &*accumulator,
+                transcript,
+            )
+            .expect(expect);
+            let recip_mult_prover =
+                RecipMultProver::initialize(w.exp_q.clone(), w.inv_sum.clone(), recip_mult_params);
 
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::prove", skip_all)]
-    /// Run the full proving pipeline, returning all stage proofs.
-    fn prove<F: JoltField, T: Transcript>(
-        mut self,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let scale_bits = prover.preprocessing.scale();
+            let exp_sum_params =
+                ExpSumParams::new(shape.node.clone(), shape.F_N, &*accumulator, transcript)
+                    .expect(expect);
+            let exp_sum_prover = ExpSumProver::initialize(w.exp_q.clone(), exp_sum_params);
 
-        // Invariant guard: the SatClamp commitment is sized in
-        // `get_committed_polynomials` from the per-node operator scale
-        // (`self.scale.ilog2()`), while the prover/verifier range checks use the
-        // model-wide `preprocessing.scale()`. A single global scale makes these
-        // identical; assert it so a future move to per-node scales fails loudly
-        // here instead of silently mismatching commitment and range-check widths.
-        debug_assert_eq!(
-            self.scale.ilog2() as u8,
-            scale_bits,
-            "softmax operator scale (log2 {}) disagrees with preprocessing scale {scale_bits}",
-            self.scale.ilog2(),
-        );
+            let provider = SoftmaxRCProvider::remainder(shape.node.clone(), shape.scale_bits);
+            let r_lookup_bits = to_lookup_bits(&w.r, shape.scale_bits as usize);
+            let rc_R_prover = identity_rangecheck_prover(&provider, r_lookup_bits, accumulator);
 
-        // ── Pre-compute index/lookup data from trace vectors ────────────
-
-        // R-derived data (consumed by stage1 RC + stage2 one-hot)
-        let r_lookup_bits = to_lookup_bits(&self.witness.r, scale_bits as usize);
-        let r_indices = to_indices(&self.witness.r);
-
-        // r_exp-derived data (consumed by stage2 RC + stage3 one-hot)
-        let r_exp_lookup_bits = to_lookup_bits(&self.witness.r_exp, scale_bits as usize);
-        let r_exp_indices = to_indices(&self.witness.r_exp);
-
-        // z_hi/z_lo indices (consumed by stage3 + stage4)
-        let z_hi_indices = to_indices(&self.witness.z_hi);
-        let z_lo_indices = to_indices(&self.witness.z_lo);
-
-        // Padded lookup tables (consumed by stage3 Shout + stage4 one-hot)
-        let mut table_hi = std::mem::take(&mut self.lut.lut_hi);
-        pad_to_power_of_two(&mut table_hi);
-        let mut table_lo = std::mem::take(&mut self.lut.lut_lo);
-        pad_to_power_of_two(&mut table_lo);
-
-        let lut_data = LookupTableData {
-            table_hi,
-            table_lo,
-            z_hi_indices,
-            z_lo_indices,
-        };
-
-        // z = max_k - x, the sat-clamp lookup's witness. Computed here (not inside
-        // `build_stage3_instances`) because stage 2 takes ownership of `self.witness.x` (for
-        // `max_indicator_prover`) — by the time stage 3 runs, `self.witness.x` is empty.
-        let last_dim = self.F_N[1];
-        let z = softmax_z(&self.witness.x, &self.witness.max_k, last_dim);
-        let z_tensor = Tensor::from_slice(&z, &[z.len()])
-            .expect("softmax_z tensor construction")
-            .padded_pow2()
-            .map(|v| v as i64);
-        let significance_clamp_indices: Vec<usize> =
-            compute_lookup_indices_from_operands(&[&z_tensor.map(|v| v as i32)], false)
-                .iter()
-                .map(|&x| x.into())
-                .collect();
-
-        // ── Pipeline ────────────────────────────────────────────────────
-
-        self.send_auxiliary_vectors(prover);
-        self.cache_exp_sum(prover);
-        self.cache_R(prover);
-        let stage_1_proof = self.stage1(prover, r_lookup_bits);
-
-        self.cache_r_exp(prover);
-        let stage_2_proof = self.stage2(prover, r_exp_lookup_bits, &r_indices);
-
-        // z_hi/z_lo need to be cached fresh at r2 (established by stage 2's exp_mult instance).
-        self.cache_z_hi_lo(prover);
-
-        // Stage 3 (exp-digit lookups + significance-clamp read-raf) is built
-        // now — its challenges are drawn and its claims appended here — and
-        // proven after the node loop in the `SoftmaxStage3` batch; stage 4 (the
-        // one-hot checks) follows that batch.
-        let log_hi = lut_data.table_hi.len().log_2();
-        let log_lo = lut_data.table_lo.len().log_2();
-        for instance in self.build_stage3_instances(prover, &lut_data, &r_exp_indices, z_tensor) {
-            prover.defer(DeferredBatch::SoftmaxStage3, instance);
+            (
+                vec![
+                    Box::new(recip_mult_prover),
+                    Box::new(exp_sum_prover),
+                    Box::new(rc_R_prover),
+                ],
+                Vec::new(),
+            )
         }
-        let idx = self.idx();
-        prover.deferred_onehots.push((
-            DeferredOneHot::SoftmaxExpHi(idx, log_hi),
-            lut_data.z_hi_indices,
-        ));
-        prover.deferred_onehots.push((
-            DeferredOneHot::SoftmaxExpLo(idx, log_lo),
-            lut_data.z_lo_indices,
-        ));
-        prover.deferred_onehots.push((
-            DeferredOneHot::SoftmaxClamp(self.computation_node.clone()),
-            significance_clamp_indices,
-        ));
+        SoftmaxRelation::Stage2(shape) => {
+            let w = witness(shape, trace);
+            let [f, _n] = shape.F_N;
+            let log_f = f.log_2();
 
-        vec![
-            (ProofId(self.idx(), ProofType::SoftmaxStage1), stage_1_proof),
-            (ProofId(self.idx(), ProofType::SoftmaxStage2), stage_2_proof),
-        ]
-    }
-}
+            let accessor = AccOpeningAccessor::new(&*accumulator, &shape.node);
+            let r1 = accessor
+                .get_advice(VirtualPoly::SoftmaxExpQ)
+                .expect(expect)
+                .0;
+            let r1_k = r1.split_at(log_f).0;
 
-// ---------------------------------------------------------------------------
-// SoftmaxLastAxisProver Methods
-// ---------------------------------------------------------------------------
+            let max_k_eval = w.max_k.evaluate_mle(&r1_k.r);
+            let max_indicator_params = MaxIndicatorParams::new(
+                shape.node.clone(),
+                shape.F_N,
+                w.argmax_k.clone(),
+                max_k_eval,
+                &*accumulator,
+            )
+            .expect(expect);
+            let max_indicator_prover =
+                MaxIndicatorProver::initialize(w.x.clone(), max_indicator_params);
 
-impl SoftmaxLastAxisProver {
-    pub(crate) fn new(
-        node: &ComputationNode,
-        witness: atlas_trace::SoftmaxWitness,
-        scale: i32,
-    ) -> Self {
-        let (&n, leading_dims) = node
-            .output_dims
-            .split_last()
-            .expect("softmax node must have at least one output dimension");
-        let f = leading_dims.iter().product::<usize>();
-        Self {
-            computation_node: node.clone(),
-            scale,
-            F_N: [f, n],
-            lut: generate_exp_lut_decomposed(scale)
-                .expect("the softmax multiplier is a scale the semantics define"),
-            witness,
+            let exp_mult_params =
+                MultParams::new(shape.node.clone(), shape.scale, &*accumulator).expect(expect);
+            let exp_mult_prover =
+                MultProver::initialize(w.exp_hi.clone(), w.exp_lo.clone(), exp_mult_params);
+
+            let provider = SoftmaxRCProvider::exp_remainder(shape.node.clone(), shape.scale_bits);
+            let r_exp_lookup_bits = to_lookup_bits(&w.r_exp, shape.scale_bits as usize);
+            let exp_r_rc_prover =
+                identity_rangecheck_prover(&provider, r_exp_lookup_bits, accumulator);
+
+            let encoding = SoftmaxRaEncoding::remainder(shape.idx(), shape.scale_bits);
+            let r_indices = to_indices(&w.r);
+            let [R_ra_prover, R_bool_prover] =
+                shout::prover::ra_onehot_provers(&encoding, &r_indices, &*accumulator, transcript);
+
+            (
+                vec![
+                    Box::new(exp_mult_prover),
+                    Box::new(max_indicator_prover),
+                    Box::new(exp_r_rc_prover),
+                    R_ra_prover,
+                    R_bool_prover,
+                ],
+                Vec::new(),
+            )
         }
-    }
+        SoftmaxRelation::Stage3(shape) => {
+            let w = witness(shape, trace);
+            let lut = lookup_tables(shape, w);
 
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::send_auxiliary_vectors", skip_all)]
-    /// Send auxiliary vectors (max_k, exp_sum_q, argmax_k) to the transcript.
-    ///
-    /// These O(F) scalars let the verifier derive `inv_sum[k] = ⌊S²/exp_sum_q[k]⌋`
-    /// without relying on a committed polynomial.
-    ///
-    /// # Why `from_u32(… as u32)` instead of `from_i32`
-    ///
-    /// `max_k` can be negative (e.g. all-negative logit rows).  We deliberately
-    /// use `F::from_u32(val as u32)` so the field element stays in `[0, 2^32)`,
-    /// which is recoverable by the verifier via `to_u64() as i32` (two's-complement
-    /// wrap).  Using `F::from_i32` on a negative value would produce `p − |val|`,
-    /// a huge field element that does not roundtrip through `to_u64()`.
-    ///
-    /// The transcript only needs prover/verifier consistency (both sides absorb
-    /// the same field element).  The recovered `i32` values are then fed into
-    /// `MultilinearPolynomial::from(Vec<i32>)`, which correctly uses `from_i32`
-    /// for the actual MLE computations.
-    pub(crate) fn send_auxiliary_vectors<F: JoltField, T: Transcript>(
-        &self,
-        prover: &mut Prover<F, T>,
-    ) {
-        let [f, _] = self.F_N;
-        let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node)
-            .into_provider(&mut prover.transcript, OpeningPoint::default());
-        for k in 0..f {
-            provider.append_advice(
-                |idx| VirtualPoly::SoftmaxSumOutput(idx, k),
-                F::from_u32(self.witness.exp_sum_q[k] as u32),
-            );
-            provider.append_advice(
-                |idx| VirtualPoly::SoftmaxMaxOutput(idx, k),
-                F::from_u32(self.witness.max_k[k] as u32),
-            );
-            provider.append_advice(
-                |idx| VirtualPoly::SoftmaxMaxIndex(idx, k),
-                F::from_u32(self.witness.argmax_k[k] as u32),
-            );
-        }
-    }
-
-    /// Cache `exp_sum_q(r0_lead)` as a virtual polynomial opening.
-    ///
-    /// Evaluates the prover-sent `exp_sum_q` vector at the leading part of
-    /// `r0` (the initial output opening point).
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_exp_sum", skip_all)]
-    pub(crate) fn cache_exp_sum<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
-        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
-        let r0 = accessor
-            .get_reduced_opening()
-            .expect("the prover holds every claim it reads")
-            .0;
-        let log_f = self.F_N[0].log_2();
-        let r_lead = r0.split_at(log_f).0;
-        let eval = self.witness.exp_sum_q.evaluate_mle(&r_lead.r);
-        let mut provider = accessor.into_provider(&mut prover.transcript, r_lead);
-        provider.append_advice(VirtualPoly::SoftmaxExpSum, eval);
-    }
-
-    /// Cache the R (remainder) polynomial to the accumulator.
-    pub(crate) fn cache_R<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
-        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
-        let r0 = accessor
-            .get_reduced_opening()
-            .expect("the prover holds every claim it reads")
-            .0;
-        let eval = self.witness.r.evaluate_mle(&r0.r);
-        let mut provider = accessor.into_provider(&mut prover.transcript, r0);
-        provider.append_advice(VirtualPoly::SoftmaxRecipMultRemainder, eval);
-    }
-
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::stage1", skip_all)]
-    fn stage1<F: JoltField, T: Transcript>(
-        &mut self,
-        prover: &mut Prover<F, T>,
-        r_lookup_bits: Vec<LookupBits>,
-    ) -> SumcheckInstanceProof<F> {
-        let mut instances = self.build_stage1_instances(prover, r_lookup_bits);
-        run_batched_prove(&mut instances, prover)
-    }
-
-    /// Build stage 1 sumcheck instances without running the sumcheck.
-    pub(crate) fn build_stage1_instances<F: JoltField, T: Transcript>(
-        &mut self,
-        prover: &mut Prover<F, T>,
-        r_lookup_bits: Vec<LookupBits>,
-    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-        let recip_mult_params = RecipMultParams::new(
-            self.computation_node.clone(),
-            self.scale,
-            self.F_N,
-            &prover.accumulator,
-            &mut prover.transcript,
-        )
-        .expect("the prover holds every claim it reads");
-        let exp_q_for_sum = self.witness.exp_q.clone();
-        let recip_mult_prover = RecipMultProver::initialize(
-            std::mem::take(&mut self.witness.exp_q),
-            std::mem::take(&mut self.witness.inv_sum),
-            recip_mult_params,
-        );
-
-        let exp_sum_params = ExpSumParams::new(
-            self.computation_node.clone(),
-            self.F_N,
-            &prover.accumulator,
-            &mut prover.transcript,
-        )
-        .expect("the prover holds every claim it reads");
-        let exp_sum_prover = ExpSumProver::initialize(exp_q_for_sum, exp_sum_params);
-
-        let provider = SoftmaxRCProvider::remainder(
-            self.computation_node.clone(),
-            prover.preprocessing.scale(),
-        );
-        let rc_R_prover =
-            identity_rangecheck_prover(&provider, r_lookup_bits, &mut prover.accumulator);
-
-        vec![
-            Box::new(recip_mult_prover),
-            Box::new(exp_sum_prover),
-            Box::new(rc_R_prover),
-        ]
-    }
-
-    /// Cache the r_exp polynomial to the accumulator.
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_r_exp", skip_all)]
-    pub(crate) fn cache_r_exp<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
-        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
-        let r1 = accessor
-            .get_advice(VirtualPoly::SoftmaxExpQ)
-            .expect("the prover holds every claim it reads")
-            .0;
-        let eval = self.witness.r_exp.evaluate_mle(&r1.r);
-        let mut provider = accessor.into_provider(&mut prover.transcript, r1);
-        provider.append_advice(VirtualPoly::SoftmaxExpRemainder, eval);
-    }
-
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::stage2", skip_all)]
-    fn stage2<F: JoltField, T: Transcript>(
-        &mut self,
-        prover: &mut Prover<F, T>,
-        r_exp_lookup_bits: Vec<LookupBits>,
-        r_indices: &[usize],
-    ) -> SumcheckInstanceProof<F> {
-        let mut instances = self.build_stage2_instances(prover, r_exp_lookup_bits, r_indices);
-        run_batched_prove(&mut instances, prover)
-    }
-
-    /// Build stage 2 sumcheck instances (the saturating clamp is a lookup, folded into stage
-    /// 3/4 instead).
-    pub(crate) fn build_stage2_instances<F: JoltField, T: Transcript>(
-        &mut self,
-        prover: &mut Prover<F, T>,
-        r_exp_lookup_bits: Vec<LookupBits>,
-        r_indices: &[usize],
-    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-        let [f, _n] = self.F_N;
-        let log_f = f.log_2();
-
-        let accessor = AccOpeningAccessor::new(&prover.accumulator, &self.computation_node);
-        let r1 = accessor
-            .get_advice(VirtualPoly::SoftmaxExpQ)
-            .expect("the prover holds every claim it reads")
-            .0;
-        let r1_k = r1.split_at(log_f).0;
-
-        let max_k_eval = self.witness.max_k.evaluate_mle(&r1_k.r);
-        let max_indicator_params = MaxIndicatorParams::new(
-            self.computation_node.clone(),
-            self.F_N,
-            std::mem::take(&mut self.witness.argmax_k),
-            max_k_eval,
-            &prover.accumulator,
-        )
-        .expect("the prover holds every claim it reads");
-        let max_indicator_prover = MaxIndicatorProver::initialize(
-            std::mem::take(&mut self.witness.x),
-            max_indicator_params,
-        );
-
-        let exp_mult_params = MultParams::new(
-            self.computation_node.clone(),
-            self.scale,
-            &prover.accumulator,
-        )
-        .expect("the prover holds every claim it reads");
-        let exp_mult_prover = MultProver::initialize(
-            std::mem::take(&mut self.witness.exp_hi),
-            std::mem::take(&mut self.witness.exp_lo),
-            exp_mult_params,
-        );
-
-        let provider = SoftmaxRCProvider::exp_remainder(
-            self.computation_node.clone(),
-            prover.preprocessing.scale(),
-        );
-        let exp_r_rc_prover =
-            identity_rangecheck_prover(&provider, r_exp_lookup_bits, &mut prover.accumulator);
-
-        let encoding = SoftmaxRaEncoding::remainder(self.idx(), prover.preprocessing.scale());
-        let [R_ra_prover, R_bool_prover] = shout::prover::ra_onehot_provers(
-            &encoding,
-            r_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        vec![
-            Box::new(exp_mult_prover),
-            Box::new(max_indicator_prover),
-            Box::new(exp_r_rc_prover),
-            R_ra_prover,
-            R_bool_prover,
-        ]
-    }
-
-    /// Cache `z_hi`/`z_lo` fresh at `r2` (mirrors `cache_r_exp`) — `r2` is `SoftmaxExpHi`'s
-    /// opening point, established by stage 2's `exp_mult_prover`.
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_z_hi_lo", skip_all)]
-    pub(crate) fn cache_z_hi_lo<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
-        let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
-        let r2 = accessor
-            .get_advice(VirtualPoly::SoftmaxExpHi)
-            .expect("the prover holds every claim it reads")
-            .0;
-        let z_hi_eval = self.witness.z_hi.evaluate_mle(&r2.r);
-        let z_lo_eval = self.witness.z_lo.evaluate_mle(&r2.r);
-        let mut provider = accessor.into_provider(&mut prover.transcript, r2);
-        provider.append_advice(VirtualPoly::SoftmaxZHi, z_hi_eval);
-        provider.append_advice(VirtualPoly::SoftmaxZLo, z_lo_eval);
-    }
-
-    #[allow(dead_code)]
-    #[tracing::instrument(name = "SoftmaxLastAxisProver::stage3", skip_all)]
-    fn stage3<F: JoltField, T: Transcript>(
-        &mut self,
-        prover: &mut Prover<F, T>,
-        lut_data: &LookupTableData,
-        r_exp_indices: &[usize],
-        z_tensor: Tensor<i64>,
-    ) -> SumcheckInstanceProof<F> {
-        let mut instances = self.build_stage3_instances(prover, lut_data, r_exp_indices, z_tensor);
-        run_batched_prove(&mut instances, prover)
-    }
-
-    /// Build stage 3 sumcheck instances: exp-digit lookups plus the saturating-clamp lookup's
-    /// execution proof. `z_tensor` is computed by the caller (`prove`), since by this point
-    /// `self.witness.x` has already been consumed by stage 2's `max_indicator_prover`.
-    pub(crate) fn build_stage3_instances<F: JoltField, T: Transcript>(
-        &mut self,
-        prover: &mut Prover<F, T>,
-        lut_data: &LookupTableData,
-        r_exp_indices: &[usize],
-        z_tensor: Tensor<i64>,
-    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-        let hi_provider = ExpReadRafProvider {
-            node: self.computation_node.clone(),
-            table_size: lut_data.table_hi.len(),
-            digit: ExpDigit::Hi,
-        };
-        let hi_prover = shout::prover::read_raf_prover(
-            &hi_provider,
-            &lut_data.z_hi_indices,
-            &lut_data.table_hi,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        let lo_provider = ExpReadRafProvider {
-            node: self.computation_node.clone(),
-            table_size: lut_data.table_lo.len(),
-            digit: ExpDigit::Lo,
-        };
-        let lo_prover = shout::prover::read_raf_prover(
-            &lo_provider,
-            &lut_data.z_lo_indices,
-            &lut_data.table_lo,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
-            OpLookupProvider::new(self.computation_node.clone());
-        significance_clamp_provider.append_witness_claim_for(
-            &z_tensor,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        let significance_clamp_prover = significance_clamp_provider
-            .read_raf_prover_from_bits::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
-                significance_clamp_provider.helper.lookup_bits(&z_tensor),
-                &mut prover.accumulator,
-                &mut prover.transcript,
+            let hi_provider = ExpReadRafProvider {
+                node: shape.node.clone(),
+                table_size: lut.table_hi.len(),
+                digit: ExpDigit::Hi,
+            };
+            let hi_prover = shout::prover::read_raf_prover(
+                &hi_provider,
+                &lut.z_hi_indices,
+                &lut.table_hi,
+                &*accumulator,
+                transcript,
             );
 
-        let encoding = SoftmaxRaEncoding::exp_remainder(self.idx(), prover.preprocessing.scale());
-        let [exp_r_ra_prover, exp_r_bool_prover] = shout::prover::ra_onehot_provers(
-            &encoding,
-            r_exp_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
+            let lo_provider = ExpReadRafProvider {
+                node: shape.node.clone(),
+                table_size: lut.table_lo.len(),
+                digit: ExpDigit::Lo,
+            };
+            let lo_prover = shout::prover::read_raf_prover(
+                &lo_provider,
+                &lut.z_lo_indices,
+                &lut.table_lo,
+                &*accumulator,
+                transcript,
+            );
 
-        vec![
-            hi_prover,
-            lo_prover,
-            Box::new(significance_clamp_prover),
-            exp_r_ra_prover,
-            exp_r_bool_prover,
-        ]
-    }
+            // z = max_k - x, the sat-clamp lookup's witness.
+            let z_tensor = significance_clamp_witness(shape, w);
+            let significance_clamp_indices: Vec<usize> =
+                compute_lookup_indices_from_operands(&[&z_tensor.map(|v| v as i32)], false)
+                    .iter()
+                    .map(|&x| x.into())
+                    .collect();
+            let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
+                OpLookupProvider::new(shape.node.clone());
+            significance_clamp_provider.append_witness_claim_for(
+                &z_tensor,
+                accumulator,
+                transcript,
+            );
+            let significance_clamp_prover = significance_clamp_provider
+                .read_raf_prover_from_bits::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
+                    significance_clamp_provider.helper.lookup_bits(&z_tensor),
+                    accumulator,
+                    transcript,
+                );
 
-    #[allow(dead_code)]
-    fn stage4<F: JoltField, T: Transcript>(
-        &mut self,
-        prover: &mut Prover<F, T>,
-        lut_data: &LookupTableData,
-        significance_clamp_indices: &[usize],
-    ) -> SumcheckInstanceProof<F> {
-        let mut instances =
-            self.build_stage4_instances(prover, lut_data, significance_clamp_indices);
-        run_batched_prove(&mut instances, prover)
-    }
-
-    /// Build stage 4 sumcheck instances: exp-digit one-hot checks plus the saturating-clamp
-    /// lookup's one-hot checks.
-    #[allow(dead_code)]
-    pub(crate) fn build_stage4_instances<F: JoltField, T: Transcript>(
-        &mut self,
-        prover: &mut Prover<F, T>,
-        lut_data: &LookupTableData,
-        significance_clamp_indices: &[usize],
-    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-        let encoding = SoftmaxRaEncoding::exp_hi(self.idx(), lut_data.table_hi.len().log_2());
-        let [hi_ra_prover, hi_bool_prover] = shout::prover::ra_onehot_provers(
-            &encoding,
-            &lut_data.z_hi_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        let encoding = SoftmaxRaEncoding::exp_lo(self.idx(), lut_data.table_lo.len().log_2());
-        let [lo_ra_prover, lo_bool_prover] = shout::prover::ra_onehot_provers(
-            &encoding,
-            &lut_data.z_lo_indices,
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-
-        let significance_clamp_provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
-            OpLookupProvider::new(self.computation_node.clone());
-        let encoding = significance_clamp_provider.encoding();
-        let [significance_clamp_ra_prover, significance_clamp_bool_prover] =
-            shout::prover::ra_onehot_provers(
+            let encoding = SoftmaxRaEncoding::exp_remainder(shape.idx(), shape.scale_bits);
+            let r_exp_indices = to_indices(&w.r_exp);
+            let [exp_r_ra_prover, exp_r_bool_prover] = shout::prover::ra_onehot_provers(
                 &encoding,
-                significance_clamp_indices,
-                &prover.accumulator,
-                &mut prover.transcript,
+                &r_exp_indices,
+                &*accumulator,
+                transcript,
             );
 
-        vec![
-            hi_ra_prover,
-            hi_bool_prover,
-            lo_ra_prover,
-            lo_bool_prover,
-            significance_clamp_ra_prover,
-            significance_clamp_bool_prover,
-        ]
+            (
+                vec![
+                    hi_prover,
+                    lo_prover,
+                    Box::new(significance_clamp_prover),
+                    exp_r_ra_prover,
+                    exp_r_bool_prover,
+                ],
+                vec![
+                    (SoftmaxAddresses::ExpHi, lut.z_hi_indices),
+                    (SoftmaxAddresses::ExpLo, lut.z_lo_indices),
+                    (SoftmaxAddresses::Clamp, significance_clamp_indices),
+                ],
+            )
+        }
+        SoftmaxRelation::ExpHiOneHot(shape) => {
+            let lut = VerifierLookupTableData::new(shape.scale)
+                .expect("the softmax multiplier is a scale the semantics define");
+            let encoding = SoftmaxRaEncoding::exp_hi(shape.idx(), lut.table_hi.len().log_2());
+            let indices = taken(addresses, SoftmaxAddresses::ExpHi);
+            (
+                shout::prover::ra_onehot_provers(&encoding, &indices, &*accumulator, transcript)
+                    .into(),
+                Vec::new(),
+            )
+        }
+        SoftmaxRelation::ExpLoOneHot(shape) => {
+            let lut = VerifierLookupTableData::new(shape.scale)
+                .expect("the softmax multiplier is a scale the semantics define");
+            let encoding = SoftmaxRaEncoding::exp_lo(shape.idx(), lut.table_lo.len().log_2());
+            let indices = taken(addresses, SoftmaxAddresses::ExpLo);
+            (
+                shout::prover::ra_onehot_provers(&encoding, &indices, &*accumulator, transcript)
+                    .into(),
+                Vec::new(),
+            )
+        }
+        SoftmaxRelation::ClampOneHot(shape) => {
+            let provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
+                OpLookupProvider::new(shape.node.clone());
+            let indices = taken(addresses, SoftmaxAddresses::Clamp);
+            (
+                shout::prover::ra_onehot_provers(
+                    &provider.encoding(),
+                    &indices,
+                    &*accumulator,
+                    transcript,
+                )
+                .into(),
+                Vec::new(),
+            )
+        }
     }
 }
 
-/// Run [`prove_relation_batch`] with the standard boilerplate.
-fn run_batched_prove<F: JoltField, T: Transcript>(
-    instances: &mut [Box<dyn DynRelationWitness<F, T>>],
-    prover: &mut Prover<F, T>,
-) -> SumcheckInstanceProof<F> {
-    prove_relation_batch(
-        instances.iter_mut().map(|v| &mut **v as _).collect(),
-        &mut prover.accumulator,
-        &mut prover.transcript,
-    )
-    .0
+/// A [`SoftmaxTie`] appends nothing on the prover's side: its openings are stage outputs.
+pub fn prove_tie(_tie: &SoftmaxTie) {}
+
+/// `z = max_k − x`, padded to a power of two: the significance clamp's lookup witness.
+fn significance_clamp_witness(shape: &SoftmaxShape, w: &SoftmaxWitness) -> Tensor<i64> {
+    let z = softmax_z(&w.x, &w.max_k, shape.F_N[1]);
+    Tensor::from_slice(&z, &[z.len()])
+        .expect("softmax_z tensor construction")
+        .padded_pow2()
+        .map(|v| v as i64)
+}
+
+/// The decomposed exp tables (padded) and the witness's digit addresses.
+fn lookup_tables(shape: &SoftmaxShape, w: &SoftmaxWitness) -> LookupTableData {
+    let mut lut = generate_exp_lut_decomposed(shape.scale)
+        .expect("the softmax multiplier is a scale the semantics define");
+    let mut table_hi = std::mem::take(&mut lut.lut_hi);
+    pad_to_power_of_two(&mut table_hi);
+    let mut table_lo = std::mem::take(&mut lut.lut_lo);
+    pad_to_power_of_two(&mut table_lo);
+    LookupTableData {
+        table_hi,
+        table_lo,
+        z_hi_indices: to_indices(&w.z_hi),
+        z_lo_indices: to_indices(&w.z_lo),
+    }
 }
 
 // ---------------------------------------------------------------------------

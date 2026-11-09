@@ -30,46 +30,42 @@
 //! while the divisor `D = N·2^S` uses the *semantic* count `N` (= `op.count`,
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use atlas_sumcheck::relation::verify_relation;
 
-use atlas_trace::{op::MeanOfSquares, Op};
+use atlas_trace::{op::MeanOfSquares, trace::ModelExecutionIO, Model, Op};
 
 use crate::{
     atlas_relation_types,
     node_view::ComputationNode,
     onnx_proof::{
-        clamp_lookups::{clamp_committed_polys, is_scalar, recover_small_int, verify_scalar_clamp},
-        deferred_lookups::{DeferredBatch, DeferredOneHot},
-        fused_rebase,
-        ops::Verifier,
-        range_checking::{
-            range_check_operands::{MeanOfSquaresRangeCheckOperands, RangeCheckOperands},
-            RangeCheckProvider,
+        clamp_lookups::is_scalar,
+        deferred_lookups::DeferredBatch,
+        plan::{clamp_steps, OpOpen, OpPlan, OpRangeCheck, OpRelation, OpTie, Plan, Step},
+        range_checking::range_check_operands::{
+            MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
         },
         relation::{
             reduced_output_setup, AtlasRelation, RelationDerived, RelationExpr, RelationId,
-            RelationOpening, RelationSetup, RelationVerifier,
+            RelationOpening, RelationSetup,
         },
-        ProofId, ProofType,
+        ProofType,
     },
-    utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
+    utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{
     field::JoltField,
     poly::eq_poly::EqPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::RaOneHotEncoding,
 };
 use atlas_transcript::Transcript;
-use common::{consts::XLEN, CommittedPoly, VirtualPoly};
+use common::{CommittedPoly, VirtualPoly};
 use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
@@ -82,13 +78,17 @@ pub fn mos_divisor(op: &MeanOfSquares, scale: u8) -> i64 {
 }
 
 impl OpLayout for MeanOfSquares {
+    fn reduction_flow(&self) -> crate::onnx_proof::ops::ReductionFlow {
+        crate::onnx_proof::ops::ReductionFlow::Custom
+    }
+
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
     ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        // Saturating clamp one-hot (64-bit) ...
-        let mut polys = clamp_committed_polys(node);
-        // ... plus the `R < D` range-check one-hot (skipped for scalar outputs).
+        // The saturating clamp's one-hots live in the packed clamp buckets; here only the
+        // `R < D` range-check one-hot (skipped for scalar outputs).
+        let mut polys = Vec::new();
         if !is_scalar(node) {
             let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node)?;
             let d = rc_operands
@@ -101,79 +101,54 @@ impl OpLayout for MeanOfSquares {
     }
 }
 
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for MeanOfSquares {
-    #[tracing::instrument(skip_all, name = "MeanOfSquares::verify")]
-    fn verify(
+/// The plan: the evaluation reduction; the remainder advice and the clamp of the pre-clamp
+/// quotient (1+2); the reduction sumcheck (3); the remainder range check `R < D` (4), in the
+/// clear for a scalar node and in the post-loop range-check batches otherwise.
+impl OpPlan for MeanOfSquares {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let scalar = is_scalar(node);
-
-        // (1+2) Clamp + remainder advice.
-        fused_rebase::verify_pre(node, verifier)?;
-
-        // (3) Reduction sumcheck.
-        let proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::RescaleArith))?;
-        let reduction = RelationVerifier::<F, _>::new(
-            MeanOfSquaresRelation::new(node.clone()),
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        verify_relation(
-            proof,
-            &reduction,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        // (4) Remainder range check `R < D`.
-        if scalar {
-            // Scalar fallback: `rescaled`, `R`, and `out` open in the clear.
-            let accessor = AccOpeningAccessor::new(&verifier.accumulator, node);
-            let rescaled_claim = accessor.get_advice(VirtualPoly::ClampAcc)?.1;
-            let output_claim = accessor.get_reduced_opening()?.1;
-            verify_scalar_clamp(rescaled_claim, output_claim, "MeanOfSquares")?;
-
-            let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder)?.1;
-            verify_scalar_remainder(r_claim, mos_divisor(self, node.scale))?;
+        model: &Model,
+        io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        let mut steps = vec![
+            Step::Reduce,
+            Step::Open(OpOpen::RescaleRemainder(node.clone())),
+        ];
+        steps.extend(clamp_steps(node, model, io));
+        steps.push(Step::Relation {
+            proof: ProofType::RescaleArith,
+            relation: OpRelation::MeanOfSquares(MeanOfSquaresRelation::new(node.clone())),
+        });
+        if is_scalar(node) {
+            steps.push(Step::Tie {
+                relation: OpTie::ScalarClamp(node.clone()),
+            });
+            steps.push(Step::Tie {
+                relation: OpTie::ScalarRemainder {
+                    node: node.clone(),
+                    bound: mos_divisor(self, node.scale),
+                },
+            });
         } else {
-            let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node)?;
-            let rc_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-                &mut verifier.accumulator,
-                &mut verifier.transcript,
-            )?;
-            verifier.defer(DeferredBatch::RangeCheck, Box::new(rc_verifier));
-            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node)?;
-            verifier
-                .deferred_onehots
-                .push(DeferredOneHot::RangeCheck(rc_operands.get_encoding(node)));
+            steps.push(Step::Defer {
+                batch: DeferredBatch::RangeCheck,
+                relation: OpRelation::RangeCheck(OpRangeCheck::MeanOfSquares, node.clone()),
+            });
+            steps.push(Step::Defer {
+                batch: DeferredBatch::RangeCheckRaChecks,
+                relation: OpRelation::RangeCheckOneHot(OpRangeCheck::MeanOfSquares, node.clone()),
+            });
         }
-        Ok(())
+        Ok(Plan(steps))
     }
-}
-
-/// Verify a scalar mean-of-squares remainder directly: `0 ≤ R < D`.
-fn verify_scalar_remainder<F: JoltField>(r_claim: F, divisor: i64) -> Result<(), ProofVerifyError> {
-    let value = recover_small_int(r_claim).ok_or_else(|| {
-        ProofVerifyError::InvalidOpeningProof(
-            "mean-of-squares (scalar): remainder claim is not a small integer".to_string(),
-        )
-    })?;
-    if value < 0 || value >= divisor {
-        return Err(ProofVerifyError::InvalidOpeningProof(
-            "mean-of-squares (scalar): remainder must lie in [0, D)".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // Reduction sumcheck: acc(r) = Σ_{h,j} eq(r,h)·x[h,j]²
 // ---------------------------------------------------------------------------
 
+crate::impl_plan_op!(@verify MeanOfSquares);
 crate::bind_relation!(MeanOfSquares, MeanOfSquaresRelation);
 
 /// The mean-of-squares reduction as a relation, binding high-to-low over the operand laid out

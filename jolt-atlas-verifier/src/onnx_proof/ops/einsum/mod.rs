@@ -1,28 +1,24 @@
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::plan::{fused_rescale_plan, OpPlan, OpRelation, Plan};
 use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use atlas_sumcheck::relation::verify_relation;
-use atlas_trace::{op::Einsum, Model, Op};
+use atlas_trace::{op::Einsum, trace::ModelExecutionIO, Model, Op};
 
 use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
         fused_rebase,
-        ops::{
-            einsum::{
-                abmk_abnk_abmn::AbmkAbnkAbmnLayout,
-                dot::{EinsumGeometry, EinsumLayout, EqSchedule},
-                k_nk_n::KNkNLayout,
-                mk_kn_mn::MkKnMnLayout,
-            },
-            Verifier,
+        ops::einsum::{
+            abmk_abnk_abmn::AbmkAbnkAbmnLayout,
+            dot::{EinsumGeometry, EinsumLayout, EqSchedule},
+            k_nk_n::KNkNLayout,
+            mk_kn_mn::MkKnMnLayout,
         },
         relation::{
             AtlasRelation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
-            RelationOpening, RelationSetup, RelationVerifier,
+            RelationOpening, RelationSetup,
         },
-        ProofId, ProofType,
+        ProofType,
     },
     utils::{
         dims::{lookup_einsum_config, EinsumDims},
@@ -34,7 +30,6 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
-use common::CommittedPoly;
 use jolt_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
 
@@ -54,48 +49,22 @@ pub mod mk_kn_mn;
 // - amk,ank->amn    → abmk_abnk_abmn (batch pack 1×a)
 // - abmk,abnk->abmn → abmk_abnk_abmn
 
-crate::bind_relation!(Einsum, ContractionRelation);
+crate::impl_plan_op!(Einsum, ContractionRelation);
 
-impl OpLayout for Einsum {
-    fn get_committed_polynomials(
+impl OpPlan for Einsum {
+    fn plan(
         &self,
         node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(fused_rebase::committed_polys(node))
-    }
-}
-
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Einsum {
-    #[tracing::instrument(skip_all, name = "Einsum::verify")]
-    fn verify(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        let fused = fused_rebase::fuses_rebase(node);
-
-        if fused {
-            fused_rebase::verify_pre(node, verifier)?;
-        }
-
-        let matmul_proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::EinsumMatmul))?;
-        let relation = ContractionRelation::for_node(&verifier.preprocessing.model, node.clone())?;
-        let matmul =
-            RelationVerifier::new(relation, &verifier.accumulator, &mut verifier.transcript)?;
-        verify_relation(
-            matmul_proof,
-            &matmul,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        if fused {
-            fused_rebase::verify_post(node, verifier)?;
-        }
-
-        Ok(())
+        model: &Model,
+        io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        fused_rescale_plan(
+            node,
+            model,
+            io,
+            ProofType::EinsumMatmul,
+            OpRelation::Contraction(ContractionRelation::for_node(model, node.clone())?),
+        )
     }
 }
 

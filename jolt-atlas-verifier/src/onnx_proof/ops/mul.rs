@@ -2,14 +2,14 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
-    impl_fused_rescale_proof_api,
     onnx_proof::{
         fused_rebase,
+        plan::{fused_rescale_plan, OpPlan, OpRelation, Plan},
         relation::{
             AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup,
         },
-        ProofId, ProofType, Verifier,
+        ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -18,13 +18,34 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::op::{And, Cube, Mul, OpSpec, Square};
+use atlas_trace::{
+    op::{And, Cube, Mul, OpSpec, Square},
+    trace::ModelExecutionIO,
+    Model,
+};
 use atlas_transcript::Transcript;
 use jolt_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
 use std::marker::PhantomData;
 
-impl_fused_rescale_proof_api!(Mul, relation MulRelation);
+crate::impl_plan_op!(Mul, MulRelation);
+
+impl OpPlan for Mul {
+    fn plan(
+        &self,
+        node: &ComputationNode,
+        model: &Model,
+        io: &ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        fused_rescale_plan(
+            node,
+            model,
+            io,
+            ProofType::RescaleArith,
+            OpRelation::Mul(MulRelation::new(node.clone())),
+        )
+    }
+}
 
 /// Element-wise multiplication as a relation.
 pub type MulRelation = ProductRelation<Mul>;

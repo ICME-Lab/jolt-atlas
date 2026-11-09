@@ -1,6 +1,5 @@
 use super::*;
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_sumcheck::relation::prover::{prove_relation, prove_relation_batch, DynRelationWitness};
 use atlas_sumcheck::{
     booleanity::prover::SmallBooleanitySumcheckProver,
     hamming_booleanity::prover::HammingBooleanitySumcheckProver,
@@ -9,59 +8,13 @@ use atlas_sumcheck::{
 use atlas_trace::op::GatherSmall;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::small::*;
 
-impl<F: JoltField, T: Transcript> ProveOp<F, T> for GatherSmall {
-    #[tracing::instrument(skip_all, name = "GatherSmall::prove")]
-    fn prove(
-        &self,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
-        let mut results = Vec::new();
-
-        let params = RelationParams::new(
-            GatherRelation::for_node(&prover.preprocessing.model, node.clone())
-                .expect("the model\'s nodes have the shapes their ops prove"),
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-        let mut exec_sumcheck = GatherProver::initialize(
-            &prover.trace,
-            params,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        let (proof, _) = prove_relation(
-            &mut exec_sumcheck,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((ProofId(node.idx, ProofType::Execution), proof));
-
-        let (hb_sumcheck, bool_sumcheck) = build_stage2_provers::<F>(node, prover);
-        let mut instances: Vec<Box<dyn DynRelationWitness<_, _>>> =
-            vec![Box::new(hb_sumcheck), Box::new(bool_sumcheck)];
-        let (stage2_proof, _) = prove_relation_batch(
-            instances.iter_mut().map(|v| &mut **v as _).collect(),
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((ProofId(node.idx, ProofType::RaOneHotChecks), stage2_proof));
-
-        let mut hw_sumcheck = build_stage3_prover::<F>(node, prover);
-        let (hw_proof, _) = prove_relation(
-            &mut hw_sumcheck,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        results.push((ProofId(node.idx, ProofType::RaHammingWeight), hw_proof));
-
-        results
-    }
-}
+crate::impl_plan_op_prover!(GatherSmall);
 
 pub(crate) fn build_stage2_provers<F: JoltField>(
     computation_node: &ComputationNode,
-    prover: &mut Prover<F, impl Transcript>,
+    trace: &Trace,
+    accumulator: &ProverOpeningAccumulator<F>,
+    transcript: &mut impl Transcript,
 ) -> (
     HammingBooleanitySumcheckProver<F>,
     SmallBooleanitySumcheckProver<F>,
@@ -69,26 +22,22 @@ pub(crate) fn build_stage2_provers<F: JoltField>(
     let Op::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
-    let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, computation_node);
+    let LayerData { operands, .. } = TraceView::layer_data(trace, computation_node);
     let [dict, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };
     let num_words = dict.dims()[gather_op.axis];
     let num_lookups = indexes.len();
 
-    let hb_params = ra_hamming_bool_params::<F>(
-        computation_node,
-        num_lookups,
-        &prover.accumulator,
-        &mut prover.transcript,
-    )
-    .expect("the prover holds every claim it reads");
+    let hb_params =
+        ra_hamming_bool_params::<F>(computation_node, num_lookups, accumulator, transcript)
+            .expect("the prover holds every claim it reads");
     let bool_params = ra_booleanity_params::<F>(
         computation_node,
         num_words,
         num_lookups,
-        &prover.accumulator,
-        &mut prover.transcript,
+        accumulator,
+        transcript,
     )
     .expect("the prover holds every claim it reads");
 
@@ -109,24 +58,22 @@ pub(crate) fn build_stage2_provers<F: JoltField>(
 
 pub(crate) fn build_stage3_prover<F: JoltField>(
     computation_node: &ComputationNode,
-    prover: &mut Prover<F, impl Transcript>,
+    trace: &Trace,
+    accumulator: &ProverOpeningAccumulator<F>,
+    transcript: &mut impl Transcript,
 ) -> HammingWeightSumcheckProver<F> {
     let Op::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")
     };
-    let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, computation_node);
+    let LayerData { operands, .. } = TraceView::layer_data(trace, computation_node);
     let [dict, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };
     let num_words = dict.dims()[gather_op.axis];
 
-    let hw_params = ra_hamming_weight_params::<F>(
-        computation_node,
-        num_words,
-        &prover.accumulator,
-        &mut prover.transcript,
-    )
-    .expect("the prover holds every claim it reads");
+    let hw_params =
+        ra_hamming_weight_params::<F>(computation_node, num_words, accumulator, transcript)
+            .expect("the prover holds every claim it reads");
 
     let ra_evals = compute_ra_evals(&hw_params.r_cycle, indexes, num_words);
 

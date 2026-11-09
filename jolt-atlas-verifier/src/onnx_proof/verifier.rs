@@ -5,14 +5,15 @@
 //! delegates to.
 
 use super::{
+    deferred_lookups::{self, DeferredBatch, DeferredSetup, DEFERRED_PROOF_IDX},
     ops::eval_reduction::NodeEvalReduction,
-    plan::{Plan, Step},
+    plan::{OpRelation, Plan, Step},
     AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
 };
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::{onnx_proof::ops::OperatorVerifier, utils::opening_access::AccOpeningAccessor};
-use crate::{ONNXProof, ProofId};
+use crate::{ONNXProof, ProofId, ProofType};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -52,16 +53,18 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
     pub eval_reductions: ProofLedger<'a, usize, EvalReductionProof<F>>,
     /// Model execution inputs and outputs.
     pub io: &'a ModelExecutionIO,
-    /// Lookups registered during the node loop, verified afterwards in one
-    /// batch (see [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
-    pub deferred: Vec<crate::onnx_proof::deferred_lookups::VerifierLookupJob>,
-    /// Verifier instances built during the node loop, verified afterwards per batch.
-    pub deferred_batches: BTreeMap<
-        crate::onnx_proof::deferred_lookups::DeferredBatch,
-        Vec<Box<dyn DynRelationVerifier<F, T>>>,
-    >,
-    /// One-hot checks to verify right after their parent batch.
-    pub deferred_onehots: Vec<crate::onnx_proof::deferred_lookups::DeferredOneHot>,
+    /// The deferral queue: relations the node loop's `Defer` steps queued, verified after the
+    /// loop as one batched sumcheck per batch (see
+    /// [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
+    pub deferred: BTreeMap<DeferredBatch, Vec<Deferred<F, T>>>,
+}
+
+/// A queued deferred relation: set up in the node's turn, or waiting for its batch.
+pub enum Deferred<F: JoltField, T: Transcript> {
+    /// Set up in the node's turn; its verifiers are ready.
+    Ready(Vec<Box<dyn DynRelationVerifier<F, T>>>),
+    /// Set up when its batch runs.
+    Pending(Box<OpRelation>),
 }
 
 impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
@@ -84,22 +87,8 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
             proofs: ProofLedger::new(proofs),
             eval_reductions: ProofLedger::new(eval_reductions),
             io,
-            deferred: Vec::new(),
-            deferred_batches: BTreeMap::new(),
-            deferred_onehots: Vec::new(),
+            deferred: BTreeMap::new(),
         }
-    }
-
-    /// Queue a node-loop-built verifier instance for the deferred batch `kind`.
-    pub fn defer(
-        &mut self,
-        kind: crate::onnx_proof::deferred_lookups::DeferredBatch,
-        instance: Box<dyn DynRelationVerifier<F, T>>,
-    ) {
-        self.deferred_batches
-            .entry(kind)
-            .or_default()
-            .push(instance);
     }
 }
 
@@ -125,19 +114,62 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
     /// The interpreter: run `node`'s plan, step by step, in transcript order.
     #[tracing::instrument(skip_all, name = "Verifier::run_plan", fields(node = node.idx))]
     pub fn run_plan(&mut self, node: &ComputationNode, plan: Plan) -> Result<(), ProofVerifyError> {
-        for step in plan.0 {
+        self.run_steps(node.idx, Some(node), plan.0)
+    }
+
+    /// The post-loop plan: the packed clamp and remainder buckets
+    /// ([`deferred_lookups::plan`]), then the deferral queue, batch by batch in
+    /// [`DeferredBatch`] order.
+    #[tracing::instrument(skip_all, name = "Verifier::run_deferred")]
+    pub fn run_deferred(&mut self) -> Result<(), ProofVerifyError> {
+        let plan = deferred_lookups::plan(self.preprocessing.model(), self.io)?;
+        self.run_steps(DEFERRED_PROOF_IDX, None, plan.0)?;
+        let mut queue = std::mem::take(&mut self.deferred);
+        for batch in DeferredBatch::ALL {
+            let Some(deferred) = queue.remove(&batch) else {
+                continue;
+            };
+            let mut instances = Vec::new();
+            for item in deferred {
+                match item {
+                    Deferred::Ready(verifiers) => instances.extend(verifiers),
+                    Deferred::Pending(relation) => instances
+                        .extend(relation.verifiers(&mut self.accumulator, &mut self.transcript)?),
+                }
+            }
+            self.verify_batch(DEFERRED_PROOF_IDX, batch.proof_type(), instances)?;
+        }
+        Ok(())
+    }
+
+    /// Run `steps` whose sumcheck proofs are stored under `proof_idx`; `node` is the node of a
+    /// node plan (`None` for the post-loop plan, which has no evaluation reduction).
+    fn run_steps(
+        &mut self,
+        proof_idx: usize,
+        node: Option<&ComputationNode>,
+        steps: Vec<Step>,
+    ) -> Result<(), ProofVerifyError> {
+        for step in steps {
             match step {
-                Step::Reduce => NodeEvalReduction::verify(self, node)?,
+                Step::Reduce => {
+                    let node = node.ok_or_else(|| {
+                        ProofVerifyError::Malformed(
+                            "plan: the post-loop plan has no node to reduce".to_string(),
+                        )
+                    })?;
+                    NodeEvalReduction::verify(self, node)?;
+                }
+                Step::Open(open) => open.verify(&mut self.accumulator, &mut self.transcript)?,
                 Step::Relation { proof, relation } => {
                     let relations =
                         relation.verifiers(&mut self.accumulator, &mut self.transcript)?;
                     let [relation] = relations.as_slice() else {
                         return Err(ProofVerifyError::Malformed(format!(
-                            "plan: node {}'s {proof:?} step is not a single relation",
-                            node.idx
+                            "plan: node {proof_idx}'s {proof:?} step is not a single relation"
                         )));
                     };
-                    let proof = self.proofs.take(ProofId(node.idx, proof))?;
+                    let proof = self.proofs.take(ProofId(proof_idx, proof))?;
                     verify_relation(
                         proof,
                         relation.as_ref(),
@@ -152,19 +184,39 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
                             relation.verifiers(&mut self.accumulator, &mut self.transcript)?,
                         );
                     }
-                    let proof = self.proofs.take(ProofId(node.idx, proof))?;
-                    verify_relation_batch(
-                        proof,
-                        instances.iter().map(|instance| instance.as_ref()).collect(),
-                        &mut self.accumulator,
-                        &mut self.transcript,
-                    )?;
+                    self.verify_batch(proof_idx, proof, instances)?;
                 }
                 Step::Tie { relation } => {
                     relation.verify(&mut self.accumulator, &mut self.transcript)?
                 }
+                Step::Defer { batch, relation } => {
+                    let item = match batch.setup() {
+                        DeferredSetup::InNodeLoop => Deferred::Ready(
+                            relation.verifiers(&mut self.accumulator, &mut self.transcript)?,
+                        ),
+                        DeferredSetup::AtBatch => Deferred::Pending(Box::new(relation)),
+                    };
+                    self.deferred.entry(batch).or_default().push(item);
+                }
             }
         }
+        Ok(())
+    }
+
+    /// Verify `instances` as the batched sumcheck stored under `ProofId(proof_idx, proof)`.
+    fn verify_batch(
+        &mut self,
+        proof_idx: usize,
+        proof: ProofType,
+        instances: Vec<Box<dyn DynRelationVerifier<F, T>>>,
+    ) -> Result<(), ProofVerifyError> {
+        let proof = self.proofs.take(ProofId(proof_idx, proof))?;
+        verify_relation_batch(
+            proof,
+            instances.iter().map(|instance| instance.as_ref()).collect(),
+            &mut self.accumulator,
+            &mut self.transcript,
+        )?;
         Ok(())
     }
 }
@@ -311,7 +363,7 @@ pub fn verify_iop<F: JoltField, T: Transcript>(
         OperatorVerifier::verify(node, verifier)
             .inspect_err(|e| tracing::debug!(node = node.idx, ?e, "verification failed"))?;
     }
-    crate::onnx_proof::deferred_lookups::verify_all(verifier)
+    verifier.run_deferred()
 }
 
 /// Verify the reduced opening proof (sumcheck reduction + PCS verification).

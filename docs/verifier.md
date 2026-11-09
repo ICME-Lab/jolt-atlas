@@ -36,9 +36,10 @@ The crate has no prover code. Three mechanisms hold that:
    (`append_inputs_to_transcript`), loads the proof's claims and commitments, checks the output
    claim against the public outputs, runs the IOP over the nodes in reverse topological order,
    then verifies the reduced opening proof.
-2. **Interpreter**: `onnx_proof/verifier.rs` (the `Verifier` state and the four steps above),
-   `onnx_proof/ops/mod.rs` (dispatch on `atlas_trace::Op`, `OpLayout`, `VerifyOp`) and
-   `onnx_proof/deferred_lookups.rs` (the checks batched after the node loop).
+2. **Interpreter**: `onnx_proof/verifier.rs` (the `Verifier` state, `run_plan` and
+   `run_deferred`), `onnx_proof/plan.rs` (`Plan`, `Step`, the closed relation enums and every
+   op's `OpPlan`), `onnx_proof/ops/mod.rs` (dispatch on `atlas_trace::Op`, `OpLayout`) and
+   `onnx_proof/deferred_lookups.rs` (the post-loop plan and the deferred batches).
 3. **Relation core**: `atlas_sumcheck::relation` and `onnx_proof/relation.rs`. Every sumcheck
    is a symbolic relation; `RelationVerifier` is derived from it, and `verify_tie` checks a
    zero-round one. Each op relation documents its S ⊆ R argument beside its definition in
@@ -51,19 +52,30 @@ The crate has no prover code. Three mechanisms hold that:
 
 ## Plans
 
-An op's verification is a `Plan` (`onnx_proof/plan.rs`): an ordered list of `Step`s over
+Every op's verification is a `Plan` (`onnx_proof/plan.rs`): an ordered list of `Step`s over
 relations, built by `OpPlan::plan(node, model, io)` before the transcript runs. `Reduce` is the
-node's evaluation reduction, `Relation` a sumcheck stored under a `ProofType`, `Batch` several
-relations proven as one batched sumcheck, `Tie` a zero-round identity. Steps hold relations (the closed enums `OpRelation` and `OpTie`), never
-closures; whatever depends on earlier claims or on challenges is read and drawn in the
-relation's `setup` when the interpreter reaches the step. `Verifier::run_plan` in
-`onnx_proof/verifier.rs` is the interpreter; the prover's `ops::prove_plan` walks the same
-plan with the relations' witnesses, so an op's transcript order is its plan's step order on
-both sides.
+node's evaluation reduction; `Open` appends advice openings at a stated point (`OpOpen`);
+`Relation` is a sumcheck stored under a `ProofType`; `Batch` several relations proven as one
+batched sumcheck; `Tie` a zero-round identity or an in-the-clear check (`OpTie`); `Defer`
+queues a relation for one of the post-loop batches (`DeferredBatch`, in
+`deferred_lookups.rs`). Steps hold relations (the closed enums `OpRelation`, `OpTie`, `OpOpen`),
+never closures; whatever depends on earlier claims or on challenges is read and drawn in the
+relation's `setup` when the interpreter reaches the step (a one-hot batch's relations are set up
+when the batch runs, since they read the `ra` claim the parent batch produces;
+`DeferredBatch::setup` says which). `Verifier::run_plan` in `onnx_proof/verifier.rs` is the
+interpreter; the prover's `ops::prove_plan` walks the same plan with the relations' witnesses,
+so an op's transcript order is its plan's step order on both sides.
 
-Plan-verified today: `And`, `Concat`, `Iff`, `Reshape`, `Slice`, `ScalarConstDiv`, `Identity`,
-`Neg`, `IsNan`, `MoveAxis`, `Broadcast`, `Constant`, `Input`, `ReLU`, `Clamp`, `Div`. The other ops still verify through hand-written `VerifyOp` impls and the deferral
-queues in `deferred_lookups.rs`.
+After the node loop, `Verifier::run_deferred` runs the post-loop plan
+(`deferred_lookups::plan`, built from the model and the public IO: the packed clamp and
+remainder buckets' exact flags, value sumchecks and chunk checks; a model output node whose
+public output is unsaturated ties `acc = out` in its own turn and is a gap in its bucket), then
+drains the one deferral queue, batch by batch in `DeferredBatch` order. Nothing is registered
+during the loop and nothing reconciled afterwards.
+
+Softmax is the stress case: its stage driver is a plan (aux vectors as `Open`, stages 1–2 as
+`Batch`, stage 3 and its one-hot checks as `Defer`); the relations of a stage read the aux
+vectors back from their openings in their setup (`SoftmaxShape::aux`).
 
 ## Proof-shape rules
 

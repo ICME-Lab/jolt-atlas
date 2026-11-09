@@ -5,7 +5,6 @@ use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     node_view::ComputationNode,
     onnx_proof::{
-        ops::ReductionFlow,
         range_checking::range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
         relation::{
             AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
@@ -30,10 +29,6 @@ use jolt_claims::{derived, opening, Expr, NoChallenges, NoInputs, NoOutputs, Sym
 use jolt_field::Ring;
 
 impl OpLayout for Div {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -49,8 +44,6 @@ impl OpLayout for Div {
         Ok(polys)
     }
 }
-
-crate::impl_plan_op!(@verify Div);
 
 impl OpPlan for Div {
     fn plan(

@@ -26,43 +26,15 @@
 //! [`RelationProver`](crate::onnx_proof::relation::RelationProver) over its
 //! [`RelationWitnesses`]; a specialized witness (the einsum dot engine, the mean-of-squares
 //! reduction, the lookup provers) attaches at its [`OpRelation`] variant in
-//! [`relation_witnesses`]. Every op binds its plan with [`impl_plan_op_prover!`].
+//! [`relation_witnesses`].
 
 use crate::onnx_proof::ops::eval_reduction::NodeEvalReductionProve;
 pub use jolt_atlas_verifier::onnx_proof::ops::*;
 
-/// An operator's proving logic, dispatched from the main proof module. The model-only
-/// [`OpLayout`] and the verifier's [`VerifyOp`] live in `jolt-atlas-verifier`.
-pub trait ProveOp<F: JoltField, T: Transcript>: OpLayout {
-    /// Prove the operation for the given computation node.
-    ///
-    /// Returns a vector of (ProofId, Proof) pairs. Most operators return a single
-    /// proof, but some (like ReLU) return multiple proofs.
-    fn prove(&self, _node: &ComputationNode, _prover: &mut Prover<F, T>) -> ExecutionProofs<F> {
-        panic!(
-            "Op selected default reduction flow but did not implement prove; either implement prove or switch reduction_flow to Custom and implement prove_with_reduction"
-        )
-    }
-
-    /// Prove the operation and produce its node eval-reduction proof.
-    ///
-    /// Default behavior performs eval reduction before operator proving.
-    /// Operators that need additional openings (e.g. Concat/Cos) can override this
-    /// method and place `NodeEvalReduction::prove` at the required point in their flow.
-    fn prove_with_reduction(
-        &self,
-        _node: &ComputationNode,
-        _prover: &mut Prover<F, T>,
-    ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
-        panic!("Op selected custom reduction flow but did not implement prove_with_reduction")
-    }
-}
 /// Shared plumbing for the clamped Erf/Sigmoid/Tanh variants.
 pub mod activation_clamped;
 /// Element-wise addition operation.
 pub mod add;
-/// Logical AND operation.
-pub mod and;
 /// Broadcast tensors to target shapes.
 pub mod broadcast;
 /// Clamp values to a specified range.
@@ -71,26 +43,16 @@ pub mod clamp;
 pub mod concat;
 /// Constant tensor nodes.
 pub mod constant;
-/// Cos trigonometric function.
-pub mod cos;
-/// Element-wise cube (x³) operation.
-pub mod cube;
 /// Element-wise division operation.
 pub mod div;
 /// Einstein summation for tensor contractions.
 pub mod einsum;
-/// Erf activation function.
-pub mod erf;
 /// Op-scoped evaluation reduction helpers.
 pub mod eval_reduction;
 /// Gather elements from input tensor using indices.
 pub mod gather;
-/// Identity operation (pass-through).
-pub mod identity;
 /// Conditional selection (if-then-else) operation.
 pub mod iff;
-/// Input tensor nodes.
-pub mod input;
 /// Check for NaN values.
 pub mod is_nan;
 /// Fused mean-of-squares reduction operation.
@@ -101,32 +63,18 @@ pub mod moveaxis;
 pub mod mul;
 /// Element-wise negation operation.
 pub mod neg;
-/// ReLU activation function.
-pub mod relu;
 /// Reshape tensor dimensions.
 pub mod reshape;
 /// Reciprocal square root operation.
 pub mod rsqrt;
 /// Division by a scalar constant.
 pub mod scalar_const_div;
-/// Sigmoid activation function.
-pub mod sigmoid;
-/// Sin trigonometric function.
-pub mod sin;
 /// Slice tensor along one axis.
 pub mod slice;
 /// Softmax operation along the last axis (axis = -1).
 pub mod softmax_last_axis;
-/// Element-wise square (x²) operation.
-pub mod square;
-/// Element-wise subtraction operation.
-pub mod sub;
 /// Sum reduction along axes.
 pub mod sum;
-/// Tanh activation function.
-pub mod tanh;
-
-use atlas_trace::Op;
 
 use crate::node_view::ComputationNode;
 
@@ -169,7 +117,9 @@ use crate::onnx_proof::{
         softmax_last_axis::SoftmaxAddresses,
         tanh::TanhTableMarker,
     },
-    plan::{OpActivation, OpLookup, OpOpen, OpRangeCheck, OpRelation, OpTie, OpTrig, Plan, Step},
+    plan::{
+        OpActivation, OpLookup, OpOpen, OpPlan, OpRangeCheck, OpRelation, OpTie, OpTrig, Plan, Step,
+    },
     range_checking::{
         range_check_operands::RangeCheckWitness,
         range_check_operands::{
@@ -204,71 +154,13 @@ use std::collections::BTreeMap;
 
 use crate::onnx_proof::Prover;
 
-/// Dispatches on every `Op` variant, binding the inner value to `$inner`
-/// and evaluating `$body`. The match is exhaustive on purpose: adding a
-/// variant to `atlas_trace::Op` must fail to compile here until the proof
-/// layer handles it.
-macro_rules! dispatch_operator {
-    ($node:expr, |$inner:ident| $body:expr) => {
-        match &$node.operator {
-            Op::And($inner) => $body,
-            Op::Add($inner) => $body,
-            Op::Broadcast($inner) => $body,
-            Op::Constant($inner) => $body,
-            Op::Cos($inner) => $body,
-            Op::Cube($inner) => $body,
-            Op::Clamp($inner) => $body,
-            Op::Concat($inner) => $body,
-            Op::Div($inner) => $body,
-            Op::Erf($inner) => $body,
-            Op::Einsum($inner) => $body,
-            Op::GatherSmall($inner) => $body,
-            Op::GatherLarge($inner) => $body,
-            Op::Identity($inner) => $body,
-            Op::Iff($inner) => $body,
-            Op::Input($inner) => $body,
-            Op::IsNan($inner) => $body,
-            Op::MeanOfSquares($inner) => $body,
-            Op::MoveAxis($inner) => $body,
-            Op::Mul($inner) => $body,
-            Op::Neg($inner) => $body,
-            Op::ReLU($inner) => $body,
-            Op::Reshape($inner) => $body,
-            Op::Rsqrt($inner) => $body,
-            Op::ScalarConstDiv($inner) => $body,
-            Op::Sigmoid($inner) => $body,
-            Op::Sin($inner) => $body,
-            Op::Slice($inner) => $body,
-            Op::SoftmaxLastAxis($inner) => $body,
-            Op::Square($inner) => $body,
-            Op::Sub($inner) => $body,
-            Op::Sum($inner) => $body,
-            Op::Tanh($inner) => $body,
-        }
-    };
-}
-
-/// Prover dispatcher for operator proofs.
-///
-/// This struct provides a single entry point for generating proofs for any computation node,
-/// dispatching to the appropriate operator-specific proving logic.
+/// Prover dispatcher for operator proofs: the node's operator's plan, walked with the
+/// relations' witnesses.
 pub struct OperatorProver;
 
 impl OperatorProver {
-    /// Generate a proof for the given computation node.
-    ///
-    /// Dispatches to the operator-specific proving implementation and returns
-    /// one or more sumcheck proofs (most operators return a single proof).
-    ///
-    /// # Arguments
-    ///
-    /// * `node` - The computation node to prove
-    /// * `prover` - The prover state containing trace, transcript, and accumulator
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing the node's evaluation-reduction proof and the
-    /// execution proof vector.
+    /// Prove `node`: build its operator's plan from the model and the public IO, then walk it.
+    /// Returns the node's evaluation-reduction proof and its execution proofs.
     pub fn prove<F, T>(
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
@@ -277,30 +169,14 @@ impl OperatorProver {
         F: JoltField,
         T: Transcript,
     {
-        dispatch_operator!(node, |inner| Self::prove_and_reduce_node(
-            inner, node, prover
+        let plan = jolt_atlas_verifier::dispatch_operator!(node, |inner| OpPlan::plan(
+            inner,
+            node,
+            prover.preprocessing.model(),
+            &prover.io
         ))
-    }
-
-    fn prove_and_reduce_node<F, T, O>(
-        operator: &O,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>)
-    where
-        F: JoltField,
-        T: Transcript,
-        O: ProveOp<F, T>,
-    {
-        match operator.reduction_flow() {
-            ReductionFlow::Default => {
-                let eval_reduction_proof = NodeEvalReduction::prove(prover, node);
-                let execution_proofs = operator.prove(node, prover);
-                // Store eval reduction proof and execution proofs as needed
-                (eval_reduction_proof, execution_proofs)
-            }
-            ReductionFlow::Custom => operator.prove_with_reduction(node, prover),
-        }
+        .expect("the prover's model has a plan for every node");
+        prove_plan(node, prover, plan)
     }
 }
 
@@ -1042,33 +918,4 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
         | OpTie::ExactClampOutput(_)
         | OpTie::ClampBucketExact(_) => {}
     }
-}
-
-/// Implement [`ProveOp`] for a plan-verified op: the prover walks the op's
-/// [`OpPlan`](crate::onnx_proof::plan::OpPlan).
-#[macro_export]
-macro_rules! impl_plan_op_prover {
-    ($inner_ty:ty) => {
-        impl<F: atlas_algebra::field::JoltField, T: atlas_transcript::Transcript>
-            $crate::onnx_proof::ops::ProveOp<F, T> for $inner_ty
-        {
-            fn prove_with_reduction(
-                &self,
-                node: &$crate::node_view::ComputationNode,
-                prover: &mut $crate::onnx_proof::Prover<F, T>,
-            ) -> (
-                Option<atlas_sumcheck::evaluation_reduction::EvalReductionProof<F>>,
-                $crate::onnx_proof::ops::ExecutionProofs<F>,
-            ) {
-                let plan = $crate::onnx_proof::plan::OpPlan::plan(
-                    self,
-                    node,
-                    prover.preprocessing.model(),
-                    &prover.io,
-                )
-                .expect("the prover's model has a plan for every node");
-                $crate::onnx_proof::ops::prove_plan(node, prover, plan)
-            }
-        }
-    };
 }

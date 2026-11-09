@@ -1,8 +1,5 @@
 use atlas_algebra::field::JoltField;
-use atlas_trace::op::Neg;
 pub use jolt_atlas_verifier::onnx_proof::ops::neg::*;
-
-crate::impl_plan_op_prover!(Neg);
 
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, TieClaims};
 use atlas_sumcheck::opening_proof::OpeningAccumulator;

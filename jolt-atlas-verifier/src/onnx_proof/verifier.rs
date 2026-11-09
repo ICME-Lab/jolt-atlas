@@ -42,21 +42,21 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Created once before the verification loop and passed to operator handlers.
 pub struct Verifier<'a, F: JoltField, T: Transcript> {
     /// Shared preprocessing data (model structure).
-    pub preprocessing: &'a AtlasSharedPreprocessing,
+    pub(crate) preprocessing: &'a AtlasSharedPreprocessing,
     /// Opening accumulator for batching polynomial openings.
-    pub accumulator: VerifierOpeningAccumulator<F>,
+    pub(crate) accumulator: VerifierOpeningAccumulator<F>,
     /// Interactive proof transcript.
-    pub transcript: T,
+    pub(crate) transcript: T,
     /// The proof's sumcheck proofs, each taken exactly once.
-    pub proofs: ProofLedger<'a, ProofId, SumcheckInstanceProof<F>>,
+    pub(crate) proofs: ProofLedger<'a, ProofId, SumcheckInstanceProof<F>>,
     /// The proof's evaluation-reduction proofs by node, each taken exactly once.
-    pub eval_reductions: ProofLedger<'a, usize, EvalReductionProof<F>>,
+    pub(crate) eval_reductions: ProofLedger<'a, usize, EvalReductionProof<F>>,
     /// Model execution inputs and outputs.
-    pub io: &'a ModelExecutionIO,
+    pub(crate) io: &'a ModelExecutionIO,
     /// The deferral queue: relations the node loop's `Defer` steps queued, verified after the
     /// loop as one batched sumcheck per batch (see
     /// [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
-    pub deferred: BTreeMap<DeferredBatch, Vec<Deferred<F, T>>>,
+    pub(crate) deferred: BTreeMap<DeferredBatch, Vec<Deferred<F, T>>>,
 }
 
 /// A queued deferred relation: set up in the node's turn, or waiting for its batch.
@@ -89,6 +89,23 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
             io,
             deferred: BTreeMap::new(),
         }
+    }
+
+    /// The opening accumulator: the claims bound so far.
+    pub fn accumulator(&self) -> &VerifierOpeningAccumulator<F> {
+        &self.accumulator
+    }
+
+    /// The opening accumulator, for tests that stage claims by hand.
+    #[cfg(feature = "test-util")]
+    pub fn accumulator_mut(&mut self) -> &mut VerifierOpeningAccumulator<F> {
+        &mut self.accumulator
+    }
+
+    /// The transcript, for tests that draw a point by hand.
+    #[cfg(feature = "test-util")]
+    pub fn transcript_mut(&mut self) -> &mut T {
+        &mut self.transcript
     }
 }
 

@@ -2,10 +2,8 @@ use crate::onnx_proof::relation::{RelationSetup, RelationWitnesses};
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::field::JoltField;
 use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
-use atlas_trace::{op::Rsqrt, trace::LayerData, Trace};
+use atlas_trace::{trace::LayerData, Trace};
 pub use jolt_atlas_verifier::onnx_proof::ops::rsqrt::*;
-
-crate::impl_plan_op_prover!(Rsqrt);
 
 impl<F: JoltField> RelationWitnesses<F> for RsqrtRelation {
     fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {

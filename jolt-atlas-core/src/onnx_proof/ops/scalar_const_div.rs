@@ -1,8 +1,5 @@
 use atlas_algebra::field::JoltField;
-use atlas_trace::op::ScalarConstDiv;
 pub use jolt_atlas_verifier::onnx_proof::ops::scalar_const_div::*;
-
-crate::impl_plan_op_prover!(ScalarConstDiv);
 
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, RelationWitnesses};
 use crate::onnx_proof::trace_view::TraceView;

@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
@@ -28,10 +28,6 @@ use jolt_field::Ring;
 crate::bind_relation!(ScalarConstDiv, ConstantDivisionRelation);
 
 impl OpLayout for ScalarConstDiv {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -39,8 +35,6 @@ impl OpLayout for ScalarConstDiv {
         Ok(vec![CommittedPoly::ScalarConstDivNodeRemainder(node.idx)])
     }
 }
-
-crate::impl_plan_op!(@verify ScalarConstDiv);
 
 impl OpPlan for ScalarConstDiv {
     fn plan(

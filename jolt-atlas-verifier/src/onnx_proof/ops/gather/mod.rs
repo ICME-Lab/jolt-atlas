@@ -1,6 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
-use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{

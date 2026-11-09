@@ -1,8 +1,5 @@
 use atlas_algebra::field::JoltField;
-use atlas_trace::op::IsNan;
 pub use jolt_atlas_verifier::onnx_proof::ops::is_nan::*;
-
-crate::impl_plan_op_prover!(IsNan);
 
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, TieClaims};
 use crate::onnx_proof::trace_view::TraceView;

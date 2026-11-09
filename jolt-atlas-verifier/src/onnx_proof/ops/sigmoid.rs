@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::{
     ops::activation_clamped::{
         clamped_activation_committed_polynomials, clamped_activation_plan, SmallActivationTable,
@@ -27,13 +27,7 @@ impl SmallActivationTable for SigmoidTableMarker {
     }
 }
 
-crate::impl_plan_op!(@verify Sigmoid);
-
 impl OpLayout for Sigmoid {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,

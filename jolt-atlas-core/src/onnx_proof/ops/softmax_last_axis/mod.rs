@@ -41,7 +41,7 @@ use crate::{
 };
 use atlas_lookup_tables::clamp::SoftmaxClampTable;
 use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
-use atlas_trace::{op::SoftmaxLastAxis, SoftmaxWitness, Tensor, Trace};
+use atlas_trace::{SoftmaxWitness, Tensor, Trace};
 
 use atlas_algebra::{
     field::JoltField,
@@ -64,8 +64,6 @@ pub mod rc;
 pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
 pub mod significance_clamp;
-
-crate::impl_plan_op_prover!(SoftmaxLastAxis);
 
 /// The node's softmax witness, captured by the executor.
 fn witness<'a>(shape: &SoftmaxShape, trace: &'a Trace) -> &'a SoftmaxWitness {

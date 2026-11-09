@@ -35,7 +35,7 @@ pub use jolt_atlas_verifier::onnx_proof::ops::mean_of_squares::*;
 use crate::onnx_proof::trace_view::TraceView;
 use std::array;
 
-use atlas_trace::{op::MeanOfSquares, trace::LayerData, Trace};
+use atlas_trace::{trace::LayerData, Trace};
 
 use crate::onnx_proof::relation::{note_dispatch, RelationParams, RelationSetup, RelationWitness};
 use atlas_algebra::{
@@ -50,8 +50,6 @@ use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
-
-crate::impl_plan_op_prover!(MeanOfSquares);
 
 /// The specialized prover of a [`MeanOfSquaresRelation`]: the operand squared against the
 /// retained-dim eq table, read by index rather than expanded. Completeness-only:

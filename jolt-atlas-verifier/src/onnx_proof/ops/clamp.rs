@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::plan::{OpLookup, OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::{
     op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding},
@@ -58,10 +58,6 @@ impl LookupOperandsTrait for SymmetricClampOperands {
 }
 
 impl OpLayout for Clamp {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -73,8 +69,6 @@ impl OpLayout for Clamp {
             .collect())
     }
 }
-
-crate::impl_plan_op!(@verify Clamp);
 
 impl OpPlan for Clamp {
     fn plan(

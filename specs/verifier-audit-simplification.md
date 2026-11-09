@@ -4,8 +4,8 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-10-28                     |
-| Status      | proposed                       |
-| PR          | (filled when the PR opens, or at merge) |
+| Status      | implemented                    |
+| PR          | landed directly on `dev` (commits 2026-11-09; stage 3 ends at the plan-only tip) |
 | Depends on  | `specs/adoption-program.md` (stages 1, 5, 6, 8, 9 and 10 as landed on `dev`: the verifier crate, every sumcheck a relation, the legacy drivers retired) |
 | Supersedes  | — |
 
@@ -148,7 +148,7 @@ PR. It is code motion: behavior-preserving, digests unchanged.
 
 Each box is ticked by its own stage PR; the invariants' gates apply to all.
 
-- [ ] **Stage 2 — exact proof shape, no panics** (one PR; protocol-breaking, one re-pin
+- [x] **Stage 2 — exact proof shape, no panics** (one PR; protocol-breaking, one re-pin
   commit). The crate-root `deny` lints above are on with no `#[allow]` outside `#[cfg(test)]`,
   which also removes `VerifyOp`'s panicking default bodies (its methods become required).
   The shared `OpeningAccumulator` getters return `Result<_, ProofVerifyError>`; `resolve`,
@@ -168,7 +168,7 @@ Each box is ticked by its own stage PR; the invariants' gates apply to all.
   `jolt-atlas-core/fuzz` (seeded from serialized probe-model proofs, mutating proof bytes and
   IO; any panic is a finding) with its regression corpus replayed by a `#[test]`; run per the
   importer's `fuzz/README.md` precedent, not in CI.
-- [ ] **Stage 3 — one verification plan** (one PR per op family, each behavior-preserving;
+- [x] **Stage 3 — one verification plan** (one PR per op family, each behavior-preserving;
   the last deletes the old traits). `onnx_proof/plan.rs` defines `Plan` (an ordered
   `Vec<Step>`) and `Step`: `Reduce` (the node's evaluation reduction), `Open` (openings
   appended at a stated point, including softmax's aux vectors), `Relation { proof: ProofType,

@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::plan::{OpLookup, OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::{op_lookups::OpLookupEncoding, ProofType};
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -8,10 +8,6 @@ use atlas_trace::op::ReLU;
 use common::CommittedPoly;
 
 impl OpLayout for ReLU {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -23,8 +19,6 @@ impl OpLayout for ReLU {
             .collect())
     }
 }
-
-crate::impl_plan_op!(@verify ReLU);
 
 impl OpPlan for ReLU {
     fn plan(

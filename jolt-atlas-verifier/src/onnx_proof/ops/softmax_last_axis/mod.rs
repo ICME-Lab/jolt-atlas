@@ -12,7 +12,7 @@
 //! `significance_clamp::SoftmaxSignificanceClampOperands`) — see `significance_clamp.rs`'s module doc for the relation being
 //! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
 //! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
-use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::ops::OpLayout;
 use atlas_sumcheck::relation::DynRelationVerifier;
 
 use crate::{
@@ -82,13 +82,7 @@ fn row_coordinates<F>(point: &[F], log_f: usize) -> Result<&[F], ProofVerifyErro
     })
 }
 
-crate::impl_plan_op!(@verify SoftmaxLastAxis);
-
 impl OpLayout for SoftmaxLastAxis {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,

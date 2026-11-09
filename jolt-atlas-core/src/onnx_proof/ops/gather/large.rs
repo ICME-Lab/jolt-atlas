@@ -1,10 +1,7 @@
 use super::*;
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_trace::op::GatherLarge;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::large::*;
-
-crate::impl_plan_op_prover!(GatherLarge);
 
 pub(crate) fn gather_lookup_indices(
     computation_node: &ComputationNode,

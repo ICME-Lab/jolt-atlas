@@ -1,8 +1,5 @@
 use atlas_algebra::field::JoltField;
-use atlas_trace::op::Broadcast;
 pub use jolt_atlas_verifier::onnx_proof::ops::broadcast::*;
-
-crate::impl_plan_op_prover!(Broadcast);
 
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, TieClaims};
 use crate::onnx_proof::trace_view::TraceView;

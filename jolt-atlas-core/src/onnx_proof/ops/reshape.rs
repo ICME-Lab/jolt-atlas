@@ -7,12 +7,9 @@
 //!
 //! `out(r_output) = sum_i selector(i) * input(i)`.
 
-use atlas_trace::op::Reshape;
 pub use jolt_atlas_verifier::onnx_proof::ops::reshape::*;
 
 use atlas_algebra::field::JoltField;
-
-crate::impl_plan_op_prover!(Reshape);
 
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, RelationWitnesses};
 use crate::onnx_proof::trace_view::TraceView;

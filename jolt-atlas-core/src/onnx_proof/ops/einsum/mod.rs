@@ -1,4 +1,3 @@
-use atlas_trace::op::Einsum;
 pub use jolt_atlas_verifier::onnx_proof::ops::einsum::*;
 
 pub mod abmk_abnk_abmn;
@@ -8,5 +7,3 @@ pub mod dot;
 pub mod k_nk_n;
 /// `mk,kn->mn` layout (matrix-matrix multiply).
 pub mod mk_kn_mn;
-
-crate::impl_plan_op_prover!(Einsum);

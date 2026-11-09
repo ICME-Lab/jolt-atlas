@@ -7,13 +7,7 @@ use atlas_sumcheck::{
 use atlas_trace::op::GatherLarge;
 use common::CommittedPoly;
 
-crate::impl_plan_op!(@verify GatherLarge);
-
 impl OpLayout for GatherLarge {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,

@@ -118,9 +118,12 @@ Workspace members, in dependency order:
   cargo-fuzz targets and their regression corpus in `fuzz/` (see `fuzz/README.md`).
 - **jolt-atlas-verifier** — the proof object, its wire format, and all verification: `ONNXProof`
   (with `ONNXProof::verify`), `ReducedOpeningProof`, `Claims`, `ProofId`/`ProofType`,
-  `proof_serialization`, and `onnx_proof` — every op's `OpLayout` and `VerifyOp`, the relations
-  and their parameters, the lookup/clamp/range-check/deferred-batch machinery's verifier sides,
-  the `Verifier` state, `verify`/`verify_with`, and the shared and verifier preprocessing; also
+  `proof_serialization`, and `onnx_proof` — every op's `OpLayout` and `OpPlan` (`plan.rs`: a
+  `Plan` of `Step`s over the closed relation enums; the only way an op is verified), the
+  relations and their parameters, the lookup/clamp/range-check/deferred-batch machinery's
+  verifier sides, the `Verifier` state (its interpreter `run_plan`/`run_deferred`; its
+  accumulator, transcript, proof ledgers and deferral queue are crate-private),
+  `verify`/`verify_with`, and the shared and verifier preprocessing; also
   `node_view` and `utils`. Every proof field is private (`from_parts` + `&` accessors; `&mut`
   behind the `test-util` feature). No prover dependency and no prover code: the crate is
   Trace-free (nothing in it names `atlas_trace::Trace` or its witness types; witness
@@ -129,9 +132,10 @@ Workspace members, in dependency order:
   CI rejects `prover`/`witness` module paths and `Trace` in its sources. `docs/verifier.md` is
   the audit reading order and the trust-perimeter statement.
 - **jolt-atlas-core** — the prover. `onnx_proof` mirrors the verifier crate's module tree: each
-  module glob-re-exports its verifier counterpart and adds the prover side (`ProveOp` impls,
-  prover instances, extension traits such as `RelationWitnesses`, `TieClaims` and
-  `OpLookupProve` for prover methods on shared types), with `prover.rs`, `witness.rs`, `preprocessing.rs` (prover setup) and `types.rs`.
+  module glob-re-exports its verifier counterpart and adds the prover side (`ops::prove_plan`
+  walks each op's plan with the relations' witnesses; prover instances; extension traits such
+  as `RelationWitnesses`, `TieClaims` and `OpLookupProve` for prover methods on shared types),
+  with `prover.rs`, `witness.rs`, `preprocessing.rs` (prover setup) and `types.rs`.
   `prove` and the free `verify` (adding the test-only lockstep debug comparison) are re-exported
   at the crate root. The whole test suite is under `onnx_proof/testing/`; the `prove` example is
   in `examples/`.

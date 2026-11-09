@@ -5,10 +5,7 @@ use atlas_sumcheck::{
     hamming_booleanity::prover::HammingBooleanitySumcheckProver,
     hamming_weight::prover::HammingWeightSumcheckProver,
 };
-use atlas_trace::op::GatherSmall;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::small::*;
-
-crate::impl_plan_op_prover!(GatherSmall);
 
 pub(crate) fn build_stage2_provers<F: JoltField>(
     computation_node: &ComputationNode,

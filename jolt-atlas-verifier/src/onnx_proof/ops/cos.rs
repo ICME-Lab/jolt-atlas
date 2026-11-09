@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::{
     neural_teleport::{
         cos::COS_TABLE_VARS, division::TeleportInputRelation, trig_downscale::TrigDownscaleOperands,
@@ -19,13 +19,7 @@ use atlas_trace::{op::Cos, trace::ModelExecutionIO, Model};
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS};
 use common::{CommittedPoly, VirtualPoly};
 
-crate::impl_plan_op!(@verify Cos);
-
 impl OpLayout for Cos {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,

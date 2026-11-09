@@ -45,13 +45,7 @@ pub fn rsqrt_dividend(node: &ComputationNode) -> i64 {
     1i64 << (3 * node.scale)
 }
 
-crate::impl_plan_op!(@verify Rsqrt);
-
 impl OpLayout for Rsqrt {
-    fn reduction_flow(&self) -> crate::onnx_proof::ops::ReductionFlow {
-        crate::onnx_proof::ops::ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,

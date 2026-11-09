@@ -767,39 +767,14 @@ fn clamp_lookups_is_scalar(node: &ComputationNode) -> bool {
     crate::onnx_proof::clamp_lookups::is_scalar(node)
 }
 
-/// Bind a plan-verified op: its [`OpPlan`] is its whole verification, evaluation reduction
-/// included, and `$relation` (a relation of the plan) is checked to be a relation of that op.
-/// The `@verify` arm alone is for an op that writes its own `OpLayout` (committed polynomials).
+/// Bind a plan-verified op with no committed polynomials: `$relation` (a relation of the plan)
+/// is checked to be a relation of that op, and its [`OpLayout`](super::ops::OpLayout) is the
+/// default. An op that commits polynomials writes its own `OpLayout` and uses `bind_relation!`.
 #[macro_export]
 macro_rules! impl_plan_op {
     ($inner_ty:ty, $relation:ty) => {
         $crate::bind_relation!($inner_ty, $relation);
 
-        impl $crate::onnx_proof::ops::OpLayout for $inner_ty {
-            fn reduction_flow(&self) -> $crate::onnx_proof::ops::ReductionFlow {
-                $crate::onnx_proof::ops::ReductionFlow::Custom
-            }
-        }
-
-        $crate::impl_plan_op!(@verify $inner_ty);
-    };
-    (@verify $inner_ty:ty) => {
-        impl<F: atlas_algebra::field::JoltField, T: atlas_transcript::Transcript>
-            $crate::onnx_proof::ops::VerifyOp<F, T> for $inner_ty
-        {
-            fn verify_with_reduction(
-                &self,
-                node: &$crate::node_view::ComputationNode,
-                verifier: &mut $crate::onnx_proof::Verifier<'_, F, T>,
-            ) -> Result<(), atlas_algebra::utils::errors::ProofVerifyError> {
-                let plan = $crate::onnx_proof::plan::OpPlan::plan(
-                    self,
-                    node,
-                    verifier.preprocessing.model(),
-                    verifier.io,
-                )?;
-                verifier.run_plan(node, plan)
-            }
-        }
+        impl $crate::onnx_proof::ops::OpLayout for $inner_ty {}
     };
 }

@@ -157,10 +157,10 @@ pub fn verify<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<Field 
         #[cfg(test)]
         if let Some(debug_info) = _debug_info {
             _verifier
-                .transcript
+                .transcript_mut()
                 .compare_to(debug_info.transcript_history);
             _verifier
-                .accumulator
+                .accumulator_mut()
                 .compare_to(debug_info.opening_accumulator);
         }
     })

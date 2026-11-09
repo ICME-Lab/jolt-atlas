@@ -78,10 +78,6 @@ pub fn mos_divisor(op: &MeanOfSquares, scale: u8) -> i64 {
 }
 
 impl OpLayout for MeanOfSquares {
-    fn reduction_flow(&self) -> crate::onnx_proof::ops::ReductionFlow {
-        crate::onnx_proof::ops::ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,
@@ -148,7 +144,6 @@ impl OpPlan for MeanOfSquares {
 // Reduction sumcheck: acc(r) = Σ_{h,j} eq(r,h)·x[h,j]²
 // ---------------------------------------------------------------------------
 
-crate::impl_plan_op!(@verify MeanOfSquares);
 crate::bind_relation!(MeanOfSquares, MeanOfSquaresRelation);
 
 /// The mean-of-squares reduction as a relation, binding high-to-low over the operand laid out

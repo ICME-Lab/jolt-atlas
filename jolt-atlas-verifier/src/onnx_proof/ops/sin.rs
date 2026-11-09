@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{OpLayout, ReductionFlow};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::{
     neural_teleport::{
         division::TeleportInputRelation, sin::SIN_TABLE_VARS, trig_downscale::TrigDownscaleOperands,
@@ -19,13 +19,7 @@ use atlas_trace::{op::Sin, trace::ModelExecutionIO, Model};
 use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS};
 use common::{CommittedPoly, VirtualPoly};
 
-crate::impl_plan_op!(@verify Sin);
-
 impl OpLayout for Sin {
-    fn reduction_flow(&self) -> ReductionFlow {
-        ReductionFlow::Custom
-    }
-
     fn get_committed_polynomials(
         &self,
         node: &ComputationNode,

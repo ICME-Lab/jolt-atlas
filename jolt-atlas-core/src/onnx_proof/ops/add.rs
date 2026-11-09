@@ -2,10 +2,8 @@ use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, TieClaims};
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
 use atlas_sumcheck::opening_proof::OpeningAccumulator;
-use atlas_trace::{op::Add, trace::LayerData, Trace};
+use atlas_trace::{trace::LayerData, Trace};
 pub use jolt_atlas_verifier::onnx_proof::ops::add::*;
-
-crate::impl_plan_op_prover!(Add);
 
 impl<F: JoltField, S: AccumulationShape> TieClaims<F> for AccumulationRelation<S> {
     fn claims(

@@ -250,7 +250,7 @@ mod tests {
         let num_vars = output_mle.get_num_vars();
 
         let point = verifier
-            .transcript
+            .transcript_mut()
             .challenge_vector_optimized::<Fr>(num_vars);
         let claim = output_mle.evaluate(&point);
         let key = OpeningId::new(
@@ -258,13 +258,13 @@ mod tests {
             SumcheckId::NodeExecution(consumer),
         );
         let opening = (OpeningPoint::new(point.clone()), claim);
-        verifier.accumulator.openings.insert(key, opening);
+        verifier.accumulator_mut().openings.insert(key, opening);
 
         NodeEvalReduction::verify(&mut verifier, &producer_node)
             .expect("single opening should be accepted and propagated by verifier");
 
         let reduced = verifier
-            .accumulator
+            .accumulator()
             .reduced_evaluations
             .get(&producer_idx)
             .expect("single opening should be propagated to reduced_evaluations");
@@ -356,7 +356,7 @@ mod tests {
 
         let output_idx = shared.model().output_indices()[0];
         assert!(verifier
-            .accumulator
+            .accumulator()
             .reduced_evaluations
             .contains_key(&output_idx));
     }

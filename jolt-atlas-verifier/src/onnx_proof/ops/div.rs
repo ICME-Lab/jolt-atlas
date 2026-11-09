@@ -1,20 +1,17 @@
-use crate::onnx_proof::ops::{OpLayout, VerifyOp};
+use crate::onnx_proof::ops::OpLayout;
+use crate::onnx_proof::plan::{OpPlan, OpRangeCheck, OpRelation, OpTie, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     node_view::ComputationNode,
     onnx_proof::{
-        ops::{eval_reduction::NodeEvalReduction, ReductionFlow},
-        range_checking::{
-            range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
-            RangeCheckProvider,
-        },
+        ops::ReductionFlow,
+        range_checking::range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
         relation::{
-            verify_tie, AtlasRelation, EngineRelation, RelationChallenge, RelationDerived,
-            RelationExpr, RelationId, RelationOpening, RelationSetup, RelationVerifier,
-            TieRelation,
+            AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
+            RelationId, RelationOpening, RelationSetup, TieRelation,
         },
-        ProofId, ProofType, Verifier,
+        ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -22,15 +19,13 @@ use atlas_algebra::{
     field::{IntoOpening, JoltField},
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_lookup_tables::unsigned_less_than::UnsignedLessThanTable;
-use atlas_sumcheck::relation::{verify_relation, verify_relation_batch};
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
-    shout::{self, RaOneHotEncoding},
+    shout::RaOneHotEncoding,
 };
 use atlas_trace::op::Div;
 use atlas_transcript::Transcript;
-use common::{consts::XLEN, CommittedPoly, VirtualPoly};
+use common::{CommittedPoly, VirtualPoly};
 use jolt_claims::{derived, opening, Expr, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
 
@@ -55,52 +50,41 @@ impl OpLayout for Div {
     }
 }
 
-impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Div {
-    #[tracing::instrument(skip_all, name = "Div::verify")]
-    fn verify(
+crate::impl_plan_op!(@verify Div);
+
+impl OpPlan for Div {
+    fn plan(
         &self,
         node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        // Execution verification
-        let proof = verifier
-            .proofs
-            .take(ProofId(node.idx, ProofType::Execution))?;
-        let exec_sumcheck = RelationVerifier::<F, _>::new(
-            DivRelation::new(node.clone()),
-            &verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-        verify_relation(
-            proof,
-            &exec_sumcheck,
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        Ok(())
-    }
-
-    fn verify_with_reduction(
-        &self,
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError> {
-        self.verify(node, verifier)?;
-
-        NodeEvalReduction::verify(verifier, node)?;
-        verify_tie(
-            &DivQuotientRelation::new(node.clone()),
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-
-        if node.is_scalar() {
-            return Ok(());
+        _model: &atlas_trace::Model,
+        _io: &atlas_trace::trace::ModelExecutionIO,
+    ) -> Result<Plan, ProofVerifyError> {
+        // The division identity runs before the reduction: it adds a claim on the node's own
+        // output (the quotient), which the reduction then folds in.
+        let mut steps = vec![
+            Step::Relation {
+                proof: ProofType::Execution,
+                relation: OpRelation::Div(DivRelation::new(node.clone())),
+            },
+            Step::Reduce,
+            Step::Tie {
+                relation: OpTie::DivQuotient(DivQuotientRelation::new(node.clone())),
+            },
+        ];
+        if !node.is_scalar() {
+            steps.push(Step::Relation {
+                proof: ProofType::RangeCheck,
+                relation: OpRelation::RangeCheck(OpRangeCheck::Div, node.clone()),
+            });
+            steps.push(Step::Batch {
+                proof: ProofType::RaOneHotChecks,
+                relations: vec![OpRelation::RangeCheckOneHot(
+                    OpRangeCheck::Div,
+                    node.clone(),
+                )],
+            });
         }
-
-        verify_range_and_onehot(node, verifier)?;
-        Ok(())
+        Ok(Plan(steps))
     }
 }
 
@@ -291,41 +275,3 @@ impl AtlasRelation for DivQuotientRelation {
 }
 
 impl<F: JoltField> TieRelation<F> for DivQuotientRelation {}
-
-fn verify_range_and_onehot<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
-    verifier: &mut Verifier<'_, F, T>,
-) -> Result<(), ProofVerifyError> {
-    let rangecheck_proof = verifier
-        .proofs
-        .take(ProofId(node.idx, ProofType::RangeCheck))?;
-
-    let rangecheck_provider = RangeCheckProvider::<DivRangeCheckOperands>::new(node)?;
-    let rangecheck_verifier = rangecheck_provider
-        .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        )?;
-    verify_relation(
-        rangecheck_proof,
-        &rangecheck_verifier,
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    let ra_one_hot_proof = verifier
-        .proofs
-        .take(ProofId(node.idx, ProofType::RaOneHotChecks))?;
-    let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node)?;
-    let encoding = rc_operands.get_encoding(node);
-    let [ra_sumcheck, bool_sumcheck] =
-        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript)?;
-    verify_relation_batch(
-        ra_one_hot_proof,
-        vec![&*ra_sumcheck, &*bool_sumcheck],
-        &mut verifier.accumulator,
-        &mut verifier.transcript,
-    )?;
-
-    Ok(())
-}

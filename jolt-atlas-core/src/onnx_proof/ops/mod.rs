@@ -142,11 +142,17 @@ use eval_reduction::NodeEvalReduction;
 use crate::onnx_proof::{
     op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProve, OpLookupProvider},
     ops::clamp::SymmetricClampOperands,
-    plan::{OpLookup, OpRelation, OpTie, Plan, Step},
+    plan::{OpLookup, OpRangeCheck, OpRelation, OpTie, Plan, Step},
+    range_checking::{
+        range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
+        RangeCheckProve, RangeCheckProvider,
+    },
     relation::{prove_tie, RelationParams, RelationProver, RelationWitnesses},
     ProofId,
 };
-use atlas_lookup_tables::{clamp::ClampTable, relu::ReluTable};
+use atlas_lookup_tables::{
+    clamp::ClampTable, relu::ReluTable, unsigned_less_than::UnsignedLessThanTable,
+};
 use atlas_sumcheck::relation::prover::{prove_relation, prove_relation_batch, DynRelationWitness};
 use atlas_sumcheck::shout;
 use common::consts::XLEN;
@@ -324,6 +330,7 @@ fn relation_witnesses<F: JoltField, T: Transcript>(
         OpRelation::And(relation) => engine(relation, prover),
         OpRelation::ConstantDivision(relation) => engine(relation, prover),
         OpRelation::Concat(relation) => engine(relation, prover),
+        OpRelation::Div(relation) => engine(relation, prover),
         OpRelation::Iff(relation) => engine(relation, prover),
         OpRelation::Lookup(OpLookup::Relu, node) => {
             let (witness, indices) = OpLookupProvider::<DefaultLookupOperands>::new(node)
@@ -361,6 +368,26 @@ fn relation_witnesses<F: JoltField, T: Transcript>(
             )
             .into()
         }
+        OpRelation::RangeCheck(OpRangeCheck::Div, node) => {
+            let (witness, indices) = RangeCheckProvider::<DivRangeCheckOperands>::new(&node)
+                .expect("the prover's model has a range check for the node")
+                .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
+                    &prover.trace,
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
+            *lookup_indices = indices;
+            vec![Box::new(witness)]
+        }
+        OpRelation::RangeCheckOneHot(OpRangeCheck::Div, node) => shout::prover::ra_onehot_provers(
+            &RangeCheckOperands::<DivRangeCheckOperands>::new(&node)
+                .expect("the prover's model has a range check for the node")
+                .get_encoding(&node),
+            lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        )
+        .into(),
         OpRelation::Reshape(relation) => engine(relation, prover),
         OpRelation::Slice(relation) => engine(relation, prover),
     }
@@ -379,6 +406,7 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
         OpTie::Broadcast(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Constant(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Input(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::DivQuotient(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Identity(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Neg(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::ZeroOutput(relation) => prove_tie(relation, trace, accumulator, transcript),

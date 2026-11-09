@@ -62,7 +62,7 @@ plan with the relations' witnesses, so an op's transcript order is its plan's st
 both sides.
 
 Plan-verified today: `And`, `Concat`, `Iff`, `Reshape`, `Slice`, `ScalarConstDiv`, `Identity`,
-`Neg`, `IsNan`, `MoveAxis`, `Broadcast`, `Constant`, `Input`, `ReLU`, `Clamp`. The other ops still verify through hand-written `VerifyOp` impls and the deferral
+`Neg`, `IsNan`, `MoveAxis`, `Broadcast`, `Constant`, `Input`, `ReLU`, `Clamp`, `Div`. The other ops still verify through hand-written `VerifyOp` impls and the deferral
 queues in `deferred_lookups.rs`.
 
 ## Proof-shape rules

@@ -15,16 +15,31 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProvider},
     ops::{
-        and::AndRelation, broadcast::BroadcastRelation, clamp::SymmetricClampOperands,
-        concat::ConcatRelation, constant::PublicRelation, iff::IffRelation,
-        is_nan::ZeroOutputRelation, moveaxis::AxisPermutationRelation, neg::SignedCopyRelation,
-        reshape::ReshapeRelation, scalar_const_div::ConstantDivisionRelation, slice::SliceRelation,
+        and::AndRelation,
+        broadcast::BroadcastRelation,
+        clamp::SymmetricClampOperands,
+        concat::ConcatRelation,
+        constant::PublicRelation,
+        div::{DivQuotientRelation, DivRelation},
+        iff::IffRelation,
+        is_nan::ZeroOutputRelation,
+        moveaxis::AxisPermutationRelation,
+        neg::SignedCopyRelation,
+        reshape::ReshapeRelation,
+        scalar_const_div::ConstantDivisionRelation,
+        slice::SliceRelation,
+    },
+    range_checking::{
+        range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
+        RangeCheckProvider,
     },
     relation::{verify_tie, RelationVerifier, SetupRelation},
     ProofType,
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_lookup_tables::{clamp::ClampTable, relu::ReluTable};
+use atlas_lookup_tables::{
+    clamp::ClampTable, relu::ReluTable, unsigned_less_than::UnsignedLessThanTable,
+};
 use atlas_sumcheck::{
     opening_proof::VerifierOpeningAccumulator, relation::DynRelationVerifier, shout,
 };
@@ -84,6 +99,8 @@ pub enum OpRelation {
     ConstantDivision(ConstantDivisionRelation),
     /// `Concat`: each operand selected into its slot.
     Concat(ConcatRelation),
+    /// `Div`: the floor division identity, at a point drawn from the transcript.
+    Div(DivRelation),
     /// `Iff`: the masked select.
     Iff(IffRelation),
     /// A prefix-suffix table lookup of the node's operand: the operand's opening is appended,
@@ -92,6 +109,11 @@ pub enum OpRelation {
     /// The one-hot checks of a [`Self::Lookup`]'s read addresses: two relations (the address
     /// polynomial as the product of its chunks; the chunks' Booleanity and Hamming weight).
     LookupOneHot(OpLookup, ComputationNode),
+    /// A remainder's range check against its bound: a prefix-suffix lookup into the
+    /// unsigned less-than table.
+    RangeCheck(OpRangeCheck, ComputationNode),
+    /// The one-hot checks of a [`Self::RangeCheck`]'s read addresses (two relations).
+    RangeCheckOneHot(OpRangeCheck, ComputationNode),
     /// `Reshape`: the operand selected into the output's layout.
     Reshape(ReshapeRelation),
     /// `Slice`: the operand's window selected.
@@ -105,6 +127,13 @@ pub enum OpLookup {
     Relu,
     /// `Clamp`'s symmetric clamp table.
     SymmetricClamp,
+}
+
+/// The remainder a range check bounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpRangeCheck {
+    /// `Div`'s remainder, below the divisor.
+    Div,
 }
 
 impl OpRelation {
@@ -130,6 +159,7 @@ impl OpRelation {
             Self::And(relation) => one(relation, accumulator, transcript),
             Self::ConstantDivision(relation) => one(relation, accumulator, transcript),
             Self::Concat(relation) => one(relation, accumulator, transcript),
+            Self::Div(relation) => one(relation, accumulator, transcript),
             Self::Iff(relation) => one(relation, accumulator, transcript),
             Self::Lookup(OpLookup::Relu, node) => Ok(vec![Box::new(
                 OpLookupProvider::<DefaultLookupOperands>::new(node)
@@ -151,6 +181,19 @@ impl OpRelation {
                 transcript,
             )?
             .into()),
+            Self::RangeCheck(OpRangeCheck::Div, node) => Ok(vec![Box::new(
+                RangeCheckProvider::<DivRangeCheckOperands>::new(&node)?
+                    .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+                        accumulator,
+                        transcript,
+                    )?,
+            )]),
+            Self::RangeCheckOneHot(OpRangeCheck::Div, node) => Ok(shout::ra_onehot_verifiers(
+                &RangeCheckOperands::<DivRangeCheckOperands>::new(&node)?.get_encoding(&node),
+                accumulator,
+                transcript,
+            )?
+            .into()),
             Self::Reshape(relation) => one(relation, accumulator, transcript),
             Self::Slice(relation) => one(relation, accumulator, transcript),
         }
@@ -167,6 +210,8 @@ pub enum OpTie {
     Constant(PublicRelation<Constant>),
     /// `Input`: the output is the public input.
     Input(PublicRelation<Input>),
+    /// `Div`: the committed quotient is the node's reduced output.
+    DivQuotient(DivQuotientRelation),
     /// `Identity`: the operand is the output.
     Identity(SignedCopyRelation<Identity>),
     /// `Neg`: the operand is the output, negated.
@@ -187,6 +232,7 @@ impl OpTie {
             Self::Broadcast(relation) => verify_tie(relation, accumulator, transcript),
             Self::Constant(relation) => verify_tie(relation, accumulator, transcript),
             Self::Input(relation) => verify_tie(relation, accumulator, transcript),
+            Self::DivQuotient(relation) => verify_tie(relation, accumulator, transcript),
             Self::Identity(relation) => verify_tie(relation, accumulator, transcript),
             Self::Neg(relation) => verify_tie(relation, accumulator, transcript),
             Self::ZeroOutput(relation) => verify_tie(relation, accumulator, transcript),

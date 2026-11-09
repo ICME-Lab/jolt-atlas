@@ -13,23 +13,28 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
+    op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProvider},
     ops::{
-        and::AndRelation, broadcast::BroadcastRelation, concat::ConcatRelation,
-        constant::PublicRelation, iff::IffRelation, is_nan::ZeroOutputRelation,
-        moveaxis::AxisPermutationRelation, neg::SignedCopyRelation, reshape::ReshapeRelation,
-        scalar_const_div::ConstantDivisionRelation, slice::SliceRelation,
+        and::AndRelation, broadcast::BroadcastRelation, clamp::SymmetricClampOperands,
+        concat::ConcatRelation, constant::PublicRelation, iff::IffRelation,
+        is_nan::ZeroOutputRelation, moveaxis::AxisPermutationRelation, neg::SignedCopyRelation,
+        reshape::ReshapeRelation, scalar_const_div::ConstantDivisionRelation, slice::SliceRelation,
     },
-    relation::{verify_tie, RelationVerifier},
+    relation::{verify_tie, RelationVerifier, SetupRelation},
     ProofType,
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_sumcheck::{opening_proof::VerifierOpeningAccumulator, relation::DynRelationVerifier};
+use atlas_lookup_tables::{clamp::ClampTable, relu::ReluTable};
+use atlas_sumcheck::{
+    opening_proof::VerifierOpeningAccumulator, relation::DynRelationVerifier, shout,
+};
 use atlas_trace::{
     op::{Constant, Identity, Input, Neg},
     trace::ModelExecutionIO,
     Model,
 };
 use atlas_transcript::Transcript;
+use common::consts::XLEN;
 
 /// One thing the verifier does for a node.
 pub enum Step {
@@ -41,6 +46,14 @@ pub enum Step {
         proof: ProofType,
         /// The relation proven.
         relation: OpRelation,
+    },
+    /// Verify several relations as one batched sumcheck stored under `proof`, their setups run
+    /// in list order.
+    Batch {
+        /// The proof slot of the batched sumcheck.
+        proof: ProofType,
+        /// The relations of the batch.
+        relations: Vec<OpRelation>,
     },
     /// Check a zero-round relation: append its openings and require the identity to hold.
     Tie {
@@ -73,39 +86,74 @@ pub enum OpRelation {
     Concat(ConcatRelation),
     /// `Iff`: the masked select.
     Iff(IffRelation),
+    /// A prefix-suffix table lookup of the node's operand: the operand's opening is appended,
+    /// then the read-raf relation is set up.
+    Lookup(OpLookup, ComputationNode),
+    /// The one-hot checks of a [`Self::Lookup`]'s read addresses: two relations (the address
+    /// polynomial as the product of its chunks; the chunks' Booleanity and Hamming weight).
+    LookupOneHot(OpLookup, ComputationNode),
     /// `Reshape`: the operand selected into the output's layout.
     Reshape(ReshapeRelation),
     /// `Slice`: the operand's window selected.
     Slice(SliceRelation),
 }
 
+/// The table a lookup op reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpLookup {
+    /// `ReLU`'s table.
+    Relu,
+    /// `Clamp`'s symmetric clamp table.
+    SymmetricClamp,
+}
+
 impl OpRelation {
-    /// The relation's verifier, set up against the accumulator and transcript.
-    pub fn verifier<F: JoltField, T: Transcript>(
+    /// The relation's verifiers (one, or the two of a one-hot check), set up against the
+    /// accumulator and transcript.
+    pub fn verifiers<F: JoltField, T: Transcript>(
         self,
-        accumulator: &VerifierOpeningAccumulator<F>,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> Result<Box<dyn DynRelationVerifier<F, T>>, ProofVerifyError> {
-        Ok(match self {
-            Self::And(relation) => {
-                Box::new(RelationVerifier::new(relation, accumulator, transcript)?)
-            }
-            Self::ConstantDivision(relation) => {
-                Box::new(RelationVerifier::new(relation, accumulator, transcript)?)
-            }
-            Self::Concat(relation) => {
-                Box::new(RelationVerifier::new(relation, accumulator, transcript)?)
-            }
-            Self::Iff(relation) => {
-                Box::new(RelationVerifier::new(relation, accumulator, transcript)?)
-            }
-            Self::Reshape(relation) => {
-                Box::new(RelationVerifier::new(relation, accumulator, transcript)?)
-            }
-            Self::Slice(relation) => {
-                Box::new(RelationVerifier::new(relation, accumulator, transcript)?)
-            }
-        })
+    ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
+        fn one<F: JoltField, T: Transcript, R: SetupRelation<F> + 'static>(
+            relation: R,
+            accumulator: &VerifierOpeningAccumulator<F>,
+            transcript: &mut T,
+        ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
+            Ok(vec![Box::new(RelationVerifier::new(
+                relation,
+                accumulator,
+                transcript,
+            )?)])
+        }
+        match self {
+            Self::And(relation) => one(relation, accumulator, transcript),
+            Self::ConstantDivision(relation) => one(relation, accumulator, transcript),
+            Self::Concat(relation) => one(relation, accumulator, transcript),
+            Self::Iff(relation) => one(relation, accumulator, transcript),
+            Self::Lookup(OpLookup::Relu, node) => Ok(vec![Box::new(
+                OpLookupProvider::<DefaultLookupOperands>::new(node)
+                    .read_raf_verify::<F, T, ReluTable<XLEN>, XLEN>(accumulator, transcript)?,
+            )]),
+            Self::Lookup(OpLookup::SymmetricClamp, node) => Ok(vec![Box::new(
+                OpLookupProvider::<SymmetricClampOperands>::new(node)
+                    .read_raf_verify::<F, T, ClampTable<XLEN>, XLEN>(accumulator, transcript)?,
+            )]),
+            Self::LookupOneHot(OpLookup::Relu, node) => Ok(shout::ra_onehot_verifiers(
+                &OpLookupEncoding::<DefaultLookupOperands>::new(&node),
+                accumulator,
+                transcript,
+            )?
+            .into()),
+            Self::LookupOneHot(OpLookup::SymmetricClamp, node) => Ok(shout::ra_onehot_verifiers(
+                &OpLookupEncoding::<SymmetricClampOperands>::new(&node),
+                accumulator,
+                transcript,
+            )?
+            .into()),
+            Self::Reshape(relation) => one(relation, accumulator, transcript),
+            Self::Slice(relation) => one(relation, accumulator, transcript),
+        }
     }
 }
 

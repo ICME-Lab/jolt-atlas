@@ -140,11 +140,16 @@ use atlas_transcript::Transcript;
 use eval_reduction::NodeEvalReduction;
 
 use crate::onnx_proof::{
-    plan::{OpRelation, OpTie, Plan, Step},
+    op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProve, OpLookupProvider},
+    ops::clamp::SymmetricClampOperands,
+    plan::{OpLookup, OpRelation, OpTie, Plan, Step},
     relation::{prove_tie, RelationParams, RelationProver, RelationWitnesses},
     ProofId,
 };
-use atlas_sumcheck::relation::prover::{prove_relation, DynRelationWitness};
+use atlas_lookup_tables::{clamp::ClampTable, relu::ReluTable};
+use atlas_sumcheck::relation::prover::{prove_relation, prove_relation_batch, DynRelationWitness};
+use atlas_sumcheck::shout;
+use common::consts::XLEN;
 
 use crate::onnx_proof::Prover;
 
@@ -259,13 +264,36 @@ pub fn prove_plan<F: JoltField, T: Transcript>(
 ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
     let mut reduction = None;
     let mut proofs = Vec::new();
+    // The read addresses of the node's lookup, kept for its one-hot checks.
+    let mut lookup_indices = Vec::new();
     for step in plan.0 {
         match step {
             Step::Reduce => reduction = NodeEvalReduction::prove(prover, node),
             Step::Relation { proof, relation } => {
-                let mut witness = relation_witness(relation, prover);
+                let mut witnesses = relation_witnesses(relation, prover, &mut lookup_indices);
+                let [witness] = witnesses.as_mut_slice() else {
+                    panic!(
+                        "node {}'s {proof:?} step is not a single relation",
+                        node.idx
+                    )
+                };
                 let (sumcheck, _) = prove_relation(
                     witness.as_mut(),
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
+                proofs.push((ProofId(node.idx, proof), sumcheck));
+            }
+            Step::Batch { proof, relations } => {
+                let mut witnesses = Vec::new();
+                for relation in relations {
+                    witnesses.extend(relation_witnesses(relation, prover, &mut lookup_indices));
+                }
+                let (sumcheck, _) = prove_relation_batch(
+                    witnesses
+                        .iter_mut()
+                        .map(|witness| &mut **witness as _)
+                        .collect(),
                     &mut prover.accumulator,
                     &mut prover.transcript,
                 );
@@ -277,24 +305,62 @@ pub fn prove_plan<F: JoltField, T: Transcript>(
     (reduction, proofs)
 }
 
-/// The engine's prover of a plan relation, set up against the prover's accumulator and
-/// transcript.
-fn relation_witness<F: JoltField, T: Transcript>(
+/// The provers of a plan relation (one, or the two of a one-hot check), set up against the
+/// prover's accumulator and transcript. A lookup leaves its read addresses in `lookup_indices`
+/// for the one-hot checks that follow it.
+fn relation_witnesses<F: JoltField, T: Transcript>(
     relation: OpRelation,
     prover: &mut Prover<F, T>,
-) -> Box<dyn DynRelationWitness<F, T>> {
+    lookup_indices: &mut Vec<usize>,
+) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     fn engine<F: JoltField, T: Transcript, R: RelationWitnesses<F> + 'static>(
         relation: R,
         prover: &mut Prover<F, T>,
-    ) -> Box<dyn DynRelationWitness<F, T>> {
+    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
         let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
-        Box::new(RelationProver::initialize(&prover.trace, params))
+        vec![Box::new(RelationProver::initialize(&prover.trace, params))]
     }
     match relation {
         OpRelation::And(relation) => engine(relation, prover),
         OpRelation::ConstantDivision(relation) => engine(relation, prover),
         OpRelation::Concat(relation) => engine(relation, prover),
         OpRelation::Iff(relation) => engine(relation, prover),
+        OpRelation::Lookup(OpLookup::Relu, node) => {
+            let (witness, indices) = OpLookupProvider::<DefaultLookupOperands>::new(node)
+                .read_raf_prove::<F, T, ReluTable<XLEN>, XLEN>(
+                    &prover.trace,
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
+            *lookup_indices = indices;
+            vec![Box::new(witness)]
+        }
+        OpRelation::Lookup(OpLookup::SymmetricClamp, node) => {
+            let (witness, indices) = OpLookupProvider::<SymmetricClampOperands>::new(node)
+                .read_raf_prove::<F, T, ClampTable<XLEN>, XLEN>(
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            );
+            *lookup_indices = indices;
+            vec![Box::new(witness)]
+        }
+        OpRelation::LookupOneHot(OpLookup::Relu, node) => shout::prover::ra_onehot_provers(
+            &OpLookupEncoding::<DefaultLookupOperands>::new(&node),
+            lookup_indices,
+            &prover.accumulator,
+            &mut prover.transcript,
+        )
+        .into(),
+        OpRelation::LookupOneHot(OpLookup::SymmetricClamp, node) => {
+            shout::prover::ra_onehot_provers(
+                &OpLookupEncoding::<SymmetricClampOperands>::new(&node),
+                lookup_indices,
+                &prover.accumulator,
+                &mut prover.transcript,
+            )
+            .into()
+        }
         OpRelation::Reshape(relation) => engine(relation, prover),
         OpRelation::Slice(relation) => engine(relation, prover),
     }

@@ -53,8 +53,8 @@ The crate has no prover code. Three mechanisms hold that:
 
 An op's verification is a `Plan` (`onnx_proof/plan.rs`): an ordered list of `Step`s over
 relations, built by `OpPlan::plan(node, model, io)` before the transcript runs. `Reduce` is the
-node's evaluation reduction, `Relation` a sumcheck stored under a `ProofType`, `Tie` a
-zero-round identity. Steps hold relations (the closed enums `OpRelation` and `OpTie`), never
+node's evaluation reduction, `Relation` a sumcheck stored under a `ProofType`, `Batch` several
+relations proven as one batched sumcheck, `Tie` a zero-round identity. Steps hold relations (the closed enums `OpRelation` and `OpTie`), never
 closures; whatever depends on earlier claims or on challenges is read and drawn in the
 relation's `setup` when the interpreter reaches the step. `Verifier::run_plan` in
 `onnx_proof/verifier.rs` is the interpreter; the prover's `ops::prove_plan` walks the same
@@ -62,7 +62,7 @@ plan with the relations' witnesses, so an op's transcript order is its plan's st
 both sides.
 
 Plan-verified today: `And`, `Concat`, `Iff`, `Reshape`, `Slice`, `ScalarConstDiv`, `Identity`,
-`Neg`, `IsNan`, `MoveAxis`, `Broadcast`, `Constant`, `Input`. The other ops still verify through hand-written `VerifyOp` impls and the deferral
+`Neg`, `IsNan`, `MoveAxis`, `Broadcast`, `Constant`, `Input`, `ReLU`, `Clamp`. The other ops still verify through hand-written `VerifyOp` impls and the deferral
 queues in `deferred_lookups.rs`.
 
 ## Proof-shape rules

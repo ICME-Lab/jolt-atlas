@@ -22,7 +22,7 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;
-use atlas_sumcheck::relation::{verify_relation, DynRelationVerifier};
+use atlas_sumcheck::relation::{verify_relation, verify_relation_batch, DynRelationVerifier};
 use atlas_sumcheck::{
     evaluation_reduction::EvalReductionProof,
     opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator},
@@ -129,11 +129,33 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
             match step {
                 Step::Reduce => NodeEvalReduction::verify(self, node)?,
                 Step::Relation { proof, relation } => {
-                    let relation = relation.verifier(&self.accumulator, &mut self.transcript)?;
+                    let relations =
+                        relation.verifiers(&mut self.accumulator, &mut self.transcript)?;
+                    let [relation] = relations.as_slice() else {
+                        return Err(ProofVerifyError::Malformed(format!(
+                            "plan: node {}'s {proof:?} step is not a single relation",
+                            node.idx
+                        )));
+                    };
                     let proof = self.proofs.take(ProofId(node.idx, proof))?;
                     verify_relation(
                         proof,
                         relation.as_ref(),
+                        &mut self.accumulator,
+                        &mut self.transcript,
+                    )?;
+                }
+                Step::Batch { proof, relations } => {
+                    let mut instances = Vec::new();
+                    for relation in relations {
+                        instances.extend(
+                            relation.verifiers(&mut self.accumulator, &mut self.transcript)?,
+                        );
+                    }
+                    let proof = self.proofs.take(ProofId(node.idx, proof))?;
+                    verify_relation_batch(
+                        proof,
+                        instances.iter().map(|instance| instance.as_ref()).collect(),
                         &mut self.accumulator,
                         &mut self.transcript,
                     )?;

@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use atlas_algebra::field::JoltField;
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
 use atlas_trace::{op::MeanOfSquares, Op};
 use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly, VirtualPoly};
@@ -283,19 +284,23 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckOperands<H> {
     }
 
     /// Extract the operand claims from the accumulator for the left and right operands.
-    pub fn operand_claims<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> (F, F) {
+    /// `Err` if the accumulator lacks one of them.
+    pub fn operand_claims<F: JoltField>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<(F, F), ProofVerifyError> {
         let operand_claims = self
             .get_input_operands_id()
             .iter()
             .map(|operand| {
                 let operand_id =
                     OpeningId::new(*operand, SumcheckId::NodeExecution(self.base.node_idx));
-                let (_, claim) = accumulator.get_virtual_polynomial_opening(operand_id);
-                claim
+                let (_, claim) = accumulator.get_virtual_polynomial_opening(operand_id)?;
+                Ok(claim)
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, ProofVerifyError>>()?;
 
-        self.helper.transform_operand_claims(operand_claims)
+        Ok(self.helper.transform_operand_claims(operand_claims))
     }
 
     /// Gets the RA one hot encoding for one-hotness checks

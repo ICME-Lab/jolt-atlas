@@ -23,6 +23,11 @@ impl<F: JoltField> TieClaims<F> for AxisPermutationRelation {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Vec<F> {
         // The operand at the permuted point is the output at `r`.
-        vec![accumulator.get_node_output_opening(self.node().idx).1]
+        vec![
+            accumulator
+                .get_node_output_opening(self.node().idx)
+                .expect("the prover holds every claim it reads")
+                .1,
+        ]
     }
 }

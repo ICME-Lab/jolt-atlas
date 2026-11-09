@@ -77,16 +77,18 @@ pub fn acc_opening_id(node_idx: usize) -> OpeningId {
 
 /// Verifier counterpart of [`prove_append_acc`]: append the `ClampAcc` opening
 /// point (claim is loaded from the proof's opening claims).
+/// `Err` if the accumulator lacks a claim it reads.
 pub fn verify_append_acc<F, T>(
     node: &ComputationNode,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
-) where
+) -> Result<(), ProofVerifyError>
+where
     F: JoltField,
     T: Transcript,
 {
-    let r = accumulator.get_node_output_opening(node.idx).0;
-    accumulator.append_virtual(transcript, acc_opening_id(node.idx), r);
+    let r = accumulator.get_node_output_opening(node.idx)?.0;
+    accumulator.append_virtual(transcript, acc_opening_id(node.idx), r)
 }
 
 /// [`LookupOperandsTrait`] helper for the 64-bit accumulator-sourced saturating clamp, backed
@@ -111,7 +113,7 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
     fn rv_claim<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn atlas_sumcheck::opening_proof::OpeningAccumulator<F>,
-    ) -> F {
+    ) -> Result<F, ProofVerifyError> {
         DefaultLookupOperands::rv_claim(node, accumulator)
     }
 
@@ -130,7 +132,7 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
         DefaultLookupOperands::r_cycle(node, accumulator)
     }
 
@@ -152,7 +154,7 @@ pub fn verify_clamp_lookup<F: JoltField, T: Transcript>(
 ) -> Result<(), ProofVerifyError> {
     let provider =
         OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node));
-    provider.append_witness_claim_verifier(&mut verifier.accumulator, &mut verifier.transcript);
+    provider.append_witness_claim_verifier(&mut verifier.accumulator, &mut verifier.transcript)?;
     if crate::onnx_proof::clamp_split::exact_output_verifier(
         verifier.preprocessing.model(),
         verifier.io,
@@ -160,9 +162,9 @@ pub fn verify_clamp_lookup<F: JoltField, T: Transcript>(
     ) {
         let acc = verifier
             .accumulator
-            .get_virtual_polynomial_opening(acc_opening_id(node.idx))
+            .get_virtual_polynomial_opening(acc_opening_id(node.idx))?
             .1;
-        let out = verifier.accumulator.get_node_output_opening(node.idx).1;
+        let out = verifier.accumulator.get_node_output_opening(node.idx)?.1;
         if acc != out {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "output node {}: unsaturated public output must equal the pre-clamp accumulation",

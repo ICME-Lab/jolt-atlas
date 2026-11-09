@@ -29,7 +29,8 @@ pub fn read_raf_prover<F: JoltField, T: Transcript>(
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Box<dyn DynRelationWitness<F, T>> {
-    let params = ReadRafParams::new(provider, accumulator, transcript);
+    let params = ReadRafParams::new(provider, accumulator, transcript)
+        .expect("the prover holds the lookup's claims");
     Box::new(ReadRafProver::initialize(lookup_indices, table, params))
 }
 
@@ -183,7 +184,8 @@ pub fn ra_onehot_provers_with<F: JoltField, T: Transcript>(
     accumulator: &dyn OpeningAccumulator<F>,
     challenges: RaOneHotChallenges<F>,
 ) -> [Box<dyn DynRelationWitness<F, T>>; 2] {
-    let params = ra_onehot_params(encoding, accumulator, challenges);
+    let params = ra_onehot_params(encoding, accumulator, challenges)
+        .expect("the prover holds the one-hot checks' claims");
     ra_onehot_provers_from_params(params, lookup_indices)
 }
 

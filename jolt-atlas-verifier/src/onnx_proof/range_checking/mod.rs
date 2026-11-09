@@ -8,6 +8,7 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::range_checking::range_check_operands::{
     RangeCheckOperands, RangeCheckingOperandsTrait,
 };
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
@@ -139,11 +140,12 @@ impl<H: RangeCheckingOperandsTrait> RangeCheckProvider<H> {
     }
 
     /// Combined verifier flow: appends RAF claims + creates sumcheck verifier.
+    /// `Err` if the accumulator lacks a claim it reads.
     pub fn read_raf_verify<F, T, LUT>(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> BinaryReadRafSumcheckVerifier<F, LUT>
+    ) -> Result<BinaryReadRafSumcheckVerifier<F, LUT>, ProofVerifyError>
     where
         F: JoltField,
         T: Transcript,
@@ -158,13 +160,16 @@ where
     F: JoltField,
     H: RangeCheckingOperandsTrait,
 {
-    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn r_cycle(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
         let id = OpeningId::new(
             self.operands.get_input_operands_id()[0],
             SumcheckId::NodeExecution(self.operands.node_idx()),
         );
-        let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(id);
-        r_node_output
+        let (r_node_output, _) = accumulator.get_virtual_polynomial_opening(id)?;
+        Ok(r_node_output)
     }
 
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
@@ -181,13 +186,17 @@ where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     H: RangeCheckingOperandsTrait,
 {
-    fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
-        let (left_operand_claim, right_operand_claim) = self.operands.operand_claims(accumulator);
-        ReadRafClaims {
+    fn read_raf_claims(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<ReadRafClaims<F>, ProofVerifyError> {
+        let (left_operand_claim, right_operand_claim) =
+            self.operands.operand_claims(accumulator)?;
+        Ok(ReadRafClaims {
             rv_claim: F::one(),
             left_operand_claim,
             right_operand_claim,
-        }
+        })
     }
 }
 

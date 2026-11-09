@@ -49,4 +49,14 @@ pub enum ProofVerifyError {
     ProofOfWork,
     #[error("Transcript NARG string not fully consumed")]
     TrailingNarg,
+    #[error("The proof carries no claim for {0}")]
+    MissingClaim(String),
+    #[error("Opening claim {0} was never bound to a point")]
+    UnboundClaim(String),
+    #[error("Sumcheck proof {0} was not consumed")]
+    UnconsumedProof(String),
+    #[error("Evaluation-reduction proof for node {0} was not consumed")]
+    UnconsumedEvalReduction(usize),
+    #[error("Malformed proof or public IO: {0}")]
+    Malformed(String),
 }

@@ -58,17 +58,17 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sum {
         // (1+2) Verify `output = SatClamp(acc)`.
         if is_scalar(node) {
             // `acc` opens in the clear: recover it and check the clamp directly.
-            verify_append_acc(node, &mut verifier.accumulator, &mut verifier.transcript);
+            verify_append_acc(node, &mut verifier.accumulator, &mut verifier.transcript)?;
             let acc_id = OpeningId::new(
                 VirtualPoly::ClampAcc(node.idx),
                 SumcheckId::NodeExecution(node.idx),
             );
             let acc_claim = verifier
                 .accumulator
-                .get_virtual_polynomial_opening(acc_id)
+                .get_virtual_polynomial_opening(acc_id)?
                 .1;
             let output_claim = AccOpeningAccessor::new(&verifier.accumulator, node)
-                .get_reduced_opening()
+                .get_reduced_opening()?
                 .1;
             verify_scalar_clamp(acc_claim, output_claim, "Sum")?;
         } else {
@@ -84,7 +84,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sum {
             SumAxisRelation::for_node(&verifier.preprocessing.model, node.clone()),
             &verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
         verify_relation(
             proof,
             &reduction,

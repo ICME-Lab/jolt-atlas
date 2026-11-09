@@ -118,7 +118,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for MeanOfSquares {
             MeanOfSquaresRelation::new(node.clone()),
             &verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
         verify_relation(
             proof,
             &reduction,
@@ -130,18 +130,18 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for MeanOfSquares {
         if scalar {
             // Scalar fallback: `rescaled`, `R`, and `out` open in the clear.
             let accessor = AccOpeningAccessor::new(&verifier.accumulator, node);
-            let rescaled_claim = accessor.get_advice(VirtualPoly::ClampAcc).1;
-            let output_claim = accessor.get_reduced_opening().1;
+            let rescaled_claim = accessor.get_advice(VirtualPoly::ClampAcc)?.1;
+            let output_claim = accessor.get_reduced_opening()?.1;
             verify_scalar_clamp(rescaled_claim, output_claim, "MeanOfSquares")?;
 
-            let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder).1;
+            let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder)?.1;
             verify_scalar_remainder(r_claim, mos_divisor(self, node.scale))?;
         } else {
             let rc_provider = RangeCheckProvider::<MeanOfSquaresRangeCheckOperands>::new(node);
             let rc_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
                 &mut verifier.accumulator,
                 &mut verifier.transcript,
-            );
+            )?;
             verifier.defer(DeferredBatch::RangeCheck, Box::new(rc_verifier));
             let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node);
             verifier
@@ -282,7 +282,7 @@ impl<F: JoltField> SetupRelation<F> for MeanOfSquaresRelation {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
-    ) -> RelationSetup<F> {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
         reduced_output_setup(accumulator, &self.node)
     }
 }

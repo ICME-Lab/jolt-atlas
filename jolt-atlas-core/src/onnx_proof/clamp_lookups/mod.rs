@@ -30,8 +30,7 @@ use crate::onnx_proof::{
 use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
 use atlas_sumcheck::{
-    opening_proof::{prover::ProverOpeningAccumulator, OpeningAccumulator},
-    sumcheck::SumcheckInstanceProof,
+    opening_proof::prover::ProverOpeningAccumulator, sumcheck::SumcheckInstanceProof,
 };
 use atlas_trace::{op::sum_axes_i64, trace::LayerData, Op, Tensor, Trace};
 use atlas_transcript::Transcript;

@@ -1,3 +1,4 @@
+use crate::opening_proof::missing_claim;
 use crate::relation::DynRelationVerifier;
 use crate::{
     booleanity::{BooleanitySumcheckParams, LinearClaim, LinearTerm},
@@ -9,6 +10,7 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier,
     },
 };
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::{FieldChallengeOps, IntoOpening, JoltField},
     poly::{
@@ -37,21 +39,29 @@ pub fn read_raf_verifier<F: JoltField, T: Transcript>(
     table: Vec<i32>,
     accumulator: &VerifierOpeningAccumulator<F>,
     transcript: &mut T,
-) -> Box<dyn DynRelationVerifier<F, T>> {
-    Box::new(ReadRafParams::new(provider, accumulator, transcript).into_verifier(table))
+) -> Result<Box<dyn DynRelationVerifier<F, T>>, ProofVerifyError> {
+    Ok(Box::new(
+        ReadRafParams::new(provider, accumulator, transcript)?.into_verifier(table),
+    ))
 }
 
 // TODO: Have one-unified trait for read-raf and ra-one-hot checks.
 
 pub trait ReadRafProvider<F: JoltField>: Clone + Send + Sync + Sized {
     /// Returns the opening claim for the rv claim
-    fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
+    /// `Err` if the accumulator lacks a claim it reads.
+    fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError>;
 
     /// Returns the opening claim for the raf claim
-    fn raf_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
+    /// `Err` if the accumulator lacks a claim it reads.
+    fn raf_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError>;
 
     /// Returns challenge used in the read-raf sum-check protocol
-    fn r(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
+    /// `Err` if the accumulator lacks a claim it reads.
+    fn r(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError>;
 
     /// Returns the virtual polynomial and sumcheck id for the one-hot encoded read-address polynomial.
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
@@ -76,22 +86,23 @@ pub struct ReadRafParams<F: JoltField> {
 
 impl<F: JoltField> ReadRafParams<F> {
     /// Create new parameters for exponentiation lookups.
+    /// `Err` if the accumulator lacks a claim it reads.
     pub fn new(
         provider: &impl ReadRafProvider<F>,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut impl Transcript,
-    ) -> Self {
+    ) -> Result<Self, ProofVerifyError> {
         let gamma = transcript.challenge_scalar();
         let (ra_vp, ra_sid) = provider.ra_poly();
-        Self {
-            r: provider.r(accumulator).r,
+        Ok(Self {
+            r: provider.r(accumulator)?.r,
             gamma,
-            rv_claim: provider.rv_claim(accumulator),
-            raf_claim: provider.raf_claim(accumulator),
+            rv_claim: provider.rv_claim(accumulator)?,
+            raf_claim: provider.raf_claim(accumulator)?,
             ra_vp,
             ra_sid,
             log_K: provider.log_K(),
-        }
+        })
     }
 }
 
@@ -208,15 +219,16 @@ impl<F: JoltField> ReadRafParams<F> {
 /// Retrieves the existing opening for the given virtual opening id from the accumulator,
 /// with special handling for `VirtualPoly::NodeOutput`,
 /// where we recover the reduced opening point.
+/// `Err` if the accumulator lacks a claim it reads.
 fn resolve_vp_opening<F: JoltField>(
     accumulator: &dyn OpeningAccumulator<F>,
     opening_id: OpeningId,
-) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
     let virtual_poly = opening_id
         .virtual_poly()
-        .expect("expected virtual polynomial");
+        .ok_or_else(|| missing_claim(opening_id))?;
     if let Some(opening) = accumulator.try_get_virtual_polynomial_opening(opening_id) {
-        return opening;
+        return Ok(opening);
     }
     if let VirtualPoly::NodeOutput(producer_idx) = virtual_poly {
         accumulator.get_node_output_opening(producer_idx)
@@ -251,8 +263,12 @@ pub trait RaOneHotEncoding {
     /// The cycle point `r_cycle` for HammingWeight and Booleanity. By default
     /// the opening point of [`Self::r_cycle_source`]; encodings whose cycle
     /// space has no single node opening (packed instances) override it.
-    fn r_cycle<F: JoltField>(&self, accumulator: &dyn OpeningAccumulator<F>) -> Vec<F> {
-        resolve_vp_opening(accumulator, self.r_cycle_source()).0.r
+    /// `Err` if the accumulator lacks a claim it reads.
+    fn r_cycle<F: JoltField>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<Vec<F>, ProofVerifyError> {
+        Ok(resolve_vp_opening(accumulator, self.r_cycle_source())?.0.r)
     }
 }
 
@@ -293,16 +309,17 @@ pub fn ra_onehot_challenges<F: JoltField, T: Transcript>(
 pub type RaOneHotParams<F> = (RaSumcheckParams<F>, BooleanitySumcheckParams<F>);
 
 /// Resolve the RA one-hot parameters from the accumulator and drawn challenges.
+/// `Err` if the accumulator lacks a claim it reads.
 pub fn ra_onehot_params<F: JoltField>(
     encoding: &impl RaOneHotEncoding,
     accumulator: &dyn OpeningAccumulator<F>,
     challenges: RaOneHotChallenges<F>,
-) -> RaOneHotParams<F> {
+) -> Result<RaOneHotParams<F>, ProofVerifyError> {
     let one_hot_params = encoding.one_hot_params();
     let d = one_hot_params.instruction_d;
     let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
 
-    let r_cycle = encoding.r_cycle(accumulator);
+    let r_cycle = encoding.r_cycle(accumulator)?;
     // The Hamming-weight check (`Σ_k ra_d(k, r_cycle) = 1`, batched by
     // `gamma_powers`) is folded into Booleanity as its linear term, so every
     // chunk is opened once.
@@ -322,7 +339,7 @@ pub fn ra_onehot_params<F: JoltField>(
         polynomial_types: polynomial_types.clone(),
         sumcheck_id: SumcheckId::Booleanity,
     };
-    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(encoding.ra_source());
+    let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(encoding.ra_source())?;
     let (r_address_ra, r_cycle_ra) = r.split_at(encoding.log_k());
     let ra_params = RaSumcheckParams {
         r_address: r_address_ra,
@@ -331,7 +348,7 @@ pub fn ra_onehot_params<F: JoltField>(
         ra_claim,
         polynomial_types,
     };
-    (ra_params, booleanity_params)
+    Ok((ra_params, booleanity_params))
 }
 
 /// Build the RA one-hot sumcheck **verifiers** (RaVirtual,
@@ -344,7 +361,7 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
     encoding: &impl RaOneHotEncoding,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> [Box<dyn DynRelationVerifier<F, T>>; 2] {
+) -> Result<[Box<dyn DynRelationVerifier<F, T>>; 2], ProofVerifyError> {
     let challenges = ra_onehot_challenges::<F, T>(encoding, transcript);
     ra_onehot_verifiers_with(encoding, accumulator, challenges)
 }
@@ -354,8 +371,12 @@ pub fn ra_onehot_verifiers_with<F: JoltField, T: Transcript>(
     encoding: &impl RaOneHotEncoding,
     accumulator: &dyn OpeningAccumulator<F>,
     challenges: RaOneHotChallenges<F>,
-) -> [Box<dyn DynRelationVerifier<F, T>>; 2] {
-    ra_onehot_verifiers_with_params(ra_onehot_params(encoding, accumulator, challenges))
+) -> Result<[Box<dyn DynRelationVerifier<F, T>>; 2], ProofVerifyError> {
+    Ok(ra_onehot_verifiers_with_params(ra_onehot_params(
+        encoding,
+        accumulator,
+        challenges,
+    )?))
 }
 
 /// Build the RA one-hot verifiers from resolved parameters.

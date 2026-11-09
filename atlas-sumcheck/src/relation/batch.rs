@@ -3,7 +3,7 @@
 //! sumcheck ([`verify_relation`]). The verifier checks the batch's final claim against the
 //! relations' output expressions and appends their produced openings.
 
-use super::{relation_input_claim, resolve, Relation, RelationVerifier};
+use super::{evaluate_expression, relation_input_claim, Relation, RelationVerifier};
 use crate::{
     opening_proof::VerifierOpeningAccumulator,
     sumcheck::{absorb_input_claims, SumcheckInstanceProof},
@@ -24,23 +24,29 @@ pub trait DynRelationVerifier<F: JoltField, T: Transcript> {
     fn degree(&self) -> usize;
 
     /// The input claim, from the accumulator's openings and the setup.
-    fn input_claim(&self, accumulator: &VerifierOpeningAccumulator<F>) -> F;
+    /// `Err` if the accumulator lacks a claim it reads.
+    fn input_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+    ) -> Result<F, ProofVerifyError>;
 
     /// The expected final claim at the relation's bound point (its suffix of the batch's
     /// challenges).
+    /// `Err` if the accumulator lacks a claim it reads.
     fn output_claim(
         &self,
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
-    ) -> F;
+    ) -> Result<F, ProofVerifyError>;
 
     /// Append the produced openings' requests at the bound point.
+    /// `Err` if the accumulator lacks a claim it reads.
     fn append_produced(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
-    );
+    ) -> Result<(), ProofVerifyError>;
 }
 
 impl<F: JoltField, T: Transcript, R: Relation<F>> DynRelationVerifier<F, T>
@@ -54,7 +60,10 @@ impl<F: JoltField, T: Transcript, R: Relation<F>> DynRelationVerifier<F, T>
         self.relation.degree()
     }
 
-    fn input_claim(&self, accumulator: &VerifierOpeningAccumulator<F>) -> F {
+    fn input_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+    ) -> Result<F, ProofVerifyError> {
         relation_input_claim(&self.relation, &self.setup, accumulator)
     }
 
@@ -62,10 +71,11 @@ impl<F: JoltField, T: Transcript, R: Relation<F>> DynRelationVerifier<F, T>
         &self,
         accumulator: &VerifierOpeningAccumulator<F>,
         sumcheck_challenges: &[F::Challenge],
-    ) -> F {
+    ) -> Result<F, ProofVerifyError> {
         let challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
-        self.relation.output_expression::<F>().evaluate(
-            |opening| resolve(accumulator, opening),
+        evaluate_expression(
+            self.relation.output_expression::<F>(),
+            accumulator,
             |challenge| self.setup.challenge(challenge),
             |derived| self.relation.derive(derived, &self.setup, &challenges),
         )
@@ -76,10 +86,10 @@ impl<F: JoltField, T: Transcript, R: Relation<F>> DynRelationVerifier<F, T>
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
         sumcheck_challenges: &[F::Challenge],
-    ) {
+    ) -> Result<(), ProofVerifyError> {
         let challenges: Vec<F> = sumcheck_challenges.to_vec().into_opening();
         self.relation
-            .append_produced_requests(&self.setup, &challenges, accumulator, transcript);
+            .append_produced_requests(&self.setup, &challenges, accumulator, transcript)
     }
 }
 
@@ -94,13 +104,17 @@ pub fn verify_relation_batch<F: JoltField, T: Transcript>(
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
-    let max_degree = relations.iter().map(|r| r.degree()).max().unwrap();
-    let max_rounds = relations.iter().map(|r| r.rounds()).max().unwrap();
+    let (Some(max_degree), Some(max_rounds)) = (
+        relations.iter().map(|r| r.degree()).max(),
+        relations.iter().map(|r| r.rounds()).max(),
+    ) else {
+        return Err(ProofVerifyError::EmptyInput);
+    };
 
     let input_claims: Vec<F> = relations
         .iter()
         .map(|r| r.input_claim(accumulator))
-        .collect();
+        .collect::<Result<_, _>>()?;
     absorb_input_claims(
         &mut ClearSumcheckRecorder::<F>::new(),
         &input_claims,
@@ -118,15 +132,14 @@ pub fn verify_relation_batch<F: JoltField, T: Transcript>(
         .sum();
     let (final_claim, r_sumcheck) = proof.verify(claim, max_rounds, max_degree, transcript)?;
 
-    let expected: F = relations
-        .iter()
-        .zip(&coefficients)
-        .map(|(r, coefficient)| {
-            let r_slice = &r_sumcheck[max_rounds - r.rounds()..];
-            r.append_produced(accumulator, transcript, r_slice);
-            r.output_claim(accumulator, r_slice) * coefficient
-        })
-        .sum();
+    let mut expected = F::zero();
+    for (r, coefficient) in relations.iter().zip(&coefficients) {
+        let r_slice = r_sumcheck
+            .get(max_rounds - r.rounds()..)
+            .ok_or(ProofVerifyError::SumcheckVerificationError)?;
+        r.append_produced(accumulator, transcript, r_slice)?;
+        expected += r.output_claim(accumulator, r_slice)? * coefficient;
+    }
     if final_claim != expected {
         return Err(ProofVerifyError::SumcheckVerificationError);
     }
@@ -141,7 +154,7 @@ pub fn verify_relation<F: JoltField, T: Transcript>(
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
-    let input_claim = relation.input_claim(accumulator);
+    let input_claim = relation.input_claim(accumulator)?;
     absorb_input_claims(
         &mut ClearSumcheckRecorder::<F>::new(),
         &[input_claim],
@@ -153,8 +166,8 @@ pub fn verify_relation<F: JoltField, T: Transcript>(
         relation.degree(),
         transcript,
     )?;
-    relation.append_produced(accumulator, transcript, &r_sumcheck);
-    if final_claim != relation.output_claim(accumulator, &r_sumcheck) {
+    relation.append_produced(accumulator, transcript, &r_sumcheck)?;
+    if final_claim != relation.output_claim(accumulator, &r_sumcheck)? {
         return Err(ProofVerifyError::SumcheckVerificationError);
     }
     Ok(r_sumcheck)

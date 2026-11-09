@@ -32,7 +32,7 @@ impl LookupOperandsTrait for SymmetricClampOperands {
     fn rv_claim<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> F {
+    ) -> Result<F, ProofVerifyError> {
         DefaultLookupOperands::rv_claim(node, accumulator)
     }
 
@@ -51,7 +51,7 @@ impl LookupOperandsTrait for SymmetricClampOperands {
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
         DefaultLookupOperands::r_cycle(node, accumulator)
     }
 
@@ -85,7 +85,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Clamp {
         let verifier_sumcheck = provider.read_raf_verify::<F, T, ClampTable<XLEN>, XLEN>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
         let execution_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
@@ -100,7 +100,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Clamp {
         // Verify RaOneHotChecks
         let encoding = provider.encoding();
         let [ra_verifier, bool_verifier] =
-            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript)?;
         let ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))

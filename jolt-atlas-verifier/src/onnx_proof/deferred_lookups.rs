@@ -106,12 +106,13 @@ impl DeferredOneHot {
         }
     }
 
-    /// Draw this check's challenges and resolve its params (sequential part).
+    /// Draw this check's challenges and resolve its params (sequential part). `Err` if the
+    /// accumulator lacks a claim the check reads.
     pub fn params<F: JoltField, T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> RaOneHotParams<F> {
+    ) -> Result<RaOneHotParams<F>, ProofVerifyError> {
         use crate::onnx_proof::{
             op_lookups::OpLookupEncoding,
             ops::{
@@ -125,7 +126,7 @@ impl DeferredOneHot {
             enc: &impl RaOneHotEncoding,
             accumulator: &dyn OpeningAccumulator<F>,
             transcript: &mut T,
-        ) -> RaOneHotParams<F> {
+        ) -> Result<RaOneHotParams<F>, ProofVerifyError> {
             let ch = shout::ra_onehot_challenges::<F, T>(enc, transcript);
             shout::ra_onehot_params(enc, accumulator, ch)
         }
@@ -233,8 +234,8 @@ pub fn verify_all<F: JoltField, T: Transcript>(
                 &mut verifier.transcript,
                 id,
                 OpeningPoint::new(Vec::<F>::new()),
-            );
-            let flag = verifier.accumulator.get_virtual_polynomial_opening(id).1;
+            )?;
+            let flag = verifier.accumulator.get_virtual_polynomial_opening(id)?.1;
             let e = if flag == F::one() {
                 true
             } else if flag == F::zero() {
@@ -254,21 +255,21 @@ pub fn verify_all<F: JoltField, T: Transcript>(
             .iter()
             .zip(&exact)
             .map(|(b, &e)| {
-                if e {
+                Ok(if e {
                     Box::new(ValueParams::into_verifier(clamp_split::exact_value_params(
                         b,
                         &verifier.accumulator,
                         &mut verifier.transcript,
-                    ))) as Box<dyn DynRelationVerifier<F, T>>
+                    )?)) as Box<dyn DynRelationVerifier<F, T>>
                 } else {
                     Box::new(SplitParams::into_verifier(SplitParams::draw(
                         b,
                         &verifier.accumulator,
                         &mut verifier.transcript,
-                    ))) as Box<dyn DynRelationVerifier<F, T>>
-                }
+                    )?)) as Box<dyn DynRelationVerifier<F, T>>
+                })
             })
-            .collect();
+            .collect::<Result<_, ProofVerifyError>>()?;
         batched_verify(instances, verifier, ProofType::DeferredClampSplit)?;
 
         let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
@@ -287,7 +288,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
                     &mut verifier.transcript,
                 )
             };
-            instances.extend(clamp_split::chunk_check_verifiers::<F, T>(p));
+            instances.extend(clamp_split::chunk_check_verifiers::<F, T>(p?));
         }
         batched_verify(instances, verifier, ProofType::DeferredClampChunkChecks)?;
     }
@@ -311,15 +312,15 @@ pub fn verify_all<F: JoltField, T: Transcript>(
             .map(|b| {
                 let gammas: Vec<F> = verifier.transcript.challenge_scalar_powers(b.nodes.len());
                 let (input_claim, cycle) =
-                    b.remainder_inputs(&gammas, &verifier.accumulator, model);
-                Box::new(ValueParams::into_verifier(ValueParams {
+                    b.remainder_inputs(&gammas, &verifier.accumulator, model)?;
+                Ok(Box::new(ValueParams::into_verifier(ValueParams {
                     bucket_idx: b.idx,
                     value_id: clamp_split::remainder_value_id(b.idx),
                     cycle,
                     input_claim,
-                })) as Box<dyn DynRelationVerifier<F, T>>
+                })) as Box<dyn DynRelationVerifier<F, T>>)
             })
-            .collect();
+            .collect::<Result<_, ProofVerifyError>>()?;
         batched_verify(instances, verifier, ProofType::DeferredRemainderRC)?;
 
         let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
@@ -329,7 +330,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
                 b,
                 &verifier.accumulator,
                 &mut verifier.transcript,
-            );
+            )?;
             instances.extend(clamp_split::chunk_check_verifiers::<F, T>(p));
         }
         batched_verify(instances, verifier, ProofType::DeferredRemainderRaChecks)?;
@@ -355,7 +356,7 @@ pub fn verify_all<F: JoltField, T: Transcript>(
         let mut instances: Vec<Box<dyn DynRelationVerifier<F, T>>> =
             Vec::with_capacity(3 * mine.len());
         for j in &mine {
-            let p = j.params::<F, T>(&verifier.accumulator, &mut verifier.transcript);
+            let p = j.params::<F, T>(&verifier.accumulator, &mut verifier.transcript)?;
             instances.extend(shout::ra_onehot_verifiers_with_params::<F, T>(p));
         }
         batched_verify(instances, verifier, mine[0].proof_type())?;

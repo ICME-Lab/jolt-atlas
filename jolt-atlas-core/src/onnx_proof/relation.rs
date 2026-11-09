@@ -89,7 +89,9 @@ pub fn prove_tie<F: JoltField, T: Transcript, R: TieClaims<F>>(
 ) {
     assert_eq!(relation.rounds(), 0, "a tie has no rounds");
     note_dispatch(relation);
-    let setup = relation.setup(&*accumulator, transcript);
+    let setup = relation
+        .setup(&*accumulator, transcript)
+        .expect("the prover holds every claim it reads");
     let claims = relation.claims(trace, &setup, &*accumulator);
     append_produced(relation, &setup, accumulator, transcript, &[], &claims);
 }

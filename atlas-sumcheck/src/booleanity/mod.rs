@@ -1,6 +1,7 @@
 use crate::relation::Produces;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
+use atlas_algebra::utils::errors::ProofVerifyError;
 use common::CommittedPoly;
 use rayon::prelude::*;
 use std::fmt::Debug;
@@ -35,10 +36,12 @@ impl<F: JoltField> LinearClaim<F> {
         }
     }
 
-    pub fn evaluate(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        self.terms.iter().fold(self.constant, |acc, (id, coef)| {
-            acc + *coef * accumulator.get_virtual_polynomial_opening(*id).1
-        })
+    pub fn evaluate(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError> {
+        let mut value = self.constant;
+        for (id, coef) in &self.terms {
+            value += *coef * accumulator.get_virtual_polynomial_opening(*id)?.1;
+        }
+        Ok(value)
     }
 }
 

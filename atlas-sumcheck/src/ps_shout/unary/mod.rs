@@ -2,6 +2,7 @@ use crate::{
     opening_proof::{OpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
     ps_shout::{CycleWeight, RafVerifierData, ReadRafSumcheckParams, ReadRafSumcheckVerifier},
 };
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -50,7 +51,10 @@ where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
 {
-    fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F>;
+    fn read_raf_claims(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<ReadRafClaims<F>, ProofVerifyError>;
 }
 
 /// Verifier counterpart of [`ps_read_raf_prover_with_cycle`].
@@ -105,14 +109,14 @@ pub fn ps_read_raf_verifier<
     provider: &impl PrefixSuffixShoutProvider<F, LUT, LOG_K>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
-) -> UnaryReadRafSumcheckVerifier<F, LUT, LOG_K> {
+) -> Result<UnaryReadRafSumcheckVerifier<F, LUT, LOG_K>, ProofVerifyError> {
     let gamma = transcript.challenge_scalar();
-    let claims = provider.read_raf_claims(accumulator);
+    let claims = provider.read_raf_claims(accumulator)?;
     let raf = UnaryRafVD {
         operand_claim: claims.operand_claim,
         log_k: LOG_K,
     };
-    let r_node_output = provider.r_cycle(accumulator);
+    let r_node_output = provider.r_cycle(accumulator)?;
     let log_T = r_node_output.len();
     let (polynomial_type, sumcheck_id) = provider.ra_poly();
     let params = ReadRafSumcheckParams::from_parts(
@@ -125,7 +129,7 @@ pub fn ps_read_raf_verifier<
         claims.rv_claim,
         raf,
     );
-    params.into_verifier()
+    Ok(params.into_verifier())
 }
 
 pub type UnaryReadRafSumcheckVerifier<F, LUT, const LOG_K: usize> =
@@ -148,6 +152,7 @@ pub mod tests {
         },
     };
     use atlas_algebra::field::fp128::Fp128 as Fr;
+    use atlas_algebra::utils::errors::ProofVerifyError;
     use atlas_algebra::{
         poly::{
             multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
@@ -196,7 +201,8 @@ pub mod tests {
             &provider,
             &mut verifier_accumulator,
             &mut verifier_transcript,
-        );
+        )
+        .unwrap();
         let verifier_challenges = verify_relation(
             &proof,
             &verifier,
@@ -301,8 +307,8 @@ pub mod tests {
         fn r_cycle(
             &self,
             _accumulator: &dyn OpeningAccumulator<Fr>,
-        ) -> OpeningPoint<BIG_ENDIAN, Fr> {
-            OpeningPoint::new(self.r_cycle.clone())
+        ) -> Result<OpeningPoint<BIG_ENDIAN, Fr>, ProofVerifyError> {
+            Ok(OpeningPoint::new(self.r_cycle.clone()))
         }
     }
 
@@ -310,11 +316,14 @@ pub mod tests {
     where
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<XLEN> + Default,
     {
-        fn read_raf_claims(&self, _accumulator: &dyn OpeningAccumulator<Fr>) -> ReadRafClaims<Fr> {
-            ReadRafClaims {
+        fn read_raf_claims(
+            &self,
+            _accumulator: &dyn OpeningAccumulator<Fr>,
+        ) -> Result<ReadRafClaims<Fr>, ProofVerifyError> {
+            Ok(ReadRafClaims {
                 rv_claim: self.rv_claim,
                 operand_claim: self.operand_claim,
-            }
+            })
         }
     }
 }

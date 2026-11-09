@@ -4,6 +4,7 @@ use crate::onnx_proof::relation::{
     RelationOpening, RelationSetup, RelationVerifier,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -36,18 +37,19 @@ pub struct RecipMultParams<F: JoltField> {
 
 impl<F: JoltField> RecipMultParams<F> {
     /// Create new parameters for reciprocal multiplication operation.
+    /// `Err` if the accumulator lacks a claim it reads.
     pub fn new(
         node: ComputationNode,
         S: i32,
         F_N: [usize; 2],
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut impl Transcript,
-    ) -> Self {
+    ) -> Result<Self, ProofVerifyError> {
         let r = AccOpeningAccessor::new(accumulator, &node)
-            .get_reduced_opening()
+            .get_reduced_opening()?
             .0
             .r;
-        Self { r, S, node, F_N }
+        Ok(Self { r, S, node, F_N })
     }
 
     /// Returns `[F, N]`.

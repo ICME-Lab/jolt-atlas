@@ -69,7 +69,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Div {
             DivRelation::new(node.clone()),
             &verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
         verify_relation(
             proof,
             &exec_sumcheck,
@@ -186,13 +186,13 @@ impl<F: JoltField> SetupRelation<F> for DivRelation {
         &self,
         _accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> RelationSetup<F> {
-        RelationSetup {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
+        Ok(RelationSetup {
             incoming_point: transcript
                 .challenge_vector_optimized::<F>(self.rounds())
                 .into_opening(),
             challenges: Vec::new(),
-        }
+        })
     }
 }
 
@@ -268,11 +268,11 @@ impl<F: JoltField> SetupRelation<F> for DivQuotientRelation {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        RelationSetup {
-            incoming_point: accumulator.get_node_output_opening(self.node.idx).0.r,
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
+        Ok(RelationSetup {
+            incoming_point: accumulator.get_node_output_opening(self.node.idx)?.0.r,
             challenges: Vec::new(),
-        }
+        })
     }
 }
 
@@ -300,7 +300,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
     verify_relation(
         rangecheck_proof,
         &rangecheck_verifier,
@@ -315,7 +315,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
     let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node);
     let encoding = rc_operands.get_encoding(node);
     let [ra_sumcheck, bool_sumcheck] =
-        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+        shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript)?;
     verify_relation_batch(
         ra_one_hot_proof,
         vec![&*ra_sumcheck, &*bool_sumcheck],

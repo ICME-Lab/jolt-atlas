@@ -5,6 +5,7 @@
 //! verifies correct reads from lookup tables and combines multiple claims using
 //! gamma batching for efficiency.
 
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::Op;
 
 use crate::node_view::ComputationNode;
@@ -82,8 +83,11 @@ pub trait LookupOperandsTrait {
     const LOG_K: usize;
 
     /// The lookup's "read value" claim (`rv_claim`): what the lookup's output is asserted to equal.
-    fn rv_claim<F: JoltField>(node: &ComputationNode, accumulator: &dyn OpeningAccumulator<F>)
-        -> F;
+    /// `Err` if the accumulator lacks the claim.
+    fn rv_claim<F: JoltField>(
+        node: &ComputationNode,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<F, ProofVerifyError>;
 
     /// Transforms the operand claims, accounting for lookup-specific adjustments (e.g., offsetting).
     /// Identity by default; override only if the lookup needs a claim-space transform.
@@ -113,10 +117,11 @@ pub trait LookupOperandsTrait {
     /// witness naturally lives at the same point as the node's committed output. A helper whose
     /// witness is an internal, mid-pipeline value already evaluated at some other established
     /// point (e.g. softmax's saturating-clamp witness) overrides this to read that point instead.
+    /// `Err` if the accumulator lacks the claim.
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> OpeningPoint<BIG_ENDIAN, F>;
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError>;
 
     /// `OpeningId` whose accumulator entry's opening point equals [`Self::r_cycle`] — consumed
     /// by the one-hot `ra` checks (`OpLookupEncoding`'s `RaOneHotEncoding::r_cycle_source`) so
@@ -141,8 +146,8 @@ impl LookupOperandsTrait for DefaultLookupOperands {
     fn rv_claim<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> F {
-        accumulator.get_node_output_opening(node.idx).1
+    ) -> Result<F, ProofVerifyError> {
+        Ok(accumulator.get_node_output_opening(node.idx)?.1)
     }
 
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
@@ -164,8 +169,8 @@ impl LookupOperandsTrait for DefaultLookupOperands {
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
-        accumulator.get_node_output_opening(node.idx).0
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
+        Ok(accumulator.get_node_output_opening(node.idx)?.0)
     }
 
     fn r_cycle_source(node_idx: usize) -> OpeningId {
@@ -222,23 +227,26 @@ impl<H: LookupOperandsTrait> OpLookupProvider<H> {
     }
 
     /// Verifier counterpart of [`Self::append_witness_claim`].
+    /// `Err` if the accumulator lacks a claim it reads.
     pub fn append_witness_claim_verifier<F, T>(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) where
+    ) -> Result<(), ProofVerifyError>
+    where
         F: JoltField,
         T: Transcript,
     {
-        append_raf_claims_verifier(self, accumulator, transcript);
+        append_raf_claims_verifier(self, accumulator, transcript)
     }
 
     /// Verifier counterpart of [`Self::read_raf_prover_from_bits`].
+    /// `Err` if the accumulator lacks a claim it reads.
     pub fn read_raf_verifier_only<F, T, LUT, const LOG_K: usize>(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> UnaryReadRafSumcheckVerifier<F, LUT, LOG_K>
+    ) -> Result<UnaryReadRafSumcheckVerifier<F, LUT, LOG_K>, ProofVerifyError>
     where
         F: JoltField,
         T: Transcript,
@@ -248,17 +256,18 @@ impl<H: LookupOperandsTrait> OpLookupProvider<H> {
     }
 
     /// Combined verifier flow: appends RAF claims + creates sumcheck verifier.
+    /// `Err` if the accumulator lacks a claim it reads.
     pub fn read_raf_verify<F, T, LUT, const LOG_K: usize>(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> UnaryReadRafSumcheckVerifier<F, LUT, LOG_K>
+    ) -> Result<UnaryReadRafSumcheckVerifier<F, LUT, LOG_K>, ProofVerifyError>
     where
         F: JoltField,
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
     {
-        append_raf_claims_verifier(self, accumulator, transcript);
+        append_raf_claims_verifier(self, accumulator, transcript)?;
         ps_read_raf_verifier(self, accumulator, transcript)
     }
 }
@@ -268,7 +277,10 @@ where
     F: JoltField,
     H: LookupOperandsTrait,
 {
-    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn r_cycle(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
         H::r_cycle(&self.computation_node, accumulator)
     }
 
@@ -286,20 +298,23 @@ where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
     H: LookupOperandsTrait,
 {
-    fn read_raf_claims(&self, accumulator: &dyn OpeningAccumulator<F>) -> ReadRafClaims<F> {
-        let rv_claim = H::rv_claim(&self.computation_node, accumulator);
+    fn read_raf_claims(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<ReadRafClaims<F>, ProofVerifyError> {
+        let rv_claim = H::rv_claim(&self.computation_node, accumulator)?;
         let operand_id = H::witness_opening_id(&self.computation_node);
-        let (_, operand_claim) = accumulator.get_virtual_polynomial_opening(operand_id);
+        let (_, operand_claim) = accumulator.get_virtual_polynomial_opening(operand_id)?;
 
         let rv_claim = self.helper.transform_output_claim(rv_claim);
         let (_, operand_claim) = self
             .helper
             .transform_operand_claims(vec![F::zero(), operand_claim]);
 
-        ReadRafClaims {
+        Ok(ReadRafClaims {
             rv_claim,
             operand_claim,
-        }
+        })
     }
 }
 
@@ -393,16 +408,18 @@ impl InterleavedBitsMarker for ComputationNode {
 
 /// Verifier counterpart of [`append_raf_claims_prover`]: appends the same opening
 /// (claim loaded from the proof).
+/// `Err` if the accumulator lacks a claim it reads.
 fn append_raf_claims_verifier<F, H>(
     provider: &OpLookupProvider<H>,
     opening_accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut impl Transcript,
-) where
+) -> Result<(), ProofVerifyError>
+where
     F: JoltField,
     H: LookupOperandsTrait,
 {
     let r_cycle =
-        <OpLookupProvider<H> as RafShoutProvider<F>>::r_cycle(provider, opening_accumulator);
+        <OpLookupProvider<H> as RafShoutProvider<F>>::r_cycle(provider, opening_accumulator)?;
     let exec_id = H::witness_opening_id(&provider.computation_node);
-    opening_accumulator.append_virtual(transcript, exec_id, r_cycle);
+    opening_accumulator.append_virtual(transcript, exec_id, r_cycle)
 }

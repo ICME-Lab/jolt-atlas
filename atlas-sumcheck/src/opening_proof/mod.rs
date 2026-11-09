@@ -95,20 +95,31 @@ pub trait OpeningAccumulator<F: JoltField> {
         opening_id: OpeningId,
     ) -> Option<(OpeningPoint<BIG_ENDIAN, F>, F)>;
 
+    /// The opening of a virtual polynomial; `Err` if the accumulator holds no claim for it.
     fn get_virtual_polynomial_opening(
         &self,
         opening_id: OpeningId,
-    ) -> (OpeningPoint<BIG_ENDIAN, F>, F);
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>;
 
+    /// The opening of a committed polynomial; `Err` if the accumulator holds no claim for it.
     fn get_committed_polynomial_opening(
         &self,
         opening_id: OpeningId,
-    ) -> (OpeningPoint<BIG_ENDIAN, F>, F);
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>;
 
     /// Gets the reduced opening claim for the given node index.
     /// The reduced opening claim is either the unique existing opening claim,
     /// Or obtained from the evaluation reduction protocol if multiple openings need to be reduced.
-    fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F);
+    /// `Err` if the node's output has not been reduced.
+    fn get_node_output_opening(
+        &self,
+        node_idx: usize,
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>;
+}
+
+/// The error of a claim the accumulator does not hold.
+pub fn missing_claim(opening_id: OpeningId) -> ProofVerifyError {
+    ProofVerifyError::MissingClaim(format!("{opening_id:?}"))
 }
 
 /// Intermediate state between the batch opening reduction sumcheck and the joint PCS opening.
@@ -154,41 +165,37 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
     fn get_virtual_polynomial_opening(
         &self,
         opening_id: OpeningId,
-    ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        opening_id
-            .virtual_poly()
-            .expect("expected virtual polynomial");
-        let key = opening_id;
-        match self.openings.get(&key) {
-            Some((point, claim)) => (point.clone(), *claim),
-            None => {
-                panic!("No opening found for {opening_id:?}")
-            }
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
+        if opening_id.virtual_poly().is_none() {
+            return Err(missing_claim(opening_id));
         }
+        self.openings
+            .get(&opening_id)
+            .map(|(point, claim)| (point.clone(), *claim))
+            .ok_or_else(|| missing_claim(opening_id))
     }
 
     fn get_committed_polynomial_opening(
         &self,
         opening_id: OpeningId,
-    ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        opening_id
-            .committed_poly()
-            .expect("expected committed polynomial");
-        let (point, claim) = self
-            .openings
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
+        if opening_id.committed_poly().is_none() {
+            return Err(missing_claim(opening_id));
+        }
+        self.openings
             .get(&opening_id)
-            .unwrap_or_else(|| panic!("No opening found for {opening_id:?}"));
-        (point.clone(), *claim)
+            .map(|(point, claim)| (point.clone(), *claim))
+            .ok_or_else(|| missing_claim(opening_id))
     }
 
-    fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-        let reduced_instance = self
-            .reduced_evaluations
-            .get(&node_idx)
-            .unwrap_or_else(|| panic!("reduced evaluation for node {node_idx} not found"))
-            .clone();
-
-        (reduced_instance.r.into(), reduced_instance.claim)
+    fn get_node_output_opening(
+        &self,
+        node_idx: usize,
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
+        let reduced_instance = self.reduced_evaluations.get(&node_idx).ok_or_else(|| {
+            ProofVerifyError::MissingClaim(format!("reduced evaluation of node {node_idx}"))
+        })?;
+        Ok((reduced_instance.r.clone().into(), reduced_instance.claim))
     }
 }
 
@@ -244,61 +251,64 @@ where
     }
 
     /// Adds an opening of a dense polynomial the accumulator.
-    /// The given `polynomial` is opened at `opening_point`.
+    /// The given `polynomial` is opened at `opening_point`. `Err` if the proof carried no
+    /// claim for it.
     pub fn append_dense<T, U>(
         &mut self,
         transcript: &mut T,
         opening_id: OpeningId,
         opening_point: Vec<U>,
-    ) where
+    ) -> Result<(), ProofVerifyError>
+    where
         T: Transcript,
         U: Copy + Send + Sync + Into<F>,
     {
+        let polynomial = opening_id
+            .committed_poly()
+            .ok_or_else(|| missing_claim(opening_id))?;
         let point = OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone());
+        let &(_, claim) = self
+            .openings
+            .get(&opening_id)
+            .ok_or_else(|| missing_claim(opening_id))?;
         self.mark_appended(opening_id, &point.r);
-        let Some(&(_, claim)) = self.openings.get(&opening_id) else {
-            panic!("Tried to populate dense opening for non-existent key: {opening_id:?}");
-        };
         // The claim was pre-loaded from the proof.
         transcript.append_scalar(&claim);
         self.openings.insert(opening_id, (point, claim));
 
-        let polynomial = opening_id
-            .committed_poly()
-            .expect("expected committed polynomial");
         self.sumchecks.insert(
             opening_id,
             OpeningReductionGroup::new(vec![polynomial], opening_id.sumcheck, opening_point),
         );
+        Ok(())
     }
 
     /// Adds openings to the accumulator. The polynomials underlying the given
     /// `commitments` are opened at `opening_point`, yielding the claimed evaluations
     /// `claims`.
     /// Multiple sparse polynomials opened at a single point are NOT batched into
-    /// a single polynomial opened at the same point.
+    /// a single polynomial opened at the same point. `Err` if the proof carried no claim for
+    /// one of them.
     pub fn append_sparse<T, U>(
         &mut self,
         transcript: &mut T,
         polynomials: Vec<CommittedPoly>,
         sumcheck: SumcheckId,
         opening_point: Vec<U>,
-    ) where
+    ) -> Result<(), ProofVerifyError>
+    where
         T: Transcript,
         U: Copy + Send + Sync + Into<F>,
     {
+        let Some(&first) = polynomials.first() else {
+            return Ok(());
+        };
         let point_f: Vec<F> = opening_point.iter().map(|u| (*u).into()).collect();
         for label in polynomials.iter().copied() {
             let key = OpeningId::new(label, sumcheck);
+            let &(_, claim) = self.openings.get(&key).ok_or_else(|| missing_claim(key))?;
             self.mark_appended(key, &point_f);
-            let claim = if let Some((_, c)) = self.openings.get(&key) {
-                let c = *c;
-                transcript.append_scalar(&c);
-                c
-            } else {
-                panic!("Tried to populate sparse opening for non-existent key: {key:?}");
-            };
-
+            transcript.append_scalar(&claim);
             self.openings.insert(
                 key,
                 (
@@ -307,41 +317,40 @@ where
                 ),
             );
         }
-        let key = OpeningId::new(polynomials[0], sumcheck);
+        let key = OpeningId::new(first, sumcheck);
         self.sumchecks.insert(
             key,
             OpeningReductionGroup::new(polynomials, sumcheck, opening_point),
         );
+        Ok(())
     }
 
     /// Populates the opening point for an existing claim in the evaluation_openings map.
+    /// `Err` if the proof carried no claim for it.
     pub fn append_virtual<T: Transcript>(
         &mut self,
         transcript: &mut T,
         opening_id: OpeningId,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
-    ) {
+    ) -> Result<(), ProofVerifyError> {
         let virtual_poly = opening_id
             .virtual_poly()
-            .expect("expected virtual polynomial");
+            .ok_or_else(|| missing_claim(opening_id))?;
         if let VirtualPoly::NodeOutput(node_idx) = virtual_poly {
             debug_assert!(
                 !self.reduced_evaluations.contains_key(&node_idx),
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }
-
-        if self.openings.contains_key(&opening_id) {
-            self.mark_appended(opening_id, &opening_point.r);
-            // The claim was pre-loaded from the proof. Append to transcript.
-            let (_, claim) = &self.openings[&opening_id];
-            transcript.append_scalar(claim);
-            let claim = *claim;
-            self.openings
-                .insert(opening_id, (opening_point.clone(), claim));
-        } else {
-            panic!("Tried to populate opening point for non-existent key: {opening_id:?}");
-        }
+        let &(_, claim) = self
+            .openings
+            .get(&opening_id)
+            .ok_or_else(|| missing_claim(opening_id))?;
+        self.mark_appended(opening_id, &opening_point.r);
+        // The claim was pre-loaded from the proof. Append to transcript.
+        transcript.append_scalar(&claim);
+        self.openings.insert(opening_id, (opening_point, claim));
+        Ok(())
     }
 }
 
@@ -700,9 +709,7 @@ impl CanonicalDeserialize for OpeningId {
 
 #[cfg(test)]
 mod guardrail_tests {
-    use super::{
-        prover::ProverOpeningAccumulator, OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId,
-    };
+    use super::{prover::ProverOpeningAccumulator, OpeningId, OpeningPoint, SumcheckId};
     use crate::evaluation_reduction::ReducedInstance;
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_transcript::{Blake2bProver, ProvingTranscript};
@@ -735,12 +742,14 @@ mod guardrail_tests {
             &mut transcript,
             id,
             OpeningPoint::new(vec![Fr::from_u64(1u64), Fr::from_u64(2u64)]),
-        );
+        )
+        .unwrap();
         acc.append_virtual(
             &mut transcript,
             id,
             OpeningPoint::new(vec![Fr::from_u64(3u64), Fr::from_u64(4u64)]),
-        );
+        )
+        .unwrap();
     }
 
     /// Re-binding the same id at the same point is legal (two instances of
@@ -757,8 +766,9 @@ mod guardrail_tests {
 
         let mut transcript = Blake2bProver::new(b"guardrail_test");
         let point = OpeningPoint::new(vec![Fr::from_u64(1u64), Fr::from_u64(2u64)]);
-        acc.append_virtual(&mut transcript, id, point.clone());
-        acc.append_virtual(&mut transcript, id, point);
+        acc.append_virtual(&mut transcript, id, point.clone())
+            .unwrap();
+        acc.append_virtual(&mut transcript, id, point).unwrap();
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
@@ -56,18 +57,21 @@ impl SoftmaxRCProvider {
 }
 
 impl<F: JoltField> IdentityRCProvider<F> for SoftmaxRCProvider {
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
+    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError> {
         let accessor = AccOpeningAccessor::new(accumulator, &self.node);
-        accessor.get_advice(self.source_vp).1
+        Ok(accessor.get_advice(self.source_vp)?.1)
     }
 
     fn log_K(&self) -> usize {
         self.log_k
     }
 
-    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
+    fn r_cycle(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
         let accessor = AccOpeningAccessor::new(accumulator, &self.node);
-        accessor.get_advice(self.source_vp).0
+        Ok(accessor.get_advice(self.source_vp)?.0)
     }
 
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {

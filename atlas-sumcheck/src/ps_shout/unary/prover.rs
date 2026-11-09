@@ -75,12 +75,16 @@ pub fn ps_read_raf_prover<
     transcript: &mut T,
 ) -> UnaryReadRafSumcheckProver<F, LUT, LOG_K> {
     let gamma = transcript.challenge_scalar();
-    let claims = provider.read_raf_claims(accumulator);
+    let claims = provider
+        .read_raf_claims(accumulator)
+        .expect("the prover holds the lookup's claims");
     let raf = UnaryRafVD {
         operand_claim: claims.operand_claim,
         log_k: LOG_K,
     };
-    let r_node_output = provider.r_cycle(accumulator);
+    let r_node_output = provider
+        .r_cycle(accumulator)
+        .expect("the prover holds the lookup's cycle point");
     let log_T = r_node_output.len();
     let (polynomial_type, sumcheck_id) = provider.ra_poly();
     let params = ReadRafSumcheckParams::from_parts(

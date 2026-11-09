@@ -35,6 +35,7 @@ impl<'a, F: JoltField> IntoProverProvider<'a, F>
 
 // Shared provider read helpers are simple forwards into the underlying accessor,
 // so a small macro keeps the two provider impl blocks focused on append behavior.
+// The prover holds every claim it reads, so a missing one is a prover bug and panics.
 macro_rules! impl_accessor_methods {
     ($provider:ident) => {
         impl<'a, F: JoltField, T: Transcript> $provider<'a, F, T> {
@@ -43,12 +44,16 @@ macro_rules! impl_accessor_methods {
             /// Returns the post-reduction evaluation from the evaluation-reduction protocol,
             /// rather than the unreduced opening from the current sumcheck.
             pub fn get_reduced_opening(&self) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-                self.accessor.get_reduced_opening()
+                self.accessor
+                    .get_reduced_opening()
+                    .expect("the prover holds every claim it reads")
             }
 
             /// Read a node I/O opening from the wrapped accumulator.
             pub fn get_nodeio(&self, target: Target) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
-                self.accessor.get_nodeio(target)
+                self.accessor
+                    .get_nodeio(target)
+                    .expect("the prover holds every claim it reads")
             }
 
             /// Read an advice opening from the wrapped accumulator.
@@ -59,7 +64,9 @@ macro_rules! impl_accessor_methods {
             where
                 Poly: Into<PolynomialId>,
             {
-                self.accessor.get_advice(poly_ctor)
+                self.accessor
+                    .get_advice(poly_ctor)
+                    .expect("the prover holds every claim it reads")
             }
 
             /// Read an opening claim from an explicit opening identifier.
@@ -67,7 +74,9 @@ macro_rules! impl_accessor_methods {
             where
                 Poly: Into<OpeningId>,
             {
-                self.accessor.get_custom(opening_id)
+                self.accessor
+                    .get_custom(opening_id)
+                    .expect("the prover holds every claim it reads")
             }
         }
     };

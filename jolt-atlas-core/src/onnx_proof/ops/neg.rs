@@ -23,7 +23,10 @@ impl<F: JoltField, S: CopySign> TieClaims<F> for SignedCopyRelation<S> {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Vec<F> {
         // operand(r) = ±out(r): the reduced output claim, signed.
-        let output = accumulator.get_node_output_opening(self.node().idx).1;
+        let output = accumulator
+            .get_node_output_opening(self.node().idx)
+            .expect("the prover holds every claim it reads")
+            .1;
         vec![F::from_i64(S::SIGN) * output]
     }
 }

@@ -20,6 +20,7 @@ use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::op_lookups::LookupOperandsTrait, utils::opening_access::AccOpeningAccessor,
 };
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
@@ -40,12 +41,12 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
     fn rv_claim<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> F {
+    ) -> Result<F, ProofVerifyError> {
         let accessor = AccOpeningAccessor::new(accumulator, node);
-        let z_hi_claim = accessor.get_advice(VirtualPoly::SoftmaxZHi).1;
-        let z_lo_claim = accessor.get_advice(VirtualPoly::SoftmaxZLo).1;
+        let z_hi_claim = accessor.get_advice(VirtualPoly::SoftmaxZHi)?.1;
+        let z_lo_claim = accessor.get_advice(VirtualPoly::SoftmaxZLo)?.1;
         let base = generate_exp_lut_decomposed(1i32 << MODEL_SCALE).base;
-        z_hi_claim * F::from_u64(base as u64) + z_lo_claim
+        Ok(z_hi_claim * F::from_u64(base as u64) + z_lo_claim)
     }
 
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
@@ -65,13 +66,14 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
 
     /// Reads from `SoftmaxZHi`'s already-cached opening (`r2`, established by `cache_z_hi_lo`) —
     /// *not* this node's own output opening (the default every other helper uses).
+    /// `Err` if the accumulator lacks a claim it reads.
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
-        AccOpeningAccessor::new(accumulator, node)
-            .get_advice(VirtualPoly::SoftmaxZHi)
-            .0
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, node)
+            .get_advice(VirtualPoly::SoftmaxZHi)?
+            .0)
     }
 
     fn r_cycle_source(node_idx: usize) -> OpeningId {

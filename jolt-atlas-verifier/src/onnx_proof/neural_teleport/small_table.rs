@@ -11,6 +11,7 @@ use crate::onnx_proof::relation::{
     RelationId, RelationOpening, RelationSetup, SetupRelation,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -160,13 +161,13 @@ impl<F: JoltField, S: SmallTable> SetupRelation<F> for SmallTableRelation<S> {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> RelationSetup<F> {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
         let gamma = transcript.challenge_scalar();
         let (r_node_output, _) =
-            AccOpeningAccessor::new(accumulator, &self.node).get_reduced_opening();
-        RelationSetup {
+            AccOpeningAccessor::new(accumulator, &self.node).get_reduced_opening()?;
+        Ok(RelationSetup {
             incoming_point: r_node_output.r,
             challenges: vec![(RelationChallenge::Gamma, gamma)],
-        }
+        })
     }
 }

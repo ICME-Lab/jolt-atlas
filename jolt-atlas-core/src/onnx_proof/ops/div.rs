@@ -159,6 +159,11 @@ impl<F: JoltField> TieClaims<F> for DivQuotientRelation {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Vec<F> {
         // The committed quotient is the node's output: its claim is the reduced one.
-        vec![accumulator.get_node_output_opening(self.node().idx).1]
+        vec![
+            accumulator
+                .get_node_output_opening(self.node().idx)
+                .expect("the prover holds every claim it reads")
+                .1,
+        ]
     }
 }

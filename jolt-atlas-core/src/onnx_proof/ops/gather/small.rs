@@ -80,14 +80,16 @@ pub(crate) fn build_stage2_provers<F: JoltField>(
         num_lookups,
         &prover.accumulator,
         &mut prover.transcript,
-    );
+    )
+    .expect("the prover holds every claim it reads");
     let bool_params = ra_booleanity_params::<F>(
         computation_node,
         num_words,
         num_lookups,
         &prover.accumulator,
         &mut prover.transcript,
-    );
+    )
+    .expect("the prover holds every claim it reads");
 
     let hw = {
         let mut lookup_vec = vec![F::one(); indexes.len()];
@@ -122,7 +124,8 @@ pub(crate) fn build_stage3_prover<F: JoltField>(
         num_words,
         &prover.accumulator,
         &mut prover.transcript,
-    );
+    )
+    .expect("the prover holds every claim it reads");
 
     let ra_evals = compute_ra_evals(&hw_params.r_cycle, indexes, num_words);
 

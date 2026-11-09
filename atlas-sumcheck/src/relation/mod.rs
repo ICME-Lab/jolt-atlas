@@ -34,10 +34,11 @@ use atlas_algebra::{
         multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
         opening_point::{OpeningPoint, BIG_ENDIAN},
     },
+    utils::errors::ProofVerifyError,
 };
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
-use jolt_claims::{Expr, SymbolicSumcheck};
+use jolt_claims::{Expr, Source, SymbolicSumcheck};
 
 /// An opening a relation reads or produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -281,13 +282,13 @@ pub trait Relation<F: JoltField>:
         challenges: &[F],
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) {
+    ) -> Result<(), ProofVerifyError> {
         let points = self.opening_points(setup, challenges);
         if let Some(groups) = self.sparse_groups() {
             for (group, point) in group_points(groups, points) {
-                accumulator.append_sparse(transcript, group.polynomials, group.sumcheck, point);
+                accumulator.append_sparse(transcript, group.polynomials, group.sumcheck, point)?;
             }
-            return;
+            return Ok(());
         }
         for (id, point) in self.produced().into_iter().zip(points) {
             match id.polynomial {
@@ -295,10 +296,11 @@ pub trait Relation<F: JoltField>:
                     transcript,
                     id,
                     OpeningPoint::<BIG_ENDIAN, F>::new(point),
-                ),
-                PolynomialId::Committed(_) => accumulator.append_dense(transcript, id, point),
+                )?,
+                PolynomialId::Committed(_) => accumulator.append_dense(transcript, id, point)?,
             }
         }
+        Ok(())
     }
 
     /// A derived scalar of the output expression, given the sumcheck challenges in round order.
@@ -325,25 +327,56 @@ pub trait Relation<F: JoltField>:
 pub trait SetupRelation<F: JoltField>: Relation<F> {
     /// The incoming point and challenges, in protocol order: read from the accumulator, drawn
     /// from the transcript, or both. Prover and verifier run it at the same transcript state.
+    /// `Err` if the accumulator lacks a claim the setup reads.
     fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> RelationSetup<F>;
+    ) -> Result<RelationSetup<F>, ProofVerifyError>;
 }
 
-/// The value of an opening the relation reads, from the accumulator.
+/// The value of an opening the relation reads, from the accumulator; `Err` if it holds none.
 pub fn resolve<F: JoltField>(
     accumulator: &dyn OpeningAccumulator<F>,
     opening: &RelationOpening,
-) -> F {
-    match *opening {
+) -> Result<F, ProofVerifyError> {
+    Ok(match *opening {
         RelationOpening::Id(id) => match id.polynomial {
-            PolynomialId::Virtual(_) => accumulator.get_virtual_polynomial_opening(id).1,
-            PolynomialId::Committed(_) => accumulator.get_committed_polynomial_opening(id).1,
+            PolynomialId::Virtual(_) => accumulator.get_virtual_polynomial_opening(id)?.1,
+            PolynomialId::Committed(_) => accumulator.get_committed_polynomial_opening(id)?.1,
         },
-        RelationOpening::ReducedNodeOutput(node) => accumulator.get_node_output_opening(node).1,
+        RelationOpening::ReducedNodeOutput(node) => accumulator.get_node_output_opening(node)?.1,
+    })
+}
+
+/// `expr` over the accumulator's openings: every opening it names is resolved first (`Err` if
+/// one is missing), then the expression is evaluated.
+pub fn evaluate_expression<F: JoltField>(
+    expr: RelationExpr<F>,
+    accumulator: &dyn OpeningAccumulator<F>,
+    challenge: impl Fn(&RelationChallenge) -> F,
+    derive: impl Fn(&RelationDerived) -> F,
+) -> Result<F, ProofVerifyError> {
+    let mut resolved: Vec<(RelationOpening, F)> = Vec::new();
+    for term in &expr.terms {
+        for factor in &term.factors {
+            if let Source::Opening(opening) = factor {
+                if !resolved.iter().any(|(id, _)| id == opening) {
+                    resolved.push((*opening, resolve(accumulator, opening)?));
+                }
+            }
+        }
     }
+    Ok(expr.evaluate(
+        |opening| {
+            resolved
+                .iter()
+                .find(|(id, _)| id == opening)
+                .map_or(F::zero(), |(_, value)| *value)
+        },
+        challenge,
+        derive,
+    ))
 }
 
 /// The relation's input claim: its input expression over the accumulator's openings.
@@ -351,9 +384,10 @@ pub fn relation_input_claim<F: JoltField, R: Relation<F>>(
     relation: &R,
     setup: &RelationSetup<F>,
     accumulator: &dyn OpeningAccumulator<F>,
-) -> F {
-    relation.input_expression::<F>().evaluate(
-        |opening| resolve(accumulator, opening),
+) -> Result<F, ProofVerifyError> {
+    evaluate_expression(
+        relation.input_expression::<F>(),
+        accumulator,
         |challenge| setup.challenge(challenge),
         |derived| panic!("the input claim is taken before binding: no {derived:?} term"),
     )
@@ -363,18 +397,6 @@ pub fn relation_input_claim<F: JoltField, R: Relation<F>>(
 pub struct RelationParams<F: JoltField, R: Relation<F>> {
     relation: R,
     setup: RelationSetup<F>,
-}
-
-impl<F: JoltField, R: SetupRelation<F>> RelationParams<F, R> {
-    /// `relation`, set up against the accumulator and transcript.
-    pub fn new<T: Transcript>(
-        relation: R,
-        accumulator: &dyn OpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Self {
-        let setup = relation.setup(accumulator, transcript);
-        Self::at(relation, setup)
-    }
 }
 
 impl<F: JoltField, R: Relation<F>> RelationParams<F, R> {
@@ -411,9 +433,9 @@ impl<F: JoltField, R: SetupRelation<F>> RelationVerifier<F, R> {
         relation: R,
         accumulator: &VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> Self {
-        let (relation, setup) = RelationParams::new(relation, accumulator, transcript).into_parts();
-        Self { relation, setup }
+    ) -> Result<Self, ProofVerifyError> {
+        let setup = relation.setup(accumulator, transcript)?;
+        Ok(Self { relation, setup })
     }
 }
 

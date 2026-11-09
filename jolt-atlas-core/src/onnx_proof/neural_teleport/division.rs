@@ -33,7 +33,9 @@ pub fn cache_teleport_quotient_prove<F: JoltField, T: Transcript>(
     let (quotient, _remainder) = compute_division(operands[0], tau);
 
     let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-    let (r_node_output, _) = accessor.get_reduced_opening();
+    let (r_node_output, _) = accessor
+        .get_reduced_opening()
+        .expect("the prover holds every claim it reads");
     let q_eval = MultilinearPolynomial::from(quotient).evaluate(&r_node_output.r);
 
     accessor
@@ -52,9 +54,17 @@ pub fn cache_teleport_input_claim_prove<F: JoltField, T: Transcript>(
     tau: i32,
 ) {
     let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-    let (r_node_output, _) = accessor.get_reduced_opening();
-    let q_claim = accessor.get_advice(CommittedPoly::TeleportNodeQuotient).1;
-    let r_claim = accessor.get_advice(VirtualPoly::TeleportRemainder).1;
+    let (r_node_output, _) = accessor
+        .get_reduced_opening()
+        .expect("the prover holds every claim it reads");
+    let q_claim = accessor
+        .get_advice(CommittedPoly::TeleportNodeQuotient)
+        .expect("the prover holds every claim it reads")
+        .1;
+    let r_claim = accessor
+        .get_advice(VirtualPoly::TeleportRemainder)
+        .expect("the prover holds every claim it reads")
+        .1;
     let a_claim = F::from_i32(tau) * q_claim + r_claim;
 
     accessor

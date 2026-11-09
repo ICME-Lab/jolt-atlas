@@ -5,6 +5,7 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier,
     },
 };
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -36,7 +37,10 @@ pub(crate) const DEGREE_BOUND: usize = 2;
 /// so implementations only write them once regardless of which variant is used.
 pub trait RafShoutProvider<F: JoltField> {
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
-    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
+    fn r_cycle(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError>;
 }
 pub(crate) const NUM_PHASES: usize = 8;
 

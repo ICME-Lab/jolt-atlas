@@ -232,7 +232,8 @@ pub fn identity_rangecheck_prover<F: JoltField>(
     lookup_indices: Vec<LookupBits>,
     accumulator: &mut ProverOpeningAccumulator<F>,
 ) -> IdentityRCProver<F> {
-    let params = IdentityRCParams::new(provider, accumulator);
+    let params = IdentityRCParams::new(provider, accumulator)
+        .expect("the prover holds the range check's claims");
     IdentityRCProver::gen(params, lookup_indices)
 }
 

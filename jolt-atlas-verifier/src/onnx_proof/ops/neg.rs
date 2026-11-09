@@ -98,7 +98,7 @@ impl<F: JoltField, S: CopySign> SetupRelation<F> for SignedCopyRelation<S> {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
-    ) -> RelationSetup<F> {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
         reduced_output_setup(accumulator, &self.node)
     }
 }

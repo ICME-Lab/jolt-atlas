@@ -59,10 +59,10 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sin {
             )));
         }
         // Plumbing: cache the quotient's claim.
-        cache_teleport_quotient_verify(node, verifier);
+        cache_teleport_quotient_verify(node, verifier)?;
 
         // Plumbing: downscale.
-        cache_downscaled_verify(node, verifier);
+        cache_downscaled_verify(node, verifier)?;
 
         // Stage 1: batch every read-raf "value" sumcheck together — downscale, the Sin
         // table lookup, and the remainder range-check.
@@ -71,19 +71,20 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sin {
         let dsc_verifier = dsc_provider.read_raf_verify::<F, T, RightShiftTable<XLEN>, XLEN>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
 
         let exec_sumcheck = RelationVerifier::<F, SmallTableRelation<SinTable>>::new(
             SmallTableRelation::new(node.clone()),
             &verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
 
         let rc_provider = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node);
-        let rangecheck_verifier = rc_provider.read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-            &mut verifier.accumulator,
-            &mut verifier.transcript,
-        );
+        let rangecheck_verifier = rc_provider
+            .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
+                &mut verifier.accumulator,
+                &mut verifier.transcript,
+            )?;
 
         let sin_proof = verifier
             .proofs
@@ -111,17 +112,17 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Sin {
             &dsc_encoding,
             &verifier.accumulator,
             &mut verifier.transcript,
-        ));
+        )?);
         onehot_verifiers.extend(shout::ra_onehot_verifiers(
             &sin_encoding,
             &verifier.accumulator,
             &mut verifier.transcript,
-        ));
+        )?);
         onehot_verifiers.extend(shout::ra_onehot_verifiers(
             &rc_encoding,
             &verifier.accumulator,
             &mut verifier.transcript,
-        ));
+        )?);
         verify_relation_batch(
             onehot_proof,
             onehot_verifiers.iter().map(|v| &**v as _).collect(),

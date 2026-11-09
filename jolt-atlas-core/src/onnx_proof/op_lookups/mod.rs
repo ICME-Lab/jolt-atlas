@@ -36,7 +36,8 @@ fn append_raf_claims_prover<F, H>(
     H: LookupOperandsTrait,
 {
     let r_cycle =
-        <OpLookupProvider<H> as RafShoutProvider<F>>::r_cycle(provider, opening_accumulator);
+        <OpLookupProvider<H> as RafShoutProvider<F>>::r_cycle(provider, opening_accumulator)
+            .expect("the prover holds every claim it reads");
     let claim = witness.evaluate_mle(&r_cycle.r);
     let exec_id = H::witness_opening_id(&provider.computation_node);
     opening_accumulator.append_virtual(transcript, exec_id, r_cycle, claim);

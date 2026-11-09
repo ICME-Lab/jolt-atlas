@@ -15,7 +15,7 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::neural_teleport::small_table::{SmallTable, SmallTableRelation};
-use crate::onnx_proof::relation::{RelationParams, RelationVerifier};
+use crate::onnx_proof::relation::{RelationParams, RelationVerifier, SetupRelation};
 use crate::onnx_proof::{
     deferred_lookups::{DeferredBatch, DeferredOneHot},
     op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding, OpLookupProvider},
@@ -72,10 +72,10 @@ impl LookupOperandsTrait for ActivationClampOperands {
     fn rv_claim<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> F {
-        accumulator
-            .get_virtual_polynomial_opening(clamped_opening_id(node.idx))
-            .1
+    ) -> Result<F, ProofVerifyError> {
+        Ok(accumulator
+            .get_virtual_polynomial_opening(clamped_opening_id(node.idx))?
+            .1)
     }
 
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
@@ -93,7 +93,7 @@ impl LookupOperandsTrait for ActivationClampOperands {
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
         DefaultLookupOperands::r_cycle(node, accumulator)
     }
 
@@ -120,32 +120,31 @@ impl<Table: SmallActivationTable> SmallTable for Table {
 }
 
 /// The execution check's relation, set up: `γ` drawn, the reduced output point read. Both sides
-/// then append the clamped input's opening at that point before the sumcheck.
+/// then append the clamped input's opening at that point before the sumcheck. `Err` if the
+/// accumulator lacks the reduced output opening.
 pub fn small_table_params<F: JoltField, Table: SmallActivationTable>(
     node: &ComputationNode,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
-) -> RelationParams<F, SmallTableRelation<Table>> {
-    RelationParams::new(
-        SmallTableRelation::new(node.clone()),
-        accumulator,
-        transcript,
-    )
+) -> Result<RelationParams<F, SmallTableRelation<Table>>, ProofVerifyError> {
+    let relation = SmallTableRelation::new(node.clone());
+    let setup = relation.setup(accumulator, transcript)?;
+    Ok(RelationParams::at(relation, setup))
 }
 
 fn small_table_verifier<F: JoltField, Table: SmallActivationTable>(
     node: &ComputationNode,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut impl Transcript,
-) -> RelationVerifier<F, SmallTableRelation<Table>> {
+) -> Result<RelationVerifier<F, SmallTableRelation<Table>>, ProofVerifyError> {
     let (relation, setup) =
-        small_table_params::<F, Table>(node, accumulator, transcript).into_parts();
+        small_table_params::<F, Table>(node, accumulator, transcript)?.into_parts();
     accumulator.append_virtual(
         transcript,
         clamped_opening_id(node.idx),
         OpeningPoint::new(setup.incoming_point.clone()),
-    );
-    RelationVerifier::at(relation, setup)
+    )?;
+    Ok(RelationVerifier::at(relation, setup))
 }
 
 /// One-hot encoding of the small table's read addresses.
@@ -190,8 +189,11 @@ where
     Table: SmallActivationTable,
 {
     // Stage 1: Execution (verified in the deferred `ActivationExec` batch).
-    let exec_verifier =
-        small_table_verifier::<F, Table>(node, &mut verifier.accumulator, &mut verifier.transcript);
+    let exec_verifier = small_table_verifier::<F, Table>(
+        node,
+        &mut verifier.accumulator,
+        &mut verifier.transcript,
+    )?;
     verifier.defer(DeferredBatch::ActivationExec, Box::new(exec_verifier));
 
     // Stage 2: ActivationClamp (deferred `ActivationClamp` batch).
@@ -201,7 +203,7 @@ where
         .read_raf_verify::<F, T, ActivationClampTable<XLEN>, XLEN>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
     verifier.defer(
         DeferredBatch::ActivationClamp,
         Box::new(clamp_verifier_sumcheck),

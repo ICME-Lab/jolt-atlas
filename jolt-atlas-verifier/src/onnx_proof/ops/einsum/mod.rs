@@ -80,7 +80,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Einsum {
             .ok_or(ProofVerifyError::MissingProof(node.idx))?;
         let relation = ContractionRelation::for_node(&verifier.preprocessing.model, node.clone());
         let matmul =
-            RelationVerifier::new(relation, &verifier.accumulator, &mut verifier.transcript);
+            RelationVerifier::new(relation, &verifier.accumulator, &mut verifier.transcript)?;
         verify_relation(
             matmul_proof,
             &matmul,
@@ -235,11 +235,14 @@ impl<F: JoltField> SetupRelation<F> for ContractionRelation {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut Tr,
-    ) -> RelationSetup<F> {
-        RelationSetup {
-            incoming_point: accumulator.get_node_output_opening(self.shape.node.idx).0.r,
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
+        Ok(RelationSetup {
+            incoming_point: accumulator
+                .get_node_output_opening(self.shape.node.idx)?
+                .0
+                .r,
             challenges: Vec::new(),
-        }
+        })
     }
 }
 

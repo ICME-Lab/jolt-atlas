@@ -293,7 +293,10 @@ impl SoftmaxLastAxisProver {
     #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_exp_sum", skip_all)]
     pub(crate) fn cache_exp_sum<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
-        let r0 = accessor.get_reduced_opening().0;
+        let r0 = accessor
+            .get_reduced_opening()
+            .expect("the prover holds every claim it reads")
+            .0;
         let log_f = self.F_N[0].log_2();
         let r_lead = r0.split_at(log_f).0;
         let eval = self.witness.exp_sum_q.evaluate_mle(&r_lead.r);
@@ -304,7 +307,10 @@ impl SoftmaxLastAxisProver {
     /// Cache the R (remainder) polynomial to the accumulator.
     pub(crate) fn cache_R<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
-        let r0 = accessor.get_reduced_opening().0;
+        let r0 = accessor
+            .get_reduced_opening()
+            .expect("the prover holds every claim it reads")
+            .0;
         let eval = self.witness.r.evaluate_mle(&r0.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r0);
         provider.append_advice(VirtualPoly::SoftmaxRecipMultRemainder, eval);
@@ -332,7 +338,8 @@ impl SoftmaxLastAxisProver {
             self.F_N,
             &prover.accumulator,
             &mut prover.transcript,
-        );
+        )
+        .expect("the prover holds every claim it reads");
         let exp_q_for_sum = self.witness.exp_q.clone();
         let recip_mult_prover = RecipMultProver::initialize(
             std::mem::take(&mut self.witness.exp_q),
@@ -345,7 +352,8 @@ impl SoftmaxLastAxisProver {
             self.F_N,
             &prover.accumulator,
             &mut prover.transcript,
-        );
+        )
+        .expect("the prover holds every claim it reads");
         let exp_sum_prover = ExpSumProver::initialize(exp_q_for_sum, exp_sum_params);
 
         let provider = SoftmaxRCProvider::remainder(
@@ -366,7 +374,10 @@ impl SoftmaxLastAxisProver {
     #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_r_exp", skip_all)]
     pub(crate) fn cache_r_exp<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
-        let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
+        let r1 = accessor
+            .get_advice(VirtualPoly::SoftmaxExpQ)
+            .expect("the prover holds every claim it reads")
+            .0;
         let eval = self.witness.r_exp.evaluate_mle(&r1.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r1);
         provider.append_advice(VirtualPoly::SoftmaxExpRemainder, eval);
@@ -395,7 +406,10 @@ impl SoftmaxLastAxisProver {
         let log_f = f.log_2();
 
         let accessor = AccOpeningAccessor::new(&prover.accumulator, &self.computation_node);
-        let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
+        let r1 = accessor
+            .get_advice(VirtualPoly::SoftmaxExpQ)
+            .expect("the prover holds every claim it reads")
+            .0;
         let r1_k = r1.split_at(log_f).0;
 
         let max_k_eval = self.witness.max_k.evaluate_mle(&r1_k.r);
@@ -405,7 +419,8 @@ impl SoftmaxLastAxisProver {
             std::mem::take(&mut self.witness.argmax_k),
             max_k_eval,
             &prover.accumulator,
-        );
+        )
+        .expect("the prover holds every claim it reads");
         let max_indicator_prover = MaxIndicatorProver::initialize(
             std::mem::take(&mut self.witness.x),
             max_indicator_params,
@@ -415,7 +430,8 @@ impl SoftmaxLastAxisProver {
             self.computation_node.clone(),
             self.scale,
             &prover.accumulator,
-        );
+        )
+        .expect("the prover holds every claim it reads");
         let exp_mult_prover = MultProver::initialize(
             std::mem::take(&mut self.witness.exp_hi),
             std::mem::take(&mut self.witness.exp_lo),
@@ -451,7 +467,10 @@ impl SoftmaxLastAxisProver {
     #[tracing::instrument(name = "SoftmaxLastAxisProver::cache_z_hi_lo", skip_all)]
     pub(crate) fn cache_z_hi_lo<F: JoltField, T: Transcript>(&self, prover: &mut Prover<F, T>) {
         let accessor = AccOpeningAccessor::new(&mut prover.accumulator, &self.computation_node);
-        let r2 = accessor.get_advice(VirtualPoly::SoftmaxExpHi).0;
+        let r2 = accessor
+            .get_advice(VirtualPoly::SoftmaxExpHi)
+            .expect("the prover holds every claim it reads")
+            .0;
         let z_hi_eval = self.witness.z_hi.evaluate_mle(&r2.r);
         let z_lo_eval = self.witness.z_lo.evaluate_mle(&r2.r);
         let mut provider = accessor.into_provider(&mut prover.transcript, r2);

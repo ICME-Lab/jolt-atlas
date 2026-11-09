@@ -153,11 +153,11 @@ impl<F: JoltField, S: OpSpec + ProductShape + 'static> SetupRelation<F> for Prod
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        RelationSetup {
-            incoming_point: accumulator.get_node_output_opening(self.node.idx).0.r,
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
+        Ok(RelationSetup {
+            incoming_point: accumulator.get_node_output_opening(self.node.idx)?.0.r,
             challenges: Vec::new(),
-        }
+        })
     }
 }
 

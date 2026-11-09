@@ -314,7 +314,9 @@ mod tests {
                 CommittedPoly::NodeOutputRaD(0, i),
                 SumcheckId::RaVirtualization,
             );
-            let (opening_point, claim) = verifier_accumulator.get_committed_polynomial_opening(id);
+            let (opening_point, claim) = verifier_accumulator
+                .get_committed_polynomial_opening(id)
+                .unwrap();
             let H_index: Vec<Option<u16>> = H_indices[i]
                 .iter()
                 .map(|v| v.map(|new_v| new_v as u16))

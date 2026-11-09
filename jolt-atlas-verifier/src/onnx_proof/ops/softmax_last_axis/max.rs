@@ -4,6 +4,7 @@ use crate::onnx_proof::relation::{
     RelationId, RelationOpening, RelationSetup, RelationVerifier,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::eq_poly::EqPolynomial,
@@ -36,19 +37,20 @@ pub struct MaxIndicatorParams<F: JoltField> {
 
 impl<F: JoltField> MaxIndicatorParams<F> {
     /// Create a new instance of max indicator sumcheck parameters.
+    /// `Err` if the accumulator lacks a claim it reads.
     pub fn new(
         node: ComputationNode,
         F_N: [usize; 2],
         argmax_k: Vec<usize>,
         input_claim: F,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Self {
+    ) -> Result<Self, ProofVerifyError> {
         let [F, N] = F_N;
         let log_f = F.log_2();
 
         // Get r1 (the point from Stage 1 reciprocal multiplication output)
         let accessor = AccOpeningAccessor::new(accumulator, &node);
-        let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ).0;
+        let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ)?.0;
         let r1_k = r1.split_at(log_f).0.r;
 
         let mut e: Vec<u32> = vec![0; F * N];
@@ -56,14 +58,14 @@ impl<F: JoltField> MaxIndicatorParams<F> {
         for k in 0..F {
             e[k * N + argmax_k[k]] = 1;
         }
-        Self {
+        Ok(Self {
             r1_k: r1_k.to_vec(),
             input_claim,
             F_N,
             e,
             argmax_k,
             node,
-        }
+        })
     }
 
     /// Returns log2 of the leading-dimension product `F`.

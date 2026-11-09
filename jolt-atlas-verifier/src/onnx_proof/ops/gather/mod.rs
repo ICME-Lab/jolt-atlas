@@ -3,7 +3,7 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::ops::{OpLayout, VerifyOp};
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
-    RelationId, RelationOpening, RelationParams, RelationSetup, RelationVerifier, SetupRelation,
+    RelationId, RelationOpening, RelationSetup, RelationVerifier, SetupRelation,
 };
 use crate::{
     onnx_proof::{ProofId, ProofType, Verifier},
@@ -158,29 +158,29 @@ impl<F: JoltField> SetupRelation<F> for GatherRelation {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> RelationSetup<F> {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
         let gamma = transcript.challenge_scalar();
         let (r_node_output, _) =
-            AccOpeningAccessor::new(accumulator, &self.shape.node).get_reduced_opening();
-        RelationSetup {
+            AccOpeningAccessor::new(accumulator, &self.shape.node).get_reduced_opening()?;
+        Ok(RelationSetup {
             incoming_point: r_node_output.r,
             challenges: vec![(RelationChallenge::Gamma, gamma)],
-        }
+        })
     }
 }
 
 /// The execution verifier of a gather `node`: the relation set up, then the index opening
 /// appended at the output point's index coordinates.
+/// `Err` if the accumulator lacks a claim it reads.
 pub fn gather_verifier<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
-) -> RelationVerifier<F, GatherRelation> {
+) -> Result<RelationVerifier<F, GatherRelation>, ProofVerifyError> {
     let relation = GatherRelation::for_node(&verifier.preprocessing.model, node.clone());
-    let (relation, setup) =
-        RelationParams::new(relation, &verifier.accumulator, &mut verifier.transcript).into_parts();
+    let setup = relation.setup(&verifier.accumulator, &mut verifier.transcript)?;
     let r_index = setup.incoming_point[..relation.shape.lookup_vars].to_vec();
     AccOpeningAccessor::new(&mut verifier.accumulator, node)
         .into_provider(&mut verifier.transcript, OpeningPoint::new(r_index))
-        .append_nodeio(Target::Input(1));
-    RelationVerifier::at(relation, setup)
+        .append_nodeio(Target::Input(1))?;
+    Ok(RelationVerifier::at(relation, setup))
 }

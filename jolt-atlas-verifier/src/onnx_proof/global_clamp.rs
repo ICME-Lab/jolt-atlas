@@ -22,6 +22,7 @@ use crate::node_view::clamp_value_bound;
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{field::JoltField, utils::math::Math};
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
@@ -187,19 +188,20 @@ impl ClampBucket {
 
     /// The packed remainder range check's input claim `Σ_n γ_n·R_n(r_n)` and
     /// cycle weight, from the member nodes' remainder advice openings.
+    /// `Err` if the accumulator lacks a claim it reads.
     pub fn remainder_inputs<F: JoltField>(
         &self,
         gammas: &[F],
         accumulator: &dyn OpeningAccumulator<F>,
         model: &Model,
-    ) -> (F, CycleWeight<F>) {
+    ) -> Result<(F, CycleWeight<F>), ProofVerifyError> {
         assert_eq!(gammas.len(), self.nodes.len());
         let mut input_claim = F::zero();
         let mut segments = Vec::with_capacity(self.nodes.len());
         for (n, gamma) in self.nodes.iter().zip(gammas) {
             let node = &model.view(n.idx);
             let (r, claim) = AccOpeningAccessor::new(accumulator, node)
-                .get_advice(VirtualPoly::RescaleRemainder);
+                .get_advice(VirtualPoly::RescaleRemainder)?;
             assert_eq!(r.len(), n.log_t, "node {} remainder point length", n.idx);
             input_claim += *gamma * claim;
             segments.push(PackedSegment {
@@ -209,13 +211,13 @@ impl ClampBucket {
                 r: r.r,
             });
         }
-        (
+        Ok((
             input_claim,
             CycleWeight::Packed {
                 log_T: self.log_t,
                 segments,
             },
-        )
+        ))
     }
 }
 

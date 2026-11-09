@@ -161,7 +161,7 @@ impl<F: JoltField> SetupRelation<F> for ConcatRelation {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
-    ) -> RelationSetup<F> {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
         reduced_output_setup(accumulator, &self.shape.node)
     }
 }

@@ -4,6 +4,7 @@ use crate::onnx_proof::relation::{
     RelationOpening, RelationSetup, RelationVerifier,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{field::JoltField, poly::eq_poly::EqPolynomial, utils::math::Math};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
@@ -27,17 +28,18 @@ pub struct ExpSumParams<F: JoltField> {
 
 impl<F: JoltField> ExpSumParams<F> {
     /// Create new parameters for exponential sum operation.
+    /// `Err` if the accumulator lacks a claim it reads.
     pub fn new(
         node: ComputationNode,
         F_N: [usize; 2],
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut impl Transcript,
-    ) -> Self {
+    ) -> Result<Self, ProofVerifyError> {
         let log_f = F_N[0].log_2();
         let accessor = AccOpeningAccessor::new(accumulator, &node);
-        let r = accessor.get_reduced_opening().0;
+        let r = accessor.get_reduced_opening()?.0;
         let r0_k = r.split_at(log_f).0.r;
-        Self { r0_k, node, F_N }
+        Ok(Self { r0_k, node, F_N })
     }
 
     /// Returns log2 of the leading-dimension product `F`.

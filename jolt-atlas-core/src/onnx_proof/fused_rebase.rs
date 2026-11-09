@@ -113,7 +113,10 @@ fn cache_remainder_prove<F: JoltField, T: Transcript>(
     remainder: &Tensor<i32>,
 ) {
     let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-    let r0 = accessor.get_reduced_opening().0;
+    let r0 = accessor
+        .get_reduced_opening()
+        .expect("the prover holds every claim it reads")
+        .0;
     let eval = remainder.evaluate_mle(&r0.r);
     let mut provider = accessor.into_provider(&mut prover.transcript, r0);
     provider.append_advice(VirtualPoly::RescaleRemainder, eval);

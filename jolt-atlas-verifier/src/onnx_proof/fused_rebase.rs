@@ -100,18 +100,19 @@ fn op_name(op: &Op) -> &'static str {
 /// `rescaled` ([`VirtualPoly::ClampAcc`]) and the remainder advice
 /// ([`VirtualPoly::RescaleRemainder`]). For a non-fused (`bits == 0`) op it is
 /// just the node-output opening, leaving the legacy raw-product behavior intact.
+/// `Err` if the accumulator lacks a claim it reads.
 pub fn fused_input_claim<F: JoltField>(
     accumulator: &dyn OpeningAccumulator<F>,
     node: &ComputationNode,
-) -> F {
+) -> Result<F, ProofVerifyError> {
     let accessor = AccOpeningAccessor::new(accumulator, node);
     match rebase_bits(node) {
         Some(bits) if bits > 0 => {
-            let rescaled = accessor.get_advice(VirtualPoly::ClampAcc).1;
-            let remainder = accessor.get_advice(VirtualPoly::RescaleRemainder).1;
-            rescaled * F::from_u64(1u64 << bits) + remainder
+            let rescaled = accessor.get_advice(VirtualPoly::ClampAcc)?.1;
+            let remainder = accessor.get_advice(VirtualPoly::RescaleRemainder)?.1;
+            Ok(rescaled * F::from_u64(1u64 << bits) + remainder)
         }
-        _ => accessor.get_reduced_opening().1,
+        _ => Ok(accessor.get_reduced_opening()?.1),
     }
 }
 
@@ -146,9 +147,9 @@ pub fn verify_pre<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    cache_remainder_verify(node, &mut verifier.accumulator, &mut verifier.transcript);
+    cache_remainder_verify(node, &mut verifier.accumulator, &mut verifier.transcript)?;
     if is_scalar(node) {
-        verify_append_acc(node, &mut verifier.accumulator, &mut verifier.transcript);
+        verify_append_acc(node, &mut verifier.accumulator, &mut verifier.transcript)?;
     } else {
         verify_clamp_lookup(node, verifier)?;
     }
@@ -166,10 +167,10 @@ pub fn verify_post<F: JoltField, T: Transcript>(
 
     if is_scalar(node) {
         let accessor = AccOpeningAccessor::new(&verifier.accumulator, node);
-        let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder).1;
+        let r_claim = accessor.get_advice(VirtualPoly::RescaleRemainder)?.1;
         verify_scalar_remainder(r_claim, bits)?;
-        let rescaled_claim = accessor.get_advice(VirtualPoly::ClampAcc).1;
-        let output_claim = accessor.get_reduced_opening().1;
+        let rescaled_claim = accessor.get_advice(VirtualPoly::ClampAcc)?.1;
+        let output_claim = accessor.get_reduced_opening()?.1;
         verify_scalar_clamp(rescaled_claim, output_claim, op_name(&node.operator))?;
         return Ok(());
     }
@@ -183,15 +184,17 @@ pub fn verify_post<F: JoltField, T: Transcript>(
 
 /// Verifier counterpart of [`cache_remainder_prove`]: append the remainder
 /// opening point (its claim is loaded from the proof's opening claims).
+/// `Err` if the accumulator lacks a claim it reads.
 fn cache_remainder_verify<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
-) {
+) -> Result<(), ProofVerifyError> {
     let accessor = AccOpeningAccessor::new(&mut *accumulator, node);
-    let r0 = accessor.get_reduced_opening().0;
+    let r0 = accessor.get_reduced_opening()?.0;
     let mut provider = accessor.into_provider(transcript, r0);
-    provider.append_advice(VirtualPoly::RescaleRemainder);
+    provider.append_advice(VirtualPoly::RescaleRemainder)?;
+    Ok(())
 }
 
 /// Verify a scalar node's remainder directly: `R ∈ [0, 2^S)`.
@@ -232,20 +235,23 @@ impl RescaleRemainderRCProvider {
 }
 
 impl<F: JoltField> IdentityRCProvider<F> for RescaleRemainderRCProvider {
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        AccOpeningAccessor::new(accumulator, &self.node)
-            .get_advice(VirtualPoly::RescaleRemainder)
-            .1
+    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, &self.node)
+            .get_advice(VirtualPoly::RescaleRemainder)?
+            .1)
     }
 
     fn log_K(&self) -> usize {
         self.log_k
     }
 
-    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
-        AccOpeningAccessor::new(accumulator, &self.node)
-            .get_advice(VirtualPoly::RescaleRemainder)
-            .0
+    fn r_cycle(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, &self.node)
+            .get_advice(VirtualPoly::RescaleRemainder)?
+            .0)
     }
 
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {

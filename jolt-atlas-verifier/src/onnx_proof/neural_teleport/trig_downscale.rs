@@ -9,6 +9,7 @@ use crate::{
     onnx_proof::{op_lookups::LookupOperandsTrait, Verifier},
     utils::opening_access::AccOpeningAccessor,
 };
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
@@ -30,10 +31,10 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
     fn rv_claim<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> F {
-        AccOpeningAccessor::new(accumulator, node)
-            .get_advice(VirtualPoly::TrigDownscaled)
-            .1
+    ) -> Result<F, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, node)
+            .get_advice(VirtualPoly::TrigDownscaled)?
+            .1)
     }
 
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
@@ -54,10 +55,10 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> OpeningPoint<BIG_ENDIAN, F> {
-        AccOpeningAccessor::new(accumulator, node)
-            .get_reduced_opening()
-            .0
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, node)
+            .get_reduced_opening()?
+            .0)
     }
 
     fn r_cycle_source(node_idx: usize) -> OpeningId {
@@ -69,12 +70,14 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
 }
 
 /// Verifier counterpart of [`cache_downscaled_prove`].
+/// `Err` if the accumulator lacks a claim it reads.
 pub fn cache_downscaled_verify<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     verifier: &mut Verifier<'_, F, T>,
-) {
+) -> Result<(), ProofVerifyError> {
     let accessor = AccOpeningAccessor::new(&mut verifier.accumulator, node);
-    let (r_node_output, _) = accessor.get_reduced_opening();
+    let (r_node_output, _) = accessor.get_reduced_opening()?;
     let mut provider = accessor.into_provider(&mut verifier.transcript, r_node_output);
-    provider.append_advice(VirtualPoly::TrigDownscaled);
+    provider.append_advice(VirtualPoly::TrigDownscaled)?;
+    Ok(())
 }

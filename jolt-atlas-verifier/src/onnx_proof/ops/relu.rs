@@ -36,7 +36,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ReLU {
         let verifier_sumcheck = provider.read_raf_verify::<F, T, ReluTable<XLEN>, XLEN>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
         let execution_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::Execution))
@@ -51,7 +51,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ReLU {
         // Verify RaOneHotChecks
         let encoding = provider.encoding();
         let [ra_verifier, bool_verifier] =
-            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript);
+            shout::ra_onehot_verifiers(&encoding, &verifier.accumulator, &mut verifier.transcript)?;
         let ra_one_hot_proof = verifier
             .proofs
             .get(&ProofId(node.idx, ProofType::RaOneHotChecks))

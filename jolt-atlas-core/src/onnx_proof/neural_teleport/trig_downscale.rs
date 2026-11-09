@@ -29,7 +29,9 @@ pub fn cache_downscaled_prove<F: JoltField, T: Transcript>(
     remainder: &Tensor<i32>,
 ) -> Tensor<i32> {
     let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
-    let (r_node_output, _) = accessor.get_reduced_opening();
+    let (r_node_output, _) = accessor
+        .get_reduced_opening()
+        .expect("the prover holds every claim it reads");
     let downscaled = remainder.map(|v| v >> TRIG_DOWNSCALE_BITS);
     let eval = downscaled.evaluate_mle(&r_node_output.r);
     let mut provider = accessor.into_provider(&mut prover.transcript, r_node_output);

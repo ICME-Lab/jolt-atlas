@@ -77,15 +77,15 @@ pub trait EngineRelation<F: JoltField>: AtlasRelation + SetupRelation<F> {
 }
 
 /// The setup of a relation whose incoming point is `node`'s reduced output point, with no
-/// challenges.
+/// challenges. `Err` if the accumulator lacks the node's reduced opening.
 pub fn reduced_output_setup<F: JoltField>(
     accumulator: &dyn OpeningAccumulator<F>,
     node: &ComputationNode,
-) -> RelationSetup<F> {
-    RelationSetup {
-        incoming_point: accumulator.get_node_output_opening(node.idx).0.r,
+) -> Result<RelationSetup<F>, ProofVerifyError> {
+    Ok(RelationSetup {
+        incoming_point: accumulator.get_node_output_opening(node.idx)?.0.r,
         challenges: Vec::new(),
-    }
+    })
 }
 
 /// The [`SymbolicSumcheck`] items every atlas relation shares: the atlas id types and no
@@ -115,7 +115,7 @@ pub fn verify_tie<F: JoltField, T: Transcript, R: AtlasRelation + SetupRelation<
     transcript: &mut T,
 ) -> Result<(), ProofVerifyError> {
     assert_eq!(relation.rounds(), 0, "a tie has no rounds");
-    let setup = relation.setup(&*accumulator, transcript);
+    let setup = relation.setup(&*accumulator, transcript)?;
     let points = relation.opening_points(&setup, &[]);
     for (id, point) in relation.produced().into_iter().zip(points) {
         match id.polynomial {
@@ -123,16 +123,17 @@ pub fn verify_tie<F: JoltField, T: Transcript, R: AtlasRelation + SetupRelation<
                 transcript,
                 id,
                 OpeningPoint::<BIG_ENDIAN, F>::new(point),
-            ),
-            PolynomialId::Committed(_) => accumulator.append_dense(transcript, id, point),
+            )?,
+            PolynomialId::Committed(_) => accumulator.append_dense(transcript, id, point)?,
         }
     }
-    let input = relation_input_claim(relation, &setup, &*accumulator);
-    let output = relation.output_expression::<F>().evaluate(
-        |opening| resolve(&*accumulator, opening),
+    let input = relation_input_claim(relation, &setup, &*accumulator)?;
+    let output = evaluate_expression(
+        relation.output_expression::<F>(),
+        &*accumulator,
         |challenge| setup.challenge(challenge),
         |derived| relation.derive(derived, &setup, &[]),
-    );
+    )?;
     if input != output {
         return Err(ProofVerifyError::InvalidOpeningProof(format!(
             "{:?} tie on node {} does not hold",

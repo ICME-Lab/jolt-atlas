@@ -6,6 +6,7 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier,
     },
 };
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -60,19 +61,19 @@ where
     pub fn new(
         provider: &impl IdentityRCProvider<F>,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Self {
-        let r_node_output = provider.r_cycle(accumulator);
+    ) -> Result<Self, ProofVerifyError> {
+        let r_node_output = provider.r_cycle(accumulator)?;
         let log_T = r_node_output.len();
         let (polynomial_type, sumcheck_id) = provider.ra_poly();
-        Self {
+        Ok(Self {
             log_T,
             cycle: CycleWeight::Eq(r_node_output),
             polynomial_type,
             sumcheck_id,
             log_K: provider.log_K(),
             phases: provider.phases(),
-            input_claim: provider.input_claim(accumulator),
-        }
+            input_claim: provider.input_claim(accumulator)?,
+        })
     }
 
     /// Params for an explicit [`CycleWeight`] and input claim (packed
@@ -219,11 +220,16 @@ where
     F: JoltField,
 {
     /// Returns the opening claim for the polynomial being range-checked.
-    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F;
+    /// `Err` if the accumulator lacks a claim it reads.
+    fn input_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError>;
     /// Returns the virtual polynomial and sumcheck id for the one-hot encoded read-address polynomial.
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
     /// Returns challenge used in the prefix-suffix sum-check protocol
-    fn r_cycle(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F>;
+    /// `Err` if the accumulator lacks a claim it reads.
+    fn r_cycle(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError>;
     /// Returns log₂ of the range upper bound K.
     fn log_K(&self) -> usize;
     /// Number of phases for the range-check sumcheck.
@@ -251,8 +257,8 @@ pub fn identity_rangecheck_verifier_with_cycle<F: JoltField>(
 pub fn identity_rangecheck_verifier<F: JoltField>(
     provider: &impl IdentityRCProvider<F>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
-) -> IdentityRCVerifier<F> {
-    IdentityRCParams::new(provider, accumulator).into_verifier()
+) -> Result<IdentityRCVerifier<F>, ProofVerifyError> {
+    Ok(IdentityRCParams::new(provider, accumulator)?.into_verifier())
 }
 
 pub mod prover;

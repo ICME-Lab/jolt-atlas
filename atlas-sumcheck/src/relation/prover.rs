@@ -114,6 +114,7 @@ impl<F: JoltField, T: Transcript, W: RelationWitness<F>> DynRelationWitness<F, T
 
     fn input_claim(&self, accumulator: &ProverOpeningAccumulator<F>) -> F {
         relation_input_claim(self.relation(), self.setup(), accumulator)
+            .expect("the prover holds every claim its relation reads")
     }
 
     fn append_produced(
@@ -267,4 +268,19 @@ fn run_engine<F: JoltField, T: Transcript>(
         .map(F::challenge_from_field)
         .collect();
     (proof, r_sumcheck)
+}
+
+impl<F: JoltField, R: SetupRelation<F>> RelationParams<F, R> {
+    /// `relation`, set up against the prover's accumulator and transcript. The prover holds
+    /// every claim its setup reads: a missing one is a prover bug and panics.
+    pub fn new<T: Transcript>(
+        relation: R,
+        accumulator: &dyn OpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> Self {
+        let setup = relation
+            .setup(accumulator, transcript)
+            .expect("the prover holds every claim its setup reads");
+        Self::at(relation, setup)
+    }
 }

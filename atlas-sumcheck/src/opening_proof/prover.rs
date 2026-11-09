@@ -69,6 +69,31 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
     fn get_virtual_polynomial_opening(
         &self,
         opening_id: OpeningId,
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
+        Ok(Self::get_virtual_polynomial_opening(self, opening_id))
+    }
+
+    fn get_committed_polynomial_opening(
+        &self,
+        opening_id: OpeningId,
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
+        Ok(Self::get_committed_polynomial_opening(self, opening_id))
+    }
+
+    fn get_node_output_opening(
+        &self,
+        node_idx: usize,
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
+        Ok(Self::get_node_output_opening(self, node_idx))
+    }
+}
+
+impl<F: JoltField> ProverOpeningAccumulator<F> {
+    /// The opening of a virtual polynomial. The prover holds every claim it reads: a missing
+    /// one is a prover bug and panics.
+    pub fn get_virtual_polynomial_opening(
+        &self,
+        opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
         opening_id
             .virtual_poly()
@@ -90,7 +115,8 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
         }
     }
 
-    fn get_committed_polynomial_opening(
+    /// The opening of a committed polynomial; panics if missing (a prover bug).
+    pub fn get_committed_polynomial_opening(
         &self,
         opening_id: OpeningId,
     ) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
@@ -104,7 +130,8 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
         (point.clone(), *claim)
     }
 
-    fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+    /// A node output's reduced opening; panics if missing (a prover bug).
+    pub fn get_node_output_opening(&self, node_idx: usize) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
         let reduced_instance = self
             .reduced_evaluations
             .get(&node_idx)

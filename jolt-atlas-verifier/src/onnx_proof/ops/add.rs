@@ -163,11 +163,11 @@ impl<F: JoltField, S: AccumulationShape> SetupRelation<F> for AccumulationRelati
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
-    ) -> RelationSetup<F> {
-        RelationSetup {
-            incoming_point: accumulator.get_node_output_opening(self.node.idx).0.r,
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
+        Ok(RelationSetup {
+            incoming_point: accumulator.get_node_output_opening(self.node.idx)?.0.r,
             challenges: Vec::new(),
-        }
+        })
     }
 }
 
@@ -189,13 +189,13 @@ pub fn verify_accumulation<S: AccumulationShape, F: JoltField, T: Transcript>(
 ) -> Result<(), ProofVerifyError> {
     if is_scalar(node) {
         let (opening_point, output_claim) =
-            AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening();
+            AccOpeningAccessor::new(&verifier.accumulator, node).get_reduced_opening()?;
         let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, node)
             .into_provider(&mut verifier.transcript, opening_point);
-        provider.append_nodeio(Target::Input(0));
-        provider.append_nodeio(Target::Input(1));
-        let left_claim = provider.get_nodeio(Target::Input(0)).1;
-        let right_claim = provider.get_nodeio(Target::Input(1)).1;
+        provider.append_nodeio(Target::Input(0))?;
+        provider.append_nodeio(Target::Input(1))?;
+        let left_claim = provider.get_nodeio(Target::Input(0))?.1;
+        let right_claim = provider.get_nodeio(Target::Input(1))?.1;
         drop(provider);
         let acc = left_claim + F::from_i64(S::SIGN) * right_claim;
         return verify_scalar_clamp(acc, output_claim, &node.operator.to_string());

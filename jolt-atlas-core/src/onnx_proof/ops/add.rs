@@ -35,8 +35,9 @@ pub(crate) fn prove_accumulation<S: AccumulationShape, F: JoltField, T: Transcri
     prover: &mut Prover<F, T>,
 ) -> Vec<(ProofId, SumcheckInstanceProof<F>)> {
     if is_scalar(node) {
-        let (opening_point, _claim) =
-            AccOpeningAccessor::new(&prover.accumulator, node).get_reduced_opening();
+        let (opening_point, _claim) = AccOpeningAccessor::new(&prover.accumulator, node)
+            .get_reduced_opening()
+            .expect("the prover holds every claim it reads");
         let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
         let [left, right] = operands[..] else {
             panic!("Expected two operands for {}", node.operator)

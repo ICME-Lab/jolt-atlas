@@ -70,8 +70,14 @@ impl<F: JoltField, S: SmallTable> TrigTableProver<F, S> {
         #[cfg(test)]
         {
             let accessor = AccOpeningAccessor::new(_accumulator, relation.node());
-            let downscaled_claim = accessor.get_advice(VirtualPoly::TrigDownscaled).1;
-            let rv_claim = accessor.get_reduced_opening().1;
+            let downscaled_claim = accessor
+                .get_advice(VirtualPoly::TrigDownscaled)
+                .expect("the prover holds every claim it reads")
+                .1;
+            let rv_claim = accessor
+                .get_reduced_opening()
+                .expect("the prover holds every claim it reads")
+                .1;
             let claim = (0..input_onehot.len())
                 .map(|i| {
                     let a = input_onehot.get_bound_coeff(i);

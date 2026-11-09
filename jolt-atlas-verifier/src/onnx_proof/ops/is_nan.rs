@@ -78,7 +78,7 @@ impl<F: JoltField> SetupRelation<F> for ZeroOutputRelation {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
-    ) -> RelationSetup<F> {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
         reduced_output_setup(accumulator, &self.node)
     }
 }

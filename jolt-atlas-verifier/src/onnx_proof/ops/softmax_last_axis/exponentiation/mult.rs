@@ -5,6 +5,7 @@ use crate::onnx_proof::relation::{
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
 use atlas_algebra::field::JoltField;
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use common::VirtualPoly;
 use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
@@ -28,12 +29,17 @@ pub struct MultParams<F: JoltField> {
 
 impl<F: JoltField> MultParams<F> {
     /// Create new parameters for softmax exp multiplication operation.
-    pub fn new(node: ComputationNode, S: i32, accumulator: &dyn OpeningAccumulator<F>) -> Self {
+    /// `Err` if the accumulator lacks a claim it reads.
+    pub fn new(
+        node: ComputationNode,
+        S: i32,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<Self, ProofVerifyError> {
         let r = AccOpeningAccessor::new(accumulator, &node)
-            .get_advice(VirtualPoly::SoftmaxExpQ)
+            .get_advice(VirtualPoly::SoftmaxExpQ)?
             .0
             .r;
-        Self { r, S, node }
+        Ok(Self { r, S, node })
     }
 }
 

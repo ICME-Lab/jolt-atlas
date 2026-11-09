@@ -48,7 +48,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for ScalarConstDiv {
             ConstantDivisionRelation::new(node.clone()),
             &verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
         verify_relation(
             proof,
             &exec_sumcheck,
@@ -141,7 +141,7 @@ impl<F: JoltField> SetupRelation<F> for ConstantDivisionRelation {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
-    ) -> RelationSetup<F> {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
         reduced_output_setup(accumulator, &self.node)
     }
 }

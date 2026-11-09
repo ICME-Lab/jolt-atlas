@@ -88,7 +88,7 @@ impl<F: JoltField, T: Transcript> VerifyOp<F, T> for Rsqrt {
             RsqrtRelation::new(node.clone()),
             &verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
         verify_relation(
             proof,
             &verifier_sumcheck,
@@ -223,15 +223,15 @@ impl<F: JoltField> SetupRelation<F> for RsqrtRelation {
         &self,
         _accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> RelationSetup<F> {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
         let incoming_point = transcript
             .challenge_vector_optimized::<F>(self.rounds())
             .into_opening();
         let gamma = transcript.challenge_scalar();
-        RelationSetup {
+        Ok(RelationSetup {
             incoming_point,
             challenges: vec![(RelationChallenge::Gamma, gamma)],
-        }
+        })
     }
 }
 
@@ -252,7 +252,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
     verifier.defer(DeferredBatch::RangeCheck, Box::new(div_rc_verifier));
 
     let sqrt_rangecheck_provider = RangeCheckProvider::<RsRangeCheckOperands>::new(node);
@@ -260,7 +260,7 @@ fn verify_range_and_onehot<F: JoltField, T: Transcript>(
         .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
             &mut verifier.accumulator,
             &mut verifier.transcript,
-        );
+        )?;
     verifier.defer(DeferredBatch::RangeCheck, Box::new(sqrt_rc_verifier));
 
     let div_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node);

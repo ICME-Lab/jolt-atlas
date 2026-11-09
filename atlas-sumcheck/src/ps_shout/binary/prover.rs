@@ -108,12 +108,16 @@ pub fn ps_read_raf_prover<
     transcript: &mut T,
 ) -> BinaryReadRafSumcheckProver<F, LUT> {
     let gamma = transcript.challenge_scalar();
-    let claims = provider.read_raf_claims(accumulator);
+    let claims = provider
+        .read_raf_claims(accumulator)
+        .expect("the prover holds the lookup's claims");
     let raf = BinaryRafVD {
         left_operand_claim: claims.left_operand_claim,
         right_operand_claim: claims.right_operand_claim,
     };
-    let r_node_output = provider.r_cycle(accumulator);
+    let r_node_output = provider
+        .r_cycle(accumulator)
+        .expect("the prover holds the lookup's cycle point");
     let log_T = r_node_output.len();
     let (polynomial_type, sumcheck_id) = provider.ra_poly();
     let params = ReadRafSumcheckParams::from_parts(

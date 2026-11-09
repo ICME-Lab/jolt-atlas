@@ -476,7 +476,9 @@ mod tests {
                 CommittedPoly::DivNodeQuotient(i),
                 SumcheckId::NodeExecution(0),
             );
-            verifier_opening_accumulator.append_dense(&mut verifier_tr, id, data.point.clone());
+            verifier_opening_accumulator
+                .append_dense(&mut verifier_tr, id, data.point.clone())
+                .unwrap();
         });
 
         // Prepare - populate sumcheck claims
@@ -631,16 +633,20 @@ mod tests {
                 CommittedPoly::DivNodeQuotient(i),
                 SumcheckId::NodeExecution(0),
             );
-            verifier_opening_accumulator.append_dense(&mut verifier_tr, id, data.point.clone());
+            verifier_opening_accumulator
+                .append_dense(&mut verifier_tr, id, data.point.clone())
+                .unwrap();
         });
 
         oh_polys.iter().enumerate().for_each(|(i, data)| {
-            verifier_opening_accumulator.append_sparse(
-                &mut verifier_tr,
-                vec![CommittedPoly::NodeOutputRaD(i, 0)],
-                SumcheckId::NodeExecution(0),
-                data.point.clone(),
-            );
+            verifier_opening_accumulator
+                .append_sparse(
+                    &mut verifier_tr,
+                    vec![CommittedPoly::NodeOutputRaD(i, 0)],
+                    SumcheckId::NodeExecution(0),
+                    data.point.clone(),
+                )
+                .unwrap();
         });
 
         // Prepare - populate sumcheck claims
@@ -794,16 +800,20 @@ mod tests {
                 CommittedPoly::DivNodeQuotient(i),
                 SumcheckId::NodeExecution(0),
             );
-            verifier_opening_accumulator.append_dense(&mut verifier_tr, id, data.point.clone());
+            verifier_opening_accumulator
+                .append_dense(&mut verifier_tr, id, data.point.clone())
+                .unwrap();
         });
 
         oh_polys.iter().enumerate().for_each(|(i, data)| {
-            verifier_opening_accumulator.append_sparse(
-                &mut verifier_tr,
-                vec![CommittedPoly::NodeOutputRaD(i, 0)],
-                SumcheckId::NodeExecution(0),
-                data.point.clone(),
-            );
+            verifier_opening_accumulator
+                .append_sparse(
+                    &mut verifier_tr,
+                    vec![CommittedPoly::NodeOutputRaD(i, 0)],
+                    SumcheckId::NodeExecution(0),
+                    data.point.clone(),
+                )
+                .unwrap();
         });
 
         // Prepare - populate sumcheck claims

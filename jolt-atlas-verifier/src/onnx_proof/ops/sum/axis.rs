@@ -1,5 +1,6 @@
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
+use atlas_algebra::utils::errors::ProofVerifyError;
 
 use atlas_trace::{op::Sum, Model};
 
@@ -115,7 +116,7 @@ impl<F: JoltField> SetupRelation<F> for SumAxisRelation {
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
         _transcript: &mut T,
-    ) -> RelationSetup<F> {
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
         reduced_output_setup(accumulator, &self.shape.node)
     }
 }

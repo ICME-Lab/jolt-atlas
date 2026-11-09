@@ -227,7 +227,8 @@ where
     // Stage 1: Execution -- output = SmallTable[clamped]. Built here (its
     // challenge is drawn now, its `clamped` advice claim appended now), proven
     // after the node loop in the `ActivationExec` batch.
-    let params = small_table_params::<F, Table>(node, &prover.accumulator, &mut prover.transcript);
+    let params = small_table_params::<F, Table>(node, &prover.accumulator, &mut prover.transcript)
+        .expect("the prover holds every claim it reads");
     let exec_sumcheck = SmallTableProver::<F, Table>::initialize(
         params,
         &prover.trace,

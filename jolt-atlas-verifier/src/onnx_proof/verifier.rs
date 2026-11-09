@@ -147,9 +147,9 @@ pub fn verify_output_claim<F: JoltField, T: Transcript>(
 
     // append_virtual now handles both transcript append and opening point update.
     // The claim was loaded from opening_claims in populate_accumulator.
-    provider.append_custom(output_opening_id);
+    provider.append_custom(output_opening_id)?;
     // Read the prover's claimed value and compare against IO.
-    let output_claim = provider.get_custom(output_opening_id).1;
+    let output_claim = provider.get_custom(output_opening_id)?.1;
     if expected_output_claim != output_claim {
         return Err(ProofVerifyError::InvalidOpeningProof(
             "Expected output claim does not match actual output claim".to_string(),

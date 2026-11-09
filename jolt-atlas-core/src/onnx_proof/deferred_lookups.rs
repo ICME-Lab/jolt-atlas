@@ -160,17 +160,19 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             .zip(&exact)
             .map(|(b, &e)| {
                 if e {
-                    Params::Exact(clamp_split::exact_value_params(
-                        b,
-                        &prover.accumulator,
-                        &mut prover.transcript,
-                    ))
+                    Params::Exact(
+                        clamp_split::exact_value_params(
+                            b,
+                            &prover.accumulator,
+                            &mut prover.transcript,
+                        )
+                        .expect("the prover holds every claim it reads"),
+                    )
                 } else {
-                    Params::Split(SplitParams::draw(
-                        b,
-                        &prover.accumulator,
-                        &mut prover.transcript,
-                    ))
+                    Params::Split(
+                        SplitParams::draw(b, &prover.accumulator, &mut prover.transcript)
+                            .expect("the prover holds every claim it reads"),
+                    )
                 }
             })
             .collect();
@@ -211,6 +213,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                         &mut prover.transcript,
                     )
                 }
+                .expect("the prover holds every claim it reads")
             })
             .collect();
         let instances: Vec<Box<dyn DynRelationWitness<F, T>>> = {
@@ -261,7 +264,9 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             .iter()
             .map(|b| {
                 let gammas: Vec<F> = prover.transcript.challenge_scalar_powers(b.nodes.len());
-                let (input_claim, cycle) = b.remainder_inputs(&gammas, &prover.accumulator, model);
+                let (input_claim, cycle) = b
+                    .remainder_inputs(&gammas, &prover.accumulator, model)
+                    .expect("the prover holds every claim it reads");
                 ValueParams {
                     bucket_idx: b.idx,
                     value_id: clamp_split::remainder_value_id(b.idx),
@@ -291,6 +296,7 @@ pub fn prove_all<F: JoltField, T: Transcript>(
                     &prover.accumulator,
                     &mut prover.transcript,
                 )
+                .expect("the prover holds every claim it reads")
             })
             .collect();
         let instances: Vec<Box<dyn DynRelationWitness<F, T>>> = {
@@ -338,7 +344,10 @@ pub fn prove_all<F: JoltField, T: Transcript>(
             let _s = tracing::span!(tracing::Level::INFO, "deferred::onehot_params", kind = ?kind)
                 .entered();
             mine.iter()
-                .map(|(j, _)| j.params::<F, T>(&prover.accumulator, &mut prover.transcript))
+                .map(|(j, _)| {
+                    j.params::<F, T>(&prover.accumulator, &mut prover.transcript)
+                        .expect("the prover holds every claim it reads")
+                })
                 .collect()
         };
         let instances: Vec<Box<dyn DynRelationWitness<F, T>>> = {

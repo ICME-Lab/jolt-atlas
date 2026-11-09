@@ -388,7 +388,7 @@ macro_rules! impl_standard_sumcheck_proof_api {
                         &verifier.preprocessing.model,
                         &verifier.accumulator,
                         &mut verifier.transcript,
-                    );
+                    )?;
                 verify_relation(
                     proof,
                     &verifier_sumcheck,
@@ -515,7 +515,7 @@ macro_rules! impl_fused_rescale_proof_api {
                         &verifier.preprocessing.model,
                         &verifier.accumulator,
                         &mut verifier.transcript,
-                    );
+                    )?;
                 verify_relation(
                     proof,
                     &verifier_sumcheck,

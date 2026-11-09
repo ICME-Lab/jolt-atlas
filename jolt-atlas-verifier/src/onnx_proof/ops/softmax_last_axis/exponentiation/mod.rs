@@ -1,5 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
@@ -71,10 +72,13 @@ impl<F: JoltField> ReadRafProvider<F> for ExpReadRafProvider {
         self.table_size.log_2()
     }
 
-    fn r(&self, accumulator: &dyn OpeningAccumulator<F>) -> OpeningPoint<BIG_ENDIAN, F> {
-        AccOpeningAccessor::new(accumulator, &self.node)
-            .get_advice(|idx| self.digit.rv_vp(idx))
-            .0
+    fn r(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, &self.node)
+            .get_advice(|idx| self.digit.rv_vp(idx))?
+            .0)
     }
 
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
@@ -84,15 +88,15 @@ impl<F: JoltField> ReadRafProvider<F> for ExpReadRafProvider {
         )
     }
 
-    fn raf_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        AccOpeningAccessor::new(accumulator, &self.node)
-            .get_advice(|idx| self.digit.raf_vp(idx))
-            .1
+    fn raf_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, &self.node)
+            .get_advice(|idx| self.digit.raf_vp(idx))?
+            .1)
     }
 
-    fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> F {
-        AccOpeningAccessor::new(accumulator, &self.node)
-            .get_advice(|idx| self.digit.rv_vp(idx))
-            .1
+    fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, &self.node)
+            .get_advice(|idx| self.digit.rv_vp(idx))?
+            .1)
     }
 }

@@ -7,6 +7,7 @@ use crate::node_view::ComputationNode;
 use atlas_algebra::{
     field::JoltField,
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    utils::errors::ProofVerifyError,
 };
 use atlas_sumcheck::opening_proof::{
     OpeningAccumulator, OpeningId, PolynomialId, SumcheckId, VerifierOpeningAccumulator,
@@ -133,22 +134,27 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
             .expect("Accumulator reference is not mutable")
     }
 
-    /// Read the reduced opening claim for the current node.
-    pub fn get_reduced_opening(&self) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+    /// Read the reduced opening claim for the current node. `Err` if the accumulator lacks it.
+    pub fn get_reduced_opening(
+        &self,
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
         self.acc().get_node_output_opening(self.builder.node.idx)
     }
 
-    /// Read a node I/O opening for the selected target.
-    pub fn get_nodeio(&self, target: Target) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+    /// Read a node I/O opening for the selected target. `Err` if the accumulator lacks it.
+    pub fn get_nodeio(
+        &self,
+        target: Target,
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
         let opening_id = self.builder.nodeio(target);
         self.acc().get_virtual_polynomial_opening(opening_id)
     }
 
-    /// Read an advice opening for the current node.
+    /// Read an advice opening for the current node. `Err` if the accumulator lacks it.
     pub fn get_advice<Poly>(
         &self,
         poly_ctor: impl FnOnce(usize) -> Poly,
-    ) -> (OpeningPoint<BIG_ENDIAN, F>, F)
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>
     where
         Poly: Into<PolynomialId>,
     {
@@ -160,7 +166,11 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
     ///
     /// This is useful when the caller has already constructed an `OpeningId`
     /// (for example, for virtual polynomials with custom indexing schemes).
-    pub fn get_custom(&self, opening_id: impl Into<OpeningId>) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+    /// `Err` if the accumulator lacks it.
+    pub fn get_custom(
+        &self,
+        opening_id: impl Into<OpeningId>,
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
         let opening_id = opening_id.into();
         match opening_id.polynomial {
             PolynomialId::Virtual(_) => self.acc().get_virtual_polynomial_opening(opening_id),
@@ -190,28 +200,38 @@ macro_rules! impl_accessor_methods {
             ///
             /// Returns the post-reduction evaluation from the evaluation-reduction protocol,
             /// rather than the unreduced opening from the current sumcheck.
-            pub fn get_reduced_opening(&self) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+            /// `Err` if the accumulator lacks it.
+            pub fn get_reduced_opening(
+                &self,
+            ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
                 self.accessor.get_reduced_opening()
             }
 
-            /// Read a node I/O opening from the wrapped accumulator.
-            pub fn get_nodeio(&self, target: Target) -> (OpeningPoint<BIG_ENDIAN, F>, F) {
+            /// Read a node I/O opening from the wrapped accumulator; `Err` if it holds none.
+            pub fn get_nodeio(
+                &self,
+                target: Target,
+            ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
                 self.accessor.get_nodeio(target)
             }
 
-            /// Read an advice opening from the wrapped accumulator.
+            /// Read an advice opening from the wrapped accumulator; `Err` if it holds none.
             pub fn get_advice<Poly>(
                 &self,
                 poly_ctor: impl FnOnce(usize) -> Poly,
-            ) -> (OpeningPoint<BIG_ENDIAN, F>, F)
+            ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>
             where
                 Poly: Into<PolynomialId>,
             {
                 self.accessor.get_advice(poly_ctor)
             }
 
-            /// Read an opening claim from an explicit opening identifier.
-            pub fn get_custom<Poly>(&self, opening_id: Poly) -> (OpeningPoint<BIG_ENDIAN, F>, F)
+            /// Read an opening claim from an explicit opening identifier; `Err` if the
+            /// accumulator holds none.
+            pub fn get_custom<Poly>(
+                &self,
+                opening_id: Poly,
+            ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>
             where
                 Poly: Into<OpeningId>,
             {
@@ -246,39 +266,51 @@ impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
 
     /// Append a node I/O opening request to the verifier accumulator at the provider's current opening point.
     ///
-    /// Panics if this provider was created from an immutable reference.
-    pub fn append_nodeio(&mut self, target: Target) {
-        self.append_nodeio_at(target, self.opening_point.clone());
+    /// Panics if this provider was created from an immutable reference; `Err` if the
+    /// accumulator lacks the claim.
+    pub fn append_nodeio(&mut self, target: Target) -> Result<(), ProofVerifyError> {
+        self.append_nodeio_at(target, self.opening_point.clone())
     }
 
     /// Append a node I/O opening request to the verifier accumulator at provided point.
     ///
-    /// Panics if this provider was created from an immutable reference.
-    pub fn append_nodeio_at(&mut self, target: Target, opening_point: OpeningPoint<BIG_ENDIAN, F>) {
+    /// Panics if this provider was created from an immutable reference; `Err` if the
+    /// accumulator lacks the claim.
+    pub fn append_nodeio_at(
+        &mut self,
+        target: Target,
+        opening_point: OpeningPoint<BIG_ENDIAN, F>,
+    ) -> Result<(), ProofVerifyError> {
         let opening_id = self.accessor.builder.nodeio(target);
         self.accessor
             .acc_mut()
-            .append_virtual(self.transcript, opening_id, opening_point);
+            .append_virtual(self.transcript, opening_id, opening_point)
     }
 
     /// Append an advice opening request to the verifier accumulator at the provider's current opening point.
     ///
-    /// Panics if this provider was created from an immutable reference.
-    pub fn append_advice<Poly>(&mut self, poly_ctor: impl FnOnce(usize) -> Poly)
+    /// Panics if this provider was created from an immutable reference; `Err` if the
+    /// accumulator lacks the claim.
+    pub fn append_advice<Poly>(
+        &mut self,
+        poly_ctor: impl FnOnce(usize) -> Poly,
+    ) -> Result<(), ProofVerifyError>
     where
         Poly: Into<PolynomialId>,
     {
-        self.append_advice_at(poly_ctor, self.opening_point.clone());
+        self.append_advice_at(poly_ctor, self.opening_point.clone())
     }
 
     /// Append an advice opening request to the verifier accumulator at provided point.
     ///
-    /// Panics if this provider was created from an immutable reference.
+    /// Panics if this provider was created from an immutable reference; `Err` if the
+    /// accumulator lacks the claim.
     pub fn append_advice_at<Poly>(
         &mut self,
         poly_ctor: impl FnOnce(usize) -> Poly,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
-    ) where
+    ) -> Result<(), ProofVerifyError>
+    where
         Poly: Into<PolynomialId>,
     {
         let opening_id = self.accessor.builder.advice(poly_ctor);
@@ -300,8 +332,12 @@ impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
 
     /// Append an arbitrary opening request to the verifier accumulator.
     ///
-    /// Panics if this provider was created from an immutable reference.
-    pub fn append_custom(&mut self, opening_id: impl Into<OpeningId>) {
+    /// Panics if this provider was created from an immutable reference; `Err` if the
+    /// accumulator lacks the claim.
+    pub fn append_custom(
+        &mut self,
+        opening_id: impl Into<OpeningId>,
+    ) -> Result<(), ProofVerifyError> {
         let opening_id = opening_id.into();
         match opening_id.polynomial {
             PolynomialId::Virtual(_) => self.accessor.acc_mut().append_virtual(

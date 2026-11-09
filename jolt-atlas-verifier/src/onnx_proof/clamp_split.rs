@@ -62,6 +62,7 @@ use crate::onnx_proof::relation::{
     RelationId, RelationOpening, RelationSetup, RelationVerifier,
 };
 use atlas_algebra::field::{IntoOpening, JoltField};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::booleanity::{LinearClaim, LinearTerm};
 use atlas_sumcheck::relation::DynRelationVerifier;
 use atlas_sumcheck::{
@@ -200,11 +201,12 @@ pub struct SplitParams<F: JoltField> {
 impl<F: JoltField> SplitParams<F> {
     /// Draw the bucket's challenges and resolve its input claim / cycle weight
     /// from the member nodes' openings (already in the accumulator on both sides).
+    /// `Err` if the accumulator lacks one of them.
     pub fn draw<T: Transcript>(
         bucket: &ClampBucket,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> Self {
+    ) -> Result<Self, ProofVerifyError> {
         let gammas: Vec<F> = transcript.challenge_scalar_powers(bucket.nodes.len());
         let betas: [F; 3] = [
             transcript.challenge_scalar(),
@@ -215,8 +217,9 @@ impl<F: JoltField> SplitParams<F> {
         let mut input_claim = F::zero();
         let mut segments = Vec::with_capacity(bucket.nodes.len());
         for (n, gamma) in bucket.nodes.iter().zip(&gammas) {
-            let (r, out_claim) = accumulator.get_node_output_opening(n.idx);
-            let (_, acc_claim) = accumulator.get_virtual_polynomial_opening(acc_opening_id(n.idx));
+            let (r, out_claim) = accumulator.get_node_output_opening(n.idx)?;
+            let (_, acc_claim) =
+                accumulator.get_virtual_polynomial_opening(acc_opening_id(n.idx))?;
             assert_eq!(r.len(), n.log_t, "node {} opening point length", n.idx);
             input_claim += *gamma * (out_claim + offset + betas[0] * (acc_claim - out_claim));
             segments.push(PackedSegment {
@@ -226,7 +229,7 @@ impl<F: JoltField> SplitParams<F> {
                 r: r.r,
             });
         }
-        Self {
+        Ok(Self {
             bucket_idx: bucket.idx,
             cycle: CycleWeight::Packed {
                 log_T: bucket.log_t,
@@ -234,7 +237,7 @@ impl<F: JoltField> SplitParams<F> {
             },
             betas,
             input_claim,
-        }
+        })
     }
 
     /// `β₁/M`, `β₂`, `β₃` and `M` as field elements.
@@ -345,12 +348,13 @@ pub type SplitVerifier<F> = RelationVerifier<F, SplitParams<F>>;
 
 /// Draw a bucket's chunk-check challenges and resolve the Booleanity
 /// parameters, whose linear term carries the Hamming-weight and chunk-value
-/// identities of the module docs (all chunks share one opening).
+/// identities of the module docs (all chunks share one opening). `Err` if the accumulator
+/// lacks that opening.
 pub fn chunk_check_params<F: JoltField, T: Transcript>(
     bucket: &ClampBucket,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> BooleanitySumcheckParams<F> {
+) -> Result<BooleanitySumcheckParams<F>, ProofVerifyError> {
     let polys = chunk_polys(bucket);
     let d = polys.len();
     let n_out = num_out_chunks();
@@ -364,7 +368,7 @@ pub fn chunk_check_params<F: JoltField, T: Transcript>(
     let r_address = transcript.challenge_vector_optimized::<F>(log_k_chunk);
 
     let b = bucket.idx;
-    let r_cycle = accumulator.get_virtual_polynomial_opening(out_id(b)).0.r;
+    let r_cycle = accumulator.get_virtual_polynomial_opening(out_id(b))?.0.r;
     let weights: Vec<F> = (0..n_out)
         .map(|i| beta_out * F::from_u64(1u64 << (log_k_chunk * (n_out - 1 - i))))
         .chain(
@@ -381,7 +385,7 @@ pub fn chunk_check_params<F: JoltField, T: Transcript>(
             (slack_id(b), beta_slack),
         ],
     };
-    BooleanitySumcheckParams {
+    Ok(BooleanitySumcheckParams {
         linear: Some(LinearTerm {
             gammas: gamma_powers,
             weights,
@@ -395,7 +399,7 @@ pub fn chunk_check_params<F: JoltField, T: Transcript>(
         r_cycle,
         polynomial_types: polys,
         sumcheck_id: SumcheckId::Booleanity,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -498,13 +502,14 @@ pub type ValueVerifier<F> = RelationVerifier<F, ValueParams<F>>;
 /// Draw a packed value range check's chunk-check challenges and resolve the
 /// Booleanity parameters (linear term: Hamming weight 1 and the chunked
 /// value `Σ_d 2^{shift_d}·Σ_k k·ra_d(k, r')` = the value opened at `value_id`).
+/// `Err` if the accumulator lacks a claim it reads.
 pub fn value_chunk_check_params<F: JoltField, T: Transcript>(
     polys: Vec<CommittedPoly>,
     value_bits: usize,
     value_id: OpeningId,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> BooleanitySumcheckParams<F> {
+) -> Result<BooleanitySumcheckParams<F>, ProofVerifyError> {
     let d = polys.len();
     let log_k_chunk = one_hot_params(value_bits).log_k_chunk;
     debug_assert_eq!(d, one_hot_params(value_bits).instruction_d);
@@ -514,7 +519,7 @@ pub fn value_chunk_check_params<F: JoltField, T: Transcript>(
     let bool_gammas = transcript.challenge_vector_optimized::<F>(d);
     let r_address = transcript.challenge_vector_optimized::<F>(log_k_chunk);
 
-    let r_cycle = accumulator.get_virtual_polynomial_opening(value_id).0.r;
+    let r_cycle = accumulator.get_virtual_polynomial_opening(value_id)?.0.r;
     let weights: Vec<F> = (0..d)
         .map(|i| beta * F::from_u64(1u64 << (log_k_chunk * (d - 1 - i))))
         .collect();
@@ -522,7 +527,7 @@ pub fn value_chunk_check_params<F: JoltField, T: Transcript>(
         constant: gamma_powers.iter().copied().sum(),
         terms: vec![(value_id, beta)],
     };
-    BooleanitySumcheckParams {
+    Ok(BooleanitySumcheckParams {
         linear: Some(LinearTerm {
             gammas: gamma_powers,
             weights,
@@ -536,15 +541,16 @@ pub fn value_chunk_check_params<F: JoltField, T: Transcript>(
         r_cycle,
         polynomial_types: polys,
         sumcheck_id: SumcheckId::Booleanity,
-    }
+    })
 }
 
 /// [`value_chunk_check_params`] for a remainder bucket.
+/// `Err` if the accumulator lacks a claim it reads.
 pub fn remainder_chunk_check_params<F: JoltField, T: Transcript>(
     bucket: &ClampBucket,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> BooleanitySumcheckParams<F> {
+) -> Result<BooleanitySumcheckParams<F>, ProofVerifyError> {
     value_chunk_check_params(
         bucket.committed_polys(),
         bucket.width,
@@ -556,11 +562,12 @@ pub fn remainder_chunk_check_params<F: JoltField, T: Transcript>(
 
 /// [`value_chunk_check_params`] for an *exact* clamp bucket: its output
 /// chunks only, valued at `OUT(r')`.
+/// `Err` if the accumulator lacks a claim it reads.
 pub fn exact_chunk_check_params<F: JoltField, T: Transcript>(
     bucket: &ClampBucket,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> BooleanitySumcheckParams<F> {
+) -> Result<BooleanitySumcheckParams<F>, ProofVerifyError> {
     value_chunk_check_params(
         out_chunk_polys(bucket),
         OUT_LOG_K,
@@ -573,17 +580,18 @@ pub fn exact_chunk_check_params<F: JoltField, T: Transcript>(
 /// Parameters of an exact bucket's output range check: the value sumcheck
 /// `Σ_t W(t)·OUT(t) = Σ_n γ_n·(out_n(r_n) + 2^31)` (the same `γ_n` draw as
 /// [`SplitParams::draw`]; no `β`s).
+/// `Err` if the accumulator lacks a claim it reads.
 pub fn exact_value_params<F: JoltField, T: Transcript>(
     bucket: &ClampBucket,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> ValueParams<F> {
+) -> Result<ValueParams<F>, ProofVerifyError> {
     let gammas: Vec<F> = transcript.challenge_scalar_powers(bucket.nodes.len());
     let offset = F::from_u64(OFFSET as u64);
     let mut input_claim = F::zero();
     let mut segments = Vec::with_capacity(bucket.nodes.len());
     for (n, gamma) in bucket.nodes.iter().zip(&gammas) {
-        let (r, out_claim) = accumulator.get_node_output_opening(n.idx);
+        let (r, out_claim) = accumulator.get_node_output_opening(n.idx)?;
         assert_eq!(r.len(), n.log_t, "node {} opening point length", n.idx);
         input_claim += *gamma * (out_claim + offset);
         segments.push(PackedSegment {
@@ -593,7 +601,7 @@ pub fn exact_value_params<F: JoltField, T: Transcript>(
             r: r.r,
         });
     }
-    ValueParams {
+    Ok(ValueParams {
         bucket_idx: bucket.idx,
         value_id: out_id(bucket.idx),
         cycle: CycleWeight::Packed {
@@ -601,7 +609,7 @@ pub fn exact_value_params<F: JoltField, T: Transcript>(
             segments,
         },
         input_claim,
-    }
+    })
 }
 
 /// Verifier side of an exact bucket's per-node identity `ClampAcc(r_n) = out_n(r_n)`.
@@ -611,9 +619,9 @@ pub fn verify_exact_nodes<F: JoltField>(
 ) -> Result<(), atlas_algebra::utils::errors::ProofVerifyError> {
     for n in &bucket.nodes {
         let acc = accumulator
-            .get_virtual_polynomial_opening(acc_opening_id(n.idx))
+            .get_virtual_polynomial_opening(acc_opening_id(n.idx))?
             .1;
-        let out = accumulator.get_node_output_opening(n.idx).1;
+        let out = accumulator.get_node_output_opening(n.idx)?.1;
         if acc != out {
             return Err(atlas_algebra::utils::errors::ProofVerifyError::InvalidOpeningProof(
                 format!(

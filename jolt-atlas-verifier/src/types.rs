@@ -21,15 +21,15 @@ pub struct ProofId(pub usize, pub ProofType);
 
 /// Type of sumcheck proof for different operations in the neural network.
 ///
-/// The `u8` discriminants are part of the serialization format — do not reorder or remove variants
-/// without a migration, as it would break proof deserialization.
+/// The `u8` discriminants are part of the serialization format: a variant keeps its number, and
+/// the numbers of deleted variants (1, 7, 8, 11, 13) stay free; a proof carrying one does not
+/// deserialize. Every variant is emitted by the prover for some checked-in model
+/// (`proof_types_all_exercised`).
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProofType {
     /// Execution sumcheck for basic operations.
     Execution = 0,
-    /// Neural teleportation for tanh approximation.
-    NeuralTeleport = 1,
     /// Read-address one-hot encoding checks.
     RaOneHotChecks = 2,
     /// Hamming weight check for read-addresses.
@@ -40,10 +40,6 @@ pub enum ProofType {
     SoftmaxStage1 = 5,
     /// Softmax stage 2
     SoftmaxStage2 = 6,
-    /// Softmax stage 3
-    SoftmaxStage3 = 7,
-    /// Softmax stage 4
-    SoftmaxStage4 = 8,
     /// Axis-reduction sumcheck for `Sum` (proves the pre-clamp accumulation
     /// equals the sum over the reduced axes; the clamp itself is a separate
     /// `Execution` lookup).
@@ -52,18 +48,10 @@ pub enum ProofType {
     /// `Σ_k L·R = rescaled·2^S + R` (the clamp lookup itself is a separate
     /// `Execution` proof; analogous to `SumReduction`).
     EinsumMatmul = 10,
-    /// Read-address one-hot checks for a fused rescaling-remainder range
-    /// check (the clamp's one-hot checks use `RaOneHotChecks`). Shared by
-    /// einsum, `Mul`, `Square`, `Cube`.
-    RescaleRemainderRaChecks = 11,
     /// Element-wise arithmetic sumcheck for a fused `Mul`/`Square`/`Cube`,
     /// proving `acc(r) = rescaled·2^S + R` (the clamp lookup is a separate
     /// `Execution` proof; the einsum analogue is `EinsumMatmul`).
     RescaleArith = 12,
-    /// Read-address one-hot checks for the Cos/Sin trig-table downscale
-    /// (right-shift) lookup (the Cos/Sin table lookup itself stays under
-    /// `Execution`, batched with the downscale read-raf).
-    TrigDownscaleRaChecks = 13,
     /// All clamp buckets' interior/saturated split sumchecks, proven as one
     /// batched sumcheck after the node loop (stored under `DEFERRED_PROOF_IDX`;
     /// see `clamp_split`).
@@ -92,25 +80,27 @@ pub enum ProofType {
     DeferredSoftmaxRaChecks = 25,
 }
 
+impl ProofType {
+    /// Every proof type, in tag order.
+    pub fn all() -> impl Iterator<Item = Self> {
+        (0..=u8::MAX).filter_map(|tag| Self::try_from(tag).ok())
+    }
+}
+
 impl TryFrom<u8> for ProofType {
     type Error = SerializationError;
 
     fn try_from(tag: u8) -> Result<Self, Self::Error> {
         match tag {
             0 => Ok(Self::Execution),
-            1 => Ok(Self::NeuralTeleport),
             2 => Ok(Self::RaOneHotChecks),
             3 => Ok(Self::RaHammingWeight),
             4 => Ok(Self::RangeCheck),
             5 => Ok(Self::SoftmaxStage1),
             6 => Ok(Self::SoftmaxStage2),
-            7 => Ok(Self::SoftmaxStage3),
-            8 => Ok(Self::SoftmaxStage4),
             9 => Ok(Self::SumReduction),
             10 => Ok(Self::EinsumMatmul),
-            11 => Ok(Self::RescaleRemainderRaChecks),
             12 => Ok(Self::RescaleArith),
-            13 => Ok(Self::TrigDownscaleRaChecks),
             14 => Ok(Self::DeferredClampSplit),
             15 => Ok(Self::DeferredClampChunkChecks),
             16 => Ok(Self::DeferredRemainderRC),

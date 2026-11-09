@@ -185,6 +185,43 @@ fn qwen() {
 
 // ── transcript binding (issue #230) ──────────────────────────────────────
 
+/// Every [`ProofType`] occurs in the proof of some checked-in model: the proof format carries
+/// no tag the prover never emits.
+#[test]
+fn proof_types_all_exercised() {
+    use super::models::probe_models;
+    use crate::onnx_proof::{prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, ProofType};
+    use atlas_transcript::Blake2bProver;
+    use std::collections::BTreeSet;
+
+    let mut cases: Vec<(String, atlas_trace::Model, Vec<Tensor<i32>>)> = probe_models()
+        .into_iter()
+        .map(|m| (m.name.to_string(), m.model, m.inputs))
+        .collect();
+    let gauntlet = zoo("op_gauntlet", 16);
+    let gauntlet_inputs = op_gauntlet_inputs(&gauntlet);
+    cases.push(("op_gauntlet".to_string(), gauntlet.model, gauntlet_inputs));
+    for name in ["gpt2-tiny", "qwen2-tiny", "bge-tiny"] {
+        let imported = zoo(name, 16);
+        let inputs = synth_inputs(&imported, GOLDEN_SEED);
+        cases.push((name.to_string(), imported.model, inputs));
+    }
+
+    let mut seen = BTreeSet::new();
+    for (_, model, inputs) in cases {
+        let pp = AtlasProverPreprocessing::<Fr, AkitaScheme>::new(
+            AtlasSharedPreprocessing::preprocess(model),
+        );
+        let (proof, _, _) = prove::<Fr, Blake2bProver, AkitaScheme>(&pp, &inputs);
+        seen.extend(proof.proofs().keys().map(|id| id.1));
+    }
+    let missing: Vec<ProofType> = ProofType::all().filter(|t| !seen.contains(t)).collect();
+    assert!(
+        missing.is_empty(),
+        "no checked-in model emits these proof types: {missing:?}"
+    );
+}
+
 /// Changing one input element must change the first derived challenge: the
 /// inputs are absorbed into the transcript before any challenge, which is
 /// what removes the adaptive forge's precondition (input-independent,

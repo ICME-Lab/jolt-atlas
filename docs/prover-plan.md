@@ -76,8 +76,11 @@ The strategy that follows, in order of leverage:
   needs (it cannot reproduce a saturating clamp).
 - **One-hot columns remain only where a table is read** (Tanh, softmax, gather: 5% of cells), or
   are virtualised from the bits at degree 4.
-- **The commitment scheme stays Akita** unless the BitZ number (section 5) says otherwise; the
-  FlashProve-style hash architecture is declined (section 4).
+- **The commitment scheme stays Akita** (decided 2026-11-10): the encoding change above is a
+  4x on the commit with no scheme change, and keeps zero knowledge (upstream's Whiteout stack),
+  recursion (the Akita verifier guest) and small proofs. BitZ is kept in view as the future
+  option for the range digits (section 5); the FlashProve-style hash architecture is declined
+  (section 4).
 
 The estimated ceiling, with the measured per-cell costs and today's digit counts: items 1–4 take
 the 23.6 s commit to roughly 5–7 s on GPT-2 at 16 tokens (clamp cells ÷ 3.8 by the encoding, ÷
@@ -256,15 +259,15 @@ witness generation over the same data takes 0.8 s.
   bits, 7B+ need 14–16 under static scales; power-of-two scales free at 16 bits); weights
   irrelevant to us (public). For us bit width is the cost, unlike DeepProve.
 
-## 5. Open decisions
+## 5. Decisions and open points
 
-1. **The end state: lattice-only, or BitZ for the range digits.** Akita after item 1 is ~37 ns per
-   digit; BitZ's paper number is ~2 ns. Staying lattice-only buys zero knowledge (upstream's
-   Whiteout stack), recursion (the Akita verifier guest, merged 2 Nov 2026) and small proofs, at
-   roughly an order of magnitude per digit on the paper's evidence. The BitZ proof-of-concept is
-   checked out at `/Users/kg/swe/icme/scratch/BitZ-PoC`; the run commands and threshold (< 3 s
-   single-threaded at 2^30 bits, > 5x below Akita on the same digits) are in the measurement
-   plan, Phase 3. Decide after that run, explicitly.
+1. **Decided: Akita now, BitZ in view.** Akita after item 1 is ~37 ns per digit; BitZ's paper
+   number is ~2 ns, from a proof-of-concept prover that is hash-based and not zero-knowledge.
+   Staying on the lattice keeps zero knowledge, recursion and small proofs and takes the 4x that
+   needs no scheme change. Revisit BitZ when item 1 has landed and the commit is measured again,
+   or when BitZ ships a maintained prover with a zero-knowledge variant. The proof-of-concept is
+   checked out at `/Users/kg/swe/icme/scratch/BitZ-PoC` with the run commands in the measurement
+   plan, Phase 3, for whenever that comparison is wanted; it is not on the critical path.
 2. **Semantics under declared widths:** saturate at the declared width, or partial-function
    semantics with the tracer asserting. Item 4; a `SemVersion` change either way.
 3. **Base 4 or Booleans** for item 1, by measured total time.

@@ -352,7 +352,8 @@ ring is not exercised by it and would be an addition on our side.
 **Gate 3, lattice side: decided.** Dense tiny digits are several times cheaper per digit than
 one-hot digits on Akita (3.8x for base 4, 2.5x for bits, before the sumcheck side, which also
 gets simpler for range checks). D3 is the lattice-side path and moves up, with D1 on top of it.
-The end-state question (BitZ) stays open until the arm above is run.
+The end state was decided on 2026-11-10 without the BitZ arm: Akita stays, BitZ is kept in view
+(`docs/prover-plan.md` section 5). The arm above is optional and off the critical path.
 
 ### Phase 4: prototypes (builds 4 and 5: release and test, both full)
 

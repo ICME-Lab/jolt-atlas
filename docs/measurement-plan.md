@@ -301,6 +301,58 @@ digits can go (D4); and which sumcheck kernels pay on a two-limb field.
 - If neither, option B (one-hot digits, fewer of them) is the end state and the remaining work is
   the fusions, D2 and the sumcheck kernels that measured above 1.3x.
 
+#### Phase 3 results so far (2026-11-10)
+
+**Akita commit microbenchmark** (`atlas-pcs/examples/commit_bench.rs`, release, 4 m 28 s to
+build; binary `bench/bin/commit_bench`; outputs `bench/runs/commit-bench-*.txt`). One 4-bit
+digit per row, 64 columns, committed four ways; per-digit costs are flat from 2^16 to 2^20 rows.
+
+| arm (same 2^26 digits) | cells | witness | commit | ns / digit | ns / key bit | vs one-hot |
+|---|---|---|---|---|---|---|
+| K = 16 one-hot (today) | 2^30 | 0.14 s | 9.6 s | 143 | 36 | 1x |
+| dense u8 in [0, 16), 1 column | 2^26 | 0.12 s | 0.81 s | 12 | 3.0 | **11.8x** |
+| dense u8 in [0, 4), 2 columns | 2^27 | 0.18 s | 2.5 s | 37 | 9.4 | 3.8x |
+| dense Boolean, 4 columns | 2^28 | 0.23 s | 3.8 s | 57 | 14 | 2.5x |
+
+Peak RSS 8.8 GB for the four arms in one process. The one-hot arm reproduces Phase 1's
+per-class cost (inside the prover: ~104 ns per digit, where a share of the rows are padding).
+
+Reading: Akita's cost is per **cell**, 9–12 ns each, whichever class; a K = 16 one-hot column
+is 16 cells per digit and its sparsity buys about 25%. A dense column of the same digits is
+one cell per digit. The catch is the range proof: a dense column in [0, 16) has no cheap
+constraint (a degree-15 zero-check, or a lookup, which is one-hot again), so the usable arms
+are the two in the lower rows: base-4 digits with a degree-3 zero-check (SuperNeo's design,
+3.8x on the commit) or Booleans with Booleanity (2.5x). For the clamp range checks, which are
+73% of the cells, a bit or base-4 decomposition needs no lookup at all: committed digits,
+one zero-check, and a linear recomposition, replacing today's read-raf + Booleanity +
+Hamming-weight + ra-virtualization on one-hot columns. The row check (D1) then applies to the
+decomposed form the same way. For the address digits of real table lookups (Tanh, softmax,
+5% of cells) the one-hot column can stay, or be virtualised from the bits at degree 4.
+
+Not yet run: the virtual-remainder grand-product test (D4), the Fp128 sumcheck kernels
+(A1, A2, E), and the **BitZ arm**. The BitZ proof-of-concept is checked out at
+`/Users/kg/swe/icme/scratch/BitZ-PoC` (toolchain 1.98.1, own target dir); building and running
+downloaded code is outside what the agent may do unattended, so it is run by hand:
+
+```bash
+cd /Users/kg/swe/icme/scratch/BitZ-PoC
+CARGO_TARGET_DIR=$PWD/target RUSTFLAGS="-C target-cpu=native" \
+  cargo build --release --locked --example bitz_bench
+CARGO_TARGET_DIR=$PWD/target RAYON_NUM_THREADS=1 target/release/examples/bitz_bench 28 --reps 3
+CARGO_TARGET_DIR=$PWD/target target/release/examples/bitz_bench 30 --reps 3
+```
+
+2^28 bits is one GPT-2 one-hot class (2^26 digits × 4 key bits); the threshold is under 3 s
+single-threaded at 2^30 and more than 5x below the Akita one-hot commit of the same digits
+(9.6 s for 2^26 digits above, so ~38 s for 2^28 digits). The example samples its own
+transcript prime (`min(113, 127 − t − 1)` bits); the extra round for a fixed 128-bit target
+ring is not exercised by it and would be an addition on our side.
+
+**Gate 3, lattice side: decided.** Dense tiny digits are several times cheaper per digit than
+one-hot digits on Akita (3.8x for base 4, 2.5x for bits, before the sumcheck side, which also
+gets simpler for range checks). D3 is the lattice-side path and moves up, with D1 on top of it.
+The end-state question (BitZ) stays open until the arm above is run.
+
 ### Phase 4: prototypes (builds 4 and 5: release and test, both full)
 
 Only what Gates 2 and 3 selected. This is the first phase that changes protocol code, so it is the

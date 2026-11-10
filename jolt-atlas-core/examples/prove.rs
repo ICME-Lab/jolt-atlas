@@ -109,7 +109,10 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         match &n.operator {
             atlas_trace::Op::Constant(_) => true,
             atlas_trace::Op::Broadcast(_) => {
-                matches!(model.view(n.inputs[0]).operator, atlas_trace::Op::Constant(_))
+                matches!(
+                    model.view(n.inputs[0]).operator,
+                    atlas_trace::Op::Constant(_)
+                )
             }
             _ => false,
         }
@@ -238,7 +241,9 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         (digits_observed as f64).log2(),
         digits_today as f64 / digits_observed.max(1) as f64
     );
-    println!("per-op clamp width w' -> nodes/elements that exceed it, clamp digit cells (x vs today):");
+    println!(
+        "per-op clamp width w' -> nodes/elements that exceed it, clamp digit cells (x vs today):"
+    );
     for (k, &w) in widths.iter().enumerate() {
         println!(
             "  w'={w:>2}: {:>4} nodes, {:>9} elems over; cells 2^{:.1} ({:.2}x)",
@@ -530,17 +535,14 @@ fn main() {
     let args = parse_args();
     let (_guard, _) = setup_tracing("jolt-atlas prove");
 
-    let ids = args
-        .input
-        .as_deref()
-        .map(|text| {
-            // The models need a power-of-two sequence length; keep the longest
-            // power-of-two prefix of the text.
-            let mut ids = tokenize(&args.model_dir, text);
-            let keep = 1usize << ids.len().ilog2();
-            ids.truncate(keep);
-            ids
-        });
+    let ids = args.input.as_deref().map(|text| {
+        // The models need a power-of-two sequence length; keep the longest
+        // power-of-two prefix of the text.
+        let mut ids = tokenize(&args.model_dir, text);
+        let keep = 1usize << ids.len().ilog2();
+        ids.truncate(keep);
+        ids
+    });
     let seq_len = ids.as_ref().map_or(args.seq_len, Vec::len);
     let bindings: HashMap<String, usize> = standard_bindings(seq_len);
     let run_args = RunArgs::new(bindings);

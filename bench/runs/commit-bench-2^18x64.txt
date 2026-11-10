@@ -1,0 +1,4 @@
+one-hot K=16 (today)         polys   64  witness 44.662ms  commit   2.421s   144.3 ns/digit    36.1 ns/key-bit  (1 classes, 268435456 cells)
+dense u8 in [0,16), 1 col    polys   64  witness 27.016ms  commit 298.862ms    17.8 ns/digit     4.5 ns/key-bit  (1 classes, 16777216 cells)
+dense u8 in [0,4), 2 cols    polys  128  witness 46.966ms  commit 608.873ms    36.3 ns/digit     9.1 ns/key-bit  (1 classes, 33554432 cells)
+dense bool, 4 cols           polys  256  witness 59.739ms  commit   1.202s    71.7 ns/digit    17.9 ns/key-bit  (1 classes, 67108864 cells)

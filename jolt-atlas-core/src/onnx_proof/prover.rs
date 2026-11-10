@@ -215,13 +215,13 @@ pub(super) fn prove_reduced_openings<
     if poly_map.is_empty() {
         return None;
     }
-    // Committed polynomials nobody opened (e.g. the clamp chunks of an
-    // output node whose public output is unsaturated) stay out of the
-    // joint opening; the verifier selects the same subset from its openings.
+    // Committed polynomials nobody opened (e.g. the empty slack chunks of a
+    // clamp bucket proven exactly) stay out of the joint opening; the
+    // verifier selects the same subset from its openings.
     let opened = prover.accumulator.opened_polynomials();
     if opened.is_empty() {
-        // Nothing was opened (every committed polynomial is unused, e.g. a
-        // model whose only clamped node is an exact output): no joint opening.
+        // Nothing was opened (every committed polynomial is unused): no joint
+        // opening.
         return None;
     }
     let (poly_map, hints): (BTreeMap<CommittedPoly, MultilinearPolynomial<F>>, Vec<_>) =

@@ -4,6 +4,7 @@
 //!   that every end-to-end test goes through, generic over the PCS.
 //! * [`op_kind`] + [`op_surface`]: the exhaustive single-op table. A new
 //!   `atlas_trace::Op` variant fails to compile here until a case exists.
+//! * [`clamp_buckets`]: what the packed clamp buckets commit for a statement.
 //! * [`zoo`]: the checked-in model zoo (tiny GPT-2 / Qwen2 / BERT stand-ins,
 //!   op gauntlet) on every run; the real downloads behind `#[ignore]`.
 //! * [`soundness`] (+ [`mutate`], [`probe`], [`models`]): generic attacks on
@@ -21,6 +22,7 @@
 //! prover and verifier helpers without widening any visibility. Proof fields
 //! are reached only through `jolt-atlas-verifier`'s `test-util` accessors.
 
+mod clamp_buckets;
 mod digests;
 pub(crate) mod harness;
 pub(crate) mod model_builder;

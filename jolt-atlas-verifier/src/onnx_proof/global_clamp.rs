@@ -28,7 +28,7 @@ use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ps_shout::{CycleWeight, PackedSegment},
 };
-use atlas_trace::{Model, Op};
+use atlas_trace::{trace::ModelExecutionIO, Model, Op};
 use common::{CommittedPoly, VirtualPoly};
 
 /// A node's segment inside a bucket's cycle space.
@@ -230,11 +230,22 @@ impl ClampBucket {
     }
 }
 
-/// All buckets' committed polynomials. `Err` if a node's operand is not a node of the model.
-pub fn bucket_committed_polys(model: &Model) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-    Ok(clamp_buckets(model)?
-        .iter()
-        .chain(remainder_buckets(model).iter())
-        .flat_map(ClampBucket::committed_polys)
+/// The buckets' committed polynomials for the statement `io`: every remainder bucket's, and the
+/// clamp buckets' that have a live node. A clamp bucket whose nodes are all unsaturated model
+/// outputs ([`clamp_split::exact_output_verifier`]) proves nothing through its columns, so it
+/// commits none. `Err` if a node's operand is not a node of the model.
+pub fn bucket_committed_polys(
+    model: &Model,
+    io: &ModelExecutionIO,
+) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+    let live = clamp_buckets(model)?.into_iter().filter(|bucket| {
+        clamp_split::live_bucket(bucket, |idx| {
+            !clamp_split::exact_output_verifier(model, io, idx)
+        })
+        .is_some()
+    });
+    Ok(live
+        .chain(remainder_buckets(model))
+        .flat_map(|bucket| bucket.committed_polys())
         .collect())
 }

@@ -98,7 +98,9 @@ impl BucketWitnesses {
         (values, *width)
     }
 
-    /// Every bucket's committed polynomials with their witnesses.
+    /// The buckets' committed polynomials with their witnesses: every live clamp bucket's and
+    /// every remainder bucket's. A clamp bucket with no live node commits nothing (the
+    /// verifier's [`bucket_committed_polys`] leaves it out the same way).
     #[tracing::instrument(skip_all, name = "global_clamp::BucketWitnesses::committed_polys")]
     pub fn committed_polys<F: JoltField>(
         &self,
@@ -107,10 +109,12 @@ impl BucketWitnesses {
         let clamp = clamp_buckets(model)
             .expect("the model's nodes have the shapes their ops prove")
             .into_iter()
-            .flat_map(|bucket| match self.clamp_splits.get(&bucket.idx) {
-                Some(split) => split.witness_polys(&bucket),
-                None => clamp_split::BucketSplit::empty_witness_polys(&bucket),
+            .filter_map(|bucket| {
+                self.clamp_splits
+                    .get(&bucket.idx)
+                    .map(|split| split.witness_polys(&bucket))
             })
+            .flatten()
             .collect::<Vec<_>>();
         let remainder = remainder_buckets(model).into_iter().flat_map(|bucket| {
             let (values, width) = self.remainder_values(bucket.idx);

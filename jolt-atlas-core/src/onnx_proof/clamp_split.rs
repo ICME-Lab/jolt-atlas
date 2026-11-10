@@ -468,26 +468,6 @@ impl BucketSplit {
         })
     }
 
-    /// The chunk polynomials of a bucket with no live node: never opened, so
-    /// committed empty (all `None`).
-    pub fn empty_witness_polys<F: JoltField>(
-        bucket: &ClampBucket,
-    ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
-        let k_chunk = one_hot_params(OUT_LOG_K).k_chunk;
-        chunk_polys(bucket)
-            .into_iter()
-            .map(|poly| {
-                (
-                    poly,
-                    MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
-                        vec![None; bucket.cycle_len()],
-                        k_chunk,
-                    )),
-                )
-            })
-            .collect()
-    }
-
     /// The `d`-th chunk index of every cycle: output chunks (`d < 8`, always
     /// set), then slack chunks (`None` on interior cycles).
     pub fn chunk_indices(&self) -> Vec<Vec<Option<u8>>> {

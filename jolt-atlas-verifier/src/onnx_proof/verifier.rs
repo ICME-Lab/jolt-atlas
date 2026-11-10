@@ -411,7 +411,7 @@ pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentSchem
 
         // Commitments are in sorted `CommittedPoly` order (the prover's
         // `poly_map`); the joint opening covers the opened subset.
-        let mut committed = pp.shared.get_models_committed_polynomials()?;
+        let mut committed = pp.shared.get_models_committed_polynomials(verifier.io)?;
         committed.sort();
         if committed.len() != proof.commitments().len() {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(

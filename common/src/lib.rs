@@ -199,6 +199,14 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         GlobalClampOutRaD(usize, usize),
 
+        /// Dense base-`b` digit of a packed clamp bucket's offset output
+        /// `OUT = out + 2^31`, most significant first (`U8Scalars` in `[0, b)`;
+        /// see `jolt_atlas_core::onnx_proof::clamp_split`).
+        ///
+        /// * `0` – bucket index
+        /// * `1` – digit index `j`
+        GlobalClampOutDigit(usize, usize),
+
         /// One-hot chunk of a packed clamp bucket's **saturation slack**
         /// (`|acc − out|` on saturated elements, `None` elsewhere; bucket-width
         /// address; see `jolt_atlas_core::onnx_proof::clamp_split`).

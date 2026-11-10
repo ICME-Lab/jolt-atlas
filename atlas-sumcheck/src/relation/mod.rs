@@ -164,6 +164,8 @@ pub enum RelationId {
     ClampSplit,
     /// A packed bucket's values opened at one point.
     PackedValue,
+    /// Dense digit columns are in range and recompose a value.
+    DigitRange,
     /// A lookup into a small public table (a teleported trig op, a clamped activation).
     SmallTable,
     /// A gather's read of its dictionary.

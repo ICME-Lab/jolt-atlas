@@ -527,6 +527,8 @@ pub enum SumcheckId {
     RLC(usize),
     /// Eval-shift sumcheck used in neural teleport ops
     NTEvalShift,
+    /// A dense digit range check (`digit_range`).
+    DigitRange,
 }
 
 impl CanonicalSerialize for SumcheckId {
@@ -551,6 +553,7 @@ impl CanonicalSerialize for SumcheckId {
                 idx.serialize_with_mode(&mut writer, compress)?;
             }
             Self::NTEvalShift => 9u8.serialize_with_mode(&mut writer, compress)?,
+            Self::DigitRange => 10u8.serialize_with_mode(&mut writer, compress)?,
         }
         Ok(())
     }
@@ -594,6 +597,7 @@ impl CanonicalDeserialize for SumcheckId {
                 Ok(Self::RLC(idx))
             }
             9 => Ok(Self::NTEvalShift),
+            10 => Ok(Self::DigitRange),
             _ => Err(SerializationError::InvalidData),
         }
     }

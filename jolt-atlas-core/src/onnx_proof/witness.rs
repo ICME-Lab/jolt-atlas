@@ -251,6 +251,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::GlobalRemainderRaD(..)
             | CommittedPoly::GlobalClampOutRaD(..)
+            | CommittedPoly::GlobalClampOutDigit(..)
             | CommittedPoly::GlobalClampSlackRaD(..) => {
                 unreachable!("packed clamp bucket witnesses are built at the model level")
             }

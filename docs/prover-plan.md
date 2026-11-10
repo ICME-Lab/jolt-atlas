@@ -106,6 +106,11 @@ range-check protocol only; outputs and golden hashes do not move unless the item
 
 ### 1. Dense-digit encoding for the clamp output chunks (roadmap D3) — 71% of rows, 3.8–5.7x on them
 
+**Implemented on `dev`** (spec `specs/clamp-dense-digit-range-check.md`): `OUT` is 16 base-4
+`U8Scalars` digit columns under `atlas_sumcheck::digit_range`, and the Booleanity check keeps the
+slack chunks only. The base is the one constant `clamp_split::DIGIT_BASE`. Not yet measured: the
+Phase 1 gate run and decision 3 below are pending.
+
 Today each bucket commits `OUT = out + 2^31` as 8 one-hot chunks per row plus empty slack chunks,
 checked by a split sumcheck and the Booleanity chunk check with a linear term
 (`clamp_split.rs`); there is no lookup on the buckets already. Replace the one-hot chunks by
@@ -284,7 +289,9 @@ witness generation over the same data takes 0.8 s.
    plan, Phase 3, for whenever that comparison is wanted; it is not on the critical path.
 2. **Semantics under declared widths:** saturate at the declared width, or partial-function
    semantics with the tracer asserting. Item 4; a `SemVersion` change either way.
-3. **Base 4 or Booleans** for item 1, by measured total time.
+3. **Base 4 or Booleans** for item 1, by measured total time. Open: item 1 ships base 4 on
+   `dev`; switching to Booleans is the one constant `clamp_split::DIGIT_BASE = 2`. Decided by
+   the Phase 1 gate run, not yet made.
 
 ## 6. Not pursuing
 

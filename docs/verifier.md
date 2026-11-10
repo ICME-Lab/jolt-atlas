@@ -67,11 +67,15 @@ interpreter; the prover's `ops::prove_plan` walks the same plan with the relatio
 so an op's transcript order is its plan's step order on both sides.
 
 After the node loop, `Verifier::run_deferred` runs the post-loop plan
-(`deferred_lookups::plan`, built from the model and the public IO: the packed clamp and
-remainder buckets' exact flags, value sumchecks and chunk checks; a model output node whose
-public output is unsaturated ties `acc = out` in its own turn and is a gap in its bucket), then
-drains the one deferral queue, batch by batch in `DeferredBatch` order. Nothing is registered
-during the loop and nothing reconciled afterwards.
+(`deferred_lookups::plan`, built from the model and the public IO: the packed clamp buckets'
+exact flags, their split or exact value sumchecks, the digit range checks of their dense `OUT`
+digits (`atlas_sumcheck::digit_range`) and the slack chunk checks of the buckets not declared
+exact, then the remainder buckets' value sumchecks and chunk checks; a model output node whose
+public output is unsaturated ties `acc = out` in its own turn and is a gap in its bucket, and a
+clamp bucket made only of such nodes is not committed at all), then drains the one deferral
+queue, batch by batch in `DeferredBatch` order. Nothing is registered during the loop and
+nothing reconciled afterwards. A plan batch whose relations set up no sumcheck instance (the
+slack batch when every bucket is exact) carries no proof entry.
 
 Softmax is the stress case: its stage driver is a plan (aux vectors as `Open`, stages 1–2 as
 `Batch`, stage 3 and its one-hot checks as `Defer`); the relations of a stage read the aux
@@ -87,7 +91,9 @@ vectors back from their openings in their setup (`SoftmaxShape::aux`).
   Prover code `expect`s the same calls: a missing claim there is a prover bug.
 - **Checked inputs.** `verify` first checks that every node's operands are earlier nodes
   (`node_view::check_model_shape`) and that the public IO names the model's inputs and
-  outputs with one tensor of the node's dims each (`verifier::check_io_shape`).
+  outputs with one tensor of the node's dims each (`verifier::check_io_shape`). The list of
+  committed polynomials is a function of the model and the public IO
+  (`get_models_committed_polynomials`).
 - **Exact consumption.** Sumcheck proofs and evaluation-reduction proofs are read through
   `ProofLedger::take`, which fails on a missing entry and on a second take.
   `Verifier::check_consumed` ends `verify`: an entry never taken, or an opening claim no append
@@ -116,7 +122,7 @@ Everything in the crate that took an `atlas_trace::Trace`, with its destination 
 | `LookupOperandsTrait::{witness, lookup_bits}` | `op_lookups::LookupWitness`, implemented beside each helper's prover (`op_lookups`, `clamp_lookups`, `ops/clamp.rs`, `ops/activation_clamped`, `neural_teleport/trig_downscale.rs`, `ops/softmax_last_axis/significance_clamp.rs`) |
 | `RangeCheckingOperandsTrait::build_lookup_operands`, `RangeCheckOperands::{build_lookup_operands, compute_lookup_indices}` | `range_checking::range_check_operands::{RangeCheckWitness, range_check_lookup_indices}` |
 | `clamp_lookups::{clamp_intermediate, clamp_lookup_bits}` | `clamp_lookups` |
-| `clamp_split::{NodeSplit, BucketSplit, value_chunk_indices, exact_output_prover}` | `clamp_split` |
+| `clamp_split::{NodeSplit, BucketSplit, value_chunk_indices, exact_output_prover}` | `clamp_split` (`BucketSplit` built once per proof in `global_clamp::BucketWitnesses`) |
 | `ClampBucket::assemble_bits` | `global_clamp::assemble_bits` |
 | `EinsumLayout::fold`, `Folded` | `ops/einsum/dot.rs` (`EinsumFold`, `Folded`), implemented in the three layout modules |
 | `neural_teleport::division::compute_division` | `neural_teleport/division.rs` |

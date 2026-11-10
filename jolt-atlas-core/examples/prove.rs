@@ -24,6 +24,7 @@
 //! `0..n` (scaled when the model expects fixed point), token types zero.
 use std::{collections::HashMap, path::PathBuf, time::Instant};
 
+use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
 use atlas_onnx_import::fixtures::{inputs_with_ids, standard_bindings, synth_inputs, GOLDEN_SEED};
 use atlas_onnx_import::{ImportedModel, InputDescriptor, InputKind};
 use atlas_trace::{Model, Tensor};
@@ -118,42 +119,79 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         }
     };
 
-    // 1. Committed digit columns by producing op, split by polynomial family.
-    //    One digit column = one one-hot polynomial of `padded` elements.
+    // 1. Committed one-hot columns, as the prover commits them: the packed bucket chunks
+    //    (output chunks, slack chunks, remainder chunks) and the per-node polynomials. A row
+    //    is one cycle; a cell is one of the K = 16 one-hot entries of a row.
     #[derive(Default)]
     struct Fam {
         polys: usize,
-        cells: usize,
+        empty: usize,
+        rows: usize,
+        nonzeros: usize,
     }
-    let mut by_op: BTreeMap<(String, String), Fam> = BTreeMap::new();
-    let mut total_cells = 0usize;
+    let count = |fam: &mut Fam, poly: &MultilinearPolynomial<Fp128>| {
+        fam.polys += 1;
+        match poly {
+            MultilinearPolynomial::OneHot(oh) => {
+                let nz = oh.nonzero_indices.iter().filter(|k| k.is_some()).count();
+                fam.rows += oh.nonzero_indices.len();
+                fam.nonzeros += nz;
+                if nz == 0 {
+                    fam.empty += 1;
+                }
+            }
+            other => fam.rows += other.len(),
+        }
+    };
+    let mut by_fam: BTreeMap<String, Fam> = BTreeMap::new();
+    for (p, poly) in
+        jolt_atlas_core::onnx_proof::global_clamp::bucket_witnesses::<Fp128>(model, &trace)
+    {
+        let name = format!("{p:?}");
+        let fam = name.split('(').next().unwrap().to_string();
+        count(by_fam.entry(fam).or_default(), &poly);
+    }
+    let mut by_op: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut node_rows = 0usize;
     for n in &views {
         let padded = n.pow2_padded_num_output_elements();
         for p in NodeCommittedPolynomials::get_committed_polynomials(n).expect("shape") {
             let name = format!("{p:?}");
             let fam = name.split('(').next().unwrap().to_string();
-            let e = by_op.entry((op_name(model, n.idx), fam)).or_default();
-            e.polys += 1;
-            e.cells += padded;
-            total_cells += padded;
+            *by_op.entry((op_name(model, n.idx), fam)).or_default() += padded;
+            node_rows += padded;
         }
     }
-    println!("committed digit columns by op and family (polys, cells=polys·padded, share):");
-    let mut rows: Vec<_> = by_op.iter().collect();
-    rows.sort_by_key(|(_, f)| std::cmp::Reverse(f.cells));
-    for ((op, fam), f) in rows {
+    let bucket_rows: usize = by_fam.values().map(|f| f.rows).sum();
+    let total_rows = bucket_rows + node_rows;
+    println!(
+        "committed one-hot columns (polys, empty polys, rows=polys*cycles, nonzeros, share of rows):"
+    );
+    for (fam, f) in &by_fam {
         println!(
-            "  {op:<16} {fam:<30} polys {:>5}  cells 2^{:<5.1} {:>5.1}%",
+            "  bucket {fam:<24} polys {:>4} empty {:>4} rows 2^{:<5.1} nonzeros 2^{:<5.1} {:>5.1}%",
             f.polys,
-            (f.cells as f64).log2(),
-            100.0 * f.cells as f64 / total_cells as f64
+            f.empty,
+            (f.rows.max(1) as f64).log2(),
+            (f.nonzeros.max(1) as f64).log2(),
+            100.0 * f.rows as f64 / total_rows as f64
+        );
+    }
+    let mut rows: Vec<_> = by_op.iter().collect();
+    rows.sort_by_key(|(_, r)| std::cmp::Reverse(**r));
+    for ((op, fam), r) in rows {
+        println!(
+            "  node   {op:<10} {fam:<26} rows 2^{:<5.1} {:>5.1}%",
+            (*r as f64).log2(),
+            100.0 * *r as f64 / total_rows as f64
         );
     }
     println!(
-        "  total cells 2^{:.1} ({} K=16 one-hot digits; {} key bits)",
-        (total_cells as f64).log2(),
-        total_cells,
-        total_cells * 4
+        "  total rows 2^{:.1} = {} committed digit positions ({} cells at K=16; {} key bits)",
+        (total_rows as f64).log2(),
+        total_rows,
+        total_rows * 16,
+        total_rows * 4
     );
 
     // 2. Clamp audit: static width vs the width the traced quotient needs, and
@@ -164,8 +202,11 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     );
     let widths = [16usize, 20, 24, 28, 32, 36, 40, 48];
     let thresholds = [80usize, 112, 176, 1024, 4096];
+    // Output chunks per element today: 8 (`OUT = out + 2^31`), whatever the static width;
+    // the w/4 slack chunks are empty off saturated rows.
+    let out_chunks = jolt_atlas_core::onnx_proof::clamp_split::num_out_chunks();
     let mut digits_today = 0usize;
-    let mut digits_observed = 0usize; // width = needed, rounded up to a digit
+    let mut digits_observed = 0usize; // output chunks at the needed width
     let mut overflow_nodes = [0usize; 8];
     let mut overflow_elems = [0usize; 8];
     let mut digits_at = [0usize; 8]; // nodes under w' at w', others at today's width
@@ -194,7 +235,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         saturated_total += saturated;
         elems_total += live;
         let row_w = *n.output_dims.last().unwrap_or(&1);
-        let today = n.sat_clamp_bits / 4;
+        let today = out_chunks;
         digits_today += today * padded;
         digits_observed += needed.div_ceil(4) * padded;
         for (k, &w) in widths.iter().enumerate() {
@@ -235,14 +276,14 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         println!("  {op:<16} {bits:>2} bits  x{c}");
     }
     println!(
-        "saturated elements: {saturated_total} of {elems_total}; clamp digit cells today 2^{:.1}, \
-         at observed widths 2^{:.1} ({:.2}x)",
+        "saturated elements: {saturated_total} of {elems_total}; clamp output chunk rows today 2^{:.1} \
+         (8 per element), at observed widths 2^{:.1} ({:.2}x)",
         (digits_today as f64).log2(),
         (digits_observed as f64).log2(),
         digits_today as f64 / digits_observed.max(1) as f64
     );
     println!(
-        "per-op clamp width w' -> nodes/elements that exceed it, clamp digit cells (x vs today):"
+        "per-op clamp width w' -> nodes/elements that exceed it, output chunk rows (x vs today):"
     );
     for (k, &w) in widths.iter().enumerate() {
         println!(
@@ -253,7 +294,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
             digits_today as f64 / digits_at[k].max(1) as f64
         );
     }
-    println!("clamp digit cells on rows of width >= threshold (rows, share of clamp cells):");
+    println!("output chunk rows on rows of width >= threshold (rows, share):");
     for (k, &thr) in thresholds.iter().enumerate() {
         println!(
             "  >= {thr:>4}: rows {:>8}  cells {:>5.1}%",

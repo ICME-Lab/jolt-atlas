@@ -81,6 +81,21 @@ fn main() {
             })
             .collect()
     });
+    // The slack chunks of the clamp buckets: columns that are empty on every row. How much an
+    // empty member of a one-hot class costs decides whether declared widths save commit time.
+    run("one-hot, 24 of 64 cols empty", &mut || {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        (0..columns)
+            .map(|c| {
+                MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
+                    (0..rows)
+                        .map(|_| (c * 8 < columns * 5).then(|| digit(&mut rng) as u16))
+                        .collect(),
+                    AKITA_ONE_HOT_K16,
+                ))
+            })
+            .collect()
+    });
     run("dense u8 in [0,16), 1 col", &mut || {
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
         (0..columns)

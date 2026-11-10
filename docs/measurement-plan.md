@@ -122,8 +122,8 @@ example edit times `model.trace(inputs)` separately.
 tokens the Akita commit is 59% of the prover and the three `OneHot num_vars=24, 64 slots` classes
 alone are 20.9 s of it: 192 polynomials of 2^20 K=16 digits, about 104 ns per committed digit.
 Witness generation is 2% (the README's "25 s witness + commit" is 0.8 s + 23.6 s). The IOP is
-14% and the deferred lookup sumchecks (Booleanity, read-raf, ra-virtualization over the packed
-buckets) are 3.1 s of that. The opening stage is 17%, of which 72% is the per-class Akita
+14% and the deferred bucket sumchecks (the clamp split sumchecks and the Booleanity chunk
+checks; the buckets run no read-raf and no ra-virtualization) are 3.1 s of that. The opening stage is 17%, of which 72% is the per-class Akita
 openings and 28% the reduction sumcheck over 1,833 claims. Scaling is linear in context
 (1.84x, 1.95x, 1.97x per doubling), the commit share rising to 72% at 128 tokens; 128 tokens fits
 in 11.2 GB.
@@ -132,13 +132,15 @@ The July HyperKZG profile does not transfer: on Akita the digit-savings table in
 first-order lever, not an upper bound. Items that remove committed digits (D2, then C1–C3, B1's
 read-raf digits, D1 on wide rows) move ahead of items that only remove sumcheck instances.
 
-Where the digits come from (`--stats`, GPT-2 16 tok): 14 packed clamp buckets of 2^20 rows at
-**40, 48, 56 and 64 bits** (10–16 digits each; 7 at 40, 1 at 48, 5 at 56, 1 at 64 = 168 digit
-columns) and 9 remainder buckets at 14 bits (4 digits) plus one at 28 (7 digits) = 39. The
-roadmap's "8 clamp digits per element" undercounts: the model-wide clamp widths are 40–64 bits,
-so per-op clamp widths of 12–16 bits (D2) would take each bucket from 10–16 digits to 3–4, a
-3–4x cut in the stage that is 59–72% of the prover. That is the Phase 2 sweep's target. The
-remainder digits (D4) are 19% of the digit columns.
+Where the digits come from (`--stats` and the Phase 2 census, GPT-2 16 tok): 14 packed clamp
+buckets of 2^20 rows, each committing **8 output chunks** of `OUT = out + 2^31` per row
+(`clamp_split.rs`: 112 polynomials) plus `w/4` slack chunks for its static width `w ∈ {40, 48,
+56, 64}` that are empty off saturated rows (168 polynomials, 152 of them entirely empty), and 9
+remainder buckets at 14 bits (4 chunks) plus one at 28 (7) = 39. An earlier version of this
+paragraph counted `w/4` clamp digits per element from the static width; the committed count is
+8 per element whatever the width, and empty columns cost nothing to commit (Phase 3). Of the
+non-empty committed digit rows, the clamp output chunks are 71%, the remainders 22%, every
+per-node polynomial together 7%.
 
 bge-small is the other regime: 4,902 commitments across 27 small one-hot classes (2^19 × 64),
 and the opening stage (7.4 s, 44%) exceeds the commit (4.8 s). Per-class opening cost scales
@@ -199,40 +201,45 @@ power-of-two token prefix. Outputs: `bench/runs/census-*.txt`. Runs: GPT-2 on sy
 (64), qwen2-tiny synthetic (16). The numbers below are stable across the three texts to within
 a few percent; GPT-2 figures are the 64-token prose run.
 
-**Where the committed cells are (GPT-2, 64 tokens).** Clamp buckets 2^29.2 cells (~600 M),
-rescale remainders about 23% of that (from the bucket table: 39 of 207 bucket digit columns),
-and every per-node polynomial together 2^25.8 (58 M). So clamp digits are roughly 73% of all
-committed cells, remainders 22%, everything else 5%. Of that 5%, the Tanh lookups
-(`ActivationClampRaD` 96 polys + `ActivationSmallRaD` 60) are 70% and the softmax families
-30%; rsqrt, mean-of-squares and gather are under 0.3% together. bge-small has the same shape
-with Erf in place of Tanh.
+**Where the committed digits are (GPT-2, 64 tokens).** Counted from the polynomials the prover
+commits (`global_clamp::bucket_witnesses` plus the per-node list), in digit rows (one row = one
+cycle of one K = 16 one-hot polynomial): clamp output chunks 112 polynomials, 2^28.8 rows; clamp
+slack chunks 168 polynomials, 2^29.4 rows but 152 of them entirely empty and 2^5 nonzeros in
+all (the two saturated elements); remainder chunks 39 polynomials, 2^27.2 rows; every per-node
+polynomial together 2^25.8. Since empty columns are free to commit (Phase 3), the paid digit
+rows split **71% clamp output chunks (8 per element), 22% remainders (4 per element), 7%
+everything else**. Of the 7%, the Tanh lookups (`ActivationClampRaD` 96 + `ActivationSmallRaD`
+60) are 70% and the softmax families 30%; rsqrt, mean-of-squares and gather are under 0.3%
+together. bge-small has the same shape (Erf for Tanh; 1,256 output-chunk polynomials in 157
+small buckets, 1,828 slack polynomials all empty).
 
 **Static vs needed clamp width.** Static widths are 40–64 bits. On real text the traced
 quotients need 13–29 bits: residual-stream Adds 17–23, einsum outputs 16–24, Muls 15–23; the
 27–29-bit nodes are the LayerNorm chain (Sum, Sub, MeanOfSquares, Add: 19–20 nodes each, i.e.
 one per norm) and the Cubes (24–28, one at 33 bits). Exactly one node saturates today (node 436,
-Cube, 2 of 262,144 elements); everything else is at least 11 bits inside its static width.
+Cube, 2 of 262,144 elements). The static width sets only the slack chunks, which are empty and
+free; what a declared width can shrink is the 8 output chunks, to `⌈w'/4⌉`:
 
-| per-op width w' | GPT-2 nodes / elements over | clamp cells vs today | bge-small nodes over | vs today |
+| per-op width w' | GPT-2 nodes / elements over | output-chunk rows vs today | bge-small nodes over | vs today |
 |---|---|---|---|---|
-| per-node observed | — | 2.19x | — | 2.31x |
-| 20 | 178 / 3.2 M | 1.61x | 75 / 9,485 | 1.97x |
-| 24 | 112 / 486 | 1.80x | 0 | 1.94x |
-| 28 | 39 / 67 | 1.69x | 0 | 1.66x |
-| 32 | 1 / 2 (the saturating Cube) | 1.48x | 0 | 1.46x |
-| 40 | 0 | 1.19x | 0 | 1.16x |
+| per-node observed | — | 1.47x | — | 1.58x |
+| 24 | 112 / 486 | 1.29x | 0 | 1.33x |
+| 28 | 39 / 67 | 1.14x | 0 | 1.14x |
+| 32 | 1 / 2 (the saturating Cube) | 1.00x | 0 | 1.00x |
 
-(Nodes over w' are counted at today's width; the ratio is over all clamp cells.)
+(Nodes over w' keep 8 chunks; the ratio is over all clamp output-chunk rows. An earlier version
+of this table measured against `w/4` digits per element and showed 1.5–2.2x; that baseline was
+wrong.)
 
-**Rows.** 92% of GPT-2's clamp cells sit on rows at least 1,024 wide and 63% on rows at least
+**Rows.** 92% of GPT-2's clamp output-chunk rows sit on rows at least 1,024 wide and 63% on rows at least
 4,096 wide (the MLP); bge-small has 48% on rows of 1,024 and nothing wider.
 
 **Softmax.** On GPT-2 text, 48–50% of live lanes have `max − x ≥ 2^17` (8.0 at scale 2^14):
 half of the exp lookups sit at the saturated end of the table. On bge-small it is 8–24% per
 layer.
 
-**Fusion candidates.** 72 einsum → constant-Add (bias) pairs on GPT-2 (2^22.8 output cells, about
-12% of the clamp cells, C1); none on bge-small or qwen2-tiny. No activation reads an einsum
+**Fusion candidates.** 72 einsum → constant-Add (bias) pairs on GPT-2 (2^22.8 output elements,
+about 12% of the clamp output-chunk rows, C1); none on bge-small or qwen2-tiny. No activation reads an einsum
 directly on any of the three (the bias Add sits between), so C2 is empty until C1 lands. Every
 Slice is aligned (B4 has nothing to do on these models). LayerNorm is not fused: each norm is
 nine lowered ops (Sum, Mul, Sub, MeanOfSquares, Add, Rsqrt, Mul, Mul, Add), eight of them
@@ -242,21 +249,21 @@ clamped, and holds the widest quotients in the model.
 7–9% of the prover and growing linearly; the tracer's i64 accumulations are worth a profile
 of their own.
 
-**Gate 2 verdict.** The sweep's premise was wrong, not its answer. At scale 2^14 the honest
+**Gate 2 verdict.** The sweep's premise was wrong twice over. At scale 2^14 the honest
 quotients need 17–29 bits, so a 12–16-bit per-op width is a change of scale, not of clamp
-width (FlashProve's 12-bit activations are at a far coarser scale); D2 at the widths that
-keep today's outputs (per-node observed, or a uniform 32) gives **1.5–2.2x on the clamp cells**,
-about 1.4–1.8x on all committed cells, and is exact by construction: for every node but the
-saturating Cube the traced quotient never leaves the narrower width, so no perplexity sweep is
-needed to show the outputs are unchanged on these inputs (what remains unmeasured is the margin
-on unseen inputs, which is a tracer-side assertion under partial semantics). The accuracy
-decision rule in this phase is therefore retired. Since 92% of the clamp cells sit on rows
-at least 1,024 wide, the **row check (D1) is the larger lever**: at 1–2 amortised digits per
-element it takes those cells down roughly an order of magnitude, against D2's 2x, and the two
-compose (a narrower declared width shrinks D1's projection digits). D1 goes to Phase 4 as the
-first prototype, with D2's declared widths as its companion rather than its alternative. C1
-(bias fusion) is worth 12% of the clamp cells on GPT-2 and nothing on the encoder models; a
-fused LayerNorm would remove the widest seven clamps per norm and is a new roadmap item.
+width (FlashProve's 12-bit activations are at a far coarser scale); and the clamp buckets
+already commit 8 output chunks per element regardless of the static width (the width only sizes
+the empty slack chunks), so a declared width can only take 8 chunks to `⌈w'/4⌉`: **1.3–1.5x on
+the clamp output chunks** at the widths that keep today's outputs (uniform 24 with 112 nodes
+excepted, or per-node observed), about 1.2–1.3x on all committed digit rows. It is exact by
+construction (every quotient but the saturating Cube stays inside its observed width on these
+inputs; the margin on unseen inputs is a tracer-side assertion under partial semantics), so the
+accuracy decision rule is retired, and D2 drops to a companion item. Since 92% of the output
+chunks sit on rows at least 1,024 wide, the **row check (D1) is the larger lever**: at 1–2
+amortised digits per element it takes those rows down roughly an order of magnitude; and the
+encoding of whatever remains is Phase 3's question. C1 (bias fusion) is worth 12% of the clamp
+output chunks on GPT-2 and nothing on the encoder models; a fused LayerNorm would remove the
+widest eight clamps per norm and is a new roadmap item.
 
 ### Phase 3: commitment microbenchmarks (build 3: `atlas-pcs` only)
 
@@ -311,24 +318,31 @@ digit per row, 64 columns, committed four ways; per-digit costs are flat from 2^
 | arm (same 2^26 digits) | cells | witness | commit | ns / digit | ns / key bit | vs one-hot |
 |---|---|---|---|---|---|---|
 | K = 16 one-hot (today) | 2^30 | 0.14 s | 9.6 s | 143 | 36 | 1x |
+| K = 16 one-hot, 24 of 64 columns empty | 2^30 | 0.14 s | 6.1 s | 144 per nonzero row | — | — |
 | dense u8 in [0, 16), 1 column | 2^26 | 0.12 s | 0.81 s | 12 | 3.0 | **11.8x** |
 | dense u8 in [0, 4), 2 columns | 2^27 | 0.18 s | 2.5 s | 37 | 9.4 | 3.8x |
 | dense Boolean, 4 columns | 2^28 | 0.23 s | 3.8 s | 57 | 14 | 2.5x |
 
-Peak RSS 8.8 GB for the four arms in one process. The one-hot arm reproduces Phase 1's
-per-class cost (inside the prover: ~104 ns per digit, where a share of the rows are padding).
+A fifth arm, added after the correction to the census: 64 one-hot columns of which 24 are
+entirely empty (the clamp buckets' slack chunks) commits in 6.06 s against 9.66 s for 64 full
+columns, i.e. 40/64 of it: **an empty column costs nothing**, and Akita's one-hot cost is per
+nonzero row (~144 ns), not per cell of the K × rows object. Peak RSS 8.8 GB for the arms in one
+process; repeat runs of the dense arms vary by ±30% (base-4 1.7–2.5 s, Boolean 3.8–4.6 s), the
+one-hot arm by 1%. The one-hot arm reproduces Phase 1's per-class cost (~104 ns per committed
+row inside the prover, where a share of the rows are padding).
 
-Reading: Akita's cost is per **cell**, 9–12 ns each, whichever class; a K = 16 one-hot column
-is 16 cells per digit and its sparsity buys about 25%. A dense column of the same digits is
-one cell per digit. The catch is the range proof: a dense column in [0, 16) has no cheap
-constraint (a degree-15 zero-check, or a lookup, which is one-hot again), so the usable arms
-are the two in the lower rows: base-4 digits with a degree-3 zero-check (SuperNeo's design,
-3.8x on the commit) or Booleans with Booleanity (2.5x). For the clamp range checks, which are
-73% of the cells, a bit or base-4 decomposition needs no lookup at all: committed digits,
-one zero-check, and a linear recomposition, replacing today's read-raf + Booleanity +
-Hamming-weight + ra-virtualization on one-hot columns. The row check (D1) then applies to the
-decomposed form the same way. For the address digits of real table lookups (Tanh, softmax,
-5% of cells) the one-hot column can stay, or be virtualised from the bits at degree 4.
+Reading: a committed one-hot row costs 144 ns; a dense value costs 12 ns; so the one-hot
+encoding is paying about 12x for the 16 cells it spreads one digit over, and sparsity across
+rows buys nothing because every row has a digit. The catch is the range proof: a dense column
+in [0, 16) has no cheap constraint (a degree-15 zero-check, or a lookup, which is one-hot
+again), so the usable arms are base-4 digits with a degree-3 zero-check (SuperNeo's design,
+3.8–5.7x on the commit) or Booleans with Booleanity (2.1–2.5x). For the clamp output chunks (71%
+of paid rows) and the remainders (22%) a base-4 decomposition needs no lookup machinery:
+committed digits, one zero-check, and the linear recomposition, replacing today's one-hot
+output chunks under the split sumcheck and Booleanity chunk check (`clamp_split.rs`; the
+buckets already run no read-raf). The split sumcheck itself keeps its shape. The row check (D1)
+then applies to the decomposed form the same way. For the address digits of real table lookups
+(Tanh, softmax, 7% of rows) the one-hot column can stay, or be virtualised from the digits.
 
 Not yet run: the virtual-remainder grand-product test (D4), the Fp128 sumcheck kernels
 (A1, A2, E), and the **BitZ arm**. The BitZ proof-of-concept is checked out at

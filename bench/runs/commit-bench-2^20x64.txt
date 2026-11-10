@@ -1,6 +1,5 @@
-rows 2^20, 64 columns: 67108864 four-bit digits (268435456 key bits) per arm
-one-hot K=16 (today)         polys   64  witness 137.139ms  commit   9.586s   142.8 ns/digit    35.7 ns/key-bit  (1 classes, 1073741824 cells)
-dense u8 in [0,16), 1 col    polys   64  witness 115.151ms  commit 812.980ms    12.1 ns/digit     3.0 ns/key-bit  (1 classes, 67108864 cells)
-dense u8 in [0,4), 2 cols    polys  128  witness 175.915ms  commit   2.516s    37.5 ns/digit     9.4 ns/key-bit  (1 classes, 134217728 cells)
-dense bool, 4 cols           polys  256  witness 232.599ms  commit   3.840s    57.2 ns/digit    14.3 ns/key-bit  (1 classes, 268435456 cells)
-          8807874560  maximum resident set size
+one-hot K=16 (today)         polys   64  witness 149.402ms  commit   9.663s   144.0 ns/digit    36.0 ns/key-bit  (1 classes, 1073741824 cells)
+one-hot, 24 of 64 cols empty polys   64  witness 141.096ms  commit   6.064s    90.4 ns/digit    22.6 ns/key-bit  (1 classes, 1073741824 cells)
+dense u8 in [0,16), 1 col    polys   64  witness 110.948ms  commit 856.764ms    12.8 ns/digit     3.2 ns/key-bit  (1 classes, 67108864 cells)
+dense u8 in [0,4), 2 cols    polys  128  witness 150.937ms  commit   1.678s    25.0 ns/digit     6.3 ns/key-bit  (1 classes, 134217728 cells)
+dense bool, 4 cols           polys  256  witness 238.538ms  commit   4.639s    69.1 ns/digit    17.3 ns/key-bit  (1 classes, 268435456 cells)

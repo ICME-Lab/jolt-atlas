@@ -2,25 +2,28 @@
 (Run with --trace for JSON output or --trace-terminal for terminal output)
 
 model models/gpt2 | sequence_length 16 | scale 2^14
-imported 1579 atlas nodes in 1.48s
+imported 1579 atlas nodes in 1.64s
   input input_ids        RawInt [1, 16]
   input attention_mask   RawInt [1, 16]
   input position_ids     RawInt [1, 16]
-trace execution: 3.03s
-committed digit columns by op and family (polys, cells=polys·padded, share):
-  Tanh             ActivationClampRaD             polys    96  cells 2^22.6   55.4%
-  Tanh             ActivationSmallRaD             polys    60  cells 2^21.9   34.6%
-  SoftmaxLastAxis  SoftmaxClampRaD                polys    96  cells 2^18.6    3.5%
-  SoftmaxLastAxis  SoftmaxExpRemainderRaD         polys    48  cells 2^17.6    1.7%
-  SoftmaxLastAxis  SoftmaxRemainderRaD            polys    48  cells 2^17.6    1.7%
-  SoftmaxLastAxis  SoftmaxZHiRaD                  polys    36  cells 2^17.2    1.3%
-  SoftmaxLastAxis  SoftmaxZLoRaD                  polys    36  cells 2^17.2    1.3%
-  GatherSmall      GatherRa                       polys     3  cells 2^15.0    0.3%
-  MeanOfSquares    MeanOfSquaresRangeCheckRaD     polys   400  cells 2^12.6    0.1%
-  Rsqrt            SqrtDivRangeCheckRaD           polys   400  cells 2^12.6    0.1%
-  Rsqrt            SqrtRangeCheckRaD              polys   400  cells 2^12.6    0.1%
-  Rsqrt            RsqrtQuotient                  polys    25  cells 2^8.6     0.0%
-  total cells 2^23.4 (11357344 K=16 one-hot digits; 45429376 key bits)
+trace execution: 3.25s
+committed one-hot columns (polys, empty polys, rows=polys*cycles, nonzeros, share of rows):
+  bucket GlobalClampOutRaD        polys  112 empty    0 rows 2^26.8  nonzeros 2^26.8   34.2%
+  bucket GlobalClampSlackRaD      polys  168 empty  152 rows 2^27.3  nonzeros 2^5.0    51.1%
+  bucket GlobalRemainderRaD       polys   39 empty    0 rows 2^25.1  nonzeros 2^25.1   11.3%
+  node   Tanh       ActivationClampRaD         rows 2^22.6    1.9%
+  node   Tanh       ActivationSmallRaD         rows 2^21.9    1.2%
+  node   SoftmaxLastAxis SoftmaxClampRaD            rows 2^18.6    0.1%
+  node   SoftmaxLastAxis SoftmaxExpRemainderRaD     rows 2^17.6    0.1%
+  node   SoftmaxLastAxis SoftmaxRemainderRaD        rows 2^17.6    0.1%
+  node   SoftmaxLastAxis SoftmaxZHiRaD              rows 2^17.2    0.0%
+  node   SoftmaxLastAxis SoftmaxZLoRaD              rows 2^17.2    0.0%
+  node   GatherSmall GatherRa                   rows 2^15.0    0.0%
+  node   MeanOfSquares MeanOfSquaresRangeCheckRaD rows 2^12.6    0.0%
+  node   Rsqrt      SqrtDivRangeCheckRaD       rows 2^12.6    0.0%
+  node   Rsqrt      SqrtRangeCheckRaD          rows 2^12.6    0.0%
+  node   Rsqrt      RsqrtQuotient              rows 2^8.6     0.0%
+  total rows 2^28.3 = 330648736 committed digit positions (5290379776 cells at K=16; 1322594944 key bits)
 clamp audit per node (op, static w, needed w, saturated/elems, row width): nodes with needed > 32 or saturation only
   node 436   Cube           static 64 needed 33 sat 2/65536 row 4096
 needed width histogram (op, bits) -> nodes:
@@ -82,22 +85,22 @@ needed width histogram (op, bits) -> nodes:
   Sum              21 bits  x2
   Sum              25 bits  x2
   Sum              27 bits  x19
-saturated elements: 2 of 12830272; clamp digit cells today 2^27.2, at observed widths 2^26.1 (2.18x)
-per-op clamp width w' -> nodes/elements that exceed it, clamp digit cells (x vs today):
-  w'=16:  493 nodes,   1706186 elems over; cells 2^27.2 (1.01x)
-  w'=20:  172 nodes,    763042 elems over; cells 2^26.5 (1.59x)
-  w'=24:  113 nodes,       284 elems over; cells 2^26.4 (1.78x)
-  w'=28:   39 nodes,        49 elems over; cells 2^26.4 (1.69x)
-  w'=32:    1 nodes,         2 elems over; cells 2^26.6 (1.48x)
-  w'=36:    0 nodes,         0 elems over; cells 2^26.8 (1.32x)
-  w'=40:    0 nodes,         0 elems over; cells 2^26.9 (1.19x)
-  w'=48:    0 nodes,         0 elems over; cells 2^27.2 (0.99x)
-clamp digit cells on rows of width >= threshold (rows, share of clamp cells):
-  >=   80: rows     5664  cells  93.8%
-  >=  112: rows     5664  cells  93.8%
-  >=  176: rows     5664  cells  93.8%
-  >= 1024: rows     5664  cells  93.8%
-  >= 4096: rows     1744  cells  64.9%
+saturated elements: 2 of 12830272; clamp output chunk rows today 2^26.6 (8 per element), at observed widths 2^26.1 (1.47x)
+per-op clamp width w' -> nodes/elements that exceed it, output chunk rows (x vs today):
+  w'=16:  493 nodes,   1706186 elems over; cells 2^26.6 (1.01x)
+  w'=20:  172 nodes,    763042 elems over; cells 2^26.2 (1.32x)
+  w'=24:  113 nodes,       284 elems over; cells 2^26.2 (1.29x)
+  w'=28:   39 nodes,        49 elems over; cells 2^26.4 (1.14x)
+  w'=32:    1 nodes,         2 elems over; cells 2^26.6 (1.00x)
+  w'=36:    0 nodes,         0 elems over; cells 2^26.8 (0.89x)
+  w'=40:    0 nodes,         0 elems over; cells 2^26.9 (0.80x)
+  w'=48:    0 nodes,         0 elems over; cells 2^27.2 (0.67x)
+output chunk rows on rows of width >= threshold (rows, share):
+  >=   80: rows     5664  cells  94.6%
+  >=  112: rows     5664  cells  94.6%
+  >=  176: rows     5664  cells  94.6%
+  >= 1024: rows     5664  cells  94.6%
+  >= 4096: rows     1744  cells  63.3%
 softmax rows: spread of (max - x) over live lanes:
   node 147   rows   256 live   16 max(max-x) 2^18.8  lanes with max-x >= 2^17 : 1968 (48.05%)
   node 269   rows   256 live   16 max(max-x) 2^18.1  lanes with max-x >= 2^17 : 1899 (46.36%)

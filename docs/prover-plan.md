@@ -26,29 +26,37 @@ regime: 27 small one-hot classes, 4,902 commitments, and the opening stage (7.4 
 the commit.
 
 **What is committed.** Only one-hot digit polynomials (K = 16, 4 bits per digit): nothing else.
-On GPT-2 at 64 tokens, by cells (one cell = one digit value):
+On GPT-2 at 64 tokens, by committed digit rows (one row = one cycle of one one-hot polynomial;
+empty columns are free, see below):
 
-| family | share of cells | what it range-checks |
+| family | share of rows | what it is |
 |---|---|---|
-| saturating-clamp digits (packed buckets, 40–64 bits wide) | ~73% | the pre-clamp quotient of every einsum, Add, Sub, Sum, Mul, Cube, MeanOfSquares output |
-| rescale remainders (14 bits; 28 for Cube) | ~22% | `acc mod 2^S` |
-| Tanh (GELU) lookups | ~3.5% | the activation's clamp and table address |
+| clamp output chunks (`OUT = out + 2^31`, 8 per element, `clamp_split.rs`) | ~71% | the clamped output of every einsum, Add, Sub, Sum, Mul, Cube, MeanOfSquares |
+| rescale remainders (14 bits = 4 chunks; 28 for Cube) | ~22% | `acc mod 2^S` |
+| Tanh (GELU) lookups | ~3% | the activation's clamp and table address |
 | softmax | ~1.5% | clamp, exp digits, two remainders |
 | rsqrt, MeanOfSquares, gather | < 0.3% | — |
 
+The clamp buckets also carry `w/4` slack chunks per static width `w ∈ {40, …, 64}`, nonzero only
+on saturated rows (2 elements in all of GPT-2); they are committed as empty columns and cost
+nothing.
+
 **Three facts that set the plan.**
 
-1. **Akita prices per cell, not per nonzero: 9–12 ns a cell.** A K = 16 one-hot column costs 143
-   ns per digit; a dense column of the same digits in [0, 16) costs 12 ns, two base-4 columns
-   37 ns, four Boolean columns 57 ns (`atlas-pcs/examples/commit_bench.rs`). The one-hot
-   encoding's sparsity recovers about 25% of the 16x cell blow-up.
-2. **The clamp widths are static bounds, 11+ bits above what the values need.** Static widths are
-   40–64 bits (10–16 digits per element); the traced quotients on real text need 13–29 bits
-   (residual Adds 17–23, einsum outputs 16–24, the LayerNorm chain 27–29). One node in GPT-2
-   saturates (a Cube, 2 elements). Per-node observed widths would cut clamp cells 2.2x; a uniform
-   32 bits (today's semantics minus saturation) 1.5x.
-3. **92% of the clamp cells sit on rows at least 1,024 wide, 63% on rows of 4,096** (GPT-2); 48%
-   on rows of 1,024 for bge-small. A per-row check amortises over them.
+1. **Akita charges ~144 ns per committed one-hot row and ~12 ns per dense value.** A K = 16
+   one-hot column costs 143 ns per digit; a dense column of the same digits in [0, 16) 12 ns,
+   two base-4 columns 25–37 ns, four Boolean columns 57–69 ns; an empty one-hot column costs
+   nothing (`atlas-pcs/examples/commit_bench.rs`). The one-hot encoding pays about 12x for
+   spreading each digit over 16 cells, and row sparsity cannot help because every row holds a
+   digit.
+2. **Every clamped element commits 8 output chunks plus 4 remainder chunks, whatever its
+   width.** The traced quotients on real text need 13–29 bits (residual Adds 17–23, einsum
+   outputs 16–24, the LayerNorm chain 27–29); one node in GPT-2 saturates (a Cube, 2 elements).
+   A declared per-op width can take the 8 output chunks to `⌈w'/4⌉`: 1.47x at per-node observed
+   widths, 1.29x at a uniform 24 bits (112 nodes excepted). The static 40–64-bit widths size only
+   the free slack chunks.
+3. **92% of the clamp output chunks sit on rows at least 1,024 wide, 63% on rows of 4,096**
+   (GPT-2); 48% on rows of 1,024 for bge-small. A per-row check amortises over them.
 
 The July 2026 HyperKZG profile, which found sumcheck work dominant per lookup, does not transfer
 to Akita. Digits are the cost.
@@ -57,9 +65,10 @@ to Akita. Digits are the cost.
 
 **On our stack, proving inference is proving values are small, and we prove it in the most
 expensive encoding available.** The arithmetic (Thaler's matmul sumcheck, virtual intermediates)
-commits nothing; 95% of what we commit exists to range-check rounding and clamping, and it is
-committed as 16 cells per 4-bit digit so that it can serve as a Shout lookup address, when a range
-check needs no lookup at all.
+commits nothing; 93% of what we commit exists to range-check rounding and clamping (the clamp
+output chunks and the remainders), and it is committed in the one-hot encoding Shout needs for
+lookup addresses, at 12x the cost of a dense digit, when a range check needs no lookup at all
+(the clamp buckets already run none: a split sumcheck and a Booleanity chunk check).
 
 The strategy that follows, in order of leverage:
 
@@ -72,45 +81,48 @@ The strategy that follows, in order of leverage:
 - **Wide rows get the row check** on top (item 3): 128 random ternary combinations per row, shared
   across rows, each range-checked instead of every element. Exact lemma (LNS 2020/1448 2.5):
   slack 2, error 2^-n, no field condition; completeness can be perfect at one extra digit.
-- **Widths are declared per op** (item 4), which both halves the digits and is what the row check
+- **Widths are declared per op** (item 4): 1.3–1.5x on the output chunks, and what the row check
   needs (it cannot reproduce a saturating clamp).
-- **One-hot columns remain only where a table is read** (Tanh, softmax, gather: 5% of cells), or
-  are virtualised from the bits at degree 4.
+- **One-hot columns remain only where a table is read** (Tanh, softmax, gather: 7% of rows), or
+  are virtualised from the digits.
 - **The commitment scheme stays Akita** (decided 2026-11-10): the encoding change above is a
   4x on the commit with no scheme change, and keeps zero knowledge (upstream's Whiteout stack),
   recursion (the Akita verifier guest) and small proofs. BitZ is kept in view as the future
   option for the range digits (section 5); the FlashProve-style hash architecture is declined
   (section 4).
 
-The estimated ceiling, with the measured per-cell costs and today's digit counts: items 1–4 take
-the 23.6 s commit to roughly 5–7 s on GPT-2 at 16 tokens (clamp cells ÷ 3.8 by the encoding, ÷
-1.5–2 by declared widths, and ÷ ~10 on wide rows by the row check; remainders ÷ 3.8), i.e. the
-prover from 40 s to the low 20s before anything is done to the IOP or the openings, which then
-become half of what is left. These are estimates; the first prototype measures them.
+The estimated ceiling, with the measured per-row costs and today's chunk counts: items 1–4 take
+the 23.6 s commit to roughly 5–7 s on GPT-2 at 16 tokens (output chunks ÷ 3.8–5.7 by the
+encoding, ÷ 1.3–1.5 by declared widths, and ÷ ~10 on wide rows by the row check; remainders ÷
+3.8–5.7), i.e. the prover from 40 s to the low 20s before anything is done to the IOP or the
+openings, which then become half of what is left. These are estimates; the first prototype
+measures them.
 
 ## 3. The plan, in order
 
 Each item names its measured target, the mechanism, and what it needs. Items 1–4 change the
 range-check protocol only; outputs and golden hashes do not move unless the item says so.
 
-### 1. Dense-digit range check for the clamp buckets (roadmap D3) — 73% of cells, 3.8x on them
+### 1. Dense-digit encoding for the clamp output chunks (roadmap D3) — 71% of rows, 3.8–5.7x on them
 
-Replace the K = 16 one-hot clamp columns by base-4 digit columns (`U8Scalars` in [0, 4), two per
-former digit) with a batched degree-3 zero-check `d(d−1)(d−2)(d−3) = 0` and the recomposition
-claim; the saturated/interior split stays, expressed on the top digits. Measured commit cost 37
-ns per 4-bit digit against 143. The deferred lookup sumchecks over the buckets (3.1 s) are
-replaced by the zero-check, cheaper than today's three. Decide base 4 against Booleans (57 ns,
-degree 2) in the prototype by total time, not commit time alone. Needs: new witness columns in
+Today each bucket commits `OUT = out + 2^31` as 8 one-hot chunks per row plus empty slack chunks,
+checked by a split sumcheck and the Booleanity chunk check with a linear term
+(`clamp_split.rs`); there is no lookup on the buckets already. Replace the one-hot chunks by
+base-4 digit columns (`U8Scalars` in [0, 4), sixteen per element) with a batched degree-3
+zero-check `d(d−1)(d−2)(d−3) = 0` in place of Booleanity and the same linear recomposition of
+`OUT` and `S`; the split sumcheck keeps its shape. Measured commit cost 25–37 ns per 4-bit digit
+against 143. Decide base 4 against Booleans (57–69 ns, degree 2) in the prototype by total time,
+not commit time alone. Needs: new witness columns in
 `witness.rs`, a relation with its `type Spec`, the soundness sweeps over the new columns, zoo
 tests, one real-model run. Prototype on `gpt2-tiny` in the test profile first.
 
-### 2. The same for the rescale remainders — 22% of cells, 3.8x on them
+### 2. The same for the rescale remainders — 22% of rows, 3.8–5.7x on them
 
 A 14-bit remainder is seven base-4 digits with the same zero-check; the 28-bit Cube remainders
 fourteen. Same machinery as item 1, same PR or the next. (Celer-style grand products on virtual
 keys, the former D4, are superseded: they only beat one-hot digits, not dense ones.)
 
-### 3. Row check on wide rows (roadmap D1) — ~10x on 63–92% of the clamp cells (estimate)
+### 3. Row check on wide rows (roadmap D1) — ~10x on 63–92% of the clamp output chunks (estimate)
 
 Per row width, after every commitment the tensor depends on, draw n = 128 + ⌈log₂ rows⌉
 combinations with coefficients 0 (p = 1/2) and ±1 (p = 1/4 each). The prover commits the digits
@@ -123,7 +135,7 @@ GPT-2 einsum output with the **negative test** that draws the matrix before the 
 commitment (the prover can then steer the tensor into its kernel). Needs item 4 or
 partial-function semantics, since the check bounds but does not saturate.
 
-### 4. Per-op declared clamp widths (roadmap D2) — 1.5–2.2x on the clamp cells, exact
+### 4. Per-op declared clamp widths (roadmap D2) — 1.3–1.5x on the clamp output chunks, exact
 
 Replace the static 40/48/56/64 ladder by a per-op width declared at compile time (observed +
 margin, or a uniform 32), absorbed into the transcript like the existing exact flag. On the
@@ -135,10 +147,10 @@ from weight ℓ1 norms (zkAgent) are the stronger form where they apply. At scal
 values need 17–29 bits, so "12–16-bit activations" is a change of scale, not of width, and is
 not pursued (section 6).
 
-### 5. Fusions that remove clamps (roadmap C1, new LayerNorm item, B4) — up to ~15% of cells
+### 5. Fusions that remove clamps (roadmap C1, new LayerNorm item, B4) — up to ~15% of rows
 
 - **Bias into the einsum rebase (C1):** 72 einsum → constant-Add pairs on GPT-2, 12% of the
-  clamp cells; `acc' = Σ L·R + b·2^S` leaves the remainder unchanged and the quotient `q + b`,
+  clamp output chunks; `acc' = Σ L·R + b·2^S` leaves the remainder unchanged and the quotient `q + b`,
   so one clamped node disappears per linear layer. Outputs differ only where the un-biased
   quotient would have saturated. Nothing on the encoder models.
 - **Fused LayerNorm:** each norm is nine lowered ops, eight of them clamped, holding the widest
@@ -148,7 +160,7 @@ not pursued (section 6).
   zero-round ties; IsNaN rewritten to constant zero and the dead Iff folded. Every Slice in the
   zoo is aligned. Small prover gain; verifier time and code.
 
-### 6. Activations and softmax (roadmap B2, C2–C4, B3, B5) — 5% of cells, more at long context
+### 6. Activations and softmax (roadmap B2, C2–C4, B3, B5) — 7% of rows, more at long context
 
 Softmax and the attention-score einsum grow with the square of the sequence length and are small
 at 16 tokens; measure at 256–512 tokens before sizing this group.
@@ -167,7 +179,7 @@ at 16 tokens; measure at 256–512 tokens before sizing this group.
   models is measured by the census (half of GPT-2's exp lookups already sit at the saturated end,
   `max − x ≥ 2^17`). Supersedes B3 (one lookup on `z`). Needs a spec.
 
-### 7. Per-node range checks onto the shared mechanism (roadmap B1) — small cells, removes 64-bit read-rafs
+### 7. Per-node range checks onto the shared mechanism (roadmap B1) — few rows, removes 64-bit read-rafs
 
 Rsqrt, Div, MeanOfSquares, Sin and Cos commit per node and run 64-bit `UnsignedLessThan`
 read-rafs with degree-17 ra-virtualization. Rsqrt becomes one relation,

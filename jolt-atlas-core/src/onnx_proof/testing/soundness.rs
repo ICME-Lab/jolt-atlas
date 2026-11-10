@@ -5,9 +5,10 @@
 //!   few documented dead fields, at least not panic.
 //! * [`witness_tamper_sweep`]: the execution trace is perturbed *before*
 //!   proving (node outputs, fused quotient / remainder, every softmax
-//!   witness column), and so are the clamp buckets' `OUT` digits, which the
-//!   trace does not hold (out of range with the value kept, and the top digit
-//!   raised past `2^32`), so the prover's own transcript stays self-consistent
+//!   witness column), and so are the packed buckets' digits (clamp `OUT`,
+//!   remainder values), which the trace does not hold (out of range with the
+//!   value kept, and the top digit raised by the base), so the prover's own
+//!   transcript stays self-consistent
 //!   and only the algebra can reject. Any effective tamper must be rejected.
 //! * [`opening_forgery_sweep`]: every opening claim the prover makes is
 //!   forged (`+1`) at the accumulator choke point and the proof re-run;
@@ -44,7 +45,7 @@ use crate::onnx_proof::{
         self,
         digit_tamper::{self, DigitTamper, DigitTamperForm},
     },
-    global_clamp::{clamp_buckets, BucketKind},
+    global_clamp::{clamp_buckets, remainder_buckets, BucketKind},
     proof_serialization::serialize_proof,
     prove, prove_from_trace, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing,
     AtlasVerifierPreprocessing, ONNXProof,
@@ -247,11 +248,13 @@ enum WitnessSite {
         field: &'static str,
         elem: usize,
     },
-    /// A live clamp bucket's `OUT` digits at the first cycle of its first live `node`, tampered
-    /// through [`digit_tamper`] (the trace holds no digits). The trace is unchanged, so neither
-    /// neutrality rule applies: the verifier must reject.
-    ClampDigit {
+    /// A bucket's digits (a live clamp bucket's `OUT`, a remainder bucket's value) at the first
+    /// cycle of its first live `node`, tampered through [`digit_tamper`] (the trace holds no
+    /// digits). The trace is unchanged, so neither neutrality rule applies: the verifier must
+    /// reject.
+    BucketDigit {
         node: usize,
+        kind: BucketKind,
         bucket: usize,
         cycle: usize,
         form: DigitTamperForm,
@@ -310,16 +313,20 @@ fn probe_elems(len: usize, all: bool) -> Vec<usize> {
 
 fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
     let mut sites = vec![];
-    for bucket in clamp_buckets(model).expect("bucket layout") {
-        let Some(live) = clamp_split::live_bucket(&bucket, |idx| {
-            !clamp_split::exact_output_prover(model, trace, idx)
-        }) else {
-            continue;
-        };
-        let first = &live.nodes[0];
+    let live_clamp = clamp_buckets(model)
+        .expect("bucket layout")
+        .into_iter()
+        .filter_map(|bucket| {
+            clamp_split::live_bucket(&bucket, |idx| {
+                !clamp_split::exact_output_prover(model, trace, idx)
+            })
+        });
+    for bucket in live_clamp.chain(remainder_buckets(model)) {
+        let first = &bucket.nodes[0];
         for form in [DigitTamperForm::KeepValue, DigitTamperForm::RaiseTop] {
-            sites.push(WitnessSite::ClampDigit {
+            sites.push(WitnessSite::BucketDigit {
                 node: first.idx,
+                kind: bucket.kind,
                 bucket: bucket.idx,
                 cycle: first.offset,
                 form,
@@ -386,13 +393,14 @@ fn apply_witness(trace: &mut Trace, site: &WitnessSite) {
                 d[*elem] = d[*elem].wrapping_add(1);
             }
         }
-        WitnessSite::ClampDigit {
+        WitnessSite::BucketDigit {
+            kind,
             bucket,
             cycle,
             form,
             ..
         } => digit_tamper::set(Some(DigitTamper {
-            kind: BucketKind::Clamp,
+            kind: *kind,
             bucket: *bucket,
             cycle: *cycle,
             form: *form,
@@ -444,7 +452,7 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                 WitnessSite::FusedQuotient { .. } => "FusedQuotient",
                 WitnessSite::FusedRemainder { .. } => "FusedRemainder",
                 WitnessSite::Softmax { .. } => "Softmax",
-                WitnessSite::ClampDigit { .. } => "ClampDigit",
+                WitnessSite::BucketDigit { .. } => "BucketDigit",
             };
             let row = rows.entry(class).or_default();
             row.0 += 1;
@@ -453,7 +461,7 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                 | WitnessSite::FusedQuotient { node, .. }
                 | WitnessSite::FusedRemainder { node, .. }
                 | WitnessSite::Softmax { node, .. }
-                | WitnessSite::ClampDigit { node, .. } => *node,
+                | WitnessSite::BucketDigit { node, .. } => *node,
             };
             let label = format!("{} node {node} {}: {site:?}", h.name, op_name(&model, node));
             match res {
@@ -477,7 +485,7 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                     let same_proof = io.inputs == h.io.inputs
                         && io.outputs == h.io.outputs
                         && serialize_proof(&proof).expect("serializes") == honest_bytes;
-                    if matches!(site, WitnessSite::ClampDigit { .. }) {
+                    if matches!(site, WitnessSite::BucketDigit { .. }) {
                         // The trace is untouched, so neither rule applies; an unchanged proof
                         // means the tamper never reached the digits.
                         match (same_proof, run_verify(&proof, &h.verifier_pp, &io)) {

@@ -25,6 +25,7 @@ pub(crate) fn probe_models() -> Vec<ProbeModel> {
         reductions(0x5EED_0002),
         tables_and_layout(0x5EED_0003),
         relation_flows(0x5EED_0004),
+        saturating(0x5EED_0005),
     ]
 }
 
@@ -35,6 +36,7 @@ pub(crate) fn probe_models_alt() -> Vec<ProbeModel> {
         reductions(0xA17_0002),
         tables_and_layout(0xA17_0003),
         relation_flows(0xA17_0004),
+        saturating(0xA17_0005),
     ]
 }
 
@@ -100,6 +102,55 @@ fn relation_flows(seed: u64) -> ProbeModel {
     ];
     ProbeModel {
         name: "relation_flows",
+        model: b.build(),
+        inputs,
+    }
+}
+
+/// A fused `Mul` that saturates on half its elements, consumed by a `Sub`: an internal,
+/// non-scalar clamped node whose clamp bucket has nonempty slack chunks, so the sweeps reach the
+/// split sumcheck and the slack chunk check of a saturating bucket
+/// (`saturating_probe_saturates` pins that it saturates).
+fn saturating(seed: u64) -> ProbeModel {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![16]);
+    // |x·w| reaches 2^48 on the even lanes, past i32 after the 2^-14 rescale; the odd lanes stay
+    // small.
+    let w: Vec<i32> = (0..16)
+        .map(|i| {
+            let sign = if i % 4 == 0 { 1 } else { -1 };
+            if i % 2 == 0 {
+                sign * (1 << 24)
+            } else {
+                sign * 3
+            }
+        })
+        .collect();
+    let w = b.constant(Tensor::from_slice(&w, &[16]).unwrap());
+    let m = b.mul(x, w);
+    let y = b.input(vec![16]);
+    let out = b.sub(m, y);
+    b.mark_output(out);
+    let inputs = vec![
+        Tensor::from_slice(
+            &(0..16)
+                .map(|i| {
+                    let magnitude = (1 << 23) + i * 4099;
+                    if i % 3 == 0 {
+                        -magnitude
+                    } else {
+                        magnitude
+                    }
+                })
+                .collect::<Vec<_>>(),
+            &[16],
+        )
+        .unwrap(),
+        Tensor::random_range(&mut rng, &[16], -(1 << 12)..(1 << 12)),
+    ];
+    ProbeModel {
+        name: "saturating",
         model: b.build(),
         inputs,
     }

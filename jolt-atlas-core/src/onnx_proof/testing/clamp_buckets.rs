@@ -6,10 +6,13 @@ use atlas_trace::Tensor;
 use atlas_transcript::Blake2bProver;
 use rand::{rngs::StdRng, SeedableRng};
 
-use super::{prove_verify_roundtrip, ModelBuilder, RoundtripOptions};
+use super::{models::probe_models, prove_verify_roundtrip, ModelBuilder, RoundtripOptions};
+use crate::node_view::{clamp_value_bound, ModelView};
 use crate::onnx_proof::{
-    clamp_split, global_clamp::clamp_buckets, prove, AtlasProverPreprocessing,
-    AtlasSharedPreprocessing, Fp128,
+    clamp_lookups::{clamp_intermediate, is_scalar},
+    clamp_split,
+    global_clamp::clamp_buckets,
+    prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
 /// A clamp bucket whose nodes are all unsaturated model outputs proves nothing through its
@@ -54,4 +57,35 @@ fn exact_output_bucket_commits_nothing() {
     assert_eq!(proof.commitments().len(), committed.len());
 
     prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
+}
+
+/// The `saturating` probe model saturates an internal, non-scalar clamped node, so the soundness
+/// sweeps run over a clamp bucket with nonempty slack chunks.
+#[test]
+fn saturating_probe_saturates() {
+    let probe = probe_models()
+        .into_iter()
+        .find(|m| m.name == "saturating")
+        .expect("the saturating probe model");
+    let model = probe.model;
+    let trace = model.trace(&probe.inputs).expect("honest execution");
+    let outputs = model.output_indices();
+    let saturating: Vec<usize> = model
+        .views()
+        .iter()
+        .filter(|n| {
+            !outputs.contains(&n.idx)
+                && !is_scalar(n)
+                && clamp_value_bound(&model, n).expect("shape").is_some()
+                && clamp_intermediate(n, &trace)
+                    .data()
+                    .iter()
+                    .any(|&acc| acc > i32::MAX as i64 || acc < i32::MIN as i64)
+        })
+        .map(|n| n.idx)
+        .collect();
+    assert!(
+        !saturating.is_empty(),
+        "no internal non-scalar clamped node saturates"
+    );
 }

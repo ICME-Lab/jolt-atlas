@@ -201,7 +201,10 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
                             relation.verifiers(&mut self.accumulator, &mut self.transcript)?,
                         );
                     }
-                    self.verify_batch(proof_idx, proof, instances)?;
+                    // No instance, no proof: a stray entry fails the drain check.
+                    if !instances.is_empty() {
+                        self.verify_batch(proof_idx, proof, instances)?;
+                    }
                 }
                 Step::Tie { relation } => {
                     relation.verify(&mut self.accumulator, &mut self.transcript)?

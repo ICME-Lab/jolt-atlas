@@ -141,6 +141,7 @@ use atlas_lookup_tables::{
     unsigned_less_than::UnsignedLessThanTable,
 };
 use atlas_sumcheck::booleanity::BooleanitySumcheckParams;
+use atlas_sumcheck::digit_range::DigitRangeParams;
 use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
 };
@@ -251,7 +252,10 @@ pub fn prove_steps<F: JoltField, T: Transcript>(
                     .map(|relation| prepare(relation, prover))
                     .collect();
                 let witnesses = build_all(prepared, prover);
-                proofs.push((ProofId(proof_idx, proof), prove_batch(witnesses, prover)));
+                // No instance, no proof (the verifier skips the batch the same way).
+                if !witnesses.is_empty() {
+                    proofs.push((ProofId(proof_idx, proof), prove_batch(witnesses, prover)));
+                }
             }
             Step::Tie { relation } => prove_op_tie(&relation, prover),
             Step::Defer { batch, relation } => {
@@ -329,8 +333,10 @@ enum Prepared<F: JoltField, T: Transcript> {
     OneHot(RaOneHotParams<F>, Vec<usize>),
     /// A clamp bucket's split (or, when exact, value) sumcheck parameters.
     ClampValue(ClampValueParams<F>, usize),
-    /// A clamp bucket's chunk-check parameters.
-    ClampChunks(BooleanitySumcheckParams<F>, usize, bool),
+    /// A clamp bucket's digit range-check parameters.
+    ClampDigits(DigitRangeParams<F>, usize),
+    /// A saturated clamp bucket's slack chunk-check parameters.
+    ClampSlack(BooleanitySumcheckParams<F>, usize),
     /// A remainder bucket's value sumcheck parameters.
     RemainderValue(ValueParams<F>, usize),
     /// A remainder bucket's chunk-check parameters.
@@ -445,23 +451,25 @@ fn prepare<F: JoltField, T: Transcript>(
             };
             Prepared::ClampValue(params, bucket.idx)
         }
-        OpRelation::ClampBucketChunks(bucket) => {
-            let exact = !prover.clamp_split(bucket.idx).saturated();
-            let params = if exact {
-                clamp_split::exact_chunk_check_params::<F, T>(
-                    &bucket,
-                    &prover.accumulator,
-                    &mut prover.transcript,
-                )
-            } else {
+        OpRelation::ClampBucketDigits(bucket) => Prepared::ClampDigits(
+            clamp_split::digit_range_params(&bucket, &prover.accumulator, &mut prover.transcript)
+                .expect(expect),
+            bucket.idx,
+        ),
+        OpRelation::ClampBucketSlack(bucket) => {
+            if !prover.clamp_split(bucket.idx).saturated() {
+                // Exact bucket: no slack check (the verifier reads the exact flag).
+                return Prepared::Ready(Vec::new());
+            }
+            Prepared::ClampSlack(
                 clamp_split::chunk_check_params::<F, T>(
                     &bucket,
                     &prover.accumulator,
                     &mut prover.transcript,
                 )
-            }
-            .expect(expect);
-            Prepared::ClampChunks(params, bucket.idx, exact)
+                .expect(expect),
+                bucket.idx,
+            )
         }
         OpRelation::RemainderBucketValue(bucket) => Prepared::RemainderValue(
             clamp_split::remainder_value_params(
@@ -512,13 +520,11 @@ fn build_all<F: JoltField, T: Transcript>(
                         as Box<dyn DynRelationWitness<F, T>>,
                 }]
             }
-            Prepared::ClampChunks(params, bucket, exact) => {
-                let split = buckets.clamp_split(bucket);
-                if exact {
-                    clamp_split::exact_chunk_check_provers::<F, T>(params, split)
-                } else {
-                    clamp_split::chunk_check_provers::<F, T>(params, split)
-                }
+            Prepared::ClampDigits(params, bucket) => {
+                clamp_split::digit_range_provers::<F, T>(params, buckets.clamp_split(bucket))
+            }
+            Prepared::ClampSlack(params, bucket) => {
+                clamp_split::chunk_check_provers::<F, T>(params, buckets.clamp_split(bucket))
             }
             Prepared::RemainderValue(params, bucket) => {
                 let (values, _) = buckets.remainder_values(bucket);
@@ -759,7 +765,8 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         | OpRelation::SmallActivationOneHot(_)
         | OpRelation::TrigOneHot(..)
         | OpRelation::ClampBucketValue(_)
-        | OpRelation::ClampBucketChunks(_)
+        | OpRelation::ClampBucketDigits(_)
+        | OpRelation::ClampBucketSlack(_)
         | OpRelation::RemainderBucketValue(_)
         | OpRelation::RemainderBucketChunks(_)) => {
             let prepared = prepare(one_hot, prover);

@@ -56,7 +56,8 @@ pub enum ProofType {
     /// batched sumcheck after the node loop (stored under `DEFERRED_PROOF_IDX`;
     /// see `clamp_split`).
     DeferredClampSplit = 14,
-    /// All clamp buckets' chunk-value / Hamming and Booleanity checks, batched.
+    /// The slack chunk checks (Booleanity, Hamming weight `IND`, slack value) of the clamp
+    /// buckets not declared exact, batched; absent when every live bucket is exact.
     DeferredClampChunkChecks = 15,
     /// All nodes' fused rescale-remainder range checks, batched.
     DeferredRemainderRC = 16,
@@ -78,6 +79,8 @@ pub enum ProofType {
     DeferredSoftmaxStage3 = 24,
     /// All softmax nodes' stage-4 one-hot checks, batched.
     DeferredSoftmaxRaChecks = 25,
+    /// All live clamp buckets' `OUT` digit range checks, batched.
+    DeferredClampDigitRange = 26,
 }
 
 impl ProofType {
@@ -113,6 +116,7 @@ impl TryFrom<u8> for ProofType {
             23 => Ok(Self::DeferredActivationClampRaChecks),
             24 => Ok(Self::DeferredSoftmaxStage3),
             25 => Ok(Self::DeferredSoftmaxRaChecks),
+            26 => Ok(Self::DeferredClampDigitRange),
             _ => Err(SerializationError::InvalidData),
         }
     }

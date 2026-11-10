@@ -107,7 +107,8 @@ pub enum Step {
         relation: OpRelation,
     },
     /// Verify several relations as one batched sumcheck stored under `proof`, their setups run
-    /// in list order.
+    /// in list order. A batch whose relations set up no sumcheck instance (each relation may
+    /// yield none, e.g. a clamp bucket's slack check when the bucket is exact) has no proof.
     Batch {
         /// The proof slot of the batched sumcheck.
         proof: ProofType,
@@ -228,8 +229,12 @@ pub enum OpRelation {
     /// A packed clamp bucket's value relation: the split sumcheck, or the exact value sumcheck
     /// when the bucket's exact flag is set.
     ClampBucketValue(ClampBucket),
-    /// A packed clamp bucket's chunk checks (one-hot checks of its committed chunks).
-    ClampBucketChunks(ClampBucket),
+    /// A packed clamp bucket's digit range check: `OUT`'s digit columns in range and
+    /// recomposing `OUT`.
+    ClampBucketDigits(ClampBucket),
+    /// A packed clamp bucket's slack chunk check (Booleanity, Hamming weight `IND`, value `S`);
+    /// no relation when the bucket's exact flag is set.
+    ClampBucketSlack(ClampBucket),
     /// A packed remainder bucket's value relation.
     RemainderBucketValue(ClampBucket),
     /// A packed remainder bucket's chunk checks.
@@ -492,13 +497,16 @@ impl OpRelation {
                     )?)?)
                 },
             )),
-            Self::ClampBucketChunks(bucket) => {
-                let params = if clamp_split::exact_flag(&bucket, accumulator)? {
-                    clamp_split::exact_chunk_check_params::<F, T>(&bucket, accumulator, transcript)?
-                } else {
-                    clamp_split::chunk_check_params::<F, T>(&bucket, accumulator, transcript)?
-                };
-                Ok(clamp_split::chunk_check_verifiers::<F, T>(params))
+            Self::ClampBucketDigits(bucket) => Ok(boxed(
+                clamp_split::digit_range_params(&bucket, accumulator, transcript)?.into_verifier(),
+            )),
+            Self::ClampBucketSlack(bucket) => {
+                if clamp_split::exact_flag(&bucket, accumulator)? {
+                    return Ok(Vec::new());
+                }
+                Ok(clamp_split::chunk_check_verifiers::<F, T>(
+                    clamp_split::chunk_check_params::<F, T>(&bucket, accumulator, transcript)?,
+                ))
             }
             Self::RemainderBucketValue(bucket) => Ok(boxed(ValueParams::into_verifier(
                 clamp_split::remainder_value_params(&bucket, accumulator, transcript)?,

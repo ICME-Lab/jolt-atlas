@@ -1,20 +1,19 @@
 //! Interior / saturated split of the packed saturating-clamp buckets.
 //!
 //! A clamped node proves `out = SatClamp(acc)` with `acc` the (i64) pre-clamp
-//! accumulation, opened once at the node's output point (`ClampAcc`). The
-//! previous protocol looked `acc` up in a `w`-bit saturation table: `w/4`
-//! committed one-hot chunks per bucket and a degree-`w/4 + 1` RaVirtual check,
-//! for `w ∈ {40, 48, 56, 64}`. Almost every element is *interior*
-//! (`acc ∈ i32`, `out = acc`); saturation is rare. This module splits the two
-//! cases so the dense work is 32-bit and the `w`-bit work is sparse.
+//! accumulation, opened once at the node's output point (`ClampAcc`). Almost
+//! every element is *interior* (`acc ∈ i32`, `out = acc`); saturation is rare.
+//! This module splits the two cases so the dense work is 32-bit and the
+//! `w`-bit work is sparse.
 //!
 //! Per bucket cycle `t` (see [`super::global_clamp`] for the packing) the
-//! prover holds three dense vectors and commits their one-hot chunks:
+//! prover holds three vectors and commits the first as dense digits and the
+//! third as one-hot chunks:
 //!
 //! ```text
-//! OUT(t) = out(t) + 2^31                          8 dense 4-bit chunks
-//! IND(t) = [acc(t) ∉ i32]                         virtual: Hamming weight of the slack chunks
-//! S(t)   = IND(t) · |acc(t) − out(t)|             w/4 sparse chunks (None where IND = 0)
+//! OUT(t) = out(t) + 2^31     32/log₂b dense base-b digits (U8Scalars in [0, b), b = DIGIT_BASE)
+//! IND(t) = [acc(t) ∉ i32]    virtual: Hamming weight of the slack chunks
+//! S(t)   = IND(t) · |acc(t) − out(t)|        w/4 sparse one-hot chunks (None where IND = 0)
 //! ```
 //!
 //! **Split sumcheck** (one per bucket, cycle weight `W(t) = Σ_n γ_n·eq(r_n, t − off_n)`):
@@ -26,33 +25,42 @@
 //!
 //! whose right-hand side is linear in the nodes' existing openings. It reduces
 //! to openings of `OUT`, `S`, `IND` at a fresh point `r'`. Since the `r_n` are
-//! drawn after the chunks are committed, the identity at random `r_n`, `γ`, `β`
-//! gives the pointwise identities (Schwartz–Zippel): `OUT = out + 2^31`,
-//! `acc − out = IND·S·σ` with `σ = (2·OUT − M)/M`, `IND·OUT·(OUT − M) = 0`,
-//! `IND ∈ {0, 1}`.
+//! drawn after the digits and chunks are committed, the identity at random
+//! `r_n`, `γ`, `β` gives the pointwise identities (Schwartz–Zippel):
+//! `OUT = out + 2^31`, `acc − out = IND·S·σ` with `σ = (2·OUT − M)/M`,
+//! `IND·OUT·(OUT − M) = 0`, `IND ∈ {0, 1}`. A bucket whose prover-declared
+//! exact flag is set runs the *exact* value sumcheck instead,
+//! `Σ_t W(t)·OUT(t) = Σ_n γ_n·(out_n(r_n) + 2^31)`, with no slack, and its
+//! member nodes tie `acc = out` ([`verify_exact_nodes`]).
 //!
-//! **Chunk check**: the Booleanity sumcheck over all chunks carries a linear
-//! term (see `atlas_sumcheck::booleanity::LinearTerm`) that ties the
-//! three virtual openings to the committed chunks — every chunk is opened once:
+//! **Digit range** (every live bucket, `atlas_sumcheck::digit_range`): the
+//! digits `d_j` of `OUT` are each in `[0, b)` and recompose `OUT(r')`,
 //!
 //! ```text
-//! Σ_k Σ_d ra_d(k, r') · (γ^d + β_o·2^{4(7−d)}·k)        d < 8      (output chunks)
-//! Σ_k Σ_d ra_d(k, r') · (γ^{8+d} + β_s·2^{4(D−1−d)}·k)  d < D      (slack chunks)
-//!   = Σ_{d<8} γ^d · 1 + Σ_{d<D} γ^{8+d} · IND(r') + β_o·OUT(r') + β_s·S(r')
+//! Σ_t eq(r', t) · [ Σ_j γ^j · ∏_{a<b}(d_j(t) − a) + β · Σ_j b^(n−1−j) · d_j(t) ] = β · OUT(r')
 //! ```
 //!
-//! i.e. every output chunk has Hamming weight 1, every slack chunk has Hamming
-//! weight `IND`, and `OUT`/`S` are the chunk values. With the standard
-//! Booleanity check on all chunks this gives, pointwise: `OUT ∈ [0, 2^32)` so
-//! `out ∈ i32`; `IND = 0 ⇒ acc = out`; `IND = 1 ⇒ OUT ∈ {0, M}`, i.e.
+//! with `r'` drawn after the digits are committed, so pointwise every digit is
+//! in `[0, b)` and `OUT = Σ_j b^(n−1−j)·d_j ∈ [0, 2^32)`, i.e. `out ∈ i32`.
+//!
+//! **Slack chunk check** (buckets not declared exact): the Booleanity
+//! sumcheck over the slack chunks carries a linear term (see
+//! `atlas_sumcheck::booleanity::LinearTerm`) tying `IND` and `S` to them, so
+//! each slack chunk is opened once:
+//!
+//! ```text
+//! Σ_k Σ_d ra_d(k, r') · (γ^d + β_s·2^{4(D−1−d)}·k)  =  Σ_d γ^d · IND(r') + β_s·S(r')      d < D
+//! ```
+//!
+//! i.e. every slack chunk has Hamming weight `IND` and `S` is their value.
+//! Together, pointwise: `IND = 0 ⇒ acc = out`; `IND = 1 ⇒ OUT ∈ {0, M}`, i.e.
 //! `out ∈ {i32::MIN, i32::MAX}`, and `acc = out ± S` with `S ∈ [0, 2^w)` on
 //! the saturated side (`out = MAX ⇒ acc = MAX + S ≥ MAX`, `out = MIN ⇒ acc =
 //! MIN − S ≤ MIN`) — exactly `out = SatClamp(acc)`. (`w` is the node's static
 //! clamp width, so `|acc| + 2^w` never wraps the field.)
 //!
-//! Compared to the table lookup: no RaVirtual (the most expensive check), the
-//! dense chunk count drops from `w/4` to 8, and the `w/4` slack chunks are
-//! almost empty.
+//! The dense digits cost a committed cell per row whatever the value; the
+//! slack chunks are empty off saturated rows and cost nothing there.
 use super::{
     clamp_lookups::acc_opening_id, deferred_lookups::DEFERRED_PROOF_IDX, global_clamp::ClampBucket,
 };
@@ -65,6 +73,7 @@ use crate::onnx_proof::relation::{
 use atlas_algebra::field::{IntoOpening, JoltField};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::booleanity::{LinearClaim, LinearTerm};
+use atlas_sumcheck::digit_range::DigitRangeParams;
 use atlas_sumcheck::relation::DynRelationVerifier;
 use atlas_sumcheck::{
     booleanity::BooleanitySumcheckParams,
@@ -78,8 +87,10 @@ use common::{CommittedPoly, VirtualPoly};
 use jolt_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
-/// Address width of the output range check (`out + 2^31 ∈ [0, 2^32)`).
+/// Bit width of the output range check (`out + 2^31 ∈ [0, 2^32)`).
 pub const OUT_LOG_K: usize = 32;
+/// The base of `OUT`'s dense digits.
+pub const DIGIT_BASE: u64 = 4;
 const OFFSET: i64 = 1 << 31;
 /// `M = 2^32 − 1`: the offset output of `i32::MAX`.
 const OUT_MAX: u64 = (1 << 32) - 1;
@@ -89,9 +100,9 @@ pub fn one_hot_params(log_k: usize) -> OneHotParams {
     OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k)
 }
 
-/// Number of output chunks (`32 / LOG_K_CHUNK`).
-pub fn num_out_chunks() -> usize {
-    one_hot_params(OUT_LOG_K).instruction_d
+/// Number of `OUT` digits (`32 / log₂ DIGIT_BASE`).
+pub fn num_out_digits() -> usize {
+    OUT_LOG_K / DIGIT_BASE.ilog2() as usize
 }
 
 /// Number of slack chunks for a `width`-bit bucket.
@@ -99,15 +110,23 @@ pub fn num_slack_chunks(width: usize) -> usize {
     one_hot_params(width).instruction_d
 }
 
-/// The bucket's committed chunk polynomials: output chunks, then slack chunks.
-pub fn chunk_polys(bucket: &ClampBucket) -> Vec<CommittedPoly> {
-    (0..num_out_chunks())
-        .map(|d| CommittedPoly::GlobalClampOutRaD(bucket.idx, d))
-        .chain(
-            (0..num_slack_chunks(bucket.width))
-                .map(|d| CommittedPoly::GlobalClampSlackRaD(bucket.idx, d)),
-        )
+/// The bucket's `OUT` digit columns, most significant first.
+pub fn out_digit_polys(bucket: &ClampBucket) -> Vec<CommittedPoly> {
+    (0..num_out_digits())
+        .map(|j| CommittedPoly::GlobalClampOutDigit(bucket.idx, j))
         .collect()
+}
+
+/// The bucket's slack chunk polynomials.
+pub fn slack_chunk_polys(bucket: &ClampBucket) -> Vec<CommittedPoly> {
+    (0..num_slack_chunks(bucket.width))
+        .map(|d| CommittedPoly::GlobalClampSlackRaD(bucket.idx, d))
+        .collect()
+}
+
+/// The bucket's committed polynomials: the `OUT` digit columns, then the slack chunks.
+pub fn chunk_polys(bucket: &ClampBucket) -> Vec<CommittedPoly> {
+    [out_digit_polys(bucket), slack_chunk_polys(bucket)].concat()
 }
 
 fn split_sumcheck_id() -> SumcheckId {
@@ -152,13 +171,6 @@ pub fn exact_flag_id(bucket_idx: usize) -> OpeningId {
         VirtualPoly::GlobalClampExact(bucket_idx),
         split_sumcheck_id(),
     )
-}
-
-/// The bucket's output-chunk polynomials only.
-pub fn out_chunk_polys(bucket: &ClampBucket) -> Vec<CommittedPoly> {
-    (0..num_out_chunks())
-        .map(|d| CommittedPoly::GlobalClampOutRaD(bucket.idx, d))
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -363,50 +375,58 @@ impl<F: JoltField> Relation<F> for SplitParams<F> {
 pub type SplitVerifier<F> = RelationVerifier<F, SplitParams<F>>;
 
 // ---------------------------------------------------------------------------
-// Chunk checks: Booleanity with the Hamming / chunk-value linear term
+// Digit range check of OUT
 // ---------------------------------------------------------------------------
 
-/// Draw a bucket's chunk-check challenges and resolve the Booleanity
-/// parameters, whose linear term carries the Hamming-weight and chunk-value
-/// identities of the module docs (all chunks share one opening). `Err` if the accumulator
-/// lacks that opening.
+/// Draw a bucket's digit range check: `OUT`'s digit columns in range and recomposing `OUT(r')`,
+/// the claim the split or exact value sumcheck produced. `Err` if the accumulator lacks it.
+pub fn digit_range_params<F: JoltField, T: Transcript>(
+    bucket: &ClampBucket,
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<DigitRangeParams<F>, ProofVerifyError> {
+    DigitRangeParams::draw(
+        DIGIT_BASE,
+        out_digit_polys(bucket),
+        out_id(bucket.idx),
+        SumcheckId::DigitRange,
+        accumulator,
+        transcript,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Slack chunk check: Booleanity with the Hamming / chunk-value linear term
+// ---------------------------------------------------------------------------
+
+/// Draw a bucket's slack chunk-check challenges and resolve the Booleanity
+/// parameters, whose linear term carries the Hamming-weight (`= IND`) and
+/// chunk-value (`= S`) identities of the module docs (all slack chunks share
+/// one opening). `Err` if the accumulator lacks the slack opening.
 pub fn chunk_check_params<F: JoltField, T: Transcript>(
     bucket: &ClampBucket,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<BooleanitySumcheckParams<F>, ProofVerifyError> {
-    let polys = chunk_polys(bucket);
+    let polys = slack_chunk_polys(bucket);
     let d = polys.len();
-    let n_out = num_out_chunks();
-    let n_slack = num_slack_chunks(bucket.width);
-    let log_k_chunk = one_hot_params(OUT_LOG_K).log_k_chunk;
+    let log_k_chunk = one_hot_params(bucket.width).log_k_chunk;
 
     let gamma_powers: Vec<F> = transcript.challenge_scalar_powers(d);
-    let beta_out: F = transcript.challenge_scalar();
     let beta_slack: F = transcript.challenge_scalar();
     let bool_gammas = transcript.challenge_vector_optimized::<F>(d);
     let r_address = transcript.challenge_vector_optimized::<F>(log_k_chunk);
 
     let b = bucket.idx;
-    let r_cycle = accumulator.get_virtual_polynomial_opening(out_id(b))?.0.r;
-    let weights: Vec<F> = (0..n_out)
-        .map(|i| beta_out * F::from_u64(1u64 << (log_k_chunk * (n_out - 1 - i))))
-        .chain(
-            (0..n_slack)
-                .map(|i| beta_slack * F::from_u64(1u64 << (log_k_chunk * (n_slack - 1 - i)))),
-        )
+    let r_cycle = accumulator.get_virtual_polynomial_opening(slack_id(b))?.0.r;
+    let weights: Vec<F> = (0..d)
+        .map(|i| beta_slack * F::from_u64(1u64 << (log_k_chunk * (d - 1 - i))))
         .collect();
-    // Σ_{d<8} γ^d·1 + Σ_{d≥8} γ^d·IND(r') + β_o·OUT(r') + β_s·S(r')
-    let (out_gammas, slack_gammas) = gamma_powers.split_at_checked(n_out).ok_or_else(|| {
-        ProofVerifyError::Malformed(format!(
-            "clamp bucket {b}: {d} chunk polynomials, fewer than the {n_out} output chunks"
-        ))
-    })?;
+    // Σ_d γ^d·IND(r') + β_s·S(r')
     let claim = LinearClaim {
-        constant: out_gammas.iter().copied().sum(),
+        constant: F::zero(),
         terms: vec![
-            (ind_id(b), slack_gammas.iter().copied().sum()),
-            (out_id(b), beta_out),
+            (ind_id(b), gamma_powers.iter().copied().sum()),
             (slack_id(b), beta_slack),
         ],
     };
@@ -585,23 +605,6 @@ pub fn remainder_chunk_check_params<F: JoltField, T: Transcript>(
         bucket.committed_polys(),
         bucket.width,
         remainder_value_id(bucket.idx),
-        accumulator,
-        transcript,
-    )
-}
-
-/// [`value_chunk_check_params`] for an *exact* clamp bucket: its output
-/// chunks only, valued at `OUT(r')`.
-/// `Err` if the accumulator lacks a claim it reads.
-pub fn exact_chunk_check_params<F: JoltField, T: Transcript>(
-    bucket: &ClampBucket,
-    accumulator: &dyn OpeningAccumulator<F>,
-    transcript: &mut T,
-) -> Result<BooleanitySumcheckParams<F>, ProofVerifyError> {
-    value_chunk_check_params(
-        out_chunk_polys(bucket),
-        OUT_LOG_K,
-        out_id(bucket.idx),
         accumulator,
         transcript,
     )

@@ -119,9 +119,9 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         }
     };
 
-    // 1. Committed one-hot columns, as the prover commits them: the packed bucket chunks
-    //    (output chunks, slack chunks, remainder chunks) and the per-node polynomials. A row
-    //    is one cycle; a cell is one of the K = 16 one-hot entries of a row.
+    // 1. Committed columns, as the prover commits them: the packed bucket polynomials (dense
+    //    `OUT` digit columns, one-hot slack and remainder chunks) and the per-node polynomials.
+    //    A row is one cycle; a one-hot row has K = 16 cells, a dense digit row one.
     #[derive(Default)]
     struct Fam {
         polys: usize,
@@ -165,9 +165,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     }
     let bucket_rows: usize = by_fam.values().map(|f| f.rows).sum();
     let total_rows = bucket_rows + node_rows;
-    println!(
-        "committed one-hot columns (polys, empty polys, rows=polys*cycles, nonzeros, share of rows):"
-    );
+    println!("committed columns (polys, empty polys, rows=polys*cycles, nonzeros, share of rows):");
     for (fam, f) in &by_fam {
         println!(
             "  bucket {fam:<24} polys {:>4} empty {:>4} rows 2^{:<5.1} nonzeros 2^{:<5.1} {:>5.1}%",
@@ -203,9 +201,10 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     );
     let widths = [16usize, 20, 24, 28, 32, 36, 40, 48];
     let thresholds = [80usize, 112, 176, 1024, 4096];
-    // Output chunks per element today: 8 (`OUT = out + 2^31`), whatever the static width;
-    // the w/4 slack chunks are empty off saturated rows.
-    let out_chunks = jolt_atlas_core::onnx_proof::clamp_split::num_out_chunks();
+    // Output rows per element in 4-bit units, whatever the static width: 8 (`OUT = out + 2^31`
+    // is 32 bits, committed as `num_out_digits` dense digits); the w/4 slack chunks are empty
+    // off saturated rows.
+    let out_chunks = jolt_atlas_core::onnx_proof::clamp_split::OUT_LOG_K / 4;
     let mut digits_today = 0usize;
     let mut digits_observed = 0usize; // output chunks at the needed width
     let mut overflow_nodes = [0usize; 8];

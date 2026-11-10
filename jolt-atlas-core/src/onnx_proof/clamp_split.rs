@@ -1,58 +1,16 @@
-//! Interior / saturated split of the packed saturating-clamp buckets.
+//! The prover side of the packed saturating-clamp buckets' split
+//! ([`jolt_atlas_verifier::onnx_proof::clamp_split`] states the protocol and
+//! its soundness argument).
 //!
-//! A clamped node proves `out = SatClamp(acc)` with `acc` the (i64) pre-clamp
-//! accumulation, opened once at the node's output point (`ClampAcc`). The
-//! previous protocol looked `acc` up in a `w`-bit saturation table: `w/4`
-//! committed one-hot chunks per bucket and a degree-`w/4 + 1` RaVirtual check,
-//! for `w ∈ {40, 48, 56, 64}`. Almost every element is *interior*
-//! (`acc ∈ i32`, `out = acc`); saturation is rare. This module splits the two
-//! cases so the dense work is 32-bit and the `w`-bit work is sparse.
-//!
-//! Per bucket cycle `t` (see [`super::global_clamp`] for the packing) the
-//! prover holds three dense vectors and commits their one-hot chunks:
-//!
-//! ```text
-//! OUT(t) = out(t) + 2^31                          8 dense 4-bit chunks
-//! IND(t) = [acc(t) ∉ i32]                         virtual: Hamming weight of the slack chunks
-//! S(t)   = IND(t) · |acc(t) − out(t)|             w/4 sparse chunks (None where IND = 0)
-//! ```
-//!
-//! **Split sumcheck** (one per bucket, cycle weight `W(t) = Σ_n γ_n·eq(r_n, t − off_n)`):
-//!
-//! ```text
-//! Σ_t W(t)·[ OUT + β₁/M · IND·S·(2·OUT − M) + β₂ · IND·OUT·(OUT − M) + β₃ · IND·(1 − IND) ]
-//!   = Σ_n γ_n · [ out_n(r_n) + 2^31 + β₁·(acc_n(r_n) − out_n(r_n)) ],      M = 2^32 − 1
-//! ```
-//!
-//! whose right-hand side is linear in the nodes' existing openings. It reduces
-//! to openings of `OUT`, `S`, `IND` at a fresh point `r'`. Since the `r_n` are
-//! drawn after the chunks are committed, the identity at random `r_n`, `γ`, `β`
-//! gives the pointwise identities (Schwartz–Zippel): `OUT = out + 2^31`,
-//! `acc − out = IND·S·σ` with `σ = (2·OUT − M)/M`, `IND·OUT·(OUT − M) = 0`,
-//! `IND ∈ {0, 1}`.
-//!
-//! **Chunk check**: the Booleanity sumcheck over all chunks carries a linear
-//! term (see `atlas_sumcheck::booleanity::LinearTerm`) that ties the
-//! three virtual openings to the committed chunks — every chunk is opened once:
-//!
-//! ```text
-//! Σ_k Σ_d ra_d(k, r') · (γ^d + β_o·2^{4(7−d)}·k)        d < 8      (output chunks)
-//! Σ_k Σ_d ra_d(k, r') · (γ^{8+d} + β_s·2^{4(D−1−d)}·k)  d < D      (slack chunks)
-//!   = Σ_{d<8} γ^d · 1 + Σ_{d<D} γ^{8+d} · IND(r') + β_o·OUT(r') + β_s·S(r')
-//! ```
-//!
-//! i.e. every output chunk has Hamming weight 1, every slack chunk has Hamming
-//! weight `IND`, and `OUT`/`S` are the chunk values. With the standard
-//! Booleanity check on all chunks this gives, pointwise: `OUT ∈ [0, 2^32)` so
-//! `out ∈ i32`; `IND = 0 ⇒ acc = out`; `IND = 1 ⇒ OUT ∈ {0, M}`, i.e.
-//! `out ∈ {i32::MIN, i32::MAX}`, and `acc = out ± S` with `S ∈ [0, 2^w)` on
-//! the saturated side (`out = MAX ⇒ acc = MAX + S ≥ MAX`, `out = MIN ⇒ acc =
-//! MIN − S ≤ MIN`) — exactly `out = SatClamp(acc)`. (`w` is the node's static
-//! clamp width, so `|acc| + 2^w` never wraps the field.)
-//!
-//! Compared to the table lookup: no RaVirtual (the most expensive check), the
-//! dense chunk count drops from `w/4` to 8, and the `w/4` slack chunks are
-//! almost empty.
+//! Per bucket the prover assembles one [`BucketSplit`] from the trace: per
+//! cycle `OUT = out + 2^31`, the saturation slack `S` and the indicator `IND`.
+//! It commits `OUT` as [`num_out_digits`] dense base-[`DIGIT_BASE`] digit
+//! columns (`U8Scalars`) and `S` as one-hot slack chunks, empty off saturated
+//! cycles (and everywhere in a bucket with no saturated cycle, which is then
+//! proven exactly and never opens them). It proves the split or exact value
+//! sumcheck ([`SplitProver`], [`ValueProver`]), the digit range check of `OUT`
+//! ([`digit_range_provers`]) and, for a saturated bucket, the slack chunk
+//! check ([`chunk_check_provers`]).
 use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::clamp_lookups::clamp_intermediate;
 use crate::onnx_proof::global_clamp::ClampBucket;
@@ -68,6 +26,7 @@ use atlas_algebra::{
     utils::thread::unsafe_allocate_zero_vec,
 };
 use atlas_sumcheck::booleanity::{prover::BooleanitySumcheckProver, BooleanitySumcheckParams};
+use atlas_sumcheck::digit_range::{prover::DigitRangeProver, DigitRangeParams};
 use atlas_sumcheck::relation::prover::DynRelationWitness;
 use atlas_trace::{Model, Trace};
 use atlas_transcript::Transcript;
@@ -285,19 +244,6 @@ impl<F: JoltField> ProveRounds<F> for ValueProver<F> {
     }
 }
 
-/// Build an exact bucket's chunk-check prover (Booleanity over the output chunks).
-pub fn exact_chunk_check_provers<F: JoltField, T: Transcript>(
-    params: BooleanitySumcheckParams<F>,
-    split: &BucketSplit,
-) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-    let values: Vec<u64> = split.out.iter().map(|&o| o as u64).collect();
-    let indices = value_chunk_indices(&values, OUT_LOG_K);
-    let g = compute_g(&indices, &params.r_cycle);
-    vec![Box::new(BooleanitySumcheckProver::<F, u8>::gen(
-        params, g, indices,
-    ))]
-}
-
 /// Build a remainder bucket's chunk-check prover.
 pub fn remainder_chunk_check_provers<F: JoltField, T: Transcript>(
     params: BooleanitySumcheckParams<F>,
@@ -315,13 +261,26 @@ pub fn remainder_chunk_check_provers<F: JoltField, T: Transcript>(
 // Bucket-level construction
 // ---------------------------------------------------------------------------
 
-/// Build a bucket's chunk-check prover from resolved parameters (no
+/// Build a bucket's digit range-check prover over its `OUT` digit columns.
+pub fn digit_range_provers<F: JoltField, T: Transcript>(
+    params: DigitRangeParams<F>,
+    split: &BucketSplit,
+) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
+    let columns = split
+        .out_digits()
+        .into_iter()
+        .map(MultilinearPolynomial::from)
+        .collect();
+    vec![Box::new(DigitRangeProver::new(params, columns))]
+}
+
+/// Build a saturated bucket's slack chunk-check prover from resolved parameters (no
 /// accumulator / transcript access).
 pub fn chunk_check_provers<F: JoltField, T: Transcript>(
     params: BooleanitySumcheckParams<F>,
     split: &BucketSplit,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-    let indices = split.chunk_indices();
+    let indices = split.slack_chunk_indices();
     let g = compute_g(&indices, &params.r_cycle);
     vec![Box::new(BooleanitySumcheckProver::<F, u8>::gen(
         params, g, indices,
@@ -468,29 +427,35 @@ impl BucketSplit {
         })
     }
 
-    /// The `d`-th chunk index of every cycle: output chunks (`d < 8`, always
-    /// set), then slack chunks (`None` on interior cycles).
-    pub fn chunk_indices(&self) -> Vec<Vec<Option<u8>>> {
-        let out_params = one_hot_params(OUT_LOG_K);
-        let slack_params = one_hot_params(self.width);
-        let mut chunks: Vec<Vec<Option<u8>>> = (0..out_params.instruction_d)
-            .map(|d| {
+    /// `OUT`'s base-[`DIGIT_BASE`] digits, one column per digit, most significant first.
+    pub fn out_digits(&self) -> Vec<Vec<u8>> {
+        let n = num_out_digits();
+        let digit_bits = DIGIT_BASE.ilog2();
+        (0..n)
+            .map(|j| {
+                let shift = (n - 1 - j) as u32 * digit_bits;
                 self.out
                     .par_iter()
                     .with_min_len(par_enabled())
-                    .map(|&o| Some(out_params.lookup_index_chunk(o as u64, d)))
+                    .map(|&o| ((o >> shift) as u64 % DIGIT_BASE) as u8)
                     .collect()
             })
-            .collect();
-        chunks.extend((0..slack_params.instruction_d).map(|d| {
-            self.slack
-                .par_iter()
-                .zip(self.ind.par_iter())
-                .with_min_len(par_enabled())
-                .map(|(&s, &i)| (i == 1).then(|| slack_params.lookup_index_chunk(s, d)))
-                .collect()
-        }));
-        chunks
+            .collect()
+    }
+
+    /// The `d`-th slack chunk index of every cycle (`None` on interior cycles).
+    pub fn slack_chunk_indices(&self) -> Vec<Vec<Option<u8>>> {
+        let slack_params = one_hot_params(self.width);
+        (0..slack_params.instruction_d)
+            .map(|d| {
+                self.slack
+                    .par_iter()
+                    .zip(self.ind.par_iter())
+                    .with_min_len(par_enabled())
+                    .map(|(&s, &i)| (i == 1).then(|| slack_params.lookup_index_chunk(s, d)))
+                    .collect()
+            })
+            .collect()
     }
 
     /// Whether any cycle is saturated (else the bucket is proven exactly and
@@ -499,32 +464,33 @@ impl BucketSplit {
         self.ind.contains(&1)
     }
 
-    /// The bucket's committed one-hot chunk polynomials.
+    /// The bucket's committed polynomials: `OUT`'s dense digit columns, then the one-hot slack
+    /// chunks (empty in a bucket with no saturated cycle, which never opens them).
     pub fn witness_polys<F: JoltField>(
         &self,
         bucket: &ClampBucket,
     ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
-        let k_chunk = one_hot_params(OUT_LOG_K).k_chunk;
-        let indices = if self.saturated() {
-            self.chunk_indices()
+        let k_chunk = one_hot_params(self.width).k_chunk;
+        let slack = if self.saturated() {
+            self.slack_chunk_indices()
         } else {
-            // Exact bucket: the slack chunks stay empty and are never opened.
-            let values: Vec<u64> = self.out.iter().map(|&o| o as u64).collect();
-            let mut idx = value_chunk_indices(&values, OUT_LOG_K);
-            idx.extend((0..num_slack_chunks(self.width)).map(|_| vec![None; self.out.len()]));
-            idx
+            vec![vec![None; self.out.len()]; num_slack_chunks(self.width)]
         };
-        chunk_polys(bucket)
+        let digits = out_digit_polys(bucket)
             .into_iter()
-            .zip(indices)
+            .zip(self.out_digits())
+            .map(|(poly, digits)| (poly, MultilinearPolynomial::from(digits)));
+        let slack = slack_chunk_polys(bucket)
+            .into_iter()
+            .zip(slack)
             .map(|(poly, idx)| {
                 let idx: Vec<Option<u16>> = idx.into_iter().map(|x| x.map(u16::from)).collect();
                 (
                     poly,
                     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(idx, k_chunk)),
                 )
-            })
-            .collect()
+            });
+        digits.chain(slack).collect()
     }
 }
 

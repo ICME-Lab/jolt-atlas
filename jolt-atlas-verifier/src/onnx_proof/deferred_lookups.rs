@@ -103,8 +103,9 @@ impl DeferredBatch {
 
 /// The post-loop plan over the packed clamp and remainder buckets, from the model and the
 /// public IO: per live clamp bucket its exact flag and the exact check, then the bucket
-/// value sumchecks as one batch and the chunk checks as another; then the same pair for the
-/// remainder buckets. A clamp bucket is live when one of its nodes is not an unsaturated
+/// value sumchecks as one batch, the `OUT` digit range checks as a second and the slack chunk
+/// checks of the buckets not declared exact as a third (absent when every bucket is exact);
+/// then the value and chunk-check pair for the remainder buckets. A clamp bucket is live when one of its nodes is not an unsaturated
 /// model output (those tie `acc = out` in their own turn). The deferred batches follow,
 /// run by the interpreter from its queue.
 pub fn plan(model: &Model, io: &ModelExecutionIO) -> Result<Plan, ProofVerifyError> {
@@ -132,10 +133,17 @@ pub fn plan(model: &Model, io: &ModelExecutionIO) -> Result<Plan, ProofVerifyErr
                 .collect(),
         });
         steps.push(Step::Batch {
+            proof: ProofType::DeferredClampDigitRange,
+            relations: buckets
+                .iter()
+                .map(|bucket| OpRelation::ClampBucketDigits(bucket.clone()))
+                .collect(),
+        });
+        steps.push(Step::Batch {
             proof: ProofType::DeferredClampChunkChecks,
             relations: buckets
                 .into_iter()
-                .map(OpRelation::ClampBucketChunks)
+                .map(OpRelation::ClampBucketSlack)
                 .collect(),
         });
     }

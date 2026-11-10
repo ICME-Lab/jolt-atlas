@@ -191,14 +191,6 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         GlobalRemainderRaD(usize, usize),
 
-        /// One-hot chunk of a packed clamp bucket's **output** range check
-        /// (`out + 2^31 ∈ [0, 2^32)`, 32-bit address; see
-        /// `jolt_atlas_core::onnx_proof::clamp_split`).
-        ///
-        /// * `0` – bucket index
-        /// * `1` – decomposition index `d`
-        GlobalClampOutRaD(usize, usize),
-
         /// Dense base-`b` digit of a packed clamp bucket's offset output
         /// `OUT = out + 2^31`, most significant first (`U8Scalars` in `[0, b)`;
         /// see `jolt_atlas_core::onnx_proof::clamp_split`).
@@ -481,7 +473,7 @@ canonical_serde_enum! {
         GlobalRemainderRa(usize),
 
         /// A packed clamp bucket's offset output `out + 2^31` (virtual; the
-        /// value of [`CommittedPoly::GlobalClampOutRaD`]'s chunks).
+        /// recomposition of [`CommittedPoly::GlobalClampOutDigit`]'s digits).
         ///
         /// * `0` – bucket index
         GlobalClampOut(usize),

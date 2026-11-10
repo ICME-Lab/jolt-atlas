@@ -3,8 +3,9 @@
 //! Every clamped node used to commit its own one-hot chunks and run its own
 //! lookup sumchecks. Here nodes of the same width are packed into *buckets*:
 //! one shared cycle space per bucket, each node occupying a
-//! power-of-two-aligned segment, so a bucket has one set of committed chunks
-//! and one set of checks whatever the node count.
+//! power-of-two-aligned segment, so a bucket has one set of committed columns
+//! (a clamp bucket's dense output digits and one-hot slack chunks, a remainder
+//! bucket's one-hot chunks) and one set of checks whatever the node count.
 //!
 //! A bucket sumcheck over the packed cycle space uses the cycle weight
 //! `Σ_n γ_n·eq(r_n, t − off_n)` ([`CycleWeight::Packed`]) so its input claim
@@ -167,7 +168,7 @@ impl ClampBucket {
         CommittedPoly::GlobalRemainderRaD(self.idx, d)
     }
 
-    /// The bucket's committed one-hot chunk polynomials.
+    /// The bucket's committed polynomials ([`clamp_split::chunk_polys`] for a clamp bucket).
     pub fn committed_polys(&self) -> Vec<CommittedPoly> {
         match self.kind {
             BucketKind::Clamp => clamp_split::chunk_polys(self),

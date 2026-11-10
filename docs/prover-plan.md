@@ -73,7 +73,8 @@ lookup addresses, at 12x the cost of a dense digit, when a range check needs no 
 The strategy that follows, in order of leverage:
 
 - **Range checks become dense digit decompositions, not lookups** (section 3, items 1–2). A
-  value `v` is committed as base-4 or Boolean digit columns with a zero-check (degree 3 or 2) and
+  value `v` is committed as base-4 or Boolean digit columns with a zero-check (degree 4 or 2 in
+  the digit) and
   the linear recomposition `v = Σ 4^i d_i`; no read-raf, no Hamming weight, no ra-virtualization.
   SuperNeo (ePrint 2026/242) is the published, security-proved form (the commitment is relaxed
   binding; the range comes from the zero-check, which is what Akita needs, since it certifies no
@@ -108,12 +109,13 @@ range-check protocol only; outputs and golden hashes do not move unless the item
 Today each bucket commits `OUT = out + 2^31` as 8 one-hot chunks per row plus empty slack chunks,
 checked by a split sumcheck and the Booleanity chunk check with a linear term
 (`clamp_split.rs`); there is no lookup on the buckets already. Replace the one-hot chunks by
-base-4 digit columns (`U8Scalars` in [0, 4), sixteen per element) with a batched degree-3
-zero-check `d(d−1)(d−2)(d−3) = 0` in place of Booleanity and the same linear recomposition of
+base-4 digit columns (`U8Scalars` in [0, 4), sixteen per element) with a batched zero-check
+`d(d−1)(d−2)(d−3) = 0` (degree 4 in the digit, 5 with the eq factor) in place of Booleanity and the same linear recomposition of
 `OUT` and `S`; the split sumcheck keeps its shape. Measured commit cost 25–37 ns per 4-bit digit
-against 143. Decide base 4 against Booleans (57–69 ns, degree 2) in the prototype by total time,
-not commit time alone. Needs: new witness columns in
-`witness.rs`, a relation with its `type Spec`, the soundness sweeps over the new columns, zoo
+against 143. Decide base 4 against Booleans (57–69 ns; `d(d−1) = 0`, degree 3 with eq) in the prototype by
+total time, not commit time alone. Needs: new witness columns in
+`global_clamp.rs`/`clamp_split.rs`, a model-level bucket relation (no `type Spec`; those are
+node-level), the soundness sweeps over the new columns, zoo
 tests, one real-model run. Prototype on `gpt2-tiny` in the test profile first.
 
 ### 2. The same for the rescale remainders — 22% of rows, 3.8–5.7x on them

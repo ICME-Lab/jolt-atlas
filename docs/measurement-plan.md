@@ -335,7 +335,7 @@ Reading: a committed one-hot row costs 144 ns; a dense value costs 12 ns; so the
 encoding is paying about 12x for the 16 cells it spreads one digit over, and sparsity across
 rows buys nothing because every row has a digit. The catch is the range proof: a dense column
 in [0, 16) has no cheap constraint (a degree-15 zero-check, or a lookup, which is one-hot
-again), so the usable arms are base-4 digits with a degree-3 zero-check (SuperNeo's design,
+again), so the usable arms are base-4 digits with a degree-4 zero-check, 5 with eq (SuperNeo's design,
 3.8–5.7x on the commit) or Booleans with Booleanity (2.1–2.5x). For the clamp output chunks (71%
 of paid rows) and the remainders (22%) a base-4 decomposition needs no lookup machinery:
 committed digits, one zero-check, and the linear recomposition, replacing today's one-hot

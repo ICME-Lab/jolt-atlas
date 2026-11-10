@@ -5,7 +5,9 @@
 //!   few documented dead fields, at least not panic.
 //! * [`witness_tamper_sweep`]: the execution trace is perturbed *before*
 //!   proving (node outputs, fused quotient / remainder, every softmax
-//!   witness column), so the prover's own transcript stays self-consistent
+//!   witness column), and so are the clamp buckets' `OUT` digits, which the
+//!   trace does not hold (out of range with the value kept, and the top digit
+//!   raised past `2^32`), so the prover's own transcript stays self-consistent
 //!   and only the algebra can reject. Any effective tamper must be rejected.
 //! * [`opening_forgery_sweep`]: every opening claim the prover makes is
 //!   forged (`+1`) at the accumulator choke point and the proof re-run;
@@ -38,8 +40,14 @@ use super::{
     probe::{self, ProbeGuard},
 };
 use crate::onnx_proof::{
-    proof_serialization::serialize_proof, prove, prove_from_trace, verify,
-    AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing, ONNXProof,
+    clamp_split::{
+        self,
+        digit_tamper::{self, DigitTamper, DigitTamperForm},
+    },
+    global_clamp::clamp_buckets,
+    proof_serialization::serialize_proof,
+    prove, prove_from_trace, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+    AtlasVerifierPreprocessing, ONNXProof,
 };
 
 /// The instantiation the sweeps run under: Akita over Fp128. The sweep bodies are generic over the
@@ -239,6 +247,15 @@ enum WitnessSite {
         field: &'static str,
         elem: usize,
     },
+    /// A live clamp bucket's `OUT` digits at the first cycle of its first live `node`, tampered
+    /// through [`digit_tamper`] (the trace holds no digits). The trace is unchanged, so neither
+    /// neutrality rule applies: the verifier must reject.
+    ClampDigit {
+        node: usize,
+        bucket: usize,
+        cycle: usize,
+        form: DigitTamperForm,
+    },
 }
 
 const SOFTMAX_FIELDS: &[&str] = &[
@@ -291,8 +308,24 @@ fn probe_elems(len: usize, all: bool) -> Vec<usize> {
     v
 }
 
-fn witness_sites(trace: &Trace, all: bool) -> Vec<WitnessSite> {
+fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
     let mut sites = vec![];
+    for bucket in clamp_buckets(model).expect("bucket layout") {
+        let Some(live) = clamp_split::live_bucket(&bucket, |idx| {
+            !clamp_split::exact_output_prover(model, trace, idx)
+        }) else {
+            continue;
+        };
+        let first = &live.nodes[0];
+        for form in [DigitTamperForm::KeepValue, DigitTamperForm::RaiseTop] {
+            sites.push(WitnessSite::ClampDigit {
+                node: first.idx,
+                bucket: bucket.idx,
+                cycle: first.offset,
+                form,
+            });
+        }
+    }
     for (node, t) in trace.node_outputs.iter().enumerate() {
         for elem in probe_elems(t.data().len(), all) {
             sites.push(WitnessSite::NodeOutput { node, elem });
@@ -353,6 +386,16 @@ fn apply_witness(trace: &mut Trace, site: &WitnessSite) {
                 d[*elem] = d[*elem].wrapping_add(1);
             }
         }
+        WitnessSite::ClampDigit {
+            bucket,
+            cycle,
+            form,
+            ..
+        } => digit_tamper::set(Some(DigitTamper {
+            bucket: *bucket,
+            cycle: *cycle,
+            form: *form,
+        })),
     }
 }
 
@@ -387,18 +430,20 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                 "proving is not deterministic; the witness oracle cannot rely on proof equality"
             );
         }
-        let sites = witness_sites(&honest_trace, all);
+        let sites = witness_sites(&model, &honest_trace, all);
         let mut rows: BTreeMap<&'static str, (usize, usize)> = BTreeMap::new();
         let mut neutral = 0usize;
         for site in &sites {
             let (tampered, res) =
                 prove_tampered::<PCS>(&h.prover_pp, &h.inputs, &mut |t| apply_witness(t, site));
+            digit_tamper::set(None);
             let divergences = probe::take_divergences();
             let class: &'static str = match site {
                 WitnessSite::NodeOutput { .. } => "NodeOutput",
                 WitnessSite::FusedQuotient { .. } => "FusedQuotient",
                 WitnessSite::FusedRemainder { .. } => "FusedRemainder",
                 WitnessSite::Softmax { .. } => "Softmax",
+                WitnessSite::ClampDigit { .. } => "ClampDigit",
             };
             let row = rows.entry(class).or_default();
             row.0 += 1;
@@ -406,7 +451,8 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                 WitnessSite::NodeOutput { node, .. }
                 | WitnessSite::FusedQuotient { node, .. }
                 | WitnessSite::FusedRemainder { node, .. }
-                | WitnessSite::Softmax { node, .. } => *node,
+                | WitnessSite::Softmax { node, .. }
+                | WitnessSite::ClampDigit { node, .. } => *node,
             };
             let label = format!("{} node {node} {}: {site:?}", h.name, op_name(&model, node));
             match res {
@@ -430,6 +476,20 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                     let same_proof = io.inputs == h.io.inputs
                         && io.outputs == h.io.outputs
                         && serialize_proof(&proof).expect("serializes") == honest_bytes;
+                    if matches!(site, WitnessSite::ClampDigit { .. }) {
+                        // The trace is untouched, so neither rule applies; an unchanged proof
+                        // means the tamper never reached the digits.
+                        match (same_proof, run_verify(&proof, &h.verifier_pp, &io)) {
+                            (false, Outcome::Rejected(_)) => row.1 += 1,
+                            (true, _) => violations.push(format!(
+                                "{label} -> the digit tamper did not change the proof"
+                            )),
+                            (false, other) => violations.push(format!(
+                                "{label} -> {other:?} (prover self-checks that would have fired: {divergences:?})"
+                            )),
+                        }
+                        continue;
+                    }
                     if same_proof {
                         neutral += 1;
                         row.1 += 1;

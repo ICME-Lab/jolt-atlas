@@ -56,7 +56,7 @@ impl<F: JoltField> SplitProver<F> {
             setup: params.relation_setup().expect("2^32 − 1 is invertible"),
             params,
             w,
-            out: MultilinearPolynomial::from(split.out.clone()),
+            out: split.out_poly(),
             slack: MultilinearPolynomial::from(split.slack.clone()),
             ind: MultilinearPolynomial::from(split.ind.clone()),
         }
@@ -380,6 +380,9 @@ pub struct BucketSplit {
     pub slack: Vec<u64>,
     /// Saturation indicator per cycle.
     pub ind: Vec<u8>,
+    /// The witness tamper sweep's digit tamper of this bucket, if any ([`digit_tamper`]).
+    #[cfg(test)]
+    pub(crate) tamper: Option<(usize, digit_tamper::DigitTamperForm)>,
 }
 
 impl BucketSplit {
@@ -416,6 +419,8 @@ impl BucketSplit {
             out,
             slack,
             ind,
+            #[cfg(test)]
+            tamper: digit_tamper::for_bucket(bucket.idx),
         }
     }
 
@@ -431,7 +436,7 @@ impl BucketSplit {
     pub fn out_digits(&self) -> Vec<Vec<u8>> {
         let n = num_out_digits();
         let digit_bits = DIGIT_BASE.ilog2();
-        (0..n)
+        let digits: Vec<Vec<u8>> = (0..n)
             .map(|j| {
                 let shift = (n - 1 - j) as u32 * digit_bits;
                 self.out
@@ -440,7 +445,46 @@ impl BucketSplit {
                     .map(|&o| ((o >> shift) as u64 % DIGIT_BASE) as u8)
                     .collect()
             })
-            .collect()
+            .collect();
+        #[cfg(test)]
+        let digits = {
+            let mut digits = digits;
+            if let Some((cycle, form)) = self.tamper {
+                digit_tamper::apply(&mut digits, cycle, form);
+            }
+            digits
+        };
+        digits
+    }
+
+    /// `OUT` per cycle as the split sumcheck's witness.
+    pub fn out_poly<F: JoltField>(&self) -> MultilinearPolynomial<F> {
+        #[cfg(test)]
+        if let Some(raised) = self.raised_out() {
+            return MultilinearPolynomial::from(raised);
+        }
+        MultilinearPolynomial::from(self.out.clone())
+    }
+
+    /// `OUT` per cycle as the exact value sumcheck's witness.
+    pub fn out_values(&self) -> Vec<u64> {
+        #[cfg(test)]
+        if let Some(raised) = self.raised_out() {
+            return raised;
+        }
+        self.out.iter().map(|&o| o as u64).collect()
+    }
+
+    /// Under a [`digit_tamper::DigitTamperForm::RaiseTop`] tamper, `OUT` with the tampered cycle
+    /// raised by `2^32`, the value its tampered digits recompose.
+    #[cfg(test)]
+    fn raised_out(&self) -> Option<Vec<u64>> {
+        let (cycle, digit_tamper::DigitTamperForm::RaiseTop) = self.tamper? else {
+            return None;
+        };
+        let mut out: Vec<u64> = self.out.iter().map(|&o| o as u64).collect();
+        out[cycle] += 1 << OUT_LOG_K;
+        Some(out)
     }
 
     /// The `d`-th slack chunk index of every cycle (`None` on interior cycles).
@@ -519,4 +563,71 @@ pub fn exact_output_prover(model: &Model, trace: &Trace, node_idx: usize) -> boo
             .node_outputs
             .get(node_idx)
             .is_some_and(|t| unsaturated(t.data()))
+}
+
+/// Test-only tamper of one clamp bucket's `OUT` digits, for the witness tamper sweep's
+/// `ClampDigit` sites: the trace holds no digits, so a trace tamper cannot reach them. The sweep
+/// sets the tamper before proving and clears it after; [`BucketSplit::assemble`] records it on
+/// the bucket it names, and the digits and `OUT` witnesses read it from there.
+#[cfg(test)]
+pub(crate) mod digit_tamper {
+    use super::DIGIT_BASE;
+    use std::sync::Mutex;
+
+    /// How the digits of one cycle are tampered.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum DigitTamperForm {
+        /// `d_j + b` and the next more significant digit `− 1`, at the most significant `j`
+        /// whose more significant neighbour is nonzero, on the first cycle from the tamper's
+        /// that has one: `OUT` is unchanged and one digit is out of range.
+        KeepValue,
+        /// The most significant digit `+ b`: the digits recompose `OUT + 2^32`, and the value
+        /// relations read that `OUT`.
+        RaiseTop,
+    }
+
+    /// A digit tamper of `bucket` at `cycle`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) struct DigitTamper {
+        pub bucket: usize,
+        pub cycle: usize,
+        pub form: DigitTamperForm,
+    }
+
+    static ACTIVE: Mutex<Option<DigitTamper>> = Mutex::new(None);
+
+    /// Set (or, with `None`, clear) the tamper the next proof applies.
+    pub(crate) fn set(tamper: Option<DigitTamper>) {
+        *ACTIVE.lock().unwrap() = tamper;
+    }
+
+    /// The active tamper's cycle and form, if it names `bucket`.
+    pub(crate) fn for_bucket(bucket: usize) -> Option<(usize, DigitTamperForm)> {
+        ACTIVE
+            .lock()
+            .unwrap()
+            .filter(|t| t.bucket == bucket)
+            .map(|t| (t.cycle, t.form))
+    }
+
+    /// Apply `form` to the digit columns at `cycle`.
+    pub(super) fn apply(digits: &mut [Vec<u8>], cycle: usize, form: DigitTamperForm) {
+        let base = DIGIT_BASE as u8;
+        match form {
+            DigitTamperForm::KeepValue => {
+                // The first cycle from `cycle` on with a nonzero digit above the least
+                // significant (`OUT ≥ b`; a saturated `out = i32::MIN` has `OUT = 0`).
+                let movable = (cycle..digits[0].len()).find_map(|t| {
+                    (1..digits.len())
+                        .find(|&j| digits[j - 1][t] >= 1)
+                        .map(|j| (t, j))
+                });
+                if let Some((t, j)) = movable {
+                    digits[j][t] += base;
+                    digits[j - 1][t] -= 1;
+                }
+            }
+            DigitTamperForm::RaiseTop => digits[0][cycle] += base,
+        }
+    }
 }

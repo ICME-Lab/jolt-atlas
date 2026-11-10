@@ -513,10 +513,7 @@ fn build_all<F: JoltField, T: Transcript>(
                     ClampValueParams::Split(p) => {
                         Box::new(SplitProver::new(p, split)) as Box<dyn DynRelationWitness<F, T>>
                     }
-                    ClampValueParams::Exact(p) => Box::new(ValueProver::new(
-                        p,
-                        split.out.iter().map(|&o| o as u64).collect(),
-                    ))
+                    ClampValueParams::Exact(p) => Box::new(ValueProver::new(p, split.out_values()))
                         as Box<dyn DynRelationWitness<F, T>>,
                 }]
             }

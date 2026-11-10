@@ -12,7 +12,7 @@ use crate::onnx_proof::{
     clamp_lookups::{clamp_intermediate, is_scalar},
     clamp_split,
     global_clamp::clamp_buckets,
-    prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
+    prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128, ProofType,
 };
 
 /// A clamp bucket whose nodes are all unsaturated model outputs proves nothing through its
@@ -60,7 +60,8 @@ fn exact_output_bucket_commits_nothing() {
 }
 
 /// The `saturating` probe model saturates an internal, non-scalar clamped node, so the soundness
-/// sweeps run over a clamp bucket with nonempty slack chunks.
+/// sweeps run over a bucket that carries dense `OUT` digits and nonempty slack chunks together,
+/// and its proof carries the slack chunk check beside the digit range check.
 #[test]
 fn saturating_probe_saturates() {
     let probe = probe_models()
@@ -88,4 +89,18 @@ fn saturating_probe_saturates() {
         !saturating.is_empty(),
         "no internal non-scalar clamped node saturates"
     );
+
+    let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(
+        AtlasSharedPreprocessing::preprocess(model),
+    );
+    let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &probe.inputs);
+    for kind in [
+        ProofType::DeferredClampDigitRange,
+        ProofType::DeferredClampChunkChecks,
+    ] {
+        assert!(
+            proof.proofs().keys().any(|id| id.1 == kind),
+            "the saturating probe's proof has no {kind:?}"
+        );
+    }
 }

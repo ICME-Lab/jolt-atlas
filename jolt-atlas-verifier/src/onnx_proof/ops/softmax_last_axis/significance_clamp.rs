@@ -18,7 +18,8 @@
 use super::exp_lut::generate_exp_lut_decomposed;
 use crate::node_view::ComputationNode;
 use crate::{
-    onnx_proof::op_lookups::LookupOperandsTrait, utils::opening_access::AccOpeningAccessor,
+    onnx_proof::op_lookups::{LookupOperandsTrait, LookupRaPolys},
+    utils::opening_access::AccOpeningAccessor,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
@@ -49,14 +50,6 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
         Ok(z_hi_claim * F::from_u64(base as u64) + z_lo_claim)
     }
 
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::SoftmaxClampRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::SoftmaxClampRaD(node_idx, d)
-    }
-
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
         OpeningId::new(
             VirtualPoly::SoftmaxClampWitness(node.idx),
@@ -81,5 +74,15 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
             VirtualPoly::SoftmaxZHi(node_idx),
             SumcheckId::NodeExecution(node_idx),
         )
+    }
+}
+
+impl LookupRaPolys for SoftmaxSignificanceClampOperands {
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
+        VirtualPoly::SoftmaxClampRa(node_idx)
+    }
+
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
+        CommittedPoly::SoftmaxClampRaD(node_idx, d)
     }
 }

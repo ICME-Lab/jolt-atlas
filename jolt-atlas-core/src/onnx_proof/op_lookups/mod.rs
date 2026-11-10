@@ -17,9 +17,9 @@ use atlas_algebra::{
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_sumcheck::{
     opening_proof::prover::ProverOpeningAccumulator,
-    ps_shout::{
-        unary::prover::{ps_read_raf_prover, UnaryReadRafSumcheckProver},
-        RafShoutProvider,
+    ps_shout::unary::{
+        prover::{ps_read_raf_prover, UnaryReadRafSumcheckProver},
+        PrefixSuffixShoutProvider,
     },
 };
 use atlas_transcript::Transcript;
@@ -35,9 +35,8 @@ fn append_raf_claims_prover<F, H>(
     F: JoltField,
     H: LookupOperandsTrait,
 {
-    let r_cycle =
-        <OpLookupProvider<H> as RafShoutProvider<F>>::r_cycle(provider, opening_accumulator)
-            .expect("the prover holds every claim it reads");
+    let r_cycle = H::r_cycle(&provider.computation_node, opening_accumulator)
+        .expect("the prover holds every claim it reads");
     let claim = witness.evaluate_mle(&r_cycle.r);
     let exec_id = H::witness_opening_id(&provider.computation_node);
     opening_accumulator.append_virtual(transcript, exec_id, r_cycle, claim);
@@ -58,7 +57,8 @@ pub trait OpLookupProve {
     where
         F: JoltField,
         T: Transcript,
-        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default;
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+        Self: PrefixSuffixShoutProvider<F, LUT, LOG_K>;
 
     /// First half of [`Self::read_raf_prove`]: evaluate the lookup witness at
     /// `r_cycle`, append its opening claim, and return the lookup bits so the
@@ -97,7 +97,8 @@ pub trait OpLookupProve {
     where
         F: JoltField,
         T: Transcript,
-        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default;
+        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+        Self: PrefixSuffixShoutProvider<F, LUT, LOG_K>;
 }
 
 impl<H: LookupWitness> OpLookupProve for OpLookupProvider<H> {
@@ -115,6 +116,7 @@ impl<H: LookupWitness> OpLookupProve for OpLookupProvider<H> {
         F: JoltField,
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+        Self: PrefixSuffixShoutProvider<F, LUT, LOG_K>,
     {
         let witness = self.helper.witness(&self.computation_node, trace);
         append_raf_claims_prover(self, &witness, accumulator, transcript);
@@ -170,6 +172,7 @@ impl<H: LookupWitness> OpLookupProve for OpLookupProvider<H> {
         F: JoltField,
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+        Self: PrefixSuffixShoutProvider<F, LUT, LOG_K>,
     {
         ps_read_raf_prover(self, lookup_bits, accumulator, transcript)
     }

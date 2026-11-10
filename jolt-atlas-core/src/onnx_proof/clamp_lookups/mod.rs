@@ -1,23 +1,21 @@
-//! 64-bit saturating-clamp lookup infrastructure for `Add`/`Sub`/`Sum`/`Einsum`/`Mul`/
-//! `Square`/`Cube`/`MeanOfSquares`.
-//!
-//! Driven by the same generic [`OpLookupProvider`](super::op_lookups::OpLookupProvider)/
-//! [`OpLookupEncoding`](super::op_lookups::OpLookupEncoding) as
-//! [`op_lookups`](super::op_lookups), parameterized here by [`SaturatingAccClampOperands`]:
+//! The saturating-clamp accumulation of `Add`/`Sub`/`Sum`/`Einsum`/`Mul`/`Square`/`Cube`/
+//! `MeanOfSquares`:
 //!
 //! ```text
-//! output(x) = SatClamp(acc(x)),   acc(x) = left(x) ± right(x)
+//! output(x) = SatClamp(acc(x))
 //! ```
 //!
-//! The lookup index is the **pre-clamp i64 accumulation** `acc`, recovered
-//! by re-executing [`sat_binop_intermediate`] on the operands (no trace change).
-//! The accumulation MLE is the `raf` polynomial ([`VirtualPoly::ClampAcc`]); [`SaturationTable`]
-//! discharges the clamp (same table shape `SymmetricClampOperands` uses for the ONNX `Clamp`
-//! op, generalized to bound 31); and the linear identity `acc(r) = left(r) ± right(r)` (checked
-//! by the caller in `Add`/`Sub`) ties the accumulation back to the operands.
+//! A clamped node opens its **pre-clamp i64 accumulation** `acc` (`VirtualPoly::ClampAcc`) at
+//! its output point through the generic [`OpLookupProvider`](super::op_lookups::OpLookupProvider),
+//! parameterized by [`SaturatingAccClampOperands`], which appends that witness claim and nothing
+//! else. The clamp itself is proven in the node's packed clamp bucket after the node loop
+//! ([`clamp_split`](super::clamp_split)), by the tie `acc = out` for a model output whose public
+//! value is unsaturated, or in the clear for a scalar node. The caller ties `acc` back to the
+//! operands (`acc = left ± right` for `Add`/`Sub`, the axis reduction for `Sum`, the fused
+//! rescale for the others).
 //!
-//! The one-hot read-address checks are over a 64-bit address, so the decomposition has
-//! `64 / log_k_chunk` committed chunks ([`CommittedPoly::ClampRaD`]).
+//! The prover recovers `acc` with [`clamp_intermediate`]: from the trace's fused intermediates,
+//! or by re-executing the saturating binop or axis sum.
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::op_lookups::{LookupOperandsTrait, LookupWitness};
@@ -86,7 +84,7 @@ pub fn clamp_intermediate(node: &ComputationNode, trace: &Trace) -> Tensor<i64> 
 /// Clamp lookup indices: each i64 accumulation value's low `bits` bits (its
 /// two's-complement encoding at the node's clamp width — see
 /// `crate::node_view`), the address into
-/// [`SaturationTable`]. Shared with `witness.rs`'s `ClampRaD` witness generation.
+/// saturation table.
 pub fn clamp_lookup_bits(intermediate: &Tensor<i64>, bits: usize) -> Vec<LookupBits> {
     intermediate
         .data()

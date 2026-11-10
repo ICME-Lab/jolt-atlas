@@ -111,13 +111,6 @@ pub trait LookupOperandsTrait {
         claim
     }
 
-    /// Virtual polynomial identifying this op's one-hot read-address ("ra") polynomial.
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly;
-
-    /// Committed polynomial for the `d`-th chunk of this op's one-hot read-address
-    /// decomposition. See [`Self::ra_virtual_poly`].
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly;
-
     /// `OpeningId` this helper's lookup witness claim is registered/read under.
     fn witness_opening_id(node: &ComputationNode) -> OpeningId;
 
@@ -146,6 +139,18 @@ pub trait LookupOperandsTrait {
     }
 }
 
+/// The one-hot read-address polynomials of a lookup proven by a read-raf against committed
+/// chunks. A helper that only appends its witness claim (the saturating clamp, whose range is
+/// proven by the packed clamp buckets) has none.
+pub trait LookupRaPolys: LookupOperandsTrait {
+    /// Virtual polynomial identifying this op's one-hot read-address ("ra") polynomial.
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly;
+
+    /// Committed polynomial for the `d`-th chunk of this op's one-hot read-address
+    /// decomposition. See [`Self::ra_virtual_poly`].
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly;
+}
+
 #[derive(Default)]
 /// Default helper for operator lookup.
 pub struct DefaultLookupOperands;
@@ -158,14 +163,6 @@ impl LookupOperandsTrait for DefaultLookupOperands {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Result<F, ProofVerifyError> {
         Ok(accumulator.get_node_output_opening(node.idx)?.1)
-    }
-
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::NodeOutputRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::NodeOutputRaD(node_idx, d)
     }
 
     /// The node's own first input, at this node's execution binding.
@@ -188,6 +185,16 @@ impl LookupOperandsTrait for DefaultLookupOperands {
             VirtualPoly::NodeOutput(node_idx),
             SumcheckId::NodeExecution(node_idx),
         )
+    }
+}
+
+impl LookupRaPolys for DefaultLookupOperands {
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
+        VirtualPoly::NodeOutputRa(node_idx)
+    }
+
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
+        CommittedPoly::NodeOutputRaD(node_idx, d)
     }
 }
 
@@ -261,6 +268,7 @@ impl<H: LookupOperandsTrait> OpLookupProvider<H> {
         F: JoltField,
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+        H: LookupRaPolys,
     {
         ps_read_raf_verifier(self, accumulator, transcript)
     }
@@ -276,6 +284,7 @@ impl<H: LookupOperandsTrait> OpLookupProvider<H> {
         F: JoltField,
         T: Transcript,
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+        H: LookupRaPolys,
     {
         append_raf_claims_verifier(self, accumulator, transcript)?;
         ps_read_raf_verifier(self, accumulator, transcript)
@@ -285,7 +294,7 @@ impl<H: LookupOperandsTrait> OpLookupProvider<H> {
 impl<F, H> RafShoutProvider<F> for OpLookupProvider<H>
 where
     F: JoltField,
-    H: LookupOperandsTrait,
+    H: LookupRaPolys,
 {
     fn r_cycle(
         &self,
@@ -306,7 +315,7 @@ impl<F, LUT, H, const LOG_K: usize> PrefixSuffixShoutProvider<F, LUT, LOG_K> for
 where
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
-    H: LookupOperandsTrait,
+    H: LookupRaPolys,
 {
     fn read_raf_claims(
         &self,
@@ -339,8 +348,8 @@ where
 ///
 /// Generic over the same `Helper` used by [`OpLookupProvider`], so that the ra/RaD
 /// polynomial identifiers it exposes stay in sync with whichever virtual/committed
-/// polynomial the helper's [`LookupOperandsTrait::ra_virtual_poly`] /
-/// [`LookupOperandsTrait::ra_committed_poly`] designate.
+/// polynomial the helper's [`LookupRaPolys::ra_virtual_poly`] /
+/// [`LookupRaPolys::ra_committed_poly`] designate.
 pub struct OpLookupEncoding<Helper = DefaultLookupOperands> {
     /// Index of the computation node using this lookup encoding.
     pub node_idx: usize,
@@ -372,7 +381,7 @@ impl<Helper> OpLookupEncoding<Helper> {
     }
 }
 
-impl<Helper: LookupOperandsTrait> RaOneHotEncoding for OpLookupEncoding<Helper> {
+impl<Helper: LookupRaPolys> RaOneHotEncoding for OpLookupEncoding<Helper> {
     fn committed_poly(&self, d: usize) -> CommittedPoly {
         Helper::ra_committed_poly(self.node_idx, d)
     }
@@ -432,8 +441,7 @@ where
     F: JoltField,
     H: LookupOperandsTrait,
 {
-    let r_cycle =
-        <OpLookupProvider<H> as RafShoutProvider<F>>::r_cycle(provider, opening_accumulator)?;
+    let r_cycle = H::r_cycle(&provider.computation_node, opening_accumulator)?;
     let exec_id = H::witness_opening_id(&provider.computation_node);
     opening_accumulator.append_virtual(transcript, exec_id, r_cycle)
 }

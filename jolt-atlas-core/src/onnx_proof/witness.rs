@@ -22,7 +22,6 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
-        clamp_lookups::{clamp_intermediate, clamp_lookup_bits},
         neural_teleport::{division::compute_division, n_bits_to_usize},
         ops::rsqrt::rsqrt_dividend,
         ops::softmax_last_axis::{generate_exp_lut_decomposed, softmax_z},
@@ -118,37 +117,17 @@ fn build_activation_small_rad_witness<F: JoltField>(
     ))
 }
 
-// TODO: group for all chunked committed polynomials (CommittedPoly::*RaD)
-/// Generate the witnesses for **all** of a node's committed polynomials, computing
-/// each expensive per-node re-execution **once** and slicing every one-hot chunk
-/// from it.
-///
-/// A fused node's saturating-clamp and rescaling-remainder one-hots decompose into
-/// many `LOG_K_CHUNK`-wide chunks (16 for the 64-bit clamp, plus the remainder /
-/// range-check chunks). Generating each chunk via [`WitnessGenerator::generate_witness`]
-/// independently re-runs the (expensive, e.g. `einsum_acc_i64` over a full
-/// contraction) accumulation once *per chunk* — ~16-36× per node in practice. This
-/// groups a node's polynomials so the accumulation runs once, then reuses the
-/// cached lookup tensor for every chunk. Non-fused polynomials fall back to
-/// [`WitnessGenerator::generate_witness`].
+/// Generate the witnesses for **all** of a node's committed polynomials. A MeanOfSquares node's
+/// range-check lookup operands are computed once and every one-hot chunk is sliced from them;
+/// every other polynomial goes through [`WitnessGenerator::generate_witness`].
 #[tracing::instrument(skip_all, name = "generate_node_witnesses", fields(node = node.idx))]
 pub(crate) fn generate_node_witnesses<F: JoltField>(
     node: &ComputationNode,
     model: &Model,
     trace: &Trace,
 ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
-    use crate::onnx_proof::{
-        fused_rebase::{rebase_bits, try_rebase_intermediates},
-        ops::NodeCommittedPolynomials,
-    };
+    use crate::onnx_proof::ops::NodeCommittedPolynomials;
 
-    // Per-node lookup tensors, each computed at most once (lazily). For a
-    // fused-rescale node the clamp quotient and rescale remainder derive from
-    // one shared accumulation pass (`try_rebase_intermediates`), which fills
-    // both caches at once — computing them independently would re-run the
-    // accumulation twice.
-    let mut clamp_bits: Option<Vec<LookupBits>> = None;
-    let mut remainder_indices: Option<Vec<usize>> = None;
     let mut mos_range_bits: Option<Vec<LookupBits>> = None;
 
     NodeCommittedPolynomials::get_committed_polynomials(node)
@@ -156,41 +135,6 @@ pub(crate) fn generate_node_witnesses<F: JoltField>(
         .into_iter()
         .map(|poly| {
             let witness = match &poly {
-                CommittedPoly::ClampRaD(_, d) => {
-                    if clamp_bits.is_none() {
-                        match try_rebase_intermediates(node, trace) {
-                            Some(ints) => {
-                                clamp_bits =
-                                    Some(clamp_lookup_bits(&ints.quotient, node.sat_clamp_bits));
-                                remainder_indices = Some(
-                                    ints.remainder.data().iter().map(|&v| v as usize).collect(),
-                                );
-                            }
-                            // Add/Sub/Sum: clamp only, no fused rescale.
-                            None => {
-                                clamp_bits = Some(clamp_lookup_bits(
-                                    &clamp_intermediate(node, trace),
-                                    node.sat_clamp_bits,
-                                ));
-                            }
-                        }
-                    }
-                    build_one_hot_rad_witness(clamp_bits.as_ref().unwrap(), *d, node.sat_clamp_bits)
-                }
-                CommittedPoly::RescaleRemainderRaD(_, d) => {
-                    let bits = rebase_bits(node)
-                        .expect("RescaleRemainderRaD requested for a non-rescaling operator");
-                    if remainder_indices.is_none() {
-                        let ints = try_rebase_intermediates(node, trace)
-                            .expect("RescaleRemainderRaD requested for a non-rescaling operator");
-                        remainder_indices =
-                            Some(ints.remainder.data().iter().map(|&v| v as usize).collect());
-                        clamp_bits.get_or_insert_with(|| {
-                            clamp_lookup_bits(&ints.quotient, node.sat_clamp_bits)
-                        });
-                    }
-                    build_onehot_witness(remainder_indices.as_ref().unwrap(), bits as usize, *d)
-                }
                 CommittedPoly::MeanOfSquaresRangeCheckRaD(_, d) => {
                     let bits = mos_range_bits.get_or_insert_with(|| {
                         let padded_operands = TraceView::padded_operand_tensors(trace, node);
@@ -305,19 +249,10 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let input = &layer_data.operands[0];
                 build_activation_small_rad_witness(input, *d)
             }
-            CommittedPoly::GlobalClampRaD(..)
-            | CommittedPoly::GlobalRemainderRaD(..)
+            CommittedPoly::GlobalRemainderRaD(..)
             | CommittedPoly::GlobalClampOutRaD(..)
             | CommittedPoly::GlobalClampSlackRaD(..) => {
                 unreachable!("packed clamp bucket witnesses are built at the model level")
-            }
-            CommittedPoly::ClampRaD(node_idx, d) => {
-                // Saturating Add/Sub: the lookup index is the pre-clamp i64
-                // accumulation, recovered by re-executing the binop.
-                let computation_node = &model.view(*node_idx);
-                let intermediate = clamp_intermediate(computation_node, trace);
-                let lookup_bits = clamp_lookup_bits(&intermediate, computation_node.sat_clamp_bits);
-                build_one_hot_rad_witness(&lookup_bits, *d, computation_node.sat_clamp_bits)
             }
             CommittedPoly::DivNodeQuotient(node_idx) => {
                 let computation_node = &model.view(*node_idx);
@@ -542,17 +477,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .padded_pow2();
                 let lookup_indices = compute_lookup_indices_from_operands(&[&operand], false);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
-            }
-            CommittedPoly::RescaleRemainderRaD(node_idx, d) => {
-                // Fused rescaling remainder `R = acc mod 2^S ∈ [0, 2^S)`, padded
-                // to the node-output cycle domain . Shared by einsum, Mul,
-                // Square, Cube via the per-operator re-execution dispatch.
-                let node = &model.view(*node_idx);
-                let bits = crate::onnx_proof::fused_rebase::rebase_bits(node)
-                    .expect("RescaleRemainderRaD requested for a non-rescaling operator");
-                let r = crate::onnx_proof::fused_rebase::rebase_remainder(node, trace);
-                let lookup_indices: Vec<usize> = r.data().iter().map(|&v| v as usize).collect();
-                build_onehot_witness(&lookup_indices, bits as usize, *d)
             }
         }
     }

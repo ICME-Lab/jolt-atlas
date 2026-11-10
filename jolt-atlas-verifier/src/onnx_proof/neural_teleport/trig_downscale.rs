@@ -6,7 +6,8 @@
 //! `division.rs`'s `a = P·q + r` derivation.
 use crate::node_view::ComputationNode;
 use crate::{
-    onnx_proof::op_lookups::LookupOperandsTrait, utils::opening_access::AccOpeningAccessor,
+    onnx_proof::op_lookups::{LookupOperandsTrait, LookupRaPolys},
+    utils::opening_access::AccOpeningAccessor,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
@@ -35,14 +36,6 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
             .1)
     }
 
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::TrigDownscaleRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::TrigDownscaleRaD(node_idx, d)
-    }
-
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
         OpeningId::new(
             VirtualPoly::TeleportRemainder(node.idx),
@@ -64,5 +57,15 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
             VirtualPoly::NodeOutput(node_idx),
             SumcheckId::NodeExecution(node_idx),
         )
+    }
+}
+
+impl LookupRaPolys for TrigDownscaleOperands {
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
+        VirtualPoly::TrigDownscaleRa(node_idx)
+    }
+
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
+        CommittedPoly::TrigDownscaleRaD(node_idx, d)
     }
 }

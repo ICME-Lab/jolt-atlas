@@ -41,16 +41,16 @@ pub enum ProofType {
     /// Softmax stage 2
     SoftmaxStage2 = 6,
     /// Axis-reduction sumcheck for `Sum` (proves the pre-clamp accumulation
-    /// equals the sum over the reduced axes; the clamp itself is a separate
-    /// `Execution` lookup).
+    /// equals the sum over the reduced axes; the clamp itself is proven in the
+    /// node's packed clamp bucket, see `clamp_split`).
     SumReduction = 9,
     /// Einsum contraction (matmul) sumcheck proving
-    /// `Σ_k L·R = rescaled·2^S + R` (the clamp lookup itself is a separate
-    /// `Execution` proof; analogous to `SumReduction`).
+    /// `Σ_k L·R = rescaled·2^S + R` (the clamp of `rescaled` is proven in the
+    /// node's packed clamp bucket; analogous to `SumReduction`).
     EinsumMatmul = 10,
     /// Element-wise arithmetic sumcheck for a fused `Mul`/`Square`/`Cube`,
-    /// proving `acc(r) = rescaled·2^S + R` (the clamp lookup is a separate
-    /// `Execution` proof; the einsum analogue is `EinsumMatmul`).
+    /// proving `acc(r) = rescaled·2^S + R` (the clamp of `rescaled` is proven in
+    /// the node's packed clamp bucket; the einsum analogue is `EinsumMatmul`).
     RescaleArith = 12,
     /// All clamp buckets' interior/saturated split sumchecks, proven as one
     /// batched sumcheck after the node loop (stored under `DEFERRED_PROOF_IDX`;

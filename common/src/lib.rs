@@ -152,23 +152,6 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         SoftmaxZLoRaD(usize, usize),
 
-        /// One-hot read-address decomposition for the saturating-clamp lookup of
-        /// a `Add`/`Sub` node. The clamp is indexed by the 64-bit accumulation, so
-        /// there are `64 / log_k_chunk` chunks (e.g. 16 for `log_k_chunk = 4`).
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        ClampRaD(usize, usize),
-
-        /// One-hot read-address decomposition for a fused rescaling
-        /// **remainder** range check (`R ∈ [0, 2^S)`). Shared by every operator
-        /// that fuses an i64-accumulate + rescaling division (einsum, `Mul`,
-        /// `Square`, `Cube`).
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        RescaleRemainderRaD(usize, usize),
-
         /// One-hot read-address decomposition for the **Clamp** operator's
         /// symmetric-range lookup.
         ///
@@ -200,14 +183,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         SoftmaxClampRaD(usize, usize),
-
-        /// One-hot read-address decomposition for a **packed** saturating-clamp
-        /// lookup bucket: several nodes' clamp lookups (same width) laid out in
-        /// one cycle space (see `jolt_atlas_core::onnx_proof::global_clamp`).
-        ///
-        /// * `0` – bucket index
-        /// * `1` – decomposition index `d`
-        GlobalClampRaD(usize, usize),
 
         /// One-hot read-address decomposition for a packed fused-rescale
         /// **remainder** range-check bucket (`R ∈ [0, 2^S)` for several nodes).
@@ -452,13 +427,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         ClampAcc(usize),
 
-        /// One-hot read-address polynomial for the saturating-clamp lookup
-        /// (`Add`/`Sub`). Virtualized — [`CommittedPoly::ClampRaD`] commits its
-        /// decomposition.
-        ///
-        /// * `0` – node index
-        ClampRa(usize),
-
         /// Remainder `R = acc mod 2^S` of a fused rescaling division
         /// (`acc = rescaled·2^S + R`, where `acc` is the operator's raw i64
         /// accumulation). Range-checked to `[0, 2^S)`; bound into the operator
@@ -466,13 +434,6 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         RescaleRemainder(usize),
-
-        /// One-hot read-address polynomial for the rescaling-remainder range
-        /// check. Virtualized — [`CommittedPoly::RescaleRemainderRaD`] commits
-        /// its decomposition.
-        ///
-        /// * `0` – node index
-        RescaleRemainderRa(usize),
 
         /// Read-address polynomial for the **Clamp** operator's symmetric-range
         /// lookup. Virtualized — [`CommittedPoly::SymmetricClampRaD`] commits its
@@ -504,12 +465,6 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         ActivationSmallRa(usize),
-
-        /// Read-address polynomial of a packed saturating-clamp lookup bucket
-        /// (virtualized; [`CommittedPoly::GlobalClampRaD`] commits its chunks).
-        ///
-        /// * `0` – bucket index
-        GlobalClampRa(usize),
 
         /// Read-address polynomial of a packed rescale-remainder bucket
         /// ([`CommittedPoly::GlobalRemainderRaD`] commits its chunks).

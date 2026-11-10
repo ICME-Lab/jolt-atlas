@@ -2,7 +2,7 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::plan::{OpLookup, OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::{
-    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding},
+    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, LookupRaPolys, OpLookupEncoding},
     ProofType,
 };
 use atlas_algebra::{
@@ -33,14 +33,6 @@ impl LookupOperandsTrait for SymmetricClampOperands {
         DefaultLookupOperands::rv_claim(node, accumulator)
     }
 
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::SymmetricClampRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::SymmetricClampRaD(node_idx, d)
-    }
-
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
         DefaultLookupOperands::witness_opening_id(node)
     }
@@ -54,6 +46,16 @@ impl LookupOperandsTrait for SymmetricClampOperands {
 
     fn r_cycle_source(node_idx: usize) -> OpeningId {
         DefaultLookupOperands::r_cycle_source(node_idx)
+    }
+}
+
+impl LookupRaPolys for SymmetricClampOperands {
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
+        VirtualPoly::SymmetricClampRa(node_idx)
+    }
+
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
+        CommittedPoly::SymmetricClampRaD(node_idx, d)
     }
 }
 

@@ -30,22 +30,19 @@ crate::impl_plan_op!(Add, AccumulationRelation<Add>);
 /// Proof for saturating element-wise addition: `output = SatClamp(left + right)`.
 ///
 /// The accumulation is widened to `i64` (`acc = left + right`) and then clamped
-/// to `i32`, so `Add` is no longer a pure linear identity. The proof has three
-/// parts (mirroring [`super::relu`], but over a 64-bit clamp address):
+/// to `i32`, so `Add` is no longer a pure linear identity. The plan ([`accumulation_plan`]) has
+/// two parts:
 ///
-/// 1. **Clamp lookup** ([`ClampLookupProvider`], `ProofType::Execution`): a
-///    prefix-suffix read-raf sumcheck proving `output(r) = SatClamp(acc(r))` and
-///    tying the accumulation MLE ([`VirtualPoly::ClampAcc`], the `raf`) to the
-///    one-hot read-address poly ([`VirtualPoly::ClampRa`]).
-/// 2. **One-hot checks** ([`ClampEncoding`], `ProofType::RaOneHotChecks`):
-///    booleanity + hamming-weight + ra-virtualization of `ClampRa` against its
-///    committed decomposition ([`CommittedPoly::ClampRaD`]).
-/// 3. **Operand tie** ([`AccumulationRelation`], no sumcheck): the prover opens
+/// 1. **Clamp** ([`clamp_steps`]): the accumulation ([`VirtualPoly::ClampAcc`]) is opened at
+///    the node's output point `r`. A model output whose public value is unsaturated then ties
+///    `acc(r) = output(r)`; every other node joins its packed clamp bucket, which proves
+///    `output = SatClamp(acc)` after the node loop
+///    ([`clamp_split`](crate::onnx_proof::clamp_split)).
+/// 2. **Operand tie** ([`AccumulationRelation`], no sumcheck): the prover opens
 ///    `left`/`right` at the same output point `r`, and the verifier checks
-///    `left(r) + right(r) == acc(r)`. `acc(r)` is the lookup's `raf` claim,
-///    already tied to `ClampRa` in (1).
+///    `left(r) + right(r) == acc(r)`.
 ///
-/// A scalar node skips (1) and (2): its operands open in the clear and the verifier
+/// A scalar node skips (1): its operands open in the clear and the verifier
 /// recomputes the clamp.
 ///
 /// The accumulation is re-executed from the operands at proving time

@@ -19,15 +19,15 @@ pub mod axis;
 /// per-output-element clamp `output = SatClamp(acc)` is identical (an element-wise
 /// `i64 → i32` saturation), only the accumulation differs. So the proof is:
 ///
-/// 1. **Clamp lookup** ([`ClampLookupProvider`], `ProofType::Execution`) +
-///    **one-hot checks** (`ProofType::RaOneHotChecks`): prove
-///    `output(r) = SatClamp(acc(r))` and tie `acc` ([`VirtualPoly::ClampAcc`]).
+/// 1. **Clamp** ([`clamp_steps`]): open `acc` ([`VirtualPoly::ClampAcc`]) at the output point
+///    and prove `output = SatClamp(acc)` exactly or in the node's packed clamp bucket, as for
+///    `Add`.
 /// 2. **Axis reduction** ([`SumAxisRelation`], `ProofType::SumReduction`): prove
 ///    `acc(r) = Σ_axis operand`, reducing to the operand opening. Its input claim
-///    is `acc(r)` (the lookup's `raf`), not the node output.
+///    is the opened `acc(r)`, not the node output.
 ///
-/// Scalar (`1×1`) outputs skip the clamp lookup (its one-hot reduction degenerates
-/// at `log_T = 0`): `acc` opens in the clear, so the verifier checks
+/// Scalar (`1×1`) outputs skip the packed bucket (its cycle space would be empty): `acc` opens
+/// in the clear, so the verifier checks
 /// `output == SatClamp(acc)` directly — and the axis reduction still binds `acc`
 /// to the operand.
 impl OpPlan for Sum {

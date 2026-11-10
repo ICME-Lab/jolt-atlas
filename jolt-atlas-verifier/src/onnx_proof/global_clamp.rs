@@ -162,12 +162,9 @@ impl ClampBucket {
         OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.width).instruction_d
     }
 
-    /// The `d`-th committed one-hot chunk polynomial.
-    pub fn committed_poly(&self, d: usize) -> CommittedPoly {
-        match self.kind {
-            BucketKind::Clamp => CommittedPoly::GlobalClampRaD(self.idx, d),
-            BucketKind::Remainder => CommittedPoly::GlobalRemainderRaD(self.idx, d),
-        }
+    /// The `d`-th committed one-hot chunk polynomial of a remainder bucket.
+    pub fn remainder_chunk_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::GlobalRemainderRaD(self.idx, d)
     }
 
     /// The bucket's committed one-hot chunk polynomials.
@@ -175,7 +172,7 @@ impl ClampBucket {
         match self.kind {
             BucketKind::Clamp => clamp_split::chunk_polys(self),
             BucketKind::Remainder => (0..self.num_chunks())
-                .map(|d| self.committed_poly(d))
+                .map(|d| self.remainder_chunk_poly(d))
                 .collect(),
         }
     }
@@ -233,9 +230,7 @@ impl ClampBucket {
     }
 }
 
-/// All buckets' committed polynomials (the model-level replacement for the
-/// per-node `ClampRaD` / `RescaleRemainderRaD` chunks). `Err` if a node's operand is not a node
-/// of the model.
+/// All buckets' committed polynomials. `Err` if a node's operand is not a node of the model.
 pub fn bucket_committed_polys(model: &Model) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
     Ok(clamp_buckets(model)?
         .iter()

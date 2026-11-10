@@ -579,7 +579,9 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         prover: &mut Prover<F, T>,
     ) -> Vec<Box<dyn DynRelationWitness<F, T>>>
     where
-        H: Default + crate::onnx_proof::op_lookups::LookupWitness,
+        H: Default
+            + crate::onnx_proof::op_lookups::LookupWitness
+            + crate::onnx_proof::op_lookups::LookupRaPolys,
         LUT: atlas_lookup_tables::JoltLookupTable
             + atlas_lookup_tables::PrefixSuffixDecompositionTrait<XLEN>
             + Default

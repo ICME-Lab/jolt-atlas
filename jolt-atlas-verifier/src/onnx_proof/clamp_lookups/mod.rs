@@ -1,23 +1,18 @@
-//! 64-bit saturating-clamp lookup infrastructure for `Add`/`Sub`/`Sum`/`Einsum`/`Mul`/
-//! `Square`/`Cube`/`MeanOfSquares`.
-//!
-//! Driven by the same generic [`OpLookupProvider`](super::op_lookups::OpLookupProvider)/
-//! [`OpLookupEncoding`](super::op_lookups::OpLookupEncoding) as
-//! [`op_lookups`](super::op_lookups), parameterized here by [`SaturatingAccClampOperands`]:
+//! The saturating-clamp accumulation of `Add`/`Sub`/`Sum`/`Einsum`/`Mul`/`Square`/`Cube`/
+//! `MeanOfSquares`:
 //!
 //! ```text
-//! output(x) = SatClamp(acc(x)),   acc(x) = left(x) ± right(x)
+//! output(x) = SatClamp(acc(x))
 //! ```
 //!
-//! The lookup index is the **pre-clamp i64 accumulation** `acc`, recovered
-//! by re-executing [`sat_binop_intermediate`] on the operands (no trace change).
-//! The accumulation MLE is the `raf` polynomial ([`VirtualPoly::ClampAcc`]); [`SaturationTable`]
-//! discharges the clamp (same table shape `SymmetricClampOperands` uses for the ONNX `Clamp`
-//! op, generalized to bound 31); and the linear identity `acc(r) = left(r) ± right(r)` (checked
-//! by the caller in `Add`/`Sub`) ties the accumulation back to the operands.
-//!
-//! The one-hot read-address checks are over a 64-bit address, so the decomposition has
-//! `64 / log_k_chunk` committed chunks ([`CommittedPoly::ClampRaD`]).
+//! A clamped node opens its **pre-clamp i64 accumulation** `acc` (`VirtualPoly::ClampAcc`) at
+//! its output point through the generic [`OpLookupProvider`](super::op_lookups::OpLookupProvider),
+//! parameterized by [`SaturatingAccClampOperands`], which appends that witness claim and nothing
+//! else. The clamp itself is proven in the node's packed clamp bucket after the node loop
+//! ([`clamp_split`](super::clamp_split)), by the tie `acc = out` for a model output whose public
+//! value is unsaturated, or in the clear for a scalar node. The caller ties `acc` back to the
+//! operands (`acc = left ± right` for `Add`/`Sub`, the axis reduction for `Sum`, the fused
+//! rescale for the others).
 
 use super::op_lookups::{DefaultLookupOperands, LookupOperandsTrait};
 use crate::node_view::ComputationNode;
@@ -27,7 +22,7 @@ use atlas_algebra::{
     utils::errors::ProofVerifyError,
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
-use common::{CommittedPoly, VirtualPoly};
+use common::VirtualPoly;
 
 /// Widest address of the saturating-clamp lookup table (an i64 accumulation).
 /// Individual nodes use `node.sat_clamp_bits ∈ {40, 48, 56, 64}` (see
@@ -95,14 +90,6 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
         accumulator: &dyn atlas_sumcheck::opening_proof::OpeningAccumulator<F>,
     ) -> Result<F, ProofVerifyError> {
         DefaultLookupOperands::rv_claim(node, accumulator)
-    }
-
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::ClampRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::ClampRaD(node_idx, d)
     }
 
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {

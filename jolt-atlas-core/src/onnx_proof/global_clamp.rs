@@ -61,7 +61,7 @@ pub fn bucket_witnesses<F: JoltField>(
                 (0..bucket.num_chunks())
                     .map(|d| {
                         (
-                            bucket.committed_poly(d),
+                            bucket.remainder_chunk_poly(d),
                             build_one_hot_rad_witness(&bits, d, bucket.width),
                         )
                     })

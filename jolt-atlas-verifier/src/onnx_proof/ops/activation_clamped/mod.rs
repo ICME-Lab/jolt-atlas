@@ -18,7 +18,7 @@ use crate::onnx_proof::neural_teleport::small_table::{SmallTable, SmallTableRela
 use crate::onnx_proof::relation::{RelationParams, RelationVerifier, SetupRelation};
 use crate::onnx_proof::{
     deferred_lookups::DeferredBatch,
-    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, OpLookupEncoding},
+    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, LookupRaPolys, OpLookupEncoding},
     plan::{OpActivation, OpLookup, OpRelation, Plan, Step},
 };
 use atlas_algebra::{
@@ -78,14 +78,6 @@ impl LookupOperandsTrait for ActivationClampOperands {
             .1)
     }
 
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::ActivationClampRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::ActivationClampRaD(node_idx, d)
-    }
-
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
         DefaultLookupOperands::witness_opening_id(node)
     }
@@ -99,6 +91,16 @@ impl LookupOperandsTrait for ActivationClampOperands {
 
     fn r_cycle_source(node_idx: usize) -> OpeningId {
         DefaultLookupOperands::r_cycle_source(node_idx)
+    }
+}
+
+impl LookupRaPolys for ActivationClampOperands {
+    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
+        VirtualPoly::ActivationClampRa(node_idx)
+    }
+
+    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
+        CommittedPoly::ActivationClampRaD(node_idx, d)
     }
 }
 

@@ -13,6 +13,7 @@ use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
     clamp_split::BucketSplit,
     deferred_lookups::DeferredBatch,
+    global_clamp::BucketWitnesses,
     ops::{Addresses, Deferred, OperatorProver},
 };
 use crate::utils::opening_access::AccOpeningAccessor;
@@ -56,10 +57,9 @@ pub struct Prover<F: JoltField, T: Transcript> {
     pub deferred: BTreeMap<DeferredBatch, Vec<Deferred<F, T>>>,
     /// The read addresses each lookup left for its one-hot checks, by lookup and node.
     pub lookup_addresses: BTreeMap<(Addresses, usize), Vec<usize>>,
-    /// The live clamp buckets' split witnesses, by bucket, for the post-loop plan.
-    pub clamp_splits: BTreeMap<usize, BucketSplit>,
-    /// The remainder buckets' packed values and widths, by bucket, for the post-loop plan.
-    pub remainder_values: BTreeMap<usize, (Vec<u64>, usize)>,
+    /// The packed buckets' witnesses, built with the prover (before the commitment) and read by
+    /// the commitment and the post-loop plan.
+    pub buckets: BucketWitnesses,
 }
 
 impl<F: JoltField, T: Transcript> Prover<F, T> {
@@ -70,14 +70,13 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
     {
         Self {
             io: trace.io(preprocessing.model()),
+            buckets: BucketWitnesses::build(preprocessing.model(), &trace),
             trace,
             preprocessing,
             accumulator: ProverOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof"),
             deferred: BTreeMap::new(),
             lookup_addresses: BTreeMap::new(),
-            clamp_splits: BTreeMap::new(),
-            remainder_values: BTreeMap::new(),
         }
     }
 
@@ -99,11 +98,9 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
             })
     }
 
-    /// A live clamp bucket's split witness (built by the post-loop plan).
+    /// A live clamp bucket's split witness.
     pub fn clamp_split(&self, bucket_idx: usize) -> &BucketSplit {
-        self.clamp_splits
-            .get(&bucket_idx)
-            .unwrap_or_else(|| panic!("clamp bucket {bucket_idx} has no split witness"))
+        self.buckets.clamp_split(bucket_idx)
     }
 }
 
@@ -129,6 +126,7 @@ pub(super) fn commit_witness_polynomials<
 >(
     model: &Model,
     trace: &Trace,
+    buckets: &BucketWitnesses,
     generators: &PCS::ProverSetup,
     transcript: &mut T,
 ) -> (
@@ -136,7 +134,7 @@ pub(super) fn commit_witness_polynomials<
     WitnessCommitments<PCS>,
     Vec<PCS::OpeningProofHint>,
 ) {
-    let poly_map = polynomial_map::<F>(model, trace);
+    let poly_map = polynomial_map::<F>(model, trace, buckets);
     let polys: Vec<&MultilinearPolynomial<F>> = poly_map.values().collect();
     let (batch, per_poly) = PCS::batch_commit_all(&polys, generators);
     let (commitments, hints): (Vec<_>, Vec<_>) = per_poly.into_iter().unzip();
@@ -314,6 +312,7 @@ pub(super) fn finalize_proof<
 pub(super) fn polynomial_map<F: JoltField>(
     model: &Model,
     trace: &Trace,
+    buckets: &BucketWitnesses,
 ) -> BTreeMap<CommittedPoly, MultilinearPolynomial<F>> {
     // Walk nodes *sequentially* with inner (per-tensor) parallelism ENABLED,
     // mirroring `Model::trace`. Witness generation re-executes each fused
@@ -336,8 +335,6 @@ pub(super) fn polynomial_map<F: JoltField>(
         })
         .collect();
     // Packed clamp buckets (model-level, not per node).
-    polys.extend(crate::onnx_proof::global_clamp::bucket_witnesses::<F>(
-        model, trace,
-    ));
+    polys.extend(buckets.committed_polys::<F>(model));
     polys
 }

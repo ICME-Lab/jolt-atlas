@@ -145,7 +145,8 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     };
     let mut by_fam: BTreeMap<String, Fam> = BTreeMap::new();
     for (p, poly) in
-        jolt_atlas_core::onnx_proof::global_clamp::bucket_witnesses::<Fp128>(model, &trace)
+        jolt_atlas_core::onnx_proof::global_clamp::BucketWitnesses::build(model, &trace)
+            .committed_polys::<Fp128>(model)
     {
         let name = format!("{p:?}");
         let fam = name.split('(').next().unwrap().to_string();

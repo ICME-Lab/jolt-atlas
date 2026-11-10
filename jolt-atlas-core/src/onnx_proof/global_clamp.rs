@@ -18,7 +18,7 @@
 //! unchanged. The layout is a pure function of the model, so prover and
 //! verifier derive it independently.
 use super::{
-    clamp_split,
+    clamp_split::{self, BucketSplit},
     fused_rebase::{rebase_remainder, remainder_lookup_bits},
     witness::build_one_hot_rad_witness,
 };
@@ -30,45 +30,102 @@ use atlas_algebra::{
 use atlas_trace::{Model, Trace};
 use common::CommittedPoly;
 pub use jolt_atlas_verifier::onnx_proof::global_clamp::*;
+use rayon::prelude::*;
+use std::collections::BTreeMap;
 
-/// Witnesses for every bucket's chunk polynomials.
-#[tracing::instrument(skip_all, name = "global_clamp::bucket_witnesses")]
-pub fn bucket_witnesses<F: JoltField>(
-    model: &Model,
-    trace: &Trace,
-) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
-    clamp_buckets(model)
-        .expect("the model's nodes have the shapes their ops prove")
-        .iter()
-        .chain(remainder_buckets(model).iter())
-        .flat_map(|bucket| match bucket.kind {
-            BucketKind::Clamp => {
-                match clamp_split::live_bucket(bucket, |idx| {
+/// The packed buckets' witnesses, built once from the trace before the commitment and read
+/// again by the post-loop plan's provers: every live clamp bucket's split and every remainder
+/// bucket's packed values with its width.
+#[derive(Default)]
+pub struct BucketWitnesses {
+    /// The live clamp buckets' split witnesses, by bucket.
+    pub clamp_splits: BTreeMap<usize, BucketSplit>,
+    /// The remainder buckets' packed values and widths, by bucket.
+    pub remainder_values: BTreeMap<usize, (Vec<u64>, usize)>,
+}
+
+impl BucketWitnesses {
+    /// Build every bucket's witness, in parallel across buckets. A clamp bucket is live when one
+    /// of its nodes is not an unsaturated model output
+    /// ([`clamp_split::exact_output_prover`]).
+    #[tracing::instrument(skip_all, name = "global_clamp::BucketWitnesses::build")]
+    pub fn build(model: &Model, trace: &Trace) -> Self {
+        let live: Vec<ClampBucket> = clamp_buckets(model)
+            .expect("the model's nodes have the shapes their ops prove")
+            .iter()
+            .filter_map(|bucket| {
+                clamp_split::live_bucket(bucket, |idx| {
                     !clamp_split::exact_output_prover(model, trace, idx)
-                }) {
-                    Some(_) => clamp_split::BucketSplit::from_trace(bucket, trace, model)
-                        .witness_polys(bucket),
-                    None => clamp_split::BucketSplit::empty_witness_polys(bucket),
-                }
-            }
-            BucketKind::Remainder => {
+                })
+            })
+            .collect();
+        let clamp_splits = live
+            .par_iter()
+            .map(|bucket| (bucket.idx, BucketSplit::from_trace(bucket, trace, model)))
+            .collect();
+        let remainder_values = remainder_buckets(model)
+            .par_iter()
+            .map(|bucket| {
                 let bits = assemble_bits(bucket, |idx| {
                     remainder_lookup_bits(
                         &rebase_remainder(&model.view(idx), trace),
                         bucket.width as i32,
                     )
                 });
-                (0..bucket.num_chunks())
-                    .map(|d| {
-                        (
-                            bucket.remainder_chunk_poly(d),
-                            build_one_hot_rad_witness(&bits, d, bucket.width),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            }
-        })
-        .collect()
+                let values: Vec<u64> = bits.into_iter().map(|x| usize::from(x) as u64).collect();
+                (bucket.idx, (values, bucket.width))
+            })
+            .collect();
+        Self {
+            clamp_splits,
+            remainder_values,
+        }
+    }
+
+    /// A live clamp bucket's split witness.
+    pub fn clamp_split(&self, bucket_idx: usize) -> &BucketSplit {
+        self.clamp_splits
+            .get(&bucket_idx)
+            .unwrap_or_else(|| panic!("clamp bucket {bucket_idx} has no split witness"))
+    }
+
+    /// A remainder bucket's packed values and width.
+    pub fn remainder_values(&self, bucket_idx: usize) -> (&[u64], usize) {
+        let (values, width) = self
+            .remainder_values
+            .get(&bucket_idx)
+            .unwrap_or_else(|| panic!("remainder bucket {bucket_idx} has no values"));
+        (values, *width)
+    }
+
+    /// Every bucket's committed polynomials with their witnesses.
+    #[tracing::instrument(skip_all, name = "global_clamp::BucketWitnesses::committed_polys")]
+    pub fn committed_polys<F: JoltField>(
+        &self,
+        model: &Model,
+    ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
+        let clamp = clamp_buckets(model)
+            .expect("the model's nodes have the shapes their ops prove")
+            .into_iter()
+            .flat_map(|bucket| match self.clamp_splits.get(&bucket.idx) {
+                Some(split) => split.witness_polys(&bucket),
+                None => clamp_split::BucketSplit::empty_witness_polys(&bucket),
+            })
+            .collect::<Vec<_>>();
+        let remainder = remainder_buckets(model).into_iter().flat_map(|bucket| {
+            let (values, width) = self.remainder_values(bucket.idx);
+            let bits: Vec<LookupBits> = values.iter().map(|&v| LookupBits::new(v, width)).collect();
+            (0..bucket.num_chunks())
+                .map(|d| {
+                    (
+                        bucket.remainder_chunk_poly(d),
+                        build_one_hot_rad_witness(&bits, d, width),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        clamp.into_iter().chain(remainder).collect()
+    }
 }
 
 /// Lay each node's lookup addresses into the bucket's cycle space; the

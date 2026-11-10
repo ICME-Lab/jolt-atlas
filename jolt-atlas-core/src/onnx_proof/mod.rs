@@ -113,6 +113,7 @@ pub(crate) fn prove_from_trace<
     let (poly_map, commitments, hints) = prover::commit_witness_polynomials::<F, T, PCS>(
         pp.model(),
         &prover.trace,
+        &prover.buckets,
         &pp.generators,
         &mut prover.transcript,
     );

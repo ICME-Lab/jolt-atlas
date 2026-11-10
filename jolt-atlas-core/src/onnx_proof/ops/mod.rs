@@ -89,7 +89,7 @@ use eval_reduction::NodeEvalReduction;
 
 use crate::onnx_proof::{
     clamp_lookups::{clamp_intermediate, SaturatingAccClampOperands},
-    clamp_split::{self, BucketSplit, SplitParams, SplitProver, ValueParams, ValueProver},
+    clamp_split::{self, SplitParams, SplitProver, ValueParams, ValueProver},
     deferred_lookups::{DeferredBatch, DeferredSetup, DEFERRED_PROOF_IDX},
     fused_rebase::rebase_remainder,
     neural_teleport::{
@@ -150,7 +150,6 @@ use common::consts::{TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS, XLEN};
 use common::{CommittedPoly, VirtualPoly};
 use jolt_claims::SymbolicSumcheck;
 use rayon::prelude::*;
-use std::collections::BTreeMap;
 
 use crate::onnx_proof::Prover;
 
@@ -492,10 +491,7 @@ fn build_all<F: JoltField, T: Transcript>(
     prover: &Prover<F, T>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     let _span = tracing::span!(tracing::Level::INFO, "deferred::build").entered();
-    let buckets = BucketWitnesses {
-        clamp_splits: &prover.clamp_splits,
-        remainder_values: &prover.remainder_values,
-    };
+    let buckets = &prover.buckets;
     prepared
         .into_par_iter()
         .flat_map_iter(|p| match p {
@@ -535,28 +531,6 @@ fn build_all<F: JoltField, T: Transcript>(
             }
         })
         .collect()
-}
-
-/// The bucket witnesses the post-loop plan's provers read (shared across the parallel build).
-struct BucketWitnesses<'a> {
-    clamp_splits: &'a BTreeMap<usize, BucketSplit>,
-    remainder_values: &'a BTreeMap<usize, (Vec<u64>, usize)>,
-}
-
-impl BucketWitnesses<'_> {
-    fn clamp_split(&self, bucket_idx: usize) -> &BucketSplit {
-        self.clamp_splits
-            .get(&bucket_idx)
-            .unwrap_or_else(|| panic!("clamp bucket {bucket_idx} has no split witness"))
-    }
-
-    fn remainder_values(&self, bucket_idx: usize) -> (&[u64], usize) {
-        let (values, width) = self
-            .remainder_values
-            .get(&bucket_idx)
-            .unwrap_or_else(|| panic!("remainder bucket {bucket_idx} has no values"));
-        (values, *width)
-    }
 }
 
 /// The provers of a plan relation (one, or the several of a stage or a one-hot check), set up

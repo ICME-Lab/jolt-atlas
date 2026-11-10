@@ -109,7 +109,9 @@ range-check protocol only; outputs and golden hashes do not move unless the item
 **Implemented on `dev`** (spec `specs/clamp-dense-digit-range-check.md`): `OUT` is 16 base-4
 `U8Scalars` digit columns under `atlas_sumcheck::digit_range`, and the Booleanity check keeps the
 slack chunks only. The base is the one constant `clamp_split::DIGIT_BASE`. Not yet measured: the
-Phase 1 gate run and decision 3 below are pending.
+Phase 1 gate run and decision 3 below are pending. A first GPT-2 run (16 tokens) proved in
+34.5 s against the 40.2 s baseline, verified in 2.20 s, with a 2.24 MiB proof; the stage split
+is not yet measured.
 
 Today each bucket commits `OUT = out + 2^31` as 8 one-hot chunks per row plus empty slack chunks,
 checked by a split sumcheck and the Booleanity chunk check with a linear term
@@ -124,6 +126,10 @@ node-level), the soundness sweeps over the new columns, zoo
 tests, one real-model run. Prototype on `gpt2-tiny` in the test profile first.
 
 ### 2. The same for the rescale remainders — 22% of rows, 3.8–5.7x on them
+
+**Implemented on `dev`**: each remainder bucket commits `⌈w/2⌉` base-4 `U8Scalars` digit columns
+under the same `digit_range` relation, which also tightens the bound to `R < 2^w` (the 4-bit
+one-hot chunks proved `R < 2^{4⌈w/4⌉}`). Not yet measured.
 
 A 14-bit remainder is seven base-4 digits with the same zero-check; the 28-bit Cube remainders
 fourteen. Same machinery as item 1, same PR or the next. (Celer-style grand products on virtual

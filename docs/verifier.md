@@ -70,7 +70,8 @@ After the node loop, `Verifier::run_deferred` runs the post-loop plan
 (`deferred_lookups::plan`, built from the model and the public IO: the packed clamp buckets'
 exact flags, their split or exact value sumchecks, the digit range checks of their dense `OUT`
 digits (`atlas_sumcheck::digit_range`) and the slack chunk checks of the buckets not declared
-exact, then the remainder buckets' value sumchecks and chunk checks; a model output node whose
+exact, then the remainder buckets' value sumchecks and the digit range checks of their dense
+digits; a model output node whose
 public output is unsaturated ties `acc = out` in its own turn and is a gap in its bucket, and a
 clamp bucket made only of such nodes is not committed at all), then drains the one deferral
 queue, batch by batch in `DeferredBatch` order. Nothing is registered during the loop and
@@ -100,7 +101,7 @@ vectors back from their openings in their setup (`SoftmaxShape::aux`).
   bound to a point, is an `Err`.
 - **No dead fields.** A node with a single claim on its output has no evaluation-reduction
   entry (the claim is the reduced instance). Every `ProofType` is emitted for some checked-in
-  model; deleted tags (1, 7, 8, 11, 13) do not deserialize.
+  model; deleted tags (1, 7, 8, 11, 13, 17) do not deserialize.
 - **What holds it.** The mutation sweep requires an `Err` at every site (no tolerance), with
   orphan sites for claims, sumcheck proofs and reduction proofs and count/shape sites for the
   IO; `proof_types_all_exercised`; `fuzz_regressions_replay` and the cargo-fuzz target in

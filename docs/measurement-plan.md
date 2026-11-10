@@ -1,8 +1,9 @@
 # Measurement plan
 
-What to build and run, and in what order, to settle the open questions in
-`docs/optimization-roadmap.md` and `docs/research-directions.md` before condensing them into one
-plan. A cold build of this workspace takes about ten minutes, so the plan is organised around
+What to build and run, and in what order, to settle the open questions behind
+`docs/prover-plan.md` (which condensed the earlier roadmap and research documents once Phases 1–3
+had run; the item labels D1–D5, B1–B5, C1–C4, A1–A4 used below are kept there). Phases 1–3 are
+done and their results sit under each gate. A cold build of this workspace takes about ten minutes, so the plan is organised around
 builds, not around questions: each build is done once and answers as many questions as possible.
 
 ## 1. Ground rules
@@ -295,7 +296,7 @@ digits can go (D4); and which sumcheck kernels pay on a two-limb field.
 **Gate 3.** Three outcomes decide the strategy:
 
 - If BitZ meets its threshold, the lattice-only end state is a decision to be made explicitly
-  against that number (`research-directions.md` section 6), not a default.
+  against that number (`docs/prover-plan.md` section 5), not a default.
 - If dense tiny cells are several times cheaper per value than one-hot digits, D3 is the
   lattice-side path and moves up.
 - If neither, option B (one-hot digits, fewer of them) is the end state and the remaining work is

@@ -100,9 +100,15 @@ pub fn one_hot_params(log_k: usize) -> OneHotParams {
     OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k)
 }
 
+/// Number of base-[`DIGIT_BASE`] digits of a `bits`-bit value, `⌈bits / log₂ b⌉`: the digits
+/// bound the value by `b^n`, which is `2^bits` when `log₂ b` divides `bits`.
+pub fn num_digits(bits: usize) -> usize {
+    bits.div_ceil(DIGIT_BASE.ilog2() as usize)
+}
+
 /// Number of `OUT` digits (`32 / log₂ DIGIT_BASE`).
 pub fn num_out_digits() -> usize {
-    OUT_LOG_K / DIGIT_BASE.ilog2() as usize
+    num_digits(OUT_LOG_K)
 }
 
 /// Number of slack chunks for a `width`-bit bucket.
@@ -461,9 +467,11 @@ pub fn remainder_value_id(bucket_idx: usize) -> OpeningId {
 
 /// A packed bucket of small non-negative values (`< 2^width`) to range-check:
 /// a degree-2 *value sumcheck* opens the packed value `V` at a fresh point
-/// `r'`, and the chunks' Booleanity linear term proves `V(r') = Σ_d
-/// 2^{shift_d}·Σ_k k·ra_d(k, r')` with Hamming weight 1 — so pointwise
-/// `V ∈ [0, 2^width)`.
+/// `r'`, and the digit range check ([`remainder_digit_range_params`]) proves
+/// `V(r')` is the recomposition of [`num_digits`]`(width)` committed digits in
+/// `[0, DIGIT_BASE)` — so pointwise `V ∈ [0, 2^width)` (for an even width;
+/// `[0, 2^(width+1))` for an odd one at `DIGIT_BASE = 4`). The exact clamp
+/// buckets use the same sumcheck for `OUT`.
 #[derive(Clone)]
 pub struct ValueParams<F: JoltField> {
     /// Bucket index.
@@ -549,62 +557,25 @@ impl<F: JoltField> Relation<F> for ValueParams<F> {
 /// Verifier of the value sumcheck: its relation.
 pub type ValueVerifier<F> = RelationVerifier<F, ValueParams<F>>;
 
-/// Draw a packed value range check's chunk-check challenges and resolve the
-/// Booleanity parameters (linear term: Hamming weight 1 and the chunked
-/// value `Σ_d 2^{shift_d}·Σ_k k·ra_d(k, r')` = the value opened at `value_id`).
-/// `Err` if the accumulator lacks a claim it reads.
-pub fn value_chunk_check_params<F: JoltField, T: Transcript>(
-    polys: Vec<CommittedPoly>,
-    value_bits: usize,
-    value_id: OpeningId,
-    accumulator: &dyn OpeningAccumulator<F>,
-    transcript: &mut T,
-) -> Result<BooleanitySumcheckParams<F>, ProofVerifyError> {
-    let d = polys.len();
-    let log_k_chunk = one_hot_params(value_bits).log_k_chunk;
-    debug_assert_eq!(d, one_hot_params(value_bits).instruction_d);
-
-    let gamma_powers: Vec<F> = transcript.challenge_scalar_powers(d);
-    let beta: F = transcript.challenge_scalar();
-    let bool_gammas = transcript.challenge_vector_optimized::<F>(d);
-    let r_address = transcript.challenge_vector_optimized::<F>(log_k_chunk);
-
-    let r_cycle = accumulator.get_virtual_polynomial_opening(value_id)?.0.r;
-    let weights: Vec<F> = (0..d)
-        .map(|i| beta * F::from_u64(1u64 << (log_k_chunk * (d - 1 - i))))
-        .collect();
-    let claim = LinearClaim {
-        constant: gamma_powers.iter().copied().sum(),
-        terms: vec![(value_id, beta)],
-    };
-    Ok(BooleanitySumcheckParams {
-        linear: Some(LinearTerm {
-            gammas: gamma_powers,
-            weights,
-            claim,
-        }),
-        d,
-        log_k_chunk,
-        log_t: r_cycle.len(),
-        gammas: bool_gammas,
-        r_address: r_address.into_opening(),
-        r_cycle,
-        polynomial_types: polys,
-        sumcheck_id: SumcheckId::Booleanity,
-    })
+/// A remainder bucket's digit columns, most significant first.
+pub fn remainder_digit_polys(bucket: &ClampBucket) -> Vec<CommittedPoly> {
+    (0..num_digits(bucket.width))
+        .map(|j| CommittedPoly::GlobalRemainderDigit(bucket.idx, j))
+        .collect()
 }
 
-/// [`value_chunk_check_params`] for a remainder bucket.
-/// `Err` if the accumulator lacks a claim it reads.
-pub fn remainder_chunk_check_params<F: JoltField, T: Transcript>(
+/// Draw a remainder bucket's digit range check: its digit columns in range and recomposing the
+/// packed value the value sumcheck opened. `Err` if the accumulator lacks that opening.
+pub fn remainder_digit_range_params<F: JoltField, T: Transcript>(
     bucket: &ClampBucket,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
-) -> Result<BooleanitySumcheckParams<F>, ProofVerifyError> {
-    value_chunk_check_params(
-        bucket.committed_polys(),
-        bucket.width,
+) -> Result<DigitRangeParams<F>, ProofVerifyError> {
+    DigitRangeParams::draw(
+        DIGIT_BASE,
+        remainder_digit_polys(bucket),
         remainder_value_id(bucket.idx),
+        SumcheckId::DigitRange,
         accumulator,
         transcript,
     )

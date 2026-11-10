@@ -244,17 +244,31 @@ impl<F: JoltField> ProveRounds<F> for ValueProver<F> {
     }
 }
 
-/// Build a remainder bucket's chunk-check prover.
-pub fn remainder_chunk_check_provers<F: JoltField, T: Transcript>(
-    params: BooleanitySumcheckParams<F>,
-    values: &[u64],
-    width: usize,
+/// `values` in base [`DIGIT_BASE`]: `n` digit columns, most significant first.
+pub fn digit_columns<T: Copy + Into<u64> + Sync>(values: &[T], n: usize) -> Vec<Vec<u8>> {
+    let digit_bits = DIGIT_BASE.ilog2();
+    (0..n)
+        .map(|j| {
+            let shift = (n - 1 - j) as u32 * digit_bits;
+            values
+                .par_iter()
+                .with_min_len(par_enabled())
+                .map(|&v| ((v.into() >> shift) % DIGIT_BASE) as u8)
+                .collect()
+        })
+        .collect()
+}
+
+/// Build a digit range-check prover over digit columns.
+pub fn digit_columns_provers<F: JoltField, T: Transcript>(
+    params: DigitRangeParams<F>,
+    digits: Vec<Vec<u8>>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-    let indices = value_chunk_indices(values, width);
-    let g = compute_g(&indices, &params.r_cycle);
-    vec![Box::new(BooleanitySumcheckProver::<F, u8>::gen(
-        params, g, indices,
-    ))]
+    let columns = digits
+        .into_iter()
+        .map(MultilinearPolynomial::from)
+        .collect();
+    vec![Box::new(DigitRangeProver::new(params, columns))]
 }
 
 // ---------------------------------------------------------------------------
@@ -266,12 +280,7 @@ pub fn digit_range_provers<F: JoltField, T: Transcript>(
     params: DigitRangeParams<F>,
     split: &BucketSplit,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-    let columns = split
-        .out_digits()
-        .into_iter()
-        .map(MultilinearPolynomial::from)
-        .collect();
-    vec![Box::new(DigitRangeProver::new(params, columns))]
+    digit_columns_provers(params, split.out_digits())
 }
 
 /// Build a saturated bucket's slack chunk-check prover from resolved parameters (no
@@ -420,7 +429,10 @@ impl BucketSplit {
             slack,
             ind,
             #[cfg(test)]
-            tamper: digit_tamper::for_bucket(bucket.idx),
+            tamper: digit_tamper::for_bucket(
+                crate::onnx_proof::global_clamp::BucketKind::Clamp,
+                bucket.idx,
+            ),
         }
     }
 
@@ -434,18 +446,7 @@ impl BucketSplit {
 
     /// `OUT`'s base-[`DIGIT_BASE`] digits, one column per digit, most significant first.
     pub fn out_digits(&self) -> Vec<Vec<u8>> {
-        let n = num_out_digits();
-        let digit_bits = DIGIT_BASE.ilog2();
-        let digits: Vec<Vec<u8>> = (0..n)
-            .map(|j| {
-                let shift = (n - 1 - j) as u32 * digit_bits;
-                self.out
-                    .par_iter()
-                    .with_min_len(par_enabled())
-                    .map(|&o| ((o >> shift) as u64 % DIGIT_BASE) as u8)
-                    .collect()
-            })
-            .collect();
+        let digits = digit_columns(&self.out, num_out_digits());
         #[cfg(test)]
         let digits = {
             let mut digits = digits;
@@ -538,20 +539,6 @@ impl BucketSplit {
     }
 }
 
-/// The `d`-th chunk index of every packed value (always set).
-pub fn value_chunk_indices(values: &[u64], width: usize) -> Vec<Vec<Option<u8>>> {
-    let params = one_hot_params(width);
-    (0..params.instruction_d)
-        .map(|d| {
-            values
-                .par_iter()
-                .with_min_len(par_enabled())
-                .map(|&v| Some(params.lookup_index_chunk(v, d)))
-                .collect()
-        })
-        .collect()
-}
-
 /// A model *output* node whose public output has no saturated element proves
 /// its clamp *exactly* — `ClampAcc(r) = out(r)` — instead of through the
 /// bucket: the verifier knows `out` (an `i32` tensor without `±2^31`), so
@@ -565,13 +552,15 @@ pub fn exact_output_prover(model: &Model, trace: &Trace, node_idx: usize) -> boo
             .is_some_and(|t| unsaturated(t.data()))
 }
 
-/// Test-only tamper of one clamp bucket's `OUT` digits, for the witness tamper sweep's
-/// `ClampDigit` sites: the trace holds no digits, so a trace tamper cannot reach them. The sweep
-/// sets the tamper before proving and clears it after; [`BucketSplit::assemble`] records it on
-/// the bucket it names, and the digits and `OUT` witnesses read it from there.
+/// Test-only tamper of one bucket's digits (a clamp bucket's `OUT`, a remainder bucket's value),
+/// for the witness tamper sweep's `BucketDigit` sites: the trace holds no digits, so a trace
+/// tamper cannot reach them. The sweep sets the tamper before proving and clears it after; a
+/// clamp bucket's [`BucketSplit::assemble`] records it, and a remainder bucket's witnesses read
+/// it in [`BucketWitnesses`](crate::onnx_proof::global_clamp::BucketWitnesses).
 #[cfg(test)]
 pub(crate) mod digit_tamper {
     use super::DIGIT_BASE;
+    use crate::onnx_proof::global_clamp::BucketKind;
     use std::sync::Mutex;
 
     /// How the digits of one cycle are tampered.
@@ -581,14 +570,15 @@ pub(crate) mod digit_tamper {
         /// whose more significant neighbour is nonzero, on the first cycle from the tamper's
         /// that has one: `OUT` is unchanged and one digit is out of range.
         KeepValue,
-        /// The most significant digit `+ b`: the digits recompose `OUT + 2^32`, and the value
-        /// relations read that `OUT`.
+        /// The most significant digit `+ b`: the digits recompose the value plus `b^n` (`OUT +
+        /// 2^32` for a clamp bucket), and the value relations read that value.
         RaiseTop,
     }
 
     /// A digit tamper of `bucket` at `cycle`.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) struct DigitTamper {
+        pub kind: BucketKind,
         pub bucket: usize,
         pub cycle: usize,
         pub form: DigitTamperForm,
@@ -601,17 +591,17 @@ pub(crate) mod digit_tamper {
         *ACTIVE.lock().unwrap() = tamper;
     }
 
-    /// The active tamper's cycle and form, if it names `bucket`.
-    pub(crate) fn for_bucket(bucket: usize) -> Option<(usize, DigitTamperForm)> {
+    /// The active tamper's cycle and form, if it names the `kind` bucket `bucket`.
+    pub(crate) fn for_bucket(kind: BucketKind, bucket: usize) -> Option<(usize, DigitTamperForm)> {
         ACTIVE
             .lock()
             .unwrap()
-            .filter(|t| t.bucket == bucket)
+            .filter(|t| t.kind == kind && t.bucket == bucket)
             .map(|t| (t.cycle, t.form))
     }
 
     /// Apply `form` to the digit columns at `cycle`.
-    pub(super) fn apply(digits: &mut [Vec<u8>], cycle: usize, form: DigitTamperForm) {
+    pub(crate) fn apply(digits: &mut [Vec<u8>], cycle: usize, form: DigitTamperForm) {
         let base = DIGIT_BASE as u8;
         match form {
             DigitTamperForm::KeepValue => {

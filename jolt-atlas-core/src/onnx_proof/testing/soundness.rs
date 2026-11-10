@@ -44,7 +44,7 @@ use crate::onnx_proof::{
         self,
         digit_tamper::{self, DigitTamper, DigitTamperForm},
     },
-    global_clamp::clamp_buckets,
+    global_clamp::{clamp_buckets, BucketKind},
     proof_serialization::serialize_proof,
     prove, prove_from_trace, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing,
     AtlasVerifierPreprocessing, ONNXProof,
@@ -392,6 +392,7 @@ fn apply_witness(trace: &mut Trace, site: &WitnessSite) {
             form,
             ..
         } => digit_tamper::set(Some(DigitTamper {
+            kind: BucketKind::Clamp,
             bucket: *bucket,
             cycle: *cycle,
             form: *form,

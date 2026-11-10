@@ -184,12 +184,13 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         SoftmaxClampRaD(usize, usize),
 
-        /// One-hot read-address decomposition for a packed fused-rescale
-        /// **remainder** range-check bucket (`R ∈ [0, 2^S)` for several nodes).
+        /// Dense base-`b` digit of a packed fused-rescale **remainder** bucket's
+        /// value `R ∈ [0, 2^S)`, most significant first (`U8Scalars` in `[0, b)`;
+        /// see `jolt_atlas_core::onnx_proof::clamp_split`).
         ///
         /// * `0` – bucket index
-        /// * `1` – decomposition index `d`
-        GlobalRemainderRaD(usize, usize),
+        /// * `1` – digit index `j`
+        GlobalRemainderDigit(usize, usize),
 
         /// Dense base-`b` digit of a packed clamp bucket's offset output
         /// `OUT = out + 2^31`, most significant first (`U8Scalars` in `[0, b)`;
@@ -466,12 +467,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         ActivationSmallRa(usize),
 
-        /// Read-address polynomial of a packed rescale-remainder bucket
-        /// ([`CommittedPoly::GlobalRemainderRaD`] commits its chunks).
-        ///
-        /// * `0` – bucket index
-        GlobalRemainderRa(usize),
-
         /// A packed clamp bucket's offset output `out + 2^31` (virtual; the
         /// recomposition of [`CommittedPoly::GlobalClampOutDigit`]'s digits).
         ///
@@ -491,7 +486,7 @@ canonical_serde_enum! {
         GlobalClampInd(usize),
 
         /// A packed rescale-remainder bucket's remainder value (virtual; the
-        /// value of [`CommittedPoly::GlobalRemainderRaD`]'s chunks).
+        /// recomposition of [`CommittedPoly::GlobalRemainderDigit`]'s digits).
         ///
         /// * `0` – bucket index
         GlobalRemainderValue(usize),

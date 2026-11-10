@@ -237,8 +237,8 @@ pub enum OpRelation {
     ClampBucketSlack(ClampBucket),
     /// A packed remainder bucket's value relation.
     RemainderBucketValue(ClampBucket),
-    /// A packed remainder bucket's chunk checks.
-    RemainderBucketChunks(ClampBucket),
+    /// A packed remainder bucket's digit range check.
+    RemainderBucketDigits(ClampBucket),
 }
 
 /// The table a lookup op reads.
@@ -511,12 +511,9 @@ impl OpRelation {
             Self::RemainderBucketValue(bucket) => Ok(boxed(ValueParams::into_verifier(
                 clamp_split::remainder_value_params(&bucket, accumulator, transcript)?,
             ))),
-            Self::RemainderBucketChunks(bucket) => Ok(clamp_split::chunk_check_verifiers::<F, T>(
-                clamp_split::remainder_chunk_check_params::<F, T>(
-                    &bucket,
-                    accumulator,
-                    transcript,
-                )?,
+            Self::RemainderBucketDigits(bucket) => Ok(boxed(
+                clamp_split::remainder_digit_range_params(&bucket, accumulator, transcript)?
+                    .into_verifier(),
             )),
         }
     }

@@ -339,8 +339,8 @@ enum Prepared<F: JoltField, T: Transcript> {
     ClampSlack(BooleanitySumcheckParams<F>, usize),
     /// A remainder bucket's value sumcheck parameters.
     RemainderValue(ValueParams<F>, usize),
-    /// A remainder bucket's chunk-check parameters.
-    RemainderChunks(BooleanitySumcheckParams<F>, usize),
+    /// A remainder bucket's digit range-check parameters.
+    RemainderDigits(DigitRangeParams<F>, usize),
 }
 
 enum ClampValueParams<F: JoltField> {
@@ -480,8 +480,8 @@ fn prepare<F: JoltField, T: Transcript>(
             .expect(expect),
             bucket.idx,
         ),
-        OpRelation::RemainderBucketChunks(bucket) => Prepared::RemainderChunks(
-            clamp_split::remainder_chunk_check_params::<F, T>(
+        OpRelation::RemainderBucketDigits(bucket) => Prepared::RemainderDigits(
+            clamp_split::remainder_digit_range_params(
                 &bucket,
                 &prover.accumulator,
                 &mut prover.transcript,
@@ -524,13 +524,13 @@ fn build_all<F: JoltField, T: Transcript>(
                 clamp_split::chunk_check_provers::<F, T>(params, buckets.clamp_split(bucket))
             }
             Prepared::RemainderValue(params, bucket) => {
-                let (values, _) = buckets.remainder_values(bucket);
-                vec![Box::new(ValueProver::new(params, values.to_vec()))
-                    as Box<dyn DynRelationWitness<F, T>>]
+                vec![Box::new(ValueProver::new(
+                    params,
+                    buckets.remainder_value_column(bucket),
+                )) as Box<dyn DynRelationWitness<F, T>>]
             }
-            Prepared::RemainderChunks(params, bucket) => {
-                let (values, width) = buckets.remainder_values(bucket);
-                clamp_split::remainder_chunk_check_provers::<F, T>(params, values, width)
+            Prepared::RemainderDigits(params, bucket) => {
+                clamp_split::digit_columns_provers::<F, T>(params, buckets.remainder_digits(bucket))
             }
         })
         .collect()
@@ -765,7 +765,7 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         | OpRelation::ClampBucketDigits(_)
         | OpRelation::ClampBucketSlack(_)
         | OpRelation::RemainderBucketValue(_)
-        | OpRelation::RemainderBucketChunks(_)) => {
+        | OpRelation::RemainderBucketDigits(_)) => {
             let prepared = prepare(one_hot, prover);
             build_all(vec![prepared], prover)
         }

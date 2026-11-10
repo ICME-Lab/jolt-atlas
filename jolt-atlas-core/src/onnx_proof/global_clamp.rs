@@ -5,23 +5,24 @@
 //! one shared cycle space per bucket, each node occupying a
 //! power-of-two-aligned segment, so a bucket has one set of committed columns
 //! (a clamp bucket's dense output digits and one-hot slack chunks, a remainder
-//! bucket's one-hot chunks) and one set of checks whatever the node count.
+//! bucket's dense digits) and one set of checks whatever the node count.
 //!
 //! A bucket sumcheck over the packed cycle space uses the cycle weight
 //! `Σ_n γ_n·eq(r_n, t − off_n)` ([`CycleWeight::Packed`]) so its input claim
 //! is a `γ`-combination of the member nodes' existing openings. The clamp
 //! buckets are proven by the interior / saturated split and the remainder
-//! buckets by a value sumcheck, both in [`super::clamp_split`]. Gaps at the
+//! buckets by a value sumcheck and a digit range check, both in [`super::clamp_split`]. Gaps at the
 //! end of a bucket hold zero-weight dummy cycles.
 //!
 //! Bucket capacity is the largest clamped node's (padded) size, so no bucket
 //! polynomial is larger than the largest per-node one was and the SRS size is
 //! unchanged. The layout is a pure function of the model, so prover and
 //! verifier derive it independently.
+#[cfg(test)]
+use super::clamp_split::digit_tamper;
 use super::{
     clamp_split::{self, BucketSplit},
     fused_rebase::{rebase_remainder, remainder_lookup_bits},
-    witness::build_one_hot_rad_witness,
 };
 use crate::node_view::ModelView;
 use atlas_algebra::{
@@ -99,6 +100,36 @@ impl BucketWitnesses {
         (values, *width)
     }
 
+    /// A remainder bucket's packed values as its value sumcheck's witness.
+    pub fn remainder_value_column(&self, bucket_idx: usize) -> Vec<u64> {
+        #[cfg(test)]
+        if let Some((cycle, digit_tamper::DigitTamperForm::RaiseTop)) =
+            digit_tamper::for_bucket(BucketKind::Remainder, bucket_idx)
+        {
+            let (values, width) = self.remainder_values(bucket_idx);
+            let mut raised = values.to_vec();
+            raised[cycle] += clamp_split::DIGIT_BASE.pow(clamp_split::num_digits(width) as u32);
+            return raised;
+        }
+        self.remainder_values(bucket_idx).0.to_vec()
+    }
+
+    /// A remainder bucket's digit columns, most significant first.
+    pub fn remainder_digits(&self, bucket_idx: usize) -> Vec<Vec<u8>> {
+        let (values, width) = self.remainder_values(bucket_idx);
+        let digits = clamp_split::digit_columns(values, clamp_split::num_digits(width));
+        #[cfg(test)]
+        let digits = {
+            let mut digits = digits;
+            if let Some((cycle, form)) = digit_tamper::for_bucket(BucketKind::Remainder, bucket_idx)
+            {
+                digit_tamper::apply(&mut digits, cycle, form);
+            }
+            digits
+        };
+        digits
+    }
+
     /// The buckets' committed polynomials with their witnesses: every live clamp bucket's and
     /// every remainder bucket's. A clamp bucket with no live node commits nothing (the
     /// verifier's [`bucket_committed_polys`] leaves it out the same way).
@@ -118,15 +149,10 @@ impl BucketWitnesses {
             .flatten()
             .collect::<Vec<_>>();
         let remainder = remainder_buckets(model).into_iter().flat_map(|bucket| {
-            let (values, width) = self.remainder_values(bucket.idx);
-            let bits: Vec<LookupBits> = values.iter().map(|&v| LookupBits::new(v, width)).collect();
-            (0..bucket.num_chunks())
-                .map(|d| {
-                    (
-                        bucket.remainder_chunk_poly(d),
-                        build_one_hot_rad_witness(&bits, d, width),
-                    )
-                })
+            clamp_split::remainder_digit_polys(&bucket)
+                .into_iter()
+                .zip(self.remainder_digits(bucket.idx))
+                .map(|(poly, digits)| (poly, MultilinearPolynomial::from(digits)))
                 .collect::<Vec<_>>()
         });
         clamp.into_iter().chain(remainder).collect()

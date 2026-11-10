@@ -120,7 +120,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     };
 
     // 1. Committed columns, as the prover commits them: the packed bucket polynomials (dense
-    //    `OUT` digit columns, one-hot slack and remainder chunks) and the per-node polynomials.
+    //    `OUT` and remainder digit columns, one-hot slack chunks) and the per-node polynomials.
     //    A row is one cycle; a one-hot row has K = 16 cells, a dense digit row one.
     #[derive(Default)]
     struct Fam {

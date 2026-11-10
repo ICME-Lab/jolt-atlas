@@ -249,7 +249,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let input = &layer_data.operands[0];
                 build_activation_small_rad_witness(input, *d)
             }
-            CommittedPoly::GlobalRemainderRaD(..)
+            CommittedPoly::GlobalRemainderDigit(..)
             | CommittedPoly::GlobalClampOutDigit(..)
             | CommittedPoly::GlobalClampSlackRaD(..) => {
                 unreachable!("packed clamp bucket witnesses are built at the model level")

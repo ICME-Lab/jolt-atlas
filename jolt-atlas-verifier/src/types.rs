@@ -22,7 +22,7 @@ pub struct ProofId(pub usize, pub ProofType);
 /// Type of sumcheck proof for different operations in the neural network.
 ///
 /// The `u8` discriminants are part of the serialization format: a variant keeps its number, and
-/// the numbers of deleted variants (1, 7, 8, 11, 13) stay free; a proof carrying one does not
+/// the numbers of deleted variants (1, 7, 8, 11, 13, 17) stay free; a proof carrying one does not
 /// deserialize. Every variant is emitted by the prover for some checked-in model
 /// (`proof_types_all_exercised`).
 #[repr(u8)]
@@ -59,10 +59,8 @@ pub enum ProofType {
     /// The slack chunk checks (Booleanity, Hamming weight `IND`, slack value) of the clamp
     /// buckets not declared exact, batched; absent when every live bucket is exact.
     DeferredClampChunkChecks = 15,
-    /// All nodes' fused rescale-remainder range checks, batched.
+    /// All remainder buckets' value sumchecks (opening each bucket's packed remainder), batched.
     DeferredRemainderRC = 16,
-    /// All nodes' rescale-remainder one-hot checks, batched.
-    DeferredRemainderRaChecks = 17,
     /// All clamped-activation nodes' small-table execution sumchecks, batched.
     DeferredActivationExec = 18,
     /// All clamped-activation nodes' activation-clamp read-rafs, batched.
@@ -81,6 +79,8 @@ pub enum ProofType {
     DeferredSoftmaxRaChecks = 25,
     /// All live clamp buckets' `OUT` digit range checks, batched.
     DeferredClampDigitRange = 26,
+    /// All remainder buckets' digit range checks, batched.
+    DeferredRemainderDigitRange = 27,
 }
 
 impl ProofType {
@@ -107,7 +107,6 @@ impl TryFrom<u8> for ProofType {
             14 => Ok(Self::DeferredClampSplit),
             15 => Ok(Self::DeferredClampChunkChecks),
             16 => Ok(Self::DeferredRemainderRC),
-            17 => Ok(Self::DeferredRemainderRaChecks),
             18 => Ok(Self::DeferredActivationExec),
             19 => Ok(Self::DeferredActivationClamp),
             20 => Ok(Self::DeferredActivationSmallRaChecks),
@@ -117,6 +116,7 @@ impl TryFrom<u8> for ProofType {
             24 => Ok(Self::DeferredSoftmaxStage3),
             25 => Ok(Self::DeferredSoftmaxRaChecks),
             26 => Ok(Self::DeferredClampDigitRange),
+            27 => Ok(Self::DeferredRemainderDigitRange),
             _ => Err(SerializationError::InvalidData),
         }
     }

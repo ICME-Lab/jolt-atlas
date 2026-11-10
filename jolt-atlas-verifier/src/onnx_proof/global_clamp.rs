@@ -5,13 +5,13 @@
 //! one shared cycle space per bucket, each node occupying a
 //! power-of-two-aligned segment, so a bucket has one set of committed columns
 //! (a clamp bucket's dense output digits and one-hot slack chunks, a remainder
-//! bucket's one-hot chunks) and one set of checks whatever the node count.
+//! bucket's dense digits) and one set of checks whatever the node count.
 //!
 //! A bucket sumcheck over the packed cycle space uses the cycle weight
 //! `Σ_n γ_n·eq(r_n, t − off_n)` ([`CycleWeight::Packed`]) so its input claim
 //! is a `γ`-combination of the member nodes' existing openings. The clamp
 //! buckets are proven by the interior / saturated split and the remainder
-//! buckets by a value sumcheck, both in [`super::clamp_split`]. Gaps at the
+//! buckets by a value sumcheck and a digit range check, both in [`super::clamp_split`]. Gaps at the
 //! end of a bucket hold zero-weight dummy cycles.
 //!
 //! Bucket capacity is the largest clamped node's (padded) size, so no bucket
@@ -25,7 +25,6 @@ use crate::node_view::ModelView;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{field::JoltField, utils::math::Math};
 use atlas_sumcheck::{
-    config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ps_shout::{CycleWeight, PackedSegment},
 };
@@ -158,23 +157,12 @@ fn pack_buckets(kind: BucketKind, clamped: Vec<(usize, usize, usize)>) -> Vec<Cl
 }
 
 impl ClampBucket {
-    /// Number of one-hot chunks (`width / LOG_K_CHUNK`).
-    pub fn num_chunks(&self) -> usize {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.width).instruction_d
-    }
-
-    /// The `d`-th committed one-hot chunk polynomial of a remainder bucket.
-    pub fn remainder_chunk_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::GlobalRemainderRaD(self.idx, d)
-    }
-
-    /// The bucket's committed polynomials ([`clamp_split::chunk_polys`] for a clamp bucket).
+    /// The bucket's committed polynomials: [`clamp_split::chunk_polys`] for a clamp bucket,
+    /// [`clamp_split::remainder_digit_polys`] for a remainder bucket.
     pub fn committed_polys(&self) -> Vec<CommittedPoly> {
         match self.kind {
             BucketKind::Clamp => clamp_split::chunk_polys(self),
-            BucketKind::Remainder => (0..self.num_chunks())
-                .map(|d| self.remainder_chunk_poly(d))
-                .collect(),
+            BucketKind::Remainder => clamp_split::remainder_digit_polys(self),
         }
     }
 

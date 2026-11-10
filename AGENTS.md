@@ -16,6 +16,10 @@ sumcheck-based protocols over multilinear polynomial commitments.
   its file and instruction and explain the conflict.
 - Read relevant code before asking about repository facts. Run Cargo commands sequentially,
   including across agents; parallel Cargo invocations fight over the build lock.
+- Iterate narrow, verify wide. While editing, compile with `cargo check -p <crate> --tests` and
+  run only the affected crate and filter (`cargo nextest run -p <crate> -E 'test(<name>)'`).
+  Run `cargo nextest run --workspace` once, as the final check before reporting; each workspace
+  run rebuilds and relinks every crate's test binaries at `opt-level = 3`.
 - Lead with the result. Report the checks actually run, their results, and any remaining blocker.
 - Before opening or updating a PR, read `CONTRIBUTING.md` and run `/clean-branch`.
 - Changes of 500+ non-trivial lines start with a spec in `specs/` (`/new-spec`, then
@@ -35,7 +39,9 @@ RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets
 # to tests; the release recompile after every edit costs minutes. Release is for the example
 # below. The workspace run covers unit tests, the op-surface table, the soundness sweeps, the
 # checked-in zoo (op_gauntlet + tiny GPT-2 / Qwen2 / BERT stand-ins) end to end, and the
-# importer's golden hashes, in about a minute.
+# importer's golden hashes, in about a minute once built. While iterating, check and run the one
+# crate and filter you touched; keep the workspace run for the final check.
+cargo check -p jolt-atlas-core --tests                       # type-check only, no codegen
 cargo nextest run --workspace
 cargo nextest run -p jolt-atlas-core -E 'test(op_surface)'   # one case per op variant
 cargo nextest run -p jolt-atlas-core -E 'test(soundness)'    # mutation / tamper / forgery sweeps

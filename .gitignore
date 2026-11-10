@@ -44,3 +44,8 @@ __pycache__/
 
 # The pinned model-export toolchain must be tracked despite the *.txt rule above.
 !scripts/requirements-models.txt
+
+# benchmark binaries and raw span logs (docs/measurement-plan.md)
+bench/bin/
+bench/runs/*.log
+!bench/runs/phase1-summary.log

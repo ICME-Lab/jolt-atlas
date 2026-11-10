@@ -1,0 +1,88 @@
+=== gpt2-tiny: --model models/gpt2-tiny
+exit 0
+prover setup: 18.60ms
+prove: 2.77s
+proof size: 0.74 MiB (569 commitments, 129 sumcheck proofs)
+verify: 156.40ms
+        3.49 real         9.73 user         5.43 sys
+           630685696  maximum resident set size
+=== qwen2-tiny: --model models/qwen2-tiny
+exit 0
+prover setup: 8.96ms
+prove: 3.21s
+proof size: 0.96 MiB (541 commitments, 173 sumcheck proofs)
+verify: 185.78ms
+        3.41 real         9.82 user         7.35 sys
+           499728384  maximum resident set size
+=== bge-tiny: --model models/bge-tiny
+exit 0
+prover setup: 9.15ms
+prove: 2.88s
+proof size: 0.89 MiB (912 commitments, 114 sumcheck proofs)
+verify: 198.31ms
+        3.10 real        10.08 user         6.18 sys
+           530169856  maximum resident set size
+=== gpt2-16-stats: --model models/gpt2 --seq-len 16 --stats
+exit 0
+prover setup: 10.35ms
+prove: 40.24s
+proof size: 2.38 MiB (1967 commitments, 589 sumcheck proofs)
+verify: 2.24s
+       44.94 real       316.11 user        26.59 sys
+          6031867904  maximum resident set size
+=== gpt2-32: --model models/gpt2 --seq-len 32
+exit 0
+prover setup: 10.10ms
+prove: 74.22s
+proof size: 2.90 MiB (1967 commitments, 589 sumcheck proofs)
+verify: 2.76s
+       78.53 real       624.10 user        31.31 sys
+          8392802304  maximum resident set size
+=== gpt2-64: --model models/gpt2 --seq-len 64
+exit 0
+prover setup: 11.78ms
+prove: 145.11s
+proof size: 3.60 MiB (1967 commitments, 589 sumcheck proofs)
+verify: 3.41s
+      150.10 real      1231.54 user        41.34 sys
+         10371252224  maximum resident set size
+=== gpt2-128: --model models/gpt2 --seq-len 128
+exit 0
+prover setup: 12.85ms
+prove: 285.92s
+proof size: 5.15 MiB (1967 commitments, 589 sumcheck proofs)
+verify: 5.12s
+      292.57 real      2535.71 user        69.08 sys
+         11172659200  maximum resident set size
+=== bge-small: --model models/bge-small-en-v1.5
+exit 0
+prover setup: 12.37ms
+prove: 16.94s
+proof size: 3.88 MiB (4902 commitments, 544 sumcheck proofs)
+verify: 1.44s
+       18.68 real        85.08 user        30.00 sys
+          2017820672  maximum resident set size
+=== gpt2-16-rep1: --model models/gpt2 --seq-len 16
+exit 0
+prover setup: 9.38ms
+prove: 40.50s
+proof size: 2.38 MiB (1967 commitments, 589 sumcheck proofs)
+verify: 2.24s
+       44.29 real       312.58 user        26.84 sys
+          6069469184  maximum resident set size
+=== gpt2-16-rep2: --model models/gpt2 --seq-len 16
+exit 0
+prover setup: 9.13ms
+prove: 39.55s
+proof size: 2.38 MiB (1967 commitments, 589 sumcheck proofs)
+verify: 2.25s
+       43.23 real       312.71 user        26.32 sys
+          6039175168  maximum resident set size
+=== gpt2-16-rep3: --model models/gpt2 --seq-len 16
+exit 0
+prover setup: 8.98ms
+prove: 39.81s
+proof size: 2.38 MiB (1967 commitments, 589 sumcheck proofs)
+verify: 2.22s
+       43.43 real       312.05 user        25.92 sys
+          6018531328  maximum resident set size

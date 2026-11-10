@@ -1,0 +1,119 @@
+=== jolt-atlas prove ===
+(Run with --trace for JSON output or --trace-terminal for terminal output)
+
+model models/bge-small-en-v1.5 | sequence_length 64 | scale 2^14
+imported 1419 atlas nodes in 292.19ms
+  input input_ids        RawInt [1, 64]
+  input attention_mask   Scaled [1, 64]
+  input token_type_ids   RawInt [1, 64]
+trace execution: 1.46s
+committed digit columns by op and family (polys, cells=polys·padded, share):
+  Erf              ActivationClampRaD             polys    96  cells 2^23.6   33.2%
+  Erf              ActivationSmallRaD             polys    60  cells 2^22.9   20.8%
+  SoftmaxLastAxis  SoftmaxClampRaD                polys    96  cells 2^22.6   16.6%
+  SoftmaxLastAxis  SoftmaxExpRemainderRaD         polys    48  cells 2^21.6    8.3%
+  SoftmaxLastAxis  SoftmaxRemainderRaD            polys    48  cells 2^21.6    8.3%
+  SoftmaxLastAxis  SoftmaxZHiRaD                  polys    36  cells 2^21.2    6.2%
+  SoftmaxLastAxis  SoftmaxZLoRaD                  polys    36  cells 2^21.2    6.2%
+  GatherSmall      GatherRa                       polys     2  cells 2^16.0    0.2%
+  MeanOfSquares    MeanOfSquaresRangeCheckRaD     polys   400  cells 2^14.6    0.1%
+  Rsqrt            SqrtDivRangeCheckRaD           polys   400  cells 2^14.6    0.1%
+  Rsqrt            SqrtRangeCheckRaD              polys   400  cells 2^14.6    0.1%
+  ScalarConstDiv   ScalarConstDivNodeRemainder    polys     1  cells 2^12.0    0.0%
+  Rsqrt            RsqrtQuotient                  polys    25  cells 2^10.6    0.0%
+  total cells 2^25.2 (37896768 K=16 one-hot digits; 151587072 key bits)
+clamp audit per node (op, static w, needed w, saturated/elems, row width): nodes with needed > 32 or saturation only
+needed width histogram (op, bits) -> nodes:
+  Add              10 bits  x1
+  Add              13 bits  x1
+  Add              14 bits  x2
+  Add              15 bits  x13
+  Add              16 bits  x12
+  Add              17 bits  x30
+  Add              18 bits  x41
+  Add              19 bits  x21
+  Add              20 bits  x19
+  Add              21 bits  x12
+  Add              22 bits  x6
+  Add              23 bits  x11
+  Add              24 bits  x3
+  Einsum           15 bits  x2
+  Einsum           16 bits  x12
+  Einsum           17 bits  x26
+  Einsum           18 bits  x22
+  Einsum           19 bits  x8
+  Einsum           20 bits  x12
+  Einsum           21 bits  x6
+  Einsum           22 bits  x2
+  Einsum           23 bits  x5
+  Einsum           24 bits  x1
+  MeanOfSquares    10 bits  x1
+  MeanOfSquares    13 bits  x1
+  MeanOfSquares    14 bits  x2
+  MeanOfSquares    15 bits  x11
+  MeanOfSquares    17 bits  x1
+  MeanOfSquares    18 bits  x1
+  MeanOfSquares    19 bits  x1
+  MeanOfSquares    20 bits  x1
+  MeanOfSquares    21 bits  x1
+  MeanOfSquares    22 bits  x2
+  MeanOfSquares    23 bits  x3
+  Mul               8 bits  x1
+  Mul               9 bits  x2
+  Mul              10 bits  x8
+  Mul              11 bits  x6
+  Mul              12 bits  x2
+  Mul              14 bits  x2
+  Mul              15 bits  x6
+  Mul              16 bits  x3
+  Mul              17 bits  x23
+  Mul              18 bits  x24
+  Mul              19 bits  x19
+  Mul              20 bits  x31
+  Mul              21 bits  x8
+  Sub               1 bits  x1
+  Sub              17 bits  x2
+  Sub              18 bits  x9
+  Sub              19 bits  x4
+  Sub              20 bits  x1
+  Sub              21 bits  x2
+  Sub              22 bits  x2
+  Sub              23 bits  x3
+  Sub              24 bits  x2
+  Sum              17 bits  x2
+  Sum              18 bits  x5
+  Sum              19 bits  x10
+  Sum              20 bits  x2
+  Sum              22 bits  x1
+  Sum              23 bits  x3
+  Sum              24 bits  x2
+saturated elements: 0 of 20261120; clamp digit cells today 2^27.8, at observed widths 2^26.6 (2.31x)
+per-op clamp width w' -> nodes/elements that exceed it, clamp digit cells (x vs today):
+  w'=16:  390 nodes,   1650463 elems over; cells 2^27.7 (1.06x)
+  w'=20:   75 nodes,      9485 elems over; cells 2^26.8 (1.97x)
+  w'=24:    0 nodes,         0 elems over; cells 2^26.9 (1.94x)
+  w'=28:    0 nodes,         0 elems over; cells 2^27.1 (1.66x)
+  w'=32:    0 nodes,         0 elems over; cells 2^27.3 (1.46x)
+  w'=36:    0 nodes,         0 elems over; cells 2^27.4 (1.29x)
+  w'=40:    0 nodes,         0 elems over; cells 2^27.6 (1.16x)
+  w'=48:    0 nodes,         0 elems over; cells 2^27.9 (0.97x)
+clamp digit cells on rows of width >= threshold (rows, share of clamp cells):
+  >=   80: rows    20352  cells  84.9%
+  >=  112: rows    20352  cells  84.9%
+  >=  176: rows    20352  cells  84.9%
+  >= 1024: rows     4608  cells  48.0%
+  >= 4096: rows        0  cells   0.0%
+softmax rows: spread of (max - x) over live lanes:
+  node 78    rows  1024 live   64 max(max-x) 2^20.2  lanes with max-x >= 2^17 : 5234 (7.99%)
+  node 193   rows  1024 live   64 max(max-x) 2^19.5  lanes with max-x >= 2^17 : 10543 (16.09%)
+  node 308   rows  1024 live   64 max(max-x) 2^18.6  lanes with max-x >= 2^17 : 15495 (23.64%)
+  node 423   rows  1024 live   64 max(max-x) 2^19.3  lanes with max-x >= 2^17 : 12878 (19.65%)
+  node 538   rows  1024 live   64 max(max-x) 2^18.5  lanes with max-x >= 2^17 : 11516 (17.57%)
+  node 653   rows  1024 live   64 max(max-x) 2^18.0  lanes with max-x >= 2^17 : 5574 (8.51%)
+  node 768   rows  1024 live   64 max(max-x) 2^18.0  lanes with max-x >= 2^17 : 5222 (7.97%)
+  node 883   rows  1024 live   64 max(max-x) 2^18.1  lanes with max-x >= 2^17 : 5524 (8.43%)
+  node 998   rows  1024 live   64 max(max-x) 2^18.3  lanes with max-x >= 2^17 : 3213 (4.90%)
+  node 1113  rows  1024 live   64 max(max-x) 2^17.6  lanes with max-x >= 2^17 : 219 (0.33%)
+  node 1228  rows  1024 live   64 max(max-x) 2^17.3  lanes with max-x >= 2^17 : 21 (0.03%)
+  node 1343  rows  1024 live   64 max(max-x) 2^19.5  lanes with max-x >= 2^17 : 3790 (5.78%)
+einsum -> constant Add (bias): 0 nodes, 2^0.0 output cells; activation reading an einsum directly: 0

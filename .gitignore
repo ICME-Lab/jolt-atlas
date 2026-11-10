@@ -49,3 +49,5 @@ __pycache__/
 bench/bin/
 bench/runs/*.log
 !bench/runs/phase1-summary.log
+!bench/runs/census-*.txt
+!bench/runs/lowered-*.txt

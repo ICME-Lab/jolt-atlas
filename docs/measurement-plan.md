@@ -17,7 +17,11 @@ builds, not around questions: each build is done once and answers as many questi
   hash in its name. A later code change then needs no rebuild of the old version to compare.
 - **Put instrumentation in the example, not the library, wherever possible.** Editing
   `jolt-atlas-core/examples/prove.rs` rebuilds only the example and its link step. Editing a
-  library crate rebuilds that crate and everything above it.
+  library crate rebuilds that crate and everything above it. Under the `release` profile the
+  link step is fat LTO over the whole program, so an example-only edit still costs about 12
+  minutes (measured). Anything that is not a timing run goes through
+  `--profile build-fast` (no LTO, incremental: 4 m 46 s cold, seconds after that); its binary
+  lands in `$CARGO_TARGET_DIR/build-fast/examples/`.
 - **Toggle variants with flags or environment variables, never with Cargo features.** Changing
   features rebuilds.
 - **Batch library edits.** Decide every instrumentation point first, land them in one change,
@@ -183,6 +187,75 @@ Answers: roadmap measurements 2 and 4, and the share of the 25 s each roadmap it
   (C1–C3) move ahead of it.
 - If static clamp bounds are far above observed magnitudes, compile-time bounds or declared widths
   are enough to make D1 output-preserving.
+
+#### Phase 2 results (2026-11-10, `prove --census`, binary `bench/bin/prove-census-fast`)
+
+The census is a `--census` mode of the `prove` example: it executes the trace and prints the
+committed-column census, the clamp audit, the softmax spread and the fusion candidates without
+proving (3 s on GPT-2 at 16 tokens, 13 s at 64). Text inputs are truncated to the longest
+power-of-two token prefix. Outputs: `bench/runs/census-*.txt`. Runs: GPT-2 on synthetic ids
+(16 tokens) and on three texts (prose 64, Python 64, finance 32 tokens), bge-small on prose
+(64), qwen2-tiny synthetic (16). The numbers below are stable across the three texts to within
+a few percent; GPT-2 figures are the 64-token prose run.
+
+**Where the committed cells are (GPT-2, 64 tokens).** Clamp buckets 2^29.2 cells (~600 M),
+rescale remainders about 23% of that (from the bucket table: 39 of 207 bucket digit columns),
+and every per-node polynomial together 2^25.8 (58 M). So clamp digits are roughly 73% of all
+committed cells, remainders 22%, everything else 5%. Of that 5%, the Tanh lookups
+(`ActivationClampRaD` 96 polys + `ActivationSmallRaD` 60) are 70% and the softmax families
+30%; rsqrt, mean-of-squares and gather are under 0.3% together. bge-small has the same shape
+with Erf in place of Tanh.
+
+**Static vs needed clamp width.** Static widths are 40–64 bits. On real text the traced
+quotients need 13–29 bits: residual-stream Adds 17–23, einsum outputs 16–24, Muls 15–23; the
+27–29-bit nodes are the LayerNorm chain (Sum, Sub, MeanOfSquares, Add: 19–20 nodes each, i.e.
+one per norm) and the Cubes (24–28, one at 33 bits). Exactly one node saturates today (node 436,
+Cube, 2 of 262,144 elements); everything else is at least 11 bits inside its static width.
+
+| per-op width w' | GPT-2 nodes / elements over | clamp cells vs today | bge-small nodes over | vs today |
+|---|---|---|---|---|
+| per-node observed | — | 2.19x | — | 2.31x |
+| 20 | 178 / 3.2 M | 1.61x | 75 / 9,485 | 1.97x |
+| 24 | 112 / 486 | 1.80x | 0 | 1.94x |
+| 28 | 39 / 67 | 1.69x | 0 | 1.66x |
+| 32 | 1 / 2 (the saturating Cube) | 1.48x | 0 | 1.46x |
+| 40 | 0 | 1.19x | 0 | 1.16x |
+
+(Nodes over w' are counted at today's width; the ratio is over all clamp cells.)
+
+**Rows.** 92% of GPT-2's clamp cells sit on rows at least 1,024 wide and 63% on rows at least
+4,096 wide (the MLP); bge-small has 48% on rows of 1,024 and nothing wider.
+
+**Softmax.** On GPT-2 text, 48–50% of live lanes have `max − x ≥ 2^17` (8.0 at scale 2^14):
+half of the exp lookups sit at the saturated end of the table. On bge-small it is 8–24% per
+layer.
+
+**Fusion candidates.** 72 einsum → constant-Add (bias) pairs on GPT-2 (2^22.8 output cells, about
+12% of the clamp cells, C1); none on bge-small or qwen2-tiny. No activation reads an einsum
+directly on any of the three (the bias Add sits between), so C2 is empty until C1 lands. Every
+Slice is aligned (B4 has nothing to do on these models). LayerNorm is not fused: each norm is
+nine lowered ops (Sum, Mul, Sub, MeanOfSquares, Add, Rsqrt, Mul, Mul, Add), eight of them
+clamped, and holds the widest quotients in the model.
+
+**Trace execution** is 3.0 s at 16 tokens and 12.8 s at 64 (the unspanned gap in Phase 1),
+7–9% of the prover and growing linearly; the tracer's i64 accumulations are worth a profile
+of their own.
+
+**Gate 2 verdict.** The sweep's premise was wrong, not its answer. At scale 2^14 the honest
+quotients need 17–29 bits, so a 12–16-bit per-op width is a change of scale, not of clamp
+width (FlashProve's 12-bit activations are at a far coarser scale); D2 at the widths that
+keep today's outputs (per-node observed, or a uniform 32) gives **1.5–2.2x on the clamp cells**,
+about 1.4–1.8x on all committed cells, and is exact by construction: for every node but the
+saturating Cube the traced quotient never leaves the narrower width, so no perplexity sweep is
+needed to show the outputs are unchanged on these inputs (what remains unmeasured is the margin
+on unseen inputs, which is a tracer-side assertion under partial semantics). The accuracy
+decision rule in this phase is therefore retired. Since 92% of the clamp cells sit on rows
+at least 1,024 wide, the **row check (D1) is the larger lever**: at 1–2 amortised digits per
+element it takes those cells down roughly an order of magnitude, against D2's 2x, and the two
+compose (a narrower declared width shrinks D1's projection digits). D1 goes to Phase 4 as the
+first prototype, with D2's declared widths as its companion rather than its alternative. C1
+(bias fusion) is worth 12% of the clamp cells on GPT-2 and nothing on the encoder models; a
+fused LayerNorm would remove the widest seven clamps per norm and is a new roadmap item.
 
 ### Phase 3: commitment microbenchmarks (build 3: `atlas-pcs` only)
 

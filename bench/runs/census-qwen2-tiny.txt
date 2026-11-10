@@ -1,0 +1,90 @@
+=== jolt-atlas prove ===
+(Run with --trace for JSON output or --trace-terminal for terminal output)
+
+model models/qwen2-tiny | sequence_length 16 | scale 2^14
+imported 307 atlas nodes in 3.46ms
+  input input_ids        RawInt [1, 16]
+  input attention_mask   RawInt [1, 16]
+  input position_ids     Scaled [1, 16]
+trace execution: 58.99ms
+committed digit columns by op and family (polys, cells=polys·padded, share):
+  Sigmoid          ActivationClampRaD             polys    16  cells 2^16.0   21.9%
+  SoftmaxLastAxis  SoftmaxClampRaD                polys    16  cells 2^16.0   21.9%
+  Sigmoid          ActivationSmallRaD             polys    10  cells 2^15.3   13.7%
+  SoftmaxLastAxis  SoftmaxExpRemainderRaD         polys     8  cells 2^15.0   10.9%
+  SoftmaxLastAxis  SoftmaxRemainderRaD            polys     8  cells 2^15.0   10.9%
+  SoftmaxLastAxis  SoftmaxZHiRaD                  polys     6  cells 2^14.6    8.2%
+  SoftmaxLastAxis  SoftmaxZLoRaD                  polys     6  cells 2^14.6    8.2%
+  GatherSmall      GatherRa                       polys     6  cells 2^12.3    1.7%
+  MeanOfSquares    MeanOfSquaresRangeCheckRaD     polys    80  cells 2^10.3    0.4%
+  Rsqrt            SqrtDivRangeCheckRaD           polys    80  cells 2^10.3    0.4%
+  Rsqrt            SqrtRangeCheckRaD              polys    80  cells 2^10.3    0.4%
+  Cos              TeleportRangeCheckRaD          polys    16  cells 2^10.0    0.3%
+  Sin              TeleportRangeCheckRaD          polys    16  cells 2^10.0    0.3%
+  Cos              TrigDownscaleRaD               polys     8  cells 2^9.0     0.2%
+  Sin              TrigDownscaleRaD               polys     8  cells 2^9.0     0.2%
+  Cos              CosRaD                         polys     4  cells 2^8.0     0.1%
+  Sin              SinRaD                         polys     4  cells 2^8.0     0.1%
+  Rsqrt            RsqrtQuotient                  polys     5  cells 2^6.3     0.0%
+  Cos              TeleportNodeQuotient           polys     1  cells 2^6.0     0.0%
+  Sin              TeleportNodeQuotient           polys     1  cells 2^6.0     0.0%
+  total cells 2^18.2 (299488 K=16 one-hot digits; 1197952 key bits)
+clamp audit per node (op, static w, needed w, saturated/elems, row width): nodes with needed > 32 or saturation only
+needed width histogram (op, bits) -> nodes:
+  Add               5 bits  x1
+  Add               6 bits  x4
+  Add              12 bits  x4
+  Add              13 bits  x1
+  Add              14 bits  x9
+  Add              19 bits  x2
+  Einsum            8 bits  x2
+  Einsum           11 bits  x1
+  Einsum           12 bits  x3
+  Einsum           13 bits  x3
+  Einsum           14 bits  x7
+  Einsum           15 bits  x3
+  Einsum           19 bits  x1
+  MeanOfSquares     4 bits  x1
+  MeanOfSquares     5 bits  x2
+  MeanOfSquares     6 bits  x2
+  Mul              11 bits  x2
+  Mul              13 bits  x2
+  Mul              14 bits  x12
+  Mul              16 bits  x2
+  Mul              17 bits  x10
+  Mul              21 bits  x5
+saturated elements: 0 of 102544; clamp digit cells today 2^20.2, at observed widths 2^18.6 (3.01x)
+per-op clamp width w' -> nodes/elements that exceed it, clamp digit cells (x vs today):
+  w'=16:   18 nodes,      4232 elems over; cells 2^19.1 (2.15x)
+  w'=20:    5 nodes,        72 elems over; cells 2^19.0 (2.35x)
+  w'=24:    0 nodes,         0 elems over; cells 2^19.2 (1.96x)
+  w'=28:    0 nodes,         0 elems over; cells 2^19.5 (1.68x)
+  w'=32:    0 nodes,         0 elems over; cells 2^19.6 (1.47x)
+  w'=36:    0 nodes,         0 elems over; cells 2^19.8 (1.31x)
+  w'=40:    0 nodes,         0 elems over; cells 2^20.0 (1.18x)
+  w'=48:    0 nodes,         0 elems over; cells 2^20.2 (0.98x)
+clamp digit cells on rows of width >= threshold (rows, share of clamp cells):
+  >=   80: rows      144  cells  46.1%
+  >=  112: rows      144  cells  46.1%
+  >=  176: rows      144  cells  46.1%
+  >= 1024: rows       16  cells  13.6%
+  >= 4096: rows        0  cells   0.0%
+softmax rows: spread of (max - x) over live lanes:
+  node 124   rows   256 live   16 max(max-x) 2^17.6  lanes with max-x >= 2^17 : 1920 (46.88%)
+  node 248   rows   256 live   16 max(max-x) 2^17.6  lanes with max-x >= 2^17 : 1920 (46.88%)
+einsum -> constant Add (bias): 0 nodes, 2^0.0 output cells; activation reading an einsum directly: 0
+  Slice node 15 axis 3 0..16 of [1, 1, 16, 16]
+  Slice node 21 axis 3 0..16 of [1, 1, 16, 16]
+  Concat node 32 axis 2 inputs [31, 31] -> [1, 16, 4]
+  Slice node 84 axis 3 0..2 of [1, 16, 16, 4]
+  Slice node 85 axis 3 2..4 of [1, 16, 16, 4]
+  Concat node 87 axis 3 inputs [86, 84] -> [1, 16, 16, 4]
+  Slice node 93 axis 3 0..2 of [1, 2, 16, 4]
+  Slice node 94 axis 3 2..4 of [1, 2, 16, 4]
+  Concat node 96 axis 3 inputs [95, 93] -> [1, 2, 16, 4]
+  Slice node 208 axis 3 0..2 of [1, 16, 16, 4]
+  Slice node 209 axis 3 2..4 of [1, 16, 16, 4]
+  Concat node 211 axis 3 inputs [210, 208] -> [1, 16, 16, 4]
+  Slice node 217 axis 3 0..2 of [1, 2, 16, 4]
+  Slice node 218 axis 3 2..4 of [1, 2, 16, 4]
+  Concat node 220 axis 3 inputs [219, 217] -> [1, 2, 16, 4]

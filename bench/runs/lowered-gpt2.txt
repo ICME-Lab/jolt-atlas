@@ -1,0 +1,41 @@
+== pass log ==
+  elide                        26
+  reshape_family              150
+  split_to_slices              12
+  pow_to_square_cube           12
+  norm_fusion                  25
+  rsqrt_eps_floor              25
+  matmul_gemm_to_einsum        73
+  slice_through_projection     36
+  transpose_to_moveaxis        60
+  expand_to_broadcast           1
+  cast_policy                   1
+  elide_again                   1
+== inputs ==
+  input_ids RawInt [1, 16]
+  attention_mask RawInt [1, 16]
+  position_ids RawInt [1, 16]
+== lowered ops (1579 nodes) ==
+  Add                      x183
+  And                      x1
+  Broadcast                x344
+  Constant                 x357
+  Cube                     x12
+  Einsum                   x97
+  GatherSmall              x3
+  Iff                      x24
+  Input                    x3
+  IsNan                    x12
+  MeanOfSquares            x25
+  MoveAxis                 x84
+  Mul                      x147
+  Reshape                  x176
+  Rsqrt                    x25
+  Slice                    x12
+  SoftmaxLastAxis          x12
+  Sub                      x25
+  Sum                      x25
+  Tanh                     x12
+== einsum equations ==
+  abmk,abnk->abmn          x24
+  mk,kn->mn                x73

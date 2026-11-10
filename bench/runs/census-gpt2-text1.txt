@@ -1,0 +1,126 @@
+=== jolt-atlas prove ===
+(Run with --trace for JSON output or --trace-terminal for terminal output)
+
+model models/gpt2 | sequence_length 64 | scale 2^14
+imported 1579 atlas nodes in 1.64s
+  input input_ids        RawInt [1, 64]
+  input attention_mask   RawInt [1, 64]
+  input position_ids     RawInt [1, 64]
+trace execution: 12.79s
+committed digit columns by op and family (polys, cells=polys·padded, share):
+  Tanh             ActivationClampRaD             polys    96  cells 2^24.6   43.1%
+  Tanh             ActivationSmallRaD             polys    60  cells 2^23.9   26.9%
+  SoftmaxLastAxis  SoftmaxClampRaD                polys    96  cells 2^22.6   10.8%
+  SoftmaxLastAxis  SoftmaxExpRemainderRaD         polys    48  cells 2^21.6    5.4%
+  SoftmaxLastAxis  SoftmaxRemainderRaD            polys    48  cells 2^21.6    5.4%
+  SoftmaxLastAxis  SoftmaxZHiRaD                  polys    36  cells 2^21.2    4.0%
+  SoftmaxLastAxis  SoftmaxZLoRaD                  polys    36  cells 2^21.2    4.0%
+  GatherSmall      GatherRa                       polys     3  cells 2^17.0    0.2%
+  MeanOfSquares    MeanOfSquaresRangeCheckRaD     polys   400  cells 2^14.6    0.0%
+  Rsqrt            SqrtDivRangeCheckRaD           polys   400  cells 2^14.6    0.0%
+  Rsqrt            SqrtRangeCheckRaD              polys   400  cells 2^14.6    0.0%
+  Rsqrt            RsqrtQuotient                  polys    25  cells 2^10.6    0.0%
+  total cells 2^25.8 (58405504 K=16 one-hot digits; 233622016 key bits)
+clamp audit per node (op, static w, needed w, saturated/elems, row width): nodes with needed > 32 or saturation only
+  node 436   Cube           static 64 needed 33 sat 2/262144 row 4096
+needed width histogram (op, bits) -> nodes:
+  Add              13 bits  x1
+  Add              15 bits  x1
+  Add              16 bits  x3
+  Add              17 bits  x15
+  Add              18 bits  x38
+  Add              19 bits  x29
+  Add              20 bits  x27
+  Add              21 bits  x8
+  Add              22 bits  x9
+  Add              23 bits  x6
+  Add              24 bits  x4
+  Add              25 bits  x2
+  Add              27 bits  x20
+  Add              28 bits  x1
+  Add              29 bits  x19
+  Cube             24 bits  x6
+  Cube             26 bits  x2
+  Cube             27 bits  x2
+  Cube             28 bits  x1
+  Cube             33 bits  x1
+  Einsum           16 bits  x2
+  Einsum           17 bits  x11
+  Einsum           18 bits  x25
+  Einsum           19 bits  x26
+  Einsum           20 bits  x17
+  Einsum           21 bits  x5
+  Einsum           22 bits  x4
+  Einsum           23 bits  x5
+  Einsum           24 bits  x1
+  Einsum           27 bits  x1
+  MeanOfSquares    13 bits  x1
+  MeanOfSquares    17 bits  x1
+  MeanOfSquares    20 bits  x2
+  MeanOfSquares    24 bits  x2
+  MeanOfSquares    29 bits  x19
+  Mul               8 bits  x1
+  Mul              11 bits  x1
+  Mul              12 bits  x2
+  Mul              15 bits  x3
+  Mul              17 bits  x28
+  Mul              18 bits  x43
+  Mul              19 bits  x19
+  Mul              20 bits  x36
+  Mul              21 bits  x2
+  Mul              22 bits  x6
+  Mul              23 bits  x3
+  Mul              24 bits  x1
+  Mul              28 bits  x2
+  Sub              18 bits  x1
+  Sub              20 bits  x1
+  Sub              22 bits  x2
+  Sub              25 bits  x2
+  Sub              27 bits  x19
+  Sum              18 bits  x1
+  Sum              20 bits  x1
+  Sum              21 bits  x2
+  Sum              25 bits  x2
+  Sum              27 bits  x19
+saturated elements: 2 of 52500736; clamp digit cells today 2^29.2, at observed widths 2^28.1 (2.19x)
+per-op clamp width w' -> nodes/elements that exceed it, clamp digit cells (x vs today):
+  w'=16:  499 nodes,   7714264 elems over; cells 2^29.2 (1.01x)
+  w'=20:  178 nodes,   3203621 elems over; cells 2^28.5 (1.61x)
+  w'=24:  112 nodes,       486 elems over; cells 2^28.4 (1.80x)
+  w'=28:   39 nodes,        67 elems over; cells 2^28.5 (1.69x)
+  w'=32:    1 nodes,         2 elems over; cells 2^28.7 (1.48x)
+  w'=36:    0 nodes,         0 elems over; cells 2^28.8 (1.32x)
+  w'=40:    0 nodes,         0 elems over; cells 2^29.0 (1.19x)
+  w'=48:    0 nodes,         0 elems over; cells 2^29.2 (0.99x)
+clamp digit cells on rows of width >= threshold (rows, share of clamp cells):
+  >=   80: rows    22656  cells  91.7%
+  >=  112: rows    22656  cells  91.7%
+  >=  176: rows    22656  cells  91.7%
+  >= 1024: rows    22656  cells  91.7%
+  >= 4096: rows     6976  cells  63.4%
+softmax rows: spread of (max - x) over live lanes:
+  node 147   rows  1024 live   64 max(max-x) 2^19.2  lanes with max-x >= 2^17 : 36663 (55.94%)
+  node 269   rows  1024 live   64 max(max-x) 2^18.5  lanes with max-x >= 2^17 : 32041 (48.89%)
+  node 391   rows  1024 live   64 max(max-x) 2^19.5  lanes with max-x >= 2^17 : 32571 (49.70%)
+  node 513   rows  1024 live   64 max(max-x) 2^19.2  lanes with max-x >= 2^17 : 36235 (55.29%)
+  node 635   rows  1024 live   64 max(max-x) 2^20.9  lanes with max-x >= 2^17 : 35612 (54.34%)
+  node 757   rows  1024 live   64 max(max-x) 2^19.4  lanes with max-x >= 2^17 : 37236 (56.82%)
+  node 879   rows  1024 live   64 max(max-x) 2^19.5  lanes with max-x >= 2^17 : 35538 (54.23%)
+  node 1001  rows  1024 live   64 max(max-x) 2^19.3  lanes with max-x >= 2^17 : 37188 (56.74%)
+  node 1123  rows  1024 live   64 max(max-x) 2^18.6  lanes with max-x >= 2^17 : 34597 (52.79%)
+  node 1245  rows  1024 live   64 max(max-x) 2^18.7  lanes with max-x >= 2^17 : 35033 (53.46%)
+  node 1367  rows  1024 live   64 max(max-x) 2^18.6  lanes with max-x >= 2^17 : 34628 (52.84%)
+  node 1489  rows  1024 live   64 max(max-x) 2^18.6  lanes with max-x >= 2^17 : 32915 (50.22%)
+einsum -> constant Add (bias): 72 nodes, 2^22.8 output cells; activation reading an einsum directly: 0
+  Slice node 19 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 25 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 31 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 37 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 43 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 49 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 55 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 61 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 67 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 73 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 79 axis 3 0..64 of [1, 1, 64, 64]
+  Slice node 85 axis 3 0..64 of [1, 1, 64, 64]

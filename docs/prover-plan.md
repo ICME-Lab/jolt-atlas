@@ -129,7 +129,14 @@ tests, one real-model run. Prototype on `gpt2-tiny` in the test profile first.
 
 **Implemented on `dev`**: each remainder bucket commits `⌈w/2⌉` base-4 `U8Scalars` digit columns
 under the same `digit_range` relation, which also tightens the bound to `R < 2^w` (the 4-bit
-one-hot chunks proved `R < 2^{4⌈w/4⌉}`). Not yet measured.
+one-hot chunks proved `R < 2^{4⌈w/4⌉}`).
+
+Items 1 and 2 together, GPT-2 at 16 tokens: 33.2 s to prove (two runs, ±0.1%), 2.29 s to
+verify, 2.25 MiB proof, 11.3 GB peak RSS (6.0 GB at baseline). Stages against the baseline:
+commit 23.6 → 7.3 s, deferred sumchecks 3.1 → 6.5 s (the degree-5 digit-range sumcheck is
+5.6 s of it), openings 5.0 → 13.0 s (the 2^28 digit class's opening alone is 5.3 s). This
+needs dense classes capped at 2^28 coefficients (`akita::MAX_DENSE_CLASS_NUM_VARS`): upstream's
+dense commit falls off a cliff at 2^29, where the 272 digit columns took 1587 s in one class.
 
 A 14-bit remainder is seven base-4 digits with the same zero-check; the 28-bit Cube remainders
 fourteen. Same machinery as item 1, same PR or the next. (Celer-style grand products on virtual

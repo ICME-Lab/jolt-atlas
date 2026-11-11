@@ -79,6 +79,11 @@ use super::commitment_scheme::{BatchCommitOutput, CommitmentScheme};
 pub const MIN_DENSE_NUM_VARS: usize = 14;
 /// Largest physical arity of the dense-bounded catalog.
 pub const MAX_DENSE_NUM_VARS: usize = 34;
+/// Largest physical arity the prover packs a dense class into; a larger kind is split into
+/// chunks. Upstream's dense commit is linear up to 2^28 coefficients (4.2 s for 256 columns of
+/// 2^20 small values) and falls off a cliff at 2^29 (over 18 min for 512 such columns), so the
+/// cap keeps every dense object on the linear side.
+pub const MAX_DENSE_CLASS_NUM_VARS: usize = 28;
 /// Smallest arity committed as a one-hot class: narrower K = 16 one-hot polynomials are packed
 /// densely, which costs little at that size.
 pub const MIN_ONE_HOT_NUM_VARS: usize = 16;
@@ -188,7 +193,8 @@ impl ClassKind {
 }
 
 /// The polynomials sharing one commitment. A one-hot kind of more than [`ONE_HOT_COLUMNS`]
-/// members spans several chunks.
+/// members, and a dense kind whose packed object would exceed [`MAX_DENSE_CLASS_NUM_VARS`],
+/// span several chunks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct ClassKey {
     kind: ClassKind,
@@ -789,114 +795,11 @@ impl CommitmentScheme for AkitaScheme {
         Self::batch_commit_all(polys, setup).1
     }
 
-    #[tracing::instrument(skip_all, name = "AkitaScheme::batch_commit_all")]
     fn batch_commit_all<U>(polys: &[U], setup: &Self::ProverSetup) -> BatchCommitOutput<Self>
     where
         U: std::borrow::Borrow<MultilinearPolynomial<Self::Field>> + Sync,
     {
-        let mut grouped: BTreeMap<(ClassKind, usize), Vec<usize>> = BTreeMap::new();
-        for (i, poly) in polys.iter().enumerate() {
-            let poly = poly.borrow();
-            grouped
-                .entry((ClassKind::of(poly), poly.get_num_vars()))
-                .or_default()
-                .push(i);
-        }
-        let mut classes: BTreeMap<ClassKey, Vec<usize>> = BTreeMap::new();
-        for ((kind, logical_num_vars), members) in grouped {
-            let chunk_len = match kind {
-                ClassKind::Dense(_) => members.len(),
-                ClassKind::OneHot => ONE_HOT_COLUMNS,
-            };
-            for (chunk, members) in members.chunks(chunk_len).enumerate() {
-                let key = ClassKey {
-                    kind,
-                    logical_num_vars,
-                    chunk,
-                };
-                classes.insert(key, members.to_vec());
-            }
-        }
-
-        let mut per_poly: Vec<Option<(AkitaSlot, AkitaHint)>> = vec![None; polys.len()];
-        let mut class_commitments = Vec::with_capacity(classes.len());
-        for (index, (key, members)) in classes.into_iter().enumerate() {
-            let shape = ClassShape::new(key.kind, key.logical_num_vars, members.len())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "no Akita catalog covers a class of {} polynomials of {key:?}",
-                        members.len()
-                    )
-                });
-            let member_polys: Vec<&MultilinearPolynomial<Fp128>> =
-                members.iter().map(|&i| polys[i].borrow()).collect();
-            let committed = if member_polys.par_iter().all(|p| is_zero(p)) {
-                None
-            } else {
-                let _span = tracing::info_span!(
-                    "AkitaScheme::commit_class",
-                    kind = ?shape.kind,
-                    num_vars = shape.physical_num_vars,
-                    slots = shape.slot_count
-                )
-                .entered();
-                let setup = setup.class_setup(&shape).unwrap_or_else(|e| panic!("{e}"));
-                let (source, committed) = match shape.kind {
-                    ClassKind::Dense(_) => {
-                        let packed = UpstreamDense::new(pack_dense(&shape, &member_polys));
-                        let committed = Upstream::commit(&packed, &setup.prover);
-                        (ClassSource::Dense(packed), committed)
-                    }
-                    ClassKind::OneHot => {
-                        let rows = Arc::new(one_hot_rows(&member_polys));
-                        let committed = Upstream::commit_trace_one_hot(
-                            &setup.prover,
-                            shape.layout_digest(),
-                            rows.clone(),
-                            &[],
-                        );
-                        (ClassSource::OneHot(rows), committed)
-                    }
-                };
-                let (commitment, hint) =
-                    committed.unwrap_or_else(|e| panic!("Akita commit for {shape:?}: {e}"));
-                Some(CommittedClass {
-                    source,
-                    commitment,
-                    hint,
-                    setup,
-                })
-            };
-            class_commitments.push(AkitaClassCommitment {
-                kind: shape.kind.tag(),
-                logical_num_vars: shape.logical_num_vars as u32,
-                slot_count: shape.slot_count as u32,
-                commitment: committed.as_ref().map(|c| serde_to_bytes(&c.commitment)),
-            });
-            let data = Arc::new(ClassProverData {
-                index: index as u32,
-                shape,
-                committed,
-            });
-            for (slot, &i) in members.iter().enumerate() {
-                per_poly[i] = Some((
-                    AkitaSlot {
-                        class: index as u32,
-                        slot: slot as u32,
-                    },
-                    AkitaHint(data.clone()),
-                ));
-            }
-        }
-        (
-            AkitaBatchCommitment {
-                classes: class_commitments,
-            },
-            per_poly
-                .into_iter()
-                .map(|p| p.expect("every polynomial is in a class"))
-                .collect(),
-        )
+        batch_commit(polys, setup, MAX_DENSE_CLASS_NUM_VARS)
     }
 
     fn prove<ProofTranscript: Transcript>(
@@ -1148,6 +1051,122 @@ impl CommitmentScheme for AkitaScheme {
     }
 }
 
+/// [`AkitaScheme::batch_commit_all`] with dense classes packed into objects of at most
+/// `max_dense_class_num_vars` variables.
+#[tracing::instrument(skip_all, name = "AkitaScheme::batch_commit_all")]
+fn batch_commit<U>(
+    polys: &[U],
+    setup: &AkitaSetup,
+    max_dense_class_num_vars: usize,
+) -> BatchCommitOutput<AkitaScheme>
+where
+    U: std::borrow::Borrow<MultilinearPolynomial<Fp128>> + Sync,
+{
+    let mut grouped: BTreeMap<(ClassKind, usize), Vec<usize>> = BTreeMap::new();
+    for (i, poly) in polys.iter().enumerate() {
+        let poly = poly.borrow();
+        grouped
+            .entry((ClassKind::of(poly), poly.get_num_vars()))
+            .or_default()
+            .push(i);
+    }
+    let mut classes: BTreeMap<ClassKey, Vec<usize>> = BTreeMap::new();
+    for ((kind, logical_num_vars), members) in grouped {
+        let chunk_len = match kind {
+            ClassKind::Dense(_) => 1 << max_dense_class_num_vars.saturating_sub(logical_num_vars),
+            ClassKind::OneHot => ONE_HOT_COLUMNS,
+        };
+        for (chunk, members) in members.chunks(chunk_len).enumerate() {
+            let key = ClassKey {
+                kind,
+                logical_num_vars,
+                chunk,
+            };
+            classes.insert(key, members.to_vec());
+        }
+    }
+
+    let mut per_poly: Vec<Option<(AkitaSlot, AkitaHint)>> = vec![None; polys.len()];
+    let mut class_commitments = Vec::with_capacity(classes.len());
+    for (index, (key, members)) in classes.into_iter().enumerate() {
+        let shape =
+            ClassShape::new(key.kind, key.logical_num_vars, members.len()).unwrap_or_else(|| {
+                panic!(
+                    "no Akita catalog covers a class of {} polynomials of {key:?}",
+                    members.len()
+                )
+            });
+        let member_polys: Vec<&MultilinearPolynomial<Fp128>> =
+            members.iter().map(|&i| polys[i].borrow()).collect();
+        let committed = if member_polys.par_iter().all(|p| is_zero(p)) {
+            None
+        } else {
+            let _span = tracing::info_span!(
+                "AkitaScheme::commit_class",
+                kind = ?shape.kind,
+                num_vars = shape.physical_num_vars,
+                slots = shape.slot_count
+            )
+            .entered();
+            let setup = setup.class_setup(&shape).unwrap_or_else(|e| panic!("{e}"));
+            let (source, committed) = match shape.kind {
+                ClassKind::Dense(_) => {
+                    let packed = UpstreamDense::new(pack_dense(&shape, &member_polys));
+                    let committed = Upstream::commit(&packed, &setup.prover);
+                    (ClassSource::Dense(packed), committed)
+                }
+                ClassKind::OneHot => {
+                    let rows = Arc::new(one_hot_rows(&member_polys));
+                    let committed = Upstream::commit_trace_one_hot(
+                        &setup.prover,
+                        shape.layout_digest(),
+                        rows.clone(),
+                        &[],
+                    );
+                    (ClassSource::OneHot(rows), committed)
+                }
+            };
+            let (commitment, hint) =
+                committed.unwrap_or_else(|e| panic!("Akita commit for {shape:?}: {e}"));
+            Some(CommittedClass {
+                source,
+                commitment,
+                hint,
+                setup,
+            })
+        };
+        class_commitments.push(AkitaClassCommitment {
+            kind: shape.kind.tag(),
+            logical_num_vars: shape.logical_num_vars as u32,
+            slot_count: shape.slot_count as u32,
+            commitment: committed.as_ref().map(|c| serde_to_bytes(&c.commitment)),
+        });
+        let data = Arc::new(ClassProverData {
+            index: index as u32,
+            shape,
+            committed,
+        });
+        for (slot, &i) in members.iter().enumerate() {
+            per_poly[i] = Some((
+                AkitaSlot {
+                    class: index as u32,
+                    slot: slot as u32,
+                },
+                AkitaHint(data.clone()),
+            ));
+        }
+    }
+    (
+        AkitaBatchCommitment {
+            classes: class_commitments,
+        },
+        per_poly
+            .into_iter()
+            .map(|p| p.expect("every polynomial is in a class"))
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1325,5 +1344,65 @@ mod tests {
             AkitaBatchCommitment::deserialize_compressed(&bytes[..]).unwrap(),
             batch
         );
+    }
+
+    /// A dense kind over the class cap is split into several classes, each committed and
+    /// opened on its own, and the joint opening verifies across them.
+    #[test]
+    fn capped_dense_kind_splits_and_opens() {
+        let mut rng = test_rng();
+        let n = 12;
+        let polys: Vec<MultilinearPolynomial<Fp128>> = (0..6)
+            .map(|_| {
+                MultilinearPolynomial::from(
+                    (0..1 << n)
+                        .map(|_| rng.gen_range(0..4u8))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        let ids: Vec<CommittedPoly> = (0..polys.len())
+            .map(|i| CommittedPoly::NodeOutputRaD(i, 0))
+            .collect();
+        let num_vars = vec![n; polys.len()];
+        let setup = AkitaScheme::setup_prover(n);
+
+        // A 14-variable cap holds four 12-variable slots per class.
+        let (batch, per_poly) = batch_commit(&polys, &setup, MIN_DENSE_NUM_VARS);
+        let slot_counts: Vec<u32> = batch.classes.iter().map(|c| c.slot_count).collect();
+        assert_eq!(slot_counts, vec![4, 2]);
+        let (slots, hints): (Vec<_>, Vec<_>) = per_poly.into_iter().unzip();
+        assert_eq!(
+            slots.iter().map(|s| (s.class, s.slot)).collect::<Vec<_>>(),
+            vec![(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1)]
+        );
+
+        let r = random_point(&mut rng, n);
+        let coeffs: Vec<Fp128> = (0..polys.len())
+            .map(|_| <Fp128 as jolt_field::Field>::random(&mut rng))
+            .collect();
+        let joint: Fp128 = polys
+            .iter()
+            .zip(&coeffs)
+            .map(|(p, c)| *c * p.evaluate(&r))
+            .sum();
+        let map: BTreeMap<CommittedPoly, MultilinearPolynomial<Fp128>> =
+            ids.iter().copied().zip(polys.iter().cloned()).collect();
+        let mut pt = Blake2bProver::new(b"akita-test");
+        batch.append_to_transcript(&mut pt);
+        let proof = AkitaScheme::prove_rlc(&setup, &map, &coeffs, hints, &r, &mut pt);
+        assert_eq!(proof.classes.len(), 2);
+        let narg = pt.into_narg();
+
+        let refs: Vec<&AkitaSlot> = slots.iter().collect();
+        let verify = |claim: Fp128| {
+            let mut vt = Blake2bVerifier::new(b"akita-test", narg.clone());
+            batch.append_to_transcript(&mut vt);
+            AkitaScheme::verify_rlc(
+                &proof, &setup, &mut vt, &r, &claim, &refs, &coeffs, &num_vars, &batch,
+            )
+        };
+        verify(joint).expect("an honest joint opening over split classes verifies");
+        assert!(verify(joint + Fp128::one()).is_err(), "wrong joint claim");
     }
 }

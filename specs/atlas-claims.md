@@ -17,8 +17,9 @@ truth for current behavior, and nobody updates old specs when the code moves on.
 
 Every atlas sumcheck is a `SymbolicSumcheck` over atlas openings, and that trait, its `Expr`
 algebra and the claim-data traits are the only things atlas takes from upstream's
-`jolt-claims`: about 1,100 lines in six modules with no dependency outside `jolt-field`,
-`jolt-poly` and `jolt-utils`. The other 18,000 lines of the vendored crate are the zkVM's
+`jolt-claims`: about 1,100 lines in six modules whose only dependencies are `jolt-field`,
+`serde`, `thiserror` and the optional `allocative` (`claim_data.rs` also names the zkVM's
+`JoltOpeningId` and `JoltChallengeId`, but only as default type parameters). The other 18,000 lines of the vendored crate are the zkVM's
 protocol stage graph (`protocols/`, `r1cs.rs`), and they are why the workspace carries a RISC-V
 ISA (`jolt-riscv`), the RISC-V instruction lookup tables (`jolt-lookup-tables`) and an R1CS
 builder (`jolt-r1cs`): some 23,000 lines that no atlas crate names, that every build compiles,
@@ -52,7 +53,11 @@ every `jolt_claims::` import in `atlas-sumcheck`, `jolt-atlas-verifier`, `jolt-a
 - **The copied modules are upstream's modules.** Each file in `atlas-claims/src/` is a copy of
   the named `crates/jolt-claims/src/<file>` at `f3265b5a`, with the local changes limited to:
   the crate name and doc links, removal of the `jolt_claims_derive` re-exports, removal of
-  items whose only users were `protocols/` (listed in the PR), and the test port below.
+  items whose only users were `protocols/` (listed in the PR), removal of the default type
+  parameters `O = JoltOpeningId` (`OutputClaims`, `InputClaims`) and `C = JoltChallengeId`
+  (`SumcheckChallenges`), which are `claim_data.rs`'s only non-test use of `protocols/` and
+  which no atlas code relies on (atlas names none of the three traits), and the test port
+  below.
   Mechanism: review-held. The PR description carries, per file, the upstream path and
   `git diff --no-index` against the vendored copy, and `docs/upstream-inventory.md` records
   the provenance row so a later upstream pull has a diff base. There is no CI check that a
@@ -75,17 +80,20 @@ every `jolt_claims::` import in `atlas-sumcheck`, `jolt-atlas-verifier`, `jolt-a
   resolves no `jolt-atlas-core`, and `jolt-atlas-verifier/clippy.toml` needs no new entry: the
   relation layer has no prover items (it is transcript- and witness-free; `docs/verifier.md`
   already lists it as such). Mechanism: the existing CI job and the `clippy.toml` list.
-- **`jolt-akita`'s commitment behavior is unchanged.** Its two uses of the zkVM geometry are
-  the 64-column trace one-hot cap (`MAX_ONE_HOT_TRACE_COLUMNS`, checked in
-  `trace_onehot/source.rs`) and the schedule-key admission list in `schedules::one_hot_keys`,
-  which today derives the admitted column widths by enumerating RV64 bytecode/RAM shapes.
-  After the change the constant lives in `jolt-akita` and the admitted widths are an explicit
-  sorted constant equal to the set the enumeration produces today, with the derivation kept as
-  a comment. Mechanism: the digest tests (the Akita class openings are in the proof bytes) and
-  a `jolt-akita` unit test asserting the constant list equals the enumeration's output,
-  committed with the enumeration code inlined in the test (so the test carries the old
-  derivation and the shipped code carries only the list). `atlas-pcs` commits 64-column K=16
-  one-hot classes (`ONE_HOT_COLUMNS`), so the list must contain 64; the test pins it.
+- **`jolt-akita`'s commitment behavior is unchanged.** Its two uses of the zkVM geometry are:
+  - The 64-column trace one-hot cap `MAX_ONE_HOT_TRACE_COLUMNS` (`u64::BITS`), a runtime
+    check in `trace_onehot/source.rs`. It becomes a local constant of the same value.
+    Mechanism: the digest tests (Akita class openings are in the proof bytes).
+  - The admitted column widths in `schedules::one_hot_keys`, derived today by enumerating
+    RV64 bytecode/RAM shapes. That enumeration runs only in the `gen_jolt_schedules`
+    generator (`emit::family_specs`) and only for the default `(1, 0)` profile; atlas loads
+    the `(8, 2)` catalogs (`atlas-pcs`' `PACKAGED_DENSE_PROFILE`), whose K=16 keys are fixed
+    fixtures (the 64-column width comes from `51..=64` there), and the checked-in `.aks`
+    catalogs are data. No proof depends on the enumeration. It is replaced by an explicit
+    sorted width constant, computed once by running today's code before the cone is deleted,
+    with a one-line comment on its origin. Mechanism: review-held; the PR description records
+    the computed list. No test carries the old derivation (it would need the deleted
+    `protocols/` types).
 - **The `atlas-trace` behavioral contract is untouched.** Nothing in this spec reads or changes
   the fixed-point scale, the quotient/remainder split, the lookup tables or the padding rules;
   the trace crate is not in the diff. Mechanism: `git diff --stat` on the PR shows no
@@ -121,8 +129,8 @@ every `jolt_claims::` import in `atlas-sumcheck`, `jolt-atlas-verifier`, `jolt-a
 - [ ] `atlas-claims` is a workspace member at the repository root beside `atlas-sumcheck`,
       with `src/{lib,claims,claim_data,symbolic,ops,formula_error,sumcheck}.rs`, no
       `protocols/`, `r1cs.rs`, `lattice.rs` or `twist/`, and dependencies only on `jolt-field`,
-      `jolt-poly`, `jolt-utils`, `derive_more`, `serde`, `thiserror` (and `rayon` if `ops`
-      still needs it after the copy). `cargo nextest run -p atlas-claims` passes.
+      `serde` and `thiserror` (plus `allocative` behind an optional feature, if a consumer
+      enables it). `cargo nextest run -p atlas-claims` passes.
 - [ ] No source file under `atlas-*`, `jolt-atlas-*`, `common` or `third_party/jolt-akita`
       contains `jolt_claims` (grep), and `Cargo.toml`/`Cargo.lock` resolve no `jolt-claims`.
 - [ ] `third_party/jolt-claims`, `third_party/jolt-claims-derive`, `third_party/jolt-riscv`,
@@ -134,7 +142,9 @@ every `jolt_claims::` import in `atlas-sumcheck`, `jolt-atlas-verifier`, `jolt-a
       in the PR, recorded in the PR description).
 - [ ] The digest pins in `jolt-atlas-core/src/onnx_proof/testing/` are unchanged in the PR diff
       and `cargo nextest run -p jolt-atlas-core -E 'test(digest)'` passes.
-- [ ] `jolt-akita` has the admitted-width constant and its equality test; the test passes.
+- [ ] `jolt-akita` defines `MAX_ONE_HOT_TRACE_COLUMNS` locally and takes `one_hot_keys`'
+      K=16 widths from an explicit constant; the PR description records the list as computed
+      from the pre-deletion enumeration.
 - [ ] CI's Format, Clippy (`RUSTFLAGS=-D warnings`), Verifier isolation and Test jobs are
       green on the PR; the heavy job (GPT-2 / BGE / Qwen prove & verify) is green on `main`
       after merge or on the PR with the `ci:heavy` label.
@@ -157,8 +167,7 @@ Existing coverage carries the change: `cargo nextest run --workspace` (unit test
 op-surface table, the soundness sweeps, the checked-in zoo end to end with proof
 round-trips, the digest pins) runs in the Test job; the Verifier isolation job runs the graph
 checks; the heavy job proves the real models. `atlas-claims`' own tests are the ported
-in-source tests of the copied modules. New tests: the `jolt-akita` admitted-width equality test;
-the new CI graph step. No `zk` feature exists in this tree. No `mutate::Site` changes (no proof
+in-source tests of the copied modules. New tests: the new CI graph step. No `zk` feature exists in this tree. No `mutate::Site` changes (no proof
 field changes). No `op_surface.rs` rows change (no op changes). The `atlas-onnx-import` zoo
 gates are unaffected (no importer or trace change) and need not run.
 
@@ -237,7 +246,7 @@ before                                         after
   them, and dropping the proc-macro crate removes `syn`/`prettyplease` from the build.
 - **Replace `jolt-akita`'s admitted-width enumeration with `1..=64`.** Rejected: the keys must
   match the packaged schedule catalog `atlas-pcs` loads, and admitting keys the catalog lacks
-  changes `one_hot_keys`' output; the explicit equal list with its equality test is exact.
+  changes `one_hot_keys`' output; the explicit list, computed from the current enumeration, is exact.
 
 ## Documentation
 
@@ -263,9 +272,9 @@ Suggested commit sequence (each builds and passes its own gate):
 1. **Add `atlas-claims`** with the six copied files, ported tests and manifest; workspace
    member; no consumer yet. Gate: `cargo nextest run -p atlas-claims`.
 2. **Retarget consumers**: `jolt_claims::` → `atlas_claims::` across `atlas-sumcheck`,
-   `jolt-atlas-verifier`, `jolt-atlas-core`; `jolt-akita` manifest, constant and admitted-width
-   list with its equality test. Gate: `cargo check -p jolt-atlas-core --tests`, then
-   `cargo nextest run -p jolt-atlas-core -E 'test(digest)'` and `-p jolt-akita`.
+   `jolt-atlas-verifier`, `jolt-atlas-core`; `jolt-akita` manifest, column-cap constant, and the
+   admitted-width list (computed by running the current enumeration first, then pasted in). Gate: `cargo check -p jolt-atlas-core --tests`, then
+   `cargo nextest run -p jolt-atlas-core -E 'test(digest)'`.
 3. **Delete the cone**: the five directories, `Cargo.toml` members/exclude/workspace-deps,
    `Cargo.lock`. Gate: `cargo check --workspace --all-targets`; `cargo tree` shows none of the
    five.

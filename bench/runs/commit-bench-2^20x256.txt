@@ -1,0 +1,4 @@
+rows 2^20, 256 columns: 268435456 four-bit digits (1073741824 key bits) per arm
+one-hot K=16 (today)         polys  256  witness 466.017ms  commit  41.267s   153.7 ns/digit    38.4 ns/key-bit  (4 classes, 4294967296 cells)
+one-hot, 24 of 64 cols empty polys  256  witness 522.435ms  commit  23.666s    88.2 ns/digit    22.0 ns/key-bit  (4 classes, 4294967296 cells)
+dense u8 in [0,16), 1 col    polys  256  witness 432.463ms  commit   4.164s    15.5 ns/digit     3.9 ns/key-bit  (1 classes, 268435456 cells)

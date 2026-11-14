@@ -1,0 +1,20 @@
+# The relation layer taken from upstream a16z/jolt crates/jolt-claims at rev
+# f3265b5a9981f0c1359f2b63008824616f0c82fa: src/{claims,claim_data,symbolic,ops,sumcheck}.rs.
+# Owned here; docs/upstream-inventory.md records the provenance.
+[package]
+name = "atlas-claims"
+version = "0.1.0"
+edition = "2021"
+description = "The symbolic-relation layer: claim expressions and the SymbolicSumcheck trait."
+
+[features]
+allocative = ["dep:allocative"]
+
+[dependencies]
+allocative = { version = "0.3", optional = true }
+jolt-field.workspace = true
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+jolt-field = { workspace = true, features = ["solinas"] }

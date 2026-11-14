@@ -519,6 +519,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas-claims"
+version = "0.1.0"
+dependencies = [
+ "allocative",
+ "jolt-field",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "atlas-lookup-tables"
 version = "0.1.0"
 dependencies = [

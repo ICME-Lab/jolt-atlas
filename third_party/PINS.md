@@ -1,9 +1,12 @@
 # Vendored upstream crates
 
-Crates adopted from [a16z/jolt](https://github.com/a16z/jolt) are vendored whole under
-`third_party/` at a recorded upstream rev and wired in through `[workspace.dependencies]` in the
-root `Cargo.toml`. Files are never copied piecemeal into our own crates. A pin bump is a
-deliberate PR that links the upstream diff between the old and new rev. `specs/adoption-program.md`
+Vendoring is the transitional state for upstream crates atlas has not yet taken over
+(`docs/roadmap.md`). Crates adopted from [a16z/jolt](https://github.com/a16z/jolt) are vendored
+whole under `third_party/` at a recorded upstream rev and wired in through
+`[workspace.dependencies]` in the root `Cargo.toml`. A pin bump is a deliberate PR that links the
+upstream diff between the old and new rev. A crate atlas takes over leaves `third_party/` and
+becomes an atlas crate; `docs/upstream-inventory.md` records its provenance (so far
+`atlas-claims`, the relation layer of `jolt-claims`). `specs/adoption-program.md`
 owns the adoption order; `docs/upstream-inventory.md` records the divergence each stage resolves.
 
 | Crate | Upstream rev | Date | Adopted at | Local delta |
@@ -13,14 +16,9 @@ owns the adoption order; `docs/upstream-inventory.md` records the divergence eac
 | `jolt-utils` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4a | Manifest only (below) |
 | `jolt-poly` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4b | Manifest only (below) |
 | `jolt-sumcheck` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4b | Manifest only (below) |
-| `jolt-claims` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
-| `jolt-claims-derive` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
 | `jolt-openings` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
 | `jolt-crypto` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
-| `jolt-riscv` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
-| `jolt-lookup-tables` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
-| `jolt-r1cs` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 5 (spike) | Manifest only (below) |
-| `jolt-akita` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 7a | Manifest only (below) |
+| `jolt-akita` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 7a | Manifest and two source files (below) |
 
 ## The arkworks fork pin
 
@@ -82,29 +80,28 @@ workspace inheritance and drops the `examples/`, `fuzz/` and `tests/` targets. U
 features are declared empty (the source's `cfg(feature = ...)` gates stay valid) and must stay
 off; `parallel` no longer forwards to `jolt-crypto`. They come back when those crates are vendored.
 
-## `jolt-claims` and its dependency cone
+## `jolt-openings` and `jolt-crypto`
 
-`jolt-claims`, `jolt-claims-derive`, `jolt-openings`, `jolt-crypto`, `jolt-riscv`,
-`jolt-lookup-tables` and `jolt-r1cs` vendor `src/` byte-identical to `crates/<name>` at the
-pinned rev. Atlas uses only `jolt-claims`' relation layer (`Expr`, `SymbolicSumcheck`); the rest
-of the cone is there because `jolt-claims` depends on it unconditionally (its zkVM protocol
-modules use the RISC-V crates, its lattice packing uses `jolt-openings`). The manifests differ
-from upstream's:
-
-- workspace dependency inheritance is resolved to explicit versions, with the arkworks crates on
-  the root `Cargo.toml`'s `dev/twist-shout` branch;
-- `jolt-claims` takes `jolt-openings` with default features off, so `jolt-crypto`'s `bn254`
-  feature (and with it `ark-bn254`/`ark-ec`) stays off in the resolved graph;
-- `jolt-lookup-tables`' `field-inline` feature drops its forward to the `tracer` dev-dependency;
-- `jolt-claims` and `jolt-claims-derive` are workspace members with their dev-dependencies
-  (`bincode`, `rand_chacha`, `prettyplease`, ...) so their upstream tests run in the workspace
-  suite; the other five are `exclude`d from the workspace, because their upstream tests need
-  crates not vendored here (`tracer`, `jolt-dory`), and the `benches/`, `fuzz/` and `tests/`
-  targets of all seven are not vendored.
+`src/` is byte-identical to `crates/<name>` at the pinned rev. The manifests resolve workspace
+dependency inheritance to explicit versions, with the arkworks crates on the root `Cargo.toml`'s
+`dev/twist-shout` branch; every consumer takes `jolt-openings` with default features off (the
+workspace entry and `jolt-akita`'s manifest), so `jolt-crypto`'s `bn254` feature (and with it `ark-bn254`/`ark-ec`) stays off in the
+resolved graph. Both are `exclude`d from the workspace, because their upstream tests need crates
+not vendored here (`tracer`, `jolt-dory`), and their `benches/`, `fuzz/` and `tests/` targets are
+not vendored.
 
 ## `jolt-akita`
 
-`src/` and `schedules/` are byte-identical to `crates/jolt-akita` at the pinned rev. It brings the
+`schedules/` and `src/` other than the two files below are byte-identical to `crates/jolt-akita`
+at the pinned rev. Upstream's `jolt-akita` depends on `jolt-claims` for two zkVM constants, so
+two files differ:
+
+- `src/trace_onehot/source.rs` defines `MAX_ONE_HOT_TRACE_COLUMNS` (`u64::BITS`) locally;
+- `src/schedules/mod.rs` takes the K=16 admitted trace column widths for the catalog generator
+  from the constant `K16_TRACE_COLUMN_WIDTHS` (`51..=64`, the set upstream's RV64 geometry
+  enumeration produces), instead of the enumeration.
+
+It brings the
 LayerZero `akita-*` crates by git at rev `dfdbd7674cab5cfbe95243e947d1b10a982f232b` (the rev
 upstream's workspace pins). The manifest differs from upstream's:
 

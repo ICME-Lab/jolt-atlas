@@ -44,7 +44,7 @@ the crates below it stay vendored until their turn. Each phase is one spec and o
 the spec says otherwise.
 
 1. **`atlas-claims`** — `specs/atlas-claims.md`. Own the relation layer; delete the RISC-V
-   cone. Status: proposed.
+   cone. Status: implemented on `dev`.
 2. **PCS adapter** — `specs/own-pcs-adapter.md`. `jolt-akita`, `jolt-openings` and
    `jolt-crypto` fold into `atlas-pcs`; `akita-*` becomes a direct dependency of `atlas-pcs`.
    Status: proposed.

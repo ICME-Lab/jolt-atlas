@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-14                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          | (filled when the PR opens, or at merge) |
 | Depends on  | `specs/adoption-program.md` (stage 5: the relation layer is adopted), `specs/verifier-audit-simplification.md` (every sumcheck is a relation) |
 | Supersedes  | `specs/adoption-program.md` stage 5's "vendor `jolt-claims` and its cone" decision; `third_party/PINS.md`'s "files are never copied piecemeal into our own crates" rule, for `jolt-claims` |

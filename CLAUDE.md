@@ -84,9 +84,9 @@ Workspace members, in dependency order:
 - **common** — shared constants and parallel helpers.
 - **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
   (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`, `jolt-utils`, `jolt-poly`,
-  `jolt-sumcheck`, `jolt-claims` (whose dependency cone, `jolt-openings`, `jolt-crypto`,
-  `jolt-riscv`, `jolt-lookup-tables` and `jolt-r1cs`, is vendored but not workspace members), and
-  `jolt-akita` (the lattice PCS adapter, over LayerZero's `akita-*` crates by git).
+  `jolt-sumcheck`, `jolt-akita` (the lattice PCS adapter, over LayerZero's `akita-*` crates by
+  git), and `jolt-openings` and `jolt-crypto` (vendored but not workspace members). Vendoring is
+  transitional: a crate atlas takes over becomes an atlas crate (`docs/roadmap.md`).
 - The proof-system toolkit inherited from Jolt, in dependency order:
   - **atlas-algebra** — `field` (`JoltField`, which extends upstream `jolt_field::JoltField`
     and adds the unreduced-product ladder and challenge types; `field::fp128`, the 128-bit
@@ -98,6 +98,9 @@ Workspace members, in dependency order:
     grinding behind the `prover` feature), the verifier a `VerifyingTranscript` over the
     proof's NARG string.
   - **atlas-lookup-tables** — the prefix-suffix lookup tables.
+  - **atlas-claims** — the symbolic-relation layer: `SymbolicSumcheck`, the `Expr` algebra and
+    the claim-data traits, owned by atlas (taken from upstream `jolt-claims` without its zkVM
+    protocol graph).
   - **atlas-sumcheck** — the relation core and its batched sumcheck (`relation`), the opening
     accumulators (`opening_proof`), evaluation reduction, the one-hot and shout subprotocols,
     `config`. As
@@ -196,7 +199,7 @@ root `Cargo.toml`.
   it must fail today and turn green when fixed. Never allowlist a sweep finding silently.
 - Lookup table generation has one owner in `atlas-trace`. Never regenerate or approximate a
   table on the prover side.
-- Every sumcheck is a symbolic relation (a `jolt_claims` `SymbolicSumcheck` over atlas
+- Every sumcheck is a symbolic relation (an `atlas_claims` `SymbolicSumcheck` over atlas
   openings), and the relation is the source of truth: the verifier is derived from it
   (`RelationVerifier`; no hand-written verifier exists), and a prover is either the engine's
   `RelationProver` or a specialized `RelationWitness` that computes only its round messages.

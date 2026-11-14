@@ -12,7 +12,6 @@
 /// Emit-spec construction shared by the generator and drift tests.
 pub mod emit {
 
-    use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
     use akita_config::recursive_commitment::{RecursiveCommitmentConfig, RecursiveScheduleConfig};
@@ -24,9 +23,6 @@ pub mod emit {
     use akita_pcs::AkitaError;
     use akita_planner::emit::bounded_parallel_filter_map;
     use akita_planner::{EmitSpec, PlannerPolicy};
-    use jolt_claims::protocols::jolt::lattice::strategy::MAX_ONE_HOT_TRACE_COLUMNS;
-    use jolt_claims::protocols::jolt::lattice::{one_hot_trace_columns, OneHotTraceShape};
-    use jolt_claims::protocols::jolt::{JoltFormulaDimensions, JoltOneHotDimensions};
 
     use crate::configs::{
         AkitaChunkProfile, JoltDenseBounded, JoltDenseFull, JoltOneHotK16Direct,
@@ -45,6 +41,12 @@ pub mod emit {
     pub const ONE_HOT_SCALAR_NUM_POLYS: &[usize] = &[1, 2];
     /// Bounded-dense advice and committed-program byte objects.
     pub const DENSE_NUM_VARS: (usize, usize) = (14, 35);
+
+    /// Admitted K=16 trace one-hot column counts: the widths of the RV64 zkVM's committed
+    /// one-hot trace over every bytecode (1–32 bits) and RAM (1–61 bits) size, as upstream's
+    /// `jolt-claims` geometry enumerated them at `f3265b5a`, capped at 64 columns.
+    pub const K16_TRACE_COLUMN_WIDTHS: [usize; 14] =
+        [51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64];
 
     /// First logical trace exponent using setup offloading.
     pub const RECURSIVE_TRACE_LOG_T_CUTOVER: usize = 21;
@@ -130,33 +132,7 @@ pub mod emit {
                 "unsupported one-hot K={one_hot_k}"
             )));
         }
-        let column_variables = K16_COLUMN_VARIABLES;
-        // RV64 lookup keys have two 64-bit operands. Bytecode PCs fit u32,
-        // and remapped RAM addresses are u64 byte addresses divided by eight.
-        let mut widths = BTreeSet::new();
-        for bytecode_bits in 1..=u32::BITS {
-            for ram_bits in 1..=u64::BITS - 3 {
-                let dimensions = JoltFormulaDimensions::try_from(JoltOneHotDimensions {
-                    log_t: 0,
-                    instruction_address_bits: 128,
-                    bytecode_k: 1usize << bytecode_bits,
-                    ram_k: 1usize << ram_bits,
-                    committed_chunk_bits: column_variables,
-                    lookup_virtual_chunk_bits: 32,
-                })
-                .map_err(|error| AkitaError::InvalidSetup(error.to_string()))?;
-                let columns = one_hot_trace_columns(&OneHotTraceShape {
-                    ra_layout: dimensions.ra_layout,
-                    log_t: 0,
-                    log_k_chunk: column_variables,
-                })
-                .map_err(|error| AkitaError::InvalidSetup(error.to_string()))?;
-                if columns.len() <= MAX_ONE_HOT_TRACE_COLUMNS {
-                    let _ = widths.insert(columns.len());
-                }
-            }
-        }
-        admitted.extend(keys(&widths.into_iter().collect::<Vec<_>>(), K16_NUM_VARS));
+        admitted.extend(keys(&K16_TRACE_COLUMN_WIDTHS, K16_NUM_VARS));
         let fixtures: &[(usize, usize)] = if profile == AkitaChunkProfile::new(1, 0) {
             &[(12, 1), (12, 2), (16, 1), (25, 1)]
         } else {

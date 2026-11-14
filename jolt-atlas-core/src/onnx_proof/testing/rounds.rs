@@ -10,9 +10,9 @@
 
 use atlas_algebra::field::fp128::Fp128 as Fr;
 use atlas_algebra::poly::{eq_poly::EqPolynomial, split_eq_poly::CHECK_GRUEN_ENDPOINTS};
+use atlas_claims::SymbolicSumcheck;
 use atlas_pcs::akita::AkitaScheme;
 use atlas_trace::{Model, Tensor};
-use jolt_claims::SymbolicSumcheck;
 use jolt_field::Ring;
 use jolt_sumcheck::ProveRounds;
 use num_traits::{One, Zero};

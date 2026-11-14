@@ -15,10 +15,10 @@ use atlas_algebra::{
     poly::multilinear_polynomial::EvaluateMle,
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_claims::{derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{op::Broadcast, Model, Tensor};
 use atlas_transcript::Transcript;
-use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 crate::impl_plan_op!(Broadcast, BroadcastRelation);

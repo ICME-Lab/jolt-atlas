@@ -1,7 +1,7 @@
 use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
+use atlas_claims::SymbolicSumcheck;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::max::*;
-use jolt_claims::SymbolicSumcheck;
 use std::array;
 
 use atlas_algebra::{

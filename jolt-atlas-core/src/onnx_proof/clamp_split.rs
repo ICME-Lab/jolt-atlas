@@ -25,6 +25,7 @@ use atlas_algebra::{
     },
     utils::thread::unsafe_allocate_zero_vec,
 };
+use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::booleanity::{prover::BooleanitySumcheckProver, BooleanitySumcheckParams};
 use atlas_sumcheck::digit_range::{prover::DigitRangeProver, DigitRangeParams};
 use atlas_sumcheck::relation::prover::DynRelationWitness;
@@ -33,7 +34,6 @@ use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 pub use jolt_atlas_verifier::onnx_proof::clamp_split::*;
-use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;

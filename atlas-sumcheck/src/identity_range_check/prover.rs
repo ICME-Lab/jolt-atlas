@@ -19,8 +19,8 @@ use atlas_algebra::{
         expanding_table::ExpandingTable, lookup_bits::LookupBits, thread::drop_in_background_thread,
     },
 };
+use atlas_claims::SymbolicSumcheck;
 use common::{parallel::par_enabled, VirtualPoly};
-use jolt_claims::SymbolicSumcheck;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use std::array;

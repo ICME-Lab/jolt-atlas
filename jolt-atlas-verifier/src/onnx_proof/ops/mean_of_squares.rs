@@ -60,13 +60,13 @@ use atlas_algebra::{
     poly::eq_poly::EqPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_claims::{constant, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::RaOneHotEncoding,
 };
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// Degree of the execution sumcheck.

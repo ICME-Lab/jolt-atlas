@@ -45,8 +45,8 @@ use atlas_algebra::{
         multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
     },
 };
+use atlas_claims::SymbolicSumcheck;
 use common::parallel::par_enabled;
-use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;

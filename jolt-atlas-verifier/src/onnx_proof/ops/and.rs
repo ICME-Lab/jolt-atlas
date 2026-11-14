@@ -20,7 +20,7 @@ impl OpPlan for And {
             Step::Reduce,
             Step::Relation {
                 proof: ProofType::Execution,
-                relation: OpRelation::And(<AndRelation as jolt_claims::SymbolicSumcheck>::new(
+                relation: OpRelation::And(<AndRelation as atlas_claims::SymbolicSumcheck>::new(
                     node.clone(),
                 )),
             },

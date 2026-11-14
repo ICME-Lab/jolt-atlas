@@ -19,6 +19,10 @@ use atlas_algebra::{
     field::{IntoOpening, JoltField},
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_claims::{
+    challenge, constant, derived, opening, Expr, NoChallenges, NoInputs, NoOutputs,
+    SymbolicSumcheck,
+};
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::RaOneHotEncoding,
@@ -26,10 +30,6 @@ use atlas_sumcheck::{
 use atlas_trace::{op::Rsqrt, trace::ModelExecutionIO, Model, Op};
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_claims::{
-    challenge, constant, derived, opening, Expr, NoChallenges, NoInputs, NoOutputs,
-    SymbolicSumcheck,
-};
 use jolt_field::Ring;
 
 /// Dividend `S³` of the fused rsqrt division relation, where `S = 2^scale` is the

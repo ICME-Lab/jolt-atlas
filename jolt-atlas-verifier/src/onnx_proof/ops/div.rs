@@ -18,6 +18,7 @@ use atlas_algebra::{
     field::{IntoOpening, JoltField},
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_claims::{derived, opening, Expr, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId},
     shout::RaOneHotEncoding,
@@ -25,7 +26,6 @@ use atlas_sumcheck::{
 use atlas_trace::op::Div;
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_claims::{derived, opening, Expr, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use jolt_field::Ring;
 
 impl OpLayout for Div {

@@ -72,6 +72,7 @@ use crate::onnx_proof::relation::{
 };
 use atlas_algebra::field::{IntoOpening, JoltField};
 use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::booleanity::{LinearClaim, LinearTerm};
 use atlas_sumcheck::digit_range::DigitRangeParams;
 use atlas_sumcheck::relation::DynRelationVerifier;
@@ -84,7 +85,6 @@ use atlas_sumcheck::{
 use atlas_trace::Model;
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// Bit width of the output range check (`out + 2^31 ∈ [0, 2^32)`).

@@ -11,9 +11,9 @@ use atlas_algebra::{
     poly::eq_poly::EqPolynomial,
     utils::{index_to_field_bitvector, math::Math},
 };
+use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use common::VirtualPoly;
-use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// Degree of the max-indicator sumcheck.

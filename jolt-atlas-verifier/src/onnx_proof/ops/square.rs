@@ -5,8 +5,8 @@ use crate::onnx_proof::{
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_claims::SymbolicSumcheck;
 use atlas_trace::{op::Square, trace::ModelExecutionIO, Model};
-use jolt_claims::SymbolicSumcheck;
 
 /// Element-wise square as a product relation.
 pub type SquareRelation = ProductRelation<Square>;

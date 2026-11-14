@@ -4,6 +4,9 @@ use std::{
     sync::Arc,
 };
 
+use super::kernels::{trace_commitment_capability, TraceOneHotColumnCommitOperation};
+use super::NO_SELECTED_ROW;
+use crate::AkitaField;
 use akita_error::AkitaError;
 use akita_pcs::custom_source::{
     AvailablePolynomialTypes, BackendKindId, CommitInnerPlan, CommitSourceClass,
@@ -11,11 +14,10 @@ use akita_pcs::custom_source::{
     PolynomialRepresentation, PolynomialTypeSelection, PreparedExternalInnerCommitment,
     RootOpeningSource, RootPolyMeta, RootPolyShape, SourceCoefficients,
 };
-use jolt_claims::protocols::jolt::lattice::strategy::MAX_ONE_HOT_TRACE_COLUMNS;
 
-use super::kernels::{trace_commitment_capability, TraceOneHotColumnCommitOperation};
-use super::NO_SELECTED_ROW;
-use crate::AkitaField;
+/// The most semantic columns a trace one-hot commits: one bit each in the `u64` row mask
+/// ([`TraceOneHotRows::committed_digit_zero_mask`]).
+pub(crate) const MAX_ONE_HOT_TRACE_COLUMNS: usize = u64::BITS as usize;
 
 /// Row-major source for the native columns in `OneHotTrace`.
 ///

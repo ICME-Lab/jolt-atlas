@@ -6,9 +6,9 @@ use atlas_algebra::{
         split_eq_poly::SplitEqUnreducedFold,
     },
 };
+use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::upstream_sumcheck::round_check_failed;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::recip_mult::*;
-use jolt_claims::SymbolicSumcheck;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 

@@ -2,8 +2,8 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::constant::{PublicRelation, PublicShape};
 use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
 use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_claims::SymbolicSumcheck;
 use atlas_trace::op::Input;
-use jolt_claims::SymbolicSumcheck;
 use std::sync::Arc;
 
 crate::impl_plan_op!(Input, PublicRelation<Input>);

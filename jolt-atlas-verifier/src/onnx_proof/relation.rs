@@ -1,4 +1,4 @@
-//! Op protocols written as symbolic relations ([`jolt_claims::SymbolicSumcheck`]) and the engine
+//! Op protocols written as symbolic relations ([`atlas_claims::SymbolicSumcheck`]) and the engine
 //! that proves and verifies them. The relation core (ids, setup, [`RelationVerifier`]) is
 //! `atlas_sumcheck::relation`, shared with the subprotocol relations; this module binds a
 //! relation to the op it proves.
@@ -32,11 +32,11 @@ use atlas_algebra::{
     },
     utils::errors::ProofVerifyError,
 };
+use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, PolynomialId, VerifierOpeningAccumulator};
 pub use atlas_sumcheck::relation::*;
 use atlas_trace::op::OpSpec;
 use atlas_transcript::Transcript;
-use jolt_claims::SymbolicSumcheck;
 
 /// An op protocol as a symbolic relation on one computation node.
 ///
@@ -97,9 +97,9 @@ macro_rules! atlas_relation_types {
         type OpeningId = $crate::onnx_proof::relation::RelationOpening;
         type DerivedId = $crate::onnx_proof::relation::RelationDerived;
         type ChallengeId = $crate::onnx_proof::relation::RelationChallenge;
-        type Challenges<C> = jolt_claims::NoChallenges<C>;
-        type Inputs<C> = jolt_claims::NoInputs<C>;
-        type Outputs<C> = jolt_claims::NoOutputs<C>;
+        type Challenges<C> = atlas_claims::NoChallenges<C>;
+        type Inputs<C> = atlas_claims::NoInputs<C>;
+        type Outputs<C> = atlas_claims::NoOutputs<C>;
     };
 }
 

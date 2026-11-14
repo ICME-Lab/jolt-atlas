@@ -73,6 +73,7 @@ use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_algebra::{
     field::JoltField, poly::opening_point::OpeningPoint, utils::errors::ProofVerifyError,
 };
+use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable},
     relu::ReluTable,
@@ -91,7 +92,6 @@ use atlas_trace::{
 };
 use atlas_transcript::Transcript;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
-use jolt_claims::SymbolicSumcheck;
 
 /// One thing the verifier does for a node.
 pub enum Step {

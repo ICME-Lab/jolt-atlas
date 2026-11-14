@@ -6,9 +6,9 @@ use crate::onnx_proof::relation::{
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
 use atlas_algebra::field::JoltField;
 use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_claims::{constant, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use common::VirtualPoly;
-use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// Degree of the exponentiation product sumcheck.

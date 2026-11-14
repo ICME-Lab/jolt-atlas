@@ -14,10 +14,10 @@ use atlas_algebra::{
     },
     utils::math::Math,
 };
+use atlas_claims::{constant, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
-use jolt_claims::{constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// Degree of the reciprocal-multiplication sumcheck.

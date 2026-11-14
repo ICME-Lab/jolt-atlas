@@ -21,10 +21,10 @@ use atlas_algebra::{
         signed_identity_poly::SignedIdentityPoly,
     },
 };
+use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
-use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use std::marker::PhantomData;
 

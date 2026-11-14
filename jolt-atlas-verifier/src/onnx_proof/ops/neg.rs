@@ -11,10 +11,10 @@ use crate::{
     utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_claims::{constant, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::op::{Identity, Neg, OpSpec};
 use atlas_transcript::Transcript;
-use jolt_claims::{constant, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use std::marker::PhantomData;
 

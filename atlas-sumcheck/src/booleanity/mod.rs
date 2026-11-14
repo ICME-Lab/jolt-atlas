@@ -15,7 +15,7 @@ use crate::{
     },
 };
 use atlas_algebra::{field::JoltField, poly::eq_poly::EqPolynomial};
-use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
+use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// Degree bound of the sumcheck round polynomials in [`BooleanityRelation`].

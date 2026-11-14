@@ -21,7 +21,7 @@ jolt-atlas-verifier.workspace = true
 jolt-field.workspace = true
 jolt-poly.workspace = true
 jolt-sumcheck.workspace = true
-jolt-claims.workspace = true
+atlas-claims.workspace = true
 
 # Cryptography and Math
 ark-std.workspace = true

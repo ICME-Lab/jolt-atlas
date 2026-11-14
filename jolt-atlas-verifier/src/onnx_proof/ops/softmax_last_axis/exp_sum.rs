@@ -7,10 +7,10 @@ use crate::onnx_proof::relation::{
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{field::JoltField, poly::eq_poly::EqPolynomial, utils::math::Math};
+use atlas_claims::{derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
-use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// Degree of the exp-sum sumcheck.

@@ -19,13 +19,13 @@ use atlas_algebra::{
     },
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{
     OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator,
 };
 use atlas_trace::{trace::ModelExecutionIO, Model, Op};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
-use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// Gather over a large dictionary (read-raf lookup).

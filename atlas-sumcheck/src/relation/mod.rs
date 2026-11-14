@@ -1,4 +1,4 @@
-//! Sumcheck instances written as symbolic relations ([`jolt_claims::SymbolicSumcheck`]) over atlas
+//! Sumcheck instances written as symbolic relations ([`atlas_claims::SymbolicSumcheck`]) over atlas
 //! openings, and the verifier derived from them.
 //!
 //! A relation declares its **input-claim expression** (the claimed sum, from openings at the
@@ -36,9 +36,9 @@ use atlas_algebra::{
     },
     utils::errors::ProofVerifyError,
 };
+use atlas_claims::{Expr, Source, SymbolicSumcheck};
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
-use jolt_claims::{Expr, Source, SymbolicSumcheck};
 
 /// An opening a relation reads or produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -498,8 +498,8 @@ macro_rules! relation_types {
         type OpeningId = $crate::relation::RelationOpening;
         type DerivedId = $crate::relation::RelationDerived;
         type ChallengeId = $crate::relation::RelationChallenge;
-        type Challenges<C> = jolt_claims::NoChallenges<C>;
-        type Inputs<C> = jolt_claims::NoInputs<C>;
-        type Outputs<C> = jolt_claims::NoOutputs<C>;
+        type Challenges<C> = atlas_claims::NoChallenges<C>;
+        type Inputs<C> = atlas_claims::NoInputs<C>;
+        type Outputs<C> = atlas_claims::NoOutputs<C>;
     };
 }

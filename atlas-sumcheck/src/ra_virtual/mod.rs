@@ -16,8 +16,8 @@ use atlas_algebra::{
         opening_point::{OpeningPoint, BIG_ENDIAN},
     },
 };
+use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use common::CommittedPoly;
-use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use rayon::prelude::*;
 

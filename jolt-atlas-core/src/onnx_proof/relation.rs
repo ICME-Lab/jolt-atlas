@@ -1,4 +1,4 @@
-//! Op protocols written as symbolic relations ([`jolt_claims::SymbolicSumcheck`]) and the engine
+//! Op protocols written as symbolic relations ([`atlas_claims::SymbolicSumcheck`]) and the engine
 //! that proves and verifies them.
 //!
 //! A relation declares, over atlas openings, its **input-claim expression** (the claimed sum,
@@ -29,6 +29,7 @@ use atlas_algebra::{
         split_eq_poly::SplitEqUnreducedFold,
     },
 };
+use atlas_claims::Source;
 use atlas_sumcheck::{
     opening_proof::{prover::ProverOpeningAccumulator, OpeningAccumulator, OpeningId},
     upstream_sumcheck::round_check_failed,
@@ -37,7 +38,6 @@ use atlas_trace::Trace;
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::relation::*;
-use jolt_claims::Source;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
@@ -51,9 +51,9 @@ macro_rules! atlas_relation_types {
         type OpeningId = $crate::onnx_proof::relation::RelationOpening;
         type DerivedId = $crate::onnx_proof::relation::RelationDerived;
         type ChallengeId = $crate::onnx_proof::relation::RelationChallenge;
-        type Challenges<C> = jolt_claims::NoChallenges<C>;
-        type Inputs<C> = jolt_claims::NoInputs<C>;
-        type Outputs<C> = jolt_claims::NoOutputs<C>;
+        type Challenges<C> = atlas_claims::NoChallenges<C>;
+        type Inputs<C> = atlas_claims::NoInputs<C>;
+        type Outputs<C> = atlas_claims::NoOutputs<C>;
     };
 }
 

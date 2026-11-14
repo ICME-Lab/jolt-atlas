@@ -134,6 +134,7 @@ use crate::onnx_proof::{
     ProofId,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider, Target};
+use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable},
     relu::ReluTable,
@@ -149,7 +150,6 @@ use atlas_sumcheck::shout::{self, RaOneHotEncoding, RaOneHotParams};
 use atlas_trace::trace::LayerData;
 use common::consts::{TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS, XLEN};
 use common::{CommittedPoly, VirtualPoly};
-use jolt_claims::SymbolicSumcheck;
 use rayon::prelude::*;
 
 use crate::onnx_proof::Prover;

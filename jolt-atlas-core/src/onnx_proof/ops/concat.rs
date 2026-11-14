@@ -5,8 +5,8 @@ use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, RelationWitnesse
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
 use atlas_algebra::utils::math::Math;
+use atlas_claims::SymbolicSumcheck;
 use atlas_trace::{trace::LayerData, Trace};
-use jolt_claims::SymbolicSumcheck;
 
 impl<F: JoltField> RelationWitnesses<F> for ConcatRelation {
     fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {

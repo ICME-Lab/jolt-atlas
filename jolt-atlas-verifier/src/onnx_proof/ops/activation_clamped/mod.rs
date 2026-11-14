@@ -26,6 +26,7 @@ use atlas_algebra::{
     poly::opening_point::{OpeningPoint, BIG_ENDIAN},
     utils::errors::ProofVerifyError,
 };
+use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
@@ -36,7 +37,6 @@ use common::{
     consts::{ACTIVATION_TABLE_VARS, XLEN},
     CommittedPoly, VirtualPoly,
 };
-use jolt_claims::SymbolicSumcheck;
 
 /// Degree of the small-table execution sumcheck.
 pub const EXEC_DEGREE_BOUND: usize = 2;

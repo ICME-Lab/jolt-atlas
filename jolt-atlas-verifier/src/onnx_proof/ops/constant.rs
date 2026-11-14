@@ -12,13 +12,13 @@ use crate::{
 use atlas_algebra::{
     field::JoltField, poly::multilinear_polynomial::EvaluateMle, utils::errors::ProofVerifyError,
 };
+use atlas_claims::{derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{
     op::{Constant, OpSpec},
     Tensor,
 };
 use atlas_transcript::Transcript;
-use jolt_claims::{derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use std::{marker::PhantomData, sync::Arc};
 

@@ -20,10 +20,10 @@ use crate::{
 use atlas_algebra::{
     field::JoltField, poly::multilinear_polynomial::BindingOrder, utils::math::Math,
 };
+use atlas_claims::{opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
-use jolt_claims::{opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// A sum node with its normalized 2D shape and axis.

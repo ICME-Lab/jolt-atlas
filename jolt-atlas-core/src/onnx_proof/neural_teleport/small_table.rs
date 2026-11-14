@@ -13,6 +13,7 @@ use atlas_algebra::{
         },
     },
 };
+use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::{
     opening_proof::prover::ProverOpeningAccumulator, relation::prover::RelationWitness,
 };
@@ -21,7 +22,6 @@ use common::parallel::par_enabled;
 #[cfg(test)]
 use common::VirtualPoly;
 pub use jolt_atlas_verifier::onnx_proof::neural_teleport::small_table::*;
-use jolt_claims::SymbolicSumcheck;
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;

@@ -17,7 +17,7 @@ impl OpPlan for Identity {
             Step::Reduce,
             Step::Tie {
                 relation: OpTie::Identity(
-                    <SignedCopyRelation<Identity> as jolt_claims::SymbolicSumcheck>::new(
+                    <SignedCopyRelation<Identity> as atlas_claims::SymbolicSumcheck>::new(
                         node.clone(),
                     ),
                 ),

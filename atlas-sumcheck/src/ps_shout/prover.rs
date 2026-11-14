@@ -18,13 +18,13 @@ use atlas_algebra::{
         thread::{drop_in_background_thread, unsafe_allocate_zero_vec},
     },
 };
+use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
     prefixes::{PrefixCheckpoints, PrefixEval, Prefixes},
     JoltLookupTable, PrefixSuffixDecompositionTrait,
 };
 use common::parallel::par_enabled;
 use itertools::Itertools;
-use jolt_claims::SymbolicSumcheck;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use std::array;

@@ -25,9 +25,9 @@ use atlas_algebra::{
     },
     utils::{expanding_table::ExpandingTable, math::Math},
 };
+use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use common::parallel::par_enabled;
 use common::CommittedPoly;
-use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use jolt_poly::GruenSplitEqPolynomial;
 use rayon::prelude::*;

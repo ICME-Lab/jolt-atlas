@@ -20,10 +20,10 @@ use atlas_algebra::{
     },
     utils::thread::unsafe_allocate_zero_vec,
 };
+use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use rayon::prelude::*;
 

@@ -17,9 +17,9 @@ use atlas_algebra::{
     },
     utils::{lookup_bits::LookupBits, thread::unsafe_allocate_zero_vec},
 };
+use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use common::{parallel::par_enabled, VirtualPoly};
-use jolt_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 use jolt_poly::GruenSplitEqPolynomial;
 use rayon::prelude::*;

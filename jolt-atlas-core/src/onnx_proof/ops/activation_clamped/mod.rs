@@ -17,9 +17,9 @@ use crate::onnx_proof::neural_teleport::small_table::SmallTableRelation;
 use crate::onnx_proof::relation::{
     RelationChallenge, RelationParams, RelationSetup, RelationWitness,
 };
+use atlas_claims::SymbolicSumcheck;
 use atlas_trace::{trace::LayerData, Trace};
 pub use jolt_atlas_verifier::onnx_proof::ops::activation_clamped::*;
-use jolt_claims::SymbolicSumcheck;
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::neural_teleport::{n_bits_to_usize, utils::compute_ra_evals_nbits_2comp};

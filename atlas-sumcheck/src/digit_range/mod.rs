@@ -39,9 +39,9 @@ use crate::{
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
-use jolt_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
 /// The challenge id of `β`, the recomposition's coefficient.

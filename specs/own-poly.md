@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-14                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          | (filled when the PR opens, or at merge) |
 | Depends on  | `specs/own-transcript.md` (phase 4); `specs/own-sumcheck-engine.md` (the engine is the main `UnivariatePoly` consumer) |
 | Supersedes  | `third_party/PINS.md` sections `jolt-poly`, `jolt-utils`; `specs/adoption-program.md` stage 4b's "operand polynomials stay ours" split |

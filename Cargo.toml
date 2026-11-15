@@ -19,8 +19,7 @@ members = [
     "jolt-atlas-core",
     "jolt-atlas-verifier",
     "third_party/jolt-field",
-    "third_party/jolt-poly",
-    "third_party/jolt-utils",
+    "jolt-poly",
     "atlas-trace",
     "atlas-onnx-import",
     "common",
@@ -44,10 +43,8 @@ atlas-sumcheck = { path = "./atlas-sumcheck", default-features = false }
 atlas-claims = { path = "./atlas-claims" }
 atlas-pcs = { path = "./atlas-pcs", default-features = false }
 jolt-atlas-verifier = { path = "./jolt-atlas-verifier" }
-# Vendored upstream crates (third_party/PINS.md records each pin).
+# Vendored upstream crate (third_party/PINS.md records the pin).
 jolt-field = { path = "./third_party/jolt-field", default-features = false }
-jolt-utils = { path = "./third_party/jolt-utils" }
-jolt-poly = { path = "./third_party/jolt-poly", default-features = false }
 
 # Cryptography and Math
 ark-serialize = { version = "0.5.0", default-features = false, features = [
@@ -199,8 +196,8 @@ ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist
 ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
 
-# The Akita crates depend on jolt-field and jolt-poly by git; resolve them to the vendored copies
-# so the graph holds one of each (as upstream's own workspace does).
+# The Akita crates depend on jolt-field and jolt-poly by git; resolve them to the vendored field and
+# to the owned jolt-poly compatibility package, so the graph holds one of each.
 [patch."https://github.com/a16z/jolt"]
 jolt-field = { path = "./third_party/jolt-field" }
-jolt-poly = { path = "./third_party/jolt-poly" }
+jolt-poly = { path = "./jolt-poly" }

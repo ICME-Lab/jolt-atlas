@@ -83,14 +83,17 @@ Workspace members, in dependency order:
 
 - **common** — shared constants and parallel helpers.
 - **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
-  (`third_party/PINS.md`): `jolt-field`, `jolt-utils` and `jolt-poly`.
+  (`third_party/PINS.md`): `jolt-field`.
   Vendoring is transitional: a crate atlas takes over becomes an atlas crate (`docs/roadmap.md`).
 - The proof-system toolkit inherited from Jolt, in dependency order:
   - **atlas-algebra** — `field` (`JoltField`, which extends upstream `jolt_field::JoltField`
     and adds the unreduced-product ladder and challenge types; `field::fp128`, the 128-bit
-    Solinas field, is the one implementation), `poly` (multilinear polynomials, opening points)
-    and `utils`. Fields and polynomials share a crate because `MultilinearPolynomial`'s `From`
-    impls overlap unless `JoltField` is local.
+    Solinas field, is the one implementation), `poly` (the one polynomial library: multilinear
+    operand polynomials, `EqPolynomial`, the Gruen `split_eq`, the `univariate` round messages
+    `UnivariatePoly`/`CompressedPoly`, opening points) and `utils`. Fields and polynomials share
+    a crate because `MultilinearPolynomial`'s `From` impls overlap unless `JoltField` is local.
+  - **jolt-poly** (root) — owned compatibility package: re-exports the four univariate types the
+    external `akita-*` crates bind as `jolt_poly::*`; the root `[patch]` points them here.
   - **atlas-transcript** — the Fiat-Shamir transcript (taken from upstream `jolt-transcript`):
     one `Transcript` trait; the prover uses a `ProvingTranscript` (spongefish `ProverState`,
     proof-of-work grinding behind the `prover` feature), the verifier a `VerifyingTranscript`
@@ -117,7 +120,7 @@ Workspace members, in dependency order:
   `relation::prover::prove_relation{,_batch,_batch_parallel}` over `RelationWitness`es, both
   driving `atlas_sumcheck::engine` (`prove_batch`, `verify_compressed`), which grinds before
   each challenge. A `RelationWitness` extends the engine's `ProveRounds`, so
-  every prover computes its own round messages (upstream `UnivariatePoly`) over upstream's
+  every prover computes its own round messages (`UnivariatePoly`) over
   `GruenSplitEqPolynomial`, while its relation supplies the degree, input claim and opening
   appends; Gruen rounds go through
   `atlas_algebra::poly::split_eq::SplitEqUnreducedFold`, which takes the relation at the endpoint the

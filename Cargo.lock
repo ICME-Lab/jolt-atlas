@@ -491,8 +491,6 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-poly",
- "jolt-utils",
  "memory-stats",
  "num",
  "num-derive",
@@ -542,8 +540,6 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-poly",
- "jolt-utils",
  "memory-stats",
  "num",
  "num-derive",
@@ -605,8 +601,6 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-poly",
- "jolt-utils",
  "memory-stats",
  "num",
  "num-derive",
@@ -650,8 +644,6 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-poly",
- "jolt-utils",
  "memory-stats",
  "num",
  "num-derive",
@@ -707,8 +699,6 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-poly",
- "jolt-utils",
  "memory-stats",
  "num",
  "num-derive",
@@ -1561,7 +1551,6 @@ dependencies = [
  "itertools 0.10.5",
  "jolt-atlas-verifier",
  "jolt-field",
- "jolt-poly",
  "num",
  "num-derive",
  "num-traits",
@@ -1597,7 +1586,6 @@ dependencies = [
  "derive_more",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-poly",
  "num-derive",
  "num-traits",
  "serde",
@@ -1631,27 +1619,7 @@ dependencies = [
 name = "jolt-poly"
 version = "0.1.0"
 dependencies = [
- "allocative",
- "bincode",
- "jolt-field",
- "jolt-utils",
- "num-traits",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
- "rayon",
- "serde",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "jolt-utils"
-version = "0.1.0"
-dependencies = [
- "jolt-field",
- "num-traits",
- "rayon",
+ "atlas-algebra",
 ]
 
 [[package]]

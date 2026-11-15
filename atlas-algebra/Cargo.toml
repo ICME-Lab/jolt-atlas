@@ -24,8 +24,6 @@ ark-std.workspace = true
 sha3 = "0.10.8"
 blake2 = "0.10"
 jolt-field = { workspace = true, features = ["solinas", "asm"] }
-jolt-utils.workspace = true
-jolt-poly = { workspace = true, features = ["parallel"] }
 bincode.workspace = true
 spongefish = { version = "=0.8.0", default-features = false, features = ["keccak"] }
 
@@ -44,7 +42,7 @@ rand_core.workspace = true
 rand_distr = "0.4.3"
 
 # Tracing and Profiling
-tracing.workspace = true
+tracing = { workspace = true, features = ["attributes"] }
 inferno = { version = "0.12.3", optional = true }
 allocative.workspace = true
 

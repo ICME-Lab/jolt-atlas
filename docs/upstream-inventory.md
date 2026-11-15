@@ -32,7 +32,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 | `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | adopt (stage 2: vendored) | `jolt-field` is vendored at `0e3faf07`. Since stage 4b's first PR our `JoltField` extends upstream `jolt_field::JoltField` (colliding methods resolve to upstream's), so upstream crates accept every atlas field. Since stage 7b `Fp128` is the only implementation: the BN254 impl, its arkworks kernel, `TrackedFr` and the `challenge/` types (`MontU128Challenge`, `Mont254BitChallenge`) are deleted. The atlas extension (ladder, codec field) remains. |
 | `transcripts/` (blake2b, keccak) | `jolt-transcript` | owned (`specs/own-transcript.md`) | `atlas-transcript` holds upstream's split surface (`ProverState`/`VerifierState` traits, codecs, `grind`) under our `Transcript` trait; see "The transcript owned" below. |
 | `subprotocols/sumcheck{,_prover,_verifier}.rs` | `jolt-sumcheck` | adopt+delta (stage 4b) | Heavily diverged both ways (~842 changed lines vs the 2026-06 jolt-core copy); our batching and instance traits vs their scheduler/recorder. Upstream takes the facade `T: Transcript<Challenge = F>` (no proof-of-work hook, full-field challenges); our rounds grind (stage 3) and bind with the 125-bit `MontU128Challenge`. Both are met without a vendored delta (`subprotocols/upstream_sumcheck.rs`: a facade view that grinds before each challenge, and `JoltField::challenge_from_field`). The batched driver runs on upstream's engine, and `SumcheckInstanceProver` extends upstream's `ProveRounds`: every instance proves its own rounds, and the trait keeps only the claim lifecycle (degree, input claim, cached openings) that stage 5 replaces. |
-| `poly/` core (dense, multilinear, eq, split_eq, unipoly, compact, lagrange, …) | `jolt-poly` | adopt+delta (stage 4b) | Round kernels run on upstream's `GruenSplitEqPolynomial` and round messages are upstream `UnivariatePoly`s; ours is retired, and `poly/split_eq.rs` keeps only atlas extensions over upstream's (the delayed-reduction fold, Gruen round helpers with endpoint closures). The operand polynomials stay ours (`MultilinearPolynomial`, `RaPolynomial`): they bind with the 125-bit challenge and keep the compact small-scalar layouts, about a quarter faster per bind than `jolt-poly`'s full-field dense binding (2²² evaluations: ~11 ms vs ~15 ms). `UniPoly`/`CompressedUniPoly` remain as the proof's wire form. |
+| `poly/` core (dense, multilinear, eq, split_eq, univariate, compact, lagrange, …) | `jolt-poly` | owned, merged (`specs/own-poly.md`) | One library, one type per concept; see "The polynomial library owned" below. The operand polynomials are ours (`MultilinearPolynomial`, `RaPolynomial`): they bind with the 125-bit challenge and keep the compact small-scalar layouts, about a quarter faster per bind than `jolt-poly`'s full-field dense binding (2²² evaluations: ~11 ms vs ~15 ms). |
 | `poly/opening_proof.rs`, `subprotocols/opening_reduction.rs` | `jolt-openings` + `jolt-claims` | relation layer owned in `atlas-claims`, store atlas-only (stage 5 spike) | Ours is fully diverged (~2,074 changed lines of 1,636): the accumulator is keyed on atlas `OpeningId`/`VirtualPoly` and interleaved with evaluation reduction. The stage 5 spike found no claim store to adopt at `f3265b5a`: `jolt-claims` is transcript-free (the `Expr`/`SymbolicSumcheck` layer plus typed claim structs) and `jolt-openings` is stateless PCS traits; the store, transcript wiring and `ConcreteSumcheck` driver live in `jolt-verifier`, bound to the zkVM's stage graph. Atlas relations (`onnx_proof/relation.rs`) are `SymbolicSumcheck`s over atlas openings, run by an atlas engine on the atlas accumulator. The claim-struct traits (`InputClaims`/`OutputClaims` and their derives) are not used: they assume a static opening vocabulary, and atlas opening ids are graph-indexed. The relation layer is owned in `atlas-claims`, taken from `jolt-claims` at `f3265b5a` (`src/{claims,claim_data,symbolic,ops,sumcheck}.rs`; `specs/atlas-claims.md`): the diff base for a later upstream pull is those five files at that rev. The vendored crate and its RISC-V cone (`jolt-riscv`, `jolt-lookup-tables`, `jolt-r1cs`, `jolt-claims-derive`) are deleted. |
 | `subprotocols/evaluation_reduction.rs` | — | atlas-only | Node-output multi-consumer reduction; ONNX-graph-specific. |
 | `poly/commitment/{commitment_scheme,dory,hyperkzg,pedersen,mock}` | `jolt-akita` (+ `jolt-openings` traits) | retired (BN254, stage 7b) / adopted (Akita, stage 7a) / owned in `atlas-pcs` (`specs/own-pcs-adapter.md`) | `dory` and `hyperkzg` were BN254-only and are deleted at stage 7b, never vendored; `pedersen` was deleted with `zk` at stage 0 (nothing else used it). Akita arrived at stage 7a from the `akita-adapter` branch's `AkitaScheme`; `mock` stays as a test PCS. |
@@ -41,7 +41,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 | `subprotocols/univariate_skip.rs` | `jolt-sumcheck` (`prove_uniskip_*`, `CenteredIntegerDomain`) | retired (stage 4b) | It had no callers and is deleted; a protocol that needs a uni-skip first round uses upstream's. |
 | `subprotocols/blindfold/` | — | retired (stage 0) | Deleted with the `zk` feature at stage 0. Upstream `jolt-blindfold` is Dory/BN254-only; zero-knowledge returns as lattice zk, a separate effort. |
 | `lookup_tables/` framework (prefix/suffix traits), `utils/lookup_bits.rs`, `poly/prefix_suffix.rs` | `jolt-lookup-tables` (`LookupBits`, prefix/suffix) | atlas-only (decided at stage 4b) | Framework is shared ancestry; **contents are atlas-only** (relu, clamp, sat_val vs their RISC-V instruction tables). At `f3265b5a` the upstream crate depends on `jolt-riscv` (and `tracer` for its tests), so adopting the framework would vendor the RISC-V ISA into a zkML prover; the Shout provers moved onto the engine (stage 4b) and keep our framework. |
-| `utils/thread.rs` (`unsafe_allocate_zero_vec`) | `jolt-utils` | adopted (stage 4a) | Re-exported from `jolt-utils`; `drop_in_background_thread` stays atlas-only. |
+| `utils/thread.rs` (`unsafe_allocate_zero_vec`) | `jolt-utils` | owned (`specs/own-poly.md`) | Taken from `jolt-utils` at `f3265b5a` (`src/alloc.rs`, with its tests); `drop_in_background_thread` is atlas-only. |
 | `utils/math.rs` (`Math`) | `jolt-utils::Math` | atlas-only delta | Ours rejects `log_2` of a non-power of two and adds `ceil_log_2`; upstream's `log_2` silently rounds up. Kept as a guard. |
 | `utils/{accumulation,small_scalar}.rs` | — (upstream accumulators live in `jolt-field`) | atlas-only (decided at stage 4b) | The small/medium/wide signed accumulators and small-scalar multiplication serve our compact operand polynomials, which stay ours at stage 4b (their 125-bit-challenge binding beats `jolt-poly`'s; see the `poly/` row), and the round kernels' delayed reduction runs on our `JoltField` ladder. They go if the operand polynomials move to `jolt-poly`. |
 | `utils/{profiling,monitor}.rs` | — | atlas-only | Benchmark instrumentation (flamegraphs, `monitor` feature). `utils/counters.rs` (the `TrackedFr` operation counters) was retired with BN254 at stage 7b. |
@@ -233,8 +233,31 @@ codec and `atlas-transcript` depends on `atlas-algebra`. Diverged from that base
   (`akita_challenge`, and `PrefixPackedLayout::reduce_claims` takes a per-variable draw), and
   drops the facade's zero-bit proof of work (a no-op on the sponge).
 
-`blake2 0.11.0-rc.6` stays (spongefish 0.8's `Hash` bridge takes a `digest 0.11` hash);
-`jolt-poly`'s `transcript` feature is declared empty (`third_party/PINS.md`).
+`blake2 0.11.0-rc.6` stays (spongefish 0.8's `Hash` bridge takes a `digest 0.11` hash).
+
+## The polynomial library owned (`specs/own-poly.md`)
+
+`atlas-algebra::poly` holds what atlas used of upstream `jolt-poly` at `f3265b5a`
+(`crates/jolt-poly/src`), merged into the atlas modules (renamed without the `_poly` suffix):
+
+- `univariate.rs`: `univariate.rs`, `compressed_univariate.rs` and `omitted_constant.rs`, bounded
+  on upstream's `jolt_field::Field` because `akita-*` binds them. They replace atlas's
+  `UniPoly`/`CompressedUniPoly`: the proof carries `CompressedPoly` and evaluation reduction's
+  `UnivariatePoly` with the old `CanonicalSerialize` layout (the coefficient vector), and the
+  polynomial product keeps atlas's trailing-zero trimming, which `h`'s bytes depend on.
+  Interpolation is upstream's Newton form. Not taken: `evaluate_basis`, `decompress`.
+- `split_eq.rs`: `GruenSplitEqPolynomial` on atlas's `EqPolynomial` and `BindingOrder`, with the
+  methods atlas calls; `merge` returns the eq table. Not taken: `TensorEqTable`,
+  `new_with_scaling`, the window helpers.
+- `eq.rs`: `evals_parallel` takes upstream's radix-4 kernel; `eq_index_msb` joins it.
+- `point.rs`: `OpeningPoint` absorbs `Point`; `EvaluationClaim` joins it.
+- Not taken: `dense.rs` (`Polynomial`), `multilinear.rs` (`MultilinearPoly`), `one_hot.rs`,
+  `lagrange.rs`, `lt.rs`, `identity.rs`, `eq_plus_one.rs`, `mle.rs`, `binding.rs`. The Akita
+  backend, their one user, commits and opens from evaluation slices and hot-index columns.
+
+The root `jolt-poly` package re-exports the `univariate` types under the name `akita-*`
+depends on. A later upstream pull diffs `crates/jolt-poly` from `f3265b5a` across these
+merges.
 
 ## BN254 removal (stage 7b)
 

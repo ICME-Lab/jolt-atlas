@@ -34,8 +34,8 @@ pinned rev, MIT/Apache) are treated the same way for now; see "Open decisions".
 | `jolt-crypto` | 5,459 | the `Commitment` trait (BN254 code off) | none | 2 (deleted) |
 | `jolt-sumcheck` | 4,913 | `prove_batch`, `verify_compressed`, `ProveRounds`, recorder | `atlas-sumcheck::upstream_sumcheck` facade, `sumcheck/` | 3 (owned: `atlas-sumcheck::engine`) |
 | `jolt-transcript` | 2,719 | spongefish prover/verifier states, codecs, grinding | `atlas-transcript` (thin layer) | 4 (owned: `atlas-transcript`) |
-| `jolt-poly` | 6,365 | `UnivariatePoly`, `GruenSplitEqPolynomial`, `CompressedPoly`, binding order | `atlas-algebra::poly` (8,067 lines) | 5 |
-| `jolt-utils` | 353 | one allocator helper | `atlas-algebra::utils` | 5 |
+| `jolt-poly` | 6,365 | `UnivariatePoly`, `GruenSplitEqPolynomial`, `CompressedPoly`, binding order | `atlas-algebra::poly` (8,067 lines) | 5 (owned: `atlas-algebra::poly`; root `jolt-poly/` re-exports the `akita-*` surface) |
+| `jolt-utils` | 353 | one allocator helper | `atlas-algebra::utils` | 5 (owned: `atlas-algebra::utils::thread`) |
 | `jolt-field` | 11,227 | Solinas Fp128 kernels (`Prime128OffsetA7F7`), `Ring`/`Field`, accumulators | `atlas-algebra::field` (`JoltField` extends upstream's; `Fp128` newtype) | 6 |
 | arkworks fork pin (`ark-ff`, `ark-serialize`, `ark-std`) | external | `CanonicalSerialize` in 38 files, `BigInt`, signed ints, `test_rng` | — | 7 |
 
@@ -56,7 +56,7 @@ the spec says otherwise.
 4. **Transcript** — `specs/own-transcript.md`. `jolt-transcript`'s split prover/verifier
    states, codecs and grinding become `atlas-transcript`. Status: implemented on `dev`.
 5. **Polynomials** — `specs/own-poly.md`. One polynomial library: `jolt-poly` and
-   `atlas-algebra::poly` merge, `jolt-utils` folds in. Status: proposed.
+   `atlas-algebra::poly` merge, `jolt-utils` folds in. Status: implemented on `dev`.
 6. **Field** — `specs/own-field.md`. One field crate: the Solinas kernels and one trait;
    the `Fp128` newtype and the two-layer `JoltField` go. Status: proposed.
 7. **arkworks** — `specs/drop-arkworks.md`. Our own canonical serialization and big-integer
@@ -82,8 +82,8 @@ repository root. Renaming them is possible only after the akita decision below.
 - **Fork `akita-*` or keep it external?** Forking brings 275,000 lines in-house for a PCS we
   do not currently modify; keeping it external means `jolt-field`/`jolt-poly` keep their
   package names and the API surface `akita-*` imports (`Prime`, `ExtField`, `Unreduced`,
-  `Fold`, `solinas::parallel`, `UnivariatePoly`, `OmittedConstantPoly`, `MultilinearPoly`,
-  `OneHotPolynomial`, `Point`). Recommendation: external until we need to change it; a thin
+  `Fold`, `solinas::parallel`, `UnivariatePoly`, `CompressedPoly`, `OmittedConstantPoly`,
+  `UnivariatePolynomial`). Recommendation: external until we need to change it; a thin
   compatibility surface in our owned crates is cheaper than owning a PCS. Revisit when the
   in-house lattice zk work starts (`lattice-only-end-state` in the team notes).
 - **Where owned crates live.** Phase 1 puts `atlas-claims` at the root beside the other

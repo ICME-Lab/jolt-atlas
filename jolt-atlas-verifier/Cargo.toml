@@ -18,7 +18,6 @@ atlas-sumcheck.workspace = true
 atlas-pcs.workspace = true
 atlas-claims.workspace = true
 jolt-field.workspace = true
-jolt-poly.workspace = true
 ark-serialize.workspace = true
 ark-std.workspace = true
 derive_more.workspace = true

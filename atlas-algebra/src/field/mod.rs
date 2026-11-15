@@ -384,8 +384,8 @@ pub mod fp128;
 mod tests {
     use super::JoltField;
 
-    /// Upstream crates (`jolt-poly`, the `akita-*` crates) bound on `jolt_field::JoltField`; every
-    /// `JoltField`, generic or concrete, must satisfy it.
+    /// The `akita-*` crates and the `univariate` types they bind are bounded on upstream's field
+    /// traits; every `JoltField`, generic or concrete, must satisfy them.
     fn upstream_accepts<F: JoltField>() {
         fn upstream_bound<G: jolt_field::JoltField>() {}
         upstream_bound::<F>();

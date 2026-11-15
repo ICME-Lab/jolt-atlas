@@ -15,10 +15,11 @@ A verdict of `jolt_atlas_verifier::onnx_proof::verify` depends on:
 | `atlas-claims` | all of it: `SymbolicSumcheck`, the `Expr` algebra and its evaluation, the claim-data traits |
 | `atlas-pcs` | `CommitmentScheme::{setup_verifier, verify, verify_rlc}` and the `akita` implementation of them, including `akita::backend` (the adapter over `akita-*`) and `openings` |
 | `atlas-transcript` | `VerifyingTranscript`, the sponge and the spongefish verifier surface under it (`VerifierTranscript`, session setup, the proof-of-work check, the challenge sponges), and `words` |
-| `atlas-algebra` | `field::fp128`, multilinear evaluation, `EqPolynomial`, opening points |
+| `atlas-algebra` | `field::fp128`, multilinear evaluation, `EqPolynomial`, opening points, `univariate` (`CompressedPoly` round messages, evaluation reduction's `UnivariatePoly`) |
 | `atlas-lookup-tables` | table evaluation (`evaluate_mle`) and the prefix-suffix decompositions |
 | `atlas-trace` | `Model` and its ops, `ModelExecutionIO`, `Tensor`, and `semantics` (the table generators). Not `Trace` or the executor. |
-| `third_party/` | `jolt-poly`, `jolt-field`, `jolt-utils`, and LayerZero's `akita-*` crates by git |
+| `jolt-poly` (root) | the four `atlas-algebra::poly::univariate` re-exports `akita-*` binds; no code |
+| `third_party/` | `jolt-field`, and LayerZero's `akita-*` crates by git |
 
 The crate has no prover code. Three mechanisms hold that:
 

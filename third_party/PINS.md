@@ -8,14 +8,13 @@ upstream diff between the old and new rev. A crate atlas takes over leaves `thir
 becomes an atlas crate; `docs/upstream-inventory.md` records its provenance (so far
 `atlas-claims`, the relation layer of `jolt-claims`; `atlas-pcs`'s `akita::backend` and
 `openings`, from `jolt-akita` and `jolt-openings`; `atlas-sumcheck::engine`, from
-`jolt-sumcheck`; and `atlas-transcript`, from `jolt-transcript`). `specs/adoption-program.md`
+`jolt-sumcheck`; `atlas-transcript`, from `jolt-transcript`; and `atlas-algebra::poly` and
+`::utils`, which absorbed `jolt-poly` and `jolt-utils`). `specs/adoption-program.md`
 owns the adoption order; `docs/upstream-inventory.md` records the divergence each stage resolves.
 
 | Crate | Upstream rev | Date | Adopted at | Local delta |
 |---|---|---|---|---|
 | `jolt-field` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 2 (bumped from `0e3faf07` at stage 3) | Manifest only (below) |
-| `jolt-utils` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4a | Manifest only (below) |
-| `jolt-poly` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4b | Manifest only (below): `transcript` feature empty |
 
 ## The arkworks fork pin
 
@@ -48,25 +47,13 @@ proof-of-work are newer than `0e3faf07`) share one rev; the upstream diff is
 dependency and the `binary`, `bytemuck` and `fp64-proof-linkage` features, carried into the
 manifest as upstream declares them. `akita-adapter` must take the same bump when it rebases.
 
-## `jolt-utils`
-
-`src/` is byte-identical to `crates/jolt-utils` at the pinned rev. The manifest resolves
-workspace inheritance to explicit versions (`jolt-field` dev-dependency by path) and drops the
-`[lints] workspace = true` table.
-
-## `jolt-poly`
-
-`src/` is byte-identical to `crates/jolt-poly` at the pinned rev. The manifest resolves workspace
-inheritance to explicit versions (internal crates by path; `allocative` relaxed to `0.3` as for
-`jolt-field`) and drops the `benches/`, `fuzz/` and `tests/` targets. `jolt-transcript` is not
-vendored (it is `atlas-transcript`), so the optional `jolt-transcript` dependency is dropped and
-the `transcript` feature is declared empty: the source's `cfg(feature = "transcript")` gate
-stays valid and the feature must stay off.
-
 ## The `akita-*` patch
 
 `atlas-pcs` depends on the LayerZero `akita-*` crates by git at rev
 `dfdbd7674cab5cfbe95243e947d1b10a982f232b`. They name `jolt-field` and `jolt-poly` by git
-(`a16z/jolt`); the root `Cargo.toml` patches that source to the vendored copies, as upstream's own
-workspace does, so the graph holds one of each. Adopting them bumped `smallvec` to `1.16` in
+(`a16z/jolt`); the root `Cargo.toml` patches that source to the vendored `jolt-field` and to the
+owned `jolt-poly` compatibility package at the repository root (it re-exports
+`atlas-algebra::poly::univariate`'s `UnivariatePoly`, `CompressedPoly`, `OmittedConstantPoly` and
+`UnivariatePolynomial`, the only `jolt_poly` items `akita-*` names), so the graph holds one of
+each. Adopting them bumped `smallvec` to `1.16` in
 `Cargo.lock`.

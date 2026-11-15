@@ -33,7 +33,7 @@ allocative = { git = "https://github.com/facebookexperimental/allocative", rev =
 
 [patch."https://github.com/a16z/jolt"]
 jolt-field = { path = "../../third_party/jolt-field" }
-jolt-poly = { path = "../../third_party/jolt-poly" }
+jolt-poly = { path = "../../jolt-poly" }
 
 [profile.release]
 debug = 1

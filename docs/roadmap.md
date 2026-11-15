@@ -1,7 +1,7 @@
 # Roadmap: own the proof-system toolkit
 
 Living document. Specs freeze at merge; this page tracks the program across them and is
-updated as phases land. Last updated 2026-11-14.
+updated as phases land. Last updated 2026-11-15.
 
 Op coverage is tracked separately in `docs/op-roadmap.md`.
 
@@ -29,9 +29,9 @@ pinned rev, MIT/Apache) are treated the same way for now; see "Open decisions".
 |---|---|---|---|---|
 | `jolt-claims` + `-derive` | 20,264 | `SymbolicSumcheck`, `Expr`, claim traits (~1,100 lines of it) | none | 1 |
 | `jolt-riscv`, `jolt-lookup-tables`, `jolt-r1cs` | 23,392 | nothing (pulled by `jolt-claims`) | `atlas-lookup-tables` is a different table set | 1 (deleted) |
-| `jolt-akita` | 9,139 | the Akita adapter behind `atlas-pcs::akita` | none | 2 |
-| `jolt-openings` | 1,261 | `CommitmentScheme`, prefix-packed layouts, `OpeningsError` | `atlas-pcs::commitment_scheme` | 2 |
-| `jolt-crypto` | 5,459 | the `Commitment` trait (BN254 code off) | none | 2 |
+| `jolt-akita` | 9,139 | the Akita adapter behind `atlas-pcs::akita` | none | 2 (owned: `atlas-pcs::akita::backend`) |
+| `jolt-openings` | 1,261 | `CommitmentScheme`, prefix-packed layouts, `OpeningsError` | `atlas-pcs::commitment_scheme` | 2 (data types owned: `atlas-pcs::openings`; traits deleted) |
+| `jolt-crypto` | 5,459 | the `Commitment` trait (BN254 code off) | none | 2 (deleted) |
 | `jolt-sumcheck` | 4,913 | `prove_batch`, `verify_compressed`, `ProveRounds`, recorder | `atlas-sumcheck::upstream_sumcheck` facade, `sumcheck/` | 3 |
 | `jolt-transcript` | 2,719 | spongefish prover/verifier states, codecs, grinding | `atlas-transcript` (thin layer) | 4 |
 | `jolt-poly` | 6,365 | `UnivariatePoly`, `GruenSplitEqPolynomial`, `CompressedPoly`, binding order | `atlas-algebra::poly` (8,067 lines) | 5 |
@@ -49,7 +49,7 @@ the spec says otherwise.
    cone. Status: implemented on `dev`.
 2. **PCS adapter** — `specs/own-pcs-adapter.md`. `jolt-akita`, `jolt-openings` and
    `jolt-crypto` fold into `atlas-pcs`; `akita-*` becomes a direct dependency of `atlas-pcs`.
-   Status: proposed.
+   Status: implemented on `dev`.
 3. **Sumcheck engine** — `specs/own-sumcheck-engine.md`. `jolt-sumcheck`'s engine becomes
    `atlas-sumcheck::engine`; the `upstream_sumcheck` facade goes. Status: proposed.
 4. **Transcript** — `specs/own-transcript.md`. `jolt-transcript`'s split prover/verifier

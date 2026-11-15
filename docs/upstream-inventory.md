@@ -35,7 +35,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 | `poly/` core (dense, multilinear, eq, split_eq, unipoly, compact, lagrange, …) | `jolt-poly` | adopt+delta (stage 4b) | Round kernels run on upstream's `GruenSplitEqPolynomial` and round messages are upstream `UnivariatePoly`s; ours is retired, and `poly/split_eq_poly.rs` keeps only atlas extensions over upstream's (the delayed-reduction fold, Gruen round helpers with endpoint closures). The operand polynomials stay ours (`MultilinearPolynomial`, `RaPolynomial`): they bind with the 125-bit challenge and keep the compact small-scalar layouts, about a quarter faster per bind than `jolt-poly`'s full-field dense binding (2²² evaluations: ~11 ms vs ~15 ms). `UniPoly`/`CompressedUniPoly` remain as the proof's wire form. |
 | `poly/opening_proof.rs`, `subprotocols/opening_reduction.rs` | `jolt-openings` + `jolt-claims` | relation layer owned in `atlas-claims`, store atlas-only (stage 5 spike) | Ours is fully diverged (~2,074 changed lines of 1,636): the accumulator is keyed on atlas `OpeningId`/`VirtualPoly` and interleaved with evaluation reduction. The stage 5 spike found no claim store to adopt at `f3265b5a`: `jolt-claims` is transcript-free (the `Expr`/`SymbolicSumcheck` layer plus typed claim structs) and `jolt-openings` is stateless PCS traits; the store, transcript wiring and `ConcreteSumcheck` driver live in `jolt-verifier`, bound to the zkVM's stage graph. Atlas relations (`onnx_proof/relation.rs`) are `SymbolicSumcheck`s over atlas openings, run by an atlas engine on the atlas accumulator. The claim-struct traits (`InputClaims`/`OutputClaims` and their derives) are not used: they assume a static opening vocabulary, and atlas opening ids are graph-indexed. The relation layer is owned in `atlas-claims`, taken from `jolt-claims` at `f3265b5a` (`src/{claims,claim_data,symbolic,ops,sumcheck}.rs`; `specs/atlas-claims.md`): the diff base for a later upstream pull is those five files at that rev. The vendored crate and its RISC-V cone (`jolt-riscv`, `jolt-lookup-tables`, `jolt-r1cs`, `jolt-claims-derive`) are deleted. |
 | `subprotocols/evaluation_reduction.rs` | — | atlas-only | Node-output multi-consumer reduction; ONNX-graph-specific. |
-| `poly/commitment/{commitment_scheme,dory,hyperkzg,pedersen,mock}` | `jolt-akita` (+ `jolt-openings` traits) | retired (BN254, stage 7b) / adopted (Akita, stage 7a) | `dory` and `hyperkzg` were BN254-only and are deleted at stage 7b, never vendored; `pedersen` was deleted with `zk` at stage 0 (nothing else used it). Akita arrived at stage 7a from the `akita-adapter` branch's `AkitaScheme`; `mock` stays as a test PCS. |
+| `poly/commitment/{commitment_scheme,dory,hyperkzg,pedersen,mock}` | `jolt-akita` (+ `jolt-openings` traits) | retired (BN254, stage 7b) / adopted (Akita, stage 7a) / owned in `atlas-pcs` (`specs/own-pcs-adapter.md`) | `dory` and `hyperkzg` were BN254-only and are deleted at stage 7b, never vendored; `pedersen` was deleted with `zk` at stage 0 (nothing else used it). Akita arrived at stage 7a from the `akita-adapter` branch's `AkitaScheme`; `mock` stays as a test PCS. |
 | `subprotocols/{shout,booleanity,hamming_booleanity,hamming_weight}` | twist/shout ancestry in upstream crates | adopted onto the engine (stage 4b) | Shared ancestry, diverged. Each implements upstream's `ProveRounds` over upstream's split eq; the relations themselves stay ours. |
 | `subprotocols/{ps_shout,ra_virtual,gamma_fold,identity_range_check,mles_product_sum}` | — | atlas-only | Prefix–suffix shout and the atlas one-hot machinery. |
 | `subprotocols/univariate_skip.rs` | `jolt-sumcheck` (`prove_uniskip_*`, `CenteredIntegerDomain`) | retired (stage 4b) | It had no callers and is deleted; a protocol that needs a uni-skip first round uses upstream's. |
@@ -133,7 +133,7 @@ saturates (completeness).
 
 ## Akita as the PCS (stage 7a)
 
-`jolt-akita` is vendored at `f3265b5a` (`third_party/PINS.md`) and `joltworks::poly::commitment::
+`jolt-akita` was vendored at `f3265b5a` and `joltworks::poly::commitment::
 akita::AkitaScheme` is the default PCS, over Fp128. Atlas deltas against upstream's own use of
 Akita, all in the adapter rather than the vendored crate:
 
@@ -156,6 +156,29 @@ Akita, all in the adapter rather than the vendored crate:
 Cost against Dory on GPT-2 (release `prove` example, median of 3, M3): prove 39.9 s vs 26.7 s,
 verify 2.17 s vs 3.42 s, proof 2.42 vs 2.37 MiB, peak memory 6.2 vs 6.6 GB. The commitment phase
 dominates (24.4 s), and two of the six 2^24-variable one-hot groups take about 10 s each of it.
+
+## The Akita adapter owned (`specs/own-pcs-adapter.md`)
+
+`atlas-pcs::akita::backend` is upstream `jolt-akita` at `f3265b5a` (`crates/jolt-akita/src`,
+with the phase-1 two-file delta: a local `MAX_ONE_HOT_TRACE_COLUMNS`, and
+`K16_TRACE_COLUMN_WIDTHS` in place of the RV64 enumeration); its catalogs are
+`atlas-pcs/schedules/` and its `gen_jolt_schedules` binary is the `gen_schedules` example.
+`atlas-pcs::openings` is upstream `jolt-openings` at the same rev, data only: `prefix.rs`
+verbatim, `OpeningsError`, `VerifierOpeningClaim` and the group-claim types. Diverged from that
+base:
+
+- upstream's scheme type `AkitaScheme` is `AkitaBackend` (and its `CpuBackend` alias
+  `AkitaBackend` is `AkitaCpuBackend`);
+- the `jolt-openings` traits are gone: `CommitmentScheme` and `TransparentObjectSetup` are
+  inherent methods of `AkitaBackend`, `BatchOpeningScheme` inherent methods of
+  `AkitaNativeBatching`; the group metadata trait impls (forwarders to inherent methods),
+  `TraceOneHotCommitment`, `commit_batch`, `verifier_setup` and `transparent_setup_context` are
+  deleted;
+- `jolt-crypto`'s `Commitment`, the `Zk*` impls with `AkitaHidingCommitment`, the
+  `profiling`-feature verifier pools and the `check_grouped_schedules` binary are deleted.
+
+A later upstream pull diffs `crates/jolt-akita` and `crates/jolt-openings` from `f3265b5a` and
+ports the change across these renames.
 
 ## BN254 removal (stage 7b)
 

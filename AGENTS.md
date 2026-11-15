@@ -84,9 +84,7 @@ Workspace members, in dependency order:
 - **common** — shared constants and parallel helpers.
 - **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
   (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`, `jolt-utils`, `jolt-poly`,
-  `jolt-sumcheck`, `jolt-akita` (the lattice PCS adapter, over LayerZero's `akita-*` crates by
-  git), and `jolt-openings` and `jolt-crypto` (vendored but not workspace members). Vendoring is
-  transitional: a crate atlas takes over becomes an atlas crate (`docs/roadmap.md`).
+  and `jolt-sumcheck`. Vendoring is transitional: a crate atlas takes over becomes an atlas crate (`docs/roadmap.md`).
 - The proof-system toolkit inherited from Jolt, in dependency order:
   - **atlas-algebra** — `field` (`JoltField`, which extends upstream `jolt_field::JoltField`
     and adds the unreduced-product ladder and challenge types; `field::fp128`, the 128-bit
@@ -106,7 +104,10 @@ Workspace members, in dependency order:
     `config`. As
     upstream's protocol crates do, it ships both sides; prover items live in each module's
     `prover` submodule, which the verifier may not name (CI path check).
-  - **atlas-pcs** — the `CommitmentScheme` interface, `akita` over Fp128, and the test `mock`.
+  - **atlas-pcs** — the `CommitmentScheme` interface, `akita` over Fp128 (its `backend`
+    submodule is the adapter over LayerZero's `akita-*` crates, a git dependency, taken from
+    upstream `jolt-akita`; the schedule catalogs are in `atlas-pcs/schedules/`), `openings`
+    (prefix packing, group claims), and the test `mock`.
   No BN254 or curve crate is in the resolved dependency graph (checked in CI); the vendored
   crates' optional `bn254` features stay off. Every sumcheck is a relation: the verifier runs
   `relation::verify_relation{,_batch}` over `RelationVerifier`s, the prover

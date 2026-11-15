@@ -13,12 +13,12 @@ A verdict of `jolt_atlas_verifier::onnx_proof::verify` depends on:
 | `jolt-atlas-verifier` | all of it |
 | `atlas-sumcheck` | `relation` (`RelationVerifier`, `verify_relation{,_batch}`, `resolve`, `relation_input_claim`), `opening_proof` (`VerifierOpeningAccumulator`, the opening-reduction relation), `evaluation_reduction` (verify side), the one-hot, booleanity, shout and prefix-suffix relations and their parameters. Not the `prover` submodules. |
 | `atlas-claims` | all of it: `SymbolicSumcheck`, the `Expr` algebra and its evaluation, the claim-data traits |
-| `atlas-pcs` | `CommitmentScheme::{setup_verifier, verify, verify_rlc}` and the `akita` implementation of them |
+| `atlas-pcs` | `CommitmentScheme::{setup_verifier, verify, verify_rlc}` and the `akita` implementation of them, including `akita::backend` (the adapter over `akita-*`) and `openings` |
 | `atlas-transcript` | `VerifyingTranscript` and the sponge under it |
 | `atlas-algebra` | `field::fp128`, multilinear evaluation, `EqPolynomial`, opening points |
 | `atlas-lookup-tables` | table evaluation (`evaluate_mle`) and the prefix-suffix decompositions |
 | `atlas-trace` | `Model` and its ops, `ModelExecutionIO`, `Tensor`, and `semantics` (the table generators). Not `Trace` or the executor. |
-| `third_party/` | `jolt-sumcheck` (`verify_compressed`), `jolt-poly`, `jolt-field`, `jolt-transcript`, and LayerZero's `akita-*` crates by git |
+| `third_party/` | `jolt-sumcheck` (`verify_compressed`), `jolt-poly`, `jolt-field`, `jolt-transcript`, `jolt-utils`, and LayerZero's `akita-*` crates by git |
 
 The crate has no prover code. Three mechanisms hold that:
 

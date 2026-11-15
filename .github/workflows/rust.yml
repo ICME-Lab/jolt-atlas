@@ -90,18 +90,27 @@ jobs:
             echo "jolt-atlas-verifier names atlas_trace's Trace" >&2
             exit 1
           fi
-      - name: No RISC-V, lookup-table, R1CS or jolt-claims crate in any member's dependency graph
-        # The zkVM cone atlas-claims replaced (specs/atlas-claims.md); dev edges included.
+      - name: No RISC-V, lookup-table, R1CS, jolt-claims or vendored PCS crate in any member's dependency graph
+        # The zkVM cone atlas-claims replaced (specs/atlas-claims.md) and the PCS adapter crates
+        # atlas-pcs replaced (specs/own-pcs-adapter.md); dev edges included.
         run: |
           status=0
           for name in $(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].name'); do
             if cargo tree -p "$name" -e normal,build,dev --prefix none \
-                | grep -qE '^(jolt-riscv|jolt-lookup-tables|jolt-r1cs|jolt-claims) '; then
+                | grep -qE '^(jolt-riscv|jolt-lookup-tables|jolt-r1cs|jolt-claims|jolt-akita|jolt-openings|jolt-crypto) '; then
               echo "$name resolves a zkVM cone crate" >&2
               status=1
             fi
           done
           exit $status
+      - name: No vendored PCS crate or upstream scheme trait named in atlas sources
+        # atlas-pcs owns the Akita adapter; CommitmentScheme is the one scheme trait.
+        run: |
+          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|UpstreamScheme)\b' \
+              common atlas-* jolt-atlas-* --include='*.rs'; then
+            echo "an atlas source names a deleted vendored PCS crate or an upstream scheme trait" >&2
+            exit 1
+          fi
       - name: No BN254 curve crates in any member's dependency graph
         # Vendored upstream crates keep optional BN254 features, so they are resolved with their
         # default features off; atlas crates are resolved as built.

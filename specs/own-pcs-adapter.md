@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-14                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          | (filled when the PR opens, or at merge) |
 | Depends on  | `specs/atlas-claims.md` (phase 1; `jolt-akita` already carries its first source delta there) |
 | Supersedes  | `third_party/PINS.md` sections `jolt-akita`, `jolt-claims and its dependency cone` (the `jolt-openings`/`jolt-crypto` rows) |

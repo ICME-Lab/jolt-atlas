@@ -1,11 +1,10 @@
+use crate::field::signed::S128;
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps},
     poly::one_hot::OneHotPolynomial,
     utils::{compute_dotproduct, small_scalar::SmallScalar},
 };
 use allocative::Allocative;
-use ark_ff::biginteger::S128;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Valid};
 use common::parallel::par_enabled;
 use rayon::prelude::*;
 use strum_macros::EnumIter;
@@ -29,36 +28,6 @@ pub enum MultilinearPolynomial<F: JoltField> {
     I128Scalars(CompactPolynomial<i128, F>),
     S128Scalars(CompactPolynomial<S128, F>),
     OneHot(OneHotPolynomial<F>),
-}
-
-impl<F: JoltField> Valid for MultilinearPolynomial<F> {
-    fn check(&self) -> Result<(), ark_serialize::SerializationError> {
-        unimplemented!("Only here to satisfy trait bounds")
-    }
-}
-
-impl<F: JoltField> CanonicalDeserialize for MultilinearPolynomial<F> {
-    fn deserialize_with_mode<R: std::io::Read>(
-        _reader: R,
-        _compress: ark_serialize::Compress,
-        _validate: ark_serialize::Validate,
-    ) -> Result<Self, ark_serialize::SerializationError> {
-        unimplemented!("Only here to satisfy trait bounds")
-    }
-}
-
-impl<F: JoltField> CanonicalSerialize for MultilinearPolynomial<F> {
-    fn serialize_with_mode<W: std::io::Write>(
-        &self,
-        _writer: W,
-        _compress: ark_serialize::Compress,
-    ) -> Result<(), ark_serialize::SerializationError> {
-        unimplemented!("Only here to satisfy trait bounds")
-    }
-
-    fn serialized_size(&self, _compress: ark_serialize::Compress) -> usize {
-        unimplemented!("Only here to satisfy trait bounds")
-    }
 }
 
 /// The order in which polynomial variables are bound in sumcheck

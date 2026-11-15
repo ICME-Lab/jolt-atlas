@@ -1,12 +1,9 @@
+use crate::field::signed::{S128, S64};
 use crate::field::JoltField;
 use allocative::Allocative;
-use ark_ff::biginteger::{S128, S64};
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 /// A trait for small scalars ({u/i}{8/16/32/64/128})
-pub trait SmallScalar:
-    Copy + Ord + Sync + CanonicalSerialize + CanonicalDeserialize + Allocative
-{
+pub trait SmallScalar: Copy + Ord + Sync + Allocative {
     /// Performs a field multiplication. Uses `JoltField::mul_{u/i}{64/128}` under the hood.
     fn field_mul<F: JoltField>(&self, n: F) -> F;
     /// Converts a small scalar into a (potentially Montgomery form) `JoltField` type
@@ -179,6 +176,15 @@ impl SmallScalar for i128 {
         }
     }
 }
+// The signed integers hold no heap data.
+impl Allocative for S64 {
+    fn visit<'a, 'b: 'a>(&self, _visitor: &'a mut allocative::Visitor<'b>) {}
+}
+
+impl Allocative for S128 {
+    fn visit<'a, 'b: 'a>(&self, _visitor: &'a mut allocative::Visitor<'b>) {}
+}
+
 impl SmallScalar for S64 {
     #[inline]
     fn field_mul<F: JoltField>(&self, n: F) -> F {

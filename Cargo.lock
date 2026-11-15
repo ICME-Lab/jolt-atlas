@@ -341,82 +341,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
-name = "ark-ff"
-version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
-dependencies = [
- "allocative",
- "ark-ff-asm",
- "ark-ff-macros",
- "ark-serialize",
- "ark-std",
- "arrayvec",
- "digest 0.10.7",
- "educe",
- "itertools 0.13.0",
- "num-bigint 0.4.6",
- "num-traits",
- "paste",
- "rayon",
- "zeroize",
-]
-
-[[package]]
-name = "ark-ff-asm"
-version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
-dependencies = [
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "ark-ff-macros"
-version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
-dependencies = [
- "num-bigint 0.4.6",
- "num-traits",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "ark-serialize"
-version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
-dependencies = [
- "ark-serialize-derive",
- "ark-std",
- "arrayvec",
- "digest 0.10.7",
- "num-bigint 0.4.6",
- "rayon",
-]
-
-[[package]]
-name = "ark-serialize-derive"
-version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "ark-std"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "246a225cc6131e9ee4f24619af0f19d67761fff15d7ccc22e42b80846e69449a"
-dependencies = [
- "num-traits",
- "rand 0.8.5",
- "rayon",
-]
-
-[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -427,9 +351,6 @@ name = "atlas-algebra"
 version = "0.1.0"
 dependencies = [
  "allocative",
- "ark-ff",
- "ark-serialize",
- "ark-std",
  "atlas-trace",
  "atlas-transcript",
  "bincode",
@@ -475,9 +396,6 @@ name = "atlas-lookup-tables"
 version = "0.1.0"
 dependencies = [
  "allocative",
- "ark-ff",
- "ark-serialize",
- "ark-std",
  "atlas-algebra",
  "atlas-trace",
  "bincode",
@@ -534,9 +452,6 @@ dependencies = [
  "akita-schedules",
  "akita-types",
  "allocative",
- "ark-ff",
- "ark-serialize",
- "ark-std",
  "atlas-algebra",
  "atlas-trace",
  "atlas-transcript",
@@ -574,9 +489,6 @@ name = "atlas-sumcheck"
 version = "0.1.0"
 dependencies = [
  "allocative",
- "ark-ff",
- "ark-serialize",
- "ark-std",
  "atlas-algebra",
  "atlas-claims",
  "atlas-lookup-tables",
@@ -629,9 +541,6 @@ name = "atlas-transcript"
 version = "0.1.0"
 dependencies = [
  "allocative",
- "ark-ff",
- "ark-serialize",
- "ark-std",
  "atlas-algebra",
  "atlas-trace",
  "atlas-transcript",
@@ -898,7 +807,6 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "allocative",
- "ark-serialize",
  "tracing-chrome",
  "tracing-subscriber",
 ]
@@ -1160,42 +1068,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "educe"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d7bc049e1bd8cdeb31b68bbd586a9464ecf9f3944af3958a7a9d0f8b9799417"
-dependencies = [
- "enum-ordinalize",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
-
-[[package]]
-name = "enum-ordinalize"
-version = "4.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a1091a7bb1f8f2c4b28f1fe2cef4980ca2d410a3d727d67ecc3178c9b0800f0"
-dependencies = [
- "enum-ordinalize-derive",
-]
-
-[[package]]
-name = "enum-ordinalize-derive"
-version = "4.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ca9601fb2d62598ee17836250842873a413586e5d7ed88b356e38ddbb0ec631"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "env_filter"
@@ -1426,15 +1302,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -1469,8 +1336,6 @@ dependencies = [
 name = "jolt-atlas-core"
 version = "0.1.0"
 dependencies = [
- "ark-serialize",
- "ark-std",
  "atlas-algebra",
  "atlas-claims",
  "atlas-lookup-tables",
@@ -1507,8 +1372,6 @@ dependencies = [
 name = "jolt-atlas-verifier"
 version = "0.1.0"
 dependencies = [
- "ark-serialize",
- "ark-std",
  "atlas-algebra",
  "atlas-claims",
  "atlas-lookup-tables",

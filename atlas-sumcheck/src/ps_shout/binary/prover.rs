@@ -7,7 +7,6 @@ use crate::{
         phase_schedule, prover::ReadRafSumcheckProver, RafProverState, ReadRafSumcheckParams,
     },
 };
-use ark_std::Zero;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -23,6 +22,7 @@ use common::{
     consts::{LOG_K, XLEN},
     parallel::par_enabled,
 };
+use num_traits::Zero;
 
 impl<F: JoltField> RafProverState<F> for BinaryRafPS<F> {
     fn init_Q(&mut self, u_evals: &[F], lookup_indices: &[LookupBits]) {

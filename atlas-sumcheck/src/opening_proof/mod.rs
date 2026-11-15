@@ -10,14 +10,12 @@ use crate::{
     sumcheck::SumcheckInstanceProof,
 };
 use allocative::Allocative;
-use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
-    Write,
-};
+use atlas_algebra::serialize::{Canonical, Error};
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
+use std::io::{Read, Write};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -531,59 +529,41 @@ pub enum SumcheckId {
     DigitRange,
 }
 
-impl CanonicalSerialize for SumcheckId {
-    fn serialize_with_mode<W: Write>(
-        &self,
-        mut writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
+impl Canonical for SumcheckId {
+    fn encode<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         match self {
             Self::NodeExecution(idx) => {
-                0u8.serialize_with_mode(&mut writer, compress)?;
-                idx.serialize_with_mode(&mut writer, compress)?;
+                0u8.encode(&mut writer)?;
+                idx.encode(&mut writer)?;
             }
-            Self::Raf => 1u8.serialize_with_mode(&mut writer, compress)?,
-            Self::RaVirtualization => 2u8.serialize_with_mode(&mut writer, compress)?,
-            Self::RamHammingBooleanity => 3u8.serialize_with_mode(&mut writer, compress)?,
-            Self::RamHammingWeight => 4u8.serialize_with_mode(&mut writer, compress)?,
-            Self::Booleanity => 5u8.serialize_with_mode(&mut writer, compress)?,
-            Self::HammingWeight => 6u8.serialize_with_mode(&mut writer, compress)?,
+            Self::Raf => 1u8.encode(&mut writer)?,
+            Self::RaVirtualization => 2u8.encode(&mut writer)?,
+            Self::RamHammingBooleanity => 3u8.encode(&mut writer)?,
+            Self::RamHammingWeight => 4u8.encode(&mut writer)?,
+            Self::Booleanity => 5u8.encode(&mut writer)?,
+            Self::HammingWeight => 6u8.encode(&mut writer)?,
             Self::RLC(idx) => {
-                7u8.serialize_with_mode(&mut writer, compress)?;
-                idx.serialize_with_mode(&mut writer, compress)?;
+                7u8.encode(&mut writer)?;
+                idx.encode(&mut writer)?;
             }
-            Self::NTEvalShift => 9u8.serialize_with_mode(&mut writer, compress)?,
-            Self::DigitRange => 10u8.serialize_with_mode(&mut writer, compress)?,
+            Self::NTEvalShift => 9u8.encode(&mut writer)?,
+            Self::DigitRange => 10u8.encode(&mut writer)?,
         }
         Ok(())
     }
 
-    fn serialized_size(&self, compress: Compress) -> usize {
+    fn encoded_len(&self) -> usize {
         match self {
-            Self::NodeExecution(idx) | Self::RLC(idx) => {
-                1u8.serialized_size(compress) + idx.serialized_size(compress)
-            }
-            _ => 1u8.serialized_size(compress),
+            Self::NodeExecution(idx) | Self::RLC(idx) => 1u8.encoded_len() + idx.encoded_len(),
+            _ => 1u8.encoded_len(),
         }
     }
-}
 
-impl Valid for SumcheckId {
-    fn check(&self) -> Result<(), SerializationError> {
-        Ok(())
-    }
-}
-
-impl CanonicalDeserialize for SumcheckId {
-    fn deserialize_with_mode<R: Read>(
-        mut reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        let tag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
+    fn decode<R: Read>(mut reader: R) -> Result<Self, Error> {
+        let tag = u8::decode(&mut reader)?;
         match tag {
             0 => {
-                let idx = usize::deserialize_with_mode(&mut reader, compress, validate)?;
+                let idx = usize::decode(&mut reader)?;
                 Ok(Self::NodeExecution(idx))
             }
             1 => Ok(Self::Raf),
@@ -593,12 +573,12 @@ impl CanonicalDeserialize for SumcheckId {
             5 => Ok(Self::Booleanity),
             6 => Ok(Self::HammingWeight),
             7 => {
-                let idx = usize::deserialize_with_mode(&mut reader, compress, validate)?;
+                let idx = usize::decode(&mut reader)?;
                 Ok(Self::RLC(idx))
             }
             9 => Ok(Self::NTEvalShift),
             10 => Ok(Self::DigitRange),
-            _ => Err(SerializationError::InvalidData),
+            _ => Err(Error::InvalidData),
         }
     }
 }
@@ -660,61 +640,45 @@ impl OpeningId {
     }
 }
 
-impl CanonicalSerialize for OpeningId {
-    fn serialize_with_mode<W: Write>(
-        &self,
-        mut writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
+impl Canonical for OpeningId {
+    fn encode<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         match self.polynomial {
             PolynomialId::Committed(polynomial) => {
-                0u8.serialize_with_mode(&mut writer, compress)?;
-                polynomial.serialize_with_mode(&mut writer, compress)?;
-                self.sumcheck.serialize_with_mode(&mut writer, compress)?;
+                0u8.encode(&mut writer)?;
+                polynomial.encode(&mut writer)?;
+                self.sumcheck.encode(&mut writer)?;
             }
             PolynomialId::Virtual(polynomial) => {
-                1u8.serialize_with_mode(&mut writer, compress)?;
-                polynomial.serialize_with_mode(&mut writer, compress)?;
-                self.sumcheck.serialize_with_mode(&mut writer, compress)?;
+                1u8.encode(&mut writer)?;
+                polynomial.encode(&mut writer)?;
+                self.sumcheck.encode(&mut writer)?;
             }
         }
         Ok(())
     }
 
-    fn serialized_size(&self, compress: Compress) -> usize {
-        1 + self.sumcheck.serialized_size(compress)
+    fn encoded_len(&self) -> usize {
+        1 + self.sumcheck.encoded_len()
             + match self.polynomial {
-                PolynomialId::Virtual(polynomial) => polynomial.serialized_size(compress),
-                PolynomialId::Committed(polynomial) => polynomial.serialized_size(compress),
+                PolynomialId::Virtual(polynomial) => polynomial.encoded_len(),
+                PolynomialId::Committed(polynomial) => polynomial.encoded_len(),
             }
     }
-}
 
-impl Valid for OpeningId {
-    fn check(&self) -> Result<(), SerializationError> {
-        Ok(())
-    }
-}
-
-impl CanonicalDeserialize for OpeningId {
-    fn deserialize_with_mode<R: Read>(
-        mut reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        let tag = u8::deserialize_with_mode(&mut reader, compress, validate)?;
+    fn decode<R: Read>(mut reader: R) -> Result<Self, Error> {
+        let tag = u8::decode(&mut reader)?;
         match tag {
             0 => {
-                let poly = CommittedPoly::deserialize_with_mode(&mut reader, compress, validate)?;
-                let sc = SumcheckId::deserialize_with_mode(&mut reader, compress, validate)?;
+                let poly = CommittedPoly::decode(&mut reader)?;
+                let sc = SumcheckId::decode(&mut reader)?;
                 Ok(Self::new(poly, sc))
             }
             1 => {
-                let poly = VirtualPoly::deserialize_with_mode(&mut reader, compress, validate)?;
-                let sc = SumcheckId::deserialize_with_mode(&mut reader, compress, validate)?;
+                let poly = VirtualPoly::decode(&mut reader)?;
+                let sc = SumcheckId::decode(&mut reader)?;
                 Ok(Self::new(poly, sc))
             }
-            _ => Err(SerializationError::InvalidData),
+            _ => Err(Error::InvalidData),
         }
     }
 }

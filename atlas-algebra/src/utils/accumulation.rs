@@ -1,6 +1,8 @@
+use crate::field::signed::{S128, S160, S192, S256, S64};
+use crate::field::Limbs;
 use crate::field::{BarrettReduce, FMAdd, JoltField, MontgomeryReduce};
-use ark_ff::biginteger::{S128, S160, S192, S256, S64};
-use ark_std::{ops::Add, Zero};
+use num_traits::Zero;
+use std::ops::Add;
 
 /// Unsigned accumulator at the "small" tier (field × u64 width).
 /// Stores a single `UnreducedMulU64` word. Supports FMA with u8, u64, and bool scalars.
@@ -556,7 +558,7 @@ impl<F: JoltField> FMAdd<F, S160> for WideAccumS<F> {
         if other.is_zero() {
             return;
         }
-        let mag: ark_ff::BigInt<3> = other.magnitude_as_bigint_nplus1();
+        let mag: Limbs<3> = other.magnitude_as_bigint_nplus1();
         let product = field.mul_to_accum_mag(&mag);
         if other.is_positive() {
             self.pos += product;
@@ -747,7 +749,7 @@ impl S128Sum {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            sum: S128::from(0i128),
+            sum: S128::from_i128(0i128),
         }
     }
 }
@@ -760,7 +762,7 @@ impl Zero for S128Sum {
 
     #[inline(always)]
     fn is_zero(&self) -> bool {
-        self.sum == S128::from(0i128)
+        self.sum == S128::from_i128(0i128)
     }
 }
 
@@ -781,7 +783,7 @@ impl FMAdd<i32, bool> for S128Sum {
         if !*right {
             return;
         }
-        self.sum += S128::from(*left as i64);
+        self.sum += S128::from_i64(*left as i64);
     }
 }
 
@@ -791,8 +793,8 @@ impl FMAdd<i32, u64> for S128Sum {
         if *right == 0 {
             return;
         }
-        let cz_s64 = S64::from(*left as i64);
-        let v_s64 = S64::from(*right);
+        let cz_s64 = S64::from_i64(*left as i64);
+        let v_s64 = S64::from_u64(*right);
         self.sum += cz_s64.mul_trunc::<1, 2>(&v_s64);
     }
 }
@@ -803,7 +805,7 @@ impl FMAdd<i32, S64> for S128Sum {
         if right.is_zero() {
             return;
         }
-        let cz_s64 = S64::from(*left as i64);
+        let cz_s64 = S64::from_i64(*left as i64);
         self.sum += cz_s64.mul_trunc::<1, 2>(right);
     }
 }
@@ -819,7 +821,7 @@ impl FMAdd<i32, S64> for S192Sum {
         if term.is_zero() {
             return;
         }
-        let c_s64 = S64::from(*c as i64);
+        let c_s64 = S64::from_i64(*c as i64);
         self.sum += c_s64.mul_trunc::<1, 3>(term);
     }
 }
@@ -830,8 +832,8 @@ impl FMAdd<i32, i128> for S192Sum {
         if *term == 0 {
             return;
         }
-        let c_s64 = S64::from(*c as i64);
-        let term_s128 = S128::from(*term);
+        let c_s64 = S64::from_i64(*c as i64);
+        let term_s128 = S128::from_i128(*term);
         self.sum += c_s64.mul_trunc::<2, 3>(&term_s128);
     }
 }
@@ -842,7 +844,7 @@ impl FMAdd<i32, S160> for S192Sum {
         if term.is_zero() {
             return;
         }
-        let c_s64 = S64::from(*c as i64);
+        let c_s64 = S64::from_i64(*c as i64);
         let term_s192 = term.to_signed_bigint_nplus1::<3>();
         self.sum += c_s64.mul_trunc::<3, 3>(&term_s192);
     }
@@ -852,13 +854,13 @@ impl Zero for S192Sum {
     #[inline(always)]
     fn zero() -> Self {
         Self {
-            sum: S192::from(0i128),
+            sum: S192::from_i128(0i128),
         }
     }
 
     #[inline(always)]
     fn is_zero(&self) -> bool {
-        self.sum == S192::from(0i128)
+        self.sum == S192::from_i128(0i128)
     }
 }
 

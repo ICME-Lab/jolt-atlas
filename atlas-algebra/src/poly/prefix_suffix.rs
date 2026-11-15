@@ -575,7 +575,7 @@ pub mod tests {
     use crate::field::Field as _;
     use num_traits::{One, Zero};
 
-    use ark_std::test_rng;
+    use crate::utils::test_rng;
 
     pub fn prefix_suffix_decomposition_test<
         const NUM_VARS: usize,

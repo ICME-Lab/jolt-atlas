@@ -14,7 +14,6 @@ use crate::{
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
-use ark_std::Zero;
 use atlas_algebra::field::Ring;
 use atlas_algebra::poly::split_eq::GruenSplitEqPolynomial;
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -30,6 +29,7 @@ use atlas_algebra::{
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use common::parallel::par_enabled;
 use common::CommittedPoly;
+use num_traits::Zero;
 use rayon::prelude::*;
 use std::ops::Mul;
 
@@ -384,8 +384,8 @@ mod tests {
     use crate::opening_proof::{
         prover::ProverOpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator,
     };
-    use ark_std::UniformRand;
     use atlas_algebra::field::fp128::Fp128 as Fr;
+    use atlas_algebra::field::Field as _;
     use atlas_algebra::{
         field::JoltField,
         poly::{
@@ -432,7 +432,7 @@ mod tests {
                 let point: Vec<Challenge> = (0..log_n)
                     .map(|_| Challenge::from(rng.gen::<u128>()))
                     .collect();
-                let raw: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+                let raw: Vec<Fr> = (0..n).map(|_| Fr::random(&mut rng)).collect();
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let id = OpeningId::new(
@@ -550,7 +550,7 @@ mod tests {
                 let point: Vec<Challenge> = (0..log_n)
                     .map(|_| Challenge::from(rng.gen::<u128>()))
                     .collect();
-                let raw: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+                let raw: Vec<Fr> = (0..n).map(|_| Fr::random(&mut rng)).collect();
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let id = OpeningId::new(
@@ -717,7 +717,7 @@ mod tests {
                 let point: Vec<Challenge> = (0..log_n)
                     .map(|_| Challenge::from(rng.gen::<u128>()))
                     .collect();
-                let raw: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+                let raw: Vec<Fr> = (0..n).map(|_| Fr::random(&mut rng)).collect();
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let id = OpeningId::new(

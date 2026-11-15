@@ -4,8 +4,8 @@
 //! carry propagation in hot accumulation loops. Carries are deferred to
 //! `normalize()` right before Barrett/Montgomery reduction.
 
+use crate::field::Limbs;
 use crate::field::UnreducedInteger;
-use ark_ff::BigInt;
 use num_traits::Zero;
 use std::cmp::Ordering;
 use std::fmt;
@@ -20,7 +20,7 @@ macro_rules! impl_folded_core_traits {
 
         impl $name {
             #[inline(always)]
-            pub fn from_bigint<const N: usize>(value: BigInt<N>) -> Self {
+            pub fn from_bigint<const N: usize>(value: Limbs<N>) -> Self {
                 let mut out = [0u128; $slots];
                 let limit = if N < $slots { N } else { $slots };
                 let mut i = 0;
@@ -32,7 +32,7 @@ macro_rules! impl_folded_core_traits {
             }
 
             #[inline]
-            pub fn normalize(self) -> BigInt<$out_limbs> {
+            pub fn normalize(self) -> Limbs<$out_limbs> {
                 let mut out = [0u64; $out_limbs];
                 let mut carry: u128 = 0;
 
@@ -53,7 +53,7 @@ macro_rules! impl_folded_core_traits {
                     j += 1;
                 }
 
-                BigInt::new(out)
+                Limbs::new(out)
             }
         }
 
@@ -200,12 +200,12 @@ macro_rules! impl_folded_core_traits {
     };
 }
 
-/// Implements `AddAssign<BigInt<N>>` by lane-wise truncating into folded slots.
+/// Implements `AddAssign<Limbs<N>>` by lane-wise truncating into folded slots.
 macro_rules! impl_addassign_bigint_trunc {
     ($target:ident, $n:literal) => {
-        impl AddAssign<BigInt<$n>> for $target {
+        impl AddAssign<Limbs<$n>> for $target {
             #[inline(always)]
-            fn add_assign(&mut self, rhs: BigInt<$n>) {
+            fn add_assign(&mut self, rhs: Limbs<$n>) {
                 let mut i = 0;
                 while i < $n {
                     self.0[i] += rhs.0[i] as u128;
@@ -216,14 +216,14 @@ macro_rules! impl_addassign_bigint_trunc {
     };
 }
 
-/// Implements `Add<BigInt<N>>` in terms of `AddAssign<BigInt<N>>`.
+/// Implements `Add<Limbs<N>>` in terms of `AddAssign<Limbs<N>>`.
 macro_rules! impl_add_bigint_trunc {
     ($target:ident, $n:literal) => {
-        impl Add<BigInt<$n>> for $target {
+        impl Add<Limbs<$n>> for $target {
             type Output = Self;
 
             #[inline(always)]
-            fn add(mut self, rhs: BigInt<$n>) -> Self::Output {
+            fn add(mut self, rhs: Limbs<$n>) -> Self::Output {
                 self += rhs;
                 self
             }

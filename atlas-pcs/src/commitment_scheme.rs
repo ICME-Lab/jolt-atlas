@@ -1,4 +1,4 @@
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use atlas_algebra::serialize::Canonical;
 use std::{borrow::Borrow, fmt::Debug};
 
 use atlas_algebra::{
@@ -20,19 +20,18 @@ pub type BatchCommitOutput<PCS> = (
 
 pub trait CommitmentScheme: Clone + Sync + Send + 'static {
     type Field: JoltField + Sized;
-    type ProverSetup: Clone + Sync + Send + Debug + CanonicalSerialize + CanonicalDeserialize;
-    type VerifierSetup: Clone + Sync + Send + Debug + CanonicalSerialize + CanonicalDeserialize;
+    type ProverSetup: Clone + Sync + Send + Debug + Canonical;
+    type VerifierSetup: Clone + Sync + Send + Debug + Canonical;
     type Commitment: Default
         + Debug
         + Sync
         + Send
         + PartialEq
-        + CanonicalSerialize
-        + CanonicalDeserialize
+        + Canonical
         + AppendToTranscript
         + Clone;
-    type Proof: Sync + Send + CanonicalSerialize + CanonicalDeserialize + Clone + Debug;
-    type BatchedProof: Sync + Send + CanonicalSerialize + CanonicalDeserialize;
+    type Proof: Sync + Send + Canonical + Clone + Debug;
+    type BatchedProof: Sync + Send + Canonical;
     /// A hint that helps the prover compute an opening proof: a byproduct of the commitment
     /// computation (Akita's packed class data).
     type OpeningProofHint: Sync + Send + Clone + Debug + PartialEq;
@@ -44,8 +43,7 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
         + Sync
         + Send
         + PartialEq
-        + CanonicalSerialize
-        + CanonicalDeserialize
+        + Canonical
         + AppendToTranscript
         + Clone;
 

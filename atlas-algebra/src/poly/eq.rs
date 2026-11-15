@@ -282,7 +282,7 @@ mod tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
     use crate::field::Field as _;
-    use ark_std::test_rng;
+    use crate::utils::test_rng;
     use std::time::Instant;
 
     #[test]

@@ -1,6 +1,7 @@
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use atlas_algebra::field::{IntoOpening, JoltField};
+use atlas_algebra::serialize::{Canonical, Error};
 use common::consts::{LOG_K_CHUNK, XLEN};
+use std::io::{Read, Write};
 
 const LOG_K: usize = XLEN * 2;
 
@@ -104,7 +105,7 @@ impl OneHotParams {
 ///
 /// Contains only the prover's choices. All fields are `u8` to minimize proof size.
 /// The verifier validates these choices and reconstructs the full `OneHotParams`.
-#[derive(Clone, Debug, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OneHotConfig {
     /// Log₂ of chunk size for one-hot encoding of address variables.
     ///
@@ -114,6 +115,23 @@ pub struct OneHotConfig {
     ///
     /// Must be either 4 or 8 currently
     pub log_k_chunk: u8,
+}
+
+/// One byte: `log_k_chunk`.
+impl Canonical for OneHotConfig {
+    fn encode<W: Write>(&self, writer: W) -> Result<(), Error> {
+        self.log_k_chunk.encode(writer)
+    }
+
+    fn encoded_len(&self) -> usize {
+        1
+    }
+
+    fn decode<R: Read>(reader: R) -> Result<Self, Error> {
+        Ok(Self {
+            log_k_chunk: u8::decode(reader)?,
+        })
+    }
 }
 
 impl OneHotConfig {

@@ -5,7 +5,6 @@ use crate::{
     utils::{math::Math, small_scalar::SmallScalar},
 };
 use allocative::Allocative;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use common::parallel::{par_enabled, par_enabled_with};
 use rayon::prelude::*;
 use std::{cmp::Ordering, ops::Index};
@@ -17,7 +16,7 @@ use std::{cmp::Ordering, ops::Index};
 ///
 /// They are often initialized with `coeffs` and then converted to `bound_coeffs`
 /// when binding the polynomial.
-#[derive(Default, Debug, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+#[derive(Default, Debug, PartialEq, Allocative)]
 pub struct CompactPolynomial<T: SmallScalar, F: JoltField> {
     num_vars: usize,
     len: usize,

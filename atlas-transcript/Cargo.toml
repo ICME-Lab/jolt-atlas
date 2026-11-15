@@ -20,9 +20,6 @@ atlas-algebra.workspace = true
 serde.workspace = true
 
 # Cryptography and Math
-ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout", features = ["std", "parallel", "asm"] }
-ark-serialize.workspace = true
-ark-std.workspace = true
 sha3 = "0.10.8"
 # spongefish 0.8's `Hash` bridge takes a `digest 0.11` hash.
 blake2 = "0.11.0-rc.6"

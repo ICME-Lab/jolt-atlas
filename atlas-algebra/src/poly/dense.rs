@@ -12,7 +12,6 @@ use crate::{
     utils::math::Math,
 };
 use allocative::Allocative;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use core::ops::Index;
 use rand_core::{CryptoRng, RngCore};
 use rayon::prelude::*;
@@ -20,7 +19,7 @@ use std::ops::IndexMut;
 
 use super::multilinear::BindingOrder;
 
-#[derive(Default, Debug, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+#[derive(Default, Debug, PartialEq, Allocative)]
 pub struct DensePolynomial<F: JoltField> {
     pub num_vars: usize, // the number of variables in the multilinear polynomial
     pub len: usize,
@@ -353,7 +352,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for DensePolynomial<F> {
 mod tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
-    use ark_std::test_rng;
+    use crate::utils::test_rng;
 
     use rand::Rng;
 

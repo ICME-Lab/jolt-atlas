@@ -1,7 +1,7 @@
 #[macro_export]
-/// Generates `CanonicalSerialize`, `CanonicalDeserialize`, and `Valid` impls
-/// for an enum whose variants are unit or carry only `CanonicalSerialize` /
-/// `CanonicalDeserialize` fields (up to 3 fields per variant).
+/// Generates a [`Canonical`](crate::serialize::Canonical) impl for an enum whose variants are
+/// unit or carry only `Canonical` fields (up to 3 fields per variant): a `u8` tag, then the
+/// fields.
 ///
 /// Tags are assigned automatically in **declaration order** (0, 1, 2, …).
 /// Adding a new variant at the end is a one-line change with no additional
@@ -38,17 +38,16 @@ macro_rules! canonical_serde_enum {
             )+
         }
 
-        // 2) CanonicalSerialize
-        impl ::ark_serialize::CanonicalSerialize for $name {
-            fn serialize_with_mode<W: ::ark_serialize::Write>(
+        // 2) Canonical
+        impl $crate::serialize::Canonical for $name {
+            fn encode<W: ::std::io::Write>(
                 &self,
                 mut writer: W,
-                compress: ::ark_serialize::Compress,
-            ) -> ::core::result::Result<(), ::ark_serialize::SerializationError> {
+            ) -> ::core::result::Result<(), $crate::serialize::Error> {
                 let mut _tag: u8 = 0;
                 $(
                     canonical_serde_enum!(
-                        @try_serialize self, _tag, writer, compress,
+                        @try_serialize self, _tag, writer,
                         $name, $variant $( ( $($fty),+ ) )?
                     );
                     #[allow(unused_assignments)]
@@ -57,54 +56,32 @@ macro_rules! canonical_serde_enum {
                 unreachable!()
             }
 
-            fn serialized_size(
-                &self,
-                compress: ::ark_serialize::Compress,
-            ) -> usize {
+            fn encoded_len(&self) -> usize {
                 $(
                     canonical_serde_enum!(
-                        @try_size self, compress,
+                        @try_size self,
                         $name, $variant $( ( $($fty),+ ) )?
                     );
                 )+
                 unreachable!()
             }
-        }
 
-        // 3) Valid (trivial – nothing extra to check)
-        impl ::ark_serialize::Valid for $name {
-            fn check(
-                &self,
-            ) -> ::core::result::Result<(), ::ark_serialize::SerializationError> {
-                ::core::result::Result::Ok(())
-            }
-        }
-
-        // 4) CanonicalDeserialize
-        impl ::ark_serialize::CanonicalDeserialize for $name {
-            fn deserialize_with_mode<R: ::ark_serialize::Read>(
+            fn decode<R: ::std::io::Read>(
                 mut reader: R,
-                compress: ::ark_serialize::Compress,
-                validate: ::ark_serialize::Validate,
-            ) -> ::core::result::Result<Self, ::ark_serialize::SerializationError> {
-                let tag =
-                    <u8 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
-                        &mut reader, compress, validate,
-                    )?;
+            ) -> ::core::result::Result<Self, $crate::serialize::Error> {
+                let tag = <u8 as $crate::serialize::Canonical>::decode(&mut reader)?;
                 let mut _expected: u8 = 0;
                 $(
                     if tag == _expected {
                         return canonical_serde_enum!(
-                            @deserialize reader, compress, validate,
+                            @deserialize reader,
                             $name, $variant $( ( $($fty),+ ) )?
                         );
                     }
                     #[allow(unused_assignments)]
                     { _expected += 1; }
                 )+
-                ::core::result::Result::Err(
-                    ::ark_serialize::SerializationError::InvalidData,
-                )
+                ::core::result::Result::Err($crate::serialize::Error::InvalidData)
             }
         }
     };
@@ -112,67 +89,47 @@ macro_rules! canonical_serde_enum {
     // ── @try_serialize helpers (per field-count) ─────────────────────
 
     // unit
-    (@try_serialize $self:ident, $tag:ident, $writer:ident, $compress:ident,
+    (@try_serialize $self:ident, $tag:ident, $writer:ident,
      $name:ident, $variant:ident
     ) => {
         if let $name::$variant = $self {
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                &$tag, &mut $writer, $compress,
-            )?;
+            $crate::serialize::Canonical::encode(&$tag, &mut $writer)?;
             return ::core::result::Result::Ok(());
         }
     };
 
     // 1 field
-    (@try_serialize $self:ident, $tag:ident, $writer:ident, $compress:ident,
+    (@try_serialize $self:ident, $tag:ident, $writer:ident,
      $name:ident, $variant:ident ($fty0:ty)
     ) => {
         if let $name::$variant(_f0) = $self {
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                &$tag, &mut $writer, $compress,
-            )?;
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                _f0, &mut $writer, $compress,
-            )?;
+            $crate::serialize::Canonical::encode(&$tag, &mut $writer)?;
+            $crate::serialize::Canonical::encode(_f0, &mut $writer)?;
             return ::core::result::Result::Ok(());
         }
     };
 
     // 2 fields
-    (@try_serialize $self:ident, $tag:ident, $writer:ident, $compress:ident,
+    (@try_serialize $self:ident, $tag:ident, $writer:ident,
      $name:ident, $variant:ident ($fty0:ty, $fty1:ty)
     ) => {
         if let $name::$variant(_f0, _f1) = $self {
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                &$tag, &mut $writer, $compress,
-            )?;
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                _f0, &mut $writer, $compress,
-            )?;
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                _f1, &mut $writer, $compress,
-            )?;
+            $crate::serialize::Canonical::encode(&$tag, &mut $writer)?;
+            $crate::serialize::Canonical::encode(_f0, &mut $writer)?;
+            $crate::serialize::Canonical::encode(_f1, &mut $writer)?;
             return ::core::result::Result::Ok(());
         }
     };
 
     // 3 fields
-    (@try_serialize $self:ident, $tag:ident, $writer:ident, $compress:ident,
+    (@try_serialize $self:ident, $tag:ident, $writer:ident,
      $name:ident, $variant:ident ($fty0:ty, $fty1:ty, $fty2:ty)
     ) => {
         if let $name::$variant(_f0, _f1, _f2) = $self {
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                &$tag, &mut $writer, $compress,
-            )?;
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                _f0, &mut $writer, $compress,
-            )?;
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                _f1, &mut $writer, $compress,
-            )?;
-            ::ark_serialize::CanonicalSerialize::serialize_with_mode(
-                _f2, &mut $writer, $compress,
-            )?;
+            $crate::serialize::Canonical::encode(&$tag, &mut $writer)?;
+            $crate::serialize::Canonical::encode(_f0, &mut $writer)?;
+            $crate::serialize::Canonical::encode(_f1, &mut $writer)?;
+            $crate::serialize::Canonical::encode(_f2, &mut $writer)?;
             return ::core::result::Result::Ok(());
         }
     };
@@ -180,95 +137,83 @@ macro_rules! canonical_serde_enum {
     // ── @try_size helpers (per field-count) ──────────────────────────
 
     // unit
-    (@try_size $self:ident, $compress:ident,
+    (@try_size $self:ident,
      $name:ident, $variant:ident
     ) => {
         if let $name::$variant = $self {
-            return ::ark_serialize::CanonicalSerialize::serialized_size(&0u8, $compress);
+            return $crate::serialize::Canonical::encoded_len(&0u8);
         }
     };
 
     // 1 field
-    (@try_size $self:ident, $compress:ident,
+    (@try_size $self:ident,
      $name:ident, $variant:ident ($fty0:ty)
     ) => {
         if let $name::$variant(_f0) = $self {
-            return ::ark_serialize::CanonicalSerialize::serialized_size(&0u8, $compress)
-                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f0, $compress);
+            return $crate::serialize::Canonical::encoded_len(&0u8)
+                 + $crate::serialize::Canonical::encoded_len(_f0);
         }
     };
 
     // 2 fields
-    (@try_size $self:ident, $compress:ident,
+    (@try_size $self:ident,
      $name:ident, $variant:ident ($fty0:ty, $fty1:ty)
     ) => {
         if let $name::$variant(_f0, _f1) = $self {
-            return ::ark_serialize::CanonicalSerialize::serialized_size(&0u8, $compress)
-                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f0, $compress)
-                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f1, $compress);
+            return $crate::serialize::Canonical::encoded_len(&0u8)
+                 + $crate::serialize::Canonical::encoded_len(_f0)
+                 + $crate::serialize::Canonical::encoded_len(_f1);
         }
     };
 
     // 3 fields
-    (@try_size $self:ident, $compress:ident,
+    (@try_size $self:ident,
      $name:ident, $variant:ident ($fty0:ty, $fty1:ty, $fty2:ty)
     ) => {
         if let $name::$variant(_f0, _f1, _f2) = $self {
-            return ::ark_serialize::CanonicalSerialize::serialized_size(&0u8, $compress)
-                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f0, $compress)
-                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f1, $compress)
-                 + ::ark_serialize::CanonicalSerialize::serialized_size(_f2, $compress);
+            return $crate::serialize::Canonical::encoded_len(&0u8)
+                 + $crate::serialize::Canonical::encoded_len(_f0)
+                 + $crate::serialize::Canonical::encoded_len(_f1)
+                 + $crate::serialize::Canonical::encoded_len(_f2);
         }
     };
 
     // ── @deserialize helpers (per field-count) ──────────────────────
 
     // unit
-    (@deserialize $reader:ident, $compress:ident, $validate:ident,
+    (@deserialize $reader:ident,
      $name:ident, $variant:ident
     ) => {
         ::core::result::Result::Ok($name::$variant)
     };
 
     // 1 field
-    (@deserialize $reader:ident, $compress:ident, $validate:ident,
+    (@deserialize $reader:ident,
      $name:ident, $variant:ident ($fty0:ty)
     ) => {
         ::core::result::Result::Ok($name::$variant(
-            <$fty0 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
-                &mut $reader, $compress, $validate,
-            )?,
+            <$fty0 as $crate::serialize::Canonical>::decode(&mut $reader)?,
         ))
     };
 
     // 2 fields
-    (@deserialize $reader:ident, $compress:ident, $validate:ident,
+    (@deserialize $reader:ident,
      $name:ident, $variant:ident ($fty0:ty, $fty1:ty)
     ) => {
         ::core::result::Result::Ok($name::$variant(
-            <$fty0 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
-                &mut $reader, $compress, $validate,
-            )?,
-            <$fty1 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
-                &mut $reader, $compress, $validate,
-            )?,
+            <$fty0 as $crate::serialize::Canonical>::decode(&mut $reader)?,
+            <$fty1 as $crate::serialize::Canonical>::decode(&mut $reader)?,
         ))
     };
 
     // 3 fields
-    (@deserialize $reader:ident, $compress:ident, $validate:ident,
+    (@deserialize $reader:ident,
      $name:ident, $variant:ident ($fty0:ty, $fty1:ty, $fty2:ty)
     ) => {
         ::core::result::Result::Ok($name::$variant(
-            <$fty0 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
-                &mut $reader, $compress, $validate,
-            )?,
-            <$fty1 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
-                &mut $reader, $compress, $validate,
-            )?,
-            <$fty2 as ::ark_serialize::CanonicalDeserialize>::deserialize_with_mode(
-                &mut $reader, $compress, $validate,
-            )?,
+            <$fty0 as $crate::serialize::Canonical>::decode(&mut $reader)?,
+            <$fty1 as $crate::serialize::Canonical>::decode(&mut $reader)?,
+            <$fty2 as $crate::serialize::Canonical>::decode(&mut $reader)?,
         ))
     };
 }

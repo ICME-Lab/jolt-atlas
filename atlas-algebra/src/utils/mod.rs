@@ -11,7 +11,6 @@ pub mod math;
 #[cfg(feature = "monitor")]
 pub mod monitor;
 pub mod profiling;
-pub mod serialization;
 pub mod small_scalar;
 pub mod thread;
 
@@ -23,7 +22,7 @@ pub mod thread;
 /// ```ignore
 /// use jolt_core::utils::index_to_field_bitvector;
 /// # use crate::field::fp128::Fp128 as Fr;
-/// # use ark_std::{One, Zero};
+/// # use num_traits::{One, Zero};
 /// let zero = Fr::zero();
 /// let one = Fr::one();
 ///
@@ -152,9 +151,20 @@ pub fn interleave_bits(even_bits: u32, odd_bits: u32) -> u64 {
     (x_bits << 1) | y_bits
 }
 
+/// The fixed-seed RNG the test suites draw from (the seed arkworks' `test_rng` used, so every
+/// test sees the stream it always has).
+pub fn test_rng() -> rand::rngs::StdRng {
+    use rand::SeedableRng;
+    let seed = [
+        1, 0, 0, 0, 23, 0, 0, 0, 200, 1, 0, 0, 210, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0,
+    ];
+    rand::rngs::StdRng::from_seed(seed)
+}
+
 #[cfg(test)]
 mod tests {
-    use ark_std::test_rng;
+    use crate::utils::test_rng;
     use rand_core::RngCore;
 
     use super::*;

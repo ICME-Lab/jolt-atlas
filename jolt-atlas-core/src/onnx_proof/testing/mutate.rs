@@ -7,7 +7,6 @@
 //! A site whose mutation is accepted is a dead field (proof malleability) or
 //! an orphan claim; a verifier panic is a robustness bug.
 
-use ark_std::One;
 use atlas_algebra::field::{Field, Ring};
 use atlas_algebra::poly::{
     point::{OpeningPoint, BIG_ENDIAN},
@@ -17,6 +16,7 @@ use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use common::VirtualPoly;
+use num_traits::One;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
 use crate::onnx_proof::{ONNXProof, ProofId, ProofType};

@@ -11,4 +11,5 @@
 )]
 pub mod field;
 pub mod poly;
+pub use common::serialize;
 pub mod utils;

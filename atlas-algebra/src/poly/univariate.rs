@@ -1,7 +1,7 @@
 //! Univariate polynomials in coefficient form: [`UnivariatePoly`], its compressed round-message
 //! form [`CompressedPoly`] (linear term omitted, recovered from the sumcheck hint), and
 //! [`OmittedConstantPoly`]. Sumcheck proofs carry [`CompressedPoly`]s and evaluation reduction
-//! carries a [`UnivariatePoly`], both through the `CanonicalSerialize` impls below.
+//! carries a [`UnivariatePoly`], both through the `Canonical` impls below.
 //!
 //! The types are bounded by upstream's `crate::field::Field` because the external `akita-*` crates
 //! bind them through the `jolt-poly` compatibility package.
@@ -10,13 +10,10 @@ use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::field::Field;
 use allocative::Allocative;
-use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
-    Write,
-};
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
 
-use crate::utils::serialization::deserialize_vec;
+use crate::serialize::{Canonical, Error};
 
 /// Shared interface for univariate polynomial types.
 ///
@@ -535,67 +532,33 @@ impl<F: Field> OmittedConstantPoly<F> {
     }
 }
 
-// Proof wire form: the coefficient vector as an arkworks `Vec`. Its length is prover-supplied, so
-// it decodes through `deserialize_vec`.
+// Proof wire form: the coefficient vector as a `Vec` (its `u64` length, then the coefficients).
 
-impl<F: Field + CanonicalSerialize> CanonicalSerialize for UnivariatePoly<F> {
-    fn serialize_with_mode<W: Write>(
-        &self,
-        writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
-        self.coefficients.serialize_with_mode(writer, compress)
+impl<F: Field + Canonical> Canonical for UnivariatePoly<F> {
+    fn encode<W: Write>(&self, writer: W) -> Result<(), Error> {
+        self.coefficients.encode(writer)
     }
 
-    fn serialized_size(&self, compress: Compress) -> usize {
-        self.coefficients.serialized_size(compress)
+    fn encoded_len(&self) -> usize {
+        self.coefficients.encoded_len()
     }
-}
 
-impl<F: Field + CanonicalDeserialize> Valid for UnivariatePoly<F> {
-    fn check(&self) -> Result<(), SerializationError> {
-        self.coefficients.check()
+    fn decode<R: Read>(reader: R) -> Result<Self, Error> {
+        Ok(Self::new(<Vec<F> as Canonical>::decode(reader)?))
     }
 }
 
-impl<F: Field + CanonicalDeserialize> CanonicalDeserialize for UnivariatePoly<F> {
-    fn deserialize_with_mode<R: Read>(
-        reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        Ok(Self::new(deserialize_vec(reader, compress, validate)?))
-    }
-}
-
-impl<F: Field + CanonicalSerialize> CanonicalSerialize for CompressedPoly<F> {
-    fn serialize_with_mode<W: Write>(
-        &self,
-        writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
-        self.coeffs_except_linear_term
-            .serialize_with_mode(writer, compress)
+impl<F: Field + Canonical> Canonical for CompressedPoly<F> {
+    fn encode<W: Write>(&self, writer: W) -> Result<(), Error> {
+        self.coeffs_except_linear_term.encode(writer)
     }
 
-    fn serialized_size(&self, compress: Compress) -> usize {
-        self.coeffs_except_linear_term.serialized_size(compress)
+    fn encoded_len(&self) -> usize {
+        self.coeffs_except_linear_term.encoded_len()
     }
-}
 
-impl<F: Field + CanonicalDeserialize> Valid for CompressedPoly<F> {
-    fn check(&self) -> Result<(), SerializationError> {
-        self.coeffs_except_linear_term.check()
-    }
-}
-
-impl<F: Field + CanonicalDeserialize> CanonicalDeserialize for CompressedPoly<F> {
-    fn deserialize_with_mode<R: Read>(
-        reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        Ok(Self::new(deserialize_vec(reader, compress, validate)?))
+    fn decode<R: Read>(reader: R) -> Result<Self, Error> {
+        Ok(Self::new(<Vec<F> as Canonical>::decode(reader)?))
     }
 }
 
@@ -893,7 +856,7 @@ mod compressed_tests {
     /// The proof wire form is the coefficient vector as an arkworks `Vec`, and decodes back.
     #[test]
     fn canonical_serialization_is_the_coefficient_vector() {
-        use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+        use crate::serialize::{from_bytes, to_bytes};
         let (p, _) = poly_and_hint(vec![
             Fr::from_u64(1),
             Fr::from_u64(3),
@@ -902,28 +865,25 @@ mod compressed_tests {
         ]);
         let compressed = p.compress();
         for (bytes, expected) in [
-            (wire(&p), wire(&p.coefficients().to_vec())),
             (
-                wire(&compressed),
-                wire(&compressed.coeffs_except_linear_term().to_vec()),
+                to_bytes(&p).unwrap(),
+                to_bytes(&p.coefficients().to_vec()).unwrap(),
+            ),
+            (
+                to_bytes(&compressed).unwrap(),
+                to_bytes(&compressed.coeffs_except_linear_term().to_vec()).unwrap(),
             ),
         ] {
             assert_eq!(bytes, expected);
         }
         assert_eq!(
-            UnivariatePoly::<Fr>::deserialize_compressed(&wire(&p)[..]).unwrap(),
+            from_bytes::<UnivariatePoly<Fr>>(&to_bytes(&p).unwrap()).unwrap(),
             p
         );
         assert_eq!(
-            CompressedPoly::<Fr>::deserialize_compressed(&wire(&compressed)[..]).unwrap(),
+            from_bytes::<CompressedPoly<Fr>>(&to_bytes(&compressed).unwrap()).unwrap(),
             compressed
         );
-
-        fn wire(value: &impl CanonicalSerialize) -> Vec<u8> {
-            let mut bytes = Vec::new();
-            value.serialize_compressed(&mut bytes).unwrap();
-            bytes
-        }
     }
 
     #[test]

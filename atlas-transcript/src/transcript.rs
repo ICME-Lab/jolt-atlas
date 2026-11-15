@@ -1,5 +1,5 @@
-use ark_serialize::CanonicalSerialize;
 use atlas_algebra::field::JoltField;
+use atlas_algebra::serialize::Canonical;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use std::borrow::Borrow;
 
@@ -11,7 +11,7 @@ pub trait Transcript: Send + Sync + 'static {
     fn append_bytes(&mut self, bytes: &[u8]);
     fn append_u64(&mut self, x: u64);
     fn append_scalar<F: JoltField>(&mut self, scalar: &F);
-    fn append_serializable<F: CanonicalSerialize>(&mut self, scalar: &F);
+    fn append_serializable<F: Canonical>(&mut self, scalar: &F);
     fn append_scalars<F: JoltField>(&mut self, scalars: &[impl Borrow<F>]);
     fn challenge_u128(&mut self) -> u128;
     /// A full-width field challenge, decoded through the transcript's challenge codec.

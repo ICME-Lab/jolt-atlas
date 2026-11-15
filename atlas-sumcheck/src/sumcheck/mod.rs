@@ -1,33 +1,30 @@
 use crate::engine::{verify_compressed, CompressedSumcheckProof, SumcheckClaim, SumcheckError};
 use atlas_algebra::{
-    field::JoltField,
-    poly::univariate::CompressedPoly,
-    utils::{errors::ProofVerifyError, serialization::deserialize_vec},
+    field::JoltField, poly::univariate::CompressedPoly, utils::errors::ProofVerifyError,
 };
 use atlas_transcript::Transcript;
 
-use ark_serialize::*;
+use atlas_algebra::serialize::{Canonical, Error};
+use std::io::{Read, Write};
 
-#[derive(CanonicalSerialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SumcheckInstanceProof<F: JoltField> {
     pub compressed_polys: Vec<CompressedPoly<F>>,
 }
 
-impl<F: JoltField> Valid for SumcheckInstanceProof<F> {
-    fn check(&self) -> Result<(), SerializationError> {
-        self.compressed_polys.check()
+/// The rounds as a `Vec` (its `u64` length, then each round's compressed polynomial).
+impl<F: JoltField> Canonical for SumcheckInstanceProof<F> {
+    fn encode<W: Write>(&self, writer: W) -> Result<(), Error> {
+        self.compressed_polys.encode(writer)
     }
-}
 
-impl<F: JoltField> CanonicalDeserialize for SumcheckInstanceProof<F> {
-    /// The round count is prover-supplied, so the rounds decode through [`deserialize_vec`].
-    fn deserialize_with_mode<R: Read>(
-        reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
+    fn encoded_len(&self) -> usize {
+        self.compressed_polys.encoded_len()
+    }
+
+    fn decode<R: Read>(reader: R) -> Result<Self, Error> {
         Ok(Self {
-            compressed_polys: deserialize_vec(reader, compress, validate)?,
+            compressed_polys: Vec::decode(reader)?,
         })
     }
 }

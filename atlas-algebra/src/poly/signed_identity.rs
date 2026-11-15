@@ -404,6 +404,7 @@ mod tests {
     use crate::field::fp128::Fp128 as Fr;
     use crate::field::Field as _;
     use crate::field::Ring;
+    use crate::utils::test_rng;
     use crate::{
         field::JoltField,
         poly::{
@@ -416,7 +417,6 @@ mod tests {
         },
         utils::{index_to_field_bitvector, interleave_bits},
     };
-    use ark_std::test_rng;
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     // --- SignedIdentityPoly tests ---

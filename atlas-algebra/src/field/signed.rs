@@ -307,6 +307,22 @@ impl S128 {
 }
 
 impl<const N: usize> SignedBigIntHi32<N> {
+    /// The magnitude as `N + 1` little-endian limbs: the low limbs, then the 32-bit head in the
+    /// top limb. This ignores the sign; pair with `is_positive()` for a signed value.
+    #[inline]
+    pub fn magnitude_as_bigint_nplus1<const NPLUS1: usize>(&self) -> Limbs<NPLUS1> {
+        debug_assert!(
+            NPLUS1 == N + 1,
+            "NPLUS1 must be N+1 for SignedBigIntHi32 magnitude pack"
+        );
+        let mut limbs = [0u64; NPLUS1];
+        if N > 0 {
+            limbs[..N].copy_from_slice(&self.magnitude_lo);
+        }
+        limbs[N] = self.magnitude_hi as u64;
+        Limbs(limbs)
+    }
+
     #[inline(always)]
     fn mag_is_zero(&self) -> bool {
         self.magnitude_hi == 0 && self.magnitude_lo.iter().all(|&l| l == 0)

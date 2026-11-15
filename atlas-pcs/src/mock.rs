@@ -1,7 +1,5 @@
 use std::{borrow::Borrow, marker::PhantomData};
 
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-
 use atlas_algebra::{
     field::JoltField,
     poly::multilinear::MultilinearPolynomial,
@@ -16,10 +14,12 @@ pub struct MockCommitScheme<F: JoltField> {
     _marker: PhantomData<F>,
 }
 
-#[derive(Default, Debug, PartialEq, Clone, CanonicalDeserialize, CanonicalSerialize)]
+#[derive(Default, Debug, PartialEq, Clone)]
 pub struct MockCommitment<F: JoltField> {
     _field: PhantomData<F>,
 }
+
+common::impl_canonical_struct!([F: JoltField] MockCommitment<F> { _field });
 
 impl<F: JoltField> AppendToTranscript for MockCommitment<F> {
     fn append_to_transcript<ProofTranscript: Transcript>(&self, transcript: &mut ProofTranscript) {
@@ -27,10 +27,12 @@ impl<F: JoltField> AppendToTranscript for MockCommitment<F> {
     }
 }
 
-#[derive(CanonicalSerialize, CanonicalDeserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct MockProof<F: JoltField> {
     opening_point: Vec<F::Challenge>,
 }
+
+common::impl_canonical_struct!([F: JoltField] MockProof<F> { opening_point });
 
 impl<F> CommitmentScheme for MockCommitScheme<F>
 where

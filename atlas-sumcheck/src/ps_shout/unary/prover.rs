@@ -8,7 +8,6 @@ use crate::{
         ReadRafSumcheckParams,
     },
 };
-use ark_std::Zero;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -21,6 +20,7 @@ use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::VirtualPoly;
+use num_traits::Zero;
 
 impl<F: JoltField> RafProverState<F> for UnaryRafPS<F> {
     fn init_Q(&mut self, u_evals: &[F], lookup_indices: &[LookupBits]) {

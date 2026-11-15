@@ -1,5 +1,4 @@
 use allocative::Allocative;
-use ark_ff::{BigInt, UniformRand};
 pub use num_traits::{One, Zero};
 use std::{
     fmt::{Debug, Display},
@@ -7,7 +6,7 @@ use std::{
     ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use crate::serialize::Canonical;
 
 pub trait FieldOps<Rhs = Self, Output = Self>:
     Add<Rhs, Output = Output>
@@ -126,7 +125,98 @@ pub trait UnreducedInteger:
 {
 }
 
-impl<const N: usize> UnreducedInteger for BigInt<N> {}
+impl<const N: usize> UnreducedInteger for Limbs<N> {}
+
+// The ladder's view of `Limbs` as an unreduced integer: arithmetic truncates to the left
+// operand's width, as the unreduced accumulators require (the right operand is never wider).
+
+impl<const N: usize> Zero for Limbs<N> {
+    #[inline]
+    fn zero() -> Self {
+        Limbs::zero()
+    }
+
+    #[inline]
+    fn is_zero(&self) -> bool {
+        Limbs::is_zero(self)
+    }
+}
+
+impl<const N: usize> From<u128> for Limbs<N> {
+    #[inline]
+    fn from(val: u128) -> Self {
+        let mut repr = Self::default();
+        repr.0[0] = val as u64;
+        if N > 1 {
+            repr.0[1] = (val >> 64) as u64;
+        }
+        repr
+    }
+}
+
+impl<const N: usize, const M: usize> AddAssign<&Limbs<M>> for Limbs<N> {
+    #[inline]
+    fn add_assign(&mut self, rhs: &Limbs<M>) {
+        debug_assert!(N >= M, "right operand cannot be wider than left operand");
+        self.add_assign_trunc::<M>(rhs);
+    }
+}
+
+impl<const N: usize, const M: usize> AddAssign<Limbs<M>> for Limbs<N> {
+    #[inline]
+    fn add_assign(&mut self, rhs: Limbs<M>) {
+        *self += &rhs;
+    }
+}
+
+impl<const N: usize, const M: usize> SubAssign<&Limbs<M>> for Limbs<N> {
+    #[inline]
+    fn sub_assign(&mut self, rhs: &Limbs<M>) {
+        debug_assert!(N >= M, "right operand cannot be wider than left operand");
+        self.sub_assign_trunc::<M>(rhs);
+    }
+}
+
+impl<const N: usize, const M: usize> SubAssign<Limbs<M>> for Limbs<N> {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Limbs<M>) {
+        *self -= &rhs;
+    }
+}
+
+impl<const N: usize, const M: usize> Add<&Limbs<M>> for Limbs<N> {
+    type Output = Limbs<N>;
+    #[inline]
+    fn add(mut self, rhs: &Limbs<M>) -> Limbs<N> {
+        self += rhs;
+        self
+    }
+}
+
+impl<const N: usize, const M: usize> Add<Limbs<M>> for Limbs<N> {
+    type Output = Limbs<N>;
+    #[inline]
+    fn add(self, rhs: Limbs<M>) -> Limbs<N> {
+        self + &rhs
+    }
+}
+
+impl<const N: usize, const M: usize> Sub<&Limbs<M>> for Limbs<N> {
+    type Output = Limbs<N>;
+    #[inline]
+    fn sub(mut self, rhs: &Limbs<M>) -> Limbs<N> {
+        self -= rhs;
+        self
+    }
+}
+
+impl<const N: usize, const M: usize> Sub<Limbs<M>> for Limbs<N> {
+    type Output = Limbs<N>;
+    #[inline]
+    fn sub(self, rhs: Limbs<M>) -> Limbs<N> {
+        self - &rhs
+    }
+}
 
 /// The field abstraction the proof system is written against: a [`Field`] with a canonical
 /// encoding, an accumulator and serde wire serialization (what the `akita-*` crates bound on),
@@ -159,8 +249,7 @@ pub trait JoltField:
     + Display
     + Debug
     + Default
-    + CanonicalSerialize
-    + CanonicalDeserialize
+    + Canonical
     + Hash
     + MaybeAllocative
     + ChallengeFieldOps<Self>
@@ -224,7 +313,7 @@ pub trait JoltField:
         + AddAssign<Self::UnreducedElem>
         + AddAssign<Self::UnreducedProduct>;
 
-    type SmallValueLookupTables: Clone + Default + CanonicalSerialize + CanonicalDeserialize;
+    type SmallValueLookupTables: Clone + Default + Canonical;
 
     /// The upstream field the transcript's challenge codec decodes full-width challenges into
     /// (same elements as `Self`); see [`JoltField::from_challenge_codec`].
@@ -252,13 +341,11 @@ pub trait JoltField:
         + Default
         + Eq
         + Hash
-        + CanonicalSerialize
-        + CanonicalDeserialize
+        + Canonical
         + Allocative
         + From<u128>
         + Into<Self>
         + ChallengeFieldOps<Self>
-        + UniformRand
         + OptimizedMul<Self, Self>;
 
     /// Computes the small-value lookup tables.
@@ -300,12 +387,12 @@ pub trait JoltField:
     /// Truncated multiply: field × M-limb magnitude → UnreducedMulU128Accum.
     /// Used by `WideAccumS` for accumulating field × {S160, S192} products.
     /// Implementations may reduce eagerly (Fp128 does).
-    fn mul_to_accum_mag<const M: usize>(&self, mag: &BigInt<M>) -> Self::UnreducedMulU128Accum;
+    fn mul_to_accum_mag<const M: usize>(&self, mag: &Limbs<M>) -> Self::UnreducedMulU128Accum;
 
     /// Truncated multiply: field × M-limb magnitude → UnreducedProduct.
     /// Used by `FullAccumS` for accumulating field × {S192, S256} products.
     /// Implementations may reduce eagerly (Fp128 does).
-    fn mul_to_product_mag<const M: usize>(&self, mag: &BigInt<M>) -> Self::UnreducedProduct;
+    fn mul_to_product_mag<const M: usize>(&self, mag: &Limbs<M>) -> Self::UnreducedProduct;
 
     fn reduce_mul_u64(x: Self::UnreducedMulU64) -> Self;
     fn reduce_mul_u128(x: Self::UnreducedMulU128) -> Self;

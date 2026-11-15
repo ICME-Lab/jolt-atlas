@@ -472,7 +472,7 @@ mod tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
 
-    use ark_std::test_rng;
+    use crate::utils::test_rng;
 
     #[test]
     fn identity_poly() {

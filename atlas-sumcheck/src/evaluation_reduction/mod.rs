@@ -16,7 +16,7 @@ use std::fmt::Debug;
 
 use crate::opening_proof::Opening;
 use allocative::Allocative;
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use atlas_algebra::serialize::{Canonical, Error};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -27,28 +27,46 @@ use atlas_algebra::{
 };
 use atlas_trace::Tensor;
 use atlas_transcript::{AppendToTranscript, Transcript};
+use std::io::{Read, Write};
 
 /// Public instance for one N-to-1 evaluation reduction round.
-#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+#[derive(Debug, Clone, PartialEq, Allocative)]
 pub struct EvalReductionInstance<F: JoltField> {
     openings: Vec<(Vec<F>, F)>, // Vec of (r, v) pairs for each opening claim
 }
 
 /// Witness for one N-to-1 evaluation reduction round.
-#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+#[derive(Debug, Clone, PartialEq, Allocative)]
 pub struct EvalReductionWitness<F: JoltField> {
     pub mle: MultilinearPolynomial<F>,
 }
 
 /// Proof for one N-to-1 evaluation reduction round.
-#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+#[derive(Debug, Clone, PartialEq, Allocative)]
 pub struct EvalReductionProof<F: JoltField> {
     /// Restriction polynomial h(t) = P(l(t)).
     pub h: UnivariatePoly<F>,
 }
 
+/// The restriction polynomial `h` (as a `UnivariatePoly`: its coefficient vector).
+impl<F: JoltField> Canonical for EvalReductionProof<F> {
+    fn encode<W: Write>(&self, writer: W) -> Result<(), Error> {
+        self.h.encode(writer)
+    }
+
+    fn encoded_len(&self) -> usize {
+        self.h.encoded_len()
+    }
+
+    fn decode<R: Read>(reader: R) -> Result<Self, Error> {
+        Ok(Self {
+            h: UnivariatePoly::decode(reader)?,
+        })
+    }
+}
+
 /// Reduced instance produced by the N-to-1 evaluation reduction.
-#[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
+#[derive(Debug, Clone, PartialEq, Allocative)]
 pub struct ReducedInstance<F: JoltField> {
     pub r: Vec<F>,
     pub claim: F,

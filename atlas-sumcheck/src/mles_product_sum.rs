@@ -1328,10 +1328,11 @@ fn product_eval_univariate_naive_accumulate<F: JoltField>(
 
 #[cfg(test)]
 mod tests {
-    use ark_std::{test_rng, One, UniformRand, Zero};
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::field::Field;
     use atlas_algebra::poly::split_eq::GruenSplitEqPolynomial;
+    use atlas_algebra::utils::test_rng;
+    use num_traits::{One, Zero};
     use std::array::from_fn;
 
     use crate::mles_product_sum::{
@@ -1374,12 +1375,12 @@ mod tests {
     /// thereby exercising all specialized product kernels for a given `N_MLE`.
     fn check_optimized_product_sum_matches_naive<const N_MLE: usize>() {
         let mut rng = &mut test_rng();
-        let r_whole = [<Fr as JoltField>::Challenge::rand(&mut rng)];
+        let r_whole = [<Fr as JoltField>::Challenge::random(&mut rng)];
         let r: &[<Fr as JoltField>::Challenge; 1] = &r_whole;
         let mles: [_; N_MLE] = from_fn(|_| random_mle(1, rng));
         let claim = gen_product_mle(&mles).evaluate(r);
 
-        let challenge_whole = [<Fr as JoltField>::Challenge::rand(&mut rng)];
+        let challenge_whole = [<Fr as JoltField>::Challenge::random(&mut rng)];
         let challenge: &[<Fr as JoltField>::Challenge; 1] = &challenge_whole;
         let mle_challenge_product = mles.iter().map(|p| p.evaluate(challenge)).product::<Fr>();
         let eval = EqPolynomial::mle(challenge, r) * mle_challenge_product;
@@ -1404,7 +1405,7 @@ mod tests {
         let r = [Fr::one()];
         let mles: [_; 4] = from_fn(|_| random_mle(1, rng));
         let claim = gen_product_mle(&mles).evaluate(&r);
-        let challenge: Fr = <Fr as JoltField>::Challenge::rand(&mut rng);
+        let challenge: Fr = <Fr as JoltField>::Challenge::random(&mut rng);
         let expected = EqPolynomial::mle(&[challenge], &r)
             * mles
                 .iter()
@@ -1457,7 +1458,7 @@ mod tests {
         // Use enough variables to exercise the split-eq inner loop (E_in_len > 1).
         let n_vars = 6;
         let w: Vec<<Fr as JoltField>::Challenge> = (0..n_vars)
-            .map(|_| <Fr as JoltField>::Challenge::rand(&mut rng))
+            .map(|_| <Fr as JoltField>::Challenge::random(&mut rng))
             .collect();
         let w_field: Vec<Fr> = w.to_vec();
         let mut eq_poly = GruenSplitEqPolynomial::new(
@@ -1502,7 +1503,7 @@ mod tests {
             assert_eq!(actual, expected);
 
             // Advance one round of binding (simulate sumcheck).
-            let r_j = <Fr as JoltField>::Challenge::rand(&mut rng);
+            let r_j = <Fr as JoltField>::Challenge::random(&mut rng);
             for mle in mles.iter_mut() {
                 mle.bind_parallel(r_j, BindingOrder::LowToHigh);
             }

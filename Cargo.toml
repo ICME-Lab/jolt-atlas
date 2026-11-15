@@ -45,10 +45,6 @@ atlas-pcs = { path = "./atlas-pcs", default-features = false }
 jolt-atlas-verifier = { path = "./jolt-atlas-verifier" }
 
 # Cryptography and Math
-ark-serialize = { version = "0.5.0", default-features = false, features = [
-    "derive",
-] }
-ark-std = { version = "0.5.0", default-features = false }
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
 
 # Numeric
@@ -187,8 +183,6 @@ inherits = "release"
 debug = false
 
 [patch.crates-io]
-ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
 
 # The Akita crates depend on jolt-field and jolt-poly by git; resolve them to the owned

@@ -10,7 +10,6 @@ use crate::{
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
-use ark_std::Zero;
 use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
@@ -28,6 +27,7 @@ use atlas_algebra::{
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
+use num_traits::Zero;
 use std::{
     collections::{BTreeMap, HashMap},
     mem,

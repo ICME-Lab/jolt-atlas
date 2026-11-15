@@ -2,6 +2,7 @@ use allocative::Allocative;
 
 pub mod consts;
 pub mod parallel;
+pub mod serialize;
 pub mod utils;
 
 // ---------------------------------------------------------------------------

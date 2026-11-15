@@ -3,7 +3,7 @@
 //!
 //! [`Fp128`] is the Solinas kernel type [`Prime128OffsetA7F7`] (taken from upstream
 //! `jolt-field`, `field::solinas`). This module adds what the proof system needs on top of the
-//! kernel: arkworks serialization (the canonical `u128`), division, `UniformRand`, `Allocative`,
+//! kernel: the canonical serialization (the `u128`), division, `Allocative`,
 //! and the `JoltField` unreduced-product ladder.
 //!
 //! fp128 is not a Montgomery field: elements are stored canonically, so
@@ -14,13 +14,10 @@
 
 use super::{FieldOps, JoltField};
 use crate::field::folded_accum::{Folded128MulU64, Folded128Product};
+use crate::field::Limbs;
 use crate::field::{CanonicalEncoding, Field, Prime128OffsetA7F7, Ring};
+use crate::serialize::{Canonical, Error};
 use allocative::Allocative;
-use ark_ff::{BigInt, UniformRand};
-use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
-};
-use ark_std::rand::Rng;
 use std::io::{Read, Write};
 use std::ops::{Add, Div, Mul, Sub};
 
@@ -68,52 +65,18 @@ impl<'b> Div<&'b Fp128> for &Fp128 {
     }
 }
 
-/// Uniform sampling by rejection over `u128`; `p > 2^127` so the expected
-/// number of draws is below two.
-impl UniformRand for Fp128 {
-    fn rand<R: Rng + ?Sized>(rng: &mut R) -> Self {
-        loop {
-            if let Some(f) = Fp128::from_u128_checked(rng.gen()) {
-                return f;
-            }
-        }
-    }
-}
-
-impl Valid for Fp128 {
-    fn check(&self) -> Result<(), SerializationError> {
-        Ok(())
-    }
-}
-
-impl CanonicalSerialize for Fp128 {
-    fn serialize_with_mode<W: Write>(
-        &self,
-        writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
-        self.to_canonical_u128()
-            .serialize_with_mode(writer, compress)
+/// The canonical `u128` (16 bytes, little-endian); decoding rejects a non-canonical value.
+impl Canonical for Fp128 {
+    fn encode<W: Write>(&self, writer: W) -> Result<(), Error> {
+        self.to_canonical_u128().encode(writer)
     }
 
-    fn serialized_size(&self, compress: Compress) -> usize {
-        0u128.serialized_size(compress)
+    fn encoded_len(&self) -> usize {
+        16
     }
-}
 
-impl CanonicalDeserialize for Fp128 {
-    fn deserialize_with_mode<R: Read>(
-        reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        let value = u128::deserialize_with_mode(reader, compress, validate)?;
-        match validate {
-            Validate::Yes => Fp128::from_u128_checked(value).ok_or(SerializationError::InvalidData),
-            // Unvalidated input is reduced (p > 2^127, so any u128 is < 2p and
-            // one conditional subtract suffices).
-            Validate::No => Ok(Fp128::from_u128_reduced(value)),
-        }
+    fn decode<R: Read>(reader: R) -> Result<Self, Error> {
+        Fp128::from_u128_checked(u128::decode(reader)?).ok_or(Error::InvalidData)
     }
 }
 
@@ -167,7 +130,7 @@ impl FieldOps<&Fp128, Fp128> for &Fp128 {}
 /// subsequent widening multiply plus Solinas reduce are correct for any
 /// 128-bit integer regardless.
 #[inline(always)]
-fn elem_to_field(a: &BigInt<2>) -> Fp128 {
+fn elem_to_field(a: &Limbs<2>) -> Fp128 {
     // SAFETY: only canonicity is debug-asserted upstream; see above.
     unsafe { Fp128::from_canonical_u128(a.0[0] as u128 | (a.0[1] as u128) << 64) }
 }
@@ -178,7 +141,7 @@ fn elem_to_field(a: &BigInt<2>) -> Fp128 {
 /// folded accumulator's slot headroom, so we reduce and embed the canonical
 /// value, which is equivalent modulo p by linearity of the final reduction.
 #[inline(always)]
-fn mul_mag_reduced<const M: usize>(a: Fp128, mag: &BigInt<M>) -> Fp128 {
+fn mul_mag_reduced<const M: usize>(a: Fp128, mag: &Limbs<M>) -> Fp128 {
     // M is const, so this match is resolved at monomorphization time. The
     // M ≤ 3 and M = 4 arms hit `mul_wide_limbs`' specialized paths and are
     // exact (2 + M output limbs). Callers currently pass M ∈ {3, 4}
@@ -199,7 +162,7 @@ impl JoltField for Fp128 {
     const MONTGOMERY_R: Self = unsafe { Fp128::from_canonical_u128(1) };
     const MONTGOMERY_R_SQUARE: Self = unsafe { Fp128::from_canonical_u128(1) };
 
-    type UnreducedElem = BigInt<2>;
+    type UnreducedElem = Limbs<2>;
     type UnreducedMulU64 = Folded128MulU64;
     // The three product-tier levels share one folded type: field × u128 and
     // field × field products are both 4 limbs for fp128, and the folded slots
@@ -244,48 +207,48 @@ impl JoltField for Fp128 {
     }
 
     #[inline(always)]
-    fn to_unreduced(&self) -> BigInt<2> {
-        BigInt::new(self.to_limbs())
+    fn to_unreduced(&self) -> Limbs<2> {
+        Limbs::new(self.to_limbs())
     }
 
     #[inline]
     fn mul_u64_unreduced(self, other: u64) -> Folded128MulU64 {
-        Folded128MulU64::from_bigint(BigInt::new(self.mul_wide_u64(other)))
+        Folded128MulU64::from_bigint(Limbs::new(self.mul_wide_u64(other)))
     }
 
     #[inline]
     fn mul_u128_unreduced(self, other: u128) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(self.mul_wide_u128(other)))
+        Folded128Product::from_bigint(Limbs::new(self.mul_wide_u128(other)))
     }
 
     #[inline]
     fn mul_to_product(self, other: Self) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(self.mul_wide(other)))
+        Folded128Product::from_bigint(Limbs::new(self.mul_wide(other)))
     }
 
     #[inline]
     fn mul_to_product_accum(self, other: Self) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(self.mul_wide(other)))
+        Folded128Product::from_bigint(Limbs::new(self.mul_wide(other)))
     }
 
     #[inline]
-    fn unreduced_mul_u64(a: &BigInt<2>, b: u64) -> Folded128MulU64 {
-        Folded128MulU64::from_bigint(BigInt::new(elem_to_field(a).mul_wide_u64(b)))
+    fn unreduced_mul_u64(a: &Limbs<2>, b: u64) -> Folded128MulU64 {
+        Folded128MulU64::from_bigint(Limbs::new(elem_to_field(a).mul_wide_u64(b)))
     }
 
     #[inline]
-    fn unreduced_mul_to_product_accum(a: &BigInt<2>, b: &BigInt<2>) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(elem_to_field(a).mul_wide(elem_to_field(b))))
+    fn unreduced_mul_to_product_accum(a: &Limbs<2>, b: &Limbs<2>) -> Folded128Product {
+        Folded128Product::from_bigint(Limbs::new(elem_to_field(a).mul_wide(elem_to_field(b))))
     }
 
     #[inline]
-    fn mul_to_accum_mag<const M: usize>(&self, mag: &BigInt<M>) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(mul_mag_reduced(*self, mag).to_limbs()))
+    fn mul_to_accum_mag<const M: usize>(&self, mag: &Limbs<M>) -> Folded128Product {
+        Folded128Product::from_bigint(Limbs::new(mul_mag_reduced(*self, mag).to_limbs()))
     }
 
     #[inline]
-    fn mul_to_product_mag<const M: usize>(&self, mag: &BigInt<M>) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(mul_mag_reduced(*self, mag).to_limbs()))
+    fn mul_to_product_mag<const M: usize>(&self, mag: &Limbs<M>) -> Folded128Product {
+        Folded128Product::from_bigint(Limbs::new(mul_mag_reduced(*self, mag).to_limbs()))
     }
 
     #[inline]
@@ -320,11 +283,12 @@ mod tests {
     // exercised deliberately: they are `JoltField`/`Challenge` trait surface.
     #![allow(clippy::op_ref, clippy::assign_op_pattern, clippy::useless_conversion)]
     use super::*;
+    use crate::field::signed::{S128, S64};
     use crate::field::{BarrettReduce, FMAdd, MontgomeryReduce};
     use crate::utils::accumulation::{FullAccumS, MedAccumS, SmallAccumS, WideAccumS};
-    use ark_ff::biginteger::{S128, S64};
-    use ark_std::test_rng;
+    use crate::utils::test_rng;
     use num_traits::{One, Zero};
+    use rand::Rng;
 
     type F = Fp128;
 
@@ -351,9 +315,9 @@ mod tests {
             assert_eq!(Ring::square(&fx), fx * fx);
             assert_eq!(-fx + fx, F::zero());
 
-            let a = F::rand(&mut rng);
-            let b = F::rand(&mut rng);
-            let c = F::rand(&mut rng);
+            let a = F::random(&mut rng);
+            let b = F::random(&mut rng);
+            let c = F::random(&mut rng);
             assert_eq!((a + b) * c, a * c + b * c);
             assert_eq!(a * b, b * a);
             assert_eq!(a + &b, a + b);
@@ -375,8 +339,8 @@ mod tests {
         let mut rng = test_rng();
         assert!(Field::inverse(&F::zero()).is_none());
         for _ in 0..64 {
-            let a = F::rand(&mut rng);
-            let b = F::rand(&mut rng);
+            let a = F::random(&mut rng);
+            let b = F::random(&mut rng);
             if a.is_zero() || b.is_zero() {
                 continue;
             }
@@ -444,7 +408,7 @@ mod tests {
     fn from_bytes_reduces_mod_order() {
         let mut rng = test_rng();
         for _ in 0..64 {
-            let a = F::rand(&mut rng);
+            let a = F::random(&mut rng);
             let bytes = a.to_canonical_u128().to_le_bytes();
             assert_eq!(F::from_bytes(&bytes), a);
 
@@ -467,21 +431,15 @@ mod tests {
     fn serialization_roundtrip() {
         let mut rng = test_rng();
         for _ in 0..64 {
-            let a = F::rand(&mut rng);
-            let mut compressed = Vec::new();
-            a.serialize_compressed(&mut compressed).unwrap();
-            assert_eq!(compressed.len(), 16);
-            assert_eq!(a.compressed_size(), 16);
-            assert_eq!(F::deserialize_compressed(&compressed[..]).unwrap(), a);
+            let a = F::random(&mut rng);
+            let bytes = crate::serialize::to_bytes(&a).unwrap();
+            assert_eq!(bytes, a.to_canonical_u128().to_le_bytes());
+            assert_eq!(a.encoded_len(), 16);
+            assert_eq!(crate::serialize::from_bytes::<F>(&bytes).unwrap(), a);
         }
 
-        // Non-canonical bytes are rejected when validating, reduced otherwise.
-        let bytes = u128::MAX.to_le_bytes();
-        assert!(F::deserialize_compressed(&bytes[..]).is_err());
-        assert_eq!(
-            F::deserialize_compressed_unchecked(&bytes[..]).unwrap(),
-            F::from_u128(u128::MAX)
-        );
+        // Non-canonical bytes are rejected.
+        assert!(crate::serialize::from_bytes::<F>(&u128::MAX.to_le_bytes()).is_err());
     }
 
     #[test]
@@ -490,8 +448,8 @@ mod tests {
         assert_eq!(F::MONTGOMERY_R_SQUARE, F::one());
         let mut rng = test_rng();
         for _ in 0..64 {
-            let a = F::rand(&mut rng);
-            let b = F::rand(&mut rng);
+            let a = F::random(&mut rng);
+            let b = F::random(&mut rng);
             assert_eq!(F::reduce_product(a.mul_to_product(b)), a * b);
             assert_eq!(F::reduce_product_accum(a.mul_to_product_accum(b)), a * b);
         }
@@ -504,16 +462,16 @@ mod tests {
             let mut acc_u64 = Folded128MulU64::zero();
             let mut expected = F::zero();
             for _ in 0..100 {
-                let a = F::rand(&mut rng);
+                let a = F::random(&mut rng);
                 let n: u64 = rng.gen();
                 acc_u64 += a.mul_u64_unreduced(n);
                 expected += a * F::from_u64(n);
 
-                let e = F::rand(&mut rng);
+                let e = F::random(&mut rng);
                 acc_u64 = acc_u64 + e.to_unreduced();
                 expected += e;
 
-                let b = F::rand(&mut rng);
+                let b = F::random(&mut rng);
                 acc_u64 += F::unreduced_mul_u64(&b.to_unreduced(), n);
                 expected += b * F::from_u64(n);
             }
@@ -522,8 +480,8 @@ mod tests {
             let mut acc = Folded128Product::zero();
             let mut expected = F::zero();
             for _ in 0..100 {
-                let a = F::rand(&mut rng);
-                let b = F::rand(&mut rng);
+                let a = F::random(&mut rng);
+                let b = F::random(&mut rng);
                 let n: u128 = rng.gen();
                 acc += a.mul_u128_unreduced(n);
                 expected += a * F::from_u128(n);
@@ -552,9 +510,9 @@ mod tests {
         let mut rng = test_rng();
         let base = two_pow_128();
         for _ in 0..256 {
-            let a = F::rand(&mut rng);
+            let a = F::random(&mut rng);
 
-            let m3 = BigInt::<3>::new([rng.gen(), rng.gen(), rng.gen()]);
+            let m3 = Limbs::<3>::new([rng.gen(), rng.gen(), rng.gen()]);
             let m3_field = F::from_u128(m3.0[0] as u128 | (m3.0[1] as u128) << 64)
                 + F::from_u64(m3.0[2]) * base;
             assert_eq!(
@@ -563,13 +521,13 @@ mod tests {
             );
             assert_eq!(F::reduce_product(a.mul_to_product_mag(&m3)), a * m3_field);
 
-            let m4 = BigInt::<4>::new([rng.gen(), rng.gen(), rng.gen(), rng.gen()]);
+            let m4 = Limbs::<4>::new([rng.gen(), rng.gen(), rng.gen(), rng.gen()]);
             let m4_field = F::from_u128(m4.0[0] as u128 | (m4.0[1] as u128) << 64)
                 + F::from_u128(m4.0[2] as u128 | (m4.0[3] as u128) << 64) * base;
             assert_eq!(F::reduce_product(a.mul_to_product_mag(&m4)), a * m4_field);
         }
-        let a = F::rand(&mut rng);
-        let m3 = BigInt::<3>::new([u64::MAX; 3]);
+        let a = F::random(&mut rng);
+        let m3 = Limbs::<3>::new([u64::MAX; 3]);
         let m3_field = F::from_u128(u128::MAX) + F::from_u64(u64::MAX) * base;
         assert_eq!(
             F::reduce_mul_u128_accum(a.mul_to_accum_mag(&m3)),
@@ -590,7 +548,7 @@ mod tests {
             let mut expected_wide = F::zero();
             let mut expected_full = F::zero();
             for _ in 0..100 {
-                let f = F::rand(&mut rng);
+                let f = F::random(&mut rng);
                 let i: i64 = rng.gen();
                 small.fmadd(&f, &i);
                 expected_small += f * F::from_i64(i);
@@ -602,10 +560,10 @@ mod tests {
                 wide.fmadd(&f, &n);
                 expected_wide += f * F::from_i128(n);
                 let s: i64 = rng.gen();
-                wide.fmadd(&f, &S64::from(s));
+                wide.fmadd(&f, &S64::from_i64(s));
                 expected_wide += f * F::from_i64(s);
 
-                full.fmadd(&f, &S128::from(n));
+                full.fmadd(&f, &S128::from_i128(n));
                 expected_full += f * F::from_i128(n);
             }
             assert_eq!(small.barrett_reduce(), expected_small);

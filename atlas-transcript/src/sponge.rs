@@ -13,8 +13,8 @@ use super::transcript::{Transcript, VerifyingTranscript};
 #[cfg(feature = "prover")]
 use crate::ProverTranscript as _;
 use crate::{BytesMsg, UniformBytes, VerifierTranscript as _};
-use ark_serialize::CanonicalSerialize;
 use atlas_algebra::field::JoltField;
+use atlas_algebra::serialize::Canonical;
 use atlas_algebra::utils::errors::ProofVerifyError;
 #[cfg(feature = "prover")]
 use spongefish::ProverState;
@@ -48,10 +48,9 @@ fn tagged(tag: u8, body: &[u8]) -> BytesMsg {
     BytesMsg(v)
 }
 
-fn compressed<T: CanonicalSerialize>(x: &T) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(x.compressed_size());
-    x.serialize_compressed(&mut buf)
-        .expect("in-memory serialization cannot fail");
+fn compressed<T: Canonical>(x: &T) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(x.encoded_len());
+    Canonical::encode(x, &mut buf).expect("in-memory serialization cannot fail");
     buf
 }
 
@@ -82,15 +81,14 @@ macro_rules! impl_transcript_ops {
             self.absorb(tagged(TAG_SCALAR, &compressed(scalar)));
         }
 
-        fn append_serializable<F: CanonicalSerialize>(&mut self, scalar: &F) {
+        fn append_serializable<F: Canonical>(&mut self, scalar: &F) {
             self.absorb(tagged(TAG_SERIALIZABLE, &compressed(scalar)));
         }
 
         fn append_scalars<F: JoltField>(&mut self, scalars: &[impl Borrow<F>]) {
             let mut body = (scalars.len() as u64).to_le_bytes().to_vec();
             for s in scalars {
-                s.borrow()
-                    .serialize_compressed(&mut body)
+                Canonical::encode(s.borrow(), &mut body)
                     .expect("in-memory serialization cannot fail");
             }
             self.absorb(tagged(TAG_SCALARS, &body));

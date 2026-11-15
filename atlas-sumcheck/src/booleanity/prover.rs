@@ -7,7 +7,6 @@ use crate::relation::prover::RelationWitness;
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
-use ark_std::Zero;
 use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
@@ -19,6 +18,7 @@ use atlas_algebra::{
     utils::{expanding_table::ExpandingTable, thread::drop_in_background_thread},
 };
 use common::parallel::par_enabled;
+use num_traits::Zero;
 use std::{fmt::Debug, iter::zip, sync::Arc};
 
 // Specialization of BooleanitySumcheckProver for cases where log_K << 64

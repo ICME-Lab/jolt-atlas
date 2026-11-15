@@ -46,10 +46,8 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
-};
 use atlas_algebra::field::Ring;
+use atlas_algebra::serialize::{Canonical, Error};
 use backend::{
     AkitaBackend, AkitaBatchProof, AkitaChunkProfile, AkitaCommitment, AkitaProverHint,
     AkitaProverSetup, AkitaScheduleArtifacts, AkitaSetupParams, AkitaVerifierSetup,
@@ -388,35 +386,19 @@ fn serde_from_bytes<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T> {
         .map(|(value, _)| value)
 }
 
-impl Valid for AkitaSetup {
-    fn check(&self) -> Result<(), SerializationError> {
-        Ok(())
-    }
-}
-
-impl CanonicalSerialize for AkitaSetup {
-    fn serialize_with_mode<W: std::io::Write>(
-        &self,
-        writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
-        serde_to_bytes(&*self.artifacts).serialize_with_mode(writer, compress)
+impl Canonical for AkitaSetup {
+    fn encode<W: std::io::Write>(&self, writer: W) -> Result<(), Error> {
+        serde_to_bytes(&*self.artifacts).encode(writer)
     }
 
-    fn serialized_size(&self, compress: Compress) -> usize {
-        serde_to_bytes(&*self.artifacts).serialized_size(compress)
+    fn encoded_len(&self) -> usize {
+        serde_to_bytes(&*self.artifacts).encoded_len()
     }
-}
 
-impl CanonicalDeserialize for AkitaSetup {
-    fn deserialize_with_mode<R: std::io::Read>(
-        reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        let bytes = Vec::<u8>::deserialize_with_mode(reader, compress, validate)?;
+    fn decode<R: std::io::Read>(reader: R) -> Result<Self, Error> {
+        let bytes = Vec::<u8>::decode(reader)?;
         let artifacts: AkitaScheduleArtifacts =
-            serde_from_bytes(&bytes).ok_or(SerializationError::InvalidData)?;
+            serde_from_bytes(&bytes).ok_or(Error::InvalidData)?;
         Ok(Self::new(Arc::new(artifacts)))
     }
 }
@@ -426,11 +408,13 @@ impl CanonicalDeserialize for AkitaSetup {
 // ---------------------------------------------------------------------------
 
 /// A polynomial's commitment: a slot of a class of the batch commitment.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AkitaSlot {
     pub class: u32,
     pub slot: u32,
 }
+
+common::impl_canonical_struct!([] AkitaSlot { class, slot });
 
 impl AppendToTranscript for AkitaSlot {
     fn append_to_transcript<T: Transcript>(&self, transcript: &mut T) {
@@ -440,7 +424,7 @@ impl AppendToTranscript for AkitaSlot {
 }
 
 /// One class.
-#[derive(Clone, Debug, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AkitaClassCommitment {
     /// The class kind (dense encoding or one-hot).
     pub kind: u8,
@@ -449,6 +433,13 @@ pub struct AkitaClassCommitment {
     /// The bincode-encoded [`AkitaCommitment`]; `None` when every member is identically zero.
     pub commitment: Option<Vec<u8>>,
 }
+
+common::impl_canonical_struct!([] AkitaClassCommitment {
+    kind,
+    logical_num_vars,
+    slot_count,
+    commitment,
+});
 
 impl AkitaClassCommitment {
     fn shape(&self) -> Option<ClassShape> {
@@ -461,10 +452,12 @@ impl AkitaClassCommitment {
 }
 
 /// Every class commitment of a proof, in class order.
-#[derive(Clone, Debug, Default, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AkitaBatchCommitment {
     pub classes: Vec<AkitaClassCommitment>,
 }
+
+common::impl_canonical_struct!([] AkitaBatchCommitment { classes });
 
 impl AppendToTranscript for AkitaBatchCommitment {
     fn append_to_transcript<T: Transcript>(&self, transcript: &mut T) {
@@ -651,7 +644,7 @@ impl PartialEq for AkitaHint {
 
 /// The opening of one class: every slot's evaluation at the class's logical point, and the Akita
 /// proof (empty for a zero class).
-#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Debug)]
 pub struct AkitaClassOpening {
     pub class: u32,
     pub slot_evals: Vec<Fp128>,
@@ -659,11 +652,15 @@ pub struct AkitaClassOpening {
     pub proof: Vec<u8>,
 }
 
+common::impl_canonical_struct!([] AkitaClassOpening { class, slot_evals, proof });
+
 /// The joint opening: one class opening per class with an opened member, in class order.
-#[derive(Clone, Debug, Default, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct AkitaJointProof {
     pub classes: Vec<AkitaClassOpening>,
 }
+
+common::impl_canonical_struct!([] AkitaJointProof { classes });
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1152,10 +1149,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_std::test_rng;
     use atlas_algebra::poly::{
         eq::eq_index_msb, multilinear::PolynomialEvaluation, one_hot::OneHotPolynomial,
     };
+    use atlas_algebra::utils::test_rng;
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
     };
@@ -1326,15 +1323,12 @@ mod tests {
         }
 
         let mut bytes = Vec::new();
-        proof.serialize_compressed(&mut bytes).unwrap();
-        let back = AkitaJointProof::deserialize_compressed(&bytes[..]).unwrap();
+        proof.encode(&mut bytes).unwrap();
+        let back = AkitaJointProof::decode(&bytes[..]).unwrap();
         assert_eq!(back.classes[0].slot_evals, proof.classes[0].slot_evals);
         let mut bytes = Vec::new();
-        batch.serialize_compressed(&mut bytes).unwrap();
-        assert_eq!(
-            AkitaBatchCommitment::deserialize_compressed(&bytes[..]).unwrap(),
-            batch
-        );
+        batch.encode(&mut bytes).unwrap();
+        assert_eq!(AkitaBatchCommitment::decode(&bytes[..]).unwrap(), batch);
     }
 
     /// A dense kind over the class cap is split into several classes, each committed and

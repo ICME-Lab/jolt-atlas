@@ -1,11 +1,9 @@
 //! Proof identifiers, proof classification, and the opening-claim wrapper.
 
-use ark_serialize::{
-    CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
-    Write,
-};
 use atlas_algebra::field::JoltField;
+use atlas_algebra::serialize::{Canonical, Error};
 use atlas_sumcheck::opening_proof::Openings;
+use std::io::{Read, Write};
 
 // ---------------------------------------------------------------------------
 // ProofId / ProofType
@@ -14,10 +12,27 @@ use atlas_sumcheck::opening_proof::Openings;
 /// Unique identifier for a sumcheck proof instance.
 ///
 /// Combines the node index with the proof type to uniquely identify each proof.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, CanonicalSerialize, CanonicalDeserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ProofId(pub usize, pub ProofType);
+
+/// The node index (as a `u64`), then the proof type's tag.
+impl Canonical for ProofId {
+    fn encode<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+        self.0.encode(&mut writer)?;
+        self.1.encode(writer)
+    }
+
+    fn encoded_len(&self) -> usize {
+        self.0.encoded_len() + self.1.encoded_len()
+    }
+
+    fn decode<R: Read>(mut reader: R) -> Result<Self, Error> {
+        Ok(Self(
+            usize::decode(&mut reader)?,
+            ProofType::decode(reader)?,
+        ))
+    }
+}
 
 /// Type of sumcheck proof for different operations in the neural network.
 ///
@@ -91,7 +106,7 @@ impl ProofType {
 }
 
 impl TryFrom<u8> for ProofType {
-    type Error = SerializationError;
+    type Error = Error;
 
     fn try_from(tag: u8) -> Result<Self, Self::Error> {
         match tag {
@@ -117,38 +132,22 @@ impl TryFrom<u8> for ProofType {
             25 => Ok(Self::DeferredSoftmaxRaChecks),
             26 => Ok(Self::DeferredClampDigitRange),
             27 => Ok(Self::DeferredRemainderDigitRange),
-            _ => Err(SerializationError::InvalidData),
+            _ => Err(Error::InvalidData),
         }
     }
 }
 
-impl CanonicalSerialize for ProofType {
-    fn serialize_with_mode<W: Write>(
-        &self,
-        writer: W,
-        compress: Compress,
-    ) -> Result<(), SerializationError> {
-        (*self as u8).serialize_with_mode(writer, compress)
+impl Canonical for ProofType {
+    fn encode<W: Write>(&self, writer: W) -> Result<(), Error> {
+        (*self as u8).encode(writer)
     }
 
-    fn serialized_size(&self, compress: Compress) -> usize {
-        0u8.serialized_size(compress)
+    fn encoded_len(&self) -> usize {
+        0u8.encoded_len()
     }
-}
 
-impl Valid for ProofType {
-    fn check(&self) -> Result<(), SerializationError> {
-        Ok(())
-    }
-}
-
-impl CanonicalDeserialize for ProofType {
-    fn deserialize_with_mode<R: Read>(
-        reader: R,
-        compress: Compress,
-        validate: Validate,
-    ) -> Result<Self, SerializationError> {
-        let tag = u8::deserialize_with_mode(reader, compress, validate)?;
+    fn decode<R: Read>(reader: R) -> Result<Self, Error> {
+        let tag = u8::decode(reader)?;
         ProofType::try_from(tag)
     }
 }

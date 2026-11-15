@@ -21,8 +21,6 @@ jolt-atlas-verifier.workspace = true
 atlas-claims.workspace = true
 
 # Cryptography and Math
-ark-std.workspace = true
-ark-serialize.workspace = true
 
 # Numeric
 num.workspace = true

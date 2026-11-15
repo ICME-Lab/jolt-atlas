@@ -6,7 +6,7 @@ use std::{
 
 use super::kernels::{trace_commitment_capability, TraceOneHotColumnCommitOperation};
 use super::NO_SELECTED_ROW;
-use crate::AkitaField;
+use crate::akita::backend::AkitaField;
 use akita_error::AkitaError;
 use akita_pcs::custom_source::{
     AvailablePolynomialTypes, BackendKindId, CommitInnerPlan, CommitSourceClass,

@@ -7,7 +7,7 @@ use rayon::prelude::*;
 
 use super::source::{validate_dimension, TraceOneHotColumn};
 use super::{K256_ROW_BATCH, NO_SELECTED_ROW, TASKS_PER_RAYON_WORKER};
-use crate::AkitaField;
+use crate::akita::backend::AkitaField;
 
 #[inline(always)]
 pub(super) fn row_is_committed(selected_row: u8, committed_zero_mask: u64, column: usize) -> bool {

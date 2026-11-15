@@ -1,5 +1,5 @@
 //! Akita (lattice, Module-SIS) commitment scheme over the 128-bit Solinas field, built on
-//! upstream's `jolt-akita`.
+//! [`backend`], the adapter over LayerZero's `akita-*` crates.
 //!
 //! Akita has no additive homomorphism, so the joint RLC opening of the batch opening reduction
 //! cannot be verified against a combined commitment. Instead:
@@ -33,10 +33,12 @@
 //! slot evaluations to be zero.
 //!
 //! Akita setups are exact-shape (the commitment arity equals the setup arity). Setups are built
-//! from upstream's packaged schedule catalogs and cached process-wide: one dense setup per
+//! from the packaged schedule catalogs (`atlas-pcs/schedules/`) and cached process-wide: one dense setup per
 //! physical arity, retagged with each class's layout digest, and one one-hot setup per arity.
 //! Akita runs its own Fiat-Shamir argument, bridged to ours through one full-width challenge per
 //! opening.
+
+pub mod backend;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -47,12 +49,12 @@ use std::{
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
-use blake2::{digest::consts::U32, Blake2b, Digest};
-use jolt_akita::{
+use backend::{
     AkitaBatchProof, AkitaChunkProfile, AkitaCommitment, AkitaProverHint, AkitaProverSetup,
     AkitaScheduleArtifacts, AkitaScheme as Upstream, AkitaSetupParams, AkitaVerifierSetup,
     TraceOneHotRows, AKITA_ONE_HOT_K16,
 };
+use blake2::{digest::consts::U32, Blake2b, Digest};
 use jolt_field::Ring;
 use jolt_openings::{
     CommitmentScheme as UpstreamScheme, GroupOpeningClaim, PrefixPackedClaims, PrefixPackedLayout,
@@ -512,7 +514,7 @@ struct ClassRows {
 impl ClassRows {
     fn new(columns: Vec<Arc<Vec<Option<u16>>>>) -> Self {
         let num_rows = columns[0].len();
-        let mut selected = vec![jolt_akita::no_selected_row(); num_rows * ONE_HOT_COLUMNS];
+        let mut selected = vec![backend::no_selected_row(); num_rows * ONE_HOT_COLUMNS];
         let mut zero_masks = vec![0u64; num_rows];
         selected
             .par_chunks_mut(ONE_HOT_COLUMNS)

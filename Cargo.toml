@@ -23,7 +23,6 @@ members = [
     "third_party/jolt-poly",
     "third_party/jolt-sumcheck",
     "third_party/jolt-utils",
-    "third_party/jolt-akita",
     "atlas-trace",
     "atlas-onnx-import",
     "common",
@@ -59,7 +58,6 @@ jolt-transcript = { path = "./third_party/jolt-transcript", default-features = f
 jolt-utils = { path = "./third_party/jolt-utils" }
 jolt-poly = { path = "./third_party/jolt-poly", default-features = false }
 jolt-sumcheck = { path = "./third_party/jolt-sumcheck" }
-jolt-akita = { path = "./third_party/jolt-akita" }
 jolt-openings = { path = "./third_party/jolt-openings", default-features = false }
 
 # Cryptography and Math
@@ -185,7 +183,7 @@ overflow-checks = false
 debug-assertions = false
 overflow-checks = false
 
-[profile.test.package.jolt-akita]
+[profile.test.package.atlas-pcs]
 debug-assertions = false
 overflow-checks = false
 

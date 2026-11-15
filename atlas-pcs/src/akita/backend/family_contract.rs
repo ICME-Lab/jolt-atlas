@@ -2,7 +2,7 @@
 
 use akita_pcs::AkitaError;
 
-use crate::configs::AkitaChunkProfile;
+use crate::akita::backend::configs::AkitaChunkProfile;
 
 pub const AKITA_ONE_HOT_K16: usize = 16;
 pub const AKITA_ONE_HOT_K256: usize = 256;

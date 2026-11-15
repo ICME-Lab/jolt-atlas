@@ -27,15 +27,15 @@ use jolt_poly::MultilinearPoly;
 use jolt_transcript::{AppendToTranscript, Label, LabelWithCount, Transcript, U64Word};
 use tracing::info_span;
 
-use crate::adapters::{
+use crate::akita::backend::adapters::{
     akita_error, append_batch_statement, append_verifier_setup, bridged_akita_session,
     invalid_batch, prove_failed, reverse_point, serialize_akita, validate_one_hot_k,
     with_backend_pool, AkitaBackendCommitment, AkitaBackendExtField, AkitaBackendFlavor,
     AkitaBackendHint, AkitaBatchProof, AkitaCommitment, AkitaConfig, AkitaField, AkitaHintSource,
     AkitaProverHint, AkitaProverSetup, AkitaVerifierSetup, AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256,
 };
-use crate::one_hot_family::with_one_hot_family;
-use crate::scheme::validate_group_order;
+use crate::akita::backend::one_hot_family::with_one_hot_family;
+use crate::akita::backend::scheme::validate_group_order;
 
 /// Marker adapter selecting Akita's native batched opening as the Jolt batch
 /// opening protocol.
@@ -359,7 +359,7 @@ impl AkitaNativeBatching {
             .map(|entry| &entry.claim.commitment)
             .collect::<Vec<_>>();
         let (auxiliary_backend, main_backend) = with_one_hot_family!(scheme setup.one_hot_scheme()?, |scheme| {
-            crate::shape_guard::deserialize_checked_grouped_backend_payload(
+            crate::akita::backend::shape_guard::deserialize_checked_grouped_backend_payload(
                 scheme.schedules(),
                 &auxiliary_commitments,
                 &main.commitment,
@@ -693,16 +693,18 @@ impl BatchOpeningScheme for AkitaNativeBatching {
         // shape is validated against the trusted schedule, so a malformed
         // proof cannot drive shape-backed allocations (see `shape_guard`).
         let backend_commitment = match commitment.backend_flavor {
-            AkitaBackendFlavor::Dense => crate::shape_guard::deserialize_checked_backend_payload(
-                setup.dense_scheme()?.schedules(),
-                commitment,
-                proof.selection(),
-                statement.len(),
-                &backend_point,
-            ),
+            AkitaBackendFlavor::Dense => {
+                crate::akita::backend::shape_guard::deserialize_checked_backend_payload(
+                    setup.dense_scheme()?.schedules(),
+                    commitment,
+                    proof.selection(),
+                    statement.len(),
+                    &backend_point,
+                )
+            }
             AkitaBackendFlavor::OneHot => {
                 with_one_hot_family!(scheme setup.one_hot_scheme()?, |scheme| {
-                    crate::shape_guard::deserialize_checked_backend_payload(
+                    crate::akita::backend::shape_guard::deserialize_checked_backend_payload(
                         scheme.schedules(),
                         commitment,
                         proof.selection(),
@@ -757,8 +759,8 @@ mod tests {
     use jolt_openings::{CommitmentGroupRole, EvaluationClaim};
     use jolt_transcript::Blake2bTranscript;
 
-    use crate::adapters::AkitaVerifierScheduleArtifacts;
-    use crate::configs::AkitaChunkProfile;
+    use crate::akita::backend::adapters::AkitaVerifierScheduleArtifacts;
+    use crate::akita::backend::configs::AkitaChunkProfile;
 
     fn commitment(
         backend_flavor: AkitaBackendFlavor,

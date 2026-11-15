@@ -12,7 +12,7 @@ use akita_params::ChunkedWitnessCfg;
 
 use std::fmt::{Display, Formatter, Result as FormatResult};
 
-use crate::AKITA_ONE_HOT_K16;
+use crate::akita::backend::AKITA_ONE_HOT_K16;
 
 macro_rules! delegate_preset {
     (

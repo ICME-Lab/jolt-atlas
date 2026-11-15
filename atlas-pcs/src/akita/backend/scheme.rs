@@ -1,4 +1,4 @@
-use crate::AkitaScheduleArtifacts;
+use crate::akita::backend::AkitaScheduleArtifacts;
 use akita_params::{PolynomialGroupLayout, PrecommittedGroupProfiles};
 use akita_pcs::custom_source::RootPolyMeta;
 use akita_pcs::{AkitaError, CommitOutput, CpuBackend, GroupContext, SourceHandle};
@@ -17,7 +17,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::adapters::{
+use crate::akita::backend::adapters::{
     akita_error, akita_ordered_evaluations, commit_failed, dense_polynomials, invalid_batch,
     invalid_setup, one_hot_polynomial, owned_one_hot_polynomial, serialize_akita,
     transparent_zk_error, validate_one_hot_k, with_backend_pool, AkitaBackend,
@@ -27,10 +27,10 @@ use crate::adapters::{
     AkitaSetupFlavor, AkitaSetupParams, AkitaVerifierScheduleArtifacts, AkitaVerifierSetup,
     BackendVerifierCache, FullWidthBackendSetup, AKITA_SOURCE_RING_DIMENSION,
 };
-use crate::configs::AkitaChunkProfile;
-use crate::native_batching::{AkitaNativeBatchPolynomials, AkitaNativeBatching};
-use crate::one_hot_family::{with_one_hot_family, OneHotFamily};
-use crate::trace_onehot::{TraceOneHotColumn, TraceOneHotRows};
+use crate::akita::backend::configs::AkitaChunkProfile;
+use crate::akita::backend::native_batching::{AkitaNativeBatchPolynomials, AkitaNativeBatching};
+use crate::akita::backend::one_hot_family::{with_one_hot_family, OneHotFamily};
+use crate::akita::backend::trace_onehot::{TraceOneHotColumn, TraceOneHotRows};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AkitaScheme;
@@ -532,11 +532,15 @@ impl CommitmentScheme for AkitaScheme {
             };
         let (one_hot_backend_prover_setup, one_hot_cpu_backend, one_hot_backend_verifier_setup) =
             if params.max_num_vars >= one_hot_log_k && params.flavor != AkitaSetupFlavor::Dense {
-                let backend_prover_setup = crate::adapters::one_hot_setup_prover(&verifier)?;
+                let backend_prover_setup =
+                    crate::akita::backend::adapters::one_hot_setup_prover(&verifier)?;
                 let cpu_backend = CpuBackend::new(Arc::clone(&backend_prover_setup.expanded))
                     .map_err(invalid_setup)?;
                 let backend_verifier_setup =
-                    crate::adapters::one_hot_setup_verifier(&verifier, &backend_prover_setup)?;
+                    crate::akita::backend::adapters::one_hot_setup_verifier(
+                        &verifier,
+                        &backend_prover_setup,
+                    )?;
                 (
                     Some(Arc::new(backend_prover_setup)),
                     Some(Arc::new(cpu_backend)),
@@ -895,11 +899,11 @@ mod tests {
     #![expect(clippy::panic, reason = "tests reject impossible fixture variants")]
 
     use super::*;
-    use crate::adapters::{
+    use crate::akita::backend::adapters::{
         append_verifier_setup, AkitaBackendFlavor, AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256,
     };
-    use crate::configs::JoltDenseBounded;
-    use crate::AkitaOneHotScheduleArtifact;
+    use crate::akita::backend::configs::JoltDenseBounded;
+    use crate::akita::backend::AkitaOneHotScheduleArtifact;
     use akita_config::CommitmentConfig;
     use akita_schedules::ValidatedScheduleCatalog;
     use jolt_field::Ring;
@@ -909,7 +913,7 @@ mod tests {
     fn full_width_objects_do_not_widen_bounded_dense_commitments() {
         let artifacts =
             AkitaScheduleArtifacts::shared_from_default_directory(AkitaChunkProfile::new(8, 2));
-        use crate::schedule_registry::{DenseGroupLayout, GroupedScheduleParams};
+        use crate::akita::backend::schedule_registry::{DenseGroupLayout, GroupedScheduleParams};
         let mut params = AkitaSetupParams::dense_only(14, 1, [7; 32], artifacts);
         params.grouped_schedule = Some(GroupedScheduleParams::new(
             None,
@@ -1196,8 +1200,12 @@ mod tests {
 
     #[test]
     fn serde_transported_recursive_grouped_setup_restores_its_schedule_rows() {
-        use crate::schedule_registry::{GroupedScheduleParams, FIXTURE_TRUSTED_ADVICE_GROUP};
-        use crate::schedules::emit::{K16_COLUMN_VARIABLES, RECURSIVE_TRACE_LOG_T_CUTOVER};
+        use crate::akita::backend::schedule_registry::{
+            GroupedScheduleParams, FIXTURE_TRUSTED_ADVICE_GROUP,
+        };
+        use crate::akita::backend::schedules::emit::{
+            K16_COLUMN_VARIABLES, RECURSIVE_TRACE_LOG_T_CUTOVER,
+        };
 
         // The narrowest production trace at the cutover; one-column scalar
         // rows at this arity stay direct.
@@ -1246,7 +1254,7 @@ mod tests {
 
     #[test]
     fn grouped_setup_rejects_a_final_arity_different_from_the_main_setup() {
-        use crate::schedule_registry::GroupedScheduleParams;
+        use crate::akita::backend::schedule_registry::GroupedScheduleParams;
 
         let request = GroupedScheduleParams::new(
             None,

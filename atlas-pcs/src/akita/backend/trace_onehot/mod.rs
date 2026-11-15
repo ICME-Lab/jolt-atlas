@@ -5,7 +5,7 @@
     reason = "hot kernels index geometry validated by TraceOneHotColumn and their plans"
 )]
 
-use crate::AkitaField;
+use crate::akita::backend::AkitaField;
 use jolt_field::WithCommitAccumulator;
 
 const NO_SELECTED_ROW: u8 = 0;

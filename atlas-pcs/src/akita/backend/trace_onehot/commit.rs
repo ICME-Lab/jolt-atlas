@@ -13,7 +13,7 @@ use super::traversal::{
     DeferredFp128Ring,
 };
 use super::{K256_ROW_BATCH, MAX_WIDE_ACCUMULATIONS, NO_SELECTED_ROW};
-use crate::AkitaField;
+use crate::akita::backend::AkitaField;
 
 pub(super) fn commit_columns<const D: usize>(
     expanded: &AkitaExpandedSetup<AkitaField>,

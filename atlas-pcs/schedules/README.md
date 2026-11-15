@@ -8,7 +8,7 @@ not promise production coverage for downstream multi-chunk deployments.
 
 Applications own their supported shapes, generation policy, and deployment
 catalogs. Generate those catalogs with the pinned Akita planner and validate them
-against the corresponding `jolt_akita::configs` policy. Supply the complete bundle
+against the corresponding `atlas_pcs::akita::backend::configs` policy. Supply the complete bundle
 explicitly through `AkitaScheduleArtifacts::from_directory(path, dense_profile)`,
 retain it in `Arc`,
 and pass it to preprocessing. No source change or custom verifier is required
@@ -64,17 +64,17 @@ logical `2^21` cycles. Every single-chunk trace row from that cutoff uses setup
 offloading; multi-chunk rows there follow the planner's objective.
 `one_hot_catalogs_switch_to_setup_offloading_at_the_trace_cutover` checks both
 rules for every emitted trace key. Multi-chunk fixture inventories are declared
-in `src/schedules/mod.rs`; deployment inventories belong to their applications.
+in `src/akita/backend/schedules/mod.rs`; deployment inventories belong to their applications.
 
 Regenerate this repository's catalogs:
 
 ```sh
-cargo run --release -p jolt-akita --bin gen_jolt_schedules -- crates/jolt-akita/schedules
+cargo run --release -p atlas-pcs --example gen_schedules -- atlas-pcs/schedules
 ```
 
 Selectors include `k16`, `k256`, `k16-single`, `k256-single`, `w8r2`, `dense-bounded`, and `dense-full`. Append `--check` to replan and compare
 canonical bytes without replacing the files. The catalogs are generated with
-the Akita revision pinned in the workspace `Cargo.toml`. Every catalog binds
+the Akita revision pinned in `atlas-pcs/Cargo.toml`. Every catalog binds
 Akita's planner policy digest, which includes the SIS security policy and its
 estimator tables, so catalogs planned under an earlier policy are rejected at
 load time.

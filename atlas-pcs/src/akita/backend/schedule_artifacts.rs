@@ -1,8 +1,8 @@
 //! Catalog byte storage with unique, sorted (K, geometry) keys.
 //! Filesystem and deserialization inputs share the same collection validation.
 
-use crate::configs::{AkitaChunkProfile, JoltDenseBounded, JoltDenseFull};
-use crate::one_hot_family::{with_one_hot_family, OneHotFamily};
+use crate::akita::backend::configs::{AkitaChunkProfile, JoltDenseBounded, JoltDenseFull};
+use crate::akita::backend::one_hot_family::{with_one_hot_family, OneHotFamily};
 use akita_config::{CommitmentConfig, TrustedScheduleCatalog};
 use akita_pcs::{AkitaCommitmentScheme, AkitaError};
 use akita_schedules::ValidatedScheduleCatalog;
@@ -146,7 +146,7 @@ impl AkitaScheduleArtifacts {
 
     /// Host/dev loader in the shared-handle form every setup call takes: the
     /// one way hosts, benches, and tests load a bundle they intend to hand to
-    /// [`crate::AkitaSetupParams`]. Reads `JOLT_AKITA_SCHEDULE_DIR`, falling back to
+    /// [`crate::akita::backend::AkitaSetupParams`]. Reads `JOLT_AKITA_SCHEDULE_DIR`, falling back to
     /// [`Self::packaged_directory`]. The caller supplies the trusted dense geometry.
     ///
     /// The handle is what is shared, not the bytes: every call re-reads the

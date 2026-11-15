@@ -16,7 +16,7 @@ use akita_schedules::ResolvedScheduleRow;
 use jolt_field::Zero;
 use jolt_openings::OpeningsError;
 
-use crate::adapters::{
+use crate::akita::backend::adapters::{
     deserialize_akita, invalid_batch, AkitaBackendCommitment, AkitaBackendCommitmentPayload,
     AkitaCommitment, AkitaField,
 };
@@ -150,7 +150,7 @@ mod tests {
     use akita_params::{ChunkedWitnessCfg, ScheduleLookupKey};
     use jolt_field::Ring;
 
-    use crate::{
+    use crate::akita::backend::{
         adapters::{AkitaBackendFlavor, AkitaConfig},
         AkitaChunkProfile, AkitaScheduleArtifacts,
     };

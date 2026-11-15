@@ -24,8 +24,10 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FormatResult};
 
-use crate::configs::{AkitaChunkProfile, JoltDenseBounded, JoltDenseFull};
-use crate::one_hot_family::{with_one_hot_family, OneHotFamily, AKITA_ONE_HOT_K256};
+use crate::akita::backend::configs::{AkitaChunkProfile, JoltDenseBounded, JoltDenseFull};
+use crate::akita::backend::one_hot_family::{
+    with_one_hot_family, OneHotFamily, AKITA_ONE_HOT_K256,
+};
 
 const MAX_PROVISIONED_ROWS: usize = 128;
 
@@ -454,8 +456,8 @@ pub fn provision_groups_for_k(
 #[expect(clippy::unwrap_used, reason = "schedule tests should fail loudly")]
 mod tests {
     use super::*;
-    use crate::AkitaScheduleArtifacts;
-    use crate::{AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256};
+    use crate::akita::backend::AkitaScheduleArtifacts;
+    use crate::akita::backend::{AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256};
 
     #[test]
     fn provisioning_rejects_geometry_mismatch_with_and_without_advice() {

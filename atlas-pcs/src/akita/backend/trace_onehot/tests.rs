@@ -23,7 +23,9 @@ use jolt_field::{Fp128x8i32, One, Ring};
 use super::commit::commit_columns;
 use super::digit_windows::{flush_digit_accumulators, DigitWindows};
 use super::source::TraceOneHotColumnBatchView;
-use crate::{AkitaChunkProfile, AkitaField, AkitaScheduleArtifacts, AkitaScheme, AkitaSetupParams};
+use crate::akita::backend::{
+    AkitaChunkProfile, AkitaField, AkitaScheduleArtifacts, AkitaScheme, AkitaSetupParams,
+};
 use jolt_openings::CommitmentScheme;
 use jolt_poly::OneHotPolynomial;
 

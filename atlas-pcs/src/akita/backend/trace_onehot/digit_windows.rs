@@ -8,7 +8,7 @@
 use akita_algebra::CyclotomicRing;
 use jolt_field::{Fp128x8i32, Unreduced};
 
-use crate::AkitaField;
+use crate::akita::backend::AkitaField;
 
 /// Eight coefficients expose the larger NEON register file to the shift sum.
 /// Keep four on other targets to avoid spilling on baseline SSE2.

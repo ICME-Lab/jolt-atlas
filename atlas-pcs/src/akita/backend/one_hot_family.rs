@@ -2,16 +2,16 @@ use akita_config::{CommitmentConfig, TrustedScheduleCatalog};
 use akita_pcs::{AkitaCommitmentScheme, AkitaError, AkitaVerifier};
 use akita_types::AkitaVerifierSetup;
 
-use crate::configs::{AkitaChunkProfile, JoltOneHotK16};
-use crate::family_contract::OneHotFamilyContract;
-pub use crate::family_contract::{AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256};
+use crate::akita::backend::configs::{AkitaChunkProfile, JoltOneHotK16};
+use crate::akita::backend::family_contract::OneHotFamilyContract;
+pub use crate::akita::backend::family_contract::{AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256};
 
 macro_rules! one_hot_families {
     ($callback:ident { $($args:tt)* }) => {
         $callback! {
             $($args)*;
-            (K16, $crate::one_hot_family::AKITA_ONE_HOT_K16, $crate::configs::JoltOneHotK16),
-            (K256, $crate::one_hot_family::AKITA_ONE_HOT_K256, $crate::configs::JoltOneHotK256),
+            (K16, $crate::akita::backend::one_hot_family::AKITA_ONE_HOT_K16, $crate::akita::backend::configs::JoltOneHotK16),
+            (K256, $crate::akita::backend::one_hot_family::AKITA_ONE_HOT_K256, $crate::akita::backend::configs::JoltOneHotK256),
         }
     };
 }
@@ -120,7 +120,7 @@ macro_rules! dispatch_family {
     ($family:expr, |$cfg:ident| $body:expr; $(($variant:ident, $k:path, $family_cfg:ty)),+ $(,)?) => {{
         match $family.kind {
             $(
-                $crate::one_hot_family::OneHotFamilyKind::$variant => {
+                $crate::akita::backend::one_hot_family::OneHotFamilyKind::$variant => {
                     type $cfg = $family_cfg;
                     $body
                 }
@@ -135,14 +135,14 @@ macro_rules! dispatch_scheme {
     ($scheme:expr, |$typed:ident| $body:expr; $(($variant:ident, $k:path, $family_cfg:ty)),+ $(,)?) => {{
         match $scheme {
             $(
-                $crate::one_hot_family::AkitaOneHotBackendScheme::$variant($typed) => $body
+                $crate::akita::backend::one_hot_family::AkitaOneHotBackendScheme::$variant($typed) => $body
             ),+
         }
     }};
     ($scheme:expr, |$typed:ident, $cfg:ident| $body:expr; $(($variant:ident, $k:path, $family_cfg:ty)),+ $(,)?) => {{
         match $scheme {
             $(
-                $crate::one_hot_family::AkitaOneHotBackendScheme::$variant($typed) => {
+                $crate::akita::backend::one_hot_family::AkitaOneHotBackendScheme::$variant($typed) => {
                     type $cfg = $family_cfg;
                     $body
                 }
@@ -156,7 +156,7 @@ macro_rules! dispatch_verifier {
     ($verifier:expr, |$typed:ident| $body:expr; $(($variant:ident, $k:path, $family_cfg:ty)),+ $(,)?) => {{
         match $verifier {
             $(
-                $crate::one_hot_family::AkitaOneHotBackendVerifier::$variant($typed) => $body
+                $crate::akita::backend::one_hot_family::AkitaOneHotBackendVerifier::$variant($typed) => $body
             ),+
         }
     }};
@@ -165,20 +165,20 @@ pub(crate) use dispatch_verifier;
 
 macro_rules! with_one_hot_family {
     ($family:expr, |$cfg:ident| $body:expr) => {{
-        use $crate::one_hot_family::dispatch_family;
-        $crate::one_hot_family::one_hot_families!(dispatch_family { $family, |$cfg| $body })
+        use $crate::akita::backend::one_hot_family::dispatch_family;
+        $crate::akita::backend::one_hot_family::one_hot_families!(dispatch_family { $family, |$cfg| $body })
     }};
     (scheme $scheme:expr, |$typed:ident| $body:expr) => {{
-        use $crate::one_hot_family::dispatch_scheme;
-        $crate::one_hot_family::one_hot_families!(dispatch_scheme { $scheme, |$typed| $body })
+        use $crate::akita::backend::one_hot_family::dispatch_scheme;
+        $crate::akita::backend::one_hot_family::one_hot_families!(dispatch_scheme { $scheme, |$typed| $body })
     }};
     (scheme $scheme:expr, |$typed:ident, $cfg:ident| $body:expr) => {{
-        use $crate::one_hot_family::dispatch_scheme;
-        $crate::one_hot_family::one_hot_families!(dispatch_scheme { $scheme, |$typed, $cfg| $body })
+        use $crate::akita::backend::one_hot_family::dispatch_scheme;
+        $crate::akita::backend::one_hot_family::one_hot_families!(dispatch_scheme { $scheme, |$typed, $cfg| $body })
     }};
     (verifier $verifier:expr, |$typed:ident| $body:expr) => {{
-        use $crate::one_hot_family::dispatch_verifier;
-        $crate::one_hot_family::one_hot_families!(dispatch_verifier { $verifier, |$typed| $body })
+        use $crate::akita::backend::one_hot_family::dispatch_verifier;
+        $crate::akita::backend::one_hot_family::one_hot_families!(dispatch_verifier { $verifier, |$typed| $body })
     }};
 }
 pub(crate) use with_one_hot_family;

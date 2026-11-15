@@ -1,4 +1,4 @@
-//! Akita PCS adapter for Jolt.
+//! The adapter over LayerZero's Akita PCS (`akita-*`), taken from upstream `jolt-akita`.
 //!
 //! Wraps the upstream Akita PCS over its fp128 field using Jolt's
 //! `CommitmentScheme` trait plus an adapter delegating same-point batches to
@@ -34,12 +34,6 @@ mod trace_onehot;
 
 pub use akita_pcs::AkitaError;
 
-#[cfg(feature = "profiling")]
-#[doc(hidden)]
-pub use adapters::{
-    host_parallel_verifier_threads, with_host_parallel_verifier_backend,
-    with_single_threaded_verifier_backend,
-};
 pub use adapters::{
     AkitaBackendFlavor, AkitaBatchProof, AkitaCommitment, AkitaField, AkitaHidingCommitment,
     AkitaProverHint, AkitaProverSetup, AkitaSetupParams, AkitaVerifierSetup, AKITA_ONE_HOT_K16,

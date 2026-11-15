@@ -4,9 +4,9 @@
 //! Regenerate them with:
 //!
 //! ```text
-//! cargo run --release -p jolt-akita --bin gen_jolt_schedules -- crates/jolt-akita/schedules
+//! cargo run --release -p atlas-pcs --example gen_schedules -- atlas-pcs/schedules
 //! # Only the full-field dense family:
-//! cargo run --release -p jolt-akita --bin gen_jolt_schedules -- crates/jolt-akita/schedules dense-full
+//! cargo run --release -p atlas-pcs --example gen_schedules -- atlas-pcs/schedules dense-full
 //! ```
 
 /// Emit-spec construction shared by the generator and drift tests.
@@ -24,12 +24,12 @@ pub mod emit {
     use akita_planner::emit::bounded_parallel_filter_map;
     use akita_planner::{EmitSpec, PlannerPolicy};
 
-    use crate::configs::{
+    use crate::akita::backend::configs::{
         AkitaChunkProfile, JoltDenseBounded, JoltDenseFull, JoltOneHotK16Direct,
         JoltOneHotK256Direct,
     };
-    use crate::one_hot_family::OneHotFamily;
-    use crate::{AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256};
+    use crate::akita::backend::one_hot_family::OneHotFamily;
+    use crate::akita::backend::{AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256};
 
     /// Admitted production trace exponents for K=16.
     pub const K16_TRACE_LOG_T: (usize, usize) = (12, 31);

@@ -23,7 +23,7 @@ use super::commit::commit_columns;
 use super::decomposition::{decompose_fold_columns_with_mode, DecomposeRotationMode};
 use super::source::{validate_batch, TraceOneHotColumn, TraceOneHotColumnBatchView};
 use super::traversal::coefficient_packing_partials_columns;
-use crate::AkitaField;
+use crate::akita::backend::AkitaField;
 
 pub(super) struct TraceOneHotColumnCommitOperation;
 

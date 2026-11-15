@@ -11,8 +11,8 @@ use atlas_algebra::{
     field::fp128::Fp128,
     poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
 };
+use atlas_pcs::akita::backend::AKITA_ONE_HOT_K16;
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
-use jolt_akita::AKITA_ONE_HOT_K16;
 
 /// Deterministic xorshift, so every arm sees the same digit stream.
 struct Rng(u64);

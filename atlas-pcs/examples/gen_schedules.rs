@@ -5,7 +5,7 @@
 //! `akita_planner::emit` machinery that produces Akita's shipped catalogs.
 //!
 //! ```text
-//! cargo run --release -p jolt-akita --bin gen_jolt_schedules -- crates/jolt-akita/schedules [selector] [--check]
+//! cargo run --release -p atlas-pcs --example gen_schedules -- atlas-pcs/schedules [selector] [--check]
 //! ```
 
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ use akita_planner::emit::{
     publish_artifact_outputs, render_schedule_artifact_outputs_with_validation,
     MaterializationDiagnostics,
 };
-use jolt_akita::schedules::emit::family_specs;
+use atlas_pcs::akita::backend::schedules::emit::family_specs;
 
 #[expect(
     clippy::expect_used,
@@ -26,7 +26,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let output_dir = PathBuf::from(
         args.next()
-            .expect("usage: gen_jolt_schedules <output-dir> [selector] [--check]"),
+            .expect("usage: gen_schedules <output-dir> [selector] [--check]"),
     );
     let mut only = None;
     let mut check = false;
@@ -46,7 +46,7 @@ fn main() {
             .expect("system time after Unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "jolt-akita-catalog-check-{}-{suffix}",
+            "atlas-akita-catalog-check-{}-{suffix}",
             std::process::id()
         ))
     } else {

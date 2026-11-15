@@ -7,9 +7,6 @@ use std::{
     sync::OnceLock,
 };
 
-#[cfg(feature = "profiling")]
-use std::{cell::Cell, num::NonZeroUsize};
-
 use akita_config::{CommitmentConfig, TrustedScheduleCatalog};
 use akita_params::{OpeningScheduleSelection, ScheduleRowDigest};
 use akita_pcs::{
@@ -28,13 +25,13 @@ use jolt_transcript::{AppendToTranscript, Label, LabelWithCount, Transcript, U64
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 
-use crate::configs::{AkitaChunkProfile, JoltDenseBounded, JoltDenseFull};
-use crate::one_hot_family::{
+use crate::akita::backend::configs::{AkitaChunkProfile, JoltDenseBounded, JoltDenseFull};
+use crate::akita::backend::one_hot_family::{
     with_one_hot_family, AkitaOneHotBackendScheme, AkitaOneHotBackendVerifier, OneHotFamily,
 };
-pub use crate::one_hot_family::{AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256};
-use crate::schedule_artifacts::AkitaScheduleArtifacts;
-use crate::schedule_registry::GroupedScheduleParams;
+pub use crate::akita::backend::one_hot_family::{AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256};
+use crate::akita::backend::schedule_artifacts::AkitaScheduleArtifacts;
+use crate::akita::backend::schedule_registry::GroupedScheduleParams;
 
 pub type AkitaField = akita_config::proof_optimized::fp128::Field;
 pub(crate) type AkitaConfig = JoltDenseBounded;
@@ -101,87 +98,6 @@ fn backend_pool() -> Option<&'static ThreadPool> {
         .as_ref()
 }
 
-#[cfg(feature = "profiling")]
-#[expect(
-    clippy::expect_used,
-    reason = "the profiling harness measures a host thread pool and cannot run without one"
-)]
-fn host_parallel_verifier_pool() -> &'static ThreadPool {
-    static POOL: OnceLock<ThreadPool> = OnceLock::new();
-    POOL.get_or_init(|| {
-        let num_threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-        build_backend_pool("jolt-akita-verify-parallel", Some(num_threads))
-            .expect("the profiling harness needs a platform that spawns threads")
-    })
-}
-
-#[cfg(feature = "profiling")]
-#[expect(
-    clippy::expect_used,
-    reason = "the profiling harness measures a host thread pool and cannot run without one"
-)]
-fn single_threaded_verifier_pool() -> &'static ThreadPool {
-    static POOL: OnceLock<ThreadPool> = OnceLock::new();
-    POOL.get_or_init(|| {
-        build_backend_pool("jolt-akita-verify-single", Some(1))
-            .expect("the profiling harness needs a platform that spawns threads")
-    })
-}
-
-#[cfg(feature = "profiling")]
-#[derive(Clone, Copy)]
-enum ProfileBackendPool {
-    Default,
-    HostParallel,
-    SingleThreaded,
-}
-
-#[cfg(feature = "profiling")]
-thread_local! {
-    static PROFILE_BACKEND_POOL: Cell<ProfileBackendPool> = const {
-        Cell::new(ProfileBackendPool::Default)
-    };
-}
-
-#[cfg(feature = "profiling")]
-struct ProfileBackendPoolGuard(ProfileBackendPool);
-
-#[cfg(feature = "profiling")]
-impl Drop for ProfileBackendPoolGuard {
-    fn drop(&mut self) {
-        PROFILE_BACKEND_POOL.with(|pool| pool.set(self.0));
-    }
-}
-
-#[cfg(feature = "profiling")]
-fn with_profile_backend_pool<R>(selection: ProfileBackendPool, f: impl FnOnce() -> R) -> R {
-    let previous = PROFILE_BACKEND_POOL.with(|pool| pool.replace(selection));
-    let _guard = ProfileBackendPoolGuard(previous);
-    f()
-}
-
-/// Runs verifier backend calls in `f` on an explicit host-sized pool.
-#[cfg(feature = "profiling")]
-#[doc(hidden)]
-pub fn with_host_parallel_verifier_backend<R>(f: impl FnOnce() -> R) -> R {
-    let _ = host_parallel_verifier_pool();
-    with_profile_backend_pool(ProfileBackendPool::HostParallel, f)
-}
-
-/// Runs verifier backend calls in `f` on exactly one worker.
-#[cfg(feature = "profiling")]
-#[doc(hidden)]
-pub fn with_single_threaded_verifier_backend<R>(f: impl FnOnce() -> R) -> R {
-    let _ = single_threaded_verifier_pool();
-    with_profile_backend_pool(ProfileBackendPool::SingleThreaded, f)
-}
-
-#[cfg(feature = "profiling")]
-#[doc(hidden)]
-pub fn host_parallel_verifier_threads() -> usize {
-    host_parallel_verifier_pool().current_num_threads()
-}
-
 /// Runs `f` with rayon parallelism on a dedicated pool whose workers have
 /// large stacks.
 ///
@@ -195,14 +111,6 @@ pub fn host_parallel_verifier_threads() -> usize {
 /// Where the platform cannot spawn threads (wasm32), no dedicated pool can
 /// exist: `f` runs on the caller's pool, whose embedder sizes worker stacks.
 pub(crate) fn with_backend_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
-    #[cfg(feature = "profiling")]
-    match PROFILE_BACKEND_POOL.with(Cell::get) {
-        ProfileBackendPool::HostParallel => return host_parallel_verifier_pool().install(f),
-        ProfileBackendPool::SingleThreaded => {
-            return single_threaded_verifier_pool().install(f);
-        }
-        ProfileBackendPool::Default => {}
-    }
     match backend_pool() {
         Some(pool) => pool.install(f),
         None => f(),
@@ -598,7 +506,7 @@ impl AkitaVerifierSetup {
     }
 
     /// Dense backend verifier, cached after the first use.
-    /// [`AkitaScheme::setup`](crate::AkitaScheme) primes the cache with the
+    /// [`AkitaScheme::setup`](crate::akita::backend::AkitaScheme) primes the cache with the
     /// freshly built key; a serde-transported setup re-derives it from the
     /// shape on first use (one-time, setup-class cost).
     pub(crate) fn dense_verifier(&self) -> Result<&AkitaVerifier<AkitaConfig>, OpeningsError> {

@@ -20,7 +20,6 @@ atlas-pcs.workspace = true
 jolt-atlas-verifier.workspace = true
 jolt-field.workspace = true
 jolt-poly.workspace = true
-jolt-sumcheck.workspace = true
 atlas-claims.workspace = true
 
 # Cryptography and Math

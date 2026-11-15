@@ -11,14 +11,14 @@ A verdict of `jolt_atlas_verifier::onnx_proof::verify` depends on:
 | Crate | Items a verdict depends on |
 |-------|----------------------------|
 | `jolt-atlas-verifier` | all of it |
-| `atlas-sumcheck` | `relation` (`RelationVerifier`, `verify_relation{,_batch}`, `resolve`, `relation_input_claim`), `opening_proof` (`VerifierOpeningAccumulator`, the opening-reduction relation), `evaluation_reduction` (verify side), the one-hot, booleanity, shout and prefix-suffix relations and their parameters. Not the `prover` submodules. |
+| `atlas-sumcheck` | `engine` (`verify_compressed`, `absorb_input_claims`, `BatchPrelude`), `relation` (`RelationVerifier`, `verify_relation{,_batch}`, `resolve`, `relation_input_claim`), `opening_proof` (`VerifierOpeningAccumulator`, the opening-reduction relation), `evaluation_reduction` (verify side), the one-hot, booleanity, shout and prefix-suffix relations and their parameters. Not the `prover` submodules. |
 | `atlas-claims` | all of it: `SymbolicSumcheck`, the `Expr` algebra and its evaluation, the claim-data traits |
 | `atlas-pcs` | `CommitmentScheme::{setup_verifier, verify, verify_rlc}` and the `akita` implementation of them, including `akita::backend` (the adapter over `akita-*`) and `openings` |
 | `atlas-transcript` | `VerifyingTranscript` and the sponge under it |
 | `atlas-algebra` | `field::fp128`, multilinear evaluation, `EqPolynomial`, opening points |
 | `atlas-lookup-tables` | table evaluation (`evaluate_mle`) and the prefix-suffix decompositions |
 | `atlas-trace` | `Model` and its ops, `ModelExecutionIO`, `Tensor`, and `semantics` (the table generators). Not `Trace` or the executor. |
-| `third_party/` | `jolt-sumcheck` (`verify_compressed`), `jolt-poly`, `jolt-field`, `jolt-transcript`, `jolt-utils`, and LayerZero's `akita-*` crates by git |
+| `third_party/` | `jolt-poly`, `jolt-field`, `jolt-transcript`, `jolt-utils`, and LayerZero's `akita-*` crates by git |
 
 The crate has no prover code. Three mechanisms hold that:
 
@@ -42,7 +42,9 @@ The crate has no prover code. Three mechanisms hold that:
    op's `OpPlan`), `onnx_proof/ops/mod.rs` (dispatch on `atlas_trace::Op`, `OpLayout`) and
    `onnx_proof/deferred_lookups.rs` (the post-loop plan and the deferred batches).
 3. **Relation core**: `atlas_sumcheck::relation` and `onnx_proof/relation.rs`, then
-   `atlas-claims` (the `SymbolicSumcheck` trait and the `Expr` algebra they evaluate). Every
+   `atlas-claims` (the `SymbolicSumcheck` trait and the `Expr` algebra they evaluate) and
+   `atlas_sumcheck::engine` (`verify_compressed`: the round checks, the grind and the
+   transcript encoding every sumcheck runs through). Every
    sumcheck is a symbolic relation; `RelationVerifier` is derived from it, and `verify_tie` checks a
    zero-round one. Each op relation documents its S ⊆ R argument beside its definition in
    `onnx_proof/ops/<op>.rs`.

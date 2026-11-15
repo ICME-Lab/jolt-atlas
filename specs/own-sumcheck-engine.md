@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-14                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          | (filled when the PR opens, or at merge) |
 | Depends on  | `specs/own-pcs-adapter.md` (phase 2, implemented: `jolt-crypto`, the `committed` feature's only would-be consumer, is gone) |
 | Supersedes  | `third_party/PINS.md` section `jolt-sumcheck`; `specs/adoption-program.md` stage 4b's "run on upstream's engine through a facade" |

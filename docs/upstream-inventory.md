@@ -180,6 +180,36 @@ base:
 A later upstream pull diffs `crates/jolt-akita` and `crates/jolt-openings` from `f3265b5a` and
 ports the change across these renames.
 
+## The sumcheck engine owned (`specs/own-sumcheck-engine.md`)
+
+`atlas-sumcheck::engine` is upstream `jolt-sumcheck` at `f3265b5a` (`crates/jolt-sumcheck/src`),
+the part atlas reaches: `prove_batch` with `ProveRounds`, `MemberRound`, `MemberFinish`,
+`RoundScheduler` and `ProvedBatch` (`prover.rs`, from upstream's `prover.rs`), the clear
+recorder (from `recorder.rs`), `verify_compressed` (from `verifier.rs`), `BatchPrelude` and
+`BatchMember` (`batch.rs`), `SumcheckClaim`, `CompressedSumcheckProof` and `SumcheckError`.
+Diverged from that base:
+
+- generic over `atlas_transcript::Transcript` and atlas `JoltField` instead of the facade
+  `Transcript<Challenge = F>` and `jolt_field::Field`; each challenge is the round's proof of
+  work (`round_pow_bits`, moved from atlas's `sumcheck` module) then `challenge_scalar_optimized`,
+  where `upstream_sumcheck::FacadeTranscript` used to interpose; a failed grind is
+  `SumcheckError::ProofOfWork`;
+- the transcript writes keep upstream's legacy encoding (field elements big-endian, `Label` and
+  `LabelWithCount` words) through `append_bytes`, in a private codec;
+- `SumcheckRecorder` is the concrete `ClearSumcheckRecorder`, whose `finish` is `into_proof`
+  and whose input-claim absorption is the free `absorb_input_claims`; `verify_compressed` is a
+  free function with the round label fixed and no domain argument;
+- not taken: `committed.rs`, `r1cs.rs`, `domain.rs`, `proof.rs`'s clear and committed proofs,
+  `round_proof.rs`'s trait surface, the uniskip provers, the uncompressed `verify`,
+  `SequentialRounds`, `SumcheckStatement`, `BatchPrelude::{new, member_output_scale}`;
+- `tests.rs` and `round_scheduler_tests.rs` (never run in the vendored build: gated on the
+  empty `committed` feature) are ported to `Fp128` and the Blake2b sponge transcripts where
+  they cover the kept surface (`engine/tests.rs`).
+
+`upstream_sumcheck`'s `InstanceRounds` is in `relation::prover`; its `FacadeTranscript` is
+`atlas-pcs::akita::facade`, which the external `akita-*` crates still need. A later upstream
+pull diffs `crates/jolt-sumcheck` from `f3265b5a` and ports the change across these renames.
+
 ## BN254 removal (stage 7b)
 
 Dory, HyperKZG, the BN254 `JoltField` impl (with its arkworks kernel, `TrackedFr` and the
@@ -235,9 +265,9 @@ relation supplies the degree, the input claim and where the produced openings si
 sparse one-hot groups via `Relation::sparse_groups`). The drivers are relation functions over
 the type-erased forms: `verify_relation{,_batch}` over `DynRelationVerifier` and
 `prove_relation{,_batch,_batch_parallel}` over `DynRelationWitness` (a blanket impl over every
-witness). They run upstream's `prove_batch` / `verify_compressed` through a `BatchPrelude`;
+witness). They run the engine's `prove_batch` / `verify_compressed` through a `BatchPrelude`;
 `BatchedSumcheck`, `Sumcheck` and the `SumcheckInstance{Prover,Verifier,Params}` traits are
-gone. `FacadeTranscript` stays until a split-surface `jolt-sumcheck` pin.
+gone. The engine is owned since `specs/own-sumcheck-engine.md` (below).
 
 ## Adoption sequence
 

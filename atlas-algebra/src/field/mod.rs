@@ -383,7 +383,7 @@ pub mod fp128;
 mod tests {
     use super::JoltField;
 
-    /// Upstream crates (`jolt-poly`, `jolt-sumcheck`) bound on `jolt_field::JoltField`; every
+    /// Upstream crates (`jolt-poly`, the `akita-*` crates) bound on `jolt_field::JoltField`; every
     /// `JoltField`, generic or concrete, must satisfy it.
     fn upstream_accepts<F: JoltField>() {
         fn upstream_bound<G: jolt_field::JoltField>() {}

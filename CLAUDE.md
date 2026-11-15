@@ -83,8 +83,8 @@ Workspace members, in dependency order:
 
 - **common** — shared constants and parallel helpers.
 - **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
-  (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`, `jolt-utils`, `jolt-poly`,
-  and `jolt-sumcheck`. Vendoring is transitional: a crate atlas takes over becomes an atlas crate (`docs/roadmap.md`).
+  (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`, `jolt-utils` and `jolt-poly`.
+  Vendoring is transitional: a crate atlas takes over becomes an atlas crate (`docs/roadmap.md`).
 - The proof-system toolkit inherited from Jolt, in dependency order:
   - **atlas-algebra** — `field` (`JoltField`, which extends upstream `jolt_field::JoltField`
     and adds the unreduced-product ladder and challenge types; `field::fp128`, the 128-bit
@@ -99,7 +99,8 @@ Workspace members, in dependency order:
   - **atlas-claims** — the symbolic-relation layer: `SymbolicSumcheck`, the `Expr` algebra and
     the claim-data traits, owned by atlas (taken from upstream `jolt-claims` without its zkVM
     protocol graph).
-  - **atlas-sumcheck** — the relation core and its batched sumcheck (`relation`), the opening
+  - **atlas-sumcheck** — the batched sumcheck engine (`engine`: `prove_batch`, `ProveRounds`,
+    `verify_compressed`, taken from upstream `jolt-sumcheck`), the relation core (`relation`), the opening
     accumulators (`opening_proof`), evaluation reduction, the one-hot and shout subprotocols,
     `config`. As
     upstream's protocol crates do, it ships both sides; prover items live in each module's
@@ -112,9 +113,8 @@ Workspace members, in dependency order:
   crates' optional `bn254` features stay off. Every sumcheck is a relation: the verifier runs
   `relation::verify_relation{,_batch}` over `RelationVerifier`s, the prover
   `relation::prover::prove_relation{,_batch,_batch_parallel}` over `RelationWitness`es, both
-  driving upstream `jolt-sumcheck`'s engine (`prove_batch`, `verify_compressed`) through
-  `atlas_sumcheck::upstream_sumcheck`, which presents our transcript as upstream's facade
-  (grinding before each challenge). A `RelationWitness` extends upstream's `ProveRounds`, so
+  driving `atlas_sumcheck::engine` (`prove_batch`, `verify_compressed`), which grinds before
+  each challenge. A `RelationWitness` extends the engine's `ProveRounds`, so
   every prover computes its own round messages (upstream `UnivariatePoly`) over upstream's
   `GruenSplitEqPolynomial`, while its relation supplies the degree, input claim and opening
   appends; Gruen rounds go through

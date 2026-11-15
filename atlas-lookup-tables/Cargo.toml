@@ -23,7 +23,6 @@ jolt-field = { workspace = true, features = ["solinas", "asm"] }
 jolt-transcript = { workspace = true, features = ["solinas", "transcript-blake2b", "transcript-keccak"] }
 jolt-utils.workspace = true
 jolt-poly = { workspace = true, features = ["parallel"] }
-jolt-sumcheck.workspace = true
 bincode.workspace = true
 spongefish = { version = "=0.8.0", default-features = false, features = ["keccak"] }
 

@@ -97,18 +97,19 @@ jobs:
           status=0
           for name in $(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].name'); do
             if cargo tree -p "$name" -e normal,build,dev --prefix none \
-                | grep -qE '^(jolt-riscv|jolt-lookup-tables|jolt-r1cs|jolt-claims|jolt-akita|jolt-openings|jolt-crypto) '; then
+                | grep -qE '^(jolt-riscv|jolt-lookup-tables|jolt-r1cs|jolt-claims|jolt-akita|jolt-openings|jolt-crypto|jolt-sumcheck) '; then
               echo "$name resolves a zkVM cone crate" >&2
               status=1
             fi
           done
           exit $status
-      - name: No vendored PCS crate or upstream scheme trait named in atlas sources
-        # atlas-pcs owns the Akita adapter; CommitmentScheme is the one scheme trait.
+      - name: No deleted vendored crate or upstream facade named in atlas sources
+        # atlas-pcs owns the Akita adapter (CommitmentScheme is the one scheme trait);
+        # atlas-sumcheck owns the sumcheck engine.
         run: |
-          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|UpstreamScheme)\b' \
+          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|jolt_sumcheck|UpstreamScheme|upstream_sumcheck)\b' \
               common atlas-* jolt-atlas-* --include='*.rs'; then
-            echo "an atlas source names a deleted vendored PCS crate or an upstream scheme trait" >&2
+            echo "an atlas source names a deleted vendored crate or an upstream facade" >&2
             exit 1
           fi
       - name: No BN254 curve crates in any member's dependency graph

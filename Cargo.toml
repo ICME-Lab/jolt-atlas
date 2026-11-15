@@ -21,7 +21,6 @@ members = [
     "third_party/jolt-field",
     "third_party/jolt-transcript",
     "third_party/jolt-poly",
-    "third_party/jolt-sumcheck",
     "third_party/jolt-utils",
     "atlas-trace",
     "atlas-onnx-import",
@@ -51,7 +50,6 @@ jolt-field = { path = "./third_party/jolt-field", default-features = false }
 jolt-transcript = { path = "./third_party/jolt-transcript", default-features = false }
 jolt-utils = { path = "./third_party/jolt-utils" }
 jolt-poly = { path = "./third_party/jolt-poly", default-features = false }
-jolt-sumcheck = { path = "./third_party/jolt-sumcheck" }
 
 # Cryptography and Math
 ark-serialize = { version = "0.5.0", default-features = false, features = [

@@ -6,8 +6,9 @@ whole under `third_party/` at a recorded upstream rev and wired in through
 `[workspace.dependencies]` in the root `Cargo.toml`. A pin bump is a deliberate PR that links the
 upstream diff between the old and new rev. A crate atlas takes over leaves `third_party/` and
 becomes an atlas crate; `docs/upstream-inventory.md` records its provenance (so far
-`atlas-claims`, the relation layer of `jolt-claims`, and `atlas-pcs`'s `akita::backend` and
-`openings`, from `jolt-akita` and `jolt-openings`). `specs/adoption-program.md`
+`atlas-claims`, the relation layer of `jolt-claims`; `atlas-pcs`'s `akita::backend` and
+`openings`, from `jolt-akita` and `jolt-openings`; and `atlas-sumcheck::engine`, from
+`jolt-sumcheck`). `specs/adoption-program.md`
 owns the adoption order; `docs/upstream-inventory.md` records the divergence each stage resolves.
 
 | Crate | Upstream rev | Date | Adopted at | Local delta |
@@ -16,7 +17,6 @@ owns the adoption order; `docs/upstream-inventory.md` records the divergence eac
 | `jolt-transcript` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 3 | Manifest only (below) |
 | `jolt-utils` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4a | Manifest only (below) |
 | `jolt-poly` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4b | Manifest only (below) |
-| `jolt-sumcheck` | `f3265b5a9981f0c1359f2b63008824616f0c82fa` | 2026-10-24 | stage 4b | Manifest only (below) |
 
 ## The arkworks fork pin
 
@@ -69,14 +69,6 @@ workspace inheritance to explicit versions (`jolt-field` dev-dependency by path)
 `src/` is byte-identical to `crates/jolt-poly` at the pinned rev. The manifest resolves workspace
 inheritance to explicit versions (internal crates by path; `allocative` relaxed to `0.3` as for
 `jolt-field`) and drops the `benches/`, `fuzz/` and `tests/` targets.
-
-## `jolt-sumcheck`
-
-`src/` is byte-identical to `crates/jolt-sumcheck` at the pinned rev. The manifest resolves
-workspace inheritance and drops the `examples/`, `fuzz/` and `tests/` targets. Upstream's optional
-`jolt-crypto` and `jolt-r1cs` dependencies are not in the workspace, so the `committed` and
-`r1cs` features are declared empty (the source's `cfg(feature = ...)` gates stay valid) and must
-stay off; `parallel` no longer forwards to `jolt-crypto`.
 
 ## The `akita-*` patch
 

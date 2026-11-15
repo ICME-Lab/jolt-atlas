@@ -106,25 +106,19 @@ jobs:
       - name: No deleted vendored crate or upstream facade named in atlas sources
         # atlas-pcs owns the Akita adapter (CommitmentScheme is the one scheme trait);
         # atlas-sumcheck owns the sumcheck engine; atlas-transcript owns the transcript;
-        # atlas-algebra owns the polynomial library (the root jolt-poly package only re-exports
-        # it for akita-*).
+        # atlas-algebra owns the polynomial library and the field (the root jolt-poly and
+        # jolt-field packages only re-export them for akita-*).
         run: |
-          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|jolt_poly|jolt_utils|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
+          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|jolt_poly|jolt_utils|jolt_field|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
               common atlas-* jolt-atlas-* --include='*.rs'; then
             echo "an atlas source names a deleted vendored crate or an upstream facade" >&2
             exit 1
           fi
       - name: No BN254 curve crates in any member's dependency graph
-        # Vendored upstream crates keep optional BN254 features, so they are resolved with their
-        # default features off; atlas crates are resolved as built.
         run: |
           status=0
-          for row in $(cargo metadata --format-version 1 --no-deps \
-              | jq -r '.packages[] | "\(.name),\(.manifest_path | contains("/third_party/"))"'); do
-            name=${row%,*}
-            flags=""
-            if [ "${row#*,}" = true ]; then flags=--no-default-features; fi
-            if cargo tree -p "$name" $flags -e normal,build --prefix none | grep -qE '^(ark-bn254|ark-ec) '; then
+          for name in $(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].name'); do
+            if cargo tree -p "$name" -e normal,build --prefix none | grep -qE '^(ark-bn254|ark-ec) '; then
               echo "$name resolves ark-bn254 or ark-ec" >&2
               status=1
             fi

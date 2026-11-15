@@ -82,18 +82,20 @@ cargo run --release -p atlas-onnx-import --example dump_lowered_ops -- <model.on
 Workspace members, in dependency order:
 
 - **common** — shared constants and parallel helpers.
-- **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
-  (`third_party/PINS.md`): `jolt-field`.
-  Vendoring is transitional: a crate atlas takes over becomes an atlas crate (`docs/roadmap.md`).
 - The proof-system toolkit inherited from Jolt, in dependency order:
-  - **atlas-algebra** — `field` (`JoltField`, which extends upstream `jolt_field::JoltField`
-    and adds the unreduced-product ladder and challenge types; `field::fp128`, the 128-bit
-    Solinas field, is the one implementation), `poly` (the one polynomial library: multilinear
+  - **atlas-algebra** — `field` (the Solinas field taken from upstream `jolt-field`: the
+    `Ring`/`Field` spine, unreduced products, packing, extensions and the `solinas` kernels with
+    their assembly under `asm/`; `JoltField`, which adds the unreduced-product ladder and
+    challenge types on top; `field::fp128::Fp128`, the 128-bit Solinas field, is the one
+    implementation), `poly` (the one polynomial library: multilinear
     operand polynomials, `EqPolynomial`, the Gruen `split_eq`, the `univariate` round messages
     `UnivariatePoly`/`CompressedPoly`, opening points) and `utils`. Fields and polynomials share
     a crate because `MultilinearPolynomial`'s `From` impls overlap unless `JoltField` is local.
-  - **jolt-poly** (root) — owned compatibility package: re-exports the four univariate types the
-    external `akita-*` crates bind as `jolt_poly::*`; the root `[patch]` points them here.
+  - **jolt-field**, **jolt-poly** (root) — owned compatibility packages: re-export the field
+    items and the four univariate types the external `akita-*` crates bind as `jolt_field::*`
+    and `jolt_poly::*`; the root `[patch]` points them here. Upstream a16z/jolt is a reference,
+    not a dependency: `docs/upstream-inventory.md` records the provenance of every crate taken
+    from it.
   - **atlas-transcript** — the Fiat-Shamir transcript (taken from upstream `jolt-transcript`):
     one `Transcript` trait; the prover uses a `ProvingTranscript` (spongefish `ProverState`,
     proof-of-work grinding behind the `prover` feature), the verifier a `VerifyingTranscript`

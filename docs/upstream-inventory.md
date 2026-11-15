@@ -29,7 +29,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 
 | `joltworks` module | Upstream counterpart | Bucket | Notes |
 |---|---|---|---|
-| `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | adopt (stage 2: vendored) | `jolt-field` is vendored at `0e3faf07`. Since stage 4b's first PR our `JoltField` extends upstream `jolt_field::JoltField` (colliding methods resolve to upstream's), so upstream crates accept every atlas field. Since stage 7b `Fp128` is the only implementation: the BN254 impl, its arkworks kernel, `TrackedFr` and the `challenge/` types (`MontU128Challenge`, `Mont254BitChallenge`) are deleted. The atlas extension (ladder, codec field) remains. |
+| `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | owned, merged (`specs/own-field.md`) | See "The field owned" below. Since stage 7b `Fp128` is the only implementation: the BN254 impl, its arkworks kernel, `TrackedFr` and the `challenge/` types (`MontU128Challenge`, `Mont254BitChallenge`) are deleted. |
 | `transcripts/` (blake2b, keccak) | `jolt-transcript` | owned (`specs/own-transcript.md`) | `atlas-transcript` holds upstream's split surface (`ProverState`/`VerifierState` traits, codecs, `grind`) under our `Transcript` trait; see "The transcript owned" below. |
 | `subprotocols/sumcheck{,_prover,_verifier}.rs` | `jolt-sumcheck` | adopt+delta (stage 4b) | Heavily diverged both ways (~842 changed lines vs the 2026-06 jolt-core copy); our batching and instance traits vs their scheduler/recorder. Upstream takes the facade `T: Transcript<Challenge = F>` (no proof-of-work hook, full-field challenges); our rounds grind (stage 3) and bind with the 125-bit `MontU128Challenge`. Both are met without a vendored delta (`subprotocols/upstream_sumcheck.rs`: a facade view that grinds before each challenge, and `JoltField::challenge_from_field`). The batched driver runs on upstream's engine, and `SumcheckInstanceProver` extends upstream's `ProveRounds`: every instance proves its own rounds, and the trait keeps only the claim lifecycle (degree, input claim, cached openings) that stage 5 replaces. |
 | `poly/` core (dense, multilinear, eq, split_eq, univariate, compact, lagrange, …) | `jolt-poly` | owned, merged (`specs/own-poly.md`) | One library, one type per concept; see "The polynomial library owned" below. The operand polynomials are ours (`MultilinearPolynomial`, `RaPolynomial`): they bind with the 125-bit challenge and keep the compact small-scalar layouts, about a quarter faster per bind than `jolt-poly`'s full-field dense binding (2²² evaluations: ~11 ms vs ~15 ms). |
@@ -259,6 +259,40 @@ The root `jolt-poly` package re-exports the `univariate` types under the name `a
 depends on. A later upstream pull diffs `crates/jolt-poly` from `f3265b5a` across these
 merges.
 
+## The field owned (`specs/own-field.md`)
+
+`atlas-algebra::field` holds upstream `jolt-field` at `f3265b5a` (`crates/jolt-field/src`, vendored
+from stage 2 at `0e3faf07` and bumped at stage 3): `algebra.rs`, `extension.rs`,
+`fp128_accumulators.rs`, `limbs.rs`, `ops.rs`, `packed.rs`, `schedules.rs`, `signed.rs`,
+`unreduced.rs` and `solinas/`, with the fp128 assembly bodies the kernels `include_str!` under
+`atlas-algebra/asm/`. Against that base each file differs only by deletions, module paths and
+resolved `cfg`s:
+
+- every feature `cfg` is resolved to the build atlas runs: `solinas`, `asm` and `parallel` on;
+  `bn254/`, `binary/`, `allocative`, `bytemuck`, `fuzzing` and the proof-linkage features off,
+  with `build.rs` (which only served proof linkage), the `.S` objects and the fp64 assembly;
+- not taken (no caller in atlas or `akita-*`): `add_trunc`, `sub_trunc`, `fmadd_trunc`, `S96`,
+  `S224`, `MODULUS_LIMBS`, `balanced_digit_lut`, `validate_canonical_frobenius_thetas`,
+  `NegOneNr`, `FieldError`'s crate-root re-export and the blanket `JoltField` bundle, whose
+  supertraits atlas's `JoltField` takes directly;
+- `Fp128` is `Prime128OffsetA7F7` itself (the newtype is gone); `field::fp128` adds the arkworks
+  serialization (the canonical `u128`), `Div`, `UniformRand`, `Allocative`, the by-reference
+  operators and `From<u128>`, and the `JoltField` ladder.
+
+Upstream's `tests/`, `benches/` and `fuzz/` targets were never vendored; the in-source test
+modules came with their files.
+
+### The `akita-*` patch
+
+`atlas-pcs` depends on the LayerZero `akita-*` crates by git at rev
+`dfdbd7674cab5cfbe95243e947d1b10a982f232b`. They name `jolt-field` and `jolt-poly` by git
+(`a16z/jolt`); the root `Cargo.toml` patches that source to the owned packages at the repository
+root, which re-export what `akita-*` binds from `atlas-algebra` (`jolt-field` also declares the
+`solinas`, `asm` and `parallel` features `akita-*` enables, as no-ops), so the graph holds one
+of each. Adopting them bumped `smallvec` to `1.16` in `Cargo.lock`. The root `Cargo.toml` pins
+`a16z/arkworks-algebra` branch `dev/twist-shout` for `ark-ff` and `ark-serialize` (the fork's
+`BigInt`, signed big integers and their `Allocative` derives) until phase 7.
+
 ## BN254 removal (stage 7b)
 
 Dory, HyperKZG, the BN254 `JoltField` impl (with its arkworks kernel, `TrackedFr` and the
@@ -271,7 +305,7 @@ The gate is the resolved dependency graph: CI resolves every workspace member (v
 crates with default features off, since they keep optional `bn254` features) and fails on
 `ark-bn254` or `ark-ec`. The `a16z/arkworks-algebra` fork pin stays for `ark-ff` (`BigInt`, the
 signed big integers and their `Allocative` derives, used by the Fp128 ladder and the small-scalar
-polynomials) and `ark-serialize`; `third_party/PINS.md` records it.
+polynomials) and `ark-serialize`; "The `akita-*` patch" above records it.
 
 ## `joltworks` dissolved (stage 9)
 

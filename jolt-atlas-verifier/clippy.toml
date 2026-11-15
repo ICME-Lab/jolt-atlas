@@ -1,5 +1,5 @@
 # The verifier's dependency cone stays prover-free at item level. The protocol crates ship both
-# sides, as upstream's do: the vendored upstream crates (third_party/) and our atlas-* crates.
+# sides, as upstream's do.
 # Our crates keep prover items in `prover` submodules, which CI's verifier-isolation job rejects
 # by path (`::prover` / `::witness` segments in this crate's sources); this list names the public
 # prover items that live elsewhere (the vendored crates' prover surface, and our prover methods

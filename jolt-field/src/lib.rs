@@ -15,3 +15,15 @@ pub use atlas_algebra::field::{
 pub use atlas_algebra::{
     cfg_chunks, cfg_chunks_mut, cfg_fold_reduce, cfg_into_iter, cfg_iter, cfg_iter_mut, cfg_join,
 };
+
+#[cfg(test)]
+mod tests {
+    /// `akita-*` bounds its field parameters on this package's traits; atlas's field must
+    /// satisfy them as the type `akita-*` is instantiated with.
+    fn akita_bound<F: crate::Field + crate::CanonicalEncoding + crate::PseudoMersenne>() {}
+
+    #[test]
+    fn atlas_fp128_satisfies_the_akita_bound() {
+        akita_bound::<atlas_algebra::field::fp128::Fp128>();
+    }
+}

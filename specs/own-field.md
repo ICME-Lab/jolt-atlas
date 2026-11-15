@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-14                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          | (filled when the PR opens, or at merge) |
 | Depends on  | `specs/own-poly.md` (phase 5; every other vendored crate is gone, so `jolt-field`'s only consumers are `atlas-algebra`, the `jolt-poly` compatibility package and `akita-*`) |
 | Supersedes  | `third_party/PINS.md` sections `jolt-field` and `The arkworks fork pin` (the field part); `specs/adoption-program.md` stage 2 |

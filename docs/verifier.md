@@ -18,8 +18,9 @@ A verdict of `jolt_atlas_verifier::onnx_proof::verify` depends on:
 | `atlas-algebra` | `field::fp128`, multilinear evaluation, `EqPolynomial`, opening points, `univariate` (`CompressedPoly` round messages, evaluation reduction's `UnivariatePoly`) |
 | `atlas-lookup-tables` | table evaluation (`evaluate_mle`) and the prefix-suffix decompositions |
 | `atlas-trace` | `Model` and its ops, `ModelExecutionIO`, `Tensor`, and `semantics` (the table generators). Not `Trace` or the executor. |
-| `jolt-poly` (root) | the four `atlas-algebra::poly::univariate` re-exports `akita-*` binds; no code |
-| `third_party/` | `jolt-field`, and LayerZero's `akita-*` crates by git |
+| `atlas-algebra::field` | the Solinas field (`Fp128`, its kernels and assembly), the `Ring`/`Field` spine, unreduced products |
+| `jolt-field`, `jolt-poly` (root) | the `atlas-algebra` re-exports `akita-*` binds; no code |
+| LayerZero's `akita-*` crates | by git at `dfdbd767` (`docs/upstream-inventory.md`) |
 
 The crate has no prover code. Three mechanisms hold that:
 

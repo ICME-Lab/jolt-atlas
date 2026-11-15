@@ -9,12 +9,12 @@ Op coverage is tracked separately in `docs/op-roadmap.md`.
 
 jolt-atlas owns the proof-system code it runs. Upstream `a16z/jolt` is a reference we read when
 it ships something better (a field kernel, a sumcheck engine, a PCS adapter) and port into our
-crates; it is not a dependency we track. `third_party/` is the transitional state for crates
-we have not yet taken over, and the program ends with that directory gone. Owning a crate means:
+crates; it is not a dependency we track. `third_party/` was the transitional state for crates
+we had not yet taken over; phase 6 removed it. Owning a crate means:
 it lives in the workspace under our name, we edit it, its tests are ours, and
 `docs/upstream-inventory.md` records where it came from so a later port has a diff base.
 
-Vendoring (`third_party/PINS.md`) got us upstream's relation layer, engine and lattice PCS
+Vendoring (the former `third_party/PINS.md`) got us upstream's relation layer, engine and lattice PCS
 quickly, but it re-created the duplication joltworks had removed: today the workspace holds two
 polynomial libraries, two sumcheck engines, two transcripts, two prefix-suffix lookup
 frameworks and a field trait layered on another field trait. The program removes each pair.
@@ -36,7 +36,7 @@ pinned rev, MIT/Apache) are treated the same way for now; see "Open decisions".
 | `jolt-transcript` | 2,719 | spongefish prover/verifier states, codecs, grinding | `atlas-transcript` (thin layer) | 4 (owned: `atlas-transcript`) |
 | `jolt-poly` | 6,365 | `UnivariatePoly`, `GruenSplitEqPolynomial`, `CompressedPoly`, binding order | `atlas-algebra::poly` (8,067 lines) | 5 (owned: `atlas-algebra::poly`; root `jolt-poly/` re-exports the `akita-*` surface) |
 | `jolt-utils` | 353 | one allocator helper | `atlas-algebra::utils` | 5 (owned: `atlas-algebra::utils::thread`) |
-| `jolt-field` | 11,227 | Solinas Fp128 kernels (`Prime128OffsetA7F7`), `Ring`/`Field`, accumulators | `atlas-algebra::field` (`JoltField` extends upstream's; `Fp128` newtype) | 6 |
+| `jolt-field` | 11,227 | Solinas Fp128 kernels (`Prime128OffsetA7F7`), `Ring`/`Field`, accumulators | `atlas-algebra::field` (`JoltField` extends upstream's; `Fp128` newtype) | 6 (owned: `atlas-algebra::field`; root `jolt-field/` re-exports the `akita-*` surface) |
 | arkworks fork pin (`ark-ff`, `ark-serialize`, `ark-std`) | external | `CanonicalSerialize` in 38 files, `BigInt`, signed ints, `test_rng` | — | 7 |
 
 ## Phases
@@ -58,7 +58,7 @@ the spec says otherwise.
 5. **Polynomials** — `specs/own-poly.md`. One polynomial library: `jolt-poly` and
    `atlas-algebra::poly` merge, `jolt-utils` folds in. Status: implemented on `dev`.
 6. **Field** — `specs/own-field.md`. One field crate: the Solinas kernels and one trait;
-   the `Fp128` newtype and the two-layer `JoltField` go. Status: proposed.
+   the `Fp128` newtype and the two-layer `JoltField` go. Status: implemented on `dev`.
 7. **arkworks** — `specs/drop-arkworks.md`. Our own canonical serialization and big-integer
    helpers; the `a16z/arkworks-algebra` fork pin and `[patch.crates-io]` entries removed.
    Status: proposed.
@@ -74,7 +74,7 @@ repository root. Renaming them is possible only after the akita decision below.
   and, from phase 1, the no-RISC-V graph check), Test; the heavy job on `main`.
 - The `prove` example on `models/gpt2-tiny` within the spec's stated tolerance; phases 5 and
   6 touch the sumcheck inner loops and gate on the real GPT-2 run.
-- `docs/upstream-inventory.md` gains a provenance row; `third_party/PINS.md` loses the crate;
+- `docs/upstream-inventory.md` gains a provenance row;
   `docs/verifier.md`'s perimeter table and the crate maps in `CLAUDE.md`/`AGENTS.md` follow.
 
 ## Open decisions
@@ -87,7 +87,7 @@ repository root. Renaming them is possible only after the akita decision below.
   compatibility surface in our owned crates is cheaper than owning a PCS. Revisit when the
   in-house lattice zk work starts (`lattice-only-end-state` in the team notes).
 - **Where owned crates live.** Phase 1 puts `atlas-claims` at the root beside the other
-  `atlas-*` crates; later phases follow. `third_party/` is deleted when phase 6 lands.
+  `atlas-*` crates; later phases follow. `third_party/` was deleted when phase 6 landed.
 
 ## Progress
 

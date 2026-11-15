@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-14                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          | (filled when the PR opens, or at merge) |
 | Depends on  | `specs/own-sumcheck-engine.md` (phase 3, implemented) |
 | Supersedes  | `third_party/PINS.md` section `jolt-transcript`; `specs/adoption-program.md` stage 3's vendoring |

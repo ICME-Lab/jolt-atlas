@@ -30,7 +30,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 | `joltworks` module | Upstream counterpart | Bucket | Notes |
 |---|---|---|---|
 | `field/` (incl. `challenge/`) | `jolt-field` (+ `jolt-transcript` codecs) | adopt (stage 2: vendored) | `jolt-field` is vendored at `0e3faf07`. Since stage 4b's first PR our `JoltField` extends upstream `jolt_field::JoltField` (colliding methods resolve to upstream's), so upstream crates accept every atlas field. Since stage 7b `Fp128` is the only implementation: the BN254 impl, its arkworks kernel, `TrackedFr` and the `challenge/` types (`MontU128Challenge`, `Mont254BitChallenge`) are deleted. The atlas extension (ladder, codec field) remains. |
-| `transcripts/` (blake2b, keccak) | `jolt-transcript` | adopted (stage 3) | `jolt-transcript` is vendored; `joltworks::transcripts` keeps our `Transcript` trait as a thin layer over upstream's split surface (`ProverState`/`VerifierState`, codecs, `grind`). The remaining delta is that trait itself, which the stage-4 ports replace with upstream's. |
+| `transcripts/` (blake2b, keccak) | `jolt-transcript` | owned (`specs/own-transcript.md`) | `atlas-transcript` holds upstream's split surface (`ProverState`/`VerifierState` traits, codecs, `grind`) under our `Transcript` trait; see "The transcript owned" below. |
 | `subprotocols/sumcheck{,_prover,_verifier}.rs` | `jolt-sumcheck` | adopt+delta (stage 4b) | Heavily diverged both ways (~842 changed lines vs the 2026-06 jolt-core copy); our batching and instance traits vs their scheduler/recorder. Upstream takes the facade `T: Transcript<Challenge = F>` (no proof-of-work hook, full-field challenges); our rounds grind (stage 3) and bind with the 125-bit `MontU128Challenge`. Both are met without a vendored delta (`subprotocols/upstream_sumcheck.rs`: a facade view that grinds before each challenge, and `JoltField::challenge_from_field`). The batched driver runs on upstream's engine, and `SumcheckInstanceProver` extends upstream's `ProveRounds`: every instance proves its own rounds, and the trait keeps only the claim lifecycle (degree, input claim, cached openings) that stage 5 replaces. |
 | `poly/` core (dense, multilinear, eq, split_eq, unipoly, compact, lagrange, …) | `jolt-poly` | adopt+delta (stage 4b) | Round kernels run on upstream's `GruenSplitEqPolynomial` and round messages are upstream `UnivariatePoly`s; ours is retired, and `poly/split_eq_poly.rs` keeps only atlas extensions over upstream's (the delayed-reduction fold, Gruen round helpers with endpoint closures). The operand polynomials stay ours (`MultilinearPolynomial`, `RaPolynomial`): they bind with the 125-bit challenge and keep the compact small-scalar layouts, about a quarter faster per bind than `jolt-poly`'s full-field dense binding (2²² evaluations: ~11 ms vs ~15 ms). `UniPoly`/`CompressedUniPoly` remain as the proof's wire form. |
 | `poly/opening_proof.rs`, `subprotocols/opening_reduction.rs` | `jolt-openings` + `jolt-claims` | relation layer owned in `atlas-claims`, store atlas-only (stage 5 spike) | Ours is fully diverged (~2,074 changed lines of 1,636): the accumulator is keyed on atlas `OpeningId`/`VirtualPoly` and interleaved with evaluation reduction. The stage 5 spike found no claim store to adopt at `f3265b5a`: `jolt-claims` is transcript-free (the `Expr`/`SymbolicSumcheck` layer plus typed claim structs) and `jolt-openings` is stateless PCS traits; the store, transcript wiring and `ConcreteSumcheck` driver live in `jolt-verifier`, bound to the zkVM's stage graph. Atlas relations (`onnx_proof/relation.rs`) are `SymbolicSumcheck`s over atlas openings, run by an atlas engine on the atlas accumulator. The claim-struct traits (`InputClaims`/`OutputClaims` and their derives) are not used: they assume a static opening vocabulary, and atlas opening ids are graph-indexed. The relation layer is owned in `atlas-claims`, taken from `jolt-claims` at `f3265b5a` (`src/{claims,claim_data,symbolic,ops,sumcheck}.rs`; `specs/atlas-claims.md`): the diff base for a later upstream pull is those five files at that rev. The vendored crate and its RISC-V cone (`jolt-riscv`, `jolt-lookup-tables`, `jolt-r1cs`, `jolt-claims-derive`) are deleted. |
@@ -209,6 +209,32 @@ Diverged from that base:
 `upstream_sumcheck`'s `InstanceRounds` is in `relation::prover`; its `FacadeTranscript` is
 `atlas-pcs::akita::facade`, which the external `akita-*` crates still need. A later upstream
 pull diffs `crates/jolt-sumcheck` from `f3265b5a` and ports the change across these renames.
+
+## The transcript owned (`specs/own-transcript.md`)
+
+`atlas-transcript` holds upstream `jolt-transcript` at `f3265b5a` (`crates/jolt-transcript/src`):
+`prover.rs`, `verifier.rs` (the `ProverTranscript`/`VerifierTranscript` traits on spongefish's
+states, kept as a diff base), `setup.rs` (`PROTOCOL_ID` unchanged: `a16z/jolt-transcript/v1`),
+`codec.rs` and `pow.rs`; `challenge.rs` keeps `UniformBytes` and the message budget.
+`grind_bits.rs` and `ChallengeCodec` (with its pseudo-Mersenne prime impls) are
+`atlas-algebra::field::challenge`, because `JoltField::ChallengeCodecField` is bounded on the
+codec and `atlas-transcript` depends on `atlas-algebra`. Diverged from that base:
+
+- not taken: `legacy.rs` (the facade `Transcript`, `SpongeTranscript`), `digest.rs`,
+  `poseidon.rs`, the Keccak sponge, the BN254 `OptimizedChallenge`, and the BN254, binary and
+  extension-field codecs;
+- the `prover-grinding` feature is `atlas-transcript`'s `prover`; the `parallel` nonce search
+  (never enabled here) is gone, so the search is the sequential scan;
+- the legacy word encodings (`Label`, `LabelWithCount`, `U64Word`, big-endian field bytes,
+  `append_values`) are `atlas_transcript::words` over our `Transcript::append_bytes`, used by the
+  Akita adapter (ported off the facade; `atlas-pcs::akita::facade` is deleted) and by the
+  sumcheck engine (its private codec folded in);
+- the facade drew `challenge_vector(n)` as `n` scalar challenges; the Akita port keeps that
+  (`akita_challenge`, and `PrefixPackedLayout::reduce_claims` takes a per-variable draw), and
+  drops the facade's zero-bit proof of work (a no-op on the sponge).
+
+`blake2 0.11.0-rc.6` stays (spongefish 0.8's `Hash` bridge takes a `digest 0.11` hash);
+`jolt-poly`'s `transcript` feature is declared empty (`third_party/PINS.md`).
 
 ## BN254 removal (stage 7b)
 

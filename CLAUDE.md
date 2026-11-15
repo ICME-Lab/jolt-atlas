@@ -83,7 +83,7 @@ Workspace members, in dependency order:
 
 - **common** — shared constants and parallel helpers.
 - **third_party/** — upstream a16z/jolt crates vendored whole at recorded revs
-  (`third_party/PINS.md`): `jolt-field`, `jolt-transcript`, `jolt-utils` and `jolt-poly`.
+  (`third_party/PINS.md`): `jolt-field`, `jolt-utils` and `jolt-poly`.
   Vendoring is transitional: a crate atlas takes over becomes an atlas crate (`docs/roadmap.md`).
 - The proof-system toolkit inherited from Jolt, in dependency order:
   - **atlas-algebra** — `field` (`JoltField`, which extends upstream `jolt_field::JoltField`
@@ -91,10 +91,12 @@ Workspace members, in dependency order:
     Solinas field, is the one implementation), `poly` (multilinear polynomials, opening points)
     and `utils`. Fields and polynomials share a crate because `MultilinearPolynomial`'s `From`
     impls overlap unless `JoltField` is local.
-  - **atlas-transcript** — the Fiat-Shamir transcript on upstream `jolt-transcript`'s split
-    surface: the prover uses a `ProvingTranscript` (spongefish `ProverState`, proof-of-work
-    grinding behind the `prover` feature), the verifier a `VerifyingTranscript` over the
-    proof's NARG string.
+  - **atlas-transcript** — the Fiat-Shamir transcript (taken from upstream `jolt-transcript`):
+    one `Transcript` trait; the prover uses a `ProvingTranscript` (spongefish `ProverState`,
+    proof-of-work grinding behind the `prover` feature), the verifier a `VerifyingTranscript`
+    over the proof's NARG string; `words`, the deployed format's word encodings the Akita
+    adapter and the sumcheck engine absorb. The challenge codec and grind pricing are
+    `atlas-algebra::field::challenge`.
   - **atlas-lookup-tables** — the prefix-suffix lookup tables.
   - **atlas-claims** — the symbolic-relation layer: `SymbolicSumcheck`, the `Expr` algebra and
     the claim-data traits, owned by atlas (taken from upstream `jolt-claims` without its zkVM

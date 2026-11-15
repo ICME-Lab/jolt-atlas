@@ -97,7 +97,7 @@ jobs:
           status=0
           for name in $(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].name'); do
             if cargo tree -p "$name" -e normal,build,dev --prefix none \
-                | grep -qE '^(jolt-riscv|jolt-lookup-tables|jolt-r1cs|jolt-claims|jolt-akita|jolt-openings|jolt-crypto|jolt-sumcheck) '; then
+                | grep -qE '^(jolt-riscv|jolt-lookup-tables|jolt-r1cs|jolt-claims|jolt-akita|jolt-openings|jolt-crypto|jolt-sumcheck|jolt-transcript) '; then
               echo "$name resolves a zkVM cone crate" >&2
               status=1
             fi
@@ -105,9 +105,9 @@ jobs:
           exit $status
       - name: No deleted vendored crate or upstream facade named in atlas sources
         # atlas-pcs owns the Akita adapter (CommitmentScheme is the one scheme trait);
-        # atlas-sumcheck owns the sumcheck engine.
+        # atlas-sumcheck owns the sumcheck engine; atlas-transcript owns the transcript.
         run: |
-          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|jolt_sumcheck|UpstreamScheme|upstream_sumcheck)\b' \
+          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
               common atlas-* jolt-atlas-* --include='*.rs'; then
             echo "an atlas source names a deleted vendored crate or an upstream facade" >&2
             exit 1

@@ -33,7 +33,7 @@ pinned rev, MIT/Apache) are treated the same way for now; see "Open decisions".
 | `jolt-openings` | 1,261 | `CommitmentScheme`, prefix-packed layouts, `OpeningsError` | `atlas-pcs::commitment_scheme` | 2 (data types owned: `atlas-pcs::openings`; traits deleted) |
 | `jolt-crypto` | 5,459 | the `Commitment` trait (BN254 code off) | none | 2 (deleted) |
 | `jolt-sumcheck` | 4,913 | `prove_batch`, `verify_compressed`, `ProveRounds`, recorder | `atlas-sumcheck::upstream_sumcheck` facade, `sumcheck/` | 3 (owned: `atlas-sumcheck::engine`) |
-| `jolt-transcript` | 2,719 | spongefish prover/verifier states, codecs, grinding | `atlas-transcript` (thin layer) | 4 |
+| `jolt-transcript` | 2,719 | spongefish prover/verifier states, codecs, grinding | `atlas-transcript` (thin layer) | 4 (owned: `atlas-transcript`) |
 | `jolt-poly` | 6,365 | `UnivariatePoly`, `GruenSplitEqPolynomial`, `CompressedPoly`, binding order | `atlas-algebra::poly` (8,067 lines) | 5 |
 | `jolt-utils` | 353 | one allocator helper | `atlas-algebra::utils` | 5 |
 | `jolt-field` | 11,227 | Solinas Fp128 kernels (`Prime128OffsetA7F7`), `Ring`/`Field`, accumulators | `atlas-algebra::field` (`JoltField` extends upstream's; `Fp128` newtype) | 6 |
@@ -54,7 +54,7 @@ the spec says otherwise.
    `atlas-sumcheck::engine`; the `upstream_sumcheck` facade goes. Status: implemented on
    `dev`.
 4. **Transcript** — `specs/own-transcript.md`. `jolt-transcript`'s split prover/verifier
-   states, codecs and grinding become `atlas-transcript`. Status: proposed.
+   states, codecs and grinding become `atlas-transcript`. Status: implemented on `dev`.
 5. **Polynomials** — `specs/own-poly.md`. One polynomial library: `jolt-poly` and
    `atlas-algebra::poly` merge, `jolt-utils` folds in. Status: proposed.
 6. **Field** — `specs/own-field.md`. One field crate: the Solinas kernels and one trait;

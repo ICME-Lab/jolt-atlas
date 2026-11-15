@@ -4,7 +4,7 @@ pub use jolt_atlas_verifier::onnx_proof::ops::eval_reduction::*;
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::Prover;
-use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial};
+use atlas_algebra::{field::JoltField, poly::multilinear::MultilinearPolynomial};
 use atlas_sumcheck::evaluation_reduction::{EvalReductionProof, EvalReductionProtocol};
 use atlas_transcript::Transcript;
 
@@ -69,8 +69,8 @@ mod tests {
     };
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_point::OpeningPoint,
+        multilinear::{MultilinearPolynomial, PolynomialEvaluation},
+        point::OpeningPoint,
     };
     use atlas_pcs::mock::MockCommitScheme;
     use atlas_sumcheck::{

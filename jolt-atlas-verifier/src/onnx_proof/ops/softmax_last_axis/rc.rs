@@ -3,7 +3,7 @@ use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    poly::point::{OpeningPoint, BIG_ENDIAN},
 };
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},

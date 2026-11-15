@@ -3,8 +3,7 @@
 use super::*;
 use crate::opening_proof::Opening;
 use atlas_algebra::{
-    field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial,
-    utils::errors::ProvingError,
+    field::JoltField, poly::multilinear::MultilinearPolynomial, utils::errors::ProvingError,
 };
 use atlas_transcript::Transcript;
 

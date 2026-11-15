@@ -1,7 +1,7 @@
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, RelationWitnesses, TieClaims};
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::field::JoltField;
-use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
+use atlas_algebra::poly::multilinear::MultilinearPolynomial;
 use atlas_sumcheck::opening_proof::OpeningAccumulator;
 use atlas_trace::{semantics::fixed::rem_floor, trace::LayerData, Trace};
 pub use jolt_atlas_verifier::onnx_proof::ops::div::*;

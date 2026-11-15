@@ -8,7 +8,7 @@
 //! an orphan claim; a verifier panic is a robustness bug.
 
 use ark_std::One;
-use atlas_algebra::poly::opening_point::{OpeningPoint, BIG_ENDIAN};
+use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};

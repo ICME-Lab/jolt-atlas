@@ -1,9 +1,9 @@
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        ra_poly::RaPolynomial,
+        eq::EqPolynomial,
+        multilinear::{MultilinearPolynomial, PolynomialEvaluation},
+        ra::RaPolynomial,
     },
     utils::math::Math,
 };

@@ -104,7 +104,7 @@ mod unipoly {
     use crate::{AppendToTranscript, Transcript};
     use atlas_algebra::{
         field::JoltField,
-        poly::unipoly::{CompressedUniPoly, UniPoly},
+        poly::univariate::{CompressedUniPoly, UniPoly},
     };
 
     impl<F: JoltField> AppendToTranscript for UniPoly<F> {

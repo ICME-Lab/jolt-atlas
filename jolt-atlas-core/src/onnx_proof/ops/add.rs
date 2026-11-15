@@ -1,6 +1,6 @@
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, TieClaims};
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_algebra::{field::JoltField, poly::multilinear_polynomial::EvaluateMle};
+use atlas_algebra::{field::JoltField, poly::multilinear::EvaluateMle};
 use atlas_sumcheck::opening_proof::OpeningAccumulator;
 use atlas_trace::{trace::LayerData, Trace};
 pub use jolt_atlas_verifier::onnx_proof::ops::add::*;

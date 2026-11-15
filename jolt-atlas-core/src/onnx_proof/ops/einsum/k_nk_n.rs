@@ -6,9 +6,9 @@ use crate::onnx_proof::ops::einsum::dot::{EinsumFold, Folded};
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        eq::EqPolynomial,
+        multilinear::MultilinearPolynomial,
+        point::{OpeningPoint, BIG_ENDIAN},
     },
 };
 use atlas_trace::Tensor;

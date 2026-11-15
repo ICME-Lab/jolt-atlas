@@ -1,5 +1,5 @@
-use super::eq_poly::EqPolynomial;
-use super::multilinear_polynomial::{BindingOrder, PolynomialBinding};
+use super::eq::EqPolynomial;
+use super::multilinear::{BindingOrder, PolynomialBinding};
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField, OptimizedMul},
     utils::{math::Math, small_scalar::SmallScalar},
@@ -73,7 +73,7 @@ impl<T: SmallScalar, F: JoltField> CompactPolynomial<T, F> {
     // https://randomwalks.xyz/publish/fast_polynomial_evaluation.html
     // Shaves a factor of 2 from run time.
     pub fn inside_out_evaluate(&self, r: &[F]) -> F {
-        // Copied over from eq_poly
+        // Copied over from `eq`
         // If the number of variables are greater
         // than 2^16 -- use parallel evaluate
         // Below that it's better to just do things linearly.
@@ -402,7 +402,7 @@ fn split_eq_evaluate_serial<T: SmallScalar, F: JoltField>(
 }
 
 /// Evaluates the multilinear extension of `coeffs` at `r` without cloning the
-/// coefficients into a [`MultilinearPolynomial`](super::multilinear_polynomial::MultilinearPolynomial).
+/// coefficients into a [`MultilinearPolynomial`](super::multilinear::MultilinearPolynomial).
 ///
 /// Equivalent to `MultilinearPolynomial::from(coeffs.to_vec()).evaluate(r)`:
 /// evaluation is read-only, so borrowed coefficients suffice. `coeffs.len()`

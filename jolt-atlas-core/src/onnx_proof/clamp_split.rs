@@ -16,12 +16,12 @@ use crate::onnx_proof::clamp_lookups::clamp_intermediate;
 use crate::onnx_proof::global_clamp::ClampBucket;
 use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_algebra::poly::one_hot_polynomial::OneHotPolynomial;
+use atlas_algebra::poly::one_hot::OneHotPolynomial;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        eq::EqPolynomial,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
     },
     utils::thread::unsafe_allocate_zero_vec,
 };

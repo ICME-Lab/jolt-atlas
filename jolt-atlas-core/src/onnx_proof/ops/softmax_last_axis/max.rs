@@ -7,11 +7,11 @@ use std::array;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{
+        eq::EqPolynomial,
+        multilinear::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
-        split_eq_poly::SplitEqUnreducedFold,
+        split_eq::SplitEqUnreducedFold,
     },
     utils::thread::drop_in_background_thread,
 };

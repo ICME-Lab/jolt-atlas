@@ -5,9 +5,9 @@ use allocative::Allocative;
 use crate::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        eq::EqPolynomial,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        point::{OpeningPoint, BIG_ENDIAN},
     },
 };
 
@@ -92,8 +92,8 @@ mod tests {
     use jolt_field::Ring as _;
 
     use crate::poly::{
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialEvaluation},
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialEvaluation},
+        point::{OpeningPoint, BIG_ENDIAN},
     };
 
     use super::{lt_evals, LtPolynomial};

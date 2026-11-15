@@ -11,9 +11,9 @@ use ark_std::Zero;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        ra_poly::RaPolynomial,
-        split_eq_poly::SplitEqUnreducedFold,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        ra::RaPolynomial,
+        split_eq::SplitEqUnreducedFold,
     },
     utils::{expanding_table::ExpandingTable, thread::drop_in_background_thread},
 };

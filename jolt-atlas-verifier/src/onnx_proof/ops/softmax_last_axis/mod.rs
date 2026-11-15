@@ -44,8 +44,8 @@ use crate::node_view::ComputationNode;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{EvaluateMle, MultilinearPolynomial, PolynomialEvaluation},
-        opening_point::OpeningPoint,
+        multilinear::{EvaluateMle, MultilinearPolynomial, PolynomialEvaluation},
+        point::OpeningPoint,
     },
     utils::{errors::ProofVerifyError, math::Math},
 };

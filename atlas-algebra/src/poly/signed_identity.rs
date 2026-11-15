@@ -1,11 +1,9 @@
-use super::multilinear_polynomial::{BindingOrder, PolynomialBinding, PolynomialEvaluation};
+use super::multilinear::{BindingOrder, PolynomialBinding, PolynomialEvaluation};
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
-        identity_poly::{
-            IdentityPolynomial, OperandPolynomial, OperandSide, ShiftHalfSuffixPolynomial,
-        },
-        multilinear_polynomial::MultilinearPolynomial,
+        identity::{IdentityPolynomial, OperandPolynomial, OperandSide, ShiftHalfSuffixPolynomial},
+        multilinear::MultilinearPolynomial,
         prefix_suffix::{
             CachedPolynomial, Prefix, PrefixCheckpoints, PrefixPolynomial, PrefixRegistry,
             PrefixSuffixPolynomial, SuffixPolynomial,
@@ -407,12 +405,12 @@ mod tests {
     use crate::{
         field::JoltField,
         poly::{
-            identity_poly::OperandSide,
-            multilinear_polynomial::{
+            identity::OperandSide,
+            multilinear::{
                 BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
             },
             prefix_suffix::{tests::prefix_suffix_decomposition_test, Prefix},
-            signed_identity_poly::{SignedIdentityPoly, SignedOperandPoly},
+            signed_identity::{SignedIdentityPoly, SignedOperandPoly},
         },
         utils::{index_to_field_bitvector, interleave_bits},
     };

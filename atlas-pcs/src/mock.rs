@@ -4,7 +4,7 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 use atlas_algebra::{
     field::JoltField,
-    poly::multilinear_polynomial::MultilinearPolynomial,
+    poly::multilinear::MultilinearPolynomial,
     utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
 };
 use atlas_transcript::{AppendToTranscript, Transcript};

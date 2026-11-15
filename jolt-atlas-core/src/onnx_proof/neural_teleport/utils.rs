@@ -7,7 +7,7 @@ pub use jolt_atlas_verifier::onnx_proof::neural_teleport::utils::*;
 use super::n_bits_to_usize;
 use atlas_algebra::{
     field::{FieldChallengeOps, JoltField},
-    poly::eq_poly::EqPolynomial,
+    poly::eq::EqPolynomial,
     utils::thread::unsafe_allocate_zero_vec,
 };
 use atlas_trace::Tensor;

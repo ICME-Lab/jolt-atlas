@@ -1,7 +1,7 @@
 use crate::engine::{verify_compressed, CompressedSumcheckProof, SumcheckClaim, SumcheckError};
 use atlas_algebra::{
     field::JoltField,
-    poly::unipoly::CompressedUniPoly,
+    poly::univariate::CompressedUniPoly,
     utils::{errors::ProofVerifyError, serialization::deserialize_vec},
 };
 use atlas_transcript::Transcript;

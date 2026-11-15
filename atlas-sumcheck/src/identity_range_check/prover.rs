@@ -11,10 +11,10 @@ use crate::{
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        identity_poly::IdentityPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        identity::IdentityPolynomial,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
-        split_eq_poly::SplitEqUnreducedFold,
+        split_eq::SplitEqUnreducedFold,
     },
     utils::{
         expanding_table::ExpandingTable, lookup_bits::LookupBits, thread::drop_in_background_thread,

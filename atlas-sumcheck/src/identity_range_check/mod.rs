@@ -11,9 +11,9 @@ use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        identity_poly::IdentityPolynomial,
-        multilinear_polynomial::PolynomialEvaluation,
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        identity::IdentityPolynomial,
+        multilinear::PolynomialEvaluation,
+        point::{OpeningPoint, BIG_ENDIAN},
     },
 };
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};

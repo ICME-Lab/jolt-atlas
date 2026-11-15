@@ -30,7 +30,7 @@
 
 use atlas_algebra::{
     field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    poly::point::{OpeningPoint, BIG_ENDIAN},
 };
 
 /// The eq-poly binding schedule within the (HighToLow) sumcheck round order.

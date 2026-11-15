@@ -12,8 +12,8 @@ use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        eq::EqPolynomial,
+        point::{OpeningPoint, BIG_ENDIAN},
     },
 };
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
@@ -197,8 +197,8 @@ mod tests {
     use atlas_algebra::{
         field::{ChallengeFieldOps, FieldChallengeOps},
         poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            one_hot_polynomial::OneHotPolynomial,
+            multilinear::{MultilinearPolynomial, PolynomialEvaluation},
+            one_hot::OneHotPolynomial,
         },
         utils::{index_to_field_bitvector, math::Math},
     };

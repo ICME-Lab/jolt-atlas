@@ -139,7 +139,7 @@ mod tests {
     use crate::opening_proof::VerifierOpeningAccumulator;
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::field::IntoOpening;
-    use atlas_algebra::poly::opening_point::{OpeningPoint, BIG_ENDIAN};
+    use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
     use jolt_field::Ring;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 

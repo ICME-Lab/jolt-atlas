@@ -30,9 +30,9 @@ use crate::opening_proof::{
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        eq::EqPolynomial,
+        multilinear::{MultilinearPolynomial, PolynomialEvaluation},
+        point::{OpeningPoint, BIG_ENDIAN},
     },
     utils::errors::ProofVerifyError,
 };

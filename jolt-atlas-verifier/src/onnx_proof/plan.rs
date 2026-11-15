@@ -70,9 +70,7 @@ use crate::onnx_proof::{
     ProofType,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
-use atlas_algebra::{
-    field::JoltField, poly::opening_point::OpeningPoint, utils::errors::ProofVerifyError,
-};
+use atlas_algebra::{field::JoltField, poly::point::OpeningPoint, utils::errors::ProofVerifyError};
 use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable},

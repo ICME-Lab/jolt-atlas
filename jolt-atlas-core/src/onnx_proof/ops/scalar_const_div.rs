@@ -3,7 +3,7 @@ pub use jolt_atlas_verifier::onnx_proof::ops::scalar_const_div::*;
 
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, RelationWitnesses};
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
+use atlas_algebra::poly::multilinear::MultilinearPolynomial;
 use atlas_trace::{semantics::fixed::rem_floor, trace::LayerData, Trace};
 
 impl<F: JoltField> RelationWitnesses<F> for ConstantDivisionRelation {

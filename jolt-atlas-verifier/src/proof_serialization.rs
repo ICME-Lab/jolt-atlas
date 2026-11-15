@@ -11,7 +11,7 @@ use ark_serialize::{
 };
 
 use atlas_algebra::{
-    field::JoltField, poly::opening_point::OpeningPoint, utils::serialization::deserialize_vec,
+    field::JoltField, poly::point::OpeningPoint, utils::serialization::deserialize_vec,
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_sumcheck::{opening_proof::OpeningId, sumcheck::SumcheckInstanceProof};

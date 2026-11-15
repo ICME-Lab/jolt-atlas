@@ -17,7 +17,7 @@ use crate::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use atlas_algebra::utils::profiling::print_current_memory_usage;
-use atlas_algebra::{field::MaybeAllocative, poly::unipoly::CompressedUniPoly};
+use atlas_algebra::{field::MaybeAllocative, poly::univariate::CompressedUniPoly};
 use rayon::prelude::*;
 
 /// Append the relation's produced openings, with their `claims`, at their points.

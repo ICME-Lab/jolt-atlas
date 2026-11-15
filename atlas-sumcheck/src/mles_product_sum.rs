@@ -1,9 +1,9 @@
 use atlas_algebra::{
     field::{BarrettReduce, FMAdd, JoltField},
     poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        ra_poly::RaPolynomial,
-        split_eq_poly::{check_gruen_endpoint, SplitEqUnreducedFold},
+        multilinear::MultilinearPolynomial,
+        ra::RaPolynomial,
+        split_eq::{check_gruen_endpoint, SplitEqUnreducedFold},
     },
     utils::accumulation::SmallAccumS,
 };
@@ -1344,12 +1344,12 @@ mod tests {
     use atlas_algebra::{
         field::JoltField,
         poly::{
-            dense_mlpoly::DensePolynomial,
-            eq_poly::EqPolynomial,
-            multilinear_polynomial::{
+            dense::DensePolynomial,
+            eq::EqPolynomial,
+            multilinear::{
                 BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
             },
-            ra_poly::RaPolynomial,
+            ra::RaPolynomial,
         },
     };
 

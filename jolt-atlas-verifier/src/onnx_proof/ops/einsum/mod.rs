@@ -25,9 +25,7 @@ use crate::{
         opening_access::{OpeningIdBuilder, Target},
     },
 };
-use atlas_algebra::{
-    field::JoltField, poly::opening_point::OpeningPoint, utils::errors::ProofVerifyError,
-};
+use atlas_algebra::{field::JoltField, poly::point::OpeningPoint, utils::errors::ProofVerifyError};
 use atlas_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;

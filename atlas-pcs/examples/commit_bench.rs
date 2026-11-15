@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use atlas_algebra::{
     field::fp128::Fp128,
-    poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
+    poly::{multilinear::MultilinearPolynomial, one_hot::OneHotPolynomial},
 };
 use atlas_pcs::akita::backend::AKITA_ONE_HOT_K16;
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};

@@ -1,6 +1,6 @@
 use crate::{
     field::JoltField,
-    poly::{dense_mlpoly::DensePolynomial, multilinear_polynomial::MultilinearPolynomial},
+    poly::{dense::DensePolynomial, multilinear::MultilinearPolynomial},
 };
 use common::parallel::par_enabled;
 use common::CommittedPoly;

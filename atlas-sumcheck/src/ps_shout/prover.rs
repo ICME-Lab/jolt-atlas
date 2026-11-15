@@ -7,10 +7,10 @@ use crate::relation::prover::RelationWitness;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        dense_mlpoly::DensePolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        dense::DensePolynomial,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
         prefix_suffix::PrefixRegistry,
-        split_eq_poly::SplitEqUnreducedFold,
+        split_eq::SplitEqUnreducedFold,
     },
     utils::{
         expanding_table::ExpandingTable,

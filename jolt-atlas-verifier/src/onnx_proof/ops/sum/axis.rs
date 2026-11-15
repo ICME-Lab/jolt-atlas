@@ -17,9 +17,7 @@ use crate::{
         opening_access::{OpeningIdBuilder, Target},
     },
 };
-use atlas_algebra::{
-    field::JoltField, poly::multilinear_polynomial::BindingOrder, utils::math::Math,
-};
+use atlas_algebra::{field::JoltField, poly::multilinear::BindingOrder, utils::math::Math};
 use atlas_claims::{opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;

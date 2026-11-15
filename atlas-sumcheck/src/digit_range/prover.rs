@@ -6,8 +6,8 @@ use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
 use allocative::Allocative;
 use atlas_algebra::poly::{
-    multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-    split_eq_poly::SplitEqUnreducedFold,
+    multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+    split_eq::SplitEqUnreducedFold,
 };
 use common::parallel::par_enabled;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};

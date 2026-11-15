@@ -5,7 +5,7 @@ pub use jolt_atlas_verifier::utils::opening_access::*;
 
 use atlas_algebra::{
     field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    poly::point::{OpeningPoint, BIG_ENDIAN},
 };
 use atlas_sumcheck::opening_proof::{prover::ProverOpeningAccumulator, OpeningId, PolynomialId};
 use atlas_transcript::Transcript;

@@ -14,7 +14,7 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier, SparseGroup,
     },
 };
-use atlas_algebra::{field::JoltField, poly::eq_poly::EqPolynomial};
+use atlas_algebra::{field::JoltField, poly::eq::EqPolynomial};
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use jolt_field::Ring;
 
@@ -295,7 +295,7 @@ mod tests {
     use super::prover::*;
     use crate::opening_proof::{prover::ProverOpeningAccumulator, VerifierOpeningAccumulator};
     use atlas_algebra::field::fp128::Fp128 as Fr;
-    use atlas_algebra::poly::opening_point::{OpeningPoint, BIG_ENDIAN};
+    use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
     use common::CommittedPoly;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 

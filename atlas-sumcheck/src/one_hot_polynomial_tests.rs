@@ -6,9 +6,9 @@ use crate::opening_reduction::{
 use ark_std::{test_rng, Zero};
 use atlas_algebra::field::fp128::Fp128 as Fr;
 use atlas_algebra::field::JoltField;
-use atlas_algebra::poly::one_hot_polynomial::*;
-use atlas_algebra::poly::{dense_mlpoly::DensePolynomial, eq_poly::EqPolynomial};
-use atlas_algebra::poly::{multilinear_polynomial::BindingOrder, unipoly::UniPoly};
+use atlas_algebra::poly::one_hot::*;
+use atlas_algebra::poly::{dense::DensePolynomial, eq::EqPolynomial};
+use atlas_algebra::poly::{multilinear::BindingOrder, univariate::UniPoly};
 use jolt_field::Field as _;
 use jolt_field::Ring as _;
 use rand_core::RngCore;

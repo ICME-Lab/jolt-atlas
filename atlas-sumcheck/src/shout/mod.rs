@@ -15,8 +15,8 @@ use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::{FieldChallengeOps, IntoOpening, JoltField},
     poly::{
-        eq_poly::EqPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        eq::EqPolynomial,
+        point::{OpeningPoint, BIG_ENDIAN},
     },
     utils::thread::unsafe_allocate_zero_vec,
 };
@@ -29,8 +29,8 @@ use rayon::prelude::*;
 
 use crate::opening_proof::VerifierOpeningAccumulator;
 use atlas_algebra::poly::{
-    identity_poly::IdentityPolynomial,
-    multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+    identity::IdentityPolynomial,
+    multilinear::{MultilinearPolynomial, PolynomialEvaluation},
 };
 
 const READ_RAF_DEGREE_BOUND: usize = 2;

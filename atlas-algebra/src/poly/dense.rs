@@ -2,7 +2,7 @@
 #![allow(clippy::uninlined_format_args)]
 use crate::{
     field::ChallengeFieldOps,
-    poly::{eq_poly::EqPolynomial, multilinear_polynomial::PolynomialEvaluation},
+    poly::{eq::EqPolynomial, multilinear::PolynomialEvaluation},
     utils::{
         compute_dotproduct, compute_dotproduct_low_optimized, thread::unsafe_allocate_zero_vec,
     },
@@ -20,7 +20,7 @@ use rand_core::{CryptoRng, RngCore};
 use rayon::prelude::*;
 use std::ops::IndexMut;
 
-use super::multilinear_polynomial::{BindingOrder, MultilinearPolynomial};
+use super::multilinear::{BindingOrder, MultilinearPolynomial};
 
 #[derive(Default, Debug, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
 pub struct DensePolynomial<F: JoltField> {
@@ -312,7 +312,7 @@ impl<F: JoltField> DensePolynomial<F> {
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>,
     {
-        // Copied over from eq_poly
+        // Copied over from `eq`
         // If the number of variables are greater
         // than 2^16 -- use parallel evaluate
         // Below that it's better to just do things linearly.
@@ -376,7 +376,7 @@ impl<F: JoltField> DensePolynomial<F> {
         let m = r.len();
         // Invoking the same parallelisation structure
         // currently in evaluating in Lagrange bases.
-        // See eq_poly::evals()
+        // See eq::evals()
         for i in (0..m).rev() {
             let stride = 1 << i;
             let r_val = r[m - 1 - i];

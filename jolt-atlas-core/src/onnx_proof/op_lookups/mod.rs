@@ -12,7 +12,7 @@ use atlas_trace::{trace::LayerData, Tensor, Trace};
 pub use jolt_atlas_verifier::onnx_proof::op_lookups::*;
 
 use atlas_algebra::{
-    field::JoltField, poly::multilinear_polynomial::EvaluateMle, utils::lookup_bits::LookupBits,
+    field::JoltField, poly::multilinear::EvaluateMle, utils::lookup_bits::LookupBits,
 };
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_sumcheck::{

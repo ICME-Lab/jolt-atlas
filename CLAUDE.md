@@ -120,7 +120,7 @@ Workspace members, in dependency order:
   every prover computes its own round messages (upstream `UnivariatePoly`) over upstream's
   `GruenSplitEqPolynomial`, while its relation supplies the degree, input claim and opening
   appends; Gruen rounds go through
-  `atlas_algebra::poly::split_eq_poly::SplitEqUnreducedFold`, which takes the relation at the endpoint the
+  `atlas_algebra::poly::split_eq::SplitEqUnreducedFold`, which takes the relation at the endpoint the
   round otherwise recovers by division.
 - **atlas-trace** — deterministic fixed-point IR, op semantics, and the trace engine. Owns the
   behavioral contract below.

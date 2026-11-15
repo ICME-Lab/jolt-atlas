@@ -25,8 +25,8 @@
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        split_eq_poly::SplitEqUnreducedFold,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        split_eq::SplitEqUnreducedFold,
     },
 };
 use atlas_claims::Source;

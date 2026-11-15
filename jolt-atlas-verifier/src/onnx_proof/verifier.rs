@@ -17,8 +17,8 @@ use crate::{ONNXProof, ProofId, ProofType};
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_point::OpeningPoint,
+        multilinear::{MultilinearPolynomial, PolynomialEvaluation},
+        point::OpeningPoint,
     },
     utils::{errors::ProofVerifyError, math::Math},
 };

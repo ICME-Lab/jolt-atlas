@@ -80,7 +80,7 @@ use crate::node_view::ComputationNode;
 
 use atlas_algebra::{
     field::JoltField,
-    poly::{multilinear_polynomial::EvaluateMle, opening_point::OpeningPoint},
+    poly::{multilinear::EvaluateMle, point::OpeningPoint},
     utils::thread::drop_in_background_thread,
 };
 use atlas_sumcheck::evaluation_reduction::EvalReductionProof;

@@ -1,8 +1,8 @@
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
-        dense_mlpoly::DensePolynomial,
-        multilinear_polynomial::{
+        dense::DensePolynomial,
+        multilinear::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
     },

@@ -11,7 +11,7 @@ use crate::onnx_proof::range_checking::range_check_operands::{
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    poly::point::{OpeningPoint, BIG_ENDIAN},
     utils::math::Math,
 };
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};

@@ -9,7 +9,7 @@ use allocative::FlameGraphBuilder;
 use ark_std::Zero;
 use atlas_algebra::{
     field::JoltField,
-    poly::multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+    poly::multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
 };
 use common::parallel::par_enabled;
 use jolt_poly::UnivariatePoly;

@@ -20,7 +20,7 @@ use crate::utils::opening_access::AccOpeningAccessor;
 use crate::utils::opening_access::IntoProverProvider;
 use atlas_algebra::{
     field::JoltField,
-    poly::multilinear_polynomial::{EvaluateMle, MultilinearPolynomial},
+    poly::multilinear::{EvaluateMle, MultilinearPolynomial},
     utils::math::Math,
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;

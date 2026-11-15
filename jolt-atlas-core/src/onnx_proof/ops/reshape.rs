@@ -13,7 +13,7 @@ use atlas_algebra::field::JoltField;
 
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, RelationWitnesses};
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
+use atlas_algebra::poly::multilinear::MultilinearPolynomial;
 use atlas_trace::{trace::LayerData, Trace};
 
 impl<F: JoltField> RelationWitnesses<F> for ReshapeRelation {

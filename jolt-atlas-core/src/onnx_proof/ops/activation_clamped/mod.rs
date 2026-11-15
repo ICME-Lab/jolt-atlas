@@ -30,11 +30,11 @@ use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{
+        multilinear::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
-        opening_point::OpeningPoint,
-        signed_identity_poly::SignedIdentityPoly,
+        point::OpeningPoint,
+        signed_identity::SignedIdentityPoly,
     },
 };
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};

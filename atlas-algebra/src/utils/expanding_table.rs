@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use std::ops::Index;
 
 use crate::field::JoltField;
-use crate::poly::multilinear_polynomial::BindingOrder;
+use crate::poly::multilinear::BindingOrder;
 use crate::utils::thread::unsafe_allocate_zero_vec;
 
 /// Table containing the evaluations `EQ(x_1, ..., x_j, r_1, ..., r_j)`,

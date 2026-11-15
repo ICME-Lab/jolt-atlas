@@ -3,7 +3,7 @@ use common::parallel::par_enabled;
 use rayon::prelude::*;
 
 use crate::field::JoltField;
-use crate::poly::multilinear_polynomial::{BindingOrder, PolynomialBinding};
+use crate::poly::multilinear::{BindingOrder, PolynomialBinding};
 
 /// Multiquadratic polynomial represented by its evaluations on the grid
 /// {0, 1, ∞}^num_vars in base-3 layout (z_0 least-significant / fastest-varying).

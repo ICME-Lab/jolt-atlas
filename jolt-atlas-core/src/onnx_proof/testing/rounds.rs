@@ -9,7 +9,7 @@
 //! closure on the probe models and the op gauntlet instead, against the division it replaces.
 
 use atlas_algebra::field::fp128::Fp128 as Fr;
-use atlas_algebra::poly::{eq_poly::EqPolynomial, split_eq_poly::CHECK_GRUEN_ENDPOINTS};
+use atlas_algebra::poly::{eq::EqPolynomial, split_eq::CHECK_GRUEN_ENDPOINTS};
 use atlas_claims::SymbolicSumcheck;
 use atlas_pcs::akita::AkitaScheme;
 use atlas_sumcheck::engine::prover::ProveRounds;

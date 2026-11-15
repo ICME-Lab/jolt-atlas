@@ -24,7 +24,7 @@ use crate::{
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    poly::point::{OpeningPoint, BIG_ENDIAN},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
 use common::{

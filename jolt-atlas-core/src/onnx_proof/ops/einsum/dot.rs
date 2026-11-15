@@ -44,10 +44,10 @@ use crate::onnx_proof::relation::{
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{
+        multilinear::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        point::{OpeningPoint, BIG_ENDIAN},
     },
 };
 use atlas_claims::SymbolicSumcheck;

@@ -12,7 +12,7 @@ use crate::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::multilinear_polynomial::EvaluateMle,
+    poly::multilinear::EvaluateMle,
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_claims::{derived, opening, SymbolicSumcheck};

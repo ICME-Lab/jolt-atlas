@@ -41,8 +41,8 @@ use crate::onnx_proof::relation::{note_dispatch, RelationParams, RelationSetup, 
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        eq::EqPolynomial,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
     },
 };
 use atlas_claims::SymbolicSumcheck;

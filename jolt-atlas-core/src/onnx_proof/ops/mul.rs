@@ -3,7 +3,7 @@ pub use jolt_atlas_verifier::onnx_proof::ops::mul::*;
 
 use crate::onnx_proof::relation::{AtlasRelation, RelationSetup, RelationWitnesses};
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
+use atlas_algebra::poly::multilinear::MultilinearPolynomial;
 use atlas_trace::op::OpSpec;
 use atlas_trace::{trace::LayerData, Trace};
 

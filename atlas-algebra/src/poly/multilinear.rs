@@ -1,6 +1,6 @@
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps},
-    poly::one_hot_polynomial::OneHotPolynomial,
+    poly::one_hot::OneHotPolynomial,
     utils::{compute_dotproduct, small_scalar::SmallScalar},
 };
 use allocative::Allocative;
@@ -10,9 +10,7 @@ use common::parallel::par_enabled;
 use rayon::prelude::*;
 use strum_macros::EnumIter;
 
-use super::{
-    compact_polynomial::CompactPolynomial, dense_mlpoly::DensePolynomial, eq_poly::EqPolynomial,
-};
+use super::{compact::CompactPolynomial, dense::DensePolynomial, eq::EqPolynomial};
 use crate::field::JoltField;
 
 /// Wrapper enum for the various multilinear polynomial types used in Jolt
@@ -521,7 +519,7 @@ impl<T: SmallScalar> EvaluateMle for [T] {
         F: JoltField + FieldChallengeOps<C>,
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
     {
-        super::compact_polynomial::evaluate_mle(self, r)
+        super::compact::evaluate_mle(self, r)
     }
 }
 
@@ -532,10 +530,10 @@ impl<T: SmallScalar + atlas_trace::tensor::Element> EvaluateMle for atlas_trace:
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
     {
         if self.len() == 1 << r.len() {
-            super::compact_polynomial::evaluate_mle(self.data(), r)
+            super::compact::evaluate_mle(self.data(), r)
         } else {
             let padded = self.padded_pow2();
-            super::compact_polynomial::evaluate_mle(padded.data(), r)
+            super::compact::evaluate_mle(padded.data(), r)
         }
     }
 }

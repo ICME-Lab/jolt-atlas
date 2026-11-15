@@ -13,7 +13,7 @@ use atlas_algebra::{
     field::JoltField,
     poly::{
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
-        signed_identity_poly::SignedIdentityPoly,
+        signed_identity::SignedIdentityPoly,
     },
     utils::lookup_bits::LookupBits,
 };

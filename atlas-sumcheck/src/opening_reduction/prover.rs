@@ -14,10 +14,10 @@ use ark_std::Zero;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        one_hot_polynomial::OneHotPolynomial,
-        ra_poly::RaPolynomial,
-        split_eq_poly::check_gruen_endpoint,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        one_hot::OneHotPolynomial,
+        ra::RaPolynomial,
+        split_eq::check_gruen_endpoint,
     },
     utils::{
         math::Math,
@@ -542,7 +542,7 @@ where
     ) {
         #[cfg(test)]
         {
-            use atlas_algebra::poly::multilinear_polynomial::PolynomialEvaluation;
+            use atlas_algebra::poly::multilinear::PolynomialEvaluation;
             for (poly_id, claim) in self.polynomials.iter().zip(&self.claims) {
                 let poly = polynomials_map.get(poly_id).unwrap();
                 debug_assert_eq!(

@@ -14,8 +14,8 @@ use crate::{
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        eq::EqPolynomial,
+        point::{OpeningPoint, BIG_ENDIAN},
     },
     utils::{errors::ProofVerifyError, math::Math},
 };

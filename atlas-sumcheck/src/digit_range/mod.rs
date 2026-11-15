@@ -229,10 +229,8 @@ mod tests {
     use crate::opening_proof::{prover::ProverOpeningAccumulator, VerifierOpeningAccumulator};
     use crate::relation::{prover::prove_relation, verify_relation};
     use atlas_algebra::field::fp128::Fp128 as Fr;
-    use atlas_algebra::poly::multilinear_polynomial::{
-        MultilinearPolynomial, PolynomialEvaluation,
-    };
-    use atlas_algebra::poly::opening_point::{OpeningPoint, BIG_ENDIAN};
+    use atlas_algebra::poly::multilinear::{MultilinearPolynomial, PolynomialEvaluation};
+    use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
     };
@@ -293,7 +291,7 @@ mod tests {
     /// The hypercube sum of the output expression's summand for these digits: what an honest
     /// prover of these columns can claim.
     fn true_sum(params: &DigitRangeParams<Fr>, digits: &[Vec<u8>]) -> Fr {
-        let eq = atlas_algebra::poly::eq_poly::EqPolynomial::<Fr>::evals(&params.r);
+        let eq = atlas_algebra::poly::eq::EqPolynomial::<Fr>::evals(&params.r);
         let places = params.place_values();
         (0..digits[0].len())
             .map(|t| {

@@ -6,7 +6,7 @@
 use crate::node_view::ComputationNode;
 use atlas_algebra::{
     field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    poly::point::{OpeningPoint, BIG_ENDIAN},
     utils::errors::ProofVerifyError,
 };
 use atlas_sumcheck::opening_proof::{

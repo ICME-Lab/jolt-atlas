@@ -1,5 +1,5 @@
 use crate::field::JoltField;
-use crate::poly::opening_point::{Endianness, OpeningPoint};
+use crate::poly::point::{Endianness, OpeningPoint};
 use crate::utils::{math::Math, thread::unsafe_allocate_zero_vec};
 use common::parallel::par_enabled;
 use rayon::prelude::*;

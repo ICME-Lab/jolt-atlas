@@ -5,7 +5,7 @@ use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::dims::SumAxis;
 use atlas_algebra::{
     field::JoltField,
-    poly::{eq_poly::EqPolynomial, multilinear_polynomial::MultilinearPolynomial},
+    poly::{eq::EqPolynomial, multilinear::MultilinearPolynomial},
     utils::math::Math,
 };
 use atlas_trace::{trace::LayerData, Trace};

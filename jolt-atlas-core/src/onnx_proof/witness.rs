@@ -35,7 +35,7 @@ use crate::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::{multilinear_polynomial::MultilinearPolynomial, one_hot_polynomial::OneHotPolynomial},
+    poly::{multilinear::MultilinearPolynomial, one_hot::OneHotPolynomial},
     utils::{lookup_bits::LookupBits, math::Math},
 };
 use atlas_sumcheck::config::{OneHotConfig, OneHotParams};

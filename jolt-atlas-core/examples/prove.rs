@@ -24,7 +24,7 @@
 //! `0..n` (scaled when the model expects fixed point), token types zero.
 use std::{collections::HashMap, path::PathBuf, time::Instant};
 
-use atlas_algebra::poly::multilinear_polynomial::MultilinearPolynomial;
+use atlas_algebra::poly::multilinear::MultilinearPolynomial;
 use atlas_onnx_import::fixtures::{inputs_with_ids, standard_bindings, synth_inputs, GOLDEN_SEED};
 use atlas_onnx_import::{ImportedModel, InputDescriptor, InputKind};
 use atlas_trace::{Model, Tensor};

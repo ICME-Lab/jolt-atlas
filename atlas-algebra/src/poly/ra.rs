@@ -7,8 +7,8 @@ use allocative::Allocative;
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{
+        eq::EqPolynomial,
+        multilinear::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
     },

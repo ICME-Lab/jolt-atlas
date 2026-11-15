@@ -55,7 +55,7 @@ use crate::{
     },
 };
 use atlas_algebra::{
-    poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+    poly::multilinear::{MultilinearPolynomial, PolynomialEvaluation},
     utils::math::Math,
 };
 use atlas_sumcheck::engine::prover::ProveRounds;

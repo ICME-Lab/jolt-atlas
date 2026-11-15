@@ -21,7 +21,7 @@ use rayon::prelude::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-pub use atlas_algebra::poly::opening_point::{Endianness, OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN};
+pub use atlas_algebra::poly::point::{Endianness, OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN};
 
 /// (point, claim)
 pub type Opening<F> = (OpeningPoint<BIG_ENDIAN, F>, F);

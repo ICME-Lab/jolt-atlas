@@ -11,9 +11,9 @@ use ark_std::Zero;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        identity_poly::OperandSide,
+        identity::OperandSide,
         prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
-        signed_identity_poly::SignedOperandPoly,
+        signed_identity::SignedOperandPoly,
     },
     utils::lookup_bits::LookupBits,
 };

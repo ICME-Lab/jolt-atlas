@@ -26,8 +26,7 @@ use super::{
 };
 use crate::node_view::ModelView;
 use atlas_algebra::{
-    field::JoltField, poly::multilinear_polynomial::MultilinearPolynomial,
-    utils::lookup_bits::LookupBits,
+    field::JoltField, poly::multilinear::MultilinearPolynomial, utils::lookup_bits::LookupBits,
 };
 use atlas_trace::{Model, Trace};
 use common::CommittedPoly;

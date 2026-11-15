@@ -6,7 +6,7 @@ use num::Integer;
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
     poly::{
-        multilinear_polynomial::MultilinearPolynomial,
+        multilinear::MultilinearPolynomial,
         prefix_suffix::{
             CachedPolynomial, Prefix, PrefixCheckpoints, PrefixPolynomial, PrefixRegistry,
             PrefixSuffixPolynomial, SuffixPolynomial,
@@ -15,7 +15,7 @@ use crate::{
     utils::{lookup_bits::LookupBits, math::Math, uninterleave_bits},
 };
 
-use super::multilinear_polynomial::{BindingOrder, PolynomialBinding, PolynomialEvaluation};
+use super::multilinear::{BindingOrder, PolynomialBinding, PolynomialEvaluation};
 
 #[derive(Clone, Debug, Allocative)]
 pub struct IdentityPolynomial<F: JoltField> {
@@ -463,8 +463,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for UnmapRamAddressPolynomial<F> {
 #[cfg(test)]
 mod tests {
     use crate::poly::{
-        multilinear_polynomial::MultilinearPolynomial,
-        prefix_suffix::tests::prefix_suffix_decomposition_test,
+        multilinear::MultilinearPolynomial, prefix_suffix::tests::prefix_suffix_decomposition_test,
     };
     use jolt_field::Field as _;
     use jolt_field::Ring;

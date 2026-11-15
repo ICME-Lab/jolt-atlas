@@ -6,7 +6,7 @@ use crate::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    poly::point::{OpeningPoint, BIG_ENDIAN},
     utils::{errors::ProofVerifyError, math::Math},
 };
 

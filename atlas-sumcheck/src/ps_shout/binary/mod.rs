@@ -6,8 +6,8 @@ use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        identity_poly::OperandSide, multilinear_polynomial::PolynomialEvaluation,
-        prefix_suffix::PrefixSuffixDecomposition, signed_identity_poly::SignedOperandPoly,
+        identity::OperandSide, multilinear::PolynomialEvaluation,
+        prefix_suffix::PrefixSuffixDecomposition, signed_identity::SignedOperandPoly,
     },
 };
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
@@ -114,8 +114,8 @@ pub mod tests {
     use atlas_algebra::utils::errors::ProofVerifyError;
     use atlas_algebra::{
         poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            opening_point::{OpeningPoint, BIG_ENDIAN},
+            multilinear::{MultilinearPolynomial, PolynomialEvaluation},
+            point::{OpeningPoint, BIG_ENDIAN},
         },
         utils::{lookup_bits::LookupBits, uninterleave_bits},
     };

@@ -45,7 +45,7 @@ use atlas_trace::{SoftmaxWitness, Tensor, Trace};
 
 use atlas_algebra::{
     field::JoltField,
-    poly::{multilinear_polynomial::EvaluateMle, opening_point::OpeningPoint},
+    poly::{multilinear::EvaluateMle, point::OpeningPoint},
     utils::{lookup_bits::LookupBits, math::Math},
 };
 use atlas_sumcheck::{identity_range_check::prover::identity_rangecheck_prover, shout};

@@ -19,9 +19,9 @@ use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        ra_poly::RaPolynomial,
+        eq::EqPolynomial,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        ra::RaPolynomial,
     },
     utils::{expanding_table::ExpandingTable, math::Math},
 };
@@ -386,10 +386,10 @@ mod tests {
     use atlas_algebra::{
         field::JoltField,
         poly::{
-            multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-            one_hot_polynomial::OneHotPolynomial,
-            opening_point::{OpeningPoint, BIG_ENDIAN},
-            rlc_polynomial::build_materialized_rlc,
+            multilinear::{MultilinearPolynomial, PolynomialEvaluation},
+            one_hot::OneHotPolynomial,
+            point::{OpeningPoint, BIG_ENDIAN},
+            rlc::build_materialized_rlc,
         },
     };
     use atlas_transcript::{

@@ -6,13 +6,13 @@ use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        identity_poly::IdentityPolynomial,
-        multilinear_polynomial::{
+        eq::EqPolynomial,
+        identity::IdentityPolynomial,
+        multilinear::{
             BindingOrder, EvaluateMle, MultilinearPolynomial, PolynomialBinding,
             PolynomialEvaluation,
         },
-        opening_point::OpeningPoint,
+        point::OpeningPoint,
     },
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
 };

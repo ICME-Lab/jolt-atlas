@@ -10,9 +10,9 @@ use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::MultilinearPolynomial,
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        eq::EqPolynomial,
+        multilinear::MultilinearPolynomial,
+        point::{OpeningPoint, BIG_ENDIAN},
         prefix_suffix::PrefixRegistry,
     },
     utils::{lookup_bits::LookupBits, thread::unsafe_allocate_zero_vec},

@@ -3,7 +3,7 @@ use std::{borrow::Borrow, fmt::Debug};
 
 use atlas_algebra::{
     field::JoltField,
-    poly::multilinear_polynomial::MultilinearPolynomial,
+    poly::multilinear::MultilinearPolynomial,
     utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
 };
 use atlas_transcript::{AppendToTranscript, Transcript};
@@ -164,7 +164,7 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
         opening_point: &[<Self::Field as JoltField>::Challenge],
         transcript: &mut ProofTranscript,
     ) -> Self::Proof {
-        let rlc = atlas_algebra::poly::rlc_polynomial::build_materialized_rlc(coeffs, polynomials);
+        let rlc = atlas_algebra::poly::rlc::build_materialized_rlc(coeffs, polynomials);
         Self::prove(setup, &rlc, opening_point, None, transcript)
     }
 

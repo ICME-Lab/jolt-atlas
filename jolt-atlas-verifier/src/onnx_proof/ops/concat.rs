@@ -18,7 +18,7 @@ use crate::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::eq_poly::EqPolynomial,
+    poly::eq::EqPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_claims::{derived, opening, Expr, SymbolicSumcheck};

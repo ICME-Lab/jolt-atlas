@@ -67,7 +67,7 @@ use atlas_algebra::{
         fp128::{Fp128, Inner},
         JoltField,
     },
-    poly::multilinear_polynomial::MultilinearPolynomial,
+    poly::multilinear::MultilinearPolynomial,
     utils::errors::ProofVerifyError,
 };
 use atlas_transcript::{AppendToTranscript, Transcript};
@@ -1169,9 +1169,7 @@ where
 mod tests {
     use super::*;
     use ark_std::test_rng;
-    use atlas_algebra::poly::{
-        multilinear_polynomial::PolynomialEvaluation, one_hot_polynomial::OneHotPolynomial,
-    };
+    use atlas_algebra::poly::{multilinear::PolynomialEvaluation, one_hot::OneHotPolynomial};
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
     };

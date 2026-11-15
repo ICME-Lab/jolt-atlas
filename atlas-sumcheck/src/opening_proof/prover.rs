@@ -11,10 +11,10 @@ use crate::{
     sumcheck::SumcheckInstanceProof,
 };
 use allocative::Allocative;
-pub use atlas_algebra::poly::opening_point::{Endianness, OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN};
+pub use atlas_algebra::poly::point::{Endianness, OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN};
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
-    poly::multilinear_polynomial::MultilinearPolynomial,
+    poly::multilinear::MultilinearPolynomial,
 };
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};

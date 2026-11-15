@@ -9,8 +9,8 @@ use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
+        eq::EqPolynomial,
+        multilinear::{MultilinearPolynomial, PolynomialEvaluation},
     },
     utils::math::Math,
 };

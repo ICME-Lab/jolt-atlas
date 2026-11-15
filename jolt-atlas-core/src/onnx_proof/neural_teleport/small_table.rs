@@ -7,8 +7,8 @@ use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        identity_poly::IdentityPolynomial,
-        multilinear_polynomial::{
+        identity::IdentityPolynomial,
+        multilinear::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
     },

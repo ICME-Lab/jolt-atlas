@@ -19,7 +19,7 @@ use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use atlas_algebra::{
     field::JoltField,
-    poly::{multilinear_polynomial::MultilinearPolynomial, unipoly::UniPoly},
+    poly::{multilinear::MultilinearPolynomial, univariate::UniPoly},
     utils::errors::{ProofVerifyError, ProvingError},
 };
 use atlas_trace::Tensor;
@@ -290,7 +290,7 @@ mod tests {
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::{
         field::{IntoOpening, JoltField},
-        poly::multilinear_polynomial::PolynomialEvaluation,
+        poly::multilinear::PolynomialEvaluation,
     };
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,

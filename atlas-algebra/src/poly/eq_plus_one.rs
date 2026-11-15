@@ -3,8 +3,8 @@ use common::parallel::par_enabled;
 use rayon::prelude::*;
 
 use crate::field::{FieldChallengeOps, JoltField};
-use crate::poly::eq_poly::EqPolynomial;
-use crate::poly::opening_point::{OpeningPoint, BIG_ENDIAN};
+use crate::poly::eq::EqPolynomial;
+use crate::poly::point::{OpeningPoint, BIG_ENDIAN};
 use crate::utils::math::Math;
 use crate::utils::thread::unsafe_allocate_zero_vec;
 
@@ -169,8 +169,8 @@ mod tests {
     use jolt_field::Ring;
 
     use crate::poly::{
-        multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
-        opening_point::{OpeningPoint, BIG_ENDIAN},
+        multilinear::{MultilinearPolynomial, PolynomialEvaluation},
+        point::{OpeningPoint, BIG_ENDIAN},
     };
 
     use super::{EqPlusOnePolynomial, EqPlusOnePrefixSuffixPoly};

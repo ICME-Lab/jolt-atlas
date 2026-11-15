@@ -7,7 +7,7 @@ use crate::onnx_proof::{
 };
 use atlas_algebra::{
     field::JoltField,
-    poly::opening_point::{OpeningPoint, BIG_ENDIAN},
+    poly::point::{OpeningPoint, BIG_ENDIAN},
     utils::errors::ProofVerifyError,
 };
 use atlas_lookup_tables::clamp::CLAMP_BOUND;

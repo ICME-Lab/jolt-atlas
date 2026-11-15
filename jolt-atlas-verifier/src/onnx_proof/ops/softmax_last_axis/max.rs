@@ -8,7 +8,7 @@ use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target}
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
-    poly::eq_poly::EqPolynomial,
+    poly::eq::EqPolynomial,
     utils::{index_to_field_bitvector, math::Math},
 };
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};

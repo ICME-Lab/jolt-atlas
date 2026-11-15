@@ -13,10 +13,7 @@ use crate::{
 };
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
-    poly::{
-        identity_poly::IdentityPolynomial, multilinear_polynomial::PolynomialEvaluation,
-        opening_point::OpeningPoint,
-    },
+    poly::{identity::IdentityPolynomial, multilinear::PolynomialEvaluation, point::OpeningPoint},
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};

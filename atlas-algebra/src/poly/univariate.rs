@@ -4,14 +4,14 @@ use std::cmp::Ordering;
 use std::iter::zip;
 use std::ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Sub};
 
-use crate::poly::lagrange_poly::LagrangeHelper;
+use crate::poly::lagrange::LagrangeHelper;
 use crate::utils::gaussian_elimination::gaussian_elimination;
 use allocative::Allocative;
 use ark_serialize::*;
 use rand_core::{CryptoRng, RngCore};
 use rayon::prelude::*;
 
-use super::multilinear_polynomial::MultilinearPolynomial;
+use super::multilinear::MultilinearPolynomial;
 use crate::utils::{serialization::deserialize_vec, small_scalar::SmallScalar};
 
 // ax^2 + bx + c stored as vec![c,b,a]

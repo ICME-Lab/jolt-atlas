@@ -7,9 +7,9 @@ use crate::{engine::prover::round_check_failed, mles_product_sum::compute_mles_p
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        eq_poly::EqPolynomial,
-        multilinear_polynomial::{BindingOrder, PolynomialBinding},
-        ra_poly::RaPolynomial,
+        eq::EqPolynomial,
+        multilinear::{BindingOrder, PolynomialBinding},
+        ra::RaPolynomial,
     },
 };
 use common::parallel::par_enabled;

@@ -9,13 +9,11 @@ use crate::{
     ra_virtual::prover::RaSumcheckProver,
 };
 use atlas_algebra::poly::{
-    identity_poly::IdentityPolynomial,
-    multilinear_polynomial::{
-        BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
-    },
+    identity::IdentityPolynomial,
+    multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation},
 };
 use atlas_algebra::{
-    field::JoltField, poly::eq_poly::EqPolynomial, utils::thread::unsafe_allocate_zero_vec,
+    field::JoltField, poly::eq::EqPolynomial, utils::thread::unsafe_allocate_zero_vec,
 };
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;

@@ -15,12 +15,15 @@
 
 use std::collections::BTreeMap;
 
+use atlas_algebra::poly::{
+    eq::eq_index_msb,
+    point::{EvaluationClaim, OpeningPoint, BIG_ENDIAN},
+};
 use atlas_transcript::{
     words::{Label, U64Word, WordTranscript},
     Transcript,
 };
 use jolt_field::JoltField;
-use jolt_poly::{eq_index_msb, EvaluationClaim, Point, HIGH_TO_LOW};
 
 use super::OpeningsError;
 
@@ -230,20 +233,16 @@ where
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrefixPackedClaims<F> {
     layout_digest: [u8; 32],
-    point: Point<HIGH_TO_LOW, F>,
+    point: OpeningPoint<BIG_ENDIAN, F>,
     evaluations: Vec<F>,
 }
 
 impl<F> PrefixPackedClaims<F> {
     /// Creates the statement in canonical logical-slot order.
-    pub fn new(
-        layout_digest: [u8; 32],
-        point: impl Into<Point<HIGH_TO_LOW, F>>,
-        evaluations: Vec<F>,
-    ) -> Self {
+    pub fn new(layout_digest: [u8; 32], point: Vec<F>, evaluations: Vec<F>) -> Self {
         Self {
             layout_digest,
-            point: point.into(),
+            point: OpeningPoint { r: point },
             evaluations,
         }
     }

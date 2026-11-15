@@ -18,8 +18,8 @@
 
 mod prefix;
 
+use atlas_algebra::poly::point::EvaluationClaim;
 use jolt_field::JoltField;
-use jolt_poly::EvaluationClaim;
 
 pub use prefix::{PrefixPackedClaims, PrefixPackedLayout};
 

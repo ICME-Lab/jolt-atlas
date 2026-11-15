@@ -282,6 +282,26 @@ impl<F: JoltField> EqPolynomial<F> {
     }
 }
 
+/// `eq(point, index)` for the Boolean index whose bits are read most significant first: bit
+/// `point.len() - 1 - j` of `index` pairs with `point[j]`, and bits beyond `u128` are zero.
+pub fn eq_index_msb<F: jolt_field::Field>(point: &[F], index: u128) -> F {
+    let mut eq = F::one();
+    for (position, challenge) in point.iter().enumerate() {
+        let shift = point.len() - 1 - position;
+        let bit = if shift < u128::BITS as usize {
+            (index >> shift) & 1
+        } else {
+            0
+        };
+        if bit == 1 {
+            eq *= *challenge;
+        } else {
+            eq *= F::one() - *challenge;
+        }
+    }
+    eq
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +309,18 @@ mod tests {
     use ark_std::test_rng;
     use jolt_field::Field as _;
     use std::time::Instant;
+
+    #[test]
+    fn eq_index_msb_matches_the_eq_table() {
+        let mut rng = test_rng();
+        for num_vars in 0..=6 {
+            let point: Vec<Fr> = (0..num_vars).map(|_| Fr::random(&mut rng)).collect();
+            let table = EqPolynomial::<Fr>::evals(&point);
+            for (index, expected) in table.iter().enumerate() {
+                assert_eq!(eq_index_msb(&point, index as u128), *expected);
+            }
+        }
+    }
 
     #[test]
     /// Test that the results of running `evals_serial`, `evals_parallel`, and `evals_serial_cached`

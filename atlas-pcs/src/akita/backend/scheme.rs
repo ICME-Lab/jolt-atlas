@@ -6,8 +6,9 @@ use crate::openings::{
 use akita_params::{PolynomialGroupLayout, PrecommittedGroupProfiles};
 use akita_pcs::custom_source::RootPolyMeta;
 use akita_pcs::{AkitaError, CommitOutput, CpuBackend, GroupContext, SourceHandle};
+use atlas_algebra::poly::point::EvaluationClaim;
 use atlas_transcript::Transcript;
-use jolt_poly::{EvaluationClaim, MultilinearPoly, OneHotPolynomial, Polynomial};
+use jolt_poly::{MultilinearPoly, OneHotPolynomial, Polynomial};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map::Entry, BTreeMap},

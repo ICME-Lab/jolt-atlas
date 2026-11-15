@@ -347,8 +347,8 @@ impl<const XLEN: usize, S: PwlSpec> JoltLookupTable for PiecewiseLinearTable<XLE
 mod tests {
     use super::*;
     use crate::test::{lookup_table_mle_linearity_test, signed_lookup_table_mle_random_test};
+    use atlas_algebra::field::Ring;
     use atlas_algebra::{field::fp128::Fp128 as Fr, utils::index_to_field_bitvector};
-    use jolt_field::Ring;
     use rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
 
     const XLEN: usize = 32;

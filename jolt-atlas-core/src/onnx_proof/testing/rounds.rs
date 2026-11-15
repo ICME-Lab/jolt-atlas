@@ -9,12 +9,12 @@
 //! closure on the probe models and the op gauntlet instead, against the division it replaces.
 
 use atlas_algebra::field::fp128::Fp128 as Fr;
+use atlas_algebra::field::Ring;
 use atlas_algebra::poly::{eq::EqPolynomial, split_eq::CHECK_GRUEN_ENDPOINTS};
 use atlas_claims::SymbolicSumcheck;
 use atlas_pcs::akita::AkitaScheme;
 use atlas_sumcheck::engine::prover::ProveRounds;
 use atlas_trace::{Model, Tensor};
-use jolt_field::Ring;
 use num_traits::{One, Zero};
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -60,7 +60,7 @@ fn eq_product_sum(r: &[Fr], operands: &[Vec<Fr>]) -> Fr {
 }
 
 fn random_challenge(rng: &mut StdRng) -> Fr {
-    <Fr as jolt_field::Field>::random(rng)
+    <Fr as atlas_algebra::field::Field>::random(rng)
 }
 
 /// A model with one node applied to `NUM_VARS`-variable inputs, its trace's operands as field

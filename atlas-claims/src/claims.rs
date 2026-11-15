@@ -1,4 +1,4 @@
-use jolt_field::Ring;
+use atlas_algebra::field::Ring;
 use serde::{Deserialize, Serialize};
 
 /// An atomic value used inside a symbolic claim expression.
@@ -169,7 +169,7 @@ pub fn constant<F: Ring, O, P, C>(value: F) -> Expr<F, O, P, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jolt_field::{Prime128Offset275 as Fr, Ring};
+    use atlas_algebra::field::{Prime128Offset275 as Fr, Ring};
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     enum Opening {

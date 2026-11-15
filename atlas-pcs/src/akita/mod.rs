@@ -49,13 +49,13 @@ use std::{
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
+use atlas_algebra::field::Ring;
 use backend::{
     AkitaBackend, AkitaBatchProof, AkitaChunkProfile, AkitaCommitment, AkitaProverHint,
     AkitaProverSetup, AkitaScheduleArtifacts, AkitaSetupParams, AkitaVerifierSetup,
     TraceOneHotRows, AKITA_ONE_HOT_K16,
 };
 use blake2::{digest::consts::U32, Blake2b, Digest};
-use jolt_field::Ring;
 
 use num_traits::{One, Zero};
 use rayon::prelude::*;
@@ -1182,7 +1182,7 @@ mod tests {
 
     fn random_point(rng: &mut impl Rng, n: usize) -> Vec<Fp128> {
         (0..n)
-            .map(|_| <Fp128 as jolt_field::Field>::random(rng))
+            .map(|_| <Fp128 as atlas_algebra::field::Field>::random(rng))
             .collect()
     }
 
@@ -1286,7 +1286,7 @@ mod tests {
 
         let r = random_point(&mut rng, max_vars);
         let coeffs: Vec<Fp128> = (0..polys.len())
-            .map(|_| <Fp128 as jolt_field::Field>::random(&mut rng))
+            .map(|_| <Fp128 as atlas_algebra::field::Field>::random(&mut rng))
             .collect();
         // The joint claim of the index-0 overlap RLC, as the opening reduction defines it.
         let joint: Fp128 = polys
@@ -1388,7 +1388,7 @@ mod tests {
 
         let r = random_point(&mut rng, n);
         let coeffs: Vec<Fp128> = (0..polys.len())
-            .map(|_| <Fp128 as jolt_field::Field>::random(&mut rng))
+            .map(|_| <Fp128 as atlas_algebra::field::Field>::random(&mut rng))
             .collect();
         let joint: Fp128 = polys
             .iter()

@@ -12,6 +12,7 @@ use crate::onnx_proof::relation::{
     RelationId, RelationOpening, RelationSetup, SetupRelation,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
+use atlas_algebra::field::Ring;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
@@ -25,7 +26,6 @@ use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
-use jolt_field::Ring;
 use std::marker::PhantomData;
 
 /// A small public lookup table and where an op reads it.

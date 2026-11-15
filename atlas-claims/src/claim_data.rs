@@ -16,7 +16,7 @@
 //! verifier-side `append_openings` is a thin consumer of [`OutputClaims::opening_values`],
 //! so it cannot disagree with the canonical order defined here.
 
-use jolt_field::JoltField;
+use atlas_algebra::field::Field;
 use thiserror::Error;
 
 /// A `Challenges` struct could not be built from a drawn-value stream. Surfaced
@@ -57,7 +57,7 @@ pub struct MissingOpeningValue<O: core::fmt::Debug> {
 /// disagree.
 ///
 /// Generic over the opening-id type `O` so the trait is reused by every protocol family.
-pub trait OutputClaims<F: JoltField, O> {
+pub trait OutputClaims<F: Field, O> {
     /// Produced opening scalars in canonical (field-declaration) order. Built from
     /// [`canonical_order`](Self::canonical_order) + [`resolve_output`](Self::resolve_output),
     /// both derived from the same fields, so `opening_values()[k]` is exactly
@@ -109,7 +109,7 @@ pub trait OutputClaims<F: JoltField, O> {
 /// (populated by explicit cross-stage wiring).
 ///
 /// Generic over the opening-id type `O`.
-pub trait InputClaims<F: JoltField, O> {
+pub trait InputClaims<F: Field, O> {
     /// The consumed opening ids in canonical (field-declaration) order. Takes
     /// `&self` because `Vec`/`Option` fields make the length and presence
     /// instance-dependent.
@@ -127,7 +127,7 @@ pub trait InputClaims<F: JoltField, O> {
 /// reads each field's value directly.
 ///
 /// Generic over the challenge-id type `C`.
-pub trait SumcheckChallenges<F: JoltField, C>: Sized {
+pub trait SumcheckChallenges<F: Field, C>: Sized {
     /// Build this `Challenges` struct from already-drawn Fiat-Shamir scalars,
     /// consuming one value per field in canonical (field-declaration) order.
     ///
@@ -157,7 +157,7 @@ pub trait SumcheckChallenges<F: JoltField, C>: Sized {
 #[cfg_attr(feature = "allocative", derive(::allocative::Allocative))]
 pub struct NoChallenges<F>(::core::marker::PhantomData<F>);
 
-impl<F: JoltField, C> SumcheckChallenges<F, C> for NoChallenges<F> {
+impl<F: Field, C> SumcheckChallenges<F, C> for NoChallenges<F> {
     fn from_transcript_values<I: Iterator<Item = F>>(
         _values: I,
     ) -> Result<Self, ChallengeDrawError> {
@@ -179,7 +179,7 @@ pub struct NoOutputs<C>(::core::marker::PhantomData<C>);
 #[expect(clippy::unwrap_used)]
 mod sumcheck_challenges_tests {
     use crate::{ChallengeDrawError, SumcheckChallenges};
-    use jolt_field::{JoltField, Prime128Offset275 as Fr, Ring};
+    use atlas_algebra::field::{Field, Prime128Offset275 as Fr, Ring};
 
     fn fr(value: u64) -> Fr {
         Fr::from_u64(value)
@@ -200,7 +200,7 @@ mod sumcheck_challenges_tests {
                 $($field: F,)+
             }
 
-            impl<F: JoltField> SumcheckChallenges<F, ChallengeId> for $name<F> {
+            impl<F: Field> SumcheckChallenges<F, ChallengeId> for $name<F> {
                 fn from_transcript_values<I: Iterator<Item = F>>(
                     mut values: I,
                 ) -> Result<Self, ChallengeDrawError> {

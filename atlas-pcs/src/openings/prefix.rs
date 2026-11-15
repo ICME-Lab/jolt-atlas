@@ -15,6 +15,7 @@
 
 use std::collections::BTreeMap;
 
+use atlas_algebra::field::{CanonicalBytes, Field};
 use atlas_algebra::poly::{
     eq::eq_index_msb,
     point::{EvaluationClaim, OpeningPoint, BIG_ENDIAN},
@@ -23,7 +24,6 @@ use atlas_transcript::{
     words::{Label, U64Word, WordTranscript},
     Transcript,
 };
-use jolt_field::JoltField;
 
 use super::OpeningsError;
 
@@ -132,7 +132,7 @@ where
     }
 
     /// Forms the physical point `(selector || logical)`.
-    pub fn pack_point<F: JoltField>(
+    pub fn pack_point<F: Field>(
         &self,
         selector_point: &[F],
         logical_point: &[F],
@@ -158,7 +158,7 @@ where
     }
 
     /// Reduces ordered logical evaluations at one common point.
-    pub fn reduce_evaluations<F: JoltField>(
+    pub fn reduce_evaluations<F: Field>(
         &self,
         selector_point: &[F],
         evaluations: &[F],
@@ -194,7 +194,7 @@ where
         mut draw: impl FnMut(&mut T) -> F,
     ) -> Result<EvaluationClaim<F>, OpeningsError>
     where
-        F: JoltField,
+        F: Field + CanonicalBytes,
         T: Transcript,
     {
         if claims.point.len() != self.logical_num_vars {

@@ -55,6 +55,7 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     poly::eq::EqPolynomial,
@@ -67,7 +68,6 @@ use atlas_sumcheck::{
 };
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_field::Ring;
 
 /// Degree of the execution sumcheck.
 pub const DEGREE: usize = 3;

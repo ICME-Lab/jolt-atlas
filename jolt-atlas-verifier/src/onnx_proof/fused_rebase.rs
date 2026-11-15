@@ -29,9 +29,9 @@ use crate::{
     onnx_proof::relation::{RelationExpr, RelationOpening},
     utils::opening_access::OpeningIdBuilder,
 };
+use atlas_algebra::field::Ring;
 use atlas_claims::{constant, opening};
 use common::VirtualPoly;
-use jolt_field::Ring;
 
 /// Rebase width `S` (in bits) of a node's fused rescaling division at the
 /// model's log2 `scale`, or `None` when the operator does not fuse a

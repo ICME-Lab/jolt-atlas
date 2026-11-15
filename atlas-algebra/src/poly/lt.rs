@@ -89,7 +89,7 @@ fn lt_evals<F: JoltField>(r: &OpeningPoint<BIG_ENDIAN, F>) -> Vec<F> {
 #[cfg(test)]
 mod tests {
     use crate::field::fp128::Fp128 as Fr;
-    use jolt_field::Ring as _;
+    use crate::field::Ring as _;
 
     use crate::poly::{
         multilinear::{BindingOrder, MultilinearPolynomial, PolynomialEvaluation},

@@ -13,8 +13,8 @@ use crate::{
     },
 };
 use atlas_algebra::field::JoltField;
+use atlas_algebra::field::Ring;
 use atlas_claims::{challenge, opening, SymbolicSumcheck};
-use jolt_field::Ring;
 
 /// Degree bound of the sumcheck round polynomials in [`HammingWeightRelation`].
 const DEGREE_BOUND: usize = 1;

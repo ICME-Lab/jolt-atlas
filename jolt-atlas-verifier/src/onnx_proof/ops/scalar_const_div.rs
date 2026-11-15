@@ -14,6 +14,7 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     utils::{errors::ProofVerifyError, math::Math},
@@ -23,7 +24,6 @@ use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{op::ScalarConstDiv, Op};
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
-use jolt_field::Ring;
 
 crate::bind_relation!(ScalarConstDiv, ConstantDivisionRelation);
 

@@ -30,8 +30,8 @@ pub fn deserialize_vec<T: CanonicalDeserialize, R: Read>(
 mod tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
+    use crate::field::Field;
     use ark_serialize::CanonicalSerialize;
-    use jolt_field::Field;
 
     fn decode<T: CanonicalDeserialize>(bytes: &[u8]) -> Result<Vec<T>, SerializationError> {
         deserialize_vec(bytes, Compress::Yes, Validate::Yes)

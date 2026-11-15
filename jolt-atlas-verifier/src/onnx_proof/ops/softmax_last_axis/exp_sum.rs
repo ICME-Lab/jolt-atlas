@@ -5,13 +5,13 @@ use crate::onnx_proof::relation::{
     RelationOpening, RelationSetup, RelationVerifier,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder};
+use atlas_algebra::field::Ring;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{field::JoltField, poly::eq::EqPolynomial, utils::math::Math};
 use atlas_claims::{derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
-use jolt_field::Ring;
 
 /// Degree of the exp-sum sumcheck.
 pub const DEGREE_BOUND: usize = 2;

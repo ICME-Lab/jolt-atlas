@@ -12,6 +12,7 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::{constant, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
@@ -22,7 +23,6 @@ use atlas_trace::{
 };
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
-use jolt_field::Ring;
 use std::marker::PhantomData;
 
 crate::impl_plan_op!(Add, AccumulationRelation<Add>);

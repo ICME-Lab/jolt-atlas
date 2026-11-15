@@ -18,14 +18,14 @@
 
 mod prefix;
 
+use atlas_algebra::field::Field;
 use atlas_algebra::poly::point::EvaluationClaim;
-use jolt_field::JoltField;
 
 pub use prefix::{PrefixPackedClaims, PrefixPackedLayout};
 
 /// One opening claim against a commitment: the commitment and its evaluation at a point.
 #[derive(Clone, Debug)]
-pub struct VerifierOpeningClaim<F: JoltField, C> {
+pub struct VerifierOpeningClaim<F: Field, C> {
     pub commitment: C,
     pub evaluation: EvaluationClaim<F>,
 }

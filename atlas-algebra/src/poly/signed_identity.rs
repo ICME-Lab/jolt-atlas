@@ -402,6 +402,8 @@ fn phase_position(chunk_len: usize, phase: usize) -> PhasePosition {
 #[cfg(test)]
 mod tests {
     use crate::field::fp128::Fp128 as Fr;
+    use crate::field::Field as _;
+    use crate::field::Ring;
     use crate::{
         field::JoltField,
         poly::{
@@ -415,8 +417,6 @@ mod tests {
         utils::{index_to_field_bitvector, interleave_bits},
     };
     use ark_std::test_rng;
-    use jolt_field::Field as _;
-    use jolt_field::Ring;
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     // --- SignedIdentityPoly tests ---

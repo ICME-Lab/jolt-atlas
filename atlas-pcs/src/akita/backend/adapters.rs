@@ -19,11 +19,11 @@ use akita_types::{
     AkitaVerifierSetup as BackendVerifierSetup, Commitment as AkitaBackendRingCommitment,
     CommittedGroup as AkitaBackendCommittedGroup,
 };
+use atlas_algebra::field::{CanonicalBytes, Zero};
 use atlas_transcript::{
     words::{Label, LabelWithCount, U64Word, WordEncoding, WordTranscript},
     Transcript,
 };
-use jolt_field::{CanonicalBytes, Zero};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 
@@ -1013,7 +1013,7 @@ mod tests {
 
     use super::*;
     use akita_types::RingVec;
-    use jolt_field::Ring;
+    use atlas_algebra::field::Ring;
 
     fn af(value: u64) -> AkitaField {
         AkitaField::from_u64(value)

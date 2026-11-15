@@ -1330,8 +1330,8 @@ fn product_eval_univariate_naive_accumulate<F: JoltField>(
 mod tests {
     use ark_std::{test_rng, One, UniformRand, Zero};
     use atlas_algebra::field::fp128::Fp128 as Fr;
+    use atlas_algebra::field::Field;
     use atlas_algebra::poly::split_eq::GruenSplitEqPolynomial;
-    use jolt_field::Field;
     use std::array::from_fn;
 
     use crate::mles_product_sum::{

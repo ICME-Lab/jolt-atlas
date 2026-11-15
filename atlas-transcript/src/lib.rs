@@ -57,11 +57,11 @@ mod fp128_tests {
     // `Into<Self>` is exercised deliberately: it is `JoltField::Challenge` trait surface.
     #![allow(clippy::useless_conversion)]
     use crate::{Blake2bProver, ProvingTranscript, Transcript};
+    use atlas_algebra::field::Ring;
     use atlas_algebra::field::{
         fp128::{Fp128 as F, Inner},
         JoltField,
     };
-    use jolt_field::Ring;
 
     fn modulus() -> u128 {
         0u128.wrapping_sub(Inner::C)

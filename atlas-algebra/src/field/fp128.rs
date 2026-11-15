@@ -2,7 +2,7 @@
 //! `p = 2^128 - 2^32 + 22537` used by upstream Jolt's lattice (Akita) protocol.
 //!
 //! The arithmetic comes from upstream's `jolt-field` crate
-//! (`jolt_field::Prime128OffsetA7F7`). [`Fp128`] is a newtype rather than a
+//! (`crate::field::Prime128OffsetA7F7`). [`Fp128`] is a newtype rather than a
 //! direct impl on that type: `JoltField`'s supertraits include foreign traits
 //! the upstream type does not implement (`CanonicalSerialize` /
 //! `CanonicalDeserialize`, `Div`, `UniformRand`, `Allocative`), and orphan
@@ -16,13 +16,13 @@
 
 use super::{FieldOps, JoltField};
 use crate::field::folded_accum::{Folded128MulU64, Folded128Product};
+use crate::field::{CanonicalEncoding, Field, Prime128OffsetA7F7, Ring};
 use allocative::Allocative;
 use ark_ff::{BigInt, UniformRand};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
 use ark_std::rand::Rng;
-use jolt_field::{CanonicalEncoding, Field, Prime128OffsetA7F7, Ring};
 use num_traits::{One, Zero};
 use std::fmt;
 use std::io::{Read, Write};
@@ -305,7 +305,7 @@ impl CanonicalDeserialize for Fp128 {
     }
 }
 
-impl jolt_field::AdditiveGroup for Fp128 {}
+impl crate::field::AdditiveGroup for Fp128 {}
 
 impl Ring for Fp128 {
     #[inline]
@@ -400,8 +400,8 @@ impl Field for Fp128 {
     }
 }
 
-impl jolt_field::CanonicalBytes for Fp128 {
-    const NUM_BYTES: usize = <Inner as jolt_field::CanonicalBytes>::NUM_BYTES;
+impl crate::field::CanonicalBytes for Fp128 {
+    const NUM_BYTES: usize = <Inner as crate::field::CanonicalBytes>::NUM_BYTES;
 
     fn to_bytes_le(&self, out: &mut [u8]) {
         self.0.to_bytes_le(out)
@@ -440,10 +440,10 @@ impl CanonicalEncoding for Fp128 {
     }
 }
 
-impl jolt_field::WithAccumulator for Fp128 {
-    type Accumulator = jolt_field::NaiveAccumulator<Fp128>;
-    type SmallScalarAccumulator = jolt_field::NaiveAccumulator<Fp128>;
-    type SignedProductAccumulator = jolt_field::NaiveAccumulator<Fp128>;
+impl crate::field::WithAccumulator for Fp128 {
+    type Accumulator = crate::field::NaiveAccumulator<Fp128>;
+    type SmallScalarAccumulator = crate::field::NaiveAccumulator<Fp128>;
+    type SignedProductAccumulator = crate::field::NaiveAccumulator<Fp128>;
 }
 
 impl FieldOps for Fp128 {}

@@ -166,7 +166,7 @@ impl<F: JoltField> EqPlusOnePrefixSuffixPoly<F> {
 #[cfg(test)]
 mod tests {
     use crate::field::fp128::Fp128 as Fr;
-    use jolt_field::Ring;
+    use crate::field::Ring;
 
     use crate::poly::{
         multilinear::{MultilinearPolynomial, PolynomialEvaluation},

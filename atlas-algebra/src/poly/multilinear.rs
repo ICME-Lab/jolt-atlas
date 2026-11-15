@@ -896,7 +896,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
 mod tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
-    use jolt_field::Field;
+    use crate::field::Field;
     use rand_chacha::ChaCha20Rng;
     use rand_core::{RngCore, SeedableRng};
 

@@ -724,9 +724,9 @@ mod guardrail_tests {
     use super::{prover::ProverOpeningAccumulator, OpeningId, OpeningPoint, SumcheckId};
     use crate::evaluation_reduction::ReducedInstance;
     use atlas_algebra::field::fp128::Fp128 as Fr;
+    use atlas_algebra::field::Ring as _;
     use atlas_transcript::{Blake2bProver, ProvingTranscript};
     use common::VirtualPoly;
-    use jolt_field::Ring as _;
 
     #[test]
     #[should_panic(expected = "reduced evaluation for node 7 not found")]

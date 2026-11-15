@@ -1,0 +1,19 @@
+# The `jolt-field` name the external `akita-*` crates depend on (by git, at a16z/jolt), resolved by
+# the root `[patch."https://github.com/a16z/jolt"]` to this owned package. It re-exports the field
+# items `akita-*` binds from atlas-algebra; it holds no code of its own.
+[package]
+name = "jolt-field"
+version = "0.1.0"
+edition = "2021"
+description = "The akita-* surface of atlas-algebra's field, under the name akita-* depends on."
+publish = false
+
+# akita-* enables these; atlas-algebra builds the Solinas field with its assembly kernels and rayon
+# folds unconditionally, so they select nothing.
+[features]
+solinas = []
+asm = []
+parallel = []
+
+[dependencies]
+atlas-algebra.workspace = true

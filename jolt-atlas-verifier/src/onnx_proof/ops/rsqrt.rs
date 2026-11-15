@@ -15,6 +15,7 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
     utils::{errors::ProofVerifyError, math::Math},
@@ -30,7 +31,6 @@ use atlas_sumcheck::{
 use atlas_trace::{op::Rsqrt, trace::ModelExecutionIO, Model, Op};
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_field::Ring;
 
 /// Dividend `S³` of the fused rsqrt division relation, where `S = 2^scale` is the
 /// input's fixed-point scale.

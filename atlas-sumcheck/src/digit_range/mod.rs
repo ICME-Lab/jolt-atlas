@@ -38,11 +38,11 @@ use crate::{
 };
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
+use atlas_algebra::field::Ring;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
-use jolt_field::Ring;
 
 /// The challenge id of `β`, the recomposition's coefficient.
 const BETA: RelationChallenge = RelationChallenge::Weight(0);
@@ -229,13 +229,13 @@ mod tests {
     use crate::opening_proof::{prover::ProverOpeningAccumulator, VerifierOpeningAccumulator};
     use crate::relation::{prover::prove_relation, verify_relation};
     use atlas_algebra::field::fp128::Fp128 as Fr;
+    use atlas_algebra::field::Field;
     use atlas_algebra::poly::multilinear::{MultilinearPolynomial, PolynomialEvaluation};
     use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
     };
     use common::VirtualPoly;
-    use jolt_field::Field;
     use rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
 
     const LOG_T: usize = 5;
@@ -461,7 +461,7 @@ mod tests {
             })
             .collect();
         let n = digits.len();
-        let random = |rng: &mut StdRng| <Fr as jolt_field::Field>::random(rng);
+        let random = |rng: &mut StdRng| <Fr as atlas_algebra::field::Field>::random(rng);
         let params = DigitRangeParams {
             base,
             digits: digit_ids(n),

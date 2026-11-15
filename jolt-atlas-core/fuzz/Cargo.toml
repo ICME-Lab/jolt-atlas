@@ -32,7 +32,7 @@ ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/tw
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
 
 [patch."https://github.com/a16z/jolt"]
-jolt-field = { path = "../../third_party/jolt-field" }
+jolt-field = { path = "../../jolt-field" }
 jolt-poly = { path = "../../jolt-poly" }
 
 [profile.release]

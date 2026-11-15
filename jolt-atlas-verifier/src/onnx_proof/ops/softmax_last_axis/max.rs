@@ -5,6 +5,7 @@ use crate::onnx_proof::relation::{
     RelationId, RelationOpening, RelationSetup, RelationVerifier,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target};
+use atlas_algebra::field::Ring;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
@@ -14,7 +15,6 @@ use atlas_algebra::{
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use common::VirtualPoly;
-use jolt_field::Ring;
 
 /// Degree of the max-indicator sumcheck.
 pub const DEGREE_BOUND: usize = 3;

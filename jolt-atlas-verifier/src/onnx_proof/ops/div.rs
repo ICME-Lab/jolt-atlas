@@ -14,6 +14,7 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
     utils::{errors::ProofVerifyError, math::Math},
@@ -26,7 +27,6 @@ use atlas_sumcheck::{
 use atlas_trace::op::Div;
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_field::Ring;
 
 impl OpLayout for Div {
     fn get_committed_polynomials(

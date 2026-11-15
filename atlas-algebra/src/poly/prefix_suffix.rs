@@ -572,7 +572,7 @@ impl<F: JoltField, const ORDER: usize, const SIGNED: bool>
 pub mod tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
-    use jolt_field::Field as _;
+    use crate::field::Field as _;
     use num_traits::{One, Zero};
 
     use ark_std::test_rng;

@@ -50,7 +50,7 @@ mod tests {
     use crate::{
         prover_transcript, verifier_transcript, BytesMsg, ProverTranscript, VerifierTranscript,
     };
-    use jolt_field::Prime64Offset59;
+    use atlas_algebra::field::Prime64Offset59;
     use spongefish::{DuplexSpongeInit, DuplexSpongeInterface};
 
     /// A sponge whose output is all ones, so every pooled candidate is

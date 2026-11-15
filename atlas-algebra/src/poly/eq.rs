@@ -259,7 +259,7 @@ impl<F: JoltField> EqPolynomial<F> {
 
 /// `eq(point, index)` for the Boolean index whose bits are read most significant first: bit
 /// `point.len() - 1 - j` of `index` pairs with `point[j]`, and bits beyond `u128` are zero.
-pub fn eq_index_msb<F: jolt_field::Field>(point: &[F], index: u128) -> F {
+pub fn eq_index_msb<F: crate::field::Field>(point: &[F], index: u128) -> F {
     let mut eq = F::one();
     for (position, challenge) in point.iter().enumerate() {
         let shift = point.len() - 1 - position;
@@ -281,8 +281,8 @@ pub fn eq_index_msb<F: jolt_field::Field>(point: &[F], index: u128) -> F {
 mod tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
+    use crate::field::Field as _;
     use ark_std::test_rng;
-    use jolt_field::Field as _;
     use std::time::Instant;
 
     #[test]

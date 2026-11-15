@@ -285,12 +285,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "allocator-api2"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
-
-[[package]]
 name = "anstream"
 version = "0.6.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -347,37 +341,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
-name = "ark-bn254"
-version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
-dependencies = [
- "ark-ec",
- "ark-ff",
- "ark-serialize",
- "ark-std",
-]
-
-[[package]]
-name = "ark-ec"
-version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
-dependencies = [
- "ahash",
- "ark-ff",
- "ark-poly",
- "ark-serialize",
- "ark-std",
- "educe",
- "fnv",
- "hashbrown 0.15.5",
- "itertools 0.13.0",
- "num-bigint 0.4.6",
- "num-integer",
- "num-traits",
- "zeroize",
-]
-
-[[package]]
 name = "ark-ff"
 version = "0.5.0"
 source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
@@ -417,20 +380,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "ark-poly"
-version = "0.5.0"
-source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
-dependencies = [
- "ahash",
- "ark-ff",
- "ark-serialize",
- "ark-std",
- "educe",
- "fnv",
- "hashbrown 0.15.5",
 ]
 
 [[package]]
@@ -490,7 +439,6 @@ dependencies = [
  "fixedbitset",
  "inferno",
  "itertools 0.10.5",
- "jolt-field",
  "memory-stats",
  "num",
  "num-derive",
@@ -517,7 +465,7 @@ name = "atlas-claims"
 version = "0.1.0"
 dependencies = [
  "allocative",
- "jolt-field",
+ "atlas-algebra",
  "serde",
  "thiserror 2.0.18",
 ]
@@ -539,7 +487,6 @@ dependencies = [
  "fixedbitset",
  "inferno",
  "itertools 0.10.5",
- "jolt-field",
  "memory-stats",
  "num",
  "num-derive",
@@ -600,7 +547,6 @@ dependencies = [
  "fixedbitset",
  "inferno",
  "itertools 0.10.5",
- "jolt-field",
  "memory-stats",
  "num",
  "num-derive",
@@ -643,7 +589,6 @@ dependencies = [
  "fixedbitset",
  "inferno",
  "itertools 0.10.5",
- "jolt-field",
  "memory-stats",
  "num",
  "num-derive",
@@ -698,7 +643,6 @@ dependencies = [
  "getrandom 0.4.3",
  "inferno",
  "itertools 0.10.5",
- "jolt-field",
  "memory-stats",
  "num",
  "num-derive",
@@ -1408,15 +1352,6 @@ checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"
-version = "0.15.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
-dependencies = [
- "allocator-api2",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
@@ -1550,7 +1485,6 @@ dependencies = [
  "derive_more",
  "itertools 0.10.5",
  "jolt-atlas-verifier",
- "jolt-field",
  "num",
  "num-derive",
  "num-traits",
@@ -1585,7 +1519,6 @@ dependencies = [
  "common",
  "derive_more",
  "itertools 0.10.5",
- "jolt-field",
  "num-derive",
  "num-traits",
  "serde",
@@ -1598,21 +1531,7 @@ dependencies = [
 name = "jolt-field"
 version = "0.1.0"
 dependencies = [
- "allocative",
- "ark-bn254",
- "ark-ff",
- "ark-serialize",
- "bincode",
- "bytemuck",
- "cc",
- "num-bigint 0.4.6",
- "num-traits",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
- "rayon",
- "serde",
- "thiserror 2.0.18",
+ "atlas-algebra",
 ]
 
 [[package]]

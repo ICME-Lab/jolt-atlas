@@ -716,9 +716,9 @@ mod tests {
 
     use super::*;
     use crate::openings::CommitmentGroupRole;
+    use atlas_algebra::field::Zero;
     use atlas_algebra::poly::point::EvaluationClaim;
     use atlas_transcript::{Blake2bVerifier, VerifyingTranscript};
-    use jolt_field::Zero;
 
     use crate::akita::backend::adapters::AkitaVerifierScheduleArtifacts;
     use crate::akita::backend::configs::AkitaChunkProfile;

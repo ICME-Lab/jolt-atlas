@@ -3,17 +3,17 @@
 //! [`OmittedConstantPoly`]. Sumcheck proofs carry [`CompressedPoly`]s and evaluation reduction
 //! carries a [`UnivariatePoly`], both through the `CanonicalSerialize` impls below.
 //!
-//! The types are bounded by upstream's `jolt_field::Field` because the external `akita-*` crates
+//! The types are bounded by upstream's `crate::field::Field` because the external `akita-*` crates
 //! bind them through the `jolt-poly` compatibility package.
 
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use crate::field::Field;
 use allocative::Allocative;
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
     Write,
 };
-use jolt_field::Field;
 use serde::{Deserialize, Serialize};
 
 use crate::utils::serialization::deserialize_vec;
@@ -627,7 +627,7 @@ impl<F: Field> Mul<&UnivariatePoly<F>> for &UnivariatePoly<F> {
 mod tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
-    use jolt_field::Ring;
+    use crate::field::Ring;
     use num_traits::{One, Zero};
 
     #[test]
@@ -846,7 +846,7 @@ mod tests {
 mod compressed_tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
-    use jolt_field::Ring;
+    use crate::field::Ring;
     use num_traits::{One, Zero};
 
     fn poly_and_hint(coeffs: Vec<Fr>) -> (UnivariatePoly<Fr>, Fr) {

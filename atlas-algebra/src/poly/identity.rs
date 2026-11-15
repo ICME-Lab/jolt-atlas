@@ -462,11 +462,11 @@ impl<F: JoltField> PolynomialEvaluation<F> for UnmapRamAddressPolynomial<F> {
 
 #[cfg(test)]
 mod tests {
+    use crate::field::Field as _;
+    use crate::field::Ring;
     use crate::poly::{
         multilinear::MultilinearPolynomial, prefix_suffix::tests::prefix_suffix_decomposition_test,
     };
-    use jolt_field::Field as _;
-    use jolt_field::Ring;
     use num_traits::{One, Zero};
 
     use super::*;

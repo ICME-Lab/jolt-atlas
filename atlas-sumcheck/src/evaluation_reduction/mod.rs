@@ -286,8 +286,8 @@ impl EvalReductionProtocol {
 
 #[cfg(test)]
 mod tests {
-    use jolt_field::Field;
-    use jolt_field::Ring as _;
+    use atlas_algebra::field::Field;
+    use atlas_algebra::field::Ring as _;
 
     use super::*;
     use atlas_algebra::field::fp128::Fp128 as Fr;

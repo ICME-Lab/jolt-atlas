@@ -206,7 +206,7 @@ impl Error for GrindBitsError {}
 // the field (rather than the transcript) because `JoltField::ChallengeCodecField` is bounded on
 // it and `atlas-transcript` depends on this crate.
 
-use jolt_field::{ExtField, Fp128, Fp32, Fp64, PseudoMersenne};
+use crate::field::{ExtField, Fp128, Fp32, Fp64, PseudoMersenne};
 use sealed::Sealed;
 
 mod sealed {
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn pseudo_mersenne_codecs_count_their_fields() {
         use super::ChallengeCodec;
-        use jolt_field::{Prime128Offset275, Prime24Offset3, Prime64Offset59};
+        use crate::field::{Prime128Offset275, Prime24Offset3, Prime64Offset59};
 
         let order = |modulus, degree| ChallengeSetSize::field_order(modulus, degree).unwrap();
         assert_eq!(Prime128Offset275::CHALLENGE_SET_SIZE, order(P128, 1));

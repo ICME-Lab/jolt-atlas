@@ -34,7 +34,7 @@ pub fn unsafe_allocate_zero_vec<T: Sized + num_traits::Zero>(size: usize) -> Vec
 mod tests {
     use super::*;
     use crate::field::fp128::Fp128 as Fr;
-    use jolt_field::Ring;
+    use crate::field::Ring;
     use num_traits::Zero;
 
     #[test]

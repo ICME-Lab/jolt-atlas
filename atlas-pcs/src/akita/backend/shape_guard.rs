@@ -14,7 +14,7 @@ use akita_params::{
 };
 use akita_pcs::AkitaError;
 use akita_schedules::ResolvedScheduleRow;
-use jolt_field::Zero;
+use atlas_algebra::field::Zero;
 
 use crate::akita::backend::adapters::{
     deserialize_akita, invalid_batch, AkitaBackendCommitment, AkitaBackendCommitmentPayload,
@@ -148,7 +148,7 @@ mod tests {
     use super::*;
     use akita_config::TrustedScheduleCatalog;
     use akita_params::{ChunkedWitnessCfg, ScheduleLookupKey};
-    use jolt_field::Ring;
+    use atlas_algebra::field::Ring;
 
     use crate::akita::backend::{
         adapters::{AkitaBackendFlavor, AkitaConfig},

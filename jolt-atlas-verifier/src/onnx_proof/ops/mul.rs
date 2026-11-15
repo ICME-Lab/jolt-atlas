@@ -13,6 +13,7 @@ use crate::{
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     utils::{errors::ProofVerifyError, math::Math},
@@ -25,7 +26,6 @@ use atlas_trace::{
     Model,
 };
 use atlas_transcript::Transcript;
-use jolt_field::Ring;
 use std::marker::PhantomData;
 
 crate::impl_plan_op!(Mul, MulRelation);

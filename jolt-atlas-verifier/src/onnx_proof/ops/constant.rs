@@ -9,6 +9,7 @@ use crate::{
         RelationId, RelationOpening, RelationSetup, TieRelation,
     },
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField, poly::multilinear::EvaluateMle, utils::errors::ProofVerifyError,
 };
@@ -19,7 +20,6 @@ use atlas_trace::{
     Tensor,
 };
 use atlas_transcript::Transcript;
-use jolt_field::Ring;
 use std::{marker::PhantomData, sync::Arc};
 
 crate::impl_plan_op!(Constant, PublicRelation<Constant>);

@@ -14,9 +14,9 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier, SparseGroup,
     },
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{field::JoltField, poly::eq::EqPolynomial};
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
-use jolt_field::Ring;
 
 /// Degree bound of the sumcheck round polynomials in [`BooleanityRelation`].
 const DEGREE_BOUND: usize = 3;

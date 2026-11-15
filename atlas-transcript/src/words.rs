@@ -26,7 +26,7 @@
 )]
 
 use crate::Transcript;
-use jolt_field::CanonicalBytes;
+use atlas_algebra::field::CanonicalBytes;
 
 /// A value with a word encoding.
 pub trait WordEncoding {

@@ -11,6 +11,7 @@ use crate::{
     onnx_proof::ProofType,
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::{identity::IdentityPolynomial, multilinear::PolynomialEvaluation, point::OpeningPoint},
@@ -23,7 +24,6 @@ use atlas_sumcheck::opening_proof::{
 use atlas_trace::{trace::ModelExecutionIO, Model, Op};
 use atlas_transcript::Transcript;
 use common::VirtualPoly;
-use jolt_field::Ring;
 
 /// Gather over a large dictionary (read-raf lookup).
 pub mod large;

@@ -8,6 +8,7 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier, SparseGroup,
     },
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
@@ -18,7 +19,6 @@ use atlas_algebra::{
 };
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use common::CommittedPoly;
-use jolt_field::Ring;
 use rayon::prelude::*;
 
 // Instruction read-access (RA) virtualization sumcheck

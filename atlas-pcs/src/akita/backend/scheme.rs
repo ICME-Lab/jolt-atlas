@@ -649,11 +649,11 @@ mod tests {
     use crate::akita::backend::AkitaOneHotScheduleArtifact;
     use akita_config::CommitmentConfig;
     use akita_schedules::ValidatedScheduleCatalog;
+    use atlas_algebra::field::Ring;
     use atlas_algebra::poly::eq::eq_index_msb;
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
     };
-    use jolt_field::Ring;
 
     /// `Σ_i evals[i] · eq(point, i)`, bits of `i` most significant first.
     fn dense_eval(evals: &[AkitaField], point: &[AkitaField]) -> AkitaField {

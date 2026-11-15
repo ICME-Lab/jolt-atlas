@@ -12,8 +12,8 @@ use crate::{
     },
 };
 use atlas_algebra::field::JoltField;
+use atlas_algebra::field::Ring;
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
-use jolt_field::Ring;
 
 /// Degree bound of the sumcheck round polynomials in [`HammingBooleanityRelation`].
 const DEGREE_BOUND: usize = 3;
@@ -139,8 +139,8 @@ mod tests {
     use crate::opening_proof::VerifierOpeningAccumulator;
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::field::IntoOpening;
+    use atlas_algebra::field::Ring;
     use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
-    use jolt_field::Ring;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
     use crate::relation::{prover::prove_relation, verify_relation};

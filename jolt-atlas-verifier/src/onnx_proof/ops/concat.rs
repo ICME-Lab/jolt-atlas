@@ -16,6 +16,7 @@ use crate::{
         ProofType,
     },
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     poly::eq::EqPolynomial,
@@ -25,7 +26,6 @@ use atlas_claims::{derived, opening, Expr, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{op::Concat, Model, Op};
 use atlas_transcript::Transcript;
-use jolt_field::Ring;
 
 crate::impl_plan_op!(Concat, ConcatRelation);
 

@@ -12,9 +12,8 @@ allocative = ["dep:allocative"]
 
 [dependencies]
 allocative = { version = "0.3", optional = true }
-jolt-field.workspace = true
+atlas-algebra.workspace = true
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
 thiserror = "2.0.18"
 
 [dev-dependencies]
-jolt-field = { workspace = true, features = ["solinas"] }

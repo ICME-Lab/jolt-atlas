@@ -70,6 +70,7 @@ use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
     RelationId, RelationOpening, RelationSetup, RelationVerifier,
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::field::{IntoOpening, JoltField};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
@@ -85,7 +86,6 @@ use atlas_sumcheck::{
 use atlas_trace::Model;
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_field::Ring;
 
 /// Bit width of the output range check (`out + 2^31 ∈ [0, 2^32)`).
 pub const OUT_LOG_K: usize = 32;

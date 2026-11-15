@@ -325,7 +325,8 @@ pub(crate) enum PaddingRule<F> {
 
 impl<F: JoltField> PaddingRule<F> {
     pub(crate) fn for_field() -> Self {
-        match jolt_field::Field::inverse(&<F as jolt_field::Ring>::from_u64(2)) {
+        match atlas_algebra::field::Field::inverse(&<F as atlas_algebra::field::Ring>::from_u64(2))
+        {
             Some(two_inv) => Self::ConstantExtension { two_inv },
             None => Self::ZeroExtension,
         }
@@ -333,7 +334,9 @@ impl<F: JoltField> PaddingRule<F> {
 
     pub(crate) fn pad_input_claim(&self, claim: F, exponent: usize) -> F {
         match self {
-            Self::ConstantExtension { .. } => jolt_field::Ring::mul_pow_2(&claim, exponent),
+            Self::ConstantExtension { .. } => {
+                atlas_algebra::field::Ring::mul_pow_2(&claim, exponent)
+            }
             Self::ZeroExtension => claim,
         }
     }

@@ -7,6 +7,7 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier,
     },
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
@@ -18,7 +19,6 @@ use atlas_algebra::{
 };
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use common::VirtualPoly;
-use jolt_field::Ring;
 use rayon::prelude::*;
 
 const DEGREE_BOUND: usize = 2;

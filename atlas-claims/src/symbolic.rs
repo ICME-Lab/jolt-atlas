@@ -1,4 +1,4 @@
-use jolt_field::Ring;
+use atlas_algebra::field::Ring;
 
 use crate::{Expr, Source, SumcheckDomain};
 
@@ -89,7 +89,7 @@ pub trait SymbolicSumcheck {
 mod tests {
     use super::*;
     use crate::{challenge, constant, derived, opening, NoChallenges, NoInputs, NoOutputs};
-    use jolt_field::{Prime128Offset275 as Fr, Ring};
+    use atlas_algebra::field::{Prime128Offset275 as Fr, Ring};
     use std::collections::BTreeSet;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

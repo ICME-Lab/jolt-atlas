@@ -1,6 +1,6 @@
 use allocative::Allocative;
 use ark_ff::{BigInt, UniformRand};
-use num_traits::{One, Zero};
+pub use num_traits::{One, Zero};
 use std::{
     fmt::{Debug, Display},
     hash::Hash,
@@ -128,14 +128,17 @@ pub trait UnreducedInteger:
 
 impl<const N: usize> UnreducedInteger for BigInt<N> {}
 
-/// The field abstraction the proof system is written against. It extends upstream
-/// [`jolt_field::JoltField`] (ring/field arithmetic, integer conversions, canonical encoding,
-/// accumulators), so upstream crates accept every `JoltField`, and adds the atlas-specific
-/// surface: the unreduced-product ladder, the 125-bit challenge type, arkworks serialization and
-/// transcript codecs.
+/// The field abstraction the proof system is written against: a [`Field`] with a canonical
+/// encoding, an accumulator and serde wire serialization (what the `akita-*` crates bound on),
+/// plus the atlas-specific surface: the unreduced-product ladder, the 125-bit challenge type,
+/// arkworks serialization and transcript codecs.
 pub trait JoltField:
     'static
-    + jolt_field::JoltField
+    + Field
+    + CanonicalEncoding
+    + WithAccumulator
+    + serde::Serialize
+    + serde::de::DeserializeOwned
     + Sized
     + Zero
     + One
@@ -380,19 +383,42 @@ pub mod challenge;
 pub mod folded_accum;
 pub mod fp128;
 
-#[cfg(test)]
-mod tests {
-    use super::JoltField;
+// The Solinas field, taken from upstream `jolt-field` at `f3265b5a` (`docs/upstream-inventory.md`).
+mod algebra;
+mod extension;
+mod fp128_accumulators;
+mod limbs;
+mod ops;
+mod packed;
+mod schedules;
+pub mod signed;
+pub mod solinas;
+mod unreduced;
 
-    /// The `akita-*` crates and the `univariate` types they bind are bounded on upstream's field
-    /// traits; every `JoltField`, generic or concrete, must satisfy them.
-    fn upstream_accepts<F: JoltField>() {
-        fn upstream_bound<G: jolt_field::JoltField>() {}
-        upstream_bound::<F>();
-    }
+// REEXPORTS-BEGIN
+pub use algebra::{
+    Accumulator, AdditiveGroup, CanonicalBytes, CanonicalEncoding, Field, NaiveAccumulator,
+    PseudoMersenne, Ring, WithAccumulator,
+};
+pub use extension::{Ext2Config, Ext2NonResidueKind, ExtField, MulBaseUnreduced, TwoNr};
+pub use fp128_accumulators::{Fp128Accumulator, Fp128SignedAccumulator};
+pub use limbs::Limbs;
+pub use packed::{NoPacking, Packed, WithPacking};
+pub use solinas::{
+    canonical_extension_basis, is_registered_prime_offset, pseudo_mersenne_modulus,
+    registered_prime_offset_spec, Ext2, Fp128, Fp128MulU64Accum, Fp128ProductAccum, Fp128x8i32,
+    Fp32, Fp64, FpExt2, FpExt4, FpExt8, Prime128Offset275, Prime128OffsetA7F7, Prime24Offset3,
+    Prime30Offset35, Prime31Offset19, Prime32Offset99, Prime40Offset195, Prime48Offset59,
+    Prime56Offset27, Prime64Offset59, PrimeOffsetSpec, PRIME_OFFSET_IMPLEMENTED_MAX_BITS,
+    PRIME_OFFSET_MAX, PRIME_OFFSET_SPECS,
+};
+pub use unreduced::{Fold, Unreduced, WithCommitAccumulator};
+// REEXPORTS-END
 
-    #[test]
-    fn every_field_satisfies_the_upstream_bound() {
-        upstream_accepts::<super::fp128::Fp128>();
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum FieldError {
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+    #[error("invalid size: expected {expected}, actual {actual}")]
+    InvalidSize { expected: usize, actual: usize },
 }

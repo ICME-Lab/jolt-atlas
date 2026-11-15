@@ -54,13 +54,13 @@ use crate::{
         trace_view::TraceView,
     },
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     poly::multilinear::{MultilinearPolynomial, PolynomialEvaluation},
     utils::math::Math,
 };
 use atlas_sumcheck::engine::prover::ProveRounds;
 use atlas_trace::{trace::LayerData, Model, Tensor, Trace};
-use jolt_field::Ring;
 use rand::{rngs::StdRng, SeedableRng};
 
 /// `(op kind of the node, the relation's Spec type)` for every relation the prover has run.
@@ -338,7 +338,7 @@ const SMALL: Range<i32> = 1..(1 << 7);
 
 fn random_point(rng: &mut StdRng, len: usize) -> Vec<Fr> {
     (0..len)
-        .map(|_| <Fr as jolt_field::Field>::random(rng))
+        .map(|_| <Fr as atlas_algebra::field::Field>::random(rng))
         .collect()
 }
 

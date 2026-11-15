@@ -15,6 +15,7 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
+use atlas_algebra::field::Ring;
 use atlas_algebra::poly::split_eq::GruenSplitEqPolynomial;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
@@ -29,7 +30,6 @@ use atlas_algebra::{
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use common::parallel::par_enabled;
 use common::CommittedPoly;
-use jolt_field::Ring;
 use rayon::prelude::*;
 use std::ops::Mul;
 

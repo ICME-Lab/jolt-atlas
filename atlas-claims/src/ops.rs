@@ -1,6 +1,6 @@
 use std::ops::{Add, Mul, Neg, Sub};
 
-use jolt_field::Ring;
+use atlas_algebra::field::Ring;
 
 use crate::{Expr, Term};
 
@@ -212,7 +212,7 @@ impl<F: Ring + Ring, O, P, C> Mul<Expr<F, O, P, C>> for i128 {
 #[cfg(test)]
 mod tests {
     use crate::{constant, opening, Expr};
-    use jolt_field::{Prime128Offset275 as Fr, Ring};
+    use atlas_algebra::field::{Prime128Offset275 as Fr, Ring};
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     enum Opening {

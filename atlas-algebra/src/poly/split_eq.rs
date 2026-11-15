@@ -481,7 +481,7 @@ impl<F: JoltField> SplitEqUnreducedFold<F> for GruenSplitEqPolynomial<F> {
 #[cfg(test)]
 mod tests {
     use crate::field::fp128::Fp128 as Fr;
-    use jolt_field::{Field, Ring};
+    use crate::field::{Field, Ring};
     use num_traits::{One, Zero};
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;

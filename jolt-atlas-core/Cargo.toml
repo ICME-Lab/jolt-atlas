@@ -18,7 +18,6 @@ atlas-lookup-tables.workspace = true
 atlas-sumcheck.workspace = true
 atlas-pcs.workspace = true
 jolt-atlas-verifier.workspace = true
-jolt-field.workspace = true
 atlas-claims.workspace = true
 
 # Cryptography and Math

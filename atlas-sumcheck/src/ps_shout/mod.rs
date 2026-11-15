@@ -6,6 +6,7 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier,
     },
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::poly::split_eq::GruenSplitEqPolynomial;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
@@ -21,7 +22,6 @@ use atlas_algebra::{
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use common::{parallel::par_enabled, VirtualPoly};
-use jolt_field::Ring;
 use rayon::prelude::*;
 
 pub mod binary;

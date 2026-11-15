@@ -11,6 +11,7 @@ use crate::{
         RelationOpening, RelationSetup, RelationVerifier,
     },
 };
+use atlas_algebra::field::Ring;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::{FieldChallengeOps, IntoOpening, JoltField},
@@ -24,7 +25,6 @@ use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
-use jolt_field::Ring;
 use rayon::prelude::*;
 
 use crate::opening_proof::VerifierOpeningAccumulator;

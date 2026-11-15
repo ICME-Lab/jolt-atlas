@@ -18,7 +18,7 @@ keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 members = [
     "jolt-atlas-core",
     "jolt-atlas-verifier",
-    "third_party/jolt-field",
+    "jolt-field",
     "jolt-poly",
     "atlas-trace",
     "atlas-onnx-import",
@@ -43,8 +43,6 @@ atlas-sumcheck = { path = "./atlas-sumcheck", default-features = false }
 atlas-claims = { path = "./atlas-claims" }
 atlas-pcs = { path = "./atlas-pcs", default-features = false }
 jolt-atlas-verifier = { path = "./jolt-atlas-verifier" }
-# Vendored upstream crate (third_party/PINS.md records the pin).
-jolt-field = { path = "./third_party/jolt-field", default-features = false }
 
 # Cryptography and Math
 ark-serialize = { version = "0.5.0", default-features = false, features = [
@@ -191,13 +189,10 @@ debug = false
 [patch.crates-io]
 ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-# Only the vendored crates' optional BN254 features (off in every atlas build) reach these two.
-ark-ec = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
-ark-bn254 = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
 
-# The Akita crates depend on jolt-field and jolt-poly by git; resolve them to the vendored field and
-# to the owned jolt-poly compatibility package, so the graph holds one of each.
+# The Akita crates depend on jolt-field and jolt-poly by git; resolve them to the owned
+# compatibility packages, so the graph holds one of each.
 [patch."https://github.com/a16z/jolt"]
-jolt-field = { path = "./third_party/jolt-field" }
+jolt-field = { path = "./jolt-field" }
 jolt-poly = { path = "./jolt-poly" }

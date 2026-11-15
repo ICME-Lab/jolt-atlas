@@ -15,24 +15,34 @@ truth for current behavior, and nobody updates old specs when the code moves on.
 
 ## Summary
 
-`atlas-pcs::akita` is a 1,100-line adapter over `jolt-akita`, which is itself a 9,100-line
+`atlas-pcs::akita` is a 1,400-line adapter over `jolt-akita`, which is itself a 9,100-line
 adapter over LayerZero's `akita-*` crates, through `jolt-openings`' `CommitmentScheme` trait
 and `jolt-crypto`'s `Commitment` trait. Two adapter layers for one PCS is the duplication this
 program removes: the schedule catalog, trace one-hot encoding, native batching and prefix
 packing live in the vendored crate, and our layer re-derives class setups and row layouts on
 top. `jolt-crypto` also drags 5,400 lines of BN254 elliptic-curve code that no build enables.
 This phase moves the adapter in-house: `jolt-akita`'s modules become `atlas-pcs::akita::*`,
-the three `jolt-openings` items we use become `atlas-pcs` types, the `Commitment` trait is
-ours, and `atlas-pcs` depends on `akita-*` directly.
+its upstream trait impls become inherent methods, the `jolt-openings` data types we use become
+`atlas-pcs` types, and `atlas-pcs` depends on `akita-*` directly.
 
 ## Intent
 
 ### Goal
 
-Move `jolt-akita`, the used parts of `jolt-openings` (`CommitmentScheme`, `GroupOpeningClaim`,
-`PrefixPackedClaims`/`PrefixPackedLayout`, `TransparentObjectSetup`, `OpeningsError`, the group
-metadata traits) and `jolt-crypto`'s `Commitment` trait into `atlas-pcs`, delete the three
+Move `jolt-akita` and the used data types of `jolt-openings` (`GroupOpeningClaim`,
+`TaggedGroupOpeningClaim`, `VerifierOpeningClaim`, `GroupOpeningWithHint`,
+`PrefixPackedClaims`/`PrefixPackedLayout`, `OpeningsError`) into `atlas-pcs`, delete the three
 vendored crates, and keep every commitment, opening proof and transcript byte identical.
+
+`jolt-akita` implements upstream traits on its scheme type: `CommitmentScheme`,
+`TransparentObjectSetup`, `jolt-crypto`'s `Commitment`, `ZkOpeningScheme`,
+`ZkBatchOpeningScheme` (`scheme.rs`), `BatchOpeningScheme` (`native_batching.rs`) and the group
+metadata traits (`adapters.rs`). None of these traits survives. The impls atlas calls become
+inherent methods on the moved type, renamed `AkitaBackend` so it does not clash with our
+`atlas_pcs::akita::AkitaScheme`; atlas calls nine of them today
+(`setup`, `commit`, `commit_trace_one_hot`, `open`, `prove_batch`, `verify`, `verify_batch`,
+`transparent_object_setup`, `retag_transparent_object_setup`), and they resolve unchanged once
+inherent. The `Commitment`, `Zk*` impls and anything else without a caller are deleted.
 
 ### Invariants
 
@@ -40,8 +50,8 @@ vendored crates, and keep every commitment, opening proof and transcript byte id
   the Akita class openings and commitments are in the proof bytes, so any change to packing,
   schedule selection or the one-hot encoding changes a digest.
 - **One scheme interface.** After the phase `atlas-pcs::commitment_scheme::CommitmentScheme` is
-  the only PCS trait in the workspace; `jolt-openings`' trait is not re-created under a new
-  name. The Akita adapter implements ours directly. Mechanism: grep in CI's verifier-isolation
+  the only PCS trait in the workspace; no `jolt-openings` or `jolt-crypto` trait is re-created
+  under any name. Our `AkitaScheme` implements it over `AkitaBackend`'s inherent methods. Mechanism: grep in CI's verifier-isolation
   job for `UpstreamScheme`/`jolt_openings` (fails if present); review of the trait's method
   list against today's (`setup_prover`, `commit`, `batch_commit*`, `prove`, `prove_rlc`,
   `verify*`, `combine_hints`), which `jolt-atlas-verifier/clippy.toml` already enumerates and
@@ -57,6 +67,10 @@ vendored crates, and keep every commitment, opening proof and transcript byte id
   with the code and run under `cargo nextest run -p atlas-pcs`.
 - **No BN254 in the graph** (unchanged); after this phase the `bn254` features of the deleted
   crates no longer exist, and the CI check is kept for `jolt-field`'s. Mechanism: CI.
+- **Moved code runs as it did.** The root `[profile.test.package.jolt-akita]` override
+  (`debug-assertions = false`, `overflow-checks = false`) moves to `atlas-pcs`, so the moved tests
+  run under the same settings. `JOLT_AKITA_SCHEDULE_DIR` keeps its name; the default directory
+  (`CARGO_MANIFEST_DIR`/`schedules`) resolves to `atlas-pcs/schedules`.
 - **Contract untouched.** No trace or op change. Mechanism: `atlas-trace/` and
   `jolt-atlas-core/src/onnx_proof/ops/` absent from the diff (review-held).
 
@@ -68,8 +82,9 @@ vendored crates, and keep every commitment, opening proof and transcript byte id
   schedule profiles, or the hint/proof wire format.
 - Reducing the adapter's two-layer structure in the same PR. The move is mechanical; a
   follow-up may merge `atlas-pcs::akita` and the moved `scheme.rs`, gated on digests.
-- `jolt-crypto`'s `VectorCommitment` and the `committed` feature of `jolt-sumcheck`: deleted
-  with the crate; `jolt-sumcheck`'s `committed` feature stays declared empty until phase 3.
+- `jolt-crypto`'s `VectorCommitment`: deleted with the crate. `jolt-sumcheck`'s manifest already
+  has no `jolt-crypto` dependency and its `committed` feature is already `[]`; its
+  `#[cfg(feature = "committed")]` imports of `jolt_crypto` stay untouched until phase 3.
 
 ## Evaluation
 
@@ -80,8 +95,12 @@ vendored crates, and keep every commitment, opening proof and transcript byte id
       workspace dependency; `akita-*` dependencies appear in `atlas-pcs/Cargo.toml` only.
 - [ ] No source under `atlas-*`/`jolt-atlas-*` names `jolt_akita`, `jolt_openings` or
       `jolt_crypto` (grep, in the CI isolation job).
-- [ ] `jolt-akita`'s two binaries (`gen_jolt_schedules`, `check_grouped_schedules`) are
-      either moved as `atlas-pcs` examples or deleted with a stated reason in the PR.
+- [ ] `gen_jolt_schedules` is `atlas-pcs/examples/gen_schedules.rs` (it reproduces the
+      checked-in `.aks` catalogs we now own). `check_grouped_schedules` is deleted (an offline
+      CSV audit with no caller; the `schedule_artifacts` tests cover the catalogs), with the
+      items only it used (`schedule_registry::{dense_group_profile, GroupedScheduleError}`).
+- [ ] No `jolt-openings`/`jolt-crypto` trait exists under any name in `atlas-pcs`; the moved
+      scheme type is `AkitaBackend` with inherent methods.
 - [ ] `cargo nextest run -p atlas-pcs` passes with the moved tests (trace one-hot, schedule
       artifacts, adapters, native batching).
 - [ ] Digest pins unchanged; CI green; heavy job green on `main`.
@@ -113,8 +132,8 @@ phase 1.
 `one_hot_family`, `shape_guard`, `family_contract`); today's `atlas-pcs/src/akita.rs` becomes
 `akita/mod.rs`. The schedule fixtures under `third_party/jolt-akita/schedules/` move to
 `atlas-pcs/schedules/` and the default-directory lookup is updated. `jolt-openings`' used
-items go to `atlas-pcs/src/openings.rs` (prefix packing, group claims, error);
-`jolt-crypto::Commitment` becomes a trait in `atlas-pcs::commitment_scheme`. The `akita-*`
+data types go to `atlas-pcs/src/openings.rs` (prefix packing, group claims, error); its traits
+and `jolt-crypto::Commitment` do not move (impls become inherent on `AkitaBackend`). The `akita-*`
 manifest rows move to `atlas-pcs/Cargo.toml` with the same rev and features. The root
 `[patch."https://github.com/a16z/jolt"]` stays (the `akita-*` crates still bind `jolt-field`
 and `jolt-poly`).
@@ -139,8 +158,9 @@ owns the Akita adapter; `akita-*` by git), `docs/roadmap.md` (phase 2 landed).
 
 1. Move `jolt-akita` sources and fixtures under `atlas-pcs::akita`, keeping its imports of
    `jolt_openings`/`jolt_crypto`; gate `cargo nextest run -p atlas-pcs` and digests.
-2. Replace the `jolt-openings` and `jolt-crypto` imports with `atlas-pcs` items; delete the
-   three crates, manifests and lock entries; `clippy.toml` paths.
+2. Replace the `jolt-openings` and `jolt-crypto` imports with `atlas-pcs` items, turn the trait
+   impls into inherent `AkitaBackend` methods; delete the three crates, manifests and lock
+   entries; `clippy.toml` paths.
 3. CI grep step, docs, spec status.
 
 ## References

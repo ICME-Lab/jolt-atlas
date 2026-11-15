@@ -35,24 +35,45 @@ directly on the moved type (no newtype), collapse `atlas_algebra::field::JoltFie
 `jolt-field` package exposing the `akita-*` surface, and delete `third_party/jolt-field`,
 with proofs byte identical.
 
+**Scope rule (strip while moving).** Only what atlas or `akita-*` calls outside tests is
+copied: `bn254/` and `binary/` are not, and neither are items such as `AccumPair`,
+`FoldMatrixFp32/64`, `Fp128Accumulator`, `Fp128SignedAccumulator`, the `*Packing` types,
+`PackedFpExt*`, `WithPacking`, `TwoNr` or `FieldError` unless the compiler shows an internal
+use. Everything copied is upstream's code at `f3265b5a`, so no separate improvement step applies.
+
+**`Fp128` shape.** `atlas_algebra::field::fp128::Fp128` is a type alias of the moved
+`field::solinas::Prime128OffsetA7F7`; upstream's const-generic type keeps its name,
+`field::solinas::Fp128<P>`. The newtype's `CanonicalSerialize`/`CanonicalDeserialize`,
+`Display`, `Allocative`, `UniformRand` and `Div` impls move onto the moved type (now local) with
+identical bytes, and `Inner` and the `Fp128(..)`/`.0` conversions disappear (10 files).
+
+**Call sites.** The atlas files that name `jolt_field` today (79) take the moved items from
+`atlas_algebra::field`; CI's source grep adds `jolt_field`.
+
 ### Invariants
 
 - **Behavior-preserving.** Digest pins unchanged. Mechanism: Test job; the field is under
   every byte of the proof.
-- **The kernels are the kernels.** `solinas/fp128.rs`, `solinas/unreduced.rs`,
-  `solinas/word.rs`, `solinas/packed/*`, `solinas/parallel.rs`, `fp128/add_sub.rs` and the
-  `asm/` sources and `build.rs` are moved unchanged in the first commit; the PR diff for
-  those files is a rename. Mechanism: `git diff -M` in the PR shows 100% renames for them
-  (review-held); the upstream in-source tests (the Solinas test modules, the `unreduced`
-  ladder tests) run under `cargo nextest run -p atlas-algebra`.
+- **The kernels are the kernels.** Each moved file (`solinas/*`, `limbs`, `unreduced`,
+  `algebra`, `packed`, `schedules`, `fp128_accumulators`, `signed`, `ops`, the `asm/` sources and
+  `build.rs`), diffed against upstream `crates/jolt-field/src` at `f3265b5a`, shows only
+  deletions (items no one calls), module paths and visibility. Mechanism: that diff, recorded in
+  the PR (review-held); the upstream in-source tests for the kept items (the Solinas test
+  modules, the `unreduced` ladder tests) run under `cargo nextest run -p atlas-algebra`.
 - **The ladder is unchanged.** Our unreduced-product ladder (`mul_u64_unreduced`,
   `mul_to_product_accum`, `reduce_*`, `fmadd`) keeps its semantics and its `probe_assert!`
   self-checks. Mechanism: the existing ladder tests in `atlas-algebra`; digests.
 - **The `akita-*` surface is exact.** The owned `jolt-field` package exports `Prime`,
-  `Field`, `Ring`, `ExtField`, `FpExt*`, `CanonicalEncoding`, `Unreduced`, `Fold`,
-  `MulBaseUnreduced`, `PseudoMersenne`, `WithCommitAccumulator`, `AdditiveGroup`, `Zero`,
-  `One`, `Fp128x8i32` and `solinas::parallel::*` with the signatures `akita-*` calls, as
-  re-exports of the moved items. Mechanism: the compiler; Akita digests.
+  `Field`, `Ring`, `ExtField`, `FpExt*` (`FpExt4` among them), `CanonicalEncoding`,
+  `CanonicalBytes`, `Unreduced`, `Fold`, `MulBaseUnreduced`, `PseudoMersenne`,
+  `WithCommitAccumulator`, `AdditiveGroup`, `Zero`, `One`, `Fp128x8i32`, `Packed`, the primes
+  `Prime32Offset99`, `Prime64Offset59`, `Prime128Offset275` and `Prime128OffsetA7F7`, the
+  generic `Fp32`, `Fp64` and `Fp128`, and `solinas::parallel::*`, with the signatures `akita-*`
+  calls, as re-exports of the moved items. It declares the features `akita-*` enables,
+  `solinas`, `asm` and `parallel`, passed through to `atlas-algebra`. Mechanism: the compiler;
+  Akita digests.
+- **`Fp128` bytes unchanged.** The impls moved off the newtype serialize exactly as before.
+  Mechanism: digests.
 - **No BN254, no binary field.** `bn254/` and `binary/` are not copied; the `bn254` feature
   and `ark-bn254` dependency disappear from the workspace. Mechanism: the CI no-BN254 check
   (now trivially true) and `Cargo.lock` review.
@@ -99,7 +120,8 @@ in-source field tests ported. No proof-format change. The `prove` example is the
 ### Performance
 
 Field multiplication is the floor of prover time. Benchmark: the `prove` example on
-`models/gpt2`, `--trace-terminal`, all three prover stages, three runs, baseline on `dev`.
+`models/gpt2`, `--trace-terminal`, all three prover stages, three runs, baseline on current
+`dev` (phase 5 included; its own benchmark is not part of this phase).
 Gate: each stage within 3%. Expected: no change (same kernels, same `asm`); removing the
 newtype's forwarding may improve inlining marginally, not a target. The `asm` feature must be
 shown enabled in the release build (`cargo build --release -vv` output or a `cfg` probe test).
@@ -135,7 +157,7 @@ kernels; the `akita-*` pin and `[patch]` rationale), `docs/verifier.md`, `CLAUDE
 
 1. Move kernels and traits as renames under `atlas-algebra::field`, keep the newtype,
    compile; port tests. 2. Collapse the newtype and the trait layering; re-point
-   `atlas-poly`'s and the engine's bounds. 3. Compatibility package, `[patch]`, delete the
+   `atlas-algebra::poly`'s and the engine's bounds. 3. Compatibility package, `[patch]`, delete the
    crate and `third_party/`; docs; GPT-2 runs recorded.
 
 ## References

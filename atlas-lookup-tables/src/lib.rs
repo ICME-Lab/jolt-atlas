@@ -114,6 +114,9 @@ pub mod and;
 pub mod clamp;
 /// Bitwise OR lookup table.
 pub mod or;
+/// Piecewise-linear tanh, erf, sigmoid, sin and cos tables with a prefix-suffix decomposition.
+/// Not read by any op.
+pub mod piecewise_linear;
 /// ReLU (Rectified Linear Unit) activation lookup table.
 pub mod relu;
 /// Unsigned right-shift-by-a-fixed-bound lookup table, used to downscale the Cos/Sin trig

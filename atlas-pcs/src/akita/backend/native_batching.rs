@@ -15,14 +15,14 @@
 //! statement shape, bridges Jolt's Fiat-Shamir transcript into Akita's
 //! session, and embeds the backend argument bytes wholesale.
 
+use crate::openings::{
+    GroupOpeningClaim, GroupOpeningWithHint, OpeningsError, TaggedGroupOpeningClaim,
+    VerifierOpeningClaim,
+};
 use akita_config::{CommitmentConfig, TrustedScheduleCatalog};
 use akita_params::{BasisMode, OpeningScheduleSelection};
 use akita_pcs::{AkitaError, SelectedProverOpeningData};
 use akita_types::{GroupBatchStatement, OpeningClaims, PolynomialGroupClaims};
-use jolt_openings::{
-    BatchOpeningScheme, GroupOpeningClaim, GroupOpeningWithHint, OpeningsError,
-    TaggedGroupOpeningClaim, VerifierOpeningClaim,
-};
 use jolt_poly::MultilinearPoly;
 use jolt_transcript::{AppendToTranscript, Label, LabelWithCount, Transcript, U64Word};
 use tracing::info_span;
@@ -581,28 +581,17 @@ fn prove_one_hot(
     Ok((selection, proof))
 }
 
-impl BatchOpeningScheme for AkitaNativeBatching {
-    type Field = AkitaField;
-    type ProverSetup = AkitaProverSetup;
-    type VerifierSetup = AkitaVerifierSetup;
-    type Statement = AkitaNativeBatchStatement;
-    type Polynomials<'a>
-        = AkitaNativeBatchPolynomials<'a>
-    where
-        Self: 'a;
-    type Hints = AkitaProverHint;
-    type Proof = AkitaBatchProof;
-
-    fn prove_batch<'a, T>(
-        setup: &Self::ProverSetup,
-        statement: Self::Statement,
-        polynomials: Self::Polynomials<'a>,
-        hint: Self::Hints,
+/// Same-point openings of one commitment group through Akita's native batched protocol.
+impl AkitaNativeBatching {
+    pub fn prove_batch<T>(
+        setup: &AkitaProverSetup,
+        statement: AkitaNativeBatchStatement,
+        polynomials: AkitaNativeBatchPolynomials<'_>,
+        hint: AkitaProverHint,
         transcript: &mut T,
-    ) -> Result<Self::Proof, OpeningsError>
+    ) -> Result<AkitaBatchProof, OpeningsError>
     where
-        Self: 'a,
-        T: Transcript<Challenge = Self::Field>,
+        T: Transcript<Challenge = AkitaField>,
     {
         let ValidatedStatement { commitment, point } = validate_statement(
             &statement,
@@ -670,14 +659,14 @@ impl BatchOpeningScheme for AkitaNativeBatching {
         Ok(AkitaBatchProof::new(selection, backend_proof))
     }
 
-    fn verify_batch<T>(
-        setup: &Self::VerifierSetup,
-        statement: &Self::Statement,
-        proof: &Self::Proof,
+    pub fn verify_batch<T>(
+        setup: &AkitaVerifierSetup,
+        statement: &AkitaNativeBatchStatement,
+        proof: &AkitaBatchProof,
         transcript: &mut T,
     ) -> Result<(), OpeningsError>
     where
-        T: Transcript<Challenge = Self::Field>,
+        T: Transcript<Challenge = AkitaField>,
     {
         let ValidatedStatement { commitment, point } = validate_statement(
             statement,
@@ -755,8 +744,9 @@ mod tests {
     )]
 
     use super::*;
+    use crate::openings::CommitmentGroupRole;
     use jolt_field::Zero;
-    use jolt_openings::{CommitmentGroupRole, EvaluationClaim};
+    use jolt_poly::EvaluationClaim;
     use jolt_transcript::Blake2bTranscript;
 
     use crate::akita::backend::adapters::AkitaVerifierScheduleArtifacts;
@@ -813,13 +803,9 @@ mod tests {
             backend_proof: Vec::new(),
         };
         let mut transcript = Blake2bTranscript::new(b"invalid-transported-setup");
-        let error = <AkitaNativeBatching as BatchOpeningScheme>::verify_batch(
-            &transported,
-            &statement,
-            &proof,
-            &mut transcript,
-        )
-        .expect_err("unsupported setup K must reject before backend dispatch");
+        let error =
+            AkitaNativeBatching::verify_batch(&transported, &statement, &proof, &mut transcript)
+                .expect_err("unsupported setup K must reject before backend dispatch");
         assert!(matches!(error, OpeningsError::InvalidBatch(_)));
     }
 

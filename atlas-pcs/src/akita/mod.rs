@@ -50,20 +50,18 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
 use backend::{
-    AkitaBatchProof, AkitaChunkProfile, AkitaCommitment, AkitaProverHint, AkitaProverSetup,
-    AkitaScheduleArtifacts, AkitaScheme as Upstream, AkitaSetupParams, AkitaVerifierSetup,
+    AkitaBackend, AkitaBatchProof, AkitaChunkProfile, AkitaCommitment, AkitaProverHint,
+    AkitaProverSetup, AkitaScheduleArtifacts, AkitaSetupParams, AkitaVerifierSetup,
     TraceOneHotRows, AKITA_ONE_HOT_K16,
 };
 use blake2::{digest::consts::U32, Blake2b, Digest};
 use jolt_field::Ring;
-use jolt_openings::{
-    CommitmentScheme as UpstreamScheme, GroupOpeningClaim, PrefixPackedClaims, PrefixPackedLayout,
-    TransparentObjectSetup,
-};
+
 use jolt_poly::{EqPolynomial, Polynomial as UpstreamDense};
 use num_traits::{One, Zero};
 use rayon::prelude::*;
 
+use crate::openings::{GroupOpeningClaim, PrefixPackedClaims, PrefixPackedLayout};
 use atlas_algebra::{
     field::{
         fp128::{Fp128, Inner},
@@ -82,7 +80,7 @@ pub const MIN_DENSE_NUM_VARS: usize = 14;
 /// Largest physical arity of the dense-bounded catalog.
 pub const MAX_DENSE_NUM_VARS: usize = 34;
 /// Largest physical arity the prover packs a dense class into; a larger kind is split into
-/// chunks. Upstream's dense commit is linear up to 2^28 coefficients (4.2 s for 256 columns of
+/// chunks. Akita's dense commit is linear up to 2^28 coefficients (4.2 s for 256 columns of
 /// 2^20 small values) and falls off a cliff at 2^29 (over 18 min for 512 such columns), so the
 /// cap keeps every dense object on the linear side.
 pub const MAX_DENSE_CLASS_NUM_VARS: usize = 28;
@@ -316,7 +314,7 @@ pub struct AkitaSetup {
 }
 
 impl AkitaSetup {
-    /// Upstream's packaged catalogs, or the directory named by `JOLT_AKITA_SCHEDULE_DIR`.
+    /// The packaged catalogs (`atlas-pcs/schedules/`), or the directory named by `JOLT_AKITA_SCHEDULE_DIR`.
     pub fn from_packaged_catalogs() -> Self {
         Self::new(AkitaScheduleArtifacts::shared_from_default_directory(
             PACKAGED_DENSE_PROFILE,
@@ -354,20 +352,23 @@ impl AkitaSetup {
 
     /// The setup of class `shape`.
     fn class_setup(&self, shape: &ClassShape) -> Result<Arc<ClassSetup>, String> {
-        let failed = |e: jolt_openings::OpeningsError| format!("Akita setup for {shape:?}: {e}");
+        let failed = |e: crate::openings::OpeningsError| format!("Akita setup for {shape:?}: {e}");
         let n = shape.physical_num_vars;
         match shape.kind {
             ClassKind::Dense(_) => {
                 let base = self.cached(false, n, || {
-                    Upstream::transparent_object_setup(&self.artifacts, n, [0; 32]).map_err(failed)
+                    AkitaBackend::transparent_object_setup(&self.artifacts, n, [0; 32])
+                        .map_err(failed)
                 })?;
-                let (prover, verifier) =
-                    Upstream::retag_transparent_object_setup(&base.prover, shape.layout_digest())
-                        .map_err(failed)?;
+                let (prover, verifier) = AkitaBackend::retag_transparent_object_setup(
+                    &base.prover,
+                    shape.layout_digest(),
+                )
+                .map_err(failed)?;
                 Ok(Arc::new(ClassSetup { prover, verifier }))
             }
             ClassKind::OneHot => self.cached(true, n, || {
-                Upstream::setup(AkitaSetupParams::one_hot_only(
+                AkitaBackend::setup(AkitaSetupParams::one_hot_only(
                     n,
                     ONE_HOT_COLUMNS,
                     shape.layout_digest(),
@@ -861,7 +862,7 @@ impl CommitmentScheme for AkitaScheme {
                                         transcript,
                                     )
                                     .expect("the prefix-packed claim reduces");
-                                Upstream::open(
+                                AkitaBackend::open(
                                     packed,
                                     claim.point.as_slice(),
                                     claim.value,
@@ -870,7 +871,7 @@ impl CommitmentScheme for AkitaScheme {
                                     transcript,
                                 )
                             }
-                            ClassSource::OneHot(_) => Upstream::prove_batch(
+                            ClassSource::OneHot(_) => AkitaBackend::prove_batch(
                                 &committed.setup.prover,
                                 Vec::new(),
                                 GroupOpeningClaim::new(
@@ -1015,7 +1016,7 @@ impl CommitmentScheme for AkitaScheme {
                                 .map_err(|e| {
                                     invalid(format!("prefix-packed claim reduction: {e}"))
                                 })?;
-                            Upstream::verify(
+                            AkitaBackend::verify(
                                 &commitment,
                                 claim.point.as_slice(),
                                 claim.value,
@@ -1024,7 +1025,7 @@ impl CommitmentScheme for AkitaScheme {
                                 transcript,
                             )
                         }
-                        ClassKind::OneHot => Upstream::verify_batch(
+                        ClassKind::OneHot => AkitaBackend::verify_batch(
                             &class_setup.verifier,
                             &[],
                             &GroupOpeningClaim::new(
@@ -1114,12 +1115,12 @@ where
             let (source, committed) = match shape.kind {
                 ClassKind::Dense(_) => {
                     let packed = UpstreamDense::new(pack_dense(&shape, &member_polys));
-                    let committed = Upstream::commit(&packed, &setup.prover);
+                    let committed = AkitaBackend::commit(&packed, &setup.prover);
                     (ClassSource::Dense(packed), committed)
                 }
                 ClassKind::OneHot => {
                     let rows = Arc::new(one_hot_rows(&member_polys));
-                    let committed = Upstream::commit_trace_one_hot(
+                    let committed = AkitaBackend::commit_trace_one_hot(
                         &setup.prover,
                         shape.layout_digest(),
                         rows.clone(),

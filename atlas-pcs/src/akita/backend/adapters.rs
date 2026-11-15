@@ -7,6 +7,7 @@ use std::{
     sync::OnceLock,
 };
 
+use crate::openings::{OpeningsError, VerifierOpeningClaim};
 use akita_config::{CommitmentConfig, TrustedScheduleCatalog};
 use akita_params::{OpeningScheduleSelection, ScheduleRowDigest};
 use akita_pcs::{
@@ -19,7 +20,6 @@ use akita_types::{
     CommittedGroup as AkitaBackendCommittedGroup,
 };
 use jolt_field::{CanonicalBytes, Zero};
-use jolt_openings::{OpeningsError, VerifierOpeningClaim};
 use jolt_poly::{MultilinearPoly, OneHotIndexOrder, OneHotPolynomial, Polynomial};
 use jolt_transcript::{AppendToTranscript, Label, LabelWithCount, Transcript, U64Word};
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -55,7 +55,7 @@ pub(crate) type AkitaBackendDensePoly = DensePoly<AkitaField>;
 pub(crate) type AkitaBackendOneHotPoly = OneHotPoly<AkitaField, u8>;
 /// The owning CPU backend: prepared setup transforms plus every commitment
 /// handle's source. Handles only prove on the backend that committed them.
-pub(crate) type AkitaBackend = CpuBackend<AkitaField, AkitaBackendExtField>;
+pub(crate) type AkitaCpuBackend = CpuBackend<AkitaField, AkitaBackendExtField>;
 pub(crate) type AkitaBackendProverSetup = BackendProverSetup<AkitaField>;
 
 pub(crate) type AkitaLayoutDigest = [u8; 32];
@@ -261,17 +261,16 @@ impl AkitaSetupParams {
 #[derive(Debug)]
 pub(crate) struct FullWidthBackendSetup {
     pub(crate) scheme: AkitaCommitmentScheme<JoltDenseFull>,
-    pub(crate) backend: AkitaBackend,
+    pub(crate) backend: AkitaCpuBackend,
 }
 
 #[derive(Clone, Debug)]
 pub struct AkitaProverSetup {
     pub(crate) full_width: BTreeMap<usize, Arc<FullWidthBackendSetup>>,
     pub(crate) backend_prover_setup: Option<Arc<AkitaBackendProverSetup>>,
-    pub(crate) cpu_backend: Option<Arc<AkitaBackend>>,
+    pub(crate) cpu_backend: Option<Arc<AkitaCpuBackend>>,
     pub(crate) one_hot_backend_prover_setup: Option<Arc<AkitaBackendProverSetup>>,
-    pub(crate) one_hot_cpu_backend: Option<Arc<AkitaBackend>>,
-    pub(crate) schedule_artifacts: Arc<AkitaScheduleArtifacts>,
+    pub(crate) one_hot_cpu_backend: Option<Arc<AkitaCpuBackend>>,
     pub(crate) verifier: AkitaVerifierSetup,
 }
 
@@ -314,7 +313,7 @@ impl AkitaProverSetup {
 
     pub(crate) fn dense_backend(
         &self,
-    ) -> Result<(&AkitaBackendProverSetup, &AkitaBackend), OpeningsError> {
+    ) -> Result<(&AkitaBackendProverSetup, &AkitaCpuBackend), OpeningsError> {
         self.backend_prover_setup
             .as_deref()
             .zip(self.cpu_backend.as_deref())
@@ -327,7 +326,7 @@ impl AkitaProverSetup {
 
     pub(crate) fn one_hot_backend(
         &self,
-    ) -> Result<(&AkitaBackendProverSetup, &AkitaBackend), OpeningsError> {
+    ) -> Result<(&AkitaBackendProverSetup, &AkitaCpuBackend), OpeningsError> {
         let prover_setup = self
             .one_hot_backend_prover_setup
             .as_deref()
@@ -506,7 +505,7 @@ impl AkitaVerifierSetup {
     }
 
     /// Dense backend verifier, cached after the first use.
-    /// [`AkitaScheme::setup`](crate::akita::backend::AkitaScheme) primes the cache with the
+    /// [`AkitaBackend::setup`](crate::akita::backend::AkitaBackend) primes the cache with the
     /// freshly built key; a serde-transported setup re-derives it from the
     /// shape on first use (one-time, setup-class cost).
     pub(crate) fn dense_verifier(&self) -> Result<&AkitaVerifier<AkitaConfig>, OpeningsError> {
@@ -660,88 +659,6 @@ pub struct AkitaCommitment {
     pub(crate) serialized_backend_bytes: Vec<u8>,
 }
 
-impl jolt_openings::GroupCommitmentMetadata for AkitaCommitment {
-    fn is_one_hot_backend(&self) -> bool {
-        self.backend_flavor() == AkitaBackendFlavor::OneHot
-    }
-
-    fn layout_digest(&self) -> [u8; 32] {
-        self.layout_digest()
-    }
-
-    fn num_vars(&self) -> usize {
-        self.num_vars()
-    }
-
-    fn poly_count(&self) -> usize {
-        self.poly_count()
-    }
-
-    fn one_hot_k(&self) -> usize {
-        self.one_hot_k()
-    }
-}
-
-impl jolt_openings::GroupSetupMetadata for AkitaVerifierSetup {
-    fn max_num_vars(&self) -> usize {
-        self.max_num_vars()
-    }
-
-    fn max_num_polys_per_commitment_group(&self) -> usize {
-        self.max_num_polys_per_commitment_group()
-    }
-
-    fn max_total_batch_polys(&self) -> usize {
-        self.max_total_batch_polys()
-    }
-
-    fn default_layout_digest(&self) -> [u8; 32] {
-        self.default_layout_digest()
-    }
-
-    fn one_hot_k(&self) -> usize {
-        self.one_hot_k()
-    }
-
-    fn one_hot_num_chunks(&self) -> usize {
-        self.akita_chunk_profile().num_chunks()
-    }
-
-    fn one_hot_num_chunked_levels(&self) -> usize {
-        self.akita_chunk_profile().levels
-    }
-}
-
-impl jolt_openings::GroupSetupMetadata for AkitaProverSetup {
-    fn max_num_vars(&self) -> usize {
-        self.max_num_vars()
-    }
-
-    fn max_num_polys_per_commitment_group(&self) -> usize {
-        self.max_num_polys_per_commitment_group()
-    }
-
-    fn max_total_batch_polys(&self) -> usize {
-        self.max_total_batch_polys()
-    }
-
-    fn default_layout_digest(&self) -> [u8; 32] {
-        self.default_layout_digest()
-    }
-
-    fn one_hot_k(&self) -> usize {
-        self.one_hot_k()
-    }
-
-    fn one_hot_num_chunks(&self) -> usize {
-        self.verifier.akita_chunk_profile().num_chunks()
-    }
-
-    fn one_hot_num_chunked_levels(&self) -> usize {
-        self.verifier.akita_chunk_profile().levels
-    }
-}
-
 impl AkitaCommitment {
     pub fn backend_flavor(&self) -> AkitaBackendFlavor {
         self.backend_flavor
@@ -814,29 +731,6 @@ impl AkitaBatchProof {
     /// adds container tags or length prefixes.
     pub fn unframed_payload_size(&self) -> Option<usize> {
         SCHEDULE_SELECTION_BYTES.checked_add(self.backend_proof.len())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AkitaHidingCommitment {
-    pub(crate) eval: Vec<u8>,
-}
-
-impl AkitaHidingCommitment {
-    pub(crate) fn new(eval: Vec<u8>) -> Self {
-        Self { eval }
-    }
-}
-
-impl AppendToTranscript for AkitaHidingCommitment {
-    fn append_to_transcript<T: Transcript>(&self, transcript: &mut T) {
-        transcript.append(&Label(b"akita_hiding_commitment"));
-        transcript.append(&LabelWithCount(
-            b"akita_hiding_eval",
-            self.eval.len() as u64,
-        ));
-        transcript.append_bytes(&self.eval);
     }
 }
 
@@ -1104,12 +998,6 @@ pub(crate) fn commit_failed(error: impl ToString) -> OpeningsError {
 
 pub(crate) fn prove_failed(error: impl ToString) -> OpeningsError {
     OpeningsError::ProveFailed(error.to_string())
-}
-
-pub(crate) fn transparent_zk_error() -> OpeningsError {
-    OpeningsError::InvalidBatch(
-        "Akita backend adapter is transparent-only and does not support ZK openings yet".to_owned(),
-    )
 }
 
 /// Ends outer Jolt challenge derivation at one statement-bound challenge and

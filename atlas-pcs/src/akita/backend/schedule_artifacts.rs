@@ -3,10 +3,10 @@
 
 use crate::akita::backend::configs::{AkitaChunkProfile, JoltDenseBounded, JoltDenseFull};
 use crate::akita::backend::one_hot_family::{with_one_hot_family, OneHotFamily};
+use crate::openings::OpeningsError;
 use akita_config::{CommitmentConfig, TrustedScheduleCatalog};
 use akita_pcs::{AkitaCommitmentScheme, AkitaError};
 use akita_schedules::ValidatedScheduleCatalog;
-use jolt_openings::OpeningsError;
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},

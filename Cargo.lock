@@ -491,7 +491,6 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-openings",
  "jolt-poly",
  "jolt-sumcheck",
  "jolt-transcript",
@@ -545,7 +544,6 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-openings",
  "jolt-poly",
  "jolt-sumcheck",
  "jolt-transcript",
@@ -611,9 +609,7 @@ dependencies = [
  "fixedbitset",
  "inferno",
  "itertools 0.10.5",
- "jolt-crypto",
  "jolt-field",
- "jolt-openings",
  "jolt-poly",
  "jolt-sumcheck",
  "jolt-transcript",
@@ -661,7 +657,6 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-openings",
  "jolt-poly",
  "jolt-sumcheck",
  "jolt-transcript",
@@ -720,7 +715,6 @@ dependencies = [
  "inferno",
  "itertools 0.10.5",
  "jolt-field",
- "jolt-openings",
  "jolt-poly",
  "jolt-sumcheck",
  "jolt-transcript",
@@ -1625,18 +1619,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jolt-crypto"
-version = "0.1.0"
-dependencies = [
- "jolt-field",
- "jolt-poly",
- "jolt-transcript",
- "rand_core 0.6.4",
- "rayon",
- "serde",
-]
-
-[[package]]
 name = "jolt-field"
 version = "0.1.0"
 dependencies = [
@@ -1655,19 +1637,6 @@ dependencies = [
  "rayon",
  "serde",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "jolt-openings"
-version = "0.1.0"
-dependencies = [
- "jolt-crypto",
- "jolt-field",
- "jolt-poly",
- "jolt-transcript",
- "serde",
- "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]

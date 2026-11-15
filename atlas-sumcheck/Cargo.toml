@@ -31,7 +31,6 @@ jolt-utils.workspace = true
 jolt-poly = { workspace = true, features = ["parallel"] }
 jolt-sumcheck.workspace = true
 atlas-claims.workspace = true
-jolt-openings = { workspace = true, features = ["parallel"] }
 bincode.workspace = true
 spongefish = { version = "=0.8.0", default-features = false, features = ["keccak"] }
 

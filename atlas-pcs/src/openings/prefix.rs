@@ -16,10 +16,10 @@
 use std::collections::BTreeMap;
 
 use jolt_field::JoltField;
-use jolt_poly::{eq_index_msb, Point, HIGH_TO_LOW};
+use jolt_poly::{eq_index_msb, EvaluationClaim, Point, HIGH_TO_LOW};
 use jolt_transcript::{Label, Transcript, U64Word};
 
-use crate::{EvaluationClaim, OpeningsError};
+use super::OpeningsError;
 
 /// Ordered fixed-capacity placement of equal-arity logical polynomials.
 #[derive(Clone, Debug, PartialEq, Eq)]

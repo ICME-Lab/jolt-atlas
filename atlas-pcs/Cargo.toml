@@ -27,9 +27,8 @@ blake2 = "0.10"
 jolt-field = { workspace = true, features = ["solinas", "asm"] }
 jolt-transcript = { workspace = true, features = ["solinas", "transcript-blake2b", "transcript-keccak"] }
 jolt-utils.workspace = true
-jolt-poly = { workspace = true, features = ["parallel"] }
+jolt-poly = { workspace = true, features = ["parallel", "transcript"] }
 jolt-sumcheck.workspace = true
-jolt-crypto = { path = "../third_party/jolt-crypto", default-features = false, features = ["parallel"] }
 # LayerZero's Akita lattice PCS, behind `akita::backend`.
 akita-algebra = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
 akita-config = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
@@ -40,7 +39,6 @@ akita-planner = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "df
 akita-schedules = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
 akita-types = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
 akita-params = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
-jolt-openings = { workspace = true, features = ["parallel"] }
 bincode.workspace = true
 spongefish = { version = "=0.8.0", default-features = false, features = ["keccak"] }
 

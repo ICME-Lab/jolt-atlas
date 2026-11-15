@@ -24,9 +24,8 @@ use super::commit::commit_columns;
 use super::digit_windows::{flush_digit_accumulators, DigitWindows};
 use super::source::TraceOneHotColumnBatchView;
 use crate::akita::backend::{
-    AkitaChunkProfile, AkitaField, AkitaScheduleArtifacts, AkitaScheme, AkitaSetupParams,
+    AkitaBackend, AkitaChunkProfile, AkitaField, AkitaScheduleArtifacts, AkitaSetupParams,
 };
-use jolt_openings::CommitmentScheme;
 use jolt_poly::OneHotPolynomial;
 
 #[derive(Debug)]
@@ -742,7 +741,7 @@ fn small_k256_blocks_commit_like_materialized_onehot() {
             .collect::<Vec<_>>();
         assert_eq!(streamed.as_ring_slice::<D>().unwrap(), expected.as_slice());
     }
-    let (pcs_setup, _) = AkitaScheme::setup(AkitaSetupParams::one_hot_only(
+    let (pcs_setup, _) = AkitaBackend::setup(AkitaSetupParams::one_hot_only(
         source.num_vars,
         COLUMNS,
         [9; 32],
@@ -755,9 +754,9 @@ fn small_k256_blocks_commit_like_materialized_onehot() {
         .map(|poly| OneHotPolynomial::new(K, poly.indices().to_vec()))
         .collect();
     let (native_commitment, _) =
-        AkitaScheme::commit_one_hot_group_owned(&pcs_setup, [9; 32], native).unwrap();
+        AkitaBackend::commit_one_hot_group_owned(&pcs_setup, [9; 32], native).unwrap();
     let (streamed_commitment, _) =
-        AkitaScheme::commit_trace_one_hot(&pcs_setup, [9; 32], Arc::clone(&source.rows), &[])
+        AkitaBackend::commit_trace_one_hot(&pcs_setup, [9; 32], Arc::clone(&source.rows), &[])
             .unwrap();
     assert_eq!(streamed_commitment, native_commitment);
 }

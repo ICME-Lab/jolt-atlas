@@ -7,6 +7,7 @@
 //! argument bytes need no such guard: Akita's verifier parses them against the
 //! selected row's own grammar.
 
+use crate::openings::OpeningsError;
 use akita_config::{CommitmentConfig, TrustedScheduleCatalog};
 use akita_params::{
     GroupCommitPhaseParams, OpeningClaimsLayout, OpeningScheduleSelection, PolynomialGroupLayout,
@@ -14,7 +15,6 @@ use akita_params::{
 use akita_pcs::AkitaError;
 use akita_schedules::ResolvedScheduleRow;
 use jolt_field::Zero;
-use jolt_openings::OpeningsError;
 
 use crate::akita::backend::adapters::{
     deserialize_akita, invalid_batch, AkitaBackendCommitment, AkitaBackendCommitmentPayload,

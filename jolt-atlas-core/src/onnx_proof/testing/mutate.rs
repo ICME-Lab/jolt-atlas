@@ -8,12 +8,15 @@
 //! an orphan claim; a verifier panic is a robustness bug.
 
 use ark_std::One;
-use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
+use atlas_algebra::poly::{
+    point::{OpeningPoint, BIG_ENDIAN},
+    univariate::{CompressedPoly, UnivariatePoly},
+};
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use common::VirtualPoly;
-use jolt_field::Ring;
+use jolt_field::{Field, Ring};
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
 use crate::onnx_proof::{ONNXProof, ProofId, ProofType};
@@ -303,7 +306,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
             v
         };
         for round in chosen {
-            for k in 0..sc.compressed_polys[round].coeffs_except_linear_term.len() {
+            for k in 0..sc.compressed_polys[round].coeffs_except_linear_term().len() {
                 sites.push(Site::RoundCoeff {
                     proof: id.clone(),
                     round,
@@ -323,7 +326,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
 
     let consumers = consumer_counts(model);
     for (node, er) in proof.eval_reduction_proofs() {
-        for k in 0..er.h.coeffs.len() {
+        for k in 0..er.h.coefficients().len() {
             sites.push(Site::EvalRedCoeff { node: *node, k });
         }
         sites.push(Site::EvalRedRemoved { node: *node });
@@ -375,7 +378,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
 
     if let Some(rop) = proof.reduced_opening_proof() {
         for (round, poly) in rop.sumcheck_proof().compressed_polys.iter().enumerate() {
-            for k in 0..poly.coeffs_except_linear_term.len() {
+            for k in 0..poly.coeffs_except_linear_term().len() {
                 sites.push(Site::ReducedRoundCoeff { round, k });
             }
         }
@@ -469,21 +472,18 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
             proof: id,
             round,
             k,
-        } => {
-            proof
-                .proofs_mut()
-                .get_mut(id)
-                .expect("site")
-                .compressed_polys[*round]
-                .coeffs_except_linear_term[*k] += one
-        }
+        } => proof
+            .proofs_mut()
+            .get_mut(id)
+            .expect("site")
+            .compressed_polys[*round]
+            .edit(|c| c[*k] += one),
         Site::RoundExtraCoeff { proof: id, round } => proof
             .proofs_mut()
             .get_mut(id)
             .expect("site")
             .compressed_polys[*round]
-            .coeffs_except_linear_term
-            .push(one),
+            .edit(|c| c.push(one)),
         Site::RoundDropped { proof: id } => {
             proof
                 .proofs_mut()
@@ -501,14 +501,12 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
         Site::ProofRemoved { proof: id } => {
             proof.proofs_mut().remove(id);
         }
-        Site::EvalRedCoeff { node, k } => {
-            proof
-                .eval_reduction_proofs_mut()
-                .get_mut(node)
-                .expect("site")
-                .h
-                .coeffs[*k] += one
-        }
+        Site::EvalRedCoeff { node, k } => proof
+            .eval_reduction_proofs_mut()
+            .get_mut(node)
+            .expect("site")
+            .h
+            .edit(|c| c[*k] += one),
         Site::EvalRedOrphan { node } => {
             let donor = proof
                 .eval_reduction_proofs()
@@ -531,15 +529,13 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
         Site::BatchCommitment(s) => {
             PCS::apply_batch(proof.batch_commitment_mut(), other.batch_commitment(), *s)
         }
-        Site::ReducedRoundCoeff { round, k } => {
-            proof
-                .reduced_opening_proof_mut()
-                .as_mut()
-                .expect("site")
-                .sumcheck_proof_mut()
-                .compressed_polys[*round]
-                .coeffs_except_linear_term[*k] += one
-        }
+        Site::ReducedRoundCoeff { round, k } => proof
+            .reduced_opening_proof_mut()
+            .as_mut()
+            .expect("site")
+            .sumcheck_proof_mut()
+            .compressed_polys[*round]
+            .edit(|c| c[*k] += one),
         Site::ReducedClaim { i } => {
             proof
                 .reduced_opening_proof_mut()
@@ -617,5 +613,26 @@ pub(crate) fn site_class(site: &Site) -> &'static str {
         Site::IoOutputCount => "IoOutputCount",
         Site::IoOutputShape => "IoOutputShape",
         Site::IoInputCount => "IoInputCount",
+    }
+}
+
+/// Rewrites a polynomial's stored coefficients in place, for the coefficient mutation sites.
+trait EditCoefficients<F> {
+    fn edit(&mut self, f: impl FnOnce(&mut Vec<F>));
+}
+
+impl<F: Field> EditCoefficients<F> for CompressedPoly<F> {
+    fn edit(&mut self, f: impl FnOnce(&mut Vec<F>)) {
+        let mut coefficients = self.coeffs_except_linear_term().to_vec();
+        f(&mut coefficients);
+        *self = CompressedPoly::new(coefficients);
+    }
+}
+
+impl<F: Field> EditCoefficients<F> for UnivariatePoly<F> {
+    fn edit(&mut self, f: impl FnOnce(&mut Vec<F>)) {
+        let mut coefficients = self.coefficients().to_vec();
+        f(&mut coefficients);
+        *self = UnivariatePoly::new(coefficients);
     }
 }

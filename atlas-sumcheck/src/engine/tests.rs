@@ -12,11 +12,11 @@
 )]
 
 use atlas_algebra::field::fp128::Fp128;
+use atlas_algebra::poly::univariate::{CompressedPoly, UnivariatePoly};
 use atlas_transcript::{
     Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
 };
 use jolt_field::{Field as _, Ring as _};
-use jolt_poly::{CompressedPoly, UnivariatePoly};
 use num_traits::One;
 
 use super::prover::{

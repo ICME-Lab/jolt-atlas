@@ -38,6 +38,7 @@ use std::array;
 use atlas_trace::{trace::LayerData, Trace};
 
 use crate::onnx_proof::relation::{note_dispatch, RelationParams, RelationSetup, RelationWitness};
+use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -48,7 +49,6 @@ use atlas_algebra::{
 use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use common::parallel::par_enabled;
-use jolt_poly::UnivariatePoly;
 use rayon::prelude::*;
 
 /// The specialized prover of a [`MeanOfSquaresRelation`]: the operand squared against the

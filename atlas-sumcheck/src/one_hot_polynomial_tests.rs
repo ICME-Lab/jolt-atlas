@@ -8,7 +8,7 @@ use atlas_algebra::field::fp128::Fp128 as Fr;
 use atlas_algebra::field::JoltField;
 use atlas_algebra::poly::one_hot::*;
 use atlas_algebra::poly::{dense::DensePolynomial, eq::EqPolynomial};
-use atlas_algebra::poly::{multilinear::BindingOrder, univariate::UniPoly};
+use atlas_algebra::poly::{multilinear::BindingOrder, univariate::UnivariatePoly};
 use jolt_field::Field as _;
 use jolt_field::Ring as _;
 use rand_core::RngCore;
@@ -109,8 +109,8 @@ fn dense_polynomial_equivalence<const LOG_K: usize, const LOG_T: usize>(vanishin
         // Update previous_claim by evaluating the univariate polynomial at r
         let eval_at_1 = previous_claim - expected_message[0];
         let univariate_evals = vec![expected_message[0], eval_at_1, expected_message[1]];
-        let univariate_poly = UniPoly::from_evals(&univariate_evals);
-        previous_claim = univariate_poly.evaluate(&r);
+        let univariate_poly = UnivariatePoly::from_evals(&univariate_evals);
+        previous_claim = univariate_poly.evaluate(r);
 
         one_hot_opening.bind(r, round);
         dense_poly.bind_parallel(r, BindingOrder::HighToLow);

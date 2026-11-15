@@ -1,4 +1,5 @@
 use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -10,7 +11,6 @@ use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::engine::prover::round_check_failed;
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::exponentiation::mult::*;
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 
 /// Prover state for softmax exp multiplication.
 pub struct MultProver<F: JoltField> {
@@ -26,7 +26,10 @@ pub struct MultProver<F: JoltField> {
 impl<F: JoltField> MultProver<F> {
     /// Constructor for softmax exp multiplication prover.
     pub fn initialize(exp_hi: Vec<i32>, exp_lo: Vec<i32>, params: MultParams<F>) -> Self {
-        let eq = GruenSplitEqPolynomial::new(&params.r, jolt_poly::BindingOrder::LowToHigh);
+        let eq = GruenSplitEqPolynomial::new(
+            &params.r,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
         let exp_hi = MultilinearPolynomial::from(exp_hi);
         let exp_lo = MultilinearPolynomial::from(exp_lo);
         Self {

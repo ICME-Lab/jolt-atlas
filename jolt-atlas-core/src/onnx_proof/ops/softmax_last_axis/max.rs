@@ -4,6 +4,7 @@ use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::max::*;
 use std::array;
 
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -17,7 +18,6 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::engine::prover::round_check_failed;
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use rayon::prelude::*;
 
 /// Prover for the max indicator sumcheck instance.
@@ -127,7 +127,7 @@ impl<F: JoltField> MaxIndicatorProver<F> {
         if round == self.params.log_N() - 1 {
             self.gs_eq = Some(GruenSplitEqPolynomial::new(
                 &self.params.r1_k,
-                jolt_poly::BindingOrder::LowToHigh,
+                atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
             ));
             drop_in_background_thread(std::mem::take(&mut self.eq));
         }

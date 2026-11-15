@@ -218,8 +218,9 @@ impl<F: JoltField> EqPolynomial<F> {
 
     /// Parallel version of [`Self::evals_with_scaling`].
     ///
-    /// Uses rayon to compute the largest layers of the DP tree in parallel.
-    /// Uses the same **big-endian** index order as [`Self::evals`].
+    /// Builds the table from the last coordinate up, so `r[0]` ends up as the MSB (the same
+    /// **big-endian** index order as [`Self::evals`]). Each parallel pass binds two coordinates,
+    /// quartering the passes over the table; an odd leftover coordinate takes one doubling pass.
     #[tracing::instrument(skip_all, "EqPolynomial::evals_parallel")]
     #[inline]
     pub fn evals_parallel<C>(r: &[C], scaling_factor: Option<F>) -> Vec<F>
@@ -231,8 +232,37 @@ impl<F: JoltField> EqPolynomial<F> {
         let mut evals: Vec<F> = unsafe_allocate_zero_vec(final_size);
         let mut size = 1;
         evals[0] = scaling_factor.unwrap_or(F::one());
+        let mut i = r.len();
 
-        for r in r.iter().rev() {
+        while i >= 2 {
+            let r_lo = r[i - 1];
+            let r_hi = r[i - 2];
+            i -= 2;
+
+            let (q0, rest) = evals.split_at_mut(size);
+            let (q1, rest) = rest.split_at_mut(size);
+            let (q2, rest) = rest.split_at_mut(size);
+            let (q3, _) = rest.split_at_mut(size);
+
+            q0.par_iter_mut()
+                .zip(q1.par_iter_mut())
+                .zip(q2.par_iter_mut())
+                .zip(q3.par_iter_mut())
+                .with_min_len(par_enabled())
+                .for_each(|(((x, q1_out), q2_out), q3_out)| {
+                    let with_lo = *x * r_lo;
+                    let without_lo = *x - with_lo;
+
+                    *q2_out = without_lo * r_hi;
+                    *x = without_lo - *q2_out;
+                    *q3_out = with_lo * r_hi;
+                    *q1_out = with_lo - *q3_out;
+                });
+
+            size *= 4;
+        }
+
+        for r in r[..i].iter().rev() {
             let (evals_left, evals_right) = evals.split_at_mut(size);
             let (evals_right, _) = evals_right.split_at_mut(size);
 

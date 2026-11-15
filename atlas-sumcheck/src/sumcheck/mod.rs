@@ -1,17 +1,16 @@
 use crate::engine::{verify_compressed, CompressedSumcheckProof, SumcheckClaim, SumcheckError};
 use atlas_algebra::{
     field::JoltField,
-    poly::univariate::CompressedUniPoly,
+    poly::univariate::CompressedPoly,
     utils::{errors::ProofVerifyError, serialization::deserialize_vec},
 };
 use atlas_transcript::Transcript;
-use jolt_poly::CompressedPoly;
 
 use ark_serialize::*;
 
 #[derive(CanonicalSerialize, Debug, Clone)]
 pub struct SumcheckInstanceProof<F: JoltField> {
-    pub compressed_polys: Vec<CompressedUniPoly<F>>,
+    pub compressed_polys: Vec<CompressedPoly<F>>,
 }
 
 impl<F: JoltField> Valid for SumcheckInstanceProof<F> {
@@ -34,7 +33,7 @@ impl<F: JoltField> CanonicalDeserialize for SumcheckInstanceProof<F> {
 }
 
 impl<F: JoltField> SumcheckInstanceProof<F> {
-    pub fn new(compressed_polys: Vec<CompressedUniPoly<F>>) -> SumcheckInstanceProof<F> {
+    pub fn new(compressed_polys: Vec<CompressedPoly<F>>) -> SumcheckInstanceProof<F> {
         SumcheckInstanceProof { compressed_polys }
     }
 
@@ -70,11 +69,7 @@ impl<F: JoltField> SumcheckInstanceProof<F> {
             claimed_sum: claim,
         };
         let proof = CompressedSumcheckProof {
-            round_polynomials: self
-                .compressed_polys
-                .iter()
-                .map(|poly| CompressedPoly::new(poly.coeffs_except_linear_term.clone()))
-                .collect(),
+            round_polynomials: self.compressed_polys.clone(),
         };
         let (value, point) =
             verify_compressed(&claim, &proof, transcript).map_err(|e| match e {

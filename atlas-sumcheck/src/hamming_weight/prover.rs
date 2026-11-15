@@ -7,12 +7,12 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
+use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
     poly::multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
 };
 use common::parallel::par_enabled;
-use jolt_poly::UnivariatePoly;
 
 #[derive(Allocative)]
 pub struct HammingWeightSumcheckProver<F: JoltField> {

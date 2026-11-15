@@ -22,6 +22,7 @@
 //! [`OpeningId`]s or a node output's reduced opening, the instance the multi-consumer evaluation
 //! reduction produces for it.
 
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -39,7 +40,6 @@ use atlas_trace::Trace;
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::relation::*;
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use rayon::prelude::*;
 
 /// The [`SymbolicSumcheck`] items every atlas relation shares: the atlas id types and no
@@ -162,7 +162,10 @@ impl<F: JoltField, R: RelationWitnesses<F>> RelationProver<F, R> {
             "an eq-weighted relation binds low-to-high"
         );
         let eq = eq_weighted.then(|| {
-            GruenSplitEqPolynomial::new(&setup.incoming_point, jolt_poly::BindingOrder::LowToHigh)
+            GruenSplitEqPolynomial::new(
+                &setup.incoming_point,
+                atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+            )
         });
         Self {
             eq,

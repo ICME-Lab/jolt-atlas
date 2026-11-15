@@ -41,6 +41,7 @@ use super::{
 use crate::onnx_proof::relation::{
     note_dispatch, AtlasRelation, RelationParams, RelationSetup, RelationWitness,
 };
+use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -53,7 +54,6 @@ use atlas_algebra::{
 use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use common::parallel::par_enabled;
-use jolt_poly::UnivariatePoly;
 use rayon::prelude::*;
 
 /// The dot engine: the specialized prover of a

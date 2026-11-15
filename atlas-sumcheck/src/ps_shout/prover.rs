@@ -4,6 +4,7 @@ use super::*;
 use crate::engine::prover::round_check_failed;
 use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -26,7 +27,6 @@ use atlas_lookup_tables::{
 };
 use common::parallel::par_enabled;
 use itertools::Itertools;
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use std::array;
 
 /// Generic prover for the Prefix-Suffix Read-RAF sumcheck.
@@ -268,7 +268,7 @@ where
         let cycle_poly = match &params.cycle {
             CycleWeight::Eq(r) => CyclePoly::Gruen(GruenSplitEqPolynomial::<F>::new(
                 &r.r,
-                jolt_poly::BindingOrder::LowToHigh,
+                atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
             )),
             CycleWeight::Packed { .. } => {
                 CyclePoly::Dense(MultilinearPolynomial::from(u_evals.clone()))

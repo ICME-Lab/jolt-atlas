@@ -11,6 +11,7 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
+use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -27,7 +28,6 @@ use atlas_algebra::{
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
-use jolt_poly::UnivariatePoly;
 use std::{
     collections::{BTreeMap, HashMap},
     mem,
@@ -246,7 +246,6 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
 
         let eq = self.eq_cycle_state.read().unwrap();
         let D_coeffs_for_G = eq.D.merge();
-        let D_coeffs_for_G = D_coeffs_for_G.evals();
 
         // Compute G as described in Section 6.3, summed over the group.
         let G = (0..num_chunks)

@@ -8,6 +8,7 @@ use crate::{
     opening_proof::{prover::ProverOpeningAccumulator, SumcheckId},
     ps_shout::{CyclePoly, CycleWeight},
 };
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -22,7 +23,6 @@ use atlas_algebra::{
 };
 use atlas_claims::SymbolicSumcheck;
 use common::{parallel::par_enabled, VirtualPoly};
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use std::array;
 
 /// Prover for the Prefix suffix Read-raf checking sum-check protocol.
@@ -272,7 +272,7 @@ where
         let cycle_poly = match &params.cycle {
             CycleWeight::Eq(r) => CyclePoly::Gruen(GruenSplitEqPolynomial::<F>::new(
                 &r.r,
-                jolt_poly::BindingOrder::LowToHigh,
+                atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
             )),
             CycleWeight::Packed { .. } => {
                 CyclePoly::Dense(MultilinearPolynomial::from(u_evals.clone()))

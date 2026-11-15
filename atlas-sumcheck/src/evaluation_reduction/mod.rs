@@ -19,7 +19,10 @@ use allocative::Allocative;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use atlas_algebra::{
     field::JoltField,
-    poly::{multilinear::MultilinearPolynomial, univariate::UniPoly},
+    poly::{
+        multilinear::MultilinearPolynomial,
+        univariate::{UnivariatePoly, UnivariatePolynomial},
+    },
     utils::errors::{ProofVerifyError, ProvingError},
 };
 use atlas_trace::Tensor;
@@ -41,7 +44,7 @@ pub struct EvalReductionWitness<F: JoltField> {
 #[derive(Debug, Clone, PartialEq, CanonicalSerialize, CanonicalDeserialize, Allocative)]
 pub struct EvalReductionProof<F: JoltField> {
     /// Restriction polynomial h(t) = P(l(t)).
-    pub h: UniPoly<F>,
+    pub h: UnivariatePoly<F>,
 }
 
 /// Reduced instance produced by the N-to-1 evaluation reduction.
@@ -115,7 +118,7 @@ impl<F: JoltField> EvalReductionInstance<F> {
                 claim: *claim,
             };
             let proof = EvalReductionProof {
-                h: UniPoly::from_coeff(vec![*claim]), // h is just the constant polynomial equal to the claim
+                h: UnivariatePoly::new(vec![*claim]), // h is just the constant polynomial equal to the claim
             };
 
             return Ok((proof, reduced_instance));
@@ -129,7 +132,7 @@ impl<F: JoltField> EvalReductionInstance<F> {
         #[cfg(test)]
         {
             for (i, (_, claim)) in self.openings.iter().enumerate() {
-                let eval_at_i = h.evaluate(&F::from_u32(i as u32));
+                let eval_at_i = h.evaluate(F::from_u32(i as u32));
                 assert_eq!(eval_at_i, *claim, "h does not match opening claim at t={i}");
             }
         }
@@ -140,7 +143,7 @@ impl<F: JoltField> EvalReductionInstance<F> {
         let proof = EvalReductionProof { h };
         let reduced_instance = ReducedInstance {
             r: eval_on_l(&ri_vec, x_prime.into()),
-            claim: proof.h.evaluate(&x_prime),
+            claim: proof.h.evaluate(x_prime.into()),
         };
 
         Ok((proof, reduced_instance))
@@ -188,7 +191,7 @@ impl<F: JoltField> EvalReductionInstance<F> {
         }
 
         for (i, (_, claim)) in self.openings.iter().enumerate() {
-            let eval_at_i = proof.h.evaluate(&F::from_u32(i as u32));
+            let eval_at_i = proof.h.evaluate(F::from_u32(i as u32));
             if eval_at_i != *claim {
                 return Err(ProofVerifyError::InvalidOpeningProof(format!(
                     "h does not match opening claim at t={i}: expected h({i}) = {claim}, got {eval_at_i}"
@@ -199,7 +202,7 @@ impl<F: JoltField> EvalReductionInstance<F> {
         proof.h.append_to_transcript(transcript);
         let x_prime = transcript.challenge_scalar_optimized::<F>();
 
-        let expected_reduced_value = proof.h.evaluate::<F>(&x_prime.into());
+        let expected_reduced_value = proof.h.evaluate(x_prime.into());
         let expected_r = eval_on_l(&ri_vec, x_prime.into());
 
         Ok(ReducedInstance {
@@ -213,8 +216,8 @@ fn eval_on_l<F: JoltField, Ref: AsRef<[F]>>(ri_vec: &[Ref], x: F) -> Vec<F> {
     ri_vec
         .iter()
         .map(|r_i| {
-            let variable_poly = UniPoly::from_evals(r_i.as_ref());
-            variable_poly.evaluate(&x)
+            let variable_poly = UnivariatePoly::from_evals(r_i.as_ref());
+            variable_poly.evaluate(x)
         })
         .collect()
 }
@@ -222,29 +225,29 @@ fn eval_on_l<F: JoltField, Ref: AsRef<[F]>>(ri_vec: &[Ref], x: F) -> Vec<F> {
 fn compute_h<F: JoltField, Ref: AsRef<[F]>>(
     mle: &MultilinearPolynomial<F>,
     ri_vec: &[Ref],
-) -> UniPoly<F> {
+) -> UnivariatePoly<F> {
     let num_vars = ri_vec.len();
 
-    let mut mle_polys: Vec<UniPoly<F>> = mle
+    let mut mle_polys: Vec<UnivariatePoly<F>> = mle
         .coeffs()
         .into_iter()
         .map(|coeff| {
-            UniPoly::from_coeff(vec![coeff]) // Start with constant polynomial for each coeff
+            UnivariatePoly::new(vec![coeff]) // Start with constant polynomial for each coeff
         })
         .collect();
 
     for (i, r_i) in ri_vec.iter().enumerate() {
         let var_weight = num_vars - i - 1;
         let half_len = 1 << var_weight;
-        let var_poly = UniPoly::from_evals(r_i.as_ref()); // r1_i + t * delta_i
+        let var_poly = UnivariatePoly::from_evals(r_i.as_ref()); // r1_i + t * delta_i
         for j in 0..half_len {
-            let left = std::mem::take(&mut mle_polys[j]);
-            let right = std::mem::take(&mut mle_polys[j + half_len]);
-            mle_polys[j] = &left + &var_poly * (&right - &left);
+            let left = &mle_polys[j];
+            let right = &mle_polys[j + half_len];
+            mle_polys[j] = left + &(&var_poly * &(right - left));
         }
     }
 
-    std::mem::take(&mut mle_polys[0])
+    mle_polys.swap_remove(0)
 }
 
 fn group_by_variable<F: JoltField, Ref: AsRef<[F]>>(evaluation_points: &[Ref]) -> Vec<Vec<F>> {
@@ -421,7 +424,7 @@ mod tests {
             assert!(h.degree() <= num_vars * (num_openings - 1));
             for (i, opening) in openings_vec.iter().enumerate() {
                 let v = mle.evaluate(opening);
-                assert_eq!(h.evaluate(&Fr::from_u64(i as u64)), v);
+                assert_eq!(h.evaluate(Fr::from_u64(i as u64)), v);
             }
         }
     }
@@ -455,7 +458,7 @@ mod tests {
             for _ in 0..10 {
                 let t_f: Fr = Fr::random(&mut rng);
                 let l_eval = eval_on_l(&r_i_vec, t_f);
-                let h_eval = h.evaluate(&t_f);
+                let h_eval = h.evaluate(t_f);
                 let mle_eval = mle.evaluate(&l_eval);
                 assert_eq!(h_eval, mle_eval);
             }
@@ -537,7 +540,9 @@ mod tests {
         let (mut proof, _reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
 
         // Tamper h so boundary checks fail.
-        proof.h.coeffs[0] += Fr::from_u64(1u64);
+        let mut coefficients = proof.h.coefficients().to_vec();
+        coefficients[0] += Fr::from_u64(1u64);
+        proof.h = UnivariatePoly::new(coefficients);
         let mut verifier_tr =
             Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
         let err = instance

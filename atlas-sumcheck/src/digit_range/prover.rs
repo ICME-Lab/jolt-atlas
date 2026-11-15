@@ -9,8 +9,8 @@ use atlas_algebra::poly::{
     multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
     split_eq::SplitEqUnreducedFold,
 };
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use common::parallel::par_enabled;
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use rayon::prelude::*;
 
 /// Prover of a [`DigitRangeRelation`] over Gruen's split eq: per round, the summand's degree-`b`
@@ -43,7 +43,10 @@ impl<F: JoltField> DigitRangeProver<F> {
             "digit range prover: base {} (only 2 and 4 are implemented)",
             params.base
         );
-        let eq_r = GruenSplitEqPolynomial::new(&params.r, jolt_poly::BindingOrder::LowToHigh);
+        let eq_r = GruenSplitEqPolynomial::new(
+            &params.r,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
         let gamma_powers = params.gamma_powers.clone();
         let weights = params
             .place_values()

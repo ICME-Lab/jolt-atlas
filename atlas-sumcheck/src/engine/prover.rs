@@ -3,11 +3,11 @@
 //! [`ClearSumcheckRecorder`] that writes each round to the transcript.
 
 use atlas_algebra::field::JoltField;
+use atlas_algebra::poly::univariate::{UnivariatePoly, UnivariatePolynomial};
 use atlas_transcript::{
     words::{LabelWithCount, WordTranscript},
     Transcript,
 };
-use jolt_poly::{UnivariatePoly, UnivariatePolynomial};
 
 use super::{
     draw_challenge, round_pow_bits, BatchPrelude, CompressedSumcheckProof, PaddingRule,
@@ -122,7 +122,7 @@ pub struct ProvedBatch<F> {
 /// into the [`CompressedSumcheckProof`]. Its writes are byte-identical to what
 /// [`super::verify_compressed`] reads back.
 pub struct ClearSumcheckRecorder<F: JoltField> {
-    round_polynomials: Vec<jolt_poly::CompressedPoly<F>>,
+    round_polynomials: Vec<atlas_algebra::poly::univariate::CompressedPoly<F>>,
 }
 
 impl<F: JoltField> Default for ClearSumcheckRecorder<F> {

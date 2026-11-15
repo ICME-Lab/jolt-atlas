@@ -6,7 +6,6 @@ use rayon::prelude::*;
 pub mod accumulation;
 pub mod errors;
 pub mod expanding_table;
-pub mod gaussian_elimination;
 pub mod lookup_bits;
 pub mod math;
 #[cfg(feature = "monitor")]

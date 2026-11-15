@@ -15,6 +15,7 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
+use atlas_algebra::poly::split_eq::GruenSplitEqPolynomial;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
     field::JoltField,
@@ -29,7 +30,6 @@ use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 use jolt_field::Ring;
-use jolt_poly::GruenSplitEqPolynomial;
 use rayon::prelude::*;
 use std::ops::Mul;
 
@@ -318,7 +318,10 @@ impl<F: JoltField> EqCycleState<F> {
         F: Mul<U, Output = F>,
     {
         let r_cycle: Vec<F> = r_cycle.iter().map(|&r| r.into()).collect();
-        let D = GruenSplitEqPolynomial::new(&r_cycle, jolt_poly::BindingOrder::HighToLow);
+        let D = GruenSplitEqPolynomial::new(
+            &r_cycle,
+            atlas_algebra::poly::multilinear::BindingOrder::HighToLow,
+        );
         Self {
             D,
             num_variables_bound: 0,

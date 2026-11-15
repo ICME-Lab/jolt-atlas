@@ -17,6 +17,7 @@ use crate::onnx_proof::global_clamp::ClampBucket;
 use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::poly::one_hot::OneHotPolynomial;
+use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -35,7 +36,6 @@ use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 pub use jolt_atlas_verifier::onnx_proof::clamp_split::*;
-use jolt_poly::UnivariatePoly;
 use rayon::prelude::*;
 
 /// Prover of a bucket's split sumcheck.

@@ -8,6 +8,7 @@ use crate::{
     booleanity::prover::BooleanitySumcheckProver, opening_proof::OpeningAccumulator,
     ra_virtual::prover::RaSumcheckProver,
 };
+use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::poly::{
     identity::IdentityPolynomial,
     multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation},
@@ -17,7 +18,6 @@ use atlas_algebra::{
 };
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
-use jolt_poly::UnivariatePoly;
 use std::array;
 
 pub fn read_raf_prover<F: JoltField, T: Transcript>(

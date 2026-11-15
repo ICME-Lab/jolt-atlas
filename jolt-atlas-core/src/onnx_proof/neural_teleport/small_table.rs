@@ -4,6 +4,7 @@ use crate::onnx_proof::neural_teleport::utils::compute_ra_evals_from_usize_indic
 use crate::onnx_proof::relation::{RelationChallenge, RelationParams, RelationSetup};
 #[cfg(test)]
 use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -23,7 +24,6 @@ use common::parallel::par_enabled;
 #[cfg(test)]
 use common::VirtualPoly;
 pub use jolt_atlas_verifier::onnx_proof::neural_teleport::small_table::*;
-use jolt_poly::UnivariatePoly;
 use rayon::prelude::*;
 
 /// Degree of the table-lookup sumcheck.

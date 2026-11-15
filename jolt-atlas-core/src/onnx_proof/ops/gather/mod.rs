@@ -3,6 +3,7 @@ use crate::onnx_proof::relation::{RelationChallenge, RelationParams, RelationSet
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::opening_access::IntoProverProvider;
 use crate::utils::opening_access::{AccOpeningAccessor, Target};
+use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -25,7 +26,6 @@ use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::*;
-use jolt_poly::UnivariatePoly;
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,

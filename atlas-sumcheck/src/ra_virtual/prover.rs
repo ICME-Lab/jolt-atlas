@@ -4,6 +4,7 @@ use super::*;
 use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
 use crate::{engine::prover::round_check_failed, mles_product_sum::compute_mles_product_sum};
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -13,7 +14,6 @@ use atlas_algebra::{
     },
 };
 use common::parallel::par_enabled;
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use std::sync::Arc;
 
 pub struct RaSumcheckProver<F: JoltField> {
@@ -41,8 +41,10 @@ impl<F: JoltField> RaSumcheckProver<F> {
             })
             .collect();
 
-        let eq_poly =
-            GruenSplitEqPolynomial::new(&params.r_cycle.r, jolt_poly::BindingOrder::LowToHigh);
+        let eq_poly = GruenSplitEqPolynomial::new(
+            &params.r_cycle.r,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
         let (relation, setup) = params.into_parts();
         Self {
             ra_i_polys,

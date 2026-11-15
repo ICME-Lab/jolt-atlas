@@ -26,6 +26,7 @@ use crate::onnx_proof::neural_teleport::{n_bits_to_usize, utils::compute_ra_eval
 use crate::onnx_proof::op_lookups::{DefaultLookupOperands, LookupWitness};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::compute_lookup_indices_from_operands;
+use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_algebra::{
     field::JoltField,
@@ -45,7 +46,6 @@ use common::{
     consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS},
     parallel::par_enabled,
 };
-use jolt_poly::UnivariatePoly;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 /// The execution check's prover: `output = Table[clamped]` over the small activation table,

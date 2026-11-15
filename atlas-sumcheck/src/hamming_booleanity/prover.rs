@@ -7,6 +7,7 @@ use crate::relation::prover::RelationWitness;
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -15,7 +16,6 @@ use atlas_algebra::{
     },
 };
 use common::parallel::par_enabled;
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 
 #[derive(Allocative)]
 pub struct HammingBooleanitySumcheckProver<F: JoltField> {
@@ -32,7 +32,10 @@ pub struct HammingBooleanitySumcheckProver<F: JoltField> {
 impl<F: JoltField> HammingBooleanitySumcheckProver<F> {
     pub fn gen(params: HammingBooleanitySumcheckParams<F>, G: Vec<Vec<F>>) -> Self {
         let hw = G.into_iter().map(MultilinearPolynomial::from).collect();
-        let eq_r = GruenSplitEqPolynomial::new(&params.r_cycle, jolt_poly::BindingOrder::LowToHigh);
+        let eq_r = GruenSplitEqPolynomial::new(
+            &params.r_cycle,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
         let gamma_powers = params.gamma_powers.clone();
         let (relation, setup) = params.into_parts();
         Self {

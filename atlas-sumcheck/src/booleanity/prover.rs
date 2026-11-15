@@ -8,6 +8,7 @@ use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
 use ark_std::Zero;
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -18,7 +19,6 @@ use atlas_algebra::{
     utils::{expanding_table::ExpandingTable, thread::drop_in_background_thread},
 };
 use common::parallel::par_enabled;
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use std::{fmt::Debug, iter::zip, sync::Arc};
 
 // Specialization of BooleanitySumcheckProver for cases where log_K << 64
@@ -122,9 +122,14 @@ impl<F: JoltField, I: Into<usize> + Copy + Default + Send + Sync + 'static>
         G: Vec<Vec<F>>,
         H_indices: Vec<Vec<Option<I>>>,
     ) -> Self {
-        let B = GruenSplitEqPolynomial::new(&params.r_address, jolt_poly::BindingOrder::LowToHigh);
-        let D_poly =
-            GruenSplitEqPolynomial::new(&params.r_cycle, jolt_poly::BindingOrder::LowToHigh);
+        let B = GruenSplitEqPolynomial::new(
+            &params.r_address,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
+        let D_poly = GruenSplitEqPolynomial::new(
+            &params.r_cycle,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
 
         let k_chunk = 1 << params.log_k_chunk;
         let mut F = ExpandingTable::new(k_chunk, BindingOrder::LowToHigh);

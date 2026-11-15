@@ -33,6 +33,7 @@ pub mod prover;
 #[cfg(test)]
 mod tests;
 
+use atlas_algebra::poly::univariate::{CompressedPoly, UnivariatePolynomial};
 use atlas_algebra::{
     field::{challenge::grind_bits_for_loss, JoltField},
     utils::errors::ProofVerifyError,
@@ -41,7 +42,6 @@ use atlas_transcript::{
     words::{LabelWithCount, WordTranscript},
     Transcript,
 };
-use jolt_poly::{CompressedPoly, UnivariatePolynomial};
 
 /// Transcript label of a sumcheck round polynomial.
 pub const SUMCHECK_ROUND_TRANSCRIPT_LABEL: &[u8] = b"sumcheck_poly";

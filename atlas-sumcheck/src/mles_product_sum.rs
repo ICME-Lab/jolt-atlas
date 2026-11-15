@@ -1,3 +1,4 @@
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::{BarrettReduce, FMAdd, JoltField},
     poly::{
@@ -8,7 +9,6 @@ use atlas_algebra::{
     utils::accumulation::SmallAccumS,
 };
 use core::{mem::MaybeUninit, ptr};
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 use num_traits::Zero;
 
 /// Computes the univariate polynomial `g(X) = sum_j eq((r', X, j), r) * prod_i mle_i(X, j)`.
@@ -1330,8 +1330,8 @@ fn product_eval_univariate_naive_accumulate<F: JoltField>(
 mod tests {
     use ark_std::{test_rng, One, UniformRand, Zero};
     use atlas_algebra::field::fp128::Fp128 as Fr;
+    use atlas_algebra::poly::split_eq::GruenSplitEqPolynomial;
     use jolt_field::Field;
-    use jolt_poly::GruenSplitEqPolynomial;
     use std::array::from_fn;
 
     use crate::mles_product_sum::{
@@ -1386,7 +1386,10 @@ mod tests {
         let mles = mles.map(RaPolynomial::RoundN);
 
         let r_field: Vec<Fr> = r.to_vec();
-        let eq_poly = GruenSplitEqPolynomial::new(&r_field, jolt_poly::BindingOrder::LowToHigh);
+        let eq_poly = GruenSplitEqPolynomial::new(
+            &r_field,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
         let sum_poly = compute_mles_product_sum(&mles, claim, &eq_poly).expect("honest claim");
         let lhs = sum_poly.evaluate(challenge[0]);
 
@@ -1409,7 +1412,10 @@ mod tests {
                 .product::<Fr>();
         let mles = mles.map(RaPolynomial::RoundN);
 
-        let eq_poly = GruenSplitEqPolynomial::new(&r, jolt_poly::BindingOrder::LowToHigh);
+        let eq_poly = GruenSplitEqPolynomial::new(
+            &r,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
         let sum_poly = compute_mles_product_sum(&mles, claim, &eq_poly).expect("honest claim");
         assert_eq!(sum_poly.evaluate(challenge), expected);
     }
@@ -1454,7 +1460,10 @@ mod tests {
             .map(|_| <Fr as JoltField>::Challenge::rand(&mut rng))
             .collect();
         let w_field: Vec<Fr> = w.to_vec();
-        let mut eq_poly = GruenSplitEqPolynomial::new(&w_field, jolt_poly::BindingOrder::LowToHigh);
+        let mut eq_poly = GruenSplitEqPolynomial::new(
+            &w_field,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
 
         // Number of product terms to sum; keep small for test runtime.
         let n_products = 3;

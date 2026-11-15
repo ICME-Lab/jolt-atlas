@@ -15,9 +15,9 @@ use crate::{
     opening_proof::prover::ProverOpeningAccumulator,
     sumcheck::SumcheckInstanceProof,
 };
+use atlas_algebra::field::MaybeAllocative;
 #[cfg(not(target_arch = "wasm32"))]
 use atlas_algebra::utils::profiling::print_current_memory_usage;
-use atlas_algebra::{field::MaybeAllocative, poly::univariate::CompressedUniPoly};
 use rayon::prelude::*;
 
 /// Append the relation's produced openings, with their `claims`, at their points.
@@ -246,16 +246,7 @@ fn run_engine<F: JoltField, T: Transcript>(
         &mut recorder,
         transcript,
     ));
-    let proof = SumcheckInstanceProof::new(
-        recorder
-            .into_proof()
-            .round_polynomials
-            .iter()
-            .map(|poly| CompressedUniPoly {
-                coeffs_except_linear_term: poly.coeffs_except_linear_term().to_vec(),
-            })
-            .collect(),
-    );
+    let proof = SumcheckInstanceProof::new(recorder.into_proof().round_polynomials);
     let r_sumcheck = proved
         .challenges
         .into_iter()

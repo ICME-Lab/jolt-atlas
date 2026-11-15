@@ -1,4 +1,5 @@
 use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
+use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -10,7 +11,6 @@ use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::engine::prover::round_check_failed;
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::recip_mult::*;
-use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
 
 /// Prover state for reciprocal multiplication in softmax.
 ///
@@ -30,7 +30,10 @@ pub struct RecipMultProver<F: JoltField> {
 impl<F: JoltField> RecipMultProver<F> {
     /// Constructor for reciprocal multiplication prover.
     pub fn initialize(exp_q: Vec<i32>, inv_sum: Vec<i32>, params: RecipMultParams<F>) -> Self {
-        let eq = GruenSplitEqPolynomial::new(&params.r, jolt_poly::BindingOrder::LowToHigh);
+        let eq = GruenSplitEqPolynomial::new(
+            &params.r,
+            atlas_algebra::poly::multilinear::BindingOrder::LowToHigh,
+        );
         let exp_q = MultilinearPolynomial::from(exp_q);
         let relation = RecipMultRelation::with_inv_sum(
             params,

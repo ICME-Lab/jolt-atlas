@@ -62,10 +62,7 @@ use rayon::prelude::*;
 
 use crate::openings::{GroupOpeningClaim, PrefixPackedClaims, PrefixPackedLayout};
 use atlas_algebra::{
-    field::{
-        fp128::{Fp128, Inner},
-        JoltField,
-    },
+    field::{fp128::Fp128, JoltField},
     poly::{eq::EqPolynomial, multilinear::MultilinearPolynomial},
     utils::errors::ProofVerifyError,
 };
@@ -97,12 +94,6 @@ const PACKAGED_DENSE_PROFILE: AkitaChunkProfile = AkitaChunkProfile::new(8, 2);
 /// The Akita lattice PCS over [`Fp128`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AkitaScheme;
-
-/// One challenge of the prefix-packed reduction: a full-width field element of the upstream
-/// field.
-fn draw_inner<T: Transcript>(transcript: &mut T) -> Inner {
-    transcript.challenge_scalar::<Fp128>().0
-}
 
 /// How a dense class's coefficients map into the dense-bounded range `[0, 2^64)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -274,12 +265,12 @@ impl ClassShape {
     }
 
     /// A logical point in Akita's variable order: a one-hot class's address variables move last.
-    fn upstream_point(&self, logical: &[Fp128]) -> Vec<Inner> {
+    fn upstream_point(&self, logical: &[Fp128]) -> Vec<Fp128> {
         match self.kind {
-            ClassKind::Dense(_) => logical.iter().map(|x| x.0).collect(),
+            ClassKind::Dense(_) => logical.to_vec(),
             ClassKind::OneHot => {
                 let (address, cycle) = logical.split_at(LOG_ONE_HOT_K);
-                cycle.iter().chain(address).map(|x| x.0).collect()
+                cycle.iter().chain(address).copied().collect()
             }
         }
     }
@@ -539,10 +530,10 @@ impl ClassRows {
     }
 
     /// Each member's evaluation at `point` (Akita's order: cycle variables, then address).
-    fn evaluations(&self, point: &[Inner]) -> Vec<Fp128> {
+    fn evaluations(&self, point: &[Fp128]) -> Vec<Fp128> {
         let (cycle, address) = point.split_at(point.len() - LOG_ONE_HOT_K);
-        let eq_cycle = EqPolynomial::<Fp128>::evals(&wrap(cycle));
-        let eq_address = EqPolynomial::<Fp128>::evals(&wrap(address));
+        let eq_cycle = EqPolynomial::<Fp128>::evals(cycle);
+        let eq_address = EqPolynomial::<Fp128>::evals(address);
         self.columns
             .par_iter()
             .map(|column| {
@@ -588,7 +579,7 @@ impl TraceOneHotRows for ClassRows {
 /// What a committed class retains for its opening.
 enum ClassSource {
     /// The packed physical polynomial of a dense class.
-    Dense(Vec<Inner>),
+    Dense(Vec<Fp128>),
     /// The trace of a one-hot class.
     OneHot(Arc<ClassRows>),
 }
@@ -610,7 +601,7 @@ struct ClassProverData {
 
 impl ClassProverData {
     /// Every slot's logical evaluation at `point` (Akita's order).
-    fn slot_evaluations(&self, point: &[Inner]) -> Vec<Fp128> {
+    fn slot_evaluations(&self, point: &[Fp128]) -> Vec<Fp128> {
         let Some(committed) = &self.committed else {
             return vec![Fp128::zero(); self.shape.slot_count];
         };
@@ -619,7 +610,7 @@ impl ClassProverData {
             ClassSource::Dense(packed) => {
                 // One eq table, shared across the slots.
                 let len = 1usize << self.shape.logical_num_vars;
-                let eq = EqPolynomial::<Fp128>::evals(&wrap(point));
+                let eq = EqPolynomial::<Fp128>::evals(point);
                 let offset = self.shape.kind.offset();
                 packed[..self.shape.slot_count * len]
                     .par_chunks(len)
@@ -628,7 +619,7 @@ impl ClassProverData {
                             .par_iter()
                             .zip(eq.par_iter())
                             .with_min_len(1 << 12)
-                            .map(|(a, b)| Fp128(*a) * *b)
+                            .map(|(a, b)| *a * *b)
                             .sum();
                         shifted - offset
                     })
@@ -689,15 +680,10 @@ fn is_zero(poly: &MultilinearPolynomial<Fp128>) -> bool {
 
 /// The packed physical polynomial of a dense class: each member, shifted by the class offset over
 /// its whole logical domain, in its slot; unused slots zero.
-/// `point` as atlas field elements, for the eq tables.
-fn wrap(point: &[Inner]) -> Vec<Fp128> {
-    point.iter().map(|&x| Fp128(x)).collect()
-}
-
-fn pack_dense(shape: &ClassShape, members: &[&MultilinearPolynomial<Fp128>]) -> Vec<Inner> {
+fn pack_dense(shape: &ClassShape, members: &[&MultilinearPolynomial<Fp128>]) -> Vec<Fp128> {
     let logical_len = 1usize << shape.logical_num_vars;
-    let offset = shape.kind.offset().0;
-    let mut evals = vec![Inner::zero(); 1usize << shape.physical_num_vars];
+    let offset = shape.kind.offset();
+    let mut evals = vec![Fp128::zero(); 1usize << shape.physical_num_vars];
     evals
         .par_chunks_mut(logical_len)
         .zip(members.par_iter())
@@ -709,7 +695,7 @@ fn pack_dense(shape: &ClassShape, members: &[&MultilinearPolynomial<Fp128>]) -> 
                     let t_len = oh.nonzero_indices.len();
                     for (t, k) in oh.nonzero_indices.iter().enumerate() {
                         if let Some(k) = k {
-                            dst[*k as usize * t_len + t] = offset + Inner::one();
+                            dst[*k as usize * t_len + t] = offset + Fp128::one();
                         }
                     }
                 }
@@ -717,7 +703,7 @@ fn pack_dense(shape: &ClassShape, members: &[&MultilinearPolynomial<Fp128>]) -> 
                     .par_iter_mut()
                     .enumerate()
                     .with_min_len(1 << 12)
-                    .for_each(|(i, d)| *d = poly.get_coeff(i).0 + offset),
+                    .for_each(|(i, d)| *d = poly.get_coeff(i) + offset),
             }
         });
     evals
@@ -742,15 +728,11 @@ fn pad_factor(r: &[Fp128], pad: usize) -> Fp128 {
     r[..pad].iter().map(|x| Fp128::one() - *x).product()
 }
 
-fn inner_values(values: &[Fp128]) -> Vec<Inner> {
-    values.iter().map(|x| x.0).collect()
-}
-
 /// The evaluations of a one-hot class's trace group: the members', then zero for the empty
 /// columns.
-fn group_evaluations(slot_evals: &[Fp128]) -> Vec<Inner> {
-    let mut evals = inner_values(slot_evals);
-    evals.resize(ONE_HOT_COLUMNS, Inner::zero());
+fn group_evaluations(slot_evals: &[Fp128]) -> Vec<Fp128> {
+    let mut evals = slot_evals.to_vec();
+    evals.resize(ONE_HOT_COLUMNS, Fp128::zero());
     evals
 }
 
@@ -858,10 +840,10 @@ impl CommitmentScheme for AkitaScheme {
                                     &PrefixPackedClaims::new(
                                         shape.layout_digest(),
                                         point,
-                                        inner_values(&shifted),
+                                        shifted.to_vec(),
                                     ),
                                     transcript,
-                                    draw_inner,
+                                    backend::akita_challenge,
                                 )
                                 .expect("the prefix-packed claim reduces");
                             AkitaBackend::open(
@@ -1008,10 +990,10 @@ impl CommitmentScheme for AkitaScheme {
                                 &PrefixPackedClaims::new(
                                     shape.layout_digest(),
                                     point,
-                                    inner_values(&shifted),
+                                    shifted.to_vec(),
                                 ),
                                 transcript,
-                                draw_inner,
+                                backend::akita_challenge,
                             )
                             .map_err(|e| invalid(format!("prefix-packed claim reduction: {e}")))?;
                         AkitaBackend::verify(
@@ -1197,7 +1179,7 @@ mod tests {
 
     /// `Σ_i evals[i] · eq(point, i)`, the index order Akita's dense commitments take (bits of
     /// `i` most significant first), computed independently of `MultilinearPolynomial`.
-    fn dense_eval(evals: &[Inner], point: &[Inner]) -> Inner {
+    fn dense_eval(evals: &[Fp128], point: &[Fp128]) -> Fp128 {
         evals
             .iter()
             .enumerate()
@@ -1213,18 +1195,18 @@ mod tests {
         let n = 6;
         let coeffs: Vec<i32> = (0..1 << n).map(|_| rng.gen_range(-1000..1000)).collect();
         let ours = MultilinearPolynomial::<Fp128>::from(coeffs.clone());
-        let theirs: Vec<Inner> = coeffs.iter().map(|&c| Fp128::from_i32(c).0).collect();
+        let theirs: Vec<Fp128> = coeffs.iter().map(|&c| Fp128::from_i32(c)).collect();
         let r = random_point(&mut rng, n);
-        assert_eq!(ours.evaluate(&r).0, dense_eval(&theirs, &inner_values(&r)));
+        assert_eq!(ours.evaluate(&r), dense_eval(&theirs, &r.to_vec()));
 
         let ours = random_one_hot(&mut rng, 32);
         let shape = ClassShape::new(ClassKind::of(&ours), ours.get_num_vars(), 1).unwrap();
         assert!(matches!(shape.kind, ClassKind::Dense(_)));
         let packed = pack_dense(&shape, &[&ours]);
         let r = random_point(&mut rng, ours.get_num_vars());
-        let mut physical = vec![Inner::zero(); shape.physical_num_vars - r.len()];
-        physical.extend(inner_values(&r));
-        assert_eq!(ours.evaluate(&r).0, dense_eval(&packed, &physical));
+        let mut physical = vec![Fp128::zero(); shape.physical_num_vars - r.len()];
+        physical.extend(r.to_vec());
+        assert_eq!(ours.evaluate(&r), dense_eval(&packed, &physical));
 
         let ours = random_one_hot(&mut rng, 1 << 12);
         let shape = ClassShape::new(ClassKind::of(&ours), ours.get_num_vars(), 1).unwrap();

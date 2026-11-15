@@ -58,13 +58,10 @@ mod fp128_tests {
     #![allow(clippy::useless_conversion)]
     use crate::{Blake2bProver, ProvingTranscript, Transcript};
     use atlas_algebra::field::Ring;
-    use atlas_algebra::field::{
-        fp128::{Fp128 as F, Inner},
-        JoltField,
-    };
+    use atlas_algebra::field::{fp128::Fp128 as F, JoltField};
 
     fn modulus() -> u128 {
-        0u128.wrapping_sub(Inner::C)
+        0u128.wrapping_sub(F::C)
     }
 
     #[test]
@@ -91,11 +88,11 @@ mod fp128_tests {
         let s1: F = t1.challenge_scalar();
         let s2: F = t2.challenge_scalar();
         assert_eq!(s1, s2);
-        assert!(s1.0.to_canonical_u128() < modulus());
+        assert!(s1.to_canonical_u128() < modulus());
 
         assert_eq!(
             <F as JoltField>::Challenge::from(u128::MAX),
-            F::from_u128(Inner::C - 1)
+            F::from_u128(F::C - 1)
         );
     }
 }

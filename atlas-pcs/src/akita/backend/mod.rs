@@ -34,6 +34,7 @@ mod trace_onehot;
 
 pub use akita_pcs::AkitaError;
 
+pub(crate) use adapters::akita_challenge;
 pub use adapters::{
     AkitaBackendFlavor, AkitaBatchProof, AkitaCommitment, AkitaField, AkitaProverHint,
     AkitaProverSetup, AkitaSetupParams, AkitaVerifierSetup, AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256,

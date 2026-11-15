@@ -1,12 +1,10 @@
 //! `JoltField` implementation for the 128-bit Solinas prime field
 //! `p = 2^128 - 2^32 + 22537` used by upstream Jolt's lattice (Akita) protocol.
 //!
-//! The arithmetic comes from upstream's `jolt-field` crate
-//! (`crate::field::Prime128OffsetA7F7`). [`Fp128`] is a newtype rather than a
-//! direct impl on that type: `JoltField`'s supertraits include foreign traits
-//! the upstream type does not implement (`CanonicalSerialize` /
-//! `CanonicalDeserialize`, `Div`, `UniformRand`, `Allocative`), and orphan
-//! rules prevent adding them here.
+//! [`Fp128`] is the Solinas kernel type [`Prime128OffsetA7F7`] (taken from upstream
+//! `jolt-field`, `field::solinas`). This module adds what the proof system needs on top of the
+//! kernel: arkworks serialization (the canonical `u128`), division, `UniformRand`, `Allocative`,
+//! and the `JoltField` unreduced-product ladder.
 //!
 //! fp128 is not a Montgomery field: elements are stored canonically, so
 //! `MONTGOMERY_R = 1` and the "Montgomery-reduced" ladder levels use the same
@@ -23,122 +21,26 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
 use ark_std::rand::Rng;
-use num_traits::{One, Zero};
-use std::fmt;
 use std::io::{Read, Write};
-use std::iter::{Product, Sum};
-use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use std::ops::{Add, Div, Mul, Sub};
 
-/// The upstream field type this newtype wraps.
-pub type Inner = Prime128OffsetA7F7;
-
-/// The 128-bit Solinas field, wrapped so it can implement `JoltField`.
-#[derive(
-    Clone, Copy, Default, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize,
-)]
-#[serde(transparent)]
-pub struct Fp128(pub Inner);
+/// The 128-bit Solinas field.
+pub type Fp128 = Prime128OffsetA7F7;
 
 impl Allocative for Fp128 {
     fn visit<'a, 'b: 'a>(&self, _visitor: &'a mut allocative::Visitor<'b>) {}
 }
 
-impl fmt::Display for Fp128 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
 #[inline(always)]
-fn div_inner(a: &Inner, b: &Inner) -> Inner {
-    *a * Field::inverse(b).expect("division by zero")
-}
-
-impl Add for Fp128 {
-    type Output = Self;
-    #[inline(always)]
-    fn add(self, rhs: Self) -> Self {
-        Self(self.0 + rhs.0)
-    }
-}
-
-impl<'a> Add<&'a Fp128> for Fp128 {
-    type Output = Self;
-    #[inline(always)]
-    fn add(self, rhs: &'a Fp128) -> Self {
-        Self(self.0 + rhs.0)
-    }
-}
-
-impl<'b> Add<&'b Fp128> for &Fp128 {
-    type Output = Fp128;
-    #[inline(always)]
-    fn add(self, rhs: &'b Fp128) -> Fp128 {
-        Fp128(self.0 + rhs.0)
-    }
-}
-
-impl Sub for Fp128 {
-    type Output = Self;
-    #[inline(always)]
-    fn sub(self, rhs: Self) -> Self {
-        Self(self.0 - rhs.0)
-    }
-}
-
-impl<'a> Sub<&'a Fp128> for Fp128 {
-    type Output = Self;
-    #[inline(always)]
-    fn sub(self, rhs: &'a Fp128) -> Self {
-        Self(self.0 - rhs.0)
-    }
-}
-
-impl<'b> Sub<&'b Fp128> for &Fp128 {
-    type Output = Fp128;
-    #[inline(always)]
-    fn sub(self, rhs: &'b Fp128) -> Fp128 {
-        Fp128(self.0 - rhs.0)
-    }
-}
-
-impl Mul for Fp128 {
-    type Output = Self;
-    #[inline(always)]
-    fn mul(self, rhs: Self) -> Self {
-        Self(self.0 * rhs.0)
-    }
-}
-
-impl<'a> Mul<&'a Fp128> for Fp128 {
-    type Output = Self;
-    #[inline(always)]
-    fn mul(self, rhs: &'a Fp128) -> Self {
-        Self(self.0 * rhs.0)
-    }
-}
-
-impl Mul<Fp128> for &Fp128 {
-    type Output = Fp128;
-    #[inline(always)]
-    fn mul(self, rhs: Fp128) -> Fp128 {
-        Fp128(self.0 * rhs.0)
-    }
-}
-
-impl<'b> Mul<&'b Fp128> for &Fp128 {
-    type Output = Fp128;
-    #[inline(always)]
-    fn mul(self, rhs: &'b Fp128) -> Fp128 {
-        Fp128(self.0 * rhs.0)
-    }
+fn div(a: Fp128, b: &Fp128) -> Fp128 {
+    a * Field::inverse(b).expect("division by zero")
 }
 
 impl Div for Fp128 {
     type Output = Self;
     #[inline(always)]
     fn div(self, rhs: Self) -> Self {
-        Self(div_inner(&self.0, &rhs.0))
+        div(self, &rhs)
     }
 }
 
@@ -146,7 +48,7 @@ impl<'a> Div<&'a Fp128> for Fp128 {
     type Output = Self;
     #[inline(always)]
     fn div(self, rhs: &'a Fp128) -> Self {
-        Self(div_inner(&self.0, &rhs.0))
+        div(self, rhs)
     }
 }
 
@@ -154,7 +56,7 @@ impl Div<Fp128> for &Fp128 {
     type Output = Fp128;
     #[inline(always)]
     fn div(self, rhs: Fp128) -> Fp128 {
-        Fp128(div_inner(&self.0, &rhs.0))
+        div(*self, &rhs)
     }
 }
 
@@ -162,106 +64,19 @@ impl<'b> Div<&'b Fp128> for &Fp128 {
     type Output = Fp128;
     #[inline(always)]
     fn div(self, rhs: &'b Fp128) -> Fp128 {
-        Fp128(div_inner(&self.0, &rhs.0))
-    }
-}
-
-impl Neg for Fp128 {
-    type Output = Self;
-    #[inline(always)]
-    fn neg(self) -> Self {
-        Self(-self.0)
-    }
-}
-
-impl AddAssign for Fp128 {
-    #[inline(always)]
-    fn add_assign(&mut self, rhs: Self) {
-        self.0 += rhs.0;
-    }
-}
-
-impl SubAssign for Fp128 {
-    #[inline(always)]
-    fn sub_assign(&mut self, rhs: Self) {
-        self.0 -= rhs.0;
-    }
-}
-
-impl MulAssign for Fp128 {
-    #[inline(always)]
-    fn mul_assign(&mut self, rhs: Self) {
-        self.0 *= rhs.0;
-    }
-}
-
-impl Zero for Fp128 {
-    #[inline(always)]
-    fn zero() -> Self {
-        Self(Inner::zero())
-    }
-    #[inline(always)]
-    fn is_zero(&self) -> bool {
-        self.0.is_zero()
-    }
-}
-
-impl One for Fp128 {
-    #[inline(always)]
-    fn one() -> Self {
-        Self(Inner::one())
-    }
-    #[inline(always)]
-    fn is_one(&self) -> bool {
-        self.0.is_one()
-    }
-}
-
-impl Sum for Fp128 {
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Self::zero(), |acc, x| acc + x)
-    }
-}
-
-impl<'a> Sum<&'a Self> for Fp128 {
-    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
-        iter.fold(Self::zero(), |acc, x| acc + *x)
-    }
-}
-
-impl Product for Fp128 {
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Self::one(), |acc, x| acc * x)
-    }
-}
-
-impl<'a> Product<&'a Self> for Fp128 {
-    fn product<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
-        iter.fold(Self::one(), |acc, x| acc * *x)
-    }
-}
-
-impl From<u128> for Fp128 {
-    #[inline(always)]
-    fn from(value: u128) -> Self {
-        Self(Inner::from_u128(value))
+        div(*self, rhs)
     }
 }
 
 /// Uniform sampling by rejection over `u128`; `p > 2^127` so the expected
 /// number of draws is below two.
-#[inline]
-fn sample_u128<F: FnMut() -> u128>(mut draw: F) -> Fp128 {
-    loop {
-        if let Some(f) = Inner::from_u128_checked(draw()) {
-            return Fp128(f);
-        }
-    }
-}
-
 impl UniformRand for Fp128 {
     fn rand<R: Rng + ?Sized>(rng: &mut R) -> Self {
-        sample_u128(|| rng.gen())
+        loop {
+            if let Some(f) = Fp128::from_u128_checked(rng.gen()) {
+                return f;
+            }
+        }
     }
 }
 
@@ -277,8 +92,7 @@ impl CanonicalSerialize for Fp128 {
         writer: W,
         compress: Compress,
     ) -> Result<(), SerializationError> {
-        self.0
-            .to_canonical_u128()
+        self.to_canonical_u128()
             .serialize_with_mode(writer, compress)
     }
 
@@ -295,155 +109,52 @@ impl CanonicalDeserialize for Fp128 {
     ) -> Result<Self, SerializationError> {
         let value = u128::deserialize_with_mode(reader, compress, validate)?;
         match validate {
-            Validate::Yes => Inner::from_u128_checked(value)
-                .map(Self)
-                .ok_or(SerializationError::InvalidData),
+            Validate::Yes => Fp128::from_u128_checked(value).ok_or(SerializationError::InvalidData),
             // Unvalidated input is reduced (p > 2^127, so any u128 is < 2p and
             // one conditional subtract suffices).
-            Validate::No => Ok(Self(Inner::from_u128_reduced(value))),
+            Validate::No => Ok(Fp128::from_u128_reduced(value)),
         }
     }
 }
 
-impl crate::field::AdditiveGroup for Fp128 {}
-
-impl Ring for Fp128 {
-    #[inline]
-    fn from_u64(v: u64) -> Self {
-        Self(Inner::from_u64(v))
-    }
-
-    #[inline]
-    fn from_i64(v: i64) -> Self {
-        Self(Inner::from_i64(v))
-    }
-
-    #[inline]
-    fn from_u128(v: u128) -> Self {
-        Self(Inner::from_u128(v))
-    }
-
-    #[inline]
-    fn from_i128(v: i128) -> Self {
-        Self(Inner::from_i128(v))
-    }
-
-    #[inline]
-    fn from_bool(v: bool) -> Self {
-        Self(Inner::from_bool(v))
-    }
-
-    #[inline]
-    fn from_u8(v: u8) -> Self {
-        Self(Inner::from_u8(v))
-    }
-
-    #[inline]
-    fn from_u16(v: u16) -> Self {
-        Self(Inner::from_u16(v))
-    }
-
-    #[inline]
-    fn from_u32(v: u32) -> Self {
-        Self(Inner::from_u32(v))
-    }
-
-    #[inline]
-    fn from_i8(v: i8) -> Self {
-        Self(Inner::from_i8(v))
-    }
-
-    #[inline]
-    fn from_i16(v: i16) -> Self {
-        Self(Inner::from_i16(v))
-    }
-
-    #[inline]
-    fn from_i32(v: i32) -> Self {
-        Self(Inner::from_i32(v))
-    }
-
-    #[inline]
-    fn square(&self) -> Self {
-        Self(Ring::square(&self.0))
-    }
-
+// The by-reference operator forms `FieldOps` asks for, which the kernel type leaves to by-value.
+impl<'b> Add<&'b Fp128> for &Fp128 {
+    type Output = Fp128;
     #[inline(always)]
-    fn mul_u64(&self, n: u64) -> Self {
-        Self(Ring::mul_u64(&self.0, n))
-    }
-
-    #[inline(always)]
-    fn mul_i64(&self, n: i64) -> Self {
-        Self(Ring::mul_i64(&self.0, n))
-    }
-
-    #[inline(always)]
-    fn mul_u128(&self, n: u128) -> Self {
-        Self(Ring::mul_u128(&self.0, n))
-    }
-
-    #[inline(always)]
-    fn mul_i128(&self, n: i128) -> Self {
-        Self(Ring::mul_i128(&self.0, n))
+    fn add(self, rhs: &'b Fp128) -> Fp128 {
+        *self + *rhs
     }
 }
 
-impl Field for Fp128 {
-    #[inline]
-    fn inverse(&self) -> Option<Self> {
-        Field::inverse(&self.0).map(Self)
-    }
-
-    fn random<R: rand_core::RngCore>(rng: &mut R) -> Self {
-        sample_u128(|| (rng.next_u64() as u128) | ((rng.next_u64() as u128) << 64))
+impl<'b> Sub<&'b Fp128> for &Fp128 {
+    type Output = Fp128;
+    #[inline(always)]
+    fn sub(self, rhs: &'b Fp128) -> Fp128 {
+        *self - *rhs
     }
 }
 
-impl crate::field::CanonicalBytes for Fp128 {
-    const NUM_BYTES: usize = <Inner as crate::field::CanonicalBytes>::NUM_BYTES;
-
-    fn to_bytes_le(&self, out: &mut [u8]) {
-        self.0.to_bytes_le(out)
+impl Mul<Fp128> for &Fp128 {
+    type Output = Fp128;
+    #[inline(always)]
+    fn mul(self, rhs: Fp128) -> Fp128 {
+        *self * rhs
     }
 }
 
-impl CanonicalEncoding for Fp128 {
-    const MODULUS_BITS: u32 = <Inner as CanonicalEncoding>::MODULUS_BITS;
-
-    fn from_bytes_le_reduced(bytes: &[u8]) -> Self {
-        Self(Inner::from_bytes_le_reduced(bytes))
-    }
-
-    fn from_bytes_le_checked(bytes: &[u8]) -> Option<Self> {
-        Inner::from_bytes_le_checked(bytes).map(Self)
-    }
-
-    fn to_u128_checked(&self) -> Option<u128> {
-        self.0.to_u128_checked()
-    }
-
-    fn from_u128_checked(v: u128) -> Option<Self> {
-        Inner::from_u128_checked(v).map(Self)
-    }
-
-    fn from_u128_reduced(v: u128) -> Self {
-        Self(Inner::from_u128_reduced(v))
-    }
-
-    fn num_bits(&self) -> u32 {
-        CanonicalEncoding::num_bits(&self.0)
-    }
-
-    fn from_scalar_challenge_bytes(bytes: &[u8]) -> Self {
-        Self(Inner::from_scalar_challenge_bytes(bytes))
+impl<'b> Mul<&'b Fp128> for &Fp128 {
+    type Output = Fp128;
+    #[inline(always)]
+    fn mul(self, rhs: &'b Fp128) -> Fp128 {
+        *self * *rhs
     }
 }
 
-impl crate::field::WithAccumulator for Fp128 {
-    type Accumulator = crate::field::NaiveAccumulator<Fp128>;
-    type SmallScalarAccumulator = crate::field::NaiveAccumulator<Fp128>;
-    type SignedProductAccumulator = crate::field::NaiveAccumulator<Fp128>;
+impl From<u128> for Fp128 {
+    #[inline(always)]
+    fn from(value: u128) -> Self {
+        Ring::from_u128(value)
+    }
 }
 
 impl FieldOps for Fp128 {}
@@ -456,9 +167,9 @@ impl FieldOps<&Fp128, Fp128> for &Fp128 {}
 /// subsequent widening multiply plus Solinas reduce are correct for any
 /// 128-bit integer regardless.
 #[inline(always)]
-fn elem_to_field(a: &BigInt<2>) -> Inner {
+fn elem_to_field(a: &BigInt<2>) -> Fp128 {
     // SAFETY: only canonicity is debug-asserted upstream; see above.
-    unsafe { Inner::from_canonical_u128(a.0[0] as u128 | (a.0[1] as u128) << 64) }
+    unsafe { Fp128::from_canonical_u128(a.0[0] as u128 | (a.0[1] as u128) << 64) }
 }
 
 /// field × M-limb magnitude, eagerly reduced to a canonical element.
@@ -467,15 +178,15 @@ fn elem_to_field(a: &BigInt<2>) -> Inner {
 /// folded accumulator's slot headroom, so we reduce and embed the canonical
 /// value, which is equivalent modulo p by linearity of the final reduction.
 #[inline(always)]
-fn mul_mag_reduced<const M: usize>(a: Inner, mag: &BigInt<M>) -> Inner {
+fn mul_mag_reduced<const M: usize>(a: Fp128, mag: &BigInt<M>) -> Fp128 {
     // M is const, so this match is resolved at monomorphization time. The
     // M ≤ 3 and M = 4 arms hit `mul_wide_limbs`' specialized paths and are
     // exact (2 + M output limbs). Callers currently pass M ∈ {3, 4}
     // (S160/S192/S256 magnitudes).
     match M {
-        0..=3 => Inner::solinas_reduce(&a.mul_wide_limbs::<M, 5>(mag.0)),
-        4 => Inner::solinas_reduce(&a.mul_wide_limbs::<M, 6>(mag.0)),
-        _ => a * Inner::solinas_reduce(&mag.0),
+        0..=3 => Fp128::solinas_reduce(&a.mul_wide_limbs::<M, 5>(mag.0)),
+        4 => Fp128::solinas_reduce(&a.mul_wide_limbs::<M, 6>(mag.0)),
+        _ => a * Fp128::solinas_reduce(&mag.0),
     }
 }
 
@@ -485,8 +196,8 @@ impl JoltField for Fp128 {
 
     // fp128 stores elements canonically (no Montgomery scaling), so R = 1.
     // SAFETY: 1 < p.
-    const MONTGOMERY_R: Self = Fp128(unsafe { Inner::from_canonical_u128(1) });
-    const MONTGOMERY_R_SQUARE: Self = Fp128(unsafe { Inner::from_canonical_u128(1) });
+    const MONTGOMERY_R: Self = unsafe { Fp128::from_canonical_u128(1) };
+    const MONTGOMERY_R_SQUARE: Self = unsafe { Fp128::from_canonical_u128(1) };
 
     type UnreducedElem = BigInt<2>;
     type UnreducedMulU64 = Folded128MulU64;
@@ -505,11 +216,11 @@ impl JoltField for Fp128 {
     // native field multiply.
     type Challenge = Fp128;
 
-    type ChallengeCodecField = Inner;
+    type ChallengeCodecField = Fp128;
 
     #[inline]
-    fn from_challenge_codec(x: Inner) -> Self {
-        Fp128(x)
+    fn from_challenge_codec(x: Fp128) -> Self {
+        x
     }
 
     #[inline]
@@ -518,43 +229,43 @@ impl JoltField for Fp128 {
     }
 
     fn challenge_set_size() -> super::challenge::ChallengeSetSize {
-        super::challenge::ChallengeSetSize::field_order(0u128.wrapping_sub(Inner::C), 1)
+        super::challenge::ChallengeSetSize::field_order(0u128.wrapping_sub(Fp128::C), 1)
             .expect("the fp128 modulus is a valid field order")
     }
 
     #[inline]
     fn to_u64(&self) -> Option<u64> {
-        self.0.to_u64_checked()
+        self.to_u64_checked()
     }
 
     #[inline]
     fn from_bytes(bytes: &[u8]) -> Self {
-        Self(Inner::from_bytes_le_reduced(bytes))
+        Fp128::from_bytes_le_reduced(bytes)
     }
 
     #[inline(always)]
     fn to_unreduced(&self) -> BigInt<2> {
-        BigInt::new(self.0.to_limbs())
+        BigInt::new(self.to_limbs())
     }
 
     #[inline]
     fn mul_u64_unreduced(self, other: u64) -> Folded128MulU64 {
-        Folded128MulU64::from_bigint(BigInt::new(self.0.mul_wide_u64(other)))
+        Folded128MulU64::from_bigint(BigInt::new(self.mul_wide_u64(other)))
     }
 
     #[inline]
     fn mul_u128_unreduced(self, other: u128) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(self.0.mul_wide_u128(other)))
+        Folded128Product::from_bigint(BigInt::new(self.mul_wide_u128(other)))
     }
 
     #[inline]
     fn mul_to_product(self, other: Self) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(self.0.mul_wide(other.0)))
+        Folded128Product::from_bigint(BigInt::new(self.mul_wide(other)))
     }
 
     #[inline]
     fn mul_to_product_accum(self, other: Self) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(self.0.mul_wide(other.0)))
+        Folded128Product::from_bigint(BigInt::new(self.mul_wide(other)))
     }
 
     #[inline]
@@ -569,37 +280,37 @@ impl JoltField for Fp128 {
 
     #[inline]
     fn mul_to_accum_mag<const M: usize>(&self, mag: &BigInt<M>) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(mul_mag_reduced(self.0, mag).to_limbs()))
+        Folded128Product::from_bigint(BigInt::new(mul_mag_reduced(*self, mag).to_limbs()))
     }
 
     #[inline]
     fn mul_to_product_mag<const M: usize>(&self, mag: &BigInt<M>) -> Folded128Product {
-        Folded128Product::from_bigint(BigInt::new(mul_mag_reduced(self.0, mag).to_limbs()))
+        Folded128Product::from_bigint(BigInt::new(mul_mag_reduced(*self, mag).to_limbs()))
     }
 
     #[inline]
     fn reduce_mul_u64(x: Folded128MulU64) -> Self {
-        Self(Inner::solinas_reduce(&x.normalize().0))
+        Fp128::solinas_reduce(&x.normalize().0)
     }
 
     #[inline]
     fn reduce_mul_u128(x: Folded128Product) -> Self {
-        Self(Inner::solinas_reduce(&x.normalize().0))
+        Fp128::solinas_reduce(&x.normalize().0)
     }
 
     #[inline]
     fn reduce_mul_u128_accum(x: Folded128Product) -> Self {
-        Self(Inner::solinas_reduce(&x.normalize().0))
+        Fp128::solinas_reduce(&x.normalize().0)
     }
 
     #[inline]
     fn reduce_product(x: Folded128Product) -> Self {
-        Self(Inner::solinas_reduce(&x.normalize().0))
+        Fp128::solinas_reduce(&x.normalize().0)
     }
 
     #[inline]
     fn reduce_product_accum(x: Folded128Product) -> Self {
-        Self(Inner::solinas_reduce(&x.normalize().0))
+        Fp128::solinas_reduce(&x.normalize().0)
     }
 }
 
@@ -613,16 +324,17 @@ mod tests {
     use crate::utils::accumulation::{FullAccumS, MedAccumS, SmallAccumS, WideAccumS};
     use ark_ff::biginteger::{S128, S64};
     use ark_std::test_rng;
+    use num_traits::{One, Zero};
 
     type F = Fp128;
 
     /// 2^128 mod p, i.e. the pseudo-Mersenne offset c.
     fn two_pow_128() -> F {
-        F::from_u128(Inner::C)
+        F::from_u128(Fp128::C)
     }
 
     fn modulus() -> u128 {
-        0u128.wrapping_sub(Inner::C)
+        0u128.wrapping_sub(Fp128::C)
     }
 
     #[test]
@@ -651,7 +363,7 @@ mod tests {
 
         assert_eq!(F::from_u128(modulus()), F::zero());
         assert_eq!(F::from_u128(modulus() - 1), -F::one());
-        assert_eq!(F::from_u128(u128::MAX), F::from_u128(Inner::C - 1));
+        assert_eq!(F::from_u128(u128::MAX), F::from_u128(Fp128::C - 1));
 
         let vals = [F::from_u64(2), F::from_u64(3), F::from_u64(5)];
         assert_eq!(vals.iter().sum::<F>(), F::from_u64(10));
@@ -733,7 +445,7 @@ mod tests {
         let mut rng = test_rng();
         for _ in 0..64 {
             let a = F::rand(&mut rng);
-            let bytes = a.0.to_canonical_u128().to_le_bytes();
+            let bytes = a.to_canonical_u128().to_le_bytes();
             assert_eq!(F::from_bytes(&bytes), a);
 
             // 32-byte input: lo + hi * 2^128 (mod p)

@@ -975,12 +975,10 @@ pub(crate) fn prove_failed(error: impl ToString) -> OpeningsError {
     OpeningsError::ProveFailed(error.to_string())
 }
 
-/// One Fiat-Shamir challenge of the outer transcript as an [`AkitaField`] element: a full-width
-/// `Fp128` challenge (one codec message of length one).
+/// One Fiat-Shamir challenge of the outer transcript: a full-width [`AkitaField`] (atlas's
+/// `Fp128`) challenge, one codec message of length one.
 pub(crate) fn akita_challenge<T: Transcript>(transcript: &mut T) -> AkitaField {
-    transcript
-        .challenge_scalar::<atlas_algebra::field::fp128::Fp128>()
-        .0
+    transcript.challenge_scalar::<AkitaField>()
 }
 
 /// Ends outer Jolt challenge derivation at one statement-bound challenge and

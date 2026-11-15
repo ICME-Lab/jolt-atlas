@@ -12,6 +12,7 @@
 pub mod booleanity;
 pub mod config;
 pub mod digit_range;
+pub mod engine;
 pub mod evaluation_reduction;
 pub mod hamming_booleanity;
 pub mod hamming_weight;

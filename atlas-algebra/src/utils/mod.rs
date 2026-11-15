@@ -57,16 +57,6 @@ pub fn compute_dotproduct<F: JoltField>(a: &[F], b: &[F]) -> F {
         .sum()
 }
 
-/// Compute dotproduct optimized for values being 0 / 1
-#[tracing::instrument(skip_all)]
-pub fn compute_dotproduct_low_optimized<F: JoltField>(a: &[F], b: &[F]) -> F {
-    a.par_iter()
-        .zip_eq(b.par_iter())
-        .with_min_len(par_enabled())
-        .map(|(a_i, b_i)| mul_0_1_optimized(a_i, b_i))
-        .sum()
-}
-
 #[inline(always)]
 pub fn mul_0_1_optimized<F: JoltField>(a: &F, b: &F) -> F {
     if a.is_zero() || b.is_zero() {

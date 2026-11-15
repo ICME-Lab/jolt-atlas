@@ -1,5 +1,4 @@
 use crate::field::JoltField;
-use crate::poly::point::{Endianness, OpeningPoint};
 use crate::utils::{math::Math, thread::unsafe_allocate_zero_vec};
 use common::parallel::par_enabled;
 use rayon::prelude::*;
@@ -33,30 +32,6 @@ impl<F: JoltField> EqPolynomial<F> {
             .with_min_len(par_enabled())
             .map(|(x_i, y_i)| *x_i * *y_i + (F::one() - *x_i) * (F::one() - *y_i))
             .product()
-    }
-
-    /// Computes `eq(x, y)` for [`OpeningPoint`]s, handling endianness automatically.
-    ///
-    /// If `x` and `y` have the **same** endianness, pairs elements positionally.
-    /// If they differ, one is reversed so that MSB aligns with MSB.
-    pub fn mle_endian<const E1: Endianness, const E2: Endianness>(
-        x: &OpeningPoint<E1, F>,
-        y: &OpeningPoint<E2, F>,
-    ) -> F {
-        assert_eq!(x.len(), y.len());
-        if E1 == E2 {
-            x.r.par_iter()
-                .zip(y.r.par_iter())
-                .with_min_len(par_enabled())
-                .map(|(x_i, y_i)| *x_i * y_i + (F::one() - x_i) * (F::one() - y_i))
-                .product()
-        } else {
-            x.r.par_iter()
-                .zip(y.r.par_iter().rev())
-                .with_min_len(par_enabled())
-                .map(|(x_i, y_i)| *x_i * y_i + (F::one() - x_i) * (F::one() - y_i))
-                .product()
-        }
     }
 
     #[tracing::instrument(skip_all, name = "EqPolynomial::evals")]

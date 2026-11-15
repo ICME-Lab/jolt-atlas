@@ -51,10 +51,6 @@ impl<const E: Endianness, F> OpeningPoint<E, F> {
 }
 
 impl<const E: Endianness, F: JoltField> OpeningPoint<E, F> {
-    pub fn split_at_r(&self, mid: usize) -> (&[F], &[F]) {
-        self.r.split_at(mid)
-    }
-
     pub fn split_at(&self, mid: usize) -> (Self, Self) {
         let (left, right) = self.r.split_at(mid);
         (Self::new(left.to_vec()), Self::new(right.to_vec()))
@@ -66,25 +62,6 @@ impl<const E: Endianness, F: JoltField> OpeningPoint<E, F> {
         Self {
             r: r.into_iter().map(|x| x.into()).collect(),
         }
-    }
-
-    pub fn endianness(&self) -> &'static str {
-        if E == BIG_ENDIAN {
-            "big"
-        } else {
-            "little"
-        }
-    }
-
-    pub fn match_endianness<const SWAPPED_E: Endianness>(&self) -> OpeningPoint<SWAPPED_E, F>
-    where
-        F: Clone,
-    {
-        let mut reversed = self.r.clone();
-        if E != SWAPPED_E {
-            reversed.reverse();
-        }
-        OpeningPoint::<SWAPPED_E, F>::new(reversed)
     }
 }
 

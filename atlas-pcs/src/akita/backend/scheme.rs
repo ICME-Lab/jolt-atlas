@@ -6,8 +6,8 @@ use crate::openings::{
 use akita_params::{PolynomialGroupLayout, PrecommittedGroupProfiles};
 use akita_pcs::custom_source::RootPolyMeta;
 use akita_pcs::{AkitaError, CommitOutput, CpuBackend, GroupContext, SourceHandle};
+use atlas_transcript::Transcript;
 use jolt_poly::{EvaluationClaim, MultilinearPoly, OneHotPolynomial, Polynomial};
-use jolt_transcript::Transcript;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map::Entry, BTreeMap},
@@ -572,7 +572,7 @@ impl AkitaBackend {
         eval: AkitaField,
         setup: &AkitaProverSetup,
         hint: Option<AkitaProverHint>,
-        transcript: &mut impl Transcript<Challenge = AkitaField>,
+        transcript: &mut impl Transcript,
     ) -> Result<AkitaBatchProof, OpeningsError> {
         let hint = match hint {
             Some(hint) => hint,
@@ -593,7 +593,7 @@ impl AkitaBackend {
         eval: AkitaField,
         proof: &AkitaBatchProof,
         setup: &AkitaVerifierSetup,
-        transcript: &mut impl Transcript<Challenge = AkitaField>,
+        transcript: &mut impl Transcript,
     ) -> Result<(), OpeningsError> {
         let statement = vec![VerifierOpeningClaim {
             commitment: commitment.clone(),
@@ -607,7 +607,7 @@ impl AkitaBackend {
         auxiliary_groups: Vec<GroupOpeningWithHint<AkitaField, AkitaCommitment, AkitaProverHint>>,
         final_group: GroupOpeningClaim<AkitaField, AkitaCommitment>,
         final_hint: AkitaProverHint,
-        transcript: &mut impl Transcript<Challenge = AkitaField>,
+        transcript: &mut impl Transcript,
     ) -> Result<AkitaBatchProof, OpeningsError> {
         AkitaNativeBatching::prove_trace_batch(
             setup,
@@ -623,7 +623,7 @@ impl AkitaBackend {
         auxiliary_groups: &[TaggedGroupOpeningClaim<AkitaField, AkitaCommitment>],
         final_group: &GroupOpeningClaim<AkitaField, AkitaCommitment>,
         proof: &AkitaBatchProof,
-        transcript: &mut impl Transcript<Challenge = AkitaField>,
+        transcript: &mut impl Transcript,
     ) -> Result<(), OpeningsError> {
         AkitaNativeBatching::verify_trace_batch(
             setup,
@@ -718,8 +718,18 @@ mod tests {
     use crate::akita::backend::AkitaOneHotScheduleArtifact;
     use akita_config::CommitmentConfig;
     use akita_schedules::ValidatedScheduleCatalog;
+    use atlas_transcript::{
+        Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
+    };
     use jolt_field::Ring;
-    use jolt_transcript::Blake2bTranscript;
+
+    /// The sponge state after the transcript's last operation.
+    fn state<T: Transcript>(transcript: &T) -> [u8; 32] {
+        *transcript
+            .state_history()
+            .last()
+            .expect("a transcript records its construction")
+    }
 
     #[test]
     fn full_width_objects_do_not_widen_bounded_dense_commitments() {
@@ -768,47 +778,47 @@ mod tests {
             },
             backend_cache: Default::default(),
         };
-        let mut baseline = Blake2bTranscript::<AkitaField>::new(b"akita-setup-key-test");
-        let initial_state = baseline.state();
+        let mut baseline = Blake2bVerifier::new(b"akita-setup-key-test", Vec::new());
+        let initial_state = state(&baseline);
 
         append_verifier_setup(&mut baseline, &setup, AkitaBackendFlavor::Dense).unwrap();
-        assert_ne!(baseline.state(), initial_state);
+        assert_ne!(state(&baseline), initial_state);
 
-        let mut same = Blake2bTranscript::<AkitaField>::new(b"akita-setup-key-test");
+        let mut same = Blake2bVerifier::new(b"akita-setup-key-test", Vec::new());
         append_verifier_setup(&mut same, &setup, AkitaBackendFlavor::Dense).unwrap();
-        assert_eq!(baseline.state(), same.state());
+        assert_eq!(state(&baseline), state(&same));
 
-        let mut flavor_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-setup-key-test");
+        let mut flavor_transcript = Blake2bVerifier::new(b"akita-setup-key-test", Vec::new());
         append_verifier_setup(&mut flavor_transcript, &setup, AkitaBackendFlavor::OneHot).unwrap();
-        assert_ne!(baseline.state(), flavor_transcript.state());
+        assert_ne!(state(&baseline), state(&flavor_transcript));
 
         let mut changed_shape = setup.clone();
         changed_shape.max_num_vars = 5;
-        let mut shape_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-setup-key-test");
+        let mut shape_transcript = Blake2bVerifier::new(b"akita-setup-key-test", Vec::new());
         append_verifier_setup(
             &mut shape_transcript,
             &changed_shape,
             AkitaBackendFlavor::Dense,
         )
         .unwrap();
-        assert_ne!(baseline.state(), shape_transcript.state());
+        assert_ne!(state(&baseline), state(&shape_transcript));
 
         let mut changed_digest = setup;
         changed_digest.default_layout_digest = [8; 32];
-        let mut digest_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-setup-key-test");
+        let mut digest_transcript = Blake2bVerifier::new(b"akita-setup-key-test", Vec::new());
         append_verifier_setup(
             &mut digest_transcript,
             &changed_digest,
             AkitaBackendFlavor::Dense,
         )
         .unwrap();
-        assert_ne!(baseline.state(), digest_transcript.state());
+        assert_ne!(state(&baseline), state(&digest_transcript));
 
         let mut changed_k = changed_digest;
         changed_k.one_hot_k = AKITA_ONE_HOT_K16;
-        let mut k_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-setup-key-test");
+        let mut k_transcript = Blake2bVerifier::new(b"akita-setup-key-test", Vec::new());
         append_verifier_setup(&mut k_transcript, &changed_k, AkitaBackendFlavor::Dense).unwrap();
-        assert_ne!(digest_transcript.state(), k_transcript.state());
+        assert_ne!(state(&digest_transcript), state(&k_transcript));
     }
 
     #[test]
@@ -870,7 +880,7 @@ mod tests {
                 evaluation: EvaluationClaim::new(point.clone(), polynomial.evaluate(&point)),
             })
             .collect::<Vec<_>>();
-        let mut prover_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-one-hot-k");
+        let mut prover_transcript = Blake2bProver::new(b"akita-one-hot-k");
         let proof = AkitaNativeBatching::prove_batch(
             &prover_setup,
             statement.clone(),
@@ -882,7 +892,7 @@ mod tests {
             &mut prover_transcript,
         )
         .unwrap();
-        let mut verifier_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-one-hot-k");
+        let mut verifier_transcript = Blake2bVerifier::new(b"akita-one-hot-k", Vec::new());
         AkitaNativeBatching::verify_batch(
             &verifier_setup,
             &statement,
@@ -890,7 +900,7 @@ mod tests {
             &mut verifier_transcript,
         )
         .unwrap();
-        assert_eq!(prover_transcript.state(), verifier_transcript.state());
+        assert_eq!(state(&prover_transcript), state(&verifier_transcript));
 
         if num_vars == 16 && num_polys == 1 {
             let one_hot = match &verifier_setup.schedule_artifacts {
@@ -923,7 +933,7 @@ mod tests {
                 // Transport drops the honest setup's primed backend caches.
                 let bytes = serde_json::to_vec(&tampered).unwrap();
                 let transported: AkitaVerifierSetup = serde_json::from_slice(&bytes).unwrap();
-                let mut transcript = Blake2bTranscript::<AkitaField>::new(b"akita-one-hot-k");
+                let mut transcript = Blake2bVerifier::new(b"akita-one-hot-k", Vec::new());
                 let error = AkitaNativeBatching::verify_batch(
                     &transported,
                     &statement,
@@ -941,7 +951,7 @@ mod tests {
         } else {
             AKITA_ONE_HOT_K16
         };
-        let mut verifier_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-one-hot-k");
+        let mut verifier_transcript = Blake2bVerifier::new(b"akita-one-hot-k", Vec::new());
         let _ = AkitaNativeBatching::verify_batch(
             &verifier_setup,
             &wrong_k_statement,
@@ -1108,7 +1118,7 @@ mod tests {
             commitment,
             evaluation: EvaluationClaim::new(point, value),
         }];
-        let mut prover_transcript = Blake2bTranscript::<AkitaField>::new(b"catalog-replay");
+        let mut prover_transcript = Blake2bProver::new(b"catalog-replay");
         let proof = AkitaNativeBatching::prove_batch(
             &prover_setup,
             statement.clone(),
@@ -1171,7 +1181,7 @@ mod tests {
             alternate_artifacts,
         ))
         .unwrap();
-        let mut verifier_transcript = Blake2bTranscript::<AkitaField>::new(b"catalog-replay");
+        let mut verifier_transcript = Blake2bVerifier::new(b"catalog-replay", Vec::new());
         let _ = AkitaNativeBatching::verify_batch(
             &alternate_verifier_setup,
             &statement,
@@ -1180,7 +1190,7 @@ mod tests {
         )
         .expect_err("a proof must not replay across catalogs with different digests");
 
-        let mut original_transcript = Blake2bTranscript::<AkitaField>::new(b"catalog-replay");
+        let mut original_transcript = Blake2bVerifier::new(b"catalog-replay", Vec::new());
         AkitaNativeBatching::verify_batch(
             &verifier_setup,
             &statement,
@@ -1217,7 +1227,7 @@ mod tests {
             evaluation: EvaluationClaim::new(point.clone(), claim),
         }];
 
-        let mut prover_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-direct-layout");
+        let mut prover_transcript = Blake2bProver::new(b"akita-direct-layout");
         let proof = AkitaNativeBatching::prove_batch(
             &prover_setup,
             statement.clone(),
@@ -1227,7 +1237,7 @@ mod tests {
         )
         .expect("direct proof should prove");
 
-        let mut verifier_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-direct-layout");
+        let mut verifier_transcript = Blake2bVerifier::new(b"akita-direct-layout", Vec::new());
         AkitaNativeBatching::verify_batch(
             &verifier_setup,
             &statement,
@@ -1235,11 +1245,11 @@ mod tests {
             &mut verifier_transcript,
         )
         .expect("direct proof should verify");
-        assert_eq!(prover_transcript.state(), verifier_transcript.state());
+        assert_eq!(state(&prover_transcript), state(&verifier_transcript));
 
         let mut changed_commitment_statement = statement.clone();
         changed_commitment_statement[0].commitment.layout_digest = [15; 32];
-        let mut verifier_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-direct-layout");
+        let mut verifier_transcript = Blake2bVerifier::new(b"akita-direct-layout", Vec::new());
         let _error = AkitaNativeBatching::verify_batch(
             &verifier_setup,
             &changed_commitment_statement,
@@ -1250,7 +1260,7 @@ mod tests {
 
         let mut changed_setup = verifier_setup;
         changed_setup.default_layout_digest = commitment_digest;
-        let mut verifier_transcript = Blake2bTranscript::<AkitaField>::new(b"akita-direct-layout");
+        let mut verifier_transcript = Blake2bVerifier::new(b"akita-direct-layout", Vec::new());
         let _error = AkitaNativeBatching::verify_batch(
             &changed_setup,
             &statement,

@@ -19,9 +19,12 @@ use akita_types::{
     AkitaVerifierSetup as BackendVerifierSetup, Commitment as AkitaBackendRingCommitment,
     CommittedGroup as AkitaBackendCommittedGroup,
 };
+use atlas_transcript::{
+    words::{Label, LabelWithCount, U64Word, WordEncoding, WordTranscript},
+    Transcript,
+};
 use jolt_field::{CanonicalBytes, Zero};
 use jolt_poly::{MultilinearPoly, OneHotIndexOrder, OneHotPolynomial, Polynomial};
-use jolt_transcript::{AppendToTranscript, Label, LabelWithCount, Transcript, U64Word};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 
@@ -681,7 +684,7 @@ impl AkitaCommitment {
     }
 }
 
-impl AppendToTranscript for AkitaCommitment {
+impl WordEncoding for AkitaCommitment {
     fn append_to_transcript<T: Transcript>(&self, transcript: &mut T) {
         transcript.append(&Label(b"akita_commitment"));
         transcript.append_bytes(self.backend_flavor.transcript_label());
@@ -1000,16 +1003,24 @@ pub(crate) fn prove_failed(error: impl ToString) -> OpeningsError {
     OpeningsError::ProveFailed(error.to_string())
 }
 
+/// One Fiat-Shamir challenge of the outer transcript as an [`AkitaField`] element: a full-width
+/// `Fp128` challenge (one codec message of length one).
+pub(crate) fn akita_challenge<T: Transcript>(transcript: &mut T) -> AkitaField {
+    transcript
+        .challenge_scalar::<atlas_algebra::field::fp128::Fp128>()
+        .0
+}
+
 /// Ends outer Jolt challenge derivation at one statement-bound challenge and
 /// uses it to domain-separate the nested Akita argument's session. No
 /// subsequent Jolt challenge consumes the terminal opening proof, so
 /// reabsorbing that proof into the outer transcript could not affect
 /// acceptance.
-pub(crate) fn bridged_akita_session<T>(jolt_transcript: &mut T, session_label: &[u8]) -> Vec<u8>
+pub(crate) fn bridged_akita_session<T>(transcript: &mut T, session_label: &[u8]) -> Vec<u8>
 where
-    T: Transcript<Challenge = AkitaField>,
+    T: Transcript,
 {
-    let bridge = jolt_transcript.challenge_scalar();
+    let bridge = akita_challenge(transcript);
     let bridge_bytes = bridge.to_bytes_le_vec();
     // Akita binds the concrete instance into its own Fiat-Shamir state but
     // keeps the session bytes as domain separator, so the cross-protocol

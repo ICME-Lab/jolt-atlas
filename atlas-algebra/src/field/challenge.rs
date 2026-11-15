@@ -17,7 +17,7 @@
 //! exact integers.
 //!
 //! `|C|` is the size of an ideal uniform draw. A codec's distance from
-//! uniform ([`ChallengeCodec`](crate::ChallengeCodec)) is charged separately.
+//! uniform ([`ChallengeCodec`]) is charged separately.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
@@ -81,15 +81,6 @@ impl ChallengeSetSize {
 
     pub(crate) const fn from_u128(value: u128) -> Self {
         Self { hi: 0, lo: value }
-    }
-
-    /// From little-endian 64-bit limbs.
-    #[cfg(feature = "bn254")]
-    pub(crate) const fn from_limbs([l0, l1, l2, l3]: [u64; 4]) -> Self {
-        Self {
-            hi: ((l3 as u128) << 64) | (l2 as u128),
-            lo: ((l1 as u128) << 64) | (l0 as u128),
-        }
     }
 
     /// `self^exponent`, saturating.
@@ -211,13 +202,158 @@ impl Display for GrindBitsError {
 
 impl Error for GrindBitsError {}
 
+// The challenge codec: how full-width field challenges decode from squeezed bytes. It lives with
+// the field (rather than the transcript) because `JoltField::ChallengeCodecField` is bounded on
+// it and `atlas-transcript` depends on this crate.
+
+use jolt_field::{ExtField, Fp128, Fp32, Fp64, PseudoMersenne};
+use sealed::Sealed;
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Decodes a fixed-length uniform byte tape into one message of field elements.
+///
+/// Implementations must budget conventional TV ≤ 2^-161 for the entire message,
+/// including rejection-pool exhaustion, rather than for each element separately.
+/// No bytes are drawn adaptively. Scalar draws use `len == 1` of this same codec.
+/// Empty messages consume zero bytes and decode to an empty vector.
+///
+/// # Pseudo-Mersenne fields
+///
+/// Candidates have `NUM_BYTES` little-endian bytes, masked to `MODULUS_BITS`;
+/// checked decoding accepts exactly the representatives below the prime.
+/// Masking makes each candidate uniform on [0, 2^b); acceptance gives a
+/// uniform element of [0, p). Accepted values are independent of acceptance
+/// indicators, so the first `len` accepted values are jointly uniform even
+/// conditioned on pool success.
+///
+/// With rejection probability ρ = c/2^b ≤ 2^-R, R = b - ceil(log2(c)),
+/// failure among B = len+k candidates needs at least k+1 rejections. A union
+/// bound gives Pr[fail] ≤ C(B,k+1) ρ^(k+1) ≤ 2^(-(k+1)(R-L)), where
+/// L = ceil(log2(B)). Choose the least k with (k+1)(R-L) ≥ 161. Once L ≥ R,
+/// increasing k cannot make the bound attainable. All arithmetic is integral.
+///
+/// The trait is sealed: every implementation lives in this module, next to
+/// the argument for its TV bound.
+///
+/// # Use outside this crate
+///
+/// `ChallengeCodec` bounds the field of every `ProverTranscript` and
+/// `VerifierTranscript` `field_challenges` call, so a protocol that draws
+/// field challenges from these transcripts names it as a bound. Callers
+/// cannot implement it. The widths and decodings above are part of the
+/// transcript's wire format: changing one changes every proof that draws
+/// challenges in that field.
+pub trait ChallengeCodec: Sized + Sealed {
+    /// `|Self|`, the number of values one challenge can take. Proof-of-work
+    /// difficulties are priced from it ([`grind_bits_for_loss`]).
+    const CHALLENGE_SET_SIZE: ChallengeSetSize;
+
+    /// Bytes squeezed for `len` elements; depends only on the type and `len`.
+    /// Returns `None` on arithmetic overflow or an unattainable rejection bound.
+    fn challenge_bytes(len: usize) -> Option<usize>;
+
+    /// Decodes exactly `challenge_bytes(len)` bytes in little-endian order.
+    /// Returns `None` on a wrong/unsupported length or rejection-pool exhaustion.
+    /// Allocates only the returned vector, with capacity `len`.
+    fn decode_challenges(bytes: &[u8], len: usize) -> Option<Vec<Self>>;
+}
+
+/// The most bytes one challenge message may squeeze.
+pub const MAX_CHALLENGE_BYTES: usize = 1 << 24;
+
+fn ceil_log2(n: u128) -> u32 {
+    u128::BITS - n.saturating_sub(1).leading_zeros()
+}
+
+#[expect(non_snake_case, reason = "R and L match the pooled-rejection bound")]
+fn pool_bytes<F: PseudoMersenne>(len: usize) -> Option<usize> {
+    if len == 0 {
+        return Some(0);
+    }
+    let R = F::MODULUS_BITS.checked_sub(ceil_log2(F::OFFSET))?;
+    let mut k = 0usize;
+    loop {
+        let candidates = len.checked_add(k)?;
+        let L = ceil_log2(u128::try_from(candidates).ok()?);
+        let margin = R.checked_sub(L).filter(|&margin| margin > 0)?;
+        if k.checked_add(1)?
+            .checked_mul(usize::try_from(margin).ok()?)?
+            >= 161
+        {
+            return candidates.checked_mul(F::NUM_BYTES);
+        }
+        k = k.checked_add(1)?;
+    }
+}
+
+/// `|F|^degree`, where a pseudo-Mersenne base has order
+/// `2^MODULUS_BITS - OFFSET`.
+const fn pseudo_mersenne_power<F: PseudoMersenne>(degree: usize) -> ChallengeSetSize {
+    let modulus = (u128::MAX >> (128 - F::MODULUS_BITS)) - (F::OFFSET - 1);
+    ChallengeSetSize::from_u128(modulus).pow(degree as u32)
+}
+
+fn decode_pool<F, E, const D: usize>(bytes: &[u8], len: usize) -> Option<Vec<E>>
+where
+    F: PseudoMersenne,
+    E: ExtField<F>,
+{
+    if D != E::DEGREE || bytes.len() != pool_bytes::<F>(len.checked_mul(D)?)? {
+        return None;
+    }
+    let mask = u128::MAX.checked_shr(128u32.checked_sub(F::MODULUS_BITS)?)?;
+    let mut accepted = bytes.chunks_exact(F::NUM_BYTES).filter_map(|candidate| {
+        let mut word = [0u8; 16];
+        word.get_mut(..F::NUM_BYTES)?.copy_from_slice(candidate);
+        let masked = (u128::from_le_bytes(word) & mask).to_le_bytes();
+        F::from_bytes_le_checked(masked.get(..F::NUM_BYTES)?)
+    });
+    let mut result = Vec::with_capacity(len);
+    for _ in 0..len {
+        let mut coordinates = [F::default(); D];
+        for coordinate in &mut coordinates {
+            *coordinate = accepted.next()?;
+        }
+        // ExtField::from_base_fn supplies exactly 0..DEGREE; D is checked above.
+        result.push(E::from_base_fn(|i| {
+            coordinates.get(i).copied().unwrap_or_default()
+        }));
+    }
+    Some(result)
+}
+
+macro_rules! prime_codec {
+    ($field:ident, $word:ty) => {
+        impl<const P: $word> Sealed for $field<P> {}
+
+        impl<const P: $word> ChallengeCodec for $field<P> {
+            const CHALLENGE_SET_SIZE: ChallengeSetSize = pseudo_mersenne_power::<Self>(1);
+
+            fn challenge_bytes(len: usize) -> Option<usize> {
+                pool_bytes::<Self>(len)
+            }
+
+            fn decode_challenges(bytes: &[u8], len: usize) -> Option<Vec<Self>> {
+                decode_pool::<Self, Self, 1>(bytes, len)
+            }
+        }
+    };
+}
+
+prime_codec!(Fp32, u32);
+prime_codec!(Fp64, u64);
+prime_codec!(Fp128, u128);
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used, reason = "tests")]
 mod tests {
     use super::{
         grind_bits_for_loss, ChallengeSetSize, GrindBitsError, MAX_POW_BITS, MAX_SECURITY_BITS,
     };
-    use num_bigint::BigUint;
+    use num::BigUint;
 
     fn big(size: ChallengeSetSize) -> BigUint {
         (BigUint::from(size.hi) << 128u32) | BigUint::from(size.lo)
@@ -335,74 +471,15 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "solinas")]
     #[test]
     fn pseudo_mersenne_codecs_count_their_fields() {
-        use crate::ChallengeCodec;
-        use jolt_field::{
-            Ext2, FpExt4, FpExt8, Prime128Offset275, Prime24Offset3, Prime32Offset99,
-            Prime64Offset59,
-        };
+        use super::ChallengeCodec;
+        use jolt_field::{Prime128Offset275, Prime24Offset3, Prime64Offset59};
 
         let order = |modulus, degree| ChallengeSetSize::field_order(modulus, degree).unwrap();
         assert_eq!(Prime128Offset275::CHALLENGE_SET_SIZE, order(P128, 1));
         assert_eq!(Prime24Offset3::CHALLENGE_SET_SIZE, order((1 << 24) - 3, 1));
-        assert_eq!(
-            FpExt4::<Prime32Offset99>::CHALLENGE_SET_SIZE,
-            order((1 << 32) - 99, 4)
-        );
-        assert_eq!(
-            FpExt8::<Prime24Offset3>::CHALLENGE_SET_SIZE,
-            order((1 << 24) - 3, 8)
-        );
-        let ext2 = Ext2::<Prime64Offset59>::CHALLENGE_SET_SIZE;
-        assert_eq!(ext2, order(P64, 2));
-        for (d, bits) in [(1, 1), (2, 2), (3, 2), (8, 4)] {
-            assert_eq!(grind_bits_for_loss(d, ext2, 128), Ok(bits), "d={d}");
-        }
-    }
-
-    #[cfg(feature = "bn254")]
-    #[test]
-    fn bn254_codecs_count_their_fields() {
-        use crate::ChallengeCodec;
-        use jolt_field::{Fq, Fr};
-
-        let r: &[u8] =
-            b"21888242871839275222246405745257275088548364400416034343698204186575808495617";
-        let q: &[u8] =
-            b"21888242871839275222246405745257275088696311157297823662689037894645226208583";
-        for (size, modulus) in [(Fr::CHALLENGE_SET_SIZE, r), (Fq::CHALLENGE_SET_SIZE, q)] {
-            assert_eq!(big(size), BigUint::parse_bytes(modulus, 10).unwrap());
-            for d in [2, 3, 8, u64::MAX] {
-                assert_eq!(grind_bits_for_loss(d, size, 128), Ok(0), "d={d}");
-            }
-            // 4 · |F| < (2^64 - 1) · 2^192 ≤ 8 · |F|.
-            assert_eq!(grind_bits_for_loss(u64::MAX, size, 192), Ok(3));
-        }
-    }
-
-    #[cfg(feature = "binary")]
-    #[test]
-    fn binary_codecs_count_their_fields() {
-        use crate::ChallengeCodec;
-        use jolt_field::{F128, F192, F64, F8};
-
-        assert_eq!(F8::CHALLENGE_SET_SIZE, ChallengeSetSize::power_of_two(8));
-        assert_eq!(F64::CHALLENGE_SET_SIZE, ChallengeSetSize::power_of_two(64));
-        assert_eq!(
-            F128::CHALLENGE_SET_SIZE,
-            ChallengeSetSize::power_of_two(128)
-        );
-        assert_eq!(
-            F192::CHALLENGE_SET_SIZE,
-            ChallengeSetSize::power_of_two(192)
-        );
-        assert_eq!(grind_bits_for_loss(2, F128::CHALLENGE_SET_SIZE, 128), Ok(1));
-        assert_eq!(
-            grind_bits_for_loss(u64::MAX, F192::CHALLENGE_SET_SIZE, 128),
-            Ok(0)
-        );
+        assert_eq!(Prime64Offset59::CHALLENGE_SET_SIZE, order(P64, 1));
     }
 
     #[test]

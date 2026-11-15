@@ -15,20 +15,33 @@
 //! The prover searches by evaluating candidate nonces on a copy of the sponge
 //! state ([`MessageSearch`]). Spongefish 0.8.0 exposes that state only under
 //! its `yolocrypto` feature, so the search is behind this crate's
-//! `prover-grinding` feature. Cargo unifies features across a build, so a
+//! `prover` feature. Cargo unifies features across a build, so a
 //! binary that links a grinding prover compiles its verifier with
 //! `yolocrypto` too; in 0.8.0 the feature changes visibility only, not bytes.
 
-#[cfg(feature = "prover-grinding")]
+#![forbid(unsafe_code)]
+#![deny(
+    clippy::indexing_slicing,
+    clippy::get_unwrap,
+    clippy::string_slice,
+    clippy::fallible_impl_from,
+    clippy::mem_forget,
+    clippy::exit,
+    clippy::panic_in_result_fn,
+    clippy::let_underscore_must_use,
+    clippy::host_endian_bytes,
+    clippy::wildcard_enum_match_arm
+)]
+
+#[cfg(feature = "prover")]
 use spongefish::DuplexSpongeInterface;
 
-use crate::MAX_POW_BITS;
+use atlas_algebra::field::challenge::MAX_POW_BITS;
 
 /// Evaluates the transcript on a candidate prover message without sending it.
 ///
-/// A probe is [`Sync`], so a search may run on
-/// several threads at once.
-#[cfg(feature = "prover-grinding")]
+/// A probe is [`Sync`], so a search may run on several threads at once.
+#[cfg(feature = "prover")]
 pub trait Probe: Sync {
     /// Writes into `out` the bytes the transcript would squeeze right after
     /// absorbing `candidate`. The transcript itself is unchanged.
@@ -40,28 +53,25 @@ pub trait Probe: Sync {
 /// satisfy a prover-side condition.
 ///
 /// A probe absorbs the candidate one byte per absorb call, exactly as sending
-/// it as single-byte prover messages does. For the Keccak and Blake2b sponges
-/// this equals one absorb of the whole candidate; [`PoseidonSponge`] absorbs a
-/// length with every call, so for it only the byte-by-byte form matches.
+/// it as single-byte prover messages does. For the Blake2b sponge this equals
+/// one absorb of the whole candidate.
 ///
 /// It holds no private randomness, writes no proof bytes and cannot restore
 /// or advance the live prover state.
-///
-/// [`PoseidonSponge`]: crate::PoseidonSponge
-#[cfg(feature = "prover-grinding")]
+#[cfg(feature = "prover")]
 #[derive(Clone)]
 pub struct MessageSearch<H> {
     sponge: H,
 }
 
-#[cfg(feature = "prover-grinding")]
+#[cfg(feature = "prover")]
 impl<H> MessageSearch<H> {
     pub(crate) const fn new(sponge: H) -> Self {
         Self { sponge }
     }
 }
 
-#[cfg(feature = "prover-grinding")]
+#[cfg(feature = "prover")]
 impl<H: DuplexSpongeInterface<U = u8> + Sync> Probe for MessageSearch<H> {
     fn probe(&self, candidate: &[u8], out: &mut [u8]) {
         let mut sponge = self.sponge.clone();
@@ -137,7 +147,7 @@ impl SpongePow {
     }
 
     /// Whether sending `nonce` makes the next squeezed bytes pass the check.
-    #[cfg(feature = "prover-grinding")]
+    #[cfg(feature = "prover")]
     fn accepts_nonce(self, probe: &impl Probe, nonce: u32) -> bool {
         let mut check = [0u8; 4];
         let Some(out) = check.get_mut(..self.word_len()) else {
@@ -147,56 +157,23 @@ impl SpongePow {
         self.accepts(out)
     }
 
-    /// The least accepted nonce.
-    #[cfg(all(feature = "prover-grinding", not(feature = "parallel")))]
-    pub(crate) fn search(self, probe: &impl Probe) -> Option<u32> {
-        self.search_sequential(probe)
-    }
-
     /// The least accepted nonce, scanned in increasing order.
-    #[cfg(all(feature = "prover-grinding", any(test, not(feature = "parallel"))))]
-    fn search_sequential(self, probe: &impl Probe) -> Option<u32> {
-        (0..=self.last_nonce()).find(|&nonce| self.accepts_nonce(probe, nonce))
-    }
-
-    /// The least accepted nonce, searched on all threads. The result equals
-    /// the sequential search.
-    #[cfg(all(feature = "prover-grinding", feature = "parallel"))]
+    #[cfg(feature = "prover")]
     pub(crate) fn search(self, probe: &impl Probe) -> Option<u32> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
-        // `u64::MAX` is no nonce, so it marks "not found".
-        let least = AtomicU64::new(u64::MAX);
-        drop(rayon::broadcast(|ctx| {
-            // Each thread scans its own residue class in increasing order and
-            // stops once it cannot beat the least nonce found so far.
-            let nonces = (ctx.index() as u64..=u64::from(self.last_nonce()))
-                .step_by(ctx.num_threads())
-                .filter_map(|nonce| u32::try_from(nonce).ok());
-            for nonce in nonces {
-                if u64::from(nonce) >= least.load(Ordering::Relaxed) {
-                    break;
-                }
-                if self.accepts_nonce(probe, nonce) {
-                    let _ = least.fetch_min(u64::from(nonce), Ordering::SeqCst);
-                    break;
-                }
-            }
-        }));
-        u32::try_from(least.into_inner()).ok()
+        (0..=self.last_nonce()).find(|&nonce| self.accepts_nonce(probe, nonce))
     }
 }
 
 /// The canonical LEB128 encoding of a `u32`: seven bits per byte, least
 /// significant first, the high bit set on every byte but the last.
-#[cfg(feature = "prover-grinding")]
+#[cfg(feature = "prover")]
 #[derive(Clone, Copy)]
 pub(crate) struct Leb128 {
     bytes: [u8; 5],
     len: usize,
 }
 
-#[cfg(feature = "prover-grinding")]
+#[cfg(feature = "prover")]
 impl Leb128 {
     pub(crate) fn new(mut value: u32) -> Self {
         let mut bytes = [0u8; 5];
@@ -268,7 +245,7 @@ mod tests {
         assert_eq!(read(8, &[0x80]), Err("short"));
     }
 
-    #[cfg(feature = "prover-grinding")]
+    #[cfg(feature = "prover")]
     mod search {
         use super::super::{Leb128, Probe, SpongePow, MAX_POW_BITS};
 
@@ -305,13 +282,12 @@ mod tests {
         }
 
         #[test]
-        fn search_finds_a_lone_nonce_anywhere_and_matches_the_sequential_scan() {
+        fn search_finds_a_lone_nonce_anywhere() {
             for bits in [1, 9] {
                 let pow = SpongePow::new(bits).unwrap();
                 let last = pow.last_nonce();
                 for target in [None, Some(0), Some(1), Some(last / 2), Some(last)] {
                     let probe = AcceptOnly(target);
-                    assert_eq!(pow.search_sequential(&probe), target);
                     assert_eq!(pow.search(&probe), target);
                 }
             }
@@ -330,8 +306,8 @@ mod tests {
             }
         }
 
-        /// With accepted nonces spread over the space, and so over several
-        /// threads' ranges, the search still returns the least one.
+        /// With accepted nonces spread over the space, the search returns the
+        /// least one.
         #[test]
         fn search_returns_the_least_of_several_accepted_nonces() {
             for bits in [1, 9] {
@@ -346,7 +322,6 @@ mod tests {
                 ] {
                     let least = targets.iter().min().copied();
                     let probe = AcceptAny(targets);
-                    assert_eq!(pow.search_sequential(&probe), least);
                     assert_eq!(pow.search(&probe), least);
                 }
             }

@@ -517,8 +517,8 @@ impl JoltField for Fp128 {
         x
     }
 
-    fn challenge_set_size() -> jolt_transcript::ChallengeSetSize {
-        jolt_transcript::ChallengeSetSize::field_order(0u128.wrapping_sub(Inner::C), 1)
+    fn challenge_set_size() -> super::challenge::ChallengeSetSize {
+        super::challenge::ChallengeSetSize::field_order(0u128.wrapping_sub(Inner::C), 1)
             .expect("the fp128 modulus is a valid field order")
     }
 

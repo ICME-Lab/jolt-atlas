@@ -1,21 +1,21 @@
-//! Transcripts on upstream `jolt-transcript`'s split surface: a spongefish [`ProverState`] for
+//! Transcripts on the spongefish-native surface: a spongefish [`ProverState`] for
 //! the prover and a [`VerifierState`] for the verifier, over one duplex sponge.
 //!
 //! Every value the protocol absorbs is a public message (the verifier reads it from the
 //! serialized proof and absorbs the same bytes). Full-width challenges decode through the
-//! upstream [`ChallengeCodec`](jolt_transcript::ChallengeCodec), which bounds each challenge's
+//! [`ChallengeCodec`](crate::ChallengeCodec), which bounds each challenge's
 //! bias by the codec budget; 125-bit challenges are uniform on their set. The only prover
 //! messages are proof-of-work nonces ([`Transcript::pow`]), so the NARG string holds just those.
 
 #[cfg(feature = "prover")]
 use super::transcript::ProvingTranscript;
 use super::transcript::{Transcript, VerifyingTranscript};
+#[cfg(feature = "prover")]
+use crate::ProverTranscript as _;
+use crate::{BytesMsg, UniformBytes, VerifierTranscript as _};
 use ark_serialize::CanonicalSerialize;
 use atlas_algebra::field::JoltField;
 use atlas_algebra::utils::errors::ProofVerifyError;
-#[cfg(feature = "prover")]
-use jolt_transcript::ProverTranscript as _;
-use jolt_transcript::{BytesMsg, UniformBytes, VerifierTranscript as _};
 #[cfg(feature = "prover")]
 use spongefish::ProverState;
 use spongefish::{DuplexSpongeInit, VerifierState};
@@ -220,7 +220,7 @@ impl<H: TranscriptSponge> Transcript for SpongeProver<H> {
 impl<H: TranscriptSponge> ProvingTranscript for SpongeProver<H> {
     fn new(label: &'static [u8]) -> Self {
         let mut t = Self {
-            state: jolt_transcript::prover_transcript::<H>(label, INSTANCE),
+            state: crate::prover_transcript::<H>(label, INSTANCE),
             #[cfg(any(test, feature = "test-feature"))]
             history: History::default(),
         };
@@ -297,9 +297,7 @@ impl<H: TranscriptSponge> VerifyingTranscript for SpongeVerifier<H> {
         // while `state` is alive, and `state` never escapes with its `'static` lifetime.
         let slice: &'static [u8] = unsafe { &*narg };
         let mut t = Self {
-            state: ManuallyDrop::new(jolt_transcript::verifier_transcript::<H>(
-                label, INSTANCE, slice,
-            )),
+            state: ManuallyDrop::new(crate::verifier_transcript::<H>(label, INSTANCE, slice)),
             narg,
             #[cfg(any(test, feature = "test-feature"))]
             history: History::default(),

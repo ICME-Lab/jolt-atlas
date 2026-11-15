@@ -15,9 +15,12 @@
 
 use std::collections::BTreeMap;
 
+use atlas_transcript::{
+    words::{Label, U64Word, WordTranscript},
+    Transcript,
+};
 use jolt_field::JoltField;
 use jolt_poly::{eq_index_msb, EvaluationClaim, Point, HIGH_TO_LOW};
-use jolt_transcript::{Label, Transcript, U64Word};
 
 use super::OpeningsError;
 
@@ -179,16 +182,17 @@ where
             }))
     }
 
-    /// Binds the semantic statement, samples the selector, and returns the
-    /// corresponding claim on the physical polynomial.
+    /// Binds the semantic statement, samples the selector (one `draw` per selector variable),
+    /// and returns the corresponding claim on the physical polynomial.
     pub fn reduce_claims<F, T>(
         &self,
         claims: &PrefixPackedClaims<F>,
         transcript: &mut T,
+        mut draw: impl FnMut(&mut T) -> F,
     ) -> Result<EvaluationClaim<F>, OpeningsError>
     where
         F: JoltField,
-        T: Transcript<Challenge = F>,
+        T: Transcript,
     {
         if claims.point.len() != self.logical_num_vars {
             return Err(OpeningsError::InvalidBatch(format!(
@@ -213,7 +217,9 @@ where
         transcript.append_values(b"prefix_pack_point", claims.point.as_slice());
         transcript.append_values(b"prefix_pack_evals", &claims.evaluations);
 
-        let selector = transcript.challenge_vector(self.selector_num_vars);
+        let selector: Vec<F> = (0..self.selector_num_vars)
+            .map(|_| draw(transcript))
+            .collect();
         let point = self.pack_point(&selector, claims.point.as_slice())?;
         let evaluation = self.reduce_evaluations(&selector, &claims.evaluations)?;
         Ok(EvaluationClaim::new(point, evaluation))

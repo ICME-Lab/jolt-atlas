@@ -39,7 +39,6 @@
 //! opening.
 
 pub mod backend;
-mod facade;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -72,7 +71,6 @@ use atlas_algebra::{
     utils::errors::ProofVerifyError,
 };
 use atlas_transcript::{AppendToTranscript, Transcript};
-use facade::FacadeTranscript;
 
 use super::commitment_scheme::{BatchCommitOutput, CommitmentScheme};
 
@@ -101,7 +99,8 @@ const PACKAGED_DENSE_PROFILE: AkitaChunkProfile = AkitaChunkProfile::new(8, 2);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AkitaScheme;
 
-/// Akita's challenges: full-width field elements of the upstream field.
+/// One challenge of the prefix-packed reduction: a full-width field element of the upstream
+/// field.
 fn draw_inner<T: Transcript>(transcript: &mut T) -> Inner {
     transcript.challenge_scalar::<Fp128>().0
 }
@@ -831,69 +830,68 @@ impl CommitmentScheme for AkitaScheme {
             classes.entry(hint.0.index).or_insert(hint.0);
         }
         let max_vars = opening_point.len();
-        let (openings, pow) =
-            FacadeTranscript::<_, Inner>::scope_with(transcript, 0, draw_inner, |transcript| {
-                classes
-                    .into_values()
-                    .map(|data| {
-                        let shape = &data.shape;
-                        let point = shape
-                            .upstream_point(&opening_point[max_vars - shape.logical_num_vars..]);
-                        let slot_evals = data.slot_evaluations(&point);
-                        let Some(committed) = &data.committed else {
-                            return AkitaClassOpening {
-                                class: data.index,
-                                slot_evals,
-                                proof: Vec::new(),
-                            };
-                        };
-                        let proof = match &committed.source {
-                            ClassSource::Dense(packed) => {
-                                let offset = shape.kind.offset();
-                                let shifted: Vec<Fp128> =
-                                    slot_evals.iter().map(|v| *v + offset).collect();
-                                let claim = shape
-                                    .layout()
-                                    .reduce_claims(
-                                        &PrefixPackedClaims::new(
-                                            shape.layout_digest(),
-                                            point,
-                                            inner_values(&shifted),
-                                        ),
-                                        transcript,
-                                    )
-                                    .expect("the prefix-packed claim reduces");
-                                AkitaBackend::open(
-                                    packed,
-                                    claim.point.as_slice(),
-                                    claim.value,
-                                    &committed.setup.prover,
-                                    Some(committed.hint.clone()),
-                                    transcript,
-                                )
-                            }
-                            ClassSource::OneHot(_) => AkitaBackend::prove_batch(
-                                &committed.setup.prover,
-                                Vec::new(),
-                                GroupOpeningClaim::new(
-                                    committed.commitment.clone(),
-                                    point,
-                                    group_evaluations(&slot_evals),
-                                ),
-                                committed.hint.clone(),
-                                transcript,
-                            ),
-                        }
-                        .unwrap_or_else(|e| panic!("Akita open for {shape:?}: {e}"));
-                        AkitaClassOpening {
+        let openings = {
+            classes
+                .into_values()
+                .map(|data| {
+                    let shape = &data.shape;
+                    let point =
+                        shape.upstream_point(&opening_point[max_vars - shape.logical_num_vars..]);
+                    let slot_evals = data.slot_evaluations(&point);
+                    let Some(committed) = &data.committed else {
+                        return AkitaClassOpening {
                             class: data.index,
                             slot_evals,
-                            proof: serde_to_bytes(&proof),
+                            proof: Vec::new(),
+                        };
+                    };
+                    let proof = match &committed.source {
+                        ClassSource::Dense(packed) => {
+                            let offset = shape.kind.offset();
+                            let shifted: Vec<Fp128> =
+                                slot_evals.iter().map(|v| *v + offset).collect();
+                            let claim = shape
+                                .layout()
+                                .reduce_claims(
+                                    &PrefixPackedClaims::new(
+                                        shape.layout_digest(),
+                                        point,
+                                        inner_values(&shifted),
+                                    ),
+                                    transcript,
+                                    draw_inner,
+                                )
+                                .expect("the prefix-packed claim reduces");
+                            AkitaBackend::open(
+                                packed,
+                                claim.point.as_slice(),
+                                claim.value,
+                                &committed.setup.prover,
+                                Some(committed.hint.clone()),
+                                transcript,
+                            )
                         }
-                    })
-                    .collect()
-            });
-        pow.expect("the Akita bridge grinds no proof of work");
+                        ClassSource::OneHot(_) => AkitaBackend::prove_batch(
+                            &committed.setup.prover,
+                            Vec::new(),
+                            GroupOpeningClaim::new(
+                                committed.commitment.clone(),
+                                point,
+                                group_evaluations(&slot_evals),
+                            ),
+                            committed.hint.clone(),
+                            transcript,
+                        ),
+                    }
+                    .unwrap_or_else(|e| panic!("Akita open for {shape:?}: {e}"));
+                    AkitaClassOpening {
+                        class: data.index,
+                        slot_evals,
+                        proof: serde_to_bytes(&proof),
+                    }
+                })
+                .collect()
+        };
         AkitaJointProof { classes: openings }
     }
 
@@ -966,87 +964,83 @@ impl CommitmentScheme for AkitaScheme {
             ));
         }
 
-        let (result, pow) =
-            FacadeTranscript::<_, Inner>::scope_with(transcript, 0, draw_inner, |transcript| {
-                proof.classes.iter().try_for_each(|opening| {
-                    let class = &batch.classes[opening.class as usize];
-                    let shape = class
-                        .shape()
-                        .ok_or_else(|| invalid(format!("invalid Akita class {}", opening.class)))?;
-                    if opening.slot_evals.len() != shape.slot_count {
+        let result = {
+            proof.classes.iter().try_for_each(|opening| {
+                let class = &batch.classes[opening.class as usize];
+                let shape = class
+                    .shape()
+                    .ok_or_else(|| invalid(format!("invalid Akita class {}", opening.class)))?;
+                if opening.slot_evals.len() != shape.slot_count {
+                    return Err(invalid(format!(
+                        "Akita class {} opening has {} evaluations, expected {}",
+                        opening.class,
+                        opening.slot_evals.len(),
+                        shape.slot_count
+                    )));
+                }
+                let Some(commitment) = &class.commitment else {
+                    if opening.slot_evals.iter().any(|v| !v.is_zero()) || !opening.proof.is_empty()
+                    {
                         return Err(invalid(format!(
-                            "Akita class {} opening has {} evaluations, expected {}",
-                            opening.class,
-                            opening.slot_evals.len(),
-                            shape.slot_count
+                            "Akita class {} is committed as zero but its opening is not",
+                            opening.class
                         )));
                     }
-                    let Some(commitment) = &class.commitment else {
-                        if opening.slot_evals.iter().any(|v| !v.is_zero())
-                            || !opening.proof.is_empty()
-                        {
-                            return Err(invalid(format!(
-                                "Akita class {} is committed as zero but its opening is not",
-                                opening.class
-                            )));
-                        }
-                        return Ok(());
-                    };
-                    let commitment: AkitaCommitment = serde_from_bytes(commitment)
-                        .ok_or_else(|| invalid("malformed Akita class commitment"))?;
-                    let akita_proof: AkitaBatchProof = serde_from_bytes(&opening.proof)
-                        .ok_or_else(|| invalid("malformed Akita class proof"))?;
-                    let class_setup = setup.class_setup(&shape).map_err(invalid)?;
-                    let point =
-                        shape.upstream_point(&opening_point[max_vars - shape.logical_num_vars..]);
-                    match shape.kind {
-                        ClassKind::Dense(_) => {
-                            let offset = shape.kind.offset();
-                            let shifted: Vec<Fp128> =
-                                opening.slot_evals.iter().map(|v| *v + offset).collect();
-                            let claim = shape
-                                .layout()
-                                .reduce_claims(
-                                    &PrefixPackedClaims::new(
-                                        shape.layout_digest(),
-                                        point,
-                                        inner_values(&shifted),
-                                    ),
-                                    transcript,
-                                )
-                                .map_err(|e| {
-                                    invalid(format!("prefix-packed claim reduction: {e}"))
-                                })?;
-                            AkitaBackend::verify(
-                                &commitment,
-                                claim.point.as_slice(),
-                                claim.value,
-                                &akita_proof,
-                                &class_setup.verifier,
+                    return Ok(());
+                };
+                let commitment: AkitaCommitment = serde_from_bytes(commitment)
+                    .ok_or_else(|| invalid("malformed Akita class commitment"))?;
+                let akita_proof: AkitaBatchProof = serde_from_bytes(&opening.proof)
+                    .ok_or_else(|| invalid("malformed Akita class proof"))?;
+                let class_setup = setup.class_setup(&shape).map_err(invalid)?;
+                let point =
+                    shape.upstream_point(&opening_point[max_vars - shape.logical_num_vars..]);
+                match shape.kind {
+                    ClassKind::Dense(_) => {
+                        let offset = shape.kind.offset();
+                        let shifted: Vec<Fp128> =
+                            opening.slot_evals.iter().map(|v| *v + offset).collect();
+                        let claim = shape
+                            .layout()
+                            .reduce_claims(
+                                &PrefixPackedClaims::new(
+                                    shape.layout_digest(),
+                                    point,
+                                    inner_values(&shifted),
+                                ),
                                 transcript,
+                                draw_inner,
                             )
-                        }
-                        ClassKind::OneHot => AkitaBackend::verify_batch(
-                            &class_setup.verifier,
-                            &[],
-                            &GroupOpeningClaim::new(
-                                commitment,
-                                point,
-                                group_evaluations(&opening.slot_evals),
-                            ),
+                            .map_err(|e| invalid(format!("prefix-packed claim reduction: {e}")))?;
+                        AkitaBackend::verify(
+                            &commitment,
+                            claim.point.as_slice(),
+                            claim.value,
                             &akita_proof,
+                            &class_setup.verifier,
                             transcript,
-                        ),
+                        )
                     }
-                    .map_err(|e| {
-                        invalid(format!(
-                            "Akita class {} opening rejected: {e}",
-                            opening.class
-                        ))
-                    })
+                    ClassKind::OneHot => AkitaBackend::verify_batch(
+                        &class_setup.verifier,
+                        &[],
+                        &GroupOpeningClaim::new(
+                            commitment,
+                            point,
+                            group_evaluations(&opening.slot_evals),
+                        ),
+                        &akita_proof,
+                        transcript,
+                    ),
+                }
+                .map_err(|e| {
+                    invalid(format!(
+                        "Akita class {} opening rejected: {e}",
+                        opening.class
+                    ))
                 })
-            });
-        pow?;
+            })
+        };
         result
     }
 

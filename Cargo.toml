@@ -19,7 +19,6 @@ members = [
     "jolt-atlas-core",
     "jolt-atlas-verifier",
     "third_party/jolt-field",
-    "third_party/jolt-transcript",
     "third_party/jolt-poly",
     "third_party/jolt-utils",
     "atlas-trace",
@@ -47,7 +46,6 @@ atlas-pcs = { path = "./atlas-pcs", default-features = false }
 jolt-atlas-verifier = { path = "./jolt-atlas-verifier" }
 # Vendored upstream crates (third_party/PINS.md records each pin).
 jolt-field = { path = "./third_party/jolt-field", default-features = false }
-jolt-transcript = { path = "./third_party/jolt-transcript", default-features = false }
 jolt-utils = { path = "./third_party/jolt-utils" }
 jolt-poly = { path = "./third_party/jolt-poly", default-features = false }
 

@@ -9,23 +9,48 @@
     non_snake_case,
     type_alias_bounds
 )]
+//! The atlas Fiat-Shamir transcript.
+//!
+//! [`Transcript`] is the one transcript trait every protocol is written against; the prover runs
+//! it on a [`SpongeProver`] and the verifier on a [`SpongeVerifier`], spongefish duplex-sponge
+//! states (Blake2b-512 by default). Under them are the spongefish-native surfaces taken from
+//! upstream `jolt-transcript` ([`ProverTranscript`], [`VerifierTranscript`], the session
+//! [`setup`](prover_transcript), the proof-of-work step), and [`words`], the deployed proof
+//! format's word encodings.
+
+mod challenge;
+mod codec;
+mod pow;
+mod prover;
+mod setup;
 mod sponge;
 mod transcript;
+mod verifier;
+pub mod words;
 
+pub use atlas_algebra::field::challenge::{
+    grind_bits_for_loss, ChallengeCodec, ChallengeSetSize, GrindBitsError, MAX_CHALLENGE_BYTES,
+    MAX_POW_BITS,
+};
+pub use challenge::UniformBytes;
+pub use codec::BytesMsg;
+#[cfg(feature = "prover")]
+pub use pow::{MessageSearch, Probe};
+pub use prover::ProverTranscript;
+pub use setup::{prover_transcript, session_id, verifier_transcript, PROTOCOL_ID};
 #[cfg(feature = "prover")]
 pub use sponge::SpongeProver;
 pub use sponge::{SpongeVerifier, TranscriptSponge};
 pub use transcript::{AppendToTranscript, ProvingTranscript, Transcript, VerifyingTranscript};
+pub use verifier::VerifierTranscript;
+
+/// Spongefish's fixed-output hash bridge instantiated with Blake2b-512.
+pub type Blake2b512 = spongefish::instantiations::Hash<blake2::Blake2b512>;
 
 /// Blake2b-512 duplex-sponge transcripts (the default).
 #[cfg(feature = "prover")]
-pub type Blake2bProver = SpongeProver<jolt_transcript::Blake2b512>;
-pub type Blake2bVerifier = SpongeVerifier<jolt_transcript::Blake2b512>;
-
-/// Keccak-f1600 duplex-sponge transcripts.
-#[cfg(feature = "prover")]
-pub type KeccakProver = SpongeProver<spongefish::instantiations::Keccak>;
-pub type KeccakVerifier = SpongeVerifier<spongefish::instantiations::Keccak>;
+pub type Blake2bProver = SpongeProver<Blake2b512>;
+pub type Blake2bVerifier = SpongeVerifier<Blake2b512>;
 
 #[cfg(test)]
 mod fp128_tests {

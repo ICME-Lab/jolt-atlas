@@ -2,10 +2,12 @@
 name = "atlas-transcript"
 version = "0.1.0"
 edition = "2021"
-description = "The atlas Fiat-Shamir transcript over upstream jolt-transcript."
+description = "The atlas Fiat-Shamir transcript, on spongefish."
 
 [features]
-prover = ["jolt-transcript/prover-grinding"]
+# The prover's proof-of-work nonce search copies the sponge state, which spongefish 0.8.0
+# exposes only under `yolocrypto`; verifier builds leave it off.
+prover = ["spongefish/yolocrypto"]
 test-feature = ["prover"]
 
 [dependencies]
@@ -22,13 +24,13 @@ ark-ff = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist
 ark-serialize.workspace = true
 ark-std.workspace = true
 sha3 = "0.10.8"
-blake2 = "0.10"
+# spongefish 0.8's `Hash` bridge takes a `digest 0.11` hash.
+blake2 = "0.11.0-rc.6"
 jolt-field = { workspace = true, features = ["solinas", "asm"] }
-jolt-transcript = { workspace = true, features = ["solinas", "transcript-blake2b", "transcript-keccak"] }
 jolt-utils.workspace = true
 jolt-poly = { workspace = true, features = ["parallel"] }
 bincode.workspace = true
-spongefish = { version = "=0.8.0", default-features = false, features = ["keccak"] }
+spongefish = { version = "=0.8.0", default-features = false, features = ["getrandom", "turboshake128"] }
 
 # Numeric
 num.workspace = true
@@ -63,6 +65,11 @@ memory-stats = { version = "1.0.0", features = ["always_use_statm"] }
 
 # Testing
 serial_test.workspace = true
+
+# spongefish seeds the prover's private RNG from getrandom 0.4, which needs an explicit backend
+# on wasm32-unknown-unknown.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom_v04 = { version = "0.4", package = "getrandom", default-features = false, features = ["wasm_js"] }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true

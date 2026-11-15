@@ -3,6 +3,20 @@
 //! `BytesMsg` uses an eight-byte little-endian length, followed by the body.
 //! Challenges use spongefish's built-in `u128` codec.
 
+#![forbid(unsafe_code)]
+#![deny(
+    clippy::indexing_slicing,
+    clippy::get_unwrap,
+    clippy::string_slice,
+    clippy::fallible_impl_from,
+    clippy::mem_forget,
+    clippy::exit,
+    clippy::panic_in_result_fn,
+    clippy::let_underscore_must_use,
+    clippy::host_endian_bytes,
+    clippy::wildcard_enum_match_arm
+)]
+
 use spongefish::{Encoding, FromNarg, NargReader, VerificationError};
 
 /// Length-prefixed byte string. 8-byte LE length keeps `BytesMsg(a) ; BytesMsg(b)`

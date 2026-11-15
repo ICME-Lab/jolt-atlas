@@ -9,9 +9,9 @@
 //! described on [`BatchPrelude`].
 //!
 //! Every challenge the engine draws is preceded by a proof of work of [`round_pow_bits`] for
-//! the batch's degree. The engine's transcript writes keep the encoding of the deployed proof
-//! format (see the codec at the end of this module): field elements as canonical big-endian
-//! bytes and labels as 32-byte words, all through [`Transcript::append_bytes`].
+//! the batch's degree. The engine's transcript writes are the deployed proof format's word
+//! encodings ([`atlas_transcript::words`]): field elements as canonical big-endian bytes and
+//! labels as 32-byte words.
 //!
 //! Prover items live in [`prover`]; everything else here is shared with the verifier.
 
@@ -33,9 +33,14 @@ pub mod prover;
 #[cfg(test)]
 mod tests;
 
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_transcript::Transcript;
-use jolt_field::CanonicalBytes;
+use atlas_algebra::{
+    field::{challenge::grind_bits_for_loss, JoltField},
+    utils::errors::ProofVerifyError,
+};
+use atlas_transcript::{
+    words::{LabelWithCount, WordTranscript},
+    Transcript,
+};
 use jolt_poly::{CompressedPoly, UnivariatePolynomial};
 
 /// Transcript label of a sumcheck round polynomial.
@@ -50,9 +55,9 @@ pub const ROUND_SECURITY_BITS: u32 = 128;
 /// `degree`. A cheating round polynomial survives only if the challenge hits one of at most
 /// `degree` roots, probability `degree / |C|` per query for challenge set `C`
 /// ([`JoltField::challenge_set_size`]); the grind raises each query's cost so the bound reaches
-/// `2^-ROUND_SECURITY_BITS` (`jolt_transcript::grind_bits_for_loss`).
+/// `2^-ROUND_SECURITY_BITS` ([`grind_bits_for_loss`]).
 pub fn round_pow_bits<F: JoltField>(degree: usize) -> u32 {
-    jolt_transcript::grind_bits_for_loss(
+    grind_bits_for_loss(
         degree.max(1) as u64,
         F::challenge_set_size(),
         ROUND_SECURITY_BITS,
@@ -380,8 +385,7 @@ fn validate_batch_dimensions<F: JoltField>(
 /// verifier alike (before the batching coefficients are drawn).
 pub fn absorb_input_claims<F: JoltField, T: Transcript>(input_claims: &[F], transcript: &mut T) {
     for input_claim in input_claims {
-        append_label(transcript, SUMCHECK_CLAIM_TRANSCRIPT_LABEL);
-        append_field(transcript, input_claim);
+        transcript.append_labeled(SUMCHECK_CLAIM_TRANSCRIPT_LABEL, input_claim);
     }
 }
 
@@ -421,13 +425,12 @@ pub fn verify_compressed<F: JoltField, T: Transcript>(
         if coeffs.is_empty() {
             return Err(SumcheckError::CompressedPolynomialTooShort { round, got: 0 });
         }
-        append_label_with_count(
-            transcript,
+        transcript.append(&LabelWithCount(
             SUMCHECK_ROUND_TRANSCRIPT_LABEL,
             coeffs.len() as u64,
-        );
+        ));
         for coeff in coeffs {
-            append_field(transcript, coeff);
+            transcript.append(coeff);
         }
         let r = draw_challenge::<F, T>(transcript, pow_bits)
             .map_err(|_| SumcheckError::ProofOfWork { round })?;
@@ -436,41 +439,6 @@ pub fn verify_compressed<F: JoltField, T: Transcript>(
     }
 
     Ok((running_sum, challenges))
-}
-
-// The codec of the deployed proof format. Every engine write goes through `append_bytes` in
-// these encodings; the transcript's own scalar absorption tags and encodes differently.
-
-/// A label zero-padded into one 32-byte word.
-fn label_word(label: &'static [u8]) -> [u8; 32] {
-    debug_assert!(label.len() <= 32, "transcript labels fit one word");
-    let mut word = [0u8; 32];
-    for (byte, &label_byte) in word.iter_mut().zip(label) {
-        *byte = label_byte;
-    }
-    word
-}
-
-/// A label as one 32-byte word, zero-padded.
-fn append_label<T: Transcript>(transcript: &mut T, label: &'static [u8]) {
-    transcript.append_bytes(&label_word(label));
-}
-
-/// A label (zero-padded to 24 bytes) and a count (big-endian `u64`) packed in one 32-byte word.
-fn append_label_with_count<T: Transcript>(transcript: &mut T, label: &'static [u8], count: u64) {
-    debug_assert!(label.len() <= 24, "counted labels fit 24 bytes");
-    let mut word = label_word(label);
-    let (_, tail) = word.split_at_mut(24);
-    tail.copy_from_slice(&count.to_be_bytes());
-    transcript.append_bytes(&word);
-}
-
-/// A field element as its canonical bytes, big-endian.
-fn append_field<F: JoltField, T: Transcript>(transcript: &mut T, value: &F) {
-    let mut bytes = vec![0u8; <F as CanonicalBytes>::NUM_BYTES];
-    CanonicalBytes::to_bytes_le(value, &mut bytes);
-    bytes.reverse();
-    transcript.append_bytes(&bytes);
 }
 
 /// A round challenge: the proof of work of difficulty `pow_bits`, then the challenge as a field

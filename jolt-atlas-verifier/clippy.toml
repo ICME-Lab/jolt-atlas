@@ -11,7 +11,7 @@
 # witness construction lives in jolt-atlas-core (`disallowed-types` below; CI greps for
 # `trace::Trace` as the backstop).
 disallowed-methods = [
-    { path = "jolt_transcript::setup::prover_transcript", reason = "prover-only" },
+    { path = "atlas_transcript::prover_transcript", reason = "prover-only" },
     { path = "atlas_sumcheck::engine::prover::prove_batch", reason = "prover-only" },
     { path = "atlas_sumcheck::engine::prover::round_check_failed", reason = "prover-only" },
     { path = "atlas_sumcheck::relation::prover::prove_relation", reason = "prover-only" },
@@ -31,7 +31,7 @@ disallowed-types = [
     { path = "atlas_trace::trace::FusedIntermediates", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
     { path = "atlas_trace::trace::NodeAux", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
     { path = "atlas_trace::trace::SoftmaxWitness", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
-    { path = "jolt_transcript::prover::ProverTranscript", reason = "prover-only" },
+    { path = "atlas_transcript::ProverTranscript", reason = "prover-only" },
     { path = "atlas_sumcheck::engine::prover::ProveRounds", reason = "prover-only" },
     { path = "atlas_sumcheck::engine::prover::MemberRound", reason = "prover-only" },
     { path = "atlas_sumcheck::engine::prover::MemberFinish", reason = "prover-only" },

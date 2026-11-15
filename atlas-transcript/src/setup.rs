@@ -4,6 +4,20 @@
 //! absorbs one instance encoding: the length-prefixed caller session followed
 //! by the 32-byte public-statement digest.
 
+#![forbid(unsafe_code)]
+#![deny(
+    clippy::indexing_slicing,
+    clippy::get_unwrap,
+    clippy::string_slice,
+    clippy::fallible_impl_from,
+    clippy::mem_forget,
+    clippy::exit,
+    clippy::panic_in_result_fn,
+    clippy::let_underscore_must_use,
+    clippy::host_endian_bytes,
+    clippy::wildcard_enum_match_arm
+)]
+
 use spongefish::instantiations::TurboShake128;
 use spongefish::{DuplexSpongeInit, ProverState, SessionId, VerifierState};
 
@@ -45,11 +59,11 @@ fn transcript_instance(session: &[u8], digest: [u8; 32]) -> (BytesMsg, [u8; 32])
 /// # Example
 ///
 /// ```
-/// use jolt_transcript::{prover_transcript, verifier_transcript, BytesMsg, ProverTranscript, VerifierTranscript};
-/// use spongefish::instantiations::Hash;
-/// use blake2::Blake2b512;
+/// use atlas_transcript::{
+///     prover_transcript, verifier_transcript, Blake2b512 as Sponge, BytesMsg, ProverTranscript,
+///     VerifierTranscript,
+/// };
 ///
-/// type Sponge = Hash<Blake2b512>;
 /// const SESSION: &[u8] = b"jolt-rv64imac/v1";
 /// let instance: [u8; 32] = [0xAB; 32];
 ///

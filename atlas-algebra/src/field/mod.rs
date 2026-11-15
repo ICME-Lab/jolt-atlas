@@ -225,7 +225,7 @@ pub trait JoltField:
 
     /// The upstream field the transcript's challenge codec decodes full-width challenges into
     /// (same elements as `Self`); see [`JoltField::from_challenge_codec`].
-    type ChallengeCodecField: jolt_transcript::ChallengeCodec;
+    type ChallengeCodecField: challenge::ChallengeCodec;
 
     /// The element of `Self` equal to a decoded codec challenge.
     fn from_challenge_codec(x: Self::ChallengeCodecField) -> Self;
@@ -236,8 +236,8 @@ pub trait JoltField:
     fn challenge_from_field(x: Self) -> Self::Challenge;
 
     /// The size of the set [`JoltField::Challenge`] values are drawn from, which prices the
-    /// proof of work before a challenge (`jolt_transcript::grind_bits_for_loss`).
-    fn challenge_set_size() -> jolt_transcript::ChallengeSetSize;
+    /// proof of work before a challenge ([`challenge::grind_bits_for_loss`]).
+    fn challenge_set_size() -> challenge::ChallengeSetSize;
     type Challenge: 'static
         + Sized
         + Copy
@@ -376,6 +376,7 @@ where
     }
 }
 
+pub mod challenge;
 pub mod folded_accum;
 pub mod fp128;
 

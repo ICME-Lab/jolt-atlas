@@ -18,13 +18,14 @@ parallel = ["rayon"]
 # Forwards to jolt-field so `F: JoltField` implies `F: Allocative`; without
 # it this crate's field-generic derives cannot discharge their scalar bound.
 allocative = ["dep:allocative", "jolt-field/allocative"]
-transcript = ["dep:jolt-transcript"]
+# Declared empty: jolt-transcript is not vendored (third_party/PINS.md), so the
+# feature must stay off; the source's `cfg(feature = "transcript")` gate stays valid.
+transcript = []
 
 [dependencies]
 allocative = { version = "0.3", optional = true }
 jolt-field = { path = "../jolt-field", default-features = false }
 jolt-utils = { path = "../jolt-utils" }
-jolt-transcript = { path = "../jolt-transcript", default-features = false, optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 tracing = { version = "0.1.37", default-features = false, features = ["attributes"] }
 rayon = { version = "1.12.0", optional = true }

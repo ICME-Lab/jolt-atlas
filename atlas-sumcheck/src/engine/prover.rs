@@ -3,12 +3,15 @@
 //! [`ClearSumcheckRecorder`] that writes each round to the transcript.
 
 use atlas_algebra::field::JoltField;
-use atlas_transcript::Transcript;
+use atlas_transcript::{
+    words::{LabelWithCount, WordTranscript},
+    Transcript,
+};
 use jolt_poly::{UnivariatePoly, UnivariatePolynomial};
 
 use super::{
-    append_field, append_label_with_count, draw_challenge, round_pow_bits, BatchPrelude,
-    CompressedSumcheckProof, PaddingRule, SumcheckError, SUMCHECK_ROUND_TRANSCRIPT_LABEL,
+    draw_challenge, round_pow_bits, BatchPrelude, CompressedSumcheckProof, PaddingRule,
+    SumcheckError, SUMCHECK_ROUND_TRANSCRIPT_LABEL,
 };
 
 /// One batch member's prove-side round interface, consumed by [`prove_batch`]'s round loop.
@@ -149,14 +152,13 @@ impl<F: JoltField> ClearSumcheckRecorder<F> {
         let Some((constant, rest)) = coeffs.split_first() else {
             return Err(SumcheckError::CompressedPolynomialTooShort { round, got: 0 });
         };
-        append_label_with_count(
-            transcript,
+        transcript.append(&LabelWithCount(
             SUMCHECK_ROUND_TRANSCRIPT_LABEL,
             rest.len() as u64,
-        );
-        append_field(transcript, constant);
+        ));
+        transcript.append(constant);
         for coeff in rest.iter().skip(1) {
-            append_field(transcript, coeff);
+            transcript.append(coeff);
         }
         let challenge = draw_challenge::<F, T>(transcript, pow_bits)
             .map_err(|_| SumcheckError::ProofOfWork { round })?;

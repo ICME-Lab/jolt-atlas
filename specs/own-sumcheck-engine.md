@@ -6,7 +6,7 @@
 | Created     | 2026-11-14                     |
 | Status      | proposed                       |
 | PR          | (filled when the PR opens, or at merge) |
-| Depends on  | `specs/own-pcs-adapter.md` (phase 2; removes the `committed` feature's only would-be consumer) |
+| Depends on  | `specs/own-pcs-adapter.md` (phase 2, implemented: `jolt-crypto`, the `committed` feature's only would-be consumer, is gone) |
 | Supersedes  | `third_party/PINS.md` section `jolt-sumcheck`; `specs/adoption-program.md` stage 4b's "run on upstream's engine through a facade" |
 
 Status is `proposed` until the implementation merges, then `implemented`. A spec is frozen at
@@ -28,11 +28,20 @@ the facade and the dead feature-gated code.
 
 ### Goal
 
-Copy `jolt-sumcheck`'s `prover`, `verifier`, `batch`, `claim`, `domain`, `error`, `proof`,
-`round_proof` and `recorder` modules into `atlas-sumcheck/src/engine/`, make them take
-`atlas_transcript`'s prover and verifier transcripts directly (grinding inside the engine's
-challenge draw), delete `upstream_sumcheck.rs` and `third_party/jolt-sumcheck`, with every
-round message, challenge and proof byte unchanged.
+Move the part of `jolt-sumcheck` that atlas reaches (from its `prover`, `verifier`, `batch`,
+`claim`, `domain`, `error`, `proof`, `round_proof` and `recorder` modules) into
+`atlas-sumcheck/src/engine/`, generic over `atlas_transcript::Transcript` (the trait
+`prove_relation_batch` and `verify_relation_batch` already bound on, not the
+`ProvingTranscript`/`VerifyingTranscript` subtraits) and `atlas_algebra::field::JoltField`, with
+the grind inside the engine's challenge draw: each challenge is `transcript.pow(bits)` then
+`transcript.challenge_scalar_optimized::<F>().into()`. Split up and delete `upstream_sumcheck.rs`
+and delete `third_party/jolt-sumcheck`, with every round message, challenge and proof byte
+unchanged.
+
+Moved: the items atlas calls and whatever they need internally. Not moved: the uniskip prover
+(`prove_uniskip_*`, `ProvedUniskip*`), the uncompressed verify and `ClearProof` path, the
+integer domains no atlas path reaches, and the `committed`/`r1cs` code. The compiler settles the
+exact list: nothing copied is left without a caller.
 
 ### Invariants
 
@@ -52,12 +61,27 @@ round message, challenge and proof byte unchanged.
   _batch_parallel}` and `verify_relation{,_batch}` keep their signatures. Mechanism: the
   compiler (every op relation and subprotocol compiles unchanged) and
   `relation_specs_match_their_dispatched_op_kind`.
+- **Absorption bytes unchanged.** The engine absorbs only through `Transcript::append_bytes`, with
+  upstream's legacy encodings: a field element as its `F::NUM_BYTES` canonical bytes, big-endian
+  (`jolt_transcript::legacy`'s blanket `AppendToTranscript`); `LabelWithCount` as 32 bytes, the
+  label zero-padded to 24 then the count as a big-endian `u64`; the input-claim and round labels
+  (`b"sumcheck_claim"`, `SUMCHECK_ROUND_TRANSCRIPT_LABEL`) as today. Never `append_scalar` or
+  `append_scalars`, which tag and encode differently (`atlas-transcript/src/sponge.rs`). The codec
+  is a private `engine` module until phase 4 owns the transcript. Mechanism: digests.
 - **The proof-of-work grind happens exactly where it does today**: before each challenge the
   verifier draws, with `grind_bits_for_loss` from the transcript crate. Mechanism: digests
   (a moved or skipped grind changes every challenge).
-- **Upstream's engine tests run.** `tests.rs` and `round_scheduler_tests.rs` (1,756 lines)
-  are ported to our transcript and field and run under `cargo nextest run -p atlas-sumcheck`.
-  Mechanism: Test job.
+- **Upstream's engine tests run.** `tests.rs` and `round_scheduler_tests.rs` never ran in the
+  vendored build: they are gated `#[cfg(all(test, feature = "committed"))]` and written against
+  BN254 `Fr`, `Blake2bTranscript` and `jolt_crypto`'s Pedersen. The tests that cover the moved
+  surface (about 25 of 43) are ported to `Fp128` and `SpongeProver`/`SpongeVerifier` and run
+  under `cargo nextest run -p atlas-sumcheck`; the committed, uniskip and integer-domain tests go
+  with their code. Mechanism: Test job.
+- **The Akita bridge survives.** `atlas-pcs::akita` drives the external `akita-*` batch opening,
+  bound on `jolt_transcript::Transcript<Challenge = AkitaField>`, through `FacadeTranscript`
+  (`akita/mod.rs`, the two `scope_with` calls). It moves to `atlas-pcs/src/akita/facade.rs` as
+  `pub(crate)`, unchanged in behavior, and lives as long as `akita-*` is external; `atlas-pcs`
+  keeps its `jolt-transcript` dependency. Mechanism: digests (Akita openings are in every proof).
 
 ### Non-Goals
 
@@ -66,17 +90,25 @@ round message, challenge and proof byte unchanged.
 - Owning `jolt-poly`'s `UnivariatePoly`/`CompressedPoly`, which the engine's proof type uses:
   the engine keeps importing `jolt_poly` until phase 5.
 - The `committed`/`r1cs` features and their code: not copied (atlas commits through the PCS,
-  not through the sumcheck recorder; R1CS is the zkVM's).
+  not through the sumcheck recorder; R1CS is the zkVM's). Nor the uniskip prover, the
+  uncompressed verify path or unused domains (see Goal).
 
 ## Evaluation
 
 ### Acceptance Criteria
 
-- [ ] `atlas-sumcheck/src/engine/` holds the copied modules; `atlas-sumcheck/src/upstream_sumcheck.rs`
-      is deleted; `third_party/jolt-sumcheck` is deleted; no source names `jolt_sumcheck`.
-- [ ] `jolt-atlas-verifier/clippy.toml` has no `jolt_sumcheck` rows and lists the engine's
-      prover items under their new paths; the isolation job passes.
-- [ ] `cargo nextest run -p atlas-sumcheck` passes, including the ported engine tests.
+- [ ] `atlas-sumcheck/src/engine/` holds the moved code; `atlas-sumcheck/src/upstream_sumcheck.rs`
+      is deleted; `third_party/jolt-sumcheck` is deleted; no source names `jolt_sumcheck` or
+      `upstream_sumcheck` (the CI grep step "No vendored PCS crate or upstream scheme trait named
+      in atlas sources" gains both); no `jolt-sumcheck` row in any manifest.
+- [ ] No copied item without a caller, and no `#[allow(dead_code)]` in `engine/`.
+- [ ] `FacadeTranscript` is `pub(crate)` in `atlas-pcs::akita::facade`.
+- [ ] `jolt-atlas-verifier/clippy.toml` has no `jolt_sumcheck` rows and lists the surviving
+      engine prover items under `atlas_sumcheck::engine::prover::*`; the uniskip, committed and
+      `CommittedSumcheckRecorder` rows and the `allow-invalid` note that existed for them are
+      gone; the isolation job passes.
+- [ ] `cargo nextest run -p atlas-sumcheck` passes, including the ported engine tests (the
+      report states how many were ported and which were dropped with their code).
 - [ ] Digest pins unchanged; CI green; heavy job green on `main`.
 - [ ] `docs/verifier.md` reading order names `atlas_sumcheck::engine` in place of
       `jolt_sumcheck::verify_compressed`; `PINS.md`, inventory, crate maps updated.
@@ -98,12 +130,21 @@ improvement; not a target.
 
 ### Architecture
 
-`atlas-sumcheck/src/engine/{mod,prover,verifier,batch,claim,domain,error,proof,round_proof,
-recorder}.rs`. The engine's transcript bound changes from upstream's `Transcript` facade to
-`atlas_transcript::ProvingTranscript`/`VerifyingTranscript`; the grind-before-challenge step
-moves from `upstream_sumcheck::GrindingTranscript` into the engine's challenge draw. The
-relation core (`relation/`) and every subprotocol keep their current imports with the path
-renamed. `jolt-atlas-verifier` sees `verify_compressed` through `atlas_sumcheck::engine`.
+`atlas-sumcheck/src/engine/` with the moved modules (those the kept surface needs) and a
+private codec module. The engine's transcript bound changes from upstream's facade `Transcript`
+to `atlas_transcript::Transcript`; the grind-before-challenge step moves from
+`upstream_sumcheck::FacadeTranscript::challenge` into the engine's challenge draw.
+`upstream_sumcheck.rs` splits: `InstanceRounds`, `round_check_failed`, `expect_engine` and the
+compressed-poly converters move to `engine`; `FacadeTranscript` moves to
+`atlas-pcs/src/akita/facade.rs`. The relation core (`relation/`) and every subprotocol keep
+their current imports with the path renamed; `jolt-atlas-core`'s twelve
+`use jolt_sumcheck::{ProveRounds, SumcheckError}` sites re-point to `atlas_sumcheck::engine`.
+`jolt-atlas-verifier` sees `verify_compressed` through `atlas_sumcheck::sumcheck`, as today.
+
+Manifests: `jolt-sumcheck` rows go from the root (member and workspace dependency) and from
+`atlas-algebra`, `atlas-transcript`, `atlas-lookup-tables`, `jolt-atlas-verifier` (unused
+edges), `atlas-pcs` and `jolt-atlas-core`; `atlas-sumcheck` gains whatever the engine needs
+(`thiserror`, `tracing`, `serde` if still used).
 
 ### Alternatives Considered
 
@@ -115,8 +156,9 @@ renamed. `jolt-atlas-verifier` sees `verify_compressed` through `atlas_sumcheck:
 ## Documentation
 
 `PINS.md`, `docs/upstream-inventory.md` (the `subprotocols/sumcheck*` row: engine owned from
-`f3265b5a`), `docs/verifier.md`, `CLAUDE.md`/`AGENTS.md` (the "both driving upstream
-`jolt-sumcheck`'s engine" sentence), `docs/roadmap.md`.
+`f3265b5a`), `docs/verifier.md` (the reading order, and the perimeter row on line 21 loses
+`jolt-sumcheck`), `CLAUDE.md`/`AGENTS.md` (the "both driving upstream `jolt-sumcheck`'s engine"
+sentence and the crate maps), `docs/roadmap.md`.
 
 ## Execution
 

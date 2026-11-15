@@ -57,7 +57,6 @@ use backend::{
 use blake2::{digest::consts::U32, Blake2b, Digest};
 use jolt_field::Ring;
 
-use jolt_poly::{EqPolynomial, Polynomial as UpstreamDense};
 use num_traits::{One, Zero};
 use rayon::prelude::*;
 
@@ -67,7 +66,7 @@ use atlas_algebra::{
         fp128::{Fp128, Inner},
         JoltField,
     },
-    poly::multilinear::MultilinearPolynomial,
+    poly::{eq::EqPolynomial, multilinear::MultilinearPolynomial},
     utils::errors::ProofVerifyError,
 };
 use atlas_transcript::{AppendToTranscript, Transcript};
@@ -542,19 +541,17 @@ impl ClassRows {
     /// Each member's evaluation at `point` (Akita's order: cycle variables, then address).
     fn evaluations(&self, point: &[Inner]) -> Vec<Fp128> {
         let (cycle, address) = point.split_at(point.len() - LOG_ONE_HOT_K);
-        let eq_cycle = EqPolynomial::new(cycle.to_vec()).evaluations();
-        let eq_address = EqPolynomial::new(address.to_vec()).evaluations();
+        let eq_cycle = EqPolynomial::<Fp128>::evals(&wrap(cycle));
+        let eq_address = EqPolynomial::<Fp128>::evals(&wrap(address));
         self.columns
             .par_iter()
             .map(|column| {
-                Fp128(
-                    column
-                        .par_iter()
-                        .zip(eq_cycle.par_iter())
-                        .with_min_len(1 << 12)
-                        .map(|(k, e)| k.map_or(Inner::zero(), |k| *e * eq_address[k as usize]))
-                        .sum(),
-                )
+                column
+                    .par_iter()
+                    .zip(eq_cycle.par_iter())
+                    .with_min_len(1 << 12)
+                    .map(|(k, e)| k.map_or(Fp128::zero(), |k| *e * eq_address[k as usize]))
+                    .sum()
             })
             .collect()
     }
@@ -591,7 +588,7 @@ impl TraceOneHotRows for ClassRows {
 /// What a committed class retains for its opening.
 enum ClassSource {
     /// The packed physical polynomial of a dense class.
-    Dense(UpstreamDense<Inner>),
+    Dense(Vec<Inner>),
     /// The trace of a one-hot class.
     OneHot(Arc<ClassRows>),
 }
@@ -622,18 +619,18 @@ impl ClassProverData {
             ClassSource::Dense(packed) => {
                 // One eq table, shared across the slots.
                 let len = 1usize << self.shape.logical_num_vars;
-                let eq = EqPolynomial::new(point.to_vec()).evaluations();
+                let eq = EqPolynomial::<Fp128>::evals(&wrap(point));
                 let offset = self.shape.kind.offset();
-                packed.evals()[..self.shape.slot_count * len]
+                packed[..self.shape.slot_count * len]
                     .par_chunks(len)
                     .map(|slot| {
-                        let shifted: Inner = slot
+                        let shifted: Fp128 = slot
                             .par_iter()
                             .zip(eq.par_iter())
                             .with_min_len(1 << 12)
-                            .map(|(a, b)| *a * *b)
+                            .map(|(a, b)| Fp128(*a) * *b)
                             .sum();
-                        Fp128(shifted) - offset
+                        shifted - offset
                     })
                     .collect()
             }
@@ -692,6 +689,11 @@ fn is_zero(poly: &MultilinearPolynomial<Fp128>) -> bool {
 
 /// The packed physical polynomial of a dense class: each member, shifted by the class offset over
 /// its whole logical domain, in its slot; unused slots zero.
+/// `point` as atlas field elements, for the eq tables.
+fn wrap(point: &[Inner]) -> Vec<Fp128> {
+    point.iter().map(|&x| Fp128(x)).collect()
+}
+
 fn pack_dense(shape: &ClassShape, members: &[&MultilinearPolynomial<Fp128>]) -> Vec<Inner> {
     let logical_len = 1usize << shape.logical_num_vars;
     let offset = shape.kind.offset().0;
@@ -1109,7 +1111,7 @@ where
             let setup = setup.class_setup(&shape).unwrap_or_else(|e| panic!("{e}"));
             let (source, committed) = match shape.kind {
                 ClassKind::Dense(_) => {
-                    let packed = UpstreamDense::new(pack_dense(&shape, &member_polys));
+                    let packed = pack_dense(&shape, &member_polys);
                     let committed = AkitaBackend::commit(&packed, &setup.prover);
                     (ClassSource::Dense(packed), committed)
                 }
@@ -1169,7 +1171,9 @@ where
 mod tests {
     use super::*;
     use ark_std::test_rng;
-    use atlas_algebra::poly::{multilinear::PolynomialEvaluation, one_hot::OneHotPolynomial};
+    use atlas_algebra::poly::{
+        eq::eq_index_msb, multilinear::PolynomialEvaluation, one_hot::OneHotPolynomial,
+    };
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
     };
@@ -1191,27 +1195,36 @@ mod tests {
         ))
     }
 
-    /// jolt-poly and atlas-algebra agree on the variable order of a dense polynomial, of a densely
-    /// packed one-hot polynomial, and of a one-hot class's trace.
+    /// `Σ_i evals[i] · eq(point, i)`, the index order Akita's dense commitments take (bits of
+    /// `i` most significant first), computed independently of `MultilinearPolynomial`.
+    fn dense_eval(evals: &[Inner], point: &[Inner]) -> Inner {
+        evals
+            .iter()
+            .enumerate()
+            .map(|(i, &e)| e * eq_index_msb(point, i as u128))
+            .sum()
+    }
+
+    /// The Akita dense index order and atlas-algebra agree on the variable order of a dense
+    /// polynomial, of a densely packed one-hot polynomial, and of a one-hot class's trace.
     #[test]
     fn evaluation_conventions_agree() {
         let mut rng = test_rng();
         let n = 6;
         let coeffs: Vec<i32> = (0..1 << n).map(|_| rng.gen_range(-1000..1000)).collect();
         let ours = MultilinearPolynomial::<Fp128>::from(coeffs.clone());
-        let theirs =
-            UpstreamDense::<Inner>::new(coeffs.iter().map(|&c| Fp128::from_i32(c).0).collect());
+        let theirs: Vec<Inner> = coeffs.iter().map(|&c| Fp128::from_i32(c).0).collect();
         let r = random_point(&mut rng, n);
-        assert_eq!(ours.evaluate(&r).0, theirs.evaluate(&inner_values(&r)));
+        assert_eq!(ours.evaluate(&r).0, dense_eval(&theirs, &inner_values(&r)));
 
         let ours = random_one_hot(&mut rng, 32);
         let shape = ClassShape::new(ClassKind::of(&ours), ours.get_num_vars(), 1).unwrap();
         assert!(matches!(shape.kind, ClassKind::Dense(_)));
-        let packed = UpstreamDense::new(pack_dense(&shape, &[&ours]));
+        let packed = pack_dense(&shape, &[&ours]);
         let r = random_point(&mut rng, ours.get_num_vars());
         let mut physical = vec![Inner::zero(); shape.physical_num_vars - r.len()];
         physical.extend(inner_values(&r));
-        assert_eq!(ours.evaluate(&r).0, packed.evaluate(&physical));
+        assert_eq!(ours.evaluate(&r).0, dense_eval(&packed, &physical));
 
         let ours = random_one_hot(&mut rng, 1 << 12);
         let shape = ClassShape::new(ClassKind::of(&ours), ours.get_num_vars(), 1).unwrap();

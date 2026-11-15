@@ -24,7 +24,6 @@ use atlas_transcript::{
     Transcript,
 };
 use jolt_field::{CanonicalBytes, Zero};
-use jolt_poly::{MultilinearPoly, OneHotIndexOrder, OneHotPolynomial, Polynomial};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 
@@ -796,40 +795,39 @@ pub fn reverse_point(point: &[AkitaField]) -> Vec<AkitaField> {
     point.iter().rev().copied().collect()
 }
 
-pub(crate) fn one_hot_polynomial<P>(
-    polynomial: &P,
+/// Row-major one-hot columns (`columns[c][row]` is the hot index of row `row`, or `None` for an
+/// all-zero row) as backend one-hot polynomials, after checking `one_hot_k`.
+pub(crate) fn one_hot_columns(
+    columns: Vec<Vec<Option<u8>>>,
     one_hot_k: usize,
-) -> Result<Option<AkitaBackendOneHotPoly>, OpeningsError>
-where
-    P: MultilinearPoly<AkitaField> + ?Sized,
-{
-    if !polynomial.is_one_hot()
-        || polynomial.one_hot_k() != Some(one_hot_k)
-        || polynomial.one_hot_index_order() != Some(OneHotIndexOrder::RowMajor)
-    {
-        return Ok(None);
-    }
-
-    let indices = polynomial
-        .one_hot_indices()
-        .ok_or_else(|| invalid_batch("Jolt one-hot polynomial did not expose its indices"))?;
+) -> Result<Vec<AkitaBackendOneHotPoly>, OpeningsError> {
     let _ = validate_one_hot_k(one_hot_k)?;
-    AkitaBackendOneHotPoly::new(one_hot_k, indices.to_vec())
-        .map(Some)
-        .map_err(akita_error)
+    columns
+        .into_iter()
+        .map(|indices| AkitaBackendOneHotPoly::new(one_hot_k, indices).map_err(akita_error))
+        .collect()
 }
 
-pub(crate) fn owned_one_hot_polynomial(
-    polynomial: OneHotPolynomial,
-    one_hot_k: usize,
-) -> Result<AkitaBackendOneHotPoly, OpeningsError> {
-    if polynomial.k() != one_hot_k || polynomial.index_order() != OneHotIndexOrder::RowMajor {
-        return Err(invalid_batch(format!(
-            "Akita owned one-hot polynomial requires row-major K={one_hot_k}"
-        )));
+/// The number of variables of a one-hot column: `log2(K · rows)`.
+pub(crate) fn one_hot_num_vars(rows: usize, one_hot_k: usize) -> Result<usize, OpeningsError> {
+    match rows.checked_mul(one_hot_k) {
+        Some(total) if total.is_power_of_two() => Ok(total.trailing_zeros() as usize),
+        _ => Err(invalid_batch(format!(
+            "Akita one-hot column of {rows} rows at K={one_hot_k} is not a power-of-two domain"
+        ))),
     }
-    let _ = validate_one_hot_k(one_hot_k)?;
-    AkitaBackendOneHotPoly::new(one_hot_k, polynomial.into_indices()).map_err(akita_error)
+}
+
+/// The number of variables of a dense evaluation table, which must have power-of-two length.
+pub(crate) fn dense_num_vars(evals: &[AkitaField]) -> Result<usize, OpeningsError> {
+    if evals.len().is_power_of_two() {
+        Ok(evals.len().trailing_zeros() as usize)
+    } else {
+        Err(invalid_batch(format!(
+            "Akita dense polynomial has {} evaluations, not a power of two",
+            evals.len()
+        )))
+    }
 }
 
 pub(crate) fn validate_one_hot_k(one_hot_k: usize) -> Result<usize, OpeningsError> {
@@ -889,13 +887,14 @@ pub fn jolt_to_akita_index(num_vars: usize, index: usize) -> usize {
 }
 
 pub(crate) fn dense_polynomials(
-    polynomials: &[Polynomial<AkitaField>],
+    polynomials: &[Vec<AkitaField>],
 ) -> Result<Vec<AkitaBackendDensePoly>, OpeningsError> {
     polynomials
         .iter()
-        .map(|poly| {
-            let evals = jolt_to_akita_evals(poly.num_vars(), poly.evals())?;
-            AkitaBackendDensePoly::from_field_evals(poly.num_vars(), evals).map_err(akita_error)
+        .map(|evals| {
+            let num_vars = dense_num_vars(evals)?;
+            let evals = jolt_to_akita_evals(num_vars, evals)?;
+            AkitaBackendDensePoly::from_field_evals(num_vars, evals).map_err(akita_error)
         })
         .collect()
 }
@@ -929,33 +928,6 @@ pub fn jolt_to_akita_evals(
         akita_evals[akita_index] = eval;
     }
     Ok(akita_evals)
-}
-
-/// Materializes a polynomial's evaluations directly in Akita's (bit-reversed)
-/// index order, avoiding a second full-size buffer for the reorder pass.
-#[expect(
-    clippy::indexing_slicing,
-    reason = "jolt_to_akita_index keeps num_vars bits of the reversal, so the index is < 2^num_vars = evals.len(); for num_vars = 0 the single index for_each_row yields is 0"
-)]
-pub(crate) fn akita_ordered_evaluations<P>(polynomial: &P) -> Result<Vec<AkitaField>, OpeningsError>
-where
-    P: MultilinearPoly<AkitaField> + ?Sized,
-{
-    let num_vars = polynomial.num_vars();
-    let Some(len) = domain_size(num_vars) else {
-        return Err(invalid_batch(format!(
-            "Akita polynomial dimension {num_vars} exceeds usize bit width"
-        )));
-    };
-    let mut evals = vec![AkitaField::zero(); len];
-    let mut jolt_index = 0usize;
-    polynomial.for_each_row(num_vars, &mut |_, row| {
-        for &eval in row {
-            evals[jolt_to_akita_index(num_vars, jolt_index)] = eval;
-            jolt_index += 1;
-        }
-    });
-    Ok(evals)
 }
 
 pub(crate) fn serialize_akita<T>(value: &T) -> Result<Vec<u8>, OpeningsError>
@@ -1151,28 +1123,13 @@ mod tests {
         );
     }
 
-    struct HugeDimensionPoly;
-
-    impl MultilinearPoly<AkitaField> for HugeDimensionPoly {
-        fn num_vars(&self) -> usize {
-            usize::BITS as usize
-        }
-
-        fn evaluate(&self, _point: &[AkitaField]) -> AkitaField {
-            unreachable!("the dimension check rejects before any evaluation")
-        }
-
-        fn for_each_row(&self, _sigma: usize, _f: &mut dyn FnMut(usize, &[AkitaField])) {
-            unreachable!("the dimension check rejects before any row is streamed")
-        }
-    }
-
     #[test]
-    fn akita_ordered_evaluations_rejects_unrepresentable_domains() {
-        let err = akita_ordered_evaluations(&HugeDimensionPoly)
-            .expect_err("2^64 evaluation domain must overflow");
+    fn dense_num_vars_rejects_non_power_of_two_tables() {
+        assert_eq!(dense_num_vars(&[AkitaField::from_u64(1); 8]).unwrap(), 3);
+        let err = dense_num_vars(&[AkitaField::from_u64(1); 6])
+            .expect_err("a 6-entry table has no variable count");
         assert!(
-            matches!(&err, OpeningsError::InvalidBatch(message) if message.contains("bit width")),
+            matches!(&err, OpeningsError::InvalidBatch(message) if message.contains("power of two")),
             "unexpected error: {err}"
         );
     }

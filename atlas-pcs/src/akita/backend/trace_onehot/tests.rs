@@ -26,7 +26,6 @@ use super::source::TraceOneHotColumnBatchView;
 use crate::akita::backend::{
     AkitaBackend, AkitaChunkProfile, AkitaField, AkitaScheduleArtifacts, AkitaSetupParams,
 };
-use jolt_poly::OneHotPolynomial;
 
 #[derive(Debug)]
 struct TestRows {
@@ -751,10 +750,10 @@ fn small_k256_blocks_commit_like_materialized_onehot() {
     .unwrap();
     let native = materialized_columns
         .iter()
-        .map(|poly| OneHotPolynomial::new(K, poly.indices().to_vec()))
+        .map(|poly| poly.indices().to_vec())
         .collect();
     let (native_commitment, _) =
-        AkitaBackend::commit_one_hot_group_owned(&pcs_setup, [9; 32], native).unwrap();
+        AkitaBackend::commit_one_hot_group(&pcs_setup, [9; 32], native).unwrap();
     let (streamed_commitment, _) =
         AkitaBackend::commit_trace_one_hot(&pcs_setup, [9; 32], Arc::clone(&source.rows), &[])
             .unwrap();

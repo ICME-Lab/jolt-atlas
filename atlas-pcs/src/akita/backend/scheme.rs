@@ -8,7 +8,6 @@ use akita_pcs::custom_source::RootPolyMeta;
 use akita_pcs::{AkitaError, CommitOutput, CpuBackend, GroupContext, SourceHandle};
 use atlas_algebra::poly::point::EvaluationClaim;
 use atlas_transcript::Transcript;
-use jolt_poly::{MultilinearPoly, OneHotPolynomial, Polynomial};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{btree_map::Entry, BTreeMap},
@@ -16,17 +15,16 @@ use std::{
 };
 
 use crate::akita::backend::adapters::{
-    akita_error, akita_ordered_evaluations, commit_failed, dense_polynomials, invalid_batch,
-    invalid_setup, one_hot_polynomial, owned_one_hot_polynomial, serialize_akita,
-    validate_one_hot_k, with_backend_pool, AkitaBackendCommitment, AkitaBackendDensePoly,
-    AkitaBackendExtField, AkitaBackendFlavor, AkitaBackendHint, AkitaBackendOneHotPoly,
-    AkitaBatchProof, AkitaCommitment, AkitaCpuBackend, AkitaField, AkitaHintSource,
-    AkitaLayoutDigest, AkitaProverHint, AkitaProverSetup, AkitaSetupFlavor, AkitaSetupParams,
-    AkitaVerifierScheduleArtifacts, AkitaVerifierSetup, BackendVerifierCache,
-    FullWidthBackendSetup, AKITA_SOURCE_RING_DIMENSION,
+    akita_error, commit_failed, dense_num_vars, dense_polynomials, invalid_batch, invalid_setup,
+    jolt_to_akita_evals, one_hot_columns, one_hot_num_vars, serialize_akita, validate_one_hot_k,
+    with_backend_pool, AkitaBackendCommitment, AkitaBackendDensePoly, AkitaBackendExtField,
+    AkitaBackendFlavor, AkitaBackendHint, AkitaBackendOneHotPoly, AkitaBatchProof, AkitaCommitment,
+    AkitaCpuBackend, AkitaField, AkitaHintSource, AkitaLayoutDigest, AkitaProverHint,
+    AkitaProverSetup, AkitaSetupFlavor, AkitaSetupParams, AkitaVerifierScheduleArtifacts,
+    AkitaVerifierSetup, BackendVerifierCache, FullWidthBackendSetup, AKITA_SOURCE_RING_DIMENSION,
 };
 use crate::akita::backend::configs::AkitaChunkProfile;
-use crate::akita::backend::native_batching::{AkitaNativeBatchPolynomials, AkitaNativeBatching};
+use crate::akita::backend::native_batching::AkitaNativeBatching;
 use crate::akita::backend::one_hot_family::{with_one_hot_family, OneHotFamily};
 use crate::akita::backend::trace_onehot::{TraceOneHotColumn, TraceOneHotRows};
 
@@ -84,19 +82,20 @@ impl AkitaBackend {
     pub fn commit_group(
         setup: &AkitaProverSetup,
         layout_digest: [u8; 32],
-        polynomials: &[Polynomial<AkitaField>],
+        polynomials: &[Vec<AkitaField>],
     ) -> Result<(AkitaCommitment, AkitaProverHint), OpeningsError> {
         let first = polynomials
             .first()
             .ok_or_else(|| invalid_batch("Akita commitment group must contain a polynomial"))?;
-        let num_vars = first.num_vars();
+        let num_vars = dense_num_vars(first)?;
 
         Self::validate_commit_shape(setup, num_vars, polynomials.len())?;
         for polynomial in polynomials {
-            if polynomial.num_vars() != num_vars {
+            if polynomial.len() != first.len() {
                 return Err(invalid_batch(format!(
-                    "Akita commitment group mixes {}-variable and {num_vars}-variable polynomials",
-                    polynomial.num_vars()
+                    "Akita commitment group mixes {}-evaluation and {}-evaluation polynomials",
+                    polynomial.len(),
+                    first.len()
                 )));
             }
         }
@@ -105,78 +104,28 @@ impl AkitaBackend {
         Self::commit_dense_backend(setup, layout_digest, num_vars, dense)
     }
 
-    /// Commits a group of row-major one-hot polynomials through the
-    /// backend's one-hot flavor as one commitment object whose members are
-    /// opened together at a shared point.
+    /// Commits a group of row-major one-hot columns (`columns[c][row]` is row `row`'s hot index)
+    /// through the backend's one-hot flavor as one commitment object whose members are opened
+    /// together at a shared point.
     pub fn commit_one_hot_group(
         setup: &AkitaProverSetup,
         layout_digest: [u8; 32],
-        polynomials: &[OneHotPolynomial],
+        columns: Vec<Vec<Option<u8>>>,
     ) -> Result<(AkitaCommitment, AkitaProverHint), OpeningsError> {
-        let first = polynomials
+        let first = columns
             .first()
             .ok_or_else(|| invalid_batch("Akita commitment group must contain a polynomial"))?;
-        let num_vars = first.num_vars();
-        Self::validate_commit_shape(setup, num_vars, polynomials.len())?;
-        let backend_polynomials = polynomials
-            .iter()
-            .map(|polynomial| {
-                if polynomial.num_vars() != num_vars {
-                    return Err(invalid_batch(format!(
-                        "Akita commitment group mixes {}-variable and {num_vars}-variable polynomials",
-                        polynomial.num_vars()
-                    )));
-                }
-                one_hot_polynomial(polynomial, setup.one_hot_k())?
-                .ok_or_else(|| {
-                    invalid_batch(format!(
-                        "Akita one-hot commitment group requires row-major K={} one-hot polynomials",
-                        setup.one_hot_k()
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let poly_count = backend_polynomials.len();
-        let (backend_commitment, backend_hint) =
-            Self::commit_one_hot_backend(setup, backend_polynomials)?;
-        Self::package_commitment(
-            layout_digest,
-            num_vars,
-            backend_commitment,
-            backend_hint,
-            AkitaHintSource::OneHot {
-                poly_count,
-                one_hot_k: setup.one_hot_k(),
-            },
-        )
-    }
-
-    /// Commits owned one-hot columns without cloning their hot-index buffers
-    /// at the Jolt/Akita boundary. The opening hint retains the backend
-    /// representations needed by the prover.
-    pub fn commit_one_hot_group_owned(
-        setup: &AkitaProverSetup,
-        layout_digest: [u8; 32],
-        polynomials: Vec<OneHotPolynomial>,
-    ) -> Result<(AkitaCommitment, AkitaProverHint), OpeningsError> {
-        let first = polynomials
-            .first()
-            .ok_or_else(|| invalid_batch("Akita commitment group must contain a polynomial"))?;
-        let num_vars = first.num_vars();
-        Self::validate_commit_shape(setup, num_vars, polynomials.len())?;
-        let backend_polynomials = polynomials
-            .into_iter()
-            .map(|polynomial| {
-                if polynomial.num_vars() != num_vars {
-                    return Err(invalid_batch(format!(
-                        "Akita commitment group mixes {}-variable and {num_vars}-variable polynomials",
-                        polynomial.num_vars()
-                    )));
-                }
-                owned_one_hot_polynomial(polynomial, setup.one_hot_k())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let poly_count = backend_polynomials.len();
+        let rows = first.len();
+        let num_vars = one_hot_num_vars(rows, setup.one_hot_k())?;
+        Self::validate_commit_shape(setup, num_vars, columns.len())?;
+        if let Some(column) = columns.iter().find(|column| column.len() != rows) {
+            return Err(invalid_batch(format!(
+                "Akita commitment group mixes {}-row and {rows}-row one-hot columns",
+                column.len()
+            )));
+        }
+        let poly_count = columns.len();
+        let backend_polynomials = one_hot_columns(columns, setup.one_hot_k())?;
         let (backend_commitment, backend_hint) =
             Self::commit_one_hot_backend(setup, backend_polynomials)?;
         Self::package_commitment(
@@ -533,42 +482,25 @@ impl AkitaBackend {
         Ok((prover, verifier))
     }
 
-    pub fn commit<P: MultilinearPoly<AkitaField> + ?Sized>(
-        poly: &P,
+    /// Commits one dense polynomial, given by its evaluations in index order (`evals[i]` at the
+    /// Boolean point whose bits, most significant first, are `i`'s).
+    pub fn commit(
+        evals: &[AkitaField],
         setup: &AkitaProverSetup,
     ) -> Result<(AkitaCommitment, AkitaProverHint), OpeningsError> {
-        let num_vars = poly.num_vars();
+        let num_vars = dense_num_vars(evals)?;
         Self::validate_commit_shape(setup, num_vars, 1)?;
-        if let Some(one_hot) = one_hot_polynomial(poly, setup.one_hot_k())? {
-            let (backend_commitment, backend_hint) =
-                Self::commit_one_hot_backend(setup, vec![one_hot])?;
-            return Self::package_commitment(
-                setup.default_layout_digest(),
-                num_vars,
-                backend_commitment,
-                backend_hint,
-                AkitaHintSource::OneHot {
-                    poly_count: 1,
-                    one_hot_k: setup.one_hot_k(),
-                },
-            );
-        }
-
-        if poly.is_one_hot() {
-            return Err(invalid_batch(format!(
-                "Akita one-hot commitments require row-major K={}",
-                setup.one_hot_k()
-            )));
-        }
-
-        let evals = akita_ordered_evaluations(poly)?;
-        let dense =
-            vec![AkitaBackendDensePoly::from_field_evals(num_vars, evals).map_err(akita_error)?];
+        let dense = vec![AkitaBackendDensePoly::from_field_evals(
+            num_vars,
+            jolt_to_akita_evals(num_vars, evals)?,
+        )
+        .map_err(akita_error)?];
         Self::commit_dense_backend(setup, setup.default_layout_digest(), num_vars, dense)
     }
 
-    pub fn open<P: MultilinearPoly<AkitaField> + ?Sized>(
-        poly: &P,
+    /// Opens the dense polynomial `evals` at `point`, committing it first when no hint is given.
+    pub fn open(
+        evals: &[AkitaField],
         point: &[AkitaField],
         eval: AkitaField,
         setup: &AkitaProverSetup,
@@ -577,15 +509,13 @@ impl AkitaBackend {
     ) -> Result<AkitaBatchProof, OpeningsError> {
         let hint = match hint {
             Some(hint) => hint,
-            None => Self::commit(poly, setup)?.1,
+            None => Self::commit(evals, setup)?.1,
         };
         let statement = vec![VerifierOpeningClaim {
             commitment: hint.commitment.clone(),
             evaluation: EvaluationClaim::new(point.to_vec(), eval),
         }];
-        let polynomials: AkitaNativeBatchPolynomials<'_> =
-            vec![&poly as &(dyn MultilinearPoly<AkitaField> + '_)];
-        AkitaNativeBatching::prove_batch(setup, statement, polynomials, hint, transcript)
+        AkitaNativeBatching::prove_batch(setup, statement, hint, transcript)
     }
 
     pub fn verify(
@@ -654,18 +584,18 @@ impl AkitaBackend {
         ))
     }
 
-    pub fn commit_full_width_object<P: MultilinearPoly<AkitaField> + ?Sized>(
+    pub fn commit_full_width_object(
         setup: &AkitaProverSetup,
-        poly: &P,
+        evals: &[AkitaField],
         layout_digest: [u8; 32],
     ) -> Result<(AkitaCommitment, AkitaProverHint), OpeningsError> {
-        let num_vars = poly.num_vars();
+        let num_vars = dense_num_vars(evals)?;
         let cached = setup.full_width.get(&num_vars).ok_or_else(|| {
             invalid_setup("full-width object arity was not admitted during preprocessing")
         })?;
         let dense = vec![AkitaBackendDensePoly::from_field_evals(
             num_vars,
-            akita_ordered_evaluations(poly)?,
+            jolt_to_akita_evals(num_vars, evals)?,
         )
         .map_err(akita_error)?];
         let (backend_commitment, backend_hint) = with_backend_pool(|| {
@@ -719,10 +649,30 @@ mod tests {
     use crate::akita::backend::AkitaOneHotScheduleArtifact;
     use akita_config::CommitmentConfig;
     use akita_schedules::ValidatedScheduleCatalog;
+    use atlas_algebra::poly::eq::eq_index_msb;
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
     };
     use jolt_field::Ring;
+
+    /// `Σ_i evals[i] · eq(point, i)`, bits of `i` most significant first.
+    fn dense_eval(evals: &[AkitaField], point: &[AkitaField]) -> AkitaField {
+        evals
+            .iter()
+            .enumerate()
+            .map(|(i, &e)| e * eq_index_msb(point, i as u128))
+            .sum()
+    }
+
+    /// A row-major one-hot column's evaluation: row `row` hot at `k` is index `row · K + k`.
+    fn one_hot_eval(one_hot_k: usize, indices: &[Option<u8>], point: &[AkitaField]) -> AkitaField {
+        indices
+            .iter()
+            .enumerate()
+            .filter_map(|(row, k)| k.map(|k| row * one_hot_k + k as usize))
+            .map(|index| eq_index_msb(point, index as u128))
+            .sum()
+    }
 
     /// The sponge state after the transcript's last operation.
     fn state<T: Transcript>(transcript: &T) -> [u8; 32] {
@@ -745,12 +695,12 @@ mod tests {
             PolynomialGroupLayout::new(14, 1),
         ));
         let (bounded, _) = AkitaBackend::setup(params).unwrap();
-        let polynomial = Polynomial::new(vec![AkitaField::pow2(80); 1 << 14]);
+        let polynomial = vec![AkitaField::pow2(80); 1 << 14];
         assert!(AkitaBackend::commit(&polynomial, &bounded).is_err());
         let (commitment, hint) =
             AkitaBackend::commit_full_width_object(&bounded, &polynomial, [7; 32]).unwrap();
         assert_eq!(commitment, hint.commitment);
-        assert_eq!(commitment.num_vars, polynomial.num_vars());
+        assert_eq!(commitment.num_vars, 14);
     }
 
     #[test]
@@ -857,7 +807,7 @@ mod tests {
         let row_count = 1usize << (num_vars - one_hot_k.ilog2() as usize);
         let polynomials = (0..num_polys)
             .map(|poly| {
-                let indices = (0..row_count)
+                (0..row_count)
                     .map(|row| {
                         if row == 2 {
                             None
@@ -865,12 +815,12 @@ mod tests {
                             Some(((row + poly) % one_hot_k) as u8)
                         }
                     })
-                    .collect::<Vec<_>>();
-                OneHotPolynomial::new(one_hot_k, indices)
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
         let (commitment, hint) =
-            AkitaBackend::commit_one_hot_group(&prover_setup, [4; 32], &polynomials).unwrap();
+            AkitaBackend::commit_one_hot_group(&prover_setup, [4; 32], polynomials.clone())
+                .unwrap();
         assert_eq!(commitment.one_hot_k(), one_hot_k);
 
         let point = vec![AkitaField::from_u64(3); num_vars];
@@ -878,17 +828,16 @@ mod tests {
             .iter()
             .map(|polynomial| VerifierOpeningClaim {
                 commitment: commitment.clone(),
-                evaluation: EvaluationClaim::new(point.clone(), polynomial.evaluate(&point)),
+                evaluation: EvaluationClaim::new(
+                    point.clone(),
+                    one_hot_eval(one_hot_k, polynomial, &point),
+                ),
             })
             .collect::<Vec<_>>();
         let mut prover_transcript = Blake2bProver::new(b"akita-one-hot-k");
         let proof = AkitaNativeBatching::prove_batch(
             &prover_setup,
             statement.clone(),
-            polynomials
-                .iter()
-                .map(|poly| poly as &dyn MultilinearPoly<AkitaField>)
-                .collect(),
             hint,
             &mut prover_transcript,
         )
@@ -1107,14 +1056,12 @@ mod tests {
             Arc::clone(&artifacts),
         ))
         .unwrap();
-        let polynomial = Polynomial::new(
-            (0..(1u64 << 14))
-                .map(|i| AkitaField::from_u64(2 + 5 * i))
-                .collect(),
-        );
+        let polynomial: Vec<AkitaField> = (0..(1u64 << 14))
+            .map(|i| AkitaField::from_u64(2 + 5 * i))
+            .collect();
         let (commitment, hint) = AkitaBackend::commit(&polynomial, &prover_setup).unwrap();
         let point = (3..17).map(AkitaField::from_u64).collect::<Vec<_>>();
-        let value = polynomial.evaluate(&point);
+        let value = dense_eval(&polynomial, &point);
         let statement = vec![VerifierOpeningClaim {
             commitment,
             evaluation: EvaluationClaim::new(point, value),
@@ -1123,7 +1070,6 @@ mod tests {
         let proof = AkitaNativeBatching::prove_batch(
             &prover_setup,
             statement.clone(),
-            vec![&polynomial],
             hint,
             &mut prover_transcript,
         )
@@ -1207,11 +1153,9 @@ mod tests {
             AkitaScheduleArtifacts::shared_from_default_directory(AkitaChunkProfile::new(8, 2));
         let setup_params = AkitaSetupParams::new(14, 1, [7; 32], artifacts);
         let (prover_setup, verifier_setup) = AkitaBackend::setup(setup_params).unwrap();
-        let polynomial = Polynomial::new(
-            (0..(1u64 << 14))
-                .map(|i| AkitaField::from_u64(2 + 5 * i))
-                .collect(),
-        );
+        let polynomial: Vec<AkitaField> = (0..(1u64 << 14))
+            .map(|i| AkitaField::from_u64(2 + 5 * i))
+            .collect();
         let commitment_digest = [9; 32];
         let (commitment, hint) = AkitaBackend::commit_group(
             &prover_setup,
@@ -1222,7 +1166,7 @@ mod tests {
         assert_eq!(commitment.layout_digest, commitment_digest);
 
         let point = (3..17).map(AkitaField::from_u64).collect::<Vec<_>>();
-        let claim = polynomial.evaluate(&point);
+        let claim = dense_eval(&polynomial, &point);
         let statement = vec![VerifierOpeningClaim {
             commitment: commitment.clone(),
             evaluation: EvaluationClaim::new(point.clone(), claim),
@@ -1232,7 +1176,6 @@ mod tests {
         let proof = AkitaNativeBatching::prove_batch(
             &prover_setup,
             statement.clone(),
-            vec![&polynomial],
             hint,
             &mut prover_transcript,
         )

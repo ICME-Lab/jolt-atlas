@@ -27,7 +27,6 @@ use atlas_transcript::{
     words::{Label, LabelWithCount, U64Word, WordEncoding, WordTranscript},
     Transcript,
 };
-use jolt_poly::MultilinearPoly;
 use tracing::info_span;
 
 use crate::akita::backend::adapters::{
@@ -400,8 +399,6 @@ impl AkitaNativeBatching {
 
 pub type AkitaNativeBatchStatement = Vec<VerifierOpeningClaim<AkitaField, AkitaCommitment>>;
 
-pub type AkitaNativeBatchPolynomials<'a> = Vec<&'a (dyn MultilinearPoly<AkitaField> + 'a)>;
-
 struct ValidatedStatement<'a> {
     commitment: &'a AkitaCommitment,
     point: &'a [AkitaField],
@@ -477,45 +474,17 @@ fn validate_statement(
     Ok(ValidatedStatement { commitment, point })
 }
 
-/// Checks that the prover hint and witness polynomials match the statement's
-/// commitment group. The hint's backend handle needs no shape checks: hints
-/// are only constructible by this crate's commit paths, which derive the
-/// commitment's shape from the source the handle retains.
-fn validate_witness(
+/// Checks that the prover hint matches the statement's commitment group. The hint's backend
+/// handle carries the witness and needs no shape checks: hints are only constructible by this
+/// crate's commit paths, which derive the commitment's shape from the source the handle retains.
+fn validate_hint(
     hint: &AkitaProverHint,
     commitment: &AkitaCommitment,
-    polynomials: &[&(dyn MultilinearPoly<AkitaField> + '_)],
 ) -> Result<(), OpeningsError> {
     if hint.commitment != *commitment {
         return Err(invalid_batch(
             "Akita prover hint does not match the statement commitment",
         ));
-    }
-    if polynomials.len() != commitment.poly_count {
-        return Err(invalid_batch(format!(
-            "Akita prover received {} polynomials for {} commitment slots",
-            polynomials.len(),
-            commitment.poly_count
-        )));
-    }
-    for polynomial in polynomials {
-        if polynomial.num_vars() != commitment.num_vars {
-            return Err(invalid_batch(format!(
-                "Akita witness polynomial has {} variables but commitment has {}",
-                polynomial.num_vars(),
-                commitment.num_vars
-            )));
-        }
-    }
-    if matches!(
-        hint.source,
-        AkitaHintSource::OneHot { .. } | AkitaHintSource::TraceOneHot { .. }
-    ) && !polynomials.iter().all(|polynomial| polynomial.is_one_hot())
-    {
-        return Err(invalid_batch(format!(
-            "Akita {} prover hint requires one-hot witness polynomials",
-            hint.source.kind()
-        )));
     }
     Ok(())
 }
@@ -589,7 +558,6 @@ impl AkitaNativeBatching {
     pub fn prove_batch<T>(
         setup: &AkitaProverSetup,
         statement: AkitaNativeBatchStatement,
-        polynomials: AkitaNativeBatchPolynomials<'_>,
         hint: AkitaProverHint,
         transcript: &mut T,
     ) -> Result<AkitaBatchProof, OpeningsError>
@@ -610,7 +578,7 @@ impl AkitaNativeBatching {
             poly_count = commitment.poly_count,
         )
         .entered();
-        validate_witness(&hint, commitment, &polynomials)?;
+        validate_hint(&hint, commitment)?;
         let (backend_commitment, backend_hint) = hint
             .backend
             .ok_or_else(|| invalid_batch("Akita prover hint is missing backend opening data"))?;

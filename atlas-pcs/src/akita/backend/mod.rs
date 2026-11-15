@@ -39,9 +39,7 @@ pub use adapters::{
     AkitaProverSetup, AkitaSetupParams, AkitaVerifierSetup, AKITA_ONE_HOT_K16, AKITA_ONE_HOT_K256,
 };
 pub use configs::AkitaChunkProfile;
-pub use native_batching::{
-    AkitaNativeBatchPolynomials, AkitaNativeBatchStatement, AkitaNativeBatching,
-};
+pub use native_batching::{AkitaNativeBatchStatement, AkitaNativeBatching};
 pub use schedule_artifacts::{AkitaOneHotScheduleArtifact, AkitaScheduleArtifacts};
 pub use schedule_registry::{DenseGroupLayout, GroupedScheduleParams};
 pub use scheme::AkitaBackend;

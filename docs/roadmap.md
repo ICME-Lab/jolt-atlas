@@ -3,6 +3,8 @@
 Living document. Specs freeze at merge; this page tracks the program across them and is
 updated as phases land. Last updated 2026-11-14.
 
+Op coverage is tracked separately in `docs/op-roadmap.md`.
+
 ## Principle
 
 jolt-atlas owns the proof-system code it runs. Upstream `a16z/jolt` is a reference we read when

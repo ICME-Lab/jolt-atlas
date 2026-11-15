@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-14                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          | (filled when the PR opens, or at merge) |
 | Depends on  | `specs/own-field.md` (phase 6; after it the only arkworks users are our own crates) |
 | Supersedes  | `docs/upstream-inventory.md` "The `akita-*` patch" sentence on the arkworks fork pin (`third_party/PINS.md` is gone since phase 6); the root `Cargo.toml` `[patch.crates-io]` arkworks entries |

@@ -109,17 +109,23 @@ jobs:
         # atlas-algebra owns the polynomial library and the field (the root jolt-poly and
         # jolt-field packages only re-export them for akita-*).
         run: |
-          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|jolt_poly|jolt_utils|jolt_field|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
+          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|jolt_poly|jolt_utils|jolt_field|ark_ff|ark_serialize|ark_std|ark_ec|ark_bn254|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
               common atlas-* jolt-atlas-* --include='*.rs'; then
             echo "an atlas source names a deleted vendored crate or an upstream facade" >&2
             exit 1
           fi
-      - name: No BN254 curve crates in any member's dependency graph
+      - name: No arkworks crate in any member's dependency graph
+        # common::serialize owns the proof encoding and atlas-algebra::field the big integers
+        # (specs/drop-arkworks.md); no ark-* crate may come back, including through akita-*.
         run: |
           status=0
+          if grep -q '^name = "ark-' Cargo.lock; then
+            echo "Cargo.lock holds an ark-* crate" >&2
+            status=1
+          fi
           for name in $(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].name'); do
-            if cargo tree -p "$name" -e normal,build --prefix none | grep -qE '^(ark-bn254|ark-ec) '; then
-              echo "$name resolves ark-bn254 or ark-ec" >&2
+            if cargo tree -p "$name" -e normal,build,dev --prefix none | grep -qE '^ark-'; then
+              echo "$name resolves an ark-* crate" >&2
               status=1
             fi
           done

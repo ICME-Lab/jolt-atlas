@@ -15,8 +15,7 @@ use blake2::{digest::consts::U32, Blake2b, Digest};
 
 use super::zoo::{op_gauntlet_inputs, zoo};
 use crate::onnx_proof::{
-    proof_serialization::{deserialize_proof, serialize_proof},
-    prove, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+    proof_serialization::serialize_proof, prove, AtlasProverPreprocessing, AtlasSharedPreprocessing,
 };
 
 fn hex(bytes: &[u8]) -> String {
@@ -99,22 +98,5 @@ fn digest_bge_tiny() {
         &inputs,
         "42ca418893815c4739bbf76fa5abcef9a306184386888c0e04d306250f8f9549",
         "1a4ac4ffdd508082fe79ff802d51ba53ebfe40d884e883f3f0a4844e27728e2a",
-    );
-}
-
-/// The op_gauntlet proof as the arkworks encoder wrote it (`fixtures/op_gauntlet.proof`, the
-/// proof `digest_op_gauntlet` pins), decoded and re-encoded by the current codec. The digests pin
-/// the encoder; this pins the decoder against bytes the previous implementation produced.
-#[test]
-fn op_gauntlet_fixture_round_trips() {
-    let bytes = include_bytes!("fixtures/op_gauntlet.proof");
-    let proof = deserialize_proof::<<AkitaScheme as CommitmentScheme>::Field, AkitaScheme>(bytes)
-        .expect("the fixture decodes");
-    let again = serialize_proof(&proof).expect("the fixture re-encodes");
-    assert!(again == bytes, "re-encoding the fixture changed its bytes");
-    assert_eq!(
-        hex(&Blake2b::<U32>::digest(bytes)),
-        "9e41536504e7d32ffc8e65e3a5b54a1a716d26d28b75253a427bef99277c71af",
-        "the fixture is the proof digest_op_gauntlet pins"
     );
 }

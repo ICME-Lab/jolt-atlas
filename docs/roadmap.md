@@ -37,7 +37,7 @@ pinned rev, MIT/Apache) are treated the same way for now; see "Open decisions".
 | `jolt-poly` | 6,365 | `UnivariatePoly`, `GruenSplitEqPolynomial`, `CompressedPoly`, binding order | `atlas-algebra::poly` (8,067 lines) | 5 (owned: `atlas-algebra::poly`; root `jolt-poly/` re-exports the `akita-*` surface) |
 | `jolt-utils` | 353 | one allocator helper | `atlas-algebra::utils` | 5 (owned: `atlas-algebra::utils::thread`) |
 | `jolt-field` | 11,227 | Solinas Fp128 kernels (`Prime128OffsetA7F7`), `Ring`/`Field`, accumulators | `atlas-algebra::field` (`JoltField` extends upstream's; `Fp128` newtype) | 6 (owned: `atlas-algebra::field`; root `jolt-field/` re-exports the `akita-*` surface) |
-| arkworks fork pin (`ark-ff`, `ark-serialize`, `ark-std`) | external | `CanonicalSerialize` in 38 files, `BigInt`, signed ints, `test_rng` | — | 7 |
+| arkworks fork pin (`ark-ff`, `ark-serialize`, `ark-std`) | external | `CanonicalSerialize` in 38 files, `BigInt`, signed ints, `test_rng` | — | 7 (dropped: `common::serialize`, `field::{Limbs, signed}`) |
 
 ## Phases
 
@@ -61,7 +61,8 @@ the spec says otherwise.
    the `Fp128` newtype and the two-layer `JoltField` go. Status: implemented on `dev`.
 7. **arkworks** — `specs/drop-arkworks.md`. Our own canonical serialization and big-integer
    helpers; the `a16z/arkworks-algebra` fork pin and `[patch.crates-io]` entries removed.
-   Status: proposed.
+   Status: implemented on `dev`. With it the program is complete: no vendored crate and no
+   arkworks remain; `akita-*` is the one external proof-system dependency.
 
 Phases 5 and 6 keep the package names `jolt-poly` and `jolt-field` (the `akita-*` manifests
 bind those names through the root `[patch."https://github.com/a16z/jolt"]`), owned and at the

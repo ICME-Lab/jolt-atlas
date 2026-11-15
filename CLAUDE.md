@@ -161,8 +161,9 @@ Pipeline: ONNX file → `atlas-onnx-import` (decode, infer, fold, lower) → `at
 → execute to a trace → `jolt-atlas-core` preprocess, commit, prove → verify against the model's
 public IO. The proof crosses the prover/verifier boundary as a `jolt-atlas-verifier` type.
 
-Arkworks comes from the fork `a16z/arkworks-algebra`, branch `dev/twist-shout`, pinned in the
-root `Cargo.toml`.
+No arkworks crate is in the graph (CI checks `Cargo.lock`): proofs, commitments and transcript
+messages encode through `atlas_algebra::serialize::Canonical` (`common::serialize`), byte for byte
+the arkworks compressed encoding the format was defined with.
 
 ### The atlas-trace Behavioral Contract
 

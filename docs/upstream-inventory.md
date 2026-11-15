@@ -289,9 +289,9 @@ modules came with their files.
 (`a16z/jolt`); the root `Cargo.toml` patches that source to the owned packages at the repository
 root, which re-export what `akita-*` binds from `atlas-algebra` (`jolt-field` also declares the
 `solinas`, `asm` and `parallel` features `akita-*` enables, as no-ops), so the graph holds one
-of each. Adopting them bumped `smallvec` to `1.16` in `Cargo.lock`. The root `Cargo.toml` pins
-`a16z/arkworks-algebra` branch `dev/twist-shout` for `ark-ff` and `ark-serialize` (the fork's
-`BigInt`, signed big integers and their `Allocative` derives) until phase 7.
+of each. Adopting them bumped `smallvec` to `1.16` in `Cargo.lock`. Phase 7
+(`specs/drop-arkworks.md`) removed the `a16z/arkworks-algebra` fork pin; see "arkworks dropped"
+below.
 
 ## BN254 removal (stage 7b)
 
@@ -303,9 +303,23 @@ materialized RLC's evaluation instead. The `prove` example drops `--pcs` and `--
 
 The gate is the resolved dependency graph: CI resolves every workspace member (vendored upstream
 crates with default features off, since they keep optional `bn254` features) and fails on
-`ark-bn254` or `ark-ec`. The `a16z/arkworks-algebra` fork pin stays for `ark-ff` (`BigInt`, the
-signed big integers and their `Allocative` derives, used by the Fp128 ladder and the small-scalar
-polynomials) and `ark-serialize`; "The `akita-*` patch" above records it.
+`ark-bn254` or `ark-ec`. Phase 7 removed the rest of arkworks; the check became "no `ark-*` crate
+in any member's graph".
+
+## arkworks dropped (`specs/drop-arkworks.md`)
+
+No arkworks crate remains. The proof format's encoding (arkworks' `CanonicalSerialize` compressed
+mode, which for atlas's types equals the uncompressed one) is `common::serialize::Canonical`,
+re-exported as `atlas_algebra::serialize`: one mode, decoding always validates, a decoded `Vec`
+allocates only what its decoded elements need (the former `deserialize_vec`), and the methods are
+`encode`/`encoded_len`/`decode` (named apart from serde's, which every field also implements).
+The 15 derive sites are hand impls or `impl_canonical_struct!`; types that were never encoded
+(witnesses, operand polynomials) lost their stub impls. The fork's `BigInt<N>` is
+`field::Limbs<N>` (the ladder's operators and `Zero`/`From<u128>` live beside
+`UnreducedInteger`) and its `S64`…`S256` are `field::signed`, which upstream `jolt-field` had
+ported from the same fork; `SignedBigIntHi32::magnitude_as_bigint_nplus1` was added there.
+`UniformRand` gave way to `Field::random`, and `ark_std::test_rng` to
+`atlas_algebra::utils::test_rng` (the same seed and `StdRng`, so test streams are unchanged).
 
 ## `joltworks` dissolved (stage 9)
 

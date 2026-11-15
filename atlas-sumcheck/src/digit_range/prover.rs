@@ -1,8 +1,9 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::engine::prover::round_check_failed;
+use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
-use crate::upstream_sumcheck::round_check_failed;
 use allocative::Allocative;
 use atlas_algebra::poly::{
     multilinear_polynomial::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
@@ -10,7 +11,6 @@ use atlas_algebra::poly::{
 };
 use common::parallel::par_enabled;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
 /// Prover of a [`DigitRangeRelation`] over Gruen's split eq: per round, the summand's degree-`b`

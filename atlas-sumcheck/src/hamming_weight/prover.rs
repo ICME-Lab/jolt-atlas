@@ -1,6 +1,7 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
@@ -12,7 +13,6 @@ use atlas_algebra::{
 };
 use common::parallel::par_enabled;
 use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 
 #[derive(Allocative)]
 pub struct HammingWeightSumcheckProver<F: JoltField> {

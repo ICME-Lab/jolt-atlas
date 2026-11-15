@@ -1,10 +1,11 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
 use crate::{
+    engine::prover::round_check_failed,
     opening_proof::{prover::ProverOpeningAccumulator, OpeningId, SumcheckId},
-    upstream_sumcheck::round_check_failed,
 };
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
@@ -27,7 +28,6 @@ use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use std::{
     collections::{BTreeMap, HashMap},
     mem,

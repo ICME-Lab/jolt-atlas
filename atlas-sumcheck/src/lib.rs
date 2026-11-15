@@ -27,4 +27,3 @@ pub mod ra_virtual;
 pub mod relation;
 pub mod shout;
 pub mod sumcheck;
-pub mod upstream_sumcheck;

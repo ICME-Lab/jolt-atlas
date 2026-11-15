@@ -1,8 +1,9 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::engine::prover::round_check_failed;
+use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
-use crate::upstream_sumcheck::round_check_failed;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -26,7 +27,6 @@ use atlas_lookup_tables::{
 use common::parallel::par_enabled;
 use itertools::Itertools;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use std::array;
 
 /// Generic prover for the Prefix-Suffix Read-RAF sumcheck.

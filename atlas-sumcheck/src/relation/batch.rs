@@ -1,19 +1,18 @@
-//! Relations driven through upstream `jolt-sumcheck`: a batch of set-up relations is one
+//! Relations driven through the sumcheck [`engine`](crate::engine): a batch of set-up relations is one
 //! front-loaded batched sumcheck ([`verify_relation_batch`]), a single relation one plain
 //! sumcheck ([`verify_relation`]). The verifier checks the batch's final claim against the
 //! relations' output expressions and appends their produced openings.
 
 use super::{evaluate_expression, relation_input_claim, Relation, RelationVerifier};
 use crate::{
-    opening_proof::VerifierOpeningAccumulator,
-    sumcheck::{absorb_input_claims, SumcheckInstanceProof},
+    engine::absorb_input_claims, opening_proof::VerifierOpeningAccumulator,
+    sumcheck::SumcheckInstanceProof,
 };
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
     utils::errors::ProofVerifyError,
 };
 use atlas_transcript::Transcript;
-use jolt_sumcheck::ClearSumcheckRecorder;
 
 /// A set-up relation as a member of a batch, its relation type erased.
 pub trait DynRelationVerifier<F: JoltField, T: Transcript> {
@@ -115,11 +114,7 @@ pub fn verify_relation_batch<F: JoltField, T: Transcript>(
         .iter()
         .map(|r| r.input_claim(accumulator))
         .collect::<Result<_, _>>()?;
-    absorb_input_claims(
-        &mut ClearSumcheckRecorder::<F>::new(),
-        &input_claims,
-        transcript,
-    );
+    absorb_input_claims(&input_claims, transcript);
     let coefficients: Vec<F> = transcript.challenge_vector(relations.len());
 
     let claim: F = relations
@@ -155,11 +150,7 @@ pub fn verify_relation<F: JoltField, T: Transcript>(
     transcript: &mut T,
 ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
     let input_claim = relation.input_claim(accumulator)?;
-    absorb_input_claims(
-        &mut ClearSumcheckRecorder::<F>::new(),
-        &[input_claim],
-        transcript,
-    );
+    absorb_input_claims(&[input_claim], transcript);
     let (final_claim, r_sumcheck) = proof.verify(
         input_claim,
         relation.rounds(),

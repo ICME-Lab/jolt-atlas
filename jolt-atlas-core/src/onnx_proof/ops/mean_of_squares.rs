@@ -46,9 +46,9 @@ use atlas_algebra::{
     },
 };
 use atlas_claims::SymbolicSumcheck;
+use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use common::parallel::par_enabled;
 use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
 /// The specialized prover of a [`MeanOfSquaresRelation`]: the operand squared against the

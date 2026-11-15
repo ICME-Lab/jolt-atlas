@@ -7,10 +7,10 @@ use atlas_algebra::{
     },
 };
 use atlas_claims::SymbolicSumcheck;
-use atlas_sumcheck::upstream_sumcheck::round_check_failed;
+use atlas_sumcheck::engine::prover::round_check_failed;
+use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::recip_mult::*;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 
 /// Prover state for reciprocal multiplication in softmax.
 ///

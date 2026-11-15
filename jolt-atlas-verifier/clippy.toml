@@ -2,19 +2,18 @@
 # sides, as upstream's do: the vendored upstream crates (third_party/) and our atlas-* crates.
 # Our crates keep prover items in `prover` submodules, which CI's verifier-isolation job rejects
 # by path (`::prover` / `::witness` segments in this crate's sources); this list names the public
-# prover items that live elsewhere: the vendored crates' prover surface, and our prover methods
-# on shared types. A crate vendored later adds its prover items here. `allow-invalid` marks
-# items behind a feature the verifier's build leaves off (jolt-sumcheck's `committed`,
-# atlas-transcript's `prover`).
+# prover items that live elsewhere (the vendored crates' prover surface, and our prover methods
+# on shared types) and, as a second line behind the path check, the prover items of the
+# sumcheck engine and the relation core. `allow-invalid` marks items behind a feature the
+# verifier's build leaves off (atlas-transcript's `prover`).
 #
 # The crate is also Trace-free: nothing here names the execution trace or its witness types, so
 # witness construction lives in jolt-atlas-core (`disallowed-types` below; CI greps for
 # `trace::Trace` as the backstop).
 disallowed-methods = [
-    { path = "jolt_sumcheck::prover::prove_batch", reason = "prover-only" },
-    { path = "jolt_sumcheck::prover::prove_uniskip_clear", reason = "prover-only" },
-    { path = "jolt_sumcheck::prover::prove_uniskip_committed", reason = "prover-only", allow-invalid = true },
     { path = "jolt_transcript::setup::prover_transcript", reason = "prover-only" },
+    { path = "atlas_sumcheck::engine::prover::prove_batch", reason = "prover-only" },
+    { path = "atlas_sumcheck::engine::prover::round_check_failed", reason = "prover-only" },
     { path = "atlas_sumcheck::relation::prover::prove_relation", reason = "prover-only" },
     { path = "atlas_sumcheck::relation::prover::prove_relation_batch", reason = "prover-only" },
     { path = "atlas_sumcheck::relation::prover::prove_relation_batch_parallel", reason = "prover-only" },
@@ -32,22 +31,13 @@ disallowed-types = [
     { path = "atlas_trace::trace::FusedIntermediates", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
     { path = "atlas_trace::trace::NodeAux", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
     { path = "atlas_trace::trace::SoftmaxWitness", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
-    { path = "jolt_sumcheck::prover::ProveRounds", reason = "prover-only" },
-    { path = "jolt_sumcheck::prover::MemberRound", reason = "prover-only" },
-    { path = "jolt_sumcheck::prover::MemberFinish", reason = "prover-only" },
-    { path = "jolt_sumcheck::prover::RoundScheduler", reason = "prover-only" },
-    { path = "jolt_sumcheck::prover::SequentialRounds", reason = "prover-only" },
-    { path = "jolt_sumcheck::prover::ProvedBatch", reason = "prover-only" },
-    { path = "jolt_sumcheck::prover::ProvedUniskip", reason = "prover-only" },
-    { path = "jolt_sumcheck::prover::ProvedUniskipCommitted", reason = "prover-only" },
-    { path = "jolt_sumcheck::recorder::SumcheckRecorder", reason = "prover-only" },
-    { path = "jolt_sumcheck::recorder::ClearSumcheckRecorder", reason = "prover-only" },
-    { path = "jolt_sumcheck::recorder::CommittedSumcheckRecorder", reason = "prover-only", allow-invalid = true },
-    { path = "jolt_sumcheck::recorder::RecordedSumcheck", reason = "prover-only" },
-    { path = "jolt_sumcheck::committed::CommittedSumcheckBuilder", reason = "prover-only", allow-invalid = true },
-    { path = "jolt_sumcheck::committed::CommittedSumcheckWitness", reason = "prover-only" },
-    { path = "jolt_sumcheck::committed::CommittedRoundWitness", reason = "prover-only" },
     { path = "jolt_transcript::prover::ProverTranscript", reason = "prover-only" },
+    { path = "atlas_sumcheck::engine::prover::ProveRounds", reason = "prover-only" },
+    { path = "atlas_sumcheck::engine::prover::MemberRound", reason = "prover-only" },
+    { path = "atlas_sumcheck::engine::prover::MemberFinish", reason = "prover-only" },
+    { path = "atlas_sumcheck::engine::prover::RoundScheduler", reason = "prover-only" },
+    { path = "atlas_sumcheck::engine::prover::ProvedBatch", reason = "prover-only" },
+    { path = "atlas_sumcheck::engine::prover::ClearSumcheckRecorder", reason = "prover-only" },
     { path = "atlas_transcript::sponge::SpongeProver", reason = "prover-only", allow-invalid = true },
     { path = "atlas_transcript::transcript::ProvingTranscript", reason = "prover-only" },
     { path = "atlas_pcs::commitment_scheme::StreamingCommitmentScheme", reason = "prover-only" },

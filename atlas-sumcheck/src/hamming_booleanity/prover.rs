@@ -1,8 +1,9 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::engine::prover::round_check_failed;
+use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
-use crate::upstream_sumcheck::round_check_failed;
 use allocative::Allocative;
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
@@ -15,7 +16,6 @@ use atlas_algebra::{
 };
 use common::parallel::par_enabled;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 
 #[derive(Allocative)]
 pub struct HammingBooleanitySumcheckProver<F: JoltField> {

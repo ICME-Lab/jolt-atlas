@@ -58,9 +58,9 @@ use atlas_algebra::{
     poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation},
     utils::math::Math,
 };
+use atlas_sumcheck::engine::prover::ProveRounds;
 use atlas_trace::{trace::LayerData, Model, Tensor, Trace};
 use jolt_field::Ring;
-use jolt_sumcheck::ProveRounds;
 use rand::{rngs::StdRng, SeedableRng};
 
 /// `(op kind of the node, the relation's Spec type)` for every relation the prover has run.

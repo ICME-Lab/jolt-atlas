@@ -1,8 +1,9 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
-use crate::{mles_product_sum::compute_mles_product_sum, upstream_sumcheck::round_check_failed};
+use crate::{engine::prover::round_check_failed, mles_product_sum::compute_mles_product_sum};
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -13,7 +14,6 @@ use atlas_algebra::{
 };
 use common::parallel::par_enabled;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use std::sync::Arc;
 
 pub struct RaSumcheckProver<F: JoltField> {

@@ -9,11 +9,11 @@ use atlas_algebra::{
     utils::thread::drop_in_background_thread,
 };
 use atlas_claims::SymbolicSumcheck;
-use atlas_sumcheck::upstream_sumcheck::round_check_failed;
+use atlas_sumcheck::engine::prover::round_check_failed;
+use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::exp_sum::*;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
 /// Prover for the exponential sum in softmax.

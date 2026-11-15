@@ -599,7 +599,6 @@ dependencies = [
  "ark-serialize",
  "ark-std",
  "atlas-algebra",
- "atlas-sumcheck",
  "atlas-trace",
  "atlas-transcript",
  "bincode",

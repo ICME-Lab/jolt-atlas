@@ -1,6 +1,7 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::DynRelationWitness;
 use crate::relation::prover::RelationWitness;
 use crate::{
@@ -19,7 +20,6 @@ use atlas_algebra::{
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use std::array;
 
 pub fn read_raf_prover<F: JoltField, T: Transcript>(

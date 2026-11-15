@@ -17,6 +17,7 @@ use atlas_algebra::{
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
 };
 use atlas_claims::SymbolicSumcheck;
+use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::{
     opening_proof::prover::ProverOpeningAccumulator, relation::prover::RelationWitness,
 };
@@ -25,7 +26,6 @@ use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::*;
 use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,

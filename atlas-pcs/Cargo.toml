@@ -5,7 +5,7 @@ edition = "2021"
 description = "The atlas polynomial commitment interface and the Akita scheme."
 
 [features]
-test-feature = ["atlas-sumcheck/test-feature"]
+test-feature = []
 
 [dependencies]
 # Internal
@@ -13,7 +13,6 @@ common.workspace = true
 atlas-trace.workspace = true
 atlas-algebra.workspace = true
 atlas-transcript.workspace = true
-atlas-sumcheck.workspace = true
 
 # Serialization
 serde = { workspace = true, features = ["alloc", "rc"] }

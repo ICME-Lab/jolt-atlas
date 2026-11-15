@@ -30,16 +30,16 @@ use atlas_algebra::{
     },
 };
 use atlas_claims::Source;
+use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::{
+    engine::prover::round_check_failed,
     opening_proof::{prover::ProverOpeningAccumulator, OpeningAccumulator, OpeningId},
-    upstream_sumcheck::round_check_failed,
 };
 use atlas_trace::Trace;
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::relation::*;
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
 /// The [`SymbolicSumcheck`] items every atlas relation shares: the atlas id types and no

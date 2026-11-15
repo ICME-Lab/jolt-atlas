@@ -37,6 +37,7 @@ use atlas_algebra::{
         signed_identity_poly::SignedIdentityPoly,
     },
 };
+use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
 use atlas_trace::Tensor;
 use atlas_transcript::Transcript;
@@ -45,7 +46,6 @@ use common::{
     parallel::par_enabled,
 };
 use jolt_poly::UnivariatePoly;
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 /// The execution check's prover: `output = Table[clamped]` over the small activation table,

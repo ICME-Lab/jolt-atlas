@@ -1,11 +1,12 @@
 //! The prover side of [`super`].
 
 use super::*;
+use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
 use crate::{
+    engine::prover::round_check_failed,
     opening_proof::{prover::ProverOpeningAccumulator, SumcheckId},
     ps_shout::{CyclePoly, CycleWeight},
-    upstream_sumcheck::round_check_failed,
 };
 use atlas_algebra::{
     field::JoltField,
@@ -22,7 +23,6 @@ use atlas_algebra::{
 use atlas_claims::SymbolicSumcheck;
 use common::{parallel::par_enabled, VirtualPoly};
 use jolt_poly::{GruenSplitEqPolynomial, UnivariatePoly};
-use jolt_sumcheck::{ProveRounds, SumcheckError};
 use std::array;
 
 /// Prover for the Prefix suffix Read-raf checking sum-check protocol.

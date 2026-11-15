@@ -4,15 +4,21 @@
 
 use super::*;
 use crate::{
-    opening_proof::prover::ProverOpeningAccumulator,
-    sumcheck::{absorb_input_claims, batch_prelude, round_pow_bits, SumcheckInstanceProof},
-    upstream_sumcheck::{
-        compressed_from_upstream, expect_engine, FacadeTranscript, InstanceRounds,
+    engine::{
+        absorb_input_claims,
+        prover::{
+            prove_batch, ClearSumcheckRecorder, MemberFinish, MemberRound, ProveRounds,
+            RoundScheduler,
+        },
+        BatchMember, BatchPrelude, SumcheckError,
     },
+    opening_proof::prover::ProverOpeningAccumulator,
+    sumcheck::SumcheckInstanceProof,
 };
-use atlas_algebra::field::MaybeAllocative;
-use jolt_sumcheck::ProveRounds;
-use jolt_sumcheck::{prove_batch, BatchPrelude, ClearSumcheckRecorder, SumcheckRecorder};
+#[cfg(not(target_arch = "wasm32"))]
+use atlas_algebra::utils::profiling::print_current_memory_usage;
+use atlas_algebra::{field::MaybeAllocative, poly::unipoly::CompressedUniPoly};
+use rayon::prelude::*;
 
 /// Append the relation's produced openings, with their `claims`, at their points.
 pub fn append_produced<F: JoltField, T: Transcript, R: Relation<F>>(
@@ -169,8 +175,7 @@ fn prove_batch_inner<F: JoltField, T: Transcript>(
         .map(|w| w.input_claim(accumulator))
         .collect();
 
-    let mut recorder = ClearSumcheckRecorder::<F>::new();
-    absorb_input_claims(&mut recorder, &input_claims, transcript);
+    absorb_input_claims(&input_claims, transcript);
     let coefficients: Vec<F> = transcript.challenge_vector(witnesses.len());
     let rounds: Vec<usize> = witnesses.iter().map(|w| w.num_rounds()).collect();
     let prelude = batch_prelude(
@@ -190,14 +195,7 @@ fn prove_batch_inner<F: JoltField, T: Transcript>(
             .iter_mut()
             .map(|w| &mut **w as &mut dyn ProveRounds<F>)
             .collect();
-        run_engine(
-            &prelude,
-            &mut members,
-            many,
-            max_degree,
-            recorder,
-            transcript,
-        )
+        run_engine(&prelude, &mut members, many, transcript)
     };
 
     for w in witnesses.iter() {
@@ -220,49 +218,42 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
     let rounds = witness.num_rounds();
     let degree = witness.degree();
     let input_claim = witness.input_claim(accumulator);
-    let mut recorder = ClearSumcheckRecorder::<F>::new();
-    absorb_input_claims(&mut recorder, &[input_claim], transcript);
+    absorb_input_claims(&[input_claim], transcript);
     let prelude = batch_prelude(&[rounds], &[input_claim], &[F::one()], rounds, degree);
 
     let (proof, r_sumcheck) = {
         let mut members: Vec<&mut dyn ProveRounds<F>> =
             vec![&mut *witness as &mut dyn ProveRounds<F>];
-        run_engine(&prelude, &mut members, false, degree, recorder, transcript)
+        run_engine(&prelude, &mut members, false, transcript)
     };
     witness.append_produced(accumulator, transcript, &r_sumcheck);
     (proof, r_sumcheck)
 }
 
-/// Run upstream's batch prover over `members` and record the round polynomials.
+/// Run the engine's batch prover over `members` and record the round polynomials.
 fn run_engine<F: JoltField, T: Transcript>(
     prelude: &BatchPrelude<F>,
     members: &mut [&mut dyn ProveRounds<F>],
     many_members: bool,
-    max_degree: usize,
-    mut recorder: ClearSumcheckRecorder<F>,
     transcript: &mut T,
 ) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
     let mut scheduler = InstanceRounds::new(many_members);
-    let ((proved, recorded), pow) =
-        FacadeTranscript::<T, F>::scope(transcript, round_pow_bits::<F>(max_degree), |facade| {
-            let proved = expect_engine(prove_batch(
-                prelude,
-                members,
-                &mut scheduler,
-                &mut recorder,
-                facade,
-            ));
-            // Witnesses append their own openings; no output values here.
-            let recorded = expect_engine(recorder.finish(&[], facade));
-            (proved, recorded)
-        });
-    pow.expect("proof-of-work nonce search");
+    let mut recorder = ClearSumcheckRecorder::new();
+    let proved = expect_engine(prove_batch(
+        prelude,
+        members,
+        &mut scheduler,
+        &mut recorder,
+        transcript,
+    ));
     let proof = SumcheckInstanceProof::new(
-        recorded
-            .proof
+        recorder
+            .into_proof()
             .round_polynomials
             .iter()
-            .map(compressed_from_upstream)
+            .map(|poly| CompressedUniPoly {
+                coeffs_except_linear_term: poly.coeffs_except_linear_term().to_vec(),
+            })
             .collect(),
     );
     let r_sumcheck = proved
@@ -271,6 +262,97 @@ fn run_engine<F: JoltField, T: Transcript>(
         .map(F::challenge_from_field)
         .collect();
     (proof, r_sumcheck)
+}
+
+/// The engine's batch description of tail-aligned members (a member with fewer rounds is bound
+/// in the last `rounds` rounds) with the given input claims and batching coefficients.
+fn batch_prelude<F: JoltField>(
+    rounds: &[usize],
+    input_claims: &[F],
+    coefficients: &[F],
+    max_num_rounds: usize,
+    max_degree: usize,
+) -> BatchPrelude<F> {
+    let members = rounds
+        .iter()
+        .zip(input_claims)
+        .zip(coefficients)
+        .map(|((&rounds, &input_claim), &coefficient)| BatchMember {
+            input_claim,
+            coefficient,
+            rounds,
+            offset: max_num_rounds - rounds,
+        })
+        .collect();
+    expect_engine(BatchPrelude::try_new(members, max_num_rounds, max_degree))
+}
+
+/// Map an engine error into the prover's panic (the engine's errors are internal
+/// inconsistencies of the prover: a round polynomial that fails its own running-claim check).
+fn expect_engine<F: JoltField, R>(res: Result<R, SumcheckError<F>>) -> R {
+    res.unwrap_or_else(|e| panic!("sumcheck prover: {e:?}"))
+}
+
+/// Round scheduling for our instances: in declaration order, or in parallel across members for
+/// batches of mutually independent instances (each member's own parallelism stays on; rayon's
+/// work stealing absorbs the nesting).
+///
+/// Private: parallel scheduling relies on every member being a [`DynRelationWitness`] (which is
+/// `Send + Sync`) seen as its [`ProveRounds`] supertrait (see [`SendRound`]), which only
+/// [`run_engine`]'s callers guarantee.
+struct InstanceRounds {
+    parallel: bool,
+    round: usize,
+}
+
+impl InstanceRounds {
+    fn new(parallel: bool) -> Self {
+        Self { parallel, round: 0 }
+    }
+}
+
+/// A round handle sent to a rayon worker.
+struct SendRound<'s, T>(&'s mut T);
+
+// SAFETY: `InstanceRounds` only schedules members that are `DynRelationWitness: Send + Sync`
+// instances upcast to `ProveRounds`; the remaining handle fields are field elements and indices.
+// Each handle is visited by exactly one worker.
+unsafe impl<T> Send for SendRound<'_, T> {}
+
+impl<F: JoltField> RoundScheduler<F> for InstanceRounds {
+    fn batch_prove_round(
+        &mut self,
+        work: &mut [MemberRound<'_, F>],
+    ) -> Result<(), SumcheckError<F>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        print_current_memory_usage(format!("Sumcheck round {}", self.round).as_str());
+        self.round += 1;
+        if self.parallel {
+            work.iter_mut()
+                .map(SendRound)
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .try_for_each(|SendRound(item)| item.run())
+        } else {
+            work.iter_mut().try_for_each(|item| item.run())
+        }
+    }
+
+    fn batch_finish_rounds(
+        &mut self,
+        finishes: &mut [MemberFinish<'_, F>],
+    ) -> Result<(), SumcheckError<F>> {
+        if self.parallel {
+            finishes
+                .iter_mut()
+                .map(SendRound)
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .try_for_each(|SendRound(item)| item.run())
+        } else {
+            finishes.iter_mut().try_for_each(|item| item.run())
+        }
+    }
 }
 
 impl<F: JoltField, R: SetupRelation<F>> RelationParams<F, R> {

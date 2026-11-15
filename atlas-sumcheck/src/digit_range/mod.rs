@@ -225,6 +225,7 @@ pub type DigitRangeVerifier<F> = RelationVerifier<F, DigitRangeRelation>;
 mod tests {
     use super::prover::DigitRangeProver;
     use super::*;
+    use crate::engine::prover::ProveRounds;
     use crate::opening_proof::{prover::ProverOpeningAccumulator, VerifierOpeningAccumulator};
     use crate::relation::{prover::prove_relation, verify_relation};
     use atlas_algebra::field::fp128::Fp128 as Fr;
@@ -237,7 +238,6 @@ mod tests {
     };
     use common::VirtualPoly;
     use jolt_field::Field;
-    use jolt_sumcheck::ProveRounds;
     use rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
 
     const LOG_T: usize = 5;

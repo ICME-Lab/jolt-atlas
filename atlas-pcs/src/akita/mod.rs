@@ -39,6 +39,7 @@
 //! opening.
 
 pub mod backend;
+mod facade;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -70,8 +71,8 @@ use atlas_algebra::{
     poly::multilinear_polynomial::MultilinearPolynomial,
     utils::errors::ProofVerifyError,
 };
-use atlas_sumcheck::upstream_sumcheck::FacadeTranscript;
 use atlas_transcript::{AppendToTranscript, Transcript};
+use facade::FacadeTranscript;
 
 use super::commitment_scheme::{BatchCommitOutput, CommitmentScheme};
 

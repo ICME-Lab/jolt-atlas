@@ -337,6 +337,14 @@ impl OpSpec for Slice {
                 "slice extent {len} is not a power of two; padded output dims would not match"
             ));
         }
+        // The slice must also be one of the extent-sized blocks of its axis, so that it is a
+        // subcube of the padded operand (the prover's tie fixes the block's index bits).
+        if !self.start.is_multiple_of(len) {
+            return Err(format!(
+                "slice start {} is not a multiple of its extent {len}",
+                self.start
+            ));
+        }
         Ok(())
     }
 }
@@ -414,6 +422,20 @@ impl OpSpec for Concat {
                 "concat axis {}: padded operand extents sum to {sum_padded} but padded output is {padded_out}",
                 self.axis
             ));
+        }
+        // Each operand must fill one of the blocks of its own padded extent, so that the
+        // operands tile the padded axis with subcubes (the prover's tie selects each by its
+        // block's index bits).
+        let mut offset = 0usize;
+        for (i, d) in ctx.input_dims.iter().enumerate() {
+            let extent = d[self.axis].next_power_of_two();
+            if !offset.is_multiple_of(extent) {
+                return Err(format!(
+                    "concat axis {}: operand {i} starts at {offset}, not a multiple of its extent {extent}",
+                    self.axis
+                ));
+            }
+            offset += extent;
         }
         Ok(())
     }

@@ -377,6 +377,52 @@ mod tests {
         assert_eq!(&out.data()[..7], &[1, 2, 3, 4, 101, 102, 103]);
     }
 
+    /// A slice must be one of the extent-sized blocks of its axis and a concat's operands must
+    /// each start at a multiple of their own padded extent: only then are they subcubes of the
+    /// padded tensors, which is what the prover's layout ties select. Compile rejects the rest.
+    #[test]
+    fn unaligned_slice_and_concat_rejected() {
+        use crate::{GraphBuilder, op};
+        let slice = |size: usize, start: usize, end: usize| {
+            let mut b = GraphBuilder::new();
+            let x = b.input(&[size]);
+            let s = b.push(
+                Op::Slice(op::Slice {
+                    axis: 0,
+                    start,
+                    end,
+                }),
+                &[x],
+            );
+            b.output(s);
+            b.build(CompileOptions::default())
+        };
+        let err = slice(64, 8, 40).expect_err("an unaligned slice must be rejected");
+        assert!(
+            err.to_string()
+                .contains("slice start 8 is not a multiple of its extent 32"),
+            "{err}"
+        );
+        slice(64, 32, 64).expect("a slice at a multiple of its extent compiles");
+        slice(48, 16, 32).expect("the input extent need not be a power of two");
+
+        let concat = |extents: &[usize]| {
+            let mut b = GraphBuilder::new();
+            let inputs: Vec<_> = extents.iter().map(|&extent| b.input(&[extent])).collect();
+            let cat = b.push(Op::Concat(op::Concat { axis: 0 }), &inputs);
+            b.output(cat);
+            b.build(CompileOptions::default())
+        };
+        let err = concat(&[4, 8, 4]).expect_err("an unaligned concat must be rejected");
+        assert!(
+            err.to_string()
+                .contains("operand 1 starts at 4, not a multiple of its extent 8"),
+            "{err}"
+        );
+        concat(&[8, 4, 4]).expect("operands at multiples of their extents compile");
+        concat(&[8, 4, 3]).expect("the last operand need not be a power of two");
+    }
+
     /// Size-1 axes never move elements in the row-major layout, so
     /// squeeze/unsqueeze reshapes are pad-coherent even around non-pow2
     /// axes; genuinely merged non-pow2 axes stay rejected.

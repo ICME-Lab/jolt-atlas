@@ -55,18 +55,18 @@ const GOLDENS: &[(&str, u64)] = &[
     // leaving the raw floor(x) misread as a scaled value (off by 2^scale,
     // old-crate parity). cast_policy now rescales provably-raw lineages, so
     // the pattern computes the ONNX value.
-    ("op_gauntlet", 0xdd4739a294d6d712),
-    ("gpt2-tiny", 0x3c08911de86f9b3a),
-    ("qwen2-tiny", 0x77cc6155185561ad),
-    ("bge-tiny", 0xce922e2e14210317),
+    ("op_gauntlet", 0x55c0e79e7df25748),
+    ("gpt2-tiny", 0x92eb18e8d31fbdef),
+    ("qwen2-tiny", 0x5f35b1745b5bf6e2),
+    ("bge-tiny", 0xd756a6db226f1f04),
 ];
 
 /// The big downloaded models (hundreds of MB); separate so default golden
 /// runs skip them.
 const GOLDENS_BIG: &[(&str, u64)] = &[
-    ("gpt2", 0x020d40b051a42652),
+    ("gpt2", 0xe5a3a3a14670c6fe),
     ("qwen", 0xc9c49afa97fc2e1c),
-    ("bge-small-en-v1.5", 0x69e16675d78f8737),
+    ("bge-small-en-v1.5", 0x372f98951101caec),
 ];
 
 fn run(goldens: &[(&str, u64)], require_present: bool) {

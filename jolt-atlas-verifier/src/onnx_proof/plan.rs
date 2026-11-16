@@ -94,8 +94,7 @@ pub enum Step {
         relation: OpRelation,
     },
     /// Verify several relations as one batched sumcheck stored under `proof`, their setups run
-    /// in list order. A batch whose relations set up no sumcheck instance (each relation may
-    /// yield none, e.g. a clamp bucket's slack check when the bucket is exact) has no proof.
+    /// in list order.
     Batch {
         /// The proof slot of the batched sumcheck.
         proof: ProofType,

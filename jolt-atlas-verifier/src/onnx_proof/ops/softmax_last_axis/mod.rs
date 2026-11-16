@@ -108,9 +108,9 @@ impl OpLayout for SoftmaxLastAxis {
 
 /// The plan (the stage driver as data): the evaluation reduction; the auxiliary vectors; the
 /// `exp_sum` opening and its check against them; the recip-mult remainder; stage 1 as one
-/// batch; the exp remainder; stage 2 as one batch; `z_hi`/`z_lo`; stage 3 queued for its
-/// post-loop batch; the operand link in the clear; stage 4 (the one-hot checks of stage 3's
-/// read addresses) queued after stage 3's batch.
+/// batch; the exp remainder; stage 2 as one batch; `z_hi`/`z_lo`; stage 3 queued for the
+/// post-loop lookup batch; the operand link in the clear; stage 4 (the one-hot checks of stage
+/// 3's read addresses) queued for the one-hot batch.
 impl OpPlan for SoftmaxLastAxis {
     fn plan(
         &self,
@@ -162,20 +162,20 @@ impl OpPlan for SoftmaxLastAxis {
             },
             open(SoftmaxOpen::ZHiLo),
             Step::Defer {
-                batch: DeferredBatch::SoftmaxStage3,
+                batch: DeferredBatch::Lookups,
                 relation: relation(SoftmaxRelation::Stage3),
             },
             tie(SoftmaxTie::OperandLink),
             Step::Defer {
-                batch: DeferredBatch::SoftmaxRaChecks,
+                batch: DeferredBatch::OneHot,
                 relation: relation(SoftmaxRelation::ExpHiOneHot),
             },
             Step::Defer {
-                batch: DeferredBatch::SoftmaxRaChecks,
+                batch: DeferredBatch::OneHot,
                 relation: relation(SoftmaxRelation::ExpLoOneHot),
             },
             Step::Defer {
-                batch: DeferredBatch::SoftmaxRaChecks,
+                batch: DeferredBatch::OneHot,
                 relation: relation(SoftmaxRelation::ClampOneHot),
             },
         ]))

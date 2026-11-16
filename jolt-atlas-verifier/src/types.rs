@@ -37,18 +37,14 @@ impl Canonical for ProofId {
 /// Type of sumcheck proof for different operations in the neural network.
 ///
 /// The `u8` discriminants are part of the serialization format: a variant keeps its number, and
-/// the numbers of deleted variants (1, 4, 7, 8, 11, 13, 17, 21, 22) stay free; a proof carrying one does not
-/// deserialize. Every variant is emitted by the prover for some checked-in model
+/// the numbers of deleted variants (1, 2, 3, 4, 7, 8, 11, 13, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25) stay
+/// free; a proof carrying one does not deserialize. Every variant is emitted by the prover for some checked-in model
 /// (`proof_types_all_exercised`).
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProofType {
     /// Execution sumcheck for basic operations.
     Execution = 0,
-    /// Read-address one-hot encoding checks.
-    RaOneHotChecks = 2,
-    /// Hamming weight check for read-addresses.
-    RaHammingWeight = 3,
     /// Softmax stage 1
     SoftmaxStage1 = 5,
     /// Softmax stage 2
@@ -69,27 +65,17 @@ pub enum ProofType {
     /// batched sumcheck after the node loop (stored under `DEFERRED_PROOF_IDX`;
     /// see `clamp_split`).
     DeferredClampSplit = 14,
-    /// The slack chunk checks (Booleanity, Hamming weight `IND`, slack value) of the clamp
-    /// buckets not declared exact, batched; absent when every live bucket is exact.
-    DeferredClampChunkChecks = 15,
     /// All remainder buckets' value sumchecks (opening each bucket's packed remainder), batched.
     DeferredRemainderRC = 16,
-    /// All clamped-activation nodes' small-table execution sumchecks, batched.
-    DeferredActivationExec = 18,
-    /// All clamped-activation nodes' activation-clamp read-rafs, batched.
-    DeferredActivationClamp = 19,
-    /// All clamped-activation nodes' small-table one-hot checks, batched.
-    DeferredActivationSmallRaChecks = 20,
-    /// All clamped-activation nodes' clamp one-hot checks, batched.
-    DeferredActivationClampRaChecks = 23,
-    /// All softmax nodes' stage-3 lookups (exp digits, significance clamp), batched.
-    DeferredSoftmaxStage3 = 24,
-    /// All softmax nodes' stage-4 one-hot checks, batched.
-    DeferredSoftmaxRaChecks = 25,
     /// All live clamp buckets' `OUT` digit range checks, batched.
     DeferredClampDigitRange = 26,
     /// All remainder buckets' digit range checks, batched.
     DeferredRemainderDigitRange = 27,
+    /// Every deferred table read (`DeferredBatch::Lookups`), as one batched sumcheck.
+    DeferredLookups = 28,
+    /// Every one-hot check and slack chunk check (`DeferredBatch::OneHot`), as one batched
+    /// sumcheck; absent when the model has no lookup and every live clamp bucket is exact.
+    DeferredOneHot = 29,
 }
 
 impl ProofType {
@@ -105,24 +91,17 @@ impl TryFrom<u8> for ProofType {
     fn try_from(tag: u8) -> Result<Self, Self::Error> {
         match tag {
             0 => Ok(Self::Execution),
-            2 => Ok(Self::RaOneHotChecks),
-            3 => Ok(Self::RaHammingWeight),
             5 => Ok(Self::SoftmaxStage1),
             6 => Ok(Self::SoftmaxStage2),
             9 => Ok(Self::SumReduction),
             10 => Ok(Self::EinsumMatmul),
             12 => Ok(Self::RescaleArith),
             14 => Ok(Self::DeferredClampSplit),
-            15 => Ok(Self::DeferredClampChunkChecks),
             16 => Ok(Self::DeferredRemainderRC),
-            18 => Ok(Self::DeferredActivationExec),
-            19 => Ok(Self::DeferredActivationClamp),
-            20 => Ok(Self::DeferredActivationSmallRaChecks),
-            23 => Ok(Self::DeferredActivationClampRaChecks),
-            24 => Ok(Self::DeferredSoftmaxStage3),
-            25 => Ok(Self::DeferredSoftmaxRaChecks),
             26 => Ok(Self::DeferredClampDigitRange),
             27 => Ok(Self::DeferredRemainderDigitRange),
+            28 => Ok(Self::DeferredLookups),
+            29 => Ok(Self::DeferredOneHot),
             _ => Err(Error::InvalidData),
         }
     }

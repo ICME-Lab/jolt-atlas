@@ -1,7 +1,8 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::deferred_lookups::DeferredBatch;
+use crate::onnx_proof::op_lookups::OpLookupEncoding;
 use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::plan::{OpLookup, OpPlan, OpRelation, Plan, Step};
-use crate::onnx_proof::{op_lookups::OpLookupEncoding, ProofType};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::shout::RaOneHotEncoding;
 use atlas_trace::op::ReLU;
@@ -29,13 +30,13 @@ impl OpPlan for ReLU {
     ) -> Result<Plan, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Reduce,
-            Step::Relation {
-                proof: ProofType::Execution,
+            Step::Defer {
+                batch: DeferredBatch::Lookups,
                 relation: OpRelation::Lookup(OpLookup::Relu, node.clone()),
             },
-            Step::Batch {
-                proof: ProofType::RaOneHotChecks,
-                relations: vec![OpRelation::LookupOneHot(OpLookup::Relu, node.clone())],
+            Step::Defer {
+                batch: DeferredBatch::OneHot,
+                relation: OpRelation::LookupOneHot(OpLookup::Relu, node.clone()),
             },
         ]))
     }

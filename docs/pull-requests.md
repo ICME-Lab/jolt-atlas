@@ -82,7 +82,9 @@ A PR that adds an op, a proof field or a check to `jolt-atlas-verifier` also mee
   from the model and the public IO alone. No step holds a closure; whatever depends on earlier
   claims or on challenges is read and drawn in the relation's `setup` when the interpreter
   reaches the step. The prover walks the same plan (`jolt-atlas-core`'s `ops::prove_plan`),
-  attaching a specialized witness at its `OpRelation` variant.
+  attaching a specialized witness at its `OpRelation` variant. A table read whose sumcheck
+  produces only its own read-address claim is a `Defer` to `DeferredBatch::Lookups`, and its
+  one-hot check a `Defer` to `DeferredBatch::OneHot`; neither runs in the node's turn.
 - **5.2 Relations.** Every sumcheck of the plan is a relation meeting §4; an in-the-clear check
   is an `OpTie` that reads its claims from the accumulator and returns `Err`.
 - **5.3 Coverage.** A node of the op is in a probe model (`onnx_proof/testing/models.rs`) or the

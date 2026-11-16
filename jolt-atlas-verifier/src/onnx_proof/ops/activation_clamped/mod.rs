@@ -9,9 +9,8 @@
 //!    `Clamp`), which soundly ties `clamped` back to the real input rather than just
 //!    asserting it.
 //!
-//! Both stages are deferred to the post-loop batches ([`clamped_activation_plan`]): every
-//! node's Execution sumchecks form one batched sumcheck, then their one-hot
-//! (`ra`/`hw`/`bool`) checks, then the ActivationClamp read-rafs, then theirs.
+//! Both stages are deferred to the post-loop batches ([`clamped_activation_plan`]): the two
+//! reads join the lookup batch, their one-hot (`ra`/`hw`/`bool`) checks the one-hot batch.
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::neural_teleport::small_table::{SmallTable, SmallTableRelation};
@@ -183,24 +182,24 @@ impl RaOneHotEncoding for SmallTableRaEncoding {
 }
 
 /// The plan of a clamped activation reading `table`: the evaluation reduction, then the two
-/// stages and their one-hot checks, each queued for its post-loop batch.
+/// stages queued for the post-loop lookup batch and their one-hot checks for the one-hot batch.
 pub fn clamped_activation_plan(node: &ComputationNode, table: OpActivation) -> Plan {
     Plan(vec![
         Step::Reduce,
         Step::Defer {
-            batch: DeferredBatch::ActivationExec,
+            batch: DeferredBatch::Lookups,
             relation: OpRelation::SmallActivation(table, node.clone()),
         },
         Step::Defer {
-            batch: DeferredBatch::ActivationExecRaChecks,
+            batch: DeferredBatch::OneHot,
             relation: OpRelation::SmallActivationOneHot(node.clone()),
         },
         Step::Defer {
-            batch: DeferredBatch::ActivationClamp,
+            batch: DeferredBatch::Lookups,
             relation: OpRelation::Lookup(OpLookup::ActivationClamp, node.clone()),
         },
         Step::Defer {
-            batch: DeferredBatch::ActivationClampRaChecks,
+            batch: DeferredBatch::OneHot,
             relation: OpRelation::LookupOneHot(OpLookup::ActivationClamp, node.clone()),
         },
     ])

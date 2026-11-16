@@ -86,7 +86,11 @@ Three splits the decisions need, all already present as spans (checked before th
 - witness generation (`ONNXProof::polynomial_map`) inside the commit stage;
 - the opening stage as the reduction sumcheck plus the per-class Akita openings
   (`AkitaScheme::prove_rlc`, with one `commit_class` span per class);
-- the deferred lookup sumchecks (`deferred_lookups::prove_all`) as their own total.
+- the deferred lookup sumchecks (`deferred_lookups::prove_all`) as their own total, with one
+  `deferred::batch{kind}` span per post-loop batch (`Lookups`, `OneHot`) and one
+  `deferred::witness{kind}` span per relation whose witness is built for them (`relu`,
+  `activation_clamp`, `small_activation`, `softmax`, `one_hot`, `gather_one_hot`,
+  `clamp_slack`, ...).
 
 Answers: stage split and per-op spans on the current backend (roadmap measurement 1), lowered op
 histograms (3), cost growth with context (5), peak memory, and the one number everything else

@@ -178,6 +178,22 @@ fn unary(
     (b.build(), vec![input])
 }
 
+/// `op(m) + m` over `dims` with `m = −input`: the operand of `op` has a second consumer, so its
+/// evaluation reduction folds the claim `op` appends in its own turn with another.
+fn shared_operand(
+    dims: &[usize],
+    input: Tensor<i32>,
+    op: fn(&mut ModelBuilder, usize) -> usize,
+) -> (Model, Vec<Tensor<i32>>) {
+    let mut b = ModelBuilder::with_scale(S);
+    let i = b.input(dims.to_vec());
+    let m = b.neg(i);
+    let y = op(&mut b, m);
+    let o = b.add(y, m);
+    b.mark_output(o);
+    (b.build(), vec![input])
+}
+
 fn unary_small(
     rng: &mut StdRng,
     dims: &[usize],
@@ -538,10 +554,12 @@ op_surface! {
     // ReLU / Clamp
     relu_random_1k: ReLU => |rng| unary_small(rng, &[T], |b, i| b.relu(i));
     relu_non_pow2_1000: ReLU => |rng| unary_small(rng, &[T_ODD], |b, i| b.relu(i));
+    relu_shared_operand_t16: ReLU => |rng| shared_operand(&[16], Tensor::random_small(rng, &[16]), |b, i| b.relu(i));
     clamp_random_1k: Clamp => |rng| unary(&[T], S, Tensor::random(rng, &[T]), |b, i| b.clamp(i, CLAMP_BOUND));
     clamp_saturating_range_t8: Clamp => |rng| unary_range(rng, &[8], -2 * (1 << CLAMP_BOUND)..2 * (1 << CLAMP_BOUND), |b, i| b.clamp(i, CLAMP_BOUND));
     clamp_near_i32_extremes_t4: Clamp => |_| unary(&[4], S, tensor(&[i32::MAX, i32::MAX - 50, i32::MIN, i32::MIN + 50], &[4]), |b, i| b.clamp(i, CLAMP_BOUND));
     clamp_non_pow2_1000: Clamp => |rng| unary(&[T_ODD], S, Tensor::random(rng, &[T_ODD]), |b, i| b.clamp(i, CLAMP_BOUND));
+    clamp_shared_operand_t16: Clamp => |rng| shared_operand(&[16], Tensor::random(rng, &[16]), |b, i| b.clamp(i, CLAMP_BOUND));
 
     // Iff
     iff_random_1k: Iff => |rng| iff_model(rng, T);
@@ -561,6 +579,7 @@ op_surface! {
     // Table activations
     tanh_random_1k: Tanh => |rng| unary_range(rng, &[T], MIN_INPUT..MAX_INPUT, |b, i| b.tanh(i));
     tanh_domain_edges: Tanh => |_| unary(&[16], S, activation_edges(), |b, i| b.tanh(i));
+    tanh_shared_operand_t16: Tanh => |rng| shared_operand(&[16], Tensor::random_range(rng, &[16], MIN_INPUT..MAX_INPUT), |b, i| b.tanh(i));
     #[ignore = "non-power-of-two tanh path not supported"]
     tanh_non_pow2_1000: Tanh => |rng| unary_range(rng, &[T_ODD], MIN_INPUT..MAX_INPUT, |b, i| b.tanh(i));
     erf_random_1k: Erf => |rng| unary_range(rng, &[T], MIN_INPUT..MAX_INPUT, |b, i| b.erf(i));
@@ -576,10 +595,12 @@ op_surface! {
     sin_random_1k: Sin => |rng| unary_range(rng, &[T], -50000..50000, |b, i| b.sin(i));
     sin_one_element: Sin => |rng| unary_range(rng, &[1], -50000..50000, |b, i| b.sin(i));
     sin_periodic_boundary: Sin => |_| unary(&[8], S, trig_edges(), |b, i| b.sin(i));
+    sin_shared_operand_t8: Sin => |_| shared_operand(&[8], trig_edges(), |b, i| b.sin(i));
     #[ignore = "non-power-of-two sin path not supported"]
     sin_non_pow2_1000: Sin => |rng| unary_range(rng, &[T_ODD], -50000..50000, |b, i| b.sin(i));
     cos_random_1k: Cos => |rng| unary_range(rng, &[T], -50000..50000, |b, i| b.cos(i));
     cos_periodic_boundary: Cos => |_| unary(&[8], S, trig_edges(), |b, i| b.cos(i));
+    cos_shared_operand_t8: Cos => |_| shared_operand(&[8], trig_edges(), |b, i| b.cos(i));
     #[ignore = "non-power-of-two cos path not supported"]
     cos_non_pow2_1000: Cos => |rng| unary_range(rng, &[T_ODD], -50000..50000, |b, i| b.cos(i));
 

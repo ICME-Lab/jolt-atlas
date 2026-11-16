@@ -2,6 +2,7 @@
 //! [`clamp_split`]): what a bucket commits for a given statement.
 
 use atlas_pcs::akita::AkitaScheme;
+use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::Tensor;
 use atlas_transcript::Blake2bProver;
 use rand::{rngs::StdRng, SeedableRng};
@@ -11,6 +12,7 @@ use crate::node_view::{clamp_value_bound, ModelView};
 use crate::onnx_proof::{
     clamp_lookups::clamp_intermediate,
     clamp_split,
+    deferred_lookups::DEFERRED_PROOF_IDX,
     global_clamp::{clamp_buckets, remainder_buckets},
     prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128, ProofType,
 };
@@ -59,6 +61,29 @@ fn exact_output_bucket_commits_nothing() {
     prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
 }
 
+/// A model with no table lookup and no clamped node proves nothing after the node loop: its
+/// proof has no post-loop entry (a stray one would fail the drain check).
+#[test]
+fn lookup_free_model_has_no_post_loop_proof() {
+    let mut rng = StdRng::seed_from_u64(0x10F0);
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![16]);
+    let out = b.neg(x);
+    b.mark_output(out);
+    let model = b.build();
+    let inputs = [Tensor::random_small(&mut rng, &[16])];
+
+    let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(
+        AtlasSharedPreprocessing::preprocess(model.clone()),
+    );
+    let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &inputs);
+    assert!(
+        proof.proofs().keys().all(|id| id.0 != DEFERRED_PROOF_IDX),
+        "a lookup-free model's proof has a post-loop entry"
+    );
+    prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
+}
+
 /// The `saturating` probe model saturates an internal clamped node, so the soundness
 /// sweeps run over a bucket that carries dense `OUT` digits and nonempty slack chunks together,
 /// and its proof carries the slack chunk check beside the digit range check.
@@ -86,19 +111,33 @@ fn saturating_probe_saturates() {
         .collect();
     assert!(!saturating.is_empty(), "no internal clamped node saturates");
 
+    let buckets = clamp_buckets(&model).expect("shapes");
     let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(
         AtlasSharedPreprocessing::preprocess(model),
     );
     let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &probe.inputs);
-    for kind in [
-        ProofType::DeferredClampDigitRange,
-        ProofType::DeferredClampChunkChecks,
-    ] {
-        assert!(
-            proof.proofs().keys().any(|id| id.1 == kind),
-            "the saturating probe's proof has no {kind:?}"
-        );
-    }
+    assert!(
+        proof
+            .proofs()
+            .keys()
+            .any(|id| id.1 == ProofType::DeferredClampDigitRange),
+        "the saturating probe's proof has no digit range check"
+    );
+    // The slack chunk check ran: some bucket's slack chunks are opened by its Booleanity.
+    let slack_opened = buckets.iter().any(|bucket| {
+        clamp_split::slack_chunk_polys(bucket)
+            .into_iter()
+            .all(|poly| {
+                proof
+                    .opening_claims()
+                    .openings()
+                    .contains_key(&OpeningId::new(poly, SumcheckId::Booleanity))
+            })
+    });
+    assert!(
+        slack_opened,
+        "the saturating probe's proof opens no slack chunks"
+    );
 }
 
 /// The `scalars` probe model puts one-element nodes under the soundness sweeps: every clamped
@@ -195,7 +234,7 @@ fn range_claim_rejects_a_bound_at_another_point() {
     use crate::onnx_proof::global_clamp::{Bound, RangeClaim, Remainder};
     use atlas_algebra::field::Ring;
     use atlas_algebra::poly::point::OpeningPoint;
-    use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator};
+    use atlas_sumcheck::opening_proof::VerifierOpeningAccumulator;
     use common::VirtualPoly;
 
     let (node, divisor) = (5usize, 3usize);

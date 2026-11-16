@@ -1,4 +1,5 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::deferred_lookups::DeferredBatch;
 use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::{
     neural_teleport::{
@@ -6,7 +7,6 @@ use crate::onnx_proof::{
     },
     op_lookups::{OpLookupEncoding, OpLookupProvider},
     plan::{OpLookup, OpOpen, OpPlan, OpRelation, OpTie, OpTrig, Plan, Step},
-    ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::{
@@ -36,8 +36,8 @@ impl OpLayout for Sin {
 }
 
 /// The plan: the evaluation reduction; the teleport quotient and the downscaled remainder
-/// opened at the reduced output point; one batch of the read-raf "value" sumchecks (downscale,
-/// the Sin table); one batch of their one-hot checks; then the
+/// opened at the reduced output point; the read-raf "value" sumchecks (downscale, the Sin
+/// table) and their one-hot checks, queued for the post-loop batches; then the
 /// teleport identity `a = P·q + r` in the clear, once `q` and `r` both hold claims at the
 /// reduced output point.
 impl OpPlan for Sin {
@@ -58,19 +58,21 @@ impl OpPlan for Sin {
             Step::Reduce,
             Step::Open(OpOpen::TeleportQuotient(node.clone())),
             Step::Open(OpOpen::TrigDownscaled(node.clone())),
-            Step::Batch {
-                proof: ProofType::Execution,
-                relations: vec![
-                    OpRelation::Lookup(OpLookup::TrigDownscale, node.clone()),
-                    OpRelation::Trig(OpTrig::Sin, node.clone()),
-                ],
+            Step::Defer {
+                batch: DeferredBatch::Lookups,
+                relation: OpRelation::Lookup(OpLookup::TrigDownscale, node.clone()),
             },
-            Step::Batch {
-                proof: ProofType::RaOneHotChecks,
-                relations: vec![
-                    OpRelation::LookupOneHot(OpLookup::TrigDownscale, node.clone()),
-                    OpRelation::TrigOneHot(OpTrig::Sin, node.clone()),
-                ],
+            Step::Defer {
+                batch: DeferredBatch::Lookups,
+                relation: OpRelation::Trig(OpTrig::Sin, node.clone()),
+            },
+            Step::Defer {
+                batch: DeferredBatch::OneHot,
+                relation: OpRelation::LookupOneHot(OpLookup::TrigDownscale, node.clone()),
+            },
+            Step::Defer {
+                batch: DeferredBatch::OneHot,
+                relation: OpRelation::TrigOneHot(OpTrig::Sin, node.clone()),
             },
             Step::Tie {
                 relation: OpTie::TeleportInput(TeleportInputRelation {

@@ -24,7 +24,10 @@ pub fn prove_all<F: JoltField, T: Transcript>(
     let plan = plan(model, &prover.io).expect("the model's nodes have the shapes their ops prove");
     let (_, bucket_proofs) = prove_steps(prover, DEFERRED_PROOF_IDX, None, plan.0);
     proofs.extend(bucket_proofs);
-    drop_in_background_thread(std::mem::take(&mut prover.buckets));
+    // The slack chunk checks in the one-hot batch read the clamp splits; the remainder values
+    // have no reader left.
+    drop_in_background_thread(std::mem::take(&mut prover.buckets.remainder_values));
 
     proofs.extend(prove_deferred_batches(prover));
+    drop_in_background_thread(std::mem::take(&mut prover.buckets));
 }

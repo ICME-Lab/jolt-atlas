@@ -1,10 +1,10 @@
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::deferred_lookups::DeferredBatch;
+use crate::onnx_proof::op_lookups::{
+    DefaultLookupOperands, LookupOperandsTrait, LookupRaPolys, OpLookupEncoding,
+};
 use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::plan::{OpLookup, OpPlan, OpRelation, Plan, Step};
-use crate::onnx_proof::{
-    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, LookupRaPolys, OpLookupEncoding},
-    ProofType,
-};
 use atlas_algebra::{
     field::JoltField,
     poly::point::{OpeningPoint, BIG_ENDIAN},
@@ -88,16 +88,13 @@ impl OpPlan for Clamp {
         }
         Ok(Plan(vec![
             Step::Reduce,
-            Step::Relation {
-                proof: ProofType::Execution,
+            Step::Defer {
+                batch: DeferredBatch::Lookups,
                 relation: OpRelation::Lookup(OpLookup::SymmetricClamp, node.clone()),
             },
-            Step::Batch {
-                proof: ProofType::RaOneHotChecks,
-                relations: vec![OpRelation::LookupOneHot(
-                    OpLookup::SymmetricClamp,
-                    node.clone(),
-                )],
+            Step::Defer {
+                batch: DeferredBatch::OneHot,
+                relation: OpRelation::LookupOneHot(OpLookup::SymmetricClamp, node.clone()),
             },
         ]))
     }

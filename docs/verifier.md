@@ -71,23 +71,25 @@ batched sumcheck; `Tie` a zero-round identity or an in-the-clear check (`OpTie`)
 queues a relation for one of the post-loop batches (`DeferredBatch`, in
 `deferred_lookups.rs`). Steps hold relations (the closed enums `OpRelation`, `OpTie`, `OpOpen`),
 never closures; whatever depends on earlier claims or on challenges is read and drawn in the
-relation's `setup` when the interpreter reaches the step (a one-hot batch's relations are set up
-when the batch runs, since they read the `ra` claim the parent batch produces;
-`DeferredBatch::setup` says which). `Verifier::run_plan` in `onnx_proof/verifier.rs` is the
+relation's `setup` when the interpreter reaches the step (a relation queued for `OneHot` is set
+up when that batch runs, since it reads the `ra` claim a lookup produces; `DeferredBatch::setup`
+says which). `Verifier::run_plan` in `onnx_proof/verifier.rs` is the
 interpreter; the prover's `ops::prove_plan` walks the same plan with the relations' witnesses,
 so an op's transcript order is its plan's step order on both sides.
 
 After the node loop, `Verifier::run_deferred` runs the post-loop plan
 (`deferred_lookups::plan`, built from the model and the public IO: the packed clamp buckets'
-exact flags, their split or exact value sumchecks, the digit range checks of their dense `OUT`
-digits (`atlas_sumcheck::digit_range`) and the slack chunk checks of the buckets not declared
-exact, then the remainder buckets' value sumchecks and the digit range checks of their dense
-digits; a model output node whose
+exact flags, their split or exact value sumchecks and the digit range checks of their dense `OUT`
+digits (`atlas_sumcheck::digit_range`), then the remainder buckets' value sumchecks and the
+digit range checks of their dense digits; a model output node whose
 public output is unsaturated ties `acc = out` in its own turn and is a gap in its bucket, and a
 clamp bucket made only of such nodes is not committed at all), then drains the one deferral
-queue, batch by batch in `DeferredBatch` order. Nothing is registered during the loop and
-nothing reconciled afterwards. A plan batch whose relations set up no sumcheck instance (the
-slack batch when every bucket is exact) carries no proof entry.
+queue in two batches: `Lookups`, every table read whose sumcheck produces only its own
+read-address claim (set up in its node's turn), then `OneHot`, every one-hot check of a read
+address together with the slack chunk checks of the clamp buckets not declared exact. Gather's
+dictionary read stays in its node's turn, since it produces a claim on its dictionary operand;
+its one-hot checks are in `OneHot`. A deferred batch with no sumcheck instance (no lookup, and
+every bucket exact) carries no proof entry.
 
 Softmax is the stress case: its stage driver is a plan (aux vectors as `Open`, stages 1–2 as
 `Batch`, stage 3 and its one-hot checks as `Defer`); the relations of a stage read the aux
@@ -112,7 +114,8 @@ vectors back from their openings in their setup (`SoftmaxShape::aux`).
   bound to a point, is an `Err`.
 - **No dead fields.** A node with a single claim on its output has no evaluation-reduction
   entry (the claim is the reduced instance). Every `ProofType` is emitted for some checked-in
-  model; deleted tags (1, 4, 7, 8, 11, 13, 17, 21, 22) do not deserialize.
+  model; deleted tags (1, 2, 3, 4, 7, 8, 11, 13, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25) do not
+  deserialize.
 - **What holds it.** The mutation sweep requires an `Err` at every site (no tolerance), with
   orphan sites for claims, sumcheck proofs and reduction proofs and count/shape sites for the
   IO; `proof_types_all_exercised`; `fuzz_regressions_replay` and the cargo-fuzz target in

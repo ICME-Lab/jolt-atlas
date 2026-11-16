@@ -1,4 +1,5 @@
 use super::*;
+use crate::onnx_proof::deferred_lookups::DeferredBatch;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::{
     booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier},
@@ -17,8 +18,8 @@ impl OpLayout for GatherSmall {
     }
 }
 
-/// The plan: the evaluation reduction, the dictionary read, the one-hot checks of its `ra`
-/// (Hamming-Booleanity and Booleanity as one batch), then the Hamming-weight check.
+/// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its `ra`
+/// (Hamming-Booleanity, Booleanity and Hamming weight), queued for the post-loop one-hot batch.
 impl OpPlan for GatherSmall {
     fn plan(
         &self,
@@ -33,12 +34,12 @@ impl OpPlan for GatherSmall {
                 proof: ProofType::Execution,
                 relation: OpRelation::Gather(GatherRelation::for_node(model, node.clone())?),
             },
-            Step::Batch {
-                proof: ProofType::RaOneHotChecks,
-                relations: vec![OpRelation::GatherSmallOneHot(shape.clone())],
+            Step::Defer {
+                batch: DeferredBatch::OneHot,
+                relation: OpRelation::GatherSmallOneHot(shape.clone()),
             },
-            Step::Relation {
-                proof: ProofType::RaHammingWeight,
+            Step::Defer {
+                batch: DeferredBatch::OneHot,
                 relation: OpRelation::GatherSmallHammingWeight(shape),
             },
         ]))

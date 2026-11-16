@@ -231,20 +231,18 @@ pub fn prove_steps<F: JoltField, T: Transcript>(
                 proofs.push((ProofId(proof_idx, proof), sumcheck));
             }
             Step::Batch { proof, relations } => {
-                let prepared: Vec<Prepared<F, T>> = relations
+                let prepared: Vec<(&'static str, Prepared<F, T>)> = relations
                     .into_iter()
                     .map(|relation| prepare(relation, prover))
                     .collect();
                 let witnesses = build_all(prepared, prover);
-                // No instance, no proof (the verifier skips the batch the same way).
-                if !witnesses.is_empty() {
-                    proofs.push((ProofId(proof_idx, proof), prove_batch(witnesses, prover)));
-                }
+                proofs.push((ProofId(proof_idx, proof), prove_batch(witnesses, prover)));
             }
             Step::Tie { relation } => prove_op_tie(&relation, prover),
             Step::Defer { batch, relation } => {
                 let item = match batch.setup() {
                     DeferredSetup::InNodeLoop => {
+                        let _span = witness_span(&relation).entered();
                         Deferred::Ready(relation_witnesses(relation, prover))
                     }
                     DeferredSetup::AtBatch => Deferred::Pending(Box::new(relation)),
@@ -269,18 +267,21 @@ pub fn prove_deferred_batches<F: JoltField, T: Transcript>(
         };
         let _span =
             tracing::span!(tracing::Level::INFO, "deferred::batch", kind = ?batch).entered();
-        let prepared: Vec<Prepared<F, T>> = deferred
+        let prepared: Vec<(&'static str, Prepared<F, T>)> = deferred
             .into_iter()
             .map(|item| match item {
-                Deferred::Ready(witnesses) => Prepared::Ready(witnesses),
+                Deferred::Ready(witnesses) => ("ready", Prepared::Ready(witnesses)),
                 Deferred::Pending(relation) => prepare(*relation, prover),
             })
             .collect();
         let witnesses = build_all(prepared, prover);
-        proofs.push((
-            ProofId(DEFERRED_PROOF_IDX, batch.proof_type()),
-            prove_batch(witnesses, prover),
-        ));
+        // No instance, no proof (the verifier skips the batch the same way).
+        if !witnesses.is_empty() {
+            proofs.push((
+                ProofId(DEFERRED_PROOF_IDX, batch.proof_type()),
+                prove_batch(witnesses, prover),
+            ));
+        }
     }
     proofs
 }
@@ -332,11 +333,43 @@ enum ClampValueParams<F: JoltField> {
     Exact(ValueParams<F>),
 }
 
+/// The span a deferred relation's witness build runs under, so a batch's time stays
+/// attributable to the kinds of relation in it.
+fn witness_span(relation: &OpRelation) -> tracing::Span {
+    kind_span(witness_kind(relation))
+}
+
+fn kind_span(kind: &'static str) -> tracing::Span {
+    tracing::span!(tracing::Level::INFO, "deferred::witness", kind)
+}
+
+fn witness_kind(relation: &OpRelation) -> &'static str {
+    match relation {
+        OpRelation::Lookup(OpLookup::Relu, _) => "relu",
+        OpRelation::Lookup(OpLookup::SymmetricClamp, _) => "clamp",
+        OpRelation::Lookup(OpLookup::ActivationClamp, _) => "activation_clamp",
+        OpRelation::Lookup(OpLookup::TrigDownscale, _) => "trig_downscale",
+        OpRelation::SmallActivation(..) => "small_activation",
+        OpRelation::Trig(..) => "trig",
+        OpRelation::Softmax(_) => "softmax",
+        OpRelation::LookupOneHot(..)
+        | OpRelation::SmallActivationOneHot(_)
+        | OpRelation::TrigOneHot(..) => "one_hot",
+        OpRelation::GatherLargeOneHot(_)
+        | OpRelation::GatherSmallOneHot(_)
+        | OpRelation::GatherSmallHammingWeight(_) => "gather_one_hot",
+        OpRelation::ClampBucketSlack(_) => "clamp_slack",
+        _ => "node",
+    }
+}
+
 /// The sequential part of a batch relation's prover.
 fn prepare<F: JoltField, T: Transcript>(
     relation: OpRelation,
     prover: &mut Prover<F, T>,
-) -> Prepared<F, T> {
+) -> (&'static str, Prepared<F, T>) {
+    let kind = witness_kind(&relation);
+    let _span = kind_span(kind).entered();
     let expect = "the prover holds every claim it reads";
     fn onehot<F: JoltField, T: Transcript>(
         encoding: &impl RaOneHotEncoding,
@@ -349,7 +382,7 @@ fn prepare<F: JoltField, T: Transcript>(
             .expect("the prover holds the one-hot checks' claims");
         Prepared::OneHot(params, prover.take_addresses(key, node_idx))
     }
-    match relation {
+    let prepared = match relation {
         OpRelation::LookupOneHot(kind @ OpLookup::Relu, node) => onehot(
             &OpLookupEncoding::<DefaultLookupOperands>::new(&node),
             Addresses::Lookup(kind),
@@ -418,7 +451,7 @@ fn prepare<F: JoltField, T: Transcript>(
         OpRelation::ClampBucketSlack(bucket) => {
             if !prover.clamp_split(bucket.idx).saturated() {
                 // Exact bucket: no slack check (the verifier reads the exact flag).
-                return Prepared::Ready(Vec::new());
+                return (kind, Prepared::Ready(Vec::new()));
             }
             Prepared::ClampSlack(
                 clamp_split::chunk_check_params::<F, T>(
@@ -449,50 +482,71 @@ fn prepare<F: JoltField, T: Transcript>(
             bucket.idx,
         ),
         other => Prepared::Ready(relation_witnesses(other, prover)),
-    }
+    };
+    (kind, prepared)
 }
 
 /// The heavy part of a batch's provers, in parallel across the batch.
 fn build_all<F: JoltField, T: Transcript>(
-    prepared: Vec<Prepared<F, T>>,
+    prepared: Vec<(&'static str, Prepared<F, T>)>,
     prover: &Prover<F, T>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-    let _span = tracing::span!(tracing::Level::INFO, "deferred::build").entered();
+    let build = tracing::span!(tracing::Level::INFO, "deferred::build").entered();
     let buckets = &prover.buckets;
     prepared
         .into_par_iter()
-        .flat_map_iter(|p| match p {
+        .flat_map_iter(|(kind, p)| match p {
             Prepared::Ready(witnesses) => witnesses,
-            Prepared::OneHot(params, indices) => {
-                shout::prover::ra_onehot_provers_from_params::<F, T>(params, &indices).into()
-            }
-            Prepared::ClampValue(params, bucket) => {
-                let split = buckets.clamp_split(bucket);
-                vec![match params {
-                    ClampValueParams::Split(p) => {
-                        Box::new(SplitProver::new(p, split)) as Box<dyn DynRelationWitness<F, T>>
-                    }
-                    ClampValueParams::Exact(p) => Box::new(ValueProver::new(p, split.out_values()))
-                        as Box<dyn DynRelationWitness<F, T>>,
-                }]
-            }
-            Prepared::ClampDigits(params, bucket) => {
-                clamp_split::digit_range_provers::<F, T>(params, buckets.clamp_split(bucket))
-            }
-            Prepared::ClampSlack(params, bucket) => {
-                clamp_split::chunk_check_provers::<F, T>(params, buckets.clamp_split(bucket))
-            }
-            Prepared::RemainderValue(params, bucket) => {
-                vec![Box::new(ValueProver::new(
-                    params,
-                    buckets.remainder_value_column(bucket),
-                )) as Box<dyn DynRelationWitness<F, T>>]
-            }
-            Prepared::RemainderDigits(params, bucket) => {
-                clamp_split::digit_columns_provers::<F, T>(params, buckets.remainder_digits(bucket))
+            p => {
+                let _span = tracing::span!(
+                    parent: build.id(),
+                    tracing::Level::INFO,
+                    "deferred::witness",
+                    kind
+                )
+                .entered();
+                build_one(p, buckets)
             }
         })
         .collect()
+}
+
+/// One relation's provers from its parameters.
+fn build_one<F: JoltField, T: Transcript>(
+    prepared: Prepared<F, T>,
+    buckets: &crate::onnx_proof::global_clamp::BucketWitnesses,
+) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
+    match prepared {
+        Prepared::Ready(witnesses) => witnesses,
+        Prepared::OneHot(params, indices) => {
+            shout::prover::ra_onehot_provers_from_params::<F, T>(params, &indices).into()
+        }
+        Prepared::ClampValue(params, bucket) => {
+            let split = buckets.clamp_split(bucket);
+            vec![match params {
+                ClampValueParams::Split(p) => {
+                    Box::new(SplitProver::new(p, split)) as Box<dyn DynRelationWitness<F, T>>
+                }
+                ClampValueParams::Exact(p) => Box::new(ValueProver::new(p, split.out_values()))
+                    as Box<dyn DynRelationWitness<F, T>>,
+            }]
+        }
+        Prepared::ClampDigits(params, bucket) => {
+            clamp_split::digit_range_provers::<F, T>(params, buckets.clamp_split(bucket))
+        }
+        Prepared::ClampSlack(params, bucket) => {
+            clamp_split::chunk_check_provers::<F, T>(params, buckets.clamp_split(bucket))
+        }
+        Prepared::RemainderValue(params, bucket) => {
+            vec![Box::new(ValueProver::new(
+                params,
+                buckets.remainder_value_column(bucket),
+            )) as Box<dyn DynRelationWitness<F, T>>]
+        }
+        Prepared::RemainderDigits(params, bucket) => {
+            clamp_split::digit_columns_provers::<F, T>(params, buckets.remainder_digits(bucket))
+        }
+    }
 }
 
 /// The provers of a plan relation (one, or the several of a stage or a one-hot check), set up

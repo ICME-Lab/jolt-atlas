@@ -1,13 +1,13 @@
-//! The post-loop plan: batched lookup sub-protocols.
+//! The post-loop plan: the packed buckets, then every lookup in two batches.
 //!
-//! A clamped or fused-rescale node's lookup sumchecks (a clamp read-raf, a remainder range
-//! check, their one-hot checks) consume claims appended during the node's own turn in the IOP
-//! and produce claims only on their own committed one-hots, so they need not run in the node
-//! loop: a plan step [`Step::Defer`](super::plan::Step::Defer) queues its relation for one of
-//! the [`DeferredBatch`]es, and every batch is proven as one batched sumcheck after the loop,
-//! in this module's order. The saturating clamps and the rescale remainders are packed further,
-//! into model-level buckets ([`global_clamp`](super::global_clamp)); [`plan`] builds their steps
-//! from the model and the public IO, with nothing to register during the loop.
+//! A table read consumes claims appended during its node's turn and produces a claim only on
+//! its own read address, and a one-hot check consumes only that read-address claim, so neither
+//! needs to run in the node loop: a plan step [`Step::Defer`](super::plan::Step::Defer) queues
+//! the read for [`DeferredBatch::Lookups`] and its one-hot check for
+//! [`DeferredBatch::OneHot`], and each batch is proven as one batched sumcheck after the loop.
+//! The saturating clamps and the rescale remainders are packed into model-level buckets
+//! ([`global_clamp`](super::global_clamp)); [`plan`] builds their steps from the model and the
+//! public IO, with nothing to register during the loop, and they run before the two batches.
 //!
 //! The prover walks the same plan (`jolt_atlas_core::onnx_proof::deferred_lookups`), proving
 //! every batch with `prove_relation_batch_parallel`: instance messages are computed in parallel
@@ -35,69 +35,46 @@ pub enum DeferredSetup {
 }
 
 /// A batch of sumcheck instances proven after the node loop as one batched sumcheck. Batches
-/// run in this enum's order; a one-hot batch directly follows the batch producing the `ra`
-/// claims it checks.
+/// run in this enum's order, after the bucket plan: a one-hot check reads the read-address
+/// claim a member of [`Self::Lookups`], a node's own read or the clamp split batch produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DeferredBatch {
-    /// Clamped-activation small-table execution sumchecks.
-    ActivationExec,
-    /// The one-hot checks of [`Self::ActivationExec`]'s read addresses.
-    ActivationExecRaChecks,
-    /// Clamped-activation clamp read-rafs.
-    ActivationClamp,
-    /// The one-hot checks of [`Self::ActivationClamp`]'s read addresses.
-    ActivationClampRaChecks,
-    /// Softmax stage 3: exp-digit lookups + significance-clamp read-raf.
-    SoftmaxStage3,
-    /// Softmax stage 4: the one-hot checks of stage 3's read addresses.
-    SoftmaxRaChecks,
+    /// Every table read whose sumcheck produces only its own read-address claim.
+    Lookups,
+    /// Every one-hot check of a read address, and the clamp buckets' slack chunk checks.
+    OneHot,
 }
 
 impl DeferredBatch {
     /// Every batch, in run order.
-    pub const ALL: [Self; 6] = [
-        Self::ActivationExec,
-        Self::ActivationExecRaChecks,
-        Self::ActivationClamp,
-        Self::ActivationClampRaChecks,
-        Self::SoftmaxStage3,
-        Self::SoftmaxRaChecks,
-    ];
+    pub const ALL: [Self; 2] = [Self::Lookups, Self::OneHot];
 
     /// The proof slot this batch's sumcheck is stored under.
     pub fn proof_type(self) -> ProofType {
         match self {
-            Self::ActivationExec => ProofType::DeferredActivationExec,
-            Self::ActivationExecRaChecks => ProofType::DeferredActivationSmallRaChecks,
-            Self::ActivationClamp => ProofType::DeferredActivationClamp,
-            Self::ActivationClampRaChecks => ProofType::DeferredActivationClampRaChecks,
-            Self::SoftmaxStage3 => ProofType::DeferredSoftmaxStage3,
-            Self::SoftmaxRaChecks => ProofType::DeferredSoftmaxRaChecks,
+            Self::Lookups => ProofType::DeferredLookups,
+            Self::OneHot => ProofType::DeferredOneHot,
         }
     }
 
-    /// When this batch's relations are set up: the one-hot batches read the `ra` claim their
-    /// parent batch produces, so they wait for it; the others draw their challenges in the
-    /// node's turn.
+    /// When this batch's relations are set up: a read draws its challenges and appends its
+    /// operand claim in the node's turn; a one-hot check waits for the claims it reads.
     pub fn setup(self) -> DeferredSetup {
         match self {
-            Self::ActivationExec | Self::ActivationClamp | Self::SoftmaxStage3 => {
-                DeferredSetup::InNodeLoop
-            }
-            Self::ActivationExecRaChecks
-            | Self::ActivationClampRaChecks
-            | Self::SoftmaxRaChecks => DeferredSetup::AtBatch,
+            Self::Lookups => DeferredSetup::InNodeLoop,
+            Self::OneHot => DeferredSetup::AtBatch,
         }
     }
 }
 
 /// The post-loop plan over the packed clamp and remainder buckets, from the model and the
-/// public IO: per live clamp bucket its exact flag and the exact check, then the bucket
-/// value sumchecks as one batch, the `OUT` digit range checks as a second and the slack chunk
-/// checks of the buckets not declared exact as a third (absent when every bucket is exact);
-/// then the remainder buckets' value sumchecks and their digit range checks. A clamp bucket is live when one of its nodes is not an unsaturated
-/// model output (those tie `acc = out` in their own turn). The deferred batches follow,
-/// run by the interpreter from its queue.
+/// public IO: per live clamp bucket its exact flag and the exact check, then the bucket value
+/// sumchecks as one batch and the `OUT` digit range checks as a second, with each bucket's
+/// slack chunk check queued for [`DeferredBatch::OneHot`] (it yields no relation when the
+/// bucket is exact); then the remainder buckets' value sumchecks and their digit range checks.
+/// A clamp bucket is live when one of its nodes is not an unsaturated model output (those tie
+/// `acc = out` in their own turn). The deferred batches follow, run by the interpreter from
+/// its queue.
 pub fn plan(model: &Model, io: &ModelExecutionIO) -> Result<Plan, ProofVerifyError> {
     let mut steps = Vec::new();
     let buckets: Vec<ClampBucket> = clamp_buckets(model)?
@@ -129,13 +106,10 @@ pub fn plan(model: &Model, io: &ModelExecutionIO) -> Result<Plan, ProofVerifyErr
                 .map(|bucket| OpRelation::ClampBucketDigits(bucket.clone()))
                 .collect(),
         });
-        steps.push(Step::Batch {
-            proof: ProofType::DeferredClampChunkChecks,
-            relations: buckets
-                .into_iter()
-                .map(OpRelation::ClampBucketSlack)
-                .collect(),
-        });
+        steps.extend(buckets.into_iter().map(|bucket| Step::Defer {
+            batch: DeferredBatch::OneHot,
+            relation: OpRelation::ClampBucketSlack(bucket),
+        }));
     }
     let rbuckets = remainder_buckets(model)?;
     if !rbuckets.is_empty() {

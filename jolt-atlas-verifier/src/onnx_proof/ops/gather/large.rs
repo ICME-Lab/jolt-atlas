@@ -1,4 +1,5 @@
 use super::*;
+use crate::onnx_proof::deferred_lookups::DeferredBatch;
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::OpeningId,
@@ -21,7 +22,7 @@ impl OpLayout for GatherLarge {
 }
 
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its
-/// read addresses as one batch.
+/// read addresses, queued for the post-loop one-hot batch.
 impl OpPlan for GatherLarge {
     fn plan(
         &self,
@@ -35,9 +36,9 @@ impl OpPlan for GatherLarge {
                 proof: ProofType::Execution,
                 relation: OpRelation::Gather(GatherRelation::for_node(model, node.clone())?),
             },
-            Step::Batch {
-                proof: ProofType::RaOneHotChecks,
-                relations: vec![OpRelation::GatherLargeOneHot(node.clone())],
+            Step::Defer {
+                batch: DeferredBatch::OneHot,
+                relation: OpRelation::GatherLargeOneHot(node.clone()),
             },
         ]))
     }

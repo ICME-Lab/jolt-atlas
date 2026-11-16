@@ -142,7 +142,7 @@ fn compile(graph: Graph, pad: bool) -> Model {
         CompileOptions {
             scale: Scale::new(SCALE).unwrap(),
             pad_pow2: pad,
-            version: SemVersion::V1,
+            version: SemVersion::V2,
         },
     )
     .unwrap()

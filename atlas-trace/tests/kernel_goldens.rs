@@ -38,8 +38,11 @@ fn trace_hash(model: &Model, inputs: &[Tensor<i32>]) -> u64 {
             }
         }
         if let Some(w) = trace.softmax(*id) {
-            for &v in w.exp_q.iter().chain(&w.inv_sum).chain(&w.r).chain(&w.r_exp) {
+            for &v in w.shift.iter().chain(&w.address) {
                 absorb_i64(v as i64);
+            }
+            for &v in w.sum_gap.iter().chain(&w.prev_sum_gap) {
+                absorb_i64(v);
             }
         }
     }
@@ -50,7 +53,7 @@ fn compile(b: GraphBuilder, pad: bool) -> Model {
     b.build(CompileOptions {
         scale: Scale::new(SCALE).unwrap(),
         pad_pow2: pad,
-        version: SemVersion::V1,
+        version: SemVersion::V2,
     })
     .unwrap()
 }
@@ -199,7 +202,7 @@ fn softmax_golden() {
     b.output(sm);
     let model = compile(b, false);
     let inputs = [random_tensor(&mut rng, &[4, 8], 1 << 15)];
-    assert_eq!(trace_hash(&model, &inputs), 0xf01505b3d1b835d6);
+    assert_eq!(trace_hash(&model, &inputs), 0xf2a2dd819d57c965);
 
     // Masked: a 3-wide row padded to 4 must reproduce the unpadded rows.
     let mut b = GraphBuilder::new();

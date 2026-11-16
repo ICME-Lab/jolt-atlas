@@ -171,14 +171,8 @@ pub enum RelationId {
     SmallTable,
     /// A gather's read of its dictionary.
     Gather,
-    /// Softmax: the output as the exponents times the rows' inverse sums.
-    SoftmaxRecipProduct,
-    /// Softmax: the row sums of the exponents.
-    SoftmaxExpSum,
-    /// Softmax: the row maxima read at the argmax.
-    SoftmaxMax,
-    /// Softmax: the exponent as the product of its two table digits.
-    SoftmaxExpProduct,
+    /// Softmax: the output claim and the two row sums reduced to the table reads.
+    SoftmaxSums,
     /// A group of committed openings reduced to one claim for the joint opening proof.
     OpeningReduction,
 }

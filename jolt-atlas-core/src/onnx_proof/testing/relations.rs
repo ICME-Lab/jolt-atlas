@@ -112,9 +112,6 @@ enum Disposition {
     /// A lookup-family protocol (read-raf lookups over one-hot addresses, clamp and activation
     /// tables): kept as code and moved as code at stage 8.
     LookupFamily,
-    /// Deferred to stage 8 as code, with its relation migration a named follow-up. Softmax: the
-    /// #218 aux-vector rework had not merged when stage 6 closed.
-    Deferred,
 }
 
 /// Every op's disposition. Exhaustive on purpose: a new op variant does not compile until it
@@ -144,7 +141,8 @@ fn disposition(kind: OpKind) -> Disposition {
         | OpKind::Concat
         | OpKind::Reshape
         | OpKind::Broadcast
-        | OpKind::MoveAxis => Relation,
+        | OpKind::MoveAxis
+        | OpKind::SoftmaxLastAxis => Relation,
         OpKind::Tanh
         | OpKind::Sigmoid
         | OpKind::Erf
@@ -154,7 +152,6 @@ fn disposition(kind: OpKind) -> Disposition {
         | OpKind::Clamp
         | OpKind::GatherSmall
         | OpKind::GatherLarge => LookupFamily,
-        OpKind::SoftmaxLastAxis => Deferred,
     }
 }
 

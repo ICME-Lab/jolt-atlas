@@ -80,6 +80,16 @@ impl SoftmaxTables {
             .sum()
     }
 
+    /// `T_sum⁻`: the sum table read one address lower, `T_sum⁻[u] = T_sum[u − 1]`, with
+    /// `T_sum⁻[0] = S' + 1`. Its row sum at shift `c` is the sum table's at `c − 1` when no
+    /// address is zero, and exceeds `S'` when one is, so `Σ T_sum⁻ > S'` says `c` is minimal.
+    pub fn sum_prev(&self) -> Vec<i32> {
+        std::iter::once(self.sum_scale as i32 + 1)
+            .chain(self.sum.iter().copied())
+            .take(self.sum.len())
+            .collect()
+    }
+
     /// The row's shift: the smallest `c` at or above the row's maximum with `f(c) ≤ S'`.
     /// `None` for an empty row.
     pub fn shift(&self, row: &[i32]) -> Option<i64> {

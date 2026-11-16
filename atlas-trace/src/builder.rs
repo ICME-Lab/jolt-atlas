@@ -121,7 +121,7 @@ mod tests {
             .build(CompileOptions {
                 scale: Scale::new(4).unwrap(),
                 pad_pow2: true,
-                version: SemVersion::V1,
+                version: SemVersion::V2,
             })
             .unwrap();
         // Inferred dims flow through: einsum output is [2, 2].

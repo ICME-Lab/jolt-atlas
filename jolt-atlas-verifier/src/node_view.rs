@@ -66,11 +66,18 @@ impl ComputationNode {
     }
 }
 
-/// Every node's operands are earlier nodes (the topological order
-/// `atlas_trace::Model::compile` establishes), and every Reshape, Slice and Concat has the
-/// power-of-two dims and the alignment its tie holds for (what compiling with padding
-/// establishes); both checked again on the model the verifier is handed.
+/// The model is of the semantics version the relations prove; every node's operands are earlier
+/// nodes (the topological order `atlas_trace::Model::compile` establishes); and every Reshape,
+/// Slice and Concat has the power-of-two dims and the alignment its tie holds for (what
+/// compiling with padding establishes). All checked again on the model the verifier is handed.
 pub fn check_model_shape(model: &atlas_trace::Model) -> Result<(), ProofVerifyError> {
+    // The relations are those of the second semantics version (its softmax).
+    if model.version() != atlas_trace::SemVersion::V2 {
+        return Err(ProofVerifyError::Malformed(format!(
+            "model: semantics version {:?}, the verifier's is V2",
+            model.version()
+        )));
+    }
     for (idx, node) in model.graph().nodes.iter().enumerate() {
         if node.inputs.iter().any(|input| input.index() >= idx) {
             return Err(ProofVerifyError::Malformed(format!(

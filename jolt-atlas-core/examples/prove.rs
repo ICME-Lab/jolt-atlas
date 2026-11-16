@@ -302,19 +302,19 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         );
     }
 
-    // 3. Softmax: spread of `max - x` over live lanes.
-    println!("softmax rows: spread of (max - x) over live lanes:");
+    // 3. Softmax: spread of the lookup address `c - x` over live lanes.
+    println!("softmax rows: spread of (c - x) over live lanes:");
     let s = model.scale().log2() as usize;
     for n in &views {
         let Some(w) = trace.softmax_witness(n.idx) else {
             continue;
         };
-        let rows = w.x.len() / w.last_dim;
+        let rows = w.address.len() / w.last_dim;
         let mut hist = [0usize; 40];
         let mut max_d = 0i64;
         for k in 0..rows {
             for j in 0..w.active_len {
-                let d = w.max_k[k] as i64 - w.x[k * w.last_dim + j] as i64;
+                let d = w.address[k * w.last_dim + j] as i64;
                 max_d = max_d.max(d);
                 hist[(64 - d.max(0).leading_zeros()) as usize] += 1;
             }
@@ -322,7 +322,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         let lanes = rows * w.active_len;
         let over: usize = hist[s + 4..].iter().sum();
         println!(
-            "  node {:<5} rows {:>5} live {:>4} max(max-x) 2^{:.1}  lanes with max-x >= 2^{} : {} ({:.2}%)",
+            "  node {:<5} rows {:>5} live {:>4} max(c-x) 2^{:.1}  lanes with c-x >= 2^{} : {} ({:.2}%)",
             n.idx,
             rows,
             w.active_len,

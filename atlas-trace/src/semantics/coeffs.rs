@@ -24,9 +24,6 @@ pub const HALF_PI_Q64: u128 = 28976077832308491370;
 /// e^-1 in Q0.62: `round(e^-1 · 2^62)`.
 pub const EXP_NEG1_Q62: u64 = 1696544475317221319;
 
-/// ln 2 in Q0.62: `round(ln 2 · 2^62)`.
-pub const LN2_Q62: u64 = 3196577161300663915;
-
 /// 2/√π in Q2.62: `round(2/√π · 2^62)`.
 pub const TWO_OVER_SQRT_PI_Q62: u64 = 5203730428379116615;
 
@@ -51,7 +48,6 @@ mod tests {
         check(PI_Q64, std::f64::consts::PI, 64, 16384.0);
         check(HALF_PI_Q64, std::f64::consts::FRAC_PI_2, 64, 8192.0);
         check(EXP_NEG1_Q62.into(), (-1.0f64).exp(), 62, 1024.0);
-        check(LN2_Q62.into(), std::f64::consts::LN_2, 62, 1024.0);
         check(
             TWO_OVER_SQRT_PI_Q62.into(),
             std::f64::consts::FRAC_2_SQRT_PI,

@@ -9,7 +9,7 @@ use atlas_trace::{
     Scale, SemVersion,
     semantics::{
         softmax::softmax_tables,
-        tables::{TableKind, exp_lut_decomposed, table},
+        tables::{TableKind, table},
     },
 };
 
@@ -29,17 +29,6 @@ fn fnv1a(values: impl IntoIterator<Item = i32>) -> u64 {
 fn table_hash(kind: TableKind, scale: u8) -> u64 {
     let t = table(kind, Scale::new(scale).unwrap(), SemVersion::V1);
     fnv1a(t.entries.iter().copied())
-}
-
-fn exp_lut_hash(scale: u8) -> u64 {
-    let lut = exp_lut_decomposed(Scale::new(scale).unwrap(), SemVersion::V1);
-    fnv1a(
-        lut.lut_hi
-            .iter()
-            .chain(&lut.lut_lo)
-            .copied()
-            .chain([lut.base as i32]),
-    )
 }
 
 #[test]
@@ -68,20 +57,6 @@ fn golden_hashes_v1() {
             "{kind:?} table at scale {scale} changed under SemVersion::V1: \
              got {got:#018x}, pinned {expected:#018x}. Any table change \
              requires a new SemVersion variant and new pins."
-        );
-    }
-
-    let exp_cases: &[(u8, u64)] = &[
-        (8, 0x5790701787d7c194),
-        (14, 0xea34f76e6c2fa16b),
-        (15, 0x6d049d70e0342e2c),
-    ];
-    for &(scale, expected) in exp_cases {
-        let got = exp_lut_hash(scale);
-        assert_eq!(
-            got, expected,
-            "softmax exp LUT at scale {scale} changed under SemVersion::V1: \
-             got {got:#018x}, pinned {expected:#018x}."
         );
     }
 }
@@ -132,6 +107,9 @@ fn print_hashes() {
                 table_hash(kind, scale)
             );
         }
-        println!("exp lut {scale}: {:#018x}", exp_lut_hash(scale));
+        println!(
+            "softmax tables {scale}: {:#018x}",
+            softmax_tables_hash(scale)
+        );
     }
 }

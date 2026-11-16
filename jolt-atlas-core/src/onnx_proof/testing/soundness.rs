@@ -269,36 +269,26 @@ enum WitnessSite {
     },
 }
 
-const SOFTMAX_FIELDS: &[&str] = &[
-    "x",
-    "max_k",
-    "exp_q",
-    "exp_sum_q",
-    "inv_sum",
-    "r",
-    "z_hi",
-    "z_lo",
-    "exp_hi",
-    "exp_lo",
-    "r_exp",
-];
+const SOFTMAX_FIELDS: &[&str] = &["shift", "address", "sum_gap", "prev_sum_gap"];
 
-fn softmax_field<'a>(
-    w: &'a mut atlas_trace::trace::SoftmaxWitness,
-    field: &str,
-) -> &'a mut Vec<i32> {
+/// The length of a softmax witness field.
+fn softmax_field_len(w: &atlas_trace::trace::SoftmaxWitness, field: &str) -> usize {
     match field {
-        "x" => &mut w.x,
-        "max_k" => &mut w.max_k,
-        "exp_q" => &mut w.exp_q,
-        "exp_sum_q" => &mut w.exp_sum_q,
-        "inv_sum" => &mut w.inv_sum,
-        "r" => &mut w.r,
-        "z_hi" => &mut w.z_hi,
-        "z_lo" => &mut w.z_lo,
-        "exp_hi" => &mut w.exp_hi,
-        "exp_lo" => &mut w.exp_lo,
-        "r_exp" => &mut w.r_exp,
+        "shift" => w.shift.len(),
+        "address" => w.address.len(),
+        "sum_gap" => w.sum_gap.len(),
+        "prev_sum_gap" => w.prev_sum_gap.len(),
+        _ => unreachable!(),
+    }
+}
+
+/// Add one to element `elem` of a softmax witness field.
+fn bump_softmax_field(w: &mut atlas_trace::trace::SoftmaxWitness, field: &str, elem: usize) {
+    match field {
+        "shift" => w.shift[elem] = w.shift[elem].wrapping_add(1),
+        "address" => w.address[elem] = w.address[elem].wrapping_add(1),
+        "sum_gap" => w.sum_gap[elem] = w.sum_gap[elem].wrapping_add(1),
+        "prev_sum_gap" => w.prev_sum_gap[elem] = w.prev_sum_gap[elem].wrapping_add(1),
         _ => unreachable!(),
     }
 }
@@ -384,9 +374,8 @@ fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
                 }
             }
             atlas_trace::trace::NodeAux::Softmax(w) => {
-                let mut w = (**w).clone();
                 for field in SOFTMAX_FIELDS {
-                    let len = softmax_field(&mut w, field).len();
+                    let len = softmax_field_len(w, field);
                     for elem in probe_elems(len, false) {
                         sites.push(WitnessSite::Softmax { node, field, elem });
                     }
@@ -462,8 +451,7 @@ fn apply_witness(trace: &mut Trace, site: &WitnessSite) {
             if let Some(atlas_trace::trace::NodeAux::Softmax(w)) =
                 trace.aux.get_mut(&NodeId(*node as u32))
             {
-                let d = softmax_field(w, field);
-                d[*elem] = d[*elem].wrapping_add(1);
+                bump_softmax_field(w, field, *elem);
             }
         }
         WitnessSite::Advice { node, field, elem } => {

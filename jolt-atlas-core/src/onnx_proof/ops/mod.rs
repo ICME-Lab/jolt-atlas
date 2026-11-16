@@ -714,15 +714,14 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 ..
             } = prover;
             let node_idx = match &relation {
-                SoftmaxRelation::Stage1(s)
-                | SoftmaxRelation::Stage2(s)
-                | SoftmaxRelation::Stage3(s)
-                | SoftmaxRelation::ExpHiOneHot(s)
-                | SoftmaxRelation::ExpLoOneHot(s)
+                SoftmaxRelation::Sums(s)
+                | SoftmaxRelation::Read(s)
+                | SoftmaxRelation::Clamp(s)
+                | SoftmaxRelation::ReadOneHot(s)
                 | SoftmaxRelation::ClampOneHot(s) => s.idx(),
             };
             let (witnesses, left) = softmax_last_axis::prove_relation(
-                &relation,
+                relation,
                 trace,
                 accumulator,
                 transcript,
@@ -860,7 +859,7 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
                 .into_provider(transcript, r_node_output)
                 .append_nodeio(Target::Input(0), a_claim);
         }
-        OpTie::Softmax(tie) => softmax_last_axis::prove_tie(tie),
+        OpTie::Softmax(tie) => softmax_last_axis::prove_tie(tie, trace, accumulator, transcript),
         OpTie::ExactClampOutput(_) | OpTie::ClampBucketExact(_) => {}
     }
 }

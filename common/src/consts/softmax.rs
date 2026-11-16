@@ -1,16 +1,13 @@
 use super::general::MODEL_SCALE;
 
-/// log2 of softmax's saturating-clamp table size at [`MODEL_SCALE`]: the padded
-/// `hi_size * base` from `exp_lut_decomposed` (`atlas_trace::semantics::tables`) at
-/// that scale, rounded up to the next power of two. Derived at compile time by
-/// [`softmax_clamp_bound`].
+/// log2 of the softmax tables' length at [`MODEL_SCALE`], and so the bound of softmax's clamp
+/// table: the address width `atlas_trace::semantics::softmax::softmax_tables` derives, which the
+/// verifier checks against this constant. Derived at compile time by [`softmax_clamp_bound`].
 pub const SOFTMAX_CLAMP_BOUND: usize = softmax_clamp_bound(MODEL_SCALE as u32);
 
-/// Compile-time derivation of [`SOFTMAX_CLAMP_BOUND`] for an arbitrary `scale`, mirroring
-/// `atlas_trace::semantics::tables::exp_lut_decomposed`'s arithmetic in fixed-point
-/// integers (that function needs non-const `f64::ln`, so can't run in `const` context; since its
-/// multiplier `S = 2^scale` is always a power of two, `ln(2S) = (scale + 1) * ln(2)` avoids
-/// needing a real logarithm at all).
+/// Compile-time derivation of [`SOFTMAX_CLAMP_BOUND`] for an arbitrary `scale`: the power of two
+/// covering `⌈S·ln(2S)⌉` with a margin. At [`MODEL_SCALE`] it equals the softmax tables' own
+/// width; the verifier rejects a mismatch, so a scale where the two differ is not provable.
 pub const fn softmax_clamp_bound(scale: u32) -> usize {
     /// `round(ln(2) * 2^32)`.
     const LN2_Q32: u128 = 2_977_044_472;

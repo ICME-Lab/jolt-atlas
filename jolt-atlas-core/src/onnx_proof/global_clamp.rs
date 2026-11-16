@@ -163,7 +163,7 @@ impl BucketWitnesses {
     }
 }
 
-/// A range claim's values over its node's padded cycle domain, from the trace: the remainder
+/// A range claim's values over its domain ([`Remainder::domain_len`]), from the trace: the remainder
 /// itself, or its slack below the bound. A value outside `[0, 2^width)` (a remainder that does
 /// not satisfy its bound) has no digit decomposition; its low `width` bits are committed, and
 /// the proof does not verify.
@@ -173,12 +173,12 @@ fn range_claim_bits(
     width: usize,
     trace: &Trace,
 ) -> Vec<LookupBits> {
-    let len = node.pow2_padded_num_output_elements();
+    let len = claim.remainder.domain_len(node);
     let padded = |tensor: &Tensor<i32>| -> Vec<i64> {
         tensor.padded_pow2().iter().map(|&v| i64::from(v)).collect()
     };
-    let flat = |values: &[i32]| -> Vec<i64> {
-        let mut values: Vec<i64> = values.iter().map(|&v| i64::from(v)).collect();
+    let per_row = |values: &[i64]| -> Vec<i64> {
+        let mut values = values.to_vec();
         values.resize(len, 0);
         values
     };
@@ -195,8 +195,8 @@ fn range_claim_bits(
         Remainder::RsqrtDiv => padded(&TraceView::rsqrt_advice(trace, node).div_remainder),
         Remainder::RsqrtSqrt => padded(&TraceView::rsqrt_advice(trace, node).sqrt_remainder),
         Remainder::Teleport => padded(&TraceView::teleport_advice(trace, node).remainder),
-        Remainder::SoftmaxRecipMult => flat(&softmax().r),
-        Remainder::SoftmaxExp => flat(&softmax().r_exp),
+        Remainder::SoftmaxSumGap => per_row(&softmax().sum_gap),
+        Remainder::SoftmaxPrevSumGap => per_row(&softmax().prev_sum_gap),
     };
     assert_eq!(remainder.len(), len, "node {} remainder length", node.idx);
     let values: Vec<i64> = match claim.slack {

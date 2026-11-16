@@ -237,63 +237,6 @@ fn trig_table(scale: Scale, sin: bool) -> ActivationTable {
     }
 }
 
-/// Decomposed exp sub-tables for softmax, exploiting `e^(a+b) = e^a·e^b`:
-/// the centered logit `z` splits into digits `z = z_hi·B + z_lo`, and
-/// `exp_q = ⌊LUT_hi[z_hi]·LUT_lo[z_lo]/S⌋`. Same structure and sizing as
-/// the old crate (its `generate_exp_lut_decomposed`), with entries from the
-/// integer exp core instead of platform f64.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ExpLutDecomposed {
-    /// `LUT_hi[h] = round(S·e^(-h·B/S))`, `h ∈ [0, hi_size)`.
-    pub lut_hi: Vec<i32>,
-    /// `LUT_lo[l] = round(S·e^(-l/S))`, `l ∈ [0, B)`.
-    pub lut_lo: Vec<i32>,
-    /// Digit base `B` (power of two).
-    pub base: usize,
-    /// `log2(B)`, for bit-shift digit extraction.
-    pub log2_base: u32,
-}
-
-/// Generate the softmax exp sub-tables for `scale`, version `version`.
-///
-/// Sizing (all integer arithmetic, matching the old f64 computation exactly
-/// for every supported scale):
-/// - cutoff `needed = ⌈S·ln(2S)⌉ + 2 = ⌈S·(s+1)·ln2⌉ + 2` — beyond it
-///   `e^(-z/S)·S` rounds to 0;
-/// - digit base `B` = the smallest power of four's square root covering
-///   `needed` (`B = 2^b` with the smallest `b` such that `4^b ≥ needed`);
-/// - `hi_size = needed/B + 2`.
-pub fn exp_lut_decomposed(scale: Scale, version: SemVersion) -> ExpLutDecomposed {
-    match version {
-        SemVersion::V1 | SemVersion::V2 => {}
-    }
-    let s = scale.denom_i64() as u128;
-    let s_log = scale.log2();
-
-    // needed = ceil(S·(s+1)·ln2) + 2, in Q62.
-    let t = s * (s_log as u128 + 1) * super::coeffs::LN2_Q62 as u128;
-    let needed = ((t + (1u128 << 62) - 1) >> 62) as usize + 2;
-
-    // Smallest b with 4^b >= needed.
-    let mut log2_base = 0u32;
-    while (1usize << (2 * log2_base)) < needed {
-        log2_base += 1;
-    }
-    let base = 1usize << log2_base;
-    let hi_size = needed / base + 2;
-
-    let entry = |z: u64| -> i32 {
-        let e = exp_neg_q62(z << (32 - s_log)) as u128;
-        round_q62(e, s as i64)
-    };
-    ExpLutDecomposed {
-        lut_hi: (0..hi_size).map(|h| entry((h * base) as u64)).collect(),
-        lut_lo: (0..base).map(|l| entry(l as u64)).collect(),
-        base,
-        log2_base,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,44 +353,6 @@ mod tests {
                     "{kind:?}[{v}]: got {got}, f64 oracle {expected}"
                 );
             }
-        }
-    }
-
-    #[test]
-    fn exp_lut_structure_matches_old_sizing() {
-        // Old f64 sizing at scale 14: needed = ceil(16384·ln(32768)) + 2.
-        let lut = exp_lut_decomposed(s14(), SemVersion::V1);
-        let needed = (16384.0f64 * (2.0 * 16384.0f64).ln()).ceil() as usize + 2;
-        let log2_b = ((needed as f64).log2() / 2.0).ceil() as u32;
-        assert_eq!(lut.log2_base, log2_b);
-        assert_eq!(lut.base, 1 << log2_b);
-        assert_eq!(lut.lut_hi.len(), needed / lut.base + 2);
-        assert_eq!(lut.lut_lo.len(), lut.base);
-        // Entry oracle check (≤1 for ties).
-        let s = 16384.0f64;
-        for (h, &e) in lut.lut_hi.iter().enumerate() {
-            let expected = (s * (-(h as f64 * lut.base as f64) / s).exp()).round() as i32;
-            assert!((e - expected).abs() <= 1, "lut_hi[{h}]: {e} vs {expected}");
-        }
-        for (l, &e) in lut.lut_lo.iter().enumerate() {
-            let expected = (s * (-(l as f64) / s).exp()).round() as i32;
-            assert!((e - expected).abs() <= 1, "lut_lo[{l}]: {e} vs {expected}");
-        }
-        // First entries are exact: e^0 = 1.
-        assert_eq!(lut.lut_hi[0], 16384);
-        assert_eq!(lut.lut_lo[0], 16384);
-    }
-
-    #[test]
-    fn exp_lut_sizing_integer_matches_f64_for_all_scales() {
-        for s in 1..=15u8 {
-            let scale = Scale::new(s).unwrap();
-            let lut = exp_lut_decomposed(scale, SemVersion::V1);
-            let sf = (1u32 << s) as f64;
-            let needed = (sf * (2.0 * sf).ln()).ceil() as usize + 2;
-            let log2_b = ((needed as f64).log2() / 2.0).ceil() as u32;
-            assert_eq!(lut.log2_base, log2_b, "scale {s}");
-            assert_eq!(lut.lut_hi.len(), needed / (1 << log2_b) + 2, "scale {s}");
         }
     }
 }

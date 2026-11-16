@@ -74,7 +74,7 @@ pub fn load(path: &Path, opts: &LoadOptions) -> Result<ImportedModel, ImportErro
         CompileOptions {
             scale: opts.scale,
             pad_pow2: opts.pad_pow2,
-            version: atlas_trace::SemVersion::V1,
+            version: atlas_trace::SemVersion::V2,
         },
     )?;
     Ok(ImportedModel {

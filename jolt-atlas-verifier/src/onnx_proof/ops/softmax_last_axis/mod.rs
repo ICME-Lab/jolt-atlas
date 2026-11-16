@@ -1,82 +1,121 @@
-//! Proofs for softmax with the last axis as the reduction dimension (ONNX Softmax operator).
-//! For more on the claim flow and design of the protocol, see: https://hackmd.io/@R5TO3fi7TlWQKnY6Ejr2eg/Byjucoqjbx
+//! Softmax over the last axis in log-partition form (ONNX Softmax).
 //!
-//! The prover sends three auxiliary vectors (`max_k`, `exp_sum_q`, `argmax_k`) to the
-//! verifier via the transcript. These let the verifier derive `inv_sum[k]` without a
-//! committed polynomial, but they add O(F) field elements to the proof size.
+//! Semantics ([`atlas_trace::semantics::softmax`]): per row, the shift `c` is the smallest
+//! integer at or above the live lanes' maximum whose sum-table row sum does not exceed `S'`,
+//! and a live lane's output is the output table read at `min(c − x, top)`.
 //!
-//! TODO(#218): Remove auxiliary vectors and derive them inside the protocol.
+//! The proof commits `c` per row and two one-hot addresses per entry: the signed 32-bit clamp
+//! address `u = c − x` and the table address `ũ = Clamp[u]`. With `v`, `t`, `t⁻` the reads of
+//! the output table, the sum table and the sum table shifted by one address at `ũ`, and `a` the
+//! public selector of the live lanes:
 //!
-//! The saturating clamp `z_c = min(z, z_bound - 1)` (`z = max_k - x`) is proven via a
-//! `ClampBoundedTable` lookup (`atlas_lookup_tables::clamp::SoftmaxClampTable`, via
-//! `significance_clamp::SoftmaxSignificanceClampOperands`) — see `significance_clamp.rs`'s module doc for the relation being
-//! proven. This lookup only supports the compile-time `common::consts::MODEL_SCALE` (its bound is
-//! a const generic), so `SoftmaxLastAxis` only supports that one scale at runtime.
+//! ```text
+//! out[k,j]  = a(j)·v[k,j]
+//! g[k]      = S' − Σ_j a(j)·t[k,j]            ≥ 0      (the row sum does not exceed S')
+//! g⁻[k]     = Σ_j a(j)·t⁻[k,j] − S' − 1       ≥ 0      (no smaller shift is admissible)
+//! u[k,j]    = c[k] − x[k,j]
+//! ```
+//!
+//! The first three are one sumcheck ([`SumsRelation`]) that leaves `v`, `t`, `t⁻` at one point;
+//! one table read through the table address proves them there, the clamp lookup ties `ũ` to
+//! `u`, and the address link ties `u` to the operand. `g` and `g⁻` are range-checked in the
+//! remainder buckets.
+//!
+//! **S ⊆ R.** The one-hot checks make `u` an integer in `[−2^31, 2^31)` and `ũ` an integer in
+//! `[0, 2^D)` per entry with `ũ = min(max(u, 0), top)`, and every read a table entry. The
+//! address link at a random point gives `u = c − x` on every entry, over the integers since
+//! both sides are below `2^33` in magnitude. The sums relation at a random point gives `g` and
+//! `g⁻` as above for every row, with all sums far below the modulus, and their range claims
+//! give `Σ t ≤ S'` and `Σ t⁻ > S'` over the live lanes. If every live lane has `u ≥ 0`, then
+//! `c ≥ x` on the live lanes, `Σ t = f(c)`, and `Σ t⁻` is `f(c − 1)` or exceeds `S'` by the
+//! shifted table's first entry when some `u = 0`; `f` is nonincreasing, so `c` is the defined
+//! shift and `v` the defined output. If some live lane has `u < 0`, its table address is 0 and
+//! it contributes `S'` to the row sum, so every other live lane reads zero in the sum table,
+//! hence in the output table: that lane is the row's strict maximum, the defined shift is its
+//! logit, and the defined output is `S` there and zero elsewhere, which is what was read.
+//!
+//! The clamp table's bound is a const generic at [`MODEL_SCALE`], so only that scale is
+//! supported.
 use crate::onnx_proof::ops::OpLayout;
+use crate::onnx_proof::relation::{
+    low_to_high_point, not_derived, AtlasRelation, EngineRelation, Produces, Relation,
+    RelationChallenge, RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
+    RelationVerifier, SetupRelation,
+};
 use atlas_sumcheck::relation::DynRelationVerifier;
 
 use crate::{
     onnx_proof::{
         deferred_lookups::DeferredBatch,
         op_lookups::OpLookupProvider,
-        ops::softmax_last_axis::{
-            exp_sum::ExpSumParams,
-            exponentiation::{mult::MultParams, ExpDigit, ExpReadRafProvider, SoftmaxRaEncoding},
-            max::MaxIndicatorParams,
-            recip_mult::{RecipMultParams, RecipMultRelation},
-            significance_clamp::SoftmaxSignificanceClampOperands,
-        },
+        ops::softmax_last_axis::significance_clamp::SoftmaxSignificanceClampOperands,
         plan::{OpOpen, OpPlan, OpRelation, OpTie, Plan, Step},
         ProofType,
     },
-    utils::opening_access::{AccOpeningAccessor, Target},
+    utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
 use atlas_lookup_tables::clamp::SoftmaxClampTable;
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
-    opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    shout::{RaOneHotEncoding, ReadRafProvider},
 };
 
-use atlas_trace::{op::SoftmaxLastAxis, trace::ModelExecutionIO, Model};
+use atlas_trace::{
+    op::SoftmaxLastAxis,
+    semantics::softmax::{softmax_tables, SoftmaxTables},
+    trace::ModelExecutionIO,
+    Model, Op, Scale, SemVersion,
+};
 
 use crate::node_view::ComputationNode;
+use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        multilinear::{EvaluateMle, MultilinearPolynomial, PolynomialEvaluation},
-        point::OpeningPoint,
+        eq::EqPolynomial,
+        point::{OpeningPoint, BIG_ENDIAN},
     },
     utils::{errors::ProofVerifyError, math::Math},
 };
+use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::shout;
 use atlas_transcript::Transcript;
 use common::{
-    consts::{MODEL_SCALE, XLEN},
+    consts::{MODEL_SCALE, SOFTMAX_CLAMP_BOUND, XLEN},
     CommittedPoly, VirtualPoly,
 };
-pub use exp_lut::{generate_exp_lut_decomposed, softmax_z, ExpLutDecomposed};
+use std::sync::OnceLock;
 
-/// Exp-LUT materialization and small softmax helpers.
-pub mod exp_lut;
-/// exp_sum(r0_k) = sum_{k,j} eq(r0_k, k) * exp_q[k,j]
-pub mod exp_sum;
-/// Lookups for the decomposed exponentiation (exp_hi and exp_lo).
-pub mod exponentiation;
-/// max indicator: max_k(r1_k) = sum_{k,j} eq(r1_k, k) * x[k,j] * e[k,j], where e[k,j] = 1 iff j = argmax_k
-pub mod max;
-/// softmax(r0) * S + R(r0) = sum_{k,j} eq(r0, (k,j)) * exp_q[k,j] * inv_sum[k]
-pub mod recip_mult;
-/// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
+/// The clamp lookup of the address `u = c − x` (`SoftmaxSignificanceClampOperands`).
 pub mod significance_clamp;
 
-/// The leading `log_f` (row) coordinates of a bound point; `Err` if the point is shorter.
-fn row_coordinates<F>(point: &[F], log_f: usize) -> Result<&[F], ProofVerifyError> {
-    point.get(..log_f).ok_or_else(|| {
-        ProofVerifyError::Malformed(format!(
-            "softmax: a point of {} coordinates has no {log_f} row coordinates",
-            point.len()
-        ))
-    })
+/// The softmax tables at [`MODEL_SCALE`] with the shifted sum table, generated once.
+pub struct ReadTables {
+    /// The tables as the trace semantics generate them.
+    pub tables: SoftmaxTables,
+    /// [`SoftmaxTables::sum_prev`].
+    pub sum_prev: Vec<i32>,
+}
+
+/// The softmax tables at [`MODEL_SCALE`]. `Err` if their address width is not the clamp
+/// table's.
+pub fn read_tables() -> Result<&'static ReadTables, ProofVerifyError> {
+    static TABLES: OnceLock<Option<ReadTables>> = OnceLock::new();
+    TABLES
+        .get_or_init(|| {
+            let tables = softmax_tables(Scale::new(MODEL_SCALE as u8).ok()?, SemVersion::V2);
+            (tables.address_bits as usize == SOFTMAX_CLAMP_BOUND).then(|| ReadTables {
+                sum_prev: tables.sum_prev(),
+                tables,
+            })
+        })
+        .as_ref()
+        .ok_or_else(|| {
+            ProofVerifyError::Malformed(
+                "softmax: the tables' address width is not the clamp table's".to_string(),
+            )
+        })
 }
 
 impl OpLayout for SoftmaxLastAxis {
@@ -84,19 +123,14 @@ impl OpLayout for SoftmaxLastAxis {
         &self,
         node: &ComputationNode,
     ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        let decomp = generate_exp_lut_decomposed(1i32 << node.scale)?;
-        let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
-        let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
         let idx = node.idx;
-
-        let mut polys = vec![];
+        let mut polys = vec![CommittedPoly::SoftmaxShift(idx)];
         for (log_k, ctor) in [
             (
                 XLEN,
                 CommittedPoly::SoftmaxClampRaD as fn(usize, usize) -> _,
             ),
-            (log_hi, CommittedPoly::SoftmaxZHiRaD),
-            (log_lo, CommittedPoly::SoftmaxZLoRaD),
+            (SOFTMAX_CLAMP_BOUND, CommittedPoly::SoftmaxAddrRaD),
         ] {
             let d =
                 OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
@@ -106,11 +140,11 @@ impl OpLayout for SoftmaxLastAxis {
     }
 }
 
-/// The plan (the stage driver as data): the evaluation reduction; the auxiliary vectors; the
-/// `exp_sum` opening and its check against them; the recip-mult remainder; stage 1 as one
-/// batch; the exp remainder; stage 2 as one batch; `z_hi`/`z_lo`; stage 3 queued for the
-/// post-loop lookup batch; the operand link in the clear; stage 4 (the one-hot checks of stage
-/// 3's read addresses) queued for the one-hot batch.
+/// The plan: the evaluation reduction; the row gaps opened at the reduced point's row
+/// coordinates; the sums relation, which leaves the three reads at one point `r1`; the shift at
+/// `r1`'s row coordinates and the table address at `r1`; the table read and the clamp lookup,
+/// queued for the post-loop lookup batch; the address link in the clear; the two addresses'
+/// one-hot checks, queued for the one-hot batch.
 impl OpPlan for SoftmaxLastAxis {
     fn plan(
         &self,
@@ -118,104 +152,79 @@ impl OpPlan for SoftmaxLastAxis {
         _model: &Model,
         _io: &ModelExecutionIO,
     ) -> Result<Plan, ProofVerifyError> {
-        if node.scale != MODEL_SCALE as u8 {
-            return Err(ProofVerifyError::Malformed(format!(
-                "model: SoftmaxLastAxis only supports MODEL_SCALE={MODEL_SCALE}, node {} has \
-                 scale {}",
-                node.idx, node.scale
-            )));
-        }
-        // The sumchecks check the *unmasked* relations, so a model declaring a masked softmax
-        // is rejected.
-        let last_dim = *node.output_dims.last().ok_or_else(|| {
-            ProofVerifyError::Malformed(format!("model: softmax node {} has rank 0", node.idx))
-        })?;
-        if self.active_len.is_some_and(|n| n != last_dim) {
+        // The clamp table's bound is `SOFTMAX_CLAMP_BOUND` at `MODEL_SCALE`.
+        if node.scale as usize != MODEL_SCALE {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                "masked softmax (active_len {:?} of {last_dim}) is not yet verifiable",
-                self.active_len
+                "SoftmaxLastAxis verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} (got {})",
+                node.scale
             )));
         }
+        read_tables()?;
         let shape = SoftmaxShape::for_node(node)?;
         let open = |open: fn(SoftmaxShape) -> SoftmaxOpen| {
             Step::Open(OpOpen::Softmax(open(shape.clone())))
         };
-        let tie = |tie: fn(SoftmaxShape) -> SoftmaxTie| Step::Tie {
-            relation: OpTie::Softmax(tie(shape.clone())),
-        };
         let relation =
             |stage: fn(SoftmaxShape) -> SoftmaxRelation| OpRelation::Softmax(stage(shape.clone()));
+        let defer = |batch, stage| Step::Defer {
+            batch,
+            relation: relation(stage),
+        };
         Ok(Plan(vec![
             Step::Reduce,
-            open(SoftmaxOpen::Aux),
-            open(SoftmaxOpen::ExpSum),
-            tie(SoftmaxTie::ExpSum),
-            open(SoftmaxOpen::RecipMultRemainder),
-            Step::Batch {
-                proof: ProofType::SoftmaxStage1,
-                relations: vec![relation(SoftmaxRelation::Stage1)],
+            open(SoftmaxOpen::Gaps),
+            Step::Relation {
+                proof: ProofType::SoftmaxSums,
+                relation: relation(SoftmaxRelation::Sums),
             },
-            open(SoftmaxOpen::ExpRemainder),
-            Step::Batch {
-                proof: ProofType::SoftmaxStage2,
-                relations: vec![relation(SoftmaxRelation::Stage2)],
+            open(SoftmaxOpen::Addresses),
+            defer(DeferredBatch::Lookups, SoftmaxRelation::Read),
+            defer(DeferredBatch::Lookups, SoftmaxRelation::Clamp),
+            Step::Tie {
+                relation: OpTie::Softmax(SoftmaxTie::AddressLink(shape.clone())),
             },
-            open(SoftmaxOpen::ZHiLo),
-            Step::Defer {
-                batch: DeferredBatch::Lookups,
-                relation: relation(SoftmaxRelation::Stage3),
-            },
-            tie(SoftmaxTie::OperandLink),
-            Step::Defer {
-                batch: DeferredBatch::OneHot,
-                relation: relation(SoftmaxRelation::ExpHiOneHot),
-            },
-            Step::Defer {
-                batch: DeferredBatch::OneHot,
-                relation: relation(SoftmaxRelation::ExpLoOneHot),
-            },
-            Step::Defer {
-                batch: DeferredBatch::OneHot,
-                relation: relation(SoftmaxRelation::ClampOneHot),
-            },
+            defer(DeferredBatch::OneHot, SoftmaxRelation::ReadOneHot),
+            defer(DeferredBatch::OneHot, SoftmaxRelation::ClampOneHot),
         ]))
     }
 }
 
-/// A softmax node's shape: its rows `F` and row length `N`, and the model scale.
+/// A softmax node's shape: its rows `F`, its padded row length `N` and its live lanes.
 #[derive(Clone)]
 pub struct SoftmaxShape {
     /// The softmax node.
     pub node: ComputationNode,
-    /// The fixed-point scale `S = 2^scale_bits`.
-    pub scale: i32,
-    /// `log₂ S`.
-    pub scale_bits: u8,
     /// `[F, N]`: the leading dims' product and the softmax axis.
     pub F_N: [usize; 2],
-}
-
-/// The auxiliary vectors the prover sends in the clear, decoded from their openings.
-pub struct SoftmaxAux {
-    /// `exp_sum_q[k]`, the row sums of the quantized exponentials.
-    pub exp_sum: Vec<i32>,
-    /// `max_k[k]`, the row maxima.
-    pub max_k: Vec<i32>,
-    /// `argmax_k[k]`, the row argmaxes.
-    pub argmax_k: Vec<usize>,
+    /// The live lanes per row; lanes at or beyond it are padding.
+    pub active_len: usize,
 }
 
 impl SoftmaxShape {
-    /// The shape of a softmax `node`. `Err` if the node has rank 0.
+    /// The shape of a softmax `node`. `Err` if the node is not a softmax, has rank 0, or its
+    /// live width is not in `1..=N`.
     pub fn for_node(node: &ComputationNode) -> Result<Self, ProofVerifyError> {
-        let (&n, leading_dims) = node.output_dims.split_last().ok_or_else(|| {
-            ProofVerifyError::Malformed(format!("model: softmax node {} has rank 0", node.idx))
-        })?;
+        let malformed = |what: &str| {
+            ProofVerifyError::Malformed(format!("model: softmax node {}: {what}", node.idx))
+        };
+        let Op::SoftmaxLastAxis(op) = &node.operator else {
+            return Err(malformed("not a softmax"));
+        };
+        let (&n, leading_dims) = node
+            .output_dims
+            .split_last()
+            .ok_or_else(|| malformed("rank 0"))?;
+        let active_len = op.active_len.unwrap_or(n);
+        if active_len == 0 || active_len > n {
+            return Err(malformed("a live width outside its row"));
+        }
         Ok(Self {
             node: node.clone(),
-            scale: 1i32 << node.scale,
-            scale_bits: node.scale,
-            F_N: [leading_dims.iter().product::<usize>(), n],
+            F_N: [
+                leading_dims.iter().product::<usize>().next_power_of_two(),
+                n.next_power_of_two(),
+            ],
+            active_len,
         })
     }
 
@@ -224,90 +233,72 @@ impl SoftmaxShape {
         self.node.idx
     }
 
-    fn log_f(&self) -> usize {
+    /// `log₂ F`.
+    pub fn log_f(&self) -> usize {
         self.F_N[0].log_2()
     }
 
-    /// Decode the auxiliary vectors from their openings (appended by [`SoftmaxOpen::Aux`]).
-    /// `Err` if one is missing or does not fit in 64 bits.
-    pub fn aux<F: JoltField>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<SoftmaxAux, ProofVerifyError> {
-        let [f, _] = self.F_N;
-        let accessor = AccOpeningAccessor::new(accumulator, &self.node);
-        let read = |vp_fn: fn(usize, usize) -> VirtualPoly| -> Result<Vec<u64>, ProofVerifyError> {
-            (0..f)
-                .map(|k| {
-                    accessor
-                        .get_advice(|idx| vp_fn(idx, k))?
-                        .1
-                        .to_u64()
-                        .ok_or_else(|| {
-                            ProofVerifyError::Malformed(format!(
-                                "softmax auxiliary scalar {k} does not fit within 64 bits"
-                            ))
-                        })
-                })
-                .collect()
-        };
-        Ok(SoftmaxAux {
-            exp_sum: read(VirtualPoly::SoftmaxSumOutput)?
-                .into_iter()
-                .map(|v| v as i32)
-                .collect(),
-            max_k: read(VirtualPoly::SoftmaxMaxOutput)?
-                .into_iter()
-                .map(|v| v as i32)
-                .collect(),
-            argmax_k: read(VirtualPoly::SoftmaxMaxIndex)?
-                .into_iter()
-                .map(|v| v as usize)
-                .collect(),
-        })
+    /// `log₂ N`.
+    pub fn log_n(&self) -> usize {
+        self.F_N[1].log_2()
     }
 
-    /// Evaluations of the per-row inverse sum `⌊S²/exp_sum_q[k]⌋`.
-    /// `Err` if a row sum is missing, oversized or zero.
-    pub fn inv_sum_evals<F: JoltField>(
+    fn ids(&self) -> OpeningIdBuilder<'_> {
+        OpeningIdBuilder::new(&self.node)
+    }
+
+    /// The point `r1` the sums relation leaves the reads at.
+    fn read_point<F: JoltField>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<Vec<F>, ProofVerifyError> {
-        let [f, _] = self.F_N;
-        let s_squared = (self.scale as i64) * (self.scale as i64);
-        let accessor = AccOpeningAccessor::new(accumulator, &self.node);
-        (0..f)
-            .map(|k| {
-                let exp_sum_q_k = accessor
-                    .get_advice(|idx| VirtualPoly::SoftmaxSumOutput(idx, k))?
-                    .1;
-                let exp_sum_q_int = exp_sum_q_k.to_u64().ok_or_else(|| {
-                    ProofVerifyError::Malformed(format!("exp_sum_q[{k}] does not fit in u64"))
-                })? as i64;
-                if exp_sum_q_int == 0 {
-                    return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                        "exp_sum_q[{k}] is zero, cannot compute inv_sum"
-                    )));
-                }
-                Ok(F::from_i32((s_squared / exp_sum_q_int) as i32))
-            })
-            .collect()
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, &self.node)
+            .get_advice(VirtualPoly::SoftmaxRead)?
+            .0)
+    }
+
+    /// The row and lane coordinates of a point of the node's cells.
+    fn split<'a, F>(&self, point: &'a [F]) -> Result<(&'a [F], &'a [F]), ProofVerifyError> {
+        if point.len() != self.log_f() + self.log_n() {
+            return Err(ProofVerifyError::Malformed(format!(
+                "softmax: a point of {} coordinates is not a point of the node's cells",
+                point.len()
+            )));
+        }
+        Ok(point.split_at(self.log_f()))
+    }
+}
+
+/// `Σ_{j < active_len} Π_b w_b(j_b)` over the `bits`-bit lanes, most significant bit first, for
+/// per-bit weights `w_b(0)`, `w_b(1)`: the multilinear extension of a function of the lane,
+/// restricted to the live lanes, in `O(bits)`.
+fn live_lane_sum<F: JoltField>(active_len: usize, zero: &[F], one: &[F]) -> F {
+    // From the least significant bit up: `below` sums the lanes whose low bits are below
+    // `active_len`'s, `all` every lane's. A higher bit `a` of `active_len` extends them by
+    // `below' = [a = 1]·w(0)·all + w(a)·below`.
+    let (mut below, mut all) = (F::zero(), F::one());
+    for (bit, (z, o)) in zero.iter().rev().zip(one.iter().rev()).enumerate() {
+        below = if (active_len >> bit) & 1 == 1 {
+            *z * all + *o * below
+        } else {
+            *z * below
+        };
+        all *= *z + *o;
+    }
+    if active_len >> zero.len() != 0 {
+        all
+    } else {
+        below
     }
 }
 
 /// A softmax advice opening.
 pub enum SoftmaxOpen {
-    /// The auxiliary vectors (`exp_sum_q`, `max_k`, `argmax_k`), each scalar at the empty
-    /// point.
-    Aux(SoftmaxShape),
-    /// `exp_sum_q` at the row coordinates of the reduced output point.
-    ExpSum(SoftmaxShape),
-    /// The recip-mult remainder at the reduced output point.
-    RecipMultRemainder(SoftmaxShape),
-    /// The exponentiation remainder at stage 1's `exp_q` point.
-    ExpRemainder(SoftmaxShape),
-    /// `z_hi` and `z_lo` at stage 2's `exp_hi` point.
-    ZHiLo(SoftmaxShape),
+    /// The row gaps `g` and `g⁻` at the row coordinates of the reduced output point.
+    Gaps(SoftmaxShape),
+    /// The shift `c` at the row coordinates of the reads' point, and the table address `ũ` at
+    /// the reads' point.
+    Addresses(SoftmaxShape),
 }
 
 impl SoftmaxOpen {
@@ -318,45 +309,25 @@ impl SoftmaxOpen {
         transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
         match self {
-            Self::Aux(shape) => {
-                let [f, _] = shape.F_N;
-                let mut provider = AccOpeningAccessor::new(accumulator, &shape.node)
-                    .into_provider(transcript, OpeningPoint::default());
-                for k in 0..f {
-                    provider.append_advice(|idx| VirtualPoly::SoftmaxSumOutput(idx, k))?;
-                    provider.append_advice(|idx| VirtualPoly::SoftmaxMaxOutput(idx, k))?;
-                    provider.append_advice(|idx| VirtualPoly::SoftmaxMaxIndex(idx, k))?;
-                }
-                Ok(())
-            }
-            Self::ExpSum(shape) => {
+            Self::Gaps(shape) => {
                 let accessor = AccOpeningAccessor::new(accumulator, &shape.node);
                 let r0 = accessor.get_reduced_opening()?.0;
-                let r_lead = r0.split_at(shape.log_f()).0;
-                accessor
-                    .into_provider(transcript, r_lead)
-                    .append_advice(VirtualPoly::SoftmaxExpSum)
+                let (r0_row, _) = shape.split(&r0.r)?;
+                let mut provider =
+                    accessor.into_provider(transcript, OpeningPoint::new(r0_row.to_vec()));
+                provider.append_advice(VirtualPoly::SoftmaxSumGap)?;
+                provider.append_advice(VirtualPoly::SoftmaxPrevSumGap)
             }
-            Self::RecipMultRemainder(shape) => {
-                let accessor = AccOpeningAccessor::new(accumulator, &shape.node);
-                let r0 = accessor.get_reduced_opening()?.0;
-                accessor
-                    .into_provider(transcript, r0)
-                    .append_advice(VirtualPoly::SoftmaxRecipMultRemainder)
-            }
-            Self::ExpRemainder(shape) => {
-                let accessor = AccOpeningAccessor::new(accumulator, &shape.node);
-                let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ)?.0;
-                accessor
+            Self::Addresses(shape) => {
+                let r1 = shape.read_point(&*accumulator)?;
+                let (r1_row, _) = shape.split(&r1.r)?;
+                let r1_row = OpeningPoint::new(r1_row.to_vec());
+                AccOpeningAccessor::new(&mut *accumulator, &shape.node)
+                    .into_provider(transcript, r1_row)
+                    .append_advice(CommittedPoly::SoftmaxShift)?;
+                AccOpeningAccessor::new(accumulator, &shape.node)
                     .into_provider(transcript, r1)
-                    .append_advice(VirtualPoly::SoftmaxExpRemainder)
-            }
-            Self::ZHiLo(shape) => {
-                let accessor = AccOpeningAccessor::new(accumulator, &shape.node);
-                let r2 = accessor.get_advice(VirtualPoly::SoftmaxExpHi)?.0;
-                let mut provider = accessor.into_provider(transcript, r2);
-                provider.append_advice(VirtualPoly::SoftmaxZHi)?;
-                provider.append_advice(VirtualPoly::SoftmaxZLo)
+                    .append_advice(VirtualPoly::SoftmaxClampedAddr)
             }
         }
     }
@@ -364,47 +335,37 @@ impl SoftmaxOpen {
 
 /// A softmax check in the clear.
 pub enum SoftmaxTie {
-    /// The `exp_sum` opening equals the auxiliary `exp_sum_q` vector's MLE at its point.
-    ExpSum(SoftmaxShape),
-    /// The operand link: the prover's `X(r2)` is `max_k(r2_lead) − z(r2)`, where `z(r2)` is
-    /// the significance clamp's witness claim (`z = max_k − x`, tied to `z_c = ClampTable[z]`
-    /// and `z_hi·base + z_lo` by the stage-3 lookup itself; see `significance_clamp.rs`).
-    OperandLink(SoftmaxShape),
+    /// The address link: the clamp lookup's operand `u(r1)` is `c(r1_row) − x(r1)`. Appends the
+    /// operand's opening at `r1`.
+    AddressLink(SoftmaxShape),
 }
 
 impl SoftmaxTie {
-    /// Check the identity. `Err` if a claim is missing or the identity fails.
+    /// The operand's opening the link appends.
+    pub fn operand(shape: &SoftmaxShape) -> OpeningId {
+        shape.ids().nodeio(Target::Input(0))
+    }
+
+    /// Append the operand's opening and check the identity. `Err` if a claim is missing or the
+    /// identity fails.
     pub fn verify<F: JoltField, T: Transcript>(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
-        _transcript: &mut T,
+        transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
         match self {
-            Self::ExpSum(shape) => {
-                let exp_sum = shape.aux(accumulator)?.exp_sum;
+            Self::AddressLink(shape) => {
+                let r1 = shape.read_point(&*accumulator)?;
+                accumulator.append_virtual(transcript, Self::operand(shape), r1)?;
                 let accessor = AccOpeningAccessor::new(&*accumulator, &shape.node);
-                let (r_lead, claimed) = accessor.get_advice(VirtualPoly::SoftmaxExpSum)?;
-                let expected = MultilinearPolynomial::from(exp_sum).evaluate(&r_lead.r);
-                if expected != claimed {
-                    return Err(ProofVerifyError::InvalidOpeningProof(
-                        "exp_sum evaluation mismatch".to_string(),
-                    ));
-                }
-                Ok(())
-            }
-            Self::OperandLink(shape) => {
-                let max_k = shape.aux(accumulator)?.max_k;
-                let accessor = AccOpeningAccessor::new(&*accumulator, &shape.node);
-                let r2 = accessor.get_advice(VirtualPoly::SoftmaxExpHi)?.0;
-                let r2_lead = row_coordinates(&r2.r, shape.log_f())?;
-                let max_k_eval = max_k.evaluate_mle(r2_lead);
-                let z_eval = accessor.get_advice(VirtualPoly::SoftmaxClampWitness)?.1;
-                let x_r2 = max_k_eval - z_eval;
-                let prover_x_r2 = accessor.get_nodeio(Target::Input(0))?.1;
-                if prover_x_r2 != x_r2 {
-                    return Err(ProofVerifyError::InvalidOpeningProof(
-                        "Operand link failed: prover's X(r2) does not match max_k - z".to_string(),
-                    ));
+                let x = accessor.get_nodeio(Target::Input(0))?.1;
+                let c = accessor.get_advice(CommittedPoly::SoftmaxShift)?.1;
+                let u = accessor.get_advice(VirtualPoly::SoftmaxClampWitness)?.1;
+                if u != c - x {
+                    return Err(ProofVerifyError::InvalidOpeningProof(format!(
+                        "softmax node {}: the lookup address is not the shift minus the logit",
+                        shape.idx()
+                    )));
                 }
                 Ok(())
             }
@@ -412,24 +373,311 @@ impl SoftmaxTie {
     }
 }
 
-/// A softmax stage's relations.
+/// The reduction of a softmax node's output claim and its two row sums to the reads at one
+/// point, over the node's cells:
+///
+/// ```text
+/// input claim   out(r0) + γ·(S' − g(r0_row)) + γ²·(g⁻(r0_row) + S' + 1)
+/// output claim  A(ρ)·v(ρ) + γ·B(ρ)·t(ρ) + γ²·B(ρ)·t⁻(ρ)
+/// ```
+///
+/// with `A[k,j] = a(j)·eq(r0, (k,j))` and `B[k,j] = a(j)·eq(r0_row, k)`, `a` the selector of the
+/// live lanes.
+///
+/// **S ⊆ R.** `out = a·v`, so `out(r0) = Σ A·v`; and `Σ B·t = Σ_k eq(r0_row, k)·Σ_j a(j)·t[k,j]`
+/// is the live row sums' extension at `r0_row`, which is `S' − g(r0_row)` when `g` is the gap of
+/// every row, likewise for `t⁻` and `g⁻`. `γ` separates the three.
+pub struct SumsRelation {
+    shape: SoftmaxShape,
+    sum_scale: i64,
+}
+
+impl SumsRelation {
+    /// The relation of a softmax node. `Err` if the softmax tables are not available.
+    pub fn new(shape: SoftmaxShape) -> Result<Self, ProofVerifyError> {
+        Ok(Self {
+            shape,
+            sum_scale: read_tables()?.tables.sum_scale,
+        })
+    }
+
+    /// The reads' openings: `v`, `t`, `t⁻`.
+    fn reads(&self) -> [OpeningId; 3] {
+        let ids = self.shape.ids();
+        [
+            ids.advice(VirtualPoly::SoftmaxRead),
+            ids.advice(VirtualPoly::SoftmaxSumRead),
+            ids.advice(VirtualPoly::SoftmaxPrevSumRead),
+        ]
+    }
+
+    /// The live-lane selector's values over a row.
+    fn selector<F: JoltField>(&self) -> Vec<F> {
+        (0..self.shape.F_N[1])
+            .map(|j| {
+                if j < self.shape.active_len {
+                    F::one()
+                } else {
+                    F::zero()
+                }
+            })
+            .collect()
+    }
+}
+
+impl SymbolicSumcheck for SumsRelation {
+    crate::atlas_relation_types!();
+    type Shape = Self;
+
+    fn new(shape: Self) -> Self {
+        shape
+    }
+
+    fn id() -> RelationId {
+        RelationId::SoftmaxSums
+    }
+
+    fn rounds(&self) -> usize {
+        self.shape.log_f() + self.shape.log_n()
+    }
+
+    fn degree(&self) -> usize {
+        2
+    }
+
+    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
+        let ids = self.shape.ids();
+        opening::<G, _, _, _>(RelationOpening::ReducedNodeOutput(self.shape.idx()))
+            + challenge::<G, _, _, _>(RelationChallenge::ClaimConstant)
+            - challenge::<G, _, _, _>(RelationChallenge::Batching(0))
+                * opening(RelationOpening::Id(ids.advice(VirtualPoly::SoftmaxSumGap)))
+            + challenge::<G, _, _, _>(RelationChallenge::Batching(1))
+                * opening(RelationOpening::Id(
+                    ids.advice(VirtualPoly::SoftmaxPrevSumGap),
+                ))
+    }
+
+    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
+        let [v, t, t_prev] = self
+            .reads()
+            .map(|id| opening::<G, _, _, _>(RelationOpening::Id(id)));
+        derived::<G, _, _, _>(RelationDerived::Table(0)) * v
+            + derived::<G, _, _, _>(RelationDerived::Table(1)) * t
+            + derived::<G, _, _, _>(RelationDerived::Table(2)) * t_prev
+    }
+}
+
+impl Produces for SumsRelation {
+    fn produced(&self) -> Vec<OpeningId> {
+        self.reads().to_vec()
+    }
+}
+
+impl<F: JoltField> Relation<F> for SumsRelation {
+    /// The weight tables over the node's cells: `A`, `γ·B` and `γ²·B`, for the prover.
+    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Result<Vec<F>, ProofVerifyError> {
+        let (r0_row, _) = self.shape.split(&setup.incoming_point)?;
+        let selector = self.selector::<F>();
+        let n = self.shape.F_N[1];
+        Ok(match index {
+            0 => {
+                let mut eq = EqPolynomial::evals(&setup.incoming_point);
+                for (cell, value) in eq.iter_mut().enumerate() {
+                    if cell % n >= self.shape.active_len {
+                        *value = F::zero();
+                    }
+                }
+                eq
+            }
+            1 | 2 => {
+                let gamma = setup.challenge(&RelationChallenge::Batching(index - 1));
+                EqPolynomial::evals(r0_row)
+                    .into_iter()
+                    .flat_map(|row| selector.iter().map(move |lane| gamma * row * *lane))
+                    .collect()
+            }
+            _ => {
+                return Err(ProofVerifyError::Malformed(format!(
+                    "the softmax sums have three weight tables, no table {index}"
+                )))
+            }
+        })
+    }
+
+    /// The weight tables' extensions at the bound point, in `O(log)`: the row part is an `eq`,
+    /// the lane part a sum over the live lanes.
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        let RelationDerived::Table(index) = id else {
+            return Err(not_derived(id));
+        };
+        let point = low_to_high_point(challenges);
+        let (rho_row, rho_lane) = self.shape.split(&point)?;
+        let (r0_row, r0_lane) = self.shape.split(&setup.incoming_point)?;
+        let row = EqPolynomial::mle(r0_row, rho_row);
+        let complement = |x: &F| F::one() - *x;
+        Ok(match index {
+            0 => {
+                // Σ_{j live} eq(r0_lane, j)·eq(ρ_lane, j).
+                let one: Vec<F> = r0_lane.iter().zip(rho_lane).map(|(a, b)| *a * *b).collect();
+                let zero: Vec<F> = r0_lane
+                    .iter()
+                    .zip(rho_lane)
+                    .map(|(a, b)| complement(a) * complement(b))
+                    .collect();
+                row * live_lane_sum(self.shape.active_len, &zero, &one)
+            }
+            1 | 2 => {
+                // Σ_{j live} eq(ρ_lane, j).
+                let zero: Vec<F> = rho_lane.iter().map(complement).collect();
+                setup.challenge(&RelationChallenge::Batching(index - 1))
+                    * row
+                    * live_lane_sum(self.shape.active_len, &zero, rho_lane)
+            }
+            _ => return Err(not_derived(id)),
+        })
+    }
+}
+
+impl<F: JoltField> SetupRelation<F> for SumsRelation {
+    fn setup<T: Transcript>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> Result<RelationSetup<F>, ProofVerifyError> {
+        let gamma: F = transcript.challenge_scalar();
+        let gamma_sq = gamma * gamma;
+        let sum_scale = F::from_i64(self.sum_scale);
+        Ok(RelationSetup {
+            incoming_point: accumulator.get_node_output_opening(self.shape.idx())?.0.r,
+            challenges: vec![
+                (RelationChallenge::Batching(0), gamma),
+                (RelationChallenge::Batching(1), gamma_sq),
+                (
+                    RelationChallenge::ClaimConstant,
+                    gamma * sum_scale + gamma_sq * (sum_scale + F::one()),
+                ),
+            ],
+        })
+    }
+}
+
+impl AtlasRelation for SumsRelation {
+    type Spec = SoftmaxLastAxis;
+
+    fn node(&self) -> &ComputationNode {
+        &self.shape.node
+    }
+}
+
+impl<F: JoltField> EngineRelation<F> for SumsRelation {}
+
+/// The table read at the reads' point: the output, sum and shifted sum tables through the
+/// table address, with the address itself as the read's `raf`.
+#[derive(Clone)]
+pub struct ReadProvider {
+    /// The softmax node's shape.
+    pub shape: SoftmaxShape,
+}
+
+impl<F: JoltField> ReadRafProvider<F> for ReadProvider {
+    fn log_K(&self) -> usize {
+        SOFTMAX_CLAMP_BOUND
+    }
+
+    fn r(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
+        self.shape.read_point(accumulator)
+    }
+
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+        (
+            VirtualPoly::SoftmaxAddrRa(self.shape.idx()),
+            SumcheckId::NodeExecution(self.shape.idx()),
+        )
+    }
+
+    fn raf_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, &self.shape.node)
+            .get_advice(VirtualPoly::SoftmaxClampedAddr)?
+            .1)
+    }
+
+    fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError> {
+        Ok(AccOpeningAccessor::new(accumulator, &self.shape.node)
+            .get_advice(VirtualPoly::SoftmaxRead)?
+            .1)
+    }
+
+    fn rv_claims(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<Vec<F>, ProofVerifyError> {
+        let accessor = AccOpeningAccessor::new(accumulator, &self.shape.node);
+        Ok(vec![
+            accessor.get_advice(VirtualPoly::SoftmaxRead)?.1,
+            accessor.get_advice(VirtualPoly::SoftmaxSumRead)?.1,
+            accessor.get_advice(VirtualPoly::SoftmaxPrevSumRead)?.1,
+        ])
+    }
+}
+
+/// One-hot encoding of the softmax table read's addresses.
+pub struct ReadRaEncoding {
+    /// Index of the softmax node.
+    pub node_idx: usize,
+}
+
+impl RaOneHotEncoding for ReadRaEncoding {
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
+        CommittedPoly::SoftmaxAddrRaD(self.node_idx, d)
+    }
+
+    fn r_cycle_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::SoftmaxRead(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
+        )
+    }
+
+    fn ra_source(&self) -> OpeningId {
+        OpeningId::new(
+            VirtualPoly::SoftmaxAddrRa(self.node_idx),
+            SumcheckId::NodeExecution(self.node_idx),
+        )
+    }
+
+    fn log_k(&self) -> usize {
+        SOFTMAX_CLAMP_BOUND
+    }
+
+    fn one_hot_params(&self) -> OneHotParams {
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), SOFTMAX_CLAMP_BOUND)
+    }
+}
+
+/// A softmax relation, as the plan holds it.
 pub enum SoftmaxRelation {
-    /// Stage 1: recip-mult and `exp_sum`.
-    Stage1(SoftmaxShape),
-    /// Stage 2: the exponentiation multiply and the max indicator.
-    Stage2(SoftmaxShape),
-    /// Stage 3: the exp-digit lookups and the significance clamp read-raf.
-    Stage3(SoftmaxShape),
-    /// Stage 4: the one-hot checks of the high exp-digit lookup.
-    ExpHiOneHot(SoftmaxShape),
-    /// Stage 4: the one-hot checks of the low exp-digit lookup.
-    ExpLoOneHot(SoftmaxShape),
-    /// Stage 4: the one-hot checks of the significance clamp.
+    /// The sums relation ([`SumsRelation`]).
+    Sums(SoftmaxShape),
+    /// The table read at the reads' point.
+    Read(SoftmaxShape),
+    /// The clamp lookup `ũ = Clamp[u]` at the reads' point.
+    Clamp(SoftmaxShape),
+    /// The one-hot checks of the table address.
+    ReadOneHot(SoftmaxShape),
+    /// The one-hot checks of the clamp address.
     ClampOneHot(SoftmaxShape),
 }
 
 impl SoftmaxRelation {
-    /// The stage's verifiers, set up in the stage's order.
+    /// The relation's verifiers.
     /// `Err` if the accumulator lacks a claim a setup reads.
     pub fn verifiers<F: JoltField, T: Transcript>(
         self,
@@ -437,133 +685,50 @@ impl SoftmaxRelation {
         transcript: &mut T,
     ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
         match self {
-            Self::Stage1(shape) => {
-                let inv_sum = shape.inv_sum_evals(&*accumulator)?;
-                let recip_mult_verifier = RecipMultRelation::with_inv_sum(
-                    RecipMultParams::new(
-                        shape.node.clone(),
-                        shape.scale,
-                        shape.F_N,
-                        &*accumulator,
-                        transcript,
-                    )?,
-                    inv_sum,
-                )
-                .into_verifier();
-                let exp_sum_verifier =
-                    ExpSumParams::new(shape.node.clone(), shape.F_N, &*accumulator, transcript)?
-                        .into_verifier();
-                Ok(vec![
-                    Box::new(recip_mult_verifier),
-                    Box::new(exp_sum_verifier),
-                ])
-            }
-            Self::Stage2(shape) => {
-                let SoftmaxAux {
-                    max_k, argmax_k, ..
-                } = shape.aux(accumulator)?;
-                let accessor = AccOpeningAccessor::new(&*accumulator, &shape.node);
-                let r1 = accessor.get_advice(VirtualPoly::SoftmaxExpQ)?.0;
-                let r1_k = row_coordinates(&r1.r, shape.log_f())?;
-                let max_k_eval = max_k.evaluate_mle(r1_k);
-                let max_indicator_verifier = MaxIndicatorParams::new(
-                    shape.node.clone(),
-                    shape.F_N,
-                    argmax_k,
-                    max_k_eval,
-                    &*accumulator,
-                )?
-                .into_verifier();
-
-                let exp_mult_verifier =
-                    MultParams::new(shape.node.clone(), shape.scale, &*accumulator)?
-                        .into_verifier();
-
-                Ok(vec![
-                    Box::new(exp_mult_verifier),
-                    Box::new(max_indicator_verifier),
-                ])
-            }
-            Self::Stage3(shape) => {
-                let lut = VerifierLookupTableData::new(shape.scale)?;
-                let provider = ExpReadRafProvider {
-                    node: shape.node.clone(),
-                    table_size: lut.table_hi.len(),
-                    digit: ExpDigit::Hi,
-                };
-                let hi_verifier = shout::read_raf_verifier(
-                    &provider,
-                    vec![lut.table_hi],
+            Self::Sums(shape) => Ok(vec![Box::new(RelationVerifier::new(
+                SumsRelation::new(shape)?,
+                &*accumulator,
+                transcript,
+            )?)]),
+            Self::Read(shape) => {
+                let read = read_tables()?;
+                Ok(vec![shout::read_raf_verifier(
+                    &ReadProvider { shape },
+                    vec![
+                        read.tables.out.clone(),
+                        read.tables.sum.clone(),
+                        read.sum_prev.clone(),
+                    ],
                     &*accumulator,
                     transcript,
-                )?;
-
-                let provider = ExpReadRafProvider {
-                    node: shape.node.clone(),
-                    table_size: lut.table_lo.len(),
-                    digit: ExpDigit::Lo,
-                };
-                let lo_verifier = shout::read_raf_verifier(
-                    &provider,
-                    vec![lut.table_lo],
-                    &*accumulator,
-                    transcript,
-                )?;
-
-                let significance_clamp_provider: OpLookupProvider<
-                    SoftmaxSignificanceClampOperands,
-                > = OpLookupProvider::new(shape.node.clone());
-                let significance_clamp_verifier = significance_clamp_provider
-                    .read_raf_verify::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
+                )?])
+            }
+            Self::Clamp(shape) => {
+                let provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
+                    OpLookupProvider::new(shape.node);
+                Ok(vec![Box::new(
+                    provider.read_raf_verify::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
                         accumulator,
                         transcript,
-                    )?;
-
-                Ok(vec![
-                    hi_verifier,
-                    lo_verifier,
-                    Box::new(significance_clamp_verifier),
-                ])
+                    )?,
+                )])
             }
-            Self::ExpHiOneHot(shape) => {
-                let lut = VerifierLookupTableData::new(shape.scale)?;
-                let encoding = SoftmaxRaEncoding::exp_hi(shape.idx(), lut.table_hi.len().log_2());
-                Ok(shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript)?.into())
-            }
-            Self::ExpLoOneHot(shape) => {
-                let lut = VerifierLookupTableData::new(shape.scale)?;
-                let encoding = SoftmaxRaEncoding::exp_lo(shape.idx(), lut.table_lo.len().log_2());
-                Ok(shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript)?.into())
-            }
+            Self::ReadOneHot(shape) => Ok(shout::ra_onehot_verifiers(
+                &ReadRaEncoding {
+                    node_idx: shape.idx(),
+                },
+                &*accumulator,
+                transcript,
+            )?
+            .into()),
             Self::ClampOneHot(shape) => {
                 let provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
-                    OpLookupProvider::new(shape.node.clone());
+                    OpLookupProvider::new(shape.node);
                 Ok(
                     shout::ra_onehot_verifiers(&provider.encoding(), &*accumulator, transcript)?
                         .into(),
                 )
             }
         }
-    }
-}
-
-/// Pre-computed verifier lookup table data (shared across stage3, operand_link, stage4).
-pub struct VerifierLookupTableData {
-    /// High half of the decomposed exp table.
-    pub table_hi: Vec<i32>,
-    /// Low half of the decomposed exp table.
-    pub table_lo: Vec<i32>,
-}
-
-impl VerifierLookupTableData {
-    /// The decomposed exp tables at `scale`. `Err` unless `scale` is a power of two the
-    /// semantics define the tables for.
-    pub fn new(scale: i32) -> Result<Self, ProofVerifyError> {
-        let decomp = generate_exp_lut_decomposed(scale)?;
-        let mut table_hi = decomp.lut_hi;
-        table_hi.resize(table_hi.len().next_power_of_two(), 0);
-        let mut table_lo = decomp.lut_lo;
-        table_lo.resize(table_lo.len().next_power_of_two(), 0);
-        Ok(Self { table_hi, table_lo })
     }
 }

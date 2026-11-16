@@ -1,23 +1,7 @@
-//! [`LookupOperandsTrait`] helper proving softmax's saturating clamp
-//! `z_c = min(z, z_bound - 1)` via [`atlas_lookup_tables::clamp::SoftmaxClampTable`].
-//!
-//! This witness (`z = max_k - x`) is evaluated at the point softmax's exp-digit lookups
-//! (`SoftmaxZHi`/`SoftmaxZLo`) already converge to (`r2`), not this node's own output opening —
-//! `r_cycle`/`r_cycle_source` are overridden accordingly. `z` is always `>= 0` by construction, so
-//! no offset trick is needed: this maps directly onto `ClampBoundedTable`'s floor-at-0 domain.
-//!
-//! The read-raf sumcheck's `rv_claim` is defined as `z_hi(r2)*base + z_lo(r2)` (computed
-//! directly from the already-cached `SoftmaxZHi`/`SoftmaxZLo` claims — see `cache_z_hi_lo` in
-//! `mod.rs`), rather than needing its own separate `z_c` witness/claim. This proves
-//! `z_hi*base + z_lo == ClampTable[z]` as one relation: combined with `z_hi`/`z_lo` each being
-//! independently bounded by the (untouched) exp-digit Shout lookups in stage 3, this forces the
-//! digit split to be the true clamp of the real `z` — no separate link check needed for the
-//! digit-split identity itself. `z` still needs tying back to the real input, done by
-//! `operand_link` in `mod.rs`.
+//! The prover's side of the softmax clamp lookup: its operand `u = c − x` from the trace.
 
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::significance_clamp::*;
 
-use super::softmax_z;
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::op_lookups::{DefaultLookupOperands, LookupWitness};
 use crate::onnx_proof::trace_view::TraceView;
@@ -25,20 +9,12 @@ use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_trace::{Tensor, Trace};
 
 impl LookupWitness for SoftmaxSignificanceClampOperands {
-    /// The shifted logits `z = max_k − x`, from the node's softmax witness in the trace.
+    /// The addresses `u = c − x`, from the node's softmax witness in the trace.
     fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-        let st = trace
+        let w = trace
             .softmax_witness(node.idx)
             .expect("softmax node has a softmax witness in the trace");
-        let last_dim = *node
-            .output_dims
-            .last()
-            .expect("softmax output has a last axis");
-        let z = softmax_z(&st.x, &st.max_k, last_dim);
-        Tensor::from_slice(&z, &[z.len()])
-            .expect("softmax_z tensor construction")
-            .padded_pow2()
-            .map(|v| v as i64)
+        super::addresses(node, w).map(|v| v as i64)
     }
 
     fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {

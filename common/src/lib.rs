@@ -30,7 +30,7 @@ canonical_serde_enum! {
     /// | `Softmax*` | Polynomials specific to softmax sub-protocol |
     /// | `*NodeQuotient / *NodeRemainder / *NodeInv / *NodeRsqrt` | Scalar advice polynomials for division / reciprocal-square-root |
     /// | `GatherRa` | Read-address polynomial for the Gather operator |
-    /// | `SoftmaxRecipMultRemainder` | Remainder used in the reciprocal-multiplication check of softmax |
+    /// | `SoftmaxShift` | The softmax row shift, one value per row |
     #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
     pub enum CommittedPoly {
         // ----- One-hot read-address decompositions (node_index, d) -----
@@ -87,17 +87,18 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         GatherRaD(usize, usize),
 
-        /// One-hot read-address decomposition for the softmax **exp-hi** Shout lookup.
+        /// One-hot read-address decomposition for the softmax table read: the clamped address
+        /// `min(c − x, top)` of the output and sum tables.
         ///
         /// * `0` – node index
         /// * `1` – decomposition index `d`
-        SoftmaxZHiRaD(usize, usize),
+        SoftmaxAddrRaD(usize, usize),
 
-        /// One-hot read-address decomposition for the softmax **exp-lo** Shout lookup.
+        /// The softmax row shift `c`, one value per row.
         ///
         /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SoftmaxZLoRaD(usize, usize),
+        SoftmaxShift(usize),
+
 
         /// One-hot read-address decomposition for the **Clamp** operator's
         /// symmetric-range lookup.
@@ -121,11 +122,9 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         ActivationSmallRaD(usize, usize),
 
-        /// One-hot read-address decomposition for softmax's saturating-clamp lookup
-        /// (`z -> min(z, z_bound - 1)`, see [`VirtualPoly::SoftmaxClampRa`]). The lookup
-        /// index is the raw `z = max_k - x` value (no offset needed, `z >= 0` always), so this
-        /// can't share `NodeOutputRaD`'s witness generation (which assumes the node's own
-        /// output/input, not an internal mid-pipeline value).
+        /// One-hot read-address decomposition for softmax's clamp lookup
+        /// (`u -> min(max(u, 0), top)`, see [`VirtualPoly::SoftmaxClampRa`]). The lookup index is
+        /// `u = c − x`, a signed 32-bit address.
         ///
         /// * `0` – node index
         /// * `1` – decomposition index `d`
@@ -211,23 +210,8 @@ canonical_serde_enum! {
         TrigDownscaleRa(usize),
 
         // ----- Softmax intermediate polynomials (node_index, feature_index) -----
-        /// Running sum used inside softmax normalisation.
-        ///
-        /// * `0` – node index
-        /// * `1` – feature index
-        SoftmaxSumOutput(usize, usize),
 
-        /// Running max used inside softmax numerical stabilisation.
-        ///
-        /// * `0` – node index
-        /// * `1` – feature index
-        SoftmaxMaxOutput(usize, usize),
 
-        /// Index of the maximum logit (used for softmax stabilisation).
-        ///
-        /// * `0` – node index
-        /// * `1` – feature index
-        SoftmaxMaxIndex(usize, usize),
 
         // ----- Hamming weight -----
         /// Polynomial used in the Hamming-weight sumcheck.
@@ -273,55 +257,49 @@ canonical_serde_enum! {
         /// * `0` – node index
         TrigDownscaled(usize),
 
-        /// Per-feature-vector sum of exponentiated logits: `exp_sum_q[k] = Σ_j exp_q[k,j]`.
+        /// Per-row gap of the softmax sum-table reads below the sum scale: `S' − Σ_j T_sum`.
         ///
         /// * `0` – node index
-        SoftmaxExpSum(usize),
+        SoftmaxSumGap(usize),
 
-        /// The rv polynomial for the softmax exponentiation lookup.
+        /// Per-row excess of the shifted sum-table reads over the sum scale:
+        /// `Σ_j T_sum⁻ − S' − 1`.
         ///
         /// * `0` – node index
-        SoftmaxExpQ(usize),
+        SoftmaxPrevSumGap(usize),
 
-        /// The rv polynomial for the softmax exponentiation lookup.
+
+        /// The softmax output-table read at every lane's clamped address.
         ///
         /// * `0` – node index
-        SoftmaxExpHi(usize),
+        SoftmaxRead(usize),
 
-        /// The rv polynomial for the softmax exponentiation lookup.
+        /// The softmax sum-table read at every lane's clamped address.
         ///
         /// * `0` – node index
-        SoftmaxExpLo(usize),
+        SoftmaxSumRead(usize),
 
-        /// Remainder polynomial for the softmax exponentiation check in softmax.
+        /// The softmax shifted sum-table read at every lane's clamped address.
         ///
         /// * `0` – node index
-        SoftmaxExpRemainder(usize),
+        SoftmaxPrevSumRead(usize),
 
-        /// The raf polynomial for the softmax `exp_hi` sub-table lookup.
+
+
+        /// The softmax table address `min(max(c − x, 0), top)`: the address of the table read and
+        /// the value of the clamp lookup.
         ///
         /// * `0` – node index
-        SoftmaxZHi(usize),
+        SoftmaxClampedAddr(usize),
 
-        /// The raf polynomial for the softmax `exp_lo` sub-table lookup.
+
+        /// One-hot-encoded read-address polynomial of the softmax table read.
         ///
         /// * `0` – node index
-        SoftmaxZLo(usize),
+        SoftmaxAddrRa(usize),
 
-        /// One-hot-encoded read-address polynomial for the softmax `exp_hi` sub-table lookup.
-        ///
-        /// * `0` – node index
-        SoftmaxZHiRa(usize),
 
-        /// One-hot-encoded read-address polynomial for the softmax `exp_lo` sub-table lookup.
-        ///
-        /// * `0` – node index
-        SoftmaxZLoRa(usize),
-
-        /// The raw pre-clamp witness for softmax's saturating-clamp lookup: `z = max_k - x`,
-        /// evaluated at the point softmax's exp-digit lookups (`SoftmaxZHi`/`SoftmaxZLo`)
-        /// converge to (not this node's own output opening — see
-        /// `SoftmaxSignificanceClampOperands::r_cycle`).
+        /// The softmax clamp lookup's operand `u = c − x`, at the softmax reads' point.
         ///
         /// * `0` – node index
         SoftmaxClampWitness(usize),
@@ -331,11 +309,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         SoftmaxClampRa(usize),
 
-        /// Remainder polynomial for the reciprocal-multiplication check in
-        /// **softmax**.
-        ///
-        /// * `0` – node index
-        SoftmaxRecipMultRemainder(usize),
 
         // ----- Saturating clamp (Add/Sub) -----
         /// MLE of the pre-clamp **i64 accumulation** of a saturating `Add`/`Sub`.

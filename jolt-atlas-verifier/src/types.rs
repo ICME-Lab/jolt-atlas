@@ -37,7 +37,7 @@ impl Canonical for ProofId {
 /// Type of sumcheck proof for different operations in the neural network.
 ///
 /// The `u8` discriminants are part of the serialization format: a variant keeps its number, and
-/// the numbers of deleted variants (1, 2, 3, 4, 7, 8, 11, 13, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25) stay
+/// the numbers of deleted variants (1 to 8, 11, 13, 15, 17 to 25) stay
 /// free; a proof carrying one does not deserialize. Every variant is emitted by the prover for some checked-in model
 /// (`proof_types_all_exercised`).
 #[repr(u8)]
@@ -45,10 +45,6 @@ impl Canonical for ProofId {
 pub enum ProofType {
     /// Execution sumcheck for basic operations.
     Execution = 0,
-    /// Softmax stage 1
-    SoftmaxStage1 = 5,
-    /// Softmax stage 2
-    SoftmaxStage2 = 6,
     /// Axis-reduction sumcheck for `Sum` (proves the pre-clamp accumulation
     /// equals the sum over the reduced axes; the clamp itself is proven in the
     /// node's packed clamp bucket, see `clamp_split`).
@@ -76,6 +72,8 @@ pub enum ProofType {
     /// Every one-hot check and slack chunk check (`DeferredBatch::OneHot`), as one batched
     /// sumcheck; absent when the model has no lookup and every live clamp bucket is exact.
     DeferredOneHot = 29,
+    /// A softmax node's reduction of its output claim and its two row sums to its table reads.
+    SoftmaxSums = 30,
 }
 
 impl ProofType {
@@ -91,8 +89,6 @@ impl TryFrom<u8> for ProofType {
     fn try_from(tag: u8) -> Result<Self, Self::Error> {
         match tag {
             0 => Ok(Self::Execution),
-            5 => Ok(Self::SoftmaxStage1),
-            6 => Ok(Self::SoftmaxStage2),
             9 => Ok(Self::SumReduction),
             10 => Ok(Self::EinsumMatmul),
             12 => Ok(Self::RescaleArith),
@@ -102,6 +98,7 @@ impl TryFrom<u8> for ProofType {
             27 => Ok(Self::DeferredRemainderDigitRange),
             28 => Ok(Self::DeferredLookups),
             29 => Ok(Self::DeferredOneHot),
+            30 => Ok(Self::SoftmaxSums),
             _ => Err(Error::InvalidData),
         }
     }

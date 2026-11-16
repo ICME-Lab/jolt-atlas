@@ -1,24 +1,20 @@
-//! Integer softmax over the last axis, with full witness capture and
-//! padding masking.
+//! Integer softmax over the last axis in log-partition form, with witness capture and padding
+//! masking.
 //!
-//! Pipeline per row (ported bit-for-bit from the old crate on live lanes):
-//! 1. `max_k` and `argmax_k` over the **live** lanes `0..active_len`;
-//! 2. per live lane: `z = max_k - x`, saturated at the exp-table bound,
-//!    split into digits `z = z_hi·B + z_lo`, two sub-table lookups, and
-//!    `exp_q = ⌊exp_hi·exp_lo/S⌋` with remainder `r_exp ∈ [0, S)`;
-//! 3. `exp_sum_q = Σ exp_q` over live lanes, `inv_sum = ⌊S²/exp_sum_q⌋`;
-//! 4. per live lane: `softmax_q = ⌊exp_q·inv_sum/S⌋`, remainder `R ∈ [0, S)`.
+//! Per row ([`crate::semantics::softmax`]): the shift `c` is the smallest integer at or above
+//! the live lanes' maximum whose sum-table row sum does not exceed `S'`; a live lane's output is
+//! the output table read at `min(c − x, top)`.
 //!
-//! Masked lanes (`j ≥ active_len`, present only after power-of-two padding)
-//! produce 0 for the output and every per-lane witness value, and contribute
-//! nothing to `exp_sum_q` — this fixes the old crate's padding corruption,
-//! where padded zero lanes entered the row sum as `exp(max)` terms. The
-//! prover gates those lanes with the public selector `[j < active_len]`.
+//! Padding lanes (`j ≥ active_len`, present only after power-of-two padding) output 0 and
+//! contribute nothing to the row sums. Their address `c − x` is still captured: the prover
+//! commits an address on every lane and gates the reads with the public selector
+//! `[j < active_len]`.
 
 use std::fmt;
 
 use crate::{
     error::{KernelError, ShapeError},
+    id::SemVersion,
     tensor::Tensor,
     trace::{NodeAux, SoftmaxWitness},
 };
@@ -48,110 +44,60 @@ impl OpSpec for SoftmaxLastAxis {
             ))));
         }
 
-        let s = ctx.scale.denom_i32();
-        // All row-level arithmetic runs in i64: a row sum of exp_q terms (each
-        // up to S) overflows i32 once active_len · S exceeds 2^31 (e.g. a
-        // vocab-size softmax axis), and s² itself overflows i32 at scale ≥ 16.
-        let s_i64 = s as i64;
-        let s_sq = s_i64 * s_i64;
+        if ctx.version == SemVersion::V1 {
+            return Err(KernelError::Shape(ShapeError::Invalid(
+                "softmax is defined from SemVersion::V2".into(),
+            )));
+        }
+        let tables = ctx.tables.softmax_tables(ctx.scale, ctx.version);
+        let sum_prev = tables.sum_prev();
+        let top = tables.top();
         let rows = input.len() / last_dim;
         let data = input.data();
-
-        // Sub-tables; lut_hi zero-padded to a power of two so a saturated
-        // z_hi can never index out of range (mirrors the proof side).
-        let lut = ctx.tables.exp_lut(ctx.scale, ctx.version);
-        let mut lut_hi = lut.lut_hi.clone();
-        lut_hi.resize(lut_hi.len().next_power_of_two(), 0);
-        let z_bound = (lut_hi.len() * lut.base) as i32;
-
         let total = rows * last_dim;
+        let overflow = |what: &'static str, value: i64| KernelError::WitnessOverflow {
+            op: "softmax",
+            what,
+            value,
+        };
+
         let mut w = SoftmaxWitness {
-            scale: s as i64,
             last_dim,
             active_len,
-            x: data.to_vec(),
-            max_k: Vec::with_capacity(rows),
-            argmax_k: Vec::with_capacity(rows),
-            exp_q: vec![0; total],
-            exp_sum_q: Vec::with_capacity(rows),
-            inv_sum: Vec::with_capacity(rows),
-            r: vec![0; total],
-            z_hi: vec![0; total],
-            z_lo: vec![0; total],
-            exp_hi: vec![0; total],
-            exp_lo: vec![0; total],
-            r_exp: vec![0; total],
+            shift: Vec::with_capacity(rows),
+            address: vec![0; total],
+            sum_gap: Vec::with_capacity(rows),
+            prev_sum_gap: Vec::with_capacity(rows),
         };
-        let mut softmax_q = vec![0i32; total];
+        let mut output = vec![0i32; total];
 
         for k in 0..rows {
             let offset = k * last_dim;
             let live = &data[offset..offset + active_len];
+            let c = tables.shift(live).expect("active_len >= 1");
+            w.shift
+                .push(i32::try_from(c).map_err(|_| overflow("shift c", c))?);
 
-            let mv = *live.iter().max().expect("active_len >= 1");
-            w.max_k.push(mv);
-            w.argmax_k
-                .push(live.iter().position(|&x| x == mv).expect("max exists"));
-
-            let mut sum_exp: i64 = 0;
-            for j in 0..active_len {
-                let idx = offset + j;
-                // z ≥ 0; saturate to the sub-table range (exp decays to 0
-                // beyond it anyway). The raw difference is computed in i64 —
-                // two extreme logits span up to 2^32 — but the proof layer
-                // recomputes z = max - x in i32 (softmax_z), so a span past
-                // i32::MAX is a typed error, not a wrapped value.
-                let z = mv as i64 - data[idx] as i64;
-                if z > i32::MAX as i64 {
-                    return Err(KernelError::WitnessOverflow {
-                        op: "softmax",
-                        what: "z = max - x",
-                        value: z,
-                    });
-                }
-                let zu = z.min((z_bound - 1) as i64) as usize;
-                let z_hi = (zu >> lut.log2_base) as i32;
-                let z_lo = (zu & (lut.base - 1)) as i32;
-                let hi_val = lut_hi[z_hi as usize];
-                let lo_val = lut.lut_lo[z_lo as usize];
-                let product = hi_val as i64 * lo_val as i64;
-                let exp_q = (product / s as i64) as i32;
-
-                w.z_hi[idx] = z_hi;
-                w.z_lo[idx] = z_lo;
-                w.exp_hi[idx] = hi_val;
-                w.exp_lo[idx] = lo_val;
-                w.exp_q[idx] = exp_q;
-                w.r_exp[idx] = (product - exp_q as i64 * s as i64) as i32;
-                sum_exp += exp_q as i64;
+            // The proof commits `c − x` as a signed 32-bit lookup address on every lane.
+            for j in 0..last_dim {
+                let u = c - data[offset + j] as i64;
+                w.address[offset + j] =
+                    i32::try_from(u).map_err(|_| overflow("address c - x", u))?;
             }
-            // The witness (and the proof protocol behind it) carries the row
-            // sum as an i32; a row whose live exponentials exceed that is a
-            // typed error, never a wrapped sum.
-            let sum_exp_i32 = i32::try_from(sum_exp).map_err(|_| KernelError::WitnessOverflow {
-                op: "softmax",
-                what: "exp_sum_q",
-                value: sum_exp,
-            })?;
-            w.exp_sum_q.push(sum_exp_i32);
-
-            // inv ≤ s²/s = s, so it always fits back into i32.
-            let inv = (s_sq / sum_exp) as i32;
-            w.inv_sum.push(inv);
-
+            let (mut sum, mut prev_sum) = (0i64, 0i64);
             for j in 0..active_len {
-                let idx = offset + j;
-                // exp_q, inv ≤ S: the product needs i64 headroom at scale ≥ 16.
-                let product = w.exp_q[idx] as i64 * inv as i64;
-                let sq = product / s_i64;
-                softmax_q[idx] = sq as i32;
-                w.r[idx] = (product - sq * s_i64) as i32;
+                // A live lane has `c ≥ x`, so its address is non-negative.
+                let address = (w.address[offset + j] as i64).min(top) as usize;
+                output[offset + j] = tables.out[address];
+                sum += tables.sum[address] as i64;
+                prev_sum += sum_prev[address] as i64;
             }
-            // Lanes active_len..last_dim stay 0 everywhere.
+            w.sum_gap.push(tables.sum_scale - sum);
+            w.prev_sum_gap.push(prev_sum - tables.sum_scale - 1);
         }
 
         Ok(Eval {
-            output: Tensor::new(softmax_q, dims)?,
+            output: Tensor::new(output, dims)?,
             aux: Some(NodeAux::Softmax(Box::new(w))),
         })
     }
@@ -190,120 +136,111 @@ impl OpSpec for SoftmaxLastAxis {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::id::{Scale, SemVersion};
+    use crate::id::Scale;
     use crate::op::TableCache;
+
+    fn try_eval(
+        input: Tensor<i32>,
+        active_len: Option<usize>,
+        scale: u8,
+        version: SemVersion,
+    ) -> Result<(Tensor<i32>, SoftmaxWitness), KernelError> {
+        let cache = TableCache::default();
+        let ctx = EvalCtx {
+            scale: Scale::new(scale).unwrap(),
+            version,
+            tables: &cache,
+        };
+        let out = SoftmaxLastAxis { active_len }.eval(&[&input], &ctx)?;
+        let NodeAux::Softmax(w) = out.aux.unwrap() else {
+            panic!()
+        };
+        Ok((out.output, *w))
+    }
 
     fn eval(
         input: Tensor<i32>,
         active_len: Option<usize>,
         scale: u8,
     ) -> (Tensor<i32>, SoftmaxWitness) {
-        let cache = TableCache::default();
-        let ctx = EvalCtx {
-            scale: Scale::new(scale).unwrap(),
-            version: SemVersion::V1,
-            tables: &cache,
-        };
-        let out = SoftmaxLastAxis { active_len }
-            .eval(&[&input], &ctx)
-            .unwrap();
-        let NodeAux::Softmax(w) = out.aux.unwrap() else {
-            panic!()
-        };
-        (out.output, *w)
+        try_eval(input, active_len, scale, SemVersion::V2).unwrap()
     }
 
     #[test]
     fn equal_logits_give_equal_probabilities() {
-        // Old crate's pinned test: scale 2^15, two equal logits → S/2 each.
         let input = Tensor::new(vec![0i32, 0], &[1, 2]).unwrap();
         let (out, _) = eval(input, None, 15);
         assert_eq!(out.data(), &[1 << 14, 1 << 14]);
     }
 
     #[test]
-    fn witness_invariants_hold() {
+    fn a_dominant_lane_takes_the_whole_scale() {
         let s = 1i32 << 14;
-        let input = Tensor::new(vec![100, -2000, 5000, 0, 16384, -16384, 7, 7], &[2, 4]).unwrap();
+        let input = Tensor::new(vec![0, 400_000, -5, 7], &[1, 4]).unwrap();
         let (out, w) = eval(input, None, 14);
+        assert_eq!(out.data(), &[0, s, 0, 0]);
+        // The shift is the maximum itself, and the minimality gap comes from the zero address.
+        assert_eq!(w.shift, vec![400_000]);
+        assert_eq!(w.sum_gap, vec![0]);
+        assert_eq!(w.prev_sum_gap, vec![0]);
+    }
+
+    #[test]
+    fn witness_is_the_definition() {
+        let s_sum = 1i64 << 22;
+        let cache = TableCache::default();
+        let tables = cache.softmax_tables(Scale::new(14).unwrap(), SemVersion::V2);
+        let sum_prev = tables.sum_prev();
+        let data = vec![100, -2000, 5000, 0, 16384, -16384, 7, 7];
+        let (out, w) = eval(Tensor::new(data.clone(), &[2, 4]).unwrap(), None, 14);
         for k in 0..2 {
-            // inv_sum = ⌊S²/exp_sum⌋.
-            assert_eq!(w.inv_sum[k], (s * s) / w.exp_sum_q[k]);
-            let row_sum: i32 = w.exp_q[k * 4..(k + 1) * 4].iter().sum();
-            assert_eq!(row_sum, w.exp_sum_q[k]);
-        }
-        for idx in 0..8 {
-            assert!((0..s).contains(&w.r[idx]));
-            assert!((0..s).contains(&w.r_exp[idx]));
-            // exp_hi·exp_lo = exp_q·S + r_exp.
-            assert_eq!(
-                w.exp_hi[idx] as i64 * w.exp_lo[idx] as i64,
-                w.exp_q[idx] as i64 * s as i64 + w.r_exp[idx] as i64
-            );
-            // softmax_q·S + R = exp_q·inv_sum.
-            let k = idx / 4;
-            assert_eq!(out.data()[idx] * s + w.r[idx], w.exp_q[idx] * w.inv_sum[k]);
-        }
-        // Probabilities approximately sum to S per row.
-        for k in 0..2 {
-            let p: i32 = out.data()[k * 4..(k + 1) * 4].iter().sum();
-            assert!((p - s).abs() < 8, "row {k} sums to {p}");
+            let row = &data[k * 4..(k + 1) * 4];
+            assert_eq!(w.shift[k] as i64, tables.shift(row).unwrap());
+            let (mut sum, mut prev) = (0i64, 0i64);
+            for (j, &x) in row.iter().enumerate() {
+                let u = w.address[k * 4 + j];
+                assert_eq!(u, w.shift[k] - x);
+                let a = (u as i64).min(tables.top()) as usize;
+                assert_eq!(out.data()[k * 4 + j], tables.out[a]);
+                sum += tables.sum[a] as i64;
+                prev += sum_prev[a] as i64;
+            }
+            assert_eq!(w.sum_gap[k], s_sum - sum);
+            assert_eq!(w.prev_sum_gap[k], prev - s_sum - 1);
+            assert!(w.sum_gap[k] >= 0 && w.prev_sum_gap[k] >= 0);
         }
     }
 
     #[test]
     fn active_len_masks_padding() {
-        // A 3-wide row padded to 4: the padded lane must not disturb the
-        // live probabilities.
+        // A 3-wide row padded to 4: the padded lane must not disturb the live probabilities,
+        // whatever value it holds.
         let live = Tensor::new(vec![100, 300, -50], &[1, 3]).unwrap();
         let (expected, _) = eval(live, None, 14);
-
-        let padded = Tensor::new(vec![100, 300, -50, 0], &[1, 4]).unwrap();
-        let (out, w) = eval(padded, Some(3), 14);
-        assert_eq!(&out.data()[..3], expected.data());
-        assert_eq!(out.data()[3], 0);
-        assert_eq!(w.exp_q[3], 0);
-        assert_eq!(w.exp_hi[3], 0);
-        assert_eq!(w.r_exp[3], 0);
+        for pad in [0, 1 << 20, -(1 << 20)] {
+            let padded = Tensor::new(vec![100, 300, -50, pad], &[1, 4]).unwrap();
+            let (out, w) = eval(padded, Some(3), 14);
+            assert_eq!(&out.data()[..3], expected.data());
+            assert_eq!(out.data()[3], 0);
+            assert_eq!(w.address[3], w.shift[0] - pad);
+        }
     }
 
     #[test]
-    fn wide_rows_sum_in_i64() {
-        // A vocab-width row: 2^17 lanes whose exponentials sum past i32::MAX
-        // would overflow an i32 accumulator (an abort under the workspace's
-        // release overflow-checks). The sum runs in i64; a row whose total
-        // exceeds the i32 witness range is a typed error, never a panic.
-        let n = 1 << 18;
-        let input = Tensor::new(vec![0i32; n], &[1, n]).unwrap();
-        let cache = TableCache::default();
-        let ctx = EvalCtx {
-            scale: Scale::new(14).unwrap(),
-            version: SemVersion::V1,
-            tables: &cache,
-        };
-        let op = SoftmaxLastAxis { active_len: None };
-        let err = match op.eval(&[&input], &ctx) {
-            Err(e) => e,
-            Ok(_) => panic!("overflowing row sum must not evaluate"),
-        };
+    fn out_of_range_addresses_are_typed_errors() {
+        // Two logits a full i32 range apart: the low lane's address does not fit 32 signed bits.
+        let input = Tensor::new(vec![i32::MAX, i32::MIN], &[1, 2]).unwrap();
+        let err = try_eval(input, None, 14, SemVersion::V2).unwrap_err();
         assert!(matches!(err, KernelError::WitnessOverflow { .. }), "{err}");
-
-        // A wide row whose sum still fits the witness evaluates fine.
-        let mut data = vec![-100_000i32; n];
-        data[0] = 0;
-        let input = Tensor::new(data, &[1, n]).unwrap();
-        let (out, _) = eval(input, None, 14);
-        assert!(out.data()[0] > 0);
+        // A shift above i32::MAX: many lanes at the top of the range.
+        let input = Tensor::new(vec![i32::MAX; 4], &[1, 4]).unwrap();
+        let err = try_eval(input, None, 14, SemVersion::V2).unwrap_err();
+        assert!(matches!(err, KernelError::WitnessOverflow { .. }), "{err}");
     }
 
     #[test]
-    fn unmasked_padding_reproduces_old_corruption() {
-        // Documenting the bug the mask fixes: without active_len, the padded
-        // zero lane joins the row and changes the live probabilities.
-        let live = Tensor::new(vec![100, 300, -50], &[1, 3]).unwrap();
-        let (expected, _) = eval(live, None, 14);
-        let padded = Tensor::new(vec![100, 300, -50, 0], &[1, 4]).unwrap();
-        let (out, _) = eval(padded, None, 14);
-        assert_ne!(&out.data()[..3], expected.data());
+    fn the_first_version_has_no_softmax() {
+        let input = Tensor::new(vec![0i32, 0], &[1, 2]).unwrap();
+        assert!(try_eval(input, None, 14, SemVersion::V1).is_err());
     }
 }

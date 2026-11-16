@@ -1,21 +1,11 @@
-//! [`LookupOperandsTrait`] helper proving softmax's saturating clamp
-//! `z_c = min(z, z_bound - 1)` via [`atlas_lookup_tables::clamp::SoftmaxClampTable`].
+//! The softmax clamp lookup: `ũ = Clamp[u]` for the signed 32-bit address `u = c − x`, via
+//! [`atlas_lookup_tables::clamp::SoftmaxClampTable`] (a negative address maps to 0, one above
+//! the tables' last address to that address).
 //!
-//! This witness (`z = max_k - x`) is evaluated at the point softmax's exp-digit lookups
-//! (`SoftmaxZHi`/`SoftmaxZLo`) already converge to (`r2`), not this node's own output opening —
-//! `r_cycle`/`r_cycle_source` are overridden accordingly. `z` is always `>= 0` by construction, so
-//! no offset trick is needed: this maps directly onto `ClampBoundedTable`'s floor-at-0 domain.
-//!
-//! The read-raf sumcheck's `rv_claim` is defined as `z_hi(r2)*base + z_lo(r2)` (computed
-//! directly from the already-cached `SoftmaxZHi`/`SoftmaxZLo` claims — see `cache_z_hi_lo` in
-//! `mod.rs`), rather than needing its own separate `z_c` witness/claim. This proves
-//! `z_hi*base + z_lo == ClampTable[z]` as one relation: combined with `z_hi`/`z_lo` each being
-//! independently bounded by the (untouched) exp-digit Shout lookups in stage 3, this forces the
-//! digit split to be the true clamp of the real `z` — no separate link check needed for the
-//! digit-split identity itself. `z` still needs tying back to the real input, done by
-//! `operand_link` in `mod.rs`.
+//! The lookup's value is the table address `ũ` and its operand is `u`, both at the point the
+//! softmax reads are left at; the address link in `mod.rs` ties `u` to the shift and the
+//! operand.
 
-use super::exp_lut::generate_exp_lut_decomposed;
 use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::op_lookups::{LookupOperandsTrait, LookupRaPolys},
@@ -27,12 +17,9 @@ use atlas_algebra::{
     poly::point::{OpeningPoint, BIG_ENDIAN},
 };
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId, SumcheckId};
-use common::{
-    consts::{MODEL_SCALE, XLEN},
-    CommittedPoly, VirtualPoly,
-};
+use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 
-/// [`LookupOperandsTrait`] helper for softmax's saturating clamp of the shifted logits `z`.
+/// [`LookupOperandsTrait`] helper for softmax's clamp of the address `u = c − x`.
 #[derive(Default)]
 pub struct SoftmaxSignificanceClampOperands;
 
@@ -43,11 +30,9 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Result<F, ProofVerifyError> {
-        let accessor = AccOpeningAccessor::new(accumulator, node);
-        let z_hi_claim = accessor.get_advice(VirtualPoly::SoftmaxZHi)?.1;
-        let z_lo_claim = accessor.get_advice(VirtualPoly::SoftmaxZLo)?.1;
-        let base = generate_exp_lut_decomposed(1i32 << MODEL_SCALE)?.base;
-        Ok(z_hi_claim * F::from_u64(base as u64) + z_lo_claim)
+        Ok(AccOpeningAccessor::new(accumulator, node)
+            .get_advice(VirtualPoly::SoftmaxClampedAddr)?
+            .1)
     }
 
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
@@ -57,21 +42,21 @@ impl LookupOperandsTrait for SoftmaxSignificanceClampOperands {
         )
     }
 
-    /// Reads from `SoftmaxZHi`'s already-cached opening (`r2`, established by `cache_z_hi_lo`) —
-    /// *not* this node's own output opening (the default every other helper uses).
+    /// The point the softmax reads are left at, not this node's own output opening (the
+    /// default every other helper uses).
     /// `Err` if the accumulator lacks a claim it reads.
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
         Ok(AccOpeningAccessor::new(accumulator, node)
-            .get_advice(VirtualPoly::SoftmaxZHi)?
+            .get_advice(VirtualPoly::SoftmaxRead)?
             .0)
     }
 
     fn r_cycle_source(node_idx: usize) -> OpeningId {
         OpeningId::new(
-            VirtualPoly::SoftmaxZHi(node_idx),
+            VirtualPoly::SoftmaxRead(node_idx),
             SumcheckId::NodeExecution(node_idx),
         )
     }

@@ -699,8 +699,21 @@ op_surface! {
     softmax_model_scale_2x8: SoftmaxLastAxis => |_| softmax_model(&[2, 8], S, tensor(&SOFTMAX_ROWS, &[2, 8]));
     softmax_one_element: SoftmaxLastAxis => |_| softmax_model(&[1, 1], S, vec_of(1234, &[1, 1]));
     softmax_random_4x16: SoftmaxLastAxis => |rng| softmax_model(&[4, 16], S, Tensor::random_range(rng, &[4, 16], -(1 << 15)..(1 << 15)));
-    #[should_panic(expected = "masked softmax")]
-    softmax_masked_rejected: SoftmaxLastAxis => |_| unary(&[2, 8], S, tensor(&SOFTMAX_ROWS, &[2, 8]), |b, i| b.softmax_last_axis_masked(i, 5));
+    /// Five live lanes of eight, with values left in the three padding lanes: they must not
+    /// reach the output or the row sums.
+    softmax_masked_5_of_8: SoftmaxLastAxis => |_| unary(&[2, 8], S, tensor(&SOFTMAX_ROWS, &[2, 8]), |b, i| b.softmax_last_axis_masked(i, 5));
+    softmax_masked_1_of_4: SoftmaxLastAxis => |rng| unary(&[4, 4], S, Tensor::random_range(rng, &[4, 4], -(1 << 15)..(1 << 15)), |b, i| b.softmax_last_axis_masked(i, 1));
+    /// A width that is not a power of two, compiled with padding as the importer does.
+    softmax_padded_3x5: SoftmaxLastAxis => |rng| {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![3, 5]);
+        let o = b.softmax_last_axis(i);
+        b.mark_output(o);
+        (b.build_padded(), vec![Tensor::random_range(rng, &[3, 5], -(1 << 16)..(1 << 16))])
+    };
+    /// A row whose spread exceeds the tables' last address: the far lanes read zero.
+    softmax_spread_beyond_the_table: SoftmaxLastAxis => |_| softmax_model(&[1, 4], S, tensor(&[0, -300_000, 5, -(1 << 22)], &[1, 4]));
+    softmax_one_row_64: SoftmaxLastAxis => |rng| softmax_model(&[1, 64], S, Tensor::random_range(rng, &[1, 64], -(1 << 16)..(1 << 16)));
 
     // Gather
     gather_small_dict32: GatherSmall => |rng| gather_model(rng, &[4, 8], 32, 4);

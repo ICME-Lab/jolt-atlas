@@ -47,9 +47,10 @@ pub struct BucketNode {
     /// What the segment range-checks in a remainder bucket; `None` in a clamp bucket, whose
     /// segment is the node's clamped output.
     pub claim: Option<RangeClaim>,
-    /// Start of the node's segment (a multiple of its own padded size).
+    /// Start of the member's segment (a multiple of its own size).
     pub offset: usize,
-    /// log₂ of the node's padded output size.
+    /// log₂ of the member's size: the node's padded output size, or its row count for a
+    /// per-row remainder ([`Remainder::domain_len`]).
     pub log_t: usize,
 }
 
@@ -69,10 +70,11 @@ pub enum Remainder {
     RsqrtSqrt,
     /// A trig op's teleport remainder `x mod P`.
     Teleport,
-    /// Softmax's reciprocal-multiplication remainder.
-    SoftmaxRecipMult,
-    /// Softmax's exponentiation remainder.
-    SoftmaxExp,
+    /// Softmax's gap of a row's sum-table reads below the sum scale, one value per row.
+    SoftmaxSumGap,
+    /// Softmax's excess of a row's shifted sum-table reads over the sum scale, one value per
+    /// row.
+    SoftmaxPrevSumGap,
 }
 
 impl Remainder {
@@ -84,10 +86,26 @@ impl Remainder {
             Self::ScalarConstDiv => VirtualPoly::ScalarConstDivRemainder(node_idx),
             Self::RsqrtSqrt => VirtualPoly::SqrtRemainder(node_idx),
             Self::Teleport => VirtualPoly::TeleportRemainder(node_idx),
-            Self::SoftmaxRecipMult => VirtualPoly::SoftmaxRecipMultRemainder(node_idx),
-            Self::SoftmaxExp => VirtualPoly::SoftmaxExpRemainder(node_idx),
+            Self::SoftmaxSumGap => VirtualPoly::SoftmaxSumGap(node_idx),
+            Self::SoftmaxPrevSumGap => VirtualPoly::SoftmaxPrevSumGap(node_idx),
         };
         OpeningId::new(poly, SumcheckId::NodeExecution(node_idx))
+    }
+
+    /// The number of values the remainder has for `node`, a power of two: one per padded
+    /// output cell, or one per row of the last axis for softmax's row gaps.
+    pub fn domain_len(self, node: &ComputationNode) -> usize {
+        let cells = node.pow2_padded_num_output_elements();
+        match self {
+            Self::SoftmaxSumGap | Self::SoftmaxPrevSumGap => {
+                let lanes = node
+                    .output_dims
+                    .last()
+                    .map_or(1, |n| n.next_power_of_two().max(1));
+                cells / lanes
+            }
+            _ => cells,
+        }
     }
 }
 
@@ -287,10 +305,32 @@ pub fn node_remainders(
             Bound::Const(i64::from(TRIG_PERIOD_MODULUS)),
         )],
         Op::SoftmaxLastAxis(_) => {
-            let bound = Bound::Const(1i64 << node.scale);
+            // `g ∈ [0, S']` and `g⁻ ∈ [0, N·(S' + 1))`, each bounded by the power of two with a
+            // whole number of digits above it.
+            let digit_bits = clamp_split::DIGIT_BASE.trailing_zeros() as usize;
+            let width = |bits: usize| bits.next_multiple_of(digit_bits);
+            let sum_scale_bits =
+                node.scale as usize + atlas_trace::semantics::softmax::SUM_EXTRA_BITS as usize;
+            let lanes = node
+                .output_dims
+                .last()
+                .ok_or_else(|| malformed("softmax of rank 0".to_string()))?
+                .next_power_of_two();
+            let (gap_width, prev_gap_width) = (
+                width(sum_scale_bits + 1),
+                width(sum_scale_bits + 1 + lanes.log_2()),
+            );
+            if prev_gap_width > 62 {
+                return Err(malformed(format!(
+                    "softmax over {lanes} lanes: the row sums do not fit the range check"
+                )));
+            }
             vec![
-                (Remainder::SoftmaxRecipMult, bound),
-                (Remainder::SoftmaxExp, bound),
+                (Remainder::SoftmaxSumGap, Bound::Const(1i64 << gap_width)),
+                (
+                    Remainder::SoftmaxPrevSumGap,
+                    Bound::Const(1i64 << prev_gap_width),
+                ),
             ]
         }
         _ => vec![],
@@ -305,12 +345,7 @@ pub fn remainder_buckets(model: &Model) -> Result<Vec<ClampBucket>, ProofVerifyE
     for n in &model.views() {
         for (remainder, bound) in node_remainders(n)? {
             for (claim, width) in range_claims(remainder, bound) {
-                items.push((
-                    n.idx,
-                    Some(claim),
-                    width,
-                    n.pow2_padded_num_output_elements(),
-                ));
+                items.push((n.idx, Some(claim), width, remainder.domain_len(n)));
             }
         }
     }

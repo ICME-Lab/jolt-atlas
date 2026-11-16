@@ -23,7 +23,7 @@ use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
         neural_teleport::n_bits_to_usize,
-        ops::softmax_last_axis::{generate_exp_lut_decomposed, softmax_z},
+        ops::softmax_last_axis::{addresses, table_addresses},
     },
     utils::compute_lookup_indices,
 };
@@ -34,7 +34,7 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::config::{OneHotConfig, OneHotParams};
 use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, XLEN},
+    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, SOFTMAX_CLAMP_BOUND, XLEN},
     parallel::par_enabled,
     CommittedPoly,
 };
@@ -328,38 +328,23 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let lookup_indices = compute_lookup_indices(remainder);
                 build_one_hot_rad_witness(&lookup_indices, *d_idx, XLEN)
             }
-            CommittedPoly::SoftmaxZHiRaD(node_idx, d) => {
+            CommittedPoly::SoftmaxShift(node_idx) => {
                 let node = &model.view(*node_idx);
                 let st = softmax_last_axis_full_trace(node, trace);
-                let decomp = generate_exp_lut_decomposed(st.scale as i32)
-                    .expect("the softmax multiplier is a scale the semantics define");
-                let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
-                let lookup_indices: Vec<usize> = st.z_hi.iter().map(|&v| v as usize).collect();
-                build_onehot_witness(&lookup_indices, log_hi, *d)
+                let mut shift = st.shift.clone();
+                shift.resize(shift.len().next_power_of_two(), 0);
+                MultilinearPolynomial::from(shift)
             }
-            CommittedPoly::SoftmaxZLoRaD(node_idx, d) => {
+            CommittedPoly::SoftmaxAddrRaD(node_idx, d) => {
                 let node = &model.view(*node_idx);
                 let st = softmax_last_axis_full_trace(node, trace);
-                let decomp = generate_exp_lut_decomposed(st.scale as i32)
-                    .expect("the softmax multiplier is a scale the semantics define");
-                let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
-                let lookup_indices: Vec<usize> = st.z_lo.iter().map(|&v| v as usize).collect();
-                build_onehot_witness(&lookup_indices, log_lo, *d)
+                build_onehot_witness(&table_addresses(node, st), SOFTMAX_CLAMP_BOUND, *d)
             }
             CommittedPoly::SoftmaxClampRaD(node_idx, d) => {
-                // Softmax's saturating-clamp lookup: the lookup index is the raw
-                // `z = max_k - x` value (no offset, `z >= 0` always).
+                // The lookup index is the signed address `u = c − x`.
                 let node = &model.view(*node_idx);
-                let &last_dim = node
-                    .output_dims
-                    .last()
-                    .expect("softmax node must have at least one output dimension");
                 let st = softmax_last_axis_full_trace(node, trace);
-                let z = softmax_z(&st.x, &st.max_k, last_dim);
-                let operand = Tensor::from_slice(&z, &[z.len()])
-                    .expect("softmax_z tensor construction")
-                    .padded_pow2();
-                let lookup_indices = compute_lookup_indices(&operand);
+                let lookup_indices = compute_lookup_indices(&addresses(node, st));
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
         }

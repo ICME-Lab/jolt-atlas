@@ -24,7 +24,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{KernelError, ShapeError},
     id::{Scale, SemVersion},
-    semantics::tables::{self, ActivationTable, ExpLutDecomposed, TableKind},
+    semantics::{
+        softmax::{SoftmaxTables, softmax_tables},
+        tables::{self, ActivationTable, TableKind},
+    },
     tensor::Tensor,
     trace::NodeAux,
 };
@@ -73,7 +76,7 @@ pub trait OpSpec: fmt::Display {
 #[derive(Default)]
 pub struct TableCache {
     cells: [OnceLock<ActivationTable>; 5],
-    exp: OnceLock<ExpLutDecomposed>,
+    softmax: OnceLock<SoftmaxTables>,
 }
 
 impl TableCache {
@@ -89,10 +92,9 @@ impl TableCache {
         self.cells[slot].get_or_init(|| tables::table(kind, scale, version))
     }
 
-    /// The softmax exp sub-tables, generated on first use.
-    pub fn exp_lut(&self, scale: Scale, version: SemVersion) -> &ExpLutDecomposed {
-        self.exp
-            .get_or_init(|| tables::exp_lut_decomposed(scale, version))
+    /// The log-partition softmax tables, generated on first use.
+    pub fn softmax_tables(&self, scale: Scale, version: SemVersion) -> &SoftmaxTables {
+        self.softmax.get_or_init(|| softmax_tables(scale, version))
     }
 }
 

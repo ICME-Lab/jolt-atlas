@@ -309,6 +309,14 @@ witness generation over the same data takes 0.8 s.
    or when BitZ ships a maintained prover with a zero-knowledge variant. The proof-of-concept is
    checked out at `/Users/kg/swe/icme/scratch/BitZ-PoC` with the run commands in the measurement
    plan, Phase 3, for whenever that comparison is wanted; it is not on the critical path.
+
+   **Reopened 2026-11-16.** Zero knowledge is set aside for now, which removes the main reason
+   above for staying on the lattice, and the Akita dependency (LayerZero's `akita-*` crates,
+   about 275,000 lines behind a 10,000-line adapter) is a cost of its own. The direction is an
+   owned BitZ implementation behind `CommitmentScheme` in place of Akita, conditional on the
+   BitZ arm of the measurement plan (Phase 3): commit and opening together on our digit volumes,
+   against the dense base-4 Akita numbers of items 1–2, not the one-hot ones. Akita stays the
+   scheme in the tree until that run and a spec. Recursion and proof size are not yet weighed.
 2. **Semantics under declared widths:** saturate at the declared width, or partial-function
    semantics with the tracer asserting. Item 4; a `SemVersion` change either way.
 3. **Base 4 or Booleans** for item 1, by measured total time. Open: item 1 ships base 4 on

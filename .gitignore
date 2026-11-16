@@ -47,8 +47,8 @@ __pycache__/
 
 # benchmark binaries and raw span logs (docs/measurement-plan.md)
 bench/bin/
-bench/runs/*.log
-!bench/runs/phase1-summary.log
+bench/runs/**/*.log
+!bench/runs/*-summary.log
 !bench/runs/census-*.txt
 !bench/runs/lowered-*.txt
 !bench/runs/commit-bench-*.txt

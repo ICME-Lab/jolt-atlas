@@ -1,0 +1,98 @@
+=== gpt2-tiny (prove-c65753bfa)
+prover setup: 17.10ms
+prove: 3.14s
+proof size: 0.69 MiB (682 commitments, 129 sumcheck proofs)
+verify: 160.93ms
+        4.00 real        10.86 user         7.64 sys
+           770637824  maximum resident set size
+=== qwen2-tiny (prove-c65753bfa)
+prover setup: 9.60ms
+prove: 3.46s
+proof size: 0.90 MiB (615 commitments, 173 sumcheck proofs)
+verify: 194.16ms
+        3.68 real        11.57 user         8.47 sys
+           807075840  maximum resident set size
+=== bge-tiny (prove-c65753bfa)
+prover setup: 9.04ms
+prove: 3.28s
+proof size: 0.71 MiB (1176 commitments, 114 sumcheck proofs)
+verify: 204.06ms
+        3.50 real        10.95 user         8.37 sys
+           801079296  maximum resident set size
+=== gpt2-16-stats (prove-c65753bfa)
+prover setup: 9.47ms
+prove: 51.52s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.66s
+       56.58 real       201.06 user        40.48 sys
+          6258458624  maximum resident set size
+=== gpt2-16-rep1 (prove-c65753bfa)
+prover setup: 12.11ms
+prove: 43.26s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.46s
+       47.34 real       191.02 user        41.32 sys
+          6111985664  maximum resident set size
+=== gpt2-16-rep2 (prove-c65753bfa)
+prover setup: 12.92ms
+prove: 43.05s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.53s
+       47.13 real       191.11 user        42.63 sys
+          6280806400  maximum resident set size
+=== gpt2-16-rep3 (prove-c65753bfa)
+prover setup: 12.16ms
+prove: 38.97s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.43s
+       43.07 real       191.30 user        43.67 sys
+          6048661504  maximum resident set size
+=== gpt2-16-rep4 (prove-c65753bfa)
+prover setup: 12.09ms
+prove: 39.87s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.49s
+       43.90 real       190.64 user        44.11 sys
+          6127730688  maximum resident set size
+=== gpt2-16-rep5 (prove-c65753bfa)
+prover setup: 13.30ms
+prove: 37.61s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.49s
+       41.57 real       190.87 user        43.52 sys
+          6124339200  maximum resident set size
+=== gpt2-16-rep6 (prove-c65753bfa)
+prover setup: 13.27ms
+prove: 40.02s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.45s
+       44.20 real       193.55 user        43.01 sys
+          6762823680  maximum resident set size
+=== gpt2-16-rep7 (prove-c65753bfa)
+prover setup: 12.48ms
+prove: 41.34s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.34s
+       45.27 real       195.86 user        43.06 sys
+          7054655488  maximum resident set size
+=== bge-small (prove-c65753bfa)
+prover setup: 12.46ms
+prove: 19.85s
+proof size: 2.32 MiB (6347 commitments, 544 sumcheck proofs)
+verify: 1.56s
+       21.75 real        77.55 user        43.54 sys
+          6607454208  maximum resident set size
+=== control-capped-1 (prove-capped)
+prover setup: 13.13ms
+prove: 38.88s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.55s
+       43.08 real       195.74 user        41.93 sys
+          6005358592  maximum resident set size
+=== control-capped-2 (prove-capped)
+prover setup: 12.62ms
+prove: 36.65s
+proof size: 2.25 MiB (2110 commitments, 590 sumcheck proofs)
+verify: 2.44s
+       40.71 real       192.70 user        43.37 sys
+          6965231616  maximum resident set size

@@ -369,6 +369,45 @@ gets simpler for range checks). D3 is the lattice-side path and moves up, with D
 The end state was decided on 2026-11-10 without the BitZ arm: Akita stays, BitZ is kept in view
 (`docs/prover-plan.md` section 5). The arm above is optional and off the critical path.
 
+### Baseline for the protocol-simplification specs (2026-11-16, commit c65753bfa)
+
+Taken after the owned-toolkit program (`docs/roadmap.md`, phases 1–7) and before any of the
+simplification specs (`specs/no-scalar-special-cases.md`, `one-range-check.md`,
+`post-loop-batches.md`, `structural-ops-as-ties.md`, `softmax-aux-removal.md`, `one-clamp.md`,
+`digits-as-trace.md`), which name this binary as their reference. Binary
+`bench/bin/prove-c65753bfa` (release build 12 m 47 s cold); raw logs under
+`bench/runs/c65753bfa/` (not tracked), result lines in `bench/runs/c65753bfa-summary.log`.
+
+| Run | prove s | verify s | proof MiB | peak RSS GB |
+|---|---|---|---|---|
+| gpt2-tiny / qwen2-tiny / bge-tiny | 3.14 / 3.46 / 3.28 | 0.16–0.20 | 0.69 / 0.90 / 0.71 | 0.8 |
+| gpt2, 16 tok, seven runs | 37.6–43.3, median 40.0 | 2.34–2.53 | 2.25 | 6.0–7.1 |
+| gpt2, 16 tok, `--stats` (first run) | 51.5 | 2.66 | 2.25 | 6.3 |
+| bge-small, 16 tok, one run | 19.9 | 1.56 | 2.32 | 6.6 |
+
+GPT-2 repeats: 43.26, 43.05, 38.97, 39.87, 37.61, 40.02, 41.34 s. Stage split of the 43.26 s
+run (`bench/spans.py`): commit 9.8 s (Akita 9.1), IOP 13.4 s (post-loop 10.5), opening-reduction
+sumcheck 3.3 s, class openings 12.1 s. The context-scaling runs (32, 64, 128 tokens) were not
+repeated.
+
+**The session was noisy.** The spread is about ±7% against ±1.2% in Phase 1, and the first run
+(`--stats`) is an outlier. Other work was running on the machine. A comparison against this
+baseline needs a quieter session or more repeats, and differences under about 7% are not
+readable from these numbers.
+
+**Control.** The previous saved binary `bench/bin/prove-capped` (the dense-digit build recorded
+at 33.2 s in `docs/prover-plan.md`) ran at 38.88 and 36.65 s in this session, interleaved with
+two of the repeats above (40.02 and 41.34 s). So the machine was about 14% slower than when
+33.2 s was recorded, and the new build's median is about 6% above the old binary's in the same
+session, inside the spread. Whether phases 5–7 cost prover time is not settled by this run.
+Peak RSS for both binaries was 6–7 GB here, against 11.3 GB recorded for `prove-capped`, which
+is consistent with the machine being under memory pressure.
+
+Saved binaries older than the PCS-adapter move read the Akita schedule files from
+`third_party/jolt-akita/schedules/`, an absolute path baked in at build time. The files are
+unchanged at `atlas-pcs/schedules/`; to run such a binary, link that directory to the old path
+for the duration of the run.
+
 ### Phase 4: prototypes (builds 4 and 5: release and test, both full)
 
 Only what Gates 2 and 3 selected. This is the first phase that changes protocol code, so it is the

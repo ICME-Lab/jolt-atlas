@@ -51,13 +51,16 @@ The crate has no prover code. Three mechanisms hold that:
    sumcheck is a symbolic relation; `RelationVerifier` is derived from it, and `verify_tie` checks a
    zero-round one. Each op relation documents its S ⊆ R argument beside its definition in
    `onnx_proof/ops/<op>.rs`.
-4. **Lookup machinery**: `onnx_proof/op_lookups/`, `clamp_lookups/`, `clamp_split.rs`,
+4. **Lookup machinery**: `onnx_proof/op_lookups/`, `clamp_split.rs`,
    `global_clamp.rs`, `fused_rebase.rs`, `neural_teleport/`: the relations and model-only
-   layouts of the lookup, clamp and range-check subprotocols. Every remainder bound (the fused
+   layouts of the lookup and range-check subprotocols. Every remainder bound (the fused
    rescales, Div, ScalarConstDiv, Rsqrt, MeanOfSquares, the trig teleport, softmax) is a range
-   claim in a packed remainder bucket (`global_clamp::RangeClaim`): the remainder, or its slack
+   claim in a packed range bucket (`global_clamp::RangeClaim`): the remainder, or its slack
    below the bound, checked by the dense digit range check. A bound that is not positive has
-   no proof.
+   no proof. The output of an exact-arithmetic node (Add, Sub, Sum, Einsum, MeanOfSquares and
+   the fused Mul, Square and Cube) that is not a model output is a range claim in the same
+   buckets: `out + 2^31 ∈ [0, 2^32)`, read from the node's reduced output opening. A model
+   output is a public `i32` tensor and has no claim.
 5. **Proof object**: `proof.rs`, `types.rs` (`ProofId`, `ProofType`, `Claims`) and
    `proof_serialization.rs` (the wire format).
 
@@ -78,18 +81,15 @@ interpreter; the prover's `ops::prove_plan` walks the same plan with the relatio
 so an op's transcript order is its plan's step order on both sides.
 
 After the node loop, `Verifier::run_deferred` runs the post-loop plan
-(`deferred_lookups::plan`, built from the model and the public IO: the packed clamp buckets'
-exact flags, their split or exact value sumchecks and the digit range checks of their dense `OUT`
-digits (`atlas_sumcheck::digit_range`), then the remainder buckets' value sumchecks and the
-digit range checks of their dense digits; a model output node whose
-public output is unsaturated ties `acc = out` in its own turn and is a gap in its bucket, and a
-clamp bucket made only of such nodes is not committed at all), then drains the one deferral
-queue in two batches: `Lookups`, every table read whose sumcheck produces only its own
-read-address claim (set up in its node's turn), then `OneHot`, every one-hot check of a read
-address together with the slack chunk checks of the clamp buckets not declared exact. Gather's
-dictionary read stays in its node's turn, since it produces a claim on its dictionary operand;
-its one-hot checks are in `OneHot`. A deferred batch with no sumcheck instance (no lookup, and
-every bucket exact) carries no proof entry.
+(`deferred_lookups::plan`, built from the model alone: the packed range buckets' value
+sumchecks as one batched sumcheck, each opening its bucket's packed value at a fresh point,
+then the digit range checks of their dense digits (`atlas_sumcheck::digit_range`) as a second),
+then drains the one deferral queue in two batches: `Lookups`, every table read whose sumcheck
+produces only its own read-address claim (set up in its node's turn), then `OneHot`, every
+one-hot check of a read address. Gather's dictionary read stays in its node's turn, since it
+produces a claim on its dictionary operand; its one-hot checks are in `OneHot`. A model with
+no range claim has no bucket entries, and a deferred batch with no sumcheck instance (a model
+with no lookup) carries no proof entry.
 
 The layout ops are ties, not sumchecks: MoveAxis, Broadcast, Identity, and also Reshape, Slice
 and Concat, whose ties re-point the node's reduced output claim at the operands (Reshape at
@@ -118,7 +118,7 @@ per-row work; the tables are generated once per process.
 - **Checked inputs.** `verify` first checks that every node's operands are earlier nodes
   (`node_view::check_model_shape`) and that the public IO names the model's inputs and
   outputs with one tensor of the node's dims each (`verifier::check_io_shape`). The list of
-  committed polynomials is a function of the model and the public IO
+  committed polynomials is a function of the model alone
   (`get_models_committed_polynomials`).
 - **Exact consumption.** Sumcheck proofs and evaluation-reduction proofs are read through
   `ProofLedger::take`, which fails on a missing entry and on a second take.
@@ -126,7 +126,7 @@ per-row work; the tables are generated once per process.
   bound to a point, is an `Err`.
 - **No dead fields.** A node with a single claim on its output has no evaluation-reduction
   entry (the claim is the reduced instance). Every `ProofType` is emitted for some checked-in
-  model; deleted tags (1 to 8, 11, 13, 15, 17 to 25) do not deserialize.
+  model; deleted tags (1 to 8, 11, 13 to 15, 17 to 26) do not deserialize.
 - **What holds it.** The mutation sweep requires an `Err` at every site (no tolerance), with
   orphan sites for claims, sumcheck proofs and reduction proofs and count/shape sites for the
   IO; `proof_types_all_exercised`; `fuzz_regressions_replay` and the cargo-fuzz target in
@@ -145,9 +145,7 @@ Everything in the crate that took an `atlas_trace::Trace`, with its destination 
 |------|-------------|
 | `EngineRelation::witnesses` | `relation::RelationWitnesses`, implemented in `ops/{iff, scalar_const_div, mul, rsqrt, div}.rs` and `ops/sum/axis.rs` |
 | `TieRelation::claims` | `relation::TieClaims`, implemented in `ops/{add, neg, is_nan, moveaxis, broadcast, constant, div}.rs` |
-| `LookupOperandsTrait::{witness, lookup_bits}` | `op_lookups::LookupWitness`, implemented beside each helper's prover (`op_lookups`, `clamp_lookups`, `ops/clamp.rs`, `ops/activation_clamped`, `neural_teleport/trig_downscale.rs`, `ops/softmax_last_axis/significance_clamp.rs`) |
-| `clamp_lookups::{clamp_intermediate, clamp_lookup_bits}` | `clamp_lookups` |
-| `clamp_split::{NodeSplit, BucketSplit, value_chunk_indices, exact_output_prover}` | `clamp_split` (`BucketSplit` built once per proof in `global_clamp::BucketWitnesses`) |
+| `LookupOperandsTrait::{witness, lookup_bits}` | `op_lookups::LookupWitness`, implemented beside each helper's prover (`op_lookups`, `ops/clamp.rs`, `ops/activation_clamped`, `neural_teleport/trig_downscale.rs`, `ops/softmax_last_axis/significance_clamp.rs`) |
 | `ClampBucket::assemble_bits` | `global_clamp::assemble_bits` |
 | `EinsumLayout::fold`, `Folded` | `ops/einsum/dot.rs` (`EinsumFold`, `Folded`), implemented in the three layout modules |
 | `neural_teleport::utils::compute_ra_evals_{nbits_2comp, from_usize_indices}` | `neural_teleport/utils.rs` |
@@ -155,7 +153,6 @@ Everything in the crate that took an `atlas_trace::Trace`, with its destination 
 | `onnx_proof/trace_view.rs` (`TraceView`) | `onnx_proof/trace_view.rs` |
 | `probe.rs`, `probe_assert!`, `probe_assert_eq!` | `onnx_proof/testing/probe.rs` |
 
-Deleted with the move, having no reader left: the `precomputed` field of
-`SaturatingAccClampOperands`, the `z` field of `SoftmaxSignificanceClampOperands`, and
-`utils::dims::transpose_flat_matrix`. The `rayon` and
+Deleted with the move, having no reader left: the `z` field of
+`SoftmaxSignificanceClampOperands` and `utils::dims::transpose_flat_matrix`. The `rayon` and
 `num` dependencies went with the moved code; the verifier is single-threaded.

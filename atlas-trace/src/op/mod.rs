@@ -2,7 +2,7 @@
 //!
 //! Each operator is a struct implementing [`OpSpec`], which covers everything
 //! the rest of the crate needs to know about it: kernel ([`OpSpec::eval`]),
-//! shape inference, clamp-width bound, padding behavior, rescale divisor, and
+//! shape inference, output range check, padding behavior, rescale divisor, and
 //! display. Adding an op means one struct, one `impl OpSpec`, and one line in
 //! the [`define_ops!`] invocation — the compiler enforces completeness
 //! everywhere else.

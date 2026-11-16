@@ -38,33 +38,33 @@ impl Canonical for ProofId {
 ///
 /// The `u8` discriminants are part of the serialization format: a variant keeps its number, and
 /// the numbers of deleted variants (1 to 8, 11, 13 to 15, 17 to 26) stay
-/// free; a proof carrying one does not deserialize. Every variant is emitted by the prover for some checked-in model
-/// (`proof_types_all_exercised`).
+/// free; a proof carrying one does not deserialize. Every variant is emitted by the prover for
+/// some checked-in model (`proof_types_all_exercised`).
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProofType {
     /// Execution sumcheck for basic operations.
     Execution = 0,
-    /// Axis-reduction sumcheck for `Sum` (proves the pre-clamp accumulation
-    /// equals the sum over the reduced axes; the clamp itself is proven in the
-    /// node's packed clamp bucket, see `clamp_split`).
+    /// Axis-reduction sumcheck for `Sum` (proves the output equals the sum over the
+    /// reduced axis; the output's range claim is in the packed range buckets, see
+    /// `global_clamp`).
     SumReduction = 9,
     /// Einsum contraction (matmul) sumcheck proving
-    /// `Σ_k L·R = rescaled·2^S + R` (the clamp of `rescaled` is proven in the
-    /// node's packed clamp bucket; analogous to `SumReduction`).
+    /// `Σ_k L·R = out·2^S + R` (the range claims of `out` and `R` are in the packed
+    /// range buckets; analogous to `SumReduction`).
     EinsumMatmul = 10,
-    /// Element-wise arithmetic sumcheck for a fused `Mul`/`Square`/`Cube`,
-    /// proving `acc(r) = rescaled·2^S + R` (the clamp of `rescaled` is proven in
-    /// the node's packed clamp bucket; the einsum analogue is `EinsumMatmul`).
+    /// Arithmetic sumcheck for a fused `Mul`/`Square`/`Cube` or a `MeanOfSquares`,
+    /// proving `acc(r) = out·D + R` for the rescale divisor `D` (the range claims of `out`
+    /// and `R` are in the packed range buckets; the einsum analogue is `EinsumMatmul`).
     RescaleArith = 12,
-    /// All remainder buckets' value sumchecks (opening each bucket's packed remainder), batched.
+    /// All range buckets' value sumchecks (opening each bucket's packed value), batched.
     DeferredRemainderRC = 16,
-    /// All remainder buckets' digit range checks, batched.
+    /// All range buckets' digit range checks, batched.
     DeferredRemainderDigitRange = 27,
     /// Every deferred table read (`DeferredBatch::Lookups`), as one batched sumcheck.
     DeferredLookups = 28,
-    /// Every one-hot check and slack chunk check (`DeferredBatch::OneHot`), as one batched
-    /// sumcheck; absent when the model has no lookup and every live clamp bucket is exact.
+    /// Every one-hot check of a read address (`DeferredBatch::OneHot`), as one batched
+    /// sumcheck; absent when the model has no lookup.
     DeferredOneHot = 29,
     /// A softmax node's reduction of its output claim and its two row sums to its table reads.
     SoftmaxSums = 30,

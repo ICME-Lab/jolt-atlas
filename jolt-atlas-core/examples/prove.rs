@@ -16,7 +16,7 @@
 //! * `--seq-len N`            sequence length binding (default 16; ignored with `--input`)
 //! * `--input "<text>"`       tokenize with `<dir>/tokenizer.json`; sequence length = token count
 //! * `--use-cache`            reuse `<dir>/shared_preprocessing.seq<N>.bin` when present
-//! * `--stats`                print the model, clamp-width histogram and packed buckets
+//! * `--stats`                print the model, the packed range buckets and the largest nodes
 //! * `--trace` / `--trace-terminal`  Chrome-trace JSON / terminal timings
 //!
 //! Inputs other than the token ids are synthesized from the importer's input

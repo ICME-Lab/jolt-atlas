@@ -1,22 +1,21 @@
-//! Shared fused-rescaling (division + saturating clamp) sub-protocol .
+//! Shared fused-rescaling (exact division by `2^S`) sub-protocol.
 //!
-//! Several operators fuse an i64 accumulate, a rescaling division by `2^S`, and a
-//! saturating clamp into a single node: einsum (`Σ_k L·R`), `Mul` (`left·right`),
-//! `Square` (`x²`), and `Cube` (`x³`). They all share the same proof skeleton,
-//! which lives here so each operator only has to supply its own *arithmetic*
-//! sumcheck (`acc(r) = Σ … `):
+//! Several operators fuse an i64 accumulate and a rescaling division by `2^S` into a single
+//! node: einsum (`Σ_k L·R`), `Mul` (`left·right`), `Square` (`x²`), and `Cube` (`x³`). They
+//! all share the same proof skeleton, which lives here so each operator only has to supply
+//! its own *arithmetic* sumcheck (`acc(r) = Σ … `):
 //!
 //! ```text
-//! acc(r) = rescaled(r)·2^S + R(r)     (the operator's arithmetic sumcheck claim)
-//! output = SatClamp(rescaled)         (clamp lookup, reuses `clamp_lookups`)
-//! R ∈ [0, 2^S)                        (a range claim in the packed remainder buckets)
+//! acc(r) = out(r)·2^S + R(r)          (the operator's arithmetic sumcheck claim)
+//! R ∈ [0, 2^S)                        (a range claim in the packed range buckets)
+//! out + 2^31 ∈ [0, 2^32)              (a range claim there too, unless a model output)
 //! ```
 //!
-//! `rescaled` is the pre-clamp value ([`VirtualPoly::ClampAcc`]), recovered as the
-//! floor-rebased accumulation; `R` is the rescaling remainder, appended as advice
-//! ([`VirtualPoly::RescaleRemainder`]) and range-checked. The arithmetic relation's input
-//! expression is [`input_expression`], so its initial claim is the raw `acc(r)` while its
-//! `Σ L·R` body is unchanged. The sequence is the plan
+//! The node's output is the Euclidean quotient of the accumulation, which must lie in `i32`
+//! (an execution whose quotient does not is an error and has no trace); `R` is the rescaling
+//! remainder, appended as advice ([`VirtualPoly::RescaleRemainder`]) and range-checked. The
+//! arithmetic relation's input expression is [`input_expression`], so its initial claim is
+//! the raw `acc(r)` while its `Σ L·R` body is unchanged. The sequence is the plan
 //! [`fused_rescale_plan`](super::plan::fused_rescale_plan).
 
 use atlas_trace::Op;
@@ -55,7 +54,7 @@ pub fn rebase_bits(node: &ComputationNode) -> Option<i32> {
 
 /// Whether a node fuses the rescaling division (`bits > 0`).
 ///
-/// A `bits == 0` op is a raw product (no rebase, no clamp) — e.g. the
+/// A `bits == 0` op is a raw product (no rebase, no output range check) — e.g. the
 /// building-block `Mul`/`Square` used inside decompositions.
 pub fn fuses_rebase(node: &ComputationNode) -> bool {
     rebase_bits(node).is_some_and(|b| b > 0)

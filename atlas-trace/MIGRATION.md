@@ -35,7 +35,6 @@ Validation status (differential suites in both crates' `tests/`):
 |---|---|
 | `Model::load(path, &RunArgs)` | `atlas_onnx_import::load(path, &LoadOptions) -> ImportedModel` |
 | `ComputationGraph { nodes: BTreeMap, .. }` | `Graph { nodes: Vec<Node> }`; `NodeId` = dense index, topo order structural |
-| `node.sat_clamp_bits: usize` | `NodeMeta.sat_clamp_bits: Option<ClampWidth>` (`.bits()`) |
 | per-op `scale` fields | one `Model::scale()` (`Scale` newtype); ops carry `rebase: bool` where the raw variant exists |
 | `rebase_bits` / `fuses_rebase` matches in `fused_rebase.rs` | `node.op.spec().rebase_divisor(scale)` |
 | `{einsum,mul,square,cube}_intermediate_and_remainder`, `mos_*` imports | `Trace::fused(id)` (always captured), or re-run `node.op.spec().eval(operands, &ctx)` |

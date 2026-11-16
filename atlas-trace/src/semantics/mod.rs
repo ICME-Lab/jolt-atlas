@@ -17,8 +17,8 @@
 //! and rayon in this module's non-test code.
 //!
 //! Layout:
-//! - [`fixed`] — the fused-rescale split, saturation, floor division,
-//!   rsqrt, and the trig period constants;
+//! - [`fixed`] — the fused-rescale split, the checked `i32` narrowing, floor
+//!   division, rsqrt, and the trig period constants;
 //! - [`exp`] — the one fixed-point exponential core (`e^-x`, Q2.62);
 //! - [`trig`] — fixed-point sin/cos (quadrant reduction + Taylor);
 //! - [`softmax`] — the log-partition softmax tables and the row shift;

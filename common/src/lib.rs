@@ -131,7 +131,7 @@ canonical_serde_enum! {
 
         /// Dense base-`b` digit of a packed range bucket's value (a remainder, a slack, or an
         /// offset output `out + 2^31`), most significant first (`U8Scalars` in `[0, b)`; see
-        /// `jolt_atlas_core::onnx_proof::clamp_split`).
+        /// `jolt_atlas_verifier::onnx_proof::clamp_split`).
         ///
         /// * `0` – bucket index
         /// * `1` – digit index `j`
@@ -286,12 +286,12 @@ canonical_serde_enum! {
         /// * `0` – node index
         SoftmaxClampRa(usize),
 
-        // ----- Saturating clamp (Add/Sub) -----
+        // ----- Fused rescale (einsum, Mul, Square, Cube, MeanOfSquares) -----
 
-        /// Remainder `R = acc mod 2^S` of a fused rescaling division
-        /// (`acc = rescaled·2^S + R`, where `acc` is the operator's raw i64
-        /// accumulation). Range-checked to `[0, 2^S)`; bound into the operator
-        /// sumcheck's input claim. Shared by einsum, `Mul`, `Square`, `Cube`.
+        /// Remainder `R = acc mod D` of a fused rescaling division
+        /// (`acc = out·D + R`, where `acc` is the operator's raw i64 accumulation and
+        /// `D` its divisor: `2^S`, or `N·2^S` for `MeanOfSquares`). Range-checked to
+        /// `[0, D)`; bound into the operator sumcheck's input claim.
         ///
         /// * `0` – node index
         RescaleRemainder(usize),

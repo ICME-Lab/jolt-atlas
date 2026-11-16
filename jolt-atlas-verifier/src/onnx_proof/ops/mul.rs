@@ -74,21 +74,26 @@ impl ProductShape for Cube {
 /// relation, `Π` running over the op's [`ProductShape::FACTORS`]:
 ///
 /// ```text
-/// input claim   q(r₀)·2^S + rem(r₀)    (fused rescale: pre-clamp quotient and remainder)
+/// input claim   out(r₀)·2^S + rem(r₀)  (fused rescale: the output is the quotient)
 ///               out(r₀)                (raw product: the reduced output opening)
 /// output claim  eq(r₀, r′) · Π operand(r′)
 /// ```
 ///
-/// The incoming point is the node output's reduced opening point. The clamp lookup and the
-/// remainder range check of a fused node are separate protocols ([`fused_rebase`]) around this
-/// one.
+/// The incoming point is the node output's reduced opening point. The range claims of a fused
+/// node's remainder and output are a separate protocol ([`fused_rebase`]) after this one.
 ///
 /// **S ⊆ R.** A raw product's output is `Π operand` exactly, so `Σ eq(r₀,·)·Π operand` is the
-/// output's MLE at `r₀`. A fused product splits the `i64` accumulation `Π operand` with
-/// `atlas_trace::semantics::fixed::rebase` into `q·2^S + rem` (Euclidean, `S` the op's rebase
-/// bits: twice the scale for `Cube`), so the same sum equals `q(r₀)·2^S + rem(r₀)` for the
-/// pre-clamp quotient `q`; the clamped output is never used here, so saturated executions
-/// satisfy it too.
+/// output's MLE at `r₀`. A fused product splits the accumulation `Π operand` with
+/// `atlas_trace::semantics::fixed::rebase` into `out·2^S + rem` (Euclidean, `S` the op's
+/// rebase bits: twice the scale for `Cube`), and its execution fails when the quotient leaves
+/// `i32`, so the same sum equals `out(r₀)·2^S + rem(r₀)` on every execution that exists.
+///
+/// **No wrap (fused).** The operands are `i32` cells, so `|Π operand| ≤ 2^62` for `Mul` and
+/// `Square` and `≤ 2^93` for `Cube`. The range claims give `out ∈ [−2^31, 2^31)` (a model
+/// output is a public `i32` tensor) and `rem ∈ [0, 2^S)`, so `|out·2^S + rem| < 2^(32+S)`,
+/// at most `2^62` since `S ≤ 30` (the scale is at most 15, `atlas_trace::Scale`). Both sides
+/// are integers of magnitude below `2^94`, far below half the 128-bit field modulus, so
+/// their equality in the field is their equality over the integers.
 pub struct ProductRelation<S> {
     node: ComputationNode,
     _spec: PhantomData<fn() -> S>,

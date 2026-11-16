@@ -32,9 +32,13 @@ cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen \
 
 The commitment scheme is Akita over the 128-bit Solinas field. Options: `--seq-len N` (default
 16), `--input "<text>"` (tokenizes with the model's `tokenizer.json`), `--use-cache` (reuse the
-shared preprocessing across runs), `--stats` (clamp-width histogram and packed buckets),
-`--trace` (Chrome Tracing JSON, view in `chrome://tracing`) or `--trace-terminal` (timings on
-the terminal).
+shared preprocessing across runs), `--stats` (the model, its packed range buckets and its
+largest nodes), `--trace` (Chrome Tracing JSON, view in `chrome://tracing`) or
+`--trace-terminal` (timings on the terminal).
+
+Models execute in exact fixed-point arithmetic over `i32`: a sum, difference, negation or
+rescaled product outside `i32` is an execution error (`WitnessOverflow`), never a clamped
+value, and such an execution has no proof.
 
 ### The model zoo (`models/`)
 
@@ -146,7 +150,7 @@ cargo nextest run -p jolt-atlas-core --run-ignored ignored-only -E 'test(known_g
 `jolt-atlas-core/src/onnx_proof/testing/` holds the whole suite:
 
 * `op_surface.rs` is a table with one case per `atlas_trace::Op` variant (plus
-  saturation, tiny-tensor, non-power-of-two, padded and rejection cases).
+  overflow rejection, tiny-tensor, non-power-of-two, padded and rejection cases).
   Adding an op variant fails to compile until the table declares a stance for it.
 * `soundness.rs` attacks the proof system generically: every field of a
   finished proof is perturbed (`proof_mutation_sweep`), the execution trace is

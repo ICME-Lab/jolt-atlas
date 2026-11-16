@@ -3,8 +3,8 @@
 //! 1. **Padding invariance** — `crop(trace(pad(g), x)) == trace(g, x)` on
 //!    every live lane of every node. This single property subsumes the
 //!    softmax padding fix and guards every future op.
-//! 2. **Clamp-width soundness** — every annotated width really contains the
-//!    pre-clamp value (via the captured fused quotients).
+//! 2. **Euclidean remainders** — every captured fused-rescale remainder lies in
+//!    `[0, divisor)`.
 //! 3. **Determinism** — identical runs produce byte-identical serialized
 //!    traces.
 

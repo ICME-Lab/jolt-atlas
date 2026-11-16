@@ -3,25 +3,23 @@
 //! Computes, per retained output element `h` (the reduced axis has size `N`):
 //!
 //! ```text
-//! acc[h]      = Σ_j x[h,j]²                       (i64 squared sum — no i32 overflow)
-//! rescaled[h] = acc[h] / D,        D = N·2^S      (mean rebase, D a per-node constant)
-//! out[h]      = SatClamp(rescaled[h])             (i32)
+//! acc[h] = Σ_j x[h,j]²                        (i64 squared sum)
+//! out[h] = acc[h] / D,        D = N·2^S       (Euclidean quotient; an error outside i32)
 //! ```
 //!
-//! replacing the old `Square → Sum → Div(N)` decomposition (which squared in i32
-//! and could saturate, the reason `pre_rebase_nonlinear` existed). The proof chain
-//! (mirrors `Sum`, plus the rescale of [`fused_rebase`]):
+//! The proof chain (mirrors `Sum`, plus the rescale of
+//! [`fused_rebase`](crate::onnx_proof::fused_rebase)):
 //!
-//! 1. **Reduction sumcheck** ([`MeanOfSquaresReductionProver`], `RescaleArith`):
+//! 1. **Remainder advice**: `R = acc mod D` is appended (`RescaleRemainder`).
+//! 2. **Reduction sumcheck** ([`MeanOfSquaresReductionProver`], `RescaleArith`):
 //!    `acc(r) = Σ_{h,j} eq(r,h)·x[h,j]²`, reducing to one input opening. Its
-//!    initial claim is `acc(r) = rescaled·D + R` (the rescale seam). This is the
+//!    initial claim is `acc(r) = out(r)·D + R(r)` (the rescale seam). This is the
 //!    einsum **High** eq-schedule (`eq·op·op`, eq over the retained/high bits,
 //!    free sum over the reduced/low bits) specialized to one operand.
-//! 2. **Clamp** (`Execution` + `RaOneHotChecks`, via [`fused_rebase::prove_pre`]):
-//!    `out = SatClamp(rescaled)`, appending `rescaled` (`ClampAcc`) and `R`
-//!    (`RescaleRemainder`).
-//! 3. **Remainder bound** `R < D`: the remainder's range claims in the packed remainder
-//!    buckets ([`global_clamp::node_remainders`](crate::onnx_proof::global_clamp::node_remainders)).
+//! 3. **Range claims** in the packed range buckets
+//!    ([`global_clamp::node_range_claims`](crate::onnx_proof::global_clamp::node_range_claims)),
+//!    after the node loop: the remainder bound `R < D` and, unless the node is a model
+//!    output, the output range `out + 2^31 ∈ [0, 2^32)`.
 //!
 //! The reduction sums over the *padded* reduced cube (`op.padded_count`, a power
 //! of two so the flat-padded operand splits cleanly into `[retained, reduced]`),

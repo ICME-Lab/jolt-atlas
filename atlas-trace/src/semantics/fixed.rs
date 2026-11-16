@@ -1,5 +1,5 @@
 //! Tiny fixed-point primitives shared by every kernel: the fused-rescale
-//! split, saturation, floor division, and the trig reduction constants.
+//! split, the checked `i32` narrowing, floor division, and the trig reduction constants.
 //!
 //! These functions are part of the proof specification (see the module docs
 //! of [`crate::semantics`]).
@@ -20,7 +20,7 @@ pub fn narrow_i32(v: i64) -> Option<i32> {
 ///
 /// This is the single definition of the fused-rescale contract used by
 /// einsum, mul, square, cube and mean-of-squares. The op's output is
-/// the quotient, which must lie in `i32`; the pair is captured in the trace for the
+/// the quotient, which must lie in `i32`; the remainder is captured in the trace for the
 /// prover.
 pub fn rebase(acc: i64, divisor: i64) -> (i64, i32) {
     debug_assert!(divisor > 0);

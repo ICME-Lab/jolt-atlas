@@ -341,8 +341,7 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
     }
 
     // Swapping or replacing a commitment is a no-op when the two polynomials
-    // (or the two executions' versions of one polynomial) are identical,
-    // e.g. all-zero one-hot chunks of a clamp bucket nothing saturates in.
+    // (or the two executions' versions of one polynomial) are identical.
     let n = proof.commitments().len();
     if n >= 2 {
         let pairs: Vec<(usize, usize)> = (0..n)

@@ -58,10 +58,9 @@ impl CopySign for Neg {
 /// output claim  ±operand(r)
 /// ```
 ///
-/// **S ⊆ R.** `Identity` passes its operand through. `Neg` negates element-wise with
-/// `saturating_neg`, which agrees with field negation everywhere except `i32::MIN`, sent to
-/// `i32::MAX`: an execution negating `i32::MIN` fails the tie (a completeness gap; the
-/// verifier accepts no wrong output).
+/// **S ⊆ R.** `Identity` passes its operand through. `Neg` negates element-wise and its
+/// execution fails on `i32::MIN`, whose negation is outside `i32`, so the tie holds at every
+/// element of every execution that exists.
 pub struct SignedCopyRelation<S> {
     node: ComputationNode,
     _spec: PhantomData<fn() -> S>,

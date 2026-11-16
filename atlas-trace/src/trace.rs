@@ -161,7 +161,7 @@ pub struct SoftmaxWitness {
 /// Per-node auxiliary witness data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeAux {
-    /// Fused-rescale quotient and remainder.
+    /// Fused-rescale remainder (the quotient is the node's output).
     Fused(FusedIntermediates),
     /// Softmax witness.
     Softmax(Box<SoftmaxWitness>),

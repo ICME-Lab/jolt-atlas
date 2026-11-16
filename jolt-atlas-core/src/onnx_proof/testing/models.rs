@@ -81,8 +81,8 @@ fn attention_like(seed: u64) -> ProbeModel {
 }
 
 /// The claim flows a relation-defined op takes part in (`Mul`, see `onnx_proof::relation`):
-/// a fused product, whose input claim reads the node's quotient and remainder advice and whose
-/// remainder range check runs in the deferred batch after the node loop; a raw product with two
+/// a fused product, whose input claim reads the node's reduced output and remainder advice and
+/// whose range claims are proven in the packed buckets after the node loop; a raw product with two
 /// consumers, whose input claim is the evaluation reduction's instance for its output; and an
 /// operand shared by a product and an add, whose reduction folds the relation's produced
 /// opening with the add's.
@@ -109,11 +109,12 @@ fn relation_flows(seed: u64) -> ProbeModel {
     }
 }
 
-/// One-element clamped nodes only: a fused `Mul`, two `Add`s, and the output `Sub`. With no larger clamped node the bucket capacity is one cell, so every node is
-/// alone in a one-cell clamp bucket and the `Mul`'s remainder in a one-cell remainder bucket:
-/// each is the first node of its bucket, where the digit tamper sites land. The values keep a
-/// non-zero digit above the least significant one in every `OUT = out + 2^31` and in the
-/// remainder (`scalars_probe_layout` pins the layout and the values).
+/// One-element range-checked nodes only: a fused `Mul`, two `Add`s, and the output `Sub`. With
+/// no larger member the bucket capacity is one cell, so every hidden output and the `Mul`'s
+/// remainder is alone in a one-cell range bucket: each is the first member of its bucket,
+/// where the digit tamper sites land. The values keep a non-zero digit above the least
+/// significant one in every `out + 2^31` and in the remainder (`scalars_probe_layout` pins
+/// the layout and the values).
 fn scalars(seed: u64) -> ProbeModel {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut b = ModelBuilder::new();

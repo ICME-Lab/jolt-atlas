@@ -1,6 +1,6 @@
-//! Compilation: [`Graph`] → [`Model`] through validate → shape-check → pad →
-//! clamp-width annotate. `Model::compile` is the only constructor, so a
-//! `Model` is always fully analyzed.
+//! Compilation: [`Graph`] → [`Model`] through validate → shape-check → pad.
+//! `Model::compile` is the only constructor, so a `Model` is always fully
+//! analyzed.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ pub struct Model {
 }
 
 impl Model {
-    /// Compile a graph: validate, check shapes, pad, annotate clamp widths.
+    /// Compile a graph: validate, check shapes, pad.
     pub fn compile(mut graph: Graph, opts: CompileOptions) -> Result<Model, CompileError> {
         graph.validate()?;
         check_shapes(&graph)?;

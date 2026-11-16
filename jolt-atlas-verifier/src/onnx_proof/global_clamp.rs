@@ -1,31 +1,32 @@
-//! Packed ("global") saturating-clamp and rescale-remainder buckets.
+//! Packed ("global") range buckets.
 //!
-//! Every clamped node used to commit its own one-hot chunks and run its own
-//! lookup sumchecks. Here nodes of the same width are packed into *buckets*:
-//! one shared cycle space per bucket, each node occupying a
-//! power-of-two-aligned segment, so a bucket has one set of committed columns
-//! (a clamp bucket's dense output digits and one-hot slack chunks, a remainder
-//! bucket's dense digits) and one set of checks whatever the node count.
+//! Every value the proof bounds is a *range claim* ([`RangeClaim`]), and the claims of one
+//! width are packed into *buckets*: one shared cycle space per bucket, each claim occupying a
+//! power-of-two-aligned segment, so a bucket has one set of committed columns (its dense
+//! digits) and one set of checks whatever the node count.
 //!
 //! A bucket sumcheck over the packed cycle space uses the cycle weight
 //! `Σ_n γ_n·eq(r_n, t − off_n)` ([`CycleWeight::Packed`]) so its input claim
-//! is a `γ`-combination of the member nodes' existing openings. The clamp
-//! buckets are proven by the interior / saturated split and the remainder
-//! buckets by a value sumcheck and a digit range check, both in [`super::clamp_split`]. Gaps at the
+//! is a `γ`-combination of the member nodes' existing openings. Each bucket is proven by a
+//! value sumcheck and a digit range check, both in [`super::clamp_split`]. Gaps at the
 //! end of a bucket hold zero-weight dummy cycles.
 //!
-//! A remainder bucket's member is a *range claim* ([`RangeClaim`]): a remainder `R` some
-//! node's relation leaves to be bounded (`R ∈ [0, 2^w)`), or the slack `B − 1 − R` below its
-//! bound (`R < B`), each an affine expression over claims the node bound at one point.
+//! A range claim is a remainder `R` some node's relation leaves to be bounded
+//! (`R ∈ [0, 2^w)`), or the slack `B − 1 − R` below its bound (`R < B`), each an affine
+//! expression over claims the node bound at one point.
 //! [`node_remainders`] lists each node's remainders and bounds, and [`range_claims`] picks the
 //! form: `R` alone at width `w` for a bound `2^w` of a whole number of digits, both claims at
 //! [`TWO_SIDED_WIDTH`] otherwise. Together the two claims give `B ≥ 1` and `0 ≤ R < B` over
 //! the integers; a bound that is not positive has no proof.
 //!
-//! Bucket capacity is the largest clamped node's (padded) size, so no bucket
-//! polynomial is larger than the largest per-node one was and the SRS size is
-//! unchanged. The layout is a pure function of the model, so prover and
-//! verifier derive it independently.
+//! A node whose op is exact arithmetic narrowed to `i32` ([`checks_its_output`]) and that is
+//! not a model output also contributes its output, offset to be non-negative
+//! ([`Remainder::Output`]): `out + 2^31 ∈ [0, 2^32)`, read from the node's reduced output
+//! opening. A model output is a public `i32` tensor and is never a member.
+//!
+//! Bucket capacity is the largest member's (padded) size, so no bucket polynomial is larger
+//! than a node's output. The layout is a pure function of the model, so prover and verifier
+//! derive it independently.
 use super::{clamp_split, fused_rebase::rebase_bits, ops::mean_of_squares::mos_divisor};
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
@@ -52,8 +53,8 @@ pub struct BucketNode {
     pub log_t: usize,
 }
 
-/// A remainder a node's relation leaves to be bounded. Each is a virtual advice opening under
-/// the node's execution.
+/// A value a node leaves to be bounded: a virtual advice opening under the node's execution,
+/// or the node's own output ([`Self::Output`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Remainder {
     /// A fused rescale's remainder (`Einsum`, `Mul`, `Square`, `Cube`, `MeanOfSquares`).
@@ -364,9 +365,8 @@ pub fn node_remainders(
     })
 }
 
-/// Partition the model's range claims into buckets keyed by width: every remainder a node's
-/// relations leave to be bounded ([`node_remainders`]), as the claims [`range_claims`] gives
-/// for its bound. `Err` for a node whose bound cannot be range-checked.
+/// Partition the model's range claims ([`node_range_claims`]) into buckets keyed by width.
+/// `Err` for a node whose bound cannot be range-checked.
 pub fn remainder_buckets(model: &Model) -> Result<Vec<ClampBucket>, ProofVerifyError> {
     let mut items: Vec<BucketItem> = Vec::new();
     for n in &model.views() {
@@ -377,7 +377,7 @@ pub fn remainder_buckets(model: &Model) -> Result<Vec<ClampBucket>, ProofVerifyE
     Ok(pack_buckets(items))
 }
 
-/// A bucket member before packing: node, range claim (remainder buckets), width, padded size.
+/// A bucket member before packing: node, range claim, width, padded size.
 type BucketItem = (usize, Option<RangeClaim>, usize, usize);
 
 /// First-fit-decreasing packing of `(node, width, padded size)` items, grouped

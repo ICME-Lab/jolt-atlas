@@ -8,15 +8,13 @@ use atlas_trace::{op::Sub, trace::ModelExecutionIO, Model};
 
 crate::impl_plan_op!(Sub, AccumulationRelation<Sub>);
 
-/// Proof for saturating element-wise subtraction: `output = SatClamp(left - right)`.
+/// Proof for exact element-wise subtraction: `output = left - right`, where a difference
+/// outside `i32` is an execution error.
 ///
-/// Identical in structure to [`Add`](super::add) but with a subtraction tie:
-/// the accumulation `acc = left - right` is widened to `i64` and opened
-/// ([`VirtualPoly::ClampAcc`]), its clamp is proven exactly or in its packed clamp bucket, and
-/// the operand tie ([`AccumulationRelation`]) checks `left(r) - right(r) == acc(r)`. See
+/// Identical in structure to [`Add`](super::add) but with a subtraction tie: the operand tie
+/// ([`AccumulationRelation`]) checks `left(r) - right(r) == output(r)` at the reduced output
+/// point, and the output's range claim is in the packed range buckets. See
 /// [`Add`](super::add) for the full breakdown.
-///
-/// [`VirtualPoly::ClampAcc`]: common::VirtualPoly::ClampAcc
 impl OpPlan for Sub {
     fn plan(
         &self,

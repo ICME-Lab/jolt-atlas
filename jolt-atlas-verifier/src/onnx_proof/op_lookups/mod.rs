@@ -111,11 +111,10 @@ pub trait LookupOperandsTrait {
     fn witness_opening_id(node: &ComputationNode) -> OpeningId;
 
     /// The point (`r_cycle`) at which this helper's witness/operand is evaluated to produce
-    /// the "raf" claim of the read-raf sumcheck. Every existing helper (`Clamp`,
-    /// saturating-arithmetic clamps) uses the node's own output opening, since their pre-clamp
-    /// witness naturally lives at the same point as the node's committed output. A helper whose
-    /// witness is an internal, mid-pipeline value already evaluated at some other established
-    /// point (e.g. softmax's saturating-clamp witness) overrides this to read that point instead.
+    /// the "raf" claim of the read-raf sumcheck. A helper whose witness lives at the same
+    /// point as the node's output (e.g. `Clamp`) uses the node's own output opening. A helper
+    /// whose witness is an internal, mid-pipeline value already evaluated at some other
+    /// established point (e.g. softmax's clamp witness) reads that point instead.
     /// `Err` if the accumulator lacks the claim.
     fn r_cycle<F: JoltField>(
         node: &ComputationNode,
@@ -128,16 +127,15 @@ pub trait LookupOperandsTrait {
     /// as [`Self::r_cycle`].
     fn r_cycle_source(node_idx: usize) -> OpeningId;
 
-    /// This helper's lookup address width. [`Self::LOG_K`] by default; helpers
-    /// whose width varies per node (the saturating clamp) override it.
+    /// This helper's lookup address width. [`Self::LOG_K`] by default; a helper
+    /// whose width varies per node overrides it.
     fn log_k(&self) -> usize {
         Self::LOG_K
     }
 }
 
 /// The one-hot read-address polynomials of a lookup proven by a read-raf against committed
-/// chunks. A helper that only appends its witness claim (the saturating clamp, whose range is
-/// proven by the packed clamp buckets) has none.
+/// chunks.
 pub trait LookupRaPolys: LookupOperandsTrait {
     /// Virtual polynomial identifying this op's one-hot read-address ("ra") polynomial.
     fn ra_virtual_poly(node_idx: usize) -> VirtualPoly;

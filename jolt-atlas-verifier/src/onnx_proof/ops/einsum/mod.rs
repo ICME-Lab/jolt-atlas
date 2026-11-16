@@ -88,7 +88,7 @@ pub struct ContractionShape {
 /// An einsum contraction as a relation:
 ///
 /// ```text
-/// input claim   q(r₀)·2^S + rem(r₀)    (fused rescale: pre-clamp quotient and remainder)
+/// input claim   out(r₀)·2^S + rem(r₀)  (fused rescale: the output is the quotient)
 ///               out(r₀)                (no rescale: the reduced output opening)
 /// output claim  L(ρ_L) · R(ρ_R) · EQ
 /// ```
@@ -99,9 +99,17 @@ pub struct ContractionShape {
 ///
 /// **S ⊆ R.** The einsum accumulates `acc(m, n) = Σ_k L(m, k)·R(k, n)` (batched patterns per
 /// batch index) in `i64` and splits it with `atlas_trace::semantics::fixed::rebase` into
-/// `q·2^S + rem`; folding the operands at `r₀` turns `acc(r₀)` into the sumcheck's
-/// `Σ_h L(h)·R(h)·EQ(h)`, so the input claim equals the sum for every execution, saturated ones
-/// included (the clamp acts on `q`, outside the relation).
+/// `out·2^S + rem`, failing when the quotient leaves `i32`; folding the operands at `r₀` turns
+/// `acc(r₀)` into the sumcheck's `Σ_h L(h)·R(h)·EQ(h)`, so the input claim equals the sum on
+/// every execution that exists.
+///
+/// **No wrap.** The operands are `i32` cells, so a contraction over `n` cells has
+/// `|Σ_k L·R| ≤ n·2^62`. The range claims give `out ∈ [−2^31, 2^31)` (a model output is a
+/// public `i32` tensor) and `rem ∈ [0, 2^S)`, so `|out·2^S + rem| < 2^(32+S)`, at most
+/// `2^47` since the scale `S` is at most 15 (`atlas_trace::Scale`). For any tensor that fits
+/// in memory (`n < 2^64`) both sides are integers of magnitude at most `2^126`, less than
+/// half the 128-bit field modulus, so their equality in the field is their equality over the
+/// integers.
 pub struct ContractionRelation {
     shape: ContractionShape,
 }

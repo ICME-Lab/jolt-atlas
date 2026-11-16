@@ -25,24 +25,17 @@ use std::marker::PhantomData;
 
 crate::impl_plan_op!(Add, AccumulationRelation<Add>);
 
-/// Proof for saturating element-wise addition: `output = SatClamp(left + right)`.
+/// Proof for exact element-wise addition: `output = left + right`, where a sum outside `i32`
+/// is an execution error. The plan ([`accumulation_plan`]) has two parts:
 ///
-/// The accumulation is widened to `i64` (`acc = left + right`) and then clamped
-/// to `i32`, so `Add` is no longer a pure linear identity. The plan ([`accumulation_plan`]) has
-/// two parts:
-///
-/// 1. **Clamp** ([`clamp_steps`]): the accumulation ([`VirtualPoly::ClampAcc`]) is opened at
-///    the node's output point `r`. A model output whose public value is unsaturated then ties
-///    `acc(r) = output(r)`; every other node joins its packed clamp bucket, which proves
-///    `output = SatClamp(acc)` after the node loop
-///    ([`clamp_split`](crate::onnx_proof::clamp_split)).
+/// 1. **Evaluation reduction**: the node's output claims are reduced to one opening at a
+///    point `r`.
 /// 2. **Operand tie** ([`AccumulationRelation`], no sumcheck): the prover opens
-///    `left`/`right` at the same output point `r`, and the verifier checks
-///    `left(r) + right(r) == acc(r)`.
+///    `left`/`right` at `r`, and the verifier checks `left(r) + right(r) == output(r)`.
 ///
-/// The accumulation is re-executed from the operands at proving time
-/// ([`clamp_intermediate`](crate::onnx_proof::clamp_lookups)); it is not stored
-/// in the trace.
+/// Unless the node is a model output, its output is shown to lie in `i32` by a range claim in
+/// the packed range buckets, proven after the node loop
+/// ([`global_clamp`](crate::onnx_proof::global_clamp)).
 impl OpPlan for Add {
     fn plan(
         &self,
@@ -54,12 +47,12 @@ impl OpPlan for Add {
     }
 }
 
-/// A saturating `left ± right`.
+/// An exact `left ± right`.
 pub trait AccumulationShape: OpSpec + 'static {
     /// `+1` for `Add`, `−1` for `Sub`.
     const SIGN: i64;
 
-    /// The plan step tying the pre-clamp accumulation to the operands.
+    /// The plan step tying the output to the operands.
     fn accumulation_tie(node: &ComputationNode) -> OpTie;
 }
 
@@ -90,16 +83,21 @@ pub fn accumulation_plan<S: AccumulationShape>(node: &ComputationNode) -> Plan {
     ])
 }
 
-/// The pre-clamp accumulation of a saturating `left ± right`, a tie at the output
-/// point `r`:
+/// `out = left ± right` as a tie at the output point `r`: no sumcheck, the identity holds at
+/// `r` because it holds on the hypercube and both sides are multilinear.
 ///
 /// ```text
-/// input claim   acc(r)                 (the clamp lookup's raf opening, `ClampAcc`)
+/// input claim   out(r)                 (the reduced output opening)
 /// output claim  left(r) ± right(r)
 /// ```
 ///
-/// **S ⊆ R.** The op accumulates `left ± right` in `i64` before the clamp, and the clamp
-/// lookup's `acc` is that accumulation, so the identity holds at every element.
+/// **S ⊆ R.** The op computes `left ± right` exactly and its execution fails when a result
+/// leaves `i32`, so the identity holds at every element of every execution that exists.
+///
+/// **No wrap.** The operands are `i32` cells, so `|left ± right| ≤ 2^32`, and `out` lies in
+/// `[−2^31, 2^31)` by its range claim (a model output by being a public `i32` tensor). Both
+/// sides are integers of magnitude below `2^33`, far below half the 128-bit field modulus,
+/// so their equality in the field is their equality over the integers.
 pub struct AccumulationRelation<S> {
     node: ComputationNode,
     _spec: PhantomData<fn() -> S>,

@@ -152,17 +152,18 @@ columns links the combinations to the tensor's evaluation claim. Element digits 
 those rows; remainders stay exact (item 2). Break-even row width 80–176; at width 1,024 the
 saving is 6–13x, at 4,096 23–51x. The prototype is a standalone relation test on one 3,072-wide
 GPT-2 einsum output with the **negative test** that draws the matrix before the remainder
-commitment (the prover can then steer the tensor into its kernel). Needs item 4 or
-partial-function semantics, since the check bounds but does not saturate.
+commitment (the prover can then steer the tensor into its kernel). The check bounds and does
+not saturate, which is the semantics in force (decision 2): an output is exact or the
+execution does not exist.
 
 ### 4. Per-op declared clamp widths (roadmap D2) — 1.3–1.5x on the clamp output chunks, exact
 
-Replace the static 40/48/56/64 ladder by a per-op width declared at compile time (observed +
-margin, or a uniform 32), absorbed into the transcript like the existing exact flag. On the
-three GPT-2 texts and bge-small every quotient but the saturating Cube stays inside its observed
-width, so this is output-identical on those inputs; what is traded is saturation semantics for a
-margin, which is a `SemVersion` decision (saturating at the declared width, or partial-function
-semantics as FlashProve and Sable use, with the tracer asserting). Compile-time overflow bounds
+Every checked output carries one range claim at a uniform 32 bits (16 base-4 digits). Replace
+it by a per-op width declared at compile time (observed + margin), part of the model and so of
+the statement. On the three GPT-2 texts and bge-small every output stays inside its observed
+width, so this is output-identical on those inputs; what is traded is the range an execution
+may use, under the partial-function semantics of decision 2 (as FlashProve and Sable use), with
+the tracer asserting the declared width. Compile-time overflow bounds
 from weight ℓ1 norms (zkAgent) are the stronger form where they apply. At scale 2^14 the honest
 values need 17–29 bits, so "12–16-bit activations" is a change of scale, not of width, and is
 not pursued (section 6).
@@ -326,7 +327,7 @@ The order of steps 6–9 is provisional: step 5's profile decides it.
   at one committed element plus 2–3 lookups, Qwen2.5-32B at 4K in 92.5 s with 135 MiB proofs,
   partial semantics, not ZK. **Attestable:** no paper or code; ZK, ~5 MiB proofs, within ~1.3x of
   Sable's wall clock. Positions still unclaimed: small proofs with an open design, ONNX
-  generality, total exact semantics, fidelity to the served model.
+  generality, fidelity to the served model.
 - **Bit-level commitments.** BitZ (ePrint 2026/2141) commits bits under a hash tree, gives an exact
   per-coefficient range for free, and proves claims over a fixed 128-bit prime with one extra
   round: 0.52 ns per bit measured on an M5 (2^30 bits in 561 ms), i.e. ~2 ns per 4-bit digit
@@ -361,8 +362,11 @@ The order of steps 6–9 is provisional: step 5's profile decides it.
    by appending the subcube's suffix, one degree-2 batching sumcheck, one opening. The layout
    is what removes the per-class openings; BitZ is what makes one 2^30 polynomial committable
    (Akita's dense commit is capped at 2^28 coefficients).
-2. **Semantics under declared widths:** saturate at the declared width, or partial-function
-   semantics with the tracer asserting. Item 4; a `SemVersion` change either way.
+2. **Semantics of a result outside `i32`: decided, partial-function.** A sum, difference,
+   negation, axis sum or rescaled quotient outside `i32` is an execution error
+   (`SemVersion::V3`, `specs/one-clamp.md`); nothing saturates, and the proof bounds each such
+   output by one 32-bit range claim. A narrower declared width (item 4) keeps this form: the
+   tracer asserts the width.
 3. **Base 4 or Booleans** for item 1, by measured total time. Open: item 1 ships base 4 on
    `dev`; switching to Booleans is the one constant `clamp_split::DIGIT_BASE = 2`. Decided by
    the Phase 1 gate run, not yet made.

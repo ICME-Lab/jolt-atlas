@@ -12,18 +12,16 @@ crate::impl_plan_op!(Sum, SumAxisRelation);
 /// Axis-wise sum implementations for sumcheck protocol.
 pub mod axis;
 
-/// Saturating axis-sum proof: `output = SatClamp(acc)`, `acc[k] = Σ_axis operand[k, ·]`.
+/// Exact axis-sum proof: `output[k] = Σ_axis operand[k, ·]`, where a sum outside `i32` is an
+/// execution error. The proof is:
 ///
-/// Reuses the [`Add`](super::add)/[`Sub`](super::sub) clamp infrastructure: the
-/// per-output-element clamp `output = SatClamp(acc)` is identical (an element-wise
-/// `i64 → i32` saturation), only the accumulation differs. So the proof is:
-///
-/// 1. **Clamp** ([`clamp_steps`]): open `acc` ([`VirtualPoly::ClampAcc`]) at the output point
-///    and prove `output = SatClamp(acc)` exactly or in the node's packed clamp bucket, as for
-///    `Add`.
+/// 1. **Evaluation reduction**: the node's output claims are reduced to one opening at a
+///    point `r`.
 /// 2. **Axis reduction** ([`SumAxisRelation`], `ProofType::SumReduction`): prove
-///    `acc(r) = Σ_axis operand`, reducing to the operand opening. Its input claim
-///    is the opened `acc(r)`, not the node output.
+///    `output(r) = Σ_axis operand`, reducing to the operand opening.
+///
+/// Unless the node is a model output, its output is shown to lie in `i32` by a range claim in
+/// the packed range buckets after the node loop, as for [`Add`](super::add).
 impl OpPlan for Sum {
     fn plan(
         &self,

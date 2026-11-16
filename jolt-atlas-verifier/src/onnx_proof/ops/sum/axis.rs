@@ -31,16 +31,23 @@ pub struct SumShape {
     axis_len: usize,
 }
 
-/// The axis reduction of a saturating sum as a dense relation, binding the summed axis
+/// The axis reduction of an exact sum as a dense relation, binding the summed axis
 /// high-to-low over the operand folded at the output point `r`:
 ///
 /// ```text
-/// input claim   acc(r)                 (the clamp lookup's raf opening, `ClampAcc`)
+/// input claim   out(r)                 (the reduced output opening)
 /// output claim  operand(ρ)             (ρ = (r′, r) along axis 0, (r, r′) along axis 1)
 /// ```
 ///
-/// **S ⊆ R.** The sum accumulates `acc = Σ_axis operand` in `i64` before the clamp, and the
-/// clamp lookup's `acc` is that accumulation, so `acc(r) = Σ_x operand(x, r)` (or `(r, x)`).
+/// **S ⊆ R.** The op computes `out = Σ_axis operand` exactly and its execution fails when a
+/// sum leaves `i32`, so `out(r) = Σ_x operand(x, r)` (or `(r, x)`) on every execution that
+/// exists.
+///
+/// **No wrap.** The operand's cells are `i32`, so a sum over an axis of `n` cells has
+/// magnitude at most `n·2^31`, and `out` lies in `[−2^31, 2^31)` by its range claim (a model
+/// output by being a public `i32` tensor). For any tensor that fits in memory (`n < 2^64`)
+/// both sides are integers of magnitude below `2^95`, far below half the 128-bit field
+/// modulus, so their equality in the field is their equality over the integers.
 pub struct SumAxisRelation {
     shape: SumShape,
 }

@@ -209,8 +209,7 @@ pub(super) fn prove_reduced_openings<
     if poly_map.is_empty() {
         return None;
     }
-    // Committed polynomials nobody opened (e.g. the empty slack chunks of a
-    // clamp bucket proven exactly) stay out of the joint opening; the
+    // Committed polynomials nobody opened stay out of the joint opening; the
     // verifier selects the same subset from its openings.
     let opened = prover.accumulator.opened_polynomials();
     if opened.is_empty() {
@@ -309,18 +308,11 @@ pub(super) fn polynomial_map<F: JoltField>(
     buckets: &BucketWitnesses,
 ) -> BTreeMap<CommittedPoly, MultilinearPolynomial<F>> {
     // Walk nodes *sequentially* with inner (per-tensor) parallelism ENABLED,
-    // mirroring `Model::trace`. Witness generation re-executes each fused
-    // node's accumulation (e.g. `einsum_intermediate`) to recover its
-    // pre-clamp value, and that cost is dominated by a few large einsum nodes
-    // (attention, MLP, logits). The previous per-node `par_iter` disabled
-    // inner parallelism to avoid nested-rayon fragmentation, which pinned
-    // each of those whales to a single thread — the reason this phase ran
-    // several times slower than the identical einsums do inside `trace`.
-    // Giving each node the whole thread pool for its accumulation and one-hot
-    // build parallelizes the whales; the many small nodes are cheap enough
-    // that losing node-level parallelism for them is negligible.
-    // `generate_node_witnesses` still computes each node's accumulation once
-    // and slices every committed-poly chunk from it.
+    // mirroring `Model::trace`. The cost is dominated by a few large nodes, and
+    // a per-node `par_iter` would pin each of them to a single thread to avoid
+    // nested-rayon fragmentation. Giving each node the whole thread pool for its
+    // witness build parallelizes the large nodes; the many small nodes are cheap
+    // enough that node-level parallelism for them is negligible.
     let mut polys: BTreeMap<CommittedPoly, MultilinearPolynomial<F>> = model
         .views()
         .iter()
@@ -328,7 +320,7 @@ pub(super) fn polynomial_map<F: JoltField>(
             crate::onnx_proof::witness::generate_node_witnesses::<F>(node, model, trace)
         })
         .collect();
-    // Packed clamp buckets (model-level, not per node).
+    // Packed range buckets (model-level, not per node).
     polys.extend(buckets.committed_polys::<F>(model));
     polys
 }

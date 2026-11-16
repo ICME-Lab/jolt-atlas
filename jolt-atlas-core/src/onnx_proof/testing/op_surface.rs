@@ -466,7 +466,7 @@ op_surface! {
     #[should_panic(expected = "WitnessOverflow")]
     add_scalar_sat_neg: Add => |_| binary_const(&[1], i32::MIN, i32::MIN, |b, a, c| b.add(a, c));
     add_scalar_no_sat: Add => |_| binary_const(&[1], i32::MAX, -5, |b, a, c| b.add(a, c));
-    /// A one-element `Add` that is not the model output: an interior cell of a one-cell bucket.
+    /// A one-element `Add` that is not the model output: the one cell of a one-cell bucket.
     add_scalar_internal: Add => |_| {
         let mut b = ModelBuilder::new();
         let i = b.input(vec![1]);
@@ -523,8 +523,8 @@ op_surface! {
     mul_saturates_neg: Mul => |_| binary_const(&[16], -SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
     #[should_panic(expected = "WitnessOverflow")]
     mul_scalar_rescale_sat: Mul => |_| binary_const(&[1], SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
-    /// A one-element fused `Mul` that is not the model output: one cell in a clamp bucket and
-    /// one in a remainder bucket.
+    /// A one-element fused `Mul` that is not the model output: its output and its remainder
+    /// are each one cell of a range bucket.
     mul_scalar_internal: Mul => |_| {
         let mut b = ModelBuilder::new();
         let i = b.input(vec![1]);
@@ -692,7 +692,7 @@ op_surface! {
         b.mark_output(o);
         (b.build(), vec![vec_of(i32::MAX / 2, &[64, 1])])
     };
-    /// A one-element `Sum` that is not the model output and shares its clamp bucket with a
+    /// A one-element `Sum` that is not the model output and shares its range bucket with a
     /// four-element `Add`: the bucket grows from four cells to eight.
     sum_scalar_internal_shared_bucket: Sum => |rng| {
         let mut b = ModelBuilder::new();
@@ -824,9 +824,8 @@ op_surface! {
     concat_unaligned_offset_rejected: Concat => |rng| concat_model(rng, &[&[4], &[8], &[4]], 0);
 
     // Multi-node and padded builds
-    /// Clamped nodes of two different sizes in one model: exercises the
-    /// first-fit bucket packing in `global_clamp` (the one size-dependent
-    /// branch in the prover) and an unsaturated bucket beside a live one.
+    /// `Add` nodes of two different sizes in one model, packed into one range bucket of
+    /// `global_clamp`; an identity is the model output, so both are members.
     clamp_bucket_packing_mixed_sizes: Add => |rng| {
         let mut b = ModelBuilder::new();
         let x = b.input(vec![T]);
@@ -835,7 +834,8 @@ op_surface! {
         let r = b.relu(a);
         let s = b.slice(r, 0, 0, 256);
         let c2 = b.constant(Tensor::random_small(rng, &[256]));
-        let o = b.add(s, c2);
+        let small = b.add(s, c2);
+        let o = b.identity(small);
         b.mark_output(o);
         (b.build(), vec![Tensor::random_small(rng, &[T])])
     };

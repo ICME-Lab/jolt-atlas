@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-16                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          |                                |
 | Depends on  | `specs/one-range-check.md`, `specs/post-loop-batches.md`, `specs/log-partition-softmax.md` (`SemVersion::V2`), `specs/fused-gelu.md` (no saturating node left) |
 | Supersedes  | `docs/prover-plan.md` §5 decision 2 |

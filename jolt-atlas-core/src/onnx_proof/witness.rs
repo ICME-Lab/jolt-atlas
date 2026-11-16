@@ -90,9 +90,8 @@ fn build_activation_small_rad_witness<F: JoltField>(
     ))
 }
 
-/// Generate the witnesses for **all** of a node's committed polynomials. A MeanOfSquares node's
-/// range-check lookup operands are computed once and every one-hot chunk is sliced from them;
-/// every other polynomial goes through [`WitnessGenerator::generate_witness`].
+/// Generate the witnesses for **all** of a node's committed polynomials, each through
+/// [`WitnessGenerator::generate_witness`].
 #[tracing::instrument(skip_all, name = "generate_node_witnesses", fields(node = node.idx))]
 pub(crate) fn generate_node_witnesses<F: JoltField>(
     node: &ComputationNode,

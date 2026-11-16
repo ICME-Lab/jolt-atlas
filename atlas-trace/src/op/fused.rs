@@ -2,7 +2,7 @@
 //!
 //! Each accumulates in `i64`, splits `acc = quotient·D + remainder`
 //! (Euclidean, via [`crate::semantics::fixed::rebase`]), emits
-//! the quotient, which must fit `i32`, and captures the pair in the trace.
+//! the quotient, which must fit `i32`, and captures the remainder in the trace.
 
 use std::fmt;
 
@@ -51,7 +51,7 @@ impl OpSpec for Mul {
     fn eval(&self, inputs: &[&Tensor<i32>], ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
         let (a, b) = (inputs[0], inputs[1]);
         if !self.rebase {
-            // Raw building-block product: already at target scale, no clamp.
+            // Raw building-block product: already at target scale, no rescale.
             return Ok(Eval::plain(a.zip_map(b, |x, y| x.wrapping_mul(y))?));
         }
         let acc = a.zip_map(b, |x, y| x as i64 * y as i64)?;
@@ -128,8 +128,7 @@ impl OpSpec for Cube {
         if !self.rebase {
             return Ok(Eval::plain(x.map(|v| v.wrapping_mul(v).wrapping_mul(v))));
         }
-        // x³ overflows i64 for |x| > 2^21; same documented assumption as the
-        // old crate (the clamp-width pass keeps these at the full 64 bits).
+        // x³ overflows i64 for |x| > 2^21: the operand is assumed to stay below it.
         let acc = x.map(|v| {
             let v = v as i64;
             v * v * v

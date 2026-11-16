@@ -201,16 +201,16 @@ pub enum OpRelation {
     Softmax(SoftmaxRelation),
     /// `Square`: `x²`.
     Square(SquareRelation),
-    /// `Sum`: the axis reduction of the pre-clamp accumulation.
+    /// `Sum`: the axis reduction of the output.
     SumAxis(SumAxisRelation),
     /// A trig op's table execution over the downscaled input.
     Trig(OpTrig, ComputationNode),
     /// The one-hot checks of a [`Self::Trig`]'s read addresses (two relations).
     TrigOneHot(OpTrig, ComputationNode),
-    /// A packed remainder bucket's value relation: the range claims of its members
+    /// A packed range bucket's value relation: the range claims of its members
     /// ([`global_clamp::RangeClaim`](crate::onnx_proof::global_clamp::RangeClaim)).
     RemainderBucketValue(ClampBucket),
-    /// A packed remainder bucket's digit range check.
+    /// A packed range bucket's digit range check.
     RemainderBucketDigits(ClampBucket),
 }
 
@@ -417,7 +417,7 @@ impl OpRelation {
 
 /// A zero-round relation or an in-the-clear check, as a plan step holds it.
 pub enum OpTie {
-    /// `Add`: the pre-clamp accumulation is `left + right`.
+    /// `Add`: the output is `left + right`.
     AddAccumulation(AccumulationRelation<Add>),
     /// `MoveAxis`: the operand at the permuted point.
     AxisPermutation(AxisPermutationRelation),
@@ -439,7 +439,7 @@ pub enum OpTie {
     Reshape(FlatCopyRelation),
     /// `Slice`: the operand's subcube the slice selects.
     Slice(SubcubeSelectRelation),
-    /// `Sub`: the pre-clamp accumulation is `left − right`.
+    /// `Sub`: the output is `left − right`.
     SubAccumulation(AccumulationRelation<Sub>),
     /// `IsNan`: the output is zero.
     ZeroOutput(ZeroOutputRelation),

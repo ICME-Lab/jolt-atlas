@@ -81,13 +81,13 @@ impl ModelBuilder {
         self.push(Op::ReLU(op::ReLU), vec![input], d)
     }
 
-    /// Saturating addition.
+    /// Exact addition: a sum outside `i32` is an execution error.
     pub fn add(&mut self, a: Wire, b: Wire) -> Wire {
         let d = self.dims(a);
         self.push(Op::Add(op::Add), vec![a, b], d)
     }
 
-    /// Saturating subtraction.
+    /// Exact subtraction: a difference outside `i32` is an execution error.
     pub fn sub(&mut self, a: Wire, b: Wire) -> Wire {
         let d = self.dims(a);
         self.push(Op::Sub(op::Sub), vec![a, b], d)
@@ -376,7 +376,7 @@ impl ModelBuilder {
     }
 
     /// Compile into an [`atlas_trace::Model`] (dims are taken as given —
-    /// no padding pass; clamp widths are annotated).
+    /// no padding pass).
     pub fn build(self) -> atlas_trace::Model {
         self.build_with(false)
     }

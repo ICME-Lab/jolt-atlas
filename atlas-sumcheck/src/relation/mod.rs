@@ -125,7 +125,7 @@ pub enum RelationId {
     DivisionQuotient,
     /// Selection `mask·a + (1 − mask)·b`.
     Select,
-    /// The pre-clamp accumulation of a saturating add or subtract, `acc = left ± right`.
+    /// An exact add or subtract, `out = left ± right`.
     Accumulation,
     /// An output equal to `±` its operand at the same point (`Identity`, `Neg`).
     SignedCopy,
@@ -161,8 +161,6 @@ pub enum RelationId {
     ReadRaf,
     /// A prefix-suffix lookup into a large table: read value plus `γ`·read address.
     PrefixSuffixReadRaf,
-    /// A clamp bucket's split of its accumulations into output, slack and saturation indicator.
-    ClampSplit,
     /// A packed bucket's values opened at one point.
     PackedValue,
     /// Dense digit columns are in range and recompose a value.

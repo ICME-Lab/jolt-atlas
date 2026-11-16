@@ -100,7 +100,31 @@ impl Trace {
     pub fn fused(&self, id: NodeId) -> Option<&FusedIntermediates> {
         match self.aux.get(&id)? {
             NodeAux::Fused(f) => Some(f),
-            NodeAux::Softmax(_) => None,
+            _ => None,
+        }
+    }
+
+    /// The floor-division remainder of a node, if it is a `Div` or a `ScalarConstDiv`.
+    pub fn remainder(&self, id: NodeId) -> Option<&Tensor<i32>> {
+        match self.aux.get(&id)? {
+            NodeAux::Remainder(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// The division and square-root advice of a node, if it is an `Rsqrt`.
+    pub fn rsqrt(&self, id: NodeId) -> Option<&RsqrtAdvice> {
+        match self.aux.get(&id)? {
+            NodeAux::Rsqrt(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// The period reduction of a node's input, if it is a `Sin` or a `Cos`.
+    pub fn teleport(&self, id: NodeId) -> Option<&TeleportAdvice> {
+        match self.aux.get(&id)? {
+            NodeAux::Teleport(a) => Some(a),
+            _ => None,
         }
     }
 
@@ -108,7 +132,7 @@ impl Trace {
     pub fn softmax(&self, id: NodeId) -> Option<&SoftmaxWitness> {
         match self.aux.get(&id)? {
             NodeAux::Softmax(w) => Some(w),
-            NodeAux::Fused(_) => None,
+            _ => None,
         }
     }
 }
@@ -176,6 +200,37 @@ pub enum NodeAux {
     Fused(FusedIntermediates),
     /// Softmax witness.
     Softmax(Box<SoftmaxWitness>),
+    /// The remainder of a floor division (`Div`, `ScalarConstDiv`): `a = out·b + remainder`,
+    /// with the sign of the divisor.
+    Remainder(Tensor<i32>),
+    /// The division and square-root advice of an `Rsqrt`.
+    Rsqrt(RsqrtAdvice),
+    /// The period reduction of a `Sin` or `Cos` input.
+    Teleport(TeleportAdvice),
+}
+
+/// The intermediates of `rsqrt(x) = ⌊√⌊S³ / x⌋⌋` for `x > 0`:
+/// `S³ = quotient·x + div_remainder` with `div_remainder ∈ [0, x)`, and
+/// `quotient = out² + sqrt_remainder` with `sqrt_remainder ∈ [0, 2·out]`. All three are zero
+/// where `x ≤ 0` (the output is 0 there).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RsqrtAdvice {
+    /// `⌊S³ / x⌋`.
+    pub quotient: Tensor<i64>,
+    /// `S³ mod x`.
+    pub div_remainder: Tensor<i32>,
+    /// `quotient − out²`.
+    pub sqrt_remainder: Tensor<i32>,
+}
+
+/// The Euclidean reduction of a trig input by the period modulus `P`:
+/// `x = P·quotient + remainder` with `remainder ∈ [0, P)`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeleportAdvice {
+    /// `x div P`.
+    pub quotient: Tensor<i32>,
+    /// `x mod P`, the value the table index is taken from.
+    pub remainder: Tensor<i32>,
 }
 
 impl Index<NodeId> for Trace {

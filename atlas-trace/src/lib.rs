@@ -42,4 +42,4 @@ pub use id::{NodeId, Scale, SemVersion};
 pub use model::{ClampWidth, CompileOptions, Model, NodeMeta};
 pub use op::Op;
 pub use tensor::Tensor;
-pub use trace::{FusedIntermediates, NodeAux, SoftmaxWitness, Trace};
+pub use trace::{FusedIntermediates, NodeAux, RsqrtAdvice, SoftmaxWitness, TeleportAdvice, Trace};

@@ -4,8 +4,9 @@ use std::fmt;
 
 use crate::{
     error::{KernelError, ShapeError},
-    semantics::fixed::{floor_div, rsqrt, sat_clamp_i32},
+    semantics::fixed::{floor_div, rem_floor, rsqrt, sat_clamp_i32},
     tensor::Tensor,
+    trace::{NodeAux, RsqrtAdvice},
 };
 
 use super::{
@@ -218,7 +219,10 @@ impl OpSpec for Div {
         if let Some(element) = b.data().iter().position(|&d| d == 0) {
             return Err(KernelError::DivByZero { element });
         }
-        Ok(Eval::plain(a.zip_map(b, floor_div)?))
+        Ok(Eval {
+            output: a.zip_map(b, floor_div)?,
+            aux: Some(NodeAux::Remainder(a.zip_map(b, rem_floor)?)),
+        })
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -242,7 +246,12 @@ impl fmt::Display for ScalarConstDiv {
 
 impl OpSpec for ScalarConstDiv {
     fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        Ok(Eval::plain(inputs[0].map(|x| floor_div(x, self.divisor))))
+        Ok(Eval {
+            output: inputs[0].map(|x| floor_div(x, self.divisor)),
+            aux: Some(NodeAux::Remainder(
+                inputs[0].map(|x| rem_floor(x, self.divisor)),
+            )),
+        })
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -270,7 +279,39 @@ impl fmt::Display for Rsqrt {
 impl OpSpec for Rsqrt {
     fn eval(&self, inputs: &[&Tensor<i32>], ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
         let scale = ctx.scale;
-        Ok(Eval::plain(inputs[0].map(|x| rsqrt(x, scale))))
+        let input = inputs[0];
+        let output = input.map(|x| rsqrt(x, scale));
+        let s_cubed = 1i64 << (3 * scale.log2());
+        let quotient: Vec<i64> = input
+            .data()
+            .iter()
+            .map(|&x| if x > 0 { s_cubed / x as i64 } else { 0 })
+            .collect();
+        let div_remainder: Vec<i32> = input
+            .data()
+            .iter()
+            .map(|&x| {
+                if x > 0 {
+                    (s_cubed % x as i64) as i32
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let sqrt_remainder: Vec<i32> = quotient
+            .iter()
+            .zip(output.data())
+            .map(|(&q, &out)| (q - out as i64 * out as i64) as i32)
+            .collect();
+        let dims = input.dims();
+        Ok(Eval {
+            aux: Some(NodeAux::Rsqrt(RsqrtAdvice {
+                quotient: Tensor::new(quotient, dims)?,
+                div_remainder: Tensor::new(div_remainder, dims)?,
+                sqrt_remainder: Tensor::new(sqrt_remainder, dims)?,
+            })),
+            output,
+        })
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -411,5 +452,104 @@ impl OpSpec for IsNan {
 
     fn padding(&self) -> PadBehavior {
         PadBehavior::ZeroPreserving
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::id::{Scale, SemVersion};
+    use crate::op::TableCache;
+
+    /// A spread of i32 values: small, large, both signs, the extremes that do not overflow.
+    fn values() -> Vec<i32> {
+        let mut v = vec![0, 1, -1, 2, -2, 7, -7, 1000, -1000, i32::MAX, i32::MIN + 1];
+        v.extend((0..64).map(|i| (i * 0x0101_3F1Fi64 % 2_000_003 - 1_000_001) as i32));
+        v
+    }
+
+    fn ctx(cache: &TableCache) -> EvalCtx<'_> {
+        EvalCtx {
+            scale: Scale::new(14).unwrap(),
+            version: SemVersion::V1,
+            tables: cache,
+        }
+    }
+
+    /// `Div` captures `a = out·b + r` with `r` of the divisor's sign and `|r| < |b|`.
+    #[test]
+    fn div_captures_its_floor_remainder() {
+        let cache = TableCache::default();
+        let a = values();
+        for &b in &[1, 3, 7, 256, -3, i32::MAX] {
+            let lhs = Tensor::new(a.clone(), &[a.len()]).unwrap();
+            let rhs = Tensor::new(vec![b; a.len()], &[a.len()]).unwrap();
+            let eval = Div.eval(&[&lhs, &rhs], &ctx(&cache)).unwrap();
+            let Some(NodeAux::Remainder(r)) = eval.aux else {
+                panic!("Div captures a remainder");
+            };
+            for ((&a, &q), &r) in a.iter().zip(eval.output.data()).zip(r.data()) {
+                assert_eq!(a as i64, q as i64 * b as i64 + r as i64);
+                assert!(if b > 0 {
+                    0 <= r && r < b
+                } else {
+                    b < r && r <= 0
+                });
+            }
+        }
+    }
+
+    /// `ScalarConstDiv` captures the same remainder for its constant divisor.
+    #[test]
+    fn scalar_const_div_captures_its_floor_remainder() {
+        let cache = TableCache::default();
+        let a = values();
+        for divisor in [1, 7, 128, 1 << 14, -3] {
+            let input = Tensor::new(a.clone(), &[a.len()]).unwrap();
+            let eval = ScalarConstDiv { divisor }
+                .eval(&[&input], &ctx(&cache))
+                .unwrap();
+            let Some(NodeAux::Remainder(r)) = eval.aux else {
+                panic!("ScalarConstDiv captures a remainder");
+            };
+            for ((&a, &q), &r) in a.iter().zip(eval.output.data()).zip(r.data()) {
+                assert_eq!(a as i64, q as i64 * divisor as i64 + r as i64);
+                assert!(if divisor > 0 {
+                    0 <= r && r < divisor
+                } else {
+                    divisor < r && r <= 0
+                });
+            }
+        }
+    }
+
+    /// `Rsqrt` captures `S³ = q·x + r_div`, `q = out² + r_sqrt` with both remainders in range,
+    /// and zeros where the input is not positive.
+    #[test]
+    fn rsqrt_captures_its_division_and_square_root() {
+        let cache = TableCache::default();
+        let x = values();
+        let input = Tensor::new(x.clone(), &[x.len()]).unwrap();
+        let eval = Rsqrt.eval(&[&input], &ctx(&cache)).unwrap();
+        let Some(NodeAux::Rsqrt(advice)) = eval.aux else {
+            panic!("Rsqrt captures its advice");
+        };
+        let s_cubed = 1i64 << 42;
+        for (i, &x) in x.iter().enumerate() {
+            let out = eval.output.data()[i] as i64;
+            let (q, r_div, r_sqrt) = (
+                advice.quotient.data()[i],
+                advice.div_remainder.data()[i] as i64,
+                advice.sqrt_remainder.data()[i] as i64,
+            );
+            if x <= 0 {
+                assert_eq!((out, q, r_div, r_sqrt), (0, 0, 0, 0));
+                continue;
+            }
+            assert_eq!(s_cubed, q * x as i64 + r_div);
+            assert!(0 <= r_div && r_div < x as i64);
+            assert_eq!(q, out * out + r_sqrt);
+            assert!(0 <= r_sqrt && r_sqrt <= 2 * out);
+        }
     }
 }

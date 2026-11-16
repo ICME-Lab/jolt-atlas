@@ -94,7 +94,6 @@ use crate::onnx_proof::{
     fused_rebase::rebase_remainder,
     neural_teleport::{
         cos::CosTable,
-        division::compute_division,
         sin::SinTable,
         small_table::{SmallTableRelation, TrigTableProver},
         trig_downscale::TrigDownscaleOperands,
@@ -147,8 +146,7 @@ use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
 };
 use atlas_sumcheck::shout::{self, RaOneHotEncoding, RaOneHotParams};
-use atlas_trace::trace::LayerData;
-use common::consts::{TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS, XLEN};
+use common::consts::{TRIG_DOWNSCALE_BITS, XLEN};
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
 
@@ -774,9 +772,9 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
 
 /// A trig node's downscaled teleport remainder, `(input mod P) >> TRIG_DOWNSCALE_BITS`.
 fn trig_downscaled(node: &ComputationNode, trace: &atlas_trace::Trace) -> atlas_trace::Tensor<i32> {
-    let LayerData { operands, .. } = TraceView::layer_data(trace, node);
-    let (_quotient, remainder) = compute_division(operands[0], TRIG_PERIOD_MODULUS as i32);
-    remainder.map(|v| v >> TRIG_DOWNSCALE_BITS)
+    TraceView::teleport_advice(trace, node)
+        .remainder
+        .map(|v| v >> TRIG_DOWNSCALE_BITS)
 }
 
 /// Append a plan opening's claims from the trace.
@@ -802,8 +800,9 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
                 .append_advice(VirtualPoly::RescaleRemainder, eval);
         }
         OpOpen::TeleportQuotient(node) => {
-            let LayerData { operands, .. } = TraceView::layer_data(&prover.trace, node);
-            let (quotient, _remainder) = compute_division(operands[0], TRIG_PERIOD_MODULUS as i32);
+            let quotient = TraceView::teleport_advice(&prover.trace, node)
+                .quotient
+                .clone();
             let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
             let r0 = accessor.get_reduced_opening().expect(expect).0;
             let eval = quotient.evaluate_mle(&r0.r);

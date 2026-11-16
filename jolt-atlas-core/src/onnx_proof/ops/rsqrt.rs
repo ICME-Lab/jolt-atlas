@@ -11,20 +11,16 @@ impl<F: JoltField> RelationWitnesses<F> for RsqrtRelation {
         let [input] = operands[..] else {
             panic!("Expected one operand for Rsqrt operation")
         };
-        let s_cubed = rsqrt_dividend(&self.node);
-        // `quotient = ⌊S³ / x̂⌋` and `out²` can exceed i32 at higher scales, so both
-        // are computed in i64; `quotient` is committed as u64. `div_remainder < x̂`
-        // and `sqrt_remainder < 2·out+1` are small and stay i32.
-        let quotient: Vec<u64> = input.iter().map(|&x| (s_cubed / x as i64) as u64).collect();
-        let div_remainder: Vec<i32> = input.iter().map(|&x| (s_cubed % x as i64) as i32).collect();
-        let sqrt_remainder: Vec<i32> = quotient
-            .iter()
-            .zip(output.iter())
-            .map(|(&quotient, &out)| (quotient as i64 - (out as i64) * (out as i64)) as i32)
-            .collect();
+        // `quotient = ⌊S³ / x̂⌋` can exceed i32 at higher scales and is committed as u64;
+        // `div_remainder < x̂` and `sqrt_remainder < 2·out+1` are small and stay i32.
+        let advice = TraceView::rsqrt_advice(trace, &self.node);
+        let quotient: Vec<u64> = advice.quotient.iter().map(|&q| q as u64).collect();
+        let (div_remainder, sqrt_remainder) =
+            (advice.div_remainder.data(), advice.sqrt_remainder.data());
         #[cfg(test)]
         {
             use crate::onnx_proof::testing::probe::{probe_assert, probe_assert_eq};
+            let s_cubed = rsqrt_dividend(&self.node);
             for (i, (&x, &q)) in input.iter().zip(&quotient).enumerate() {
                 let (x, q, out) = (x as i128, q as i128, output.data()[i] as i128);
                 let (div_remainder, sqrt_remainder) =
@@ -40,8 +36,8 @@ impl<F: JoltField> RelationWitnesses<F> for RsqrtRelation {
             MultilinearPolynomial::from(input.clone()),
             MultilinearPolynomial::from(quotient),
             MultilinearPolynomial::from(output.clone()),
-            MultilinearPolynomial::from(div_remainder),
-            MultilinearPolynomial::from(sqrt_remainder),
+            MultilinearPolynomial::from(div_remainder.to_vec()),
+            MultilinearPolynomial::from(sqrt_remainder.to_vec()),
         ]
     }
 }

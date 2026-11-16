@@ -8,7 +8,7 @@
 use crate::node_view::ComputationNode;
 use atlas_trace::{
     trace::{FusedIntermediates, LayerData},
-    NodeId, SoftmaxWitness, Tensor, Trace,
+    NodeId, RsqrtAdvice, SoftmaxWitness, TeleportAdvice, Tensor, Trace,
 };
 
 /// Node-view-based accessors over the raw trace.
@@ -17,6 +17,12 @@ pub trait TraceView {
     fn fused_intermediates(&self, idx: usize) -> Option<&FusedIntermediates>;
     /// The softmax witness of a node, if any.
     fn softmax_witness(&self, idx: usize) -> Option<&SoftmaxWitness>;
+    /// The floor-division remainder of a `Div` or `ScalarConstDiv` node. Panics for any other.
+    fn division_remainder(&self, n: &ComputationNode) -> &Tensor<i32>;
+    /// The division and square-root advice of an `Rsqrt` node. Panics for any other.
+    fn rsqrt_advice(&self, n: &ComputationNode) -> &RsqrtAdvice;
+    /// The period reduction of a `Sin` or `Cos` node's input. Panics for any other.
+    fn teleport_advice(&self, n: &ComputationNode) -> &TeleportAdvice;
     /// Operands and output of a node.
     fn layer_data<'a>(&'a self, n: &ComputationNode) -> LayerData<'a>;
     /// Operand tensors of a node.
@@ -32,6 +38,33 @@ impl TraceView for Trace {
 
     fn softmax_witness(&self, idx: usize) -> Option<&SoftmaxWitness> {
         self.softmax(NodeId(idx as u32))
+    }
+
+    fn division_remainder(&self, n: &ComputationNode) -> &Tensor<i32> {
+        self.remainder(NodeId(n.idx as u32)).unwrap_or_else(|| {
+            panic!(
+                "node {} ({}) has no remainder in the trace",
+                n.idx, n.operator
+            )
+        })
+    }
+
+    fn rsqrt_advice(&self, n: &ComputationNode) -> &RsqrtAdvice {
+        self.rsqrt(NodeId(n.idx as u32)).unwrap_or_else(|| {
+            panic!(
+                "node {} ({}) has no rsqrt advice in the trace",
+                n.idx, n.operator
+            )
+        })
+    }
+
+    fn teleport_advice(&self, n: &ComputationNode) -> &TeleportAdvice {
+        self.teleport(NodeId(n.idx as u32)).unwrap_or_else(|| {
+            panic!(
+                "node {} ({}) has no teleport advice in the trace",
+                n.idx, n.operator
+            )
+        })
     }
 
     fn layer_data<'a>(&'a self, n: &ComputationNode) -> LayerData<'a> {

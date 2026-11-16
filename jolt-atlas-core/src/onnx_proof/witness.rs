@@ -22,8 +22,7 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
     onnx_proof::{
-        neural_teleport::{division::compute_division, n_bits_to_usize},
-        ops::rsqrt::rsqrt_dividend,
+        neural_teleport::n_bits_to_usize,
         ops::softmax_last_axis::{generate_exp_lut_decomposed, softmax_z},
         range_checking::range_check_operands::{
             range_check_lookup_indices, DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands,
@@ -31,7 +30,7 @@ use crate::{
             TeleportRangeCheckOperands,
         },
     },
-    utils::{adjusted_remainder, compute_lookup_indices_from_operands},
+    utils::compute_lookup_indices_from_operands,
 };
 use atlas_algebra::{
     field::JoltField,
@@ -40,7 +39,7 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::config::{OneHotConfig, OneHotParams};
 use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, TRIG_PERIOD_MODULUS, XLEN},
+    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, XLEN},
     parallel::par_enabled,
     CommittedPoly,
 };
@@ -266,48 +265,29 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 // For nodes that use the quotient for a lookup (erf/sigmoid ...),
                 // the quotient is virtualized from a one-hot encoding.
                 assert!(matches!(computation_node.operator, Op::Cos(_) | Op::Sin(_)));
-                let tau = match &computation_node.operator {
-                    Op::Cos(_) | Op::Sin(_) => TRIG_PERIOD_MODULUS as i32,
-                    _ => unreachable!(
-                        "teleport quotient witness requested for non-teleport operator"
-                    ),
-                };
-                let layer_data = TraceView::layer_data(trace, computation_node);
-                let input = &layer_data.operands[0];
-                let (quotient, _remainder) = compute_division(input, tau);
-                MultilinearPolynomial::from(quotient)
+                MultilinearPolynomial::from(
+                    TraceView::teleport_advice(trace, computation_node)
+                        .quotient
+                        .clone(),
+                )
             }
             CommittedPoly::ScalarConstDivNodeRemainder(node_idx) => {
                 let computation_node = &model.view(*node_idx);
-                let Op::ScalarConstDiv(op) = &computation_node.operator else {
-                    panic!("Expected ScalarConstDiv operator at node {node_idx}");
-                };
-                let b = op.divisor;
-                let layer_data = TraceView::layer_data(trace, computation_node);
-                let [left_operand] = layer_data.operands[..] else {
-                    panic!("Expected one operand for ScalarConstDiv operation")
-                };
-                let remainder_data: Vec<i32> = left_operand
-                    .iter()
-                    .map(|&a| adjusted_remainder(a, b))
-                    .collect();
-                MultilinearPolynomial::from(Tensor::<i32>::construct(
-                    remainder_data,
-                    left_operand.dims().to_vec(),
-                ))
+                assert!(matches!(computation_node.operator, Op::ScalarConstDiv(_)));
+                MultilinearPolynomial::from(
+                    TraceView::division_remainder(trace, computation_node).clone(),
+                )
             }
             CommittedPoly::RsqrtQuotient(node_idx) => {
                 let computation_node = &model.view(*node_idx);
                 assert!(matches!(computation_node.operator, Op::Rsqrt(_)));
-                let layer_data = TraceView::layer_data(trace, computation_node);
-                let [input] = layer_data.operands[..] else {
-                    panic!("Expected one operand for Rsqrt operation")
-                };
-                let s_cubed = rsqrt_dividend(computation_node);
                 // `quotient = ⌊S³ / x̂⌋` can exceed i32 at higher scales (e.g. up to
                 // `S³` when `x̂ = 1`), so it is committed as u64.
-                let quotient_data: Vec<u64> =
-                    input.iter().map(|&x| (s_cubed / x as i64) as u64).collect();
+                let quotient_data: Vec<u64> = TraceView::rsqrt_advice(trace, computation_node)
+                    .quotient
+                    .iter()
+                    .map(|&q| q as u64)
+                    .collect();
                 MultilinearPolynomial::from(quotient_data)
             }
             CommittedPoly::DivRangeCheckRaD(node_idx, d) => {
@@ -394,10 +374,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     matches!(computation_node.operator, Op::Cos(_) | Op::Sin(_)),
                     "Expected Cos or Sin operator for CosRaD/SinRaD committed polynomial"
                 );
-                let layer_data = TraceView::layer_data(trace, computation_node);
-                let input = &layer_data.operands[0];
-
-                let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
+                let remainder = &TraceView::teleport_advice(trace, computation_node).remainder;
                 let lookup_indices: Vec<usize> = remainder
                     .par_iter()
                     .with_min_len(par_enabled())
@@ -424,10 +401,8 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     matches!(computation_node.operator, Op::Cos(_) | Op::Sin(_)),
                     "Expected Cos or Sin operator for TrigDownscaleRaD committed polynomial"
                 );
-                let layer_data = TraceView::layer_data(trace, computation_node);
-                let input = &layer_data.operands[0];
-                let (_quotient, remainder) = compute_division(input, TRIG_PERIOD_MODULUS as i32);
-                let lookup_indices = compute_lookup_indices_from_operands(&[&remainder], false);
+                let remainder = &TraceView::teleport_advice(trace, computation_node).remainder;
+                let lookup_indices = compute_lookup_indices_from_operands(&[remainder], false);
                 build_one_hot_rad_witness(&lookup_indices, *d_idx, XLEN)
             }
             CommittedPoly::SoftmaxRemainderRaD(node_idx, d) => {

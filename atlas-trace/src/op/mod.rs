@@ -113,8 +113,8 @@ impl fmt::Debug for TableCache {
 pub struct Eval {
     /// The node's quantized output.
     pub output: Tensor<i32>,
-    /// Fused-rescale intermediates or the softmax witness, if the op
-    /// produces one.
+    /// The advice the op captures for the prover, if any: fused-rescale intermediates, the
+    /// softmax witness, a division remainder, the rsqrt or teleport intermediates.
     pub aux: Option<NodeAux>,
 }
 

@@ -6,8 +6,9 @@ use std::fmt;
 
 use crate::{
     error::{KernelError, ShapeError},
-    semantics::tables::TableKind,
+    semantics::tables::{IndexRule, TableKind},
     tensor::Tensor,
+    trace::{NodeAux, TeleportAdvice},
 };
 
 use super::{Cos, Erf, Eval, EvalCtx, OpSpec, PadBehavior, Sigmoid, Sin, Tanh, same_dims};
@@ -27,7 +28,10 @@ macro_rules! impl_activation {
                 ctx: &EvalCtx<'_>,
             ) -> Result<Eval, KernelError> {
                 let table = ctx.tables.get($kind, ctx.scale, ctx.version);
-                Ok(Eval::plain(inputs[0].map(|x| table.lookup(x))))
+                Ok(Eval {
+                    output: inputs[0].map(|x| table.lookup(x)),
+                    aux: teleport_advice(table.index, inputs[0]),
+                })
             }
 
             fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -39,6 +43,19 @@ macro_rules! impl_activation {
             }
         }
     };
+}
+
+/// The period reduction a trig table indexes by, captured for the prover; `None` for a table
+/// that does not reduce its input.
+fn teleport_advice(index: IndexRule, input: &Tensor<i32>) -> Option<NodeAux> {
+    let IndexRule::TrigReduced { modulus, .. } = index else {
+        return None;
+    };
+    let modulus = modulus as i32;
+    Some(NodeAux::Teleport(TeleportAdvice {
+        quotient: input.map(|x| x.div_euclid(modulus)),
+        remainder: input.map(|x| x.rem_euclid(modulus)),
+    }))
 }
 
 // tanh(0) = erf(0) = sin(0) = 0, so zero padding passes through.
@@ -72,5 +89,38 @@ mod tests {
         assert_eq!(out.data()[2], -195);
         assert_eq!(out.data()[3], 256); // deep saturation
         assert_eq!(out.data()[4], -256);
+    }
+
+    /// `Sin` and `Cos` capture `x = P·q + r` with `r ∈ [0, P)`, the reduction their table
+    /// indexes by; a table that does not reduce captures nothing.
+    #[test]
+    fn trig_captures_its_period_reduction() {
+        let cache = TableCache::default();
+        let ctx = EvalCtx {
+            scale: Scale::new(14).unwrap(),
+            version: SemVersion::V1,
+            tables: &cache,
+        };
+        let values = vec![0, 1, -1, 50_000, -50_000, i32::MAX, i32::MIN];
+        let x = Tensor::new(values.clone(), &[values.len()]).unwrap();
+        for (kind, eval) in [
+            (TableKind::Sin, Sin.eval(&[&x], &ctx).unwrap()),
+            (TableKind::Cos, Cos.eval(&[&x], &ctx).unwrap()),
+        ] {
+            let IndexRule::TrigReduced { modulus, .. } =
+                cache.get(kind, ctx.scale, ctx.version).index
+            else {
+                panic!("trig tables reduce by a period");
+            };
+            let Some(NodeAux::Teleport(advice)) = eval.aux else {
+                panic!("trig ops capture their reduction");
+            };
+            for (i, &x) in values.iter().enumerate() {
+                let (q, r) = (advice.quotient.data()[i], advice.remainder.data()[i]);
+                assert_eq!(x as i64, modulus as i64 * q as i64 + r as i64);
+                assert!(0 <= r && (r as u32) < modulus);
+            }
+        }
+        assert!(Tanh.eval(&[&x], &ctx).unwrap().aux.is_none());
     }
 }

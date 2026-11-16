@@ -248,6 +248,12 @@ enum WitnessSite {
         field: &'static str,
         elem: usize,
     },
+    /// One element of a division, rsqrt or teleport advice tensor (see [`bump_advice`]).
+    Advice {
+        node: usize,
+        field: &'static str,
+        elem: usize,
+    },
     /// A bucket's digits (a live clamp bucket's `OUT`, a remainder bucket's value) at the first
     /// cycle of its first live `node`, tampered through [`digit_tamper`] (the trace holds no
     /// digits). The trace is unchanged, so neither neutrality rule applies: the verifier must
@@ -358,9 +364,48 @@ fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
                     }
                 }
             }
+            atlas_trace::trace::NodeAux::Remainder(_)
+            | atlas_trace::trace::NodeAux::Rsqrt(_)
+            | atlas_trace::trace::NodeAux::Teleport(_) => {
+                let len = trace.node_outputs[node].data().len();
+                for &field in advice_fields(aux) {
+                    for elem in probe_elems(len, all) {
+                        sites.push(WitnessSite::Advice { node, field, elem });
+                    }
+                }
+            }
         }
     }
     sites
+}
+
+/// The tamperable tensors of a division, rsqrt or teleport advice.
+fn advice_fields(aux: &atlas_trace::trace::NodeAux) -> &'static [&'static str] {
+    use atlas_trace::trace::NodeAux;
+    match aux {
+        NodeAux::Remainder(_) => &["remainder"],
+        NodeAux::Rsqrt(_) => &["quotient", "div_remainder", "sqrt_remainder"],
+        NodeAux::Teleport(_) => &["teleport_quotient", "teleport_remainder"],
+        NodeAux::Fused(_) | NodeAux::Softmax(_) => &[],
+    }
+}
+
+/// Add `delta` to element `elem` of the advice tensor `field`.
+fn bump_advice(aux: &mut atlas_trace::trace::NodeAux, field: &str, elem: usize, delta: i64) {
+    use atlas_trace::trace::NodeAux;
+    let bump = |d: &mut [i32]| d[elem] = d[elem].wrapping_add(delta as i32);
+    match (aux, field) {
+        (NodeAux::Remainder(r), "remainder") => bump(r.data_mut()),
+        (NodeAux::Rsqrt(a), "quotient") => {
+            let d = a.quotient.data_mut();
+            d[elem] = d[elem].wrapping_add(delta);
+        }
+        (NodeAux::Rsqrt(a), "div_remainder") => bump(a.div_remainder.data_mut()),
+        (NodeAux::Rsqrt(a), "sqrt_remainder") => bump(a.sqrt_remainder.data_mut()),
+        (NodeAux::Teleport(a), "teleport_quotient") => bump(a.quotient.data_mut()),
+        (NodeAux::Teleport(a), "teleport_remainder") => bump(a.remainder.data_mut()),
+        (_, field) => panic!("no advice field `{field}` on this node"),
+    }
 }
 
 fn apply_witness(trace: &mut Trace, site: &WitnessSite) {
@@ -392,6 +437,13 @@ fn apply_witness(trace: &mut Trace, site: &WitnessSite) {
                 let d = softmax_field(w, field);
                 d[*elem] = d[*elem].wrapping_add(1);
             }
+        }
+        WitnessSite::Advice { node, field, elem } => {
+            let aux = trace
+                .aux
+                .get_mut(&NodeId(*node as u32))
+                .expect("the site was enumerated from this node's advice");
+            bump_advice(aux, field, *elem, 1);
         }
         WitnessSite::BucketDigit {
             kind,
@@ -452,6 +504,7 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                 WitnessSite::FusedQuotient { .. } => "FusedQuotient",
                 WitnessSite::FusedRemainder { .. } => "FusedRemainder",
                 WitnessSite::Softmax { .. } => "Softmax",
+                WitnessSite::Advice { .. } => "Advice",
                 WitnessSite::BucketDigit { .. } => "BucketDigit",
             };
             let row = rows.entry(class).or_default();
@@ -461,6 +514,7 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                 | WitnessSite::FusedQuotient { node, .. }
                 | WitnessSite::FusedRemainder { node, .. }
                 | WitnessSite::Softmax { node, .. }
+                | WitnessSite::Advice { node, .. }
                 | WitnessSite::BucketDigit { node, .. } => *node,
             };
             let label = format!("{} node {node} {}: {site:?}", h.name, op_name(&model, node));

@@ -30,6 +30,8 @@ disallowed-types = [
     { path = "atlas_trace::trace::FusedIntermediates", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
     { path = "atlas_trace::trace::NodeAux", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
     { path = "atlas_trace::trace::SoftmaxWitness", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
+    { path = "atlas_trace::trace::RsqrtAdvice", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
+    { path = "atlas_trace::trace::TeleportAdvice", reason = "the verifier is Trace-free; witness construction lives in jolt-atlas-core" },
     { path = "atlas_transcript::ProverTranscript", reason = "prover-only" },
     { path = "atlas_sumcheck::engine::prover::ProveRounds", reason = "prover-only" },
     { path = "atlas_sumcheck::engine::prover::MemberRound", reason = "prover-only" },

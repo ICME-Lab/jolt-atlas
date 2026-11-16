@@ -3,7 +3,7 @@ use crate::onnx_proof::trace_view::TraceView;
 use atlas_algebra::field::JoltField;
 use atlas_algebra::poly::multilinear::MultilinearPolynomial;
 use atlas_sumcheck::opening_proof::OpeningAccumulator;
-use atlas_trace::{semantics::fixed::rem_floor, trace::LayerData, Trace};
+use atlas_trace::{trace::LayerData, Trace};
 pub use jolt_atlas_verifier::onnx_proof::ops::div::*;
 
 impl<F: JoltField> RelationWitnesses<F> for DivRelation {
@@ -12,13 +12,8 @@ impl<F: JoltField> RelationWitnesses<F> for DivRelation {
         let [left, right] = operands[..] else {
             panic!("Expected two operands for Div operation")
         };
-        let remainder: Vec<i32> = left
-            .padded_pow2()
-            .iter()
-            .zip(right.padded_pow2().iter())
-            // Padding lanes divide 0 by 0: no remainder.
-            .map(|(&a, &b)| if b == 0 { 0 } else { rem_floor(a, b) })
-            .collect();
+        // Padding lanes divide 0 by 0 and carry no remainder.
+        let remainder = TraceView::division_remainder(trace, self.node()).padded_pow2();
         vec![
             MultilinearPolynomial::from(left.padded_pow2()),
             MultilinearPolynomial::from(right.padded_pow2()),

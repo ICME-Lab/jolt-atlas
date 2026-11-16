@@ -36,7 +36,7 @@ use crate::{
             significance_clamp::SoftmaxSignificanceClampOperands,
         },
     },
-    utils::{compute_lookup_indices_from_operands, opening_access::AccOpeningAccessor},
+    utils::{compute_lookup_indices, opening_access::AccOpeningAccessor},
 };
 use atlas_lookup_tables::clamp::SoftmaxClampTable;
 use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
@@ -275,7 +275,7 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
             // z = max_k - x, the sat-clamp lookup's witness.
             let z_tensor = significance_clamp_witness(shape, w);
             let significance_clamp_indices: Vec<usize> =
-                compute_lookup_indices_from_operands(&[&z_tensor.map(|v| v as i32)], false)
+                compute_lookup_indices(&z_tensor.map(|v| v as i32))
                     .iter()
                     .map(|&x| x.into())
                     .collect();

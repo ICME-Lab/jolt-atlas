@@ -22,11 +22,7 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter as EnumIterMacro};
 #[repr(u8)]
 #[derive(Clone, Copy, EnumIterMacro, EnumCountMacro)]
 pub enum Prefix {
-    RightOperand,
-    LeftOperand,
     Identity,
-    RightOperandMSB,
-    LeftOperandMSB,
     SignedIdentity,
 }
 

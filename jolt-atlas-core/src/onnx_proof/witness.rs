@@ -25,7 +25,7 @@ use crate::{
         neural_teleport::n_bits_to_usize,
         ops::softmax_last_axis::{generate_exp_lut_decomposed, softmax_z},
     },
-    utils::compute_lookup_indices_from_operands,
+    utils::compute_lookup_indices,
 };
 use atlas_algebra::{
     field::JoltField,
@@ -170,7 +170,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .map(|tensor| tensor.padded_pow2())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
-                let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
+                let lookup_indices = compute_lookup_indices(operand_refs[0]);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
             CommittedPoly::SymmetricClampRaD(node_idx, d) => {
@@ -182,7 +182,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .map(|tensor| tensor.padded_pow2())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
-                let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
+                let lookup_indices = compute_lookup_indices(operand_refs[0]);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
             CommittedPoly::ActivationClampRaD(node_idx, d) => {
@@ -194,7 +194,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .map(|tensor| tensor.padded_pow2())
                     .collect();
                 let operand_refs: Vec<_> = padded_operands.iter().collect();
-                let lookup_indices = compute_lookup_indices_from_operands(&operand_refs, false);
+                let lookup_indices = compute_lookup_indices(operand_refs[0]);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
             CommittedPoly::ActivationSmallRaD(node_idx, d) => {
@@ -325,7 +325,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     "Expected Cos or Sin operator for TrigDownscaleRaD committed polynomial"
                 );
                 let remainder = &TraceView::teleport_advice(trace, computation_node).remainder;
-                let lookup_indices = compute_lookup_indices_from_operands(&[remainder], false);
+                let lookup_indices = compute_lookup_indices(remainder);
                 build_one_hot_rad_witness(&lookup_indices, *d_idx, XLEN)
             }
             CommittedPoly::SoftmaxZHiRaD(node_idx, d) => {
@@ -359,7 +359,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let operand = Tensor::from_slice(&z, &[z.len()])
                     .expect("softmax_z tensor construction")
                     .padded_pow2();
-                let lookup_indices = compute_lookup_indices_from_operands(&[&operand], false);
+                let lookup_indices = compute_lookup_indices(&operand);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
         }

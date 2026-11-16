@@ -2,8 +2,6 @@ use std::{fmt::Display, ops::BitAnd};
 
 use allocative::Allocative;
 
-use crate::utils::uninterleave_bits;
-
 /// A bitvector type used to represent a (substring of a) lookup index.
 #[derive(Clone, Copy, Debug, Allocative)]
 pub struct LookupBits {
@@ -18,13 +16,6 @@ impl LookupBits {
             bits %= 1 << len;
         }
         Self { bits, len }
-    }
-
-    pub fn uninterleave(&self) -> (Self, Self) {
-        let (x_bits, y_bits) = uninterleave_bits(self.bits);
-        let x = Self::new(x_bits as u64, self.len / 2);
-        let y = Self::new(y_bits as u64, self.len - x.len);
-        (x, y)
     }
 
     /// Splits `self` into a tuple (prefix, suffix) of `LookupBits`, where

@@ -25,7 +25,7 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::neural_teleport::{n_bits_to_usize, utils::compute_ra_evals_nbits_2comp};
 use crate::onnx_proof::op_lookups::{DefaultLookupOperands, LookupWitness};
 use crate::onnx_proof::trace_view::TraceView;
-use crate::utils::compute_lookup_indices_from_operands;
+use crate::utils::compute_lookup_indices;
 use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_algebra::{
@@ -210,6 +210,6 @@ impl LookupWitness for ActivationClampOperands {
 
     fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
         let operand = witness.map(|v| v as i32);
-        compute_lookup_indices_from_operands(&[&operand], false)
+        compute_lookup_indices(&operand)
     }
 }

@@ -1,8 +1,8 @@
 use super::multilinear::{BindingOrder, PolynomialBinding, PolynomialEvaluation};
 use crate::{
-    field::{ChallengeFieldOps, FieldChallengeOps, JoltField},
+    field::JoltField,
     poly::{
-        identity::{IdentityPolynomial, OperandPolynomial, OperandSide, ShiftHalfSuffixPolynomial},
+        identity::IdentityPolynomial,
         multilinear::MultilinearPolynomial,
         prefix_suffix::{
             CachedPolynomial, Prefix, PrefixCheckpoints, PrefixPolynomial, PrefixRegistry,
@@ -25,10 +25,8 @@ use std::sync::{Arc, RwLock};
 /// Used in the RAF sumcheck as the identity factor:
 /// `sum_k ra(k, j) * Self(k)` folds to a claim on the signed integer value at the sumcheck point.
 ///
-/// Unlike [`BinarySignedIdentityPoly`], this struct is not parameterized by an `X_LEN` constant
-/// and does not assume an interleaved / two-operand key layout. It is used directly in
-/// single-operand activation proofs (tanh, erf, sigmoid) where the lookup index is the
-/// quotient of the input divided by the fixed-point scale.
+/// The address is one operand's two's-complement value: the lookup index of the prefix-suffix
+/// read-rafs (ReLU, the clamps, the trig downscale).
 #[derive(Clone, Debug, Allocative)]
 pub struct SignedIdentityPoly<F: JoltField> {
     num_vars: usize,
@@ -210,152 +208,6 @@ impl<F: JoltField> PrefixPolynomial<F> for SignedIdentityPoly<F> {
 
 // -------- Signed Operand Poly --------
 
-/// Multilinear polynomial that interprets one interleaved operand as a signed integer.
-///
-/// Used when evaluating either the left or right operand lane from an interleaved bit-vector.
-///
-/// Layout: the input length equals `2 * X_LEN` and bits are interleaved by operand.
-/// For the left operand, relevant coordinates are `x[2*i]`; for the right operand,
-/// relevant coordinates are `x[2*i + 1]`. In each lane, the first coordinate is the sign bit
-/// and the remaining `X_LEN - 1` coordinates are value bits. Let `u` be the lane interpreted as
-/// an unsigned integer and `s` the sign bit (MSB). Then
-/// `u - s * 2^X_LEN = value_bits - s * 2^(X_LEN - 1)`, which is exactly the two's-complement
-/// signed interpretation.
-///
-/// In the prime field, negatives are represented modulo `p`: for `m > 0`, `-m` is encoded as
-/// `p - m` (equivalently `-m mod p`).
-#[derive(Clone, Debug)]
-pub struct SignedOperandPoly<F: JoltField, const X_LEN: usize> {
-    _field: core::marker::PhantomData<F>,
-    side: OperandSide,
-}
-
-impl<F: JoltField, const X_LEN: usize> SignedOperandPoly<F, X_LEN> {
-    pub fn new(side: OperandSide) -> Self {
-        Self {
-            _field: core::marker::PhantomData,
-            side,
-        }
-    }
-}
-
-impl<F: JoltField, const X_LEN: usize> PolynomialEvaluation<F> for SignedOperandPoly<F, X_LEN> {
-    /// Left Operand Case: Self(x) = (sum_{i=0}^{X_LEN-1} x[2*i] * 2^(X_LEN - 1 - i)) - x[0] * 2^X_LEN
-    /// Right Operand Case: Self(x) = (sum_{i=0}^{X_LEN-1} x[2*i+1] * 2^(X_LEN - 1 - i)) - x[1] * 2^X_LEN
-    fn evaluate<C>(&self, r: &[C]) -> F
-    where
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        let len = r.len();
-        debug_assert_eq!(len, 2 * X_LEN);
-        let shift = match self.side {
-            OperandSide::Left => 0,
-            OperandSide::Right => 1,
-        };
-        let sign_bit = r[shift];
-        let y: F = (0..X_LEN)
-            .map(|i| {
-                let r_i: F = r[2 * i + shift].into();
-                r_i.mul_u128(1u128 << (X_LEN - 1 - i))
-            })
-            .sum();
-        y - sign_bit * F::from_u64(X_LEN.pow2() as u64)
-    }
-
-    fn sumcheck_evals(&self, _: usize, _: usize, _: BindingOrder) -> Vec<F> {
-        unimplemented!("Currently unused")
-    }
-}
-
-impl<F: JoltField, const X_LEN: usize> PrefixSuffixPolynomial<F, 3>
-    for SignedOperandPoly<F, X_LEN>
-{
-    fn suffixes(&self) -> [Box<dyn SuffixPolynomial<F> + Sync>; 3] {
-        [
-            Box::new(ShiftHalfSuffixPolynomial),
-            Box::new(OperandPolynomial::new(2 * X_LEN, self.side)),
-            Box::new(OneSuffixPolynomial),
-        ]
-    }
-
-    fn prefixes(
-        &self,
-        chunk_len: usize,
-        phase: usize,
-        prefix_registry: &mut PrefixRegistry<F>,
-    ) -> [Option<Arc<RwLock<CachedPolynomial<F>>>>; 3] {
-        match self.side {
-            OperandSide::Left => {
-                let lo = prefix_registry.get_or_insert(Prefix::LeftOperand, |cp| {
-                    OperandPolynomial::new(2 * X_LEN, OperandSide::Left)
-                        .prefix_polynomial(cp, chunk_len, phase)
-                });
-                let msb = prefix_registry.get_or_insert(Prefix::LeftOperandMSB, |cp| {
-                    OperandMsbPrefixPoly::<F, X_LEN>::new(OperandSide::Left)
-                        .prefix_polynomial(cp, chunk_len, phase)
-                });
-                [Some(lo), None, Some(msb)]
-            }
-            OperandSide::Right => {
-                let ro = prefix_registry.get_or_insert(Prefix::RightOperand, |cp| {
-                    OperandPolynomial::new(2 * X_LEN, OperandSide::Right)
-                        .prefix_polynomial(cp, chunk_len, phase)
-                });
-                let msb = prefix_registry.get_or_insert(Prefix::RightOperandMSB, |cp| {
-                    OperandMsbPrefixPoly::<F, X_LEN>::new(OperandSide::Right)
-                        .prefix_polynomial(cp, chunk_len, phase)
-                });
-                [Some(ro), None, Some(msb)]
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct OperandMsbPrefixPoly<F: JoltField, const X_LEN: usize> {
-    _field: core::marker::PhantomData<F>,
-    side: OperandSide,
-}
-
-impl<F: JoltField, const X_LEN: usize> OperandMsbPrefixPoly<F, X_LEN> {
-    pub fn new(side: OperandSide) -> Self {
-        Self {
-            _field: core::marker::PhantomData,
-            side,
-        }
-    }
-}
-
-impl<F: JoltField, const X_LEN: usize> PrefixPolynomial<F> for OperandMsbPrefixPoly<F, X_LEN> {
-    fn prefix_polynomial(
-        &self,
-        checkpoints: &PrefixCheckpoints<F>,
-        chunk_len: usize,
-        phase: usize,
-    ) -> CachedPolynomial<F> {
-        debug_assert!(chunk_len.is_even());
-        let bound_value = match self.side {
-            OperandSide::Left => checkpoints[Prefix::LeftOperandMSB].unwrap_or(F::zero()),
-            OperandSide::Right => checkpoints[Prefix::RightOperandMSB].unwrap_or(F::zero()),
-        };
-        let shift = match self.side {
-            OperandSide::Left => 1,
-            OperandSide::Right => 2,
-        };
-        let evals = match phase {
-            0 => (0..chunk_len.pow2())
-                .map(|i| {
-                    let sign_bit = ((i >> (chunk_len - shift)) & 1) as u32;
-                    sign_correction::<F>(sign_bit, X_LEN)
-                })
-                .collect(),
-            _ => vec![bound_value; chunk_len.pow2()],
-        };
-        make_cached_poly(evals, chunk_len)
-    }
-}
-
 /// Wraps evals into a `CachedPolynomial` with standard cache capacity.
 fn make_cached_poly<F: JoltField>(evals: Vec<F>, chunk_len: usize) -> CachedPolynomial<F> {
     CachedPolynomial::new(MultilinearPolynomial::from(evals), (chunk_len - 1).pow2())
@@ -391,16 +243,14 @@ mod tests {
     use crate::{
         field::JoltField,
         poly::{
-            identity::OperandSide,
             multilinear::{
                 BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
             },
             prefix_suffix::{tests::prefix_suffix_decomposition_test, Prefix},
-            signed_identity::{SignedIdentityPoly, SignedOperandPoly},
+            signed_identity::SignedIdentityPoly,
         },
-        utils::{index_to_field_bitvector, interleave_bits},
+        utils::index_to_field_bitvector,
     };
-    use rand::{rngs::StdRng, Rng, SeedableRng};
 
     // --- SignedIdentityPoly tests ---
 
@@ -464,60 +314,6 @@ mod tests {
         prefix_suffix_decomposition_test::<16, 2, 2, true, _>(
             SignedIdentityPoly::<Fr>::new(16),
             vec![Prefix::SignedIdentity],
-        );
-    }
-
-    // --- SignedOperandPoly tests ---
-
-    #[test]
-    fn test_signed_operand_poly_evaluation() {
-        for i in 0..256usize {
-            let lo = i as i8;
-            let ro = i as i8;
-            let index = interleave_bits(lo as u8 as u32, ro as u8 as u32);
-            let bit_vector: Vec<Fr> = index_to_field_bitvector(index, 16);
-            assert_eq!(
-                Fr::from_i8(lo),
-                SignedOperandPoly::<Fr, 8>::new(OperandSide::Left).evaluate(&bit_vector),
-                "failed for value = {lo}, bit_vector = {bit_vector:?}"
-            );
-            assert_eq!(
-                Fr::from_i8(ro),
-                SignedOperandPoly::<Fr, 8>::new(OperandSide::Right).evaluate(&bit_vector),
-                "failed for value = {ro}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_signed_operand_poly_random_evaluations() {
-        use crate::utils::uninterleave_bits;
-
-        let mut rng = StdRng::seed_from_u64(404);
-        for _ in 0..1000 {
-            let i = rng.gen();
-            let bit_vector: Vec<Fr> = index_to_field_bitvector(i, 64);
-            let (left, right) = uninterleave_bits(i);
-            assert_eq!(
-                Fr::from_i32(left as i32),
-                SignedOperandPoly::<Fr, 32>::new(OperandSide::Left).evaluate(&bit_vector)
-            );
-            assert_eq!(
-                Fr::from_i32(right as i32),
-                SignedOperandPoly::<Fr, 32>::new(OperandSide::Right).evaluate(&bit_vector)
-            );
-        }
-    }
-
-    #[test]
-    fn signed_operand_poly_prefix_suffix_decomposition() {
-        prefix_suffix_decomposition_test::<16, 2, 3, true, _>(
-            SignedOperandPoly::<Fr, 8>::new(OperandSide::Left),
-            vec![Prefix::LeftOperand, Prefix::LeftOperandMSB],
-        );
-        prefix_suffix_decomposition_test::<16, 2, 3, true, _>(
-            SignedOperandPoly::<Fr, 8>::new(OperandSide::Right),
-            vec![Prefix::RightOperand, Prefix::RightOperandMSB],
         );
     }
 }

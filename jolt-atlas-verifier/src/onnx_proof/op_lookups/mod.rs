@@ -6,7 +6,6 @@
 //! gamma batching for efficiency.
 
 use atlas_algebra::utils::errors::ProofVerifyError;
-use atlas_trace::Op;
 
 use crate::node_view::ComputationNode;
 use atlas_algebra::{
@@ -385,29 +384,6 @@ impl<Helper: LookupRaPolys> RaOneHotEncoding for OpLookupEncoding<Helper> {
 
     fn one_hot_params(&self) -> OneHotParams {
         OneHotParams::new(self.log_t, self.log_k())
-    }
-}
-
-/// Trait for determining if a computation node uses interleaved operand bits.
-///
-/// Some operations store operands with interleaved bits for prefix-suffix decomposition
-/// . This trait provides a method to check if a node uses this representation.
-pub trait InterleavedBitsMarker {
-    /// Returns `true` if the operands are stored with interleaved bits. `Err` for an operator
-    /// with no prefix-suffix operand lookup.
-    fn is_interleaved_operands(&self) -> Result<bool, ProofVerifyError>;
-}
-
-impl InterleavedBitsMarker for ComputationNode {
-    fn is_interleaved_operands(&self) -> Result<bool, ProofVerifyError> {
-        match &self.operator {
-            Op::ReLU(_) => Ok(false),
-            Op::Clamp(_) => Ok(false),
-            other => Err(ProofVerifyError::Malformed(format!(
-                "model: node {} is {other}, which has no operand lookup",
-                self.idx
-            ))),
-        }
     }
 }
 

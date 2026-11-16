@@ -137,7 +137,7 @@ Everything in the crate that took an `atlas_trace::Trace`, with its destination 
 | `ClampBucket::assemble_bits` | `global_clamp::assemble_bits` |
 | `EinsumLayout::fold`, `Folded` | `ops/einsum/dot.rs` (`EinsumFold`, `Folded`), implemented in the three layout modules |
 | `neural_teleport::utils::compute_ra_evals_{nbits_2comp, from_usize_indices}` | `neural_teleport/utils.rs` |
-| `utils::compute_lookup_indices_from_operands` | `utils` |
+| `utils::compute_lookup_indices` | `utils` |
 | `onnx_proof/trace_view.rs` (`TraceView`) | `onnx_proof/trace_view.rs` |
 | `probe.rs`, `probe_assert!`, `probe_assert_eq!` | `onnx_proof/testing/probe.rs` |
 

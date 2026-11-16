@@ -4,99 +4,22 @@ pub use jolt_atlas_verifier::utils::*;
 
 pub mod opening_access;
 
-use atlas_algebra::utils::{interleave_bits, lookup_bits::LookupBits};
+use atlas_algebra::utils::lookup_bits::LookupBits;
 use atlas_trace::Tensor;
 use common::{consts::XLEN, parallel::par_enabled};
 use rayon::prelude::*;
 
-/// Computes lookup table indices from operand tensors.
-///
-/// # Arguments
-/// * `operand_tensors` - Slice of operand tensors to compute indices from
-/// * `is_interleaved_operands` - If true, expects 2 tensors and interleaves their bits
-///
-/// # Returns
-/// A vector of `LookupBits` representing the lookup indices for each element.
-///
-/// # Panics
-/// Panics if `is_interleaved_operands` is true but the number of operand tensors is not 2.
-pub fn compute_lookup_indices_from_operands(
-    operand_tensors: &[&Tensor<i32>],
-    is_interleaved_operands: bool,
-) -> Vec<LookupBits> {
-    if is_interleaved_operands {
-        // Interleaved mode: requires exactly 2 operand tensors
-        assert_eq!(
-            operand_tensors.len(),
-            2,
-            "Interleaved operands mode requires exactly 2 input tensors, but got {}",
-            operand_tensors.len()
-        );
-
-        let left_operand = operand_tensors[0];
-        let right_operand = operand_tensors[1];
-
-        debug_assert!(
-            left_operand.dims().iter().all(|d| d.is_power_of_two()),
-            "left operand dims must all be power-of-two, got {:?}",
-            left_operand.dims()
-        );
-        debug_assert!(
-            right_operand.dims().iter().all(|d| d.is_power_of_two()),
-            "right operand dims must all be power-of-two, got {:?}",
-            right_operand.dims()
-        );
-
-        // Validate that both tensors have the same length
-        assert_eq!(
-            left_operand.len(),
-            right_operand.len(),
-            "Interleaved operands must have the same length: left={}, right={}",
-            left_operand.len(),
-            right_operand.len()
-        );
-
-        // Interleave bits from both operands to form lookup indices
-        left_operand
-            .data()
-            .par_iter()
-            .zip(right_operand.data().par_iter())
-            .with_min_len(par_enabled())
-            .map(|(&left_val, &right_val)| {
-                // Cast to u64 for interleaving
-                let left_bits = left_val as u32;
-                let right_bits = right_val as u32;
-                let interleaved = interleave_bits(left_bits, right_bits);
-                LookupBits::new(interleaved, XLEN * 2)
-            })
-            .collect()
-    } else {
-        // Single operand mode: requires exactly 1 input tensor
-        assert_eq!(
-            operand_tensors.len(),
-            1,
-            "Single operand mode requires exactly 1 input tensor, but got {}",
-            operand_tensors.len()
-        );
-
-        let operand = operand_tensors[0];
-
-        debug_assert!(
-            operand.dims().iter().all(|d| d.is_power_of_two()),
-            "operand dims must all be power-of-two, got {:?}",
-            operand.dims()
-        );
-
-        // Use tensor values directly as lookup indices
-        operand
-            .data()
-            .par_iter()
-            .with_min_len(par_enabled())
-            .map(|&value| {
-                // Cast to u64 for consistent bit representation
-                let index = value as u32 as u64;
-                LookupBits::new(index, XLEN)
-            })
-            .collect()
-    }
+/// The lookup index of each element of `operand`: its value as an `XLEN`-bit address.
+pub fn compute_lookup_indices(operand: &Tensor<i32>) -> Vec<LookupBits> {
+    debug_assert!(
+        operand.dims().iter().all(|d| d.is_power_of_two()),
+        "operand dims must all be power-of-two, got {:?}",
+        operand.dims()
+    );
+    operand
+        .data()
+        .par_iter()
+        .with_min_len(par_enabled())
+        .map(|&value| LookupBits::new(value as u32 as u64, XLEN))
+        .collect()
 }

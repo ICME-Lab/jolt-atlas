@@ -5,7 +5,6 @@
 //! prefix MLEs incrementally with checkpoints updated every two rounds, we avoid summing
 //! over the full 2^(2*XLEN) lookup table.
 
-use self::eq::EqPrefix;
 use crate::prefixes::{
     higher_all_one::{
         ActivationHigherAllOnePrefix, ClampHigherAllOnePrefix, SatClampHigherAllOnePrefix,
@@ -46,8 +45,6 @@ use std::{
 use strum::EnumCount;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-/// Equality comparison prefix implementation.
-pub mod eq;
 /// Checks that all bits with significance >= given bound are one.
 pub mod higher_all_one;
 /// Checks that all bits with significance >= given bound are zero.
@@ -249,7 +246,6 @@ macro_rules! impl_sparse_dense_prefix {
 }
 
 impl_sparse_dense_prefix!(
-    Eq                          : EqPrefix,                         // Equality comparison prefix
     Msb                         : MsbPrefix,                        // MSB (sign bit) prefix
     NotMsb                      : NotMsbPrefix,                     // Not-MSB prefix
     NotWordNoMsb                : NotWordNoMsbPrefix,               // Two's complement negation prefix: `(!lower_word) + 1`

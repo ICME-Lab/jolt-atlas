@@ -7,7 +7,7 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
-use crate::utils::compute_lookup_indices_from_operands;
+use crate::utils::compute_lookup_indices;
 use atlas_trace::{trace::LayerData, Tensor, Trace};
 pub use jolt_atlas_verifier::onnx_proof::op_lookups::*;
 
@@ -169,6 +169,6 @@ impl LookupWitness for DefaultLookupOperands {
 
     fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
         let operand = witness.map(|v| v as i32);
-        compute_lookup_indices_from_operands(&[&operand], false)
+        compute_lookup_indices(&operand)
     }
 }

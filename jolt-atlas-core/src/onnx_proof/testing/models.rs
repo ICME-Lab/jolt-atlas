@@ -27,6 +27,7 @@ pub(crate) fn probe_models() -> Vec<ProbeModel> {
         relation_flows(0x5EED_0004),
         saturating(0x5EED_0005),
         scalars(0x5EED_0006),
+        smooth_relus(0x5EED_0007),
     ]
 }
 
@@ -39,6 +40,7 @@ pub(crate) fn probe_models_alt() -> Vec<ProbeModel> {
         relation_flows(0xA17_0004),
         saturating(0xA17_0005),
         scalars(0xA17_0006),
+        smooth_relus(0xA17_0007),
     ]
 }
 
@@ -269,6 +271,27 @@ fn tables_and_layout(seed: u64) -> ProbeModel {
     ];
     ProbeModel {
         name: "tables_and_layout",
+        model: b.build(),
+        inputs,
+    }
+}
+
+/// The three smooth ReLUs on one 16-element input reaching past both clamp bounds, their
+/// outputs added so each has a consumer.
+fn smooth_relus(seed: u64) -> ProbeModel {
+    use atlas_trace::op::SmoothReluForm;
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![16]);
+    let gelu_erf = b.smooth_relu(x, SmoothReluForm::GeluErf);
+    let gelu_tanh = b.smooth_relu(x, SmoothReluForm::GeluTanh);
+    let silu = b.smooth_relu(x, SmoothReluForm::Silu);
+    let gelus = b.add(gelu_erf, gelu_tanh);
+    let out = b.add(gelus, silu);
+    b.mark_output(out);
+    let inputs = vec![Tensor::random_range(&mut rng, &[16], -(1 << 19)..(1 << 19))];
+    ProbeModel {
+        name: "smooth_relus",
         model: b.build(),
         inputs,
     }

@@ -34,13 +34,15 @@ impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for HZeroMulLWordS
 }
 
 use crate::clamp::{CLAMP_BOUND, SIGN_BIT_I32};
-use common::consts::{ACTIVATION_BOUND, SOFTMAX_CLAMP_BOUND};
+use common::consts::{ACTIVATION_BOUND, SILU_BOUND, SOFTMAX_CLAMP_BOUND};
 pub type ClampHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, CLAMP_BOUND>;
 
 pub type SatClampHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, SIGN_BIT_I32>;
 
 pub type ActivationHZeroMulLWordSuffix<const XLEN: usize> =
     HZeroMulLWordSuffix<XLEN, ACTIVATION_BOUND>;
+
+pub type SiluHZeroMulLWordSuffix<const XLEN: usize> = HZeroMulLWordSuffix<XLEN, SILU_BOUND>;
 
 /// Its own nominal type rather than a `HZeroMulLWordSuffix<XLEN, SOFTMAX_CLAMP_BOUND>` alias
 /// — see [`super::higher_all_zero::SoftmaxClampHigherAllZeroSuffix`] for why.

@@ -27,6 +27,12 @@ pub const EXP_NEG1_Q62: u64 = 1696544475317221319;
 /// 2/√π in Q2.62: `round(2/√π · 2^62)`.
 pub const TWO_OVER_SQRT_PI_Q62: u64 = 5203730428379116615;
 
+/// 1/√2 in Q0.62: `round(2^62 / √2)`.
+pub const INV_SQRT2_Q62: u64 = 3260954456333195553;
+
+/// √(2/π) in Q0.62: `round(√(2/π) · 2^62)`.
+pub const SQRT_2_OVER_PI_Q62: u64 = 3679593073373651226;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,6 +54,18 @@ mod tests {
         check(PI_Q64, std::f64::consts::PI, 64, 16384.0);
         check(HALF_PI_Q64, std::f64::consts::FRAC_PI_2, 64, 8192.0);
         check(EXP_NEG1_Q62.into(), (-1.0f64).exp(), 62, 1024.0);
+        check(
+            INV_SQRT2_Q62.into(),
+            std::f64::consts::FRAC_1_SQRT_2,
+            62,
+            1024.0,
+        );
+        check(
+            SQRT_2_OVER_PI_Q62.into(),
+            (2.0 / std::f64::consts::PI).sqrt(),
+            62,
+            1024.0,
+        );
         check(
             TWO_OVER_SQRT_PI_Q62.into(),
             std::f64::consts::FRAC_2_SQRT_PI,

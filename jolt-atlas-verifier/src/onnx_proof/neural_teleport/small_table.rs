@@ -40,6 +40,11 @@ pub trait SmallTable: Send + Sync + 'static {
     fn materialize() -> Result<Vec<i32>, ProofVerifyError>;
     /// The opening of the looked-up addresses at the node's output point.
     fn address(node: &ComputationNode) -> OpeningId;
+    /// The value the table read is claimed to equal at the node's output point: the node's
+    /// reduced output, unless the table holds only a part of it.
+    fn value<G: Ring>(node: &ComputationNode) -> RelationExpr<G> {
+        opening(RelationOpening::ReducedNodeOutput(node.idx))
+    }
 }
 
 impl SmallTable for CosTable {
@@ -69,14 +74,15 @@ impl SmallTable for SinTable {
 /// A small-table lookup:
 ///
 /// ```text
-/// input claim   out(r_out) + γ·address(r_out)          (the reduced output, the read addresses)
+/// input claim   value(r_out) + γ·address(r_out)        (the read values, the read addresses)
 /// output claim  ra(ρ ‖ r_out) · (table(ρ) + γ·id(ρ))  (ρ the low-to-high bound address point)
 /// ```
 ///
 /// with `id` the signed identity for two's-complement addresses.
 ///
-/// **S ⊆ R.** The op's output is the table read at the addresses, so an honest one-hot `ra`
-/// reads the output and, through the identity, the addresses. The setup draws `γ` and takes the
+/// **S ⊆ R.** The values ([`SmallTable::value`], the op's output by default) are the table
+/// read at the addresses, so an honest one-hot `ra` reads them and, through the identity, the
+/// addresses. The setup draws `γ` and takes the
 /// reduced output point as its incoming point.
 pub struct SmallTableRelation<S> {
     node: ComputationNode,
@@ -118,7 +124,7 @@ impl<S: SmallTable> SymbolicSumcheck for SmallTableRelation<S> {
     }
 
     fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
-        opening::<G, _, _, _>(RelationOpening::ReducedNodeOutput(self.node.idx))
+        S::value::<G>(&self.node)
             + challenge::<G, _, _, _>(RelationChallenge::Gamma)
                 * opening(RelationOpening::Id(S::address(&self.node)))
     }

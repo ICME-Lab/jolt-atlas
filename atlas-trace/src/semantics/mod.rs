@@ -23,7 +23,7 @@
 //! - [`trig`] — fixed-point sin/cos (quadrant reduction + Taylor);
 //! - [`softmax`] — the log-partition softmax tables and the row shift;
 //! - [`tables`] — lookup-table generation for every nonlinear op;
-//! - [`coeffs`] — the four committed constants with provenance.
+//! - [`coeffs`] — the six committed constants with provenance.
 
 pub mod coeffs;
 pub mod exp;

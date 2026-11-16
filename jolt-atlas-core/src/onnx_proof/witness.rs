@@ -34,7 +34,7 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::config::{OneHotConfig, OneHotParams};
 use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, SOFTMAX_CLAMP_BOUND, XLEN},
+    consts::{SOFTMAX_CLAMP_BOUND, XLEN},
     parallel::par_enabled,
     CommittedPoly,
 };
@@ -67,17 +67,17 @@ pub(crate) fn build_one_hot_rad_witness<F: JoltField>(
 /// indices, then constructs the `d`-th one-hot address chunk.
 fn build_activation_small_rad_witness<F: JoltField>(
     input: &Tensor<i32>,
+    vars: usize,
     d: usize,
 ) -> MultilinearPolynomial<F> {
-    let bound = 1i32 << ACTIVATION_BOUND;
+    let bound = 1i32 << (vars - 1);
     let clamped = input.map(|x| x.clamp(-bound, bound - 1));
     let lookup_indices: Vec<usize> = clamped
         .par_iter()
         .with_min_len(par_enabled())
-        .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_VARS))
+        .map(|&x| n_bits_to_usize(x, vars))
         .collect();
-    let one_hot_params =
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_VARS);
+    let one_hot_params = OneHotParams::from_config_and_log_K(&OneHotConfig::default(), vars);
     let h_indices =
         atlas_sumcheck::shout::compute_instruction_h_indices(&lookup_indices, &one_hot_params);
     MultilinearPolynomial::OneHot(OneHotPolynomial::from_indices(
@@ -201,7 +201,12 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let computation_node = &model.view(*node_idx);
                 let layer_data = TraceView::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
-                build_activation_small_rad_witness(input, *d)
+                let vars =
+                    crate::onnx_proof::ops::activation_clamped::SmallTableRaEncoding::for_node(
+                        computation_node,
+                    )
+                    .log_k;
+                build_activation_small_rad_witness(input, vars, *d)
             }
             CommittedPoly::GlobalRemainderDigit(..)
             | CommittedPoly::GlobalClampOutDigit(..)

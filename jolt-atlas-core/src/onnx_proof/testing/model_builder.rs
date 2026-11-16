@@ -334,6 +334,12 @@ impl ModelBuilder {
         self.push(Op::IsNan(op::IsNan), vec![input], d)
     }
 
+    /// A smooth ReLU (GELU in its erf or tanh form, or SiLU).
+    pub fn smooth_relu(&mut self, input: Wire, form: op::SmoothReluForm) -> Wire {
+        let d = self.dims(input);
+        self.push(Op::SmoothRelu(op::SmoothRelu { form }), vec![input], d)
+    }
+
     /// Tanh activation.
     pub fn tanh(&mut self, input: Wire) -> Wire {
         let d = self.dims(input);

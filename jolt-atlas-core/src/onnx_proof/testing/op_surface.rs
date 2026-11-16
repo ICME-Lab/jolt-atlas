@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 
 use atlas_lookup_tables::clamp::CLAMP_BOUND;
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
-use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
+use atlas_trace::{op::SmoothReluForm, trace::ModelExecutionIO, Model, Tensor};
 use common::consts::{ACTIVATION_BOUND, MODEL_SCALE, TRIG_PERIOD_MODULUS};
 use rand::{rngs::StdRng, SeedableRng};
 use strum::IntoEnumIterator;
@@ -308,6 +308,18 @@ fn activation_edges() -> Tensor<i32> {
         ],
         &[16],
     )
+}
+
+/// Both clamp bounds of the smooth ReLUs (`±8` for GELU, `±16` for SiLU) and the far tails,
+/// where the output is the input or zero.
+fn smooth_relu_edges() -> Tensor<i32> {
+    let mut data = vec![0, 1, -1, 16384, -16384, i32::MAX, i32::MIN, 71_000, -71_000];
+    for bound in [1i32 << ACTIVATION_BOUND, 1 << (ACTIVATION_BOUND + 1)] {
+        data.extend([-bound - 1, -bound, -bound + 1, bound - 1, bound, bound + 1]);
+    }
+    data.extend([1 << 24, -(1 << 24), 212_000, -212_000, 7, -7, 12345, -12345]);
+    data.resize(32, 0);
+    tensor(&data, &[32])
 }
 
 fn trig_edges() -> Tensor<i32> {
@@ -605,6 +617,37 @@ op_surface! {
     rsqrt_non_pow2_1000: Rsqrt => |rng| rsqrt_model(rng, T_ODD, 8, 1..MAX_INPUT);
 
     // Table activations
+    // The smooth ReLUs (GELU, SiLU): ReLU plus a correction table over a clamped domain.
+    gelu_erf_random_1k: SmoothRelu => |rng| unary_range(rng, &[T], -(1 << 19)..(1 << 19), |b, i| b.smooth_relu(i, SmoothReluForm::GeluErf));
+    gelu_erf_domain_edges: SmoothRelu => |_| unary(&[32], S, smooth_relu_edges(), |b, i| b.smooth_relu(i, SmoothReluForm::GeluErf));
+    gelu_erf_shared_operand_t16: SmoothRelu => |rng| shared_operand(&[16], Tensor::random_range(rng, &[16], MIN_INPUT..MAX_INPUT), |b, i| b.smooth_relu(i, SmoothReluForm::GeluErf));
+    gelu_erf_non_pow2_1000: SmoothRelu => |rng| {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![T_ODD]);
+        let o = b.smooth_relu(i, SmoothReluForm::GeluErf);
+        b.mark_output(o);
+        (b.build_padded(), vec![Tensor::random_range(rng, &[T_ODD], -(1 << 19)..(1 << 19))])
+    };
+    gelu_tanh_random_1k: SmoothRelu => |rng| unary_range(rng, &[T], -(1 << 19)..(1 << 19), |b, i| b.smooth_relu(i, SmoothReluForm::GeluTanh));
+    gelu_tanh_domain_edges: SmoothRelu => |_| unary(&[32], S, smooth_relu_edges(), |b, i| b.smooth_relu(i, SmoothReluForm::GeluTanh));
+    gelu_tanh_shared_operand_t16: SmoothRelu => |rng| shared_operand(&[16], Tensor::random_range(rng, &[16], MIN_INPUT..MAX_INPUT), |b, i| b.smooth_relu(i, SmoothReluForm::GeluTanh));
+    gelu_tanh_non_pow2_1000: SmoothRelu => |rng| {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![T_ODD]);
+        let o = b.smooth_relu(i, SmoothReluForm::GeluTanh);
+        b.mark_output(o);
+        (b.build_padded(), vec![Tensor::random_range(rng, &[T_ODD], -(1 << 19)..(1 << 19))])
+    };
+    silu_random_1k: SmoothRelu => |rng| unary_range(rng, &[T], -(1 << 19)..(1 << 19), |b, i| b.smooth_relu(i, SmoothReluForm::Silu));
+    silu_domain_edges: SmoothRelu => |_| unary(&[32], S, smooth_relu_edges(), |b, i| b.smooth_relu(i, SmoothReluForm::Silu));
+    silu_shared_operand_t16: SmoothRelu => |rng| shared_operand(&[16], Tensor::random_range(rng, &[16], MIN_INPUT..MAX_INPUT), |b, i| b.smooth_relu(i, SmoothReluForm::Silu));
+    silu_non_pow2_1000: SmoothRelu => |rng| {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![T_ODD]);
+        let o = b.smooth_relu(i, SmoothReluForm::Silu);
+        b.mark_output(o);
+        (b.build_padded(), vec![Tensor::random_range(rng, &[T_ODD], -(1 << 19)..(1 << 19))])
+    };
     tanh_random_1k: Tanh => |rng| unary_range(rng, &[T], MIN_INPUT..MAX_INPUT, |b, i| b.tanh(i));
     tanh_domain_edges: Tanh => |_| unary(&[16], S, activation_edges(), |b, i| b.tanh(i));
     tanh_shared_operand_t16: Tanh => |rng| shared_operand(&[16], Tensor::random_range(rng, &[16], MIN_INPUT..MAX_INPUT), |b, i| b.tanh(i));

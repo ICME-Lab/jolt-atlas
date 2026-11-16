@@ -35,7 +35,7 @@ impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for HOneMulLWordSu
 }
 
 use crate::clamp::{CLAMP_BOUND, SIGN_BIT_I32};
-use common::consts::ACTIVATION_BOUND;
+use common::consts::{ACTIVATION_BOUND, SILU_BOUND};
 
 pub type ClampHOneMulLWordSuffix<const XLEN: usize> = HOneMulLWordSuffix<XLEN, CLAMP_BOUND>;
 
@@ -43,3 +43,5 @@ pub type SatClampHOneMulLWordSuffix<const XLEN: usize> = HOneMulLWordSuffix<XLEN
 
 pub type ActivationHOneMulLWordSuffix<const XLEN: usize> =
     HOneMulLWordSuffix<XLEN, ACTIVATION_BOUND>;
+
+pub type SiluHOneMulLWordSuffix<const XLEN: usize> = HOneMulLWordSuffix<XLEN, SILU_BOUND>;

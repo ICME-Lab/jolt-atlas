@@ -84,6 +84,8 @@ pub mod sigmoid;
 pub mod sin;
 /// Slice tensor along one axis.
 pub mod slice;
+/// The smooth ReLUs (GELU, SiLU): ReLU plus a table-lookup correction.
+pub mod smooth_relu;
 /// Softmax operation along the last axis (axis = -1).
 pub mod softmax_last_axis;
 /// Element-wise square (x²) operation.
@@ -150,6 +152,7 @@ macro_rules! dispatch_operator {
             atlas_trace::Op::Mul($inner) => $body,
             atlas_trace::Op::Neg($inner) => $body,
             atlas_trace::Op::ReLU($inner) => $body,
+            atlas_trace::Op::SmoothRelu($inner) => $body,
             atlas_trace::Op::Reshape($inner) => $body,
             atlas_trace::Op::Rsqrt($inner) => $body,
             atlas_trace::Op::ScalarConstDiv($inner) => $body,

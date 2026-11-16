@@ -15,7 +15,7 @@
 use crate::id::{Scale, SemVersion};
 
 use super::{
-    coeffs::TWO_OVER_SQRT_PI_Q62,
+    coeffs::{INV_SQRT2_Q62, SQRT_2_OVER_PI_Q62, TWO_OVER_SQRT_PI_Q62},
     exp::exp_neg_q62,
     fixed::{trig_downscale_bits, trig_period_modulus},
     trig::sin_cos_q62,
@@ -34,6 +34,23 @@ pub enum TableKind {
     Sin,
     /// `cos` over the period-reduced, downshifted domain.
     Cos,
+    /// `GELU(x) − ReLU(x)` for the erf form `x·(1 + erf(x/√2))/2`, over the symmetric clamped
+    /// domain: zero at both ends.
+    GeluErf,
+    /// `GELU(x) − ReLU(x)` for the tanh form `x·(1 + tanh(√(2/π)·(x + 0.044715·x³)))/2`, over
+    /// the symmetric clamped domain: zero at both ends.
+    GeluTanh,
+    /// `SiLU(x) − ReLU(x)` for `SiLU(x) = x·σ(x)`, over a symmetric clamped domain twice as
+    /// wide: zero at both ends.
+    Silu,
+}
+
+impl TableKind {
+    /// Whether the table holds a smooth activation's correction to `ReLU`
+    /// ([`crate::op::SmoothRelu`]), not the activation itself.
+    pub fn is_relu_correction(self) -> bool {
+        matches!(self, Self::GeluErf | Self::GeluTanh | Self::Silu)
+    }
 }
 
 /// How a quantized input maps to a table index. Part of the kernel spec.
@@ -96,9 +113,12 @@ pub fn table(kind: TableKind, scale: Scale, version: SemVersion) -> ActivationTa
         SemVersion::V1 | SemVersion::V2 => {}
     }
     match kind {
-        TableKind::Tanh => sym_clamp_table(scale, tanh_entry),
-        TableKind::Sigmoid => sym_clamp_table(scale, sigmoid_entry),
-        TableKind::Erf => sym_clamp_table(scale, erf_entry),
+        TableKind::Tanh => sym_clamp_table(scale, 3, tanh_entry),
+        TableKind::Sigmoid => sym_clamp_table(scale, 3, sigmoid_entry),
+        TableKind::Erf => sym_clamp_table(scale, 3, erf_entry),
+        TableKind::GeluErf => sym_clamp_table(scale, 3, relu_correction(gelu_erf_gate_q62)),
+        TableKind::GeluTanh => sym_clamp_table(scale, 3, relu_correction(gelu_tanh_gate_q62)),
+        TableKind::Silu => sym_clamp_table(scale, 4, relu_correction(silu_gate_q62)),
         TableKind::Sin => trig_table(scale, true),
         TableKind::Cos => trig_table(scale, false),
     }
@@ -113,10 +133,10 @@ fn round_q62(v_q62: u128, s: i64) -> i32 {
     (((v_q62 * s as u128) + (1 << 61)) >> 62) as i32
 }
 
-/// Build a symmetric-clamp table (`tanh`/`sigmoid`/`erf` family): domain
-/// `[-2^(s+3), 2^(s+3))`, one entry per quantized input.
-fn sym_clamp_table(scale: Scale, entry: impl Fn(i32, Scale) -> i32) -> ActivationTable {
-    let bound_log = scale.log2() + 3;
+/// Build a symmetric-clamp table: domain `[-2^(s+extra), 2^(s+extra))`, one entry per
+/// quantized input (`extra = 3` for the `tanh`/`sigmoid`/`erf` family).
+fn sym_clamp_table(scale: Scale, extra: u32, entry: impl Fn(i32, Scale) -> i32) -> ActivationTable {
+    let bound_log = scale.log2() + extra;
     let bound = 1i32 << bound_log;
     let entries = (-bound..bound).map(|x| entry(x, scale)).collect();
     ActivationTable {
@@ -161,6 +181,61 @@ fn erf_entry(x: i32, scale: Scale) -> i32 {
         round_q62(erf_q62(u_q32), scale.denom_i64())
     };
     if x < 0 { -magnitude } else { magnitude }
+}
+
+/// The entry of a smooth activation's correction to `ReLU`: for `f(x) = x·g(x)` with gate
+/// `g ∈ [0, 1]` given in Q0.62, `round(x·g(x/S)) − max(x, 0)`, ties upward. `f(x) − f(−x) = x`
+/// for the three gates here, so the correction is even and vanishes away from zero.
+fn relu_correction(gate_q62: impl Fn(i32, Scale) -> u128) -> impl Fn(i32, Scale) -> i32 {
+    move |x, scale| {
+        let rounded = ((x as i128 * gate_q62(x, scale) as i128) + (1 << 61)) >> 62;
+        rounded as i32 - x.max(0)
+    }
+}
+
+/// The erf-form GELU gate `(1 + erf(u/√2))/2` at `u = x/S`, in Q0.62; `erf` saturates to `±1`
+/// from `|u|/√2 ≥ 4` as in [`erf_entry`].
+fn gelu_erf_gate_q62(x: i32, scale: Scale) -> u128 {
+    let abs_u_q32 = (x.unsigned_abs() as u128) << (32 - scale.log2());
+    let arg_q32 = (abs_u_q32 * INV_SQRT2_Q62 as u128) >> 62;
+    let erf = if arg_q32 >= 4 << 32 {
+        ONE_Q62
+    } else {
+        erf_q62(arg_q32 as u64)
+    };
+    if x >= 0 {
+        (ONE_Q62 + erf) / 2
+    } else {
+        (ONE_Q62 - erf) / 2
+    }
+}
+
+/// The tanh-form GELU gate `(1 + tanh(√(2/π)·(u + 0.044715·u³)))/2` at `u = x/S`, in Q0.62,
+/// with `0.044715 = 8943/200000` and `tanh` from `e^(−2a)` as in [`tanh_entry`].
+fn gelu_tanh_gate_q62(x: i32, scale: Scale) -> u128 {
+    let u_q32 = (x.unsigned_abs() as u128) << (32 - scale.log2());
+    let u3_q32 = (u_q32 * u_q32 * u_q32) >> 64;
+    let poly_q32 = u_q32 + u3_q32 * 8943 / 200_000;
+    let a_q32 = (poly_q32 * SQRT_2_OVER_PI_Q62 as u128) >> 62;
+    // `exp_neg_q62` is zero from 45 on; an argument past its `u64` range is far beyond that.
+    let e = u64::try_from(2 * a_q32).map_or(0, exp_neg_q62) as u128;
+    let tanh = ((ONE_Q62 - e) << 62) / (ONE_Q62 + e);
+    if x >= 0 {
+        (ONE_Q62 + tanh) / 2
+    } else {
+        (ONE_Q62 - tanh) / 2
+    }
+}
+
+/// The SiLU gate `σ(u) = 1/(1 + e^(−u))` at `u = x/S`, in Q0.62, as in [`sigmoid_entry`].
+fn silu_gate_q62(x: i32, scale: Scale) -> u128 {
+    let abs_u_q32 = (x.unsigned_abs() as u64) << (32 - scale.log2());
+    let e = exp_neg_q62(abs_u_q32) as u128;
+    if x >= 0 {
+        (ONE_Q62 << 62) / (ONE_Q62 + e)
+    } else {
+        (e << 62) / (ONE_Q62 + e)
+    }
 }
 
 /// `erf(u)` in Q0.62 for `u ∈ [0, 4)` given in Q32.32, by the positive-term
@@ -353,6 +428,55 @@ mod tests {
                     "{kind:?}[{v}]: got {got}, f64 oracle {expected}"
                 );
             }
+        }
+    }
+
+    /// The three corrections to `ReLU`: zero at both ends of their domain, and `ReLU` plus the
+    /// correction within one unit of the rounded real activation everywhere.
+    #[test]
+    fn relu_corrections_vanish_at_the_ends_and_match_f64() {
+        fn erf(x: f64) -> f64 {
+            // Abramowitz & Stegun 7.1.26 is too coarse; use the series the kernel uses.
+            let (mut sum, mut term, mut n) = (x, x, 0.0f64);
+            while term.abs() > 1e-17 * sum.abs() {
+                n += 1.0;
+                term *= 2.0 * x * x / (2.0 * n + 1.0);
+                sum += term;
+            }
+            2.0 / std::f64::consts::PI.sqrt() * (-x * x).exp() * sum
+        }
+        let gelu_erf = |x: f64| 0.5 * x * (1.0 + erf(x / std::f64::consts::SQRT_2));
+        let gelu_tanh = |x: f64| {
+            0.5 * x
+                * (1.0 + ((2.0 / std::f64::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
+        };
+        let silu = |x: f64| x / (1.0 + (-x).exp());
+        type Activation<'a> = &'a dyn Fn(f64) -> f64;
+        let cases: [(TableKind, Activation, u32); 3] = [
+            (TableKind::GeluErf, &gelu_erf, 3),
+            (TableKind::GeluTanh, &gelu_tanh, 3),
+            (TableKind::Silu, &silu, 4),
+        ];
+        let s = 16384.0f64;
+        for (kind, f, extra) in cases {
+            let t = table(kind, s14(), SemVersion::V2);
+            let bound = 1i32 << (14 + extra);
+            assert_eq!(
+                t.index,
+                IndexRule::SymClamp {
+                    bound_log: 14 + extra
+                }
+            );
+            assert_eq!(t.entries.len(), 2 * bound as usize);
+            assert_eq!(t.lookup(-bound), 0, "{kind:?} at the low end");
+            assert_eq!(t.lookup(bound - 1), 0, "{kind:?} at the high end");
+            let mut worst = 0f64;
+            for x in -bound..bound {
+                let got = (x.max(0) + t.lookup(x)) as f64;
+                worst = worst.max((got - s * f(x as f64 / s)).abs());
+            }
+            println!("{kind:?}: worst error {worst:.3} units");
+            assert!(worst <= 1.0, "{kind:?}: off by {worst}");
         }
     }
 }

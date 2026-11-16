@@ -95,15 +95,14 @@ use crate::onnx_proof::{
     neural_teleport::{
         cos::CosTable,
         sin::SinTable,
-        small_table::{SmallTableRelation, TrigTableProver},
+        small_table::{SmallTable, SmallTableRelation, TrigTableProver},
         trig_downscale::TrigDownscaleOperands,
     },
     op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProve, OpLookupProvider},
     ops::softmax_last_axis::SoftmaxRelation,
     ops::{
         activation_clamped::{
-            small_table_params, ActivationClampOperands, SmallActivationTable, SmallTableProver,
-            SmallTableRaEncoding,
+            small_table_params, ActivationClampOperands, SmallTableProver, SmallTableRaEncoding,
         },
         clamp::SymmetricClampOperands,
         cos::CosRaEncoding,
@@ -113,6 +112,7 @@ use crate::onnx_proof::{
         mean_of_squares::MeanOfSquaresReductionProver,
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
+        smooth_relu::{GeluErfTable, GeluTanhTable, SiluTable, SmoothReluOperands},
         softmax_last_axis::SoftmaxAddresses,
         tanh::TanhTableMarker,
     },
@@ -124,7 +124,7 @@ use crate::onnx_proof::{
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider, Target};
 use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
-    clamp::{ActivationClampTable, ClampTable},
+    clamp::{ActivationClampTable, ClampTable, SiluClampTable},
     relu::ReluTable,
     right_shift::RightShiftTable,
 };
@@ -395,9 +395,14 @@ fn prepare<F: JoltField, T: Transcript>(
             node.idx,
             prover,
         ),
-        OpRelation::LookupOneHot(kind @ OpLookup::ActivationClamp, node) => onehot(
+        // A smooth ReLU's clamp and ReLU reads share one committed address, left under the
+        // clamp's key.
+        OpRelation::LookupOneHot(
+            OpLookup::ActivationClamp | OpLookup::SiluClamp | OpLookup::SmoothRelu,
+            node,
+        ) => onehot(
             &OpLookupEncoding::<ActivationClampOperands>::new(&node),
-            Addresses::Lookup(kind),
+            Addresses::Lookup(OpLookup::ActivationClamp),
             node.idx,
             prover,
         ),
@@ -408,7 +413,7 @@ fn prepare<F: JoltField, T: Transcript>(
             prover,
         ),
         OpRelation::SmallActivationOneHot(node) => onehot(
-            &SmallTableRaEncoding { node_idx: node.idx },
+            &SmallTableRaEncoding::for_node(&node),
             Addresses::SmallActivation,
             node.idx,
             prover,
@@ -587,7 +592,7 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         prover.leave_addresses(Addresses::Lookup(kind), node_idx, indices);
         vec![Box::new(witness)]
     }
-    fn small_activation<F: JoltField, T: Transcript, Table: SmallActivationTable>(
+    fn small_activation<F: JoltField, T: Transcript, Table: SmallTable>(
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
     ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
@@ -687,6 +692,24 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         OpRelation::Lookup(kind @ OpLookup::TrigDownscale, node) => {
             lookup::<F, T, TrigDownscaleOperands, RightShiftTable<XLEN>>(kind, node, prover)
         }
+        OpRelation::Lookup(OpLookup::SiluClamp, node) => {
+            lookup::<F, T, ActivationClampOperands, SiluClampTable<XLEN>>(
+                OpLookup::ActivationClamp,
+                node,
+                prover,
+            )
+        }
+        OpRelation::Lookup(OpLookup::SmoothRelu, node) => {
+            // The same addresses as the node's clamp read, which leaves them for the one-hot
+            // checks.
+            let (witness, _) = OpLookupProvider::<SmoothReluOperands>::new(node)
+                .read_raf_prove::<F, T, ReluTable<XLEN>, XLEN>(
+                    &prover.trace,
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
+            vec![Box::new(witness)]
+        }
         OpRelation::MeanOfSquares(relation) => {
             let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
             vec![Box::new(MeanOfSquaresReductionProver::initialize(
@@ -704,6 +727,15 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         }
         OpRelation::SmallActivation(OpActivation::Tanh, node) => {
             small_activation::<F, T, TanhTableMarker>(&node, prover)
+        }
+        OpRelation::SmallActivation(OpActivation::GeluErf, node) => {
+            small_activation::<F, T, GeluErfTable>(&node, prover)
+        }
+        OpRelation::SmallActivation(OpActivation::GeluTanh, node) => {
+            small_activation::<F, T, GeluTanhTable>(&node, prover)
+        }
+        OpRelation::SmallActivation(OpActivation::Silu, node) => {
+            small_activation::<F, T, SiluTable>(&node, prover)
         }
         OpRelation::Softmax(relation) => {
             let Prover {
@@ -798,6 +830,15 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
             accessor
                 .into_provider(&mut prover.transcript, r0)
                 .append_advice(VirtualPoly::TrigDownscaled, eval);
+        }
+        OpOpen::SmoothReluRelu(node) => {
+            let relu = TraceView::operand_tensors(&prover.trace, node)[0].map(|x| x.max(0));
+            let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
+            let r0 = accessor.get_reduced_opening().expect(expect).0;
+            let eval = relu.evaluate_mle(&r0.r);
+            accessor
+                .into_provider(&mut prover.transcript, r0)
+                .append_advice(VirtualPoly::SmoothReluRelu, eval);
         }
         OpOpen::Softmax(open) => softmax_last_axis::prove_open(
             open,

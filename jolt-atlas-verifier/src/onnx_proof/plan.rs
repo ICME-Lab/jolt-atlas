@@ -51,6 +51,7 @@ use crate::onnx_proof::{
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
         slice::SubcubeSelectRelation,
+        smooth_relu::{GeluErfTable, GeluTanhTable, SiluTable, SmoothReluOperands},
         softmax_last_axis::{SoftmaxOpen, SoftmaxRelation, SoftmaxTie},
         square::SquareRelation,
         sum::axis::SumAxisRelation,
@@ -63,7 +64,7 @@ use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::{field::JoltField, poly::point::OpeningPoint, utils::errors::ProofVerifyError};
 use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
-    clamp::{ActivationClampTable, ClampTable},
+    clamp::{ActivationClampTable, ClampTable, SiluClampTable},
     relu::ReluTable,
     right_shift::RightShiftTable,
 };
@@ -140,6 +141,12 @@ pub enum OpActivation {
     Sigmoid,
     /// `Tanh`.
     Tanh,
+    /// The erf-form GELU's correction to `ReLU`.
+    GeluErf,
+    /// The tanh-form GELU's correction to `ReLU`.
+    GeluTanh,
+    /// SiLU's correction to `ReLU`.
+    Silu,
 }
 
 /// The trigonometric table a teleported trig op reads.
@@ -228,6 +235,10 @@ pub enum OpLookup {
     ActivationClamp,
     /// A trig op's downscale (right shift) of its remainder.
     TrigDownscale,
+    /// SiLU's input clamp, twice as wide as the clamped activations'.
+    SiluClamp,
+    /// A smooth ReLU's `ReLU` read, through its clamp lookup's committed address.
+    SmoothRelu,
 }
 
 impl OpRelation {
@@ -302,6 +313,14 @@ impl OpRelation {
                         transcript,
                     )?,
             )),
+            Self::Lookup(OpLookup::SiluClamp, node) => Ok(boxed(
+                OpLookupProvider::<ActivationClampOperands>::new(node)
+                    .read_raf_verify::<F, T, SiluClampTable<XLEN>, XLEN>(accumulator, transcript)?,
+            )),
+            Self::Lookup(OpLookup::SmoothRelu, node) => Ok(boxed(
+                OpLookupProvider::<SmoothReluOperands>::new(node)
+                    .read_raf_verify::<F, T, ReluTable<XLEN>, XLEN>(accumulator, transcript)?,
+            )),
             Self::LookupOneHot(OpLookup::Relu, node) => Ok(shout::ra_onehot_verifiers(
                 &OpLookupEncoding::<DefaultLookupOperands>::new(&node),
                 accumulator,
@@ -314,7 +333,12 @@ impl OpRelation {
                 transcript,
             )?
             .into()),
-            Self::LookupOneHot(OpLookup::ActivationClamp, node) => Ok(shout::ra_onehot_verifiers(
+            // One committed address serves a smooth ReLU's clamp and ReLU reads; its checks
+            // are the clamp's.
+            Self::LookupOneHot(
+                OpLookup::ActivationClamp | OpLookup::SiluClamp | OpLookup::SmoothRelu,
+                node,
+            ) => Ok(shout::ra_onehot_verifiers(
                 &OpLookupEncoding::<ActivationClampOperands>::new(&node),
                 accumulator,
                 transcript,
@@ -346,8 +370,21 @@ impl OpRelation {
                     transcript,
                 )?))
             }
+            Self::SmallActivation(OpActivation::GeluErf, node) => Ok(boxed(
+                small_table_verifier::<F, GeluErfTable>(&node, accumulator, transcript)?,
+            )),
+            Self::SmallActivation(OpActivation::GeluTanh, node) => Ok(boxed(
+                small_table_verifier::<F, GeluTanhTable>(&node, accumulator, transcript)?,
+            )),
+            Self::SmallActivation(OpActivation::Silu, node) => {
+                Ok(boxed(small_table_verifier::<F, SiluTable>(
+                    &node,
+                    accumulator,
+                    transcript,
+                )?))
+            }
             Self::SmallActivationOneHot(node) => Ok(shout::ra_onehot_verifiers(
-                &SmallTableRaEncoding { node_idx: node.idx },
+                &SmallTableRaEncoding::for_node(&node),
                 accumulator,
                 transcript,
             )?
@@ -516,6 +553,8 @@ pub enum OpOpen {
     TeleportQuotient(ComputationNode),
     /// A trig op's downscaled remainder at the reduced output point.
     TrigDownscaled(ComputationNode),
+    /// A smooth ReLU's `ReLU(x)` at the reduced output point.
+    SmoothReluRelu(ComputationNode),
     /// A softmax opening, as `ops::softmax_last_axis` lists them.
     Softmax(SoftmaxOpen),
     /// A packed clamp bucket's exact flag, at the empty point.
@@ -557,6 +596,9 @@ impl OpOpen {
             ),
             Self::TrigDownscaled(node) => {
                 at_reduced_output(node, accumulator, transcript, VirtualPoly::TrigDownscaled)
+            }
+            Self::SmoothReluRelu(node) => {
+                at_reduced_output(node, accumulator, transcript, VirtualPoly::SmoothReluRelu)
             }
             Self::Softmax(open) => open.verify(accumulator, transcript),
             Self::ClampExactFlag(bucket_idx) => accumulator.append_virtual(

@@ -11,7 +11,56 @@ use crate::{
     trace::{NodeAux, TeleportAdvice},
 };
 
-use super::{Cos, Erf, Eval, EvalCtx, OpSpec, PadBehavior, Sigmoid, Sin, Tanh, same_dims};
+use super::{
+    Cos, Erf, Eval, EvalCtx, OpSpec, PadBehavior, Sigmoid, Sin, SmoothRelu, Tanh, same_dims,
+};
+use serde::{Deserialize, Serialize};
+
+/// Which smooth activation a [`SmoothRelu`] computes.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub enum SmoothReluForm {
+    /// GELU, `x·(1 + erf(x/√2))/2`.
+    GeluErf,
+    /// GELU in its tanh form, `x·(1 + tanh(√(2/π)·(x + 0.044715·x³)))/2`.
+    GeluTanh,
+    /// SiLU, `x·σ(x)`.
+    Silu,
+}
+
+impl SmoothReluForm {
+    /// The table holding the form's correction to `ReLU`.
+    pub fn table(self) -> TableKind {
+        match self {
+            Self::GeluErf => TableKind::GeluErf,
+            Self::GeluTanh => TableKind::GeluTanh,
+            Self::Silu => TableKind::Silu,
+        }
+    }
+}
+
+impl fmt::Display for SmoothRelu {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SmoothRelu({:?})", self.form)
+    }
+}
+
+impl OpSpec for SmoothRelu {
+    fn eval(&self, inputs: &[&Tensor<i32>], ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
+        // `max(x, 0)` plus a correction in `(−S, 0]`: no overflow, since the correction is zero
+        // wherever `x` is outside the table's domain.
+        let table = ctx.tables.get(self.form.table(), ctx.scale, ctx.version);
+        Ok(Eval::plain(inputs[0].map(|x| x.max(0) + table.lookup(x))))
+    }
+
+    fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
+        same_dims(inputs, Some(1))
+    }
+
+    fn padding(&self) -> PadBehavior {
+        // f(0) = 0 for every form.
+        PadBehavior::ZeroPreserving
+    }
+}
 
 macro_rules! impl_activation {
     ($name:ident, $kind:expr, $zero_preserving:expr) => {
@@ -122,5 +171,56 @@ mod tests {
             }
         }
         assert!(Tanh.eval(&[&x], &ctx).unwrap().aux.is_none());
+    }
+
+    /// `SmoothRelu` is `ReLU` plus its form's table, and the identity or zero far from zero.
+    #[test]
+    fn smooth_relu_is_relu_plus_its_correction() {
+        let cache = TableCache::default();
+        let ctx = EvalCtx {
+            scale: Scale::new(14).unwrap(),
+            version: SemVersion::V2,
+            tables: &cache,
+        };
+        let values = vec![
+            0,
+            1,
+            -1,
+            16384,
+            -16384,
+            1 << 20,
+            -(1 << 20),
+            i32::MAX,
+            i32::MIN,
+        ];
+        let x = Tensor::new(values.clone(), &[values.len()]).unwrap();
+        for form in [
+            SmoothReluForm::GeluErf,
+            SmoothReluForm::GeluTanh,
+            SmoothReluForm::Silu,
+        ] {
+            let out = SmoothRelu { form }.eval(&[&x], &ctx).unwrap().output;
+            let table = cache.get(form.table(), ctx.scale, ctx.version);
+            for (&x, &y) in values.iter().zip(out.data()) {
+                assert_eq!(y, x.max(0) + table.lookup(x), "{form:?} at {x}");
+            }
+            assert_eq!(
+                &out.data()[5..],
+                &[1 << 20, 0, i32::MAX, 0],
+                "{form:?} tails"
+            );
+            assert_eq!(out.data()[0], 0);
+        }
+        // GELU(1) = 0.8413·S and SiLU(1) = 0.7311·S.
+        let one = Tensor::new(vec![16384], &[1]).unwrap();
+        let at_one = |form| {
+            SmoothRelu { form }
+                .eval(&[&one], &ctx)
+                .unwrap()
+                .output
+                .data()[0]
+        };
+        assert_eq!(at_one(SmoothReluForm::GeluErf), 13785);
+        assert_eq!(at_one(SmoothReluForm::Silu), 11978);
     }
 }

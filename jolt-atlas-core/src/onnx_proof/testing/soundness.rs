@@ -512,6 +512,7 @@ fn live_cells(model: &Model) -> Vec<Vec<bool>> {
                 | Op::Neg(_)
                 | Op::Identity(_)
                 | Op::ReLU(_)
+                | Op::SmoothRelu(_)
                 | Op::Clamp(_)
                 | Op::Square(_)
                 | Op::Cube(_)

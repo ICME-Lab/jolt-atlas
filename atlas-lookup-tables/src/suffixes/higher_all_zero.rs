@@ -27,13 +27,15 @@ impl<const XLEN: usize, const BOUND: usize> SparseDenseSuffix for HigherAllZeroS
 }
 
 use crate::clamp::{CLAMP_BOUND, SIGN_BIT_I32};
-use common::consts::{ACTIVATION_BOUND, SOFTMAX_CLAMP_BOUND};
+use common::consts::{ACTIVATION_BOUND, SILU_BOUND, SOFTMAX_CLAMP_BOUND};
 pub type ClampHigherAllZeroSuffix<const XLEN: usize> = HigherAllZeroSuffix<XLEN, CLAMP_BOUND>;
 
 pub type SatClampHigherAllZeroSuffix<const XLEN: usize> = HigherAllZeroSuffix<XLEN, SIGN_BIT_I32>;
 
 pub type ActivationHigherAllZeroSuffix<const XLEN: usize> =
     HigherAllZeroSuffix<XLEN, ACTIVATION_BOUND>;
+
+pub type SiluHigherAllZeroSuffix<const XLEN: usize> = HigherAllZeroSuffix<XLEN, SILU_BOUND>;
 
 /// Its own nominal type rather than a `HigherAllZeroSuffix<XLEN, SOFTMAX_CLAMP_BOUND>` alias:
 /// `SOFTMAX_CLAMP_BOUND` and `ACTIVATION_BOUND` are derived from the same `MODEL_SCALE`

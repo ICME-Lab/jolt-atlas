@@ -221,6 +221,7 @@ impl ModelView for atlas_trace::Model {
             | Op::Erf(_)
             | Op::Clamp(_)
             | Op::ReLU(_)
+            | Op::SmoothRelu(_)
             | Op::Rsqrt(_)
             | Op::Sigmoid(_)
             | Op::Sin(_)

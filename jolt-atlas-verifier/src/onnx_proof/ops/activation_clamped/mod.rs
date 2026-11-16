@@ -14,6 +14,7 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::neural_teleport::small_table::{SmallTable, SmallTableRelation};
+use crate::onnx_proof::ops::smooth_relu;
 use crate::onnx_proof::relation::{RelationParams, RelationVerifier, SetupRelation};
 use crate::onnx_proof::{
     deferred_lookups::DeferredBatch,
@@ -123,7 +124,7 @@ impl<Table: SmallActivationTable> SmallTable for Table {
 /// The execution check's relation, set up: `γ` drawn, the reduced output point read. Both sides
 /// then append the clamped input's opening at that point before the sumcheck. `Err` if the
 /// accumulator lacks the reduced output opening.
-pub fn small_table_params<F: JoltField, Table: SmallActivationTable>(
+pub fn small_table_params<F: JoltField, Table: SmallTable>(
     node: &ComputationNode,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut impl Transcript,
@@ -135,7 +136,7 @@ pub fn small_table_params<F: JoltField, Table: SmallActivationTable>(
 
 /// The execution check's verifier: set up, with the clamped input's opening appended at the
 /// reduced output point. `Err` if the accumulator lacks a claim it reads.
-pub fn small_table_verifier<F: JoltField, Table: SmallActivationTable>(
+pub fn small_table_verifier<F: JoltField, Table: SmallTable>(
     node: &ComputationNode,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut impl Transcript,
@@ -154,6 +155,23 @@ pub fn small_table_verifier<F: JoltField, Table: SmallActivationTable>(
 pub struct SmallTableRaEncoding {
     /// The node whose reads are encoded.
     pub node_idx: usize,
+    /// The table's address variables.
+    pub log_k: usize,
+}
+
+impl SmallTableRaEncoding {
+    /// The encoding of `node`'s small-table read: [`ACTIVATION_TABLE_VARS`] address variables,
+    /// or the wider table's of a smooth ReLU ([`smooth_relu::table_vars`]).
+    pub fn for_node(node: &ComputationNode) -> Self {
+        let log_k = match &node.operator {
+            atlas_trace::Op::SmoothRelu(op) => smooth_relu::table_vars(op.form),
+            _ => ACTIVATION_TABLE_VARS,
+        };
+        Self {
+            node_idx: node.idx,
+            log_k,
+        }
+    }
 }
 
 impl RaOneHotEncoding for SmallTableRaEncoding {
@@ -173,11 +191,11 @@ impl RaOneHotEncoding for SmallTableRaEncoding {
     }
 
     fn log_k(&self) -> usize {
-        ACTIVATION_TABLE_VARS
+        self.log_k
     }
 
     fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), ACTIVATION_TABLE_VARS)
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_k)
     }
 }
 
@@ -208,7 +226,7 @@ pub fn clamped_activation_plan(node: &ComputationNode, table: OpActivation) -> P
 /// Committed polynomials for a clamped-activation node (both stages' one-hot RaD chunks).
 pub fn clamped_activation_committed_polynomials(node: &ComputationNode) -> Vec<CommittedPoly> {
     let clamp_encoding: OpLookupEncoding<ActivationClampOperands> = OpLookupEncoding::new(node);
-    let small_encoding = SmallTableRaEncoding { node_idx: node.idx };
+    let small_encoding = SmallTableRaEncoding::for_node(node);
     let clamp_d = clamp_encoding.one_hot_params().instruction_d;
     let small_d = small_encoding.one_hot_params().instruction_d;
     let mut polys = vec![];

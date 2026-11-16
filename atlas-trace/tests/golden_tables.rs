@@ -49,6 +49,15 @@ fn golden_hashes_v1() {
         (TableKind::Erf, 15, 0xa3f4cf008a5722ce),
         (TableKind::Sin, 15, 0x937a366fa5a75e2b),
         (TableKind::Cos, 15, 0xa782099c1c21686c),
+        (TableKind::GeluErf, 8, 0xfcb8926dc51b835d),
+        (TableKind::GeluTanh, 8, 0x66711a16944929d5),
+        (TableKind::Silu, 8, 0x198c548302e3bbe5),
+        (TableKind::GeluErf, 14, 0xedbbb6d83491f185),
+        (TableKind::GeluTanh, 14, 0x5b1ca25a67a460c9),
+        (TableKind::Silu, 14, 0xe5399697be58ecbd),
+        (TableKind::GeluErf, 15, 0x657202d9ab887595),
+        (TableKind::GeluTanh, 15, 0x08c81b70f7d75049),
+        (TableKind::Silu, 15, 0xae723313f92ec7a1),
     ];
     for &(kind, scale, expected) in cases {
         let got = table_hash(kind, scale);
@@ -101,6 +110,9 @@ fn print_hashes() {
             TableKind::Erf,
             TableKind::Sin,
             TableKind::Cos,
+            TableKind::GeluErf,
+            TableKind::GeluTanh,
+            TableKind::Silu,
         ] {
             println!(
                 "(TableKind::{kind:?}, {scale}, {:#018x}),",

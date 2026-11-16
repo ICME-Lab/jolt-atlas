@@ -149,6 +149,7 @@ fn disposition(kind: OpKind) -> Disposition {
         | OpKind::Sin
         | OpKind::Cos
         | OpKind::ReLU
+        | OpKind::SmoothRelu
         | OpKind::Clamp
         | OpKind::GatherSmall
         | OpKind::GatherLarge => LookupFamily,

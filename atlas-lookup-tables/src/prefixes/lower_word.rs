@@ -103,7 +103,7 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
 }
 
 use crate::clamp::{CLAMP_BOUND, SIGN_BIT_I32};
-use common::consts::{ACTIVATION_BOUND, SOFTMAX_CLAMP_BOUND};
+use common::consts::{ACTIVATION_BOUND, SILU_BOUND, SOFTMAX_CLAMP_BOUND};
 
 pub type ClampLowerWordPrefix<const XLEN: usize> =
     LowerWordPrefix<XLEN, CLAMP_BOUND, { Prefixes::ClampLowerWord as usize }>;
@@ -113,6 +113,9 @@ pub type SatClampLowerWordPrefix<const XLEN: usize> =
 
 pub type ActivationLowerWordPrefix<const XLEN: usize> =
     LowerWordPrefix<XLEN, ACTIVATION_BOUND, { Prefixes::ActivationLowerWord as usize }>;
+
+pub type SiluLowerWordPrefix<const XLEN: usize> =
+    LowerWordPrefix<XLEN, SILU_BOUND, { Prefixes::SiluLowerWord as usize }>;
 
 pub type SoftmaxClampLowerWordPrefix<const XLEN: usize> =
     LowerWordPrefix<XLEN, SOFTMAX_CLAMP_BOUND, { Prefixes::SoftmaxClampLowerWord as usize }>;

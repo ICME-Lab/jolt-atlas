@@ -94,7 +94,7 @@ impl<const XLEN: usize, const BOUND: usize, const CP_INDEX: usize, F: JoltField>
 }
 
 use crate::clamp::{CLAMP_BOUND, SIGN_BIT_I32};
-use common::consts::ACTIVATION_BOUND;
+use common::consts::{ACTIVATION_BOUND, SILU_BOUND};
 
 pub type ClampHigherAllOnePrefix<const XLEN: usize> =
     HigherAllOnePrefix<XLEN, CLAMP_BOUND, { Prefixes::ClampHigherAllOne as usize }>;
@@ -104,3 +104,6 @@ pub type SatClampHigherAllOnePrefix<const XLEN: usize> =
 
 pub type ActivationHigherAllOnePrefix<const XLEN: usize> =
     HigherAllOnePrefix<XLEN, ACTIVATION_BOUND, { Prefixes::ActivationHigherAllOne as usize }>;
+
+pub type SiluHigherAllOnePrefix<const XLEN: usize> =
+    HigherAllOnePrefix<XLEN, SILU_BOUND, { Prefixes::SiluHigherAllOne as usize }>;

@@ -15,6 +15,7 @@ pub use linear::sum_axes_i64;
 mod softmax;
 mod structural;
 
+pub use activation::SmoothReluForm;
 pub use einsum::EinsumEq;
 
 use std::{fmt, sync::OnceLock};
@@ -75,7 +76,7 @@ pub trait OpSpec: fmt::Display {
 /// per model. Cloning yields a fresh (empty) cache.
 #[derive(Default)]
 pub struct TableCache {
-    cells: [OnceLock<ActivationTable>; 5],
+    cells: [OnceLock<ActivationTable>; 8],
     softmax: OnceLock<SoftmaxTables>,
 }
 
@@ -88,6 +89,9 @@ impl TableCache {
             TableKind::Erf => 2,
             TableKind::Sin => 3,
             TableKind::Cos => 4,
+            TableKind::GeluErf => 5,
+            TableKind::GeluTanh => 6,
+            TableKind::Silu => 7,
         };
         self.cells[slot].get_or_init(|| tables::table(kind, scale, version))
     }
@@ -327,6 +331,10 @@ define_ops! {
     Cos,
     /// Rectified linear unit `max(x, 0)`.
     ReLU,
+    /// A smooth activation `x·g(x)` with `f(x) − f(−x) = x` (GELU in its erf or tanh form,
+    /// SiLU), computed as `max(x, 0)` plus a table-lookup correction that vanishes outside
+    /// the table's clamped domain.
+    SmoothRelu { form: SmoothReluForm },
     /// Symmetric clamp into `[-2^bound_log, 2^bound_log)`.
     Clamp { bound_log: u32 },
     /// Element-wise select `mask·a + (1-mask)·b`; mask must be 0/1.

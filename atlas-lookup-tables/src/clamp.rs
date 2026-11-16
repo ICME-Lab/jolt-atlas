@@ -2,14 +2,15 @@ use super::{
     prefixes::{
         higher_all_one::{
             ActivationHigherAllOnePrefix, ClampHigherAllOnePrefix, SatClampHigherAllOnePrefix,
+            SiluHigherAllOnePrefix,
         },
         higher_all_zero::{
             ActivationHigherAllZeroPrefix, ClampHigherAllZeroPrefix, SatClampHigherAllZeroPrefix,
-            SoftmaxClampHigherAllZeroPrefix,
+            SiluHigherAllZeroPrefix, SoftmaxClampHigherAllZeroPrefix,
         },
         lower_word::{
             ActivationLowerWordPrefix, ClampLowerWordPrefix, SatClampLowerWordPrefix,
-            SoftmaxClampLowerWordPrefix,
+            SiluLowerWordPrefix, SoftmaxClampLowerWordPrefix,
         },
         zero::ZeroPrefix,
         PrefixEval, PrefixVariant, Prefixes,
@@ -17,14 +18,15 @@ use super::{
     suffixes::{
         higher_all_zero::{
             ActivationHigherAllZeroSuffix, ClampHigherAllZeroSuffix, SatClampHigherAllZeroSuffix,
-            SoftmaxClampHigherAllZeroSuffix,
+            SiluHigherAllZeroSuffix, SoftmaxClampHigherAllZeroSuffix,
         },
         hone_mul_lword::{
             ActivationHOneMulLWordSuffix, ClampHOneMulLWordSuffix, SatClampHOneMulLWordSuffix,
+            SiluHOneMulLWordSuffix,
         },
         hzero_mul_lword::{
             ActivationHZeroMulLWordSuffix, ClampHZeroMulLWordSuffix, SatClampHZeroMulLWordSuffix,
-            SoftmaxClampHZeroMulLWordSuffix,
+            SiluHZeroMulLWordSuffix, SoftmaxClampHZeroMulLWordSuffix,
         },
         one::OneSuffix,
         SuffixEval, SuffixVariant, Suffixes,
@@ -32,7 +34,7 @@ use super::{
     JoltLookupTable, PrefixSuffixDecompositionTrait,
 };
 use atlas_algebra::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
-use common::consts::{ACTIVATION_BOUND, SOFTMAX_CLAMP_BOUND};
+use common::consts::{ACTIVATION_BOUND, SILU_BOUND, SOFTMAX_CLAMP_BOUND};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -257,8 +259,23 @@ impl<const XLEN: usize> ClampSpec for ActivationClampTable<XLEN> {
     const SYMMETRIC: bool = true;
 }
 
-/// Clamps softmax's `z = max_k - x` (always non-negative by construction) to
-/// `[0, 2^SOFTMAX_CLAMP_BOUND - 1]` at model scale [`common::consts::MODEL_SCALE`]
+/// Clamps SiLU's input to `[-2^SILU_BOUND, 2^SILU_BOUND - 1]` at model scale
+/// [`common::consts::MODEL_SCALE`], before its correction-table lookup.
+pub type SiluClampTable<const XLEN: usize> = ClampBoundedTable<XLEN, SILU_BOUND, true>;
+
+impl<const XLEN: usize> ClampSpec for SiluClampTable<XLEN> {
+    type HigherAllZero = SiluHigherAllZeroPrefix<XLEN>;
+    type HigherAllOne = SiluHigherAllOnePrefix<XLEN>;
+    type LowerWord = SiluLowerWordPrefix<XLEN>;
+    type SufHigherAllZero = SiluHigherAllZeroSuffix<XLEN>;
+    type SufHZeroMulLWord = SiluHZeroMulLWordSuffix<XLEN>;
+    type SufHOneMulLWord = SiluHOneMulLWordSuffix<XLEN>;
+    const BOUND: usize = SILU_BOUND;
+    const SYMMETRIC: bool = true;
+}
+
+/// Clamps softmax's signed address `u = c − x` to `[0, 2^SOFTMAX_CLAMP_BOUND - 1]` (a negative
+/// address maps to 0) at model scale [`common::consts::MODEL_SCALE`]
 /// (`jolt_atlas_core::onnx_proof::ops::softmax_last_axis::significance_clamp`).
 pub type SoftmaxClampTable<const XLEN: usize> = ClampBoundedTable<XLEN, SOFTMAX_CLAMP_BOUND, false>;
 
@@ -288,6 +305,7 @@ mod test {
         prefix_suffix_test::<XLEN, Fr, ClampTable<XLEN>>();
         prefix_suffix_test::<LARGE_XLEN, Fr, SaturationTable>();
         prefix_suffix_test::<XLEN, Fr, ActivationClampTable<XLEN>>();
+        prefix_suffix_test::<XLEN, Fr, SiluClampTable<XLEN>>();
         prefix_suffix_test::<XLEN, Fr, SoftmaxClampTable<XLEN>>();
     }
 
@@ -305,6 +323,7 @@ mod test {
         signed_lookup_table_mle_random_test::<Fr, ClampTable<XLEN>>();
         signed_lookup_table_mle_random_test::<Fr, SaturationTable>();
         signed_lookup_table_mle_random_test::<Fr, ActivationClampTable<XLEN>>();
+        signed_lookup_table_mle_random_test::<Fr, SiluClampTable<XLEN>>();
         signed_lookup_table_mle_random_test::<Fr, SoftmaxClampTable<XLEN>>();
     }
 
@@ -313,6 +332,7 @@ mod test {
         lookup_table_mle_linearity_test::<XLEN, Fr, ClampTable<XLEN>>();
         lookup_table_mle_linearity_test::<LARGE_XLEN, Fr, SaturationTable>();
         lookup_table_mle_linearity_test::<XLEN, Fr, ActivationClampTable<XLEN>>();
+        lookup_table_mle_linearity_test::<XLEN, Fr, SiluClampTable<XLEN>>();
         lookup_table_mle_linearity_test::<XLEN, Fr, SoftmaxClampTable<XLEN>>();
     }
 }

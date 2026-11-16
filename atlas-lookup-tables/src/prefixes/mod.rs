@@ -8,15 +8,16 @@
 use crate::prefixes::{
     higher_all_one::{
         ActivationHigherAllOnePrefix, ClampHigherAllOnePrefix, SatClampHigherAllOnePrefix,
+        SiluHigherAllOnePrefix,
     },
     higher_all_zero::{
         ActivationHigherAllZeroPrefix, ClampHigherAllZeroPrefix, SatClampHigherAllZeroPrefix,
-        SoftmaxClampHigherAllZeroPrefix,
+        SiluHigherAllZeroPrefix, SoftmaxClampHigherAllZeroPrefix,
     },
     lower_msb::LowerMsbPrefix,
     lower_word::{
         ActivationLowerWordPrefix, ClampLowerWordPrefix, SatClampLowerWordPrefix,
-        SoftmaxClampLowerWordPrefix,
+        SiluLowerWordPrefix, SoftmaxClampLowerWordPrefix,
     },
     lower_word_no_msb::LowerWordNoMsbPrefix,
     msb::MsbPrefix,
@@ -270,6 +271,10 @@ impl_sparse_dense_prefix!(
     ActivationHigherAllZero     : ActivationHigherAllZeroPrefix,    // Indicator that all bits with significance >= bound are zero, used by clamped activation tables.
     ActivationHigherAllOne      : ActivationHigherAllOnePrefix,     // Indicator that all bits with significance >= bound, sign included, are one, used by clamped activation tables.
     ActivationLowerWord         : ActivationLowerWordPrefix,        // Lower word without bits of significance >= bound, used by clamped activation tables (Erf/Sigmoid/Tanh).
+
+    SiluHigherAllZero           : SiluHigherAllZeroPrefix,          // Indicator that all bits with significance >= bound are zero, used by SiLU's clamp table.
+    SiluHigherAllOne            : SiluHigherAllOnePrefix,           // Indicator that all bits with significance >= bound, sign included, are one, used by SiLU's clamp table.
+    SiluLowerWord               : SiluLowerWordPrefix,              // Lower word without bits of significance >= bound, used by SiLU's clamp table.
 
     SoftmaxClampHigherAllZero   : SoftmaxClampHigherAllZeroPrefix,  // Indicator that all bits with significance >= bound are zero, used by softmax's saturating-clamp table.
     SoftmaxClampLowerWord       : SoftmaxClampLowerWordPrefix,      // Lower word without bits of significance >= bound, used by softmax's saturating-clamp table.

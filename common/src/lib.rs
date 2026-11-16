@@ -345,6 +345,13 @@ canonical_serde_enum! {
         /// * `0` – node index
         ActivationClampedOutput(usize),
 
+        /// `max(x, 0)` of a smooth-ReLU node's input, at the node's reduced output point: the
+        /// value of the node's ReLU read, and the part of its output the correction table does
+        /// not hold.
+        ///
+        /// * `0` – node index
+        SmoothReluRelu(usize),
+
         /// Read-address polynomial for the clamped Erf/Sigmoid/Tanh variants'
         /// activation-clamp lookup stage (natively-symmetric clamp table, same shape as
         /// [`Self::SymmetricClampRa`]). Virtualized --

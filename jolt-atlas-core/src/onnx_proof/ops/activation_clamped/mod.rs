@@ -13,7 +13,7 @@
 //! their one-hot (`ra`/`hw`/`bool`) checks batched together afterwards into a single
 //! batched sumcheck.
 
-use crate::onnx_proof::neural_teleport::small_table::SmallTableRelation;
+use crate::onnx_proof::neural_teleport::small_table::{SmallTable, SmallTableRelation};
 use crate::onnx_proof::relation::{
     RelationChallenge, RelationParams, RelationSetup, RelationWitness,
 };
@@ -42,15 +42,12 @@ use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
 use atlas_trace::Tensor;
 use atlas_transcript::Transcript;
-use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS},
-    parallel::par_enabled,
-};
+use common::parallel::par_enabled;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 /// The execution check's prover: `output = Table[clamped]` over the small activation table,
 /// the clamped input's one-hot encoding against the table and the signed identity.
-pub struct SmallTableProver<F: JoltField, Table: SmallActivationTable> {
+pub struct SmallTableProver<F: JoltField, Table: SmallTable> {
     relation: SmallTableRelation<Table>,
     setup: RelationSetup<F>,
     gamma: F,
@@ -62,7 +59,7 @@ pub struct SmallTableProver<F: JoltField, Table: SmallActivationTable> {
     pub lookup_indices: Vec<usize>,
 }
 
-impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
+impl<F: JoltField, Table: SmallTable> SmallTableProver<F, Table> {
     /// Computes the clamped tensor and registers its advice claim at `r_node_output`;
     /// the `ActivationClamp` stage then ties that claim back to `raw_input`.
     pub fn initialize(
@@ -76,7 +73,7 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
         let r_node_output = OpeningPoint::new(setup.incoming_point.clone());
         let LayerData { operands, .. } = TraceView::layer_data(trace, relation.node());
         let raw_input = operands[0];
-        let clamp_bound = 1i32 << ACTIVATION_BOUND;
+        let clamp_bound = 1i32 << (Table::VARS - 1);
         let clamped_tensor = raw_input.map(|x| x.clamp(-clamp_bound, clamp_bound - 1));
         let clamped_tensor_padded = clamped_tensor.padded_pow2();
 
@@ -99,15 +96,15 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
             Table::materialize().expect("the semantics define the table at the model scale"),
         );
         let input_onehot: Vec<F> =
-            compute_ra_evals_nbits_2comp(&r_node_output.r, &clamped_tensor, ACTIVATION_TABLE_VARS);
+            compute_ra_evals_nbits_2comp(&r_node_output.r, &clamped_tensor, Table::VARS);
         let input_onehot = MultilinearPolynomial::from(input_onehot);
         assert_eq!(input_onehot.len(), table.len());
-        let identity = SignedIdentityPoly::new(ACTIVATION_TABLE_VARS);
+        let identity = SignedIdentityPoly::new(Table::VARS);
 
         let lookup_indices: Vec<usize> = clamped_tensor_padded
             .par_iter()
             .with_min_len(par_enabled())
-            .map(|&x| n_bits_to_usize(x, ACTIVATION_TABLE_VARS))
+            .map(|&x| n_bits_to_usize(x, Table::VARS))
             .collect();
 
         Self {
@@ -122,7 +119,7 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
     }
 }
 
-impl<F: JoltField, Table: SmallActivationTable> RelationWitness<F> for SmallTableProver<F, Table> {
+impl<F: JoltField, Table: SmallTable> RelationWitness<F> for SmallTableProver<F, Table> {
     type Relation = SmallTableRelation<Table>;
 
     fn relation(&self) -> &SmallTableRelation<Table> {
@@ -138,7 +135,7 @@ impl<F: JoltField, Table: SmallActivationTable> RelationWitness<F> for SmallTabl
     }
 }
 
-impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
+impl<F: JoltField, Table: SmallTable> SmallTableProver<F, Table> {
     fn round_message(&mut self, _round: usize, previous_claim: F) -> UnivariatePoly<F> {
         let Self {
             input_onehot,
@@ -180,7 +177,7 @@ impl<F: JoltField, Table: SmallActivationTable> SmallTableProver<F, Table> {
     }
 }
 
-impl<F: JoltField, Table: SmallActivationTable> ProveRounds<F> for SmallTableProver<F, Table> {
+impl<F: JoltField, Table: SmallTable> ProveRounds<F> for SmallTableProver<F, Table> {
     fn num_rounds(&self) -> usize {
         self.relation.rounds()
     }
@@ -211,5 +208,15 @@ impl LookupWitness for ActivationClampOperands {
     fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
         let operand = witness.map(|v| v as i32);
         compute_lookup_indices(&operand)
+    }
+}
+
+impl LookupWitness for crate::onnx_proof::ops::smooth_relu::SmoothReluOperands {
+    fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+        LookupWitness::witness(&ActivationClampOperands, node, trace)
+    }
+
+    fn lookup_bits(&self, witness: &Tensor<i64>) -> Vec<LookupBits> {
+        LookupWitness::lookup_bits(&ActivationClampOperands, witness)
     }
 }

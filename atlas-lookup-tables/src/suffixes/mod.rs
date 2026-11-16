@@ -8,14 +8,15 @@
 use crate::suffixes::{
     higher_all_zero::{
         ActivationHigherAllZeroSuffix, ClampHigherAllZeroSuffix, SatClampHigherAllZeroSuffix,
-        SoftmaxClampHigherAllZeroSuffix,
+        SiluHigherAllZeroSuffix, SoftmaxClampHigherAllZeroSuffix,
     },
     hone_mul_lword::{
         ActivationHOneMulLWordSuffix, ClampHOneMulLWordSuffix, SatClampHOneMulLWordSuffix,
+        SiluHOneMulLWordSuffix,
     },
     hzero_mul_lword::{
         ActivationHZeroMulLWordSuffix, ClampHZeroMulLWordSuffix, SatClampHZeroMulLWordSuffix,
-        SoftmaxClampHZeroMulLWordSuffix,
+        SiluHZeroMulLWordSuffix, SoftmaxClampHZeroMulLWordSuffix,
     },
     lower_msb_upper_eqo_low::LowerMsbUpperEqoLowSuffix,
     neg_relu::NegReluSuffix,
@@ -119,6 +120,10 @@ impl_sparse_dense_suffix!(
     ActivationHigherAllZero     : ActivationHigherAllZeroSuffix,    // `higher_all_zero(bits)`, used by clamped activation tables (Erf/Sigmoid/Tanh).
     ActivationHZeroMulLWord     : ActivationHZeroMulLWordSuffix,    // `higher_all_zero(bits) * lower_word(bits)`, used by clamped activation tables.
     ActivationHOneMulLWord      : ActivationHOneMulLWordSuffix,     // `higher_all_one(bits) * lower_word(bits)`, used by clamped activation tables.
+
+    SiluHigherAllZero           : SiluHigherAllZeroSuffix,          // `higher_all_zero(bits)`, used by SiLU's clamp table.
+    SiluHZeroMulLWord           : SiluHZeroMulLWordSuffix,          // `higher_all_zero(bits) * lower_word(bits)`, used by SiLU's clamp table.
+    SiluHOneMulLWord            : SiluHOneMulLWordSuffix,           // `higher_all_one(bits) * lower_word(bits)`, used by SiLU's clamp table.
 
     SoftmaxClampHigherAllZero   : SoftmaxClampHigherAllZeroSuffix,  // `higher_all_zero(bits)`, used by softmax's saturating-clamp table.
     SoftmaxClampHZeroMulLWord   : SoftmaxClampHZeroMulLWordSuffix,  // `higher_all_zero(bits) * lower_word(bits)`, used by softmax's saturating-clamp table.

@@ -285,15 +285,15 @@ define_ops! {
     Constant(std::sync::Arc<Tensor<i32>>),
     /// Pass-through.
     Identity,
-    /// Saturating element-wise addition (i64 accumulate, clamp to i32).
+    /// Element-wise addition; a sum outside `i32` is an execution error.
     Add,
-    /// Saturating element-wise subtraction.
+    /// Element-wise subtraction; a difference outside `i32` is an execution error.
     Sub,
-    /// Element-wise negation.
+    /// Element-wise negation; `-i32::MIN` is an execution error.
     Neg,
-    /// Fused element-wise product: i64 accumulate, floor-rescale by `2^s`,
-    /// saturating clamp. `rebase: false` is the raw building-block product
-    /// (no rescale, no clamp).
+    /// Fused element-wise product: i64 accumulate, floor-rescale by `2^s`; a
+    /// quotient outside `i32` is an execution error. `rebase: false` is the raw
+    /// building-block product (no rescale, wrapping).
     Mul { rebase: bool },
     /// Fused element-wise square (`rebase` as in [`Mul`]).
     Square { rebase: bool },
@@ -303,13 +303,13 @@ define_ops! {
     Div,
     /// Floor division by a constant scalar.
     ScalarConstDiv { divisor: i32 },
-    /// Fused tensor contraction: i64 accumulate, floor-rescale by `2^s`,
-    /// saturating clamp.
+    /// Fused tensor contraction: i64 accumulate, floor-rescale by `2^s`; a
+    /// quotient outside `i32` is an execution error.
     Einsum { equation: EinsumEq },
-    /// Sum over axes (i64 accumulate, saturating clamp).
+    /// Sum over axes (i64 accumulate); a sum outside `i32` is an execution error.
     Sum { axes: Vec<usize> },
     /// Fused mean of squares over axes: `Σx²` in i64, floor-divide by
-    /// `count·2^s`, saturating clamp. `count` is the semantic element count
+    /// `count·2^s`; a quotient outside `i32` is an execution error. `count` is the semantic element count
     /// (the mean denominator); `padded_count` is the power-of-two-rounded
     /// product the prover's sumcheck cube uses.
     MeanOfSquares { axes: Vec<usize>, count: usize, padded_count: usize },

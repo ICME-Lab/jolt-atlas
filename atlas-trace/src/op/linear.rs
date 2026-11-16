@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{
     error::{KernelError, ShapeError},
-    semantics::fixed::{floor_div, rem_floor, rsqrt, sat_clamp_i32},
+    semantics::fixed::{floor_div, narrow_i32, rem_floor, rsqrt},
     tensor::Tensor,
     trace::{NodeAux, RsqrtAdvice},
 };
@@ -18,16 +18,32 @@ use super::{
 /// clamp-width analysis.
 pub(super) const I32_MAG: u128 = 1 << 31;
 
-/// Saturating elementwise chain for Add/Sub: accumulate each consecutive
-/// pair in `i64` and clamp back to `i32` per step (per-step clamping is the
-/// old crate's variadic semantics).
-fn sat_chain(
+/// Narrow every element of an `i64` result to `i32`; the first element outside the range is
+/// an execution error naming `op` and `what`.
+pub(super) fn narrow(
+    wide: &Tensor<i64>,
+    op: &'static str,
+    what: &'static str,
+) -> Result<Tensor<i32>, KernelError> {
+    let data = wide
+        .data()
+        .iter()
+        .map(|&value| narrow_i32(value).ok_or(KernelError::WitnessOverflow { op, what, value }))
+        .collect::<Result<Vec<i32>, _>>()?;
+    Ok(Tensor::new(data, wide.dims())?)
+}
+
+/// Elementwise chain for Add/Sub: each consecutive pair is combined in `i64` and must fit
+/// `i32` at every step.
+fn checked_chain(
     inputs: &[&Tensor<i32>],
+    op: &'static str,
     combine: impl Fn(i64, i64) -> i64,
 ) -> Result<Tensor<i32>, KernelError> {
     let mut acc = inputs[0].clone();
     for rhs in &inputs[1..] {
-        acc = acc.zip_map(rhs, |a, b| sat_clamp_i32(combine(a as i64, b as i64)))?;
+        let wide = acc.zip_map(rhs, |a, b| combine(a as i64, b as i64))?;
+        acc = narrow(&wide, op, "result")?;
     }
     Ok(acc)
 }
@@ -40,7 +56,7 @@ impl fmt::Display for Add {
 
 impl OpSpec for Add {
     fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        Ok(Eval::plain(sat_chain(inputs, |a, b| a + b)?))
+        Ok(Eval::plain(checked_chain(inputs, "add", |a, b| a + b)?))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -70,7 +86,7 @@ impl fmt::Display for Sub {
 
 impl OpSpec for Sub {
     fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        Ok(Eval::plain(sat_chain(inputs, |a, b| a - b)?))
+        Ok(Eval::plain(checked_chain(inputs, "sub", |a, b| a - b)?))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -100,8 +116,9 @@ impl fmt::Display for Neg {
 
 impl OpSpec for Neg {
     fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        // Saturating: -i32::MIN stays representable.
-        Ok(Eval::plain(inputs[0].map(|x| x.saturating_neg())))
+        // `-i32::MIN` is not an `i32`.
+        let wide = inputs[0].map(|x| -(x as i64));
+        Ok(Eval::plain(narrow(&wide, "neg", "result")?))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -164,7 +181,7 @@ pub(super) fn sum_map_i64(
 impl OpSpec for Sum {
     fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
         let acc = sum_axes_i64(inputs[0], &self.axes);
-        Ok(Eval::plain(acc.map(sat_clamp_i32)))
+        Ok(Eval::plain(narrow(&acc, "sum", "result")?))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -551,5 +568,62 @@ mod tests {
             assert_eq!(q, out * out + r_sqrt);
             assert!(0 <= r_sqrt && r_sqrt <= 2 * out);
         }
+    }
+
+    /// A sum, difference, axis sum or negation outside `i32` is an execution error; its
+    /// neighbour inside the range is the exact value.
+    #[test]
+    fn results_outside_i32_are_errors() {
+        let cache = crate::op::TableCache::default();
+        let ctx = EvalCtx {
+            scale: crate::id::Scale::new(14).unwrap(),
+            version: crate::id::SemVersion::V3,
+            tables: &cache,
+        };
+        let t = |v: Vec<i32>| Tensor::new(v.clone(), &[v.len()]).unwrap();
+        let overflow =
+            |r: Result<Eval, KernelError>| matches!(r, Err(KernelError::WitnessOverflow { .. }));
+
+        let (max, min) = (t(vec![i32::MAX, 5]), t(vec![i32::MIN, 5]));
+        let (one, zero) = (t(vec![1, 1]), t(vec![0, 1]));
+        assert!(overflow(Add.eval(&[&max, &one], &ctx)));
+        assert!(overflow(Sub.eval(&[&min, &one], &ctx)));
+        assert_eq!(
+            Add.eval(&[&max, &zero], &ctx).unwrap().output.data(),
+            &[i32::MAX, 6]
+        );
+        assert_eq!(
+            Sub.eval(&[&min, &zero], &ctx).unwrap().output.data(),
+            &[i32::MIN, 4]
+        );
+
+        assert!(overflow(Neg.eval(&[&min], &ctx)));
+        assert_eq!(
+            Neg.eval(&[&t(vec![i32::MIN + 1, 5])], &ctx)
+                .unwrap()
+                .output
+                .data(),
+            &[i32::MAX, -5]
+        );
+
+        // A fused product: the rescaled quotient must fit, not the `i64` accumulation.
+        let mul = crate::op::Mul { rebase: true };
+        let big = t(vec![1 << 30]);
+        assert!(overflow(mul.eval(&[&big, &big], &ctx)));
+        let fits = t(vec![1 << 22]);
+        assert_eq!(
+            mul.eval(&[&fits, &fits], &ctx).unwrap().output.data(),
+            &[1 << 30]
+        );
+
+        let sum = Sum { axes: vec![0] };
+        assert!(overflow(sum.eval(&[&t(vec![i32::MAX, 1])], &ctx)));
+        assert_eq!(
+            sum.eval(&[&t(vec![i32::MAX, 0])], &ctx)
+                .unwrap()
+                .output
+                .data(),
+            &[i32::MAX]
+        );
     }
 }

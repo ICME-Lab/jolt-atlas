@@ -260,10 +260,11 @@ impl fmt::Display for Einsum {
 impl OpSpec for Einsum {
     fn eval(&self, inputs: &[&Tensor<i32>], ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
         let acc = einsum_acc_i64(&self.equation, inputs)?;
-        Ok(rebase_eval(
+        rebase_eval(
             acc,
             self.rebase_divisor(ctx.scale).expect("fused"),
-        ))
+            "einsum",
+        )
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {

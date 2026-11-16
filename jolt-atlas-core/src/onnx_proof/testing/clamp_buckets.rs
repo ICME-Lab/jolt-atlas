@@ -10,11 +10,10 @@ use rand::{rngs::StdRng, SeedableRng};
 use super::{models::probe_models, prove_verify_roundtrip, ModelBuilder, RoundtripOptions};
 use crate::node_view::{clamp_value_bound, ModelView};
 use crate::onnx_proof::{
-    clamp_lookups::clamp_intermediate,
     clamp_split,
     deferred_lookups::DEFERRED_PROOF_IDX,
     global_clamp::{clamp_buckets, remainder_buckets},
-    prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128, ProofType,
+    prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
 /// A clamp bucket whose nodes are all unsaturated model outputs proves nothing through its
@@ -84,66 +83,9 @@ fn lookup_free_model_has_no_post_loop_proof() {
     prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
 }
 
-/// The `saturating` probe model saturates an internal clamped node, so the soundness
-/// sweeps run over a bucket that carries dense `OUT` digits and nonempty slack chunks together,
-/// and its proof carries the slack chunk check beside the digit range check.
-#[test]
-fn saturating_probe_saturates() {
-    let probe = probe_models()
-        .into_iter()
-        .find(|m| m.name == "saturating")
-        .expect("the saturating probe model");
-    let model = probe.model;
-    let trace = model.trace(&probe.inputs).expect("honest execution");
-    let outputs = model.output_indices();
-    let saturating: Vec<usize> = model
-        .views()
-        .iter()
-        .filter(|n| {
-            !outputs.contains(&n.idx)
-                && clamp_value_bound(&model, n).expect("shape").is_some()
-                && clamp_intermediate(n, &trace)
-                    .data()
-                    .iter()
-                    .any(|&acc| acc > i32::MAX as i64 || acc < i32::MIN as i64)
-        })
-        .map(|n| n.idx)
-        .collect();
-    assert!(!saturating.is_empty(), "no internal clamped node saturates");
-
-    let buckets = clamp_buckets(&model).expect("shapes");
-    let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(
-        AtlasSharedPreprocessing::preprocess(model),
-    );
-    let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &probe.inputs);
-    assert!(
-        proof
-            .proofs()
-            .keys()
-            .any(|id| id.1 == ProofType::DeferredClampDigitRange),
-        "the saturating probe's proof has no digit range check"
-    );
-    // The slack chunk check ran: some bucket's slack chunks are opened by its Booleanity.
-    let slack_opened = buckets.iter().any(|bucket| {
-        clamp_split::slack_chunk_polys(bucket)
-            .into_iter()
-            .all(|poly| {
-                proof
-                    .opening_claims()
-                    .openings()
-                    .contains_key(&OpeningId::new(poly, SumcheckId::Booleanity))
-            })
-    });
-    assert!(
-        slack_opened,
-        "the saturating probe's proof opens no slack chunks"
-    );
-}
-
 /// The `scalars` probe model puts one-element nodes under the soundness sweeps: every clamped
 /// node is alone in a one-cell clamp bucket, the fused `Mul`'s remainder in a one-cell remainder
-/// bucket, one internal node saturates, and every value the digit tamper targets has a digit to
-/// move.
+/// bucket, and every value the digit tamper targets has a digit to move.
 #[test]
 fn scalars_probe_layout() {
     let probe = probe_models()
@@ -175,15 +117,10 @@ fn scalars_probe_layout() {
     }
     assert_eq!(remainders.len(), 1, "the fused Mul");
 
-    let views = model.views();
-    let mut saturated = 0;
     for &idx in clamped.iter().filter(|idx| !outputs.contains(idx)) {
-        let acc = clamp_intermediate(&views[idx], &trace).data()[0];
-        saturated += usize::from(acc > i32::MAX as i64);
         let out = i64::from(trace.node_outputs[idx].data()[0]);
         assert!(out + (1 << 31) >= 4, "node {idx}: OUT has no upper digit");
     }
-    assert_eq!(saturated, 1, "exactly the second Add saturates");
 }
 
 /// Every remainder a probe model's nodes leave to be bounded is in exactly one remainder

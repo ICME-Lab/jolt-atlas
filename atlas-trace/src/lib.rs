@@ -9,15 +9,15 @@
 //!   ([`id::Scale`]): `q` represents `q / 2^scale`.
 //! - Fused-rescale ops (einsum, mul, square, cube, mean-of-squares)
 //!   accumulate in `i64`, then split `acc = quotient·D + remainder`
-//!   (Euclidean, `remainder ∈ [0, D)`) and emit
-//!   `output = sat_clamp_i32(quotient)`. The quotient and remainder
-//!   are captured in the trace for the prover.
+//!   (Euclidean, `remainder ∈ [0, D)`) and emit the quotient, which must lie in
+//!   `i32`. The quotient and remainder are captured in the trace for the prover.
 //! - Division-like ops capture their advice the same way: `Div` and
 //!   `ScalarConstDiv` their floor-division remainder, `Rsqrt` its division
 //!   quotient and both remainders, `Sin` and `Cos` the period reduction their
 //!   table indexes by ([`trace::NodeAux`]).
-//! - Add and Sub saturate per step (each pairwise `i64` sum or difference is
-//!   `sat_clamp_i32`'d), and Sum clamps its `i64` reduction once.
+//! - Arithmetic is exact or absent: a sum or difference (each pairwise step of
+//!   Add and Sub), an axis sum, a negation or a rescaled quotient outside `i32`
+//!   is an execution error, never a clamped value.
 //! - Softmax over a row is the output table read at `min(c − x, top)`, with the shift `c`
 //!   the smallest integer at or above the row's maximum whose sum-table row sum does not
 //!   exceed the sum scale ([`semantics::softmax`]); the shift, the addresses and the two

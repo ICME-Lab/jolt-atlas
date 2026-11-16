@@ -71,10 +71,11 @@ impl ComputationNode {
 /// Slice and Concat has the power-of-two dims and the alignment its tie holds for (what
 /// compiling with padding establishes). All checked again on the model the verifier is handed.
 pub fn check_model_shape(model: &atlas_trace::Model) -> Result<(), ProofVerifyError> {
-    // The relations are those of the second semantics version (its softmax).
-    if model.version() != atlas_trace::SemVersion::V2 {
+    // The relations are those of the third semantics version (the log-partition softmax,
+    // exact arithmetic).
+    if model.version() != atlas_trace::SemVersion::V3 {
         return Err(ProofVerifyError::Malformed(format!(
-            "model: semantics version {:?}, the verifier's is V2",
+            "model: semantics version {:?}, the verifier's is V3",
             model.version()
         )));
     }

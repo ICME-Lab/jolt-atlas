@@ -240,7 +240,7 @@ impl Default for CompileOptions {
         CompileOptions {
             scale: Scale::new(14).expect("14 is in range"),
             pad_pow2: true,
-            version: SemVersion::V2,
+            version: SemVersion::V3,
         }
     }
 }

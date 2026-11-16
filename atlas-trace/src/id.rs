@@ -84,6 +84,9 @@ pub enum SemVersion {
     /// The log-partition softmax ([`crate::semantics::softmax`]) in place of the max, exp-digit
     /// and reciprocal one. Every other kernel and table is as in `V1`.
     V2,
+    /// Exact arithmetic: a sum, difference, negation or rescaled quotient outside `i32` is an
+    /// execution error where `V2` saturated. Every output that exists is as in `V2`.
+    V3,
 }
 
 #[cfg(test)]

@@ -399,7 +399,7 @@ impl ModelBuilder {
             CompileOptions {
                 scale: atlas_trace::Scale::new(self.scale).expect("scale in range"),
                 pad_pow2,
-                version: SemVersion::V2,
+                version: SemVersion::V3,
             },
         )
         .unwrap_or_else(|e| panic!("ModelBuilder::build: {e}"))

@@ -39,7 +39,7 @@ pub struct SoftmaxTables {
 /// Generate the softmax tables for `scale`, version `version`.
 pub fn softmax_tables(scale: Scale, version: SemVersion) -> SoftmaxTables {
     match version {
-        SemVersion::V1 | SemVersion::V2 => {}
+        SemVersion::V1 | SemVersion::V2 | SemVersion::V3 => {}
     }
     let s = scale.denom_i64();
     let sum_scale = s << SUM_EXTRA_BITS;

@@ -685,10 +685,10 @@ fn layout_ops_outside_their_ties_are_rejected() {
     }
 }
 
-/// The verifier's relations are those of `SemVersion::V2`: a model compiled under another
+/// The verifier's relations are those of `SemVersion::V3`: a model compiled under an earlier
 /// version is rejected before any proof is read.
 #[test]
-fn a_first_version_model_is_rejected() {
+fn an_earlier_version_model_is_rejected() {
     use crate::node_view::check_model_shape;
     use atlas_trace::{CompileOptions, GraphBuilder, Scale, SemVersion};
 
@@ -704,9 +704,11 @@ fn a_first_version_model_is_rejected() {
         })
         .expect("the graph compiles")
     };
-    check_model_shape(&build(SemVersion::V2)).expect("the current version is accepted");
-    let err = check_model_shape(&build(SemVersion::V1)).expect_err("the first version");
-    assert!(err.to_string().contains("semantics version"), "{err}");
+    check_model_shape(&build(SemVersion::V3)).expect("the current version is accepted");
+    for version in [SemVersion::V1, SemVersion::V2] {
+        let err = check_model_shape(&build(version)).expect_err("an earlier version");
+        assert!(err.to_string().contains("semantics version"), "{err}");
+    }
 }
 
 /// A softmax proof carries nothing per row: its opening claims are as many for sixteen rows as

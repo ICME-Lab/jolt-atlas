@@ -132,7 +132,7 @@ impl Trace {
 /// Intermediates of a fused-rescale op (einsum, mul, square, cube,
 /// mean-of-squares), captured so the proof system never re-runs the
 /// expensive accumulation: `acc = quotient·D + remainder` with
-/// `remainder ∈ [0, D)` and `output = sat_clamp_i32(quotient)`.
+/// `remainder ∈ [0, D)` and `output = quotient`, which fits `i32`.
 ///
 /// Same contract as the old crate's `FusedIntermediates`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

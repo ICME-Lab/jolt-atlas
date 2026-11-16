@@ -53,7 +53,7 @@ fn compile(b: GraphBuilder, pad: bool) -> Model {
     b.build(CompileOptions {
         scale: Scale::new(SCALE).unwrap(),
         pad_pow2: pad,
-        version: SemVersion::V2,
+        version: SemVersion::V3,
     })
     .unwrap()
 }
@@ -98,11 +98,12 @@ fn exact_class_golden() {
     b.output(out);
 
     let model = compile(b, false);
+    // Small enough that the chained square and cube stay inside `i32`.
     let inputs = [
-        random_tensor(&mut rng, &dims, 1 << 16),
-        random_tensor(&mut rng, &dims, 1 << 16),
+        random_tensor(&mut rng, &dims, 1 << 14),
+        random_tensor(&mut rng, &dims, 1 << 14),
     ];
-    assert_eq!(trace_hash(&model, &inputs), 0xbaf1350d08519bbf);
+    assert_eq!(trace_hash(&model, &inputs), 0xca192837f849f640);
 }
 
 /// Structural ops + einsum (constant and dynamic operands) + gather.

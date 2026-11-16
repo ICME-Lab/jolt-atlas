@@ -2,14 +2,14 @@
 //!
 //! Each accumulates in `i64`, splits `acc = quotient·D + remainder`
 //! (Euclidean, via [`crate::semantics::fixed::rebase`]), emits
-//! `sat_clamp_i32(quotient)`, and captures the pair in the trace.
+//! the quotient, which must fit `i32`, and captures the pair in the trace.
 
 use std::fmt;
 
 use crate::{
     error::{KernelError, ShapeError},
     id::Scale,
-    semantics::fixed::{rebase, sat_clamp_i32},
+    semantics::fixed::rebase,
     tensor::Tensor,
     trace::{FusedIntermediates, NodeAux},
 };
@@ -18,10 +18,14 @@ use super::{
     BoundCtx, Cube, Eval, EvalCtx, MeanOfSquares, Mul, OpSpec, PadBehavior, Square, same_dims,
 };
 
-/// Split an i64 accumulation tensor by `divisor`, producing the clamped
-/// output and the captured intermediates. The single implementation of the
-/// fused contract for every rescaling op.
-pub(super) fn rebase_eval(acc: Tensor<i64>, divisor: i64) -> Eval {
+/// Split an i64 accumulation tensor by `divisor`, producing the output (the quotient, which
+/// must fit `i32`) and the captured intermediates. The single implementation of the fused
+/// contract for every rescaling op.
+pub(super) fn rebase_eval(
+    acc: Tensor<i64>,
+    divisor: i64,
+    op: &'static str,
+) -> Result<Eval, KernelError> {
     let mut quotient = Vec::with_capacity(acc.len());
     let mut remainder = Vec::with_capacity(acc.len());
     for &v in acc.data() {
@@ -30,15 +34,14 @@ pub(super) fn rebase_eval(acc: Tensor<i64>, divisor: i64) -> Eval {
         remainder.push(r);
     }
     let dims = acc.dims();
-    let output = Tensor::new(quotient.iter().map(|&q| sat_clamp_i32(q)).collect(), dims)
-        .expect("same length");
-    Eval {
-        output,
+    let quotient = Tensor::new(quotient, dims).expect("same length");
+    Ok(Eval {
+        output: super::linear::narrow(&quotient, op, "quotient")?,
         aux: Some(NodeAux::Fused(FusedIntermediates {
-            quotient: Tensor::new(quotient, dims).expect("same length"),
+            quotient,
             remainder: Tensor::new(remainder, dims).expect("same length"),
         })),
-    }
+    })
 }
 
 impl fmt::Display for Mul {
@@ -55,10 +58,11 @@ impl OpSpec for Mul {
             return Ok(Eval::plain(a.zip_map(b, |x, y| x.wrapping_mul(y))?));
         }
         let acc = a.zip_map(b, |x, y| x as i64 * y as i64)?;
-        Ok(rebase_eval(
+        rebase_eval(
             acc,
             self.rebase_divisor(ctx.scale).expect("rebase on"),
-        ))
+            "mul",
+        )
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -91,10 +95,11 @@ impl OpSpec for Square {
             return Ok(Eval::plain(x.map(|v| v.wrapping_mul(v))));
         }
         let acc = x.map(|v| v as i64 * v as i64);
-        Ok(rebase_eval(
+        rebase_eval(
             acc,
             self.rebase_divisor(ctx.scale).expect("rebase on"),
-        ))
+            "square",
+        )
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -132,10 +137,11 @@ impl OpSpec for Cube {
             let v = v as i64;
             v * v * v
         });
-        Ok(rebase_eval(
+        rebase_eval(
             acc,
             self.rebase_divisor(ctx.scale).expect("rebase on"),
-        ))
+            "cube",
+        )
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -172,10 +178,11 @@ impl OpSpec for MeanOfSquares {
             let v = v as i64;
             v * v
         });
-        Ok(rebase_eval(
+        rebase_eval(
             acc,
             self.rebase_divisor(ctx.scale).expect("always fused"),
-        ))
+            "mean_of_squares",
+        )
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {

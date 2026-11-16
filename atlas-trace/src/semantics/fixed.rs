@@ -8,9 +8,10 @@ use crate::id::Scale;
 
 use super::coeffs::PI_Q64;
 
-/// Saturate an `i64` into `i32` range.
-pub fn sat_clamp_i32(v: i64) -> i32 {
-    v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+/// Narrow an `i64` to `i32`: `None` outside the `i32` range. An arithmetic result that does not
+/// fit is an execution error, never a clamped value.
+pub fn narrow_i32(v: i64) -> Option<i32> {
+    i32::try_from(v).ok()
 }
 
 /// Split a raw `i64` accumulation by `divisor` (Euclidean): returns
@@ -19,7 +20,7 @@ pub fn sat_clamp_i32(v: i64) -> i32 {
 ///
 /// This is the single definition of the fused-rescale contract used by
 /// einsum, mul, square, cube and mean-of-squares. The op's output is
-/// `sat_clamp_i32(quotient)`; the pair is captured in the trace for the
+/// the quotient, which must lie in `i32`; the pair is captured in the trace for the
 /// prover.
 pub fn rebase(acc: i64, divisor: i64) -> (i64, i32) {
     debug_assert!(divisor > 0);
@@ -163,9 +164,11 @@ mod tests {
     }
 
     #[test]
-    fn sat_clamp_edges() {
-        assert_eq!(sat_clamp_i32(i64::MAX), i32::MAX);
-        assert_eq!(sat_clamp_i32(i64::MIN), i32::MIN);
-        assert_eq!(sat_clamp_i32(42), 42);
+    fn narrow_edges() {
+        assert_eq!(narrow_i32(i32::MAX as i64), Some(i32::MAX));
+        assert_eq!(narrow_i32(i32::MIN as i64), Some(i32::MIN));
+        assert_eq!(narrow_i32(i32::MAX as i64 + 1), None);
+        assert_eq!(narrow_i32(i32::MIN as i64 - 1), None);
+        assert_eq!(narrow_i32(42), Some(42));
     }
 }

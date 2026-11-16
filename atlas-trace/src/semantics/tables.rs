@@ -110,7 +110,7 @@ impl ActivationTable {
 /// to any entry for any input requires a new [`SemVersion`].
 pub fn table(kind: TableKind, scale: Scale, version: SemVersion) -> ActivationTable {
     match version {
-        SemVersion::V1 | SemVersion::V2 => {}
+        SemVersion::V1 | SemVersion::V2 | SemVersion::V3 => {}
     }
     match kind {
         TableKind::Tanh => sym_clamp_table(scale, 3, tanh_entry),

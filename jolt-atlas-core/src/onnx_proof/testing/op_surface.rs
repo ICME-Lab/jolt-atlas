@@ -7,19 +7,19 @@
 //! model must contain a node of the kind it claims to cover.
 //!
 //! Sizes: `T = 1 << 10` by default (prove cost is linear in `T`, the
-//! overflow / saturation paths are value-driven, and no size-gated prover
+//! overflow paths are value-driven, and no size-gated prover
 //! branch exists above `T = 8`); `t = 1000` for the non-power-of-two
 //! variants; one large smoke case (`mul_large_2p15`).
 //!
-//! Saturation cases are sized for the current `MODEL_SCALE` and assert that
-//! saturation really happened, so a scale change that stops them saturating
-//! fails loudly instead of silently testing the unsaturated path.
+//! Overflow cases are sized for the current `MODEL_SCALE` and are expected rejections: an
+//! arithmetic result outside `i32` is an execution error, so they must panic at the trace. A
+//! scale change that stops them overflowing fails loudly.
 
 use std::collections::BTreeSet;
 
 use atlas_lookup_tables::clamp::CLAMP_BOUND;
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
-use atlas_trace::{op::SmoothReluForm, trace::ModelExecutionIO, Model, Tensor};
+use atlas_trace::{op::SmoothReluForm, Model, Tensor};
 use common::consts::{ACTIVATION_BOUND, MODEL_SCALE, TRIG_PERIOD_MODULUS};
 use rand::{rngs::StdRng, SeedableRng};
 use strum::IntoEnumIterator;
@@ -32,8 +32,6 @@ pub(crate) struct OpCase {
     pub kind: OpKind,
     /// Builds the model and its inputs from a seeded RNG.
     pub build: fn(&mut StdRng) -> (Model, Vec<Tensor<i32>>),
-    /// Post-condition on the public IO (e.g. "the clamp really saturated").
-    pub check: Option<fn(&ModelExecutionIO)>,
 }
 
 /// Per-case seed derived from the case name (FNV-1a), so every case is
@@ -54,10 +52,7 @@ const fn seed_of(name: &str) -> u64 {
 pub(crate) fn run_case<PCS: CommitmentScheme>(case: &OpCase) {
     let mut rng = StdRng::seed_from_u64(seed_of(case.name));
     let (model, inputs) = (case.build)(&mut rng);
-    let io = prove_verify_roundtrip::<PCS>(model, &inputs, RoundtripOptions::default());
-    if let Some(check) = case.check {
-        check(&io);
-    }
+    prove_verify_roundtrip::<PCS>(model, &inputs, RoundtripOptions::default());
 }
 
 /// Run the case called `name` under `PCS`.
@@ -72,7 +67,7 @@ pub(crate) fn run_named<PCS: CommitmentScheme>(name: &str) {
 macro_rules! op_surface {
     ($(
         $(#[$meta:meta])*
-        $name:ident : $kind:ident $(, check = $check:expr)? => $build:expr ;
+        $name:ident : $kind:ident => $build:expr ;
     )*) => {
         /// Every declared case.
         pub(crate) const CASES: &[OpCase] = &[$(
@@ -80,7 +75,6 @@ macro_rules! op_surface {
                 name: stringify!($name),
                 kind: OpKind::$kind,
                 build: $build,
-                check: op_surface!(@opt $($check)?),
             },
         )*];
         $(
@@ -91,8 +85,6 @@ macro_rules! op_surface {
             }
         )*
     };
-    (@opt) => { None };
-    (@opt $check:expr) => { Some($check) };
 }
 
 // ── shared constants and helpers ─────────────────────────────────────────
@@ -109,30 +101,6 @@ fn vec_of(v: i32, dims: &[usize]) -> Tensor<i32> {
 
 fn tensor(data: &[i32], dims: &[usize]) -> Tensor<i32> {
     Tensor::from_slice(data, dims).unwrap()
-}
-
-/// Some output element saturated to `i32::MAX`.
-fn saturates_max(io: &ModelExecutionIO) {
-    assert!(
-        io.outputs[0].data().contains(&i32::MAX),
-        "expected a saturated (i32::MAX) output; got {:?}",
-        &io.outputs[0].data()[..io.outputs[0].data().len().min(8)]
-    );
-}
-
-/// Some output element saturated to `i32::MIN`.
-fn saturates_min(io: &ModelExecutionIO) {
-    assert!(
-        io.outputs[0].data().contains(&i32::MIN),
-        "expected a saturated (i32::MIN) output; got {:?}",
-        &io.outputs[0].data()[..io.outputs[0].data().len().min(8)]
-    );
-}
-
-/// Outputs saturated in both directions.
-fn saturates_both(io: &ModelExecutionIO) {
-    saturates_max(io);
-    saturates_min(io);
 }
 
 /// `op(input, random constant)` over `dims`, inputs in the i8 range.
@@ -211,7 +179,7 @@ fn unary_range(
     unary(dims, S, Tensor::random_range(rng, dims, range), op)
 }
 
-/// Alternating `i32::MAX ± k` / `i32::MIN ∓ k` so both clamp sides saturate.
+/// Alternating `i32::MAX ± k` / `i32::MIN ∓ k` so the result overflows on both sides.
 fn overflow_pair(t: usize, pos_delta: i32, neg_delta: i32) -> (Tensor<i32>, Tensor<i32>) {
     let input: Vec<i32> = (0..t)
         .map(|i| if i % 2 == 0 { i32::MAX } else { i32::MIN })
@@ -453,7 +421,7 @@ fn concat_padded(rng: &mut StdRng, shapes: &[&[usize]], axis: isize) -> (Model, 
     (b.build_padded(), inputs)
 }
 
-/// Magnitudes that saturate the fused rescale paths at the current scale.
+/// Magnitudes that overflow the fused rescale paths at the current scale.
 /// `(2^23+1)^2 >> 14 ≈ 2^32`, `(2^20+1)^3 >> 28 ≈ 2^32`, `16·(2^22+1)^2 >> 14
 /// ≈ 2^34`, `16·(2^23+1)^2 / (16·2^14) ≈ 2^32`.
 const SAT_SQUARE: i32 = (1 << 23) + 1;
@@ -493,8 +461,10 @@ op_surface! {
     add_tiny_t2: Add => |_| binary_const(&[2], 3, 2, |b, a, c| b.add(a, c));
     add_tiny_t4: Add => |_| binary_const(&[4], 3, 2, |b, a, c| b.add(a, c));
     add_tiny_t8: Add => |_| binary_const(&[8], 3, 2, |b, a, c| b.add(a, c));
-    add_scalar_sat_pos: Add, check = saturates_max => |_| binary_const(&[1], i32::MAX, i32::MAX, |b, a, c| b.add(a, c));
-    add_scalar_sat_neg: Add, check = saturates_min => |_| binary_const(&[1], i32::MIN, i32::MIN, |b, a, c| b.add(a, c));
+    #[should_panic(expected = "WitnessOverflow")]
+    add_scalar_sat_pos: Add => |_| binary_const(&[1], i32::MAX, i32::MAX, |b, a, c| b.add(a, c));
+    #[should_panic(expected = "WitnessOverflow")]
+    add_scalar_sat_neg: Add => |_| binary_const(&[1], i32::MIN, i32::MIN, |b, a, c| b.add(a, c));
     add_scalar_no_sat: Add => |_| binary_const(&[1], i32::MAX, -5, |b, a, c| b.add(a, c));
     /// A one-element `Add` that is not the model output: an interior cell of a one-cell bucket.
     add_scalar_internal: Add => |_| {
@@ -507,7 +477,8 @@ op_surface! {
         b.mark_output(o);
         (b.build(), vec![vec_of(123_456, &[1])])
     };
-    add_saturating_overflow_1k: Add, check = saturates_both => |_| add_const_overflow(T, 1000, -1000);
+    #[should_panic(expected = "WitnessOverflow")]
+    add_saturating_overflow_1k: Add => |_| add_const_overflow(T, 1000, -1000);
 
     // Sub
     sub_random_1k: Sub => |rng| binary_small(rng, &[T], |b, a, c| b.sub(a, c));
@@ -516,10 +487,13 @@ op_surface! {
     sub_tiny_t2: Sub => |_| binary_const(&[2], 7, 2, |b, a, c| b.sub(a, c));
     sub_tiny_t4: Sub => |_| binary_const(&[4], 7, 2, |b, a, c| b.sub(a, c));
     sub_tiny_t8: Sub => |_| binary_const(&[8], 7, 2, |b, a, c| b.sub(a, c));
-    sub_scalar_sat_pos: Sub, check = saturates_max => |_| binary_const(&[1], i32::MAX, i32::MIN, |b, a, c| b.sub(a, c));
-    sub_scalar_sat_neg: Sub, check = saturates_min => |_| binary_const(&[1], i32::MIN, i32::MAX, |b, a, c| b.sub(a, c));
+    #[should_panic(expected = "WitnessOverflow")]
+    sub_scalar_sat_pos: Sub => |_| binary_const(&[1], i32::MAX, i32::MIN, |b, a, c| b.sub(a, c));
+    #[should_panic(expected = "WitnessOverflow")]
+    sub_scalar_sat_neg: Sub => |_| binary_const(&[1], i32::MIN, i32::MAX, |b, a, c| b.sub(a, c));
     sub_scalar_no_sat: Sub => |_| binary_const(&[1], 10, 3, |b, a, c| b.sub(a, c));
-    sub_saturating_overflow_1k: Sub, check = saturates_both => |_| sub_const_overflow(T, -1000, 1000);
+    #[should_panic(expected = "WitnessOverflow")]
+    sub_saturating_overflow_1k: Sub => |_| sub_const_overflow(T, -1000, 1000);
     /// `y = sub(x, x)`: both operands open the same producer at the same
     /// point; the openings collapse to one entry and must still verify.
     sub_duplicate_operand: Sub => |rng| {
@@ -535,19 +509,20 @@ op_surface! {
     // Neg
     neg_random_1k: Neg => |rng| unary_small(rng, &[T], |b, i| b.neg(i));
     neg_non_pow2_1000: Neg => |rng| unary_small(rng, &[T_ODD], |b, i| b.neg(i));
-    /// The executor negates with saturation (`-i32::MIN = i32::MAX`) but the
-    /// verifier ties `out = -in` exactly, so an honest trace containing
-    /// `i32::MIN` produces a proof that does not verify (completeness gap).
-    #[ignore = "known gap: Neg saturates in the executor but the proof relation is exact negation; \
-                verify fails with `Neg output claim should equal the negation of the operand claim`"]
-    known_gap_neg_i32_min_saturates: Neg, check = saturates_max => |_| unary(&[4], S, tensor(&[i32::MIN, i32::MIN + 1, 0, i32::MAX], &[4]), |b, i| b.neg(i));
+    /// `-i32::MIN` is not an `i32`: the execution fails, and `Neg`'s exact relation holds on
+    /// every execution that exists.
+    #[should_panic(expected = "WitnessOverflow")]
+    neg_i32_min_rejected: Neg => |_| unary(&[4], S, tensor(&[i32::MIN, i32::MIN + 1, 0, i32::MAX], &[4]), |b, i| b.neg(i));
 
     // Mul (fused rescale)
     mul_random_1k: Mul => |rng| binary_small(rng, &[T], |b, a, c| b.mul(a, c));
     mul_non_pow2_1000: Mul => |rng| binary_small(rng, &[T_ODD], |b, a, c| b.mul(a, c));
-    mul_saturates_pos: Mul, check = saturates_max => |_| binary_const(&[16], SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
-    mul_saturates_neg: Mul, check = saturates_min => |_| binary_const(&[16], -SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
-    mul_scalar_rescale_sat: Mul, check = saturates_max => |_| binary_const(&[1], SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
+    #[should_panic(expected = "WitnessOverflow")]
+    mul_saturates_pos: Mul => |_| binary_const(&[16], SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
+    #[should_panic(expected = "WitnessOverflow")]
+    mul_saturates_neg: Mul => |_| binary_const(&[16], -SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
+    #[should_panic(expected = "WitnessOverflow")]
+    mul_scalar_rescale_sat: Mul => |_| binary_const(&[1], SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
     /// A one-element fused `Mul` that is not the model output: one cell in a clamp bucket and
     /// one in a remainder bucket.
     mul_scalar_internal: Mul => |_| {
@@ -566,12 +541,15 @@ op_surface! {
     // Square / Cube
     square_random_1k: Square => |rng| unary_small(rng, &[T], |b, i| b.square(i));
     square_non_pow2_1000: Square => |rng| unary_small(rng, &[T_ODD], |b, i| b.square(i));
-    square_saturates: Square, check = saturates_max => |_| unary(&[16], S, vec_of(SAT_SQUARE, &[16]), |b, i| b.square(i));
+    #[should_panic(expected = "WitnessOverflow")]
+    square_saturates: Square => |_| unary(&[16], S, vec_of(SAT_SQUARE, &[16]), |b, i| b.square(i));
     square_scalar_out: Square => |_| unary(&[1], S, vec_of(1000, &[1]), |b, i| b.square(i));
     cube_random_1k: Cube => |rng| unary_small(rng, &[T], |b, i| b.cube(i, S));
     cube_non_pow2_1000: Cube => |rng| unary_small(rng, &[T_ODD], |b, i| b.cube(i, S));
-    cube_saturates_pos: Cube, check = saturates_max => |_| unary(&[16], S, vec_of(SAT_CUBE, &[16]), |b, i| b.cube(i, S));
-    cube_saturates_neg: Cube, check = saturates_min => |_| unary(&[16], S, vec_of(-SAT_CUBE, &[16]), |b, i| b.cube(i, S));
+    #[should_panic(expected = "WitnessOverflow")]
+    cube_saturates_pos: Cube => |_| unary(&[16], S, vec_of(SAT_CUBE, &[16]), |b, i| b.cube(i, S));
+    #[should_panic(expected = "WitnessOverflow")]
+    cube_saturates_neg: Cube => |_| unary(&[16], S, vec_of(-SAT_CUBE, &[16]), |b, i| b.cube(i, S));
     cube_raw_no_rebase: Cube => |rng| unary_small(rng, &[T], |b, i| b.cube(i, 0));
     cube_scalar_out: Cube => |_| unary(&[1], S, vec_of(1000, &[1]), |b, i| b.cube(i, S));
 
@@ -680,7 +658,8 @@ op_surface! {
     mean_of_squares_scalar_out: MeanOfSquares => |rng| mos_model(rng, 1, 128);
     /// `count = 96` vs `padded_count = 128` (GPT-2's 768-wide LayerNorm shape class).
     mean_of_squares_non_pow2_count_96: MeanOfSquares => |rng| mos_model(rng, 8, 96);
-    mean_of_squares_saturates: MeanOfSquares, check = saturates_max => |_| {
+    #[should_panic(expected = "WitnessOverflow")]
+    mean_of_squares_saturates: MeanOfSquares => |_| {
         let mut b = ModelBuilder::new();
         let i = b.input(vec![2, 16]);
         let o = b.mean_of_squares(i, vec![1], vec![2, 1]);
@@ -693,7 +672,8 @@ op_surface! {
     sum_axis0_2d: Sum => |rng| sum_model(rng, 16, 32, 0);
     sum_axis1_2d: Sum => |rng| sum_model(rng, 16, 32, 1);
     sum_axis1_1d: Sum => |rng| sum_model(rng, 16, 1, 1);
-    sum_saturating_rows: Sum, check = saturates_both => |_| {
+    #[should_panic(expected = "WitnessOverflow")]
+    sum_saturating_rows: Sum => |_| {
         let (m, n) = (4, 8);
         let data: Vec<i32> = (0..m * n)
             .map(|i| if (i / n) % 2 == 0 { i32::MAX / 2 } else { i32::MIN / 2 })
@@ -704,7 +684,8 @@ op_surface! {
         b.mark_output(o);
         (b.build(), vec![tensor(&data, &[m, n])])
     };
-    sum_scalar_saturating: Sum, check = saturates_max => |_| {
+    #[should_panic(expected = "WitnessOverflow")]
+    sum_scalar_saturating: Sum => |_| {
         let mut b = ModelBuilder::new();
         let i = b.input(vec![64, 1]);
         let o = b.sum(i, vec![0], vec![1]);
@@ -780,8 +761,10 @@ op_surface! {
     einsum_mk_kn_mn_scalar_out: Einsum => |rng| einsum_model(rng, "mk,kn->mn", &[1, 16], &[16, 1], &[1, 1]);
     #[ignore = "non-power-of-two einsum path not supported"]
     einsum_mk_kn_mn_non_pow2: Einsum => |rng| einsum_model(rng, "mk,kn->mn", &[33, 65], &[65, 17], &[33, 17]);
-    einsum_mk_kn_mn_saturates_pos: Einsum, check = saturates_max => |_| einsum_const("mk,kn->mn", &[2, 16], &[16, 2], &[2, 2], SAT_EINSUM, SAT_EINSUM);
-    einsum_mk_kn_mn_saturates_neg: Einsum, check = saturates_min => |_| einsum_const("mk,kn->mn", &[2, 16], &[16, 2], &[2, 2], -SAT_EINSUM, SAT_EINSUM);
+    #[should_panic(expected = "WitnessOverflow")]
+    einsum_mk_kn_mn_saturates_pos: Einsum => |_| einsum_const("mk,kn->mn", &[2, 16], &[16, 2], &[2, 2], SAT_EINSUM, SAT_EINSUM);
+    #[should_panic(expected = "WitnessOverflow")]
+    einsum_mk_kn_mn_saturates_neg: Einsum => |_| einsum_const("mk,kn->mn", &[2, 16], &[16, 2], &[2, 2], -SAT_EINSUM, SAT_EINSUM);
     einsum_k_nk_n_128x256: Einsum => |rng| einsum_model(rng, "k,nk->n", &[128], &[256, 128], &[256]);
     #[ignore = "non-power-of-two einsum path not supported"]
     einsum_k_nk_n_non_pow2: Einsum => |rng| einsum_model(rng, "k,nk->n", &[65], &[33, 65], &[33]);

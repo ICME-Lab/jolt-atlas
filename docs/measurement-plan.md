@@ -375,6 +375,45 @@ gets simpler for range checks). D3 is the lattice-side path and moves up, with D
 The end state was decided on 2026-11-10 without the BitZ arm: Akita stays, BitZ is kept in view
 (`docs/prover-plan.md` section 5). The arm above is optional and off the critical path.
 
+### BitZ under the Mosaic layout (planned 2026-11-16)
+
+The question: is one BitZ commitment laid out as in MosaicPCS (Magnetar §2.2, §5.2) faster for
+this prover than Akita with per-class openings? It replaces the arm above, whose threshold was
+set against one-hot digits. What it would replace is measured by `bench/gate.sh` on the
+benchmark machine: of a 39 s GPT-2 prove at 16 tokens, `commit` is 11.7 s and `openings` 14.5 s
+(the reduction sumcheck plus one Akita opening per class), and the two digit-range batches
+exist only because Akita gives no range bound.
+
+Three stages, cheapest first; each can stop the next. All on the benchmark machine, idle.
+
+1. **Volume and the raw scheme (no new code).** Take the committed volume in bits from
+   `prove --census` on GPT-2 and bge-small: two bits per base-4 digit, `log K` bits per one-hot
+   address chunk, 32 per dense i32 column. Round the total up to the next power of two (the
+   packed polynomial; an estimate of 2^29–2^30 on GPT-2, not yet counted). Run `bitz_bench <n> --reps 3` at that `n`
+   and one below, at 16 threads and at 1. Record commit, prove (the opening) with its phases,
+   verify, proof bytes and peak RSS. **Stop** if commit + prove is not at least 3x below
+   Akita's commit + openings on the same machine: the layout cannot recover that.
+2. **The Mosaic batching sumcheck (a small crate over `atlas-sumcheck`, Fp128).** Build one
+   bit-valued polynomial of stage 1's size with the real column list on aligned subcubes, take
+   as many claims at independent points as a GPT-2 proof carries (1,833 when `docs/prover-plan.md` item 8 was written; recount), lift
+   each by its suffix and run `Σ_i α_i·eq(r_i ‖ s_i, x)·G(x)` to one point. This is the cost
+   that replaces the reduction sumcheck and every per-class opening, and no paper prices it
+   for a claim count like ours. Record time, peak memory and the split between building the
+   combined `eq` weight and the rounds.
+3. **The Fp128 round.** `bitz_bench` samples its own transcript prime; proving claims over our
+   fixed 128-bit prime needs BitZ's extra round, which the proof-of-concept does not exercise.
+   Add it to the example or bound it from the paper, and say which.
+
+**Result table:** stage 1 commit + stage 2 + stage 1 prove + stage 3, against Akita's
+`commit` + `openings`, with the two digit-range batches credited to BitZ (its commitment
+bounds every coefficient to a bit, so base-4 digits need no zero-check). Beside the times:
+proof size (2.25 MiB today), verify time, peak memory.
+
+**What the result does not cover:** BitZ is hash-based and not zero-knowledge, and the
+proof-of-concept is not a maintained prover; an owned implementation is the cost of a yes.
+The Mosaic layout over Akita is not an arm: one dense polynomial of this size is past
+Akita's 2^28 cap, and the Akita form of the idea is item 8's one-group layout.
+
 ### Baseline for the protocol-simplification specs (2026-11-16, commit c65753bfa)
 
 Taken after the owned-toolkit program (`docs/roadmap.md`, phases 1–7) and before any of the

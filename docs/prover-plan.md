@@ -295,9 +295,10 @@ lands on: stage times within 3%, peak memory within 5%, unless the spec states t
 
 5. Measure before choosing. Section 1's profile is from an M3 at `25c7218f1`, before every
    change above; redo it on the benchmark machine at the commit step 4 lands on. The same
-   session settles decision 3 (base 4 or Booleans) and runs the BitZ arm of decision 1. BitZ
-   comes before any Akita-specific work: if the scheme changes, item 8 and the `akita-*` rev
-   bump are moot.
+   session settles decision 3 (base 4 or Booleans) and runs the BitZ and Mosaic arm of
+   decision 1 (`docs/measurement-plan.md`, "BitZ under the Mosaic layout"). That arm comes
+   before any Akita-specific work: if the scheme changes, item 8 and the `akita-*` rev bump are
+   moot.
 6. Item 3's standalone relation test with the negative test, then on the MLP rows; item 4's
    narrower declared widths.
 7. `digits-as-trace` stages 2 and 3: digit-backed relations batched outside the node loop
@@ -355,6 +356,11 @@ The order of steps 6–9 is provisional: step 5's profile decides it.
    BitZ arm of the measurement plan (Phase 3): commit and opening together on our digit volumes,
    against the dense base-4 Akita numbers of items 1–2, not the one-hot ones. Akita stays the
    scheme in the tree until that run and a spec. Recursion and proof size are not yet weighed.
+   The candidate measured is BitZ under Magnetar's MosaicPCS layout, not BitZ per class: every
+   committed column on an aligned subcube of one bit polynomial, one commitment, claims lifted
+   by appending the subcube's suffix, one degree-2 batching sumcheck, one opening. The layout
+   is what removes the per-class openings; BitZ is what makes one 2^30 polynomial committable
+   (Akita's dense commit is capped at 2^28 coefficients).
 2. **Semantics under declared widths:** saturate at the declared width, or partial-function
    semantics with the tracer asserting. Item 4; a `SemVersion` change either way.
 3. **Base 4 or Booleans** for item 1, by measured total time. Open: item 1 ships base 4 on

@@ -410,6 +410,43 @@ Saved binaries older than the PCS-adapter move read the Akita schedule files fro
 unchanged at `atlas-pcs/schedules/`; to run such a binary, link that directory to the old path
 for the duration of the run.
 
+### Baseline on the benchmark machine (2026-11-16, `bench/gate.sh`)
+
+The same baseline re-taken on `atlas-bench` (16-core arm64, 30 GB), where nothing else runs:
+`bench/gate.sh a166b0148 c65753bfa 026041101`, interleaved, five runs on GPT-2 at 16 tokens
+and three on bge-small. `a166b0148` is the end of the field phase, `c65753bfa` the baseline the
+simplification specs name, `026041101` the head of `specs/no-scalar-special-cases.md`. Medians:
+
+| GPT-2, 16 tok | a166b0148 | c65753bfa | 026041101 |
+|---|---|---|---|
+| prove s | 38.87 | 39.28 | 39.05 |
+| commit s | 11.8 | 11.7 | 11.5 |
+| IOP s | 8.86 | 8.95 | 8.84 |
+| openings s | 14.3 | 14.5 | 14.4 |
+| verify s | 3.49 | 3.52 | 3.49 |
+| peak GB | 17.7 | 17.6 | 17.8 |
+
+| bge-small, 16 tok | a166b0148 | c65753bfa | 026041101 |
+|---|---|---|---|
+| prove s | 24.07 | 24.46 | 24.07 |
+| commit s | 4.46 | 4.44 | 4.42 |
+| IOP s | 5.60 | 5.60 | 5.53 |
+| openings s | 13.4 | 13.7 | 13.4 |
+| verify s | 2.31 | 2.33 | 2.30 |
+| peak GB | 7.8 | 7.8 | 7.8 |
+
+Prove spread (max − min) per commit is 0.6–1.6 s on GPT-2 and 0.5–1.0 s on bge-small, so the
+medians are good to about 2%. Readings:
+
+- **Removing arkworks cost nothing measurable**: `c65753bfa` is +1.1% on GPT-2 and +1.6% on
+  bge-small against `a166b0148`, inside the spread. The gate for the polynomial and field
+  phases themselves is a separate run.
+- **The scalar change is neutral**, as expected: neither model has a one-element clamped node.
+- **Peak memory on GPT-2 is 17.6 GB here.** The laptop runs above reported 6–7 GB for the same
+  binary, which was the machine compressing memory under pressure, not the prover's footprint.
+  A 16 GB machine does not hold this proof in RAM.
+- These timings are not comparable to the M3 tables elsewhere in this document.
+
 ### Phase 4: prototypes (builds 4 and 5: release and test, both full)
 
 Only what Gates 2 and 3 selected. This is the first phase that changes protocol code, so it is the

@@ -116,18 +116,7 @@ use crate::onnx_proof::{
         softmax_last_axis::SoftmaxAddresses,
         tanh::TanhTableMarker,
     },
-    plan::{
-        OpActivation, OpLookup, OpOpen, OpPlan, OpRangeCheck, OpRelation, OpTie, OpTrig, Plan, Step,
-    },
-    range_checking::{
-        range_check_operands::RangeCheckWitness,
-        range_check_operands::{
-            DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
-            RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
-            TeleportRangeCheckOperands,
-        },
-        RangeCheckProve, RangeCheckProvider,
-    },
+    plan::{OpActivation, OpLookup, OpOpen, OpPlan, OpRelation, OpTie, OpTrig, Plan, Step},
     relation::{prove_tie, RelationParams, RelationProver, RelationWitnesses},
     trace_view::TraceView,
     ProofId,
@@ -138,7 +127,6 @@ use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable},
     relu::ReluTable,
     right_shift::RightShiftTable,
-    unsigned_less_than::UnsignedLessThanTable,
 };
 use atlas_sumcheck::booleanity::BooleanitySumcheckParams;
 use atlas_sumcheck::digit_range::DigitRangeParams;
@@ -184,8 +172,6 @@ impl OperatorProver {
 pub enum Addresses {
     /// An [`OpRelation::Lookup`].
     Lookup(OpLookup),
-    /// An [`OpRelation::RangeCheck`].
-    RangeCheck(OpRangeCheck),
     /// An [`OpRelation::SmallActivation`].
     SmallActivation,
     /// An [`OpRelation::Trig`].
@@ -363,16 +349,6 @@ fn prepare<F: JoltField, T: Transcript>(
             .expect("the prover holds the one-hot checks' claims");
         Prepared::OneHot(params, prover.take_addresses(key, node_idx))
     }
-    fn range_check_onehot<F: JoltField, T: Transcript, H: RangeCheckingOperandsTrait>(
-        kind: OpRangeCheck,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Prepared<F, T> {
-        let encoding = RangeCheckOperands::<H>::new(node)
-            .expect("the prover's model has a range check for the node")
-            .get_encoding(node);
-        onehot(&encoding, Addresses::RangeCheck(kind), node.idx, prover)
-    }
     match relation {
         OpRelation::LookupOneHot(kind @ OpLookup::Relu, node) => onehot(
             &OpLookupEncoding::<DefaultLookupOperands>::new(&node),
@@ -398,21 +374,6 @@ fn prepare<F: JoltField, T: Transcript>(
             node.idx,
             prover,
         ),
-        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::Div, node) => {
-            range_check_onehot::<F, T, DivRangeCheckOperands>(kind, &node, prover)
-        }
-        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::MeanOfSquares, node) => {
-            range_check_onehot::<F, T, MeanOfSquaresRangeCheckOperands>(kind, &node, prover)
-        }
-        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::RsqrtDiv, node) => {
-            range_check_onehot::<F, T, RiRangeCheckOperands>(kind, &node, prover)
-        }
-        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::RsqrtSqrt, node) => {
-            range_check_onehot::<F, T, RsRangeCheckOperands>(kind, &node, prover)
-        }
-        OpRelation::RangeCheckOneHot(kind @ OpRangeCheck::Teleport, node) => {
-            range_check_onehot::<F, T, TeleportRangeCheckOperands>(kind, &node, prover)
-        }
         OpRelation::SmallActivationOneHot(node) => onehot(
             &SmallTableRaEncoding { node_idx: node.idx },
             Addresses::SmallActivation,
@@ -572,21 +533,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         prover.leave_addresses(Addresses::Lookup(kind), node_idx, indices);
         vec![Box::new(witness)]
     }
-    fn range_check<F: JoltField, T: Transcript, H: RangeCheckWitness>(
-        kind: OpRangeCheck,
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-        let (witness, indices) = RangeCheckProvider::<H>::new(node)
-            .expect("the prover's model has a range check for the node")
-            .read_raf_prove::<F, T, UnsignedLessThanTable<XLEN>>(
-                &prover.trace,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-        prover.leave_addresses(Addresses::RangeCheck(kind), node.idx, indices);
-        vec![Box::new(witness)]
-    }
     fn small_activation<F: JoltField, T: Transcript, Table: SmallActivationTable>(
         node: &ComputationNode,
         prover: &mut Prover<F, T>,
@@ -696,21 +642,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
             ))]
         }
         OpRelation::Mul(relation) => engine(relation, prover),
-        OpRelation::RangeCheck(kind @ OpRangeCheck::Div, node) => {
-            range_check::<F, T, DivRangeCheckOperands>(kind, &node, prover)
-        }
-        OpRelation::RangeCheck(kind @ OpRangeCheck::MeanOfSquares, node) => {
-            range_check::<F, T, MeanOfSquaresRangeCheckOperands>(kind, &node, prover)
-        }
-        OpRelation::RangeCheck(kind @ OpRangeCheck::RsqrtDiv, node) => {
-            range_check::<F, T, RiRangeCheckOperands>(kind, &node, prover)
-        }
-        OpRelation::RangeCheck(kind @ OpRangeCheck::RsqrtSqrt, node) => {
-            range_check::<F, T, RsRangeCheckOperands>(kind, &node, prover)
-        }
-        OpRelation::RangeCheck(kind @ OpRangeCheck::Teleport, node) => {
-            range_check::<F, T, TeleportRangeCheckOperands>(kind, &node, prover)
-        }
         OpRelation::Reshape(relation) => engine(relation, prover),
         OpRelation::Rsqrt(relation) => engine(relation, prover),
         OpRelation::Slice(relation) => engine(relation, prover),
@@ -756,7 +687,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         OpRelation::Trig(OpTrig::Cos, node) => trig::<F, T, CosTable>(node, prover),
         OpRelation::Trig(OpTrig::Sin, node) => trig::<F, T, SinTable>(node, prover),
         one_hot @ (OpRelation::LookupOneHot(..)
-        | OpRelation::RangeCheckOneHot(..)
         | OpRelation::SmallActivationOneHot(_)
         | OpRelation::TrigOneHot(..)
         | OpRelation::ClampBucketValue(_)
@@ -838,7 +768,7 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
 }
 
 /// Append a plan tie's produced openings with the prover's claims. An in-the-clear check
-/// (a one-element remainder, an exact output, a bucket's exact flag) produces nothing here: its
+/// (an exact output, a bucket's exact flag) produces nothing here: its
 /// openings are earlier steps'.
 fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prover<F, T>) {
     let expect = "the prover holds every claim it reads";
@@ -877,7 +807,6 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
                 .append_nodeio(Target::Input(0), a_claim);
         }
         OpTie::Softmax(tie) => softmax_last_axis::prove_tie(tie),
-        OpTie::ScalarRemainder { .. } | OpTie::ExactClampOutput(_) | OpTie::ClampBucketExact(_) => {
-        }
+        OpTie::ExactClampOutput(_) | OpTie::ClampBucketExact(_) => {}
     }
 }

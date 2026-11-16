@@ -128,12 +128,13 @@ fn scalars_probe_layout() {
         clamped.len(),
         "one bucket per one-element node"
     );
-    for bucket in buckets.iter().chain(&remainder_buckets(&model)) {
+    let remainders = remainder_buckets(&model).expect("remainder layout");
+    for bucket in buckets.iter().chain(&remainders) {
         assert_eq!(bucket.log_t, 0);
         assert_eq!(bucket.nodes.len(), 1);
         assert_eq!(bucket.nodes[0].log_t, 0);
     }
-    assert_eq!(remainder_buckets(&model).len(), 1, "the fused Mul");
+    assert_eq!(remainders.len(), 1, "the fused Mul");
 
     let views = model.views();
     let mut saturated = 0;

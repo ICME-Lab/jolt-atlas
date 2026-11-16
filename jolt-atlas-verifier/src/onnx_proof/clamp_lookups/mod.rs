@@ -29,30 +29,6 @@ use common::VirtualPoly;
 /// `crate::node_view`); this is the default / upper bound.
 pub const CLAMP_LOG_K: usize = 64;
 
-/// Whether `node`'s (padded) output is a single element (`log_T = 0`).
-///
-/// A one-element `MeanOfSquares` node has its remainder bound checked in the clear instead of
-/// by a lookup range check: the remainder opens at the empty point, so its claim is the value
-/// (see [`recover_small_int`]). The saturating clamp makes no such distinction.
-pub fn is_scalar(node: &ComputationNode) -> bool {
-    node.pow2_padded_num_output_elements() == 1
-}
-
-/// Recover the signed integer encoded by a field element known to be a
-/// small-magnitude `i32`/`i64` embedding (e.g. a rescale remainder).
-///
-/// Returns `None` if the element is neither a small non-negative value nor a
-/// small negation — a malformed claim.
-pub fn recover_small_int<F: JoltField>(x: F) -> Option<i64> {
-    if let Some(u) = x.to_u64() {
-        i64::try_from(u).ok()
-    } else {
-        (-x).to_u64()
-            .and_then(|u| i64::try_from(u).ok())
-            .map(|n| -n)
-    }
-}
-
 /// Opening id for a node's accumulation (`ClampAcc`) polynomial.
 pub fn acc_opening_id(node_idx: usize) -> OpeningId {
     OpeningId::new(

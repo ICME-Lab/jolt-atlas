@@ -61,51 +61,11 @@ canonical_serde_enum! {
         TrigDownscaleRaD(usize, usize),
 
         // ----- Range-check one-hot polynomials for advice values (node_index, d) -----
-        /// Interleaved remainder `R` and divisor one-hot polynomial for the
-        /// **Div** range check.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        DivRangeCheckRaD(usize, usize),
-
-        /// Interleaved remainder `R` and divisor one-hot polynomial for the
-        /// **Sqrt** division range check.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SqrtDivRangeCheckRaD(usize, usize),
-
-        /// Interleaved remainder `R` and (constant) divisor one-hot polynomial for
-        /// the fused **MeanOfSquares** rescaling-remainder range check `R < N·2^S`
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        MeanOfSquaresRangeCheckRaD(usize, usize),
-
-        /// Interleaved `r_s` and square-root one-hot polynomial for the
-        /// **Sqrt** range check.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SqrtRangeCheckRaD(usize, usize),
-
-        /// Remainder and input one-hot polynomial for the **neural teleportation**
-        /// division range check.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        TeleportRangeCheckRaD(usize, usize),
-
         // ----- Scalar advice polynomials (node_index) -----
         /// Advice polynomial for the **quotient** in integer division.
         ///
         /// * `0` – node index
         DivNodeQuotient(usize),
-
-        /// Advice polynomial for the **remainder** in scalar-constant division.
-        ///
-        /// * `0` – node index
-        ScalarConstDivNodeRemainder(usize),
 
         /// Advice polynomial for the fused Rsqrt **quotient** `⌊S³ / x̂⌋`,
         /// i.e. the value fed into the integer square root.
@@ -128,18 +88,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         /// * `1` – decomposition index `d`
         GatherRaD(usize, usize),
-
-        /// One-hot read-address decomposition for the softmax **remainder** RC.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SoftmaxRemainderRaD(usize, usize),
-
-        /// One-hot read-address decomposition for the softmax **exp-remainder** RC.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SoftmaxExpRemainderRaD(usize, usize),
 
         /// One-hot read-address decomposition for the softmax **exp-hi** Shout lookup.
         ///
@@ -294,33 +242,16 @@ canonical_serde_enum! {
 
         // ----- Advice-derived polynomials (proven via ReadRafSumcheckProver) -----
 
-        /// Read-address polynomial derived from [`CommittedPoly::DivRangeCheckRaD`].
-        ///
-        /// * `0` – node index
-        DivRangeCheckRa(usize),
-
-        /// Read-address polynomial derived from [`CommittedPoly::SqrtRangeCheckRaD`].
-        ///
-        /// * `0` – node index
-        SqrtRangeCheckRa(usize),
-
-        /// Read-address polynomial derived from
-        /// [`CommittedPoly::TeleportRangeCheckRaD`].
-        ///
-        /// * `0` – node index
-        TeleportRangeCheckRa(usize),
-
-        /// Read-address polynomial derived from
-        /// [`CommittedPoly::MeanOfSquaresRangeCheckRaD`].
-        ///
-        /// * `0` – node index
-        MeanOfSquaresRangeCheckRa(usize),
-
         // ----- Division / square-root remainder & quotient polynomials -----
         /// Remainder polynomial for integer division advice.
         ///
         /// * `0` – node index
         DivRemainder(usize),
+
+        /// Remainder polynomial of a scalar-constant division.
+        ///
+        /// * `0` – node index
+        ScalarConstDivRemainder(usize),
 
         /// Remainder polynomial for square-root advice.
         ///
@@ -354,11 +285,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         SoftmaxExpQ(usize),
 
-        /// The one-hot encoding of the softmax R poly
-        ///
-        /// * `0` – node index
-        SoftmaxRemainderRa(usize),
-
         /// The rv polynomial for the softmax exponentiation lookup.
         ///
         /// * `0` – node index
@@ -373,11 +299,6 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         SoftmaxExpRemainder(usize),
-
-        /// One-hot-encoded Read-address polynomial for the softmax exp-remainder range check.
-        ///
-        /// * `0` – node index
-        SoftmaxExpRemainderRa(usize),
 
         /// The raf polynomial for the softmax `exp_hi` sub-table lookup.
         ///

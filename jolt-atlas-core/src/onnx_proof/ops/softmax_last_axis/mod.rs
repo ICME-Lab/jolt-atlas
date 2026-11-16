@@ -29,10 +29,9 @@ use crate::{
             exp_sum::{ExpSumParams, ExpSumProver},
             exponentiation::{
                 mult::{MultParams, MultProver},
-                ExpDigit, ExpReadRafProvider,
+                ExpDigit, ExpReadRafProvider, SoftmaxRaEncoding,
             },
             max::{MaxIndicatorParams, MaxIndicatorProver},
-            rc::{SoftmaxRCProvider, SoftmaxRaEncoding},
             recip_mult::{RecipMultParams, RecipMultProver},
             significance_clamp::SoftmaxSignificanceClampOperands,
         },
@@ -46,9 +45,9 @@ use atlas_trace::{SoftmaxWitness, Tensor, Trace};
 use atlas_algebra::{
     field::JoltField,
     poly::{multilinear::EvaluateMle, point::OpeningPoint},
-    utils::{lookup_bits::LookupBits, math::Math},
+    utils::math::Math,
 };
-use atlas_sumcheck::{identity_range_check::prover::identity_rangecheck_prover, shout};
+use atlas_sumcheck::shout;
 use atlas_transcript::Transcript;
 use common::{consts::XLEN, VirtualPoly};
 
@@ -58,8 +57,6 @@ pub mod exp_sum;
 pub mod exponentiation;
 /// max indicator: max_k(r1_k) = sum_{k,j} eq(r1_k, k) * x[k,j] * e[k,j], where e[k,j] = 1 iff j = argmax_k
 pub mod max;
-/// Range-check provider
-pub mod rc;
 /// softmax(r0) * S + R(r0) = sum_{k,j} eq(r0, (k,j)) * exp_q[k,j] * inv_sum[k]
 pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
@@ -206,16 +203,8 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
                     .expect(expect);
             let exp_sum_prover = ExpSumProver::initialize(w.exp_q.clone(), exp_sum_params);
 
-            let provider = SoftmaxRCProvider::remainder(shape.node.clone(), shape.scale_bits);
-            let r_lookup_bits = to_lookup_bits(&w.r, shape.scale_bits as usize);
-            let rc_R_prover = identity_rangecheck_prover(&provider, r_lookup_bits, accumulator);
-
             (
-                vec![
-                    Box::new(recip_mult_prover),
-                    Box::new(exp_sum_prover),
-                    Box::new(rc_R_prover),
-                ],
+                vec![Box::new(recip_mult_prover), Box::new(exp_sum_prover)],
                 Vec::new(),
             )
         }
@@ -248,24 +237,8 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
             let exp_mult_prover =
                 MultProver::initialize(w.exp_hi.clone(), w.exp_lo.clone(), exp_mult_params);
 
-            let provider = SoftmaxRCProvider::exp_remainder(shape.node.clone(), shape.scale_bits);
-            let r_exp_lookup_bits = to_lookup_bits(&w.r_exp, shape.scale_bits as usize);
-            let exp_r_rc_prover =
-                identity_rangecheck_prover(&provider, r_exp_lookup_bits, accumulator);
-
-            let encoding = SoftmaxRaEncoding::remainder(shape.idx(), shape.scale_bits);
-            let r_indices = to_indices(&w.r);
-            let [R_ra_prover, R_bool_prover] =
-                shout::prover::ra_onehot_provers(&encoding, &r_indices, &*accumulator, transcript);
-
             (
-                vec![
-                    Box::new(exp_mult_prover),
-                    Box::new(max_indicator_prover),
-                    Box::new(exp_r_rc_prover),
-                    R_ra_prover,
-                    R_bool_prover,
-                ],
+                vec![Box::new(exp_mult_prover), Box::new(max_indicator_prover)],
                 Vec::new(),
             )
         }
@@ -320,23 +293,8 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
                     transcript,
                 );
 
-            let encoding = SoftmaxRaEncoding::exp_remainder(shape.idx(), shape.scale_bits);
-            let r_exp_indices = to_indices(&w.r_exp);
-            let [exp_r_ra_prover, exp_r_bool_prover] = shout::prover::ra_onehot_provers(
-                &encoding,
-                &r_exp_indices,
-                &*accumulator,
-                transcript,
-            );
-
             (
-                vec![
-                    hi_prover,
-                    lo_prover,
-                    Box::new(significance_clamp_prover),
-                    exp_r_ra_prover,
-                    exp_r_bool_prover,
-                ],
+                vec![hi_prover, lo_prover, Box::new(significance_clamp_prover)],
                 vec![
                     (SoftmaxAddresses::ExpHi, lut.z_hi_indices),
                     (SoftmaxAddresses::ExpLo, lut.z_lo_indices),
@@ -419,14 +377,6 @@ fn lookup_tables(shape: &SoftmaxShape, w: &SoftmaxWitness) -> LookupTableData {
 /// Convert `i32` trace values to usize indices.
 pub(crate) fn to_indices(values: &[i32]) -> Vec<usize> {
     values.iter().map(|&v| v as usize).collect()
-}
-
-/// Convert `i32` trace values to `LookupBits` with the given bit-width.
-pub(crate) fn to_lookup_bits(values: &[i32], bits: usize) -> Vec<LookupBits> {
-    values
-        .iter()
-        .map(|&v| LookupBits::new(v as u64, bits))
-        .collect()
 }
 
 /// Pad a vector in-place to the next power of two with zeros.

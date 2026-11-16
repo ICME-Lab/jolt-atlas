@@ -56,11 +56,6 @@ impl ComputationNode {
             .product()
     }
 
-    /// Whether the node produces a single element.
-    pub fn is_scalar(&self) -> bool {
-        self.num_output_elements() == 1
-    }
-
     /// The node index of operand `position`. A position past the node's operands gives
     /// `usize::MAX`, the index of no node, so no accumulator holds an opening keyed by it.
     pub fn input(&self, position: usize) -> usize {

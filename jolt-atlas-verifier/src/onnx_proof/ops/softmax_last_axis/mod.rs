@@ -21,9 +21,8 @@ use crate::{
         op_lookups::OpLookupProvider,
         ops::softmax_last_axis::{
             exp_sum::ExpSumParams,
-            exponentiation::{mult::MultParams, ExpDigit, ExpReadRafProvider},
+            exponentiation::{mult::MultParams, ExpDigit, ExpReadRafProvider, SoftmaxRaEncoding},
             max::MaxIndicatorParams,
-            rc::{SoftmaxRCProvider, SoftmaxRaEncoding},
             recip_mult::{RecipMultParams, RecipMultRelation},
             significance_clamp::SoftmaxSignificanceClampOperands,
         },
@@ -49,7 +48,7 @@ use atlas_algebra::{
     },
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_sumcheck::{identity_range_check::identity_rangecheck_verifier, shout};
+use atlas_sumcheck::shout;
 use atlas_transcript::Transcript;
 use common::{
     consts::{MODEL_SCALE, XLEN},
@@ -65,8 +64,6 @@ pub mod exp_sum;
 pub mod exponentiation;
 /// max indicator: max_k(r1_k) = sum_{k,j} eq(r1_k, k) * x[k,j] * e[k,j], where e[k,j] = 1 iff j = argmax_k
 pub mod max;
-/// Range-check provider
-pub mod rc;
 /// softmax(r0) * S + R(r0) = sum_{k,j} eq(r0, (k,j)) * exp_q[k,j] * inv_sum[k]
 pub mod recip_mult;
 /// The saturating-clamp lookup helper (`SoftmaxSignificanceClampOperands`) and its `ClampSpec` table.
@@ -87,7 +84,6 @@ impl OpLayout for SoftmaxLastAxis {
         &self,
         node: &ComputationNode,
     ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        let log_scale = node.scale as usize;
         let decomp = generate_exp_lut_decomposed(1i32 << node.scale)?;
         let log_hi = decomp.lut_hi.len().next_power_of_two().log_2();
         let log_lo = decomp.lut_lo.len().next_power_of_two().log_2();
@@ -96,11 +92,9 @@ impl OpLayout for SoftmaxLastAxis {
         let mut polys = vec![];
         for (log_k, ctor) in [
             (
-                log_scale,
-                CommittedPoly::SoftmaxRemainderRaD as fn(usize, usize) -> _,
+                XLEN,
+                CommittedPoly::SoftmaxClampRaD as fn(usize, usize) -> _,
             ),
-            (log_scale, CommittedPoly::SoftmaxExpRemainderRaD),
-            (XLEN, CommittedPoly::SoftmaxClampRaD),
             (log_hi, CommittedPoly::SoftmaxZHiRaD),
             (log_lo, CommittedPoly::SoftmaxZLoRaD),
         ] {
@@ -420,13 +414,11 @@ impl SoftmaxTie {
 
 /// A softmax stage's relations.
 pub enum SoftmaxRelation {
-    /// Stage 1: recip-mult, `exp_sum` and the recip-mult remainder's identity range check.
+    /// Stage 1: recip-mult and `exp_sum`.
     Stage1(SoftmaxShape),
-    /// Stage 2: the exponentiation multiply, the max indicator, the exp remainder's identity
-    /// range check, and the recip-mult remainder's one-hot checks.
+    /// Stage 2: the exponentiation multiply and the max indicator.
     Stage2(SoftmaxShape),
-    /// Stage 3: the exp-digit lookups, the significance clamp read-raf, and the exp
-    /// remainder's one-hot checks.
+    /// Stage 3: the exp-digit lookups and the significance clamp read-raf.
     Stage3(SoftmaxShape),
     /// Stage 4: the one-hot checks of the high exp-digit lookup.
     ExpHiOneHot(SoftmaxShape),
@@ -461,13 +453,9 @@ impl SoftmaxRelation {
                 let exp_sum_verifier =
                     ExpSumParams::new(shape.node.clone(), shape.F_N, &*accumulator, transcript)?
                         .into_verifier();
-                let rc_provider =
-                    SoftmaxRCProvider::remainder(shape.node.clone(), shape.scale_bits);
-                let rc_R_verifier = identity_rangecheck_verifier(&rc_provider, accumulator)?;
                 Ok(vec![
                     Box::new(recip_mult_verifier),
                     Box::new(exp_sum_verifier),
-                    Box::new(rc_R_verifier),
                 ])
             }
             Self::Stage2(shape) => {
@@ -491,20 +479,9 @@ impl SoftmaxRelation {
                     MultParams::new(shape.node.clone(), shape.scale, &*accumulator)?
                         .into_verifier();
 
-                let rc_provider =
-                    SoftmaxRCProvider::exp_remainder(shape.node.clone(), shape.scale_bits);
-                let exp_r_rc_verifier = identity_rangecheck_verifier(&rc_provider, accumulator)?;
-
-                let encoding = SoftmaxRaEncoding::remainder(shape.idx(), shape.scale_bits);
-                let [R_ra_verifier, R_bool_verifier] =
-                    shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript)?;
-
                 Ok(vec![
                     Box::new(exp_mult_verifier),
                     Box::new(max_indicator_verifier),
-                    Box::new(exp_r_rc_verifier),
-                    R_ra_verifier,
-                    R_bool_verifier,
                 ])
             }
             Self::Stage3(shape) => {
@@ -534,16 +511,10 @@ impl SoftmaxRelation {
                         transcript,
                     )?;
 
-                let encoding = SoftmaxRaEncoding::exp_remainder(shape.idx(), shape.scale_bits);
-                let [r_exp_ra_verifier, r_exp_bool_verifier] =
-                    shout::ra_onehot_verifiers(&encoding, &*accumulator, transcript)?;
-
                 Ok(vec![
                     hi_verifier,
                     lo_verifier,
                     Box::new(significance_clamp_verifier),
-                    r_exp_ra_verifier,
-                    r_exp_bool_verifier,
                 ])
             }
             Self::ExpHiOneHot(shape) => {

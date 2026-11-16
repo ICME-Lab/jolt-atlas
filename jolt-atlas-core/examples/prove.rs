@@ -423,10 +423,12 @@ fn print_stats(model: &Model) {
         println!("  {op:<16} {bits:>2} bits  x{n}");
     }
     println!("packed buckets (kind idx width log_t nodes | largest node):");
+    let remainders =
+        remainder_buckets(model).expect("the model's remainders have bounds the buckets check");
     for b in clamp_buckets(model)
         .expect("the model's nodes have the shapes their ops prove")
         .iter()
-        .chain(remainder_buckets(model).iter())
+        .chain(remainders.iter())
     {
         let big = b.nodes.iter().max_by_key(|n| n.log_t).unwrap();
         println!(

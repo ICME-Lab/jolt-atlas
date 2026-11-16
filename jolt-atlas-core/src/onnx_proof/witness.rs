@@ -24,11 +24,6 @@ use crate::{
     onnx_proof::{
         neural_teleport::n_bits_to_usize,
         ops::softmax_last_axis::{generate_exp_lut_decomposed, softmax_z},
-        range_checking::range_check_operands::{
-            range_check_lookup_indices, DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands,
-            RangeCheckWitness, RiRangeCheckOperands, RsRangeCheckOperands,
-            TeleportRangeCheckOperands,
-        },
     },
     utils::compute_lookup_indices_from_operands,
 };
@@ -39,38 +34,17 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::config::{OneHotConfig, OneHotParams};
 use common::{
-    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, LOG_K, XLEN},
+    consts::{ACTIVATION_BOUND, ACTIVATION_TABLE_VARS, XLEN},
     parallel::par_enabled,
     CommittedPoly,
 };
 use rayon::prelude::*;
 
-/// Builds a one-hot RaD witness for any of the range-checking operand types.
-///
-/// Every range-check variant (`DivRangeCheckRaD`, `SqrtRangeCheckRaD`, etc.) follows the
-/// same three steps: get operand tensors via the trait, compute lookup indices, then call
-/// `build_one_hot_rad_witness`. This helper collapses all four arms to a single call site.
-fn build_range_check_rad_witness<F: JoltField, H: RangeCheckWitness>(
-    model: &Model,
-    trace: &Trace,
-    node_idx: usize,
-    d: usize,
-) -> MultilinearPolynomial<F> {
-    let computation_node = &model.view(node_idx);
-    let inputs = TraceView::padded_operand_tensors(trace, computation_node);
-    let [left_operand, right_operand] = H::build_lookup_operands(computation_node, trace, &inputs)
-        .try_into()
-        .expect("Expected two operands for range-checking");
-
-    let lookup_indices = range_check_lookup_indices(&left_operand, &right_operand);
-    build_one_hot_rad_witness(&lookup_indices, d, LOG_K)
-}
-
 /// Builds a one-hot polynomial witness for the `d`-th dimension of a read-after-decompose (RaD)
 /// address polynomial.
 ///
 /// This pattern appears in every operand type that decomposes lookup indices across multiple
-/// dimensions (NodeOutputRaD, DivRangeCheckRaD, SqrtRangeCheckRaD, etc.).
+/// dimensions (NodeOutputRaD, SymmetricClampRaD, etc.).
 pub(crate) fn build_one_hot_rad_witness<F: JoltField>(
     lookup_indices: &[LookupBits],
     d: usize,
@@ -127,30 +101,11 @@ pub(crate) fn generate_node_witnesses<F: JoltField>(
 ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
     use crate::onnx_proof::ops::NodeCommittedPolynomials;
 
-    let mut mos_range_bits: Option<Vec<LookupBits>> = None;
-
     NodeCommittedPolynomials::get_committed_polynomials(node)
         .expect("the model's nodes have the shapes their ops prove")
         .into_iter()
         .map(|poly| {
-            let witness = match &poly {
-                CommittedPoly::MeanOfSquaresRangeCheckRaD(_, d) => {
-                    let bits = mos_range_bits.get_or_insert_with(|| {
-                        let padded_operands = TraceView::padded_operand_tensors(trace, node);
-                        let [left, right] = MeanOfSquaresRangeCheckOperands::build_lookup_operands(
-                            node,
-                            trace,
-                            &padded_operands,
-                        )
-                        .try_into()
-                        .unwrap();
-
-                        range_check_lookup_indices(&left, &right)
-                    });
-                    build_one_hot_rad_witness(bits, *d, LOG_K)
-                }
-                other => other.generate_witness(model, trace),
-            };
+            let witness = poly.generate_witness(model, trace);
             (poly, witness)
         })
         .collect()
@@ -271,13 +226,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                         .clone(),
                 )
             }
-            CommittedPoly::ScalarConstDivNodeRemainder(node_idx) => {
-                let computation_node = &model.view(*node_idx);
-                assert!(matches!(computation_node.operator, Op::ScalarConstDiv(_)));
-                MultilinearPolynomial::from(
-                    TraceView::division_remainder(trace, computation_node).clone(),
-                )
-            }
             CommittedPoly::RsqrtQuotient(node_idx) => {
                 let computation_node = &model.view(*node_idx);
                 assert!(matches!(computation_node.operator, Op::Rsqrt(_)));
@@ -289,31 +237,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .map(|&q| q as u64)
                     .collect();
                 MultilinearPolynomial::from(quotient_data)
-            }
-            CommittedPoly::DivRangeCheckRaD(node_idx, d) => {
-                build_range_check_rad_witness::<F, DivRangeCheckOperands>(
-                    model, trace, *node_idx, *d,
-                )
-            }
-            CommittedPoly::MeanOfSquaresRangeCheckRaD(node_idx, d) => {
-                build_range_check_rad_witness::<F, MeanOfSquaresRangeCheckOperands>(
-                    model, trace, *node_idx, *d,
-                )
-            }
-            CommittedPoly::SqrtRangeCheckRaD(node_idx, d) => {
-                build_range_check_rad_witness::<F, RsRangeCheckOperands>(
-                    model, trace, *node_idx, *d,
-                )
-            }
-            CommittedPoly::SqrtDivRangeCheckRaD(node_idx, d) => {
-                build_range_check_rad_witness::<F, RiRangeCheckOperands>(
-                    model, trace, *node_idx, *d,
-                )
-            }
-            CommittedPoly::TeleportRangeCheckRaD(node_idx, d) => {
-                build_range_check_rad_witness::<F, TeleportRangeCheckOperands>(
-                    model, trace, *node_idx, *d,
-                )
             }
             CommittedPoly::GatherRa(node_idx) => {
                 let computation_node = &model.view(*node_idx);
@@ -405,20 +328,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let lookup_indices = compute_lookup_indices_from_operands(&[remainder], false);
                 build_one_hot_rad_witness(&lookup_indices, *d_idx, XLEN)
             }
-            CommittedPoly::SoftmaxRemainderRaD(node_idx, d) => {
-                let node = &model.view(*node_idx);
-                let log_scale = softmax_op_scale(node) as usize;
-                let st = softmax_last_axis_full_trace(node, trace);
-                let lookup_indices: Vec<usize> = st.r.iter().map(|&v| v as usize).collect();
-                build_onehot_witness(&lookup_indices, log_scale, *d)
-            }
-            CommittedPoly::SoftmaxExpRemainderRaD(node_idx, d) => {
-                let node = &model.view(*node_idx);
-                let log_scale = softmax_op_scale(node) as usize;
-                let st = softmax_last_axis_full_trace(node, trace);
-                let lookup_indices: Vec<usize> = st.r_exp.iter().map(|&v| v as usize).collect();
-                build_onehot_witness(&lookup_indices, log_scale, *d)
-            }
             CommittedPoly::SoftmaxZHiRaD(node_idx, d) => {
                 let node = &model.view(*node_idx);
                 let st = softmax_last_axis_full_trace(node, trace);
@@ -455,16 +364,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
         }
     }
-}
-
-/// The softmax node's log2 scale (the model's global scale).
-fn softmax_op_scale(node: &ComputationNode) -> i32 {
-    assert!(
-        matches!(node.operator, Op::SoftmaxLastAxis(_)),
-        "Expected SoftmaxLastAxis at node {}",
-        node.idx
-    );
-    node.scale as i32
 }
 
 /// The softmax node's full witness, captured in the trace at execution time

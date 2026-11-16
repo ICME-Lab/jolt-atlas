@@ -18,7 +18,7 @@
 //! polynomial is larger than the largest per-node one was and the SRS size is
 //! unchanged. The layout is a pure function of the model, so prover and
 //! verifier derive it independently.
-use super::{clamp_split, fused_rebase::rebase_bits};
+use super::{clamp_split, fused_rebase::rebase_bits, ops::mean_of_squares::mos_divisor};
 use crate::node_view::clamp_value_bound;
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
@@ -29,17 +29,162 @@ use atlas_sumcheck::{
     ps_shout::{CycleWeight, PackedSegment},
 };
 use atlas_trace::{trace::ModelExecutionIO, Model, Op};
-use common::{CommittedPoly, VirtualPoly};
+use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly, VirtualPoly};
 
 /// A node's segment inside a bucket's cycle space.
 #[derive(Clone, Debug)]
 pub struct BucketNode {
     /// Node index.
     pub idx: usize,
+    /// What the segment range-checks in a remainder bucket; `None` in a clamp bucket, whose
+    /// segment is the node's clamped output.
+    pub claim: Option<RangeClaim>,
     /// Start of the node's segment (a multiple of its own padded size).
     pub offset: usize,
     /// log₂ of the node's padded output size.
     pub log_t: usize,
+}
+
+/// A remainder a node's relation leaves to be bounded. Each is a virtual advice opening under
+/// the node's execution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Remainder {
+    /// A fused rescale's remainder (`Einsum`, `Mul`, `Square`, `Cube`, `MeanOfSquares`).
+    Rescale,
+    /// `Div`'s remainder.
+    Div,
+    /// `ScalarConstDiv`'s remainder.
+    ScalarConstDiv,
+    /// `Rsqrt`'s division remainder `S³ mod x`.
+    RsqrtDiv,
+    /// `Rsqrt`'s square-root remainder `q − out²`.
+    RsqrtSqrt,
+    /// A trig op's teleport remainder `x mod P`.
+    Teleport,
+    /// Softmax's reciprocal-multiplication remainder.
+    SoftmaxRecipMult,
+    /// Softmax's exponentiation remainder.
+    SoftmaxExp,
+}
+
+impl Remainder {
+    /// The remainder's opening for node `node_idx`.
+    pub fn opening_id(self, node_idx: usize) -> OpeningId {
+        let poly = match self {
+            Self::Rescale => VirtualPoly::RescaleRemainder(node_idx),
+            Self::Div | Self::RsqrtDiv => VirtualPoly::DivRemainder(node_idx),
+            Self::ScalarConstDiv => VirtualPoly::ScalarConstDivRemainder(node_idx),
+            Self::RsqrtSqrt => VirtualPoly::SqrtRemainder(node_idx),
+            Self::Teleport => VirtualPoly::TeleportRemainder(node_idx),
+            Self::SoftmaxRecipMult => VirtualPoly::SoftmaxRecipMultRemainder(node_idx),
+            Self::SoftmaxExp => VirtualPoly::SoftmaxExpRemainder(node_idx),
+        };
+        OpeningId::new(poly, SumcheckId::NodeExecution(node_idx))
+    }
+}
+
+/// The bound `B` a remainder lies strictly below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bound {
+    /// A constant.
+    Const(i64),
+    /// The output of node `.0`, as the remainder's node opened it beside the remainder.
+    Node(usize),
+    /// `2·v + 1` for `v` the output of node `.0`, opened the same way.
+    TwiceNodePlusOne(usize),
+}
+
+/// What one bucket member range-checks: a remainder `R` itself (`R ∈ [0, 2^w)`), or the slack
+/// `B − 1 − R` below its bound (`R < B`). Both are affine in claims the node's turn bound at
+/// one point.
+///
+/// A member is non-negative and below `2^w` as a field element, and `|B| < 2^33`, so with
+/// `w ≤ 32` each statement holds over the integers: the magnitudes are far below the field
+/// modulus. `R ≥ 0` and `B − 1 − R ≥ 0` together give `B ≥ 1`: a bound that is not positive
+/// has no proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RangeClaim {
+    /// The remainder.
+    pub remainder: Remainder,
+    /// `None` for `R` itself, the bound for the slack `B − 1 − R`.
+    pub slack: Option<Bound>,
+}
+
+/// Width of a two-sided range claim: wide enough for every `i32`-sized bound.
+pub const TWO_SIDED_WIDTH: usize = 32;
+
+/// The range claims that bound a remainder below `bound`, each with its width: `R` alone at
+/// width `w` when the bound is `2^w` with `w` a whole number of digits, otherwise `R` and the
+/// slack `B − 1 − R` at [`TWO_SIDED_WIDTH`].
+pub fn range_claims(remainder: Remainder, bound: Bound) -> Vec<(RangeClaim, usize)> {
+    let digit_bits = clamp_split::DIGIT_BASE.trailing_zeros() as usize;
+    if let Bound::Const(b) = bound {
+        if b > 0 && b.count_ones() == 1 {
+            let width = b.trailing_zeros() as usize;
+            if width.is_multiple_of(digit_bits) {
+                return vec![(
+                    RangeClaim {
+                        remainder,
+                        slack: None,
+                    },
+                    width,
+                )];
+            }
+        }
+    }
+    vec![
+        (
+            RangeClaim {
+                remainder,
+                slack: None,
+            },
+            TWO_SIDED_WIDTH,
+        ),
+        (
+            RangeClaim {
+                remainder,
+                slack: Some(bound),
+            },
+            TWO_SIDED_WIDTH,
+        ),
+    ]
+}
+
+impl RangeClaim {
+    /// The member's point and claim for node `node_idx`, from the openings its node bound.
+    /// `Err` if a claim is missing, or the bound is not opened at the remainder's point.
+    pub fn evaluate<F: JoltField>(
+        &self,
+        node_idx: usize,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<(Vec<F>, F), ProofVerifyError> {
+        let (point, remainder) =
+            accumulator.get_virtual_polynomial_opening(self.remainder.opening_id(node_idx))?;
+        let bound_at = |bound_node: usize| -> Result<F, ProofVerifyError> {
+            let (bound_point, bound) =
+                accumulator.get_virtual_polynomial_opening(OpeningId::new(
+                    VirtualPoly::NodeOutput(bound_node),
+                    SumcheckId::NodeExecution(node_idx),
+                ))?;
+            if bound_point.r != point.r {
+                return Err(ProofVerifyError::Malformed(format!(
+                    "node {node_idx}: {:?} and its bound are opened at different points",
+                    self.remainder
+                )));
+            }
+            Ok(bound)
+        };
+        let claim = match self.slack {
+            None => remainder,
+            Some(Bound::Const(b)) => F::from_i64(b - 1) - remainder,
+            Some(Bound::Node(n)) => bound_at(n)? - F::one() - remainder,
+            Some(Bound::TwiceNodePlusOne(n)) => {
+                let v = bound_at(n)?;
+                v + v - remainder
+            }
+        };
+        Ok((point.r, claim))
+    }
 }
 
 /// Which lookup family a bucket packs.
@@ -71,66 +216,127 @@ pub struct ClampBucket {
 /// the largest clamped node (so offsets are automatically aligned). `Err` if a node's operand
 /// is not a node of the model.
 pub fn clamp_buckets(model: &Model) -> Result<Vec<ClampBucket>, ProofVerifyError> {
-    let mut clamped: Vec<(usize, usize, usize)> = Vec::new();
+    let mut clamped: Vec<BucketItem> = Vec::new();
     for n in &model.views() {
         if clamp_value_bound(model, n)?.is_some() {
-            clamped.push((n.idx, n.sat_clamp_bits, n.pow2_padded_num_output_elements()));
+            clamped.push((
+                n.idx,
+                None,
+                n.sat_clamp_bits,
+                n.pow2_padded_num_output_elements(),
+            ));
         }
     }
     Ok(pack_buckets(BucketKind::Clamp, clamped))
 }
 
-/// Whether `node` proves a fused rescale remainder range check (Einsum / Mul /
-/// Square / Cube with a nonzero rebase).
-pub fn has_remainder_rc(node: &ComputationNode) -> bool {
-    matches!(
-        node.operator,
-        Op::Einsum(_) | Op::Mul(_) | Op::Square(_) | Op::Cube(_)
-    ) && rebase_bits(node).is_some_and(|b| b > 0)
+/// The remainders `node`'s relations leave to be bounded, each with its bound. `Err` for a
+/// node whose constant bound cannot be range-checked.
+pub fn node_remainders(
+    node: &ComputationNode,
+) -> Result<Vec<(Remainder, Bound)>, ProofVerifyError> {
+    let malformed =
+        |what: String| ProofVerifyError::Malformed(format!("model: node {}: {what}", node.idx));
+    let operand = |position: usize| {
+        node.inputs
+            .get(position)
+            .copied()
+            .ok_or_else(|| malformed(format!("no operand {position}")))
+    };
+    Ok(match &node.operator {
+        Op::Einsum(_) | Op::Mul(_) | Op::Square(_) | Op::Cube(_) => match rebase_bits(node) {
+            Some(bits) if bits > 0 => vec![(Remainder::Rescale, Bound::Const(1i64 << bits))],
+            _ => vec![],
+        },
+        Op::MeanOfSquares(op) => {
+            let divisor = mos_divisor(op, node.scale);
+            if i32::try_from(divisor).is_err() {
+                return Err(malformed(format!(
+                    "MeanOfSquares divisor N·2^S = {divisor} must fit i32 for the range check"
+                )));
+            }
+            vec![(Remainder::Rescale, Bound::Const(divisor))]
+        }
+        Op::Div(_) => vec![(Remainder::Div, Bound::Node(operand(1)?))],
+        Op::ScalarConstDiv(op) => {
+            if op.divisor < 1 {
+                return Err(malformed(format!(
+                    "ScalarConstDiv divisor {} is not positive",
+                    op.divisor
+                )));
+            }
+            vec![(
+                Remainder::ScalarConstDiv,
+                Bound::Const(i64::from(op.divisor)),
+            )]
+        }
+        Op::Rsqrt(_) => vec![
+            (Remainder::RsqrtDiv, Bound::Node(operand(0)?)),
+            (Remainder::RsqrtSqrt, Bound::TwiceNodePlusOne(node.idx)),
+        ],
+        Op::Sin(_) | Op::Cos(_) => vec![(
+            Remainder::Teleport,
+            Bound::Const(i64::from(TRIG_PERIOD_MODULUS)),
+        )],
+        Op::SoftmaxLastAxis(_) => {
+            let bound = Bound::Const(1i64 << node.scale);
+            vec![
+                (Remainder::SoftmaxRecipMult, bound),
+                (Remainder::SoftmaxExp, bound),
+            ]
+        }
+        _ => vec![],
+    })
 }
 
-/// Partition the fused-rescale remainder range checks into buckets keyed by
-/// rebase width.
-pub fn remainder_buckets(model: &Model) -> Vec<ClampBucket> {
-    let items: Vec<(usize, usize, usize)> = model
-        .views()
-        .iter()
-        .filter(|n| has_remainder_rc(n))
-        .filter_map(|n| {
-            Some((
-                n.idx,
-                rebase_bits(n)? as usize,
-                n.pow2_padded_num_output_elements(),
-            ))
-        })
-        .collect();
-    pack_buckets(BucketKind::Remainder, items)
+/// Partition the model's range claims into buckets keyed by width: every remainder a node's
+/// relations leave to be bounded ([`node_remainders`]), as the claims [`range_claims`] gives
+/// for its bound. `Err` for a node whose bound cannot be range-checked.
+pub fn remainder_buckets(model: &Model) -> Result<Vec<ClampBucket>, ProofVerifyError> {
+    let mut items: Vec<BucketItem> = Vec::new();
+    for n in &model.views() {
+        for (remainder, bound) in node_remainders(n)? {
+            for (claim, width) in range_claims(remainder, bound) {
+                items.push((
+                    n.idx,
+                    Some(claim),
+                    width,
+                    n.pow2_padded_num_output_elements(),
+                ));
+            }
+        }
+    }
+    Ok(pack_buckets(BucketKind::Remainder, items))
 }
+
+/// A bucket member before packing: node, range claim (remainder buckets), width, padded size.
+type BucketItem = (usize, Option<RangeClaim>, usize, usize);
 
 /// First-fit-decreasing packing of `(node, width, padded size)` items, grouped
 /// by width, into a capacity equal to the largest item.
-fn pack_buckets(kind: BucketKind, clamped: Vec<(usize, usize, usize)>) -> Vec<ClampBucket> {
-    let Some(capacity) = clamped.iter().map(|c| c.2).max() else {
+fn pack_buckets(kind: BucketKind, clamped: Vec<BucketItem>) -> Vec<ClampBucket> {
+    let Some(capacity) = clamped.iter().map(|c| c.3).max() else {
         return Vec::new();
     };
-    let mut widths: Vec<usize> = clamped.iter().map(|c| c.1).collect();
+    let mut widths: Vec<usize> = clamped.iter().map(|c| c.2).collect();
     widths.sort_unstable();
     widths.dedup();
 
     let mut buckets: Vec<ClampBucket> = Vec::new();
     for w in widths {
-        let mut group: Vec<(usize, usize)> = clamped
+        let mut group: Vec<(usize, Option<RangeClaim>, usize)> = clamped
             .iter()
-            .filter(|c| c.1 == w)
-            .map(|c| (c.0, c.2))
+            .filter(|c| c.2 == w)
+            .map(|c| (c.0, c.1, c.3))
             .collect();
-        // Decreasing size (then node index): every earlier size is a multiple
-        // of every later one, so first-fit keeps segments aligned.
-        group.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        // Decreasing size (then node index, a node's claims in the order given): every
+        // earlier size is a multiple of every later one, so first-fit keeps segments aligned.
+        group.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
         let mut open: Vec<(usize, Vec<BucketNode>)> = Vec::new();
-        for (idx, t) in group {
+        for (idx, claim, t) in group {
             let node = |offset: usize| BucketNode {
                 idx,
+                claim,
                 offset,
                 log_t: t.log_2(),
             };
@@ -170,9 +376,9 @@ impl ClampBucket {
         1 << self.log_t
     }
 
-    /// The packed remainder range check's input claim `Σ_n γ_n·R_n(r_n)` and
-    /// cycle weight, from the member nodes' remainder advice openings.
-    /// `Err` if the accumulator lacks a claim it reads.
+    /// The packed range check's input claim `Σ_m γ_m·claim_m` and cycle weight, from the
+    /// openings the members' nodes bound ([`RangeClaim::evaluate`]). `Err` if the accumulator
+    /// lacks a claim a member reads, or a member's claims are not at one point.
     pub fn remainder_inputs<F: JoltField>(
         &self,
         gammas: &[F],
@@ -180,7 +386,7 @@ impl ClampBucket {
     ) -> Result<(F, CycleWeight<F>), ProofVerifyError> {
         if gammas.len() != self.nodes.len() {
             return Err(ProofVerifyError::Malformed(format!(
-                "{} batching coefficients for a bucket of {} nodes",
+                "{} batching coefficients for a bucket of {} members",
                 gammas.len(),
                 self.nodes.len()
             )));
@@ -188,10 +394,13 @@ impl ClampBucket {
         let mut input_claim = F::zero();
         let mut segments = Vec::with_capacity(self.nodes.len());
         for (n, gamma) in self.nodes.iter().zip(gammas) {
-            let (r, claim) = accumulator.get_virtual_polynomial_opening(OpeningId::new(
-                VirtualPoly::RescaleRemainder(n.idx),
-                SumcheckId::NodeExecution(n.idx),
-            ))?;
+            let range_claim = n.claim.ok_or_else(|| {
+                ProofVerifyError::Malformed(format!(
+                    "node {} is in a remainder bucket without a range claim",
+                    n.idx
+                ))
+            })?;
+            let (r, claim) = range_claim.evaluate(n.idx, accumulator)?;
             if r.len() != n.log_t {
                 return Err(ProofVerifyError::Malformed(format!(
                     "node {} remainder point has {} coordinates, expected {}",
@@ -205,7 +414,7 @@ impl ClampBucket {
                 gamma: *gamma,
                 prefix: n.offset >> n.log_t,
                 prefix_len: self.log_t - n.log_t,
-                r: r.r,
+                r,
             });
         }
         Ok((
@@ -233,7 +442,7 @@ pub fn bucket_committed_polys(
         .is_some()
     });
     Ok(live
-        .chain(remainder_buckets(model))
+        .chain(remainder_buckets(model)?)
         .flat_map(|bucket| bucket.committed_polys())
         .collect())
 }
@@ -245,7 +454,8 @@ mod tests {
 
     /// `(log_t, member node indices)` per bucket, in bucket order.
     fn layout(items: &[(usize, usize, usize)]) -> Vec<(usize, usize, Vec<usize>)> {
-        pack_buckets(BucketKind::Clamp, items.to_vec())
+        let items = items.iter().map(|&(idx, w, t)| (idx, None, w, t)).collect();
+        pack_buckets(BucketKind::Clamp, items)
             .into_iter()
             .map(|b| (b.width, b.log_t, b.nodes.iter().map(|n| n.idx).collect()))
             .collect()

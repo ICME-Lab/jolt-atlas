@@ -15,7 +15,7 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    clamp_lookups::{acc_opening_id, recover_small_int, SaturatingAccClampOperands},
+    clamp_lookups::{acc_opening_id, SaturatingAccClampOperands},
     clamp_split::{self, SplitParams, ValueParams},
     deferred_lookups::DeferredBatch,
     fused_rebase,
@@ -56,14 +56,6 @@ use crate::onnx_proof::{
         sum::axis::SumAxisRelation,
         tanh::TanhTableMarker,
     },
-    range_checking::{
-        range_check_operands::{
-            DivRangeCheckOperands, MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
-            RangeCheckingOperandsTrait, RiRangeCheckOperands, RsRangeCheckOperands,
-            TeleportRangeCheckOperands,
-        },
-        RangeCheckProvider,
-    },
     relation::{verify_tie, RelationVerifier, SetupRelation},
     ProofType,
 };
@@ -74,7 +66,6 @@ use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable},
     relu::ReluTable,
     right_shift::RightShiftTable,
-    unsigned_less_than::UnsignedLessThanTable,
 };
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, PolynomialId, VerifierOpeningAccumulator},
@@ -196,11 +187,6 @@ pub enum OpRelation {
     MeanOfSquares(MeanOfSquaresRelation),
     /// `Mul`: `left·right`.
     Mul(MulRelation),
-    /// A remainder's range check against its bound: a prefix-suffix lookup into the
-    /// unsigned less-than table.
-    RangeCheck(OpRangeCheck, ComputationNode),
-    /// The one-hot checks of a [`Self::RangeCheck`]'s read addresses (two relations).
-    RangeCheckOneHot(OpRangeCheck, ComputationNode),
     /// `Reshape`: the operand selected into the output's layout.
     Reshape(ReshapeRelation),
     /// `Rsqrt`: the fused division and square-root identities.
@@ -231,7 +217,8 @@ pub enum OpRelation {
     /// A packed clamp bucket's slack chunk check (Booleanity, Hamming weight `IND`, value `S`);
     /// no relation when the bucket's exact flag is set.
     ClampBucketSlack(ClampBucket),
-    /// A packed remainder bucket's value relation.
+    /// A packed remainder bucket's value relation: the range claims of its members
+    /// ([`global_clamp::RangeClaim`](crate::onnx_proof::global_clamp::RangeClaim)).
     RemainderBucketValue(ClampBucket),
     /// A packed remainder bucket's digit range check.
     RemainderBucketDigits(ClampBucket),
@@ -248,21 +235,6 @@ pub enum OpLookup {
     ActivationClamp,
     /// A trig op's downscale (right shift) of its remainder.
     TrigDownscale,
-}
-
-/// The remainder a range check bounds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OpRangeCheck {
-    /// `Div`'s remainder, below the divisor.
-    Div,
-    /// `MeanOfSquares`'s rescale remainder, below `N·2^S`.
-    MeanOfSquares,
-    /// `Rsqrt`'s division remainder, below the input.
-    RsqrtDiv,
-    /// `Rsqrt`'s square-root remainder, at most `2·out`.
-    RsqrtSqrt,
-    /// A trig op's teleport remainder, below the period.
-    Teleport,
 }
 
 impl OpRelation {
@@ -288,31 +260,6 @@ impl OpRelation {
             verifier: impl DynRelationVerifier<F, T> + 'static,
         ) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
             vec![Box::new(verifier)]
-        }
-        fn range_check<F: JoltField, T: Transcript, H: RangeCheckingOperandsTrait>(
-            node: &ComputationNode,
-            accumulator: &mut VerifierOpeningAccumulator<F>,
-            transcript: &mut T,
-        ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
-            Ok(boxed(
-                RangeCheckProvider::<H>::new(node)?
-                    .read_raf_verify::<F, T, UnsignedLessThanTable<XLEN>>(
-                        accumulator,
-                        transcript,
-                    )?,
-            ))
-        }
-        fn range_check_onehot<F: JoltField, T: Transcript, H: RangeCheckingOperandsTrait>(
-            node: &ComputationNode,
-            accumulator: &VerifierOpeningAccumulator<F>,
-            transcript: &mut T,
-        ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
-            Ok(shout::ra_onehot_verifiers(
-                &RangeCheckOperands::<H>::new(node)?.get_encoding(node),
-                accumulator,
-                transcript,
-            )?
-            .into())
         }
         match self {
             Self::And(relation) => one(relation, accumulator, transcript),
@@ -389,44 +336,6 @@ impl OpRelation {
             .into()),
             Self::MeanOfSquares(relation) => one(relation, accumulator, transcript),
             Self::Mul(relation) => one(relation, accumulator, transcript),
-            Self::RangeCheck(OpRangeCheck::Div, node) => {
-                range_check::<F, T, DivRangeCheckOperands>(&node, accumulator, transcript)
-            }
-            Self::RangeCheck(OpRangeCheck::MeanOfSquares, node) => {
-                range_check::<F, T, MeanOfSquaresRangeCheckOperands>(&node, accumulator, transcript)
-            }
-            Self::RangeCheck(OpRangeCheck::RsqrtDiv, node) => {
-                range_check::<F, T, RiRangeCheckOperands>(&node, accumulator, transcript)
-            }
-            Self::RangeCheck(OpRangeCheck::RsqrtSqrt, node) => {
-                range_check::<F, T, RsRangeCheckOperands>(&node, accumulator, transcript)
-            }
-            Self::RangeCheck(OpRangeCheck::Teleport, node) => {
-                range_check::<F, T, TeleportRangeCheckOperands>(&node, accumulator, transcript)
-            }
-            Self::RangeCheckOneHot(OpRangeCheck::Div, node) => {
-                range_check_onehot::<F, T, DivRangeCheckOperands>(&node, accumulator, transcript)
-            }
-            Self::RangeCheckOneHot(OpRangeCheck::MeanOfSquares, node) => {
-                range_check_onehot::<F, T, MeanOfSquaresRangeCheckOperands>(
-                    &node,
-                    accumulator,
-                    transcript,
-                )
-            }
-            Self::RangeCheckOneHot(OpRangeCheck::RsqrtDiv, node) => {
-                range_check_onehot::<F, T, RiRangeCheckOperands>(&node, accumulator, transcript)
-            }
-            Self::RangeCheckOneHot(OpRangeCheck::RsqrtSqrt, node) => {
-                range_check_onehot::<F, T, RsRangeCheckOperands>(&node, accumulator, transcript)
-            }
-            Self::RangeCheckOneHot(OpRangeCheck::Teleport, node) => {
-                range_check_onehot::<F, T, TeleportRangeCheckOperands>(
-                    &node,
-                    accumulator,
-                    transcript,
-                )
-            }
             Self::Reshape(relation) => one(relation, accumulator, transcript),
             Self::Rsqrt(relation) => one(relation, accumulator, transcript),
             Self::Slice(relation) => one(relation, accumulator, transcript),
@@ -543,14 +452,6 @@ pub enum OpTie {
     SubAccumulation(AccumulationRelation<Sub>),
     /// `IsNan`: the output is zero.
     ZeroOutput(ZeroOutputRelation),
-    /// A one-element `MeanOfSquares` node's remainder, opened in the clear, lies in
-    /// `[0, bound)`.
-    ScalarRemainder {
-        /// The node.
-        node: ComputationNode,
-        /// The exclusive bound.
-        bound: i64,
-    },
     /// A model output node whose public output is unsaturated: the pre-clamp accumulation
     /// equals the output.
     ExactClampOutput(ComputationNode),
@@ -581,24 +482,6 @@ impl OpTie {
             Self::Neg(relation) => verify_tie(relation, accumulator, transcript),
             Self::SubAccumulation(relation) => verify_tie(relation, accumulator, transcript),
             Self::ZeroOutput(relation) => verify_tie(relation, accumulator, transcript),
-            Self::ScalarRemainder { node, bound } => {
-                let remainder = AccOpeningAccessor::new(&*accumulator, node)
-                    .get_advice(VirtualPoly::RescaleRemainder)?
-                    .1;
-                let value = recover_small_int(remainder).ok_or_else(|| {
-                    ProofVerifyError::InvalidOpeningProof(format!(
-                        "{} (one element): remainder claim is not a small integer",
-                        node.operator
-                    ))
-                })?;
-                if value < 0 || value >= *bound {
-                    return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                        "{} (one element): remainder must lie in [0, {bound})",
-                        node.operator
-                    )));
-                }
-                Ok(())
-            }
             Self::ExactClampOutput(node) => {
                 let acc = accumulator
                     .get_virtual_polynomial_opening(acc_opening_id(node.idx))?

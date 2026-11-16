@@ -22,13 +22,14 @@
 use super::clamp_split::digit_tamper;
 use super::{
     clamp_split::{self, BucketSplit},
-    fused_rebase::{rebase_remainder, remainder_lookup_bits},
+    fused_rebase::rebase_remainder,
+    trace_view::TraceView,
 };
-use crate::node_view::ModelView;
+use crate::node_view::{ComputationNode, ModelView};
 use atlas_algebra::{
     field::JoltField, poly::multilinear::MultilinearPolynomial, utils::lookup_bits::LookupBits,
 };
-use atlas_trace::{Model, Trace};
+use atlas_trace::{Model, Tensor, Trace};
 use common::CommittedPoly;
 pub use jolt_atlas_verifier::onnx_proof::global_clamp::*;
 use rayon::prelude::*;
@@ -65,13 +66,14 @@ impl BucketWitnesses {
             .map(|bucket| (bucket.idx, BucketSplit::from_trace(bucket, trace, model)))
             .collect();
         let remainder_values = remainder_buckets(model)
+            .expect("the model's remainders have bounds the buckets can check")
             .par_iter()
             .map(|bucket| {
-                let bits = assemble_bits(bucket, |idx| {
-                    remainder_lookup_bits(
-                        &rebase_remainder(&model.view(idx), trace),
-                        bucket.width as i32,
-                    )
+                let bits = assemble_bits(bucket, |member| {
+                    let claim = member
+                        .claim
+                        .expect("a remainder bucket's members carry range claims");
+                    range_claim_bits(&model.view(member.idx), &claim, bucket.width, trace)
                 });
                 let values: Vec<u64> = bits.into_iter().map(|x| usize::from(x) as u64).collect();
                 (bucket.idx, (values, bucket.width))
@@ -147,26 +149,85 @@ impl BucketWitnesses {
             })
             .flatten()
             .collect::<Vec<_>>();
-        let remainder = remainder_buckets(model).into_iter().flat_map(|bucket| {
-            clamp_split::remainder_digit_polys(&bucket)
-                .into_iter()
-                .zip(self.remainder_digits(bucket.idx))
-                .map(|(poly, digits)| (poly, MultilinearPolynomial::from(digits)))
-                .collect::<Vec<_>>()
-        });
+        let remainder = remainder_buckets(model)
+            .expect("the model's remainders have bounds the buckets can check")
+            .into_iter()
+            .flat_map(|bucket| {
+                clamp_split::remainder_digit_polys(&bucket)
+                    .into_iter()
+                    .zip(self.remainder_digits(bucket.idx))
+                    .map(|(poly, digits)| (poly, MultilinearPolynomial::from(digits)))
+                    .collect::<Vec<_>>()
+            });
         clamp.into_iter().chain(remainder).collect()
     }
 }
 
-/// Lay each node's lookup addresses into the bucket's cycle space; the
+/// A range claim's values over its node's padded cycle domain, from the trace: the remainder
+/// itself, or its slack below the bound. A value outside `[0, 2^width)` (a remainder that does
+/// not satisfy its bound) has no digit decomposition; its low `width` bits are committed, and
+/// the proof does not verify.
+fn range_claim_bits(
+    node: &ComputationNode,
+    claim: &RangeClaim,
+    width: usize,
+    trace: &Trace,
+) -> Vec<LookupBits> {
+    let len = node.pow2_padded_num_output_elements();
+    let padded = |tensor: &Tensor<i32>| -> Vec<i64> {
+        tensor.padded_pow2().iter().map(|&v| i64::from(v)).collect()
+    };
+    let flat = |values: &[i32]| -> Vec<i64> {
+        let mut values: Vec<i64> = values.iter().map(|&v| i64::from(v)).collect();
+        values.resize(len, 0);
+        values
+    };
+    let softmax = || {
+        trace
+            .softmax_witness(node.idx)
+            .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx))
+    };
+    let remainder: Vec<i64> = match claim.remainder {
+        Remainder::Rescale => padded(&rebase_remainder(node, trace)),
+        Remainder::Div | Remainder::ScalarConstDiv => {
+            padded(TraceView::division_remainder(trace, node))
+        }
+        Remainder::RsqrtDiv => padded(&TraceView::rsqrt_advice(trace, node).div_remainder),
+        Remainder::RsqrtSqrt => padded(&TraceView::rsqrt_advice(trace, node).sqrt_remainder),
+        Remainder::Teleport => padded(&TraceView::teleport_advice(trace, node).remainder),
+        Remainder::SoftmaxRecipMult => flat(&softmax().r),
+        Remainder::SoftmaxExp => flat(&softmax().r_exp),
+    };
+    assert_eq!(remainder.len(), len, "node {} remainder length", node.idx);
+    let values: Vec<i64> = match claim.slack {
+        None => remainder,
+        Some(Bound::Const(bound)) => remainder.iter().map(|r| bound - 1 - r).collect(),
+        Some(Bound::Node(bound)) => padded(&trace.node_outputs[bound])
+            .iter()
+            .zip(&remainder)
+            .map(|(b, r)| b - 1 - r)
+            .collect(),
+        Some(Bound::TwiceNodePlusOne(bound)) => padded(&trace.node_outputs[bound])
+            .iter()
+            .zip(&remainder)
+            .map(|(v, r)| 2 * v - r)
+            .collect(),
+    };
+    values
+        .into_iter()
+        .map(|v| LookupBits::new(v as u64, width))
+        .collect()
+}
+
+/// Lay each member's lookup addresses into the bucket's cycle space; the
 /// unused tail holds index-0 lookups.
 pub fn assemble_bits(
     bucket: &ClampBucket,
-    mut per_node: impl FnMut(usize) -> Vec<LookupBits>,
+    mut per_node: impl FnMut(&BucketNode) -> Vec<LookupBits>,
 ) -> Vec<LookupBits> {
     let mut bits = vec![LookupBits::new(0, bucket.width); bucket.cycle_len()];
     for n in &bucket.nodes {
-        let b = per_node(n.idx);
+        let b = per_node(n);
         assert_eq!(b.len(), 1 << n.log_t, "node {} lookup count", n.idx);
         bits[n.offset..n.offset + b.len()].copy_from_slice(&b);
     }

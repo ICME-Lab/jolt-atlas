@@ -37,7 +37,7 @@ impl Canonical for ProofId {
 /// Type of sumcheck proof for different operations in the neural network.
 ///
 /// The `u8` discriminants are part of the serialization format: a variant keeps its number, and
-/// the numbers of deleted variants (1, 7, 8, 11, 13, 17) stay free; a proof carrying one does not
+/// the numbers of deleted variants (1, 4, 7, 8, 11, 13, 17, 21, 22) stay free; a proof carrying one does not
 /// deserialize. Every variant is emitted by the prover for some checked-in model
 /// (`proof_types_all_exercised`).
 #[repr(u8)]
@@ -49,8 +49,6 @@ pub enum ProofType {
     RaOneHotChecks = 2,
     /// Hamming weight check for read-addresses.
     RaHammingWeight = 3,
-    /// Range-checking for remainders.
-    RangeCheck = 4,
     /// Softmax stage 1
     SoftmaxStage1 = 5,
     /// Softmax stage 2
@@ -82,10 +80,6 @@ pub enum ProofType {
     DeferredActivationClamp = 19,
     /// All clamped-activation nodes' small-table one-hot checks, batched.
     DeferredActivationSmallRaChecks = 20,
-    /// All operand range checks (MeanOfSquares / Rsqrt), batched.
-    DeferredRangeCheck = 21,
-    /// All operand range checks' one-hot checks, batched.
-    DeferredRangeCheckRaChecks = 22,
     /// All clamped-activation nodes' clamp one-hot checks, batched.
     DeferredActivationClampRaChecks = 23,
     /// All softmax nodes' stage-3 lookups (exp digits, significance clamp), batched.
@@ -113,7 +107,6 @@ impl TryFrom<u8> for ProofType {
             0 => Ok(Self::Execution),
             2 => Ok(Self::RaOneHotChecks),
             3 => Ok(Self::RaHammingWeight),
-            4 => Ok(Self::RangeCheck),
             5 => Ok(Self::SoftmaxStage1),
             6 => Ok(Self::SoftmaxStage2),
             9 => Ok(Self::SumReduction),
@@ -125,8 +118,6 @@ impl TryFrom<u8> for ProofType {
             18 => Ok(Self::DeferredActivationExec),
             19 => Ok(Self::DeferredActivationClamp),
             20 => Ok(Self::DeferredActivationSmallRaChecks),
-            21 => Ok(Self::DeferredRangeCheck),
-            22 => Ok(Self::DeferredRangeCheckRaChecks),
             23 => Ok(Self::DeferredActivationClampRaChecks),
             24 => Ok(Self::DeferredSoftmaxStage3),
             25 => Ok(Self::DeferredSoftmaxRaChecks),

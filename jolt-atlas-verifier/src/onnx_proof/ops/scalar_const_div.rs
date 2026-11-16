@@ -23,18 +23,11 @@ use atlas_claims::{constant, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{op::ScalarConstDiv, Op};
 use atlas_transcript::Transcript;
-use common::CommittedPoly;
+use common::VirtualPoly;
 
 crate::bind_relation!(ScalarConstDiv, ConstantDivisionRelation);
 
-impl OpLayout for ScalarConstDiv {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(vec![CommittedPoly::ScalarConstDivNodeRemainder(node.idx)])
-    }
-}
+impl OpLayout for ScalarConstDiv {}
 
 impl OpPlan for ScalarConstDiv {
     fn plan(
@@ -43,6 +36,14 @@ impl OpPlan for ScalarConstDiv {
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
     ) -> Result<Plan, ProofVerifyError> {
+        // The remainder's bound `0 ≤ rem < divisor` is a range claim in the packed remainder
+        // buckets, which have no proof for a bound that is not positive.
+        if self.divisor < 1 {
+            return Err(ProofVerifyError::Malformed(format!(
+                "model: ScalarConstDiv node {} has the non-positive divisor {}",
+                node.idx, self.divisor
+            )));
+        }
         Ok(Plan(vec![
             Step::Reduce,
             Step::Relation {
@@ -61,9 +62,9 @@ impl OpPlan for ScalarConstDiv {
 /// ```
 ///
 /// **S ⊆ R.** `atlas_trace::semantics::fixed::floor_div` and `rem_floor` satisfy
-/// `left = d·q + rem` at every element. Nothing bounds the committed remainder, so the relation
-/// does not pin `q` to the floor: a known soundness gap of this op's protocol, which the
-/// relation preserves.
+/// `left = d·q + rem` at every element, with `0 ≤ rem < d` for the positive divisor the plan
+/// requires. The relation proves the identity; the bound, which pins `q` to the floor, is the
+/// remainder's range claim in the packed remainder buckets (`global_clamp::node_remainders`).
 pub struct ConstantDivisionRelation {
     node: ComputationNode,
     /// The node's constant divisor; `None` unless the node is a `ScalarConstDiv`, which the
@@ -120,10 +121,7 @@ impl SymbolicSumcheck for ConstantDivisionRelation {
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         let open = |id| opening(RelationOpening::Id(id));
         let left = open(self.ids().nodeio(Target::Input(0)));
-        let remainder = open(
-            self.ids()
-                .advice(CommittedPoly::ScalarConstDivNodeRemainder),
-        );
+        let remainder = open(self.ids().advice(VirtualPoly::ScalarConstDivRemainder));
         derived(RelationDerived::Eq) * (left - remainder)
     }
 }
@@ -132,8 +130,7 @@ impl Produces for ConstantDivisionRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![
             self.ids().nodeio(Target::Input(0)),
-            self.ids()
-                .advice(CommittedPoly::ScalarConstDivNodeRemainder),
+            self.ids().advice(VirtualPoly::ScalarConstDivRemainder),
         ]
     }
 }

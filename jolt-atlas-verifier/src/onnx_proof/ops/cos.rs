@@ -5,8 +5,7 @@ use crate::onnx_proof::{
         cos::COS_TABLE_VARS, division::TeleportInputRelation, trig_downscale::TrigDownscaleOperands,
     },
     op_lookups::{OpLookupEncoding, OpLookupProvider},
-    plan::{OpLookup, OpOpen, OpPlan, OpRangeCheck, OpRelation, OpTie, OpTrig, Plan, Step},
-    range_checking::{range_check_operands::TeleportRangeCheckOperands, RangeCheckProvider},
+    plan::{OpLookup, OpOpen, OpPlan, OpRelation, OpTie, OpTrig, Plan, Step},
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -25,23 +24,20 @@ impl OpLayout for Cos {
         node: &ComputationNode,
     ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         let cos_encoding = CosRaEncoding::new(node);
-        let rc_encoding = RangeCheckProvider::<TeleportRangeCheckOperands>::new(node)?.encoding();
         let dsc_encoding: OpLookupEncoding<TrigDownscaleOperands> =
             OpLookupProvider::<TrigDownscaleOperands>::new(node.clone()).encoding();
         let cos_d = cos_encoding.one_hot_params().instruction_d;
-        let rc_d = rc_encoding.one_hot_params().instruction_d;
         let dsc_d = dsc_encoding.one_hot_params().instruction_d;
         let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];
         polys.extend((0..dsc_d).map(|i| CommittedPoly::TrigDownscaleRaD(node.idx, i)));
         polys.extend((0..cos_d).map(|i| CommittedPoly::CosRaD(node.idx, i)));
-        polys.extend((0..rc_d).map(|i| CommittedPoly::TeleportRangeCheckRaD(node.idx, i)));
         Ok(polys)
     }
 }
 
 /// The plan: the evaluation reduction; the teleport quotient and the downscaled remainder
 /// opened at the reduced output point; one batch of the read-raf "value" sumchecks (downscale,
-/// the Cos table, the remainder range check); one batch of their one-hot checks; then the
+/// the Cos table); one batch of their one-hot checks; then the
 /// teleport identity `a = P·q + r` in the clear, once `q` and `r` both hold claims at the
 /// reduced output point.
 impl OpPlan for Cos {
@@ -67,7 +63,6 @@ impl OpPlan for Cos {
                 relations: vec![
                     OpRelation::Lookup(OpLookup::TrigDownscale, node.clone()),
                     OpRelation::Trig(OpTrig::Cos, node.clone()),
-                    OpRelation::RangeCheck(OpRangeCheck::Teleport, node.clone()),
                 ],
             },
             Step::Batch {
@@ -75,7 +70,6 @@ impl OpPlan for Cos {
                 relations: vec![
                     OpRelation::LookupOneHot(OpLookup::TrigDownscale, node.clone()),
                     OpRelation::TrigOneHot(OpTrig::Cos, node.clone()),
-                    OpRelation::RangeCheckOneHot(OpRangeCheck::Teleport, node.clone()),
                 ],
             },
             Step::Tie {

@@ -22,7 +22,6 @@ pub use jolt_atlas_verifier::onnx_proof::fused_rebase::*;
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
-use atlas_algebra::utils::lookup_bits::LookupBits;
 
 /// The operator's rescaling remainder `R = acc mod D`, padded to the node-output
 /// cycle domain, where `D` is the operator-specific divisor (usually `2^S`, but
@@ -39,13 +38,4 @@ pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<
         })
         .remainder
         .padded_pow2()
-}
-
-/// A (padded) rescaling remainder tensor as `bits`-bit lookup indices.
-pub(crate) fn remainder_lookup_bits(remainder: &Tensor<i32>, bits: i32) -> Vec<LookupBits> {
-    remainder
-        .data()
-        .iter()
-        .map(|&v| LookupBits::new(v as u64, bits as usize))
-        .collect()
 }

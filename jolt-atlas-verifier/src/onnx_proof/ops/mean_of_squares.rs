@@ -20,10 +20,8 @@
 //! 2. **Clamp** (`Execution` + `RaOneHotChecks`, via [`fused_rebase::prove_pre`]):
 //!    `out = SatClamp(rescaled)`, appending `rescaled` (`ClampAcc`) and `R`
 //!    (`RescaleRemainder`).
-//! 3. **Remainder range check** `R < D` (`RangeCheck` + `RescaleRemainderRaChecks`,
-//!    via the [`range_checking`](crate::onnx_proof::range_checking) `UnsignedLT`
-//!    lookup; `D` is a constant, so the Teleport-style
-//!    [`MeanOfSquaresRangeCheckOperands`] is used).
+//! 3. **Remainder bound** `R < D`: the remainder's range claims in the packed remainder
+//!    buckets ([`global_clamp::node_remainders`](crate::onnx_proof::global_clamp::node_remainders)).
 //!
 //! The reduction sums over the *padded* reduced cube (`op.padded_count`, a power
 //! of two so the flat-padded operand splits cleanly into `[retained, reduced]`),
@@ -41,12 +39,7 @@ use crate::{
     atlas_relation_types,
     node_view::ComputationNode,
     onnx_proof::{
-        clamp_lookups::is_scalar,
-        deferred_lookups::DeferredBatch,
-        plan::{clamp_steps, OpOpen, OpPlan, OpRangeCheck, OpRelation, OpTie, Plan, Step},
-        range_checking::range_check_operands::{
-            MeanOfSquaresRangeCheckOperands, RangeCheckOperands,
-        },
+        plan::{clamp_steps, OpOpen, OpPlan, OpRelation, Plan, Step},
         relation::{
             reduced_output_setup, AtlasRelation, RelationDerived, RelationExpr, RelationId,
             RelationOpening, RelationSetup,
@@ -62,12 +55,9 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_claims::{constant, derived, opening, SymbolicSumcheck};
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    shout::RaOneHotEncoding,
-};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
-use common::{CommittedPoly, VirtualPoly};
+use common::VirtualPoly;
 
 /// Degree of the execution sumcheck.
 pub const DEGREE: usize = 3;
@@ -77,29 +67,11 @@ pub fn mos_divisor(op: &MeanOfSquares, scale: u8) -> i64 {
     (1i64 << scale) * op.count as i64
 }
 
-impl OpLayout for MeanOfSquares {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        // The saturating clamp's one-hots live in the packed clamp buckets; here only the
-        // `R < D` range-check one-hot (skipped for scalar outputs).
-        let mut polys = Vec::new();
-        if !is_scalar(node) {
-            let rc_operands = RangeCheckOperands::<MeanOfSquaresRangeCheckOperands>::new(node)?;
-            let d = rc_operands
-                .get_encoding(node)
-                .one_hot_params()
-                .instruction_d;
-            polys.extend((0..d).map(|i| CommittedPoly::MeanOfSquaresRangeCheckRaD(node.idx, i)));
-        }
-        Ok(polys)
-    }
-}
+impl OpLayout for MeanOfSquares {}
 
 /// The plan: the evaluation reduction; the remainder advice and the clamp of the pre-clamp
-/// quotient (1+2); the reduction sumcheck (3); the remainder range check `R < D` (4), in the
-/// clear for a scalar node and in the post-loop range-check batches otherwise.
+/// quotient (1+2); the reduction sumcheck (3); the remainder bound `R < D` is proven in the
+/// packed remainder buckets after the node loop (`global_clamp::node_remainders`).
 impl OpPlan for MeanOfSquares {
     fn plan(
         &self,
@@ -116,23 +88,6 @@ impl OpPlan for MeanOfSquares {
             proof: ProofType::RescaleArith,
             relation: OpRelation::MeanOfSquares(MeanOfSquaresRelation::new(node.clone())),
         });
-        if is_scalar(node) {
-            steps.push(Step::Tie {
-                relation: OpTie::ScalarRemainder {
-                    node: node.clone(),
-                    bound: mos_divisor(self, node.scale),
-                },
-            });
-        } else {
-            steps.push(Step::Defer {
-                batch: DeferredBatch::RangeCheck,
-                relation: OpRelation::RangeCheck(OpRangeCheck::MeanOfSquares, node.clone()),
-            });
-            steps.push(Step::Defer {
-                batch: DeferredBatch::RangeCheckRaChecks,
-                relation: OpRelation::RangeCheckOneHot(OpRangeCheck::MeanOfSquares, node.clone()),
-            });
-        }
         Ok(Plan(steps))
     }
 }

@@ -4,9 +4,7 @@ use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     onnx_proof::{
-        deferred_lookups::DeferredBatch,
-        plan::{OpPlan, OpRangeCheck, OpRelation, Plan, Step},
-        range_checking::range_check_operands::{RangeCheckOperands, RiRangeCheckOperands},
+        plan::{OpPlan, OpRelation, Plan, Step},
         relation::{
             AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup,
@@ -24,10 +22,7 @@ use atlas_claims::{
     challenge, constant, derived, opening, Expr, NoChallenges, NoInputs, NoOutputs,
     SymbolicSumcheck,
 };
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    shout::RaOneHotEncoding,
-};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::{op::Rsqrt, trace::ModelExecutionIO, Model, Op};
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
@@ -50,22 +45,13 @@ impl OpLayout for Rsqrt {
         &self,
         node: &ComputationNode,
     ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        let mut polys = vec![CommittedPoly::RsqrtQuotient(node.idx)];
-
-        let rc_operands = RangeCheckOperands::<RiRangeCheckOperands>::new(node)?;
-        let encoding = rc_operands.get_encoding(node);
-        let d = encoding.one_hot_params().instruction_d;
-        for i in 0..d {
-            polys.push(CommittedPoly::SqrtDivRangeCheckRaD(node.idx, i));
-            polys.push(CommittedPoly::SqrtRangeCheckRaD(node.idx, i));
-        }
-        Ok(polys)
+        Ok(vec![CommittedPoly::RsqrtQuotient(node.idx)])
     }
 }
 
 /// The plan: the fused relation's sumcheck (its point drawn from the transcript), then the
-/// evaluation reduction, then the two remainder range checks and their one-hot checks, deferred
-/// to the post-loop range-check batches.
+/// evaluation reduction. The two remainder bounds are proven in the packed remainder buckets
+/// after the node loop (`global_clamp::node_remainders`).
 impl OpPlan for Rsqrt {
     fn plan(
         &self,
@@ -79,22 +65,6 @@ impl OpPlan for Rsqrt {
                 relation: OpRelation::Rsqrt(RsqrtRelation::new(node.clone())),
             },
             Step::Reduce,
-            Step::Defer {
-                batch: DeferredBatch::RangeCheck,
-                relation: OpRelation::RangeCheck(OpRangeCheck::RsqrtDiv, node.clone()),
-            },
-            Step::Defer {
-                batch: DeferredBatch::RangeCheckRaChecks,
-                relation: OpRelation::RangeCheckOneHot(OpRangeCheck::RsqrtDiv, node.clone()),
-            },
-            Step::Defer {
-                batch: DeferredBatch::RangeCheck,
-                relation: OpRelation::RangeCheck(OpRangeCheck::RsqrtSqrt, node.clone()),
-            },
-            Step::Defer {
-                batch: DeferredBatch::RangeCheckRaChecks,
-                relation: OpRelation::RangeCheckOneHot(OpRangeCheck::RsqrtSqrt, node.clone()),
-            },
         ]))
     }
 }

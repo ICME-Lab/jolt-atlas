@@ -1,11 +1,10 @@
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::plan::{OpPlan, OpRangeCheck, OpRelation, OpTie, Plan, Step};
+use crate::onnx_proof::plan::{OpPlan, OpRelation, OpTie, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     node_view::ComputationNode,
     onnx_proof::{
-        range_checking::range_check_operands::{DivRangeCheckOperands, RangeCheckOperands},
         relation::{
             AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
             RelationId, RelationOpening, RelationSetup, TieRelation,
@@ -20,10 +19,7 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_claims::{derived, opening, Expr, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    shout::RaOneHotEncoding,
-};
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_trace::op::Div;
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
@@ -33,15 +29,7 @@ impl OpLayout for Div {
         &self,
         node: &ComputationNode,
     ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        let mut polys = vec![CommittedPoly::DivNodeQuotient(node.idx)];
-        if node.is_scalar() {
-            return Ok(polys);
-        }
-        let rc_operands = RangeCheckOperands::<DivRangeCheckOperands>::new(node)?;
-        let encoding = rc_operands.get_encoding(node);
-        let d = encoding.one_hot_params().instruction_d;
-        polys.extend((0..d).map(|i| CommittedPoly::DivRangeCheckRaD(node.idx, i)));
-        Ok(polys)
+        Ok(vec![CommittedPoly::DivNodeQuotient(node.idx)])
     }
 }
 
@@ -54,7 +42,9 @@ impl OpPlan for Div {
     ) -> Result<Plan, ProofVerifyError> {
         // The division identity runs before the reduction: it adds a claim on the node's own
         // output (the quotient), which the reduction then folds in.
-        let mut steps = vec![
+        // The remainder's bound `0 ≤ rem < right` is proven in the packed remainder buckets
+        // after the node loop (`global_clamp::node_remainders`).
+        Ok(Plan(vec![
             Step::Relation {
                 proof: ProofType::Execution,
                 relation: OpRelation::Div(DivRelation::new(node.clone())),
@@ -63,21 +53,7 @@ impl OpPlan for Div {
             Step::Tie {
                 relation: OpTie::DivQuotient(DivQuotientRelation::new(node.clone())),
             },
-        ];
-        if !node.is_scalar() {
-            steps.push(Step::Relation {
-                proof: ProofType::RangeCheck,
-                relation: OpRelation::RangeCheck(OpRangeCheck::Div, node.clone()),
-            });
-            steps.push(Step::Batch {
-                proof: ProofType::RaOneHotChecks,
-                relations: vec![OpRelation::RangeCheckOneHot(
-                    OpRangeCheck::Div,
-                    node.clone(),
-                )],
-            });
-        }
-        Ok(Plan(steps))
+        ]))
     }
 }
 

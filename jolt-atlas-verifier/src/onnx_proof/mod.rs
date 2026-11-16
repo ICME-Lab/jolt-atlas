@@ -23,7 +23,6 @@ pub mod op_lookups;
 pub mod ops;
 pub mod plan;
 pub mod preprocessing;
-pub mod range_checking;
 pub mod relation;
 pub mod verifier;
 

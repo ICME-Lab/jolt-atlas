@@ -47,10 +47,6 @@ pub enum DeferredBatch {
     ActivationClamp,
     /// The one-hot checks of [`Self::ActivationClamp`]'s read addresses.
     ActivationClampRaChecks,
-    /// Operand range checks (MeanOfSquares remainder, Rsqrt div / sqrt).
-    RangeCheck,
-    /// The one-hot checks of [`Self::RangeCheck`]'s read addresses.
-    RangeCheckRaChecks,
     /// Softmax stage 3: exp-digit lookups + significance-clamp read-raf.
     SoftmaxStage3,
     /// Softmax stage 4: the one-hot checks of stage 3's read addresses.
@@ -59,13 +55,11 @@ pub enum DeferredBatch {
 
 impl DeferredBatch {
     /// Every batch, in run order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 6] = [
         Self::ActivationExec,
         Self::ActivationExecRaChecks,
         Self::ActivationClamp,
         Self::ActivationClampRaChecks,
-        Self::RangeCheck,
-        Self::RangeCheckRaChecks,
         Self::SoftmaxStage3,
         Self::SoftmaxRaChecks,
     ];
@@ -77,8 +71,6 @@ impl DeferredBatch {
             Self::ActivationExecRaChecks => ProofType::DeferredActivationSmallRaChecks,
             Self::ActivationClamp => ProofType::DeferredActivationClamp,
             Self::ActivationClampRaChecks => ProofType::DeferredActivationClampRaChecks,
-            Self::RangeCheck => ProofType::DeferredRangeCheck,
-            Self::RangeCheckRaChecks => ProofType::DeferredRangeCheckRaChecks,
             Self::SoftmaxStage3 => ProofType::DeferredSoftmaxStage3,
             Self::SoftmaxRaChecks => ProofType::DeferredSoftmaxRaChecks,
         }
@@ -89,13 +81,11 @@ impl DeferredBatch {
     /// node's turn.
     pub fn setup(self) -> DeferredSetup {
         match self {
-            Self::ActivationExec
-            | Self::ActivationClamp
-            | Self::RangeCheck
-            | Self::SoftmaxStage3 => DeferredSetup::InNodeLoop,
+            Self::ActivationExec | Self::ActivationClamp | Self::SoftmaxStage3 => {
+                DeferredSetup::InNodeLoop
+            }
             Self::ActivationExecRaChecks
             | Self::ActivationClampRaChecks
-            | Self::RangeCheckRaChecks
             | Self::SoftmaxRaChecks => DeferredSetup::AtBatch,
         }
     }
@@ -147,7 +137,7 @@ pub fn plan(model: &Model, io: &ModelExecutionIO) -> Result<Plan, ProofVerifyErr
                 .collect(),
         });
     }
-    let rbuckets = remainder_buckets(model);
+    let rbuckets = remainder_buckets(model)?;
     if !rbuckets.is_empty() {
         steps.push(Step::Batch {
             proof: ProofType::DeferredRemainderRC,

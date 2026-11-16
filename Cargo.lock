@@ -388,7 +388,6 @@ dependencies = [
  "atlas-algebra",
  "atlas-trace",
  "common",
- "derive_more",
  "num",
  "num-derive",
  "num-traits",

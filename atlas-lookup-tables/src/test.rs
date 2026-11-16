@@ -218,23 +218,11 @@ fn prefix_suffix_test_inner<
     }
 }
 
-/// Tests the prefix-suffix decomposition of a binary (2*XLEN address space) lookup table.
+/// Tests the prefix-suffix decomposition of a lookup table over an `XLEN`-bit address.
 ///
 /// Verifies that combining prefix and suffix evaluations correctly reconstructs
 /// the full lookup table value at random indices.
 pub fn prefix_suffix_test<
-    const XLEN: usize,
-    F: JoltField,
-    T: PrefixSuffixDecompositionTrait<XLEN>,
->() {
-    prefix_suffix_test_inner::<XLEN, F, T>(16, XLEN * 2);
-}
-
-/// Tests the prefix-suffix decomposition of a unary (XLEN address space) lookup table.
-///
-/// Verifies that combining prefix and suffix evaluations correctly reconstructs
-/// the full lookup table value at random indices.
-pub fn prefix_suffix_test_unary<
     const XLEN: usize,
     F: JoltField,
     T: PrefixSuffixDecompositionTrait<XLEN>,

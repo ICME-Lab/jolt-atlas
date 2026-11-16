@@ -64,14 +64,14 @@ mod test {
         right_shift::RightShiftTable,
         test::{
             lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
-            lookup_table_mle_random_test, prefix_suffix_test_unary,
+            lookup_table_mle_random_test, prefix_suffix_test,
         },
     };
     use atlas_algebra::field::fp128::Fp128 as Fr;
 
     #[test]
     fn prefix_suffix() {
-        prefix_suffix_test_unary::<32, Fr, RightShiftTable<32>>();
+        prefix_suffix_test::<32, Fr, RightShiftTable<32>>();
     }
 
     #[test]

@@ -277,7 +277,7 @@ impl<const XLEN: usize> ClampSpec for SoftmaxClampTable<XLEN> {
 mod test {
     use super::*;
     use crate::test::{
-        lookup_table_mle_linearity_test, prefix_suffix_test_unary,
+        lookup_table_mle_linearity_test, prefix_suffix_test,
         signed_lookup_table_mle_full_hypercube_test, signed_lookup_table_mle_random_test,
     };
     use atlas_algebra::field::fp128::Fp128 as Fr;
@@ -285,10 +285,10 @@ mod test {
 
     #[test]
     fn prefix_suffix() {
-        prefix_suffix_test_unary::<XLEN, Fr, ClampTable<XLEN>>();
-        prefix_suffix_test_unary::<LARGE_XLEN, Fr, SaturationTable>();
-        prefix_suffix_test_unary::<XLEN, Fr, ActivationClampTable<XLEN>>();
-        prefix_suffix_test_unary::<XLEN, Fr, SoftmaxClampTable<XLEN>>();
+        prefix_suffix_test::<XLEN, Fr, ClampTable<XLEN>>();
+        prefix_suffix_test::<LARGE_XLEN, Fr, SaturationTable>();
+        prefix_suffix_test::<XLEN, Fr, ActivationClampTable<XLEN>>();
+        prefix_suffix_test::<XLEN, Fr, SoftmaxClampTable<XLEN>>();
     }
 
     #[test]

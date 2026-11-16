@@ -74,7 +74,7 @@ mod test {
     use crate::{
         test::{
             lookup_table_mle_full_hypercube_test, lookup_table_mle_linearity_test,
-            lookup_table_mle_random_test, prefix_suffix_test_unary,
+            lookup_table_mle_random_test, prefix_suffix_test,
         },
         unsigned_abs::UnsignedAbsTable,
         JoltLookupTable,
@@ -134,7 +134,7 @@ mod test {
 
     #[test]
     fn prefix_suffix() {
-        prefix_suffix_test_unary::<32, Fr, UnsignedAbsTable<32>>();
+        prefix_suffix_test::<32, Fr, UnsignedAbsTable<32>>();
     }
 
     #[test]

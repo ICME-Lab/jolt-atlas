@@ -5,7 +5,7 @@
 //! prefix MLEs incrementally with checkpoints updated every two rounds, we avoid summing
 //! over the full 2^(2*XLEN) lookup table.
 
-use self::{and::AndPrefix, eq::EqPrefix, or::OrPrefix, xor::XorPrefix};
+use self::eq::EqPrefix;
 use crate::prefixes::{
     higher_all_one::{
         ActivationHigherAllOnePrefix, ClampHigherAllOnePrefix, SatClampHigherAllOnePrefix,
@@ -46,8 +46,6 @@ use std::{
 use strum::EnumCount;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-/// Bitwise AND prefix implementation.
-pub mod and;
 /// Equality comparison prefix implementation.
 pub mod eq;
 /// Checks that all bits with significance >= given bound are one.
@@ -68,8 +66,6 @@ pub mod not_lower_msb;
 pub mod not_msb;
 /// Two's complement negation prefix: `(!lower_word) + 1`, used in `neg_relu` decomposition.
 pub mod not_word_no_msb;
-/// Bitwise OR prefix implementation.
-pub mod or;
 /// Value of the high bits of an unsigned input, right-shifted by a bound.
 pub mod right_shift;
 /// Saturated boundary value prefix implementation, used in `sat_clamp` decomposition.
@@ -80,8 +76,6 @@ pub mod upper_eqo;
 pub mod upper_eqz;
 /// Lower word (without MSB) prefix implementation.
 pub mod word_no_msb;
-/// Bitwise XOR prefix implementation.
-pub mod xor;
 /// The constant 0 prefix implementation.
 pub mod zero;
 
@@ -255,14 +249,11 @@ macro_rules! impl_sparse_dense_prefix {
 }
 
 impl_sparse_dense_prefix!(
-    And                         : AndPrefix,                        // Bitwise AND prefix
     Eq                          : EqPrefix,                         // Equality comparison prefix
     Msb                         : MsbPrefix,                        // MSB (sign bit) prefix
     NotMsb                      : NotMsbPrefix,                     // Not-MSB prefix
     NotWordNoMsb                : NotWordNoMsbPrefix,               // Two's complement negation prefix: `(!lower_word) + 1`
-    Or                          : OrPrefix,                         // Bitwise OR prefix
     WordNoMsb                   : WordNoMsbPrefix,                  // Lower word without MSB prefix
-    Xor                         : XorPrefix,                        // Bitwise XOR prefix
     Zero                        : ZeroPrefix,                       // The constant 0
 
     LowerMsb                    : LowerMsbPrefix,                   // Lower 32-bit word sign bit (r[XLEN/2], the i32 sign bit), used in `sat_clamp` decomposition

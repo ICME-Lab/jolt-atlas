@@ -232,30 +232,6 @@ where
             raf,
         }
     }
-
-    /// Like [`Self::from_parts`], for an arbitrary [`CycleWeight`] (e.g. a
-    /// packed multi-node instance).
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_parts_with_cycle(
-        gamma: F,
-        cycle: CycleWeight<F>,
-        table: LUT,
-        polynomial_type: VirtualPoly,
-        sumcheck_id: SumcheckId,
-        rv_claim: F,
-        raf: OperandRaf<F>,
-    ) -> Self {
-        Self {
-            gamma,
-            log_T: cycle.log_T(),
-            cycle,
-            table,
-            polynomial_type,
-            sumcheck_id,
-            rv_claim,
-            raf,
-        }
-    }
 }
 
 /// The prefix-suffix read-raf check as a relation: over the address-then-cycle hypercube,

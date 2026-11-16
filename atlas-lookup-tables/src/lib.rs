@@ -39,17 +39,12 @@
     type_alias_bounds
 )]
 
-use and::AndTable;
-use or::OrTable;
 use prefixes::{PrefixEval, Prefixes};
 use suffixes::{SuffixEval, Suffixes};
-use xor::XorTable;
 
 use atlas_algebra::field::{ChallengeFieldOps, FieldChallengeOps, JoltField};
-use derive_more::From;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::fmt::Debug;
-use strum_macros::{EnumCount as EnumCountMacro, EnumIter, IntoStaticStr};
 
 #[cfg(test)]
 /// Test utilities for verifying lookup table correctness.
@@ -107,13 +102,9 @@ pub mod prefixes;
 /// Suffix components for lookup table MLE decomposition.
 pub mod suffixes;
 
-/// Bitwise AND lookup table.
-pub mod and;
 /// Clamps the input to a specified range: floor-at-0 (`SoftmaxClampTable`) or natively
 /// symmetric (`ClampTable`/`SaturationTable`/`ActivationClampTable`), via one generic `ClampSpec`.
 pub mod clamp;
-/// Bitwise OR lookup table.
-pub mod or;
 /// Piecewise-linear tanh, erf, sigmoid, sin and cos tables with a prefix-suffix decomposition.
 /// Not read by any op.
 pub mod piecewise_linear;
@@ -127,87 +118,3 @@ pub mod right_shift;
 /// Computes `abs(x)` by interpreting the input as a signed integer and returning
 /// its unsigned magnitude.
 pub mod unsigned_abs;
-/// Bitwise XOR lookup table.
-pub mod xor;
-
-/// Enum of all available lookup tables in the ONNX proof system.
-///
-/// Each variant corresponds to a specific operation (AND, OR, XOR) and contains
-/// the associated lookup table implementation.
-#[derive(
-    Copy, Clone, Debug, From, Serialize, Deserialize, EnumIter, EnumCountMacro, IntoStaticStr,
-)]
-#[repr(u8)]
-pub enum LookupTables<const XLEN: usize> {
-    /// Bitwise AND operation lookup table
-    And(AndTable<XLEN>),
-    /// Bitwise OR operation lookup table
-    Or(OrTable<XLEN>),
-    /// Bitwise XOR operation lookup table
-    Xor(XorTable<XLEN>),
-}
-
-impl<const XLEN: usize> LookupTables<XLEN> {
-    /// Materializes the entire lookup table (test only).
-    #[cfg(test)]
-    pub fn materialize(&self) -> Vec<u64> {
-        match self {
-            LookupTables::And(table) => table.materialize(),
-            LookupTables::Or(table) => table.materialize(),
-            LookupTables::Xor(table) => table.materialize(),
-        }
-    }
-
-    /// Materializes a single entry of the lookup table at the given index.
-    pub fn materialize_entry(&self, index: u64) -> u64 {
-        match self {
-            LookupTables::And(table) => table.materialize_entry(index),
-            LookupTables::Or(table) => table.materialize_entry(index),
-            LookupTables::Xor(table) => table.materialize_entry(index),
-        }
-    }
-
-    /// Evaluates the multilinear extension (MLE) of the lookup table at point `r`.
-    pub fn evaluate_mle<F, C>(&self, r: &[C]) -> F
-    where
-        C: ChallengeFieldOps<F>,
-        F: JoltField + FieldChallengeOps<C>,
-    {
-        match self {
-            LookupTables::And(table) => table.evaluate_mle(r),
-            LookupTables::Or(table) => table.evaluate_mle(r),
-            LookupTables::Xor(table) => table.evaluate_mle(r),
-        }
-    }
-
-    /// Returns the prefix components used in this lookup table's decomposition.
-    pub fn prefixes(&self) -> Vec<Prefixes> {
-        match self {
-            LookupTables::And(table) => table.prefixes(),
-            LookupTables::Or(table) => table.prefixes(),
-            LookupTables::Xor(table) => table.prefixes(),
-        }
-    }
-
-    /// Returns the suffix components used in this lookup table's decomposition.
-    pub fn suffixes(&self) -> Vec<Suffixes> {
-        match self {
-            LookupTables::And(table) => table.suffixes(),
-            LookupTables::Or(table) => table.suffixes(),
-            LookupTables::Xor(table) => table.suffixes(),
-        }
-    }
-
-    /// Combines prefix and suffix evaluations to reconstruct the full lookup table MLE value.
-    pub fn combine<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F {
-        match self {
-            LookupTables::And(table) => table.combine(prefixes, suffixes),
-            LookupTables::Or(table) => table.combine(prefixes, suffixes),
-            LookupTables::Xor(table) => table.combine(prefixes, suffixes),
-        }
-    }
-}

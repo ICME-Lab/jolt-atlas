@@ -28,10 +28,8 @@ use atlas_algebra::{field::JoltField, utils::lookup_bits::LookupBits};
 use num_derive::FromPrimitive;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-use self::{and::AndSuffix, one::OneSuffix, or::OrSuffix, xor::XorSuffix};
+use self::one::OneSuffix;
 
-/// Bitwise AND suffix implementation.
-pub mod and;
 /// Checks that all bits with significance >= given bound are zero.
 pub mod higher_all_zero;
 /// Suffix that evaluates `higher_all_one(bits) * lower_word(bits)`.
@@ -48,14 +46,10 @@ pub mod not_lower_msb_upper_eqz;
 pub mod not_lower_msb_upper_eqz_low;
 /// Constant one suffix implementation.
 pub mod one;
-/// Bitwise OR suffix implementation.
-pub mod or;
 /// Value of the high bits of an unsigned input, right-shifted by a bound.
 pub mod right_shift;
 /// Lower word without MSB suffix implementation.
 pub mod word_no_msb;
-/// Bitwise XOR suffix implementation.
-pub mod xor;
 
 /// Trait for suffix components that support sparse-dense MLE evaluation.
 ///
@@ -106,12 +100,9 @@ macro_rules! impl_sparse_dense_suffix {
 }
 
 impl_sparse_dense_suffix!(
-    And                         : AndSuffix,                        // Bitwise AND suffix
     NegRelu                     : NegReluSuffix,                    // Suffix for Relu(-x) table
     One                         : OneSuffix,                        // Constant one suffix
-    Or                          : OrSuffix,                         // Bitwise OR suffix
     WordNoMSB                   : WordNoMsbSuffix,                  // Lower word without MSB suffix
-    Xor                         : XorSuffix,                        // Bitwise XOR suffix
 
     LowerMsbUpperEqoLow         : LowerMsbUpperEqoLowSuffix,        // `m * upper_eqo * low` suffix, used in `sat_clamp` decomposition
     NotLowerMsbUpperEqz         : NotLowerMsbUpperEqzSuffix,        // `(1-m) * upper_eqz` suffix, used in `sat_clamp` decomposition

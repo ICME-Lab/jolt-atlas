@@ -9,8 +9,8 @@
 //! its output point through the generic [`OpLookupProvider`](super::op_lookups::OpLookupProvider),
 //! parameterized by [`SaturatingAccClampOperands`], which appends that witness claim and nothing
 //! else. The clamp itself is proven in the node's packed clamp bucket after the node loop
-//! ([`clamp_split`](super::clamp_split)), by the tie `acc = out` for a model output whose public
-//! value is unsaturated, or in the clear for a scalar node. The caller ties `acc` back to the
+//! ([`clamp_split`](super::clamp_split)), or by the tie `acc = out` for a model output whose
+//! public value is unsaturated. The caller ties `acc` back to the
 //! operands (`acc = left ± right` for `Add`/`Sub`, the axis reduction for `Sum`, the fused
 //! rescale for the others).
 //!

@@ -18,9 +18,6 @@
 //! expression is [`input_expression`], so its initial claim is the raw `acc(r)` while its
 //! `Σ L·R` body is unchanged. The sequence is the plan
 //! [`fused_rescale_plan`](super::plan::fused_rescale_plan).
-//!
-//! Scalar nodes (`log_T = 0`) skip the one-hot reductions and open `rescaled` and
-//! `R` in the clear (mirroring the `Add`/`Sub`/`Sum` clamp fallback).
 
 use atlas_trace::Op;
 

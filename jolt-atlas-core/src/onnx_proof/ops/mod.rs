@@ -839,7 +839,7 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
 }
 
 /// Append a plan tie's produced openings with the prover's claims. An in-the-clear check
-/// (a scalar clamp, an exact output, a bucket's exact flag) produces nothing here: its
+/// (a one-element remainder, an exact output, a bucket's exact flag) produces nothing here: its
 /// openings are earlier steps'.
 fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prover<F, T>) {
     let expect = "the prover holds every claim it reads";
@@ -860,21 +860,6 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
         OpTie::Neg(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::SubAccumulation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::ZeroOutput(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::ScalarAccumulation { node, .. } => {
-            let (opening_point, _claim) = AccOpeningAccessor::new(&*accumulator, node)
-                .get_reduced_opening()
-                .expect(expect);
-            let LayerData { operands, .. } = TraceView::layer_data(trace, node);
-            let [left, right] = operands[..] else {
-                panic!("Expected two operands for {}", node.operator)
-            };
-            let left_claim = left.evaluate_mle(&opening_point.r);
-            let right_claim = right.evaluate_mle(&opening_point.r);
-            let mut provider =
-                AccOpeningAccessor::new(accumulator, node).into_provider(transcript, opening_point);
-            provider.append_nodeio(Target::Input(0), left_claim);
-            provider.append_nodeio(Target::Input(1), right_claim);
-        }
         OpTie::TeleportInput(relation) => {
             let node = &relation.node;
             let accessor = AccOpeningAccessor::new(&*accumulator, node);
@@ -893,9 +878,7 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
                 .append_nodeio(Target::Input(0), a_claim);
         }
         OpTie::Softmax(tie) => softmax_last_axis::prove_tie(tie),
-        OpTie::ScalarClamp(_)
-        | OpTie::ScalarRemainder { .. }
-        | OpTie::ExactClampOutput(_)
-        | OpTie::ClampBucketExact(_) => {}
+        OpTie::ScalarRemainder { .. } | OpTie::ExactClampOutput(_) | OpTie::ClampBucketExact(_) => {
+        }
     }
 }

@@ -15,9 +15,7 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    clamp_lookups::{
-        acc_opening_id, recover_small_int, verify_scalar_clamp, SaturatingAccClampOperands,
-    },
+    clamp_lookups::{acc_opening_id, recover_small_int, SaturatingAccClampOperands},
     clamp_split::{self, SplitParams, ValueParams},
     deferred_lookups::DeferredBatch,
     fused_rebase,
@@ -69,7 +67,7 @@ use crate::onnx_proof::{
     relation::{verify_tie, RelationVerifier, SetupRelation},
     ProofType,
 };
-use crate::utils::opening_access::{AccOpeningAccessor, Target};
+use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::{field::JoltField, poly::point::OpeningPoint, utils::errors::ProofVerifyError};
 use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
@@ -545,18 +543,8 @@ pub enum OpTie {
     SubAccumulation(AccumulationRelation<Sub>),
     /// `IsNan`: the output is zero.
     ZeroOutput(ZeroOutputRelation),
-    /// A scalar `Add`/`Sub`: both operands open at the reduced output point, and the output is
-    /// the saturating clamp of `left ± right`, recomputed in the clear.
-    ScalarAccumulation {
-        /// The node.
-        node: ComputationNode,
-        /// `+1` for `Add`, `−1` for `Sub`.
-        sign: i64,
-    },
-    /// A scalar clamped node: the output is the saturating clamp of its `ClampAcc` opening,
-    /// recomputed in the clear.
-    ScalarClamp(ComputationNode),
-    /// A scalar fused node's remainder, opened in the clear, lies in `[0, bound)`.
+    /// A one-element `MeanOfSquares` node's remainder, opened in the clear, lies in
+    /// `[0, bound)`.
     ScalarRemainder {
         /// The node.
         node: ComputationNode,
@@ -593,37 +581,19 @@ impl OpTie {
             Self::Neg(relation) => verify_tie(relation, accumulator, transcript),
             Self::SubAccumulation(relation) => verify_tie(relation, accumulator, transcript),
             Self::ZeroOutput(relation) => verify_tie(relation, accumulator, transcript),
-            Self::ScalarAccumulation { node, sign } => {
-                let (opening_point, output_claim) =
-                    AccOpeningAccessor::new(&*accumulator, node).get_reduced_opening()?;
-                let mut provider = AccOpeningAccessor::new(accumulator, node)
-                    .into_provider(transcript, opening_point);
-                provider.append_nodeio(Target::Input(0))?;
-                provider.append_nodeio(Target::Input(1))?;
-                let left_claim = provider.get_nodeio(Target::Input(0))?.1;
-                let right_claim = provider.get_nodeio(Target::Input(1))?.1;
-                let acc = left_claim + F::from_i64(*sign) * right_claim;
-                verify_scalar_clamp(acc, output_claim, &node.operator.to_string())
-            }
-            Self::ScalarClamp(node) => {
-                let accessor = AccOpeningAccessor::new(&*accumulator, node);
-                let acc = accessor.get_advice(VirtualPoly::ClampAcc)?.1;
-                let output_claim = accessor.get_reduced_opening()?.1;
-                verify_scalar_clamp(acc, output_claim, &node.operator.to_string())
-            }
             Self::ScalarRemainder { node, bound } => {
                 let remainder = AccOpeningAccessor::new(&*accumulator, node)
                     .get_advice(VirtualPoly::RescaleRemainder)?
                     .1;
                 let value = recover_small_int(remainder).ok_or_else(|| {
                     ProofVerifyError::InvalidOpeningProof(format!(
-                        "{} (scalar): remainder claim is not a small integer",
+                        "{} (one element): remainder claim is not a small integer",
                         node.operator
                     ))
                 })?;
                 if value < 0 || value >= *bound {
                     return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                        "{} (scalar): remainder must lie in [0, {bound})",
+                        "{} (one element): remainder must lie in [0, {bound})",
                         node.operator
                     )));
                 }
@@ -656,8 +626,7 @@ impl OpTie {
 
 /// Advice openings a plan step appends; the point is stated, the claim is the proof's.
 pub enum OpOpen {
-    /// The node's pre-clamp accumulation (`ClampAcc`) at the node's output point: the clamp
-    /// lookup's `raf`, or the in-the-clear accumulation of a scalar node.
+    /// The node's pre-clamp accumulation (`ClampAcc`) at the node's output point.
     ClampAcc(ComputationNode),
     /// A fused node's rescale remainder at the reduced output point.
     RescaleRemainder(ComputationNode),
@@ -730,22 +699,11 @@ pub fn fused_rescale_plan(
 ) -> Result<Plan, ProofVerifyError> {
     let mut steps = vec![Step::Reduce];
     let bits = fused_rebase::rebase_bits(node).filter(|&bits| bits > 0);
-    if let Some(bits) = bits {
+    if bits.is_some() {
         steps.push(Step::Open(OpOpen::RescaleRemainder(node.clone())));
         steps.extend(clamp_steps(node, model, io));
         steps.push(Step::Relation { proof, relation });
-        if clamp_lookups_is_scalar(node) {
-            steps.push(Step::Tie {
-                relation: OpTie::ScalarRemainder {
-                    node: node.clone(),
-                    bound: 1i64 << bits,
-                },
-            });
-            steps.push(Step::Tie {
-                relation: OpTie::ScalarClamp(node.clone()),
-            });
-        }
-        // A non-scalar remainder is range-checked in its packed bucket after the node loop.
+        // The remainder is range-checked in its packed bucket after the node loop.
     } else {
         steps.push(Step::Relation { proof, relation });
     }
@@ -753,21 +711,16 @@ pub fn fused_rescale_plan(
 }
 
 /// The steps that discharge `output = SatClamp(ClampAcc)` for a clamped node: the accumulation
-/// is opened; a scalar node is checked in the clear by the caller's [`OpTie::ScalarClamp`], a
-/// model output node with an unsaturated public output ties `acc = out`, and every other node
-/// is proven in its packed clamp bucket after the node loop.
+/// is opened; a model output node with an unsaturated public output ties `acc = out`, and every
+/// other node is proven in its packed clamp bucket after the node loop.
 pub fn clamp_steps(node: &ComputationNode, model: &Model, io: &ModelExecutionIO) -> Vec<Step> {
     let mut steps = vec![Step::Open(OpOpen::ClampAcc(node.clone()))];
-    if !clamp_lookups_is_scalar(node) && clamp_split::exact_output_verifier(model, io, node.idx) {
+    if clamp_split::exact_output_verifier(model, io, node.idx) {
         steps.push(Step::Tie {
             relation: OpTie::ExactClampOutput(node.clone()),
         });
     }
     steps
-}
-
-fn clamp_lookups_is_scalar(node: &ComputationNode) -> bool {
-    crate::onnx_proof::clamp_lookups::is_scalar(node)
 }
 
 /// Bind a plan-verified op with no committed polynomials: `$relation` (a relation of the plan)

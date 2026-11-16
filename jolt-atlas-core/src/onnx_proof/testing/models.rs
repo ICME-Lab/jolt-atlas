@@ -26,6 +26,7 @@ pub(crate) fn probe_models() -> Vec<ProbeModel> {
         tables_and_layout(0x5EED_0003),
         relation_flows(0x5EED_0004),
         saturating(0x5EED_0005),
+        scalars(0x5EED_0006),
     ]
 }
 
@@ -37,6 +38,7 @@ pub(crate) fn probe_models_alt() -> Vec<ProbeModel> {
         tables_and_layout(0xA17_0003),
         relation_flows(0xA17_0004),
         saturating(0xA17_0005),
+        scalars(0xA17_0006),
     ]
 }
 
@@ -155,6 +157,48 @@ fn saturating(seed: u64) -> ProbeModel {
         inputs,
     }
 }
+
+/// One-element clamped nodes only: a fused `Mul`, an `Add`, an `Add` that saturates, and the
+/// output `Sub`. With no larger clamped node the bucket capacity is one cell, so every node is
+/// alone in a one-cell clamp bucket and the `Mul`'s remainder in a one-cell remainder bucket:
+/// each is the first node of its bucket, where the digit tamper sites land. The values keep a
+/// non-zero digit above the least significant one in every `OUT = out + 2^31` and in the
+/// remainder (`scalars_probe_layout` pins the layout and the values).
+fn scalars(seed: u64) -> ProbeModel {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![1]);
+    let c = b.constant(Tensor::from_slice(&[SCALARS_PROBE_FACTOR], &[1]).unwrap());
+    let m = b.mul(x, c);
+    let y = b.input(vec![1]);
+    let a = b.add(m, y);
+    let top = b.constant(Tensor::from_slice(&[i32::MAX], &[1]).unwrap());
+    let s = b.add(a, top);
+    let z = b.input(vec![1]);
+    let out = b.sub(s, z);
+    b.mark_output(out);
+    // A remainder of `x·factor` below 4 has no digit for the tamper to move.
+    let x = loop {
+        let x = Tensor::random_range(&mut rng, &[1], 900..1100);
+        let product = i64::from(x.data()[0]) * i64::from(SCALARS_PROBE_FACTOR);
+        if product.rem_euclid(1 << MODEL_SCALE) >= 4 {
+            break x;
+        }
+    };
+    let inputs = vec![
+        x,
+        Tensor::random_range(&mut rng, &[1], 1..1000),
+        Tensor::random_range(&mut rng, &[1], 1..1000),
+    ];
+    ProbeModel {
+        name: "scalars",
+        model: b.build(),
+        inputs,
+    }
+}
+
+/// The constant factor of the `scalars` probe's fused `Mul`.
+pub(crate) const SCALARS_PROBE_FACTOR: i32 = 3001;
 
 /// rsqrt / cos / sin / iff / clamp / square / mean_of_squares / sum / cube /
 /// scalar_const_div on a 64-element input.

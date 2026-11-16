@@ -3,7 +3,6 @@ use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     onnx_proof::{
-        clamp_lookups::is_scalar,
         plan::{clamp_steps, OpPlan, OpTie, Plan, Step},
         relation::{
             AtlasRelation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
@@ -41,9 +40,6 @@ crate::impl_plan_op!(Add, AccumulationRelation<Add>);
 /// 2. **Operand tie** ([`AccumulationRelation`], no sumcheck): the prover opens
 ///    `left`/`right` at the same output point `r`, and the verifier checks
 ///    `left(r) + right(r) == acc(r)`.
-///
-/// A scalar node skips (1): its operands open in the clear and the verifier
-/// recomputes the clamp.
 ///
 /// The accumulation is re-executed from the operands at proving time
 /// ([`clamp_intermediate`](crate::onnx_proof::clamp_lookups)); it is not stored
@@ -85,31 +81,21 @@ impl AccumulationShape for Sub {
 }
 
 /// The plan of a saturating `left ± right`: the evaluation reduction, then the clamp steps and
-/// the accumulation tie, or for a scalar node the clamp recomputed from the operands in the
-/// clear.
+/// the accumulation tie.
 pub fn accumulation_plan<S: AccumulationShape>(
     node: &ComputationNode,
     model: &Model,
     io: &ModelExecutionIO,
 ) -> Plan {
     let mut steps = vec![Step::Reduce];
-    if is_scalar(node) {
-        steps.push(Step::Tie {
-            relation: OpTie::ScalarAccumulation {
-                node: node.clone(),
-                sign: S::SIGN,
-            },
-        });
-    } else {
-        steps.extend(clamp_steps(node, model, io));
-        steps.push(Step::Tie {
-            relation: S::accumulation_tie(node),
-        });
-    }
+    steps.extend(clamp_steps(node, model, io));
+    steps.push(Step::Tie {
+        relation: S::accumulation_tie(node),
+    });
     Plan(steps)
 }
 
-/// The pre-clamp accumulation of a non-scalar saturating `left ± right`, a tie at the output
+/// The pre-clamp accumulation of a saturating `left ± right`, a tie at the output
 /// point `r`:
 ///
 /// ```text

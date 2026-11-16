@@ -118,9 +118,6 @@ impl OpPlan for MeanOfSquares {
         });
         if is_scalar(node) {
             steps.push(Step::Tie {
-                relation: OpTie::ScalarClamp(node.clone()),
-            });
-            steps.push(Step::Tie {
                 relation: OpTie::ScalarRemainder {
                     node: node.clone(),
                     bound: mos_divisor(self, node.scale),

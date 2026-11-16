@@ -18,7 +18,7 @@
 //! polynomial is larger than the largest per-node one was and the SRS size is
 //! unchanged. The layout is a pure function of the model, so prover and
 //! verifier derive it independently.
-use super::{clamp_lookups::is_scalar, clamp_split, fused_rebase::rebase_bits};
+use super::{clamp_split, fused_rebase::rebase_bits};
 use crate::node_view::clamp_value_bound;
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
@@ -66,14 +66,14 @@ pub struct ClampBucket {
     pub nodes: Vec<BucketNode>,
 }
 
-/// Partition the model's clamped (non-scalar) nodes into buckets: grouped by
+/// Partition the model's clamped nodes into buckets: grouped by
 /// width, packed first-fit-decreasing by padded size into a capacity equal to
 /// the largest clamped node (so offsets are automatically aligned). `Err` if a node's operand
 /// is not a node of the model.
 pub fn clamp_buckets(model: &Model) -> Result<Vec<ClampBucket>, ProofVerifyError> {
     let mut clamped: Vec<(usize, usize, usize)> = Vec::new();
     for n in &model.views() {
-        if clamp_value_bound(model, n)?.is_some() && !is_scalar(n) {
+        if clamp_value_bound(model, n)?.is_some() {
             clamped.push((n.idx, n.sat_clamp_bits, n.pow2_padded_num_output_elements()));
         }
     }
@@ -81,13 +81,12 @@ pub fn clamp_buckets(model: &Model) -> Result<Vec<ClampBucket>, ProofVerifyError
 }
 
 /// Whether `node` proves a fused rescale remainder range check (Einsum / Mul /
-/// Square / Cube with a nonzero rebase, non-scalar).
+/// Square / Cube with a nonzero rebase).
 pub fn has_remainder_rc(node: &ComputationNode) -> bool {
     matches!(
         node.operator,
         Op::Einsum(_) | Op::Mul(_) | Op::Square(_) | Op::Cube(_)
     ) && rebase_bits(node).is_some_and(|b| b > 0)
-        && !is_scalar(node)
 }
 
 /// Partition the fused-rescale remainder range checks into buckets keyed by
@@ -237,4 +236,49 @@ pub fn bucket_committed_polys(
         .chain(remainder_buckets(model))
         .flat_map(|bucket| bucket.committed_polys())
         .collect())
+}
+
+#[cfg(test)]
+#[allow(clippy::indexing_slicing)]
+mod tests {
+    use super::{pack_buckets, BucketKind};
+
+    /// `(log_t, member node indices)` per bucket, in bucket order.
+    fn layout(items: &[(usize, usize, usize)]) -> Vec<(usize, usize, Vec<usize>)> {
+        pack_buckets(BucketKind::Clamp, items.to_vec())
+            .into_iter()
+            .map(|b| (b.width, b.log_t, b.nodes.iter().map(|n| n.idx).collect()))
+            .collect()
+    }
+
+    /// A one-element node joining a bucket filled to an exact power of two below capacity
+    /// raises it to the next power of two.
+    #[test]
+    fn one_element_node_can_double_a_bucket() {
+        let without = layout(&[(0, 40, 8), (1, 40, 2)]);
+        assert_eq!(without, vec![(40, 3, vec![0]), (40, 1, vec![1])]);
+        let with = layout(&[(0, 40, 8), (1, 40, 2), (2, 40, 1)]);
+        assert_eq!(with, vec![(40, 3, vec![0]), (40, 2, vec![1, 2])]);
+    }
+
+    /// A one-element node that fits in no bucket of its width opens one, and every later bucket
+    /// moves up an index.
+    #[test]
+    fn one_element_node_can_open_a_bucket() {
+        let without = layout(&[(0, 40, 4), (1, 48, 4)]);
+        assert_eq!(without, vec![(40, 2, vec![0]), (48, 2, vec![1])]);
+        let with = layout(&[(0, 40, 4), (1, 48, 4), (2, 40, 1)]);
+        assert_eq!(
+            with,
+            vec![(40, 2, vec![0]), (40, 0, vec![2]), (48, 2, vec![1])]
+        );
+    }
+
+    /// With no larger node the capacity is one cell, so each one-element node is its own
+    /// bucket.
+    #[test]
+    fn one_element_nodes_alone_get_a_bucket_each() {
+        let both = layout(&[(0, 40, 1), (1, 40, 1)]);
+        assert_eq!(both, vec![(40, 0, vec![0]), (40, 0, vec![1])]);
+    }
 }

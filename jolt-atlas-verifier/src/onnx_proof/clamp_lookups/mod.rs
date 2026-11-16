@@ -9,8 +9,8 @@
 //! its output point through the generic [`OpLookupProvider`](super::op_lookups::OpLookupProvider),
 //! parameterized by [`SaturatingAccClampOperands`], which appends that witness claim and nothing
 //! else. The clamp itself is proven in the node's packed clamp bucket after the node loop
-//! ([`clamp_split`](super::clamp_split)), by the tie `acc = out` for a model output whose public
-//! value is unsaturated, or in the clear for a scalar node. The caller ties `acc` back to the
+//! ([`clamp_split`](super::clamp_split)), or by the tie `acc = out` for a model output whose
+//! public value is unsaturated. The caller ties `acc` back to the
 //! operands (`acc = left ± right` for `Add`/`Sub`, the axis reduction for `Sum`, the fused
 //! rescale for the others).
 
@@ -31,23 +31,18 @@ pub const CLAMP_LOG_K: usize = 64;
 
 /// Whether `node`'s (padded) output is a single element (`log_T = 0`).
 ///
-/// Such "scalar" `Add`/`Sub` nodes skip the clamp lookup: the one-hot PCS
-/// opening reduction degenerates with an empty cycle dimension. This is sound
-/// because a single element is opened *in the clear* at the empty point — the
-/// verifier recovers the (committed, hence valid-`i32`) operands and checks the
-/// saturating identity `output == SatClamp(left ± right)` directly (see
-/// [`recover_small_int`]).
+/// A one-element `MeanOfSquares` node has its remainder bound checked in the clear instead of
+/// by a lookup range check: the remainder opens at the empty point, so its claim is the value
+/// (see [`recover_small_int`]). The saturating clamp makes no such distinction.
 pub fn is_scalar(node: &ComputationNode) -> bool {
     node.pow2_padded_num_output_elements() == 1
 }
 
 /// Recover the signed integer encoded by a field element known to be a
-/// small-magnitude `i32`/`i64` embedding (e.g. `left ± right` for `i32`
-/// operands, which lies in `[2·i32::MIN, 2·i32::MAX]`).
+/// small-magnitude `i32`/`i64` embedding (e.g. a rescale remainder).
 ///
 /// Returns `None` if the element is neither a small non-negative value nor a
-/// small negation — a malformed claim. Operand claims are otherwise bound to
-/// committed `i32` node outputs, so honest values always recover.
+/// small negation — a malformed claim.
 pub fn recover_small_int<F: JoltField>(x: F) -> Option<i64> {
     if let Some(u) = x.to_u64() {
         i64::try_from(u).ok()
@@ -110,26 +105,4 @@ impl LookupOperandsTrait for SaturatingAccClampOperands {
     fn log_k(&self) -> usize {
         self.log_k
     }
-}
-
-/// Verify a scalar node's clamp directly: `output_claim == SatClamp(combined)`,
-/// where `combined` is the in-the-clear accumulation (`left ± right`, or the
-/// axis sum). `op` names the operator for error messages.
-pub fn verify_scalar_clamp<F: JoltField>(
-    combined: F,
-    output_claim: F,
-    op: &str,
-) -> Result<(), ProofVerifyError> {
-    let value = recover_small_int(combined).ok_or_else(|| {
-        ProofVerifyError::InvalidOpeningProof(format!(
-            "{op} (scalar): accumulation claim is not a small signed-integer encoding"
-        ))
-    })?;
-    let expected = F::from_i32(value.clamp(i32::MIN as i64, i32::MAX as i64) as i32);
-    if output_claim != expected {
-        return Err(ProofVerifyError::InvalidOpeningProof(format!(
-            "{op} (scalar): output must equal SatClamp(input)"
-        )));
-    }
-    Ok(())
 }

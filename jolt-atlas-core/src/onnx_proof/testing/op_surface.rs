@@ -440,6 +440,17 @@ op_surface! {
     add_scalar_sat_pos: Add, check = saturates_max => |_| binary_const(&[1], i32::MAX, i32::MAX, |b, a, c| b.add(a, c));
     add_scalar_sat_neg: Add, check = saturates_min => |_| binary_const(&[1], i32::MIN, i32::MIN, |b, a, c| b.add(a, c));
     add_scalar_no_sat: Add => |_| binary_const(&[1], i32::MAX, -5, |b, a, c| b.add(a, c));
+    /// A one-element `Add` that is not the model output: an interior cell of a one-cell bucket.
+    add_scalar_internal: Add => |_| {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![1]);
+        let c = b.constant(vec_of(40_000, &[1]));
+        let a = b.add(i, c);
+        let d = b.constant(vec_of(7, &[1]));
+        let o = b.sub(a, d);
+        b.mark_output(o);
+        (b.build(), vec![vec_of(123_456, &[1])])
+    };
     add_saturating_overflow_1k: Add, check = saturates_both => |_| add_const_overflow(T, 1000, -1000);
 
     // Sub
@@ -481,6 +492,18 @@ op_surface! {
     mul_saturates_pos: Mul, check = saturates_max => |_| binary_const(&[16], SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
     mul_saturates_neg: Mul, check = saturates_min => |_| binary_const(&[16], -SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
     mul_scalar_rescale_sat: Mul, check = saturates_max => |_| binary_const(&[1], SAT_SQUARE, SAT_SQUARE, |b, a, c| b.mul(a, c));
+    /// A one-element fused `Mul` that is not the model output: one cell in a clamp bucket and
+    /// one in a remainder bucket.
+    mul_scalar_internal: Mul => |_| {
+        let mut b = ModelBuilder::new();
+        let i = b.input(vec![1]);
+        let c = b.constant(vec_of(3001, &[1]));
+        let m = b.mul(i, c);
+        let d = b.constant(vec_of(11, &[1]));
+        let o = b.add(m, d);
+        b.mark_output(o);
+        (b.build(), vec![vec_of(1000, &[1])])
+    };
     /// The one large-polynomial smoke case (SRS, MSM and one-hot sizes).
     mul_large_2p15: Mul => |rng| binary_small(rng, &[1 << 15], |b, a, c| b.mul(a, c));
 
@@ -488,11 +511,13 @@ op_surface! {
     square_random_1k: Square => |rng| unary_small(rng, &[T], |b, i| b.square(i));
     square_non_pow2_1000: Square => |rng| unary_small(rng, &[T_ODD], |b, i| b.square(i));
     square_saturates: Square, check = saturates_max => |_| unary(&[16], S, vec_of(SAT_SQUARE, &[16]), |b, i| b.square(i));
+    square_scalar_out: Square => |_| unary(&[1], S, vec_of(1000, &[1]), |b, i| b.square(i));
     cube_random_1k: Cube => |rng| unary_small(rng, &[T], |b, i| b.cube(i, S));
     cube_non_pow2_1000: Cube => |rng| unary_small(rng, &[T_ODD], |b, i| b.cube(i, S));
     cube_saturates_pos: Cube, check = saturates_max => |_| unary(&[16], S, vec_of(SAT_CUBE, &[16]), |b, i| b.cube(i, S));
     cube_saturates_neg: Cube, check = saturates_min => |_| unary(&[16], S, vec_of(-SAT_CUBE, &[16]), |b, i| b.cube(i, S));
     cube_raw_no_rebase: Cube => |rng| unary_small(rng, &[T], |b, i| b.cube(i, 0));
+    cube_scalar_out: Cube => |_| unary(&[1], S, vec_of(1000, &[1]), |b, i| b.cube(i, S));
 
     // Div / ScalarConstDiv
     div_by_const_1k: Div => |rng| div_model(rng, T, 1 << 8);
@@ -586,6 +611,30 @@ op_surface! {
         b.mark_output(o);
         (b.build(), vec![vec_of(i32::MAX / 2, &[64, 1])])
     };
+    /// A one-element `Sum` that is not the model output and shares its clamp bucket with a
+    /// four-element `Add`: the bucket grows from four cells to eight.
+    sum_scalar_internal_shared_bucket: Sum => |rng| {
+        let mut b = ModelBuilder::new();
+        let u = b.input(vec![1, 8]);
+        let cu = b.constant(Tensor::random_small(rng, &[1, 8]));
+        let p = b.add(u, cu);
+        let v = b.input(vec![4, 1]);
+        let cv = b.constant(Tensor::random_small(rng, &[4, 1]));
+        let q = b.add(v, cv);
+        let s = b.sum(q, vec![0], vec![1]);
+        let wide = b.broadcast(s, vec![1, 8]);
+        let r = b.add(wide, p);
+        let w = b.constant(Tensor::random_small(rng, &[1, 8]));
+        let o = b.sub(r, w);
+        b.mark_output(o);
+        (
+            b.build(),
+            vec![
+                Tensor::random_small(rng, &[1, 8]),
+                Tensor::random_small(rng, &[4, 1]),
+            ],
+        )
+    };
     #[ignore = "non-power-of-two sum(axis) path not supported"]
     sum_non_pow2: Sum => |rng| sum_model(rng, 33, 65, 1);
 
@@ -614,6 +663,7 @@ op_surface! {
 
     // Einsum: the four importer-canonical equations plus the shared `k,nk->n` layout.
     einsum_mk_kn_mn_16x32x64: Einsum => |rng| einsum_model(rng, "mk,kn->mn", &[16, 32], &[32, 64], &[16, 64]);
+    einsum_mk_kn_mn_scalar_out: Einsum => |rng| einsum_model(rng, "mk,kn->mn", &[1, 16], &[16, 1], &[1, 1]);
     #[ignore = "non-power-of-two einsum path not supported"]
     einsum_mk_kn_mn_non_pow2: Einsum => |rng| einsum_model(rng, "mk,kn->mn", &[33, 65], &[65, 17], &[33, 17]);
     einsum_mk_kn_mn_saturates_pos: Einsum, check = saturates_max => |_| einsum_const("mk,kn->mn", &[2, 16], &[16, 2], &[2, 2], SAT_EINSUM, SAT_EINSUM);

@@ -90,7 +90,7 @@ fn needed_bits(q: &[i64]) -> usize {
 /// Committed-digit census and value-magnitude audit from one trace, without
 /// proving (Phase 2 of `docs/measurement-plan.md`).
 fn census(model: &Model, inputs: &[Tensor<i32>]) {
-    use jolt_atlas_core::onnx_proof::clamp_lookups::{clamp_intermediate, is_scalar};
+    use jolt_atlas_core::onnx_proof::clamp_lookups::clamp_intermediate;
     use jolt_atlas_core::onnx_proof::ops::NodeCommittedPolynomials;
     use jolt_atlas_core::onnx_proof::trace_view::TraceView;
     use std::collections::BTreeMap;
@@ -218,8 +218,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     for n in &views {
         let clamped = jolt_atlas_core::node_view::clamp_value_bound(model, n)
             .expect("shape")
-            .is_some()
-            && !is_scalar(n);
+            .is_some();
         if !clamped {
             continue;
         }

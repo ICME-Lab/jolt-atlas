@@ -9,9 +9,9 @@ use rand::{rngs::StdRng, SeedableRng};
 use super::{models::probe_models, prove_verify_roundtrip, ModelBuilder, RoundtripOptions};
 use crate::node_view::{clamp_value_bound, ModelView};
 use crate::onnx_proof::{
-    clamp_lookups::{clamp_intermediate, is_scalar},
+    clamp_lookups::clamp_intermediate,
     clamp_split,
-    global_clamp::clamp_buckets,
+    global_clamp::{clamp_buckets, remainder_buckets},
     prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128, ProofType,
 };
 
@@ -59,7 +59,7 @@ fn exact_output_bucket_commits_nothing() {
     prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
 }
 
-/// The `saturating` probe model saturates an internal, non-scalar clamped node, so the soundness
+/// The `saturating` probe model saturates an internal clamped node, so the soundness
 /// sweeps run over a bucket that carries dense `OUT` digits and nonempty slack chunks together,
 /// and its proof carries the slack chunk check beside the digit range check.
 #[test]
@@ -76,7 +76,6 @@ fn saturating_probe_saturates() {
         .iter()
         .filter(|n| {
             !outputs.contains(&n.idx)
-                && !is_scalar(n)
                 && clamp_value_bound(&model, n).expect("shape").is_some()
                 && clamp_intermediate(n, &trace)
                     .data()
@@ -85,10 +84,7 @@ fn saturating_probe_saturates() {
         })
         .map(|n| n.idx)
         .collect();
-    assert!(
-        !saturating.is_empty(),
-        "no internal non-scalar clamped node saturates"
-    );
+    assert!(!saturating.is_empty(), "no internal clamped node saturates");
 
     let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(
         AtlasSharedPreprocessing::preprocess(model),
@@ -103,4 +99,49 @@ fn saturating_probe_saturates() {
             "the saturating probe's proof has no {kind:?}"
         );
     }
+}
+
+/// The `scalars` probe model puts one-element nodes under the soundness sweeps: every clamped
+/// node is alone in a one-cell clamp bucket, the fused `Mul`'s remainder in a one-cell remainder
+/// bucket, one internal node saturates, and every value the digit tamper targets has a digit to
+/// move.
+#[test]
+fn scalars_probe_layout() {
+    let probe = probe_models()
+        .into_iter()
+        .find(|m| m.name == "scalars")
+        .expect("the scalars probe model");
+    let model = probe.model;
+    let trace = model.trace(&probe.inputs).expect("honest execution");
+    let outputs = model.output_indices();
+    let clamped: Vec<usize> = model
+        .views()
+        .iter()
+        .filter(|n| clamp_value_bound(&model, n).expect("shape").is_some())
+        .map(|n| n.idx)
+        .collect();
+    assert_eq!(clamped.len(), 4, "a Mul, two Adds and a Sub");
+
+    let buckets = clamp_buckets(&model).expect("bucket layout");
+    assert_eq!(
+        buckets.len(),
+        clamped.len(),
+        "one bucket per one-element node"
+    );
+    for bucket in buckets.iter().chain(&remainder_buckets(&model)) {
+        assert_eq!(bucket.log_t, 0);
+        assert_eq!(bucket.nodes.len(), 1);
+        assert_eq!(bucket.nodes[0].log_t, 0);
+    }
+    assert_eq!(remainder_buckets(&model).len(), 1, "the fused Mul");
+
+    let views = model.views();
+    let mut saturated = 0;
+    for &idx in clamped.iter().filter(|idx| !outputs.contains(idx)) {
+        let acc = clamp_intermediate(&views[idx], &trace).data()[0];
+        saturated += usize::from(acc > i32::MAX as i64);
+        let out = i64::from(trace.node_outputs[idx].data()[0]);
+        assert!(out + (1 << 31) >= 4, "node {idx}: OUT has no upper digit");
+    }
+    assert_eq!(saturated, 1, "exactly the second Add saturates");
 }

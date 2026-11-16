@@ -28,9 +28,7 @@ use atlas_algebra::{field::JoltField, utils::lookup_bits::LookupBits};
 use num_derive::FromPrimitive;
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
-use self::{
-    and::AndSuffix, less_than::LessThanSuffix, one::OneSuffix, or::OrSuffix, xor::XorSuffix,
-};
+use self::{and::AndSuffix, one::OneSuffix, or::OrSuffix, xor::XorSuffix};
 
 /// Bitwise AND suffix implementation.
 pub mod and;
@@ -40,8 +38,6 @@ pub mod higher_all_zero;
 pub mod hone_mul_lword;
 /// Suffix that evaluates `higher_all_zero(bits) * lower_word(bits)`.
 pub mod hzero_mul_lword;
-/// Less-than comparison suffix implementation.
-pub mod less_than;
 /// `m * upper_eqo * low` suffix implementation, used in `sat_clamp` decomposition.
 pub mod lower_msb_upper_eqo_low;
 /// Negated ReLU suffix (Relu(-x)): `neg_relu(x) = max(-x, 0)`.
@@ -111,7 +107,6 @@ macro_rules! impl_sparse_dense_suffix {
 
 impl_sparse_dense_suffix!(
     And                         : AndSuffix,                        // Bitwise AND suffix
-    LessThan                    : LessThanSuffix,                   // Less-than comparison suffix
     NegRelu                     : NegReluSuffix,                    // Suffix for Relu(-x) table
     One                         : OneSuffix,                        // Constant one suffix
     Or                          : OrSuffix,                         // Bitwise OR suffix

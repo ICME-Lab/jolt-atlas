@@ -3,7 +3,6 @@ pub mod dense;
 pub mod eq;
 pub mod identity;
 pub mod lagrange;
-pub mod lt;
 pub mod multilinear;
 pub mod one_hot;
 pub mod point;

@@ -69,14 +69,6 @@ impl Trace {
             .collect()
     }
 
-    /// Operand tensors with per-dimension power-of-two padding applied.
-    pub fn padded_operand_tensors(&self, node: &crate::graph::Node) -> Vec<Tensor<i32>> {
-        self.operand_tensors(node)
-            .into_iter()
-            .map(Tensor::padded_pow2)
-            .collect()
-    }
-
     /// The public IO of this execution.
     pub fn io(&self, model: &crate::model::Model) -> ModelExecutionIO {
         let graph = model.graph();

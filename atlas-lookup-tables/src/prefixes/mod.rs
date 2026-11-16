@@ -5,7 +5,7 @@
 //! prefix MLEs incrementally with checkpoints updated every two rounds, we avoid summing
 //! over the full 2^(2*XLEN) lookup table.
 
-use self::{and::AndPrefix, eq::EqPrefix, less_than::LessThanPrefix, or::OrPrefix, xor::XorPrefix};
+use self::{and::AndPrefix, eq::EqPrefix, or::OrPrefix, xor::XorPrefix};
 use crate::prefixes::{
     higher_all_one::{
         ActivationHigherAllOnePrefix, ClampHigherAllOnePrefix, SatClampHigherAllOnePrefix,
@@ -54,8 +54,6 @@ pub mod eq;
 pub mod higher_all_one;
 /// Checks that all bits with significance >= given bound are zero.
 pub mod higher_all_zero;
-/// Less-than comparison prefix implementation.
-pub mod less_than;
 /// Lower 32-bit word sign bit (i32 sign bit) prefix implementation.
 pub mod lower_msb;
 /// Outputs the lower word of the input without bits of significance >= bound.
@@ -259,7 +257,6 @@ macro_rules! impl_sparse_dense_prefix {
 impl_sparse_dense_prefix!(
     And                         : AndPrefix,                        // Bitwise AND prefix
     Eq                          : EqPrefix,                         // Equality comparison prefix
-    LessThan                    : LessThanPrefix,                   // Less-than comparison prefix
     Msb                         : MsbPrefix,                        // MSB (sign bit) prefix
     NotMsb                      : NotMsbPrefix,                     // Not-MSB prefix
     NotWordNoMsb                : NotWordNoMsbPrefix,               // Two's complement negation prefix: `(!lower_word) + 1`

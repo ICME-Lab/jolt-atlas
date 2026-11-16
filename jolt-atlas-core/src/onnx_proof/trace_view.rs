@@ -27,8 +27,6 @@ pub trait TraceView {
     fn layer_data<'a>(&'a self, n: &ComputationNode) -> LayerData<'a>;
     /// Operand tensors of a node.
     fn operand_tensors<'a>(&'a self, n: &ComputationNode) -> Vec<&'a Tensor<i32>>;
-    /// Operand tensors with power-of-two padding applied.
-    fn padded_operand_tensors(&self, n: &ComputationNode) -> Vec<Tensor<i32>>;
 }
 
 impl TraceView for Trace {
@@ -76,12 +74,5 @@ impl TraceView for Trace {
 
     fn operand_tensors<'a>(&'a self, n: &ComputationNode) -> Vec<&'a Tensor<i32>> {
         n.inputs.iter().map(|&i| &self.node_outputs[i]).collect()
-    }
-
-    fn padded_operand_tensors(&self, n: &ComputationNode) -> Vec<Tensor<i32>> {
-        TraceView::operand_tensors(self, n)
-            .into_iter()
-            .map(Tensor::padded_pow2)
-            .collect()
     }
 }

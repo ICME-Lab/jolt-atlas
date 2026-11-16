@@ -24,7 +24,6 @@ use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use common::{parallel::par_enabled, VirtualPoly};
 use rayon::prelude::*;
 
-pub mod binary;
 #[cfg(test)]
 mod lookup_table_tests;
 pub mod unary;

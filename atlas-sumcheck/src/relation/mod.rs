@@ -158,8 +158,6 @@ pub enum RelationId {
     ReadRaf,
     /// A prefix-suffix lookup into a large table: read value plus `γ`·read address.
     PrefixSuffixReadRaf,
-    /// A value is in range: its one-hot address decomposition recovers it.
-    IdentityRangeCheck,
     /// A clamp bucket's split of its accumulations into output, slack and saturation indicator.
     ClampSplit,
     /// A packed bucket's values opened at one point.

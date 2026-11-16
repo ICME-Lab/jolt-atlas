@@ -127,8 +127,6 @@ pub mod right_shift;
 /// Computes `abs(x)` by interpreting the input as a signed integer and returning
 /// its unsigned magnitude.
 pub mod unsigned_abs;
-/// Unsigned less-than comparison lookup table.
-pub mod unsigned_less_than;
 /// Bitwise XOR lookup table.
 pub mod xor;
 

@@ -2,10 +2,9 @@
 
 use super::*;
 use crate::{
-    opening_proof::{prover::ProverOpeningAccumulator, SumcheckId},
+    opening_proof::prover::ProverOpeningAccumulator,
     ps_shout::{
-        phase_schedule, prover::ReadRafSumcheckProver, CycleWeight, RafProverState,
-        ReadRafSumcheckParams,
+        phase_schedule, prover::ReadRafSumcheckProver, RafProverState, ReadRafSumcheckParams,
     },
 };
 use atlas_algebra::{
@@ -19,7 +18,6 @@ use atlas_algebra::{
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
-use common::VirtualPoly;
 use num_traits::Zero;
 
 impl<F: JoltField> RafProverState<F> for UnaryRafPS<F> {
@@ -103,39 +101,6 @@ pub fn ps_read_raf_prover<
     let identity_ps =
         PrefixSuffixDecomposition::new(Box::new(SignedIdentityPoly::<F>::new(LOG_K)), log_m, LOG_K);
     drop(_guard);
-    let raf_state = UnaryRafPS { identity_ps };
-    ReadRafSumcheckProver::new_inner(params, lookup_indices, raf_state)
-}
-
-/// Prover for an explicit [`CycleWeight`] and input claim (packed instances), with the batching
-/// challenge `gamma` already drawn: no transcript, so instances can be built in parallel.
-pub fn ps_read_raf_prover_with_gamma<
-    F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
-    const LOG_K: usize,
->(
-    gamma: F,
-    claims: ReadRafClaims<F>,
-    cycle: CycleWeight<F>,
-    ra_poly: (VirtualPoly, SumcheckId),
-    lookup_indices: Vec<LookupBits>,
-) -> UnaryReadRafSumcheckProver<F, LUT, LOG_K> {
-    let raf = UnaryRafVD {
-        operand_claim: claims.operand_claim,
-        log_k: LOG_K,
-    };
-    let params = ReadRafSumcheckParams::from_parts_with_cycle(
-        gamma,
-        cycle,
-        LUT::default(),
-        ra_poly.0,
-        ra_poly.1,
-        claims.rv_claim,
-        raf,
-    );
-    let (_phases, log_m) = phase_schedule(LOG_K);
-    let identity_ps =
-        PrefixSuffixDecomposition::new(Box::new(SignedIdentityPoly::<F>::new(LOG_K)), log_m, LOG_K);
     let raf_state = UnaryRafPS { identity_ps };
     ReadRafSumcheckProver::new_inner(params, lookup_indices, raf_state)
 }

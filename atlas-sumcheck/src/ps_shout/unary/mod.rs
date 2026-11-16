@@ -1,6 +1,6 @@
 use crate::{
-    opening_proof::{OpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
-    ps_shout::{CycleWeight, RafVerifierData, ReadRafSumcheckParams, ReadRafSumcheckVerifier},
+    opening_proof::{OpeningAccumulator, VerifierOpeningAccumulator},
+    ps_shout::{RafVerifierData, ReadRafSumcheckParams, ReadRafSumcheckVerifier},
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
@@ -12,7 +12,6 @@ use atlas_algebra::{
 };
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_transcript::Transcript;
-use common::VirtualPoly;
 use rayon::prelude::*;
 
 /// Verifier-side RAF data for unary ops (ReLU, UnsignedAbs).
@@ -55,33 +54,6 @@ where
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Result<ReadRafClaims<F>, ProofVerifyError>;
-}
-
-/// Verifier counterpart of [`ps_read_raf_prover_with_gamma`].
-pub fn ps_read_raf_verifier_with_gamma<
-    F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
-    const LOG_K: usize,
->(
-    gamma: F,
-    claims: ReadRafClaims<F>,
-    cycle: CycleWeight<F>,
-    ra_poly: (VirtualPoly, SumcheckId),
-) -> UnaryReadRafSumcheckVerifier<F, LUT, LOG_K> {
-    let raf = UnaryRafVD {
-        operand_claim: claims.operand_claim,
-        log_k: LOG_K,
-    };
-    let params = ReadRafSumcheckParams::from_parts_with_cycle(
-        gamma,
-        cycle,
-        LUT::default(),
-        ra_poly.0,
-        ra_poly.1,
-        claims.rv_claim,
-        raf,
-    );
-    params.into_verifier()
 }
 
 pub fn ps_read_raf_verifier<

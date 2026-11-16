@@ -138,11 +138,6 @@ impl Node {
             .map(|d| d.next_power_of_two())
             .product()
     }
-
-    /// Whether the node produces a single element.
-    pub fn is_scalar(&self) -> bool {
-        self.num_output_elements() == 1
-    }
 }
 
 impl std::ops::Index<NodeId> for Graph {

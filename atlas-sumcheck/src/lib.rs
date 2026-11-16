@@ -16,7 +16,6 @@ pub mod engine;
 pub mod evaluation_reduction;
 pub mod hamming_booleanity;
 pub mod hamming_weight;
-pub mod identity_range_check;
 pub mod mles_product_sum;
 #[cfg(test)]
 mod one_hot_polynomial_tests;

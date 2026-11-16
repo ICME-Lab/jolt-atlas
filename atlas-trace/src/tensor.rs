@@ -112,11 +112,6 @@ impl<T: Element> Tensor<T> {
         self.data.is_empty()
     }
 
-    /// Whether the tensor holds exactly one element.
-    pub fn is_scalar(&self) -> bool {
-        self.data.len() == 1
-    }
-
     /// Flat index of a coordinate (row-major). Panics on rank mismatch or
     /// out-of-range coordinates — callers index within `dims()` by
     /// construction.

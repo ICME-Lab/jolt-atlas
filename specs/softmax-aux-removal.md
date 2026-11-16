@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-16                     |
-| Status      | proposed                       |
+| Status      | withdrawn (superseded by `specs/log-partition-softmax.md`) |
 | PR          |                                |
 | Depends on  | `specs/one-range-check.md`, `specs/post-loop-batches.md` |
 | Supersedes  | issue #218                     |

@@ -401,7 +401,24 @@ fn structural(
     (b.build(), vec![Tensor::random_small(rng, dims)])
 }
 
-fn concat_model(rng: &mut StdRng, shapes: &[&[usize]], axis: isize) -> (Model, Vec<Tensor<i32>>) {
+/// [`structural`] compiled with the padding pass, for dims that are not powers of two.
+fn structural_padded(
+    rng: &mut StdRng,
+    dims: &[usize],
+    op: impl FnOnce(&mut ModelBuilder, usize) -> usize,
+) -> (Model, Vec<Tensor<i32>>) {
+    let mut b = ModelBuilder::new();
+    let i = b.input(dims.to_vec());
+    let o = op(&mut b, i);
+    b.mark_output(o);
+    (b.build_padded(), vec![Tensor::random_small(rng, dims)])
+}
+
+fn concat_builder(
+    rng: &mut StdRng,
+    shapes: &[&[usize]],
+    axis: isize,
+) -> (ModelBuilder, Vec<Tensor<i32>>) {
     let mut b = ModelBuilder::new();
     let ins: Vec<usize> = shapes.iter().map(|s| b.input(s.to_vec())).collect();
     let o = b.concat(&ins, axis);
@@ -410,7 +427,18 @@ fn concat_model(rng: &mut StdRng, shapes: &[&[usize]], axis: isize) -> (Model, V
         .iter()
         .map(|s| Tensor::random_small(rng, s))
         .collect();
+    (b, inputs)
+}
+
+fn concat_model(rng: &mut StdRng, shapes: &[&[usize]], axis: isize) -> (Model, Vec<Tensor<i32>>) {
+    let (b, inputs) = concat_builder(rng, shapes, axis);
     (b.build(), inputs)
+}
+
+/// [`concat_model`] compiled with the padding pass, for dims that are not powers of two.
+fn concat_padded(rng: &mut StdRng, shapes: &[&[usize]], axis: isize) -> (Model, Vec<Tensor<i32>>) {
+    let (b, inputs) = concat_builder(rng, shapes, axis);
+    (b.build_padded(), inputs)
 }
 
 /// Magnitudes that saturate the fused rescale paths at the current scale.
@@ -729,27 +757,32 @@ op_surface! {
     reshape_4x8_to_8x4: Reshape => |rng| structural(rng, &[4, 8], |b, i| b.reshape(i, vec![8, 4]));
     reshape_2x4x8_to_64: Reshape => |rng| structural(rng, &[2, 4, 8], |b, i| b.reshape(i, vec![64]));
     reshape_2x4x8_to_8x8: Reshape => |rng| structural(rng, &[2, 4, 8], |b, i| b.reshape(i, vec![8, 8]));
-    reshape_non_pow2_10x10_to_20x5: Reshape => |rng| structural(rng, &[10, 10], |b, i| b.reshape(i, vec![20, 5]));
-    slice_2x5_ax1_1_4: Slice => |rng| structural(rng, &[2, 5], |b, i| b.slice(i, 1, 1, 4));
-    slice_3x4_ax0_1_3: Slice => |rng| structural(rng, &[3, 4], |b, i| b.slice(i, 0, 1, 3));
-    slice_2x3x5_ax2_0_4: Slice => |rng| structural(rng, &[2, 3, 5], |b, i| b.slice(i, 2, 0, 4));
-    slice_2x4x3_ax1_1_4: Slice => |rng| structural(rng, &[2, 4, 3], |b, i| b.slice(i, 1, 1, 4));
-    slice_4x6_ax1_2_5: Slice => |rng| structural(rng, &[4, 6], |b, i| b.slice(i, 1, 2, 5));
-    slice_5x3_ax0_0_2: Slice => |rng| structural(rng, &[5, 3], |b, i| b.slice(i, 0, 0, 2));
+    reshape_padded_1x7x8_to_7x8: Reshape => |rng| structural_padded(rng, &[1, 7, 8], |b, i| b.reshape(i, vec![7, 8]));
+    #[should_panic(expected = "is not a power of two")]
+    reshape_non_pow2_dims_rejected: Reshape => |rng| structural(rng, &[10, 10], |b, i| b.reshape(i, vec![20, 5]));
+    slice_8_ax0_0_4: Slice => |rng| structural(rng, &[8], |b, i| b.slice(i, 0, 0, 4));
+    slice_8x4_ax0_6_8: Slice => |rng| structural(rng, &[8, 4], |b, i| b.slice(i, 0, 6, 8));
+    slice_4x8x2_ax1_2_4: Slice => |rng| structural(rng, &[4, 8, 2], |b, i| b.slice(i, 1, 2, 4));
+    slice_4x8_ax1_4_8: Slice => |rng| structural(rng, &[4, 8], |b, i| b.slice(i, 1, 4, 8));
+    slice_4x8_ax1_full: Slice => |rng| structural(rng, &[4, 8], |b, i| b.slice(i, 1, 0, 8));
+    slice_padded_5x3_ax0_0_2: Slice => |rng| structural_padded(rng, &[5, 3], |b, i| b.slice(i, 0, 0, 2));
+    slice_padded_3x6_ax1_4_6: Slice => |rng| structural_padded(rng, &[3, 6], |b, i| b.slice(i, 1, 4, 6));
+    #[should_panic(expected = "start 2 is not a multiple of the extent 4")]
+    slice_unaligned_start_rejected: Slice => |rng| structural(rng, &[8], |b, i| b.slice(i, 0, 2, 6));
     concat_pow2_4x2_ax1: Concat => |rng| concat_model(rng, &[&[4, 2], &[4, 2]], 1);
     concat_pow2_2x4_ax0: Concat => |rng| concat_model(rng, &[&[2, 4], &[2, 4]], 0);
     concat_pow2_2x4x2_ax2: Concat => |rng| concat_model(rng, &[&[2, 4, 2], &[2, 4, 2]], 2);
     concat_pow2_2x2x4_axneg2: Concat => |rng| concat_model(rng, &[&[2, 2, 4], &[2, 2, 4]], -2);
     concat_pow2_2x2x2x2_ax3: Concat => |rng| concat_model(rng, &[&[2, 2, 2, 2], &[2, 2, 2, 2]], 3);
-    concat_arbitrary_3x2_3x3_ax1: Concat => |rng| concat_model(rng, &[&[3, 2], &[3, 3]], 1);
-    concat_arbitrary_2x3_4x3_ax0: Concat => |rng| concat_model(rng, &[&[2, 3], &[4, 3]], 0);
-    concat_arbitrary_2x3x3_2x3x2_ax2: Concat => |rng| concat_model(rng, &[&[2, 3, 3], &[2, 3, 2]], 2);
-    concat_arbitrary_2x1x3_2x2x3_axneg2: Concat => |rng| concat_model(rng, &[&[2, 1, 3], &[2, 2, 3]], -2);
-    concat_arbitrary_1x2x3x1_1x2x3x2_ax3: Concat => |rng| concat_model(rng, &[&[1, 2, 3, 1], &[1, 2, 3, 2]], 3);
-    concat_three_inputs_ax1: Concat => |rng| concat_model(rng, &[&[2, 3], &[2, 1], &[2, 4]], 1);
-    concat_three_inputs_ax0: Concat => |rng| concat_model(rng, &[&[1, 2, 4], &[3, 2, 4], &[2, 2, 4]], 0);
-    concat_four_inputs_axneg1: Concat => |rng| concat_model(rng, &[&[2, 2, 1], &[2, 2, 3], &[2, 2, 2], &[2, 2, 2]], -1);
-    concat_single_input: Concat => |rng| concat_model(rng, &[&[3, 5, 2]], 1);
+    concat_three_inputs_8_4_4_ax0: Concat => |rng| concat_model(rng, &[&[8, 2], &[4, 2], &[4, 2]], 0);
+    concat_three_inputs_4_2_2_ax1: Concat => |rng| concat_model(rng, &[&[2, 4], &[2, 2], &[2, 2]], 1);
+    concat_four_inputs_axneg1: Concat => |rng| concat_model(rng, &[&[2, 2, 4], &[2, 2, 4], &[2, 2, 4], &[2, 2, 4]], -1);
+    concat_single_input: Concat => |rng| concat_model(rng, &[&[4, 8, 2]], 1);
+    concat_padded_4_3_ax0: Concat => |rng| concat_padded(rng, &[&[4], &[3]], 0);
+    concat_padded_3x4_3x3_ax1: Concat => |rng| concat_padded(rng, &[&[3, 4], &[3, 3]], 1);
+    concat_padded_8_4_3_ax0: Concat => |rng| concat_padded(rng, &[&[8, 5], &[4, 5], &[3, 5]], 0);
+    #[should_panic(expected = "offset 4 is not a multiple of the operand extent 8")]
+    concat_unaligned_offset_rejected: Concat => |rng| concat_model(rng, &[&[4], &[8], &[4]], 0);
 
     // Multi-node and padded builds
     /// Clamped nodes of two different sizes in one model: exercises the

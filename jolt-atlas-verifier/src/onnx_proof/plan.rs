@@ -31,7 +31,7 @@ use crate::onnx_proof::{
         and::AndRelation,
         broadcast::BroadcastRelation,
         clamp::SymmetricClampOperands,
-        concat::ConcatRelation,
+        concat::SubcubeTilingRelation,
         constant::PublicRelation,
         cos::CosRaEncoding,
         cube::CubeRelation,
@@ -45,12 +45,12 @@ use crate::onnx_proof::{
         moveaxis::AxisPermutationRelation,
         mul::MulRelation,
         neg::SignedCopyRelation,
-        reshape::ReshapeRelation,
+        reshape::FlatCopyRelation,
         rsqrt::RsqrtRelation,
         scalar_const_div::ConstantDivisionRelation,
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
-        slice::SliceRelation,
+        slice::SubcubeSelectRelation,
         softmax_last_axis::{SoftmaxOpen, SoftmaxRelation, SoftmaxTie},
         square::SquareRelation,
         sum::axis::SumAxisRelation,
@@ -157,8 +157,6 @@ pub enum OpRelation {
     And(AndRelation),
     /// `ScalarConstDiv`: the quotient by a constant.
     ConstantDivision(ConstantDivisionRelation),
-    /// `Concat`: each operand selected into its slot.
-    Concat(ConcatRelation),
     /// `Einsum`: the contraction, its input claim the fused rescale's `q·2^S + rem`.
     Contraction(ContractionRelation),
     /// `Cube`: `x³`.
@@ -186,12 +184,8 @@ pub enum OpRelation {
     MeanOfSquares(MeanOfSquaresRelation),
     /// `Mul`: `left·right`.
     Mul(MulRelation),
-    /// `Reshape`: the operand selected into the output's layout.
-    Reshape(ReshapeRelation),
     /// `Rsqrt`: the fused division and square-root identities.
     Rsqrt(RsqrtRelation),
-    /// `Slice`: the operand's window selected.
-    Slice(SliceRelation),
     /// A clamped activation's small-table execution: `γ` drawn, the clamped input's opening
     /// appended at the reduced output point.
     SmallActivation(OpActivation, ComputationNode),
@@ -263,7 +257,6 @@ impl OpRelation {
         match self {
             Self::And(relation) => one(relation, accumulator, transcript),
             Self::ConstantDivision(relation) => one(relation, accumulator, transcript),
-            Self::Concat(relation) => one(relation, accumulator, transcript),
             Self::Contraction(relation) => one(relation, accumulator, transcript),
             Self::Cube(relation) => one(relation, accumulator, transcript),
             Self::Div(relation) => one(relation, accumulator, transcript),
@@ -335,9 +328,7 @@ impl OpRelation {
             .into()),
             Self::MeanOfSquares(relation) => one(relation, accumulator, transcript),
             Self::Mul(relation) => one(relation, accumulator, transcript),
-            Self::Reshape(relation) => one(relation, accumulator, transcript),
             Self::Rsqrt(relation) => one(relation, accumulator, transcript),
-            Self::Slice(relation) => one(relation, accumulator, transcript),
             Self::SmallActivation(OpActivation::Erf, node) => {
                 Ok(boxed(small_table_verifier::<F, ErfTableMarker>(
                     &node,
@@ -437,6 +428,8 @@ pub enum OpTie {
     AxisPermutation(AxisPermutationRelation),
     /// `Broadcast`: the operand replicated along the broadcast axes.
     Broadcast(BroadcastRelation),
+    /// `Concat`: the operands' blocks tile the output's axis.
+    Concat(SubcubeTilingRelation),
     /// `Constant`: the output is the model's constant.
     Constant(PublicRelation<Constant>),
     /// `Input`: the output is the public input.
@@ -447,6 +440,10 @@ pub enum OpTie {
     Identity(SignedCopyRelation<Identity>),
     /// `Neg`: the operand is the output, negated.
     Neg(SignedCopyRelation<Neg>),
+    /// `Reshape`: the operand at the same point.
+    Reshape(FlatCopyRelation),
+    /// `Slice`: the operand's subcube the slice selects.
+    Slice(SubcubeSelectRelation),
     /// `Sub`: the pre-clamp accumulation is `left − right`.
     SubAccumulation(AccumulationRelation<Sub>),
     /// `IsNan`: the output is zero.
@@ -474,11 +471,14 @@ impl OpTie {
             Self::AddAccumulation(relation) => verify_tie(relation, accumulator, transcript),
             Self::AxisPermutation(relation) => verify_tie(relation, accumulator, transcript),
             Self::Broadcast(relation) => verify_tie(relation, accumulator, transcript),
+            Self::Concat(relation) => verify_tie(relation, accumulator, transcript),
             Self::Constant(relation) => verify_tie(relation, accumulator, transcript),
             Self::Input(relation) => verify_tie(relation, accumulator, transcript),
             Self::DivQuotient(relation) => verify_tie(relation, accumulator, transcript),
             Self::Identity(relation) => verify_tie(relation, accumulator, transcript),
             Self::Neg(relation) => verify_tie(relation, accumulator, transcript),
+            Self::Reshape(relation) => verify_tie(relation, accumulator, transcript),
+            Self::Slice(relation) => verify_tie(relation, accumulator, transcript),
             Self::SubAccumulation(relation) => verify_tie(relation, accumulator, transcript),
             Self::ZeroOutput(relation) => verify_tie(relation, accumulator, transcript),
             Self::ExactClampOutput(node) => {

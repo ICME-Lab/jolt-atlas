@@ -88,6 +88,13 @@ New:
   axis exactly, so there is no uncovered region. On power-of-two dims every Reshape is the flat
   identity, so the verifier needs no coherence check of its own. *Mechanism:* review-held (`docs/pull-requests.md` §4.2);
   `witness_tamper_sweep` over the probe models.
+- **F. Discarded cells are outside the statement.** A tie opens its operand only on the cells
+  it selects: the claim a Slice passes to its operand has Boolean coordinates on the sliced
+  axis, so the operand's relation (and, through elementwise ops, its producers') is checked on
+  the selected subcube only. Cells no model output depends on are unconstrained; the public
+  output is not affected. The selector sumcheck checked them, at a random point. *Mechanism:*
+  `witness_tamper_sweep` accepts a tamper confined to such cells as neutral, by a structural
+  liveness analysis (`live_cells`), and rejects every other.
 - **C. Alignment is decided at compile time.** A model with an unaligned Slice or Concat does
   not compile; the verifier independently rejects such a node with `Err`, since it does not
   trust that the model was compiled by us. *Mechanism:* `pad_graph` tests that assert the

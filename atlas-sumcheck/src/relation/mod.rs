@@ -62,6 +62,9 @@ pub enum RelationDerived {
     Public,
     /// The MLE of a broadcast's all-ones replication tensor at its replicated coordinates.
     BroadcastOnes,
+    /// `eq` between operand `i`'s block index on a concatenated axis and the high coordinates
+    /// of that axis in the incoming point: the indicator of the block the operand fills.
+    BlockEq(usize),
     /// The MLE of the relation's public table `i` ([`Relation::table`]) at the low-to-high
     /// bound point.
     Table(usize),

@@ -25,7 +25,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_sumcheck::opening_proof::{forgery, OpeningId};
-use atlas_trace::{trace::ModelExecutionIO, Model, NodeId, Tensor, Trace};
+use atlas_trace::{trace::ModelExecutionIO, Model, NodeId, Op, Tensor, Trace};
 use atlas_transcript::{Blake2bProver, Blake2bVerifier};
 use common::consts::MODEL_SCALE;
 use rand::{rngs::StdRng, SeedableRng};
@@ -499,6 +499,73 @@ fn witness_tamper_sweep() {
     witness_tamper_sweep_for::<Pcs>();
 }
 
+/// Which cells of each node some model output depends on, by the graph's structure alone. A
+/// model output's cells are all live; a `Slice` reads only the cells it selects; an elementwise
+/// op reads cell `i` of a same-shaped operand for its cell `i`; every other op is taken to read
+/// all of its operands whenever one of its cells is live.
+fn live_cells(model: &Model) -> Vec<Vec<bool>> {
+    let nodes = &model.graph().nodes;
+    let len = |dims: &[usize]| dims.iter().product::<usize>();
+    let mut live: Vec<Vec<bool>> = nodes
+        .iter()
+        .map(|node| vec![false; len(&node.output_dims)])
+        .collect();
+    for output in model.outputs() {
+        live[output.index()].fill(true);
+    }
+    for (idx, node) in nodes.iter().enumerate().rev() {
+        let node_live = live[idx].clone();
+        let any = node_live.iter().any(|&cell| cell);
+        let elementwise = matches!(
+            node.op,
+            Op::Add(_)
+                | Op::Sub(_)
+                | Op::Mul(_)
+                | Op::Neg(_)
+                | Op::Identity(_)
+                | Op::ReLU(_)
+                | Op::Clamp(_)
+                | Op::Square(_)
+                | Op::Cube(_)
+                | Op::Div(_)
+                | Op::ScalarConstDiv(_)
+                | Op::Rsqrt(_)
+                | Op::Tanh(_)
+                | Op::Erf(_)
+                | Op::Sigmoid(_)
+                | Op::Sin(_)
+                | Op::Cos(_)
+                | Op::And(_)
+                | Op::Iff(_)
+                | Op::IsNan(_)
+        );
+        for input in &node.inputs {
+            let input = input.index();
+            let input_dims = nodes[input].output_dims.clone();
+            match &node.op {
+                Op::Slice(slice) => {
+                    for (cell, _) in node_live.iter().enumerate().filter(|(_, &cell)| cell) {
+                        let mut coord =
+                            crate::utils::dims::linear_to_coord(cell, &node.output_dims);
+                        coord[slice.axis] += slice.start;
+                        let source = crate::utils::dims::coord_to_linear(&coord, &input_dims)
+                            .expect("a slice's cells are cells of its operand");
+                        live[input][source] = true;
+                    }
+                }
+                _ if elementwise && input_dims == node.output_dims => {
+                    for (source, &cell) in live[input].iter_mut().zip(&node_live) {
+                        *source |= cell;
+                    }
+                }
+                _ if any => live[input].fill(true),
+                _ => {}
+            }
+        }
+    }
+    live
+}
+
 fn witness_tamper_sweep_for<PCS: PcsMutations>() {
     let _probe = ProbeGuard::enter();
     let all = exhaustive();
@@ -519,6 +586,7 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                 "proving is not deterministic; the witness oracle cannot rely on proof equality"
             );
         }
+        let live = live_cells(&model);
         let sites = witness_sites(&model, &honest_trace, all);
         let mut rows: BTreeMap<&'static str, (usize, usize)> = BTreeMap::new();
         let mut neutral = 0usize;
@@ -562,6 +630,10 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                     // 2. re-executing the claimed inputs reproduces the
                     //    tampered trace exactly: a different but true
                     //    statement with a consistent witness.
+                    // 3. the tampered cell is one no model output depends on
+                    //    ([`live_cells`]): a layout tie opens its operand only on
+                    //    the cells it selects, so the cells a `Slice` discards
+                    //    are not part of the statement.
                     // An input pushed out of its domain (a non-boolean mask)
                     // does not execute at all; that is reported, not judged.
                     let same_proof = io.inputs == h.io.inputs
@@ -600,8 +672,22 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                             continue;
                         }
                     }
+                    let dead_cell = match site {
+                        WitnessSite::NodeOutput { node, elem }
+                        | WitnessSite::FusedQuotient { node, elem }
+                        | WitnessSite::FusedRemainder { node, elem }
+                        | WitnessSite::Advice { node, elem, .. } => {
+                            live[*node].get(*elem).is_some_and(|&cell| !cell)
+                        }
+                        WitnessSite::Softmax { node, .. } => !live[*node].iter().any(|&cell| cell),
+                        WitnessSite::BucketDigit { .. } => false,
+                    };
                     match run_verify(&proof, &h.verifier_pp, &io) {
                         Outcome::Rejected(_) => row.1 += 1,
+                        Outcome::Accepted if dead_cell => {
+                            neutral += 1;
+                            row.1 += 1;
+                        }
                         other => violations.push(format!(
                             "{label} -> {other:?} (prover self-checks that would have fired: {divergences:?})"
                         )),

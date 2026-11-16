@@ -40,6 +40,59 @@ pub fn coord_to_linear(coord: &[usize], dims: &[usize]) -> Result<usize, ProofVe
     Ok(index)
 }
 
+/// Split a point of the padded domain of `dims` into its per-axis coordinate groups: axis `k`
+/// owns `log₂ dims[k]` consecutive coordinates, most significant first, in axis order. `Err` if
+/// a dim is not a power of two or `point` is not a point of that domain.
+pub fn axis_groups<'a, F>(
+    dims: &[usize],
+    point: &'a [F],
+) -> Result<Vec<&'a [F]>, ProofVerifyError> {
+    let mut groups = Vec::with_capacity(dims.len());
+    let mut offset = 0usize;
+    for &dim in dims {
+        let num_vars = pow2_log(dim)?;
+        let group = point.get(offset..offset + num_vars).ok_or_else(|| {
+            ProofVerifyError::Malformed(format!(
+                "model: a {}-coordinate point is not a point of dims {dims:?}",
+                point.len()
+            ))
+        })?;
+        groups.push(group);
+        offset += num_vars;
+    }
+    if offset != point.len() {
+        return Err(ProofVerifyError::Malformed(format!(
+            "model: a {}-coordinate point is not a point of dims {dims:?}",
+            point.len()
+        )));
+    }
+    Ok(groups)
+}
+
+/// `log₂ dim`. `Err` if `dim` is not a power of two.
+pub fn pow2_log(dim: usize) -> Result<usize, ProofVerifyError> {
+    if !dim.is_power_of_two() {
+        return Err(ProofVerifyError::Malformed(format!(
+            "model: dim {dim} is not a power of two"
+        )));
+    }
+    Ok(dim.trailing_zeros() as usize)
+}
+
+/// The low `num_bits` bits of `value` as field elements, most significant first.
+pub fn bits_msb_first<F: atlas_algebra::field::JoltField>(value: usize, num_bits: usize) -> Vec<F> {
+    (0..num_bits)
+        .rev()
+        .map(|bit| {
+            if (value >> bit) & 1 == 1 {
+                F::one()
+            } else {
+                F::zero()
+            }
+        })
+        .collect()
+}
+
 /// Function type for extracting dimension information from a computation node. `Err` if the
 /// node's operands do not have the equation's shape.
 pub type DimExtractor = fn(&ComputationNode, &Model) -> Result<EinsumDims, ProofVerifyError>;

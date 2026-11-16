@@ -91,6 +91,16 @@ dictionary read stays in its node's turn, since it produces a claim on its dicti
 its one-hot checks are in `OneHot`. A deferred batch with no sumcheck instance (no lookup, and
 every bucket exact) carries no proof entry.
 
+The layout ops are ties, not sumchecks: MoveAxis, Broadcast, Identity, and also Reshape, Slice
+and Concat, whose ties re-point the node's reduced output claim at the operands (Reshape at
+the same point; Slice at the point with the slice's block bits fixed on its axis; Concat as
+the sum of each operand's block indicator times the operand at the remaining coordinates).
+Those three hold only on power-of-two dims with aligned blocks, which compiling with padding
+establishes (`atlas_trace`'s `pad_graph`) and `node_view::check_model_shape` checks again on
+the model the verifier is handed. A Slice's tie opens its operand at a point whose sliced-axis
+coordinates are fixed bits, so the cells a Slice discards, when nothing else reads them, are
+not checked: they are no part of the statement about the public output.
+
 Softmax is the stress case: its stage driver is a plan (aux vectors as `Open`, stages 1–2 as
 `Batch`, stage 3 and its one-hot checks as `Defer`); the relations of a stage read the aux
 vectors back from their openings in their setup (`SoftmaxShape::aux`).
@@ -132,7 +142,7 @@ Everything in the crate that took an `atlas_trace::Trace`, with its destination 
 
 | Item | Destination |
 |------|-------------|
-| `EngineRelation::witnesses` | `relation::RelationWitnesses`, implemented in `ops/{reshape, slice, concat, iff, scalar_const_div, mul, rsqrt, div}.rs` and `ops/sum/axis.rs` |
+| `EngineRelation::witnesses` | `relation::RelationWitnesses`, implemented in `ops/{iff, scalar_const_div, mul, rsqrt, div}.rs` and `ops/sum/axis.rs` |
 | `TieRelation::claims` | `relation::TieClaims`, implemented in `ops/{add, neg, is_nan, moveaxis, broadcast, constant, div}.rs` |
 | `LookupOperandsTrait::{witness, lookup_bits}` | `op_lookups::LookupWitness`, implemented beside each helper's prover (`op_lookups`, `clamp_lookups`, `ops/clamp.rs`, `ops/activation_clamped`, `neural_teleport/trig_downscale.rs`, `ops/softmax_last_axis/significance_clamp.rs`) |
 | `clamp_lookups::{clamp_intermediate, clamp_lookup_bits}` | `clamp_lookups` |

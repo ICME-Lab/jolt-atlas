@@ -1,33 +1,33 @@
+//! Concat as a zero-round tie.
+//!
+//! When every operand's extent on the axis is a power of two and each operand starts at a
+//! multiple of its own extent, the operands tile the output's axis with subcubes: operand `i`
+//! is the block whose high axis bits are the bits of `offset_i / extent_i`. The output's
+//! extension is then the sum, over operands, of the block's indicator at the high axis
+//! coordinates times the operand's extension at the low ones. `atlas_trace`'s `pad_graph`
+//! accepts only such concats; any other is rejected here.
+
 use crate::node_view::{ComputationNode, ModelView};
-use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
+use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
 use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::utils::{
-    dims::{coord_to_linear, linear_to_coord},
-    opening_access::{OpeningIdBuilder, Target},
-};
+use crate::utils::dims::{axis_groups, bits_msb_first, pow2_log};
 use crate::{
     atlas_relation_types,
-    onnx_proof::{
-        relation::{
-            low_to_high_point, reduced_output_setup, AtlasRelation, EngineRelation,
-            RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
-        },
-        ProofType,
+    onnx_proof::relation::{
+        not_derived, reduced_output_setup, AtlasRelation, RelationDerived, RelationExpr,
+        RelationId, RelationOpening, RelationSetup, TieRelation,
     },
+    utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::field::Ring;
-use atlas_algebra::{
-    field::JoltField,
-    poly::eq::EqPolynomial,
-    utils::{errors::ProofVerifyError, math::Math},
-};
-use atlas_claims::{derived, opening, Expr, SymbolicSumcheck};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_claims::{derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{op::Concat, Model, Op};
+use atlas_trace::{op::Concat, Model};
 use atlas_transcript::Transcript;
 
-crate::impl_plan_op!(Concat, ConcatRelation);
+crate::impl_plan_op!(Concat, SubcubeTilingRelation);
 
 impl OpPlan for Concat {
     fn plan(
@@ -38,84 +38,168 @@ impl OpPlan for Concat {
     ) -> Result<Plan, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Reduce,
-            Step::Relation {
-                proof: ProofType::Execution,
-                relation: OpRelation::Concat(ConcatRelation::for_node(model, node.clone())?),
+            Step::Tie {
+                relation: OpTie::Concat(SubcubeTilingRelation::for_node(
+                    model,
+                    node.clone(),
+                    self,
+                )?),
             },
         ]))
     }
 }
 
-/// A concat node with its axis and its operands' unpadded dims, validated against the concat
-/// shape rules.
+/// An operand of an aligned concat: the block of the output's axis it fills.
+struct Block {
+    /// `offset / extent`: the block's index among extent-sized blocks of the axis.
+    index: usize,
+    /// `log₂(output extent / extent)`: the axis coordinates the block index fixes.
+    index_vars: usize,
+}
+
+/// An aligned concat node: its axis and its operands' blocks, in operand order.
 pub struct ConcatShape {
     node: ComputationNode,
-    input_raw_dims: Vec<Vec<usize>>,
     axis: usize,
+    blocks: Vec<Block>,
 }
 
-fn unsupported(what: impl std::fmt::Display) -> ProofVerifyError {
-    ProofVerifyError::Malformed(format!("model: concat: {what}"))
-}
-
-/// `Concat` as a dense relation over the largest operand's padded domain:
+/// `Concat` as a tie: the output at `r` is the sum over operands of the operand's block
+/// indicator at the high coordinates of the axis times the operand at the remaining ones.
 ///
 /// ```text
-/// input claim   out(r₀)                (the reduced output opening)
-/// output claim  Σ_i selector_i(r′) · in_i(r′[..n_i])
+/// input claim   out(r)                 (the reduced output opening)
+/// output claim  Σ_i eq(bits(offset_i / extent_i), r_axis,high) · operand_i(r with r_axis,low on the axis)
 /// ```
 ///
-/// Each operand is lifted to the largest domain by repeating it across the low variables, so
-/// its claim is its own MLE at the first `n_i` coordinates of `r′`; `selector_i` places
-/// `eq(r₀, ·)` at the output cell of each of its elements.
-///
-/// **S ⊆ R.** A concatenation copies each operand unchanged into its range of the axis, so
-/// `out(r₀) = Σ_i Σ_x selector_i(x)·in_i(x)`.
-pub struct ConcatRelation {
+/// **S ⊆ R.** Every dim is a power of two, the operands' extents sum to the output's, and each
+/// operand starts at a multiple of its extent, so the operands' blocks partition the axis and
+/// output cell `(block_i, j)` is operand `i`'s cell `j`. The right-hand side is multilinear in
+/// `r` and equals the output on every Boolean point (exactly one indicator is one there), so it
+/// is the output's extension.
+pub struct SubcubeTilingRelation {
     shape: ConcatShape,
 }
 
-impl ConcatRelation {
-    /// The relation of a concat `node` of `model`. `Err` if the node is not a concat or its
-    /// dims break the concat shape rules.
-    pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
-        let Op::Concat(op) = &node.operator else {
-            return Err(unsupported("expected a Concat operator"));
-        };
+impl SubcubeTilingRelation {
+    /// The relation of a concat `node` of `model`. `Err` if an operand is not a node of the
+    /// model, a dim is not a power of two, an operand's dims differ from the node's off the
+    /// axis, the extents on the axis do not sum to the node's, or an operand's offset is not a
+    /// multiple of its extent.
+    pub fn for_node(
+        model: &Model,
+        node: ComputationNode,
+        op: &Concat,
+    ) -> Result<Self, ProofVerifyError> {
         let axis = op.axis;
-        if node.inputs.iter().any(|&input| input >= model.num_nodes()) {
-            return Err(unsupported("an operand is not a node"));
+        let Some(&output_extent) = node.output_dims.get(axis) else {
+            return Err(unsupported(&node, "the axis is out of range"));
+        };
+        for &dim in &node.output_dims {
+            pow2_log(dim)?;
         }
-        let input_raw_dims: Vec<Vec<usize>> = model
-            .operand_views(&node)
-            .iter()
-            .map(|input| input.output_dims.clone())
-            .collect();
-        validate_concat_shapes(
-            &input_raw_dims
-                .iter()
-                .map(|dims| dims.as_slice())
-                .collect::<Vec<_>>(),
-            &node.output_dims,
-            axis,
-        )?;
-        Ok(Self::new(ConcatShape {
-            node,
-            input_raw_dims,
-            axis,
-        }))
+        let output_vars = pow2_log(output_extent)?;
+        let mut blocks = Vec::new();
+        let mut offset = 0usize;
+        for input_dims in operand_dims(model, &node)? {
+            let mut expected = node.output_dims.clone();
+            let extent = match (input_dims.get(axis), expected.get_mut(axis)) {
+                (Some(&extent), Some(dim)) => {
+                    *dim = extent;
+                    extent
+                }
+                _ => return Err(unsupported(&node, "an operand of another rank")),
+            };
+            if input_dims != expected {
+                return Err(unsupported(
+                    &node,
+                    format!(
+                        "operand dims {input_dims:?} in an output of {:?}",
+                        node.output_dims
+                    ),
+                ));
+            }
+            let extent_vars = pow2_log(extent)?;
+            if extent > output_extent || !offset.is_multiple_of(extent) {
+                return Err(unsupported(
+                    &node,
+                    format!("offset {offset} is not a multiple of the operand extent {extent}"),
+                ));
+            }
+            blocks.push(Block {
+                index: offset / extent,
+                index_vars: output_vars - extent_vars,
+            });
+            offset += extent;
+        }
+        if offset != output_extent {
+            return Err(unsupported(
+                &node,
+                format!("operand extents sum to {offset}, the output's is {output_extent}"),
+            ));
+        }
+        Ok(Self::new(ConcatShape { node, axis, blocks }))
     }
 
-    fn input_num_vars(&self) -> Vec<usize> {
+    fn input(&self, operand: usize) -> OpeningId {
+        OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(operand))
+    }
+
+    /// The output point `r` split for `block`: the high coordinates of the axis its index
+    /// fixes, and the operand's point (`r` with the axis's low coordinates on the axis).
+    fn split<F: JoltField>(
+        &self,
+        block: &Block,
+        r: &[F],
+    ) -> Result<(Vec<F>, Vec<F>), ProofVerifyError> {
+        let mut high = Vec::new();
+        let mut point = Vec::with_capacity(r.len());
+        for (axis, group) in axis_groups(&self.shape.node.output_dims, r)?
+            .into_iter()
+            .enumerate()
+        {
+            if axis == self.shape.axis {
+                let (group_high, group_low) = group.split_at(block.index_vars.min(group.len()));
+                high.extend_from_slice(group_high);
+                point.extend_from_slice(group_low);
+            } else {
+                point.extend_from_slice(group);
+            }
+        }
+        Ok((high, point))
+    }
+
+    /// Each operand's point for the output point `r`, in operand order.
+    pub fn operand_points<F: JoltField>(&self, r: &[F]) -> Result<Vec<Vec<F>>, ProofVerifyError> {
         self.shape
-            .input_raw_dims
+            .blocks
             .iter()
-            .map(|dims| padded_domain_len(dims).log_2())
+            .map(|block| Ok(self.split(block, r)?.1))
             .collect()
     }
 }
 
-impl SymbolicSumcheck for ConcatRelation {
+/// The dims of `node`'s operands. `Err` if an operand is not a node of `model`.
+fn operand_dims(
+    model: &Model,
+    node: &ComputationNode,
+) -> Result<Vec<Vec<usize>>, ProofVerifyError> {
+    node.inputs
+        .iter()
+        .map(|&input| {
+            if input >= model.num_nodes() {
+                return Err(unsupported(node, "an operand is not a node"));
+            }
+            Ok(model.view(input).output_dims)
+        })
+        .collect()
+}
+
+fn unsupported(node: &ComputationNode, what: impl std::fmt::Display) -> ProofVerifyError {
+    ProofVerifyError::Malformed(format!("model: concat node {}: {what}", node.idx))
+}
+
+impl SymbolicSumcheck for SubcubeTilingRelation {
     atlas_relation_types!();
     type Shape = ConcatShape;
 
@@ -128,11 +212,11 @@ impl SymbolicSumcheck for ConcatRelation {
     }
 
     fn rounds(&self) -> usize {
-        self.input_num_vars().into_iter().max().unwrap_or(0)
+        0
     }
 
     fn degree(&self) -> usize {
-        2
+        1
     }
 
     fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
@@ -140,57 +224,56 @@ impl SymbolicSumcheck for ConcatRelation {
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        self.produced()
-            .into_iter()
-            .enumerate()
-            .fold(Expr::zero(), |sum, (i, id)| {
-                sum + derived(RelationDerived::Table(i)) * opening(RelationOpening::Id(id))
+        (0..self.shape.blocks.len())
+            .map(|operand| {
+                derived(RelationDerived::BlockEq(operand))
+                    * opening(RelationOpening::Id(self.input(operand)))
             })
+            .fold(RelationExpr::zero(), |sum, term| sum + term)
     }
 }
 
-impl Produces for ConcatRelation {
+impl Produces for SubcubeTilingRelation {
     fn produced(&self) -> Vec<OpeningId> {
-        let ids = OpeningIdBuilder::new(&self.shape.node);
-        (0..self.shape.input_raw_dims.len())
-            .map(|i| ids.nodeio(Target::Input(i)))
+        (0..self.shape.blocks.len())
+            .map(|operand| self.input(operand))
             .collect()
     }
 }
 
-impl<F: JoltField> Relation<F> for ConcatRelation {
+impl<F: JoltField> Relation<F> for SubcubeTilingRelation {
     fn opening_points(
         &self,
-        _setup: &RelationSetup<F>,
-        challenges: &[F],
+        setup: &RelationSetup<F>,
+        _challenges: &[F],
     ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
-        let point = low_to_high_point(challenges);
-        self.input_num_vars()
-            .into_iter()
-            .map(|n| {
-                point.get(..n).map(<[F]>::to_vec).ok_or_else(|| {
-                    ProofVerifyError::Malformed(format!(
-                        "concat: {} challenges for an operand of {n} variables",
-                        point.len()
-                    ))
-                })
-            })
-            .collect()
+        self.operand_points(&setup.incoming_point)
     }
 
-    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Result<Vec<F>, ProofVerifyError> {
-        build_concat_selector(
-            &self.shape.input_raw_dims,
-            &self.shape.node.output_dims,
-            self.shape.axis,
-            index,
-            &setup.incoming_point,
-            self.rounds(),
-        )
+    fn derive(
+        &self,
+        id: &RelationDerived,
+        setup: &RelationSetup<F>,
+        _challenges: &[F],
+    ) -> Result<F, ProofVerifyError> {
+        let RelationDerived::BlockEq(operand) = id else {
+            return Err(not_derived(id));
+        };
+        let block = self
+            .shape
+            .blocks
+            .get(*operand)
+            .ok_or_else(|| unsupported(&self.shape.node, format!("no operand {operand}")))?;
+        let (high, _) = self.split(block, &setup.incoming_point)?;
+        Ok(bits_msb_first::<F>(block.index, block.index_vars)
+            .into_iter()
+            .zip(high)
+            .map(|(bit, r)| bit * r + (F::one() - bit) * (F::one() - r))
+            .product())
     }
 }
 
-impl<F: JoltField> SetupRelation<F> for ConcatRelation {
+impl<F: JoltField> SetupRelation<F> for SubcubeTilingRelation {
     fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -200,7 +283,7 @@ impl<F: JoltField> SetupRelation<F> for ConcatRelation {
     }
 }
 
-impl AtlasRelation for ConcatRelation {
+impl AtlasRelation for SubcubeTilingRelation {
     type Spec = Concat;
 
     fn node(&self) -> &ComputationNode {
@@ -208,120 +291,4 @@ impl AtlasRelation for ConcatRelation {
     }
 }
 
-impl<F: JoltField> EngineRelation<F> for ConcatRelation {}
-
-fn padded_domain_len(dims: &[usize]) -> usize {
-    dims.iter().map(|dim| dim.next_power_of_two()).product()
-}
-
-fn build_concat_selector<F: JoltField>(
-    raw_input_dims: &[Vec<usize>],
-    output_raw_dims: &[usize],
-    axis: usize,
-    input_idx: usize,
-    r_output: &[F],
-    max_input_num_vars: usize,
-) -> Result<Vec<F>, ProofVerifyError> {
-    let input_raw_dims = raw_input_dims
-        .get(input_idx)
-        .ok_or_else(|| unsupported(format!("input_idx {input_idx} out of range")))?;
-    let input_raw_len: usize = input_raw_dims.iter().product();
-    let input_padded_dims: Vec<usize> = input_raw_dims
-        .iter()
-        .map(|dim| dim.next_power_of_two())
-        .collect();
-    let input_domain_len: usize = input_padded_dims.iter().product();
-    let input_num_vars = input_domain_len.log_2();
-
-    let output_padded_dims: Vec<usize> = output_raw_dims
-        .iter()
-        .map(|dim| dim.next_power_of_two())
-        .collect();
-    let output_domain_len: usize = output_padded_dims.iter().product();
-    let output_num_vars = output_domain_len.log_2();
-    if output_num_vars != r_output.len() {
-        return Err(ProofVerifyError::Malformed(format!(
-            "concat selector: output point has {} coordinates, its padded domain {output_num_vars}",
-            r_output.len()
-        )));
-    }
-    let shift = max_input_num_vars
-        .checked_sub(input_num_vars)
-        .ok_or_else(|| unsupported("an operand larger than the sumcheck domain"))?;
-
-    let max_domain_len = 1usize << max_input_num_vars;
-    let axis_offset = axis_offset(raw_input_dims, input_idx, axis)?;
-    let mut selector = vec![F::zero(); max_domain_len];
-    let eq_evals = EqPolynomial::evals(r_output);
-
-    for linear_idx in 0..input_raw_len {
-        let input_coord = linear_to_coord(linear_idx, input_raw_dims);
-        let mut output_coord = input_coord.clone();
-        *output_coord
-            .get_mut(axis)
-            .ok_or_else(|| unsupported(format!("axis {axis} out of range")))? += axis_offset;
-
-        let input_index = coord_to_linear(&input_coord, &input_padded_dims)?;
-        let output_index = coord_to_linear(&output_coord, &output_padded_dims)?;
-        let full_index = input_index << shift;
-        let (Some(cell), Some(eq)) = (selector.get_mut(full_index), eq_evals.get(output_index))
-        else {
-            return Err(unsupported("an element outside the padded domain"));
-        };
-        *cell = *eq;
-    }
-
-    Ok(selector)
-}
-
-/// Validates concat shape rules.
-fn validate_concat_shapes(
-    inputs_dims: &[&[usize]],
-    out_dims: &[usize],
-    axis: usize,
-) -> Result<(), ProofVerifyError> {
-    if inputs_dims.is_empty() {
-        return Err(unsupported("expects at least one input"));
-    }
-    let rank = out_dims.len();
-    if axis >= rank {
-        return Err(unsupported(format!(
-            "axis {axis} out of range for rank {rank}"
-        )));
-    }
-    if inputs_dims.iter().any(|dims| dims.len() != rank) {
-        return Err(unsupported("input rank mismatch"));
-    }
-
-    for (dim, &out_dim) in out_dims.iter().enumerate() {
-        // Every input has the output's rank, so `dim` is one of its axes.
-        let input_dims = inputs_dims.iter().filter_map(|dims| dims.get(dim).copied());
-        if dim == axis {
-            if out_dim != input_dims.sum::<usize>() {
-                return Err(unsupported(
-                    "output axis dimension must equal sum of input dimensions",
-                ));
-            }
-        } else if input_dims.clone().any(|input_dim| input_dim != out_dim) {
-            return Err(unsupported("non-axis dimensions must match between inputs"));
-        }
-    }
-    Ok(())
-}
-
-/// Returns the axis offset (in output coordinates) for the given input.
-fn axis_offset(
-    raw_input_dims: &[Vec<usize>],
-    input_idx: usize,
-    axis: usize,
-) -> Result<usize, ProofVerifyError> {
-    raw_input_dims
-        .iter()
-        .take(input_idx)
-        .map(|dims| {
-            dims.get(axis)
-                .copied()
-                .ok_or_else(|| unsupported(format!("axis {axis} out of range")))
-        })
-        .sum()
-}
+impl<F: JoltField> TieRelation<F> for SubcubeTilingRelation {}

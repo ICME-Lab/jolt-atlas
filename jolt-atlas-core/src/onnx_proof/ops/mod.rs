@@ -630,7 +630,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
     match relation {
         OpRelation::And(relation) => engine(relation, prover),
         OpRelation::ConstantDivision(relation) => engine(relation, prover),
-        OpRelation::Concat(relation) => engine(relation, prover),
         OpRelation::Contraction(relation) => {
             let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
             vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
@@ -696,9 +695,7 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
             ))]
         }
         OpRelation::Mul(relation) => engine(relation, prover),
-        OpRelation::Reshape(relation) => engine(relation, prover),
         OpRelation::Rsqrt(relation) => engine(relation, prover),
-        OpRelation::Slice(relation) => engine(relation, prover),
         OpRelation::SmallActivation(OpActivation::Erf, node) => {
             small_activation::<F, T, ErfTableMarker>(&node, prover)
         }
@@ -836,11 +833,14 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
         OpTie::AddAccumulation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::AxisPermutation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Broadcast(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::Concat(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Constant(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Input(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::DivQuotient(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Identity(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Neg(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::Reshape(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::Slice(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::SubAccumulation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::ZeroOutput(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::TeleportInput(relation) => {

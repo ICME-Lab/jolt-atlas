@@ -6,6 +6,9 @@
 //! that bundle, built on demand by [`ModelView::view`]; the model itself is
 //! stored and serialized only as the raw `atlas_trace::Model`.
 
+use crate::onnx_proof::ops::{
+    concat::SubcubeTilingRelation, reshape::FlatCopyRelation, slice::SubcubeSelectRelation,
+};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::{Op, Tensor};
 use serde::{Deserialize, Serialize};
@@ -63,8 +66,10 @@ impl ComputationNode {
     }
 }
 
-/// Every node's operands are earlier nodes: the topological order `atlas_trace::Model::compile`
-/// establishes, checked again on the model the verifier is handed.
+/// Every node's operands are earlier nodes (the topological order
+/// `atlas_trace::Model::compile` establishes), and every Reshape, Slice and Concat has the
+/// power-of-two dims and the alignment its tie holds for (what compiling with padding
+/// establishes); both checked again on the model the verifier is handed.
 pub fn check_model_shape(model: &atlas_trace::Model) -> Result<(), ProofVerifyError> {
     for (idx, node) in model.graph().nodes.iter().enumerate() {
         if node.inputs.iter().any(|input| input.index() >= idx) {
@@ -72,6 +77,18 @@ pub fn check_model_shape(model: &atlas_trace::Model) -> Result<(), ProofVerifyEr
                 "model: node {idx} ({}) has an operand that is not an earlier node",
                 node.op
             )));
+        }
+        match &node.op {
+            atlas_trace::Op::Reshape(_) => {
+                FlatCopyRelation::for_node(model, model.view(idx))?;
+            }
+            atlas_trace::Op::Slice(op) => {
+                SubcubeSelectRelation::for_node(model, model.view(idx), op)?;
+            }
+            atlas_trace::Op::Concat(op) => {
+                SubcubeTilingRelation::for_node(model, model.view(idx), op)?;
+            }
+            _ => {}
         }
     }
     Ok(())

@@ -176,9 +176,10 @@ not pursued (section 6).
 - **Fused LayerNorm:** each norm is nine lowered ops, eight of them clamped, holding the widest
   quotients in the model (27–29 bits). One op with per-row range checks (VerInf, DeepProve) and
   the rsqrt relation of item 7 removes most of them. Needs an importer pass and a tracer op.
-- **Structural ops as ties (B4):** Reshape, aligned Slice and Concat, MoveAxis chains as
-  zero-round ties; IsNaN rewritten to constant zero and the dead Iff folded. Every Slice in the
-  zoo is aligned. Small prover gain; verifier time and code.
+- **Structural ops as ties (B4):** Reshape, aligned Slice and Concat as zero-round ties are
+  implemented (`specs/structural-ops-as-ties.md`); unaligned ones no longer compile. Open:
+  MoveAxis chains merged, IsNaN rewritten to constant zero and the dead Iff folded. Small
+  prover gain; verifier time and code.
 
 ### 6. Activations and softmax (roadmap B2, C2–C4, B3, B5) — 7% of rows, more at long context
 

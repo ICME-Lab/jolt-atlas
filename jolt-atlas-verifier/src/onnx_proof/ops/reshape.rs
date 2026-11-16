@@ -1,41 +1,32 @@
-//! Reshape proof using an eq-selector over the padded input domain.
+//! Reshape as a zero-round tie.
 //!
-//! For each raw input element `t`, we compute the padded output index that the
-//! same element occupies after reshape and place `eq(r_output, mapped_index(t))`
-//! at the corresponding padded input position. The resulting selector MLE
-//! satisfies:
-//!
-//! `out(r_output) = sum_i selector(i) * input(i)`.
-
-use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
-use atlas_trace::{op::Reshape, Model};
+//! On power-of-two dims a reshape keeps every element at its flat row-major index, so the
+//! output's multilinear extension is the operand's: the tie re-points the node's reduced output
+//! claim at the operand, at the same point. A model compiled with padding has such dims
+//! (`atlas_trace`'s `pad_graph` rejects a reshape whose layout changes under padding); a model
+//! with any other dims on a reshape is rejected here.
 
 use crate::node_view::{ComputationNode, ModelView};
-use crate::utils::dims::{coord_to_linear, linear_to_coord};
+use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use crate::onnx_proof::relation::Produces;
+use crate::onnx_proof::relation::{Relation, SetupRelation};
+use crate::utils::dims::pow2_log;
 use crate::{
     atlas_relation_types,
-    onnx_proof::{
-        relation::{
-            reduced_output_setup, AtlasRelation, EngineRelation, RelationDerived, RelationExpr,
-            RelationId, RelationOpening, RelationSetup,
-        },
-        ProofType,
+    onnx_proof::relation::{
+        reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
+        RelationSetup, TieRelation,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::field::Ring;
-use atlas_algebra::{
-    field::{ChallengeFieldOps, JoltField},
-    poly::eq::EqPolynomial,
-    utils::{errors::ProofVerifyError, math::Math},
-};
-use atlas_claims::{derived, opening, SymbolicSumcheck};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_claims::{opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_trace::{op::Reshape, Model};
 use atlas_transcript::Transcript;
 
-crate::impl_plan_op!(Reshape, ReshapeRelation);
+crate::impl_plan_op!(Reshape, FlatCopyRelation);
 
 impl OpPlan for Reshape {
     fn plan(
@@ -46,116 +37,52 @@ impl OpPlan for Reshape {
     ) -> Result<Plan, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Reduce,
-            Step::Relation {
-                proof: ProofType::Execution,
-                relation: OpRelation::Reshape(ReshapeRelation::for_node(model, node.clone())?),
+            Step::Tie {
+                relation: OpTie::Reshape(FlatCopyRelation::for_node(model, node.clone())?),
             },
         ]))
     }
 }
 
-/// Build a reshape selector vector over the padded input domain.
-///
-/// For each raw input position `t`, this computes the padded input index
-/// corresponding to `t`, the padded output index that the same raw element maps
-/// to after reshape, and stores `eq(r_output, mapped_output_index)` at that
-/// padded input position. Padding cells remain zero.
-///
-/// This gives a selector MLE such that:
-/// `out(r_output) = Σ_i selector(i) * input(i)`.
-///
-/// `Err` if the dims are not a reshape of one another or `r_output` is not a point of the
-/// padded output domain.
-pub fn build_reshape_selectors<F: JoltField + ChallengeFieldOps<F>>(
-    input_raw_dims: &[usize],
-    output_raw_dims: &[usize],
-    r_output: &[F],
-) -> Result<Vec<F>, ProofVerifyError> {
-    let unsupported =
-        |what: &str| ProofVerifyError::Malformed(format!("model: reshape selector: {what}"));
-    let input_raw_len: usize = input_raw_dims.iter().product();
-    let output_raw_len: usize = output_raw_dims.iter().product();
-    if input_raw_len != output_raw_len {
-        return Err(unsupported("requires equal raw element counts"));
-    }
-
-    let input_padded_dims: Vec<usize> = input_raw_dims
-        .iter()
-        .map(|d| d.next_power_of_two())
-        .collect();
-    let output_padded_dims: Vec<usize> = output_raw_dims
-        .iter()
-        .map(|d| d.next_power_of_two())
-        .collect();
-    let input_padded_len: usize = input_padded_dims.iter().product();
-    let output_padded_len: usize = output_padded_dims.iter().product();
-    if input_padded_len != output_padded_len {
-        return Err(unsupported("requires equal padded domain sizes"));
-    }
-
-    // Selector values are zero on padding cells by default.
-    let mut selector = vec![F::zero(); input_padded_len];
-    let eq_evals = EqPolynomial::evals(r_output);
-
-    for t in 0..input_raw_len {
-        let input_coord = linear_to_coord(t, input_raw_dims);
-        let output_coord = linear_to_coord(t, output_raw_dims);
-        let input_padded_index = coord_to_linear(&input_coord, &input_padded_dims)?;
-        let output_padded_index = coord_to_linear(&output_coord, &output_padded_dims)?;
-        let (Some(cell), Some(eq)) = (
-            selector.get_mut(input_padded_index),
-            eq_evals.get(output_padded_index),
-        ) else {
-            return Err(unsupported("an element outside the padded domain"));
-        };
-        *cell = *eq;
-    }
-
-    Ok(selector)
-}
-
-/// A reshape node with its operand's and its own unpadded dims.
+/// A reshape node whose dims the tie holds for.
 pub struct ReshapeShape {
     node: ComputationNode,
-    input_raw_dims: Vec<usize>,
 }
 
-/// `Reshape` as a dense relation over the padded input domain:
+/// `Reshape` as a tie: the output at `r` is the operand at `r`.
 ///
 /// ```text
-/// input claim   out(r₀)                (the reduced output opening)
-/// output claim  selector(r′) · in(r′)
+/// input claim   out(r)                 (the reduced output opening)
+/// output claim  operand(r)
 /// ```
 ///
-/// where `selector` ([`build_reshape_selectors`]) places `eq(r₀, ·)` at the padded output cell
-/// each input element lands in.
-///
-/// **S ⊆ R.** A reshape moves raw elements in row-major order without changing them, so
-/// `out(r₀) = Σ_i selector(i)·in(i)` over the input domain.
-pub struct ReshapeRelation {
+/// **S ⊆ R.** Every dim of the operand and of the output is a power of two with equal
+/// products, so neither tensor is padded and both are the same flat row-major vector: a reshape
+/// moves no element off its flat index. Their multilinear extensions over that index are equal.
+pub struct FlatCopyRelation {
     shape: ReshapeShape,
 }
 
-impl ReshapeRelation {
+impl FlatCopyRelation {
     /// The relation of a reshape `node` of `model`. `Err` if the node's operand is not a node
-    /// of the model.
+    /// of the model, a dim of either is not a power of two, or their element counts differ.
     pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
-        let input = node
-            .inputs
-            .first()
-            .copied()
-            .filter(|&input| input < model.num_nodes())
-            .ok_or_else(|| {
-                ProofVerifyError::Malformed(format!(
-                    "model: reshape node {}: the operand is not a node",
-                    node.idx
-                ))
-            })?;
-        let input_raw_dims = model.view(input).output_dims;
-        Ok(Self::new(ReshapeShape {
-            node,
-            input_raw_dims,
-        }))
+        let [input_dims] = operand_dims(model, &node)?
+            .try_into()
+            .map_err(|_| unsupported(&node, "a reshape has one operand"))?;
+        let num_vars = |dims: &[usize]| -> Result<usize, ProofVerifyError> {
+            dims.iter().map(|&dim| pow2_log(dim)).sum()
+        };
+        if num_vars(&input_dims)? != num_vars(&node.output_dims)? {
+            return Err(unsupported(
+                &node,
+                format!(
+                    "{input_dims:?} and {:?} differ in element count",
+                    node.output_dims
+                ),
+            ));
+        }
+        Ok(Self::new(ReshapeShape { node }))
     }
 
     fn input(&self) -> OpeningId {
@@ -163,7 +90,27 @@ impl ReshapeRelation {
     }
 }
 
-impl SymbolicSumcheck for ReshapeRelation {
+/// The dims of `node`'s operands. `Err` if an operand is not a node of `model`.
+fn operand_dims(
+    model: &Model,
+    node: &ComputationNode,
+) -> Result<Vec<Vec<usize>>, ProofVerifyError> {
+    node.inputs
+        .iter()
+        .map(|&input| {
+            if input >= model.num_nodes() {
+                return Err(unsupported(node, "an operand is not a node"));
+            }
+            Ok(model.view(input).output_dims)
+        })
+        .collect()
+}
+
+fn unsupported(node: &ComputationNode, what: impl std::fmt::Display) -> ProofVerifyError {
+    ProofVerifyError::Malformed(format!("model: reshape node {}: {what}", node.idx))
+}
+
+impl SymbolicSumcheck for FlatCopyRelation {
     atlas_relation_types!();
     type Shape = ReshapeShape;
 
@@ -176,11 +123,11 @@ impl SymbolicSumcheck for ReshapeRelation {
     }
 
     fn rounds(&self) -> usize {
-        self.shape.node.pow2_padded_num_output_elements().log_2()
+        0
     }
 
     fn degree(&self) -> usize {
-        2
+        1
     }
 
     fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
@@ -188,32 +135,19 @@ impl SymbolicSumcheck for ReshapeRelation {
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        derived(RelationDerived::Table(0)) * opening(RelationOpening::Id(self.input()))
+        opening(RelationOpening::Id(self.input()))
     }
 }
 
-impl Produces for ReshapeRelation {
+impl Produces for FlatCopyRelation {
     fn produced(&self) -> Vec<OpeningId> {
         vec![self.input()]
     }
 }
 
-impl<F: JoltField> Relation<F> for ReshapeRelation {
-    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Result<Vec<F>, ProofVerifyError> {
-        if index != 0 {
-            return Err(ProofVerifyError::Malformed(format!(
-                "a reshape has one selector, no table {index}"
-            )));
-        }
-        build_reshape_selectors(
-            &self.shape.input_raw_dims,
-            &self.shape.node.output_dims,
-            &setup.incoming_point,
-        )
-    }
-}
+impl<F: JoltField> Relation<F> for FlatCopyRelation {}
 
-impl<F: JoltField> SetupRelation<F> for ReshapeRelation {
+impl<F: JoltField> SetupRelation<F> for FlatCopyRelation {
     fn setup<T: Transcript>(
         &self,
         accumulator: &dyn OpeningAccumulator<F>,
@@ -223,7 +157,7 @@ impl<F: JoltField> SetupRelation<F> for ReshapeRelation {
     }
 }
 
-impl AtlasRelation for ReshapeRelation {
+impl AtlasRelation for FlatCopyRelation {
     type Spec = Reshape;
 
     fn node(&self) -> &ComputationNode {
@@ -231,4 +165,4 @@ impl AtlasRelation for ReshapeRelation {
     }
 }
 
-impl<F: JoltField> EngineRelation<F> for ReshapeRelation {}
+impl<F: JoltField> TieRelation<F> for FlatCopyRelation {}

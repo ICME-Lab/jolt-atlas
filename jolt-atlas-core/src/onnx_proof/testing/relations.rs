@@ -33,17 +33,14 @@ use crate::{
     onnx_proof::{
         fused_rebase,
         ops::{
-            concat::ConcatRelation,
             cube::CubeRelation,
             div::DivRelation,
             einsum::{dot::EinsumDotProver, ContractionRelation},
             iff::IffRelation,
             mean_of_squares::{MeanOfSquaresReductionProver, MeanOfSquaresRelation},
             mul::MulRelation,
-            reshape::ReshapeRelation,
             rsqrt::RsqrtRelation,
             scalar_const_div::ConstantDivisionRelation,
-            slice::SliceRelation,
             square::SquareRelation,
             sum::axis::SumAxisRelation,
         },
@@ -425,13 +422,6 @@ fn check_engine<R: RelationWitnesses<Fr>>(
 fn relation_prover_equiv_dense() {
     let cases: Vec<SingleNodeCase> = vec![
         (vec![(vec![4, 8], SMALL)], |b, i| {
-            b.reshape(i[0], vec![8, 4])
-        }),
-        (vec![(vec![4, 8], SMALL)], |b, i| b.slice(i[0], 1, 2, 7)),
-        (vec![(vec![4, 8], SMALL), (vec![4, 2], SMALL)], |b, i| {
-            b.concat(&[i[0], i[1]], 1)
-        }),
-        (vec![(vec![4, 8], SMALL)], |b, i| {
             b.sum(i[0], vec![1], vec![4])
         }),
         (vec![(vec![4, 8], SMALL)], |b, i| {
@@ -449,39 +439,9 @@ fn relation_prover_equiv_dense() {
             .collect();
         let open = |i: usize, point: &[Fr]| operands[i].evaluate(point);
         match node.operator {
-            Op::Reshape(_) => check_dense(
-                || {
-                    ReshapeRelation::for_node(&model, node.clone())
-                        .expect("the model\'s nodes have the shapes their ops prove")
-                },
-                &trace,
-                &node,
-                &open,
-                rng,
-            ),
-            Op::Slice(_) => check_dense(
-                || {
-                    SliceRelation::for_node(&model, node.clone())
-                        .expect("the model\'s nodes have the shapes their ops prove")
-                },
-                &trace,
-                &node,
-                &open,
-                rng,
-            ),
             Op::Sum(_) => check_dense(
                 || {
                     SumAxisRelation::for_node(&model, node.clone())
-                        .expect("the model\'s nodes have the shapes their ops prove")
-                },
-                &trace,
-                &node,
-                &open,
-                rng,
-            ),
-            Op::Concat(_) => check_dense(
-                || {
-                    ConcatRelation::for_node(&model, node.clone())
                         .expect("the model\'s nodes have the shapes their ops prove")
                 },
                 &trace,
@@ -567,5 +527,162 @@ fn relation_prover_equiv_contraction() {
         let mut prover =
             EinsumDotProver::initialize(&trace, RelationParams::at(relation(), setup.clone()));
         assert_matches_reference(&mut prover, &relation(), &setup, &open, &challenges);
+    }
+}
+
+/// The three layout ties hold on models compiled with padding: for a Reshape, an aligned Slice
+/// and an aligned Concat over dims that are not powers of two, the output's extension at a
+/// random point is the tie's combination of the operands' extensions at its opening points.
+#[test]
+fn layout_ties_hold_on_padded_models() {
+    use crate::onnx_proof::ops::{
+        concat::SubcubeTilingRelation, reshape::FlatCopyRelation, slice::SubcubeSelectRelation,
+    };
+    use atlas_algebra::poly::multilinear::EvaluateMle;
+    use atlas_sumcheck::relation::RelationDerived;
+    use rand::Rng;
+
+    type Build = Box<dyn Fn(&mut ModelBuilder, &[usize]) -> usize>;
+    let mut rng = StdRng::seed_from_u64(0x7_1E5);
+    for _ in 0..60 {
+        let lead = rng.gen_range(1..7usize);
+        let other = rng.gen_range(1..7usize);
+        let (inputs, build): (Vec<Vec<usize>>, Build) = match rng.gen_range(0..3) {
+            // `[lead, 2^k] -> [lead·2^j, 2^(k−j)]`: the inner axes are powers of two.
+            0 => {
+                let k = rng.gen_range(1..4u32);
+                let j = rng.gen_range(0..=k);
+                let shape = vec![lead << j, 1 << (k - j)];
+                (
+                    vec![vec![lead, 1 << k]],
+                    Box::new(move |b, i| b.reshape(i[0], shape.clone())),
+                )
+            }
+            // A power-of-two extent at a multiple of itself, on a random axis.
+            1 => {
+                let size = rng.gen_range(2..10usize);
+                let extent = 1 << rng.gen_range(0..=size.ilog2());
+                let start = extent * rng.gen_range(0..size / extent);
+                let axis = rng.gen_range(0..2usize);
+                let mut dims = vec![other, other];
+                dims[axis] = size;
+                (
+                    vec![dims],
+                    Box::new(move |b, i| b.slice(i[0], axis, start, start + extent)),
+                )
+            }
+            // Operands whose padded extents tile the padded axis.
+            _ => {
+                let layouts: [&[usize]; 6] = [
+                    &[4, 4],
+                    &[4, 3],
+                    &[8, 4, 4],
+                    &[8, 4, 3],
+                    &[2, 2, 2, 2],
+                    &[4, 2, 1, 1],
+                ];
+                let extents = layouts[rng.gen_range(0..layouts.len())];
+                let axis = rng.gen_range(0..2usize);
+                let dims = extents
+                    .iter()
+                    .map(|&extent| {
+                        let mut dims = vec![other, other];
+                        dims[axis] = extent;
+                        dims
+                    })
+                    .collect();
+                (dims, Box::new(move |b, i| b.concat(i, axis as isize)))
+            }
+        };
+        let mut b = ModelBuilder::new();
+        let wires: Vec<usize> = inputs.iter().map(|d| b.input(d.clone())).collect();
+        let node = build(&mut b, &wires);
+        b.mark_output(node);
+        let model = b.build_padded();
+        let values: Vec<Tensor<i32>> = inputs
+            .iter()
+            .map(|d| Tensor::random_range(&mut rng, d, SMALL))
+            .collect();
+        let trace = model.trace(&values).expect("honest execution");
+        let node = model.view(node);
+        let LayerData { operands, output } = TraceView::layer_data(&trace, &node);
+
+        let r = random_point(&mut rng, node.pow2_padded_num_output_elements().log_2());
+        let setup = RelationSetup {
+            incoming_point: r.clone(),
+            challenges: Vec::new(),
+        };
+        let expect = "a model compiled with padding has the dims the ties hold for";
+        let (points, coefficients): (Vec<Vec<Fr>>, Vec<Fr>) = match &node.operator {
+            Op::Reshape(_) => {
+                FlatCopyRelation::for_node(&model, node.clone()).expect(expect);
+                (vec![r.clone()], vec![Fr::from_u64(1)])
+            }
+            Op::Slice(op) => {
+                let relation =
+                    SubcubeSelectRelation::for_node(&model, node.clone(), op).expect(expect);
+                (
+                    vec![relation.operand_point(&r).expect(expect)],
+                    vec![Fr::from_u64(1)],
+                )
+            }
+            Op::Concat(op) => {
+                let relation =
+                    SubcubeTilingRelation::for_node(&model, node.clone(), op).expect(expect);
+                let coefficients = (0..operands.len())
+                    .map(|i| {
+                        relation
+                            .derive(&RelationDerived::BlockEq(i), &setup, &[])
+                            .expect(expect)
+                    })
+                    .collect();
+                (relation.operand_points(&r).expect(expect), coefficients)
+            }
+            other => panic!("not a layout op: {other}"),
+        };
+        let combined: Fr = operands
+            .iter()
+            .zip(&points)
+            .zip(&coefficients)
+            .map(|((operand, point), coefficient)| *coefficient * operand.evaluate_mle(point))
+            .sum();
+        assert_eq!(
+            output.evaluate_mle(&r),
+            combined,
+            "{} over {inputs:?}",
+            node.operator
+        );
+    }
+}
+
+/// The verifier rejects, on its own, a model whose layout ops do not have the dims and the
+/// alignment their ties hold for: such a model was not compiled with padding.
+#[test]
+fn layout_ops_outside_their_ties_are_rejected() {
+    use crate::node_view::check_model_shape;
+
+    let cases: Vec<(&str, SingleNodeCase)> = vec![
+        (
+            "is not a power of two",
+            (vec![(vec![10, 10], SMALL)], |b, i| {
+                b.reshape(i[0], vec![20, 5])
+            }),
+        ),
+        (
+            "start 8 is not a multiple of the extent 32",
+            (vec![(vec![64], SMALL)], |b, i| b.slice(i[0], 0, 8, 40)),
+        ),
+        (
+            "offset 4 is not a multiple of the operand extent 8",
+            (
+                vec![(vec![4], SMALL), (vec![8], SMALL), (vec![4], SMALL)],
+                |b, i| b.concat(i, 0),
+            ),
+        ),
+    ];
+    for (reason, (dims, build)) in cases {
+        let (model, ..) = single_node(0x7_1E6, &dims, build);
+        let err = check_model_shape(&model).expect_err("the model is outside the ties");
+        assert!(err.to_string().contains(reason), "{err}");
     }
 }

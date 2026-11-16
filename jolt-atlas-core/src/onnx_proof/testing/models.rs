@@ -245,9 +245,11 @@ fn tables_and_layout(seed: u64) -> ProbeModel {
     // Raw (un-rescaled) cube must stay inside i32: erf is ±2^14 wide.
     let e_small = b.scalar_const_div(e, 1 << 10);
     let cu = b.cube(e_small, 0);
-    let cat = b.concat(&[n, cu, sg], 0);
-    let sl = b.slice(cat, 0, 8, 40);
-    let rs = b.reshape(sl, vec![4, 8]);
+    // Three operands tiling the axis (16 + 8 + 8), two of them slices, one at a nonzero start.
+    let cu_tail = b.slice(cu, 0, 8, 16);
+    let sg_head = b.slice(sg, 0, 0, 8);
+    let cat = b.concat(&[n, cu_tail, sg_head], 0);
+    let rs = b.reshape(cat, vec![4, 8]);
     let mv = b.moveaxis(rs, 0, 1);
     let head = b.slice(x, 0, 0, 4);
     let head_row = b.reshape(head, vec![1, 4]);

@@ -11,7 +11,6 @@ use super::{
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
-    clamp_split::BucketSplit,
     deferred_lookups::DeferredBatch,
     global_clamp::BucketWitnesses,
     ops::{Addresses, Deferred, OperatorProver},
@@ -96,11 +95,6 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
             .unwrap_or_else(|| {
                 panic!("node {node_idx}: the {key:?} addresses were not left by their lookup")
             })
-    }
-
-    /// A live clamp bucket's split witness.
-    pub fn clamp_split(&self, bucket_idx: usize) -> &BucketSplit {
-        self.buckets.clamp_split(bucket_idx)
     }
 }
 

@@ -82,15 +82,14 @@ fn op_name(model: &Model, idx: usize) -> String {
 }
 
 /// Signed two's-complement width that holds every value of `q`.
-fn needed_bits(q: &[i64]) -> usize {
+fn needed_bits(q: &[i32]) -> usize {
     let max = q.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
-    (u64::BITS - max.leading_zeros()) as usize + 1
+    (u32::BITS - max.leading_zeros()) as usize + 1
 }
 
 /// Committed-digit census and value-magnitude audit from one trace, without
 /// proving (Phase 2 of `docs/measurement-plan.md`).
 fn census(model: &Model, inputs: &[Tensor<i32>]) {
-    use jolt_atlas_core::onnx_proof::clamp_lookups::clamp_intermediate;
     use jolt_atlas_core::onnx_proof::ops::NodeCommittedPolynomials;
     use jolt_atlas_core::onnx_proof::trace_view::TraceView;
     use std::collections::BTreeMap;
@@ -120,8 +119,8 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     };
 
     // 1. Committed columns, as the prover commits them: the packed bucket polynomials (dense
-    //    `OUT` and remainder digit columns, one-hot slack chunks) and the per-node polynomials.
-    //    A row is one cycle; a one-hot row has K = 16 cells, a dense digit row one.
+    //    digit columns of the range claims) and the per-node polynomials. A row is one cycle;
+    //    a one-hot row has K = 16 cells, a dense digit row one.
     #[derive(Default)]
     struct Fam {
         polys: usize,
@@ -193,114 +192,38 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         total_rows * 4
     );
 
-    // 2. Clamp audit: static width vs the width the traced quotient needs, and
-    //    the saturation count; rows by width for the row check.
-    println!(
-        "clamp audit per node (op, static w, needed w, saturated/elems, row width): nodes with \
-         needed > 32 or saturation only"
-    );
-    let widths = [16usize, 20, 24, 28, 32, 36, 40, 48];
-    let thresholds = [80usize, 112, 176, 1024, 4096];
-    // Output rows per element in 4-bit units, whatever the static width: 8 (`OUT = out + 2^31`
-    // is 32 bits, committed as `num_out_digits` dense digits); the w/4 slack chunks are empty
-    // off saturated rows.
-    let out_chunks = jolt_atlas_core::onnx_proof::clamp_split::OUT_LOG_K / 4;
-    let mut digits_today = 0usize;
-    let mut digits_observed = 0usize; // output chunks at the needed width
-    let mut overflow_nodes = [0usize; 8];
-    let mut overflow_elems = [0usize; 8];
-    let mut digits_at = [0usize; 8]; // nodes under w' at w', others at today's width
+    // 2. Output audit: the width each range-checked output needs against the 32 bits its
+    //    range claim commits (`out + 2^31`, 16 base-4 digits per element).
     let mut needed_hist: BTreeMap<(String, usize), usize> = BTreeMap::new();
-    let mut rows_by_thr = [0usize; 5];
-    let mut digits_by_thr = [0usize; 5];
-    let mut saturated_total = 0usize;
+    let mut digits_committed = 0usize;
+    let mut digits_needed = 0usize;
     let mut elems_total = 0usize;
     for n in &views {
-        let clamped = jolt_atlas_core::node_view::clamp_value_bound(model, n)
-            .expect("shape")
-            .is_some();
-        if !clamped {
+        if !jolt_atlas_core::onnx_proof::global_clamp::checks_its_output(model, n).expect("shape") {
             continue;
         }
-        let q = clamp_intermediate(n, &trace);
-        let q = q.data();
+        let out = trace.node_outputs[n.idx].data();
         let live = n.num_output_elements();
         let padded = n.pow2_padded_num_output_elements();
-        let needed = needed_bits(&q[..live.min(q.len())]);
-        let saturated = q
-            .iter()
-            .filter(|&&v| v > i32::MAX as i64 || v < i32::MIN as i64)
-            .count();
-        saturated_total += saturated;
+        let needed = needed_bits(&out[..live.min(out.len())]);
         elems_total += live;
-        let row_w = *n.output_dims.last().unwrap_or(&1);
-        let today = out_chunks;
-        digits_today += today * padded;
-        digits_observed += needed.div_ceil(4) * padded;
-        for (k, &w) in widths.iter().enumerate() {
-            let bound = 1i64 << (w - 1);
-            let over = q.iter().filter(|&&v| v >= bound || v < -bound).count();
-            if over > 0 {
-                overflow_nodes[k] += 1;
-                overflow_elems[k] += over;
-                digits_at[k] += today * padded;
-            } else {
-                digits_at[k] += (w / 4) * padded;
-            }
-        }
-        for (k, &thr) in thresholds.iter().enumerate() {
-            if row_w >= thr {
-                rows_by_thr[k] += padded / row_w.max(1);
-                digits_by_thr[k] += today * padded;
-            }
-        }
+        digits_committed += 16 * padded;
+        digits_needed += needed.div_ceil(2) * padded;
         *needed_hist
             .entry((op_name(model, n.idx), needed))
             .or_default() += 1;
-        if needed > 32 || saturated > 0 {
-            println!(
-                "  node {:<5} {:<14} static {:>2} needed {:>2} sat {}/{} row {}",
-                n.idx,
-                op_name(model, n.idx),
-                n.sat_clamp_bits,
-                needed,
-                saturated,
-                live,
-                row_w
-            );
-        }
     }
-    println!("needed width histogram (op, bits) -> nodes:");
+    println!("range-checked outputs, needed width histogram (op, bits) -> nodes:");
     for ((op, bits), c) in &needed_hist {
         println!("  {op:<16} {bits:>2} bits  x{c}");
     }
     println!(
-        "saturated elements: {saturated_total} of {elems_total}; clamp output chunk rows today 2^{:.1} \
-         (8 per element), at observed widths 2^{:.1} ({:.2}x)",
-        (digits_today as f64).log2(),
-        (digits_observed as f64).log2(),
-        digits_today as f64 / digits_observed.max(1) as f64
+        "range-checked elements: {elems_total}; output digit rows 2^{:.1} (16 per element), at \
+         the needed widths 2^{:.1} ({:.2}x)",
+        (digits_committed as f64).log2(),
+        (digits_needed as f64).log2(),
+        digits_committed as f64 / digits_needed.max(1) as f64
     );
-    println!(
-        "per-op clamp width w' -> nodes/elements that exceed it, output chunk rows (x vs today):"
-    );
-    for (k, &w) in widths.iter().enumerate() {
-        println!(
-            "  w'={w:>2}: {:>4} nodes, {:>9} elems over; cells 2^{:.1} ({:.2}x)",
-            overflow_nodes[k],
-            overflow_elems[k],
-            (digits_at[k] as f64).log2(),
-            digits_today as f64 / digits_at[k].max(1) as f64
-        );
-    }
-    println!("output chunk rows on rows of width >= threshold (rows, share):");
-    for (k, &thr) in thresholds.iter().enumerate() {
-        println!(
-            "  >= {thr:>4}: rows {:>8}  cells {:>5.1}%",
-            rows_by_thr[k],
-            100.0 * digits_by_thr[k] as f64 / digits_today.max(1) as f64
-        );
-    }
 
     // 3. Softmax: spread of the lookup address `c - x` over live lanes.
     println!("softmax rows: spread of (c - x) over live lanes:");
@@ -389,10 +312,9 @@ fn tokenize(model_dir: &std::path::Path, text: &str) -> Vec<i32> {
     encoding.get_ids().iter().map(|&id| id as i32).collect()
 }
 
-/// Per-operator histogram of the statically derived saturating-clamp widths,
-/// the packed lookup buckets, and the largest nodes.
+/// The model's nodes, the packed range buckets, and the largest nodes.
 fn print_stats(model: &Model) {
-    use jolt_atlas_core::onnx_proof::global_clamp::{clamp_buckets, remainder_buckets};
+    use jolt_atlas_core::onnx_proof::global_clamp::remainder_buckets;
     println!("{}", model.pretty_print());
     println!(
         "max num vars: {}",
@@ -407,33 +329,13 @@ fn print_stats(model: &Model) {
             .unwrap()
             .to_string()
     };
-    let mut hist: std::collections::BTreeMap<(String, usize), usize> = Default::default();
-    for node in &model.views() {
-        if jolt_atlas_core::node_view::clamp_value_bound(model, node)
-            .expect("the model's nodes have the shapes their ops prove")
-            .is_some()
-        {
-            *hist
-                .entry((op_name(node.idx), node.sat_clamp_bits))
-                .or_default() += 1;
-        }
-    }
-    println!("saturating-clamp widths (op, bits) -> nodes:");
-    for ((op, bits), n) in hist {
-        println!("  {op:<16} {bits:>2} bits  x{n}");
-    }
-    println!("packed buckets (kind idx width log_t nodes | largest node):");
-    let remainders =
-        remainder_buckets(model).expect("the model's remainders have bounds the buckets check");
-    for b in clamp_buckets(model)
-        .expect("the model's nodes have the shapes their ops prove")
-        .iter()
-        .chain(remainders.iter())
+    println!("range buckets (idx width log_t members | largest member):");
+    for b in
+        &remainder_buckets(model).expect("the model's range claims have bounds the buckets check")
     {
         let big = b.nodes.iter().max_by_key(|n| n.log_t).unwrap();
         println!(
-            "  {:?} #{:<3} w={:<2} log_t={:<2} nodes={:<4} | node {} {} log_t={}",
-            b.kind,
+            "  #{:<3} w={:<2} log_t={:<2} members={:<4} | node {} {} log_t={}",
             b.idx,
             b.width,
             b.log_t,

@@ -139,7 +139,7 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
     /// [`DeferredBatch`] order.
     #[tracing::instrument(skip_all, name = "Verifier::run_deferred")]
     pub fn run_deferred(&mut self) -> Result<(), ProofVerifyError> {
-        let plan = deferred_lookups::plan(self.preprocessing.model(), self.io)?;
+        let plan = deferred_lookups::plan(self.preprocessing.model())?;
         self.run_steps(DEFERRED_PROOF_IDX, None, plan.0)?;
         let mut queue = std::mem::take(&mut self.deferred);
         for batch in DeferredBatch::ALL {
@@ -414,7 +414,7 @@ pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentSchem
 
         // Commitments are in sorted `CommittedPoly` order (the prover's
         // `poly_map`); the joint opening covers the opened subset.
-        let mut committed = pp.shared.get_models_committed_polynomials(verifier.io)?;
+        let mut committed = pp.shared.get_models_committed_polynomials()?;
         committed.sort();
         if committed.len() != proof.commitments().len() {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(

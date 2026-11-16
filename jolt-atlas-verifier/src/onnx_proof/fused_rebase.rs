@@ -61,16 +61,15 @@ pub fn fuses_rebase(node: &ComputationNode) -> bool {
     rebase_bits(node).is_some_and(|b| b > 0)
 }
 
-/// The arithmetic relation's input expression: `q(r₀)·2^S + rem(r₀)` over the
-/// node's pre-clamp quotient and remainder advice, or the reduced output opening when the node
-/// does not fuse a rescale.
+/// The arithmetic relation's input expression: `out(r₀)·2^S + rem(r₀)` over the node's reduced
+/// output (the rescaled quotient) and its remainder advice, or the reduced output opening
+/// alone when the node does not fuse a rescale.
 pub fn input_expression<F: Ring>(node: &ComputationNode) -> RelationExpr<F> {
     let ids = OpeningIdBuilder::new(node);
     match rebase_bits(node) {
         Some(bits) if bits > 0 => {
-            let quotient = ids.advice(VirtualPoly::ClampAcc);
             let remainder = ids.advice(VirtualPoly::RescaleRemainder);
-            constant(F::pow2(bits as usize)) * opening(RelationOpening::Id(quotient))
+            constant(F::pow2(bits as usize)) * opening(RelationOpening::ReducedNodeOutput(node.idx))
                 + opening(RelationOpening::Id(remainder))
         }
         _ => opening(RelationOpening::ReducedNodeOutput(node.idx)),

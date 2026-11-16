@@ -1,7 +1,7 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     ops::sum::axis::SumAxisRelation,
-    plan::{clamp_steps, OpPlan, OpRelation, Plan, Step},
+    plan::{OpPlan, OpRelation, Plan, Step},
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -29,16 +29,14 @@ impl OpPlan for Sum {
         &self,
         node: &ComputationNode,
         model: &Model,
-        io: &ModelExecutionIO,
+        _io: &ModelExecutionIO,
     ) -> Result<Plan, ProofVerifyError> {
-        let mut steps = vec![Step::Reduce];
-        // (1) `output = SatClamp(acc)`.
-        steps.extend(clamp_steps(node, model, io));
-        // (2) Axis reduction.
-        steps.push(Step::Relation {
-            proof: ProofType::SumReduction,
-            relation: OpRelation::SumAxis(SumAxisRelation::for_node(model, node.clone())?),
-        });
-        Ok(Plan(steps))
+        Ok(Plan(vec![
+            Step::Reduce,
+            Step::Relation {
+                proof: ProofType::SumReduction,
+                relation: OpRelation::SumAxis(SumAxisRelation::for_node(model, node.clone())?),
+            },
+        ]))
     }
 }

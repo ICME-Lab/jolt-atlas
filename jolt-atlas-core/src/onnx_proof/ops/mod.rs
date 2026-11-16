@@ -79,17 +79,14 @@ pub mod sum;
 use crate::node_view::ComputationNode;
 
 use atlas_algebra::{
-    field::JoltField,
-    poly::{multilinear::EvaluateMle, point::OpeningPoint},
-    utils::thread::drop_in_background_thread,
+    field::JoltField, poly::multilinear::EvaluateMle, utils::thread::drop_in_background_thread,
 };
 use atlas_sumcheck::evaluation_reduction::EvalReductionProof;
 use atlas_transcript::Transcript;
 use eval_reduction::NodeEvalReduction;
 
 use crate::onnx_proof::{
-    clamp_lookups::{clamp_intermediate, SaturatingAccClampOperands},
-    clamp_split::{self, SplitParams, SplitProver, ValueParams, ValueProver},
+    clamp_split::{self, ValueParams, ValueProver},
     deferred_lookups::{DeferredBatch, DeferredSetup, DEFERRED_PROOF_IDX},
     fused_rebase::rebase_remainder,
     neural_teleport::{
@@ -128,7 +125,6 @@ use atlas_lookup_tables::{
     relu::ReluTable,
     right_shift::RightShiftTable,
 };
-use atlas_sumcheck::booleanity::BooleanitySumcheckParams;
 use atlas_sumcheck::digit_range::DigitRangeParams;
 use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
@@ -315,22 +311,11 @@ enum Prepared<F: JoltField, T: Transcript> {
     /// Witnesses built already.
     Ready(Vec<Box<dyn DynRelationWitness<F, T>>>),
     /// A one-hot check's parameters and its lookup's read addresses.
-    OneHot(RaOneHotParams<F>, Vec<usize>),
-    /// A clamp bucket's split (or, when exact, value) sumcheck parameters.
-    ClampValue(ClampValueParams<F>, usize),
-    /// A clamp bucket's digit range-check parameters.
-    ClampDigits(DigitRangeParams<F>, usize),
-    /// A saturated clamp bucket's slack chunk-check parameters.
-    ClampSlack(BooleanitySumcheckParams<F>, usize),
-    /// A remainder bucket's value sumcheck parameters.
+    OneHot(Box<RaOneHotParams<F>>, Vec<usize>),
+    /// A range bucket's value sumcheck parameters.
     RemainderValue(ValueParams<F>, usize),
-    /// A remainder bucket's digit range-check parameters.
+    /// A range bucket's digit range-check parameters.
     RemainderDigits(DigitRangeParams<F>, usize),
-}
-
-enum ClampValueParams<F: JoltField> {
-    Split(SplitParams<F>),
-    Exact(ValueParams<F>),
 }
 
 /// The span a deferred relation's witness build runs under, so a batch's time stays
@@ -358,7 +343,6 @@ fn witness_kind(relation: &OpRelation) -> &'static str {
         OpRelation::GatherLargeOneHot(_)
         | OpRelation::GatherSmallOneHot(_)
         | OpRelation::GatherSmallHammingWeight(_) => "gather_one_hot",
-        OpRelation::ClampBucketSlack(_) => "clamp_slack",
         _ => "node",
     }
 }
@@ -380,7 +364,7 @@ fn prepare<F: JoltField, T: Transcript>(
         let challenges = shout::ra_onehot_challenges::<F, T>(encoding, &mut prover.transcript);
         let params = shout::ra_onehot_params(encoding, &prover.accumulator, challenges)
             .expect("the prover holds the one-hot checks' claims");
-        Prepared::OneHot(params, prover.take_addresses(key, node_idx))
+        Prepared::OneHot(Box::new(params), prover.take_addresses(key, node_idx))
     }
     let prepared = match relation {
         OpRelation::LookupOneHot(kind @ OpLookup::Relu, node) => onehot(
@@ -430,44 +414,6 @@ fn prepare<F: JoltField, T: Transcript>(
             node.idx,
             prover,
         ),
-        OpRelation::ClampBucketValue(bucket) => {
-            let params = if prover.clamp_split(bucket.idx).saturated() {
-                ClampValueParams::Split(
-                    SplitParams::draw(&bucket, &prover.accumulator, &mut prover.transcript)
-                        .expect(expect),
-                )
-            } else {
-                ClampValueParams::Exact(
-                    clamp_split::exact_value_params(
-                        &bucket,
-                        &prover.accumulator,
-                        &mut prover.transcript,
-                    )
-                    .expect(expect),
-                )
-            };
-            Prepared::ClampValue(params, bucket.idx)
-        }
-        OpRelation::ClampBucketDigits(bucket) => Prepared::ClampDigits(
-            clamp_split::digit_range_params(&bucket, &prover.accumulator, &mut prover.transcript)
-                .expect(expect),
-            bucket.idx,
-        ),
-        OpRelation::ClampBucketSlack(bucket) => {
-            if !prover.clamp_split(bucket.idx).saturated() {
-                // Exact bucket: no slack check (the verifier reads the exact flag).
-                return (kind, Prepared::Ready(Vec::new()));
-            }
-            Prepared::ClampSlack(
-                clamp_split::chunk_check_params::<F, T>(
-                    &bucket,
-                    &prover.accumulator,
-                    &mut prover.transcript,
-                )
-                .expect(expect),
-                bucket.idx,
-            )
-        }
         OpRelation::RemainderBucketValue(bucket) => Prepared::RemainderValue(
             clamp_split::remainder_value_params(
                 &bucket,
@@ -524,23 +470,7 @@ fn build_one<F: JoltField, T: Transcript>(
     match prepared {
         Prepared::Ready(witnesses) => witnesses,
         Prepared::OneHot(params, indices) => {
-            shout::prover::ra_onehot_provers_from_params::<F, T>(params, &indices).into()
-        }
-        Prepared::ClampValue(params, bucket) => {
-            let split = buckets.clamp_split(bucket);
-            vec![match params {
-                ClampValueParams::Split(p) => {
-                    Box::new(SplitProver::new(p, split)) as Box<dyn DynRelationWitness<F, T>>
-                }
-                ClampValueParams::Exact(p) => Box::new(ValueProver::new(p, split.out_values()))
-                    as Box<dyn DynRelationWitness<F, T>>,
-            }]
-        }
-        Prepared::ClampDigits(params, bucket) => {
-            clamp_split::digit_range_provers::<F, T>(params, buckets.clamp_split(bucket))
-        }
-        Prepared::ClampSlack(params, bucket) => {
-            clamp_split::chunk_check_provers::<F, T>(params, buckets.clamp_split(bucket))
+            shout::prover::ra_onehot_provers_from_params::<F, T>(*params, &indices).into()
         }
         Prepared::RemainderValue(params, bucket) => {
             vec![Box::new(ValueProver::new(
@@ -771,9 +701,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         one_hot @ (OpRelation::LookupOneHot(..)
         | OpRelation::SmallActivationOneHot(_)
         | OpRelation::TrigOneHot(..)
-        | OpRelation::ClampBucketValue(_)
-        | OpRelation::ClampBucketDigits(_)
-        | OpRelation::ClampBucketSlack(_)
         | OpRelation::RemainderBucketValue(_)
         | OpRelation::RemainderBucketDigits(_)) => {
             let prepared = prepare(one_hot, prover);
@@ -793,15 +720,6 @@ fn trig_downscaled(node: &ComputationNode, trace: &atlas_trace::Trace) -> atlas_
 fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F, T>) {
     let expect = "the prover holds every claim it reads";
     match open {
-        OpOpen::ClampAcc(node) => {
-            let witness = clamp_intermediate(node, &prover.trace);
-            OpLookupProvider::with_helper(node.clone(), SaturatingAccClampOperands::for_node(node))
-                .append_witness_claim_for(
-                    &witness,
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-        }
         OpOpen::RescaleRemainder(node) => {
             let remainder = rebase_remainder(node, &prover.trace);
             let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
@@ -846,21 +764,10 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
             &mut prover.accumulator,
             &mut prover.transcript,
         ),
-        OpOpen::ClampExactFlag(bucket_idx) => {
-            let exact = !prover.clamp_split(*bucket_idx).saturated();
-            prover.accumulator.append_virtual(
-                &mut prover.transcript,
-                clamp_split::exact_flag_id(*bucket_idx),
-                OpeningPoint::new(Vec::<F>::new()),
-                if exact { F::one() } else { F::zero() },
-            );
-        }
     }
 }
 
-/// Append a plan tie's produced openings with the prover's claims. An in-the-clear check
-/// (an exact output, a bucket's exact flag) produces nothing here: its
-/// openings are earlier steps'.
+/// Append a plan tie's produced openings with the prover's claims.
 fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prover<F, T>) {
     let expect = "the prover holds every claim it reads";
     let Prover {
@@ -901,6 +808,5 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
                 .append_nodeio(Target::Input(0), a_claim);
         }
         OpTie::Softmax(tie) => softmax_last_axis::prove_tie(tie, trace, accumulator, transcript),
-        OpTie::ExactClampOutput(_) | OpTie::ClampBucketExact(_) => {}
     }
 }

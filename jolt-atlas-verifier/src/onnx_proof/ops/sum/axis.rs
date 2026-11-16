@@ -22,7 +22,6 @@ use atlas_algebra::{field::JoltField, poly::multilinear::BindingOrder, utils::ma
 use atlas_claims::{opening, SymbolicSumcheck};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_transcript::Transcript;
-use common::VirtualPoly;
 
 /// A sum node with its normalized 2D shape and axis.
 pub struct SumShape {
@@ -99,9 +98,7 @@ impl SymbolicSumcheck for SumAxisRelation {
     }
 
     fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::Id(
-            self.ids().advice(VirtualPoly::ClampAcc),
-        ))
+        opening(RelationOpening::ReducedNodeOutput(self.shape.node.idx))
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {

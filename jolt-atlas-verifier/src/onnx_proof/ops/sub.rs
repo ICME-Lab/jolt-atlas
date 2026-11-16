@@ -21,9 +21,9 @@ impl OpPlan for Sub {
     fn plan(
         &self,
         node: &ComputationNode,
-        model: &Model,
-        io: &ModelExecutionIO,
+        _model: &Model,
+        _io: &ModelExecutionIO,
     ) -> Result<Plan, ProofVerifyError> {
-        Ok(accumulation_plan::<Sub>(node, model, io))
+        Ok(accumulation_plan::<Sub>(node))
     }
 }

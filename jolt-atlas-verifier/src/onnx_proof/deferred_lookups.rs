@@ -5,22 +5,22 @@
 //! needs to run in the node loop: a plan step [`Step::Defer`](super::plan::Step::Defer) queues
 //! the read for [`DeferredBatch::Lookups`] and its one-hot check for
 //! [`DeferredBatch::OneHot`], and each batch is proven as one batched sumcheck after the loop.
-//! The saturating clamps and the rescale remainders are packed into model-level buckets
-//! ([`global_clamp`](super::global_clamp)); [`plan`] builds their steps from the model and the
-//! public IO, with nothing to register during the loop, and they run before the two batches.
+//! The range claims (remainders, their slacks, the outputs of the arithmetic nodes) are packed
+//! into model-level buckets ([`global_clamp`](super::global_clamp)); [`plan`] builds their steps
+//! from the model, with nothing to register during the loop, and they run before the two
+//! batches.
 //!
 //! The prover walks the same plan (`jolt_atlas_core::onnx_proof::deferred_lookups`), proving
 //! every batch with `prove_relation_batch_parallel`: instance messages are computed in parallel
 //! across instances, which turns hundreds of tiny sequential sumchecks into a few large
 //! parallel ones.
 use crate::onnx_proof::{
-    clamp_split,
-    global_clamp::{clamp_buckets, remainder_buckets, ClampBucket},
-    plan::{OpOpen, OpRelation, OpTie, Plan, Step},
+    global_clamp::remainder_buckets,
+    plan::{OpRelation, Plan, Step},
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
-use atlas_trace::{trace::ModelExecutionIO, Model};
+use atlas_trace::Model;
 
 /// Node index under which the deferred (model-wide) lookup proofs are stored.
 pub const DEFERRED_PROOF_IDX: usize = usize::MAX;
@@ -36,12 +36,12 @@ pub enum DeferredSetup {
 
 /// A batch of sumcheck instances proven after the node loop as one batched sumcheck. Batches
 /// run in this enum's order, after the bucket plan: a one-hot check reads the read-address
-/// claim a member of [`Self::Lookups`], a node's own read or the clamp split batch produces.
+/// claim a member of [`Self::Lookups`] or a node's own read produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DeferredBatch {
     /// Every table read whose sumcheck produces only its own read-address claim.
     Lookups,
-    /// Every one-hot check of a read address, and the clamp buckets' slack chunk checks.
+    /// Every one-hot check of a read address.
     OneHot,
 }
 
@@ -67,62 +67,23 @@ impl DeferredBatch {
     }
 }
 
-/// The post-loop plan over the packed clamp and remainder buckets, from the model and the
-/// public IO: per live clamp bucket its exact flag and the exact check, then the bucket value
-/// sumchecks as one batch and the `OUT` digit range checks as a second, with each bucket's
-/// slack chunk check queued for [`DeferredBatch::OneHot`] (it yields no relation when the
-/// bucket is exact); then the remainder buckets' value sumchecks and their digit range checks.
-/// A clamp bucket is live when one of its nodes is not an unsaturated model output (those tie
-/// `acc = out` in their own turn). The deferred batches follow, run by the interpreter from
-/// its queue.
-pub fn plan(model: &Model, io: &ModelExecutionIO) -> Result<Plan, ProofVerifyError> {
+/// The post-loop plan over the packed range buckets, from the model: their value sumchecks as
+/// one batch, then their digit range checks as a second. The deferred batches follow, run by
+/// the interpreter from its queue.
+pub fn plan(model: &Model) -> Result<Plan, ProofVerifyError> {
     let mut steps = Vec::new();
-    let buckets: Vec<ClampBucket> = clamp_buckets(model)?
-        .iter()
-        .filter_map(|bucket| {
-            clamp_split::live_bucket(bucket, |idx| {
-                !clamp_split::exact_output_verifier(model, io, idx)
-            })
-        })
-        .collect();
+    let buckets = remainder_buckets(model)?;
     if !buckets.is_empty() {
-        for bucket in &buckets {
-            steps.push(Step::Open(OpOpen::ClampExactFlag(bucket.idx)));
-            steps.push(Step::Tie {
-                relation: OpTie::ClampBucketExact(bucket.clone()),
-            });
-        }
-        steps.push(Step::Batch {
-            proof: ProofType::DeferredClampSplit,
-            relations: buckets
-                .iter()
-                .map(|bucket| OpRelation::ClampBucketValue(bucket.clone()))
-                .collect(),
-        });
-        steps.push(Step::Batch {
-            proof: ProofType::DeferredClampDigitRange,
-            relations: buckets
-                .iter()
-                .map(|bucket| OpRelation::ClampBucketDigits(bucket.clone()))
-                .collect(),
-        });
-        steps.extend(buckets.into_iter().map(|bucket| Step::Defer {
-            batch: DeferredBatch::OneHot,
-            relation: OpRelation::ClampBucketSlack(bucket),
-        }));
-    }
-    let rbuckets = remainder_buckets(model)?;
-    if !rbuckets.is_empty() {
         steps.push(Step::Batch {
             proof: ProofType::DeferredRemainderRC,
-            relations: rbuckets
+            relations: buckets
                 .iter()
                 .map(|bucket| OpRelation::RemainderBucketValue(bucket.clone()))
                 .collect(),
         });
         steps.push(Step::Batch {
             proof: ProofType::DeferredRemainderDigitRange,
-            relations: rbuckets
+            relations: buckets
                 .into_iter()
                 .map(OpRelation::RemainderBucketDigits)
                 .collect(),

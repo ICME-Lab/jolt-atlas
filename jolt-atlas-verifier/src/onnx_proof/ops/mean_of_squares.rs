@@ -39,7 +39,7 @@ use crate::{
     atlas_relation_types,
     node_view::ComputationNode,
     onnx_proof::{
-        plan::{clamp_steps, OpOpen, OpPlan, OpRelation, Plan, Step},
+        plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
         relation::{
             reduced_output_setup, AtlasRelation, RelationDerived, RelationExpr, RelationId,
             RelationOpening, RelationSetup,
@@ -76,19 +76,17 @@ impl OpPlan for MeanOfSquares {
     fn plan(
         &self,
         node: &ComputationNode,
-        model: &Model,
-        io: &ModelExecutionIO,
+        _model: &Model,
+        _io: &ModelExecutionIO,
     ) -> Result<Plan, ProofVerifyError> {
-        let mut steps = vec![
+        Ok(Plan(vec![
             Step::Reduce,
             Step::Open(OpOpen::RescaleRemainder(node.clone())),
-        ];
-        steps.extend(clamp_steps(node, model, io));
-        steps.push(Step::Relation {
-            proof: ProofType::RescaleArith,
-            relation: OpRelation::MeanOfSquares(MeanOfSquaresRelation::new(node.clone())),
-        });
-        Ok(Plan(steps))
+            Step::Relation {
+                proof: ProofType::RescaleArith,
+                relation: OpRelation::MeanOfSquares(MeanOfSquaresRelation::new(node.clone())),
+            },
+        ]))
     }
 }
 
@@ -177,9 +175,9 @@ impl SymbolicSumcheck for MeanOfSquaresRelation {
     fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
         // The setup rejects a node without a reduction, so the zero is never proven against.
         let divisor = self.reduction.map_or(0, |(divisor, _)| divisor);
-        let rescaled = self.ids().advice(VirtualPoly::ClampAcc);
         let remainder = self.ids().advice(VirtualPoly::RescaleRemainder);
-        constant(F::from_u64(divisor as u64)) * opening(RelationOpening::Id(rescaled))
+        constant(F::from_u64(divisor as u64))
+            * opening(RelationOpening::ReducedNodeOutput(self.node.idx))
             + opening(RelationOpening::Id(remainder))
     }
 

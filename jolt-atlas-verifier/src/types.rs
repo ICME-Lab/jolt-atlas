@@ -37,7 +37,7 @@ impl Canonical for ProofId {
 /// Type of sumcheck proof for different operations in the neural network.
 ///
 /// The `u8` discriminants are part of the serialization format: a variant keeps its number, and
-/// the numbers of deleted variants (1 to 8, 11, 13, 15, 17 to 25) stay
+/// the numbers of deleted variants (1 to 8, 11, 13 to 15, 17 to 26) stay
 /// free; a proof carrying one does not deserialize. Every variant is emitted by the prover for some checked-in model
 /// (`proof_types_all_exercised`).
 #[repr(u8)]
@@ -57,14 +57,8 @@ pub enum ProofType {
     /// proving `acc(r) = rescaled·2^S + R` (the clamp of `rescaled` is proven in
     /// the node's packed clamp bucket; the einsum analogue is `EinsumMatmul`).
     RescaleArith = 12,
-    /// All clamp buckets' interior/saturated split sumchecks, proven as one
-    /// batched sumcheck after the node loop (stored under `DEFERRED_PROOF_IDX`;
-    /// see `clamp_split`).
-    DeferredClampSplit = 14,
     /// All remainder buckets' value sumchecks (opening each bucket's packed remainder), batched.
     DeferredRemainderRC = 16,
-    /// All live clamp buckets' `OUT` digit range checks, batched.
-    DeferredClampDigitRange = 26,
     /// All remainder buckets' digit range checks, batched.
     DeferredRemainderDigitRange = 27,
     /// Every deferred table read (`DeferredBatch::Lookups`), as one batched sumcheck.
@@ -92,9 +86,7 @@ impl TryFrom<u8> for ProofType {
             9 => Ok(Self::SumReduction),
             10 => Ok(Self::EinsumMatmul),
             12 => Ok(Self::RescaleArith),
-            14 => Ok(Self::DeferredClampSplit),
             16 => Ok(Self::DeferredRemainderRC),
-            26 => Ok(Self::DeferredClampDigitRange),
             27 => Ok(Self::DeferredRemainderDigitRange),
             28 => Ok(Self::DeferredLookups),
             29 => Ok(Self::DeferredOneHot),

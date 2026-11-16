@@ -186,25 +186,20 @@ fn consumers(nodes: &[ComputationNode], node: usize) -> Vec<&ComputationNode> {
 }
 
 #[test]
-fn fused_product_reads_its_advice_by_node_id() {
+fn fused_product_reads_its_output_and_remainder() {
     let (_, muls) = mul_nodes();
     let fused = muls
         .iter()
         .find(|n| fused_rebase::fuses_rebase(n))
         .expect("a fused product");
-    let advice = |poly: fn(usize) -> VirtualPoly| {
-        RelationOpening::Id(OpeningId::new(
-            poly(fused.idx),
-            SumcheckId::NodeExecution(fused.idx),
-        ))
-    };
+    let remainder = RelationOpening::Id(OpeningId::new(
+        VirtualPoly::RescaleRemainder(fused.idx),
+        SumcheckId::NodeExecution(fused.idx),
+    ));
     let input = openings(&MulRelation::new(fused.clone()).input_expression::<Fr>());
     assert_eq!(
         input,
-        vec![
-            advice(VirtualPoly::ClampAcc),
-            advice(VirtualPoly::RescaleRemainder)
-        ]
+        vec![RelationOpening::ReducedNodeOutput(fused.idx), remainder]
     );
 }
 

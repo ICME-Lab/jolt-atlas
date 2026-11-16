@@ -47,7 +47,7 @@ use crate::onnx_proof::{
         self,
         digit_tamper::{self, DigitTamper, DigitTamperForm},
     },
-    global_clamp::{clamp_buckets, remainder_buckets, BucketKind, BucketWitnesses},
+    global_clamp::{remainder_buckets, BucketWitnesses},
     proof_serialization::serialize_proof,
     prove, prove_from_trace, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing,
     AtlasVerifierPreprocessing, ONNXProof,
@@ -256,13 +256,11 @@ enum WitnessSite {
         field: &'static str,
         elem: usize,
     },
-    /// A bucket's digits (a live clamp bucket's `OUT`, a remainder bucket's value) at the first
-    /// cycle of its first live `node`, tampered through [`digit_tamper`] (the trace holds no
-    /// digits). The trace is unchanged, so neither neutrality rule applies: the verifier must
-    /// reject.
+    /// A range bucket's digits at a cycle of member `node`, tampered through [`digit_tamper`]
+    /// (the trace holds no digits). The trace is unchanged, so no neutrality rule applies: the
+    /// verifier must reject.
     BucketDigit {
         node: usize,
-        kind: BucketKind,
         bucket: usize,
         cycle: usize,
         form: DigitTamperForm,
@@ -311,35 +309,16 @@ fn probe_elems(len: usize, all: bool) -> Vec<usize> {
 
 fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
     let mut sites = vec![];
-    let live_clamp = clamp_buckets(model)
-        .expect("bucket layout")
-        .into_iter()
-        .filter_map(|bucket| {
-            clamp_split::live_bucket(&bucket, |idx| {
-                !clamp_split::exact_output_prover(model, trace, idx)
-            })
-        });
-    let remainders = remainder_buckets(model).expect("remainder layout");
     let bucket_witnesses = BucketWitnesses::build(model, trace);
-    for bucket in live_clamp.chain(remainders) {
-        // Every member of a remainder bucket is its own range claim; a clamp bucket's nodes
-        // share one statement, so its first node stands for it.
-        let members = match bucket.kind {
-            BucketKind::Remainder => &bucket.nodes[..],
-            BucketKind::Clamp => &bucket.nodes[..1],
-        };
-        for member in members {
+    for bucket in remainder_buckets(model).expect("bucket layout") {
+        let (values, _) = bucket_witnesses.remainder_values(bucket.idx);
+        // Every member is its own range claim.
+        for member in &bucket.nodes {
             // The keep-value form moves a digit above the least significant one, so it needs a
-            // cell that has one: a remainder member whose values are all below the digit base
-            // (a saturated softmax's remainders are all zero) gets the raise-top form only.
-            let keep_value_cycle = match bucket.kind {
-                BucketKind::Clamp => Some(member.offset),
-                BucketKind::Remainder => {
-                    let (values, _) = bucket_witnesses.remainder_values(bucket.idx);
-                    (member.offset..member.offset + (1 << member.log_t))
-                        .find(|&t| values[t] >= clamp_split::DIGIT_BASE)
-                }
-            };
+            // cell that has one: a member whose values are all below the digit base gets the
+            // raise-top form only.
+            let keep_value_cycle = (member.offset..member.offset + (1 << member.log_t))
+                .find(|&t| values[t] >= clamp_split::DIGIT_BASE);
             let forms = [
                 (DigitTamperForm::KeepValue, keep_value_cycle),
                 (DigitTamperForm::RaiseTop, Some(member.offset)),
@@ -348,7 +327,6 @@ fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
                 if let Some(cycle) = cycle {
                     sites.push(WitnessSite::BucketDigit {
                         node: member.idx,
-                        kind: bucket.kind,
                         bucket: bucket.idx,
                         cycle,
                         form,
@@ -462,13 +440,11 @@ fn apply_witness(trace: &mut Trace, site: &WitnessSite) {
             bump_advice(aux, field, *elem, 1);
         }
         WitnessSite::BucketDigit {
-            kind,
             bucket,
             cycle,
             form,
             ..
         } => digit_tamper::set(Some(DigitTamper {
-            kind: *kind,
             bucket: *bucket,
             cycle: *cycle,
             form: *form,

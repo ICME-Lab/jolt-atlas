@@ -15,8 +15,7 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    clamp_lookups::{acc_opening_id, SaturatingAccClampOperands},
-    clamp_split::{self, SplitParams, ValueParams},
+    clamp_split::{self, ValueParams},
     deferred_lookups::DeferredBatch,
     fused_rebase,
     global_clamp::ClampBucket,
@@ -61,7 +60,7 @@ use crate::onnx_proof::{
     ProofType,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_algebra::{field::JoltField, poly::point::OpeningPoint, utils::errors::ProofVerifyError};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable, SiluClampTable},
@@ -69,7 +68,7 @@ use atlas_lookup_tables::{
     right_shift::RightShiftTable,
 };
 use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, PolynomialId, VerifierOpeningAccumulator},
+    opening_proof::{PolynomialId, VerifierOpeningAccumulator},
     relation::DynRelationVerifier,
     shout,
 };
@@ -208,15 +207,6 @@ pub enum OpRelation {
     Trig(OpTrig, ComputationNode),
     /// The one-hot checks of a [`Self::Trig`]'s read addresses (two relations).
     TrigOneHot(OpTrig, ComputationNode),
-    /// A packed clamp bucket's value relation: the split sumcheck, or the exact value sumcheck
-    /// when the bucket's exact flag is set.
-    ClampBucketValue(ClampBucket),
-    /// A packed clamp bucket's digit range check: `OUT`'s digit columns in range and
-    /// recomposing `OUT`.
-    ClampBucketDigits(ClampBucket),
-    /// A packed clamp bucket's slack chunk check (Booleanity, Hamming weight `IND`, value `S`);
-    /// no relation when the bucket's exact flag is set.
-    ClampBucketSlack(ClampBucket),
     /// A packed remainder bucket's value relation: the range claims of its members
     /// ([`global_clamp::RangeClaim`](crate::onnx_proof::global_clamp::RangeClaim)).
     RemainderBucketValue(ClampBucket),
@@ -414,32 +404,6 @@ impl OpRelation {
                 transcript,
             )?
             .into()),
-            Self::ClampBucketValue(bucket) => Ok(boxed_value(
-                if clamp_split::exact_flag(&bucket, accumulator)? {
-                    Box::new(ValueParams::into_verifier(clamp_split::exact_value_params(
-                        &bucket,
-                        accumulator,
-                        transcript,
-                    )?))
-                } else {
-                    Box::new(SplitParams::into_verifier(SplitParams::draw(
-                        &bucket,
-                        accumulator,
-                        transcript,
-                    )?)?)
-                },
-            )),
-            Self::ClampBucketDigits(bucket) => Ok(boxed(
-                clamp_split::digit_range_params(&bucket, accumulator, transcript)?.into_verifier(),
-            )),
-            Self::ClampBucketSlack(bucket) => {
-                if clamp_split::exact_flag(&bucket, accumulator)? {
-                    return Ok(Vec::new());
-                }
-                Ok(clamp_split::chunk_check_verifiers::<F, T>(
-                    clamp_split::chunk_check_params::<F, T>(&bucket, accumulator, transcript)?,
-                ))
-            }
             Self::RemainderBucketValue(bucket) => Ok(boxed(ValueParams::into_verifier(
                 clamp_split::remainder_value_params(&bucket, accumulator, transcript)?,
             ))),
@@ -449,12 +413,6 @@ impl OpRelation {
             )),
         }
     }
-}
-
-fn boxed_value<F: JoltField, T: Transcript>(
-    verifier: Box<dyn DynRelationVerifier<F, T>>,
-) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
-    vec![verifier]
 }
 
 /// A zero-round relation or an in-the-clear check, as a plan step holds it.
@@ -485,16 +443,10 @@ pub enum OpTie {
     SubAccumulation(AccumulationRelation<Sub>),
     /// `IsNan`: the output is zero.
     ZeroOutput(ZeroOutputRelation),
-    /// A model output node whose public output is unsaturated: the pre-clamp accumulation
-    /// equals the output.
-    ExactClampOutput(ComputationNode),
     /// A trig op's input is `P·q + r` over its teleport quotient and remainder claims.
     TeleportInput(TeleportInputRelation),
     /// A softmax in-the-clear check, as `ops::softmax_last_axis` lists them.
     Softmax(SoftmaxTie),
-    /// A packed clamp bucket's exact flag is a bit, and when set every live node of the bucket
-    /// has its pre-clamp accumulation equal to its output.
-    ClampBucketExact(ClampBucket),
 }
 
 impl OpTie {
@@ -518,35 +470,14 @@ impl OpTie {
             Self::Slice(relation) => verify_tie(relation, accumulator, transcript),
             Self::SubAccumulation(relation) => verify_tie(relation, accumulator, transcript),
             Self::ZeroOutput(relation) => verify_tie(relation, accumulator, transcript),
-            Self::ExactClampOutput(node) => {
-                let acc = accumulator
-                    .get_virtual_polynomial_opening(acc_opening_id(node.idx))?
-                    .1;
-                let out = accumulator.get_node_output_opening(node.idx)?.1;
-                if acc != out {
-                    return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                        "output node {}: unsaturated public output must equal the pre-clamp accumulation",
-                        node.idx
-                    )));
-                }
-                Ok(())
-            }
             Self::TeleportInput(relation) => relation.verify(accumulator, transcript),
             Self::Softmax(tie) => tie.verify(accumulator, transcript),
-            Self::ClampBucketExact(bucket) => {
-                if clamp_split::exact_flag(bucket, accumulator)? {
-                    clamp_split::verify_exact_nodes(bucket, accumulator)?;
-                }
-                Ok(())
-            }
         }
     }
 }
 
 /// Advice openings a plan step appends; the point is stated, the claim is the proof's.
 pub enum OpOpen {
-    /// The node's pre-clamp accumulation (`ClampAcc`) at the node's output point.
-    ClampAcc(ComputationNode),
     /// A fused node's rescale remainder at the reduced output point.
     RescaleRemainder(ComputationNode),
     /// A trig op's teleport quotient at the reduced output point.
@@ -557,8 +488,6 @@ pub enum OpOpen {
     SmoothReluRelu(ComputationNode),
     /// A softmax opening, as `ops::softmax_last_axis` lists them.
     Softmax(SoftmaxOpen),
-    /// A packed clamp bucket's exact flag, at the empty point.
-    ClampExactFlag(usize),
 }
 
 impl OpOpen {
@@ -580,11 +509,6 @@ impl OpOpen {
             accessor.into_provider(transcript, r0).append_advice(poly)
         }
         match self {
-            Self::ClampAcc(node) => OpLookupProvider::with_helper(
-                node.clone(),
-                SaturatingAccClampOperands::for_node(node),
-            )
-            .append_witness_claim_verifier(accumulator, transcript),
             Self::RescaleRemainder(node) => {
                 at_reduced_output(node, accumulator, transcript, VirtualPoly::RescaleRemainder)
             }
@@ -601,50 +525,22 @@ impl OpOpen {
                 at_reduced_output(node, accumulator, transcript, VirtualPoly::SmoothReluRelu)
             }
             Self::Softmax(open) => open.verify(accumulator, transcript),
-            Self::ClampExactFlag(bucket_idx) => accumulator.append_virtual(
-                transcript,
-                clamp_split::exact_flag_id(*bucket_idx),
-                OpeningPoint::new(Vec::<F>::new()),
-            ),
         }
     }
 }
 
 /// The fused-rescale skeleton around an op's arithmetic relation (`Einsum`, `Mul`, `Square`,
-/// `Cube`): the remainder advice, the clamp of the pre-clamp quotient, the arithmetic
-/// sumcheck under `proof`, and the remainder's range check. A node without a rescale
+/// `Cube`): the remainder advice, then the arithmetic sumcheck under `proof`, whose input claim
+/// is `out·2^S + rem`. The remainder, and the output unless the node is a model output, are
+/// range-checked in the packed buckets after the node loop. A node without a rescale
 /// (`bits == 0`) proves the arithmetic relation alone against its reduced output.
-pub fn fused_rescale_plan(
-    node: &ComputationNode,
-    model: &Model,
-    io: &ModelExecutionIO,
-    proof: ProofType,
-    relation: OpRelation,
-) -> Result<Plan, ProofVerifyError> {
+pub fn fused_rescale_plan(node: &ComputationNode, proof: ProofType, relation: OpRelation) -> Plan {
     let mut steps = vec![Step::Reduce];
-    let bits = fused_rebase::rebase_bits(node).filter(|&bits| bits > 0);
-    if bits.is_some() {
+    if fused_rebase::rebase_bits(node).is_some_and(|bits| bits > 0) {
         steps.push(Step::Open(OpOpen::RescaleRemainder(node.clone())));
-        steps.extend(clamp_steps(node, model, io));
-        steps.push(Step::Relation { proof, relation });
-        // The remainder is range-checked in its packed bucket after the node loop.
-    } else {
-        steps.push(Step::Relation { proof, relation });
     }
-    Ok(Plan(steps))
-}
-
-/// The steps that discharge `output = SatClamp(ClampAcc)` for a clamped node: the accumulation
-/// is opened; a model output node with an unsaturated public output ties `acc = out`, and every
-/// other node is proven in its packed clamp bucket after the node loop.
-pub fn clamp_steps(node: &ComputationNode, model: &Model, io: &ModelExecutionIO) -> Vec<Step> {
-    let mut steps = vec![Step::Open(OpOpen::ClampAcc(node.clone()))];
-    if clamp_split::exact_output_verifier(model, io, node.idx) {
-        steps.push(Step::Tie {
-            relation: OpTie::ExactClampOutput(node.clone()),
-        });
-    }
-    steps
+    steps.push(Step::Relation { proof, relation });
+    Plan(steps)
 }
 
 /// Bind a plan-verified op with no committed polynomials: `$relation` (a relation of the plan)

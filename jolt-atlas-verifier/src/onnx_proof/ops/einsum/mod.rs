@@ -54,15 +54,13 @@ impl OpPlan for Einsum {
         &self,
         node: &ComputationNode,
         model: &Model,
-        io: &ModelExecutionIO,
+        _io: &ModelExecutionIO,
     ) -> Result<Plan, ProofVerifyError> {
-        fused_rescale_plan(
+        Ok(fused_rescale_plan(
             node,
-            model,
-            io,
             ProofType::EinsumMatmul,
             OpRelation::Contraction(ContractionRelation::for_node(model, node.clone())?),
-        )
+        ))
     }
 }
 

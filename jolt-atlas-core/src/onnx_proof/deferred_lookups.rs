@@ -1,4 +1,4 @@
-//! The post-loop plan on the prover's side: the packed clamp and remainder buckets, then the
+//! The post-loop plan on the prover's side: the packed range buckets, then the
 //! deferral queue, each batch proven as one batched sumcheck with
 //! `prove_relation_batch_parallel`. The plan itself is the verifier's
 //! ([`plan`](jolt_atlas_verifier::onnx_proof::deferred_lookups::plan)); the bucket witnesses
@@ -21,13 +21,10 @@ pub fn prove_all<F: JoltField, T: Transcript>(
     proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
 ) {
     let model = prover.preprocessing.model();
-    let plan = plan(model, &prover.io).expect("the model's nodes have the shapes their ops prove");
+    let plan = plan(model).expect("the model's nodes have the shapes their ops prove");
     let (_, bucket_proofs) = prove_steps(prover, DEFERRED_PROOF_IDX, None, plan.0);
     proofs.extend(bucket_proofs);
-    // The slack chunk checks in the one-hot batch read the clamp splits; the remainder values
-    // have no reader left.
-    drop_in_background_thread(std::mem::take(&mut prover.buckets.remainder_values));
+    drop_in_background_thread(std::mem::take(&mut prover.buckets));
 
     proofs.extend(prove_deferred_batches(prover));
-    drop_in_background_thread(std::mem::take(&mut prover.buckets));
 }

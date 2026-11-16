@@ -3,7 +3,7 @@ use crate::onnx_proof::relation::Produces;
 use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     onnx_proof::{
-        plan::{clamp_steps, OpPlan, OpTie, Plan, Step},
+        plan::{OpPlan, OpTie, Plan, Step},
         relation::{
             AtlasRelation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
             RelationOpening, RelationSetup, TieRelation,
@@ -21,7 +21,6 @@ use atlas_trace::{
     Model,
 };
 use atlas_transcript::Transcript;
-use common::VirtualPoly;
 use std::marker::PhantomData;
 
 crate::impl_plan_op!(Add, AccumulationRelation<Add>);
@@ -48,10 +47,10 @@ impl OpPlan for Add {
     fn plan(
         &self,
         node: &ComputationNode,
-        model: &Model,
-        io: &ModelExecutionIO,
+        _model: &Model,
+        _io: &ModelExecutionIO,
     ) -> Result<Plan, ProofVerifyError> {
-        Ok(accumulation_plan::<Add>(node, model, io))
+        Ok(accumulation_plan::<Add>(node))
     }
 }
 
@@ -80,19 +79,15 @@ impl AccumulationShape for Sub {
     }
 }
 
-/// The plan of a saturating `left ± right`: the evaluation reduction, then the clamp steps and
-/// the accumulation tie.
-pub fn accumulation_plan<S: AccumulationShape>(
-    node: &ComputationNode,
-    model: &Model,
-    io: &ModelExecutionIO,
-) -> Plan {
-    let mut steps = vec![Step::Reduce];
-    steps.extend(clamp_steps(node, model, io));
-    steps.push(Step::Tie {
-        relation: S::accumulation_tie(node),
-    });
-    Plan(steps)
+/// The plan of `left ± right`: the evaluation reduction, then the tie of the output to the
+/// operands. The output is range-checked in the packed buckets after the node loop.
+pub fn accumulation_plan<S: AccumulationShape>(node: &ComputationNode) -> Plan {
+    Plan(vec![
+        Step::Reduce,
+        Step::Tie {
+            relation: S::accumulation_tie(node),
+        },
+    ])
 }
 
 /// The pre-clamp accumulation of a saturating `left ± right`, a tie at the output
@@ -146,9 +141,7 @@ impl<S: AccumulationShape> SymbolicSumcheck for AccumulationRelation<S> {
     }
 
     fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::Id(
-            self.ids().advice(VirtualPoly::ClampAcc),
-        ))
+        opening(RelationOpening::ReducedNodeOutput(self.node.idx))
     }
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {

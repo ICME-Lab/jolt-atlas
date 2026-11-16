@@ -13,7 +13,6 @@ use atlas_transcript::{Transcript, VerifyingTranscript};
 
 // ── Submodules ───────────────────────────────────────────────────────────
 
-pub mod clamp_lookups;
 pub mod clamp_split;
 pub mod deferred_lookups;
 pub mod fused_rebase;

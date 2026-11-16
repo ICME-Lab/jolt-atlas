@@ -1,5 +1,5 @@
-//! The packed clamp buckets ([`global_clamp`](crate::onnx_proof::global_clamp),
-//! [`clamp_split`]): what a bucket commits for a given statement.
+//! The packed range buckets ([`global_clamp`](crate::onnx_proof::global_clamp)): what they hold
+//! and commit for a model.
 
 use atlas_pcs::akita::AkitaScheme;
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
@@ -8,59 +8,54 @@ use atlas_transcript::Blake2bProver;
 use rand::{rngs::StdRng, SeedableRng};
 
 use super::{models::probe_models, prove_verify_roundtrip, ModelBuilder, RoundtripOptions};
-use crate::node_view::{clamp_value_bound, ModelView};
+use crate::node_view::ModelView;
 use crate::onnx_proof::{
-    clamp_split,
     deferred_lookups::DEFERRED_PROOF_IDX,
-    global_clamp::{clamp_buckets, remainder_buckets},
+    global_clamp::{checks_its_output, remainder_buckets, Remainder},
     prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
-/// A clamp bucket whose nodes are all unsaturated model outputs proves nothing through its
-/// columns (each node ties `acc = out` in its own turn), so it commits nothing: it is absent from
-/// the committed-polynomial list for its statement, the prover commits exactly that list, and
-/// the proof verifies.
+/// A model output is a public `i32` tensor, so it is never a bucket member, whatever its values,
+/// and the committed polynomials are a function of the model: the prover commits the same list
+/// for an execution whose output holds `i32::MAX` as for any other, and both proofs verify.
 #[test]
-fn exact_output_bucket_commits_nothing() {
-    let mut rng = StdRng::seed_from_u64(0xB0C7);
+fn model_outputs_are_not_range_checked() {
     let mut b = ModelBuilder::new();
-    let x = b.input(vec![256]);
-    let c = b.constant(Tensor::random_small(&mut rng, &[256]));
-    let out = b.mul(x, c);
+    let x = b.input(vec![4]);
+    let y = b.input(vec![4]);
+    let hidden = b.add(x, y);
+    let out = b.add(hidden, y);
     b.mark_output(out);
     let model = b.build();
-    let inputs = vec![Tensor::random_small(&mut rng, &[256])];
 
-    let io = model.trace(&inputs).expect("honest execution").io(&model);
-    assert!(
-        clamp_split::exact_output_verifier(&model, &io, out),
-        "the clamped output is unsaturated"
-    );
-    let buckets = clamp_buckets(&model).expect("bucket layout");
-    let bucket = buckets
+    let buckets = remainder_buckets(&model).expect("bucket layout");
+    let members: Vec<usize> = buckets
         .iter()
-        .find(|bucket| bucket.nodes.iter().any(|n| n.idx == out))
-        .expect("the clamped output has a bucket");
-    assert!(bucket.nodes.iter().all(|n| n.idx == out));
+        .flat_map(|bucket| bucket.nodes.iter().map(|n| n.idx))
+        .collect();
+    assert_eq!(members, vec![hidden], "the hidden sum only");
 
     let shared = AtlasSharedPreprocessing::preprocess(model.clone());
     let committed = shared
-        .get_models_committed_polynomials(&io)
+        .get_models_committed_polynomials()
         .expect("committed list");
-    for poly in bucket.committed_polys() {
-        assert!(
-            !committed.contains(&poly),
-            "{poly:?} is committed for a bucket with nothing to check"
-        );
-    }
     let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(shared);
-    let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &inputs);
-    assert_eq!(proof.commitments().len(), committed.len());
-
-    prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
+    let tensor = |values: [i32; 4]| Tensor::from_slice(&values, &[4]).unwrap();
+    for inputs in [
+        vec![tensor([1, -2, 3, -4]), tensor([5, 6, -7, 8])],
+        vec![tensor([i32::MAX, 0, i32::MIN, -1]), tensor([0, 0, 0, 0])],
+    ] {
+        let io = model.trace(&inputs).expect("honest execution").io(&model);
+        let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &inputs);
+        assert_eq!(proof.commitments().len(), committed.len());
+        prove_verify_roundtrip::<AkitaScheme>(model.clone(), &inputs, RoundtripOptions::default());
+        if inputs[0].data()[0] == i32::MAX {
+            assert_eq!(io.outputs[0].data()[0], i32::MAX);
+        }
+    }
 }
 
-/// A model with no table lookup and no clamped node proves nothing after the node loop: its
+/// A model with no table lookup and no range-checked value proves nothing after the node loop: its
 /// proof has no post-loop entry (a stray one would fail the drain check).
 #[test]
 fn lookup_free_model_has_no_post_loop_proof() {
@@ -83,8 +78,8 @@ fn lookup_free_model_has_no_post_loop_proof() {
     prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
 }
 
-/// The `scalars` probe model puts one-element nodes under the soundness sweeps: every clamped
-/// node is alone in a one-cell clamp bucket, the fused `Mul`'s remainder in a one-cell remainder
+/// The `scalars` probe model puts one-element nodes under the soundness sweeps: every range
+/// claim (the three hidden outputs and the fused `Mul`'s remainder) is alone in a one-cell
 /// bucket, and every value the digit tamper targets has a digit to move.
 #[test]
 fn scalars_probe_layout() {
@@ -94,50 +89,55 @@ fn scalars_probe_layout() {
         .expect("the scalars probe model");
     let model = probe.model;
     let trace = model.trace(&probe.inputs).expect("honest execution");
-    let outputs = model.output_indices();
-    let clamped: Vec<usize> = model
+    let checked: Vec<usize> = model
         .views()
         .iter()
-        .filter(|n| clamp_value_bound(&model, n).expect("shape").is_some())
+        .filter(|n| checks_its_output(&model, n).expect("shape"))
         .map(|n| n.idx)
+        .filter(|idx| !model.output_indices().contains(idx))
         .collect();
-    assert_eq!(clamped.len(), 4, "a Mul, two Adds and a Sub");
-
-    let buckets = clamp_buckets(&model).expect("bucket layout");
     assert_eq!(
-        buckets.len(),
-        clamped.len(),
-        "one bucket per one-element node"
+        checked.len(),
+        3,
+        "a Mul and two Adds; the Sub is the output"
     );
-    let remainders = remainder_buckets(&model).expect("remainder layout");
-    for bucket in buckets.iter().chain(&remainders) {
+
+    let buckets = remainder_buckets(&model).expect("bucket layout");
+    assert_eq!(buckets.len(), checked.len() + 1, "one bucket per claim");
+    for bucket in &buckets {
         assert_eq!(bucket.log_t, 0);
         assert_eq!(bucket.nodes.len(), 1);
         assert_eq!(bucket.nodes[0].log_t, 0);
     }
-    assert_eq!(remainders.len(), 1, "the fused Mul");
+    let output_claims = buckets
+        .iter()
+        .filter(|b| {
+            b.nodes[0]
+                .claim
+                .is_some_and(|c| c.remainder == Remainder::Output)
+        })
+        .count();
+    assert_eq!(output_claims, checked.len());
 
-    for &idx in clamped.iter().filter(|idx| !outputs.contains(idx)) {
+    for &idx in &checked {
         let out = i64::from(trace.node_outputs[idx].data()[0]);
         assert!(out + (1 << 31) >= 4, "node {idx}: OUT has no upper digit");
     }
 }
 
-/// Every remainder a probe model's nodes leave to be bounded is in exactly one remainder
-/// bucket, once per range claim.
+/// Every value a probe model's nodes leave to be bounded is in exactly one range bucket, once
+/// per range claim.
 #[test]
 fn every_range_claim_is_in_exactly_one_bucket() {
-    use crate::onnx_proof::global_clamp::{node_remainders, range_claims, RangeClaim};
+    use crate::onnx_proof::global_clamp::{node_range_claims, RangeClaim};
     let mut families = std::collections::BTreeSet::new();
     for probe in probe_models() {
         let model = probe.model;
         let mut expected: Vec<(usize, RangeClaim, usize)> = Vec::new();
         for node in &model.views() {
-            for (remainder, bound) in node_remainders(node).expect("bounds") {
-                families.insert(remainder);
-                for (claim, width) in range_claims(remainder, bound) {
-                    expected.push((node.idx, claim, width));
-                }
+            for (claim, width) in node_range_claims(&model, node).expect("bounds") {
+                families.insert(claim.remainder);
+                expected.push((node.idx, claim, width));
             }
         }
         let mut packed: Vec<(usize, RangeClaim, usize)> = remainder_buckets(&model)
@@ -160,8 +160,8 @@ fn every_range_claim_is_in_exactly_one_bucket() {
     }
     assert_eq!(
         families.len(),
-        8,
-        "the probe models hold every remainder family: {families:?}"
+        9,
+        "the probe models hold every range-claim family: {families:?}"
     );
 }
 
@@ -187,7 +187,7 @@ fn range_claim_rejects_a_bound_at_another_point() {
     let stage = |bound_point| {
         let mut accumulator = VerifierOpeningAccumulator::<Fp128>::new();
         accumulator.openings.insert(
-            Remainder::Div.opening_id(node),
+            Remainder::Div.opening_id(node).expect("an advice opening"),
             (point(1), Fp128::from_u64(2)),
         );
         accumulator

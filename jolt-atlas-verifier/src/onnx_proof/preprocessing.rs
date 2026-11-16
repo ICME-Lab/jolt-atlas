@@ -13,7 +13,7 @@
 use crate::node_view::ModelView;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_pcs::commitment_scheme::CommitmentScheme;
-use atlas_trace::{trace::ModelExecutionIO, Model};
+use atlas_trace::Model;
 use common::CommittedPoly;
 use serde::{Deserialize, Serialize};
 
@@ -37,14 +37,10 @@ impl AtlasSharedPreprocessing {
         Self { model }
     }
 
-    /// Get all committed polynomials a proof of the statement `io` commits: the model's
-    /// operations' and the packed buckets' (which depend on the public outputs, see
-    /// [`bucket_committed_polys`](crate::onnx_proof::global_clamp::bucket_committed_polys)).
+    /// Get all committed polynomials a proof commits: the model's operations' and the packed
+    /// range buckets'. A function of the model alone.
     /// `Err` if a node does not have the shape its operator proves.
-    pub fn get_models_committed_polynomials(
-        &self,
-        io: &ModelExecutionIO,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+    pub fn get_models_committed_polynomials(&self) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
         use crate::onnx_proof::ops::NodeCommittedPolynomials;
         let mut polys: Vec<CommittedPoly> = Vec::new();
         for node in &self.model.views() {
@@ -52,7 +48,6 @@ impl AtlasSharedPreprocessing {
         }
         polys.extend(crate::onnx_proof::global_clamp::bucket_committed_polys(
             &self.model,
-            io,
         )?);
         Ok(polys)
     }

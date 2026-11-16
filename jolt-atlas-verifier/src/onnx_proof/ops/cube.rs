@@ -17,15 +17,13 @@ impl OpPlan for Cube {
     fn plan(
         &self,
         node: &ComputationNode,
-        model: &Model,
-        io: &ModelExecutionIO,
+        _model: &Model,
+        _io: &ModelExecutionIO,
     ) -> Result<Plan, ProofVerifyError> {
-        fused_rescale_plan(
+        Ok(fused_rescale_plan(
             node,
-            model,
-            io,
             ProofType::RescaleArith,
             OpRelation::Cube(CubeRelation::new(node.clone())),
-        )
+        ))
     }
 }

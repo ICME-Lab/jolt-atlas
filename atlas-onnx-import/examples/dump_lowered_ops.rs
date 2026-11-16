@@ -1,5 +1,5 @@
-//! Print the lowered op inventory (op histogram + einsum equations) of a
-//! model — the conformance view of what statement would be proven.
+//! Print the lowered op inventory (op histogram, einsum equations, and the layout of every
+//! Slice and Concat) of a model — the conformance view of what statement would be proven.
 //!
 //! ```sh
 //! cargo run -p atlas-onnx-import --example dump_lowered_ops -- \
@@ -48,7 +48,30 @@ fn main() {
 
     let mut ops: BTreeMap<String, usize> = BTreeMap::new();
     let mut equations: BTreeMap<String, usize> = BTreeMap::new();
-    for node in &imported.model.graph().nodes {
+    let mut slices: BTreeMap<String, usize> = BTreeMap::new();
+    let mut concats: BTreeMap<String, usize> = BTreeMap::new();
+    let nodes = &imported.model.graph().nodes;
+    for node in nodes {
+        match &node.op {
+            Op::Slice(slice) => {
+                let extent = nodes[node.inputs[0].index()].output_dims[slice.axis];
+                let line = format!(
+                    "axis {} of {extent}: {}..{}",
+                    slice.axis, slice.start, slice.end
+                );
+                *slices.entry(line).or_default() += 1;
+            }
+            Op::Concat(concat) => {
+                let extents: Vec<usize> = node
+                    .inputs
+                    .iter()
+                    .map(|&input| nodes[input.index()].output_dims[concat.axis])
+                    .collect();
+                let line = format!("axis {}: {extents:?}", concat.axis);
+                *concats.entry(line).or_default() += 1;
+            }
+            _ => {}
+        }
         let key = match &node.op {
             Op::Einsum(e) => {
                 *equations.entry(e.equation.to_string()).or_default() += 1;
@@ -74,6 +97,18 @@ fn main() {
         println!("== einsum equations ==");
         for (eq, count) in &equations {
             println!("  {eq:<24} x{count}");
+        }
+    }
+    if !slices.is_empty() {
+        println!("== slices (axis of input extent: start..end) ==");
+        for (slice, count) in &slices {
+            println!("  {slice:<32} x{count}");
+        }
+    }
+    if !concats.is_empty() {
+        println!("== concats (operand extents on the axis) ==");
+        for (concat, count) in &concats {
+            println!("  {concat:<32} x{count}");
         }
     }
 }

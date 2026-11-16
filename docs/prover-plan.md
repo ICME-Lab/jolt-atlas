@@ -211,7 +211,7 @@ models (Bits Under ZK-LLM).
 
 Per-class Akita openings scale with the class count. After items 1–2 the classes change shape
 anyway; lay every committed polynomial on an aligned subcube of as few classes as the catalog
-allows (upstream's one-native-group layout, a16z/jolt #2012; `akita.rs` already uses aligned
+allows (upstream's one-native-group layout, a16z/jolt #2012; `atlas-pcs/src/akita/mod.rs` already uses aligned
 subcubes within a class). JaggedPCS is a different construction and would cost 0.4–0.6 s under
 our padding. The reduction sumcheck (1.8 s, 1,833 claims) shrinks with the IOP item below.
 
@@ -230,11 +230,15 @@ outputs are not digit-decomposed and keep a short local chain or gain a decompos
 shipped transformer prover does this (FlashProve runs ~2,000 sumchecks per request). Needs a
 relation compiler from the ONNX graph; a Phase 4 candidate after the range-check items.
 
-### 10. Engine (roadmap A, E) and the pin bump
+### 10. Engine (roadmap A, E) and the upstream kernel port
 
-- Bump the Jolt and Akita pins on a branch and re-run the baseline first; upstream's commit and
-  field kernels since the pin (#2255, #2211, #2191, #2145, #2188) are the cheapest speedup
-  available, and the open modulus change (#2379) will reach the vendored field.
+- Port upstream's field and commit kernels and re-run the baseline first. Nothing is vendored
+  any more (`docs/roadmap.md`): the field is `atlas-algebra::field`, taken from `jolt-field` at
+  `f3265b5a`, so upstream's kernel work since then (#2255, #2211, #2191, #2145, #2188) is a
+  port into our crate with `docs/upstream-inventory.md` as the diff base, and the open modulus
+  change (#2379) would be one too. The `akita-*` crates are still a git dependency (rev
+  `dfdbd767`); bumping that rev on a branch picks up the commit-side work. Together these are
+  the cheapest speedup available.
 - Einsum dot engine on `GruenSplitEqPolynomial`, `LowToHigh`, unreduced accumulation (A1), the
   row-major unreduced fold over unpadded extents (A2), a parallel allocation-free evaluation
   reduction (A3). Estimated 2–4x on their kernels, which are inside the 5.7 s IOP.
@@ -258,7 +262,7 @@ witness generation over the same data takes 0.8 s.
    today's.
 2. Item 2 in the same encoding. Item 4's declared widths as the `SemVersion` decision.
 3. Item 3's standalone relation test with the negative test; then on the MLP rows.
-4. The pin bump, in parallel on its own branch.
+4. The upstream kernel port and the `akita-*` rev bump, in parallel on their own branch.
 5. Items 5 and 7; one spec for item 6 (C1–C4 share machinery); item 8.
 6. Item 9's relation compiler as its own spec; item 10's microbenchmarks; item 11 any time.
 

@@ -18,14 +18,8 @@ def secs(tok):
     return float(m.group(1)) * UNITS[m.group(2)]
 
 
-def main():
-    path = sys.argv[1]
-    top = 40
-    flt = None
-    if "--top" in sys.argv:
-        top = int(sys.argv[sys.argv.index("--top") + 1])
-    if "--filter" in sys.argv:
-        flt = sys.argv[sys.argv.index("--filter") + 1]
+def aggregate(path, flt=None):
+    """Total busy seconds and count per innermost span, plus the log's summary lines."""
     busy = defaultdict(float)
     count = defaultdict(int)
     summary = []
@@ -33,7 +27,7 @@ def main():
         for line in f:
             line = ANSI.sub("", line)
             if re.match(r"^(prover setup|prove|verify|proof size|imported|model )", line) or (
-                "maximum resident" in line or line.strip().endswith(" sys") and " real " in line
+                "maximum resident" in line.lower() or line.strip().endswith(" sys") and " real " in line
             ):
                 summary.append(line.rstrip())
                 continue
@@ -45,11 +39,22 @@ def main():
             spans, b = m.group(1), m.group(2)
             # innermost span is the last `name{fields}` element of the path
             name = spans.split(":")[-1] if "{" not in spans.split(":")[-1] else spans[spans.rfind(":", 0, spans.rfind("{")) + 1 :]
-            name = re.sub(r"\{.*", lambda mm: mm.group(0), name)
             if flt and flt not in name:
                 continue
             busy[name] += secs(b)
             count[name] += 1
+    return summary, busy, count
+
+
+def main():
+    path = sys.argv[1]
+    top = 40
+    flt = None
+    if "--top" in sys.argv:
+        top = int(sys.argv[sys.argv.index("--top") + 1])
+    if "--filter" in sys.argv:
+        flt = sys.argv[sys.argv.index("--filter") + 1]
+    summary, busy, count = aggregate(path, flt)
     for s in summary:
         print(s)
     print()

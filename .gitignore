@@ -48,6 +48,9 @@ __pycache__/
 # benchmark binaries and raw span logs (docs/measurement-plan.md)
 bench/bin/
 bench/runs/**/*.log
+bench/runs/gate/
+# detached remote runs (scripts/remote.sh bg)
+remote-logs/
 !bench/runs/*-summary.log
 !bench/runs/census-*.txt
 !bench/runs/lowered-*.txt

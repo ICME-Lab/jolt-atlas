@@ -11,7 +11,9 @@ builds, not around questions: each build is done once and answers as many questi
 - **One Cargo invocation at a time**, across people and agents. Parallel invocations fight over
   the build lock.
 - **Never benchmark while anything else is compiling or proving.** Timings on a busy machine are
-  not usable. Reading and writing can overlap a build; measuring cannot.
+  not usable. Reading and writing can overlap a build; measuring cannot. A laptop in use
+  counts as busy: run gates on the benchmark machine (`scripts/remote.sh run 'bench/gate.sh ...'`,
+  `CLAUDE.md` "Remote runs") and compare only commits measured there together.
 - **Run built binaries directly** (`$CARGO_TARGET_DIR/release/examples/prove ...`), not through `cargo run`.
   `cargo run` re-checks the workspace every time and can trigger a rebuild after an unrelated edit.
 - **Keep a copy of every binary that produced a number.** Copy it out of `target/` with the commit

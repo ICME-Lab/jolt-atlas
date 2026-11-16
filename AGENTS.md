@@ -20,6 +20,13 @@ sumcheck-based protocols over multilinear polynomial commitments.
   run only the affected crate and filter (`cargo nextest run -p <crate> -E 'test(<name>)'`).
   Run `cargo nextest run --workspace` once, as the final check before reporting; each workspace
   run rebuilds and relinks every crate's test binaries at `opt-level = 3`.
+- Run expensive work on the benchmark machine, not the laptop, when one is configured
+  (`ssh atlas-bench true` succeeds, or `scripts/remote.sh up` starts it): the workspace test
+  run, the soundness sweeps, the real-model tests, release builds, and every timing run. The
+  laptop is in use while agents work, so its timings are not usable and a ten-minute build
+  there blocks the user. `scripts/remote.sh run '<command>'` copies the working tree
+  (uncommitted changes included) and runs the command there; see "Remote runs" below. Narrow
+  `cargo check` and single-filter test runs stay local.
 - Lead with the result. Report the checks actually run, their results, and any remaining blocker.
 - Before opening or updating a PR, read `CONTRIBUTING.md` and run `/clean-branch`.
 - Changes of 500+ non-trivial lines start with a spec in `specs/` (`/new-spec`, then
@@ -74,6 +81,31 @@ cargo run --release -p atlas-onnx-import --example dump_lowered_ops -- <model.on
 # Regenerating the tiny fixtures (changes weights → re-pin atlas-onnx-import/tests/golden_zoo.rs)
 .venv/bin/python scripts/gen_tiny_models.py
 ```
+
+### Remote runs
+
+`scripts/remote.sh` drives a remote machine through an SSH alias (`atlas-bench` by default,
+`ATLAS_REMOTE` to override); the machine's address and credentials live in the developer's own
+`~/.ssh/config`, never in the repository. It copies the tree with rsync, so nothing needs
+pushing, and leaves gitignored paths on the remote alone (`target/`, `bench/bin/`, models).
+
+```bash
+scripts/remote.sh up                                    # start the machine (it powers off when idle)
+scripts/remote.sh setup                                 # once: compiler, rustup, cargo-nextest
+scripts/remote.sh models                                # once: copy models/gpt2 (other dirs as arguments)
+scripts/remote.sh run 'cargo nextest run --workspace'   # sync, run, wait
+scripts/remote.sh bg sweeps 'JOLT_SOUNDNESS_EXHAUSTIVE=1 cargo nextest run -p jolt-atlas-core -E "test(soundness)"'
+scripts/remote.sh tail sweeps                           # follow a detached run
+scripts/remote.sh down                                  # stop it when done for the day
+
+# A performance gate: release `prove` at each commit, interleaved runs, per-stage medians and
+# the change against the first commit; exits 1 outside +3% time or +5% peak memory.
+scripts/remote.sh run 'bench/gate.sh <base> <commit>... --runs 3'
+scripts/remote.sh fetch bench/runs/gate                 # copy the raw logs back
+```
+
+Timings are comparable only between commits measured on the same machine in the same session;
+`docs/prover-plan.md`'s tables are from an M3 and are not comparable to the remote's.
 
 ## Architecture
 

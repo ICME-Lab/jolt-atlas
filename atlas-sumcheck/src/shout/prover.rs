@@ -52,26 +52,36 @@ impl<F: JoltField> ReadRafProver<F> {
     ) -> Self {
         let table_size = 1 << params.log_K;
         let E = EqPolynomial::evals(&params.r);
-        let G = lookup_indices
-            .par_iter()
-            .with_min_len(par_enabled())
-            .enumerate()
-            .fold(
-                || unsafe_allocate_zero_vec::<F>(table_size),
-                |mut local_G, (j, &lookup_index)| {
-                    local_G[lookup_index] += E[j];
-                    local_G
-                },
-            )
-            .reduce(
-                || unsafe_allocate_zero_vec::<F>(table_size),
-                |mut acc, local_G| {
-                    for (i, &val) in local_G.iter().enumerate() {
-                        acc[i] += val;
-                    }
-                    acc
-                },
-            );
+        // `G[a] = Σ_{j : address_j = a} eq(r, j)`. A parallel fold allocates one table-sized
+        // accumulator per split, which only pays when the lookups outnumber the table.
+        let G = if lookup_indices.len() <= table_size {
+            let mut G = unsafe_allocate_zero_vec::<F>(table_size);
+            for (j, &lookup_index) in lookup_indices.iter().enumerate() {
+                G[lookup_index] += E[j];
+            }
+            G
+        } else {
+            lookup_indices
+                .par_iter()
+                .with_min_len(table_size.max(par_enabled()))
+                .enumerate()
+                .fold(
+                    || unsafe_allocate_zero_vec::<F>(table_size),
+                    |mut local_G, (j, &lookup_index)| {
+                        local_G[lookup_index] += E[j];
+                        local_G
+                    },
+                )
+                .reduce(
+                    || unsafe_allocate_zero_vec::<F>(table_size),
+                    |mut acc, local_G| {
+                        for (i, &val) in local_G.iter().enumerate() {
+                            acc[i] += val;
+                        }
+                        acc
+                    },
+                )
+        };
         assert_eq!(
             tables.len(),
             params.table_weights().len(),

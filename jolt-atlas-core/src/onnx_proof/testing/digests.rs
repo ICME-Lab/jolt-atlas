@@ -57,8 +57,8 @@ fn digest_op_gauntlet() {
         "op_gauntlet",
         imported.model,
         &inputs,
-        "9e41536504e7d32ffc8e65e3a5b54a1a716d26d28b75253a427bef99277c71af",
-        "ca8cf0b598775aea959534b881f07bbc83c12336430e9e8bcfd689573431f9bf",
+        "b8230de2a65ced326e59000077bea3d679c72088e987e394e01b4930494f4201",
+        "c852f7bbb75dbbef56ca6d0557e4fd585a8cfe0391465d6d982401760eec7bca",
     );
 }
 

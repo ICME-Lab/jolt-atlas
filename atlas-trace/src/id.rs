@@ -81,6 +81,9 @@ impl std::fmt::Display for Scale {
 pub enum SemVersion {
     /// Initial deterministic integer semantics.
     V1,
+    /// The log-partition softmax ([`crate::semantics::softmax`]) in place of the max, exp-digit
+    /// and reciprocal one. Every other kernel and table is as in `V1`.
+    V2,
 }
 
 #[cfg(test)]

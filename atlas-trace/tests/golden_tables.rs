@@ -7,7 +7,10 @@
 
 use atlas_trace::{
     Scale, SemVersion,
-    semantics::tables::{TableKind, exp_lut_decomposed, table},
+    semantics::{
+        softmax::softmax_tables,
+        tables::{TableKind, exp_lut_decomposed, table},
+    },
 };
 
 /// FNV-1a 64-bit over a little-endian i32 stream (dependency-free and
@@ -78,6 +81,34 @@ fn golden_hashes_v1() {
         assert_eq!(
             got, expected,
             "softmax exp LUT at scale {scale} changed under SemVersion::V1: \
+             got {got:#018x}, pinned {expected:#018x}."
+        );
+    }
+}
+
+fn softmax_tables_hash(scale: u8) -> u64 {
+    let t = softmax_tables(Scale::new(scale).unwrap(), SemVersion::V2);
+    fnv1a(
+        t.out
+            .iter()
+            .chain(&t.sum)
+            .copied()
+            .chain([t.address_bits as i32]),
+    )
+}
+
+#[test]
+fn golden_hashes_v2_softmax() {
+    let cases: &[(u8, u64)] = &[
+        (8, 0xecf911aeeb9b0dd1),
+        (14, 0x0d77e4cd5f82b76e),
+        (15, 0x97f5bdf088b75992),
+    ];
+    for &(scale, expected) in cases {
+        let got = softmax_tables_hash(scale);
+        assert_eq!(
+            got, expected,
+            "softmax tables at scale {scale} changed under SemVersion::V2: \
              got {got:#018x}, pinned {expected:#018x}."
         );
     }

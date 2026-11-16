@@ -93,7 +93,7 @@ impl ActivationTable {
 /// to any entry for any input requires a new [`SemVersion`].
 pub fn table(kind: TableKind, scale: Scale, version: SemVersion) -> ActivationTable {
     match version {
-        SemVersion::V1 => {}
+        SemVersion::V1 | SemVersion::V2 => {}
     }
     match kind {
         TableKind::Tanh => sym_clamp_table(scale, tanh_entry),
@@ -265,7 +265,7 @@ pub struct ExpLutDecomposed {
 /// - `hi_size = needed/B + 2`.
 pub fn exp_lut_decomposed(scale: Scale, version: SemVersion) -> ExpLutDecomposed {
     match version {
-        SemVersion::V1 => {}
+        SemVersion::V1 | SemVersion::V2 => {}
     }
     let s = scale.denom_i64() as u128;
     let s_log = scale.log2();

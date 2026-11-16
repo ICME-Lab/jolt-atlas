@@ -21,12 +21,14 @@
 //!   rsqrt, and the trig period constants;
 //! - [`exp`] — the one fixed-point exponential core (`e^-x`, Q2.62);
 //! - [`trig`] — fixed-point sin/cos (quadrant reduction + Taylor);
+//! - [`softmax`] — the log-partition softmax tables and the row shift;
 //! - [`tables`] — lookup-table generation for every nonlinear op;
 //! - [`coeffs`] — the five committed constants with provenance.
 
 pub mod coeffs;
 pub mod exp;
 pub mod fixed;
+pub mod softmax;
 pub mod tables;
 pub mod trig;
 

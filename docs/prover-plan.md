@@ -262,15 +262,52 @@ witness generation over the same data takes 0.8 s.
 
 ### Order and gates
 
-1. Item 1 prototype on `gpt2-tiny` (test profile), then release and the Phase 1 run table
-   against `bench/bin/prove-25c7218f1`. This is the first protocol change and sets the encoding
-   everything else uses. **Gate:** total time per clamp digit (commit + sumchecks) below
-   today's.
-2. Item 2 in the same encoding. Item 4's declared widths as the `SemVersion` decision.
-3. Item 3's standalone relation test with the negative test; then on the MLP rows.
-4. The upstream kernel port and the `akita-*` rev bump, in parallel on their own branch.
-5. Items 5 and 7; one spec for item 6 (C1–C4 share machinery); item 8.
-6. Item 9's relation compiler as its own spec; item 10's microbenchmarks; item 11 any time.
+The work is carried by specs; this is the one order. Each spec names the items it implements
+and rewrites their text here when it lands. Every step is gated by `bench/gate.sh` on
+`gpt2 --seq-len 16` and `bge-small-en-v1.5` on the benchmark machine, against the commit it
+lands on: stage times within 3%, peak memory within 5%, unless the spec states tighter bounds.
+
+**Landed on `dev`:**
+
+| Spec | Items |
+|---|---|
+| `clamp-dense-digit-range-check` | 1 and 2 |
+| `one-range-check` | 7, the range-check half |
+| `no-scalar-special-cases` | one-element nodes join the buckets (no item) |
+| `post-loop-batches` | every lookup in two post-loop batches (no item) |
+| `structural-ops-as-ties` | 5, the Reshape, Slice and Concat part of B4 |
+
+**In progress, in dependency order:**
+
+1. `log-partition-softmax` — item 6's softmax line, under `SemVersion::V2`. One table read per
+   entry instead of 28 committed cells, any width provable. Fused attention (C3) stays open.
+2. `fused-gelu` — item 6's C4. GELU and SiLU chains become one `SmoothRelu` op at 13 cells per
+   element; on GPT-2 that is about 5.5 of 12.8 million clamped elements, and it removes the
+   Cube, the only node that saturates on any model we run.
+3. `one-clamp` — decision 2: a result outside `i32` is a `KernelError`. Needs step 2. The
+   pre-clamp accumulation, the slack, the split sumcheck, the exact flag and the 40–64 width
+   ladder go; item 3's prerequisite is met and item 4 reduces to widths below 32 bits.
+4. `digits-as-trace`, stage 1 — item 9 for the nodes that have digits: their output claims are
+   discharged at the bucket's value sumcheck and their evaluation reductions disappear. Needs
+   step 3.
+
+**After those, not yet specified:**
+
+5. Measure before choosing. Section 1's profile is from an M3 at `25c7218f1`, before every
+   change above; redo it on the benchmark machine at the commit step 4 lands on. The same
+   session settles decision 3 (base 4 or Booleans) and runs the BitZ arm of decision 1. BitZ
+   comes before any Akita-specific work: if the scheme changes, item 8 and the `akita-*` rev
+   bump are moot.
+6. Item 3's standalone relation test with the negative test, then on the MLP rows; item 4's
+   narrower declared widths.
+7. `digits-as-trace` stages 2 and 3: digit-backed relations batched outside the node loop
+   (needs a memory plan), then the relation compiler and the end of the chain.
+8. Item 5's bias fusion (C1) and fused LayerNorm with item 7's Rsqrt relation; then item 6's
+   B2, C2 and C3, which C1 and step 2 make reachable.
+9. Item 10: the field kernel port (independent of the commitment scheme) and the engine
+   microbenchmarks; item 8 and the rev bump if Akita stays; item 11 any time.
+
+The order of steps 6–9 is provisional: step 5's profile decides it.
 
 ## 4. Positions (research, condensed)
 

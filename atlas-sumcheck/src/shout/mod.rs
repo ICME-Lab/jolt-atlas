@@ -35,14 +35,16 @@ use atlas_algebra::poly::{
 
 const READ_RAF_DEGREE_BOUND: usize = 2;
 
+/// The verifier of a read of `tables` through one read address: one value claim per table
+/// ([`ReadRafProvider::rv_claims`]), folded with powers of a challenge.
 pub fn read_raf_verifier<F: JoltField, T: Transcript>(
     provider: &impl ReadRafProvider<F>,
-    table: Vec<i32>,
+    tables: Vec<Vec<i32>>,
     accumulator: &VerifierOpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<Box<dyn DynRelationVerifier<F, T>>, ProofVerifyError> {
     Ok(Box::new(
-        ReadRafParams::new(provider, accumulator, transcript)?.into_verifier(table),
+        ReadRafParams::new(provider, accumulator, transcript)?.into_verifier(tables)?,
     ))
 }
 
@@ -52,6 +54,16 @@ pub trait ReadRafProvider<F: JoltField>: Clone + Send + Sync + Sized {
     /// Returns the opening claim for the rv claim
     /// `Err` if the accumulator lacks a claim it reads.
     fn rv_claim(&self, accumulator: &dyn OpeningAccumulator<F>) -> Result<F, ProofVerifyError>;
+
+    /// The value claims of a read of several tables through one address, in table order. A
+    /// single-table read has the one claim of [`Self::rv_claim`].
+    /// `Err` if the accumulator lacks a claim it reads.
+    fn rv_claims(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<Vec<F>, ProofVerifyError> {
+        Ok(vec![self.rv_claim(accumulator)?])
+    }
 
     /// Returns the opening claim for the raf claim
     /// `Err` if the accumulator lacks a claim it reads.
@@ -78,7 +90,10 @@ pub trait ReadRafProvider<F: JoltField>: Clone + Send + Sync + Sized {
 pub struct ReadRafParams<F: JoltField> {
     r: Vec<F>,
     gamma: F,
-    rv_claim: F,
+    /// The weight of each table's value claim: one for a single table, else powers of a
+    /// challenge.
+    table_weights: Vec<F>,
+    rv_claims: Vec<F>,
     raf_claim: F,
     ra_vp: VirtualPoly,
     ra_sid: SumcheckId,
@@ -95,10 +110,19 @@ impl<F: JoltField> ReadRafParams<F> {
     ) -> Result<Self, ProofVerifyError> {
         let gamma = transcript.challenge_scalar();
         let (ra_vp, ra_sid) = provider.ra_poly();
+        let rv_claims = provider.rv_claims(accumulator)?;
+        let mut table_weights = vec![F::one(); rv_claims.len()];
+        if rv_claims.len() > 1 {
+            let beta: F = transcript.challenge_scalar();
+            for i in 1..table_weights.len() {
+                table_weights[i] = table_weights[i - 1] * beta;
+            }
+        }
         Ok(Self {
             r: provider.r(accumulator)?.r,
             gamma,
-            rv_claim: provider.rv_claim(accumulator)?,
+            table_weights,
+            rv_claims,
             raf_claim: provider.raf_claim(accumulator)?,
             ra_vp,
             ra_sid,
@@ -107,19 +131,22 @@ impl<F: JoltField> ReadRafParams<F> {
     }
 }
 
-/// A lookup into a small public table as a relation: over the address hypercube,
+/// A lookup into small public tables through one read address, as a relation: over the address
+/// hypercube,
 ///
 /// ```text
-/// input claim   rv + γ·raf
-/// output claim  ra(ρ, r) · (val(ρ) + γ·id(ρ))
+/// input claim   Σ_i w_i·rv_i + γ·raf
+/// output claim  ra(ρ, r) · (Σ_i w_i·val_i(ρ) + γ·id(ρ))
 /// ```
 ///
-/// with `ρ` the bound address point in round order, `val` the table's MLE and `id` the identity
-/// polynomial. **S ⊆ R.** An honest `ra` is the one-hot encoding of the lookup addresses, so the
-/// sum over addresses reads the table value and the address. The setup's incoming point is the
-/// lookup's cycle point `r`; its coefficients are `γ`, `rv` and `raf`.
+/// with `ρ` the bound address point in round order, `val_i` table `i`'s MLE, `id` the identity
+/// polynomial and `w_i` the table weights (one for a single table, else powers of a challenge).
+/// **S ⊆ R.** An honest `ra` is the one-hot encoding of the lookup addresses, so the sum over
+/// addresses reads every table's value and the address. The setup's incoming point is the
+/// lookup's cycle point `r`; its coefficients are `γ`, the weights, the folded value claim and
+/// `raf`.
 pub struct ReadRafRelation {
-    table: Vec<i32>,
+    tables: Vec<Vec<i32>>,
     log_K: usize,
     ra_vp: VirtualPoly,
     ra_sid: SumcheckId,
@@ -152,10 +179,17 @@ impl SymbolicSumcheck for ReadRafRelation {
     }
 
     fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
-        opening::<G, _, _, _>(RelationOpening::Id(self.produced()[0]))
-            * (derived::<G, _, _, _>(RelationDerived::Table(0))
-                + challenge::<G, _, _, _>(RelationChallenge::Gamma)
-                    * derived(RelationDerived::Identity))
+        let tables = (0..self.tables.len())
+            .map(|i| {
+                challenge::<G, _, _, _>(RelationChallenge::Weight(i))
+                    * derived(RelationDerived::Table(i))
+            })
+            .fold(
+                challenge::<G, _, _, _>(RelationChallenge::Gamma)
+                    * derived(RelationDerived::Identity),
+                |sum, term| sum + term,
+            );
+        opening::<G, _, _, _>(RelationOpening::Id(self.produced()[0])) * tables
     }
 }
 
@@ -181,10 +215,11 @@ impl<F: JoltField> Relation<F> for ReadRafRelation {
         challenges: &[F],
     ) -> Result<F, ProofVerifyError> {
         Ok(match id {
-            RelationDerived::Table(0) => {
+            RelationDerived::Table(index) => {
                 let _span = tracing::span!(tracing::Level::INFO, "ReadRafVerifier::val_evaluation")
                     .entered();
-                MultilinearPolynomial::from(self.table.clone()).evaluate(challenges)
+                let table = self.tables.get(*index).ok_or_else(|| not_derived(id))?;
+                MultilinearPolynomial::from(table.clone()).evaluate(challenges)
             }
             RelationDerived::Identity => IdentityPolynomial::new(self.log_K).evaluate(challenges),
             other => return Err(not_derived(other)),
@@ -196,24 +231,53 @@ impl<F: JoltField> Relation<F> for ReadRafRelation {
 pub type ReadRafVerifier<F> = RelationVerifier<F, ReadRafRelation>;
 
 impl<F: JoltField> ReadRafParams<F> {
-    /// The relation these parameters instantiate over `table`, with its setup.
-    pub fn into_verifier(self, table: Vec<i32>) -> ReadRafVerifier<F> {
-        let (relation, setup) = self.into_parts(table);
-        RelationVerifier::at(relation, setup)
+    /// The relation these parameters instantiate over `tables`, with its setup. `Err` if the
+    /// provider did not supply one value claim per table.
+    pub fn into_verifier(
+        self,
+        tables: Vec<Vec<i32>>,
+    ) -> Result<ReadRafVerifier<F>, ProofVerifyError> {
+        if tables.len() != self.rv_claims.len() {
+            return Err(ProofVerifyError::Malformed(format!(
+                "a read of {} tables with {} value claims",
+                tables.len(),
+                self.rv_claims.len()
+            )));
+        }
+        let (relation, setup) = self.into_parts(tables);
+        Ok(RelationVerifier::at(relation, setup))
     }
 
-    /// The relation over `table` these parameters instantiate, with its setup.
-    pub fn into_parts(self, table: Vec<i32>) -> (ReadRafRelation, RelationSetup<F>) {
+    /// The weights of the tables' value claims, in table order.
+    pub fn table_weights(&self) -> &[F] {
+        &self.table_weights
+    }
+
+    /// The relation over `tables` these parameters instantiate, with its setup.
+    pub fn into_parts(self, tables: Vec<Vec<i32>>) -> (ReadRafRelation, RelationSetup<F>) {
+        let claim = self
+            .table_weights
+            .iter()
+            .zip(&self.rv_claims)
+            .map(|(weight, claim)| *weight * *claim)
+            .sum();
+        let mut challenges = vec![
+            (RelationChallenge::Gamma, self.gamma),
+            (RelationChallenge::Claim, claim),
+            (RelationChallenge::SecondClaim, self.raf_claim),
+        ];
+        challenges.extend(
+            self.table_weights
+                .iter()
+                .enumerate()
+                .map(|(i, weight)| (RelationChallenge::Weight(i), *weight)),
+        );
         let setup = RelationSetup {
             incoming_point: self.r,
-            challenges: vec![
-                (RelationChallenge::Gamma, self.gamma),
-                (RelationChallenge::Claim, self.rv_claim),
-                (RelationChallenge::SecondClaim, self.raf_claim),
-            ],
+            challenges,
         };
         let relation = ReadRafRelation {
-            table,
+            tables,
             log_K: self.log_K,
             ra_vp: self.ra_vp,
             ra_sid: self.ra_sid,

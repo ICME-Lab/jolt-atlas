@@ -23,13 +23,13 @@ use std::array;
 pub fn read_raf_prover<F: JoltField, T: Transcript>(
     provider: &impl ReadRafProvider<F>,
     lookup_indices: &[usize],
-    table: &[i32],
+    tables: &[&[i32]],
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Box<dyn DynRelationWitness<F, T>> {
     let params = ReadRafParams::new(provider, accumulator, transcript)
         .expect("the prover holds the lookup's claims");
-    Box::new(ReadRafProver::initialize(lookup_indices, table, params))
+    Box::new(ReadRafProver::initialize(lookup_indices, tables, params))
 }
 
 /// Prover state for lookups into small tables.
@@ -45,7 +45,11 @@ pub struct ReadRafProver<F: JoltField> {
 impl<F: JoltField> ReadRafProver<F> {
     #[tracing::instrument(name = "ReadRafProver::initialize", skip_all)]
     /// Initialize the prover for lookups.
-    pub fn initialize(lookup_indices: &[usize], table: &[i32], params: ReadRafParams<F>) -> Self {
+    pub fn initialize(
+        lookup_indices: &[usize],
+        tables: &[&[i32]],
+        params: ReadRafParams<F>,
+    ) -> Self {
         let table_size = 1 << params.log_K;
         let E = EqPolynomial::evals(&params.r);
         let G = lookup_indices
@@ -68,10 +72,33 @@ impl<F: JoltField> ReadRafProver<F> {
                     acc
                 },
             );
-        let val = MultilinearPolynomial::from(table.to_vec());
+        assert_eq!(
+            tables.len(),
+            params.table_weights().len(),
+            "one value claim per table"
+        );
+        // The weighted sum of the tables; a single table stays in its small-scalar form.
+        let val = match tables {
+            [table] => MultilinearPolynomial::from(table.to_vec()),
+            _ => {
+                let weights = params.table_weights();
+                let combined: Vec<F> = (0..table_size)
+                    .into_par_iter()
+                    .map(|a| {
+                        tables
+                            .iter()
+                            .zip(weights)
+                            .map(|(table, weight)| weight.mul_i64(table[a] as i64))
+                            .sum()
+                    })
+                    .collect();
+                MultilinearPolynomial::from(combined)
+            }
+        };
         let int = IdentityPolynomial::new(params.log_K);
         let gamma = params.gamma;
-        let (relation, setup) = params.into_parts(table.to_vec());
+        let (relation, setup) =
+            params.into_parts(tables.iter().map(|table| table.to_vec()).collect());
         Self {
             int,
             relation,

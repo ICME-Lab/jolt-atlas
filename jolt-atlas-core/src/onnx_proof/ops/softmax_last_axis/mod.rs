@@ -254,7 +254,7 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
             let hi_prover = shout::prover::read_raf_prover(
                 &hi_provider,
                 &lut.z_hi_indices,
-                &lut.table_hi,
+                &[&lut.table_hi],
                 &*accumulator,
                 transcript,
             );
@@ -267,7 +267,7 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
             let lo_prover = shout::prover::read_raf_prover(
                 &lo_provider,
                 &lut.z_lo_indices,
-                &lut.table_lo,
+                &[&lut.table_lo],
                 &*accumulator,
                 transcript,
             );

@@ -491,16 +491,24 @@ impl SoftmaxRelation {
                     table_size: lut.table_hi.len(),
                     digit: ExpDigit::Hi,
                 };
-                let hi_verifier =
-                    shout::read_raf_verifier(&provider, lut.table_hi, &*accumulator, transcript)?;
+                let hi_verifier = shout::read_raf_verifier(
+                    &provider,
+                    vec![lut.table_hi],
+                    &*accumulator,
+                    transcript,
+                )?;
 
                 let provider = ExpReadRafProvider {
                     node: shape.node.clone(),
                     table_size: lut.table_lo.len(),
                     digit: ExpDigit::Lo,
                 };
-                let lo_verifier =
-                    shout::read_raf_verifier(&provider, lut.table_lo, &*accumulator, transcript)?;
+                let lo_verifier = shout::read_raf_verifier(
+                    &provider,
+                    vec![lut.table_lo],
+                    &*accumulator,
+                    transcript,
+                )?;
 
                 let significance_clamp_provider: OpLookupProvider<
                     SoftmaxSignificanceClampOperands,

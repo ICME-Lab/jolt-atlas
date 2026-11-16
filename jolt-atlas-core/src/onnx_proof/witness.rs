@@ -377,7 +377,7 @@ fn softmax_last_axis_full_trace<'a>(
         .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx))
 }
 
-/// Build a one-hot RaD witness for an identity range-check or Shout ra
+/// Build a one-hot RaD witness for a Shout ra
 /// polynomial, given raw lookup indices and the log2 of the table /
 /// range-check size.
 fn build_onehot_witness<F: JoltField>(

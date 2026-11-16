@@ -28,7 +28,6 @@ canonical_serde_enum! {
     /// |-------|---------|
     /// | `NodeOutputRaD` / `{Cos,Sin}RaD` | One-hot read-address decompositions for activation-function lookup tables |
     /// | `Softmax*` | Polynomials specific to softmax sub-protocol |
-    /// | `Div* / Sqrt* / Teleport*` | Range-check one-hot polynomials for integer-arithmetic advice values |
     /// | `*NodeQuotient / *NodeRemainder / *NodeInv / *NodeRsqrt` | Scalar advice polynomials for division / reciprocal-square-root |
     /// | `GatherRa` | Read-address polynomial for the Gather operator |
     /// | `SoftmaxRecipMultRemainder` | Remainder used in the reciprocal-multiplication check of softmax |
@@ -60,7 +59,6 @@ canonical_serde_enum! {
         /// * `1` – decomposition index `d`
         TrigDownscaleRaD(usize, usize),
 
-        // ----- Range-check one-hot polynomials for advice values (node_index, d) -----
         // ----- Scalar advice polynomials (node_index) -----
         /// Advice polynomial for the **quotient** in integer division.
         ///
@@ -181,7 +179,7 @@ canonical_serde_enum! {
     /// | `{Cos,Sin}Ra` | Read-address polynomials for activation-function lookups |
     /// | `Softmax*` | Intermediate polynomials arising in the softmax sub-protocol |
     /// | `HammingWeight` | Polynomial used in the Hamming-weight sumcheck |
-    /// | `Div* / Sqrt* / Teleport*` | Advice-derived polynomials proven via `ReadRafSumcheckProver` from committed one-hot polynomials |
+    /// | `Div* / Sqrt* / Teleport*` | Advice polynomials of the division, square-root and teleport identities |
     #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
     pub enum VirtualPoly {
         // ----- Node output -----

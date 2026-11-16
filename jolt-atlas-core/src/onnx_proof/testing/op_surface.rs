@@ -523,9 +523,15 @@ op_surface! {
     div_by_const_1k: Div => |rng| div_model(rng, T, 1 << 8);
     div_by_tensor_1k: Div => |rng| recip_model(rng, T, 1 << 16);
     div_negative_dividend: Div => |rng| recip_model(rng, 64, -(1 << 16));
+    div_one_element: Div => |rng| recip_model(rng, 1, 1 << 16);
     #[ignore = "non-power-of-two div path not supported"]
     div_non_pow2_1000: Div => |rng| div_model(rng, T_ODD, 1 << 8);
     scalar_const_div_1k: ScalarConstDiv => |rng| unary_small(rng, &[T], |b, i| b.scalar_const_div(i, 128));
+    /// A divisor that is not a power of two: the remainder is bounded from both sides.
+    scalar_const_div_by_7_1k: ScalarConstDiv => |rng| unary_small(rng, &[T], |b, i| b.scalar_const_div(i, 7));
+    /// The importer's divisor, `2^scale`: one range claim at that width.
+    scalar_const_div_by_scale_1k: ScalarConstDiv => |rng| unary_small(rng, &[T], |b, i| b.scalar_const_div(i, 1 << S));
+    scalar_const_div_one_element: ScalarConstDiv => |_| unary(&[1], S, vec_of(-12_345, &[1]), |b, i| b.scalar_const_div(i, 7));
     #[ignore = "non-power-of-two scalar_const_div path not supported"]
     scalar_const_div_non_pow2_1000: ScalarConstDiv => |rng| unary_small(rng, &[T_ODD], |b, i| b.scalar_const_div(i, 128));
 
@@ -548,6 +554,7 @@ op_surface! {
     /// the u64 quotient / i64 `out²` witness path on every element.
     rsqrt_scale12_small_inputs: Rsqrt => |rng| rsqrt_model(rng, T, 12, 1..64);
     rsqrt_model_scale_1k: Rsqrt => |rng| rsqrt_model(rng, T, S, 1..MAX_INPUT);
+    rsqrt_one_element: Rsqrt => |rng| rsqrt_model(rng, 1, S, 1..MAX_INPUT);
     #[ignore = "non-power-of-two rsqrt path not supported"]
     rsqrt_non_pow2_1000: Rsqrt => |rng| rsqrt_model(rng, T_ODD, 8, 1..MAX_INPUT);
 
@@ -567,6 +574,7 @@ op_surface! {
 
     // Trig
     sin_random_1k: Sin => |rng| unary_range(rng, &[T], -50000..50000, |b, i| b.sin(i));
+    sin_one_element: Sin => |rng| unary_range(rng, &[1], -50000..50000, |b, i| b.sin(i));
     sin_periodic_boundary: Sin => |_| unary(&[8], S, trig_edges(), |b, i| b.sin(i));
     #[ignore = "non-power-of-two sin path not supported"]
     sin_non_pow2_1000: Sin => |rng| unary_range(rng, &[T_ODD], -50000..50000, |b, i| b.sin(i));
@@ -640,6 +648,7 @@ op_surface! {
 
     // Softmax
     softmax_model_scale_2x8: SoftmaxLastAxis => |_| softmax_model(&[2, 8], S, tensor(&SOFTMAX_ROWS, &[2, 8]));
+    softmax_one_element: SoftmaxLastAxis => |_| softmax_model(&[1, 1], S, vec_of(1234, &[1, 1]));
     softmax_random_4x16: SoftmaxLastAxis => |rng| softmax_model(&[4, 16], S, Tensor::random_range(rng, &[4, 16], -(1 << 15)..(1 << 15)));
     #[should_panic(expected = "masked softmax")]
     softmax_masked_rejected: SoftmaxLastAxis => |_| unary(&[2, 8], S, tensor(&SOFTMAX_ROWS, &[2, 8]), |b, i| b.softmax_last_axis_masked(i, 5));

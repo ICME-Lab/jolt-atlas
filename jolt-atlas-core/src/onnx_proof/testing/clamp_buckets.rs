@@ -146,3 +146,101 @@ fn scalars_probe_layout() {
     }
     assert_eq!(saturated, 1, "exactly the second Add saturates");
 }
+
+/// Every remainder a probe model's nodes leave to be bounded is in exactly one remainder
+/// bucket, once per range claim.
+#[test]
+fn every_range_claim_is_in_exactly_one_bucket() {
+    use crate::onnx_proof::global_clamp::{node_remainders, range_claims, RangeClaim};
+    let mut families = std::collections::BTreeSet::new();
+    for probe in probe_models() {
+        let model = probe.model;
+        let mut expected: Vec<(usize, RangeClaim, usize)> = Vec::new();
+        for node in &model.views() {
+            for (remainder, bound) in node_remainders(node).expect("bounds") {
+                families.insert(remainder);
+                for (claim, width) in range_claims(remainder, bound) {
+                    expected.push((node.idx, claim, width));
+                }
+            }
+        }
+        let mut packed: Vec<(usize, RangeClaim, usize)> = remainder_buckets(&model)
+            .expect("remainder layout")
+            .iter()
+            .flat_map(|bucket| {
+                bucket.nodes.iter().map(|member| {
+                    (
+                        member.idx,
+                        member.claim.expect("a remainder member has a claim"),
+                        bucket.width,
+                    )
+                })
+            })
+            .collect();
+        let key = |m: &(usize, RangeClaim, usize)| (m.0, m.1.remainder, m.1.slack.is_some());
+        expected.sort_by_key(key);
+        packed.sort_by_key(key);
+        assert_eq!(packed, expected, "{}", probe.name);
+    }
+    assert_eq!(
+        families.len(),
+        8,
+        "the probe models hold every remainder family: {families:?}"
+    );
+}
+
+/// A slack claim whose bound is opened at another point than its remainder is rejected.
+#[test]
+fn range_claim_rejects_a_bound_at_another_point() {
+    use crate::onnx_proof::global_clamp::{Bound, RangeClaim, Remainder};
+    use atlas_algebra::field::Ring;
+    use atlas_algebra::poly::point::OpeningPoint;
+    use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator};
+    use common::VirtualPoly;
+
+    let (node, divisor) = (5usize, 3usize);
+    let claim = RangeClaim {
+        remainder: Remainder::Div,
+        slack: Some(Bound::Node(divisor)),
+    };
+    let point = |seed: u64| OpeningPoint::new((0..4).map(|i| Fp128::from_u64(seed + i)).collect());
+    let bound_id = OpeningId::new(
+        VirtualPoly::NodeOutput(divisor),
+        SumcheckId::NodeExecution(node),
+    );
+    let stage = |bound_point| {
+        let mut accumulator = VerifierOpeningAccumulator::<Fp128>::new();
+        accumulator.openings.insert(
+            Remainder::Div.opening_id(node),
+            (point(1), Fp128::from_u64(2)),
+        );
+        accumulator
+            .openings
+            .insert(bound_id, (bound_point, Fp128::from_u64(7)));
+        accumulator
+    };
+    let (_, slack) = claim
+        .evaluate(node, &stage(point(1)))
+        .expect("one common point");
+    assert_eq!(slack, Fp128::from_u64(7 - 1 - 2));
+    assert!(claim.evaluate(node, &stage(point(100))).is_err());
+}
+
+/// `ScalarConstDiv` by a divisor that is not positive is rejected before anything is proven.
+#[test]
+fn scalar_const_div_rejects_a_non_positive_divisor() {
+    use crate::onnx_proof::plan::OpPlan;
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![8]);
+    let out = b.scalar_const_div(x, -3);
+    b.mark_output(out);
+    let model = b.build();
+    let inputs = vec![Tensor::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8], &[8]).unwrap()];
+    let io = model.trace(&inputs).expect("honest execution").io(&model);
+    let node = model.views()[out].clone();
+    let atlas_trace::Op::ScalarConstDiv(op) = &node.operator else {
+        panic!("the output is a ScalarConstDiv");
+    };
+    assert!(op.plan(&node, &model, &io).is_err());
+    assert!(remainder_buckets(&model).is_err());
+}

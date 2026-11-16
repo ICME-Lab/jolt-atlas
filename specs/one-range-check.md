@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-16                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          |                                |
 | Depends on  | `specs/no-scalar-special-cases.md` |
 | Supersedes  | `docs/prover-plan.md` §3 item 7 |

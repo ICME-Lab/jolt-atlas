@@ -14,6 +14,14 @@
 //! buckets by a value sumcheck and a digit range check, both in [`super::clamp_split`]. Gaps at the
 //! end of a bucket hold zero-weight dummy cycles.
 //!
+//! A remainder bucket's member is a *range claim* ([`RangeClaim`]): a remainder `R` some
+//! node's relation leaves to be bounded (`R ∈ [0, 2^w)`), or the slack `B − 1 − R` below its
+//! bound (`R < B`), each an affine expression over claims the node bound at one point.
+//! [`node_remainders`] lists each node's remainders and bounds, and [`range_claims`] picks the
+//! form: `R` alone at width `w` for a bound `2^w` of a whole number of digits, both claims at
+//! [`TWO_SIDED_WIDTH`] otherwise. Together the two claims give `B ≥ 1` and `0 ≤ R < B` over
+//! the integers; a bound that is not positive has no proof.
+//!
 //! Bucket capacity is the largest clamped node's (padded) size, so no bucket
 //! polynomial is larger than the largest per-node one was and the SRS size is
 //! unchanged. The layout is a pure function of the model, so prover and
@@ -450,7 +458,7 @@ pub fn bucket_committed_polys(
 #[cfg(test)]
 #[allow(clippy::indexing_slicing)]
 mod tests {
-    use super::{pack_buckets, BucketKind};
+    use super::{pack_buckets, range_claims, Bound, BucketKind, Remainder, TWO_SIDED_WIDTH};
 
     /// `(log_t, member node indices)` per bucket, in bucket order.
     fn layout(items: &[(usize, usize, usize)]) -> Vec<(usize, usize, Vec<usize>)> {
@@ -490,5 +498,28 @@ mod tests {
     fn one_element_nodes_alone_get_a_bucket_each() {
         let both = layout(&[(0, 40, 1), (1, 40, 1)]);
         assert_eq!(both, vec![(40, 0, vec![0]), (40, 0, vec![1])]);
+    }
+
+    /// One claim at width `w` exactly when the bound is `2^w` with `w` a whole number of
+    /// base-4 digits; otherwise the remainder and its slack at the two-sided width.
+    #[test]
+    fn range_claims_follow_the_width_rule() {
+        let shape = |bound: Bound| -> Vec<(bool, usize)> {
+            range_claims(Remainder::Rescale, bound)
+                .into_iter()
+                .map(|(claim, width)| (claim.slack.is_some(), width))
+                .collect()
+        };
+        let two_sided = vec![(false, TWO_SIDED_WIDTH), (true, TWO_SIDED_WIDTH)];
+        assert_eq!(shape(Bound::Const(1 << 14)), vec![(false, 14)]);
+        assert_eq!(shape(Bound::Const(1 << 28)), vec![(false, 28)]);
+        assert_eq!(shape(Bound::Const(1)), vec![(false, 0)]);
+        assert_eq!(shape(Bound::Const(1 << 7)), two_sided);
+        assert_eq!(shape(Bound::Const(7)), two_sided);
+        assert_eq!(shape(Bound::Const(768 << 14)), two_sided);
+        assert_eq!(shape(Bound::Const(0)), two_sided);
+        assert_eq!(shape(Bound::Const(-3)), two_sided);
+        assert_eq!(shape(Bound::Node(3)), two_sided);
+        assert_eq!(shape(Bound::TwiceNodePlusOne(3)), two_sided);
     }
 }

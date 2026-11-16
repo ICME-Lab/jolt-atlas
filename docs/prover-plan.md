@@ -201,7 +201,12 @@ at 16 tokens; measure at 256–512 tokens before sizing this group.
 
 ### 7. Per-node range checks onto the shared mechanism (roadmap B1) — few rows, removes 64-bit read-rafs
 
-Rsqrt, Div, MeanOfSquares, Sin and Cos commit per node and run 64-bit `UnsignedLessThan`
+**The range-check half is implemented** (`specs/one-range-check.md`): every remainder bound,
+softmax's and ScalarConstDiv's included, is a range claim (`R`, or the slack `B − 1 − R`) in the
+packed remainder buckets; the `UnsignedLessThan` read-rafs and the identity range check are gone.
+The single Rsqrt relation below is still open.
+
+Rsqrt, Div, MeanOfSquares, Sin and Cos committed per node and ran 64-bit `UnsignedLessThan`
 read-rafs with degree-17 ra-virtualization. Rsqrt becomes one relation,
 `out²·x ≤ S³ < (out+1)²·x`, with its two slacks range-checked by item 1's mechanism; the others
 become `R` and `B − 1 − R` checks. Never table rsqrt: fixed-grid tables destroy 7B+ RMSNorm

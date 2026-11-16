@@ -20,10 +20,8 @@
 //! 2. **Clamp** (`Execution` + `RaOneHotChecks`, via [`fused_rebase::prove_pre`]):
 //!    `out = SatClamp(rescaled)`, appending `rescaled` (`ClampAcc`) and `R`
 //!    (`RescaleRemainder`).
-//! 3. **Remainder range check** `R < D` (`RangeCheck` + `RescaleRemainderRaChecks`,
-//!    via the [`range_checking`](crate::onnx_proof::range_checking) `UnsignedLT`
-//!    lookup; `D` is a constant, so the Teleport-style
-//!    [`MeanOfSquaresRangeCheckOperands`] is used).
+//! 3. **Remainder bound** `R < D`: the remainder's range claims in the packed remainder
+//!    buckets ([`global_clamp::node_remainders`](crate::onnx_proof::global_clamp::node_remainders)).
 //!
 //! The reduction sums over the *padded* reduced cube (`op.padded_count`, a power
 //! of two so the flat-padded operand splits cleanly into `[retained, reduced]`),

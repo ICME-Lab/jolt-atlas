@@ -31,8 +31,8 @@ The crate has no prover code. Three mechanisms hold that:
 - The `verifier-isolation` CI job builds the crate alone, rejects `jolt-atlas-core` in its
   dependency tree, and greps its sources for `::prover` / `::witness` paths and for `Trace`.
 - Prover methods on shared types are extension traits in `jolt-atlas-core`
-  (`RelationWitnesses`, `TieClaims`, `LookupWitness`, `RangeCheckWitness`, `EinsumFold`,
-  `OpLookupProve`, `RangeCheckProve`, `NodeEvalReductionProve`).
+  (`RelationWitnesses`, `TieClaims`, `LookupWitness`, `EinsumFold`, `OpLookupProve`,
+  `NodeEvalReductionProve`).
 
 ## Reading order
 
@@ -51,9 +51,13 @@ The crate has no prover code. Three mechanisms hold that:
    sumcheck is a symbolic relation; `RelationVerifier` is derived from it, and `verify_tie` checks a
    zero-round one. Each op relation documents its S ⊆ R argument beside its definition in
    `onnx_proof/ops/<op>.rs`.
-4. **Lookup machinery**: `onnx_proof/op_lookups/`, `range_checking/`, `clamp_lookups/`,
-   `clamp_split.rs`, `global_clamp.rs`, `fused_rebase.rs`, `neural_teleport/`: the relations
-   and model-only layouts of the lookup, clamp and range-check subprotocols.
+4. **Lookup machinery**: `onnx_proof/op_lookups/`, `clamp_lookups/`, `clamp_split.rs`,
+   `global_clamp.rs`, `fused_rebase.rs`, `neural_teleport/`: the relations and model-only
+   layouts of the lookup, clamp and range-check subprotocols. Every remainder bound (the fused
+   rescales, Div, ScalarConstDiv, Rsqrt, MeanOfSquares, the trig teleport, softmax) is a range
+   claim in a packed remainder bucket (`global_clamp::RangeClaim`): the remainder, or its slack
+   below the bound, checked by the dense digit range check. A bound that is not positive has
+   no proof.
 5. **Proof object**: `proof.rs`, `types.rs` (`ProofId`, `ProofType`, `Claims`) and
    `proof_serialization.rs` (the wire format).
 
@@ -108,7 +112,7 @@ vectors back from their openings in their setup (`SoftmaxShape::aux`).
   bound to a point, is an `Err`.
 - **No dead fields.** A node with a single claim on its output has no evaluation-reduction
   entry (the claim is the reduced instance). Every `ProofType` is emitted for some checked-in
-  model; deleted tags (1, 7, 8, 11, 13, 17) do not deserialize.
+  model; deleted tags (1, 4, 7, 8, 11, 13, 17, 21, 22) do not deserialize.
 - **What holds it.** The mutation sweep requires an `Err` at every site (no tolerance), with
   orphan sites for claims, sumcheck proofs and reduction proofs and count/shape sites for the
   IO; `proof_types_all_exercised`; `fuzz_regressions_replay` and the cargo-fuzz target in
@@ -128,19 +132,16 @@ Everything in the crate that took an `atlas_trace::Trace`, with its destination 
 | `EngineRelation::witnesses` | `relation::RelationWitnesses`, implemented in `ops/{reshape, slice, concat, iff, scalar_const_div, mul, rsqrt, div}.rs` and `ops/sum/axis.rs` |
 | `TieRelation::claims` | `relation::TieClaims`, implemented in `ops/{add, neg, is_nan, moveaxis, broadcast, constant, div}.rs` |
 | `LookupOperandsTrait::{witness, lookup_bits}` | `op_lookups::LookupWitness`, implemented beside each helper's prover (`op_lookups`, `clamp_lookups`, `ops/clamp.rs`, `ops/activation_clamped`, `neural_teleport/trig_downscale.rs`, `ops/softmax_last_axis/significance_clamp.rs`) |
-| `RangeCheckingOperandsTrait::build_lookup_operands`, `RangeCheckOperands::{build_lookup_operands, compute_lookup_indices}` | `range_checking::range_check_operands::{RangeCheckWitness, range_check_lookup_indices}` |
 | `clamp_lookups::{clamp_intermediate, clamp_lookup_bits}` | `clamp_lookups` |
 | `clamp_split::{NodeSplit, BucketSplit, value_chunk_indices, exact_output_prover}` | `clamp_split` (`BucketSplit` built once per proof in `global_clamp::BucketWitnesses`) |
 | `ClampBucket::assemble_bits` | `global_clamp::assemble_bits` |
 | `EinsumLayout::fold`, `Folded` | `ops/einsum/dot.rs` (`EinsumFold`, `Folded`), implemented in the three layout modules |
-| `neural_teleport::division::compute_division` | `neural_teleport/division.rs` |
 | `neural_teleport::utils::compute_ra_evals_{nbits_2comp, from_usize_indices}` | `neural_teleport/utils.rs` |
-| `utils::{adjusted_remainder, compute_lookup_indices_from_operands}` | `utils` |
+| `utils::compute_lookup_indices_from_operands` | `utils` |
 | `onnx_proof/trace_view.rs` (`TraceView`) | `onnx_proof/trace_view.rs` |
 | `probe.rs`, `probe_assert!`, `probe_assert_eq!` | `onnx_proof/testing/probe.rs` |
 
 Deleted with the move, having no reader left: the `precomputed` field of
-`SaturatingAccClampOperands`, the `z` field of `SoftmaxSignificanceClampOperands`, the `scale`
-fields of `RiRangeCheckOperands` / `RsRangeCheckOperands`, the `node_idx` field of
-`MeanOfSquaresRangeCheckOperands`, and `utils::dims::transpose_flat_matrix`. The `rayon` and
+`SaturatingAccClampOperands`, the `z` field of `SoftmaxSignificanceClampOperands`, and
+`utils::dims::transpose_flat_matrix`. The `rayon` and
 `num` dependencies went with the moved code; the verifier is single-threaded.

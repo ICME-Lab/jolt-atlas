@@ -27,10 +27,12 @@ use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_sumcheck::opening_proof::{forgery, OpeningId};
 use atlas_trace::{trace::ModelExecutionIO, Model, NodeId, Tensor, Trace};
 use atlas_transcript::{Blake2bProver, Blake2bVerifier};
+use common::consts::MODEL_SCALE;
 use rand::{rngs::StdRng, SeedableRng};
 use serial_test::serial;
 
 use super::{
+    model_builder::ModelBuilder,
     models::{
         padded_add_model, padded_broadcast_sum_model, probe_models, probe_models_alt, square_model,
         sub_const_model, ProbeModel,
@@ -932,4 +934,238 @@ fn fuzz_regressions_replay() {
         }
         let _ = target.run(&std::fs::read(&path).expect("readable regression input"));
     }
+}
+
+// ── remainder bounds ─────────────────────────────────────────────────────
+//
+// Each test below moves a quotient by one and its remainder by the bound in the opposite
+// direction, so the op's own identity still holds and only the remainder's range claim in the
+// packed remainder buckets can reject. The op is the model output, so no consumer relation
+// sees the forged quotient.
+
+/// An edit of the honest trace.
+type Forgery = Box<dyn FnMut(&mut Trace)>;
+
+/// Prove `model` on `inputs` from a trace edited by `tamper`, and verify. A prover that
+/// refuses is reported as a rejection: no proof was accepted.
+fn bound_outcome(
+    model: &Model,
+    inputs: &[Tensor<i32>],
+    tamper: &mut dyn FnMut(&mut Trace),
+) -> Outcome {
+    let prover_pp = AtlasProverPreprocessing::<<Pcs as CommitmentScheme>::Field, Pcs>::new(
+        AtlasSharedPreprocessing::preprocess(model.clone()),
+    );
+    let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
+    match prove_tampered::<Pcs>(&prover_pp, inputs, tamper).1 {
+        Ok((proof, io)) => run_verify(&proof, &verifier_pp, &io),
+        Err(panic) => Outcome::Rejected(format!("prover refused: {panic}")),
+    }
+}
+
+/// The honest trace verifies and every forged one is rejected with an `Err`.
+fn assert_bound_holds(
+    what: &str,
+    model: &Model,
+    inputs: &[Tensor<i32>],
+    forgeries: Vec<(&str, Forgery)>,
+) {
+    let _probe = ProbeGuard::enter();
+    assert!(
+        matches!(bound_outcome(model, inputs, &mut |_| {}), Outcome::Accepted),
+        "{what}: the honest trace must verify"
+    );
+    for (name, mut forge) in forgeries {
+        let outcome = bound_outcome(model, inputs, &mut *forge);
+        assert!(
+            matches!(outcome, Outcome::Rejected(_)),
+            "{what}, {name}: {outcome:?}"
+        );
+    }
+}
+
+/// The node's `Remainder` advice.
+fn remainder_mut(trace: &mut Trace, node: usize) -> &mut [i32] {
+    match trace.aux.get_mut(&NodeId(node as u32)) {
+        Some(atlas_trace::trace::NodeAux::Remainder(r)) => r.data_mut(),
+        _ => panic!("node {node} has no remainder advice"),
+    }
+}
+
+/// A quotient that is the node's output moved by `step`, its remainder by `−step·bound`.
+fn forge_output_quotient(node: usize, elem: usize, step: i32, bound: i32) -> Forgery {
+    Box::new(move |trace| {
+        trace.node_outputs[node].data_mut()[elem] += step;
+        remainder_mut(trace, node)[elem] -= step * bound;
+    })
+}
+
+#[test]
+#[serial(soundness_probe)]
+fn div_remainder_is_bounded() {
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![8]);
+    let divisor = b.constant(Tensor::from_slice(&[7; 8], &[8]).unwrap());
+    let out = b.div(x, divisor);
+    b.mark_output(out);
+    let inputs = vec![Tensor::from_slice(&[100, -100, 3, 46, 1 << 20, -5, 13, 6], &[8]).unwrap()];
+    assert_bound_holds(
+        "Div",
+        &b.build(),
+        &inputs,
+        vec![
+            ("quotient − 1", forge_output_quotient(out, 3, -1, 7)),
+            ("quotient + 1", forge_output_quotient(out, 3, 1, 7)),
+        ],
+    );
+}
+
+#[test]
+#[serial(soundness_probe)]
+fn scalar_const_div_remainder_is_bounded() {
+    // A divisor that is not a power of two (the two-sided claim), and `2^14` (one claim).
+    for divisor in [7, 1 << 14] {
+        let mut b = ModelBuilder::new();
+        let x = b.input(vec![8]);
+        let out = b.scalar_const_div(x, divisor);
+        b.mark_output(out);
+        let inputs =
+            vec![Tensor::from_slice(&[100, -100, 3, 46, 1 << 20, -5, 13, 99_999], &[8]).unwrap()];
+        assert_bound_holds(
+            &format!("ScalarConstDiv by {divisor}"),
+            &b.build(),
+            &inputs,
+            vec![
+                ("quotient − 1", forge_output_quotient(out, 4, -1, divisor)),
+                ("quotient + 1", forge_output_quotient(out, 4, 1, divisor)),
+            ],
+        );
+    }
+}
+
+/// The node's `Rsqrt` advice.
+fn rsqrt_mut(trace: &mut Trace, node: usize) -> &mut atlas_trace::RsqrtAdvice {
+    match trace.aux.get_mut(&NodeId(node as u32)) {
+        Some(atlas_trace::trace::NodeAux::Rsqrt(a)) => a,
+        _ => panic!("node {node} has no rsqrt advice"),
+    }
+}
+
+#[test]
+#[serial(soundness_probe)]
+fn rsqrt_remainders_are_bounded() {
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![8]);
+    let out = b.rsqrt(x);
+    b.mark_output(out);
+    let model = b.build();
+    let values = [1000, 3000, 7777, 12_345, 50_000, 99_991, 250_007, 1_000_003];
+    let inputs = vec![Tensor::from_slice(&values, &[8]).unwrap()];
+
+    // An element whose square-root remainder leaves room both ways: 1 ≤ r_sqrt < 2·out.
+    let honest = model.trace(&inputs).expect("honest execution");
+    let advice = honest.rsqrt(NodeId(out as u32)).expect("rsqrt advice");
+    let elem = (0..values.len())
+        .find(|&i| {
+            let r = i64::from(advice.sqrt_remainder.data()[i]);
+            1 <= r && r < 2 * i64::from(honest.node_outputs[out].data()[i])
+        })
+        .expect("an element with a square-root remainder strictly inside its range");
+    let x_elem = values[elem];
+
+    // Division: S³ = q·x + r_div and q = out² + r_sqrt both still hold.
+    let forge_division = |step: i64| -> Forgery {
+        Box::new(move |trace| {
+            let advice = rsqrt_mut(trace, out);
+            advice.quotient.data_mut()[elem] += step;
+            advice.div_remainder.data_mut()[elem] -= (step as i32) * x_elem;
+            advice.sqrt_remainder.data_mut()[elem] += step as i32;
+        })
+    };
+    // Square root: q = out² + r_sqrt still holds with the output moved.
+    let forge_sqrt = |step: i32| -> Forgery {
+        Box::new(move |trace| {
+            let v = trace.node_outputs[out].data()[elem];
+            trace.node_outputs[out].data_mut()[elem] = v + step;
+            rsqrt_mut(trace, out).sqrt_remainder.data_mut()[elem] -= step * (2 * v + step);
+        })
+    };
+    assert_bound_holds(
+        "Rsqrt",
+        &model,
+        &inputs,
+        vec![
+            ("division quotient − 1", forge_division(-1)),
+            ("division quotient + 1", forge_division(1)),
+            ("output − 1", forge_sqrt(-1)),
+            ("output + 1", forge_sqrt(1)),
+        ],
+    );
+}
+
+#[test]
+#[serial(soundness_probe)]
+fn mean_of_squares_remainder_is_bounded() {
+    let (rows, count) = (8usize, 24usize);
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![rows, count]);
+    let out = b.mean_of_squares(x, vec![1], vec![rows, 1]);
+    b.mark_output(out);
+    let mut rng = StdRng::seed_from_u64(0xB0D5);
+    let inputs = vec![Tensor::random_range(
+        &mut rng,
+        &[rows, count],
+        -(1 << 15)..(1 << 15),
+    )];
+    let divisor = (count as i32) << MODEL_SCALE;
+    let forge = |step: i32| -> Forgery {
+        Box::new(move |trace| {
+            trace.node_outputs[out].data_mut()[2] += step;
+            let Some(atlas_trace::trace::NodeAux::Fused(f)) =
+                trace.aux.get_mut(&NodeId(out as u32))
+            else {
+                panic!("MeanOfSquares has fused intermediates");
+            };
+            f.quotient.data_mut()[2] += i64::from(step);
+            f.remainder.data_mut()[2] -= step * divisor;
+        })
+    };
+    assert_bound_holds(
+        "MeanOfSquares",
+        &b.build(),
+        &inputs,
+        vec![("quotient − 1", forge(-1)), ("quotient + 1", forge(1))],
+    );
+}
+
+/// A bound that is not positive has no proof: a negative divisor (floor division puts its
+/// remainder in `(B, 0]`) and an `Rsqrt` of a negative input (output 0).
+#[test]
+#[serial(soundness_probe)]
+fn non_positive_bounds_have_no_proof() {
+    let _probe = ProbeGuard::enter();
+
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![8]);
+    let divisor = b.constant(Tensor::from_slice(&[-7; 8], &[8]).unwrap());
+    let out = b.div(x, divisor);
+    b.mark_output(out);
+    let inputs = vec![Tensor::from_slice(&[100, -100, 3, 46, 1 << 20, -5, 13, 6], &[8]).unwrap()];
+    let outcome = bound_outcome(&b.build(), &inputs, &mut |_| {});
+    assert!(
+        matches!(outcome, Outcome::Rejected(_)),
+        "Div by −7: {outcome:?}"
+    );
+
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![8]);
+    let out = b.rsqrt(x);
+    b.mark_output(out);
+    let inputs =
+        vec![Tensor::from_slice(&[1000, 3000, -5, 12_345, 50_000, 7, 9, 11], &[8]).unwrap()];
+    let outcome = bound_outcome(&b.build(), &inputs, &mut |_| {});
+    assert!(
+        matches!(outcome, Outcome::Rejected(_)),
+        "Rsqrt of −5: {outcome:?}"
+    );
 }

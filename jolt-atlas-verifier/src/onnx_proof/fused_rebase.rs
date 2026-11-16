@@ -9,7 +9,7 @@
 //! ```text
 //! acc(r) = rescaled(r)·2^S + R(r)     (the operator's arithmetic sumcheck claim)
 //! output = SatClamp(rescaled)         (clamp lookup, reuses `clamp_lookups`)
-//! R ∈ [0, 2^S)                        (identity range-check on the remainder)
+//! R ∈ [0, 2^S)                        (a range claim in the packed remainder buckets)
 //! ```
 //!
 //! `rescaled` is the pre-clamp value ([`VirtualPoly::ClampAcc`]), recovered as the

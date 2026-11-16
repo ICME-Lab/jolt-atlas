@@ -1,9 +1,7 @@
 use std::{borrow::Borrow, marker::PhantomData};
 
 use atlas_algebra::{
-    field::JoltField,
-    poly::multilinear::MultilinearPolynomial,
-    utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
+    field::JoltField, poly::multilinear::MultilinearPolynomial, utils::errors::ProofVerifyError,
 };
 use atlas_transcript::{AppendToTranscript, Transcript};
 
@@ -78,12 +76,6 @@ where
         MockCommitment::default()
     }
 
-    fn combine_hints(
-        _hints: Vec<Self::OpeningProofHint>,
-        _coeffs: &[Self::Field],
-    ) -> Self::OpeningProofHint {
-    }
-
     fn prove<ProofTranscript: Transcript>(
         _setup: &Self::ProverSetup,
         _poly: &MultilinearPolynomial<Self::Field>,
@@ -118,22 +110,4 @@ where
     F: JoltField,
 {
     type ChunkState = ();
-
-    fn process_chunk<T: SmallScalar>(_setup: &Self::ProverSetup, _chunk: &[T]) -> Self::ChunkState {
-    }
-
-    fn process_chunk_onehot(
-        _setup: &Self::ProverSetup,
-        _onehot_k: usize,
-        _chunk: &[Option<usize>],
-    ) -> Self::ChunkState {
-    }
-
-    fn aggregate_chunks(
-        _setup: &Self::ProverSetup,
-        _onehot_k: Option<usize>,
-        _tier1_commitments: &[Self::ChunkState],
-    ) -> (Self::Commitment, Self::OpeningProofHint) {
-        (MockCommitment::default(), ())
-    }
 }

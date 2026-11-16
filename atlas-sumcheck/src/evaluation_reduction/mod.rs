@@ -25,7 +25,6 @@ use atlas_algebra::{
     },
     utils::errors::{ProofVerifyError, ProvingError},
 };
-use atlas_trace::Tensor;
 use atlas_transcript::{AppendToTranscript, Transcript};
 use std::io::{Read, Write};
 
@@ -87,14 +86,6 @@ impl<F: JoltField> EvalReductionWitness<F> {
     /// Build a witness directly from an already-materialized MLE.
     pub fn new(mle: MultilinearPolynomial<F>) -> Self {
         Self { mle }
-    }
-
-    /// Build a witness from an integer tensor by padding to next power of two,
-    /// then interpreting it as the coefficient vector of an MLE.
-    pub fn from_tensor(tensor: &Tensor<i32>) -> Self {
-        Self {
-            mle: MultilinearPolynomial::from(tensor.padded_pow2()),
-        }
     }
 }
 

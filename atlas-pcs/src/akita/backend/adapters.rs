@@ -297,22 +297,6 @@ impl AkitaProverSetup {
         self.verifier.one_hot_k
     }
 
-    /// Releases transformed setup slots after the trace commitment. Later
-    /// opening work rebuilds the slots on first use.
-    pub fn release_post_commit_ntt_residency(&self) -> Result<(), OpeningsError> {
-        for backend in [
-            self.cpu_backend.as_deref(),
-            self.one_hot_cpu_backend.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .chain(self.full_width.values().map(|setup| &setup.backend))
-        {
-            let _ = backend.trim_caches().map_err(invalid_setup)?;
-        }
-        Ok(())
-    }
-
     pub(crate) fn dense_backend(
         &self,
     ) -> Result<(&AkitaBackendProverSetup, &AkitaCpuBackend), OpeningsError> {
@@ -722,17 +706,6 @@ impl AkitaBatchProof {
         OpeningScheduleSelection {
             row_digest: ScheduleRowDigest::from_bytes(self.schedule_selection),
         }
-    }
-
-    /// Headerless backend proof body: Akita's Spongefish argument bytes.
-    pub fn backend_proof_body_size(&self) -> usize {
-        self.backend_proof.len()
-    }
-
-    /// Sum of the raw component bytes before the enclosing Jolt serializer
-    /// adds container tags or length prefixes.
-    pub fn unframed_payload_size(&self) -> Option<usize> {
-        SCHEDULE_SELECTION_BYTES.checked_add(self.backend_proof.len())
     }
 }
 

@@ -353,18 +353,12 @@ macro_rules! define_solinas_prime {
                 <$word>::BITS - self.0.leading_zeros()
             }
 
-            #[inline]
-            fn from_scalar_challenge_bytes(bytes: &[u8]) -> Self {
-                Self::from_bytes_le_reduced(bytes)
-            }
         }
 
         $crate::impl_serde_bytes!(impl[const P: $word] $name<P>, (<$word>::BITS / 8) as usize);
 
         impl<const P: $word> WithAccumulator for $name<P> {
             type Accumulator = NaiveAccumulator<Self>;
-            type SmallScalarAccumulator = NaiveAccumulator<Self>;
-            type SignedProductAccumulator = NaiveAccumulator<Self>;
         }
 
     };

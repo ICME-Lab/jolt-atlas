@@ -2,7 +2,6 @@ use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::Univaria
 use atlas_algebra::{
     field::{BarrettReduce, FMAdd, JoltField},
     poly::{
-        multilinear::MultilinearPolynomial,
         ra::RaPolynomial,
         split_eq::{check_gruen_endpoint, SplitEqUnreducedFold},
     },
@@ -45,32 +44,6 @@ pub fn compute_mles_product_sum<F: JoltField>(
     })
 }
 
-/// Computes the univariate polynomial `g(X) = sum_j eq((r', X, j), r) * mle(X, j)^d`.
-///
-/// Note `claim` should equal `g(0) + g(1)`; otherwise the error carries the actual
-/// `g(0) + g(1)` (see [`finish_mles_product_sum_from_evals`]).
-pub fn compute_mle_product_sum<F: JoltField>(
-    d: usize,
-    mle: &MultilinearPolynomial<F>,
-    claim: F,
-    eq_poly: &GruenSplitEqPolynomial<F>,
-) -> Result<UnivariatePoly<F>, F> {
-    // Evaluate q(X) = g(X) / l(X) at [1, 2, ..., |mles| - 1, ∞] using split-eq fold.
-    //
-    // We dispatch on `d` to allow specialized fast paths (e.g., the fully
-    // stack-allocated `d = 16` implementation) while keeping the final
-    // interpolation logic centralized.
-    let sum_evals: Vec<F> = compute_mle_product_sum_evals_generic(d, mle, eq_poly);
-
-    finish_mles_product_sum_from_evals(&sum_evals, claim, eq_poly, || {
-        let [q_zero] = eq_poly.par_fold_out_in_unreduced::<1>(&|g| {
-            let p0 = mle.get_bound_coeff(2 * g);
-            [(1..d).fold(p0, |acc, _| acc * p0)]
-        });
-        q_zero
-    })
-}
-
 /// Generic implementation of the split-eq fold that computes the evaluations
 /// of `q(X) = g(X) / l(X)` on the grid `[1, 2, ..., d - 1, ∞]` for
 /// arbitrary `d`.
@@ -107,78 +80,6 @@ fn compute_mles_product_sum_evals_generic<F: JoltField>(
             |inner, g, _x_in, e_in| {
                 // Build per-g pairs [(p0, p1); D] in-place, reusing `inner.pairs`.
                 for (idx, mle) in mles.iter().enumerate() {
-                    let p0 = mle.get_bound_coeff(2 * g);
-                    let p1 = mle.get_bound_coeff(2 * g + 1);
-                    inner.pairs[idx] = (p0, p1);
-                }
-
-                // Compute endpoints on the evaluation grid into the scratch
-                // `endpoints` buffer. All entries are overwritten, so no need
-                // to zero between uses.
-                eval_linear_prod_assign(&inner.pairs, &mut inner.endpoints);
-
-                // Accumulate with unreduced arithmetic
-                for k in 0..d {
-                    inner.lanes[k] += e_in.mul_to_product_accum(inner.endpoints[k]);
-                }
-            },
-            |_x_out, e_out, mut inner| {
-                // Reduce inner lanes, scale by e_out (unreduced), and reuse the
-                // existing `lanes` allocation as the outer accumulator
-                // `Vec<F::UnreducedProductAccum>`, avoiding an extra allocation.
-                for k in 0..d {
-                    let reduced_k = F::reduce_product_accum(inner.lanes[k]);
-                    inner.lanes[k] = e_out.mul_to_product_accum(reduced_k);
-                }
-                inner.lanes
-            },
-            |mut a, b| {
-                for k in 0..d {
-                    a[k] += b[k];
-                }
-                a
-            },
-        )
-        .into_iter()
-        .map(F::reduce_product_accum)
-        .collect()
-}
-
-/// Generic implementation of the split-eq fold that computes the evaluations
-/// of `q(X) = g(X) / l(X)` on the grid `[1, 2, ..., d - 1, ∞]` for
-/// arbitrary `d`.
-#[inline]
-fn compute_mle_product_sum_evals_generic<F: JoltField>(
-    d: usize,
-    mle: &MultilinearPolynomial<F>,
-    eq_poly: &GruenSplitEqPolynomial<F>,
-) -> Vec<F> {
-    /// Per-`x_out` accumulator used inside `par_fold_out_in`.
-    ///
-    /// - `lanes[k]` accumulates the unreduced contribution for output lane `k`.
-    /// - `pairs` and `endpoints` are scratch buffers reused across all `g`
-    ///   values for a given `x_out`, to avoid repeated heap allocations.
-    struct InnerAcc<F: JoltField> {
-        lanes: Vec<F::UnreducedProductAccum>,
-        pairs: Vec<(F, F)>,
-        endpoints: Vec<F>,
-    }
-
-    eq_poly
-        .par_fold_out_in(
-            // Allocate one InnerAcc per `x_out` lane; its scratch buffers are
-            // reused across all inner `g` contributions for that lane.
-            //
-            // Note: `pairs` and `endpoints` are pre-sized to length `d` so that
-            // we can update them by index without changing their length.
-            || InnerAcc {
-                lanes: vec![F::UnreducedProductAccum::zero(); d],
-                pairs: vec![(F::zero(), F::zero()); d],
-                endpoints: vec![F::zero(); d],
-            },
-            |inner, g, _x_in, e_in| {
-                // Build per-g pairs [(p0, p1); D] in-place, reusing `inner.pairs`.
-                for idx in 0..d {
                     let p0 = mle.get_bound_coeff(2 * g);
                     let p1 = mle.get_bound_coeff(2 * g + 1);
                     inner.pairs[idx] = (p0, p1);
@@ -425,28 +326,6 @@ pub fn eval_linear_prod_assign<F: JoltField>(pairs: &[(F, F)], evals: &mut [F]) 
     }
 }
 
-/// Evaluate the product of linear polynomials on the grid `U_D = [1, 2, ..., D - 1, ∞]`.
-///
-/// - `D` is `pairs.len()`.
-/// - Each pair satisfies `pairs[j] = (p_j(0), p_j(1))` for a linear `p_j`.
-/// - This sums the evaluations of `P(x) = ∏_j p_j(x)` into `sums` in the
-///   layout `[P(1), P(2), ..., P(D - 1), P(∞)]`.
-pub fn eval_linear_prod_accumulate<F: JoltField>(
-    pairs: &[(F, F)],
-    sums: &mut [F::UnreducedProductAccum],
-) {
-    debug_assert_eq!(pairs.len(), sums.len());
-    match pairs.len() {
-        2 => eval_prod_2_accumulate(pairs.try_into().unwrap(), sums),
-        3 => eval_prod_3_accumulate(pairs.try_into().unwrap(), sums),
-        5 => eval_prod_5_accumulate(pairs.try_into().unwrap(), sums),
-        9 => eval_prod_9_accumulate(pairs.try_into().unwrap(), sums),
-        // Implement more efficient than naive if these ever get used.
-        4 | 6 | 7 | 8 => unimplemented!("n_pairs = {}", pairs.len()),
-        _ => product_eval_univariate_naive_accumulate(pairs, sums),
-    }
-}
-
 /// Evaluate the product of 2 linear polynomials at the small internal grid used
 /// by the interpolation routines (returns values at 1, 2, and ∞).
 ///
@@ -475,17 +354,6 @@ fn eval_prod_2_assign<F: JoltField>(p: &[(F, F); 2], outputs: &mut [F]) {
     outputs[1] = (p[0].1 - p[0].0) * (p[1].1 - p[1].0); // ∞
 }
 
-/// Evaluate the product of 2 linear polynomials on `U_2 = [1, ∞]`.
-///
-/// Given `p[j] = (p_j(0), p_j(1))` and `P(x) = ∏_j p_j(x)`, this writes:
-/// - `outputs[0] += P(1)`
-/// - `outputs[1] += P(∞) = ∏_j (p_j(1) - p_j(0))`
-#[inline(always)]
-fn eval_prod_2_accumulate<F: JoltField>(p: &[(F, F); 2], outputs: &mut [F::UnreducedProductAccum]) {
-    outputs[0] += p[0].1.mul_to_product_accum(p[1].1); // 1
-    outputs[1] += (p[0].1 - p[0].0).mul_to_product_accum(p[1].1 - p[1].0); // ∞
-}
-
 /// Evaluate the product of 3 linear polynomials on `U_3 = [1, 2, ∞]`.
 ///
 /// Given `pairs[j] = (p_j(0), p_j(1))` and `P(x) = ∏_j p_j(x)`, this writes:
@@ -501,26 +369,6 @@ fn eval_prod_3_assign<F: JoltField>(pairs: &[(F, F); 3], outputs: &mut [F]) {
     outputs[0] = a1 * b1;
     outputs[1] = a2 * b2;
     outputs[2] = a_inf * b_inf;
-}
-
-/// Evaluate the product of 3 linear polynomials on `U_3 = [1, 2, ∞]`.
-///
-/// Given `pairs[j] = (p_j(0), p_j(1))` and `P(x) = ∏_j p_j(x)`, this writes:
-/// - `outputs[0] += P(1)`
-/// - `outputs[1] += P(2)`
-/// - `outputs[2] += P(∞)`
-#[inline(always)]
-fn eval_prod_3_accumulate<F: JoltField>(
-    pairs: &[(F, F); 3],
-    outputs: &mut [F::UnreducedProductAccum],
-) {
-    let (a1, a2, a_inf) = eval_linear_prod_2_internal(pairs[0], pairs[1]);
-    let (b0, b1) = pairs[2];
-    let b_inf = b1 - b0;
-    let b2 = b1 + b_inf;
-    outputs[0] += a1.mul_to_product_accum(b1);
-    outputs[1] += a2.mul_to_product_accum(b2);
-    outputs[2] += a_inf.mul_to_product_accum(b_inf);
 }
 
 /// Evaluate the product of 4 linear polynomials at the internal interpolation
@@ -809,47 +657,6 @@ fn eval_prod_8_assign<F: JoltField>(p: &[(F, F); 8], outputs: &mut [F]) {
     outputs[5] = a6 * b6;
     outputs[6] = a7 * b7;
     outputs[7] = a_inf * b_inf;
-}
-
-/// Evaluate the product of 8 linear polynomials on `U_8 = [1, 2, ..., 7, ∞]`.
-///
-/// Given `p[j] = (p_j(0), p_j(1))` and `P(x) = ∏_j p_j(x)`, this writes:
-/// - `outputs[0..7] = [P(1), P(2), ..., P(7), P(∞)]`.
-///
-/// # Safety
-///
-/// As in `eval_linear_prod_8_internal`, this function reinterprets
-/// `p[0..4]` and `p[4..8]` as `[(F, F); 4]`. The invariants are:
-/// - `p` is a fixed-size `[ (F, F); 8 ]`, so both sub-slices have length 4 and
-///   correct alignment.
-/// - The sub-slices are non-overlapping.
-fn eval_prod_9_accumulate<F: JoltField>(p: &[(F, F); 9], outputs: &mut [F::UnreducedProductAccum]) {
-    // TODO: Implement more optimal way to do this.
-    // 5x4 split probably better than current 8x1 split.
-    let p8 = p[0..8].try_into().unwrap();
-    let [a1, a2, a3, a4, a5, a6, a7, a8, a_inf] = eval_linear_prod_8_internal(p8);
-
-    let (lin0, lin1) = p[8];
-    let delta = lin1 - lin0;
-    let l1 = lin1;
-    let l2 = l1 + delta;
-    let l3 = l2 + delta;
-    let l4 = l3 + delta;
-    let l5 = l4 + delta;
-    let l6 = l5 + delta;
-    let l7 = l6 + delta;
-    let l8 = l7 + delta;
-    let l_inf = delta;
-
-    outputs[0] += a1.mul_to_product_accum(l1);
-    outputs[1] += a2.mul_to_product_accum(l2);
-    outputs[2] += a3.mul_to_product_accum(l3);
-    outputs[3] += a4.mul_to_product_accum(l4);
-    outputs[4] += a5.mul_to_product_accum(l5);
-    outputs[5] += a6.mul_to_product_accum(l6);
-    outputs[6] += a7.mul_to_product_accum(l7);
-    outputs[7] += a8.mul_to_product_accum(l8);
-    outputs[8] += a_inf.mul_to_product_accum(l_inf);
 }
 
 /// Evaluate the product of 16 linear polynomials on `U_16 = [1, 2, ..., 15, ∞]`.
@@ -1280,50 +1087,6 @@ pub fn eval_linear_prod_naive_assign<F: JoltField>(pairs: &[(F, F)], evals: &mut
         acc_inf *= *pinf;
     }
     evals[d - 1] = acc_inf;
-}
-
-/// Naive evaluator for the product of `D` linear polynomials on `U_D = [1, 2, ..., D - 1, ∞]`.
-///
-/// The evaluations on `U_D` are accumulated into `sums`.
-///
-/// Inputs:
-/// - `pairs[j] = (p_j(0), p_j(1))`
-/// - `sums`: accumulator with layout `[1, 2, ..., D - 1, ∞]`
-fn product_eval_univariate_naive_accumulate<F: JoltField>(
-    pairs: &[(F, F)],
-    sums: &mut [F::UnreducedProductAccum],
-) {
-    let d = pairs.len();
-    debug_assert_eq!(sums.len(), d);
-    if d == 0 {
-        return;
-    }
-    // Memoize p(1)=p1, then p(2)=p(1)+pinf, p(3)=p(2)+pinf, ...
-    let mut cur_vals = Vec::with_capacity(d);
-    let mut pinfs = Vec::with_capacity(d);
-    for &(p0, p1) in pairs.iter() {
-        let pinf = p1 - p0;
-        cur_vals.push(p1);
-        pinfs.push(pinf);
-    }
-    // Evaluate at x = 1..(d-1)
-    for idx in 0..(d - 1) {
-        let mut acc = F::one();
-        for v in cur_vals.iter() {
-            acc *= *v;
-        }
-        sums[idx] += acc.to_unreduced();
-        // advance all to next x
-        for i in 0..d {
-            cur_vals[i] += pinfs[i];
-        }
-    }
-    // Evaluate at infinity (product of leading coefficients)
-    let mut acc_inf = F::one();
-    for pinf in pinfs.iter() {
-        acc_inf *= *pinf;
-    }
-    sums[d - 1] += acc_inf.to_unreduced();
 }
 
 #[cfg(test)]

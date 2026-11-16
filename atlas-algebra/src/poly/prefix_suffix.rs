@@ -113,14 +113,6 @@ impl<F: JoltField> PolynomialEvaluation<F> for CachedPolynomial<F> {
         self.inner.evaluate(x)
     }
 
-    fn batch_evaluate<C>(_polys: &[&Self], _r: &[C]) -> Vec<F>
-    where
-        C: Copy + Send + Sync + Into<F>,
-        F: std::ops::Mul<C, Output = F> + std::ops::SubAssign<F>,
-    {
-        unimplemented!("Currently unused")
-    }
-
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F> {
         self.inner.sumcheck_evals(index, degree, order)
     }

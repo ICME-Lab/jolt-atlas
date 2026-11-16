@@ -631,16 +631,6 @@ pub trait PolynomialEvaluation<F: JoltField> {
         C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
         F: FieldChallengeOps<C>;
 
-    /// Evaluates a batch of polynomials on the same point `r`.
-    /// Returns: (evals, EQ table)
-    /// where EQ table is EQ(x, r) for x \in {0, 1}^|r|. This is used for
-    /// batched opening proofs (see opening_proof.rs)
-    fn batch_evaluate<C>(polys: &[&Self], r: &[C]) -> Vec<F>
-    where
-        Self: Sized,
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>;
-
     /// Computes this polynomial's contribution to the computation of a prover
     /// sumcheck message (i.e. a univariate polynomial of the given `degree`).
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F>;
@@ -815,14 +805,6 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
             }
             MultilinearPolynomial::OneHot(poly) => poly.evaluate(r),
         }
-    }
-
-    fn batch_evaluate<C>(_polys: &[&Self], _r: &[C]) -> Vec<F>
-    where
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        unimplemented!("Currently unused")
     }
 
     #[inline]

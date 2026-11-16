@@ -258,9 +258,6 @@ pub trait JoltField:
 {
     const NUM_BYTES: usize;
 
-    /// Number of 64-bit limbs in the canonical field element representation (Fp128: 2).
-    const NUM_LIMBS: usize;
-
     /// Montgomery factor R = 2^(64*NUM_LIMBS) mod p.
     /// For non-Montgomery fields (e.g. Solinas), R = 1.
     const MONTGOMERY_R: Self;
@@ -348,10 +345,6 @@ pub trait JoltField:
         + ChallengeFieldOps<Self>
         + OptimizedMul<Self, Self>;
 
-    /// Computes the small-value lookup tables.
-    fn compute_lookup_tables() -> Self::SmallValueLookupTables {
-        unimplemented!("Small-value lookup tables are unimplemented")
-    }
     /// Conversion from a byte array to a field element.
     fn from_bytes(bytes: &[u8]) -> Self;
     /// Conversion from a field element to a 64-bit unsigned integer.
@@ -427,7 +420,6 @@ pub trait MaybeAllocative {}
 impl<T> MaybeAllocative for T {}
 
 pub trait OptimizedMul<Rhs, Output>: Sized + Mul<Rhs, Output = Output> {
-    fn mul_0_optimized(self, other: Rhs) -> Self::Output;
     fn mul_1_optimized(self, other: Rhs) -> Self::Output;
     fn mul_01_optimized(self, other: Rhs) -> Self::Output;
 }
@@ -436,15 +428,6 @@ impl<F> OptimizedMul<F, F> for F
 where
     F: JoltField,
 {
-    #[inline(always)]
-    fn mul_0_optimized(self, other: F) -> F {
-        if self.is_zero() || other.is_zero() {
-            Self::zero()
-        } else {
-            self * other
-        }
-    }
-
     #[inline(always)]
     fn mul_1_optimized(self, other: F) -> F {
         if self.is_one() {

@@ -46,20 +46,6 @@ pub trait Packed:
             .collect()
     }
 
-    /// Splits into a packed prefix and a scalar suffix shorter than `WIDTH`.
-    #[inline]
-    fn pack_slice_with_suffix(buf: &[Self::Scalar]) -> (Vec<Self>, &[Self::Scalar]) {
-        let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
-        (Self::pack_slice(packed), suffix)
-    }
-
-    #[inline]
-    fn unpack_slice(buf: &[Self]) -> Vec<Self::Scalar> {
-        buf.iter()
-            .flat_map(|p| (0..Self::WIDTH).map(move |i| p.extract(i)))
-            .collect()
-    }
-
     #[inline(always)]
     fn square(self) -> Self {
         self * self

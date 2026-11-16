@@ -24,7 +24,6 @@ atlas-claims.workspace = true
 
 # Numeric
 num.workspace = true
-num-derive.workspace = true
 num-traits.workspace = true
 
 # Serialization
@@ -37,17 +36,9 @@ rayon.workspace = true
 
 # Randomness
 rand.workspace = true
-rand_core.workspace = true
 
 # Tracing and Profiling
 tracing.workspace = true
-tracing-chrome.workspace = true
-tracing-subscriber.workspace = true
-
-# Core Utilities
-derive_more.workspace = true
-itertools.workspace = true
-regex.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
 

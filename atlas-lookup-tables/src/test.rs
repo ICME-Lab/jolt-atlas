@@ -1,6 +1,6 @@
 use atlas_algebra::{
     field::JoltField,
-    utils::{index_to_field_bitvector, interleave_bits, lookup_bits::LookupBits},
+    utils::{index_to_field_bitvector, lookup_bits::LookupBits},
 };
 
 use common::consts::XLEN;
@@ -110,14 +110,6 @@ pub fn lookup_table_mle_linearity_test<
             assert_eq!(lhs, rhs, "evaluate_mle is not affine in variable {var_idx}");
         }
     }
-}
-
-/// Generates a lookup index where right operand is 111..000
-pub fn gen_bitmask_lookup_index(rng: &mut StdRng) -> u64 {
-    let x = rng.next_u32();
-    let zeros = rng.gen_range(0..=XLEN);
-    let y = (!0u32).wrapping_shl(zeros as u32);
-    interleave_bits(x, y)
 }
 
 fn prefix_suffix_test_inner<

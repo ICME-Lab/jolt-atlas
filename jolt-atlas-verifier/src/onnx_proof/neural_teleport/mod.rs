@@ -12,11 +12,6 @@ pub mod small_table;
 pub mod trig_downscale;
 pub mod utils;
 
-use common::consts::MODEL_SCALE;
-
-/// Cos/Sin table output scale: `2^MODEL_SCALE`.
-pub const SCALE_FACTOR: f64 = (1u128 << MODEL_SCALE) as f64;
-
 /// Converts an n-bit index to a signed integer using two's complement.
 ///
 /// For an n-bit representation, indices in [0, 2^(n-1)) remain positive,

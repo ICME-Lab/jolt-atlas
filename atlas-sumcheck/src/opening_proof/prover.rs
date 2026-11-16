@@ -174,18 +174,6 @@ where
         debug_assert!(prev.is_none(), "duplicate reduced claim for {key:?}");
     }
 
-    pub fn evaluation_openings_mut(&mut self) -> &mut Openings<F> {
-        &mut self.openings
-    }
-
-    /// Get the value of an opening by key
-    pub fn get_opening(&self, key: OpeningId) -> F {
-        self.openings
-            .get(&key)
-            .unwrap_or_else(|| panic!("opening should exist for {key:?}"))
-            .1
-    }
-
     pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {
         let lo = OpeningId::new(
             VirtualPoly::NodeOutput(node_idx),
@@ -339,26 +327,12 @@ where
         }
         std::mem::take(&mut self.openings)
     }
-
-    pub fn assert_virtual_polynomial_opening_exists(
-        &self,
-        opening_id: OpeningId,
-    ) -> Option<&(OpeningPoint<false, F>, F)> {
-        opening_id
-            .virtual_poly()
-            .expect("expected virtual polynomial");
-        self.openings.get(&opening_id)
-    }
 }
 
 impl<F> ProverOpeningAccumulator<F>
 where
     F: JoltField,
 {
-    pub fn num_sumchecks(&self) -> usize {
-        self.sumchecks.len()
-    }
-
     // ========== Batch Opening Reduction Sumcheck ==========
 
     /// Prepares sumcheck instances for the batch opening reduction.

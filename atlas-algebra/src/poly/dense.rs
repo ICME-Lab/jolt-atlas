@@ -256,63 +256,6 @@ impl<F: JoltField> PolynomialEvaluation<F> for DensePolynomial<F> {
         self.evaluate(r)
     }
 
-    fn batch_evaluate<C>(polys: &[&Self], r: &[C]) -> Vec<F>
-    where
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        // A more cache-efficient batch polynomial evaluation
-        let num_polys = polys.len();
-        let m = r.len() / 2;
-        let (r2, r1) = r.split_at(m);
-        let (eq_one, eq_two) = rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
-
-        let evals = (0..eq_one.len())
-            .into_par_iter()
-            .with_min_len(par_enabled())
-            .map(|x1| {
-                let eq1_val = eq_one[x1];
-                let inner_sums = (0..eq_two.len())
-                    .into_par_iter()
-                    .with_min_len(par_enabled())
-                    .filter_map(|x2| {
-                        let eq2_val = eq_two[x2];
-                        let idx = x1 * eq_two.len() + x2;
-                        let partial: Vec<F> = polys
-                            .iter()
-                            .map(|poly| {
-                                let coeff = poly.Z[idx];
-                                OptimizedMul::mul_01_optimized(eq2_val, coeff)
-                            })
-                            .collect();
-                        Some(partial)
-                    })
-                    .reduce(
-                        || vec![F::zero(); num_polys],
-                        |mut acc, item| {
-                            for i in 0..num_polys {
-                                acc[i] += item[i];
-                            }
-                            acc
-                        },
-                    );
-                inner_sums
-                    .into_iter()
-                    .map(|s| OptimizedMul::mul_01_optimized(eq1_val, s))
-                    .collect::<Vec<_>>()
-            })
-            .reduce(
-                || vec![F::zero(); num_polys],
-                |mut acc, item| {
-                    for i in 0..num_polys {
-                        acc[i] += item[i];
-                    }
-                    acc
-                },
-            );
-        evals
-    }
-
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F> {
         debug_assert!(degree > 0);
         debug_assert!(index < self.len() / 2);

@@ -118,15 +118,6 @@ impl<I: Into<usize> + Copy + Default + Send + Sync + 'static, F: JoltField> Poly
         unimplemented!()
     }
 
-    fn batch_evaluate<C>(_polys: &[&Self], _r: &[C]) -> Vec<F>
-    where
-        Self: Sized,
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        unimplemented!()
-    }
-
     #[inline]
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F> {
         debug_assert!(degree > 0);

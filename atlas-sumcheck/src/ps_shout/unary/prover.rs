@@ -107,28 +107,8 @@ pub fn ps_read_raf_prover<
     ReadRafSumcheckProver::new_inner(params, lookup_indices, raf_state)
 }
 
-/// Build the read-raf prover for an explicit [`CycleWeight`] and claims (used
-/// for packed multi-node instances, where there is no single provider node).
-/// Draws the same transcript challenge as [`ps_read_raf_prover`].
-#[allow(clippy::too_many_arguments)]
-pub fn ps_read_raf_prover_with_cycle<
-    F: JoltField,
-    T: Transcript,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
-    const LOG_K: usize,
->(
-    claims: ReadRafClaims<F>,
-    cycle: CycleWeight<F>,
-    ra_poly: (VirtualPoly, SumcheckId),
-    lookup_indices: Vec<LookupBits>,
-    transcript: &mut T,
-) -> UnaryReadRafSumcheckProver<F, LUT, LOG_K> {
-    let gamma = transcript.challenge_scalar();
-    ps_read_raf_prover_with_gamma::<F, LUT, LOG_K>(gamma, claims, cycle, ra_poly, lookup_indices)
-}
-
-/// [`ps_read_raf_prover_with_cycle`] with the batching challenge `gamma`
-/// already drawn — no transcript, so instances can be built in parallel.
+/// Prover for an explicit [`CycleWeight`] and input claim (packed instances), with the batching
+/// challenge `gamma` already drawn: no transcript, so instances can be built in parallel.
 pub fn ps_read_raf_prover_with_gamma<
     F: JoltField,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,

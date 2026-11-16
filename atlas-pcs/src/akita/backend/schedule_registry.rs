@@ -339,7 +339,6 @@ impl AdvicePrecommitLayouts {
 }
 
 pub const FIXTURE_TRUSTED_ADVICE_GROUP: PolynomialGroupLayout = PolynomialGroupLayout::new(14, 1);
-pub const FIXTURE_K16_FINAL_NUM_VARS: (usize, usize) = (22, 26);
 
 fn provision_groups_for_config<Cfg: CommitmentConfig>(
     dense_catalog: &ValidatedScheduleCatalog,
@@ -422,34 +421,6 @@ fn provision_groups_for_config<Cfg: CommitmentConfig>(
         &combinations,
         final_group,
     )?)
-}
-
-/// Adapt grouped rows for the standard single-chunk one-hot family.
-pub fn provision_groups_for_k(
-    dense_catalog: &ValidatedScheduleCatalog,
-    full_dense_catalog: &ValidatedScheduleCatalog,
-    one_hot_catalog: &ValidatedScheduleCatalog,
-    params: &GroupedScheduleParams,
-    one_hot_k: usize,
-) -> Result<RegisteredRows, GroupedScheduleError> {
-    let family = OneHotFamily::from_parts(one_hot_k, AkitaChunkProfile::new(1, 0))?;
-    family.validate_num_vars(
-        params.final_group.num_vars(),
-        params.final_group.num_polynomials(),
-    )?;
-    with_one_hot_family!(family, |Cfg| {
-        let catalog = TrustedScheduleCatalog::<Cfg>::new(
-            one_hot_catalog.clone(),
-            AkitaChunkProfile::default().witness_cfg(),
-        )?;
-        provision_groups_for_config::<Cfg>(
-            dense_catalog,
-            full_dense_catalog,
-            &catalog,
-            params,
-            one_hot_k,
-        )
-    })
 }
 
 #[cfg(test)]

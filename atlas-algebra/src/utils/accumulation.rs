@@ -713,33 +713,6 @@ impl<F: JoltField> MontgomeryReduce<F> for FullAccumS<F> {
     }
 }
 
-#[inline(always)]
-pub fn fmadd_i32_s64(sum: &mut S128, c: i32, v: S64) {
-    if c == 0 {
-        return;
-    }
-    let limbs = v.magnitude_as_u64();
-    if limbs == 0 {
-        return;
-    }
-    let mag = (limbs as u128) * (c.unsigned_abs() as u128);
-    let mut signed = mag as i128;
-    if v.is_positive != (c >= 0) {
-        signed = -signed;
-    }
-    *sum += S128::from_i128(signed);
-}
-
-#[inline(always)]
-pub fn fmadd_i32_u64(sum: &mut S128, c: i32, v: u64) {
-    if c == 0 || v == 0 {
-        return;
-    }
-    let mag = (v as u128) * (c.unsigned_abs() as u128);
-    let signed = if c >= 0 { mag as i128 } else { -(mag as i128) };
-    *sum += S128::from_i128(signed);
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct S128Sum {
     pub sum: S128,

@@ -254,16 +254,6 @@ where
     }
 }
 
-/// Verifier counterpart of [`identity_rangecheck_prover_with_cycle`].
-pub fn identity_rangecheck_verifier_with_cycle<F: JoltField>(
-    cycle: CycleWeight<F>,
-    log_K: usize,
-    ra_poly: (VirtualPoly, SumcheckId),
-    input_claim: F,
-) -> IdentityRCVerifier<F> {
-    IdentityRCParams::from_parts_with_cycle(cycle, log_K, ra_poly, input_claim).into_verifier()
-}
-
 pub fn identity_rangecheck_verifier<F: JoltField>(
     provider: &impl IdentityRCProvider<F>,
     accumulator: &mut VerifierOpeningAccumulator<F>,

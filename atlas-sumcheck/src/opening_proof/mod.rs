@@ -364,10 +364,6 @@ impl<F> VerifierOpeningAccumulator<F>
 where
     F: JoltField,
 {
-    pub fn num_sumchecks(&self) -> usize {
-        self.sumchecks.len()
-    }
-
     /// The distinct committed polynomials with a registered opening, sorted —
     /// the order of the proof's reduced claims and of the prover's
     /// `state.polynomials` from `finalize_batch_opening_sumcheck`.

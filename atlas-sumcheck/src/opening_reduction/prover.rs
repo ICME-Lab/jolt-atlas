@@ -582,13 +582,4 @@ where
             }
         };
     }
-
-    pub fn cache_sumcheck_claim(&mut self) {
-        debug_assert!(self.sumcheck_claim.is_none());
-        let claim = match &mut self.prover_state {
-            ProverOpening::Dense(opening) => opening.final_claim(),
-            ProverOpening::OneHot(opening) => opening.final_claim(),
-        };
-        self.sumcheck_claim = Some(claim);
-    }
 }

@@ -60,22 +60,9 @@ pub trait OpLookupProve {
         LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
         Self: PrefixSuffixShoutProvider<F, LUT, LOG_K>;
 
-    /// First half of [`Self::read_raf_prove`]: evaluate the lookup witness at
-    /// `r_cycle`, append its opening claim, and return the lookup bits so the
-    /// read-raf sumcheck itself can be built later (see
-    /// [`Self::read_raf_prover_from_bits`] and `deferred_lookups`).
-    fn append_witness_claim<F, T>(
-        &self,
-        trace: &Trace,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Vec<LookupBits>
-    where
-        F: JoltField,
-        T: Transcript;
-
-    /// [`Self::append_witness_claim`] for a witness the caller already holds
-    /// (returns nothing; the caller keeps the witness).
+    /// Append the lookup's witness claim for a witness the caller already holds, without
+    /// building the read-raf sumcheck (see [`Self::read_raf_prover_from_bits`] and
+    /// `deferred_lookups`).
     fn append_witness_claim_for<F, T>(
         &self,
         witness: &Tensor<i64>,
@@ -126,27 +113,9 @@ impl<H: LookupWitness> OpLookupProve for OpLookupProvider<H> {
         (prover, lookup_indices)
     }
 
-    /// First half of [`Self::read_raf_prove`]: evaluate the lookup witness at
-    /// `r_cycle`, append its opening claim, and return the lookup bits so the
-    /// read-raf sumcheck itself can be built later (see
-    /// [`Self::read_raf_prover_from_bits`] and `deferred_lookups`).
-    fn append_witness_claim<F, T>(
-        &self,
-        trace: &Trace,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Vec<LookupBits>
-    where
-        F: JoltField,
-        T: Transcript,
-    {
-        let witness = self.helper.witness(&self.computation_node, trace);
-        append_raf_claims_prover(self, &witness, accumulator, transcript);
-        self.helper.lookup_bits(&witness)
-    }
-
-    /// [`Self::append_witness_claim`] for a witness the caller already holds
-    /// (returns nothing; the caller keeps the witness).
+    /// Append the lookup's witness claim for a witness the caller already holds, without
+    /// building the read-raf sumcheck (see [`Self::read_raf_prover_from_bits`] and
+    /// `deferred_lookups`).
     fn append_witness_claim_for<F, T>(
         &self,
         witness: &Tensor<i64>,

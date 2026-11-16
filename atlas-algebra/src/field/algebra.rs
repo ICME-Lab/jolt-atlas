@@ -336,11 +336,6 @@ pub trait CanonicalEncoding:
     fn from_challenge_bytes(bytes: &[u8]) -> Self {
         Self::from_bytes_le_reduced(bytes)
     }
-
-    /// Constructs a non-optimized scalar challenge from transcript bytes.
-    ///
-    /// Implementations must choose the protocol's byte order explicitly.
-    fn from_scalar_challenge_bytes(bytes: &[u8]) -> Self;
 }
 
 /// Accumulates sums and products with potentially deferred modular reduction.
@@ -371,22 +366,10 @@ pub trait Accumulator: Default + Copy + Send + Sync {
     /// Fused multiply-add: `self += a * b` without intermediate reduction.
     fn fmadd(&mut self, a: Self::Element, b: Self::Element);
 
-    /// Fused multiply-add with a `u8` scalar: `self += a * F::from(b)`.
-    #[inline]
-    fn fmadd_u8(&mut self, a: Self::Element, b: u8) {
-        self.fmadd(a, Self::Element::from_u8(b));
-    }
-
     /// Fused multiply-add with a `u64` scalar: `self += a * F::from(b)`.
     #[inline]
     fn fmadd_u64(&mut self, a: Self::Element, b: u64) {
         self.fmadd(a, Self::Element::from_u64(b));
-    }
-
-    /// Fused multiply-add with a `u128` scalar: `self += a * F::from(b)`.
-    #[inline]
-    fn fmadd_u128(&mut self, a: Self::Element, b: u128) {
-        self.fmadd(a, Self::Element::from_u128(b));
     }
 
     /// Fused multiply-add with an `i64` scalar: `self += a * F::from(b)`.
@@ -430,25 +413,11 @@ pub trait Accumulator: Default + Copy + Send + Sync {
             self.fmadd(-value, magnitude);
         }
     }
-
-    /// Fused multiply-add with a `bool` scalar: `self += a` when `b` is true.
-    #[inline]
-    fn fmadd_bool(&mut self, a: Self::Element, b: bool) {
-        if b {
-            self.add(a);
-        }
-    }
 }
 
 pub trait WithAccumulator: Ring {
     /// General field-product accumulator.
     type Accumulator: Accumulator<Element = Self>;
-
-    /// Accumulator optimized for signed `u64`/`i64` scalar products.
-    type SmallScalarAccumulator: Accumulator<Element = Self>;
-
-    /// Accumulator optimized for signed 256-bit scalar products.
-    type SignedProductAccumulator: Accumulator<Element = Self>;
 }
 
 /// Fallback accumulator using standard ring arithmetic: every

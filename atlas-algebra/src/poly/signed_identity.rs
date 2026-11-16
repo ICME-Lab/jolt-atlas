@@ -69,14 +69,6 @@ impl<F: JoltField> PolynomialEvaluation<F> for SignedIdentityPoly<F> {
         y - sign_bit * w
     }
 
-    fn batch_evaluate<C>(_polys: &[&Self], _r: &[C]) -> Vec<F>
-    where
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        unimplemented!("Currently unused")
-    }
-
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F> {
         let mut evals = vec![F::zero(); degree];
         let m = match order {
@@ -269,15 +261,6 @@ impl<F: JoltField, const X_LEN: usize> PolynomialEvaluation<F> for SignedOperand
             })
             .sum();
         y - sign_bit * F::from_u64(X_LEN.pow2() as u64)
-    }
-
-    fn batch_evaluate<C>(_: &[&Self], _: &[C]) -> Vec<F>
-    where
-        Self: Sized,
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        unimplemented!("Currently unused")
     }
 
     fn sumcheck_evals(&self, _: usize, _: usize, _: BindingOrder) -> Vec<F> {

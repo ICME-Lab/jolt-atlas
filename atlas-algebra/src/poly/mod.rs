@@ -1,17 +1,14 @@
 pub mod compact;
 pub mod dense;
 pub mod eq;
-pub mod eq_plus_one;
 pub mod identity;
 pub mod lagrange;
 pub mod lt;
 pub mod multilinear;
-pub mod multiquadratic;
 pub mod one_hot;
 pub mod point;
 pub mod prefix_suffix;
 pub mod ra;
-pub mod range_mask;
 pub mod rlc;
 pub mod signed_identity;
 pub mod split_eq;

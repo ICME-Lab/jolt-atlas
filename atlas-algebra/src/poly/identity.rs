@@ -78,14 +78,6 @@ impl<F: JoltField> PolynomialEvaluation<F> for IdentityPolynomial<F> {
             .sum()
     }
 
-    fn batch_evaluate<C>(_polys: &[&Self], _r: &[C]) -> Vec<F>
-    where
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        unimplemented!("Currently unused")
-    }
-
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F> {
         let mut evals = vec![F::zero(); degree];
         let m = match order {
@@ -257,14 +249,6 @@ impl<F: JoltField> PolynomialEvaluation<F> for OperandPolynomial<F> {
                 })
                 .sum(),
         }
-    }
-
-    fn batch_evaluate<C>(_polys: &[&Self], _r: &[C]) -> Vec<F>
-    where
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        unimplemented!("Currently unused")
     }
 
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F> {
@@ -441,14 +425,6 @@ impl<F: JoltField> PolynomialEvaluation<F> for UnmapRamAddressPolynomial<F> {
         F: FieldChallengeOps<C>,
     {
         self.int_poly.evaluate(r).mul_u64(8) + F::from_u64(self.start_address)
-    }
-
-    fn batch_evaluate<C>(_polys: &[&Self], _r: &[C]) -> Vec<F>
-    where
-        C: Copy + Send + Sync + Into<F> + ChallengeFieldOps<F>,
-        F: FieldChallengeOps<C>,
-    {
-        unimplemented!("Unused")
     }
 
     fn sumcheck_evals(&self, index: usize, degree: usize, order: BindingOrder) -> Vec<F> {

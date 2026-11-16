@@ -155,7 +155,6 @@ fn mul_mag_reduced<const M: usize>(a: Fp128, mag: &Limbs<M>) -> Fp128 {
 
 impl JoltField for Fp128 {
     const NUM_BYTES: usize = 16;
-    const NUM_LIMBS: usize = 2;
 
     // fp128 stores elements canonically (no Montgomery scaling), so R = 1.
     // SAFETY: 1 < p.

@@ -5,7 +5,7 @@ use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::RelationWitness;
 use crate::{
     engine::prover::round_check_failed,
-    opening_proof::{prover::ProverOpeningAccumulator, SumcheckId},
+    opening_proof::prover::ProverOpeningAccumulator,
     ps_shout::{CyclePoly, CycleWeight},
 };
 use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
@@ -22,7 +22,7 @@ use atlas_algebra::{
     },
 };
 use atlas_claims::SymbolicSumcheck;
-use common::{parallel::par_enabled, VirtualPoly};
+use common::parallel::par_enabled;
 use std::array;
 
 /// Prover for the Prefix suffix Read-raf checking sum-check protocol.
@@ -234,18 +234,6 @@ pub fn identity_rangecheck_prover<F: JoltField>(
 ) -> IdentityRCProver<F> {
     let params = IdentityRCParams::new(provider, accumulator)
         .expect("the prover holds the range check's claims");
-    IdentityRCProver::gen(params, lookup_indices)
-}
-
-/// Prover for an explicit [`CycleWeight`] and input claim (packed instances).
-pub fn identity_rangecheck_prover_with_cycle<F: JoltField>(
-    cycle: CycleWeight<F>,
-    log_K: usize,
-    ra_poly: (VirtualPoly, SumcheckId),
-    input_claim: F,
-    lookup_indices: Vec<LookupBits>,
-) -> IdentityRCProver<F> {
-    let params = IdentityRCParams::from_parts_with_cycle(cycle, log_K, ra_poly, input_claim);
     IdentityRCProver::gen(params, lookup_indices)
 }
 

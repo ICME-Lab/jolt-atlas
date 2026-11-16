@@ -66,13 +66,6 @@ impl OneHotParams {
         Self::from_config_and_log_K(&config, log_K)
     }
 
-    /// Extract the minimal config for serialization in the proof.
-    pub fn to_config(&self) -> OneHotConfig {
-        OneHotConfig {
-            log_k_chunk: self.log_k_chunk as u8,
-        }
-    }
-
     pub fn lookup_index_chunk(&self, index: u64, idx: usize) -> u8 {
         ((index >> self.instruction_shifts[idx]) & (self.k_chunk - 1) as u64) as u8
     }

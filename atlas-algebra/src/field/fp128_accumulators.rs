@@ -1,5 +1,5 @@
 use crate::field::signed::S256;
-use crate::field::{Accumulator, Fp128, Fp128MulU64Accum, Fp128ProductAccum, Ring, Unreduced};
+use crate::field::{Accumulator, Fp128, Fp128MulU64Accum, Fp128ProductAccum, Unreduced};
 
 /// Deferred-reduction accumulator for fp128 products.
 #[derive(Clone, Copy)]
@@ -41,11 +41,6 @@ impl<const P: u128> Accumulator for Fp128Accumulator<P> {
         self.0 .0[0] += product.0[0];
         self.0 .0[1] += product.0[1];
         self.0 .0[2] += product.0[2];
-    }
-
-    #[inline(always)]
-    fn fmadd_u128(&mut self, a: Fp128<P>, b: u128) {
-        self.0 += a.mul_unreduced(Fp128::<P>::from_u128(b));
     }
 }
 
@@ -173,7 +168,7 @@ impl<const P: u128> Accumulator for Fp128SignedAccumulator<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field::{Field, NaiveAccumulator};
+    use crate::field::{Field, NaiveAccumulator, Ring};
     use rand_chacha::ChaCha20Rng;
     use rand_core::{RngCore, SeedableRng};
 

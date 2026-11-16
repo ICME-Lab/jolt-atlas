@@ -7,7 +7,6 @@ license-file = "../LICENSE"
 
 [dependencies]
 atlas-trace.workspace = true
-bytes = "1"
 prost = "0.13"
 thiserror.workspace = true
 rand = { workspace = true, default-features = true, optional = true }

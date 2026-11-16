@@ -92,20 +92,6 @@ impl CommitmentGroupRole {
         }
     }
 
-    pub const fn new_indexed(
-        order: u64,
-        transcript_label: &'static [u8],
-        diagnostic_name: &'static str,
-        transcript_index: u64,
-    ) -> Self {
-        Self {
-            order,
-            transcript_label,
-            diagnostic_name,
-            transcript_index: Some(transcript_index),
-        }
-    }
-
     /// Protocol-defined canonical batch position.
     pub const fn order(self) -> u64 {
         self.order

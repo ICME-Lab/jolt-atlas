@@ -51,7 +51,6 @@ pub mod emit {
     /// First logical trace exponent using setup offloading.
     pub const RECURSIVE_TRACE_LOG_T_CUTOVER: usize = 21;
     pub const K16_COLUMN_VARIABLES: usize = 4;
-    pub const K256_COLUMN_VARIABLES: usize = 8;
 
     /// Reachable scalar keys for one family grid.
     pub fn keys(

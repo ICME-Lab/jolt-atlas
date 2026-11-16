@@ -20,8 +20,7 @@
 use super::word::mul64_wide;
 use crate::field::PseudoMersenne;
 use crate::field::{
-    CanonicalBytes, CanonicalEncoding, Field, Fp128Accumulator, Fp128SignedAccumulator, Ring,
-    WithAccumulator,
+    CanonicalBytes, CanonicalEncoding, Field, Fp128Accumulator, Ring, WithAccumulator,
 };
 use rand_core::RngCore;
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -1075,19 +1074,12 @@ impl<const P: u128> CanonicalEncoding for Fp128<P> {
     fn num_bits(&self) -> u32 {
         u128::BITS - join(self.0).leading_zeros()
     }
-
-    #[inline]
-    fn from_scalar_challenge_bytes(bytes: &[u8]) -> Self {
-        Self::from_bytes_le_reduced(bytes)
-    }
 }
 
 crate::impl_serde_bytes!(impl[const P: u128] Fp128<P>, 16);
 
 impl<const P: u128> WithAccumulator for Fp128<P> {
     type Accumulator = Fp128Accumulator<P>;
-    type SmallScalarAccumulator = Fp128SignedAccumulator<P>;
-    type SignedProductAccumulator = Fp128SignedAccumulator<P>;
 }
 
 impl<const P: u128> PseudoMersenne for Fp128<P> {

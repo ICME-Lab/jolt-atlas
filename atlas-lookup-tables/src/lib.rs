@@ -150,13 +150,6 @@ pub enum LookupTables<const XLEN: usize> {
 }
 
 impl<const XLEN: usize> LookupTables<XLEN> {
-    /// Returns the discriminant index of the given lookup table variant.
-    pub fn enum_index(table: &Self) -> usize {
-        // Discriminant: https://doc.rust-lang.org/reference/items/enumerations.html#pointer-casting
-        let byte = unsafe { *(table as *const Self as *const u8) };
-        byte as usize
-    }
-
     /// Materializes the entire lookup table (test only).
     #[cfg(test)]
     pub fn materialize(&self) -> Vec<u64> {

@@ -42,7 +42,7 @@ architectures; adopt upstream's design and rebuild our semantics inside it), **a
 | `subprotocols/blindfold/` | — | retired (stage 0) | Deleted with the `zk` feature at stage 0. Upstream `jolt-blindfold` is Dory/BN254-only; zero-knowledge returns as lattice zk, a separate effort. |
 | `lookup_tables/` framework (prefix/suffix traits), `utils/lookup_bits.rs`, `poly/prefix_suffix.rs` | `jolt-lookup-tables` (`LookupBits`, prefix/suffix) | atlas-only (decided at stage 4b) | Framework is shared ancestry; **contents are atlas-only** (relu, clamp, sat_val vs their RISC-V instruction tables). At `f3265b5a` the upstream crate depends on `jolt-riscv` (and `tracer` for its tests), so adopting the framework would vendor the RISC-V ISA into a zkML prover; the Shout provers moved onto the engine (stage 4b) and keep our framework. |
 | `utils/thread.rs` (`unsafe_allocate_zero_vec`) | `jolt-utils` | owned (`specs/own-poly.md`) | Taken from `jolt-utils` at `f3265b5a` (`src/alloc.rs`, with its tests); `drop_in_background_thread` is atlas-only. |
-| `utils/math.rs` (`Math`) | `jolt-utils::Math` | atlas-only delta | Ours rejects `log_2` of a non-power of two and adds `ceil_log_2`; upstream's `log_2` silently rounds up. Kept as a guard. |
+| `utils/math.rs` (`Math`) | `jolt-utils::Math` | atlas-only delta | Ours rejects `log_2` of a non-power of two; upstream's `log_2` silently rounds up. Kept as a guard. |
 | `utils/{accumulation,small_scalar}.rs` | — (upstream accumulators live in `jolt-field`) | atlas-only (decided at stage 4b) | The small/medium/wide signed accumulators and small-scalar multiplication serve our compact operand polynomials, which stay ours at stage 4b (their 125-bit-challenge binding beats `jolt-poly`'s; see the `poly/` row), and the round kernels' delayed reduction runs on our `JoltField` ladder. They go if the operand polynomials move to `jolt-poly`. |
 | `utils/{profiling,monitor}.rs` | — | atlas-only | Benchmark instrumentation (flamegraphs, `monitor` feature). `utils/counters.rs` (the `TrackedFr` operation counters) was retired with BN254 at stage 7b. |
 | `utils/{errors,expanding_table,gaussian_elimination,serialization}.rs` | — | atlas-only (decided at stage 4b) | No upstream counterpart at `f3265b5a`. `expanding_table` serves the Booleanity and one-hot opening provers, which bind with it on the engine; `serialization` holds the capped proof-vector decoder. |
@@ -116,12 +116,12 @@ records it as stage 6 closed.
 
 - **Relation-defined** (verifier derived from a `SymbolicSumcheck` in `onnx_proof/relation.rs`):
   Input, Constant, Identity, Neg, IsNan, Broadcast, MoveAxis (ties); Add and Sub (accumulation
-  ties, non-scalar nodes); Mul, And, Square, Cube, Rsqrt, Div, Iff, ScalarConstDiv (eq-weighted
+  ties); Mul, And, Square, Cube, Rsqrt, Div, Iff, ScalarConstDiv (eq-weighted
   engine relations); Reshape, Slice, Concat, Sum (dense engine relations); Einsum and
   MeanOfSquares (relations with specialized provers, checked by `relation_prover_equiv_*`).
 - **Lookup family, moved as code at stage 8**: ReLU, Clamp, Tanh, Sigmoid, Erf, Sin, Cos,
-  GatherSmall, GatherLarge, and the clamp lookups, remainder range checks and scalar clamp checks
-  that relation-defined ops still run beside their relations.
+  GatherSmall, GatherLarge, and the clamp lookups and remainder range checks that
+  relation-defined ops still run beside their relations.
 - **Deferred to stage 8 as code**: SoftmaxLastAxis. The #218 aux-vector rework had not merged
   when stage 6 closed, so by the spec's rule softmax moves as code; migrating its stages to
   relations is a named follow-up once #218 lands.

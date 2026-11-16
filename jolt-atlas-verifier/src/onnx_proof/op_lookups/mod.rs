@@ -243,7 +243,8 @@ impl<H: LookupOperandsTrait> OpLookupProvider<H> {
         OpLookupEncoding::with_log_k(&self.computation_node, self.helper.log_k())
     }
 
-    /// Verifier counterpart of [`Self::append_witness_claim`].
+    /// Append the lookup's witness claim: the verifier counterpart of the prover's
+    /// `append_witness_claim_for`.
     /// `Err` if the accumulator lacks a claim it reads.
     pub fn append_witness_claim_verifier<F, T>(
         &self,
@@ -255,22 +256,6 @@ impl<H: LookupOperandsTrait> OpLookupProvider<H> {
         T: Transcript,
     {
         append_raf_claims_verifier(self, accumulator, transcript)
-    }
-
-    /// Verifier counterpart of [`Self::read_raf_prover_from_bits`].
-    /// `Err` if the accumulator lacks a claim it reads.
-    pub fn read_raf_verifier_only<F, T, LUT, const LOG_K: usize>(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<UnaryReadRafSumcheckVerifier<F, LUT, LOG_K>, ProofVerifyError>
-    where
-        F: JoltField,
-        T: Transcript,
-        LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
-        H: LookupRaPolys,
-    {
-        ps_read_raf_verifier(self, accumulator, transcript)
     }
 
     /// Combined verifier flow: appends RAF claims + creates sumcheck verifier.

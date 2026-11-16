@@ -8,8 +8,6 @@ pub mod errors;
 pub mod expanding_table;
 pub mod lookup_bits;
 pub mod math;
-#[cfg(feature = "monitor")]
-pub mod monitor;
 pub mod profiling;
 pub mod small_scalar;
 pub mod thread;
@@ -54,28 +52,6 @@ pub fn compute_dotproduct<F: JoltField>(a: &[F], b: &[F]) -> F {
         .with_min_len(par_enabled())
         .map(|(a_i, b_i)| *a_i * *b_i)
         .sum()
-}
-
-#[inline(always)]
-pub fn mul_0_1_optimized<F: JoltField>(a: &F, b: &F) -> F {
-    if a.is_zero() || b.is_zero() {
-        F::zero()
-    } else if a.is_one() {
-        *b
-    } else if b.is_one() {
-        *a
-    } else {
-        *a * *b
-    }
-}
-
-#[inline(always)]
-pub fn mul_0_optimized<F: JoltField>(likely_zero: &F, x: &F) -> F {
-    if likely_zero.is_zero() {
-        F::zero()
-    } else {
-        *likely_zero * *x
-    }
 }
 
 /// Splits a 64-bit value into two 32-bit values by separating even and odd bits.

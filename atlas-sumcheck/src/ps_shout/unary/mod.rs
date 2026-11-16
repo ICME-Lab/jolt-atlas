@@ -57,22 +57,6 @@ where
     ) -> Result<ReadRafClaims<F>, ProofVerifyError>;
 }
 
-/// Verifier counterpart of [`ps_read_raf_prover_with_cycle`].
-pub fn ps_read_raf_verifier_with_cycle<
-    F: JoltField,
-    T: Transcript,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
-    const LOG_K: usize,
->(
-    claims: ReadRafClaims<F>,
-    cycle: CycleWeight<F>,
-    ra_poly: (VirtualPoly, SumcheckId),
-    transcript: &mut T,
-) -> UnaryReadRafSumcheckVerifier<F, LUT, LOG_K> {
-    let gamma = transcript.challenge_scalar();
-    ps_read_raf_verifier_with_gamma::<F, LUT, LOG_K>(gamma, claims, cycle, ra_poly)
-}
-
 /// Verifier counterpart of [`ps_read_raf_prover_with_gamma`].
 pub fn ps_read_raf_verifier_with_gamma<
     F: JoltField,

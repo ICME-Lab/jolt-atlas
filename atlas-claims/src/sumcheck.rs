@@ -8,8 +8,4 @@ pub enum SumcheckDomain {
     CenteredInteger { domain_size: usize },
 }
 
-impl SumcheckDomain {
-    pub const fn centered_integer(domain_size: usize) -> Self {
-        Self::CenteredInteger { domain_size }
-    }
-}
+impl SumcheckDomain {}

@@ -122,18 +122,6 @@ impl IGraph {
         self.nodes[idx].as_ref().map(|n| (idx, n))
     }
 
-    /// How many live node inputs plus graph outputs reference the edge.
-    /// One O(nodes) scan — for a per-edge query over many edges, build
-    /// [`IGraph::use_counts`] once instead.
-    pub fn use_count(&self, id: EdgeId) -> usize {
-        self.nodes
-            .iter()
-            .flatten()
-            .map(|n| n.inputs.iter().filter(|&&e| e == id).count())
-            .sum::<usize>()
-            + self.outputs.iter().filter(|&&e| e == id).count()
-    }
-
     /// Use counts of every edge (indexed by `EdgeId`), computed in one scan.
     pub fn use_counts(&self) -> Vec<usize> {
         let mut counts = vec![0usize; self.edges.len()];

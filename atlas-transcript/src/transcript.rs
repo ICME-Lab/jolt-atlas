@@ -16,14 +16,12 @@ pub trait Transcript: Send + Sync + 'static {
     fn challenge_u128(&mut self) -> u128;
     /// A full-width field challenge, decoded through the transcript's challenge codec.
     fn challenge_scalar<F: JoltField>(&mut self) -> F;
-    fn challenge_scalar_128_bits<F: JoltField>(&mut self) -> F;
     fn challenge_vector<F: JoltField>(&mut self, len: usize) -> Vec<F>;
     // Compute powers of scalar q : (1, q, q^2, ..., q^(len-1))
     fn challenge_scalar_powers<F: JoltField>(&mut self, len: usize) -> Vec<F>;
     // New methods that return F::Challenge
     fn challenge_scalar_optimized<F: JoltField>(&mut self) -> F::Challenge;
     fn challenge_vector_optimized<F: JoltField>(&mut self, len: usize) -> Vec<F::Challenge>;
-    fn challenge_scalar_powers_optimized<F: JoltField>(&mut self, len: usize) -> Vec<F>;
 
     /// Proof of work of difficulty `bits` before the next challenge: the prover grinds a nonce
     /// into the proof's NARG string, the verifier reads and checks it. `0` is a no-op.

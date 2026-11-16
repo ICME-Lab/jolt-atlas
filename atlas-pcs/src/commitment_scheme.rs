@@ -2,9 +2,7 @@ use atlas_algebra::serialize::Canonical;
 use std::{borrow::Borrow, fmt::Debug};
 
 use atlas_algebra::{
-    field::JoltField,
-    poly::multilinear::MultilinearPolynomial,
-    utils::{errors::ProofVerifyError, small_scalar::SmallScalar},
+    field::JoltField, poly::multilinear::MultilinearPolynomial, utils::errors::ProofVerifyError,
 };
 use atlas_transcript::{AppendToTranscript, Transcript};
 
@@ -46,10 +44,6 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
         + Canonical
         + AppendToTranscript
         + Clone;
-
-    /// Whether this PCS requires materialized (dense) polynomials for opening proofs.
-    /// If true, use `build_materialized_rlc`; if false, use `build_streaming_rlc`.
-    const REQUIRES_MATERIALIZED_POLYS: bool = false;
 
     /// Generates the prover setup for this PCS. `max_num_vars` is the maximum number of
     /// variables of any polynomial that will be committed using this setup.
@@ -113,15 +107,6 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
         _coeffs: &[Self::Field],
     ) -> Self::Commitment {
         todo!("`combine_commitments` should be on a separate `AdditivelyHomomorphic` trait")
-    }
-
-    /// Homomorphically combines multiple opening proof hints into a single hint, computed as a
-    /// linear combination with the given coefficients.
-    fn combine_hints(
-        _hints: Vec<Self::OpeningProofHint>,
-        _coeffs: &[Self::Field],
-    ) -> Self::OpeningProofHint {
-        unimplemented!()
     }
 
     /// Generates a proof of evaluation for a polynomial at a specific point.
@@ -220,21 +205,4 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
 pub trait StreamingCommitmentScheme: CommitmentScheme {
     /// The type representing chunk state (tier 1 commitments)
     type ChunkState: Send + Sync + Clone + PartialEq + Debug;
-
-    /// Compute tier 1 commitment for a chunk of small scalar values
-    fn process_chunk<T: SmallScalar>(setup: &Self::ProverSetup, chunk: &[T]) -> Self::ChunkState;
-
-    /// Compute tier 1 commitment for a chunk of one-hot values
-    fn process_chunk_onehot(
-        setup: &Self::ProverSetup,
-        onehot_k: usize,
-        chunk: &[Option<usize>],
-    ) -> Self::ChunkState;
-
-    /// Compute tier 2 commitment from accumulated tier 1 commitments
-    fn aggregate_chunks(
-        setup: &Self::ProverSetup,
-        onehot_k: Option<usize>,
-        tier1_commitments: &[Self::ChunkState],
-    ) -> (Self::Commitment, Self::OpeningProofHint);
 }

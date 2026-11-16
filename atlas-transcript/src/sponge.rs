@@ -104,10 +104,6 @@ macro_rules! impl_transcript_ops {
             self.challenge_vector::<F>(1)[0]
         }
 
-        fn challenge_scalar_128_bits<F: JoltField>(&mut self) -> F {
-            F::from_u128(self.challenge_u128())
-        }
-
         fn challenge_vector<F: JoltField>(&mut self, len: usize) -> Vec<F> {
             let codec = self
                 .state
@@ -130,16 +126,6 @@ macro_rules! impl_transcript_ops {
             (0..len)
                 .map(|_| self.challenge_scalar_optimized::<F>())
                 .collect()
-        }
-
-        fn challenge_scalar_powers_optimized<F: JoltField>(&mut self, len: usize) -> Vec<F> {
-            // Each power is an optimized challenge-by-field product.
-            let q: F::Challenge = self.challenge_scalar_optimized::<F>();
-            let mut q_powers = vec![F::one(); len];
-            for i in 1..len {
-                q_powers[i] = q * q_powers[i - 1];
-            }
-            q_powers
         }
 
         #[cfg(any(test, feature = "test-feature"))]

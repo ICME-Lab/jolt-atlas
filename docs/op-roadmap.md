@@ -35,18 +35,20 @@ Measured at scale 14:
 The technique works for any function that is smooth with second derivative at most about 1 on
 a bounded domain. It does not yet plug into the prefix-suffix sumcheck; see "Open decisions".
 
-## Tier 1: fused activations
+## Tier 1: fused activations (done)
 
-Highest value, because these are on the hot path of every transformer we prove and each
-replaces a chain of ops with one lookup.
+GELU (tanh and erf forms) and SiLU are one op, `SmoothRelu` (`specs/fused-gelu.md`). Each
+satisfies `f(x) − f(−x) = x`, so `f(x) − ReLU(x)` is even and vanishes away from zero, and
 
-| Op | Models | What is missing |
-|---|---|---|
-| GELU (tanh and erf forms) | GPT-2, BERT/bge, Gemma, Whisper | A linear tail: above the domain the table is `x`, not a constant. |
-| SiLU | Qwen2, Llama, Mistral, diffusion U-Nets, YOLOv5/v8 | The same linear tail. |
+```text
+f(x) = ReLU(x) + H[clamp(x)]
+```
 
-Both have lower curvature than tanh, so the 256-input segment width carries over. The linear
-tail is one extra lower-word term in the decomposition.
+with `H` a plain rounded table that is zero at both ends of its domain. The linear tail needs
+no table of its own: it is the ReLU read. The importer fuses the exported subgraphs
+(`smooth_relu_fusion`); GPT-2, BERT/bge and Qwen2 lower to it.
+
+Not yet covered: other gated activations (Mish, HardSwish, Swish with a slope other than one).
 
 ## Tier 2: the mantissa family
 
@@ -109,8 +111,6 @@ From `CLAUDE.md` and `docs/pull-requests.md`:
 - **Vector-valued prefix state.** The piecewise-linear tables implement `JoltLookupTable` but
   not `PrefixSuffixDecompositionTrait`: mid-sumcheck they need a partially folded knot vector
   (up to 257 field elements for tanh) where `PrefixCheckpoints` holds one scalar per prefix.
-  Every tier 1–3 table depends on the prefix-suffix sumcheck accepting such state.
+  Every tier 2–3 table depends on the prefix-suffix sumcheck accepting such state.
 - **Rounding the output.** The tables emit 8 extra fractional bits. Bringing the value back to
   model scale needs a remainder range check per lookup, which gives back part of the saving.
-- **Whether tier 1 pays for itself.** Unmeasured. Before a spec, measure what the tanh/erf
-  small-table stage and the surrounding multiplies cost on GPT-2 and Qwen.

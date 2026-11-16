@@ -29,6 +29,9 @@ done
 [ -d "$MODEL" ] || { echo "model directory $MODEL is missing" >&2; exit 1; }
 
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}
+# The binary's default schedule directory is the checkout it was built in, a worktree removed
+# below, so every binary reads the schedules of this checkout.
+export JOLT_AKITA_SCHEDULE_DIR=${JOLT_AKITA_SCHEDULE_DIR:-$ROOT/atlas-pcs/schedules}
 mkdir -p bench/bin bench/runs/gate
 for sha in "${COMMITS[@]}"; do
     [ -x "bench/bin/prove-$sha" ] && continue

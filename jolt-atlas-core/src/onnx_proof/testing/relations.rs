@@ -683,3 +683,50 @@ fn layout_ops_outside_their_ties_are_rejected() {
         assert!(err.to_string().contains(reason), "{err}");
     }
 }
+
+/// The verifier's relations are those of `SemVersion::V2`: a model compiled under another
+/// version is rejected before any proof is read.
+#[test]
+fn a_first_version_model_is_rejected() {
+    use crate::node_view::check_model_shape;
+    use atlas_trace::{CompileOptions, GraphBuilder, Scale, SemVersion};
+
+    let build = |version| {
+        let mut b = GraphBuilder::new();
+        let x = b.input(&[4]);
+        let y = b.push(Op::Neg(atlas_trace::op::Neg), &[x]);
+        b.output(y);
+        b.build(CompileOptions {
+            scale: Scale::new(14).unwrap(),
+            pad_pow2: true,
+            version,
+        })
+        .expect("the graph compiles")
+    };
+    check_model_shape(&build(SemVersion::V2)).expect("the current version is accepted");
+    let err = check_model_shape(&build(SemVersion::V1)).expect_err("the first version");
+    assert!(err.to_string().contains("semantics version"), "{err}");
+}
+
+/// A softmax proof carries nothing per row: its opening claims are as many for sixteen rows as
+/// for two.
+#[test]
+fn softmax_proof_has_no_per_row_claims() {
+    use crate::onnx_proof::{prove, AtlasProverPreprocessing, AtlasSharedPreprocessing};
+    use atlas_transcript::Blake2bProver;
+
+    let claims = |rows: usize| {
+        let mut rng = StdRng::seed_from_u64(0x50F7);
+        let mut b = ModelBuilder::new();
+        let x = b.input(vec![rows, 8]);
+        let out = b.softmax_last_axis(x);
+        b.mark_output(out);
+        let inputs = [Tensor::random_range(&mut rng, &[rows, 8], SMALL)];
+        let pp = AtlasProverPreprocessing::<Fr, AkitaScheme>::new(
+            AtlasSharedPreprocessing::preprocess(b.build()),
+        );
+        let (proof, _, _) = prove::<Fr, Blake2bProver, AkitaScheme>(&pp, &inputs);
+        proof.opening_claims().openings().len()
+    };
+    assert_eq!(claims(2), claims(16));
+}

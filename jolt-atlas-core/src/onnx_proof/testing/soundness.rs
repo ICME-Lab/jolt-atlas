@@ -1243,3 +1243,87 @@ fn non_positive_bounds_have_no_proof() {
         "Rsqrt of −5: {outcome:?}"
     );
 }
+
+/// Rewrite row `row` of softmax node `node` as an honest-looking witness at shift `c`: the
+/// addresses, the live lanes' outputs and the two row gaps all follow from `c`.
+fn forge_softmax_shift(node: usize, row: usize, c: i32) -> Forgery {
+    use atlas_trace::semantics::softmax::softmax_tables;
+    Box::new(move |trace| {
+        let tables = softmax_tables(
+            atlas_trace::Scale::new(MODEL_SCALE as u8).unwrap(),
+            atlas_trace::SemVersion::V2,
+        );
+        let sum_prev = tables.sum_prev();
+        let Some(atlas_trace::trace::NodeAux::Softmax(w)) = trace.aux.get_mut(&NodeId(node as u32))
+        else {
+            panic!("node {node} has no softmax witness")
+        };
+        let (n, live) = (w.last_dim, w.active_len);
+        let (mut sum, mut prev) = (0i64, 0i64);
+        let mut outputs = Vec::new();
+        for j in 0..n {
+            let cell = row * n + j;
+            // The logit, from the honest address.
+            let x = w.shift[row] - w.address[cell];
+            w.address[cell] = c - x;
+            if j < live {
+                let a = (w.address[cell] as i64).clamp(0, tables.top()) as usize;
+                outputs.push((cell, tables.out[a]));
+                sum += tables.sum[a] as i64;
+                prev += sum_prev[a] as i64;
+            }
+        }
+        w.shift[row] = c;
+        w.sum_gap[row] = tables.sum_scale - sum;
+        w.prev_sum_gap[row] = prev - tables.sum_scale - 1;
+        for (cell, y) in outputs {
+            trace.node_outputs[node].data_mut()[cell] = y;
+        }
+    })
+}
+
+/// The softmax shift is pinned: a witness rebuilt around any other shift is rejected, except
+/// below a lane that dominates its row, where it proves the same output.
+#[test]
+#[serial(soundness_probe)]
+fn softmax_shift_is_pinned() {
+    let model = |rows: usize| {
+        let mut b = ModelBuilder::new();
+        let x = b.input(vec![rows, 4]);
+        let out = b.softmax_last_axis(x);
+        b.mark_output(out);
+        (b.build(), out)
+    };
+    // Row 0 has two comparable lanes; row 1 has one lane far above the rest.
+    let inputs =
+        vec![Tensor::from_slice(&[1000, 990, -3000, 250, 400_000, 0, -5, 7], &[2, 4]).unwrap()];
+    let (m, out) = model(2);
+    let honest = m.trace(&inputs).expect("honest execution");
+    let shift = |row: usize| match honest.aux.get(&NodeId(out as u32)) {
+        Some(atlas_trace::trace::NodeAux::Softmax(w)) => w.shift[row],
+        _ => panic!("no softmax witness"),
+    };
+    let (c0, c1) = (shift(0), shift(1));
+    assert!(c0 > 1001, "row 0's shift is above its maximum");
+    assert_eq!(c1, 400_000, "row 1's shift is its dominant logit");
+    assert_bound_holds(
+        "SoftmaxLastAxis",
+        &m,
+        &inputs,
+        vec![
+            ("shift + 1", forge_softmax_shift(out, 0, c0 + 1)),
+            ("shift − 1", forge_softmax_shift(out, 0, c0 - 1)),
+            // Below lane 0's logit with lane 1 still reading a nonzero value.
+            ("shift below a lane", forge_softmax_shift(out, 0, 995)),
+            ("dominant shift + 1", forge_softmax_shift(out, 1, c1 + 1)),
+        ],
+    );
+    // Below the dominant lane's logit and far above every other: the clamp reads address zero
+    // for the dominant lane, the others read zero, and the output is the honest one.
+    let _probe = ProbeGuard::enter();
+    let outcome = bound_outcome(&m, &inputs, &mut *forge_softmax_shift(out, 1, c1 - 10));
+    assert!(matches!(outcome, Outcome::Accepted), "{outcome:?}");
+    let mut forged = honest.clone();
+    forge_softmax_shift(out, 1, c1 - 10)(&mut forged);
+    assert_eq!(forged.node_outputs[out], honest.node_outputs[out]);
+}

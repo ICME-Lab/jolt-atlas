@@ -101,9 +101,11 @@ the model the verifier is handed. A Slice's tie opens its operand at a point who
 coordinates are fixed bits, so the cells a Slice discards, when nothing else reads them, are
 not checked: they are no part of the statement about the public output.
 
-Softmax is the stress case: its stage driver is a plan (aux vectors as `Open`, stages 1–2 as
-`Batch`, stage 3 and its one-hot checks as `Defer`); the relations of a stage read the aux
-vectors back from their openings in their setup (`SoftmaxShape::aux`).
+Softmax is a plan like any other: the row gaps as an `Open`, one in-loop sumcheck that leaves
+its three table reads at one point, the row shift and the table address as an `Open`, a table
+read and the clamp lookup as `Defer`s to `Lookups`, the address link as a `Tie`, and the two
+one-hot checks as `Defer`s to `OneHot`. Nothing is sent per row and the verifier does no
+per-row work; the tables are generated once per process.
 
 ## Proof-shape rules
 
@@ -124,8 +126,7 @@ vectors back from their openings in their setup (`SoftmaxShape::aux`).
   bound to a point, is an `Err`.
 - **No dead fields.** A node with a single claim on its output has no evaluation-reduction
   entry (the claim is the reduced instance). Every `ProofType` is emitted for some checked-in
-  model; deleted tags (1, 2, 3, 4, 7, 8, 11, 13, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25) do not
-  deserialize.
+  model; deleted tags (1 to 8, 11, 13, 15, 17 to 25) do not deserialize.
 - **What holds it.** The mutation sweep requires an `Err` at every site (no tolerance), with
   orphan sites for claims, sumcheck proofs and reduction proofs and count/shape sites for the
   IO; `proof_types_all_exercised`; `fuzz_regressions_replay` and the cargo-fuzz target in

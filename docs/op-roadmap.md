@@ -65,8 +65,8 @@ shape once covers the three ops, and it would show whether a table can compete w
 current `Rsqrt` relation.
 
 Exp belongs with this tier in importance but not in technique. Its negative side fits the
-uniform table; its positive side grows without bound and would reuse the multiplicative split
-(`e^(a+b) = e^a·e^b`) that softmax already uses.
+uniform table; its positive side grows without bound and would need a multiplicative split
+(`e^(a+b) = e^a·e^b`); softmax reads one table and does not use one.
 
 ## Tier 3: more single-input activations
 

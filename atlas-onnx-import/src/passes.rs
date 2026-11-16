@@ -41,6 +41,7 @@ pub fn run_all(g: &mut IGraph, scale: Scale) -> Result<Vec<PassReport>, ImportEr
         ("gather_norm", Plain(gather_norm)),
         ("reshape_family", Plain(reshape_family)),
         ("split_to_slices", Plain(split_to_slices)),
+        ("smooth_relu_fusion", Plain(smooth_relu_fusion)),
         ("pow_to_square_cube", Plain(pow_to_square_cube)),
         ("norm_fusion", Plain(norm_fusion)),
         ("div_rewrites", Scaled(div_rewrites)),
@@ -271,6 +272,129 @@ fn gather_norm(g: &mut IGraph) -> Result<usize, ImportError> {
             data: ConstData::I64(resolved),
         });
         g.nodes[idx].as_mut().expect("live").inputs[1] = re;
+        rewrites += 1;
+    }
+    Ok(rewrites)
+}
+
+/// The operands of the live node producing `e`, if its op is `op` and `e` has no other use.
+fn interior<'a>(g: &'a IGraph, uses: &[usize], e: EdgeId, op: &str) -> Option<&'a [EdgeId]> {
+    let (_, node) = g.producer(e)?;
+    (node.op == op && uses.get(e.0) == Some(&1)).then_some(node.inputs.as_slice())
+}
+
+/// Whether `e` is a scalar constant equal to `value` to `f32` precision (exporters write the
+/// activations' constants as `f32`).
+fn is_scalar(g: &IGraph, e: EdgeId, value: f64) -> bool {
+    g.konst(e)
+        .and_then(|k| k.scalar_f32())
+        .is_some_and(|c| (f64::from(c) - value).abs() <= value.abs() * 1e-6)
+}
+
+/// `(other operand)` of a two-operand node whose remaining operand is the scalar `value`, in
+/// either order.
+fn with_scalar(g: &IGraph, inputs: &[EdgeId], value: f64) -> Option<EdgeId> {
+    match *inputs {
+        [a, b] if is_scalar(g, b, value) => Some(a),
+        [a, b] if is_scalar(g, a, value) => Some(b),
+        _ => None,
+    }
+}
+
+/// The input `x` of the tanh-form GELU ending at `Mul(Mul(x, 0.5), Add(Tanh(…), 1))`.
+fn gelu_tanh_input(g: &IGraph, uses: &[usize], inputs: &[EdgeId]) -> Option<EdgeId> {
+    let [a, b] = *inputs else { return None };
+    [(a, b), (b, a)].into_iter().find_map(|(half, gate)| {
+        let x = with_scalar(g, interior(g, uses, half, "Mul")?, 0.5)?;
+        let tanh = with_scalar(g, interior(g, uses, gate, "Add")?, 1.0)?;
+        let [arg] = *interior(g, uses, tanh, "Tanh")? else {
+            return None;
+        };
+        let poly = with_scalar(
+            g,
+            interior(g, uses, arg, "Mul")?,
+            (2.0 / std::f64::consts::PI).sqrt(),
+        )?;
+        let [p, q] = *interior(g, uses, poly, "Add")? else {
+            return None;
+        };
+        let cubic = if p == x {
+            q
+        } else if q == x {
+            p
+        } else {
+            return None;
+        };
+        let cube = with_scalar(g, interior(g, uses, cubic, "Mul")?, 0.044715)?;
+        let [base, exponent] = *interior(g, uses, cube, "Pow")? else {
+            return None;
+        };
+        (base == x && is_scalar(g, exponent, 3.0)).then_some(x)
+    })
+}
+
+/// The input `x` of the erf-form GELU ending at `Mul(Mul(x, Add(Erf(x/√2), 1)), 0.5)`.
+fn gelu_erf_input(g: &IGraph, uses: &[usize], inputs: &[EdgeId]) -> Option<EdgeId> {
+    let product = with_scalar(g, inputs, 0.5)?;
+    let [a, b] = *interior(g, uses, product, "Mul")? else {
+        return None;
+    };
+    [(a, b), (b, a)].into_iter().find_map(|(x, gate)| {
+        let erf = with_scalar(g, interior(g, uses, gate, "Add")?, 1.0)?;
+        let [arg] = *interior(g, uses, erf, "Erf")? else {
+            return None;
+        };
+        let scaled = match interior(g, uses, arg, "Div") {
+            Some(&[base, divisor]) if is_scalar(g, divisor, std::f64::consts::SQRT_2) => base,
+            _ => with_scalar(
+                g,
+                interior(g, uses, arg, "Mul")?,
+                std::f64::consts::FRAC_1_SQRT_2,
+            )?,
+        };
+        (scaled == x).then_some(x)
+    })
+}
+
+/// The input `x` of the SiLU `Mul(x, Sigmoid(x))`.
+fn silu_input(g: &IGraph, uses: &[usize], inputs: &[EdgeId]) -> Option<EdgeId> {
+    let [a, b] = *inputs else { return None };
+    [(a, b), (b, a)]
+        .into_iter()
+        .find_map(|(x, gate)| (*interior(g, uses, gate, "Sigmoid")? == [x]).then_some(x))
+}
+
+/// Fuse the exported GELU (erf and tanh forms) and SiLU subgraphs into one
+/// `atlas.SmoothRelu` node each. A subgraph is fused only when its structure and constants
+/// are exactly one of the three forms and none of its interior values has another consumer;
+/// anything else lowers op by op. The nodes left without a consumer are removed by the
+/// pipeline's final dead-code elimination.
+fn smooth_relu_fusion(g: &mut IGraph) -> Result<usize, ImportError> {
+    let uses = g.use_counts();
+    let mut rewrites = 0;
+    for idx in 0..g.nodes.len() {
+        let Some(node) = g.nodes[idx].as_ref() else {
+            continue;
+        };
+        if node.op != "Mul" {
+            continue;
+        }
+        let Some((form, x)) = gelu_tanh_input(g, &uses, &node.inputs)
+            .map(|x| ("GeluTanh", x))
+            .or_else(|| gelu_erf_input(g, &uses, &node.inputs).map(|x| ("GeluErf", x)))
+            .or_else(|| silu_input(g, &uses, &node.inputs).map(|x| ("Silu", x)))
+        else {
+            continue;
+        };
+        let fused = INode {
+            name: node.name.clone(),
+            op: "atlas.SmoothRelu".into(),
+            attrs: [("form".to_string(), Attr::Str(form.into()))].into(),
+            inputs: vec![x],
+            outputs: node.outputs.clone(),
+        };
+        g.push_node(fused);
+        g.remove_node(idx);
         rewrites += 1;
     }
     Ok(rewrites)
@@ -1836,5 +1960,119 @@ mod tests {
 
         let mut g = build(1e-2); // representable: untouched
         assert_eq!(rsqrt_eps_floor(&mut g, scale).unwrap(), 0);
+    }
+
+    /// A graph builder for the fusion tests: float edges of one shape, scalar constants and
+    /// nodes by op name.
+    struct Fusion {
+        g: IGraph,
+    }
+
+    impl Fusion {
+        fn new() -> (Self, EdgeId) {
+            let mut g = IGraph::default();
+            let x = g.fresh_edge("x", f32_info(&[4]));
+            (Self { g }, x)
+        }
+
+        fn konst(&mut self, value: f32) -> EdgeId {
+            f32_scalar_const(&mut self.g, "c", value)
+        }
+
+        fn node(&mut self, op: &str, inputs: &[EdgeId]) -> EdgeId {
+            let out = self.g.fresh_edge(op, f32_info(&[4]));
+            self.g.push_node(INode {
+                name: format!("{op}_{}", out.0),
+                op: op.into(),
+                attrs: Default::default(),
+                inputs: inputs.to_vec(),
+                outputs: vec![out],
+            });
+            out
+        }
+
+        /// The tanh-form GELU of `x` as GPT-2 exports it, with `c` in place of `0.044715`.
+        fn gelu_tanh(&mut self, x: EdgeId, c: f32) -> (EdgeId, EdgeId) {
+            let (half, three, c, k, one) = (
+                self.konst(0.5),
+                self.konst(3.0),
+                self.konst(c),
+                self.konst(0.797_884_6),
+                self.konst(1.0),
+            );
+            let n0 = self.node("Mul", &[x, half]);
+            let n1 = self.node("Pow", &[x, three]);
+            let n2 = self.node("Mul", &[n1, c]);
+            let n3 = self.node("Add", &[x, n2]);
+            let n4 = self.node("Mul", &[n3, k]);
+            let n5 = self.node("Tanh", &[n4]);
+            let n6 = self.node("Add", &[n5, one]);
+            (self.node("Mul", &[n0, n6]), n5)
+        }
+
+        /// Run the pass with `out` as the graph's output; the fused nodes' forms.
+        fn fuse(mut self, out: EdgeId) -> Vec<String> {
+            self.g.outputs.push(out);
+            let rewrites = smooth_relu_fusion(&mut self.g).unwrap();
+            let forms: Vec<String> = self
+                .g
+                .live_nodes()
+                .filter(|(_, n)| n.op == "atlas.SmoothRelu")
+                .map(|(_, n)| n.attr_str("form").unwrap().to_string())
+                .collect();
+            assert_eq!(rewrites, forms.len());
+            forms
+        }
+    }
+
+    #[test]
+    fn the_three_exported_activations_are_fused() {
+        let (mut f, x) = Fusion::new();
+        let (out, _) = f.gelu_tanh(x, 0.044_715);
+        assert_eq!(f.fuse(out), ["GeluTanh"]);
+
+        // The erf form as BERT exports it, and with a reciprocal multiply for the division.
+        for reciprocal in [false, true] {
+            let (mut f, x) = Fusion::new();
+            let (one, half) = (f.konst(1.0), f.konst(0.5));
+            let scaled = if reciprocal {
+                let c = f.konst(std::f32::consts::FRAC_1_SQRT_2);
+                f.node("Mul", &[x, c])
+            } else {
+                let c = f.konst(std::f32::consts::SQRT_2);
+                f.node("Div", &[x, c])
+            };
+            let erf = f.node("Erf", &[scaled]);
+            let gate = f.node("Add", &[erf, one]);
+            let product = f.node("Mul", &[x, gate]);
+            let out = f.node("Mul", &[product, half]);
+            assert_eq!(f.fuse(out), ["GeluErf"]);
+        }
+
+        let (mut f, x) = Fusion::new();
+        let gate = f.node("Sigmoid", &[x]);
+        let out = f.node("Mul", &[gate, x]);
+        assert_eq!(f.fuse(out), ["Silu"]);
+    }
+
+    #[test]
+    fn a_perturbed_constant_or_a_tapped_interior_is_not_fused() {
+        let (mut f, x) = Fusion::new();
+        let (out, _) = f.gelu_tanh(x, 0.05);
+        assert!(f.fuse(out).is_empty(), "a different cubic coefficient");
+
+        // The tanh's output feeds a second consumer.
+        let (mut f, x) = Fusion::new();
+        let (out, tanh) = f.gelu_tanh(x, 0.044_715);
+        let tap = f.node("Neg", &[tanh]);
+        f.g.outputs.push(tap);
+        assert!(f.fuse(out).is_empty(), "a tapped interior value");
+
+        // A sigmoid of another tensor is not SiLU.
+        let (mut f, x) = Fusion::new();
+        let y = f.g.fresh_edge("y", f32_info(&[4]));
+        let gate = f.node("Sigmoid", &[y]);
+        let out = f.node("Mul", &[x, gate]);
+        assert!(f.fuse(out).is_empty(), "a gate of another tensor");
     }
 }

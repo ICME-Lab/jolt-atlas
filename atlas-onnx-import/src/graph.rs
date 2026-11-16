@@ -60,6 +60,14 @@ impl INode {
         }
     }
 
+    /// String attribute.
+    pub fn attr_str(&self, name: &str) -> Option<&str> {
+        match self.attrs.get(name)? {
+            Attr::Str(v) => Some(v),
+            _ => None,
+        }
+    }
+
     /// Float attribute.
     pub fn attr_float(&self, name: &str) -> Option<f32> {
         match self.attrs.get(name)? {

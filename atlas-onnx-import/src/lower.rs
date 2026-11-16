@@ -252,6 +252,15 @@ impl<'g> Lowerer<'g> {
             "atlas.Square" => direct(self, Op::Square(op::Square { rebase: scaled }))?,
             "atlas.Cube" => direct(self, Op::Cube(op::Cube { rebase: scaled }))?,
             "atlas.Rsqrt" => direct(self, Op::Rsqrt(op::Rsqrt))?,
+            "atlas.SmoothRelu" => {
+                let form = match node.attr_str("form") {
+                    Some("GeluErf") => op::SmoothReluForm::GeluErf,
+                    Some("GeluTanh") => op::SmoothReluForm::GeluTanh,
+                    Some("Silu") => op::SmoothReluForm::Silu,
+                    _ => return Err(unlowered()),
+                };
+                direct(self, Op::SmoothRelu(op::SmoothRelu { form }))?
+            }
             "atlas.Descale" => direct(
                 self,
                 Op::ScalarConstDiv(op::ScalarConstDiv {

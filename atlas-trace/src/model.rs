@@ -8,8 +8,7 @@ use crate::{
     error::CompileError,
     graph::{Graph, Node},
     id::{NodeId, Scale, SemVersion},
-    op::{BoundCtx, Op, PadCtx, TableCache},
-    tensor::Tensor,
+    op::{Op, PadCtx, TableCache},
 };
 
 /// A compiled, analyzed, immutable model.
@@ -18,7 +17,6 @@ pub struct Model {
     graph: Graph,
     scale: Scale,
     version: SemVersion,
-    meta: Vec<NodeMeta>,
     io: IoDims,
     /// Memoized activation tables (regenerated on demand; not serialized).
     #[serde(skip)]
@@ -51,13 +49,10 @@ impl Model {
             check_shapes(&graph)?;
         }
 
-        let meta = annotate_clamp_widths(&graph, opts.scale);
-
         Ok(Model {
             graph,
             scale: opts.scale,
             version: opts.version,
-            meta,
             io,
             tables: TableCache::default(),
         })
@@ -83,9 +78,9 @@ impl Model {
         &self.io
     }
 
-    /// A node together with its analysis results.
-    pub fn node(&self, id: NodeId) -> (&Node, &NodeMeta) {
-        (self.graph.node(id), &self.meta[id.index()])
+    /// The node `id`.
+    pub fn node(&self, id: NodeId) -> &Node {
+        self.graph.node(id)
     }
 
     /// The graph-input node ids.
@@ -98,14 +93,13 @@ impl Model {
         &self.graph.outputs
     }
 
-    /// Iterate nodes in topological order with ids and analysis results.
-    pub fn nodes(&self) -> impl Iterator<Item = (NodeId, &Node, &NodeMeta)> {
+    /// Iterate nodes in topological order with their ids.
+    pub fn nodes(&self) -> impl Iterator<Item = (NodeId, &Node)> {
         self.graph
             .nodes
             .iter()
-            .zip(&self.meta)
             .enumerate()
-            .map(|(i, (n, m))| (NodeId(i as u32), n, m))
+            .map(|(i, n)| (NodeId(i as u32), n))
     }
 }
 
@@ -185,37 +179,6 @@ fn pad_graph(graph: &mut Graph) -> Result<(), CompileError> {
     Ok(())
 }
 
-/// Fold [`crate::op::OpSpec::clamp_bound`] over the graph.
-fn annotate_clamp_widths(graph: &Graph, scale: Scale) -> Vec<NodeMeta> {
-    graph
-        .nodes
-        .iter()
-        .map(|node| {
-            let input_dims: Vec<&[usize]> = node
-                .inputs
-                .iter()
-                .map(|&id| graph.node(id).output_dims.as_slice())
-                .collect();
-            let input_consts: Vec<Option<&Tensor<i32>>> = node
-                .inputs
-                .iter()
-                .map(|&id| match &graph.node(id).op {
-                    Op::Constant(c) => Some(c.0.as_ref()),
-                    _ => None,
-                })
-                .collect();
-            let ctx = BoundCtx {
-                scale,
-                input_dims,
-                input_consts,
-            };
-            NodeMeta {
-                sat_clamp_bits: node.op.spec().clamp_bound(&ctx).map(ClampWidth::for_bound),
-            }
-        })
-        .collect()
-}
-
 impl std::ops::Index<NodeId> for Model {
     type Output = crate::graph::Node;
 
@@ -245,53 +208,6 @@ impl Default for CompileOptions {
     }
 }
 
-/// Supported saturating-clamp lookup widths (multiples of 8: the read-raf
-/// sumcheck runs 8 address phases).
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum ClampWidth {
-    /// 40-bit lookup.
-    W40,
-    /// 48-bit lookup.
-    W48,
-    /// 56-bit lookup.
-    W56,
-    /// Full 64-bit lookup (an i64 accumulation).
-    W64,
-}
-
-impl ClampWidth {
-    /// The width in bits.
-    pub fn bits(self) -> usize {
-        match self {
-            ClampWidth::W40 => 40,
-            ClampWidth::W48 => 48,
-            ClampWidth::W56 => 56,
-            ClampWidth::W64 => 64,
-        }
-    }
-
-    /// Smallest supported width whose signed range contains `[-bound, bound]`.
-    /// Ported verbatim from the old crate's `width_for_bound`.
-    pub fn for_bound(bound: u128) -> ClampWidth {
-        if bound >= (1u128 << 63) {
-            return ClampWidth::W64;
-        }
-        // `bound < 2^b`; a w-bit two's-complement holds [-2^(w-1), 2^(w-1)).
-        let needed = (u128::BITS - bound.leading_zeros()) as usize + 1;
-        [ClampWidth::W40, ClampWidth::W48, ClampWidth::W56]
-            .into_iter()
-            .find(|w| w.bits() >= needed)
-            .unwrap_or(ClampWidth::W64)
-    }
-}
-
-/// Analysis results attached to a node by compilation.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NodeMeta {
-    /// Width of the node's saturating-clamp lookup; `None` = no clamp.
-    pub sat_clamp_bits: Option<ClampWidth>,
-}
-
 /// Original (pre-padding) IO dims, for padding inputs and cropping outputs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IoDims {
@@ -304,6 +220,7 @@ pub struct IoDims {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tensor::Tensor;
 
     // Pins the padding-soundness gap documented on `pad_graph`: Broadcast of
     // a size-1 axis to a non-power-of-two extent fills the padded lanes with
@@ -467,16 +384,5 @@ mod tests {
         // Semantic result: 3·v per row. Today the padded 4th lane also holds
         // v, so the trace (and the proof, which agrees with it) yields 4·v.
         assert_eq!(&out.data()[..2], &[15, 21]);
-    }
-
-    #[test]
-    fn width_rounding_matches_old_crate() {
-        // Pinned in the old crate's clamp_width tests.
-        assert_eq!(ClampWidth::for_bound(1 << 32), ClampWidth::W40);
-        assert_eq!(ClampWidth::for_bound((1 << 39) - 1), ClampWidth::W40);
-        assert_eq!(ClampWidth::for_bound(1 << 39), ClampWidth::W48);
-        assert_eq!(ClampWidth::for_bound(1 << 48), ClampWidth::W56);
-        assert_eq!(ClampWidth::for_bound(1 << 60), ClampWidth::W64);
-        assert_eq!(ClampWidth::for_bound(u128::MAX), ClampWidth::W64);
     }
 }

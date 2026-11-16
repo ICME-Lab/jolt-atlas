@@ -4,9 +4,9 @@
 //!   public IO) is perturbed in turn; the verifier must reject, or, for the
 //!   few documented dead fields, at least not panic.
 //! * [`witness_tamper_sweep`]: the execution trace is perturbed *before*
-//!   proving (node outputs, fused quotient / remainder, every softmax
-//!   witness column), and so are the packed buckets' digits (clamp `OUT`,
-//!   remainder values), which the trace does not hold (out of range with the
+//!   proving (node outputs, fused remainders, every softmax
+//!   witness column), and so are the range buckets' digits, which the trace
+//!   does not hold (out of range with the
 //!   value kept, and the top digit raised by the base), so the prover's own
 //!   transcript stays self-consistent
 //!   and only the algebra can reject. Any effective tamper must be rejected.
@@ -237,10 +237,6 @@ enum WitnessSite {
         node: usize,
         elem: usize,
     },
-    FusedQuotient {
-        node: usize,
-        elem: usize,
-    },
     FusedRemainder {
         node: usize,
         elem: usize,
@@ -344,9 +340,6 @@ fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
         let node = id.index();
         match aux {
             atlas_trace::trace::NodeAux::Fused(f) => {
-                for elem in probe_elems(f.quotient.data().len(), all) {
-                    sites.push(WitnessSite::FusedQuotient { node, elem });
-                }
                 for elem in probe_elems(f.remainder.data().len(), all) {
                     sites.push(WitnessSite::FusedRemainder { node, elem });
                 }
@@ -408,14 +401,6 @@ fn apply_witness(trace: &mut Trace, site: &WitnessSite) {
         WitnessSite::NodeOutput { node, elem } => {
             let d = trace.node_outputs[*node].data_mut();
             d[*elem] = d[*elem].wrapping_add(1);
-        }
-        WitnessSite::FusedQuotient { node, elem } => {
-            if let Some(atlas_trace::trace::NodeAux::Fused(f)) =
-                trace.aux.get_mut(&NodeId(*node as u32))
-            {
-                let d = f.quotient.data_mut();
-                d[*elem] = d[*elem].wrapping_add(1);
-            }
         }
         WitnessSite::FusedRemainder { node, elem } => {
             if let Some(atlas_trace::trace::NodeAux::Fused(f)) =
@@ -562,7 +547,6 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
             let divergences = probe::take_divergences();
             let class: &'static str = match site {
                 WitnessSite::NodeOutput { .. } => "NodeOutput",
-                WitnessSite::FusedQuotient { .. } => "FusedQuotient",
                 WitnessSite::FusedRemainder { .. } => "FusedRemainder",
                 WitnessSite::Softmax { .. } => "Softmax",
                 WitnessSite::Advice { .. } => "Advice",
@@ -572,7 +556,6 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
             row.0 += 1;
             let node = match site {
                 WitnessSite::NodeOutput { node, .. }
-                | WitnessSite::FusedQuotient { node, .. }
                 | WitnessSite::FusedRemainder { node, .. }
                 | WitnessSite::Softmax { node, .. }
                 | WitnessSite::Advice { node, .. }
@@ -639,7 +622,6 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                     }
                     let dead_cell = match site {
                         WitnessSite::NodeOutput { node, elem }
-                        | WitnessSite::FusedQuotient { node, elem }
                         | WitnessSite::FusedRemainder { node, elem }
                         | WitnessSite::Advice { node, elem, .. } => {
                             live[*node].get(*elem).is_some_and(|&cell| !cell)
@@ -1177,7 +1159,6 @@ fn mean_of_squares_remainder_is_bounded() {
             else {
                 panic!("MeanOfSquares has fused intermediates");
             };
-            f.quotient.data_mut()[2] += i64::from(step);
             f.remainder.data_mut()[2] -= step * divisor;
         })
     };
@@ -1186,6 +1167,236 @@ fn mean_of_squares_remainder_is_bounded() {
         &b.build(),
         &inputs,
         vec![("quotient − 1", forge(-1)), ("quotient + 1", forge(1))],
+    );
+}
+
+// The tests below claim an execution whose exact result at one cell lies outside `i32`: the
+// operands are set so that the op's integer identity gives `i32::MAX + 1` or less than
+// `i32::MIN`, and the node's output (an `i32` tensor, like every witness column) holds that
+// result reduced mod 2^32, with the true remainder. No execution exists, so each must be
+// rejected. (An output cell that is itself out of range is the digit tamper's case, in
+// [`witness_tamper_sweep`].)
+
+/// One claimed overflow: operand cells to set, as `(node, element, value)`, and the op's
+/// exact accumulation at output cell 0 with its divisor (1 for an op that does not rescale).
+struct Overflow {
+    label: &'static str,
+    operands: Vec<(usize, usize, i32)>,
+    acc: i128,
+    divisor: i128,
+}
+
+/// `node`'s output cell 0 is the exact result of `case` wrapped to `i32`, forwarded by
+/// `consumer` (an identity).
+fn forge_overflow(node: usize, consumer: usize, case: &Overflow) -> Forgery {
+    let exact = case.acc.div_euclid(case.divisor);
+    let remainder = case.acc.rem_euclid(case.divisor) as i32;
+    assert!(
+        exact > i128::from(i32::MAX) || exact < i128::from(i32::MIN),
+        "{}: {exact} is inside i32",
+        case.label
+    );
+    let wrapped = exact as i32;
+    let operands = case.operands.clone();
+    Box::new(move |trace| {
+        for &(operand, elem, value) in &operands {
+            trace.node_outputs[operand].data_mut()[elem] = value;
+        }
+        trace.node_outputs[node].data_mut()[0] = wrapped;
+        trace.node_outputs[consumer].data_mut()[0] = wrapped;
+        if let Some(atlas_trace::trace::NodeAux::Fused(f)) = trace.aux.get_mut(&NodeId(node as u32))
+        {
+            f.remainder.data_mut()[0] = remainder;
+        }
+    })
+}
+
+/// Build a model with `build` (returning the checked node), give it an identity consumer as
+/// its output, and assert every case of `cases` is rejected.
+fn assert_overflow_rejected(
+    what: &str,
+    build: impl FnOnce(&mut ModelBuilder) -> usize,
+    inputs: Vec<Tensor<i32>>,
+    cases: Vec<Overflow>,
+) {
+    let mut b = ModelBuilder::new();
+    let node = build(&mut b);
+    let consumer = b.identity(node);
+    b.mark_output(consumer);
+    let forgeries = cases
+        .iter()
+        .map(|case| (case.label, forge_overflow(node, consumer, case)))
+        .collect();
+    assert_bound_holds(what, &b.build(), &inputs, forgeries);
+}
+
+const I32_MAX: i128 = i32::MAX as i128;
+const I32_MIN: i128 = i32::MIN as i128;
+const RESCALE: i128 = 1 << MODEL_SCALE;
+
+fn ones(dims: &[usize]) -> Tensor<i32> {
+    Tensor::from_slice(&vec![1; dims.iter().product()], dims).unwrap()
+}
+
+#[test]
+#[serial(soundness_probe)]
+fn add_and_sub_overflow_have_no_proof() {
+    for (what, sign) in [("Add", 1i128), ("Sub", -1i128)] {
+        let case = |label, x: i32, y: i32| Overflow {
+            label,
+            operands: vec![(0, 0, x), (1, 0, y)],
+            acc: i128::from(x) + sign * i128::from(y),
+            divisor: 1,
+        };
+        let step = sign as i32;
+        assert_overflow_rejected(
+            what,
+            |b| {
+                let x = b.input(vec![4]);
+                let y = b.input(vec![4]);
+                if sign == 1 {
+                    b.add(x, y)
+                } else {
+                    b.sub(x, y)
+                }
+            },
+            vec![ones(&[4]), ones(&[4])],
+            vec![
+                case("i32::MAX + 1", i32::MAX, step),
+                case("i32::MIN − 1", i32::MIN, -step),
+            ],
+        );
+    }
+}
+
+#[test]
+#[serial(soundness_probe)]
+fn sum_overflow_has_no_proof() {
+    let case = |label, x: i32, y: i32| Overflow {
+        label,
+        operands: vec![(0, 0, x), (0, 1, y)],
+        // The other two cells of the row are the honest ones.
+        acc: i128::from(x) + i128::from(y) + 2,
+        divisor: 1,
+    };
+    assert_overflow_rejected(
+        "Sum",
+        |b| {
+            let x = b.input(vec![2, 4]);
+            b.sum(x, vec![1], vec![2])
+        },
+        vec![ones(&[2, 4])],
+        vec![
+            case("above i32::MAX", i32::MAX, 1),
+            case("below i32::MIN", i32::MIN, -4),
+        ],
+    );
+}
+
+#[test]
+#[serial(soundness_probe)]
+fn fused_product_overflow_has_no_proof() {
+    // (−715827883)·(3·2^14) = (i32::MIN − 1)·2^14.
+    let mul = |label, x: i32, y: i32| Overflow {
+        label,
+        operands: vec![(0, 0, x), (1, 0, y)],
+        acc: i128::from(x) * i128::from(y),
+        divisor: RESCALE,
+    };
+    assert_eq!(mul("", 1 << 30, 1 << 15).acc, (I32_MAX + 1) * RESCALE);
+    assert_eq!(mul("", -715_827_883, 3 << 14).acc, (I32_MIN - 1) * RESCALE);
+    assert_overflow_rejected(
+        "Mul",
+        |b| {
+            let x = b.input(vec![4]);
+            let y = b.input(vec![4]);
+            b.mul(x, y)
+        },
+        vec![ones(&[4]), ones(&[4])],
+        vec![
+            mul("i32::MAX + 1", 1 << 30, 1 << 15),
+            mul("i32::MIN − 1", -715_827_883, 3 << 14),
+        ],
+    );
+
+    assert_overflow_rejected(
+        "Square",
+        |b| {
+            let x = b.input(vec![4]);
+            b.square(x)
+        },
+        vec![ones(&[4])],
+        vec![Overflow {
+            label: "above i32::MAX",
+            operands: vec![(0, 0, 1 << 23)],
+            acc: 1 << 46,
+            divisor: RESCALE,
+        }],
+    );
+
+    let cube = |label, x: i32| Overflow {
+        label,
+        operands: vec![(0, 0, x)],
+        acc: i128::from(x).pow(3),
+        divisor: RESCALE * RESCALE,
+    };
+    assert_overflow_rejected(
+        "Cube",
+        |b| {
+            let x = b.input(vec![4]);
+            b.cube(x, MODEL_SCALE as u8)
+        },
+        vec![ones(&[4])],
+        vec![
+            cube("above i32::MAX", 1 << 20),
+            cube("below i32::MIN", -(1 << 20)),
+        ],
+    );
+}
+
+#[test]
+#[serial(soundness_probe)]
+fn reduction_overflow_has_no_proof() {
+    // Row 0 of the input is four cells of 2^24: Σ x² = 2^50 over a divisor of 4·2^14.
+    assert_overflow_rejected(
+        "MeanOfSquares",
+        |b| {
+            let x = b.input(vec![2, 4]);
+            b.mean_of_squares(x, vec![1], vec![2, 1])
+        },
+        vec![ones(&[2, 4])],
+        vec![Overflow {
+            label: "above i32::MAX",
+            operands: (0..4).map(|j| (0, j, 1 << 24)).collect(),
+            acc: 1 << 50,
+            divisor: 4 * RESCALE,
+        }],
+    );
+
+    // `out[0][0] = Σ_k x[0][k]·w[k][0]`, with `w[0][0] = 2^15` and the rest of the column zero.
+    let mut weights = vec![1i32; 16];
+    for k in 0..4 {
+        weights[4 * k] = 0;
+    }
+    weights[0] = 1 << 15;
+    let einsum = |label, x: i32| Overflow {
+        label,
+        operands: vec![(0, 0, x)],
+        acc: i128::from(x) << 15,
+        divisor: RESCALE,
+    };
+    assert_overflow_rejected(
+        "Einsum",
+        |b| {
+            let x = b.input(vec![4, 4]);
+            let w = b.constant(Tensor::from_slice(&weights, &[4, 4]).unwrap());
+            b.einsum("mk,kn->mn", vec![x, w], vec![4, 4])
+        },
+        vec![ones(&[4, 4])],
+        vec![
+            einsum("i32::MAX + 1", 1 << 30),
+            einsum("below i32::MIN", -(1 << 30) - 1),
+        ],
     );
 }
 

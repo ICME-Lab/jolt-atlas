@@ -92,7 +92,7 @@ fn scalars_probe_layout() {
     let checked: Vec<usize> = model
         .views()
         .iter()
-        .filter(|n| checks_its_output(&model, n).expect("shape"))
+        .filter(|n| checks_its_output(n))
         .map(|n| n.idx)
         .filter(|idx| !model.output_indices().contains(idx))
         .collect();

@@ -13,7 +13,7 @@ use rand::{SeedableRng, rngs::StdRng};
 const SCALE: u8 = 14;
 
 /// FNV-1a 64-bit over a trace: every node output, in node order, plus the
-/// fused quotients/remainders and softmax witness fields.
+/// fused remainders and softmax witness fields.
 fn trace_hash(model: &Model, inputs: &[Tensor<i32>]) -> u64 {
     let trace = model.trace(inputs).expect("trace");
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -30,9 +30,6 @@ fn trace_hash(model: &Model, inputs: &[Tensor<i32>]) -> u64 {
     }
     for id in trace.aux.keys() {
         if let Some(f) = trace.fused(*id) {
-            for &q in f.quotient.data() {
-                absorb_i64(q);
-            }
             for &r in f.remainder.data() {
                 absorb_i64(r as i64);
             }
@@ -103,7 +100,7 @@ fn exact_class_golden() {
         random_tensor(&mut rng, &dims, 1 << 14),
         random_tensor(&mut rng, &dims, 1 << 14),
     ];
-    assert_eq!(trace_hash(&model, &inputs), 0xca192837f849f640);
+    assert_eq!(trace_hash(&model, &inputs), 0x3ff788728f84ea20);
 }
 
 /// Structural ops + einsum (constant and dynamic operands) + gather.
@@ -167,7 +164,7 @@ fn structural_and_einsum_golden() {
 
     let model = compile(b, false);
     let inputs = [random_tensor(&mut rng, &[4, 8], 1 << 15)];
-    assert_eq!(trace_hash(&model, &inputs), 0x5d575e107a6f5d88);
+    assert_eq!(trace_hash(&model, &inputs), 0xd77dbffa78b50e92);
 }
 
 /// Table-class ops: activations, trig, softmax — the deterministic integer

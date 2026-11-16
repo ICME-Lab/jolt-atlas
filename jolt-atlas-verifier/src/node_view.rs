@@ -1,7 +1,7 @@
 //! The proof layer's per-node working view over an [`atlas_trace::Model`].
 //!
 //! Op provers and their params structs need an **owned** bundle of node
-//! facts (index, operator, operand indices, dims, clamp width, scale) that
+//! facts (index, operator, operand indices, dims, scale) that
 //! outlives model borrows across sumcheck lifetimes. [`ComputationNode`] is
 //! that bundle, built on demand by [`ModelView::view`]; the model itself is
 //! stored and serialized only as the raw `atlas_trace::Model`.
@@ -10,11 +10,11 @@ use crate::onnx_proof::ops::{
     concat::SubcubeTilingRelation, reshape::FlatCopyRelation, slice::SubcubeSelectRelation,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
-use atlas_trace::{Op, Tensor};
+use atlas_trace::Op;
 use serde::{Deserialize, Serialize};
 
 /// A node viewed the way the proof layer consumes it: with its index,
-/// operator, usize operand indices, dims, clamp width, and the model scale.
+/// operator, usize operand indices, dims, and the model scale.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ComputationNode {
     /// Dense node index (topological order).
@@ -25,8 +25,6 @@ pub struct ComputationNode {
     pub inputs: Vec<usize>,
     /// Output dims (padded when the model was compiled with padding).
     pub output_dims: Vec<usize>,
-    /// Saturating-clamp lookup width in bits (64 when unclamped).
-    pub sat_clamp_bits: usize,
     /// The model's global fixed-point scale (log2). Carried per node so
     /// operator-level helpers (`rebase_bits`, table sizing) don't need a
     /// model reference.
@@ -41,7 +39,6 @@ impl ComputationNode {
             operator,
             inputs,
             output_dims,
-            sat_clamp_bits: 64,
             scale: common::consts::MODEL_SCALE as u8,
         }
     }
@@ -143,13 +140,12 @@ impl ModelView for atlas_trace::Model {
 
     fn view(&self, idx: usize) -> ComputationNode {
         let id = atlas_trace::NodeId(idx as u32);
-        let (node, meta) = self.node(id);
+        let node = self.node(id);
         ComputationNode {
             idx,
             operator: node.op.clone(),
             inputs: node.inputs.iter().map(|i| i.index()).collect(),
             output_dims: node.output_dims.clone(),
-            sat_clamp_bits: meta.sat_clamp_bits.map(|w| w.bits()).unwrap_or(64),
             scale: self.scale_log2(),
         }
     }
@@ -258,45 +254,13 @@ impl ModelView for atlas_trace::Model {
         for node in self.views() {
             let _ = writeln!(
                 out,
-                "{:>5}  {:<40} inputs {:?} dims {:?} clamp {}",
+                "{:>5}  {:<40} inputs {:?} dims {:?}",
                 node.idx,
                 node.operator.to_string(),
                 node.inputs,
                 node.output_dims,
-                node.sat_clamp_bits,
             );
         }
         out
     }
-}
-
-/// Sound magnitude bound on a node's pre-clamp value, or `None` for
-/// unclamped nodes. Delegates to the op's own `clamp_bound`. `Err` if an operand of the node is
-/// not a node of the model.
-pub fn clamp_value_bound(
-    model: &atlas_trace::Model,
-    node: &ComputationNode,
-) -> Result<Option<u128>, ProofVerifyError> {
-    let graph = model.graph();
-    let mut input_dims: Vec<&[usize]> = Vec::with_capacity(node.inputs.len());
-    let mut input_consts: Vec<Option<&Tensor<i32>>> = Vec::with_capacity(node.inputs.len());
-    for &i in &node.inputs {
-        let operand = graph.nodes.get(i).ok_or_else(|| {
-            ProofVerifyError::Malformed(format!(
-                "model: node {} has operand {i}, which is not a node",
-                node.idx
-            ))
-        })?;
-        input_dims.push(operand.output_dims.as_slice());
-        input_consts.push(match &operand.op {
-            Op::Constant(c) => Some(c.0.as_ref()),
-            _ => None,
-        });
-    }
-    let ctx = atlas_trace::op::BoundCtx {
-        scale: model.scale(),
-        input_dims,
-        input_consts,
-    };
-    Ok(node.operator.spec().clamp_bound(&ctx))
 }

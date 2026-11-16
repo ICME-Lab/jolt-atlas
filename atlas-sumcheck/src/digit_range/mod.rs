@@ -242,12 +242,15 @@ mod tests {
     const VALUE_BITS: u32 = 32;
 
     fn value_id() -> OpeningId {
-        OpeningId::new(VirtualPoly::GlobalClampOut(0), SumcheckId::NodeExecution(0))
+        OpeningId::new(
+            VirtualPoly::GlobalRemainderValue(0),
+            SumcheckId::NodeExecution(0),
+        )
     }
 
     fn digit_ids(n: usize) -> Vec<CommittedPoly> {
         (0..n)
-            .map(|j| CommittedPoly::GlobalClampOutDigit(0, j))
+            .map(|j| CommittedPoly::GlobalRemainderDigit(0, j))
             .collect()
     }
 

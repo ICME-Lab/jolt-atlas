@@ -208,10 +208,8 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .log_k;
                 build_activation_small_rad_witness(input, vars, *d)
             }
-            CommittedPoly::GlobalRemainderDigit(..)
-            | CommittedPoly::GlobalClampOutDigit(..)
-            | CommittedPoly::GlobalClampSlackRaD(..) => {
-                unreachable!("packed clamp bucket witnesses are built at the model level")
+            CommittedPoly::GlobalRemainderDigit(..) => {
+                unreachable!("range bucket witnesses are built at the model level")
             }
             CommittedPoly::DivNodeQuotient(node_idx) => {
                 let computation_node = &model.view(*node_idx);

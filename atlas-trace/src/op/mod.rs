@@ -11,7 +11,6 @@ mod activation;
 mod einsum;
 mod fused;
 mod linear;
-pub use linear::sum_axes_i64;
 mod softmax;
 mod structural;
 
@@ -48,10 +47,10 @@ pub trait OpSpec: fmt::Display {
         Ok(())
     }
 
-    /// Sound bound on the magnitude of the pre-clamp value, if this op ends
-    /// in a saturating clamp. `None` = no clamp lookup on this node.
-    fn clamp_bound(&self, _ctx: &BoundCtx<'_>) -> Option<u128> {
-        None
+    /// Whether the op's result is exact arithmetic narrowed to `i32` (a sum, difference, axis
+    /// sum or rescaled quotient), so that a proof must show the output lies in `i32`.
+    fn checks_output(&self) -> bool {
+        false
     }
 
     /// Padding behavior class (see [`PadBehavior`]).
@@ -140,16 +139,6 @@ pub struct EvalCtx<'a> {
     /// Memoized activation tables (generation is deterministic, so caching
     /// is purely an optimization).
     pub tables: &'a TableCache,
-}
-
-/// Inputs to the static clamp-width bound analysis.
-pub struct BoundCtx<'a> {
-    /// The model's global fixed-point scale.
-    pub scale: Scale,
-    /// Each operand's (padded) dims.
-    pub input_dims: Vec<&'a [usize]>,
-    /// Each operand's constant data, when the operand is a `Constant` node.
-    pub input_consts: Vec<Option<&'a Tensor<i32>>>,
 }
 
 /// How an operator behaves under power-of-two padding of its operands.

@@ -14,9 +14,7 @@ use crate::{
     trace::{FusedIntermediates, NodeAux},
 };
 
-use super::{
-    BoundCtx, Cube, Eval, EvalCtx, MeanOfSquares, Mul, OpSpec, PadBehavior, Square, same_dims,
-};
+use super::{Cube, Eval, EvalCtx, MeanOfSquares, Mul, OpSpec, PadBehavior, Square, same_dims};
 
 /// Split an i64 accumulation tensor by `divisor`, producing the output (the quotient, which
 /// must fit `i32`) and the captured intermediates. The single implementation of the fused
@@ -38,7 +36,6 @@ pub(super) fn rebase_eval(
     Ok(Eval {
         output: super::linear::narrow(&quotient, op, "quotient")?,
         aux: Some(NodeAux::Fused(FusedIntermediates {
-            quotient,
             remainder: Tensor::new(remainder, dims).expect("same length"),
         })),
     })
@@ -69,8 +66,8 @@ impl OpSpec for Mul {
         same_dims(inputs, Some(2))
     }
 
-    fn clamp_bound(&self, ctx: &BoundCtx<'_>) -> Option<u128> {
-        self.rebase.then(|| (1u128 << 62) >> ctx.scale.log2())
+    fn checks_output(&self) -> bool {
+        self.rebase
     }
 
     fn padding(&self) -> PadBehavior {
@@ -106,8 +103,8 @@ impl OpSpec for Square {
         same_dims(inputs, Some(1))
     }
 
-    fn clamp_bound(&self, ctx: &BoundCtx<'_>) -> Option<u128> {
-        self.rebase.then(|| (1u128 << 62) >> ctx.scale.log2())
+    fn checks_output(&self) -> bool {
+        self.rebase
     }
 
     fn padding(&self) -> PadBehavior {
@@ -148,9 +145,8 @@ impl OpSpec for Cube {
         same_dims(inputs, Some(1))
     }
 
-    fn clamp_bound(&self, _ctx: &BoundCtx<'_>) -> Option<u128> {
-        // x³ needs up to 93 bits before the rebase; keep the full width.
-        self.rebase.then_some(u128::MAX)
+    fn checks_output(&self) -> bool {
+        self.rebase
     }
 
     fn padding(&self) -> PadBehavior {
@@ -215,8 +211,8 @@ impl OpSpec for MeanOfSquares {
         Ok(())
     }
 
-    fn clamp_bound(&self, ctx: &BoundCtx<'_>) -> Option<u128> {
-        Some((1u128 << 62) >> ctx.scale.log2())
+    fn checks_output(&self) -> bool {
+        true
     }
 
     fn padding(&self) -> PadBehavior {

@@ -166,7 +166,7 @@ proptest! {
 
         // Every node's padded output, cropped to the unpadded dims, must
         // equal the unpadded output.
-        for (id, node, _) in unpadded.nodes() {
+        for (id, node) in unpadded.nodes() {
             let logical = &node.output_dims;
             let cropped = t_pad.output(id).crop_to(logical).unwrap();
             prop_assert_eq!(
@@ -180,7 +180,7 @@ proptest! {
     }
 
     #[test]
-    fn clamp_width_soundness(spec in graph_spec()) {
+    fn fused_remainders_are_euclidean(spec in graph_spec()) {
         let graph = build_graph(&spec);
         let inputs = vec![
             Tensor::new(spec.input_a.clone(), &spec.dims).unwrap(),
@@ -189,18 +189,15 @@ proptest! {
         let model = compile(graph, true);
         let trace = model.trace(&inputs).unwrap();
 
-        for (id, node, meta) in model.nodes() {
-            let Some(width) = meta.sat_clamp_bits else { continue };
-            // For fused ops the pre-clamp value is the captured quotient.
-            if let Some(f) = trace.fused(id) {
-                let bound = 1i128 << (width.bits() - 1);
-                for &q in f.quotient.data() {
-                    prop_assert!(
-                        (q as i128) < bound && (q as i128) >= -bound,
-                        "node {} ({}): quotient {} escapes {}-bit width",
-                        id, node.op, q, width.bits()
-                    );
-                }
+        for (id, node) in model.nodes() {
+            let Some(f) = trace.fused(id) else { continue };
+            let divisor = node.op.spec().rebase_divisor(model.scale()).expect("a fused op");
+            for &r in f.remainder.data() {
+                prop_assert!(
+                    (0..divisor).contains(&i64::from(r)),
+                    "node {} ({}): remainder {} outside [0, {})",
+                    id, node.op, r, divisor
+                );
             }
         }
     }

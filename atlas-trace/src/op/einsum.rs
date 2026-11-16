@@ -12,7 +12,7 @@ use crate::{
     tensor::{Tensor, row_major_strides as strides},
 };
 
-use super::{BoundCtx, Einsum, Eval, EvalCtx, OpSpec, PadBehavior, fused::rebase_eval};
+use super::{Einsum, Eval, EvalCtx, OpSpec, PadBehavior, fused::rebase_eval};
 
 /// A parsed, validated einsum equation (`"mk,kn->mn"`).
 ///
@@ -276,8 +276,8 @@ impl OpSpec for Einsum {
         Ok(shape)
     }
 
-    fn clamp_bound(&self, ctx: &BoundCtx<'_>) -> Option<u128> {
-        Some(einsum_acc_bound(&self.equation, ctx) >> ctx.scale.log2())
+    fn checks_output(&self) -> bool {
+        true
     }
 
     fn padding(&self) -> PadBehavior {
@@ -288,75 +288,6 @@ impl OpSpec for Einsum {
     fn rebase_divisor(&self, scale: Scale) -> Option<i64> {
         Some(scale.denom_i64())
     }
-}
-
-/// Bound on `|Σ Π operands|`: `2^31 · max_row Σ|w|` when an operand is a
-/// constant (weights are known exactly), else `2^62 · contracted size`.
-/// Ported verbatim from the old crate's `einsum_acc_bound`.
-fn einsum_acc_bound(eq: &EinsumEq, ctx: &BoundCtx<'_>) -> u128 {
-    const I32_MAG: u128 = 1 << 31;
-
-    // Prefer a constant operand: its row sums bound the contraction exactly.
-    let mut best: Option<u128> = None;
-    for (i, maybe_const) in ctx.input_consts.iter().enumerate() {
-        if let Some(w) = maybe_const
-            && let Some(m) = const_operand_row_sum_max(w, &eq.inputs[i], eq.output())
-        {
-            let b = I32_MAG * m;
-            best = Some(best.map_or(b, |x: u128| x.min(b)));
-        }
-    }
-    if let Some(b) = best {
-        return b;
-    }
-
-    // All operands dynamic: each product is at most 2^62, summed over the
-    // contracted index space.
-    let mut sizes: HashMap<u8, usize> = HashMap::new();
-    for (letters, dims) in eq.inputs.iter().zip(&ctx.input_dims) {
-        for (j, &c) in letters.iter().enumerate() {
-            if let Some(&d) = dims.get(j) {
-                sizes.insert(c, d);
-            }
-        }
-    }
-    let contracted: u128 = sizes
-        .iter()
-        .filter(|(c, _)| !eq.output.contains(c))
-        .map(|(_, &d)| d as u128)
-        .product::<u128>()
-        .max(1);
-    (1u128 << 62) * contracted
-}
-
-/// `max` over the operand's free indices of `Σ` over its contracted indices
-/// of `|w|`, for a constant operand `w` with letters `letters`.
-fn const_operand_row_sum_max(w: &Tensor<i32>, letters: &[u8], output: &[u8]) -> Option<u128> {
-    let dims = w.dims();
-    if letters.len() != dims.len() {
-        return None;
-    }
-    let free: Vec<usize> = (0..letters.len())
-        .filter(|&i| output.contains(&letters[i]))
-        .collect();
-    let free_size: usize = free.iter().map(|&i| dims[i]).product::<usize>().max(1);
-    let mut sums = vec![0u128; free_size];
-    let mut coord = vec![0usize; dims.len()];
-    for &v in w.data() {
-        let mut key = 0usize;
-        for &f in &free {
-            key = key * dims[f] + coord[f];
-        }
-        sums[key] += (v as i64).unsigned_abs() as u128;
-        for d in (0..dims.len()).rev() {
-            coord[d] += 1;
-            if coord[d] < dims[d] {
-                break;
-            }
-            coord[d] = 0;
-        }
-    }
-    sums.into_iter().max()
 }
 
 #[cfg(test)]

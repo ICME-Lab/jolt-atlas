@@ -10,13 +10,9 @@ use crate::{
 };
 
 use super::{
-    Add, And, BoundCtx, Clamp, Div, Eval, EvalCtx, Iff, IsNan, Neg, OpSpec, PadBehavior, ReLU,
-    Rsqrt, ScalarConstDiv, Sub, Sum, same_dims,
+    Add, And, Clamp, Div, Eval, EvalCtx, Iff, IsNan, Neg, OpSpec, PadBehavior, ReLU, Rsqrt,
+    ScalarConstDiv, Sub, Sum, same_dims,
 };
-
-/// Magnitude bound of an i32 (`2^31`), the induction hypothesis of the
-/// clamp-width analysis.
-pub(super) const I32_MAG: u128 = 1 << 31;
 
 /// Narrow every element of an `i64` result to `i32`; the first element outside the range is
 /// an execution error naming `op` and `what`.
@@ -69,8 +65,8 @@ impl OpSpec for Add {
         same_dims(inputs, None)
     }
 
-    fn clamp_bound(&self, _ctx: &BoundCtx<'_>) -> Option<u128> {
-        Some(2 * I32_MAG)
+    fn checks_output(&self) -> bool {
+        true
     }
 
     fn padding(&self) -> PadBehavior {
@@ -99,8 +95,8 @@ impl OpSpec for Sub {
         same_dims(inputs, None)
     }
 
-    fn clamp_bound(&self, _ctx: &BoundCtx<'_>) -> Option<u128> {
-        Some(2 * I32_MAG)
+    fn checks_output(&self) -> bool {
+        true
     }
 
     fn padding(&self) -> PadBehavior {
@@ -137,10 +133,7 @@ impl fmt::Display for Sum {
 }
 
 /// Reduce `input` over `axes` in `i64`, collapsing each reduced axis to 1.
-///
-/// Public because the pre-clamp Sum accumulation is part of the proof spec:
-/// the prover recovers the saturating-clamp lookup index from it.
-pub fn sum_axes_i64(input: &Tensor<i32>, axes: &[usize]) -> Tensor<i64> {
+fn sum_axes_i64(input: &Tensor<i32>, axes: &[usize]) -> Tensor<i64> {
     sum_map_i64(input, axes, |v| v as i64)
 }
 
@@ -201,15 +194,8 @@ impl OpSpec for Sum {
             .collect())
     }
 
-    fn clamp_bound(&self, ctx: &BoundCtx<'_>) -> Option<u128> {
-        let input = ctx.input_dims.first()?;
-        let n: u128 = self
-            .axes
-            .iter()
-            .map(|&a| *input.get(a).unwrap_or(&1) as u128)
-            .product::<u128>()
-            .max(1);
-        Some(n * I32_MAG)
+    fn checks_output(&self) -> bool {
+        true
     }
 
     fn padding(&self) -> PadBehavior {

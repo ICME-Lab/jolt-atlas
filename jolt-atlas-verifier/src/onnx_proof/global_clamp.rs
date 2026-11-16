@@ -27,7 +27,6 @@
 //! unchanged. The layout is a pure function of the model, so prover and
 //! verifier derive it independently.
 use super::{clamp_split, fused_rebase::rebase_bits, ops::mean_of_squares::mos_divisor};
-use crate::node_view::clamp_value_bound;
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -255,10 +254,9 @@ pub struct ClampBucket {
 }
 
 /// Whether `node`'s op is exact arithmetic whose result must be shown to lie in `i32`: a sum,
-/// difference, axis sum or rescaled quotient. `Err` if an operand of the node is not a node
-/// of the model.
-pub fn checks_its_output(model: &Model, node: &ComputationNode) -> Result<bool, ProofVerifyError> {
-    Ok(clamp_value_bound(model, node)?.is_some())
+/// difference, axis sum or rescaled quotient.
+pub fn checks_its_output(node: &ComputationNode) -> bool {
+    node.operator.spec().checks_output()
 }
 
 /// The range claims `node` contributes, each with its width: its remainders' ([`node_remainders`],
@@ -273,7 +271,7 @@ pub fn node_range_claims(
     for (remainder, bound) in node_remainders(node)? {
         claims.extend(range_claims(remainder, bound));
     }
-    if checks_its_output(model, node)? && !model.output_indices().contains(&node.idx) {
+    if checks_its_output(node) && !model.output_indices().contains(&node.idx) {
         claims.push((
             RangeClaim {
                 remainder: Remainder::Output,

@@ -131,15 +131,9 @@ impl Trace {
 
 /// Intermediates of a fused-rescale op (einsum, mul, square, cube,
 /// mean-of-squares), captured so the proof system never re-runs the
-/// expensive accumulation: `acc = quotient·D + remainder` with
-/// `remainder ∈ [0, D)` and `output = quotient`, which fits `i32`.
-///
-/// Same contract as the old crate's `FusedIntermediates`.
+/// expensive accumulation: `acc = output·D + remainder` with `remainder ∈ [0, D)`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FusedIntermediates {
-    /// Pre-clamp rescaled accumulation `acc div D` (the saturating-clamp
-    /// lookup index).
-    pub quotient: Tensor<i64>,
     /// Rescaling remainder `acc mod D ∈ [0, D)`.
     pub remainder: Tensor<i32>,
 }

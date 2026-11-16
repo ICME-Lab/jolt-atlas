@@ -199,7 +199,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     let mut digits_needed = 0usize;
     let mut elems_total = 0usize;
     for n in &views {
-        if !jolt_atlas_core::onnx_proof::global_clamp::checks_its_output(model, n).expect("shape") {
+        if !jolt_atlas_core::onnx_proof::global_clamp::checks_its_output(n) {
             continue;
         }
         let out = trace.node_outputs[n.idx].data();

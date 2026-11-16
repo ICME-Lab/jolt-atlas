@@ -47,7 +47,7 @@ pub mod trace;
 pub use builder::GraphBuilder;
 pub use graph::{Graph, Node};
 pub use id::{NodeId, Scale, SemVersion};
-pub use model::{ClampWidth, CompileOptions, Model, NodeMeta};
+pub use model::{CompileOptions, Model};
 pub use op::Op;
 pub use tensor::Tensor;
 pub use trace::{FusedIntermediates, NodeAux, RsqrtAdvice, SoftmaxWitness, TeleportAdvice, Trace};

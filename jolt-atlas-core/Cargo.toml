@@ -23,7 +23,6 @@ atlas-claims.workspace = true
 # Cryptography and Math
 
 # Numeric
-num.workspace = true
 num-traits.workspace = true
 
 # Serialization

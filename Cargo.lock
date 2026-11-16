@@ -1252,7 +1252,6 @@ dependencies = [
  "blake2 0.10.6",
  "common",
  "jolt-atlas-verifier",
- "num",
  "num-traits",
  "rand 0.8.5",
  "rayon",

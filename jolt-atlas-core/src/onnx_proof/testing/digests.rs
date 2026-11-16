@@ -57,8 +57,8 @@ fn digest_op_gauntlet() {
         "op_gauntlet",
         imported.model,
         &inputs,
-        "ae99dcf85980ffb6e67109be03882b060dd85d62c14a4c69a58dcf7ea61280fb",
-        "63d412d50301a8b4c9db92500d79b0f565abd5eca325b06a1f6ff337ee2a7895",
+        "d9469cd85243e8dd240120ffd80080a266479127eff61ca4d9cace213e41f137",
+        "fc751ff1da419143adc242ee3671868adbea23e30cc4e9c135f4a30d5b0f5535",
     );
 }
 
@@ -70,8 +70,8 @@ fn digest_gpt2_tiny() {
         "gpt2-tiny",
         imported.model,
         &inputs,
-        "28aa9643479c34ba474e18e30d1d72f27becb55a7de08649dfc780554b828889",
-        "49a63d80bcab661264f5b49d9c44515f45dc9213b85b6025242a7cfac13b8587",
+        "30795c0426dda025ec3a541fd5d831126e068355b3abf91f929ceb19199d936c",
+        "cea3a75cf7e37737d23e9cbd464247271382ace27aa577b34c03dc7b901eda67",
     );
 }
 
@@ -83,8 +83,8 @@ fn digest_qwen2_tiny() {
         "qwen2-tiny",
         imported.model,
         &inputs,
-        "d9be6178c05094e050dddc35ee1fa2ab2bbb1e2d17d245cd2a2c4f3d9ed681f3",
-        "80bb5c16852323645a3f7619aa760612dbd0236b4ec7a496b5fb924428e0a9c8",
+        "6b3b835cee70770ea5fde4d3671416e2d6b566e244bf8d05880a01627da0f211",
+        "00a84f22c32059c4962fdd7b12f4da23fb428a74909fd7c341c3171587b265dd",
     );
 }
 
@@ -96,7 +96,7 @@ fn digest_bge_tiny() {
         "bge-tiny",
         imported.model,
         &inputs,
-        "e7a0b9a00246fc9f7c176611dc6289a0d7e4c27a8afdf0cca56b464ac0f89bc9",
-        "245c597f9fe22435b8b77080039d686dd699e5356e549332a91d1f14a1cfd302",
+        "b70156c7c8b3c7fcd237afca844314d49f1e1fab47a445eb8b5bb3bef47c2277",
+        "0df65c93b0b5c2b2cb231948de8e8a504108f0895ac3d4aaad9dca218edeb763",
     );
 }

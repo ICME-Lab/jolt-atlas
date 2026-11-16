@@ -18,11 +18,8 @@ use atlas_sumcheck::{
     config::OneHotParams,
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
     ps_shout::{
-        unary::{
-            ps_read_raf_verifier, PrefixSuffixShoutProvider, ReadRafClaims,
-            UnaryReadRafSumcheckVerifier,
-        },
-        RafShoutProvider,
+        ps_read_raf_verifier, PrefixSuffixShoutProvider, RafShoutProvider, ReadRafClaims,
+        ReadRafSumcheckVerifier,
     },
     shout::RaOneHotEncoding,
 };
@@ -264,7 +261,7 @@ impl<H: LookupOperandsTrait> OpLookupProvider<H> {
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> Result<UnaryReadRafSumcheckVerifier<F, LUT, LOG_K>, ProofVerifyError>
+    ) -> Result<ReadRafSumcheckVerifier<F, LUT, LOG_K>, ProofVerifyError>
     where
         F: JoltField,
         T: Transcript,

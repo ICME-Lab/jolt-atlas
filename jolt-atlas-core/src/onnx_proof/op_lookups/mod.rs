@@ -17,8 +17,8 @@ use atlas_algebra::{
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_sumcheck::{
     opening_proof::prover::ProverOpeningAccumulator,
-    ps_shout::unary::{
-        prover::{ps_read_raf_prover, UnaryReadRafSumcheckProver},
+    ps_shout::{
+        prover::{ps_read_raf_prover, ReadRafSumcheckProver},
         PrefixSuffixShoutProvider,
     },
 };
@@ -53,7 +53,7 @@ pub trait OpLookupProve {
         trace: &Trace,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> (UnaryReadRafSumcheckProver<F, LUT, LOG_K>, Vec<usize>)
+    ) -> (ReadRafSumcheckProver<F, LUT, LOG_K>, Vec<usize>)
     where
         F: JoltField,
         T: Transcript,
@@ -80,7 +80,7 @@ pub trait OpLookupProve {
         lookup_bits: Vec<LookupBits>,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> UnaryReadRafSumcheckProver<F, LUT, LOG_K>
+    ) -> ReadRafSumcheckProver<F, LUT, LOG_K>
     where
         F: JoltField,
         T: Transcript,
@@ -98,7 +98,7 @@ impl<H: LookupWitness> OpLookupProve for OpLookupProvider<H> {
         trace: &Trace,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> (UnaryReadRafSumcheckProver<F, LUT, LOG_K>, Vec<usize>)
+    ) -> (ReadRafSumcheckProver<F, LUT, LOG_K>, Vec<usize>)
     where
         F: JoltField,
         T: Transcript,
@@ -136,7 +136,7 @@ impl<H: LookupWitness> OpLookupProve for OpLookupProvider<H> {
         lookup_bits: Vec<LookupBits>,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
-    ) -> UnaryReadRafSumcheckProver<F, LUT, LOG_K>
+    ) -> ReadRafSumcheckProver<F, LUT, LOG_K>
     where
         F: JoltField,
         T: Transcript,

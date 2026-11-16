@@ -3,6 +3,7 @@
 use super::*;
 use crate::engine::prover::round_check_failed;
 use crate::engine::{prover::ProveRounds, SumcheckError};
+use crate::opening_proof::prover::ProverOpeningAccumulator;
 use crate::relation::prover::RelationWitness;
 use atlas_algebra::poly::{split_eq::GruenSplitEqPolynomial, univariate::UnivariatePoly};
 use atlas_algebra::{
@@ -10,7 +11,8 @@ use atlas_algebra::{
     poly::{
         dense::DensePolynomial,
         multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
-        prefix_suffix::PrefixRegistry,
+        prefix_suffix::{Prefix, PrefixRegistry, PrefixSuffixDecomposition},
+        signed_identity::SignedIdentityPoly,
         split_eq::SplitEqUnreducedFold,
     },
     utils::{
@@ -27,20 +29,16 @@ use atlas_lookup_tables::{
 };
 use common::parallel::par_enabled;
 use itertools::Itertools;
+use num_traits::Zero;
 use std::array;
 
-/// Generic prover for the Prefix-Suffix Read-RAF sumcheck.
-///
-/// `LOG_K`: address phase rounds.  `N`: table MLE bit-width.
-/// `VD`: verifier RAF data.  `PS`: prover RAF state (PS decompositions).
-pub struct ReadRafSumcheckProver<F, LUT, const LOG_K: usize, const N: usize, VD, PS>
+/// Prover for the prefix-suffix read-raf sumcheck. `LOG_K`: address phase rounds.
+pub struct ReadRafSumcheckProver<F, LUT, const LOG_K: usize>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
-    PS: RafProverState<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
-    params: ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>,
+    params: ReadRafSumcheckParams<F, LUT, LOG_K>,
     setup: RelationSetup<F>,
     ra: Option<MultilinearPolynomial<F>>,
     r: Vec<F::Challenge>,
@@ -54,16 +52,13 @@ where
     v: Vec<ExpandingTable<F>>,
     cycle_poly: CyclePoly<F>,
     prefix_registry: PrefixRegistry<F>,
-    raf_state: PS,
+    raf_state: OperandRafState<F>,
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD, PS>
-    ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+impl<F, LUT, const LOG_K: usize> ReadRafSumcheckProver<F, LUT, LOG_K>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
-    PS: RafProverState<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
     fn compute_prefix_suffix_prover_message(
         &self,
@@ -102,7 +97,7 @@ where
                     .prefixes()
                     .iter()
                     .map(|prefix| {
-                        prefix.prefix_mle::<N, F, F::Challenge>(
+                        prefix.prefix_mle::<LOG_K, F, F::Challenge>(
                             &self.prefix_checkpoints,
                             r_x,
                             0,
@@ -117,7 +112,7 @@ where
                     .prefixes()
                     .iter()
                     .map(|prefix| {
-                        prefix.prefix_mle::<N, F, F::Challenge>(
+                        prefix.prefix_mle::<LOG_K, F, F::Challenge>(
                             &self.prefix_checkpoints,
                             r_x,
                             2,
@@ -152,15 +147,12 @@ where
     }
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD, PS> RelationWitness<F>
-    for ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+impl<F, LUT, const LOG_K: usize> RelationWitness<F> for ReadRafSumcheckProver<F, LUT, LOG_K>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
-    PS: RafProverState<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
-    type Relation = ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>;
+    type Relation = ReadRafSumcheckParams<F, LUT, LOG_K>;
 
     fn relation(&self) -> &Self::Relation {
         &self.params
@@ -175,12 +167,9 @@ where
     }
 }
 
-impl<F: JoltField, LUT, const LOG_K: usize, const N: usize, VD, PS> ProveRounds<F>
-    for ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+impl<F: JoltField, LUT, const LOG_K: usize> ProveRounds<F> for ReadRafSumcheckProver<F, LUT, LOG_K>
 where
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
-    PS: RafProverState<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
     fn num_rounds(&self) -> usize {
         self.params.rounds()
@@ -240,18 +229,15 @@ where
     }
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD, PS>
-    ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+impl<F, LUT, const LOG_K: usize> ReadRafSumcheckProver<F, LUT, LOG_K>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
-    PS: RafProverState<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
     pub fn new_inner(
-        params: ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>,
+        params: ReadRafSumcheckParams<F, LUT, LOG_K>,
         lookup_indices: Vec<LookupBits>,
-        raf_state: PS,
+        raf_state: OperandRafState<F>,
     ) -> Self {
         let (phases, log_m) = phase_schedule(LOG_K);
         let u_evals = params.cycle.evals();
@@ -348,7 +334,7 @@ where
                 self.lookup_indices.iter().enumerate().for_each(|(j, &k)| {
                     let (prefix_bits, suffix_bits) = k.split(suffix_len);
                     let y = prefix_bits & m_mask;
-                    let t = s.suffix_mle::<N>(suffix_bits);
+                    let t = s.suffix_mle::<LOG_K>(suffix_bits);
                     if t != 0 {
                         Q[y] += self.u_evals[j] * F::from_u32(t)
                     };
@@ -395,12 +381,9 @@ where
     }
 }
 
-impl<F: JoltField, LUT, const LOG_K: usize, const N: usize, VD, PS>
-    ReadRafSumcheckProver<F, LUT, LOG_K, N, VD, PS>
+impl<F: JoltField, LUT, const LOG_K: usize> ReadRafSumcheckProver<F, LUT, LOG_K>
 where
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
-    PS: RafProverState<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
     #[tracing::instrument(skip_all, name = "InstructionReadRafSumcheckProver::bind")]
     fn bind(&mut self, r: F, round: usize) {
@@ -423,7 +406,7 @@ where
 
             if self.r.len().is_multiple_of(2) {
                 let suffix_len = LOG_K - (round / log_m + 1) * log_m;
-                Prefixes::update_checkpoints::<N, F, F::Challenge>(
+                Prefixes::update_checkpoints::<LOG_K, F, F::Challenge>(
                     &mut self.prefix_checkpoints,
                     self.r[self.r.len() - 2],
                     self.r[self.r.len() - 1],
@@ -457,7 +440,7 @@ where
                     .table
                     .suffixes()
                     .iter()
-                    .map(|suffix| F::from_u32(suffix.suffix_mle::<N>(LookupBits::new(0, 0))))
+                    .map(|suffix| F::from_u32(suffix.suffix_mle::<LOG_K>(LookupBits::new(0, 0))))
                     .collect();
                 self.val = Some(self.params.table.combine(&prefixes, &suffixes));
                 let raf_val = self
@@ -477,4 +460,97 @@ where
             }
         }
     }
+}
+
+/// The prover's state for the read address's side of a read-raf: the prefix-suffix
+/// decomposition of the signed identity polynomial.
+pub struct OperandRafState<F: JoltField> {
+    pub identity_ps: PrefixSuffixDecomposition<F, 2, true>,
+}
+
+impl<F: JoltField> OperandRafState<F> {
+    fn init_Q(&mut self, u_evals: &[F], lookup_indices: &[LookupBits]) {
+        self.identity_ps.init_Q(u_evals, lookup_indices);
+    }
+
+    fn init_P(&mut self, registry: &mut PrefixRegistry<F>) {
+        self.identity_ps.init_P(registry);
+    }
+
+    fn prover_msg(&self, gamma: F) -> [F; 2] {
+        let len = self.identity_ps.Q_len();
+        let [operand_0, operand_2] = (0..len / 2)
+            .into_par_iter()
+            .with_min_len(par_enabled())
+            .map(|b| {
+                let (o0, o2) = self.identity_ps.sumcheck_evals(b);
+                [o0.to_unreduced(), o2.to_unreduced()]
+            })
+            .fold_with([F::UnreducedMulU64::zero(); 2], |running, new| {
+                [running[0] + new[0], running[1] + new[1]]
+            })
+            .reduce(
+                || [F::UnreducedMulU64::zero(); 2],
+                |running, new| [running[0] + new[0], running[1] + new[1]],
+            );
+        [
+            F::reduce_mul_u64(operand_0) * gamma,
+            F::reduce_mul_u64(operand_2) * gamma,
+        ]
+    }
+
+    fn bind(&mut self, r_j: F::Challenge) {
+        self.identity_ps.bind(r_j);
+    }
+
+    fn raf_val(&self, registry: &PrefixRegistry<F>, gamma: F) -> F {
+        let effective_identity = registry.checkpoints[Prefix::SignedIdentity].unwrap();
+        gamma * effective_identity
+    }
+}
+
+/// The prover of a prefix-suffix lookup's read-raf over `lookup_indices`: `γ` drawn, the
+/// claims read from the accumulator.
+pub fn ps_read_raf_prover<
+    F: JoltField,
+    T: Transcript,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    const LOG_K: usize,
+>(
+    provider: &impl PrefixSuffixShoutProvider<F, LUT, LOG_K>,
+    lookup_indices: Vec<LookupBits>,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> ReadRafSumcheckProver<F, LUT, LOG_K> {
+    let gamma = transcript.challenge_scalar();
+    let claims = provider
+        .read_raf_claims(accumulator)
+        .expect("the prover holds the lookup's claims");
+    let raf = OperandRaf {
+        operand_claim: claims.operand_claim,
+        log_k: LOG_K,
+    };
+    let r_node_output = provider
+        .r_cycle(accumulator)
+        .expect("the prover holds the lookup's cycle point");
+    let log_T = r_node_output.len();
+    let (polynomial_type, sumcheck_id) = provider.ra_poly();
+    let params = ReadRafSumcheckParams::from_parts(
+        gamma,
+        log_T,
+        r_node_output,
+        LUT::default(),
+        polynomial_type,
+        sumcheck_id,
+        claims.rv_claim,
+        raf,
+    );
+    let (_phases, log_m) = phase_schedule(LOG_K);
+    let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
+    let _guard = span.enter();
+    let identity_ps =
+        PrefixSuffixDecomposition::new(Box::new(SignedIdentityPoly::<F>::new(LOG_K)), log_m, LOG_K);
+    drop(_guard);
+    let raf_state = OperandRafState { identity_ps };
+    ReadRafSumcheckProver::new_inner(params, lookup_indices, raf_state)
 }

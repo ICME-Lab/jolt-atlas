@@ -1,6 +1,6 @@
 use crate::relation::not_derived;
 use crate::{
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
     relation::{
         Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
         RelationOpening, RelationSetup, RelationVerifier,
@@ -13,28 +13,26 @@ use atlas_algebra::{
     field::JoltField,
     poly::{
         eq::EqPolynomial,
-        multilinear::MultilinearPolynomial,
+        multilinear::{MultilinearPolynomial, PolynomialEvaluation},
         point::{OpeningPoint, BIG_ENDIAN},
-        prefix_suffix::PrefixRegistry,
+        signed_identity::SignedIdentityPoly,
     },
-    utils::{lookup_bits::LookupBits, thread::unsafe_allocate_zero_vec},
+    utils::thread::unsafe_allocate_zero_vec,
 };
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
+use atlas_transcript::Transcript;
 use common::{parallel::par_enabled, VirtualPoly};
 use rayon::prelude::*;
 
 #[cfg(test)]
 mod lookup_table_tests;
-pub mod unary;
+#[cfg(test)]
+pub mod tests;
 
 pub(crate) const DEGREE_BOUND: usize = 2;
 
-/// Common interface shared by both binary and unary ps_shout providers.
-///
-/// Contains the three methods that are structurally identical across
-/// `binary::PrefixSuffixShoutProvider` and `unary::PrefixSuffixShoutProvider`,
-/// so implementations only write them once regardless of which variant is used.
+/// Where a prefix-suffix lookup's read-address polynomial and cycle point live.
 pub trait RafShoutProvider<F: JoltField> {
     fn ra_poly(&self) -> (VirtualPoly, SumcheckId);
     fn r_cycle(
@@ -155,38 +153,47 @@ pub(crate) fn phase_schedule(log_k: usize) -> (usize, usize) {
     }
 }
 
-/// Verifier-side RAF: computing the RAF's contribution to the input claim
-/// and the RAF claim at a given address evaluation point.
-///
-/// Binary: `raf_input_claim(γ) = left_claim + γ * right_claim`
-/// Unary:  `raf_input_claim(γ) = operand_claim`
-///
-/// Then `input_claim = rv_claim + γ * raf.raf_input_claim(γ)`.
-pub trait RafVerifierData<F: JoltField>: Send + Sync {
-    fn raf_input_claim(&self, gamma: F) -> F;
-    fn raf_claim_at(&self, r_address: &[F], gamma: F) -> F;
+/// The read address's side of a read-raf: the operand whose signed value the address encodes.
+/// Its contribution to the input claim is the operand's claim, and at an address point it is
+/// the signed identity polynomial.
+pub struct OperandRaf<F: JoltField> {
+    pub operand_claim: F,
+    pub log_k: usize,
 }
 
-/// Prover-side RAF state: holds the PS decompositions and produces
-/// per-round univariate contributions and final checkpoint values.
-pub trait RafProverState<F: JoltField>: Send + Sync {
-    fn init_Q(&mut self, u_evals: &[F], lookup_indices: &[LookupBits]);
-    fn init_P(&mut self, registry: &mut PrefixRegistry<F>);
-    fn prover_msg(&self, gamma: F) -> [F; 2];
-    fn bind(&mut self, r_j: F::Challenge);
-    fn raf_val(&self, registry: &PrefixRegistry<F>, gamma: F) -> F;
+impl<F: JoltField> OperandRaf<F> {
+    /// The signed identity polynomial over the `log_k` address bits, at `r_address`.
+    pub fn claim_at(&self, r_address: &[F]) -> F {
+        SignedIdentityPoly::<F>::new(self.log_k).evaluate(r_address)
+    }
+}
+
+/// The claims a prefix-suffix lookup's read-raf starts from.
+#[derive(Debug, Clone, Copy)]
+pub struct ReadRafClaims<F: JoltField> {
+    pub rv_claim: F,
+    pub operand_claim: F,
+}
+
+/// A prefix-suffix lookup: its read-address polynomial, cycle point and starting claims.
+pub trait PrefixSuffixShoutProvider<F, LUT, const LOG_K: usize>: RafShoutProvider<F>
+where
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+{
+    fn read_raf_claims(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<ReadRafClaims<F>, ProofVerifyError>;
 }
 
 /// Parameters shared by the prover and verifier.
 ///
 /// `LOG_K`: total address bits (= number of address-phase rounds).
-/// `N`: bit-width used for table prefix/suffix MLE computations.
-/// `VD`: verifier-side RAF data (claims + evaluation).
-pub struct ReadRafSumcheckParams<F, LUT, const LOG_K: usize, const N: usize, VD>
+pub struct ReadRafSumcheckParams<F, LUT, const LOG_K: usize>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
     pub gamma: F,
     pub log_T: usize,
@@ -195,14 +202,13 @@ where
     pub polynomial_type: VirtualPoly,
     pub sumcheck_id: SumcheckId,
     pub rv_claim: F,
-    pub raf: VD,
+    pub raf: OperandRaf<F>,
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD> ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
+impl<F, LUT, const LOG_K: usize> ReadRafSumcheckParams<F, LUT, LOG_K>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
@@ -213,7 +219,7 @@ where
         polynomial_type: VirtualPoly,
         sumcheck_id: SumcheckId,
         rv_claim: F,
-        raf: VD,
+        raf: OperandRaf<F>,
     ) -> Self {
         Self {
             gamma,
@@ -237,7 +243,7 @@ where
         polynomial_type: VirtualPoly,
         sumcheck_id: SumcheckId,
         rv_claim: F,
-        raf: VD,
+        raf: OperandRaf<F>,
     ) -> Self {
         Self {
             gamma,
@@ -263,11 +269,10 @@ where
 /// order, cycle reversed). **S ⊆ R.** An honest `ra` is the one-hot encoding of the lookup
 /// addresses, so the sum over addresses reads the table value and the address at each cycle.
 /// The parameters carry their field data; the setup carries `γ` and both claims.
-impl<F, LUT, const LOG_K: usize, const N: usize, VD> ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
+impl<F, LUT, const LOG_K: usize> ReadRafSumcheckParams<F, LUT, LOG_K>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
     /// The bound point split into its address part (round order) and cycle part (reversed).
     fn split_point(challenges: &[F]) -> (Vec<F>, Vec<F>) {
@@ -276,7 +281,7 @@ where
     }
 
     /// The relation these parameters instantiate, with its setup.
-    pub fn into_verifier(self) -> ReadRafSumcheckVerifier<F, LUT, LOG_K, N, VD> {
+    pub fn into_verifier(self) -> ReadRafSumcheckVerifier<F, LUT, LOG_K> {
         let setup = self.relation_setup();
         RelationVerifier::at(self, setup)
     }
@@ -288,21 +293,16 @@ where
             challenges: vec![
                 (RelationChallenge::Gamma, self.gamma),
                 (RelationChallenge::Claim, self.rv_claim),
-                (
-                    RelationChallenge::SecondClaim,
-                    self.raf.raf_input_claim(self.gamma),
-                ),
+                (RelationChallenge::SecondClaim, self.raf.operand_claim),
             ],
         }
     }
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD> SymbolicSumcheck
-    for ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
+impl<F, LUT, const LOG_K: usize> SymbolicSumcheck for ReadRafSumcheckParams<F, LUT, LOG_K>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
     crate::relation_types!();
     type Shape = Self;
@@ -337,24 +337,20 @@ where
     }
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD> Produces
-    for ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
+impl<F, LUT, const LOG_K: usize> Produces for ReadRafSumcheckParams<F, LUT, LOG_K>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N>,
-    VD: RafVerifierData<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
     fn produced(&self) -> Vec<OpeningId> {
         vec![OpeningId::new(self.polynomial_type, self.sumcheck_id)]
     }
 }
 
-impl<F, LUT, const LOG_K: usize, const N: usize, VD> Relation<F>
-    for ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>
+impl<F, LUT, const LOG_K: usize> Relation<F> for ReadRafSumcheckParams<F, LUT, LOG_K>
 where
     F: JoltField,
-    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<N> + Send + Sync,
-    VD: RafVerifierData<F>,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Send + Sync,
 {
     fn opening_points(
         &self,
@@ -375,14 +371,48 @@ where
         Ok(match id {
             RelationDerived::Table(0) => self.table.evaluate_mle(&address),
             RelationDerived::CycleEq => self.cycle.mle(&cycle),
-            RelationDerived::Raf => self.raf.raf_claim_at(&address, self.gamma),
+            RelationDerived::Raf => self.raf.claim_at(&address),
             other => return Err(not_derived(other)),
         })
     }
 }
 
 /// The verifier of a prefix-suffix read-raf check: its relation.
-pub type ReadRafSumcheckVerifier<F, LUT, const LOG_K: usize, const N: usize, VD> =
-    RelationVerifier<F, ReadRafSumcheckParams<F, LUT, LOG_K, N, VD>>;
+pub type ReadRafSumcheckVerifier<F, LUT, const LOG_K: usize> =
+    RelationVerifier<F, ReadRafSumcheckParams<F, LUT, LOG_K>>;
+
+/// The verifier of a prefix-suffix lookup's read-raf: `γ` drawn, the claims read from the
+/// accumulator. `Err` if the accumulator lacks a claim it reads.
+pub fn ps_read_raf_verifier<
+    F: JoltField,
+    T: Transcript,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+    const LOG_K: usize,
+>(
+    provider: &impl PrefixSuffixShoutProvider<F, LUT, LOG_K>,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<ReadRafSumcheckVerifier<F, LUT, LOG_K>, ProofVerifyError> {
+    let gamma = transcript.challenge_scalar();
+    let claims = provider.read_raf_claims(accumulator)?;
+    let raf = OperandRaf {
+        operand_claim: claims.operand_claim,
+        log_k: LOG_K,
+    };
+    let r_node_output = provider.r_cycle(accumulator)?;
+    let log_T = r_node_output.len();
+    let (polynomial_type, sumcheck_id) = provider.ra_poly();
+    let params = ReadRafSumcheckParams::from_parts(
+        gamma,
+        log_T,
+        r_node_output,
+        LUT::default(),
+        polynomial_type,
+        sumcheck_id,
+        claims.rv_claim,
+        raf,
+    );
+    Ok(params.into_verifier())
+}
 
 pub mod prover;

@@ -318,6 +318,7 @@ pub fn verify_output_claim<F: JoltField, T: Transcript>(
 pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
     proof: &ONNXProof<F, PCS>,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
+    schedule: &Schedule<F>,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
     if let Some(reduced_opening_proof) = proof.reduced_opening_proof() {
@@ -339,10 +340,9 @@ pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentSchem
             &mut verifier.transcript,
         );
 
-        // Commitments are in sorted `CommittedPoly` order (the prover's
-        // `poly_map`); the joint opening covers the opened subset.
-        let mut committed = pp.shared.get_models_committed_polynomials()?;
-        committed.sort();
+        // The proof commits the polynomials the schedule opens, in sorted `CommittedPoly`
+        // order (the prover's `poly_map`); the joint opening covers the opened subset.
+        let committed = schedule.committed();
         if committed.len() != proof.commitments().len() {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "expected {} commitments, found {}",

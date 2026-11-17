@@ -1,5 +1,4 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use crate::{
     onnx_proof::{
@@ -15,8 +14,6 @@ use atlas_algebra::{
 use atlas_claims::{constant, derived, opening, Int};
 use atlas_trace::{op::ScalarConstDiv, Op};
 use common::VirtualPoly;
-
-impl OpLayout for ScalarConstDiv {}
 
 impl OpPlan for ScalarConstDiv {
     fn plan<F: atlas_algebra::field::JoltField>(

@@ -26,7 +26,6 @@
 //! while the divisor `D = N·2^S` uses the *semantic* count `N` (= `op.count`,
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
-use crate::onnx_proof::ops::OpLayout;
 
 use atlas_trace::{op::MeanOfSquares, trace::ModelExecutionIO, Model, Op};
 
@@ -56,8 +55,6 @@ pub const DEGREE: usize = 3;
 pub fn mos_divisor(op: &MeanOfSquares, scale: u8) -> i64 {
     (1i64 << scale) * op.count as i64
 }
-
-impl OpLayout for MeanOfSquares {}
 
 /// The plan: the evaluation reduction; the remainder advice (1); the reduction sumcheck (2).
 /// The remainder bound `R < D` and the output's range are proven in the packed range buckets

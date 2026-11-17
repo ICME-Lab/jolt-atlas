@@ -10,17 +10,12 @@ use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use crate::utils::dims::{axis_groups, bits_msb_first, pow2_log};
 use crate::{
-    onnx_proof::{
-        ops::OpLayout,
-        relation::{Custom, OpRel, OpRelKind, RelationOpening, RelationSetup},
-    },
+    onnx_proof::relation::{Custom, OpRel, OpRelKind, RelationOpening, RelationSetup},
     utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::opening;
 use atlas_trace::{op::Slice, Model, Op};
-
-impl OpLayout for Slice {}
 
 impl OpPlan for Slice {
     fn plan<F: atlas_algebra::field::JoltField>(

@@ -222,51 +222,6 @@ fn proof_types_all_exercised() {
     );
 }
 
-/// Temporary, until the per-op committed lists are deleted: the committed polynomials a model's
-/// schedule opens are the ones its ops and buckets declare, as sets, on every probe model, the
-/// op gauntlet and the tiny models.
-#[test]
-fn schedule_committed_is_the_declared_committed_set() {
-    use super::models::probe_models;
-    use crate::onnx_proof::{schedule::Schedule, AtlasSharedPreprocessing};
-    use std::collections::BTreeSet;
-
-    let mut cases: Vec<(String, atlas_trace::Model, Vec<Tensor<i32>>)> = probe_models()
-        .into_iter()
-        .map(|m| (m.name.to_string(), m.model, m.inputs))
-        .collect();
-    let gauntlet = zoo("op_gauntlet", 16);
-    let gauntlet_inputs = op_gauntlet_inputs(&gauntlet);
-    cases.push(("op_gauntlet".to_string(), gauntlet.model, gauntlet_inputs));
-    for name in ["gpt2-tiny", "qwen2-tiny", "bge-tiny"] {
-        let imported = zoo(name, 16);
-        let inputs = synth_inputs(&imported, GOLDEN_SEED);
-        cases.push((name.to_string(), imported.model, inputs));
-    }
-
-    for (name, model, inputs) in cases {
-        let io = model.trace(&inputs).expect("honest execution").io(&model);
-        let schedule = Schedule::<Fr>::compile(&model, &io).expect("the model has a schedule");
-        let opened = schedule.committed();
-        let declared = AtlasSharedPreprocessing::preprocess(model)
-            .get_models_committed_polynomials()
-            .expect("committed list");
-        assert_eq!(
-            opened.iter().collect::<BTreeSet<_>>().len(),
-            opened.len(),
-            "{name}: a committed polynomial is listed twice"
-        );
-        let opened: BTreeSet<_> = opened.into_iter().collect();
-        let declared: BTreeSet<_> = declared.into_iter().collect();
-        assert!(
-            opened == declared,
-            "{name}: opened but not declared {:?}; declared but not opened {:?}",
-            opened.difference(&declared).collect::<Vec<_>>(),
-            declared.difference(&opened).collect::<Vec<_>>()
-        );
-    }
-}
-
 /// Changing one input element must change the first derived challenge: the
 /// inputs are absorbed into the transcript before any challenge, which is
 /// what removes the adaptive forge's precondition (input-independent,

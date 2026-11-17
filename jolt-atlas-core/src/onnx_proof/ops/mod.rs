@@ -1,8 +1,8 @@
 //! # Neural Network Op Proofs Module
 //!
 //! The prover side of every supported ONNX operation. The verifier crate defines each op's
-//! relations, its [`OpLayout`] (committed polynomials) and its plan, the steps it writes to the
-//! model's schedule (`onnx_proof::schedule`); this module walks the schedule with the
+//! relations and its plan, the steps it writes to the model's schedule
+//! (`onnx_proof::schedule`); this module walks the schedule with the
 //! relations' witnesses ([`prove_schedule`]), so the transcript order is the schedule's step
 //! order on both sides.
 //!

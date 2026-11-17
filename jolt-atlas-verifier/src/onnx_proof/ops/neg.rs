@@ -1,17 +1,12 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use crate::{
-    onnx_proof::{
-        ops::OpLayout,
-        relation::{OpRel, OpRelKind, RelationOpening},
-    },
+    onnx_proof::relation::{OpRel, OpRelKind, RelationOpening},
     utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::{constant, opening, Int};
 use atlas_trace::op::Neg;
-
-impl OpLayout for Neg {}
 
 impl OpPlan for Neg {
     fn plan<F: atlas_algebra::field::JoltField>(

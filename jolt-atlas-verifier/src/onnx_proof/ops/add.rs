@@ -1,7 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
-        ops::OpLayout,
         relation::{OpRel, OpRelKind, RelationOpening},
         schedule::{OpPlan, ScheduleBuilder},
     },
@@ -10,8 +9,6 @@ use crate::{
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::opening;
 use atlas_trace::{op::Add, trace::ModelExecutionIO, Model};
-
-impl OpLayout for Add {}
 
 /// Proof for exact element-wise addition: `output = left + right`, where a sum outside `i32`
 /// is an execution error. The plan ([`accumulation_plan`]) has two parts:

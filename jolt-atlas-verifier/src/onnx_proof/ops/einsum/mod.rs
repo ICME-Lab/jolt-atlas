@@ -5,14 +5,11 @@ use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
         fused_rebase,
-        ops::{
-            einsum::{
-                abmk_abnk_abmn::AbmkAbnkAbmnLayout,
-                dot::{EinsumGeometry, EinsumLayout},
-                k_nk_n::KNkNLayout,
-                mk_kn_mn::MkKnMnLayout,
-            },
-            OpLayout,
+        ops::einsum::{
+            abmk_abnk_abmn::AbmkAbnkAbmnLayout,
+            dot::{EinsumGeometry, EinsumLayout},
+            k_nk_n::KNkNLayout,
+            mk_kn_mn::MkKnMnLayout,
         },
         relation::{
             not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
@@ -42,8 +39,6 @@ pub mod mk_kn_mn;
 // - mk,nk->mn       → k_nk_n   (vector-matrix; m == 1 enforced at dispatch)
 // - amk,ank->amn    → abmk_abnk_abmn (batch pack 1×a)
 // - abmk,abnk->abmn → abmk_abnk_abmn
-
-impl OpLayout for Einsum {}
 
 impl OpPlan for Einsum {
     fn plan<F: atlas_algebra::field::JoltField>(

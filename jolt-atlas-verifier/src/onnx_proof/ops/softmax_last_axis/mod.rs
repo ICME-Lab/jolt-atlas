@@ -36,7 +36,6 @@
 //!
 //! The clamp table's bound is a const generic at [`MODEL_SCALE`], so only that scale is
 //! supported.
-use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::{
     low_to_high_point, not_derived, Custom, OpRel, OpRelKind, RelationChallenge, RelationDerived,
     RelationOpening, RelationSetup,
@@ -52,7 +51,6 @@ use crate::{
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
 use atlas_sumcheck::{
-    config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
     shout::ReadRafProvider,
 };
@@ -77,7 +75,7 @@ use atlas_claims::{challenge, derived, opening};
 use atlas_sumcheck::shout;
 use atlas_transcript::Transcript;
 use common::{
-    consts::{MODEL_SCALE, SOFTMAX_CLAMP_BOUND, XLEN},
+    consts::{MODEL_SCALE, SOFTMAX_CLAMP_BOUND},
     CommittedPoly, VirtualPoly,
 };
 use std::sync::OnceLock;
@@ -108,28 +106,6 @@ pub fn read_tables() -> Result<&'static ReadTables, ProofVerifyError> {
                 "softmax: the tables' address width is not the clamp table's".to_string(),
             )
         })
-}
-
-impl OpLayout for SoftmaxLastAxis {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        let idx = node.idx;
-        let mut polys = vec![CommittedPoly::SoftmaxShift(idx)];
-        for (log_k, ctor) in [
-            (
-                XLEN,
-                CommittedPoly::SoftmaxClampRaD as fn(usize, usize) -> _,
-            ),
-            (SOFTMAX_CLAMP_BOUND, CommittedPoly::SoftmaxAddrRaD),
-        ] {
-            let d =
-                OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k).instruction_d;
-            polys.extend((0..d).map(|i| ctor(idx, i)));
-        }
-        Ok(polys)
-    }
 }
 
 /// The plan: the evaluation reduction; the row gaps opened at the reduced point's row

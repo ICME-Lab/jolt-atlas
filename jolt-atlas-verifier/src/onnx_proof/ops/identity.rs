@@ -1,11 +1,9 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{neg::signed_copy, OpLayout};
+use crate::onnx_proof::ops::neg::signed_copy;
 use crate::onnx_proof::relation::OpRelKind;
 use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::op::Identity;
-
-impl OpLayout for Identity {}
 
 impl OpPlan for Identity {
     fn plan<F: atlas_algebra::field::JoltField>(

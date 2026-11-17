@@ -11,20 +11,15 @@ use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use crate::utils::dims::{axis_groups, bits_msb_first, pow2_log};
 use crate::{
-    onnx_proof::{
-        ops::OpLayout,
-        relation::{
-            not_derived, Custom, OpExpr, OpRel, OpRelKind, RelationDerived, RelationOpening,
-            RelationSetup,
-        },
+    onnx_proof::relation::{
+        not_derived, Custom, OpExpr, OpRel, OpRelKind, RelationDerived, RelationOpening,
+        RelationSetup,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::{derived, opening};
 use atlas_trace::{op::Concat, Model, Op};
-
-impl OpLayout for Concat {}
 
 impl OpPlan for Concat {
     fn plan<F: atlas_algebra::field::JoltField>(

@@ -1,6 +1,5 @@
 use super::*;
 use crate::onnx_proof::{
-    ops::OpLayout,
     schedule::{OpPlan, OpRelation, ScheduleBuilder},
     ProofType,
 };
@@ -17,15 +16,6 @@ use atlas_trace::op::GatherSmall;
 use atlas_trace::trace::ModelExecutionIO;
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
-
-impl OpLayout for GatherSmall {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(vec![CommittedPoly::GatherRa(node.idx)])
-    }
-}
 
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its `ra`
 /// (Hamming-Booleanity, Booleanity and Hamming weight), queued for the post-loop one-hot batch.

@@ -137,7 +137,7 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     verifier.run(&schedule)?;
 
     // Verify reduced opening proof
-    verifier::verify_reduced_openings(proof, pp, &mut verifier)?;
+    verifier::verify_reduced_openings(proof, pp, &schedule, &mut verifier)?;
 
     // The proof was consumed exactly: no sumcheck or reduction proof left over, no claim unbound.
     verifier.check_consumed()?;

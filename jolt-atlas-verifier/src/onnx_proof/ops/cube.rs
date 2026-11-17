@@ -1,14 +1,12 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    ops::{mul::product, OpLayout},
+    ops::mul::product,
     relation::OpRelKind,
     schedule::{fused_rescale_plan, OpPlan, OpRelation, ScheduleBuilder},
     ProofType,
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_trace::{op::Cube, trace::ModelExecutionIO, Model};
-
-impl OpLayout for Cube {}
 
 /// Element-wise cube as a product ([`product`]).
 impl OpPlan for Cube {

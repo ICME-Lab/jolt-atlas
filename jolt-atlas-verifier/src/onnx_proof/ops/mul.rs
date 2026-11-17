@@ -2,7 +2,6 @@ use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
         fused_rebase,
-        ops::OpLayout,
         relation::{OpRel, OpRelKind, RelationDerived, RelationOpening},
         schedule::{fused_rescale_plan, OpPlan, OpRelation, ScheduleBuilder},
         ProofType,
@@ -15,8 +14,6 @@ use atlas_algebra::{
 };
 use atlas_claims::{derived, opening};
 use atlas_trace::{op::Mul, trace::ModelExecutionIO, Model};
-
-impl OpLayout for Mul {}
 
 impl OpPlan for Mul {
     fn plan<F: JoltField>(

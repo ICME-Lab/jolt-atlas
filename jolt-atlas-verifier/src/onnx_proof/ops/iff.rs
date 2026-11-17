@@ -2,7 +2,6 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use crate::{
     onnx_proof::{
-        ops::OpLayout,
         relation::{OpRel, OpRelKind, RelationDerived, RelationOpening},
         ProofType,
     },
@@ -14,8 +13,6 @@ use atlas_algebra::{
 };
 use atlas_claims::{constant, derived, opening, Int};
 use atlas_trace::op::Iff;
-
-impl OpLayout for Iff {}
 
 impl OpPlan for Iff {
     fn plan<F: atlas_algebra::field::JoltField>(

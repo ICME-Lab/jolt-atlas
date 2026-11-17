@@ -90,7 +90,8 @@ fn needed_bits(q: &[i32]) -> usize {
 /// Committed-digit census and value-magnitude audit from one trace, without
 /// proving (Phase 2 of `docs/measurement-plan.md`).
 fn census(model: &Model, inputs: &[Tensor<i32>]) {
-    use jolt_atlas_core::onnx_proof::ops::NodeCommittedPolynomials;
+    use common::CommittedPoly;
+    use jolt_atlas_core::onnx_proof::schedule::Schedule;
     use jolt_atlas_core::onnx_proof::trace_view::TraceView;
     use std::collections::BTreeMap;
 
@@ -153,14 +154,28 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     }
     let mut by_op: BTreeMap<(String, String), usize> = BTreeMap::new();
     let mut node_rows = 0usize;
-    for n in &views {
-        let padded = n.pow2_padded_num_output_elements();
-        for p in NodeCommittedPolynomials::get_committed_polynomials(n).expect("shape") {
-            let name = format!("{p:?}");
-            let fam = name.split('(').next().unwrap().to_string();
-            *by_op.entry((op_name(model, n.idx), fam)).or_default() += padded;
-            node_rows += padded;
+    // The polynomials the schedule opens besides the buckets' digits: each names its node
+    // first.
+    let committed = Schedule::<Fp128>::compile(model, &trace.io(model))
+        .expect("the model has a schedule")
+        .committed();
+    for p in &committed {
+        if matches!(p, CommittedPoly::GlobalRemainderDigit(..)) {
+            continue;
         }
+        let name = format!("{p:?}");
+        let (fam, args) = name.split_once('(').unwrap();
+        let node: usize = args
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap()
+            .parse()
+            .expect("a node polynomial names its node first");
+        let padded = views[node].pow2_padded_num_output_elements();
+        *by_op
+            .entry((op_name(model, node), fam.to_string()))
+            .or_default() += padded;
+        node_rows += padded;
     }
     let bucket_rows: usize = by_fam.values().map(|f| f.rows).sum();
     let total_rows = bucket_rows + node_rows;
@@ -270,11 +285,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
                     biased += 1;
                     biased_cells += n.pow2_padded_num_output_elements();
                 }
-                if NodeCommittedPolynomials::get_committed_polynomials(&cn)
-                    .expect("shape")
-                    .iter()
-                    .any(|p| format!("{p:?}").starts_with("NodeOutputRaD"))
-                {
+                if committed.contains(&CommittedPoly::NodeOutputRaD(cn.idx, 0)) {
                     act_after_einsum += 1;
                 }
             }

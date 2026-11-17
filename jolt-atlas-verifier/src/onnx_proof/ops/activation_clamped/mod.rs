@@ -16,7 +16,6 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::lookup::{
     output_value, small_table, PrefixSuffixTable, SmallTableDef, TableRead,
 };
-use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::RelationOpening;
 use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
@@ -87,31 +86,6 @@ pub fn clamped_activation_plan<F: JoltField>(
     Ok(())
 }
 
-/// Committed polynomials for a node reading the small table `def` at its clamped input: both
-/// stages' one-hot chunks.
-pub fn clamped_activation_committed_polynomials(
-    node: &ComputationNode,
-    def: SmallTableDef,
-) -> Vec<CommittedPoly> {
-    let mut polys = clamp_read(node, PrefixSuffixTable::ActivationClamp)
-        .ra
-        .committed_polys();
-    polys.extend(def.ra_encoding(node).committed_polys());
-    polys
-}
-
-impl OpLayout for Erf {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(clamped_activation_committed_polynomials(
-            node,
-            table_def(TableKind::Erf),
-        ))
-    }
-}
-
 impl OpPlan for Erf {
     fn plan<F: JoltField>(
         &self,
@@ -124,18 +98,6 @@ impl OpPlan for Erf {
     }
 }
 
-impl OpLayout for Sigmoid {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(clamped_activation_committed_polynomials(
-            node,
-            table_def(TableKind::Sigmoid),
-        ))
-    }
-}
-
 impl OpPlan for Sigmoid {
     fn plan<F: JoltField>(
         &self,
@@ -145,18 +107,6 @@ impl OpPlan for Sigmoid {
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         clamped_activation_plan(node, schedule)
-    }
-}
-
-impl OpLayout for Tanh {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(clamped_activation_committed_polynomials(
-            node,
-            table_def(TableKind::Tanh),
-        ))
     }
 }
 

@@ -1,19 +1,14 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
-use crate::onnx_proof::{
-    ops::OpLayout,
-    relation::{
-        not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
-    },
+use crate::onnx_proof::relation::{
+    not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
 };
+use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use atlas_algebra::{
     field::JoltField, poly::multilinear::EvaluateMle, utils::errors::ProofVerifyError,
 };
 use atlas_claims::{derived, opening};
 use atlas_trace::{op::Constant, Tensor};
 use std::sync::Arc;
-
-impl OpLayout for Constant {}
 
 impl OpPlan for Constant {
     fn plan<F: atlas_algebra::field::JoltField>(

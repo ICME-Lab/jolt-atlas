@@ -490,15 +490,6 @@ impl RangeBucket {
     }
 }
 
-/// The buckets' committed polynomials: every range bucket's digit columns. A function of the
-/// model alone. `Err` for a node whose bound cannot be range-checked.
-pub fn bucket_committed_polys(model: &Model) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-    Ok(range_buckets(model)?
-        .iter()
-        .flat_map(|bucket| bucket.committed_polys())
-        .collect())
-}
-
 #[cfg(test)]
 #[allow(clippy::indexing_slicing)]
 mod tests {

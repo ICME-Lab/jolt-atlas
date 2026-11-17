@@ -87,26 +87,6 @@ fn build_activation_small_rad_witness<F: JoltField>(
     ))
 }
 
-/// Generate the witnesses for **all** of a node's committed polynomials, each through
-/// [`WitnessGenerator::generate_witness`].
-#[tracing::instrument(skip_all, name = "generate_node_witnesses", fields(node = node.idx))]
-pub(crate) fn generate_node_witnesses<F: JoltField>(
-    node: &ComputationNode,
-    model: &Model,
-    trace: &Trace,
-) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
-    use crate::onnx_proof::ops::NodeCommittedPolynomials;
-
-    NodeCommittedPolynomials::get_committed_polynomials(node)
-        .expect("the model's nodes have the shapes their ops prove")
-        .into_iter()
-        .map(|poly| {
-            let witness = poly.generate_witness(model, trace);
-            (poly, witness)
-        })
-        .collect()
-}
-
 /// Trait for generating witness polynomials from model execution traces.
 ///
 /// This trait defines the interface for converting committed polynomial specifications

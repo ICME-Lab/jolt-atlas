@@ -281,9 +281,15 @@ mod tests {
 
         let output_idx = prover.preprocessing.model().output_indices()[0];
         assert_eq!(prover.accumulator.get_node_openings(output_idx).len(), 1);
-        let model = prover.preprocessing.model().clone();
+        let schedule = Schedule::compile(prover.preprocessing.model(), &prover.io)
+            .expect("the model has a schedule");
 
-        prover::iop(&model, &mut prover, &mut proofs, &mut eval_reduction_proofs);
+        prover::iop(
+            &schedule,
+            &mut prover,
+            &mut proofs,
+            &mut eval_reduction_proofs,
+        );
 
         // A single claim is its own reduced instance: no proof entry.
         assert!(!eval_reduction_proofs.contains_key(&output_idx));
@@ -309,9 +315,10 @@ mod tests {
         let mut proofs = BTreeMap::new();
         let mut eval_reduction_proofs = BTreeMap::new();
 
+        let schedule = Schedule::compile(shared.model(), &io).expect("the model has a schedule");
         prover::output_claim(&mut prover);
         prover::iop(
-            shared.model(),
+            &schedule,
             &mut prover,
             &mut proofs,
             &mut eval_reduction_proofs,
@@ -337,7 +344,6 @@ mod tests {
         verifier::populate_accumulator(&partial_proof, &mut verifier);
         verifier::verify_output_claim(shared.model(), &mut verifier)
             .expect("verify_output_claim should succeed for consistent partial proof state");
-        let schedule = Schedule::compile(shared.model(), &io).expect("the model has a schedule");
         verifier
             .run(&schedule)
             .expect("the schedule should run in isolation after output-claim initialization");

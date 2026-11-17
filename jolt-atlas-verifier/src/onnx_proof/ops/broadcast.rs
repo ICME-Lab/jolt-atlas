@@ -1,11 +1,8 @@
 use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use crate::{
-    onnx_proof::{
-        ops::OpLayout,
-        relation::{
-            not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
-        },
+    onnx_proof::relation::{
+        not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -16,8 +13,6 @@ use atlas_algebra::{
 };
 use atlas_claims::{derived, opening};
 use atlas_trace::{op::Broadcast, Model, Tensor};
-
-impl OpLayout for Broadcast {}
 
 impl OpPlan for Broadcast {
     fn plan<F: atlas_algebra::field::JoltField>(

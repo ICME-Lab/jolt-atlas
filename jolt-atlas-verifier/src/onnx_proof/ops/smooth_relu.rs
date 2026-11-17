@@ -20,10 +20,9 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::lookup::{small_table, PrefixSuffixTable, SmallTableDef, TableRead};
-use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::{OpExpr, RelationOpening};
 use crate::onnx_proof::{
-    ops::activation_clamped::{clamp_read, clamped_activation_committed_polynomials},
+    ops::activation_clamped::clamp_read,
     schedule::{OpOpen, OpPlan, OpRelation, ScheduleBuilder},
 };
 use crate::utils::opening_access::OpeningIdBuilder;
@@ -89,18 +88,6 @@ pub fn relu_read(node: &ComputationNode) -> TableRead {
         VirtualPoly::ActivationClampRa,
         CommittedPoly::ActivationClampRaD,
     )
-}
-
-impl OpLayout for SmoothRelu {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(clamped_activation_committed_polynomials(
-            node,
-            table_def(self.form),
-        ))
-    }
 }
 
 /// The plan: the evaluation reduction; `ReLU(x)` opened at the reduced output point; the

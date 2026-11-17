@@ -12,7 +12,7 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::{
     prove,
     range_bucket::{checks_its_output, range_buckets, Remainder},
-    schedule::DEFERRED_PROOF_IDX,
+    schedule::{Schedule, DEFERRED_PROOF_IDX},
     AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
@@ -37,9 +37,6 @@ fn model_outputs_are_not_range_checked() {
     assert_eq!(members, vec![hidden], "the hidden sum only");
 
     let shared = AtlasSharedPreprocessing::preprocess(model.clone());
-    let committed = shared
-        .get_models_committed_polynomials()
-        .expect("committed list");
     let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(shared);
     let tensor = |values: [i32; 4]| Tensor::from_slice(&values, &[4]).unwrap();
     for inputs in [
@@ -47,6 +44,9 @@ fn model_outputs_are_not_range_checked() {
         vec![tensor([i32::MAX, 0, i32::MIN, -1]), tensor([0, 0, 0, 0])],
     ] {
         let io = model.trace(&inputs).expect("honest execution").io(&model);
+        let committed = Schedule::<Fp128>::compile(&model, &io)
+            .expect("the model has a schedule")
+            .committed();
         let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &inputs);
         assert_eq!(proof.commitments().len(), committed.len());
         prove_verify_roundtrip::<AkitaScheme>(model.clone(), &inputs, RoundtripOptions::default());

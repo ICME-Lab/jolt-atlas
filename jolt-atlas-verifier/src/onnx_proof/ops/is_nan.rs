@@ -1,17 +1,12 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use crate::{
-    onnx_proof::{
-        ops::OpLayout,
-        relation::{OpRel, OpRelKind, RelationOpening},
-    },
+    onnx_proof::relation::{OpRel, OpRelKind, RelationOpening},
     utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::opening;
 use atlas_trace::op::IsNan;
-
-impl OpLayout for IsNan {}
 
 impl OpPlan for IsNan {
     fn plan<F: atlas_algebra::field::JoltField>(

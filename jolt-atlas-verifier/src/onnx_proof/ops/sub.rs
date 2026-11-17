@@ -1,13 +1,11 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    ops::{add::accumulation_plan, OpLayout},
+    ops::add::accumulation_plan,
     relation::OpRelKind,
     schedule::{OpPlan, ScheduleBuilder},
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::{op::Sub, trace::ModelExecutionIO, Model};
-
-impl OpLayout for Sub {}
 
 /// Proof for exact element-wise subtraction: `output = left - right`, where a difference
 /// outside `i32` is an execution error.

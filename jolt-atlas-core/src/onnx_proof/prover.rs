@@ -10,6 +10,7 @@ use super::{
 };
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
+use crate::onnx_proof::witness::WitnessGenerator;
 use crate::onnx_proof::{
     ops::{prove_schedule, Addresses},
     range_bucket::BucketWitnesses,
@@ -113,6 +114,7 @@ pub(super) fn commit_witness_polynomials<
     T: Transcript,
     PCS: CommitmentScheme<Field = F>,
 >(
+    schedule: &Schedule<F>,
     model: &Model,
     trace: &Trace,
     buckets: &BucketWitnesses,
@@ -123,7 +125,7 @@ pub(super) fn commit_witness_polynomials<
     WitnessCommitments<PCS>,
     Vec<PCS::OpeningProofHint>,
 ) {
-    let poly_map = polynomial_map::<F>(model, trace, buckets);
+    let poly_map = polynomial_map::<F>(schedule, model, trace, buckets);
     let polys: Vec<&MultilinearPolynomial<F>> = poly_map.values().collect();
     let (batch, per_poly) = PCS::batch_commit_all(&polys, generators);
     let (commitments, hints): (Vec<_>, Vec<_>) = per_poly.into_iter().unzip();
@@ -175,14 +177,12 @@ pub(crate) fn output_claim<F: JoltField, T: Transcript>(prover: &mut Prover<F, T
 /// sumchecks.
 #[tracing::instrument(skip_all, name = "ONNXProof::iop")]
 pub(crate) fn iop<F: JoltField, T: Transcript>(
-    model: &Model,
+    schedule: &Schedule<F>,
     prover: &mut Prover<F, T>,
     proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
     eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
 ) {
-    let schedule = Schedule::compile(model, &prover.io)
-        .expect("the model's nodes have the shapes their ops prove");
-    prove_schedule(&schedule, prover, proofs, eval_reduction_proofs);
+    prove_schedule(schedule, prover, proofs, eval_reduction_proofs);
 }
 
 #[tracing::instrument(skip_all, name = "ONNXProof::prove_reduced_openings")]
@@ -291,26 +291,26 @@ pub(super) fn finalize_proof<
     )
 }
 
+/// The witness of every polynomial the proof commits: the ones the schedule opens, the
+/// packed range buckets' digit columns from `buckets` and every other from the trace.
 #[tracing::instrument(skip_all, name = "ONNXProof::polynomial_map")]
 pub(super) fn polynomial_map<F: JoltField>(
+    schedule: &Schedule<F>,
     model: &Model,
     trace: &Trace,
     buckets: &BucketWitnesses,
 ) -> BTreeMap<CommittedPoly, MultilinearPolynomial<F>> {
-    // Walk nodes *sequentially* with inner (per-tensor) parallelism ENABLED,
-    // mirroring `Model::trace`. The cost is dominated by a few large nodes, and
-    // a per-node `par_iter` would pin each of them to a single thread to avoid
-    // nested-rayon fragmentation. Giving each node the whole thread pool for its
-    // witness build parallelizes the large nodes; the many small nodes are cheap
-    // enough that node-level parallelism for them is negligible.
-    let mut polys: BTreeMap<CommittedPoly, MultilinearPolynomial<F>> = model
-        .views()
-        .iter()
-        .flat_map(|node| {
-            crate::onnx_proof::witness::generate_node_witnesses::<F>(node, model, trace)
+    // Polynomials are built one after another, each with the whole thread pool: the cost is
+    // dominated by a few large ones, which a parallel walk would pin to a single thread each.
+    let mut polys: BTreeMap<CommittedPoly, MultilinearPolynomial<F>> = schedule
+        .committed()
+        .into_iter()
+        .filter(|poly| !matches!(poly, CommittedPoly::GlobalRemainderDigit(..)))
+        .map(|poly| {
+            let witness = poly.generate_witness(model, trace);
+            (poly, witness)
         })
         .collect();
-    // Packed range buckets (model-level, not per node).
     polys.extend(buckets.committed_polys::<F>(model));
     polys
 }

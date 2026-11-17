@@ -1,12 +1,10 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{constant::public_value, OpLayout};
+use crate::onnx_proof::ops::constant::public_value;
 use crate::onnx_proof::relation::OpRelKind;
 use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::op::Input;
 use std::sync::Arc;
-
-impl OpLayout for Input {}
 
 impl OpPlan for Input {
     fn plan<F: atlas_algebra::field::JoltField>(

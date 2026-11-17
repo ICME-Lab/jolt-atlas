@@ -1,4 +1,3 @@
-use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use crate::{
     node_view::ComputationNode,
@@ -15,15 +14,6 @@ use atlas_algebra::{
 use atlas_claims::{derived, opening};
 use atlas_trace::op::Div;
 use common::{CommittedPoly, VirtualPoly};
-
-impl OpLayout for Div {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(vec![CommittedPoly::DivNodeQuotient(node.idx)])
-    }
-}
 
 impl OpPlan for Div {
     fn plan<F: atlas_algebra::field::JoltField>(

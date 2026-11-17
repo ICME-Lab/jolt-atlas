@@ -1,6 +1,5 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::lookup::{PrefixSuffixTable, TableRead};
-use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::RelationOpening;
 use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -18,15 +17,6 @@ pub fn read(node: &ComputationNode) -> TableRead {
         VirtualPoly::SymmetricClampRa,
         CommittedPoly::SymmetricClampRaD,
     )
-}
-
-impl OpLayout for Clamp {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(read(node).ra.committed_polys())
-    }
 }
 
 impl OpPlan for Clamp {

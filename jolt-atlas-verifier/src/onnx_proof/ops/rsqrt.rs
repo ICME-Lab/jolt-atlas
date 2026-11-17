@@ -1,5 +1,4 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::OpLayout;
 use crate::{
     onnx_proof::{
         relation::{
@@ -29,15 +28,6 @@ pub fn rsqrt_dividend(node: &ComputationNode) -> i64 {
         "rsqrt_dividend called on a non-Rsqrt node"
     );
     1i64 << (3 * node.scale)
-}
-
-impl OpLayout for Rsqrt {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(vec![CommittedPoly::RsqrtQuotient(node.idx)])
-    }
 }
 
 /// The plan: the fused relation's sumcheck (its point drawn from the transcript), then the

@@ -1,13 +1,11 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    ops::{sum::axis::axis_sum, OpLayout},
+    ops::sum::axis::axis_sum,
     schedule::{OpPlan, OpRelation, ScheduleBuilder},
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::{op::Sum, trace::ModelExecutionIO, Model};
-
-impl OpLayout for Sum {}
 
 /// Axis-wise sum implementations for sumcheck protocol.
 pub mod axis;

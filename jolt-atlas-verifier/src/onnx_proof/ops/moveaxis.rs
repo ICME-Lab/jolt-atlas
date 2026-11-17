@@ -1,10 +1,7 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use crate::{
-    onnx_proof::{
-        ops::OpLayout,
-        relation::{Custom, OpRel, OpRelKind, RelationOpening, RelationSetup},
-    },
+    onnx_proof::relation::{Custom, OpRel, OpRelKind, RelationOpening, RelationSetup},
     utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{
@@ -13,8 +10,6 @@ use atlas_algebra::{
 };
 use atlas_claims::opening;
 use atlas_trace::{op::MoveAxis, Op};
-
-impl OpLayout for MoveAxis {}
 
 impl OpPlan for MoveAxis {
     fn plan<F: atlas_algebra::field::JoltField>(

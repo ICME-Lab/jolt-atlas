@@ -1,22 +1,12 @@
 use super::*;
 use crate::onnx_proof::lookup::RaEncoding;
 use crate::onnx_proof::{
-    ops::OpLayout,
     schedule::{OpPlan, OpRelation, ScheduleBuilder},
     ProofType,
 };
 use atlas_trace::op::GatherLarge;
 use atlas_trace::trace::ModelExecutionIO;
 use common::CommittedPoly;
-
-impl OpLayout for GatherLarge {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(ra_encoding(node)?.committed_polys())
-    }
-}
 
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its
 /// read addresses, queued for the post-loop one-hot batch.

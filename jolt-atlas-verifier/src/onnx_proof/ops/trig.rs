@@ -11,7 +11,6 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::lookup::{
     output_value, small_table, PrefixSuffixTable, SmallTableDef, TableRead,
 };
-use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::{OpRel, OpRelKind, RelationOpening};
 use crate::onnx_proof::schedule::{OpOpen, OpPlan, OpRelation, ScheduleBuilder};
 use crate::utils::opening_access::{OpeningIdBuilder, Target};
@@ -63,15 +62,6 @@ fn table_def(
     }
 }
 
-/// The committed polynomials of a trig node reading the table `def`: the period quotient, the
-/// downscale's address chunks and the table's.
-fn committed_polynomials(node: &ComputationNode, def: SmallTableDef) -> Vec<CommittedPoly> {
-    let mut polys = vec![CommittedPoly::TrigPeriodQuotient(node.idx)];
-    polys.extend(downscale_read(node).ra.committed_polys());
-    polys.extend(def.ra_encoding(node).committed_polys());
-    polys
-}
-
 /// The plan of a trig node `name`: the evaluation reduction; the period quotient and the
 /// downscaled remainder opened at the reduced output point; the downscale and table reads and
 /// their one-hot checks, queued for the post-loop batches; then the period reduction
@@ -102,15 +92,6 @@ fn trig_plan<F: JoltField>(
     Ok(())
 }
 
-impl OpLayout for Sin {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(committed_polynomials(node, sin_table()))
-    }
-}
-
 impl OpPlan for Sin {
     fn plan<F: JoltField>(
         &self,
@@ -120,15 +101,6 @@ impl OpPlan for Sin {
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         trig_plan(node, "Sin", schedule)
-    }
-}
-
-impl OpLayout for Cos {
-    fn get_committed_polynomials(
-        &self,
-        node: &ComputationNode,
-    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(committed_polynomials(node, cos_table()))
     }
 }
 

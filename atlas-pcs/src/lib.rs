@@ -10,6 +10,7 @@
     type_alias_bounds
 )]
 pub mod akita;
+pub mod bitz;
 pub mod commitment_scheme;
 pub mod openings;
 

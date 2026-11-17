@@ -124,11 +124,8 @@ Workspace members, in dependency order:
     operand polynomials, `EqPolynomial`, the Gruen `split_eq`, the `univariate` round messages
     `UnivariatePoly`/`CompressedPoly`, opening points) and `utils`. Fields and polynomials share
     a crate because `MultilinearPolynomial`'s `From` impls overlap unless `JoltField` is local.
-  - **jolt-field**, **jolt-poly** (root) — owned compatibility packages: re-export the field
-    items and the four univariate types the external `akita-*` crates bind as `jolt_field::*`
-    and `jolt_poly::*`; the root `[patch]` points them here. Upstream a16z/jolt is a reference,
-    not a dependency: `docs/upstream-inventory.md` records the provenance of every crate taken
-    from it.
+  Upstream a16z/jolt is a reference, not a dependency: `docs/upstream-inventory.md` records
+  the provenance of every crate taken from it.
   - **atlas-transcript** — the Fiat-Shamir transcript (taken from upstream `jolt-transcript`):
     one `Transcript` trait; the prover uses a `ProvingTranscript` (spongefish `ProverState`,
     proof-of-work grinding behind the `prover` feature), which sends values (`send_scalar`,
@@ -137,7 +134,7 @@ Workspace members, in dependency order:
     `read_scalars`, `read_serializable`) absorb what they return. The NARG string is the
     proof: every commitment, claim, round message, proof-of-work nonce and the joint opening
     proof, in the order the verifier reads them. `words` is the deployed format's word
-    encodings the Akita adapter and the sumcheck engine absorb. The challenge codec and grind
+    encodings the sumcheck engine absorbs. The challenge codec and grind
     pricing are `atlas-algebra::field::challenge`.
   - **atlas-lookup-tables** — the prefix-suffix lookup tables.
   - **atlas-claims** — the symbolic-relation layer: `SymbolicSumcheck` (a relation value's
@@ -153,16 +150,16 @@ Workspace members, in dependency order:
     `config`. As
     upstream's protocol crates do, it ships both sides; prover items live in each module's
     `prover` submodule, which the verifier may not name (CI path check).
-  - **atlas-pcs** — the `CommitmentScheme` interface, `akita` over Fp128 (its `backend`
-    submodule is the adapter over LayerZero's `akita-*` crates, a git dependency, taken from
-    upstream `jolt-akita`; the schedule catalogs are in `atlas-pcs/schedules/`), `openings`
-    (prefix packing, group claims), the test `mock`, and `bitz` (`specs/bitz-commitment.md`,
-    stage 1): a commitment to a vector of bits packed into `F_{2^128}`, with one evaluation
+  - **atlas-pcs** — the `CommitmentScheme` interface (one batch commitment, one joint
+    opening) and its one scheme, `bitz` (`specs/bitz-commitment.md`): a commitment to a
+    vector of bits packed into `F_{2^128}`, Reed–Solomon encoded and Merkle-committed, with one
     claim over Fp128 proven against it by a projection onto a random prime, a grand product
-    (`gkr`), ring switching and a Ligerito opening. Written from the papers; no caller yet.
-    Its example `bitz_bench` is the scheme's benchmark.
-  No BN254 or curve crate is in the resolved dependency graph (checked in CI); the vendored
-  crates' optional `bn254` features stay off. Every sumcheck is a relation: the verifier runs
+    (`gkr`), ring switching and a Ligerito opening. `bitz::scheme` lays every committed
+    polynomial out as bit planes of that one vector and turns the proof's joint opening into
+    one such claim. Written from the papers, no external proof-system dependency. Its example
+    `bitz_bench` is the scheme's benchmark.
+  No BN254, curve, arkworks or Akita crate is in the resolved dependency graph (checked in
+  CI). Every sumcheck is a relation: the verifier runs
   `relation::verify_relation{,_batch}` over `RelationVerifier`s, the prover
   `relation::prover::prove_relation{,_batch,_batch_parallel}` over `RelationWitness`es, both
   driving `atlas_sumcheck::engine` (`prove_batch`, `verify_compressed`), which grinds before

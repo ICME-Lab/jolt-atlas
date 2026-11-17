@@ -11,8 +11,8 @@ final-status-level = "slow"
 inherits = "default"
 failure-output = "immediate-final"
 retries = 0
-# GitHub's 4-vCPU, 16 GB runners lose the job to memory starvation with four Akita
-# proofs in flight; two fit.
+# GitHub's 4-vCPU, 16 GB runners lose the job to memory starvation with four proofs in
+# flight; two fit.
 test-threads = 2
 
 [profile.ci.junit]
@@ -26,7 +26,7 @@ slow-timeout = { period = "300s", terminate-after = 9 }
 success-output = "final"
 
 # The exhaustive soundness sweeps prove once per site; the witness sweep takes
-# about 37 min on an M3 under Akita, so give them twice the heavy budget.
+# the longest, so give them twice the heavy budget.
 [[profile.heavy.overrides]]
 filter = 'test(soundness)'
 slow-timeout = { period = "300s", terminate-after = 18 }

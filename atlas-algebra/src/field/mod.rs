@@ -219,7 +219,7 @@ impl<const N: usize, const M: usize> Sub<Limbs<M>> for Limbs<N> {
 }
 
 /// The field abstraction the proof system is written against: a [`Field`] with a canonical
-/// encoding, an accumulator and serde wire serialization (what the `akita-*` crates bound on),
+/// encoding, an accumulator and serde wire serialization,
 /// plus the atlas-specific surface: the unreduced-product ladder, the 125-bit challenge type,
 /// arkworks serialization and transcript codecs.
 pub trait JoltField:

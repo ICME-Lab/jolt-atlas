@@ -26,246 +26,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "akita-algebra"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-error",
- "akita-serialization",
- "jolt-field",
- "jolt-poly",
- "rand_core 0.6.4",
- "rayon",
- "tracing",
-]
-
-[[package]]
-name = "akita-challenges"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-error",
- "akita-transcript",
- "jolt-field",
- "keccak 0.1.6",
- "serde",
- "smallvec",
-]
-
-[[package]]
-name = "akita-config"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-challenges",
- "akita-error",
- "akita-params",
- "akita-schedules",
- "akita-serialization",
- "akita-transcript",
- "akita-types",
- "jolt-field",
-]
-
-[[package]]
-name = "akita-cpu-backend"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-algebra",
- "akita-challenges",
- "akita-config",
- "akita-error",
- "akita-params",
- "akita-prover",
- "akita-serialization",
- "akita-sumcheck",
- "akita-transcript",
- "akita-types",
- "jolt-field",
- "jolt-poly",
- "rayon",
- "tracing",
-]
-
-[[package]]
-name = "akita-error"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "akita-params"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-algebra",
- "akita-challenges",
- "akita-error",
- "akita-serialization",
- "akita-sumcheck",
- "akita-transcript",
- "blake2 0.11.0",
- "jolt-field",
- "serde",
- "sha3 0.12.0",
-]
-
-[[package]]
-name = "akita-pcs"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-algebra",
- "akita-challenges",
- "akita-config",
- "akita-cpu-backend",
- "akita-error",
- "akita-params",
- "akita-prover",
- "akita-serialization",
- "akita-setup",
- "akita-transcript",
- "akita-types",
- "akita-verifier",
- "jolt-field",
- "rayon",
- "tracing",
-]
-
-[[package]]
-name = "akita-planner"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-challenges",
- "akita-error",
- "akita-params",
- "akita-schedules",
- "libm",
-]
-
-[[package]]
-name = "akita-prover"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-algebra",
- "akita-challenges",
- "akita-config",
- "akita-error",
- "akita-params",
- "akita-serialization",
- "akita-sumcheck",
- "akita-transcript",
- "akita-types",
- "jolt-field",
- "jolt-poly",
- "tracing",
-]
-
-[[package]]
-name = "akita-schedules"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-challenges",
- "akita-error",
- "akita-params",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "akita-serialization"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "jolt-field",
- "jolt-poly",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "akita-setup"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-config",
- "akita-cpu-backend",
- "akita-error",
- "akita-params",
- "akita-serialization",
- "akita-types",
- "jolt-field",
- "tracing",
-]
-
-[[package]]
-name = "akita-sumcheck"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-algebra",
- "akita-error",
- "akita-serialization",
- "akita-transcript",
- "jolt-field",
- "jolt-poly",
-]
-
-[[package]]
-name = "akita-transcript"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-error",
- "jolt-field",
- "spongefish 0.7.4",
-]
-
-[[package]]
-name = "akita-types"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-algebra",
- "akita-challenges",
- "akita-error",
- "akita-params",
- "akita-serialization",
- "akita-sumcheck",
- "akita-transcript",
- "jolt-field",
- "jolt-poly",
- "rand_core 0.6.4",
- "shake",
- "tracing",
-]
-
-[[package]]
-name = "akita-verifier"
-version = "0.1.0"
-source = "git+https://github.com/LayerZero-Labs/akita.git?rev=dfdbd7674cab5cfbe95243e947d1b10a982f232b#dfdbd7674cab5cfbe95243e947d1b10a982f232b"
-dependencies = [
- "akita-algebra",
- "akita-challenges",
- "akita-config",
- "akita-error",
- "akita-params",
- "akita-serialization",
- "akita-sumcheck",
- "akita-transcript",
- "akita-types",
- "jolt-field",
- "jolt-poly",
- "rayon",
- "tracing",
-]
-
-[[package]]
 name = "allocative"
 version = "0.3.4"
 source = "git+https://github.com/facebookexperimental/allocative?rev=85b773d85d526d068ce94724ff7a7b81203fc95e#85b773d85d526d068ce94724ff7a7b81203fc95e"
@@ -415,27 +175,12 @@ dependencies = [
 name = "atlas-pcs"
 version = "0.1.0"
 dependencies = [
- "akita-algebra",
- "akita-challenges",
- "akita-config",
- "akita-error",
- "akita-params",
- "akita-pcs",
- "akita-planner",
- "akita-schedules",
- "akita-types",
  "atlas-algebra",
  "atlas-transcript",
- "bincode",
- "blake2 0.10.6",
  "blake3",
  "common",
- "num-traits",
  "rand 0.8.5",
  "rayon",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
 ]
@@ -486,7 +231,7 @@ dependencies = [
  "blake2 0.11.0",
  "getrandom 0.4.3",
  "rayon",
- "spongefish 0.8.0",
+ "spongefish",
  "tracing-subscriber",
 ]
 
@@ -575,7 +320,7 @@ dependencies = [
  "cc",
  "cfg-if",
  "constant_time_eq",
- "cpufeatures 0.3.1",
+ "cpufeatures",
 ]
 
 [[package]]
@@ -676,7 +421,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.1",
+ "cpufeatures",
  "rand_core 0.10.1",
 ]
 
@@ -757,12 +502,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "const-oid"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
-
-[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -773,15 +512,6 @@ name = "core_detect"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
-
-[[package]]
-name = "cpufeatures"
-version = "0.2.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "cpufeatures"
@@ -992,7 +722,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer 0.12.1",
- "const-oid",
  "crypto-common 0.2.2",
  "ctutils",
 ]
@@ -1234,15 +963,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1301,20 +1021,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jolt-field"
-version = "0.1.0"
-dependencies = [
- "atlas-algebra",
-]
-
-[[package]]
-name = "jolt-poly"
-version = "0.1.0"
-dependencies = [
- "atlas-algebra",
-]
-
-[[package]]
 name = "js-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1326,21 +1032,12 @@ dependencies = [
 
 [[package]]
 name = "keccak"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
-dependencies = [
- "cpufeatures 0.2.17",
-]
-
-[[package]]
-name = "keccak"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.1",
+ "cpufeatures",
 ]
 
 [[package]]
@@ -1476,7 +1173,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-complex",
  "num-integer",
  "num-iter",
@@ -1489,16 +1186,6 @@ name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
-dependencies = [
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-bigint"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -1560,7 +1247,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -1607,171 +1294,6 @@ checksum = "c7f86c6eef3d6df15f23bcfb6af487cbd2fed4e5581d58d5bf1f5f8b7f6727dc"
 dependencies = [
  "cc",
  "pkg-config",
-]
-
-[[package]]
-name = "p3-challenger"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84d5d5e1ecf2c80b09b48ce870e8abd08b643454101c5dc9d0fd71bfbd78224d"
-dependencies = [
- "p3-field",
- "p3-maybe-rayon",
- "p3-monty-31",
- "p3-symmetric",
- "p3-util",
- "tracing",
-]
-
-[[package]]
-name = "p3-dft"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4321a952da2721ecd85ca593ea189798dfb4e439a2cc1378ce1442091880f173"
-dependencies = [
- "itertools 0.15.0",
- "p3-field",
- "p3-matrix",
- "p3-maybe-rayon",
- "p3-util",
- "spin",
- "tracing",
-]
-
-[[package]]
-name = "p3-field"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53db75d38e04fc255826f388eca9d05976733dc9754aa3db411bc9ea1a37c1a0"
-dependencies = [
- "itertools 0.15.0",
- "num-bigint 0.5.1",
- "p3-maybe-rayon",
- "p3-util",
- "paste",
- "rand 0.10.3",
- "serde",
- "tracing",
-]
-
-[[package]]
-name = "p3-koala-bear"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70cbc82137c157673e2d33d95f936a94ce237a790d46e0a2b3165dccfc385dd6"
-dependencies = [
- "p3-challenger",
- "p3-field",
- "p3-mds",
- "p3-monty-31",
- "p3-poseidon1",
- "p3-poseidon2",
- "p3-symmetric",
- "rand 0.10.3",
-]
-
-[[package]]
-name = "p3-matrix"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "473eb920c446a6f4536e0d3528fbdca2a23c0e24e1d0d7767452e6d385dd335c"
-dependencies = [
- "itertools 0.15.0",
- "p3-field",
- "p3-maybe-rayon",
- "p3-util",
- "rand 0.10.3",
- "serde",
- "tracing",
-]
-
-[[package]]
-name = "p3-maybe-rayon"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6fddfd435f96394769414cf5590b77058aa506659bf20d6592e9d1989e04440"
-
-[[package]]
-name = "p3-mds"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "551ba0ab2cccd89f85a99450224898aff224e323bbf61f777ba6344f0896ef10"
-dependencies = [
- "p3-dft",
- "p3-field",
- "p3-symmetric",
- "p3-util",
- "rand 0.10.3",
-]
-
-[[package]]
-name = "p3-monty-31"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "871f635f7340cd0868b17e43e0c98fefdafdaed90469d0725caf6d8372a2a47c"
-dependencies = [
- "itertools 0.15.0",
- "num-bigint 0.5.1",
- "p3-dft",
- "p3-field",
- "p3-matrix",
- "p3-maybe-rayon",
- "p3-mds",
- "p3-poseidon1",
- "p3-poseidon2",
- "p3-symmetric",
- "p3-util",
- "paste",
- "rand 0.10.3",
- "serde",
- "spin",
- "tracing",
-]
-
-[[package]]
-name = "p3-poseidon1"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d0d304e9a1f29c0d66534aa84e69528e2118351fdce08dcf5898af4e0fecc32"
-dependencies = [
- "p3-field",
- "p3-mds",
- "p3-symmetric",
- "rand 0.10.3",
-]
-
-[[package]]
-name = "p3-poseidon2"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43eb8a73a26d14becaed1c67c3e8a047e4311d7909b402383c82ca9643ba17c6"
-dependencies = [
- "p3-field",
- "p3-mds",
- "p3-symmetric",
- "p3-util",
- "rand 0.10.3",
-]
-
-[[package]]
-name = "p3-symmetric"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2015ea80cad969b6aabf27a04884286fe1354393b166d968ee0d80a95126b2a4"
-dependencies = [
- "itertools 0.15.0",
- "p3-field",
- "p3-util",
- "serde",
-]
-
-[[package]]
-name = "p3-util"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c5466fc40e6df89d3b291a2eff16b33e68e8571207790370137ec18090aadab"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -2236,45 +1758,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha2"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.3.1",
- "digest 0.11.3",
-]
-
-[[package]]
-name = "sha3"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
-dependencies = [
- "digest 0.11.3",
- "keccak 0.2.2",
-]
-
-[[package]]
-name = "sha3"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
-dependencies = [
- "digest 0.11.3",
- "keccak 0.2.2",
- "sponge-cursor",
-]
-
-[[package]]
 name = "shake"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09057cb2149ad4cbd2da1e26b351f9a4c354219421229c69c3063e6f61947c4a"
 dependencies = [
  "digest 0.11.3",
- "keccak 0.2.2",
+ "keccak",
  "sponge-cursor",
 ]
 
@@ -2306,15 +1796,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 
 [[package]]
-name = "spin"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
-dependencies = [
- "lock_api",
-]
-
-[[package]]
 name = "spm_precompiled"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2331,19 +1812,6 @@ name = "sponge-cursor"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
-
-[[package]]
-name = "spongefish"
-version = "0.7.4"
-source = "git+https://github.com/arkworks-rs/spongefish?rev=ef9741346a150039427d9e0c02d6b2d73e93ec81#ef9741346a150039427d9e0c02d6b2d73e93ec81"
-dependencies = [
- "blake2 0.11.0",
- "digest 0.11.3",
- "p3-koala-bear",
- "rand 0.8.5",
- "sha2",
- "sha3 0.11.0",
-]
 
 [[package]]
 name = "spongefish"
@@ -2651,7 +2119,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f892c6904b0bd5a9241eac848347abcbbbd2b9f3892bad23ac3e6efab8d6f06a"
 dependencies = [
  "digest 0.11.3",
- "keccak 0.2.2",
+ "keccak",
  "sponge-cursor",
 ]
 

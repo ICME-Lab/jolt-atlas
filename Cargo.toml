@@ -18,8 +18,6 @@ keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 members = [
     "jolt-atlas-core",
     "jolt-atlas-verifier",
-    "jolt-field",
-    "jolt-poly",
     "atlas-trace",
     "atlas-onnx-import",
     "common",
@@ -99,76 +97,6 @@ jolt-atlas-core = { path = "./jolt-atlas-core" }
 opt-level = 3
 lto = "off"
 
-# Akita's debug-only self-checks dominate a test-profile prove (the exhaustive
-# witness sweep runs 1.6x faster without them). Akita is tested upstream.
-[profile.test.package.akita-algebra]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-challenges]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-config]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-cpu-backend]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-error]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-params]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-pcs]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-planner]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-prover]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-schedules]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-serialization]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-setup]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-sumcheck]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-transcript]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-types]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.akita-verifier]
-debug-assertions = false
-overflow-checks = false
-
-[profile.test.package.atlas-pcs]
-debug-assertions = false
-overflow-checks = false
-
 [profile.release]
 debug = 1
 overflow-checks = true
@@ -186,9 +114,3 @@ debug = false
 
 [patch.crates-io]
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
-
-# The Akita crates depend on jolt-field and jolt-poly by git; resolve them to the owned
-# compatibility packages, so the graph holds one of each.
-[patch."https://github.com/a16z/jolt"]
-jolt-field = { path = "./jolt-field" }
-jolt-poly = { path = "./jolt-poly" }

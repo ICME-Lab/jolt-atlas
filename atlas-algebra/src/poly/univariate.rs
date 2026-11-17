@@ -2,9 +2,6 @@
 //! form [`CompressedPoly`] (linear term omitted, recovered from the sumcheck hint), and
 //! [`OmittedConstantPoly`]. Sumcheck proofs carry [`CompressedPoly`]s and evaluation reduction
 //! carries a [`UnivariatePoly`], both through the `Canonical` impls below.
-//!
-//! The types are bounded by upstream's `crate::field::Field` because the external `akita-*` crates
-//! bind them through the `jolt-poly` compatibility package.
 
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 

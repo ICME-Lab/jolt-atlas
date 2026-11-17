@@ -90,33 +90,34 @@ jobs:
             echo "jolt-atlas-verifier names atlas_trace's Trace" >&2
             exit 1
           fi
-      - name: No RISC-V, lookup-table, R1CS, jolt-claims or vendored PCS crate in any member's dependency graph
-        # The zkVM cone atlas-claims replaced (specs/atlas-claims.md) and the PCS adapter crates
-        # atlas-pcs replaced (specs/own-pcs-adapter.md); dev edges included.
+      - name: No RISC-V, lookup-table, R1CS, jolt-claims, upstream PCS or Akita crate in any member's dependency graph
+        # The zkVM cone atlas-claims replaced (specs/atlas-claims.md), the PCS adapter crates
+        # atlas-pcs replaced (specs/own-pcs-adapter.md), and the Akita crates with the two
+        # compatibility packages they bound on, which BitZ replaced (specs/bitz-commitment.md);
+        # dev edges included.
         run: |
           status=0
           for name in $(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].name'); do
             if cargo tree -p "$name" -e normal,build,dev --prefix none \
-                | grep -qE '^(jolt-riscv|jolt-lookup-tables|jolt-r1cs|jolt-claims|jolt-akita|jolt-openings|jolt-crypto|jolt-sumcheck|jolt-transcript|jolt-utils) '; then
-              echo "$name resolves a zkVM cone crate" >&2
+                | grep -qE '^(jolt-riscv|jolt-lookup-tables|jolt-r1cs|jolt-claims|jolt-akita|jolt-openings|jolt-crypto|jolt-sumcheck|jolt-transcript|jolt-utils|jolt-field|jolt-poly|akita-[a-z-]+) '; then
+              echo "$name resolves a zkVM cone, upstream PCS or Akita crate" >&2
               status=1
             fi
           done
           exit $status
       - name: No deleted vendored crate or upstream facade named in atlas sources
-        # atlas-pcs owns the Akita adapter (CommitmentScheme is the one scheme trait);
+        # atlas-pcs owns the commitment scheme (CommitmentScheme is the one scheme trait);
         # atlas-sumcheck owns the sumcheck engine; atlas-transcript owns the transcript;
-        # atlas-algebra owns the polynomial library and the field (the root jolt-poly and
-        # jolt-field packages only re-export them for akita-*).
+        # atlas-algebra owns the polynomial library and the field.
         run: |
-          if grep -rnE '\b(jolt_akita|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|jolt_poly|jolt_utils|jolt_field|ark_ff|ark_serialize|ark_std|ark_ec|ark_bn254|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
+          if grep -rnE '\b(jolt_akita|akita_[a-z_]+|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|jolt_poly|jolt_utils|jolt_field|ark_ff|ark_serialize|ark_std|ark_ec|ark_bn254|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
               common atlas-* jolt-atlas-* --include='*.rs'; then
             echo "an atlas source names a deleted vendored crate or an upstream facade" >&2
             exit 1
           fi
       - name: No arkworks crate in any member's dependency graph
         # common::serialize owns the proof encoding and atlas-algebra::field the big integers
-        # (specs/drop-arkworks.md); no ark-* crate may come back, including through akita-*.
+        # (specs/drop-arkworks.md); no ark-* crate may come back.
         run: |
           status=0
           if grep -q '^name = "ark-' Cargo.lock; then

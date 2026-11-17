@@ -13,15 +13,13 @@ A verdict of `jolt_atlas_verifier::onnx_proof::verify` depends on:
 | `jolt-atlas-verifier` | all of it |
 | `atlas-sumcheck` | `engine` (`verify_compressed`, `absorb_input_claims`, `BatchPrelude`), `relation` (`RelationVerifier`, `verify_relation{,_batch}`, `resolve`, `relation_input_claim`), `opening_proof` (`VerifierOpeningAccumulator`, the opening-reduction relation), `evaluation_reduction` (verify side), the one-hot, booleanity, shout and prefix-suffix relations and their parameters. Not the `prover` submodules. |
 | `atlas-claims` | all of it: `SymbolicSumcheck`, the `Expr` algebra and its evaluation, the claim-data traits |
-| `atlas-pcs` | `CommitmentScheme::{setup_verifier, verify, verify_rlc}` and the `akita` implementation of them, including `akita::backend` (the adapter over `akita-*`) and `openings` |
+| `atlas-pcs` | `CommitmentScheme::{setup_verifier, verify_rlc}` and the `bitz` implementation: `bitz::scheme` (`Layout`, `opening_weights`, `verify_rlc`), `bitz::verifier`, `gkr::verify`, `ring_switch::reduce`, `ligerito::verifier`, `integers` (the prime draw), `params` (the soundness parameters), `merkle::verify_row`, `rs::Code`, `gf128`; BLAKE3 for the Merkle tree |
 | `atlas-transcript` | `VerifyingTranscript` and its reads (`read_scalar`, `read_scalars`, `read_serializable`: the only way a value leaves the proof), the sponge and the spongefish verifier surface under it (`VerifierTranscript`, session setup, the proof-of-work check, the challenge sponges), and `words` |
 | `atlas-algebra` | `field::fp128`, multilinear evaluation, `EqPolynomial`, opening points, `univariate` (`CompressedPoly` round messages, evaluation reduction's `UnivariatePoly`) |
 | `atlas-lookup-tables` | table evaluation (`evaluate_mle`) and the prefix-suffix decompositions |
 | `atlas-trace` | `Model` and its ops, `ModelExecutionIO`, `Tensor`, and `semantics` (the table generators). Not `Trace` or the executor. |
 | `common::serialize` (`atlas_algebra::serialize`) | `Canonical` and its decoders: the encoding of a field element and of the framed values a proof carries (the commitments, the joint opening proof), decoded with validation and bounded allocation |
 | `atlas-algebra::field` | the Solinas field (`Fp128`, its kernels and assembly), the `Ring`/`Field` spine, unreduced products |
-| `jolt-field`, `jolt-poly` (root) | the `atlas-algebra` re-exports `akita-*` binds; no code |
-| LayerZero's `akita-*` crates | by git at `dfdbd767` (`docs/upstream-inventory.md`) |
 
 The crate has no prover code. Three mechanisms hold that:
 

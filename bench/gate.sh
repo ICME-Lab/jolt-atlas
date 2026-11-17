@@ -29,9 +29,6 @@ done
 [ -d "$MODEL" ] || { echo "model directory $MODEL is missing" >&2; exit 1; }
 
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}
-# The binary's default schedule directory is the checkout it was built in, a worktree removed
-# below, so every binary reads the schedules of this checkout.
-export JOLT_AKITA_SCHEDULE_DIR=${JOLT_AKITA_SCHEDULE_DIR:-$ROOT/atlas-pcs/schedules}
 mkdir -p bench/bin bench/runs/gate
 for sha in "${COMMITS[@]}"; do
     [ -x "bench/bin/prove-$sha" ] && continue
@@ -43,11 +40,24 @@ for sha in "${COMMITS[@]}"; do
     git worktree remove --force "$wt"
 done
 
+# A commit from before the BitZ scheme proves with Akita, whose binary reads schedule files at
+# run time: take them from the commit. Empty for a commit that has none.
+schedules() {
+    local dir=bench/bin/schedules-$1
+    if [ ! -d "$dir" ] && git cat-file -e "$1:atlas-pcs/schedules" 2>/dev/null; then
+        mkdir -p "$dir"
+        git archive "$1" atlas-pcs/schedules | tar -x -C "$dir" --strip-components=2
+    fi
+    [ -d "$dir" ] && echo "$ROOT/$dir"
+    return 0
+}
+
 if /usr/bin/time -v true 2>/dev/null; then TIME=(/usr/bin/time -v); else TIME=(/usr/bin/time -l); fi
 for i in $(seq 1 "$RUNS"); do
     for sha in "${COMMITS[@]}"; do
         log=bench/runs/gate/$sha-$(basename "$MODEL")-$SEQ-rep$i.log
-        "${TIME[@]}" "bench/bin/prove-$sha" --model "$MODEL" --seq-len "$SEQ" --trace-terminal > "$log" 2>&1
+        JOLT_AKITA_SCHEDULE_DIR=$(schedules "$sha") \
+            "${TIME[@]}" "bench/bin/prove-$sha" --model "$MODEL" --seq-len "$SEQ" --trace-terminal > "$log" 2>&1
         grep -q "Proof verified" "$log" || { echo "$sha run $i did not verify: $log" >&2; exit 1; }
         echo "ran $sha rep $i: $(grep -E '^prove:' "$log")"
     done

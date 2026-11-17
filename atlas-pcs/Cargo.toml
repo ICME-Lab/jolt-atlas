@@ -2,7 +2,7 @@
 name = "atlas-pcs"
 version = "0.1.0"
 edition = "2021"
-description = "The atlas polynomial commitment interface and the Akita scheme."
+description = "The atlas polynomial commitment interface and the BitZ scheme."
 
 [dependencies]
 # Internal
@@ -10,37 +10,16 @@ common.workspace = true
 atlas-algebra.workspace = true
 atlas-transcript.workspace = true
 
-# Serialization
-serde = { workspace = true, features = ["alloc", "rc"] }
-blake2 = "0.10"
 # The Merkle tree of the BitZ commitment.
 blake3.workspace = true
-# LayerZero's Akita lattice PCS, behind `akita::backend`.
-akita-algebra = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
-akita-config = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
-akita-error = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
-akita-pcs = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false, features = ["parallel", "transcript-blake2b"] }
-akita-challenges = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
-akita-planner = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
-akita-schedules = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
-akita-types = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
-akita-params = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
-bincode.workspace = true
-num-traits.workspace = true
 
 # Parallel Processing
 rayon.workspace = true
 
-# Randomness
-rand.workspace = true
-
 # Tracing and Profiling
 tracing.workspace = true
 
-# Core Utilities
-thiserror = { workspace = true, default-features = true }
-
 [dev-dependencies]
-serde_json = { workspace = true, features = ["std"] }
+rand.workspace = true
 tracing-subscriber.workspace = true
 atlas-transcript = { workspace = true, features = ["prover", "test-feature"] }

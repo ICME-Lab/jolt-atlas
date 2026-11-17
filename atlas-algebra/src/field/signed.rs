@@ -11,7 +11,7 @@
 //!   [`S160`].
 //!
 //! The surface is the consumer-used subset of jolt-field's signed API
-//! (workspace + Akita audited); unconsumed constructors and truncating
+//! (workspace audited); unconsumed constructors and truncating
 //! combinators were dropped.
 //!
 //! Zero is not canonicalized: a zero magnitude may carry either sign.

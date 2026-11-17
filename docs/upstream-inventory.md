@@ -159,6 +159,11 @@ dominates (24.4 s), and two of the six 2^24-variable one-hot groups take about 1
 
 ## The Akita adapter owned (`specs/own-pcs-adapter.md`)
 
+**Deleted** with the cutover to BitZ (`specs/bitz-commitment.md`, stage 2): `atlas-pcs::akita`,
+`atlas-pcs::openings`, `atlas-pcs/schedules/`, the `akita-*` git dependency and the root
+`jolt-field` and `jolt-poly` compatibility packages. The tag `akita-last` is the last commit
+that proves with them. What follows records what was owned until then.
+
 `atlas-pcs::akita::backend` is upstream `jolt-akita` at `f3265b5a` (`crates/jolt-akita/src`,
 with the phase-1 two-file delta: a local `MAX_ONE_HOT_TRACE_COLUMNS`, and
 `K16_TRACE_COLUMN_WIDTHS` in place of the RV64 enumeration); its catalogs are
@@ -188,6 +193,10 @@ Diamond and Posen (ePrint 2024/504) for ring switching, and Lin, Chung and Han's
 polynomial basis for the Reed–Solomon encoding. No file is taken from the BitZ
 proof-of-concept (`albert-garreta/BitZ-PoC`) or from Flock, and neither is a dependency; the
 proof-of-concept is run by hand for the comparison in `docs/measurement-plan.md`.
+
+The proof-of-concept's note on its grand product was read for techniques when the prover was
+tuned (never materialising `eq`, unreduced sums, fusing a fold into the next pass, one
+transposition of the bits); `docs/measurement-plan.md` lists what was and was not adopted.
 
 ## The sumcheck engine owned (`specs/own-sumcheck-engine.md`)
 

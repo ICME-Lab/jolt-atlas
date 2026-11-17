@@ -314,7 +314,10 @@ lands on: stage times within 3%, peak memory within 5%, unless the spec states t
    session settles decision 3 (base 4 or Booleans) and runs the BitZ and Mosaic arm of
    decision 1 (`docs/measurement-plan.md`, "BitZ under the Mosaic layout"). That arm comes
    before any Akita-specific work: if the scheme changes, item 8 and the `akita-*` rev bump are
-   moot.
+   moot. **Run 2026-11-17:** BitZ commits and opens our volume in about 0.45 s against
+   Akita's 15.2 s, and the projection for GPT-2 at 16 tokens is about 10 s. The scheme change
+   is specified in `specs/bitz-commitment.md` (four stages) and goes ahead of steps 6–9;
+   item 8 and the rev bump are dropped.
 6. Item 3's standalone relation test with the negative test, then on the MLP rows; item 4's
    narrower declared widths.
 7. `digits-as-trace` stages 2 and 3: digit-backed relations batched outside the node loop

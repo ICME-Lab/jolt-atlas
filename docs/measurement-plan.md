@@ -414,6 +414,81 @@ proof-of-concept is not a maintained prover; an owned implementation is the cost
 The Mosaic layout over Akita is not an arm: one dense polynomial of this size is past
 Akita's 2^28 cap, and the Akita form of the idea is item 8's one-group layout.
 
+**Stage 1 result (2026-11-17, `atlas-bench`, 16 threads, BitZ-PoC `318ea393d`).** Volume from
+`prove --census` at `c90a4652e`, GPT-2 at 16 tokens: 2^27.1 base-4 digit positions in the
+range buckets and about 2^22.9 one-hot lookup positions, so about 2^28.3 bits; one packed
+polynomial is 2^29. `bitz_bench <n> --reps 3` on random bits, one evaluation claim:
+
+| n | commit ms | prove ms | verify ms | proof KB | peak GB |
+|---|---|---|---|---|---|
+| 28 | 28 | 193 | 18 | 271 | 0.8 |
+| 29 | 56 | 373 | 29 | 292 | 1.6 |
+| 30 | 104 | 655 | 31 | 373 | 3.2 |
+| 29, one thread | 397 | 3327 | 34 | 292 | 1.6 |
+
+Three quarters of the prove time is the grand-product GKR (279 ms at n = 29), which is the
+bit check; the opening proper is 73 ms. Akita on the same machine and commit: `commit` 7.1 s,
+`openings` 9.9 s. The stage passes its threshold by about 40x at n = 29.
+
+Not like for like: the example is fixed at a 100-bit security target (`BitZLigerito::parse(..,
+100)`), ladder `custom:1:4`, with a 109-bit sampled prime, where our proofs target a 128-bit
+field; and it proves one claim, where stage 2's batching sumcheck is what reduces ours to
+one. Stages 2 and 3 are still to run.
+
+**Stage 2 result (2026-11-17): already measured in the prover; no separate crate.** The
+pipeline is Mosaic-shaped inside each class today: `prove_batch_opening_sumcheck` reduces every
+claim to one common point, and each Akita class is opened once through equal-point prefix
+packing (`atlas-pcs/src/openings/prefix.rs`). What BitZ changes is the number of classes, from
+thirteen to one, not the batching. From `bench/spans.py` on the gate's GPT-2 log at
+`c90a4652e` (25.0 s prove, `atlas-bench`):
+
+| Span | s | Under BitZ + Mosaic |
+|---|---|---|
+| `commit_witness_polynomials` | 7.12 (Akita 6.90) | witness preparation 0.2 + BitZ commit 0.06 |
+| `prove_batch_opening_sumcheck` (20 rounds, 576 members) | 1.60 | stays |
+| `prove_rlc` (13 class openings; the 2^28 dense class alone 5.27) | 8.26 | one BitZ opening, 0.37 at the 100-bit setting |
+| the two bucket batches (20 rounds, 14 members each) | 1.65 | the digit-range one goes; its share is not split out here |
+| the rest of `iop` | 2.41 | stays |
+| outside the three stages (trace execution 3.8) | 3.9 | stays |
+
+Projection: about 10 s (0.3 + 1.6 + 0.4 + at most 4.1 + 3.9), before stage 3's cost of the
+128-bit setting and the Fp128 round. Trace execution becomes the largest single item.
+
+Open design points for a spec, not costs: packing columns of different sizes into one
+polynomial needs each column's reduced claim at a prefix of the common point; a base-4 digit
+column becomes two bit columns, whose evaluations at the reduced point the prover sends (one
+pass over 2^28.3 bits); a one-hot lookup column can be committed as its bits directly (K = 16
+adds about 2^26.9 bits, still inside 2^29).
+
+**Stage 3 result (2026-11-17, `atlas-bench`, 16 threads, n = 29).** Two runs on the
+proof-of-concept; the instance copy of `examples/bitz_bench.rs` takes its target from
+`BITZ_TARGET` (the original is beside it as `.orig`).
+
+| Setting | commit ms | prove ms | verify ms | proof KB |
+|---|---|---|---|---|
+| 100-bit target, `custom:1:4`, sampled 109-bit prime (stage 1) | 56 | 373 | 29 | 292 |
+| 128-bit target, `udr`, sampled 109-bit prime | 53 | 387 | 33 | 494 |
+| 100-bit target, fixed prime 2^100 − 15 (`mul_compare pcs`, `u32-full`, `--log-n 22`) | 49 | 376 | 22 | 292 |
+
+The 128-bit target costs proof size, not time: `custom:1:4` is rejected at 128 (its
+out-of-domain term gives 118.4 bits), the unique-decoding ladder is accepted. The target is
+met by round-by-round accounting with proof of work, as our transcript's is, not as a
+statistical bound. A prime fixed in advance costs nothing measurable against a sampled one.
+
+Not measured, because the proof-of-concept cannot run it: our prime. Its field holds at
+most 113 bits (`standalone_q_bits`), so a claim over Fp128 means BitZ's arithmetic on our
+field kernels, which is part of an owned implementation. The same benchmark spends 1.8 s
+computing the evaluation claim of 2^29 bits (`claim_ms`, outside its PCS time); our prover
+needs the equivalent pass for the bit columns at the reduced point, so that pass has to be
+written parallel and is the one cost here not yet priced.
+
+**Outcome of the arm.** At our volume and at a 128-bit target BitZ commits and opens in
+about 0.45 s against Akita's 15.2 s (commit 6.9, class openings 8.3), with a smaller proof and
+a faster verifier. With stage 2's table that projects GPT-2 at 16 tokens at about 10 s. The
+decision this arm was for (`docs/prover-plan.md` section 5, decision 1) can be taken: the
+next step is a spec for an owned BitZ behind `CommitmentScheme` under the one-polynomial
+layout.
+
 ### Baseline for the protocol-simplification specs (2026-11-16, commit c65753bfa)
 
 Taken after the owned-toolkit program (`docs/roadmap.md`, phases 1–7) and before any of the

@@ -1,17 +1,17 @@
-//! The prover side of the engine: the batched round loop [`prove_batch`], the member round
-//! interface [`ProveRounds`], the per-round traversal seam [`RoundScheduler`] and the
-//! [`ClearSumcheckRecorder`] that writes each round to the transcript.
+//! The prover side of the engine: the batched round loop [`prove_batch`], which sends each
+//! round message through the transcript, the member round interface [`ProveRounds`] and the
+//! per-round traversal seam [`RoundScheduler`].
 
 use atlas_algebra::field::JoltField;
 use atlas_algebra::poly::univariate::{UnivariatePoly, UnivariatePolynomial};
 use atlas_transcript::{
     words::{LabelWithCount, WordTranscript},
-    Transcript,
+    ProvingTranscript,
 };
 
 use super::{
-    draw_challenge, round_pow_bits, BatchPrelude, CompressedSumcheckProof, PaddingRule,
-    SumcheckError, SUMCHECK_ROUND_TRANSCRIPT_LABEL,
+    draw_challenge, round_pow_bits, BatchPrelude, PaddingRule, SumcheckError,
+    SUMCHECK_ROUND_TRANSCRIPT_LABEL,
 };
 
 /// One batch member's prove-side round interface, consumed by [`prove_batch`]'s round loop.
@@ -117,77 +117,34 @@ pub struct ProvedBatch<F> {
     pub member_claims: Vec<F>,
 }
 
-/// Writes each round polynomial to the transcript (compressed, under
-/// [`SUMCHECK_ROUND_TRANSCRIPT_LABEL`]), draws the round challenge, and collects the rounds
-/// into the [`CompressedSumcheckProof`]. Its writes are byte-identical to what
-/// [`super::verify_compressed`] reads back.
-pub struct ClearSumcheckRecorder<F: JoltField> {
-    round_polynomials: Vec<atlas_algebra::poly::univariate::CompressedPoly<F>>,
-}
-
-impl<F: JoltField> Default for ClearSumcheckRecorder<F> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<F: JoltField> ClearSumcheckRecorder<F> {
-    pub fn new() -> Self {
-        Self {
-            round_polynomials: Vec::new(),
-        }
-    }
-
-    /// Record round `round`'s polynomial and draw its challenge behind a proof of work of
-    /// `pow_bits`.
-    fn absorb_round<T: Transcript>(
-        &mut self,
-        round: usize,
-        round_poly: &UnivariatePoly<F>,
-        pow_bits: u32,
-        transcript: &mut T,
-    ) -> Result<F, SumcheckError<F>> {
-        let coeffs = round_poly.coefficients();
-        // The compressed form omits the linear term `c_1`: the label counts `c_0, c_2, ...`.
-        let Some((constant, rest)) = coeffs.split_first() else {
-            return Err(SumcheckError::CompressedPolynomialTooShort { round, got: 0 });
-        };
-        transcript.append(&LabelWithCount(
-            SUMCHECK_ROUND_TRANSCRIPT_LABEL,
-            rest.len() as u64,
-        ));
-        transcript.append(constant);
-        for coeff in rest.iter().skip(1) {
-            transcript.append(coeff);
-        }
-        let challenge = draw_challenge::<F, T>(transcript, pow_bits)
-            .map_err(|_| SumcheckError::ProofOfWork { round })?;
-        self.round_polynomials.push(round_poly.compress());
-        Ok(challenge)
-    }
-
-    /// The recorded proof.
-    pub fn into_proof(self) -> CompressedSumcheckProof<F> {
-        CompressedSumcheckProof {
-            round_polynomials: self.round_polynomials,
-        }
-    }
-}
-
-/// Drop trailing zero coefficients down to the minimum two (degree 1) the compressed wire form
-/// requires. The batched polynomial is assembled over `max_degree + 1` slots, so rounds where
-/// every active member's degree is lower carry trailing zeros that must not reach the wire.
-fn trim_round_polynomial<F: JoltField>(mut coefficients: Vec<F>) -> UnivariatePoly<F> {
-    while coefficients.len() > 2 && coefficients.last().is_some_and(|value| *value == F::zero()) {
-        let _ = coefficients.pop();
-    }
-    UnivariatePoly::new(coefficients)
+/// Send round `round`'s message and draw its challenge behind a proof of work of `pow_bits`.
+/// `coefficients` are the round polynomial's, in increasing order, one per slot up to the
+/// batch's degree: the message is all of them but the linear one, so every round of a batch
+/// sends the same number of coefficients, which is what [`super::verify_compressed`] reads.
+fn send_round<F: JoltField, T: ProvingTranscript>(
+    round: usize,
+    coefficients: &[F],
+    pow_bits: u32,
+    transcript: &mut T,
+) -> Result<F, SumcheckError<F>> {
+    let message: Vec<F> = coefficients
+        .iter()
+        .enumerate()
+        .filter(|(power, _)| *power != 1)
+        .map(|(_, coefficient)| *coefficient)
+        .collect();
+    transcript.append(&LabelWithCount(
+        SUMCHECK_ROUND_TRANSCRIPT_LABEL,
+        message.len() as u64,
+    ));
+    transcript.send_scalars(&message);
+    draw_challenge::<F, T>(transcript, pow_bits).map_err(|_| SumcheckError::ProofOfWork { round })
 }
 
 /// Prove one batched sumcheck. Per round: combine the active members' round polynomials with
 /// their batching coefficients and the padding rule of [`BatchPrelude`], self-check
-/// `s(0) + s(1)` against the running claim, record the round through `recorder` (which draws
-/// the challenge behind the proof of work of [`round_pow_bits`] for `prelude.max_degree`), and
+/// `s(0) + s(1)` against the running claim, send the round message and draw the challenge
+/// behind the proof of work of [`round_pow_bits`] for `prelude.max_degree`, and
 /// stash the challenge as each active member's pending bind, delivered with its next
 /// `prove_round` or, after the loop, through `finish_rounds`.
 ///
@@ -198,11 +155,10 @@ fn trim_round_polynomial<F: JoltField>(mut coefficients: Vec<F>) -> UnivariatePo
     name = "prove_batch",
     fields(num_rounds = prelude.max_num_vars, members = members.len())
 )]
-pub fn prove_batch<F: JoltField, T: Transcript>(
+pub fn prove_batch<F: JoltField, T: ProvingTranscript>(
     prelude: &BatchPrelude<F>,
     members: &mut [&mut dyn ProveRounds<F>],
     scheduler: &mut dyn RoundScheduler<F>,
-    recorder: &mut ClearSumcheckRecorder<F>,
     transcript: &mut T,
 ) -> Result<ProvedBatch<F>, SumcheckError<F>> {
     if members.len() != prelude.members.len() {
@@ -313,7 +269,7 @@ pub fn prove_batch<F: JoltField, T: Transcript>(
             }
         }
 
-        let batched_poly = trim_round_polynomial(batched_coefficients);
+        let batched_poly = UnivariatePoly::new(batched_coefficients);
         let round_sum = batched_poly.evaluate(F::zero()) + batched_poly.evaluate(F::one());
         if round_sum != running_claim {
             return Err(SumcheckError::RoundCheckFailed {
@@ -323,7 +279,7 @@ pub fn prove_batch<F: JoltField, T: Transcript>(
             });
         }
 
-        let challenge = recorder.absorb_round(round, &batched_poly, pow_bits, transcript)?;
+        let challenge = send_round(round, batched_poly.coefficients(), pow_bits, transcript)?;
         running_claim = batched_poly.evaluate(challenge);
         challenges.push(challenge);
 

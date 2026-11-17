@@ -348,8 +348,7 @@ mod tests {
 
         let mut prover = SmallBooleanitySumcheckProver::gen(params, vec![G], vec![H_indices]);
 
-        let (proof, _) =
-            prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
+        let _ = prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
         let mut verifier_transcript = Blake2bVerifier::new(b"", prover_transcript.narg().to_vec());
         let mut verifier_accumulator = VerifierOpeningAccumulator::new();
@@ -360,7 +359,6 @@ mod tests {
 
         let verifier = prover.params.into_verifier();
         verify_relation(
-            &proof,
             &verifier,
             &mut verifier_accumulator,
             &mut verifier_transcript,

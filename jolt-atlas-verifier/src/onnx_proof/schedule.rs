@@ -34,7 +34,6 @@ use crate::onnx_proof::{
     range_bucket::{range_buckets, RangeBucket},
     range_check::{self, ValueParams},
     relation::{op_rel_verifier, OpRel},
-    ProofId, ProofType,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
@@ -48,10 +47,6 @@ use atlas_transcript::VerifyingTranscript;
 use common::{CommittedPoly, VirtualPoly};
 use std::collections::BTreeSet;
 
-/// Node index under which the proofs of the model-wide sumcheck steps (the range buckets, the
-/// lookups, the one-hot checks) are stored.
-pub const DEFERRED_PROOF_IDX: usize = usize::MAX;
-
 /// The name of a relation in a schedule: its index in the schedule's relation table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelId(pub usize);
@@ -64,15 +59,13 @@ pub enum Step {
         /// The node whose output claims are reduced.
         node: usize,
     },
-    /// Append advice openings at a stated point; their claims come from the proof.
+    /// Append advice openings at a stated point; their claims are read from the transcript.
     Open(OpOpen),
     /// Set a relation up (its draws and appends); a later `Sumcheck` verifies it.
     Setup(RelId),
-    /// Set up each member not yet set up, in order, then verify the members as the one
-    /// sumcheck stored under `proof`.
+    /// Set up each member not yet set up, in order, then verify the members as one sumcheck,
+    /// its round messages and the members' produced claims read from the transcript.
     Sumcheck {
-        /// Where the proof stores the sumcheck.
-        proof: ProofId,
         /// The relations proven, in instance order.
         members: Vec<RelId>,
         /// Whether the sumcheck is a batch, which draws a coefficient per instance (even for
@@ -124,10 +117,9 @@ impl<F: JoltField> std::fmt::Display for Schedule<F> {
                     members, batched, ..
                 } => {
                     let kind = if *batched { "Batch" } else { "Sumcheck" };
-                    let shared = members.first().and_then(node);
-                    if shared.is_some() && members.iter().all(|id| node(id) == shared) {
+                    if let Some(shared) = self.sumcheck_node(members) {
                         let names: Vec<String> = members.iter().map(name).collect();
-                        writeln!(f, "{} {kind} [{}]", at(shared), names.join(", "))?;
+                        writeln!(f, "{} {kind} [{}]", at(Some(shared)), names.join(", "))?;
                     } else {
                         let names: Vec<String> = members
                             .iter()
@@ -176,12 +168,23 @@ impl<F: JoltField> Schedule<F> {
         polys.into_iter().collect()
     }
 
-    /// The sumcheck proofs a proof of this schedule carries, in step order.
-    pub fn proof_ids(&self) -> impl Iterator<Item = &ProofId> {
+    /// The sumchecks a proof of this schedule carries, in step order: each one's members.
+    pub fn sumchecks(&self) -> impl Iterator<Item = &[RelId]> {
         self.steps.iter().filter_map(|step| match step {
-            Step::Sumcheck { proof, .. } => Some(proof),
+            Step::Sumcheck { members, .. } => Some(members.as_slice()),
             _ => None,
         })
+    }
+
+    /// The node whose turn a sumcheck over `members` runs in: the node all of them belong to.
+    /// `None` for a sumcheck over relations of several nodes or of none.
+    pub fn sumcheck_node(&self, members: &[RelId]) -> Option<usize> {
+        let node = |id: &RelId| self.relations.get(id.0).and_then(OpRelation::node);
+        let shared = members.first().and_then(node)?;
+        members
+            .iter()
+            .all(|id| node(id) == Some(shared))
+            .then_some(shared)
     }
 
     /// The steps, in transcript order.
@@ -243,9 +246,9 @@ impl<F: JoltField> Schedule<F> {
                         return malformed(format!("relation {} is set up twice", id.0));
                     }
                 }
-                Step::Sumcheck { proof, members, .. } => {
+                Step::Sumcheck { members, .. } => {
                     if members.is_empty() {
-                        return malformed(format!("the sumcheck {proof:?} has no member"));
+                        return malformed("a sumcheck has no member".to_string());
                     }
                     for id in members {
                         if mark(&mut verified, *id)? {
@@ -281,7 +284,7 @@ pub struct ScheduleBuilder<F: JoltField> {
     pub(crate) lookups: Vec<RelId>,
     /// The one-hot checks, in the order registered.
     pub(crate) one_hot: Vec<RelId>,
-    /// The node whose steps are being written; [`DEFERRED_PROOF_IDX`] outside any node.
+    /// The node whose steps are being written; `usize::MAX` before any node is entered.
     node: usize,
 }
 
@@ -293,7 +296,7 @@ impl<F: JoltField> ScheduleBuilder<F> {
             steps: Vec::new(),
             lookups: Vec::new(),
             one_hot: Vec::new(),
-            node: DEFERRED_PROOF_IDX,
+            node: usize::MAX,
         }
     }
 
@@ -317,26 +320,23 @@ impl<F: JoltField> ScheduleBuilder<F> {
         self.steps.push(Step::Open(open));
     }
 
-    /// `relation`'s sumcheck, stored under the node's `proof` slot: the relation is set up,
-    /// then verified, at this step.
-    pub fn relation(&mut self, proof: ProofType, relation: OpRelation<F>) {
+    /// `relation`'s sumcheck: the relation is set up, then verified, at this step.
+    pub fn relation(&mut self, relation: OpRelation<F>) {
         let id = self.register(relation);
         self.steps.push(Step::Sumcheck {
-            proof: ProofId(self.node, proof),
             members: vec![id],
             batched: false,
         });
     }
 
-    /// Several relations as one batched sumcheck stored under the node's `proof` slot, their
-    /// setups run in list order at this step.
-    pub fn batch(&mut self, proof: ProofType, relations: Vec<OpRelation<F>>) {
+    /// Several relations as one batched sumcheck, their setups run in list order at this
+    /// step.
+    pub fn batch(&mut self, relations: Vec<OpRelation<F>>) {
         let members = relations
             .into_iter()
             .map(|relation| self.register(relation))
             .collect();
         self.steps.push(Step::Sumcheck {
-            proof: ProofId(self.node, proof),
             members,
             batched: true,
         });
@@ -370,10 +370,8 @@ impl<F: JoltField> ScheduleBuilder<F> {
     /// set up at most once, before its sumcheck, and verified exactly once (by one sumcheck or
     /// one tie), and every sumcheck has a member.
     pub fn finish(mut self, buckets: Vec<RangeBucket>) -> Result<Schedule<F>, ProofVerifyError> {
-        self.node = DEFERRED_PROOF_IDX;
         if !buckets.is_empty() {
             self.batch(
-                ProofType::DeferredRemainderRC,
                 buckets
                     .iter()
                     .cloned()
@@ -381,23 +379,18 @@ impl<F: JoltField> ScheduleBuilder<F> {
                     .collect(),
             );
             self.batch(
-                ProofType::DeferredRemainderDigitRange,
                 buckets
                     .into_iter()
                     .map(OpRelation::RemainderBucketDigits)
                     .collect(),
             );
         }
-        for (proof, members) in [
-            (
-                ProofType::DeferredLookups,
-                std::mem::take(&mut self.lookups),
-            ),
-            (ProofType::DeferredOneHot, std::mem::take(&mut self.one_hot)),
+        for members in [
+            std::mem::take(&mut self.lookups),
+            std::mem::take(&mut self.one_hot),
         ] {
             if !members.is_empty() {
                 self.steps.push(Step::Sumcheck {
-                    proof: ProofId(DEFERRED_PROOF_IDX, proof),
                     members,
                     batched: true,
                 });
@@ -556,7 +549,7 @@ impl<F: JoltField> OpRelation<F> {
     }
 }
 
-/// Advice openings a step appends; the point is stated, the claim is the proof's.
+/// Advice openings a step appends; the point is stated, the claim is read from the transcript.
 #[derive(Clone)]
 pub enum OpOpen {
     /// A fused node's rescale remainder at the reduced output point.
@@ -645,13 +638,12 @@ impl OpOpen {
 }
 
 /// The fused-rescale skeleton around an op's arithmetic relation (`Einsum`, `Mul`, `Square`,
-/// `Cube`): the remainder advice, then the arithmetic sumcheck under `proof`, whose input claim
+/// `Cube`): the remainder advice, then the arithmetic sumcheck, whose input claim
 /// is `out·2^S + rem`. The remainder, and the output unless the node is a model output, are
 /// range-checked in the packed buckets. A node without a rescale (`bits == 0`) proves the
 /// arithmetic relation alone against its reduced output.
 pub fn fused_rescale_plan<F: JoltField>(
     node: &ComputationNode,
-    proof: ProofType,
     relation: OpRelation<F>,
     schedule: &mut ScheduleBuilder<F>,
 ) {
@@ -659,13 +651,13 @@ pub fn fused_rescale_plan<F: JoltField>(
     if fused_rebase::rebase_bits(node).is_some_and(|bits| bits > 0) {
         schedule.open(OpOpen::RescaleRemainder(node.clone()));
     }
-    schedule.relation(proof, relation);
+    schedule.relation(relation);
 }
 
 #[cfg(test)]
 mod tests {
     use super::{OpRelation, RelId, ScheduleBuilder, Step};
-    use crate::onnx_proof::{range_bucket::RangeBucket, ProofId, ProofType};
+    use crate::onnx_proof::range_bucket::RangeBucket;
     use atlas_algebra::field::fp128::Fp128;
 
     /// A relation that needs no node: an empty bucket's value relation.
@@ -680,7 +672,6 @@ mod tests {
 
     fn sumcheck(members: Vec<RelId>) -> Step {
         Step::Sumcheck {
-            proof: ProofId(0, ProofType::Execution),
             members,
             batched: true,
         }

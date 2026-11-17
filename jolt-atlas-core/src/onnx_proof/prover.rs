@@ -4,9 +4,7 @@
 //! This file houses the [`Prover`] struct and the private helper functions that
 //! `prove` delegates to.
 
-use super::{
-    types::ProverDebugInfo, AtlasSharedPreprocessing, ONNXProof, ProofId, ReducedOpeningProof,
-};
+use super::{types::ProverDebugInfo, AtlasSharedPreprocessing, ONNXProof, ReducedOpeningProof};
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::witness::WitnessGenerator;
@@ -23,11 +21,7 @@ use atlas_algebra::{
     utils::math::Math,
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;
-use atlas_sumcheck::{
-    evaluation_reduction::EvalReductionProof,
-    opening_proof::{prover::ProverOpeningAccumulator, OpeningId, SumcheckId},
-    sumcheck::SumcheckInstanceProof,
-};
+use atlas_sumcheck::opening_proof::{prover::ProverOpeningAccumulator, OpeningId, SumcheckId};
 use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
 use atlas_transcript::{AppendToTranscript, ProvingTranscript};
 use common::{CommittedPoly, VirtualPoly};
@@ -178,10 +172,8 @@ pub(crate) fn output_claim<F: JoltField, T: ProvingTranscript>(prover: &mut Prov
 pub(crate) fn iop<F: JoltField, T: ProvingTranscript>(
     schedule: &Schedule<F>,
     prover: &mut Prover<F, T>,
-    proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
-    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
 ) {
-    prove_schedule(schedule, prover, proofs, eval_reduction_proofs);
+    prove_schedule(schedule, prover);
 }
 
 #[tracing::instrument(skip_all, name = "ONNXProof::prove_reduced_openings")]
@@ -223,7 +215,7 @@ pub(super) fn prove_reduced_openings<
         .prepare_for_sumcheck(poly_map, &mut prover.transcript);
 
     // Run sumcheck
-    let (accumulator_sumcheck_proof, r_sumcheck_acc) = prover
+    let r_sumcheck_acc = prover
         .accumulator
         .prove_batch_opening_sumcheck(&mut prover.transcript);
 
@@ -241,10 +233,7 @@ pub(super) fn prove_reduced_openings<
         &state.r_sumcheck,
         &mut prover.transcript,
     );
-    Some(ReducedOpeningProof::from_parts(
-        accumulator_sumcheck_proof,
-        joint_opening_proof,
-    ))
+    Some(ReducedOpeningProof::from_parts(joint_opening_proof))
 }
 
 #[allow(clippy::type_complexity)]
@@ -256,8 +245,6 @@ pub(super) fn finalize_proof<
     prover: Prover<F, T>,
     io: ModelExecutionIO,
     commitments: WitnessCommitments<PCS>,
-    proofs: BTreeMap<ProofId, SumcheckInstanceProof<F>>,
-    eval_reduction_proofs: BTreeMap<usize, EvalReductionProof<F>>,
     reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
 ) -> (
     ONNXProof<F, PCS>,
@@ -274,10 +261,8 @@ pub(super) fn finalize_proof<
     let narg = prover.transcript.into_narg();
     (
         ONNXProof::from_parts(
-            proofs,
             commitments.batch,
             commitments.polys,
-            eval_reduction_proofs,
             reduced_opening_proof,
             narg,
         ),

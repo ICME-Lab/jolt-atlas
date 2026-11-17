@@ -5,7 +5,6 @@ use crate::{
             Incoming, OpRel, OpRelKind, RelationChallenge, RelationDerived, RelationOpening,
         },
         schedule::{OpPlan, OpRelation, ScheduleBuilder},
-        ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -40,7 +39,7 @@ impl OpPlan for Rsqrt {
         _model: &Model,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
-        schedule.relation(ProofType::Execution, OpRelation::Op(reciprocal_sqrt(node)));
+        schedule.relation(OpRelation::Op(reciprocal_sqrt(node)));
         schedule.reduce();
         Ok(())
     }

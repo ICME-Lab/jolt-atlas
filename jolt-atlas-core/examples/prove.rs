@@ -477,7 +477,7 @@ fn run(shared: AtlasSharedPreprocessing, inputs: &[Tensor<i32>]) {
         "proof size: {:.2} MiB ({} commitments, {} sumcheck proofs)",
         bytes.len() as f64 / (1024.0 * 1024.0),
         proof.commitments().len(),
-        proof.proofs().len()
+        prover_pp.schedule.sumchecks().count()
     );
 
     let verifier_pp = AtlasVerifierPreprocessing::<Fp128, AkitaScheme>::from(&prover_pp);

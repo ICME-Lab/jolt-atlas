@@ -185,40 +185,124 @@ fn qwen() {
 
 // ── transcript binding (issue #230) ──────────────────────────────────────
 
-/// Every [`ProofType`] occurs in the proof of some checked-in model: the proof format carries
-/// no tag the prover never emits.
+/// Every [`OpRelKind`] and every other kind of relation a schedule holds occurs in the
+/// schedule of some checked-in model: the verifier has no relation no checked-in proof runs.
 #[test]
-fn proof_types_all_exercised() {
+fn relation_kinds_all_exercised() {
     use super::models::probe_models;
-    use crate::onnx_proof::{prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, ProofType};
-    use atlas_transcript::Blake2bProver;
+    use crate::onnx_proof::{
+        relation::OpRelKind,
+        schedule::{OpRelation, Schedule},
+    };
     use std::collections::BTreeSet;
 
-    let mut cases: Vec<(String, atlas_trace::Model, Vec<Tensor<i32>>)> = probe_models()
-        .into_iter()
-        .map(|m| (m.name.to_string(), m.model, m.inputs))
-        .collect();
-    let gauntlet = zoo("op_gauntlet", 16);
-    let gauntlet_inputs = op_gauntlet_inputs(&gauntlet);
-    cases.push(("op_gauntlet".to_string(), gauntlet.model, gauntlet_inputs));
-    for name in ["gpt2-tiny", "qwen2-tiny", "bge-tiny"] {
-        let imported = zoo(name, 16);
-        let inputs = synth_inputs(&imported, GOLDEN_SEED);
-        cases.push((name.to_string(), imported.model, inputs));
+    /// Every `OpRelKind`. The match has no wildcard arm, so a variant without a line in the
+    /// list fails to compile.
+    fn op_rel_kinds() -> Vec<OpRelKind> {
+        use OpRelKind::*;
+        let all = vec![
+            And,
+            Mul,
+            Square,
+            Cube,
+            AddAccumulation,
+            SubAccumulation,
+            Iff,
+            ConstantDivision,
+            Rsqrt,
+            Identity,
+            Neg,
+            ZeroOutput,
+            Constant,
+            Input,
+            AxisPermutation,
+            Broadcast,
+            Reshape,
+            Slice,
+            Concat,
+            SumAxis,
+            MeanOfSquares,
+            Contraction,
+            Gather,
+            SoftmaxSums,
+            TrigPeriod,
+            SoftmaxAddressLink,
+            SmallTable,
+        ];
+        for kind in &all {
+            match kind {
+                And | Mul | Square | Cube | AddAccumulation | SubAccumulation | Iff
+                | ConstantDivision | Rsqrt | Identity | Neg | ZeroOutput | Constant | Input
+                | AxisPermutation | Broadcast | Reshape | Slice | Concat | SumAxis
+                | MeanOfSquares | Contraction | Gather | SoftmaxSums | TrigPeriod
+                | SoftmaxAddressLink | SmallTable => {}
+            }
+        }
+        all
     }
 
-    let mut seen = BTreeSet::new();
-    for (_, model, inputs) in cases {
-        let pp = AtlasProverPreprocessing::<Fr, AkitaScheme>::new(
-            AtlasSharedPreprocessing::preprocess(model),
-        );
-        let (proof, _, _) = prove::<Fr, Blake2bProver, AkitaScheme>(&pp, &inputs);
-        seen.extend(proof.proofs().keys().map(|id| id.1));
+    /// The kinds of relation a schedule holds beside the op relations.
+    const OTHER_KINDS: [&str; 7] = [
+        "TableRead",
+        "OneHot",
+        "GatherSmallOneHot",
+        "GatherSmallHammingWeight",
+        "SoftmaxRead",
+        "RemainderBucketValue",
+        "RemainderBucketDigits",
+    ];
+
+    /// The kind of a relation that is not an op relation: one of [`OTHER_KINDS`]. The match has
+    /// no wildcard arm, so a variant without a name fails to compile.
+    fn other_kind(relation: &OpRelation<Fr>) -> Option<&'static str> {
+        Some(match relation {
+            OpRelation::Op(_) => return None,
+            OpRelation::TableRead(_) => "TableRead",
+            OpRelation::OneHot(_) => "OneHot",
+            OpRelation::GatherSmallOneHot(_) => "GatherSmallOneHot",
+            OpRelation::GatherSmallHammingWeight(_) => "GatherSmallHammingWeight",
+            OpRelation::SoftmaxRead(_) => "SoftmaxRead",
+            OpRelation::RemainderBucketValue(_) => "RemainderBucketValue",
+            OpRelation::RemainderBucketDigits(_) => "RemainderBucketDigits",
+        })
     }
-    let missing: Vec<ProofType> = ProofType::all().filter(|t| !seen.contains(t)).collect();
+
+    let mut models: Vec<atlas_trace::Model> = probe_models().into_iter().map(|m| m.model).collect();
+    for name in ["op_gauntlet", "gpt2-tiny", "qwen2-tiny", "bge-tiny"] {
+        models.push(zoo(name, 16).model);
+    }
+
+    let mut op_kinds = BTreeSet::new();
+    let mut other_kinds = BTreeSet::new();
+    for model in &models {
+        let schedule = Schedule::<Fr>::compile(model).expect("the model has a schedule");
+        for relation in schedule.relations() {
+            match relation {
+                OpRelation::Op(relation) => {
+                    op_kinds.insert(format!("{:?}", relation.kind));
+                }
+                other => {
+                    let kind = other_kind(other).expect("not an op relation");
+                    assert!(OTHER_KINDS.contains(&kind), "{kind} is not listed");
+                    other_kinds.insert(kind);
+                }
+            }
+        }
+    }
+    let missing: Vec<String> = op_rel_kinds()
+        .into_iter()
+        .map(|kind| format!("{kind:?}"))
+        .filter(|kind| !op_kinds.contains(kind))
+        .chain(
+            OTHER_KINDS
+                .iter()
+                .filter(|kind| !other_kinds.contains(*kind))
+                .map(|kind| kind.to_string()),
+        )
+        .collect();
     assert!(
         missing.is_empty(),
-        "no checked-in model emits these proof types: {missing:?}"
+        "no checked-in model's schedule holds these relations: {missing:?}"
     );
 }
 

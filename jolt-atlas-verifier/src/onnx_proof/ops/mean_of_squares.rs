@@ -36,7 +36,6 @@ use crate::{
             not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
         },
         schedule::{OpOpen, OpPlan, OpRelation, ScheduleBuilder},
-        ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -68,10 +67,7 @@ impl OpPlan for MeanOfSquares {
     ) -> Result<(), ProofVerifyError> {
         schedule.reduce();
         schedule.open(OpOpen::RescaleRemainder(node.clone()));
-        schedule.relation(
-            ProofType::RescaleArith,
-            OpRelation::Op(squared_sum_reduction(node)?),
-        );
+        schedule.relation(OpRelation::Op(squared_sum_reduction(node)?));
         Ok(())
     }
 }

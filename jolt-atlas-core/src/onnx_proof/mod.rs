@@ -16,7 +16,6 @@ use atlas_trace::{trace::ModelExecutionIO, Tensor};
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_transcript::{ProvingTranscript, VerifyingTranscript};
-use std::collections::BTreeMap;
 
 // ── Submodules ───────────────────────────────────────────────────────────
 
@@ -43,9 +42,7 @@ pub(crate) mod testing;
 pub use jolt_atlas_verifier::onnx_proof::{
     append_inputs_to_transcript, schedule, verifier, verify_with, Verifier,
 };
-pub use jolt_atlas_verifier::{
-    proof_serialization, ONNXProof, ProofId, ProofType, ReducedOpeningProof,
-};
+pub use jolt_atlas_verifier::{proof_serialization, ONNXProof, ReducedOpeningProof};
 pub use preprocessing::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
 };
@@ -100,7 +97,6 @@ pub(crate) fn prove_from_trace<
     // Initialize prover state
     // TODO: Deduplicate shared preprocessing, which is present in both AtlasProverPreprocessing and Prover state
     let mut prover: Prover<F, T> = Prover::new(pp.shared.clone(), trace);
-    let mut proofs = BTreeMap::new();
 
     // Bind public inputs into the transcript before any challenge (issue #230).
     append_inputs_to_transcript(&mut prover.transcript, &io);
@@ -120,25 +116,12 @@ pub(crate) fn prove_from_trace<
     prover::output_claim(&mut prover);
 
     // IOP portion
-    let mut eval_reduction_proofs = BTreeMap::new();
-    prover::iop(
-        &pp.schedule,
-        &mut prover,
-        &mut proofs,
-        &mut eval_reduction_proofs,
-    );
+    prover::iop(&pp.schedule, &mut prover);
 
     // Reduction sum-check + PCS::prove
     let reduced_opening_proof =
         prover::prove_reduced_openings(&mut prover, &poly_map, hints, &pp.generators);
-    prover::finalize_proof(
-        prover,
-        io,
-        commitments,
-        proofs,
-        eval_reduction_proofs,
-        reduced_opening_proof,
-    )
+    prover::finalize_proof(prover, io, commitments, reduced_opening_proof)
 }
 
 /// Verify a proof for an ONNX neural network computation.

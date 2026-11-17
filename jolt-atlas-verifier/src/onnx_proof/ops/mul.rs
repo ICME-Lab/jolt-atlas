@@ -4,7 +4,6 @@ use crate::{
         fused_rebase,
         relation::{OpRel, OpRelKind, RelationDerived, RelationOpening},
         schedule::{fused_rescale_plan, OpPlan, OpRelation, ScheduleBuilder},
-        ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -24,7 +23,6 @@ impl OpPlan for Mul {
     ) -> Result<(), ProofVerifyError> {
         fused_rescale_plan(
             node,
-            ProofType::RescaleArith,
             OpRelation::Op(product(node, OpRelKind::Mul, &[0, 1])),
             schedule,
         );

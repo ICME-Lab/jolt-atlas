@@ -3,7 +3,6 @@ use crate::onnx_proof::{
     ops::mul::product,
     relation::OpRelKind,
     schedule::{OpPlan, OpRelation, ScheduleBuilder},
-    ProofType,
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_trace::op::And;
@@ -17,10 +16,7 @@ impl OpPlan for And {
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         schedule.reduce();
-        schedule.relation(
-            ProofType::Execution,
-            OpRelation::Op(product(node, OpRelKind::And, &[0, 1])),
-        );
+        schedule.relation(OpRelation::Op(product(node, OpRelKind::And, &[0, 1])));
         Ok(())
     }
 }

@@ -513,7 +513,7 @@ mod tests {
         prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map, &mut prover_tr);
 
         // Run sumcheck
-        let (accumulator_sumcheck_proof, r_sumcheck_acc) =
+        let r_sumcheck_acc =
             prover_opening_accumulator.prove_batch_opening_sumcheck(&mut prover_tr);
 
         // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
@@ -544,7 +544,7 @@ mod tests {
 
         // Verify sumcheck
         let r_sumcheck = verifier_opening_accumulator
-            .verify_batch_opening_sumcheck(&accumulator_sumcheck_proof, &mut verifier_tr)
+            .verify_batch_opening_sumcheck(&mut verifier_tr)
             .unwrap();
 
         // Finalize and store state in accumulator for Stage 8
@@ -660,7 +660,7 @@ mod tests {
         prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map, &mut prover_tr);
 
         // Run sumcheck
-        let (accumulator_sumcheck_proof, r_sumcheck_acc) =
+        let r_sumcheck_acc =
             prover_opening_accumulator.prove_batch_opening_sumcheck(&mut prover_tr);
 
         // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
@@ -702,7 +702,7 @@ mod tests {
 
         // Verify sumcheck
         let r_sumcheck = verifier_opening_accumulator
-            .verify_batch_opening_sumcheck(&accumulator_sumcheck_proof, &mut verifier_tr)
+            .verify_batch_opening_sumcheck(&mut verifier_tr)
             .unwrap();
 
         // Finalize and store state in accumulator for Stage 8
@@ -817,7 +817,7 @@ mod tests {
         prover_opening_accumulator.prepare_for_sumcheck(&polynomial_map, &mut prover_tr);
 
         // Run sumcheck
-        let (accumulator_sumcheck_proof, r_sumcheck_acc) =
+        let r_sumcheck_acc =
             prover_opening_accumulator.prove_batch_opening_sumcheck(&mut prover_tr);
 
         // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
@@ -859,7 +859,7 @@ mod tests {
 
         // Verify sumcheck
         let r_sumcheck = verifier_opening_accumulator
-            .verify_batch_opening_sumcheck(&accumulator_sumcheck_proof, &mut verifier_tr)
+            .verify_batch_opening_sumcheck(&mut verifier_tr)
             .unwrap();
 
         // Finalize and store state in accumulator for Stage 8

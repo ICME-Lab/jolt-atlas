@@ -84,7 +84,6 @@ pub mod trig;
 use atlas_algebra::{
     field::JoltField, poly::multilinear::EvaluateMle, utils::thread::drop_in_background_thread,
 };
-use atlas_sumcheck::evaluation_reduction::EvalReductionProof;
 use atlas_transcript::ProvingTranscript;
 use eval_reduction::NodeEvalReduction;
 
@@ -100,9 +99,8 @@ use crate::onnx_proof::{
     relation::{
         op_rel_params, prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
     },
-    schedule::{OpOpen, OpRelation, RelId, Schedule, Step, DEFERRED_PROOF_IDX},
+    schedule::{OpOpen, OpRelation, RelId, Schedule, Step},
     trace_view::TraceView,
-    ProofId, ProofType,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider};
 use atlas_algebra::poly::multilinear::MultilinearPolynomial;
@@ -112,11 +110,9 @@ use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
 };
 use atlas_sumcheck::shout::{self, RaOneHotParams};
-use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_trace::Trace;
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
 
 use crate::onnx_proof::Prover;
 
@@ -129,14 +125,12 @@ pub struct Addresses(pub OpeningId);
 /// ([`Verifier::run`](crate::onnx_proof::Verifier::run)) runs, in the same order, with the
 /// relations' witnesses. A relation set up by a `Setup` step keeps its witnesses until the
 /// `Sumcheck` step that names it; a batched sumcheck builds the witnesses of its other members
-/// in parallel. Each sumcheck proof goes to `proofs` under its step's id, each node's
-/// evaluation-reduction proof to `eval_reduction_proofs`.
+/// in parallel. Every round message, claim and evaluation-reduction polynomial is sent through
+/// the prover's transcript at the step the verifier reads it.
 #[tracing::instrument(skip_all, name = "prove_schedule")]
 pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
     schedule: &Schedule<F>,
     prover: &mut Prover<F, T>,
-    proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
-    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
 ) {
     let relation = |id: &RelId| {
         schedule
@@ -146,18 +140,17 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
     let mut set_up: Vec<Option<Witnesses<F, T>>> =
         schedule.relations().iter().map(|_| None).collect();
     // The span of the node whose steps are running: a node's turn starts with its reduction
-    // or with a sumcheck of its own.
+    // or with a sumcheck of its own, and ends at a sumcheck over several nodes' relations.
     let mut turn: Option<(usize, tracing::span::EnteredSpan)> = None;
     for step in schedule.steps() {
         let step_node = match step {
-            Step::Reduce { node } => Some(*node),
-            Step::Sumcheck { proof, .. } => Some(proof.0),
+            Step::Reduce { node } => Some(Some(*node)),
+            Step::Sumcheck { members, .. } => Some(schedule.sumcheck_node(members)),
             Step::Open(_) | Step::Setup(_) | Step::Tie(_) => None,
         };
-        if let Some(node) = step_node.filter(|node| turn.as_ref().map(|turn| turn.0) != Some(*node))
-        {
+        if let Some(node) = step_node.filter(|node| turn.as_ref().map(|turn| turn.0) != *node) {
             drop(turn.take());
-            if node != DEFERRED_PROOF_IDX {
+            if let Some(node) = node {
                 let op = prover.preprocessing.model().view(node).operator;
                 turn = Some((
                     node,
@@ -168,9 +161,7 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
         match step {
             Step::Reduce { node } => {
                 let node = prover.preprocessing.model().view(*node);
-                if let Some(reduction) = NodeEvalReduction::prove(prover, &node) {
-                    eval_reduction_proofs.insert(node.idx, reduction);
-                }
+                NodeEvalReduction::prove(prover, &node);
             }
             Step::Open(open) => prove_open(open, prover),
             Step::Setup(id) => {
@@ -179,7 +170,6 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
                 set_up[id.0] = Some(relation_witnesses(relation.clone(), prover));
             }
             Step::Sumcheck {
-                proof,
                 members,
                 batched: false,
             } => {
@@ -188,23 +178,25 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
                     .flat_map(|id| relation_witnesses(relation(id).clone(), prover))
                     .collect();
                 let [witness] = witnesses.as_mut_slice() else {
-                    panic!("the sumcheck {proof:?} is not a single relation")
+                    panic!("the unbatched sumcheck of {members:?} is not a single relation")
                 };
-                let (sumcheck, _) = prove_relation(
+                prove_relation(
                     witness.as_mut(),
                     &mut prover.accumulator,
                     &mut prover.transcript,
                 );
-                proofs.insert(proof.clone(), sumcheck);
             }
             Step::Sumcheck {
-                proof,
                 members,
                 batched: true,
             } => {
-                let _span =
-                    tracing::span!(tracing::Level::INFO, "deferred::batch", kind = ?proof.1)
-                        .entered();
+                let first = relation(&members[0]);
+                let _span = tracing::span!(
+                    tracing::Level::INFO,
+                    "deferred::batch",
+                    kind = batch_kind(first)
+                )
+                .entered();
                 let prepared: Vec<(&'static str, Prepared<F, T>)> = members
                     .iter()
                     .map(|id| match set_up[id.0].take() {
@@ -213,9 +205,9 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
                     })
                     .collect();
                 let witnesses = build_all(prepared, prover);
-                proofs.insert(proof.clone(), prove_batch(witnesses, prover));
+                prove_batch(witnesses, prover);
                 // The digit range check is the last reader of the bucket witnesses.
-                if proof.1 == ProofType::DeferredRemainderDigitRange {
+                if matches!(first, OpRelation::RemainderBucketDigits(_)) {
                     drop_in_background_thread(std::mem::take(&mut prover.buckets));
                 }
             }
@@ -243,6 +235,20 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
     }
 }
 
+/// What a batched sumcheck proves, by the kind of its first member (a batch's members are of
+/// one kind): the name of its span.
+fn batch_kind<F: JoltField>(first: &OpRelation<F>) -> &'static str {
+    match first {
+        OpRelation::RemainderBucketValue(_) => "BucketValues",
+        OpRelation::RemainderBucketDigits(_) => "BucketDigits",
+        OpRelation::TableRead(_) | OpRelation::SoftmaxRead(_) => "Lookups",
+        OpRelation::OneHot(_)
+        | OpRelation::GatherSmallOneHot(_)
+        | OpRelation::GatherSmallHammingWeight(_) => "OneHot",
+        OpRelation::Op(_) => "Op",
+    }
+}
+
 /// The witnesses of one relation, set up.
 type Witnesses<F, T> = Vec<Box<dyn DynRelationWitness<F, T>>>;
 
@@ -251,8 +257,8 @@ type Witnesses<F, T> = Vec<Box<dyn DynRelationWitness<F, T>>>;
 fn prove_batch<F: JoltField, T: ProvingTranscript>(
     mut witnesses: Vec<Box<dyn DynRelationWitness<F, T>>>,
     prover: &mut Prover<F, T>,
-) -> SumcheckInstanceProof<F> {
-    let (proof, _) = if witnesses.len() > 1 {
+) {
+    if witnesses.len() > 1 {
         prove_relation_batch_parallel(
             witnesses.iter_mut().map(|w| &mut **w as _).collect(),
             &mut prover.accumulator,
@@ -266,7 +272,6 @@ fn prove_batch<F: JoltField, T: ProvingTranscript>(
         )
     };
     drop_in_background_thread(witnesses);
-    proof
 }
 
 /// A relation of a batch after its sequential part (claims read, challenges drawn, openings

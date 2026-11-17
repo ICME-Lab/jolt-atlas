@@ -3,7 +3,6 @@ use crate::onnx_proof::{
     ops::mul::product,
     relation::OpRelKind,
     schedule::{fused_rescale_plan, OpPlan, OpRelation, ScheduleBuilder},
-    ProofType,
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_trace::{op::Cube, Model};
@@ -18,7 +17,6 @@ impl OpPlan for Cube {
     ) -> Result<(), ProofVerifyError> {
         fused_rescale_plan(
             node,
-            ProofType::RescaleArith,
             OpRelation::Op(product(node, OpRelKind::Cube, &[0, 0, 0])),
             schedule,
         );

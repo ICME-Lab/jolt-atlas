@@ -14,10 +14,7 @@ use rand::{rngs::StdRng, SeedableRng};
 
 use super::zoo::zoo;
 use super::{prove_verify_roundtrip, ModelBuilder, RoundtripOptions};
-use crate::onnx_proof::{
-    schedule::{Schedule, Step},
-    ProofType,
-};
+use crate::onnx_proof::schedule::{OpRelation, RelId, Schedule, Step};
 
 /// Compile `name`'s schedule and compare the hash of its rendering against `pin`.
 fn assert_schedule_pin(name: &str, pin: &str) {
@@ -72,8 +69,8 @@ fn schedule_pin_bge_tiny() {
     );
 }
 
-/// A model with no table read has no lookups step and no one-hot step in its schedule, hence no
-/// proof entry for either, and its proof verifies.
+/// A model with no table read has no lookups step and no one-hot step in its schedule, hence
+/// nothing in its proof for either, and its proof verifies.
 #[test]
 fn schedule_of_a_lookup_free_model_has_no_lookup_step() {
     let mut rng = StdRng::seed_from_u64(0x5C4E);
@@ -86,23 +83,25 @@ fn schedule_of_a_lookup_free_model_has_no_lookup_step() {
     let model = b.build();
 
     let schedule = Schedule::<Fp128>::compile(&model).expect("the model has a schedule");
-    let lookup_steps = schedule.steps().iter().filter(|step| {
-        matches!(
-            step,
-            Step::Setup(_)
-                | Step::Sumcheck {
-                    proof: crate::onnx_proof::ProofId(
-                        _,
-                        ProofType::DeferredLookups | ProofType::DeferredOneHot
-                    ),
-                    ..
-                }
+    // The first member of a sumcheck over `members`.
+    let first = |members: &[RelId]| schedule.relation(members[0]).expect("a member");
+    let is_read = |relation: &OpRelation<Fp128>| {
+        !matches!(
+            relation,
+            OpRelation::Op(_)
+                | OpRelation::RemainderBucketValue(_)
+                | OpRelation::RemainderBucketDigits(_)
         )
-    });
-    assert_eq!(lookup_steps.count(), 0);
+    };
+    let setups = schedule
+        .steps()
+        .iter()
+        .filter(|step| matches!(step, Step::Setup(_)));
+    assert_eq!(setups.count(), 0);
+    assert!(!schedule.sumchecks().any(|members| is_read(first(members))));
     assert!(schedule
-        .proof_ids()
-        .any(|proof| proof.1 == ProofType::DeferredRemainderRC));
+        .sumchecks()
+        .any(|members| matches!(first(members), OpRelation::RemainderBucketValue(_))));
 
     let inputs = [
         Tensor::random_small(&mut rng, &[8]),

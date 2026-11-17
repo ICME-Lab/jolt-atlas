@@ -1,8 +1,5 @@
 use super::*;
-use crate::onnx_proof::{
-    schedule::{OpPlan, OpRelation, ScheduleBuilder},
-    ProofType,
-};
+use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::field::IntoOpening;
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -27,7 +24,7 @@ impl OpPlan for GatherSmall {
     ) -> Result<(), ProofVerifyError> {
         let shape = GatherSmallShape::for_node(model, node)?;
         schedule.reduce();
-        schedule.relation(ProofType::Execution, OpRelation::Op(gather(model, node)?));
+        schedule.relation(OpRelation::Op(gather(model, node)?));
         schedule.one_hot(OpRelation::GatherSmallOneHot(shape.clone()));
         schedule.one_hot(OpRelation::GatherSmallHammingWeight(shape));
         Ok(())

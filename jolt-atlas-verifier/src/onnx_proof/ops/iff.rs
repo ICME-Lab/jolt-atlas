@@ -1,10 +1,7 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use crate::{
-    onnx_proof::{
-        relation::{OpRel, OpRelKind, RelationDerived, RelationOpening},
-        ProofType,
-    },
+    onnx_proof::relation::{OpRel, OpRelKind, RelationDerived, RelationOpening},
     utils::opening_access::{OpeningIdBuilder, Target},
 };
 use atlas_algebra::{
@@ -22,7 +19,7 @@ impl OpPlan for Iff {
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         schedule.reduce();
-        schedule.relation(ProofType::Execution, OpRelation::Op(select(node)));
+        schedule.relation(OpRelation::Op(select(node)));
         Ok(())
     }
 }

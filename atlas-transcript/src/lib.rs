@@ -96,21 +96,3 @@ mod fp128_tests {
         );
     }
 }
-
-mod univariate {
-    use crate::{AppendToTranscript, Transcript};
-    use atlas_algebra::{field::JoltField, poly::univariate::UnivariatePoly};
-
-    impl<F: JoltField> AppendToTranscript for UnivariatePoly<F> {
-        fn append_to_transcript<ProofTranscript: Transcript>(
-            &self,
-            transcript: &mut ProofTranscript,
-        ) {
-            transcript.append_message(b"UncompressedUniPoly_begin");
-            for coeff in self.coefficients() {
-                transcript.append_scalar(coeff);
-            }
-            transcript.append_message(b"UncompressedUniPoly_end");
-        }
-    }
-}

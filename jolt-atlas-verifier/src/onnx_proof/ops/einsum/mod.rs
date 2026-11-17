@@ -14,7 +14,6 @@ use crate::{
         relation::{
             not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
         },
-        ProofType,
     },
     utils::{
         dims::{lookup_einsum_config, EinsumDims},
@@ -47,12 +46,7 @@ impl OpPlan for Einsum {
         model: &Model,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
-        fused_rescale_plan(
-            node,
-            ProofType::EinsumMatmul,
-            OpRelation::Op(contraction(model, node)?),
-            schedule,
-        );
+        fused_rescale_plan(node, OpRelation::Op(contraction(model, node)?), schedule);
         Ok(())
     }
 }

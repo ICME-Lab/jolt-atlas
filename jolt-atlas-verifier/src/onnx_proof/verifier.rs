@@ -13,60 +13,42 @@ use super::{
 };
 use crate::node_view::ModelView;
 use crate::utils::opening_access::AccOpeningAccessor;
-use crate::{ONNXProof, ProofId};
+use crate::ONNXProof;
 use atlas_algebra::{
     field::JoltField,
     poly::multilinear::{MultilinearPolynomial, PolynomialEvaluation},
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;
+use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator};
 use atlas_sumcheck::relation::{verify_relation, verify_relation_batch, DynRelationVerifier};
-use atlas_sumcheck::{
-    evaluation_reduction::EvalReductionProof,
-    opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator},
-    sumcheck::SumcheckInstanceProof,
-};
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use atlas_transcript::{AppendToTranscript, VerifyingTranscript};
 use common::{CommittedPoly, VirtualPoly};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
 // Verifier state
 // ---------------------------------------------------------------------------
 
 /// Verifier state that owns all data needed during verification.
-/// Created once before the schedule runs.
+/// Created once before the schedule runs. The proof is the transcript's NARG string: the
+/// verifier reaches it only through the transcript's reads.
 pub struct Verifier<'a, F: JoltField, T: VerifyingTranscript> {
     /// Opening accumulator for batching polynomial openings.
     pub(crate) accumulator: VerifierOpeningAccumulator<F>,
     /// Interactive proof transcript.
     pub(crate) transcript: T,
-    /// The proof's sumcheck proofs, each taken exactly once.
-    pub(crate) proofs: ProofLedger<'a, ProofId, SumcheckInstanceProof<F>>,
-    /// The proof's evaluation-reduction proofs by node, each taken exactly once.
-    pub(crate) eval_reductions: ProofLedger<'a, usize, EvalReductionProof<F>>,
     /// Model execution inputs and outputs.
     pub(crate) io: &'a ModelExecutionIO,
 }
 
 impl<'a, F: JoltField, T: VerifyingTranscript> Verifier<'a, F, T> {
-    /// Create a new verifier with the given proofs, IO, and the proof's transcript NARG
-    /// string.
-    pub fn new(
-        proofs: &'a BTreeMap<ProofId, SumcheckInstanceProof<F>>,
-        eval_reductions: &'a BTreeMap<usize, EvalReductionProof<F>>,
-        io: &'a ModelExecutionIO,
-        narg: &[u8],
-    ) -> Self
-    where
-        T: VerifyingTranscript,
-    {
+    /// Create a new verifier with the given IO and the proof's transcript NARG string.
+    pub fn new(io: &'a ModelExecutionIO, narg: &[u8]) -> Self {
         Self {
             accumulator: VerifierOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof", narg.to_vec()),
-            proofs: ProofLedger::new(proofs),
-            eval_reductions: ProofLedger::new(eval_reductions),
             io,
         }
     }
@@ -90,20 +72,6 @@ impl<'a, F: JoltField, T: VerifyingTranscript> Verifier<'a, F, T> {
 }
 
 impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
-    /// The drain check: the proof was consumed exactly. `Err` if a sumcheck proof or an
-    /// evaluation-reduction proof was never taken.
-    pub fn check_consumed(&self) -> Result<(), ProofVerifyError> {
-        if let Some(id) = self.proofs.first_unconsumed() {
-            return Err(ProofVerifyError::UnconsumedProof(format!("{id:?}")));
-        }
-        if let Some(node) = self.eval_reductions.first_unconsumed() {
-            return Err(ProofVerifyError::UnconsumedEvalReduction(*node));
-        }
-        Ok(())
-    }
-}
-
-impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
     /// The interpreter: run `schedule`, step by step, in transcript order. A relation set up
     /// by a `Setup` step keeps its verifiers until the `Sumcheck` step that names it.
     #[tracing::instrument(skip_all, name = "Verifier::run")]
@@ -123,11 +91,7 @@ impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
                         *slot = Some(verifiers);
                     }
                 }
-                Step::Sumcheck {
-                    proof: proof_id,
-                    members,
-                    batched,
-                } => {
+                Step::Sumcheck { members, batched } => {
                     let mut instances = Vec::new();
                     for id in members {
                         match set_up.get_mut(id.0).and_then(Option::take) {
@@ -139,28 +103,25 @@ impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
                             ),
                         }
                     }
-                    let proof = self.proofs.take(proof_id.clone())?;
                     let verified = if *batched {
                         verify_relation_batch(
-                            proof,
                             instances.iter().map(|instance| instance.as_ref()).collect(),
                             &mut self.accumulator,
                             &mut self.transcript,
                         )
                     } else {
                         let [relation] = instances.as_slice() else {
-                            return Err(ProofVerifyError::Malformed(format!(
-                                "schedule: the sumcheck {proof_id:?} is not a single relation"
-                            )));
+                            return Err(ProofVerifyError::Malformed(
+                                "schedule: an unbatched sumcheck is not a single relation".into(),
+                            ));
                         };
                         verify_relation(
-                            proof,
                             relation.as_ref(),
                             &mut self.accumulator,
                             &mut self.transcript,
                         )
                     };
-                    verified.inspect_err(|e| tracing::debug!(?proof_id, ?e, "sumcheck failed"))?;
+                    verified.inspect_err(|e| tracing::debug!(?members, ?e, "sumcheck failed"))?;
                 }
                 Step::Tie(id) => {
                     let relation = schedule.tie(*id)?;
@@ -183,44 +144,6 @@ impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
 
 /// The verifiers of one relation, set up.
 type Verifiers<F, T> = Vec<Box<dyn DynRelationVerifier<F, T>>>;
-
-/// A keyed part of the proof with its consumption record: every entry is taken exactly once.
-pub struct ProofLedger<'a, K, V> {
-    entries: &'a BTreeMap<K, V>,
-    consumed: BTreeSet<K>,
-}
-
-impl<'a, K: Ord + Clone + std::fmt::Debug, V> ProofLedger<'a, K, V> {
-    fn new(entries: &'a BTreeMap<K, V>) -> Self {
-        Self {
-            entries,
-            consumed: BTreeSet::new(),
-        }
-    }
-
-    /// Take the entry under `key`. `Err` if the proof carries none, or it was already taken.
-    pub fn take(&mut self, key: K) -> Result<&'a V, ProofVerifyError> {
-        let entry = self
-            .entries
-            .get(&key)
-            .ok_or_else(|| ProofVerifyError::Malformed(format!("missing proof entry {key:?}")))?;
-        if !self.consumed.insert(key.clone()) {
-            return Err(ProofVerifyError::Malformed(format!(
-                "proof entry {key:?} taken twice"
-            )));
-        }
-        Ok(entry)
-    }
-
-    /// Whether the proof carries an entry under `key`.
-    pub fn contains(&self, key: &K) -> bool {
-        self.entries.contains_key(key)
-    }
-
-    fn first_unconsumed(&self) -> Option<&'a K> {
-        self.entries.keys().find(|key| !self.consumed.contains(key))
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Internal verification helpers
@@ -325,10 +248,9 @@ pub fn verify_reduced_openings<
             .accumulator
             .prepare_for_sumcheck(&mut verifier.transcript);
 
-        let reduction_res = verifier.accumulator.verify_batch_opening_sumcheck(
-            reduced_opening_proof.sumcheck_proof(),
-            &mut verifier.transcript,
-        );
+        let reduction_res = verifier
+            .accumulator
+            .verify_batch_opening_sumcheck(&mut verifier.transcript);
         let r_sumcheck = reduction_res
             .inspect_err(|e| tracing::debug!(?e, "opening reduction via sumcheck failed"))?;
 

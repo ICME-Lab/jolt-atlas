@@ -345,8 +345,7 @@ mod tests {
             .map(|d| MultilinearPolynomial::from(d.clone()))
             .collect();
         let mut prover = DigitRangeProver::new(params.clone(), columns);
-        let (proof, _) =
-            prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
+        let _ = prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
         // The value claim is the stream's first message.
         let mut narg = Vec::new();
@@ -363,7 +362,6 @@ mod tests {
             OpeningPoint::<BIG_ENDIAN, Fr>::new(r),
         )?;
         verify_relation(
-            &proof,
             &params.into_verifier(),
             &mut verifier_accumulator,
             &mut verifier_transcript,

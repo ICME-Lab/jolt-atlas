@@ -1,6 +1,7 @@
 //! The batched sumcheck engine: the round loop every relation is proven with
 //! ([`prover::prove_batch`]) and the compressed-round verifier every relation is checked with
-//! ([`verify_compressed`]).
+//! ([`verify_compressed`]). The prover sends each round message through its transcript and the
+//! verifier reads it there: a sumcheck is not a value either side holds.
 //!
 //! The sumcheck reduces a claim $\sum_{x \in \{0,1\}^n} g(x) = C$ to one evaluation
 //! $g(r_1, \ldots, r_n) = v$ in $n$ rounds: in round $i$ the prover sends a univariate
@@ -9,9 +10,10 @@
 //! described on [`BatchPrelude`].
 //!
 //! Every challenge the engine draws is preceded by a proof of work of [`round_pow_bits`] for
-//! the batch's degree. The engine's transcript writes are the deployed proof format's word
-//! encodings ([`atlas_transcript::words`]): field elements as canonical big-endian bytes and
-//! labels as 32-byte words.
+//! the batch's degree. A round message is `degree` coefficients, a count the claim fixes: the
+//! round polynomial's coefficients in increasing order with the linear one left out (the
+//! verifier recovers it from the running sum). The labels and input claims the engine absorbs
+//! are the deployed proof format's word encodings ([`atlas_transcript::words`]).
 //!
 //! Prover items live in [`prover`]; everything else here is shared with the verifier.
 
@@ -33,14 +35,14 @@ pub mod prover;
 #[cfg(test)]
 mod tests;
 
-use atlas_algebra::poly::univariate::{CompressedPoly, UnivariatePolynomial};
+use atlas_algebra::poly::univariate::CompressedPoly;
 use atlas_algebra::{
     field::{challenge::grind_bits_for_loss, JoltField},
     utils::errors::ProofVerifyError,
 };
 use atlas_transcript::{
     words::{LabelWithCount, WordTranscript},
-    Transcript,
+    Transcript, VerifyingTranscript,
 };
 
 /// Transcript label of a sumcheck round polynomial.
@@ -77,14 +79,6 @@ pub struct SumcheckClaim<F> {
     pub claimed_sum: F,
 }
 
-/// A sumcheck proof as the engine produces and verifies it: one round polynomial per round,
-/// each with its linear coefficient omitted (the verifier recovers it from the running sum).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CompressedSumcheckProof<F: JoltField> {
-    /// The round polynomials, in round order.
-    pub round_polynomials: Vec<CompressedPoly<F>>,
-}
-
 /// Why the engine rejected a proof or refused to prove a batch.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -100,12 +94,12 @@ pub enum SumcheckError<F: JoltField> {
         actual: F,
     },
 
-    /// A round polynomial exceeded the declared degree bound.
+    /// A member's round polynomial exceeded the batch's declared degree bound.
     #[error("degree bound exceeded: degree {got}, max {max}")]
     DegreeBoundExceeded {
         /// Actual degree of the offending round polynomial.
         got: usize,
-        /// Maximum allowed degree from the claim.
+        /// Maximum allowed degree of the batch.
         max: usize,
     },
 
@@ -170,23 +164,20 @@ pub enum SumcheckError<F: JoltField> {
     #[error("sumcheck degree {degree} cannot be represented with its coefficient count")]
     DegreeOverflow { degree: usize },
 
-    /// A compressed round polynomial had no coefficients, so there is nothing to absorb or
-    /// evaluate. Any valid compressed round polynomial has degree at least 1.
-    #[error("round {round}: compressed round polynomial requires >= 2 coefficients, got {got}")]
-    CompressedPolynomialTooShort {
-        /// Zero-indexed round number where the malformed polynomial appeared.
-        round: usize,
-        /// Number of stored coefficients received.
-        got: usize,
+    /// A claim with rounds to verify declared a degree of zero: a round message of no
+    /// coefficient, with nothing to read or evaluate.
+    #[error("the claim declares degree 0 with {num_vars} rounds to verify")]
+    ZeroDegree {
+        /// Number of rounds that would need round messages.
+        num_vars: usize,
     },
 
-    /// The number of round polynomials in the proof does not match the claim's variables.
-    #[error("expected {expected} rounds, proof contains {got}")]
-    WrongNumberOfRounds {
-        /// Expected number of rounds (equal to `num_vars`).
-        expected: usize,
-        /// Actual number of round polynomials in the proof.
-        got: usize,
+    /// A round message could not be read: the stream ended, or a coefficient is not a canonical
+    /// field element.
+    #[error("round {round}: the round message could not be read")]
+    RoundMessageUnreadable {
+        /// Zero-indexed round number whose message was being read.
+        round: usize,
     },
 
     /// The proof of work before a round challenge did not check.
@@ -392,52 +383,44 @@ pub fn absorb_input_claims<F: JoltField, T: Transcript>(input_claims: &[F], tran
     }
 }
 
-/// Verify a compressed sumcheck proof of `claim` and return the reduced claim `(v, r)`: the
-/// final running sum and the round challenges.
+/// Verify the sumcheck of `claim`, reading its round messages from the transcript, and return
+/// the reduced claim `(v, r)`: the final running sum and the round challenges.
 ///
-/// Per round: the degree bound is enforced, the round polynomial is absorbed under
-/// [`SUMCHECK_ROUND_TRANSCRIPT_LABEL`], the proof of work is checked and the challenge `r_i`
-/// squeezed, and the running sum becomes the round polynomial at `r_i` (its linear term
-/// recovered from the running sum). The caller checks `v` against the oracle.
+/// The claim fixes what is read: `claim.num_vars` round messages of `claim.degree`
+/// coefficients each. Per round: [`SUMCHECK_ROUND_TRANSCRIPT_LABEL`] is absorbed with the
+/// coefficient count, the round message is read (which absorbs it), the proof of work is
+/// checked and the challenge `r_i` squeezed, and the running sum becomes the round polynomial
+/// at `r_i` (its linear term recovered from the running sum). The caller checks `v` against
+/// the oracle.
 ///
-/// When `claim.num_vars == 0` nothing is absorbed or checked and `v` is the claimed sum.
+/// When `claim.num_vars == 0` nothing is read, absorbed or checked and `v` is the claimed sum.
 #[tracing::instrument(skip_all, name = "verify_compressed")]
-pub fn verify_compressed<F: JoltField, T: Transcript>(
+pub fn verify_compressed<F: JoltField, T: VerifyingTranscript>(
     claim: &SumcheckClaim<F>,
-    proof: &CompressedSumcheckProof<F>,
     transcript: &mut T,
 ) -> Result<(F, Vec<F>), SumcheckError<F>> {
-    if proof.round_polynomials.len() != claim.num_vars {
-        return Err(SumcheckError::WrongNumberOfRounds {
-            expected: claim.num_vars,
-            got: proof.round_polynomials.len(),
+    if claim.num_vars > 0 && claim.degree == 0 {
+        return Err(SumcheckError::ZeroDegree {
+            num_vars: claim.num_vars,
         });
     }
     let pow_bits = round_pow_bits::<F>(claim.degree);
     let mut running_sum = claim.claimed_sum;
     let mut challenges = Vec::with_capacity(claim.num_vars);
 
-    for (round, round_proof) in proof.round_polynomials.iter().enumerate() {
-        if round_proof.degree() > claim.degree {
-            return Err(SumcheckError::DegreeBoundExceeded {
-                got: round_proof.degree(),
-                max: claim.degree,
-            });
-        }
-        let coeffs = round_proof.coeffs_except_linear_term();
-        if coeffs.is_empty() {
-            return Err(SumcheckError::CompressedPolynomialTooShort { round, got: 0 });
-        }
+    for round in 0..claim.num_vars {
         transcript.append(&LabelWithCount(
             SUMCHECK_ROUND_TRANSCRIPT_LABEL,
-            coeffs.len() as u64,
+            claim.degree as u64,
         ));
-        for coeff in coeffs {
-            transcript.append(coeff);
-        }
+        let round_message = CompressedPoly::new(
+            transcript
+                .read_scalars(claim.degree)
+                .map_err(|_| SumcheckError::RoundMessageUnreadable { round })?,
+        );
         let r = draw_challenge::<F, T>(transcript, pow_bits)
             .map_err(|_| SumcheckError::ProofOfWork { round })?;
-        running_sum = round_proof.evaluate_with_hint(running_sum, r);
+        running_sum = round_message.evaluate_with_hint(running_sum, r);
         challenges.push(r);
     }
 

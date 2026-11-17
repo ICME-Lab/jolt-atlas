@@ -12,7 +12,6 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::{
     prove,
     range_bucket::{checks_its_output, range_buckets, Remainder},
-    schedule::DEFERRED_PROOF_IDX,
     AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
@@ -53,8 +52,9 @@ fn model_outputs_are_not_range_checked() {
     }
 }
 
-/// A model with no table lookup and no range-checked value proves nothing after the nodes' steps: its
-/// proof has no model-wide entry (a stray one would fail the drain check).
+/// A model with no table lookup and no range-checked value proves nothing after the nodes'
+/// steps: its schedule has no sumcheck over several nodes' relations, so its proof carries
+/// nothing for one (a stray message would fail the end-of-stream check).
 #[test]
 fn lookup_free_model_has_no_post_loop_proof() {
     let mut rng = StdRng::seed_from_u64(0x10F0);
@@ -68,10 +68,11 @@ fn lookup_free_model_has_no_post_loop_proof() {
     let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(
         AtlasSharedPreprocessing::preprocess(model.clone()),
     );
-    let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &inputs);
     assert!(
-        proof.proofs().keys().all(|id| id.0 != DEFERRED_PROOF_IDX),
-        "a lookup-free model's proof has a model-wide entry"
+        pp.schedule
+            .sumchecks()
+            .all(|members| pp.schedule.sumcheck_node(members).is_some()),
+        "a lookup-free model's schedule has a model-wide sumcheck"
     );
     prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
 }

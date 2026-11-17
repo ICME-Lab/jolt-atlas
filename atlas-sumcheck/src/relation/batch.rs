@@ -1,12 +1,13 @@
 //! Relations driven through the sumcheck [`engine`](crate::engine): a batch of set-up relations is one
 //! front-loaded batched sumcheck ([`verify_relation_batch`]), a single relation one plain
-//! sumcheck ([`verify_relation`]). The verifier checks the batch's final claim against the
-//! relations' output expressions and appends their produced openings.
+//! sumcheck ([`verify_relation`]). The verifier reads the round messages from the transcript,
+//! appends the relations' produced openings (reading their claims), and checks the batch's
+//! final claim against the relations' output expressions.
 
 use super::{evaluate_expression, relation_input_claim, Relation, RelationVerifier};
 use crate::{
-    engine::absorb_input_claims, opening_proof::VerifierOpeningAccumulator,
-    sumcheck::SumcheckInstanceProof,
+    engine::{absorb_input_claims, verify_compressed, SumcheckClaim, SumcheckError},
+    opening_proof::VerifierOpeningAccumulator,
 };
 use atlas_algebra::{
     field::{IntoOpening, JoltField},
@@ -92,13 +93,34 @@ impl<F: JoltField, T: VerifyingTranscript, R: Relation<F>> DynRelationVerifier<F
     }
 }
 
+/// Verify the rounds of a sumcheck of `claim` over `num_rounds` variables with round
+/// polynomials of degree at most `degree`, read from the transcript. Returns the final claim
+/// and the challenges; the caller checks the final claim against the oracle.
+fn verify_rounds<F: JoltField, T: VerifyingTranscript>(
+    claim: F,
+    num_rounds: usize,
+    degree: usize,
+    transcript: &mut T,
+) -> Result<(F, Vec<F::Challenge>), ProofVerifyError> {
+    let claim = SumcheckClaim {
+        num_vars: num_rounds,
+        degree,
+        claimed_sum: claim,
+    };
+    let (value, point) = verify_compressed(&claim, transcript).map_err(|e| match e {
+        SumcheckError::ProofOfWork { .. } => ProofVerifyError::ProofOfWork,
+        _ => ProofVerifyError::SumcheckVerificationError,
+    })?;
+    let r = point.into_iter().map(F::challenge_from_field).collect();
+    Ok((value, r))
+}
+
 /// Verify a batch of relations proven as one front-loaded batched sumcheck (Jim Posen,
 /// ["Perspectives on Sumcheck Batching"](https://hackmd.io/s/HyxaupAAA)). A relation with fewer
 /// rounds than the batch is bound in its last rounds, and its input claim is scaled by two per
 /// round it sits out. Returns the batch's challenges.
 #[tracing::instrument(skip_all, name = "verify_relation_batch")]
 pub fn verify_relation_batch<F: JoltField, T: VerifyingTranscript>(
-    proof: &SumcheckInstanceProof<F>,
     relations: Vec<&dyn DynRelationVerifier<F, T>>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -125,7 +147,7 @@ pub fn verify_relation_batch<F: JoltField, T: VerifyingTranscript>(
             input_claim.mul_pow_2(max_rounds - r.rounds()) * coefficient
         })
         .sum();
-    let (final_claim, r_sumcheck) = proof.verify(claim, max_rounds, max_degree, transcript)?;
+    let (final_claim, r_sumcheck) = verify_rounds(claim, max_rounds, max_degree, transcript)?;
 
     let mut expected = F::zero();
     for (r, coefficient) in relations.iter().zip(&coefficients) {
@@ -144,14 +166,13 @@ pub fn verify_relation_batch<F: JoltField, T: VerifyingTranscript>(
 /// Verify one relation proven as its own sumcheck. Returns its challenges.
 #[tracing::instrument(skip_all, name = "verify_relation")]
 pub fn verify_relation<F: JoltField, T: VerifyingTranscript>(
-    proof: &SumcheckInstanceProof<F>,
     relation: &dyn DynRelationVerifier<F, T>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
     let input_claim = relation.input_claim(accumulator)?;
     absorb_input_claims(&[input_claim], transcript);
-    let (final_claim, r_sumcheck) = proof.verify(
+    let (final_claim, r_sumcheck) = verify_rounds(
         input_claim,
         relation.rounds(),
         relation.degree(),

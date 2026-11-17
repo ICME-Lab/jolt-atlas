@@ -52,7 +52,7 @@ where
         &mut prover_accumulator,
         &mut prover_transcript,
     );
-    let (proof, prover_challenges) =
+    let prover_challenges =
         prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
     let mut verifier_transcript = Blake2bVerifier::new(b"test", prover_transcript.into_narg());
@@ -66,7 +66,6 @@ where
     )
     .unwrap();
     let verifier_challenges = verify_relation(
-        &proof,
         &verifier,
         &mut verifier_accumulator,
         &mut verifier_transcript,

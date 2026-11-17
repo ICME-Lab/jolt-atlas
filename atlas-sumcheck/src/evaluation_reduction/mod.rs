@@ -11,22 +11,32 @@
 //! for all i in 0..N, `l(i) = ri`. The verifier checks for all i in 0..N, `h(i) = vi`,
 //! derives a Fiat-Shamir challenge `x'`, and reduces to one claim:
 //! `P(r') = v'` with `r' = l(x')` and `v' = h(x')`.
+//!
+//! `h` travels through the transcript as its coefficients, one per power up to its degree
+//! bound `n·(N − 1)` for an `n`-variate `P` ([`h_coefficients`]): the verifier reads that many.
 
 use std::fmt::Debug;
 
 use crate::opening_proof::Opening;
 use allocative::Allocative;
-use atlas_algebra::serialize::{Canonical, Error};
 use atlas_algebra::{
     field::JoltField,
-    poly::{
-        multilinear::MultilinearPolynomial,
-        univariate::{UnivariatePoly, UnivariatePolynomial},
-    },
+    poly::{multilinear::MultilinearPolynomial, univariate::UnivariatePoly},
     utils::errors::{ProofVerifyError, ProvingError},
 };
-use atlas_transcript::{AppendToTranscript, Transcript};
-use std::io::{Read, Write};
+use atlas_transcript::{ProvingTranscript, VerifyingTranscript};
+
+/// Transcript label before the coefficients of `h`.
+const H_BEGIN_TRANSCRIPT_LABEL: &[u8] = b"UncompressedUniPoly_begin";
+/// Transcript label after the coefficients of `h`.
+const H_END_TRANSCRIPT_LABEL: &[u8] = b"UncompressedUniPoly_end";
+
+/// The number of coefficients of the restriction `h` of an `num_vars`-variate polynomial to
+/// the curve through `num_openings` points: its degree bound `num_vars·(num_openings − 1)`,
+/// plus one.
+pub fn h_coefficients(num_vars: usize, num_openings: usize) -> usize {
+    num_vars * num_openings.saturating_sub(1) + 1
+}
 
 /// Public instance for one N-to-1 evaluation reduction round.
 #[derive(Debug, Clone, PartialEq, Allocative)]
@@ -38,30 +48,6 @@ pub struct EvalReductionInstance<F: JoltField> {
 #[derive(Debug, Clone, PartialEq, Allocative)]
 pub struct EvalReductionWitness<F: JoltField> {
     pub mle: MultilinearPolynomial<F>,
-}
-
-/// Proof for one N-to-1 evaluation reduction round.
-#[derive(Debug, Clone, PartialEq, Allocative)]
-pub struct EvalReductionProof<F: JoltField> {
-    /// Restriction polynomial h(t) = P(l(t)).
-    pub h: UnivariatePoly<F>,
-}
-
-/// The restriction polynomial `h` (as a `UnivariatePoly`: its coefficient vector).
-impl<F: JoltField> Canonical for EvalReductionProof<F> {
-    fn encode<W: Write>(&self, writer: W) -> Result<(), Error> {
-        self.h.encode(writer)
-    }
-
-    fn encoded_len(&self) -> usize {
-        self.h.encoded_len()
-    }
-
-    fn decode<R: Read>(reader: R) -> Result<Self, Error> {
-        Ok(Self {
-            h: UnivariatePoly::decode(reader)?,
-        })
-    }
 }
 
 /// Reduced instance produced by the N-to-1 evaluation reduction.
@@ -99,11 +85,13 @@ impl<F: JoltField> From<Opening<F>> for ReducedInstance<F> {
 }
 
 impl<F: JoltField> EvalReductionInstance<F> {
-    pub fn prove<T: Transcript>(
+    /// Reduce the instance's openings to one, sending `h` through the transcript. A single
+    /// opening is the reduced instance and nothing is sent.
+    pub fn prove<T: ProvingTranscript>(
         &self,
         witness: &EvalReductionWitness<F>,
         transcript: &mut T,
-    ) -> Result<(EvalReductionProof<F>, ReducedInstance<F>), ProvingError> {
+    ) -> Result<ReducedInstance<F>, ProvingError> {
         if self.openings.is_empty() {
             return Err(ProvingError::EmptyInput);
         }
@@ -122,15 +110,10 @@ impl<F: JoltField> EvalReductionInstance<F> {
             // Short path:
             // If there's only one opening, we can skip the reduction and directly return the claim as the reduced instance.
             let (r, claim) = &self.openings[0];
-            let reduced_instance = ReducedInstance {
+            return Ok(ReducedInstance {
                 r: r.clone(),
                 claim: *claim,
-            };
-            let proof = EvalReductionProof {
-                h: UnivariatePoly::new(vec![*claim]), // h is just the constant polynomial equal to the claim
-            };
-
-            return Ok((proof, reduced_instance));
+            });
         }
 
         // i'th vector of this Vec<Vec<F>> is the vector of i'th variables across all evaluation points.
@@ -146,21 +129,30 @@ impl<F: JoltField> EvalReductionInstance<F> {
             }
         }
 
-        h.append_to_transcript(transcript);
+        // One coefficient per power up to the degree bound: the count the verifier reads.
+        let mut coefficients = h.coefficients().to_vec();
+        let count = h_coefficients(num_vars, opening_points.len());
+        assert!(
+            coefficients.len() <= count,
+            "h has {} coefficients, above its degree bound's {count}",
+            coefficients.len()
+        );
+        coefficients.resize(count, F::zero());
+        transcript.append_message(H_BEGIN_TRANSCRIPT_LABEL);
+        transcript.send_scalars(&coefficients);
+        transcript.append_message(H_END_TRANSCRIPT_LABEL);
         let x_prime: F::Challenge = transcript.challenge_scalar_optimized::<F>();
 
-        let proof = EvalReductionProof { h };
-        let reduced_instance = ReducedInstance {
+        Ok(ReducedInstance {
             r: eval_on_l(&ri_vec, x_prime.into()),
-            claim: proof.h.evaluate(x_prime.into()),
-        };
-
-        Ok((proof, reduced_instance))
+            claim: h.evaluate(x_prime.into()),
+        })
     }
 
-    pub fn verify<T: Transcript>(
+    /// Reduce the instance's openings to one, reading `h` from the transcript. A single
+    /// opening is the reduced instance and nothing is read.
+    pub fn verify<T: VerifyingTranscript>(
         &self,
-        proof: &EvalReductionProof<F>,
         transcript: &mut T,
     ) -> Result<ReducedInstance<F>, ProofVerifyError> {
         if self.openings.is_empty() {
@@ -188,19 +180,15 @@ impl<F: JoltField> EvalReductionInstance<F> {
 
         let ri_vec = group_by_variable(&opening_points);
 
-        let n_openings = self.openings.len();
-
-        if proof.h.degree() > n_vars * (n_openings - 1) {
-            return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                "Degree of h should be bounded by number of variables in original MLE and number of openings; \
-                expected degree <= num_vars * (num_openings - 1), got {} > {}",
-                proof.h.degree(),
-                n_vars * (n_openings - 1)
-            )));
-        }
+        // The degree bound fixes how many coefficients are read.
+        transcript.append_message(H_BEGIN_TRANSCRIPT_LABEL);
+        let h = UnivariatePoly::new(
+            transcript.read_scalars(h_coefficients(n_vars, self.openings.len()))?,
+        );
+        transcript.append_message(H_END_TRANSCRIPT_LABEL);
 
         for (i, (_, claim)) in self.openings.iter().enumerate() {
-            let eval_at_i = proof.h.evaluate(F::from_u32(i as u32));
+            let eval_at_i = h.evaluate(F::from_u32(i as u32));
             if eval_at_i != *claim {
                 return Err(ProofVerifyError::InvalidOpeningProof(format!(
                     "h does not match opening claim at t={i}: expected h({i}) = {claim}, got {eval_at_i}"
@@ -208,10 +196,9 @@ impl<F: JoltField> EvalReductionInstance<F> {
             }
         }
 
-        proof.h.append_to_transcript(transcript);
         let x_prime = transcript.challenge_scalar_optimized::<F>();
 
-        let expected_reduced_value = proof.h.evaluate(x_prime.into());
+        let expected_reduced_value = h.evaluate(x_prime.into());
         let expected_r = eval_on_l(&ri_vec, x_prime.into());
 
         Ok(ReducedInstance {
@@ -282,14 +269,13 @@ fn group_by_variable<F: JoltField, Ref: AsRef<[F]>>(evaluation_points: &[Ref]) -
 pub struct EvalReductionProtocol;
 
 impl EvalReductionProtocol {
-    pub fn verify<F: JoltField, T: Transcript>(
+    pub fn verify<F: JoltField, T: VerifyingTranscript>(
         openings: &[&Opening<F>],
-        proof: &EvalReductionProof<F>,
         transcript: &mut T,
     ) -> Result<ReducedInstance<F>, ProofVerifyError> {
         let instance = EvalReductionInstance::new(openings);
 
-        instance.verify(proof, transcript)
+        instance.verify(transcript)
     }
 }
 
@@ -300,12 +286,14 @@ mod tests {
 
     use super::*;
     use atlas_algebra::field::fp128::Fp128 as Fr;
+    use atlas_algebra::poly::univariate::UnivariatePolynomial;
+    use atlas_algebra::serialize::Canonical;
     use atlas_algebra::{
         field::{IntoOpening, JoltField},
         poly::multilinear::PolynomialEvaluation,
     };
     use atlas_transcript::{
-        Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
+        Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
     };
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use rand_distr::Uniform;
@@ -491,16 +479,18 @@ mod tests {
 
         let mut prover_tr = Blake2bProver::new(b"eval-reduction-test");
         let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
-        let (proof, reduced_prover) = instance
+        let reduced_prover = instance
             .prove(&witness, &mut prover_tr)
             .expect("prover should succeed");
+        // Two openings of a 3-variate polynomial: h has degree at most 3.
+        assert_eq!(prover_tr.narg().len(), 4 * 16);
 
-        let mut verifier_tr =
-            Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
+        let mut verifier_tr = Blake2bVerifier::new(b"eval-reduction-test", prover_tr.into_narg());
         let reduced_verifier = instance
-            .verify(&proof, &mut verifier_tr)
+            .verify(&mut verifier_tr)
             .expect("verifier should accept valid reduction proof");
         assert_eq!(reduced_verifier, reduced_prover);
+        verifier_tr.finish().expect("h is the whole stream");
     }
 
     #[test]
@@ -511,20 +501,20 @@ mod tests {
         let opening: Opening<Fr> = (r.clone().into(), v);
 
         let mut prover_tr = Blake2bProver::new(b"eval-red-single");
-        let (proof, reduced_prover) =
+        let reduced_prover =
             EvalReductionProtocol::prove::<Fr, _>(&[&opening], mle, &mut prover_tr)
                 .expect("single opening should be propagated by prover");
 
         assert_eq!(reduced_prover.r, r.into_opening());
         assert_eq!(reduced_prover.claim, v);
         assert!(
-            proof.h.degree() == 0,
-            "h should be constant for single opening case"
+            prover_tr.narg().is_empty(),
+            "nothing is sent for a single opening"
         );
 
-        let mut verifier_tr = Blake2bVerifier::new(b"eval-red-single", prover_tr.narg().to_vec());
+        let mut verifier_tr = Blake2bVerifier::new(b"eval-red-single", prover_tr.into_narg());
         let reduced_verifier =
-            EvalReductionProtocol::verify::<Fr, _>(&[&opening], &proof, &mut verifier_tr)
+            EvalReductionProtocol::verify::<Fr, _>(&[&opening], &mut verifier_tr)
                 .expect("single opening should be propagated by verifier");
 
         assert_eq!(reduced_verifier, reduced_prover);
@@ -546,18 +536,38 @@ mod tests {
 
         let mut prover_tr = Blake2bProver::new(b"eval-reduction-test");
         let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
-        let (mut proof, _reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
+        let _reduced = instance.prove(&witness, &mut prover_tr).unwrap();
 
-        // Tamper h so boundary checks fail.
-        let mut coefficients = proof.h.coefficients().to_vec();
-        coefficients[0] += Fr::from_u64(1u64);
-        proof.h = UnivariatePoly::new(coefficients);
-        let mut verifier_tr =
-            Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
+        // Tamper h's constant coefficient, the stream's first scalar, so boundary checks fail.
+        let mut narg = prover_tr.into_narg();
+        let constant = Fr::decode(&narg[..16]).unwrap() + Fr::from_u64(1u64);
+        constant.encode(&mut narg[..16]).unwrap();
+        let mut verifier_tr = Blake2bVerifier::new(b"eval-reduction-test", narg);
         let err = instance
-            .verify(&proof, &mut verifier_tr)
+            .verify(&mut verifier_tr)
             .expect_err("verifier should reject when h is tampered");
         assert!(matches!(err, ProofVerifyError::InvalidOpeningProof(_)));
+    }
+
+    /// The verifier reads as many coefficients as the degree bound allows, whatever the
+    /// stream holds: a stream one coefficient short is rejected.
+    #[test]
+    fn eval_reduction_2to1_rejects_a_short_h() {
+        let mle = MultilinearPolynomial::<Fr>::from(vec![f(1), f(2), f(3), f(4)]);
+        let (r1, r2) = (vec![ch(1), ch(2)], vec![ch(3), ch(4)]);
+        let opening1: Opening<Fr> = (r1.clone().into(), mle.evaluate(&r1));
+        let opening2: Opening<Fr> = (r2.clone().into(), mle.evaluate(&r2));
+        let witness = EvalReductionWitness { mle };
+
+        let mut prover_tr = Blake2bProver::new(b"eval-reduction-test");
+        let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
+        let _reduced = instance.prove(&witness, &mut prover_tr).unwrap();
+
+        let mut narg = prover_tr.into_narg();
+        assert_eq!(narg.len(), h_coefficients(2, 2) * 16);
+        narg.truncate(narg.len() - 16);
+        let mut verifier_tr = Blake2bVerifier::new(b"eval-reduction-test", narg);
+        assert!(instance.verify(&mut verifier_tr).is_err());
     }
 
     #[test]
@@ -575,15 +585,14 @@ mod tests {
 
         let mut prover_tr = Blake2bProver::new(b"eval-reduction-test");
         let instance = EvalReductionInstance::new(&[&opening1, &opening2]);
-        let (proof, reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
+        let reduced = instance.prove(&witness, &mut prover_tr).unwrap();
 
-        let mut verifier_tr =
-            Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
+        let mut verifier_tr = Blake2bVerifier::new(b"eval-reduction-test", prover_tr.into_narg());
         // Force transcript divergence before verification starts.
         verifier_tr.append_message(b"desync");
 
         let reduced_verifier = instance
-            .verify(&proof, &mut verifier_tr)
+            .verify(&mut verifier_tr)
             .expect("reduction verify still succeeds but yields a different reduced claim");
         assert_ne!(reduced_verifier, reduced);
     }
@@ -608,10 +617,9 @@ mod tests {
 
         let mut prover_tr = Blake2bProver::new(b"eval-reduction-test");
         let instance = EvalReductionInstance::new(&[&opening1, &opening2, &opening3]);
-        let (proof, reduced) = instance.prove(&witness, &mut prover_tr).unwrap();
-        let mut verifier_tr =
-            Blake2bVerifier::new(b"eval-reduction-test", prover_tr.narg().to_vec());
-        let reduced_verifier = instance.verify(&proof, &mut verifier_tr).unwrap();
+        let reduced = instance.prove(&witness, &mut prover_tr).unwrap();
+        let mut verifier_tr = Blake2bVerifier::new(b"eval-reduction-test", prover_tr.into_narg());
+        let reduced_verifier = instance.verify(&mut verifier_tr).unwrap();
         assert_eq!(reduced_verifier, reduced);
     }
 }

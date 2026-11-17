@@ -5,10 +5,7 @@
 //! necessarily of the same size, each opened at a different point) into a single opening.
 
 use crate::relation::{verify_relation_batch, DynRelationVerifier};
-use crate::{
-    evaluation_reduction::ReducedInstance, opening_reduction::OpeningReductionGroup,
-    sumcheck::SumcheckInstanceProof,
-};
+use crate::{evaluation_reduction::ReducedInstance, opening_reduction::OpeningReductionGroup};
 use allocative::Allocative;
 use atlas_algebra::serialize::{Canonical, Error};
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
@@ -370,7 +367,6 @@ where
     )]
     pub fn verify_batch_opening_sumcheck<T: VerifyingTranscript>(
         &mut self,
-        sumcheck_proof: &SumcheckInstanceProof<F>,
         transcript: &mut T,
     ) -> Result<Vec<F::Challenge>, ProofVerifyError> {
         let verifiers: Vec<_> = self
@@ -382,7 +378,7 @@ where
             .iter()
             .map(|verifier| verifier as &dyn DynRelationVerifier<F, T>)
             .collect();
-        let r_sumcheck = verify_relation_batch(sumcheck_proof, instances, self, transcript)?;
+        let r_sumcheck = verify_relation_batch(instances, self, transcript)?;
         for (group, verifier) in self.sumchecks.values_mut().zip(&verifiers) {
             group.sumcheck_claim = verifier.reduced_claim();
         }

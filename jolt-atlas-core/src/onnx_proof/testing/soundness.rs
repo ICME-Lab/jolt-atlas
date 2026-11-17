@@ -183,7 +183,7 @@ fn proof_mutation_sweep_for<PCS: PcsMutations>() {
     for (m, alt) in probe_models().into_iter().zip(probe_models_alt()) {
         let h = honest::<PCS>(m);
         let (other, _, _) = prove::<PCS::Field, Blake2bProver, PCS>(&h.prover_pp, &alt.inputs);
-        let sites = enumerate_sites::<PCS>(&h.proof, &other, &h.io, h.prover_pp.model());
+        let sites = enumerate_sites::<PCS>(&h.proof, &other, &h.io);
         // Sequential on purpose: a verifier crash (stack overflow) must be
         // attributable to the site being tried, which the exhaustive run
         // logs site by site.

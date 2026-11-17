@@ -46,7 +46,6 @@ use crate::{
     onnx_proof::{
         lookup::{PrefixSuffixTable, RaEncoding, TableRead},
         schedule::{OpOpen, OpPlan, OpRelation, ScheduleBuilder},
-        ProofType,
     },
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
@@ -132,7 +131,7 @@ impl OpPlan for SoftmaxLastAxis {
         let clamp_ra = clamp.ra.clone();
         schedule.reduce();
         schedule.open(OpOpen::Softmax(SoftmaxOpen::Gaps(shape.clone())));
-        schedule.relation(ProofType::SoftmaxSums, OpRelation::Op(sums(node)?));
+        schedule.relation(OpRelation::Op(sums(node)?));
         schedule.open(OpOpen::Softmax(SoftmaxOpen::Addresses(shape.clone())));
         schedule.lookup(OpRelation::SoftmaxRead(shape));
         schedule.lookup(OpRelation::TableRead(clamp));

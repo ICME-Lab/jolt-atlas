@@ -8,8 +8,8 @@ pub struct NodeEvalReduction;
 
 impl NodeEvalReduction {
     /// Reduce the claims on node `node_idx`'s output to one. A single claim is the reduced
-    /// instance and the proof carries no entry for the node; several are reduced with the
-    /// node's evaluation-reduction proof.
+    /// instance and nothing is read; several are reduced with the restriction polynomial read
+    /// from the transcript.
     pub fn verify<F: JoltField, T: VerifyingTranscript>(
         verifier: &mut Verifier<'_, F, T>,
         node_idx: usize,
@@ -22,10 +22,7 @@ impl NodeEvalReduction {
                 r: point.r.clone(),
                 claim: *claim,
             },
-            _ => {
-                let proof = verifier.eval_reductions.take(node_idx)?;
-                EvalReductionProtocol::verify(&openings, proof, &mut verifier.transcript)?
-            }
+            _ => EvalReductionProtocol::verify(&openings, &mut verifier.transcript)?,
         };
 
         verifier

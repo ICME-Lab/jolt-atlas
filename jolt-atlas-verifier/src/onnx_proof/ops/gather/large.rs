@@ -1,9 +1,6 @@
 use super::*;
 use crate::onnx_proof::lookup::RaEncoding;
-use crate::onnx_proof::{
-    schedule::{OpPlan, OpRelation, ScheduleBuilder},
-    ProofType,
-};
+use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use atlas_trace::op::GatherLarge;
 use common::CommittedPoly;
 
@@ -17,7 +14,7 @@ impl OpPlan for GatherLarge {
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         schedule.reduce();
-        schedule.relation(ProofType::Execution, OpRelation::Op(gather(model, node)?));
+        schedule.relation(OpRelation::Op(gather(model, node)?));
         schedule.one_hot(OpRelation::OneHot(ra_encoding(node)?));
         Ok(())
     }

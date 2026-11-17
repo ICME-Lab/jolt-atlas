@@ -1,5 +1,5 @@
 //! The engine's tests, over `Fp128` and the Blake2b sponge transcripts: the compressed verifier's
-//! rejections, the batched prover against the verifier on twin transcripts (padding and head
+//! rejections, the batched prover against the verifier reading its stream (padding and head
 //! alignment included), the round-scheduler seam, and the batch prelude's validation.
 
 #![allow(
@@ -13,19 +13,18 @@
 
 use atlas_algebra::field::fp128::Fp128;
 use atlas_algebra::field::{Field as _, Ring as _};
-use atlas_algebra::poly::univariate::{CompressedPoly, UnivariatePoly};
+use atlas_algebra::poly::univariate::UnivariatePoly;
+use atlas_algebra::serialize::Canonical;
 use atlas_transcript::{
     Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
 };
 use num_traits::One;
 
 use super::prover::{
-    prove_batch, ClearSumcheckRecorder, MemberFinish, MemberRound, ProveRounds, ProvedBatch,
-    RoundScheduler,
+    prove_batch, MemberFinish, MemberRound, ProveRounds, ProvedBatch, RoundScheduler,
 };
 use super::{
-    absorb_input_claims, verify_compressed, BatchMember, BatchPrelude, CompressedSumcheckProof,
-    SumcheckClaim, SumcheckError,
+    absorb_input_claims, verify_compressed, BatchMember, BatchPrelude, SumcheckClaim, SumcheckError,
 };
 
 type F = Fp128;
@@ -170,12 +169,7 @@ fn prove_members(
     offsets: &[usize],
     max_num_vars: usize,
     scheduler: &mut dyn RoundScheduler<F>,
-) -> (
-    Blake2bProver,
-    BatchPrelude<F>,
-    ProvedBatch<F>,
-    CompressedSumcheckProof<F>,
-) {
+) -> (Blake2bProver, BatchPrelude<F>, ProvedBatch<F>) {
     let mut transcript = Blake2bProver::new(label);
     absorb_input_claims(sums, &mut transcript);
     let described = members
@@ -190,31 +184,30 @@ fn prove_members(
         })
         .collect();
     let prelude = BatchPrelude::try_new(described, max_num_vars, 1).unwrap();
-    let mut recorder = ClearSumcheckRecorder::new();
-    let proved = prove_batch(&prelude, members, scheduler, &mut recorder, &mut transcript).unwrap();
-    (transcript, prelude, proved, recorder.into_proof())
+    let proved = prove_batch(&prelude, members, scheduler, &mut transcript).unwrap();
+    (transcript, prelude, proved)
 }
 
-/// Replay the batch head on a verifier transcript, verify the proof, and check both transcripts
-/// end in the same state (the next challenge agrees).
+/// Replay the batch head on a verifier transcript over the prover's stream, verify the
+/// sumcheck, and check that the stream was read to its end and both transcripts end in the
+/// same state (the next challenge agrees).
 fn verify_twin(
     label: &'static [u8],
     mut prover: Blake2bProver,
     sums: &[F],
     claimed_sum: F,
     max_num_vars: usize,
-    proof: &CompressedSumcheckProof<F>,
 ) -> (F, Vec<F>) {
     let mut verifier = Blake2bVerifier::new(label, prover.narg().to_vec());
     absorb_input_claims(sums, &mut verifier);
     let _: Vec<F> = sums.iter().map(|_| verifier.challenge_scalar()).collect();
-    let reduced =
-        verify_compressed(&claim(max_num_vars, 1, claimed_sum), proof, &mut verifier).unwrap();
+    let reduced = verify_compressed(&claim(max_num_vars, 1, claimed_sum), &mut verifier).unwrap();
     assert_eq!(
         prover.challenge_scalar::<F>(),
         verifier.challenge_scalar::<F>(),
         "prover and verifier transcripts diverged"
     );
+    verifier.finish().expect("the sumcheck is the whole stream");
     reduced
 }
 
@@ -224,9 +217,9 @@ fn single_member_reduces_to_the_multilinear_evaluation() {
     let mut member = DenseMember::with_sum(3, sum, 5);
     let original = member.original.clone();
     let label = b"single-member";
-    let (transcript, prelude, proved, proof) =
+    let (transcript, prelude, proved) =
         prove_members(label, &mut [&mut member], &[sum], &[0], 3, &mut Sequential);
-    let (value, point) = verify_twin(label, transcript, &[sum], prelude.claimed_sum, 3, &proof);
+    let (value, point) = verify_twin(label, transcript, &[sum], prelude.claimed_sum, 3);
 
     assert_eq!(point, proved.challenges);
     assert_eq!(value, proved.final_claim);
@@ -236,67 +229,72 @@ fn single_member_reduces_to_the_multilinear_evaluation() {
     assert_eq!(member.final_eval(), mle(&original, &point));
 }
 
+/// A degree-1 round message is one coefficient, the constant: a stream with it changed still
+/// parses, and no longer reduces to the member's evaluation.
 #[test]
 fn tampered_round_does_not_reduce_to_the_evaluation() {
     let sum = f(77);
     let mut member = DenseMember::with_sum(2, sum, 3);
     let original = member.original.clone();
     let label = b"tampered-round";
-    let (transcript, prelude, _, mut proof) =
+    let (transcript, prelude, _) =
         prove_members(label, &mut [&mut member], &[sum], &[0], 2, &mut Sequential);
-    let mut coeffs = proof.round_polynomials[0]
-        .coeffs_except_linear_term()
-        .to_vec();
-    coeffs[0] += F::one();
-    proof.round_polynomials[0] = CompressedPoly::new(coeffs);
+    let mut narg = transcript.into_narg();
+    let constant = F::decode(&narg[..16]).unwrap() + F::one();
+    constant.encode(&mut narg[..16]).unwrap();
 
-    let mut verifier = Blake2bVerifier::new(label, transcript.narg().to_vec());
+    let mut verifier = Blake2bVerifier::new(label, narg);
     absorb_input_claims(&[sum], &mut verifier);
     let _: F = verifier.challenge_scalar();
-    let (value, point) =
-        verify_compressed(&claim(2, 1, prelude.claimed_sum), &proof, &mut verifier).unwrap();
-    assert_ne!(
-        value,
-        prelude.members[0].coefficient * mle(&original, &point)
-    );
+    match verify_compressed(&claim(2, 1, prelude.claimed_sum), &mut verifier) {
+        // The changed message moved the challenge, so the nonce after it no longer checks...
+        Err(SumcheckError::ProofOfWork { .. }) => {}
+        // ... or it does, and the reduction lands elsewhere.
+        Ok((value, point)) => assert_ne!(
+            value,
+            prelude.members[0].coefficient * mle(&original, &point)
+        ),
+        Err(other) => panic!("unexpected rejection: {other:?}"),
+    }
 }
 
+/// The claim fixes the number of rounds read: a stream holding fewer is a short read.
 #[test]
-fn verify_rejects_wrong_round_count() {
-    let proof = CompressedSumcheckProof {
-        round_polynomials: Vec::new(),
-    };
+fn verify_rejects_a_stream_with_too_few_rounds() {
     let mut transcript = Blake2bVerifier::new(b"sumcheck-test", Vec::new());
     assert!(matches!(
-        verify_compressed(&claim(1, 1, f(0)), &proof, &mut transcript),
-        Err(SumcheckError::WrongNumberOfRounds {
-            expected: 1,
-            got: 0
-        })
+        verify_compressed(&claim(1, 1, f(0)), &mut transcript),
+        Err(SumcheckError::RoundMessageUnreadable { round: 0 })
+    ));
+}
+
+/// The claim fixes the number of coefficients read per round: a round message cannot carry
+/// more than the degree allows, and a stream holding fewer is a short read.
+#[test]
+fn verify_reads_degree_coefficients_per_round() {
+    let sum = f(9);
+    let mut member = DenseMember::with_sum(1, sum, 4);
+    let label = b"round-width";
+    let (transcript, prelude, _) =
+        prove_members(label, &mut [&mut member], &[sum], &[0], 1, &mut Sequential);
+    let narg = transcript.into_narg();
+
+    // Read as a degree-2 sumcheck, the one coefficient sent is one short.
+    let mut verifier = Blake2bVerifier::new(label, narg[..16].to_vec());
+    absorb_input_claims(&[sum], &mut verifier);
+    let _: F = verifier.challenge_scalar();
+    assert!(matches!(
+        verify_compressed(&claim(1, 2, prelude.claimed_sum), &mut verifier),
+        Err(SumcheckError::RoundMessageUnreadable { round: 0 })
     ));
 }
 
 #[test]
-fn verify_rejects_degree_bound_exceeded() {
-    let proof = CompressedSumcheckProof {
-        round_polynomials: vec![CompressedPoly::new(vec![f(1), f(2)])],
-    };
+fn verify_rejects_a_degree_zero_claim_with_rounds() {
     let mut transcript = Blake2bVerifier::new(b"sumcheck-test", Vec::new());
     assert!(matches!(
-        verify_compressed(&claim(1, 1, f(3)), &proof, &mut transcript),
-        Err(SumcheckError::DegreeBoundExceeded { got: 2, max: 1 })
-    ));
-}
-
-#[test]
-fn verify_rejects_empty_round_polynomial() {
-    let proof = CompressedSumcheckProof {
-        round_polynomials: vec![CompressedPoly::new(Vec::new())],
-    };
-    let mut transcript = Blake2bVerifier::new(b"sumcheck-test", Vec::new());
-    assert!(matches!(
-        verify_compressed(&claim(1, 1, f(0)), &proof, &mut transcript),
-        Err(SumcheckError::CompressedPolynomialTooShort { round: 0, got: 0 })
+        verify_compressed(&claim(1, 0, f(0)), &mut transcript),
+        Err(SumcheckError::ZeroDegree { num_vars: 1 })
     ));
 }
 
@@ -304,7 +302,7 @@ fn verify_rejects_empty_round_polynomial() {
 fn verify_rejects_a_missing_proof_of_work() {
     let sum = f(5);
     let mut member = DenseMember::with_sum(1, sum, 9);
-    let (_, prelude, _, proof) = prove_members(
+    let (transcript, prelude, _) = prove_members(
         b"missing-pow",
         &mut [&mut member],
         &[sum],
@@ -312,12 +310,12 @@ fn verify_rejects_a_missing_proof_of_work() {
         1,
         &mut Sequential,
     );
-    // A verifier transcript without the prover's NARG bytes has no nonce to check.
-    let mut verifier = Blake2bVerifier::new(b"missing-pow", Vec::new());
+    // A stream cut after the round message has no nonce to check.
+    let mut verifier = Blake2bVerifier::new(b"missing-pow", transcript.narg()[..16].to_vec());
     absorb_input_claims(&[sum], &mut verifier);
     let _: F = verifier.challenge_scalar();
     assert!(matches!(
-        verify_compressed(&claim(1, 1, prelude.claimed_sum), &proof, &mut verifier),
+        verify_compressed(&claim(1, 1, prelude.claimed_sum), &mut verifier),
         Err(SumcheckError::ProofOfWork { round: 0 })
     ));
 }
@@ -342,7 +340,6 @@ fn prove_batch_rejects_zero_max_degree() {
         &prelude,
         &mut [&mut member],
         &mut Sequential,
-        &mut ClearSumcheckRecorder::new(),
         &mut transcript,
     );
     assert!(matches!(
@@ -359,7 +356,7 @@ fn prove_batch_twin_with_padding() {
     let mut long = DenseMember::with_sum(3, sum_long, 5);
     let mut short = DenseMember::with_sum(1, sum_short, 91);
     let label = b"prove-batch-twin";
-    let (transcript, prelude, proved, proof) = prove_members(
+    let (transcript, prelude, proved) = prove_members(
         label,
         &mut [&mut long, &mut short],
         &[sum_long, sum_short],
@@ -383,7 +380,6 @@ fn prove_batch_twin_with_padding() {
         &[sum_long, sum_short],
         prelude.claimed_sum,
         3,
-        &proof,
     );
     assert_eq!(value, proved.final_claim);
     assert_eq!(point, proved.challenges);
@@ -402,7 +398,7 @@ fn prove_batch_twin_head_aligned_member() {
     let mut long = DenseMember::with_sum(3, sum_long, 5);
     let mut short = DenseMember::with_sum(1, sum_short * f(4), 91);
     let label = b"prove-batch-head-twin";
-    let (transcript, prelude, proved, proof) = prove_members(
+    let (transcript, prelude, proved) = prove_members(
         label,
         &mut [&mut long, &mut short],
         &[sum_long, sum_short],
@@ -422,7 +418,6 @@ fn prove_batch_twin_head_aligned_member() {
         &[sum_long, sum_short],
         prelude.claimed_sum,
         3,
-        &proof,
     );
     assert_eq!(value, proved.final_claim);
     assert_eq!(point, proved.challenges);
@@ -430,7 +425,7 @@ fn prove_batch_twin_head_aligned_member() {
 
 fn two_member_batch(
     scheduler: &mut dyn RoundScheduler<F>,
-) -> Result<(ProvedBatch<F>, CompressedSumcheckProof<F>, F), SumcheckError<F>> {
+) -> Result<(ProvedBatch<F>, Vec<u8>, F), SumcheckError<F>> {
     let (sum_long, sum_short) = (f(4242), f(99));
     let mut long = DenseMember::with_sum(3, sum_long, 7);
     let mut short = DenseMember::with_sum(1, sum_short, 13);
@@ -456,19 +451,18 @@ fn two_member_batch(
         1,
     )
     .unwrap();
-    let mut recorder = ClearSumcheckRecorder::new();
     let proved = prove_batch(
         &prelude,
         &mut [&mut long, &mut short],
         scheduler,
-        &mut recorder,
         &mut transcript,
     )?;
-    Ok((proved, recorder.into_proof(), transcript.challenge_scalar()))
+    let next_challenge = transcript.challenge_scalar();
+    Ok((proved, transcript.into_narg(), next_challenge))
 }
 
 #[test]
-fn proof_is_invariant_under_a_reordering_traversal() {
+fn stream_is_invariant_under_a_reordering_traversal() {
     let sequential = two_member_batch(&mut Sequential).unwrap();
     let reversed = two_member_batch(&mut Reversed).unwrap();
     assert_eq!(sequential.0, reversed.0);

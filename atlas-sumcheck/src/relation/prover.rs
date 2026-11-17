@@ -6,14 +6,10 @@ use super::*;
 use crate::{
     engine::{
         absorb_input_claims,
-        prover::{
-            prove_batch, ClearSumcheckRecorder, MemberFinish, MemberRound, ProveRounds,
-            RoundScheduler,
-        },
+        prover::{prove_batch, MemberFinish, MemberRound, ProveRounds, RoundScheduler},
         BatchMember, BatchPrelude, SumcheckError,
     },
     opening_proof::prover::ProverOpeningAccumulator,
-    sumcheck::SumcheckInstanceProof,
 };
 use atlas_algebra::field::MaybeAllocative;
 #[cfg(not(target_arch = "wasm32"))]
@@ -138,13 +134,14 @@ impl<F: JoltField, T: ProvingTranscript, W: RelationWitness<F>> DynRelationWitne
 }
 
 /// Prove a batch of relations as one front-loaded batched sumcheck, the prover side of
-/// [`super::verify_relation_batch`]. Returns the proof and the batch's challenges.
+/// [`super::verify_relation_batch`]: the round messages and the produced claims are sent
+/// through the transcript. Returns the batch's challenges.
 #[tracing::instrument(skip_all, name = "prove_relation_batch")]
 pub fn prove_relation_batch<F: JoltField, T: ProvingTranscript>(
     witnesses: Vec<&mut dyn DynRelationWitness<F, T>>,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
-) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
+) -> Vec<F::Challenge> {
     prove_batch_inner(witnesses, accumulator, transcript, false)
 }
 
@@ -159,7 +156,7 @@ pub fn prove_relation_batch_parallel<F: JoltField, T: ProvingTranscript>(
     witnesses: Vec<&mut dyn DynRelationWitness<F, T>>,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
-) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
+) -> Vec<F::Challenge> {
     prove_batch_inner(witnesses, accumulator, transcript, true)
 }
 
@@ -168,7 +165,7 @@ fn prove_batch_inner<F: JoltField, T: ProvingTranscript>(
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
     parallel_witnesses: bool,
-) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
+) -> Vec<F::Challenge> {
     let max_rounds = witnesses.iter().map(|w| w.num_rounds()).max().unwrap();
     let max_degree = witnesses.iter().map(|w| w.degree()).max().unwrap();
     let input_claims: Vec<F> = witnesses
@@ -191,7 +188,7 @@ fn prove_batch_inner<F: JoltField, T: ProvingTranscript>(
     // asked to and worthwhile.
     const MANY_WITNESSES: usize = 8;
     let many = parallel_witnesses && witnesses.len() >= MANY_WITNESSES;
-    let (proof, r_sumcheck) = {
+    let r_sumcheck = {
         let mut members: Vec<&mut dyn ProveRounds<F>> = witnesses
             .iter_mut()
             .map(|w| &mut **w as &mut dyn ProveRounds<F>)
@@ -205,55 +202,46 @@ fn prove_batch_inner<F: JoltField, T: ProvingTranscript>(
         let r_slice = &r_sumcheck[max_rounds - w.num_rounds()..];
         w.append_produced(accumulator, transcript, r_slice);
     }
-    (proof, r_sumcheck)
+    r_sumcheck
 }
 
 /// Prove one relation as its own sumcheck, the prover side of [`super::verify_relation`]: a
-/// batch of one with coefficient one and no coefficient drawn.
+/// batch of one with coefficient one and no coefficient drawn. Returns its challenges.
 #[tracing::instrument(skip_all, name = "prove_relation")]
 pub fn prove_relation<F: JoltField, T: ProvingTranscript>(
     witness: &mut dyn DynRelationWitness<F, T>,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
-) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
+) -> Vec<F::Challenge> {
     let rounds = witness.num_rounds();
     let degree = witness.degree();
     let input_claim = witness.input_claim(accumulator);
     absorb_input_claims(&[input_claim], transcript);
     let prelude = batch_prelude(&[rounds], &[input_claim], &[F::one()], rounds, degree);
 
-    let (proof, r_sumcheck) = {
+    let r_sumcheck = {
         let mut members: Vec<&mut dyn ProveRounds<F>> =
             vec![&mut *witness as &mut dyn ProveRounds<F>];
         run_engine(&prelude, &mut members, false, transcript)
     };
     witness.append_produced(accumulator, transcript, &r_sumcheck);
-    (proof, r_sumcheck)
+    r_sumcheck
 }
 
-/// Run the engine's batch prover over `members` and record the round polynomials.
+/// Run the engine's batch prover over `members`. Returns the challenges.
 fn run_engine<F: JoltField, T: ProvingTranscript>(
     prelude: &BatchPrelude<F>,
     members: &mut [&mut dyn ProveRounds<F>],
     many_members: bool,
     transcript: &mut T,
-) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
+) -> Vec<F::Challenge> {
     let mut scheduler = InstanceRounds::new(many_members);
-    let mut recorder = ClearSumcheckRecorder::new();
-    let proved = expect_engine(prove_batch(
-        prelude,
-        members,
-        &mut scheduler,
-        &mut recorder,
-        transcript,
-    ));
-    let proof = SumcheckInstanceProof::new(recorder.into_proof().round_polynomials);
-    let r_sumcheck = proved
+    let proved = expect_engine(prove_batch(prelude, members, &mut scheduler, transcript));
+    proved
         .challenges
         .into_iter()
         .map(F::challenge_from_field)
-        .collect();
-    (proof, r_sumcheck)
+        .collect()
 }
 
 /// The engine's batch description of tail-aligned members (a member with fewer rounds is bound

@@ -38,7 +38,6 @@ disallowed-types = [
     { path = "atlas_sumcheck::engine::prover::MemberFinish", reason = "prover-only" },
     { path = "atlas_sumcheck::engine::prover::RoundScheduler", reason = "prover-only" },
     { path = "atlas_sumcheck::engine::prover::ProvedBatch", reason = "prover-only" },
-    { path = "atlas_sumcheck::engine::prover::ClearSumcheckRecorder", reason = "prover-only" },
     { path = "atlas_transcript::sponge::SpongeProver", reason = "prover-only", allow-invalid = true },
     { path = "atlas_transcript::transcript::ProvingTranscript", reason = "prover-only" },
     { path = "atlas_pcs::commitment_scheme::StreamingCommitmentScheme", reason = "prover-only" },

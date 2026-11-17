@@ -25,7 +25,7 @@ pub mod verifier;
 
 // ── Re-exports ───────────────────────────────────────────────────────────
 
-pub use crate::{proof_serialization, ONNXProof, ProofId, ProofType, ReducedOpeningProof};
+pub use crate::{proof_serialization, ONNXProof, ReducedOpeningProof};
 pub use preprocessing::{AtlasSharedPreprocessing, AtlasVerifierPreprocessing};
 pub use verifier::Verifier;
 
@@ -107,12 +107,7 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     io: &ModelExecutionIO,
     setup: impl FnOnce(&mut Verifier<'_, F, T>),
 ) -> Result<(), ProofVerifyError> {
-    let mut verifier: Verifier<F, T> = Verifier::new(
-        proof.proofs(),
-        proof.eval_reduction_proofs(),
-        io,
-        proof.narg(),
-    );
+    let mut verifier: Verifier<F, T> = Verifier::new(io, proof.narg());
     setup(&mut verifier);
 
     // Every node's operands are earlier nodes, the layout ops have the dims their ties hold
@@ -138,10 +133,8 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     // Verify reduced opening proof
     verifier::verify_reduced_openings(proof, pp, &mut verifier)?;
 
-    // The proof was consumed exactly: no sumcheck or reduction proof left over.
-    verifier.check_consumed()?;
-
-    // Every claim and proof-of-work nonce in the NARG string must have been read.
+    // The NARG string was read to its end: every claim, round message and proof-of-work nonce
+    // was read, and nothing follows them.
     verifier.transcript.finish()
 }
 

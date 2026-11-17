@@ -5,17 +5,17 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::Prover;
 use atlas_algebra::{field::JoltField, poly::multilinear::MultilinearPolynomial};
-use atlas_sumcheck::evaluation_reduction::{EvalReductionProof, EvalReductionProtocol};
+use atlas_sumcheck::evaluation_reduction::{EvalReductionProtocol, ReducedInstance};
 use atlas_transcript::ProvingTranscript;
 
 /// Prover-side methods of [`NodeEvalReduction`].
 pub trait NodeEvalReductionProve {
     /// Run node-output evaluation reduction on the prover side for the given node. A node with
-    /// a single claim on its output needs no proof: the claim is the reduced instance.
+    /// a single claim on its output sends nothing: the claim is the reduced instance.
     fn prove<F: JoltField, T: ProvingTranscript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
-    ) -> Option<EvalReductionProof<F>>;
+    );
 }
 
 impl NodeEvalReductionProve for NodeEvalReduction {
@@ -24,7 +24,7 @@ impl NodeEvalReductionProve for NodeEvalReduction {
     fn prove<F: JoltField, T: ProvingTranscript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
-    ) -> Option<EvalReductionProof<F>> {
+    ) {
         let node_idx = computation_node.idx;
         let openings = prover.accumulator.get_node_openings(node_idx);
 
@@ -32,30 +32,23 @@ impl NodeEvalReductionProve for NodeEvalReduction {
         // reduced instance and never touches the output MLE (or the transcript),
         // so skip converting the output tensor to field elements — that
         // conversion is the whole cost for the ~2k single-consumer nodes.
-        let (proof, reduced) = if openings.len() == 1 {
+        let reduced = if openings.len() == 1 {
             let (r, claim) = (openings[0].0.clone(), openings[0].1);
-            (
-                None,
-                atlas_sumcheck::evaluation_reduction::ReducedInstance { r: r.r, claim },
-            )
+            ReducedInstance { r: r.r, claim }
         } else {
             let LayerData {
                 operands: _,
                 output,
             } = TraceView::layer_data(&prover.trace, computation_node);
             let output_mle = MultilinearPolynomial::from(output.padded_pow2());
-            let (proof, reduced) =
-                EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
-                    .expect("Proving evaluation reduction should not fail");
-            (Some(proof), reduced)
+            EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
+                .expect("Proving evaluation reduction should not fail")
         };
 
         prover
             .accumulator
             .reduced_evaluations
             .insert(node_idx, reduced);
-
-        proof
     }
 }
 
@@ -65,8 +58,7 @@ mod tests {
     use crate::node_view::ModelView;
     use crate::onnx_proof::testing::ModelBuilder;
     use crate::onnx_proof::{
-        prover, schedule::Schedule, verifier, AtlasSharedPreprocessing, ONNXProof, ProofId,
-        Verifier,
+        prover, schedule::Schedule, verifier, AtlasSharedPreprocessing, ONNXProof, Verifier,
     };
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::poly::{
@@ -74,10 +66,7 @@ mod tests {
         point::OpeningPoint,
     };
     use atlas_pcs::mock::MockCommitScheme;
-    use atlas_sumcheck::{
-        opening_proof::{OpeningId, SumcheckId},
-        sumcheck::SumcheckInstanceProof,
-    };
+    use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
     use atlas_trace::op::Add;
     use atlas_trace::trace::ModelExecutionIO;
     use atlas_trace::Model;
@@ -88,7 +77,6 @@ mod tests {
     };
     use common::VirtualPoly;
     use rand::{rngs::StdRng, SeedableRng};
-    use std::collections::BTreeMap;
 
     // All node output is used 1 to 2 times.
     fn one_sub_model(rng: &mut StdRng, t: usize) -> Model {
@@ -153,7 +141,7 @@ mod tests {
             claim2,
         );
 
-        let _ = NodeEvalReduction::prove(&mut prover, &producer_node);
+        NodeEvalReduction::prove(&mut prover, &producer_node);
 
         let entries: Vec<_> = prover.accumulator.get_node_openings(producer_idx);
 
@@ -204,7 +192,7 @@ mod tests {
             claim,
         );
 
-        let _ = NodeEvalReduction::prove(&mut prover, &producer_node);
+        NodeEvalReduction::prove(&mut prover, &producer_node);
 
         let reduced = prover
             .accumulator
@@ -230,10 +218,7 @@ mod tests {
             output_indices: Vec::new(),
         };
 
-        let proofs = BTreeMap::new();
-        let eval_reductions = BTreeMap::new();
-        let mut verifier =
-            Verifier::<Fr, Blake2bVerifier>::new(&proofs, &eval_reductions, &io, &[]);
+        let mut verifier = Verifier::<Fr, Blake2bVerifier>::new(&io, &[]);
 
         let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
@@ -285,9 +270,6 @@ mod tests {
             .expect("model execution failed");
         let mut prover = Prover::<Fr, Blake2bProver>::new(preprocessing, trace);
 
-        let mut proofs: BTreeMap<ProofId, SumcheckInstanceProof<Fr>> = BTreeMap::new();
-        let mut eval_reduction_proofs = BTreeMap::new();
-
         prover::output_claim(&mut prover);
 
         let output_idx = prover.preprocessing.model().output_indices()[0];
@@ -295,15 +277,14 @@ mod tests {
         let schedule =
             Schedule::compile(prover.preprocessing.model()).expect("the model has a schedule");
 
-        prover::iop(
-            &schedule,
-            &mut prover,
-            &mut proofs,
-            &mut eval_reduction_proofs,
-        );
+        prover::iop(&schedule, &mut prover);
 
-        // A single claim is its own reduced instance: no proof entry.
-        assert!(!eval_reduction_proofs.contains_key(&output_idx));
+        // A single claim is its own reduced instance.
+        let (_, claim) = prover.accumulator.get_node_openings(output_idx)[0].clone();
+        assert_eq!(
+            prover.accumulator.reduced_evaluations[&output_idx].claim,
+            claim
+        );
     }
 
     #[test]
@@ -320,36 +301,22 @@ mod tests {
             .expect("model execution failed");
         let io = trace.io(shared.model());
 
-        // Build just enough prover state for (proofs, eval_reduction_proofs, NARG string)
+        // Build just enough prover state for the NARG string
         // using output_claim + iop (no commitments, no reduced opening proof stage).
         let mut prover = Prover::<_, Blake2bProver>::new(shared.clone(), trace);
-        let mut proofs = BTreeMap::new();
-        let mut eval_reduction_proofs = BTreeMap::new();
 
         let schedule = Schedule::compile(shared.model()).expect("the model has a schedule");
         prover::output_claim(&mut prover);
-        prover::iop(
-            &schedule,
-            &mut prover,
-            &mut proofs,
-            &mut eval_reduction_proofs,
-        );
+        prover::iop(&schedule, &mut prover);
 
         let partial_proof = ONNXProof::<_, MockCommitScheme<Fr>>::from_parts(
-            proofs,
             (),
             vec![],
-            eval_reduction_proofs,
             None,
             prover.transcript.into_narg(),
         );
 
-        let mut verifier = Verifier::<_, Blake2bVerifier>::new(
-            partial_proof.proofs(),
-            partial_proof.eval_reduction_proofs(),
-            &io,
-            partial_proof.narg(),
-        );
+        let mut verifier = Verifier::<_, Blake2bVerifier>::new(&io, partial_proof.narg());
         verifier::populate_accumulator(&partial_proof, &mut verifier);
         verifier::verify_output_claim(shared.model(), &mut verifier)
             .expect("verify_output_claim should succeed for consistent partial proof state");

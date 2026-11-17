@@ -8,7 +8,6 @@ use crate::{
         prover::{OpeningProofReductionSumcheckProver, ProverOpening},
         EqAddressState, EqCycleState, SharedDensePolynomial,
     },
-    sumcheck::SumcheckInstanceProof,
 };
 use allocative::Allocative;
 pub use atlas_algebra::poly::point::{Endianness, OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN};
@@ -410,7 +409,7 @@ where
     }
 
     /// Proves the batch opening reduction sumcheck (Stage 7).
-    /// Returns the sumcheck proof and challenges.
+    /// Returns the challenges.
     #[tracing::instrument(
         skip_all,
         name = "ProverOpeningAccumulator::prove_batch_opening_sumcheck"
@@ -418,7 +417,7 @@ where
     pub fn prove_batch_opening_sumcheck<T: ProvingTranscript>(
         &mut self,
         transcript: &mut T,
-    ) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
+    ) -> Vec<F::Challenge> {
         #[cfg(feature = "allocative")]
         {
             print_data_structure_heap_usage("Opening accumulator", &(*self));
@@ -434,7 +433,7 @@ where
             .map(|(_, opening)| opening as &mut _)
             .collect();
 
-        let (sumcheck_proof, r_sumcheck) = prove_relation_batch(instances, self, transcript);
+        let r_sumcheck = prove_relation_batch(instances, self, transcript);
 
         // Restore sumchecks (with cached claims from cache_openings)
         self.sumchecks = sumchecks;
@@ -446,7 +445,7 @@ where
             write_flamegraph_svg(flamegraph, "stage7_end_flamechart.svg");
         }
 
-        (sumcheck_proof, r_sumcheck)
+        r_sumcheck
     }
 
     /// Finalizes the batch opening reduction sumcheck.

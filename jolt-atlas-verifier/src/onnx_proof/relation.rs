@@ -38,8 +38,9 @@ use atlas_sumcheck::opening_proof::{
     OpeningAccumulator, OpeningId, PolynomialId, VerifierOpeningAccumulator,
 };
 pub use atlas_sumcheck::relation::*;
-use atlas_trace::op::OpSpec;
+use atlas_trace::{op::OpSpec, Tensor};
 use atlas_transcript::Transcript;
+use std::sync::Arc;
 
 /// An op protocol as a symbolic relation on one computation node.
 ///
@@ -231,6 +232,10 @@ pub enum OpRelKind {
     Neg,
     /// `IsNan`: the output is zero.
     ZeroOutput,
+    /// `Constant`: the output is the model's constant.
+    Constant,
+    /// `Input`: the output is the public input.
+    Input,
 }
 
 impl OpRelKind {
@@ -246,6 +251,7 @@ impl OpRelKind {
             Self::Rsqrt => RelationId::Rsqrt,
             Self::Identity | Self::Neg => RelationId::SignedCopy,
             Self::ZeroOutput => RelationId::ZeroOutput,
+            Self::Constant | Self::Input => RelationId::PublicValue,
         }
     }
 
@@ -266,6 +272,8 @@ impl OpRelKind {
             Self::Identity => matches!(op, Op::Identity(_)),
             Self::Neg => matches!(op, Op::Neg(_)),
             Self::ZeroOutput => matches!(op, Op::IsNan(_)),
+            Self::Constant => matches!(op, Op::Constant(_)),
+            Self::Input => matches!(op, Op::Input(_)),
         }
     }
 }
@@ -362,6 +370,8 @@ pub struct OpRel<F: JoltField> {
     /// The order a dense relation binds its variables in (an eq-weighted one binds
     /// low-to-high).
     pub binding: BindingOrder,
+    /// The public tensor the output equals, for a public-value tie.
+    pub public: Option<Arc<Tensor<i32>>>,
     /// What is not the default.
     pub custom: Custom<F>,
 }
@@ -382,6 +392,7 @@ impl<F: JoltField> OpRel<F> {
             draws: Vec::new(),
             setup_opens: Vec::new(),
             binding: BindingOrder::LowToHigh,
+            public: None,
             custom: Custom::default(),
         }
     }

@@ -29,7 +29,6 @@ use crate::onnx_proof::{
         broadcast::BroadcastRelation,
         clamp::SymmetricClampOperands,
         concat::SubcubeTilingRelation,
-        constant::PublicRelation,
         cos::CosRaEncoding,
         einsum::ContractionRelation,
         erf::ErfTableMarker,
@@ -60,11 +59,7 @@ use atlas_sumcheck::{
     relation::DynRelationVerifier,
     shout,
 };
-use atlas_trace::{
-    op::{Constant, Input},
-    trace::ModelExecutionIO,
-    Model,
-};
+use atlas_trace::{trace::ModelExecutionIO, Model};
 use atlas_transcript::Transcript;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 
@@ -392,10 +387,6 @@ pub enum OpTie<F: JoltField> {
     Broadcast(BroadcastRelation),
     /// `Concat`: the operands' blocks tile the output's axis.
     Concat(SubcubeTilingRelation),
-    /// `Constant`: the output is the model's constant.
-    Constant(PublicRelation<Constant>),
-    /// `Input`: the output is the public input.
-    Input(PublicRelation<Input>),
     /// `Reshape`: the operand at the same point.
     Reshape(FlatCopyRelation),
     /// `Slice`: the operand's subcube the slice selects.
@@ -418,8 +409,6 @@ impl<F: JoltField> OpTie<F> {
             Self::AxisPermutation(relation) => verify_tie(relation, accumulator, transcript),
             Self::Broadcast(relation) => verify_tie(relation, accumulator, transcript),
             Self::Concat(relation) => verify_tie(relation, accumulator, transcript),
-            Self::Constant(relation) => verify_tie(relation, accumulator, transcript),
-            Self::Input(relation) => verify_tie(relation, accumulator, transcript),
             Self::Reshape(relation) => verify_tie(relation, accumulator, transcript),
             Self::Slice(relation) => verify_tie(relation, accumulator, transcript),
             Self::TeleportInput(relation) => relation.verify(accumulator, transcript),

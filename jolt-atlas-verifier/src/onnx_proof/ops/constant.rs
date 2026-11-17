@@ -1,28 +1,19 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
-use crate::{
-    atlas_relation_types,
-    onnx_proof::relation::{
-        not_derived, reduced_output_setup, AtlasRelation, RelationDerived, RelationExpr,
-        RelationId, RelationOpening, RelationSetup, TieRelation,
+use crate::onnx_proof::{
+    ops::OpLayout,
+    relation::{
+        not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
     },
 };
-use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField, poly::multilinear::EvaluateMle, utils::errors::ProofVerifyError,
 };
-use atlas_claims::{derived, opening, SymbolicSumcheck};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{
-    op::{Constant, OpSpec},
-    Tensor,
-};
-use atlas_transcript::Transcript;
-use std::{marker::PhantomData, sync::Arc};
+use atlas_claims::{derived, opening};
+use atlas_trace::{op::Constant, Tensor};
+use std::sync::Arc;
 
-crate::impl_plan_op!(Constant, PublicRelation<Constant>);
+impl OpLayout for Constant {}
 
 impl OpPlan for Constant {
     fn plan<F: atlas_algebra::field::JoltField>(
@@ -34,25 +25,9 @@ impl OpPlan for Constant {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Constant(PublicRelation::new(PublicShape::new(
-                    node.clone(),
-                    self.0.clone(),
-                ))),
+                relation: OpTie::Op(public_value(node, OpRelKind::Constant, self.0.clone())),
             },
         ]))
-    }
-}
-
-/// A node and the public data its output must equal.
-pub struct PublicShape {
-    node: ComputationNode,
-    value: Arc<Tensor<i32>>,
-}
-
-impl PublicShape {
-    /// `node` with its public `value`.
-    pub fn new(node: ComputationNode, value: Arc<Tensor<i32>>) -> Self {
-        Self { node, value }
     }
 }
 
@@ -66,81 +41,38 @@ impl PublicShape {
 ///
 /// **S ⊆ R.** `Constant` outputs its tensor and `Input` the supplied input, which the verifier
 /// holds as the public IO.
-pub struct PublicRelation<S> {
-    shape: PublicShape,
-    _spec: PhantomData<fn() -> S>,
-}
-
-impl<S: OpSpec + 'static> SymbolicSumcheck for PublicRelation<S> {
-    atlas_relation_types!();
-
-    fn id(&self) -> RelationId {
-        RelationId::PublicValue
-    }
-
-    fn rounds(&self) -> usize {
-        0
-    }
-
-    fn degree(&self) -> usize {
-        1
-    }
-
-    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::ReducedNodeOutput(self.shape.node.idx))
-    }
-
-    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        derived(RelationDerived::Public)
+pub fn public_value<F: JoltField>(
+    node: &ComputationNode,
+    kind: OpRelKind,
+    value: Arc<Tensor<i32>>,
+) -> OpRel<F> {
+    OpRel {
+        degree: 1,
+        input: opening(RelationOpening::ReducedNodeOutput(node.idx)),
+        output: derived(RelationDerived::Public),
+        public: Some(value),
+        custom: Custom {
+            derive: Some(public_value_at_incoming_point),
+            ..Custom::default()
+        },
+        ..OpRel::base(kind, node)
     }
 }
 
-impl<S: OpSpec + 'static> PublicRelation<S> {
-    /// The relation for the given shape.
-    pub fn new(shape: PublicShape) -> Self {
-        Self {
-            shape,
-            _spec: PhantomData,
-        }
+/// [`RelationDerived::Public`] of a [`public_value`]: the public tensor's MLE at the incoming
+/// point.
+fn public_value_at_incoming_point<F: JoltField>(
+    relation: &OpRel<F>,
+    id: &RelationDerived,
+    setup: &RelationSetup<F>,
+    _challenges: &[F],
+) -> Result<F, ProofVerifyError> {
+    match (id, &relation.public) {
+        (RelationDerived::Public, Some(value)) => Ok(value.evaluate_mle(&setup.incoming_point)),
+        (RelationDerived::Public, None) => Err(ProofVerifyError::Malformed(format!(
+            "node {}'s public-value tie holds no public tensor",
+            relation.node.idx
+        ))),
+        (other, _) => Err(not_derived(other)),
     }
 }
-
-impl<S: OpSpec + 'static> Produces for PublicRelation<S> {
-    fn produced(&self) -> Vec<OpeningId> {
-        Vec::new()
-    }
-}
-
-impl<F: JoltField, S: OpSpec + 'static> Relation<F> for PublicRelation<S> {
-    fn derive(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        _challenges: &[F],
-    ) -> Result<F, ProofVerifyError> {
-        Ok(match id {
-            RelationDerived::Public => self.shape.value.evaluate_mle(&setup.incoming_point),
-            other => return Err(not_derived(other)),
-        })
-    }
-}
-
-impl<F: JoltField, S: OpSpec + 'static> SetupRelation<F> for PublicRelation<S> {
-    fn setup<T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        reduced_output_setup(accumulator, &self.shape.node)
-    }
-}
-
-impl<S: OpSpec + 'static> AtlasRelation for PublicRelation<S> {
-    type Spec = S;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-}
-
-impl<F: JoltField, S: OpSpec + 'static> TieRelation<F> for PublicRelation<S> {}

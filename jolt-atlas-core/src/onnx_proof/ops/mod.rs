@@ -779,8 +779,6 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie<F>, prover: &mut P
         OpTie::AxisPermutation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Broadcast(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Concat(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::Constant(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::Input(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Reshape(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Slice(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::TeleportInput(relation) => {
@@ -825,7 +823,9 @@ pub fn op_rel_witnesses<F: JoltField>(
         | OpRelKind::DivQuotient
         | OpRelKind::Identity
         | OpRelKind::Neg
-        | OpRelKind::ZeroOutput => {
+        | OpRelKind::ZeroOutput
+        | OpRelKind::Constant
+        | OpRelKind::Input => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
     }
@@ -850,6 +850,7 @@ pub fn op_rel_tie_claims<F: JoltField>(
             neg::signed_copy_claims(node, relation.kind, accumulator)
         }
         OpRelKind::ZeroOutput => is_nan::zero_output_claims(node, trace, &setup.incoming_point),
+        OpRelKind::Constant | OpRelKind::Input => constant::public_value_claims(),
         OpRelKind::And
         | OpRelKind::Mul
         | OpRelKind::Square

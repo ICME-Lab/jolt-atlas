@@ -27,7 +27,7 @@ use atlas_algebra::{
 };
 use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
-    clamp::{ActivationClampTable, ClampTable, SiluClampTable, SoftmaxClampTable},
+    clamp::{ActivationClampTable, SiluClampTable, SoftmaxClampTable},
     relu::ReluTable,
     right_shift::RightShiftTable,
 };
@@ -340,7 +340,6 @@ pub fn table_read_operand(read: &TableRead, trace: &Trace) -> Tensor<i64> {
             softmax_last_axis::addresses(node, witness).map(|v| v as i64)
         }
         PrefixSuffixTable::Relu
-        | PrefixSuffixTable::Clamp
         | PrefixSuffixTable::ActivationClamp
         | PrefixSuffixTable::SiluClamp => TraceView::operand_tensors(trace, node)[0]
             .padded_pow2()
@@ -356,7 +355,6 @@ fn table_read_addresses(read: &TableRead, operand: &Tensor<i64>) -> Vec<LookupBi
             .map(|&v| LookupBits::new(v as u64, XLEN))
             .collect(),
         PrefixSuffixTable::Relu
-        | PrefixSuffixTable::Clamp
         | PrefixSuffixTable::ActivationClamp
         | PrefixSuffixTable::SiluClamp
         | PrefixSuffixTable::SoftmaxClamp => compute_lookup_indices(&operand.map(|v| v as i32)),
@@ -383,12 +381,6 @@ pub fn table_read_prover<F: JoltField, T: Transcript>(
     let indices: Vec<usize> = addresses.iter().map(|&x| x.into()).collect();
     let prover: Box<dyn DynRelationWitness<F, T>> = match read.table {
         PrefixSuffixTable::Relu => Box::new(ps_read_raf_prover::<F, T, ReluTable<XLEN>, XLEN>(
-            read,
-            addresses,
-            accumulator,
-            transcript,
-        )),
-        PrefixSuffixTable::Clamp => Box::new(ps_read_raf_prover::<F, T, ClampTable<XLEN>, XLEN>(
             read,
             addresses,
             accumulator,

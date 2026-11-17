@@ -8,7 +8,7 @@
 //!
 //! ## Op Categories
 //!
-//! **Arithmetic Operations**: [`add`], [`sub`], [`neg`], [`mul`], [`div`], [`square`], [`cube`],
+//! **Arithmetic Operations**: [`add`], [`sub`], [`neg`], [`mul`], [`square`], [`cube`],
 //! [`scalar_const_div`], [`mean_of_squares`]
 //!
 //! **Activation Functions**: [`relu`], [`activation_clamped`], [`smooth_relu`], [`trig`],
@@ -17,7 +17,7 @@
 //! **Tensor Operations**: [`einsum`], [`sum`], [`reshape`], [`broadcast`], [`moveaxis`],
 //! [`slice`], [`concat`], [`gather`]
 //!
-//! **Special Operations**: [`rsqrt`] (reciprocal square root), [`clamp`], [`iff`] (conditional select)
+//! **Special Operations**: [`rsqrt`] (reciprocal square root), [`iff`] (conditional select)
 //!
 //! **Logic Operations**: [`and`], [`is_nan`]
 //!
@@ -43,16 +43,12 @@ pub mod add;
 pub mod and;
 /// Broadcast tensors to target shapes.
 pub mod broadcast;
-/// Clamp values to a specified range.
-pub mod clamp;
 /// Concatenate tensors along an axis.
 pub mod concat;
 /// Constant tensor nodes.
 pub mod constant;
 /// Element-wise cube (x³) operation.
 pub mod cube;
-/// Element-wise division operation.
-pub mod div;
 /// Einstein summation for tensor contractions.
 pub mod einsum;
 /// Op-scoped evaluation reduction helpers.
@@ -112,9 +108,7 @@ macro_rules! dispatch_operator {
             atlas_trace::Op::Constant($inner) => $body,
             atlas_trace::Op::Cos($inner) => $body,
             atlas_trace::Op::Cube($inner) => $body,
-            atlas_trace::Op::Clamp($inner) => $body,
             atlas_trace::Op::Concat($inner) => $body,
-            atlas_trace::Op::Div($inner) => $body,
             atlas_trace::Op::Erf($inner) => $body,
             atlas_trace::Op::Einsum($inner) => $body,
             atlas_trace::Op::GatherSmall($inner) => $body,

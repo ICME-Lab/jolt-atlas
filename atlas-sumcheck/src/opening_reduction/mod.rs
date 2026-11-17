@@ -431,7 +431,7 @@ mod tests {
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let id = OpeningId::new(
-                    CommittedPoly::DivNodeQuotient(i),
+                    CommittedPoly::RsqrtQuotient(i),
                     SumcheckId::NodeExecution(0),
                 );
                 prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
@@ -443,7 +443,7 @@ mod tests {
         let all_polys: Vec<(CommittedPoly, MultilinearPolynomial<Fr>)> = dense_polys
             .iter()
             .enumerate()
-            .map(|(i, data)| (CommittedPoly::DivNodeQuotient(i), data.poly.clone()))
+            .map(|(i, data)| (CommittedPoly::RsqrtQuotient(i), data.poly.clone()))
             .collect();
 
         // Prepare sumcheck
@@ -478,7 +478,7 @@ mod tests {
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
             let id = OpeningId::new(
-                CommittedPoly::DivNodeQuotient(i),
+                CommittedPoly::RsqrtQuotient(i),
                 SumcheckId::NodeExecution(0),
             );
             verifier_opening_accumulator
@@ -549,7 +549,7 @@ mod tests {
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let id = OpeningId::new(
-                    CommittedPoly::DivNodeQuotient(i),
+                    CommittedPoly::RsqrtQuotient(i),
                     SumcheckId::NodeExecution(0),
                 );
                 prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
@@ -594,7 +594,7 @@ mod tests {
         let mut all_polys: Vec<(CommittedPoly, MultilinearPolynomial<Fr>)> = dense_polys
             .iter()
             .enumerate()
-            .map(|(i, data)| (CommittedPoly::DivNodeQuotient(i), data.poly.clone()))
+            .map(|(i, data)| (CommittedPoly::RsqrtQuotient(i), data.poly.clone()))
             .collect();
         all_polys.extend(oh_polys.iter().enumerate().map(|(i, data)| {
             (
@@ -635,7 +635,7 @@ mod tests {
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
             let id = OpeningId::new(
-                CommittedPoly::DivNodeQuotient(i),
+                CommittedPoly::RsqrtQuotient(i),
                 SumcheckId::NodeExecution(0),
             );
             verifier_opening_accumulator
@@ -716,7 +716,7 @@ mod tests {
                 let poly = MultilinearPolynomial::from(raw);
                 let eval = poly.evaluate(&point);
                 let id = OpeningId::new(
-                    CommittedPoly::DivNodeQuotient(i),
+                    CommittedPoly::RsqrtQuotient(i),
                     SumcheckId::NodeExecution(0),
                 );
                 prover_opening_accumulator.append_dense(&mut prover_tr, id, point.clone(), eval);
@@ -761,7 +761,7 @@ mod tests {
         let mut all_polys: Vec<(CommittedPoly, MultilinearPolynomial<Fr>)> = dense_polys
             .iter()
             .enumerate()
-            .map(|(i, data)| (CommittedPoly::DivNodeQuotient(i), data.poly.clone()))
+            .map(|(i, data)| (CommittedPoly::RsqrtQuotient(i), data.poly.clone()))
             .collect();
         all_polys.extend(oh_polys.iter().enumerate().map(|(i, data)| {
             (
@@ -802,7 +802,7 @@ mod tests {
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
             let id = OpeningId::new(
-                CommittedPoly::DivNodeQuotient(i),
+                CommittedPoly::RsqrtQuotient(i),
                 SumcheckId::NodeExecution(0),
             );
             verifier_opening_accumulator

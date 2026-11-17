@@ -5,9 +5,8 @@
 //!    ([`small_table`]), where `clamped` is an internal advice claim (gamma-batched with the
 //!    identity polynomial so the one-hot `ra` address is soundly tied to its value).
 //! 2. **ActivationClamp**: proves that same `clamped` claim equals
-//!    `ActivationClampTable[raw_input]` (natively symmetric clamp lookup, same shape as
-//!    `Clamp`), which soundly ties `clamped` back to the real input rather than just
-//!    asserting it.
+//!    `ActivationClampTable[raw_input]` (natively symmetric clamp lookup), which soundly
+//!    ties `clamped` back to the real input rather than just asserting it.
 //!
 //! Both stages are deferred to the post-loop batches ([`clamped_activation_plan`]): the two
 //! reads join the lookup batch, their one-hot (`ra`/`hw`/`bool`) checks the one-hot batch.

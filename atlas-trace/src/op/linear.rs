@@ -10,8 +10,8 @@ use crate::{
 };
 
 use super::{
-    Add, And, Clamp, Div, Eval, EvalCtx, Iff, IsNan, Neg, OpSpec, PadBehavior, ReLU, Rsqrt,
-    ScalarConstDiv, Sub, Sum, same_dims,
+    Add, And, Eval, EvalCtx, Iff, IsNan, Neg, OpSpec, PadBehavior, ReLU, Rsqrt, ScalarConstDiv,
+    Sub, Sum, same_dims,
 };
 
 /// Narrow every element of an `i64` result to `i32`; the first element outside the range is
@@ -203,44 +203,6 @@ impl OpSpec for Sum {
     }
 }
 
-impl fmt::Display for Div {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Div")
-    }
-}
-
-impl OpSpec for Div {
-    fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        let (a, b) = (inputs[0], inputs[1]);
-        if a.dims() != b.dims() {
-            return Err(ShapeError::BroadcastIncompatible {
-                lhs: a.dims().to_vec(),
-                rhs: b.dims().to_vec(),
-            }
-            .into());
-        }
-        if let Some(element) = b.data().iter().position(|&d| d == 0) {
-            return Err(KernelError::DivByZero { element });
-        }
-        Ok(Eval {
-            output: a.zip_map(b, floor_div)?,
-            aux: Some(NodeAux::Remainder(a.zip_map(b, rem_floor)?)),
-        })
-    }
-
-    fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
-        same_dims(inputs, Some(2))
-    }
-
-    fn padding(&self) -> PadBehavior {
-        // Padded divisor lanes are zero; `eval` rejects them, so padded
-        // graphs must keep Div inputs unpadded on live lanes. The importer
-        // never emits Div (it rewrites to Mul/Rsqrt); flag it masked so a
-        // hand-built padded graph fails loudly rather than silently.
-        PadBehavior::NeedsMask
-    }
-}
-
 impl fmt::Display for ScalarConstDiv {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ScalarConstDiv(÷{})", self.divisor)
@@ -340,34 +302,6 @@ impl OpSpec for ReLU {
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
         same_dims(inputs, Some(1))
-    }
-
-    fn padding(&self) -> PadBehavior {
-        PadBehavior::ZeroPreserving
-    }
-}
-
-impl fmt::Display for Clamp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Clamp(±2^{})", self.bound_log)
-    }
-}
-
-impl OpSpec for Clamp {
-    fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        let bound = 1i32 << self.bound_log;
-        Ok(Eval::plain(inputs[0].map(|x| x.clamp(-bound, bound - 1))))
-    }
-
-    fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
-        same_dims(inputs, Some(1))
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        if self.bound_log >= 31 {
-            return Err(format!("bound_log {} overflows i32", self.bound_log));
-        }
-        Ok(())
     }
 
     fn padding(&self) -> PadBehavior {
@@ -476,29 +410,6 @@ mod tests {
             scale: Scale::new(14).unwrap(),
             version: SemVersion::V1,
             tables: cache,
-        }
-    }
-
-    /// `Div` captures `a = out·b + r` with `r` of the divisor's sign and `|r| < |b|`.
-    #[test]
-    fn div_captures_its_floor_remainder() {
-        let cache = TableCache::default();
-        let a = values();
-        for &b in &[1, 3, 7, 256, -3, i32::MAX] {
-            let lhs = Tensor::new(a.clone(), &[a.len()]).unwrap();
-            let rhs = Tensor::new(vec![b; a.len()], &[a.len()]).unwrap();
-            let eval = Div.eval(&[&lhs, &rhs], &ctx(&cache)).unwrap();
-            let Some(NodeAux::Remainder(r)) = eval.aux else {
-                panic!("Div captures a remainder");
-            };
-            for ((&a, &q), &r) in a.iter().zip(eval.output.data()).zip(r.data()) {
-                assert_eq!(a as i64, q as i64 * b as i64 + r as i64);
-                assert!(if b > 0 {
-                    0 <= r && r < b
-                } else {
-                    b < r && r <= 0
-                });
-            }
         }
     }
 

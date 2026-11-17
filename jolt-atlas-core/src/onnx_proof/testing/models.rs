@@ -2,7 +2,6 @@
 //! graph a few dozen elements wide, so a prove costs a fraction of a second
 //! and a verify a few milliseconds.
 
-use atlas_lookup_tables::clamp::CLAMP_BOUND;
 use atlas_trace::{Model, Tensor};
 use common::consts::MODEL_SCALE;
 use rand::{rngs::StdRng, SeedableRng};
@@ -42,7 +41,7 @@ pub(crate) fn probe_models_alt() -> Vec<ProbeModel> {
     ]
 }
 
-/// einsum → add → relu (consumed twice: fan-out) → softmax → div → reshape →
+/// einsum → add → relu (consumed twice: fan-out) → softmax → scalar_const_div → reshape →
 /// sub, plus an embedding gather and a fused mul, summed into one output.
 fn attention_like(seed: u64) -> ProbeModel {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -54,8 +53,7 @@ fn attention_like(seed: u64) -> ProbeModel {
     let a = b.add(h, bias);
     let r = b.relu(a);
     let s = b.softmax_last_axis(r);
-    let pos = b.constant(Tensor::from_slice(&[1 << 8; 32], &[4, 8]).unwrap());
-    let d = b.div(s, pos);
+    let d = b.scalar_const_div(s, 1 << 8);
     let q = b.reshape(d, vec![32]);
     let c1 = b.constant(Tensor::random_small(&mut rng, &[32]));
     let e = b.sub(q, c1);
@@ -151,7 +149,7 @@ fn scalars(seed: u64) -> ProbeModel {
 /// The constant factor of the `scalars` probe's fused `Mul`.
 pub(crate) const SCALARS_PROBE_FACTOR: i32 = 3001;
 
-/// rsqrt / cos / sin / iff / clamp / square / mean_of_squares / sum / cube /
+/// rsqrt / cos / sin / iff / square / mean_of_squares / sum / cube /
 /// scalar_const_div on a 64-element input.
 fn reductions(seed: u64) -> ProbeModel {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -162,8 +160,7 @@ fn reductions(seed: u64) -> ProbeModel {
     let s = b.sin(x);
     let mask = b.constant(Tensor::random_boolean(&mut rng, &[64]));
     let sel = b.iff(mask, c, s);
-    let cl = b.clamp(sel, CLAMP_BOUND);
-    let sq = b.square(cl);
+    let sq = b.square(sel);
     let y = b.reshape(sq, vec![8, 8]);
     let mos = b.mean_of_squares(y, vec![1], vec![8, 1]);
     let sm = b.sum(y, vec![1], vec![8]);

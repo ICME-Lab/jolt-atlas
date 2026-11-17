@@ -17,7 +17,6 @@
 
 use std::collections::BTreeSet;
 
-use atlas_lookup_tables::clamp::CLAMP_BOUND;
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_trace::{op::SmoothReluForm, Model, Tensor};
 use common::consts::{ACTIVATION_BOUND, MODEL_SCALE, TRIG_PERIOD_MODULUS};
@@ -208,24 +207,6 @@ fn sub_const_overflow(t: usize, pos: i32, neg: i32) -> (Model, Vec<Tensor<i32>>)
     let o = b.sub(i, c);
     b.mark_output(o);
     (b.build(), vec![input])
-}
-
-fn div_model(rng: &mut StdRng, t: usize, divisor: i32) -> (Model, Vec<Tensor<i32>>) {
-    let mut b = ModelBuilder::new();
-    let i = b.input(vec![t]);
-    let c = b.constant(vec_of(divisor, &[t]));
-    let o = b.div(i, c);
-    b.mark_output(o);
-    (b.build(), vec![Tensor::random(rng, &[t])])
-}
-
-fn recip_model(rng: &mut StdRng, t: usize, dividend: i32) -> (Model, Vec<Tensor<i32>>) {
-    let mut b = ModelBuilder::new();
-    let i = b.input(vec![t]);
-    let c = b.constant(vec_of(dividend, &[t]));
-    let o = b.div(c, i);
-    b.mark_output(o);
-    (b.build(), vec![Tensor::random_range(rng, &[t], 1..64)])
 }
 
 fn rsqrt_model(
@@ -553,13 +534,8 @@ op_surface! {
     cube_raw_no_rebase: Cube => |rng| unary_small(rng, &[T], |b, i| b.cube(i, 0));
     cube_scalar_out: Cube => |_| unary(&[1], S, vec_of(1000, &[1]), |b, i| b.cube(i, S));
 
-    // Div / ScalarConstDiv
-    div_by_const_1k: Div => |rng| div_model(rng, T, 1 << 8);
-    div_by_tensor_1k: Div => |rng| recip_model(rng, T, 1 << 16);
-    div_negative_dividend: Div => |rng| recip_model(rng, 64, -(1 << 16));
-    div_one_element: Div => |rng| recip_model(rng, 1, 1 << 16);
+    // ScalarConstDiv
     #[ignore = "non-power-of-two div path not supported"]
-    div_non_pow2_1000: Div => |rng| div_model(rng, T_ODD, 1 << 8);
     scalar_const_div_1k: ScalarConstDiv => |rng| unary_small(rng, &[T], |b, i| b.scalar_const_div(i, 128));
     /// A divisor that is not a power of two: the remainder is bounded from both sides.
     scalar_const_div_by_7_1k: ScalarConstDiv => |rng| unary_small(rng, &[T], |b, i| b.scalar_const_div(i, 7));
@@ -569,15 +545,10 @@ op_surface! {
     #[ignore = "non-power-of-two scalar_const_div path not supported"]
     scalar_const_div_non_pow2_1000: ScalarConstDiv => |rng| unary_small(rng, &[T_ODD], |b, i| b.scalar_const_div(i, 128));
 
-    // ReLU / Clamp
+    // ReLU
     relu_random_1k: ReLU => |rng| unary_small(rng, &[T], |b, i| b.relu(i));
     relu_non_pow2_1000: ReLU => |rng| unary_small(rng, &[T_ODD], |b, i| b.relu(i));
     relu_shared_operand_t16: ReLU => |rng| shared_operand(&[16], Tensor::random_small(rng, &[16]), |b, i| b.relu(i));
-    clamp_random_1k: Clamp => |rng| unary(&[T], S, Tensor::random(rng, &[T]), |b, i| b.clamp(i, CLAMP_BOUND));
-    clamp_saturating_range_t8: Clamp => |rng| unary_range(rng, &[8], -2 * (1 << CLAMP_BOUND)..2 * (1 << CLAMP_BOUND), |b, i| b.clamp(i, CLAMP_BOUND));
-    clamp_near_i32_extremes_t4: Clamp => |_| unary(&[4], S, tensor(&[i32::MAX, i32::MAX - 50, i32::MIN, i32::MIN + 50], &[4]), |b, i| b.clamp(i, CLAMP_BOUND));
-    clamp_non_pow2_1000: Clamp => |rng| unary(&[T_ODD], S, Tensor::random(rng, &[T_ODD]), |b, i| b.clamp(i, CLAMP_BOUND));
-    clamp_shared_operand_t16: Clamp => |rng| shared_operand(&[16], Tensor::random(rng, &[16]), |b, i| b.clamp(i, CLAMP_BOUND));
 
     // Iff
     iff_random_1k: Iff => |rng| iff_model(rng, T);

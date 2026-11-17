@@ -68,7 +68,7 @@ The crate has no prover code. Three mechanisms hold that:
    `TableRead`, a read of a prefix-suffix table of `atlas-lookup-tables`
    (`PrefixSuffixTable`), verified by `table_read_verifier`; and `RaEncoding`, the committed
    one-hot chunks and the openings the one-hot checks of a read start from. Every remainder
-   bound (the fused rescales, Div, ScalarConstDiv, Rsqrt, MeanOfSquares, the trig period
+   bound (the fused rescales, ScalarConstDiv, Rsqrt, MeanOfSquares, the trig period
    reduction, softmax) is a range
    claim in a packed range bucket (`range_bucket::RangeClaim`): the remainder, or its slack
    below the bound, checked by the dense digit range check. A bound that is not positive has

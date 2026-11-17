@@ -17,7 +17,7 @@ pub trait TraceView {
     fn fused_intermediates(&self, idx: usize) -> Option<&FusedIntermediates>;
     /// The softmax witness of a node, if any.
     fn softmax_witness(&self, idx: usize) -> Option<&SoftmaxWitness>;
-    /// The floor-division remainder of a `Div` or `ScalarConstDiv` node. Panics for any other.
+    /// The floor-division remainder of a `ScalarConstDiv` node. Panics for any other.
     fn division_remainder(&self, n: &ComputationNode) -> &Tensor<i32>;
     /// The division and square-root advice of an `Rsqrt` node. Panics for any other.
     fn rsqrt_advice(&self, n: &ComputationNode) -> &RsqrtAdvice;

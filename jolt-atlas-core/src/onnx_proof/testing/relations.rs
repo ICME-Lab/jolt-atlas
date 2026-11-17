@@ -33,7 +33,6 @@ use crate::{
     onnx_proof::{
         fused_rebase,
         ops::{
-            div::division,
             einsum::{contraction, dot::EinsumDotProver},
             iff::select,
             mean_of_squares::{squared_sum_reduction, MeanOfSquaresReductionProver},
@@ -135,7 +134,6 @@ fn disposition(kind: OpKind) -> Disposition {
         | OpKind::Mul
         | OpKind::Square
         | OpKind::Cube
-        | OpKind::Div
         | OpKind::ScalarConstDiv
         | OpKind::Einsum
         | OpKind::Sum
@@ -158,7 +156,7 @@ fn disposition(kind: OpKind) -> Disposition {
         | OpKind::SmoothRelu
         | OpKind::GatherSmall
         | OpKind::GatherLarge => Relation,
-        OpKind::ReLU | OpKind::Clamp => TableReadOnly,
+        OpKind::ReLU => TableReadOnly,
     }
 }
 
@@ -370,10 +368,6 @@ fn relation_prover_equiv_engine() {
         (vec![(vec![8], SMALL)], |b, i| b.cube(i[0], 0)),
         (vec![(vec![8], SMALL)], |b, i| b.rsqrt(i[0])),
         (
-            vec![(vec![8], -(1 << 7)..(1 << 7)), (vec![8], SMALL)],
-            |b, i| b.div(i[0], i[1]),
-        ),
-        (
             vec![(vec![8], 0..2), (vec![8], SMALL), (vec![8], SMALL)],
             |b, i| b.iff(i[0], i[1], i[2]),
         ),
@@ -393,7 +387,6 @@ fn relation_prover_equiv_engine() {
                 check_engine(|| product(&node, OpRelKind::Cube, &[0, 0, 0]), &trace, rng)
             }
             Op::Rsqrt(_) => check_engine(|| reciprocal_sqrt(&node), &trace, rng),
-            Op::Div(_) => check_engine(|| division(&node), &trace, rng),
             Op::Iff(_) => check_engine(|| select(&node), &trace, rng),
             Op::ScalarConstDiv(_) => check_engine(
                 || constant_division(&node).expect("a ScalarConstDiv node"),

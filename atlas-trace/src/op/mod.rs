@@ -288,8 +288,6 @@ define_ops! {
     Square { rebase: bool },
     /// Fused element-wise cube; rescales by `2^(2s)` (`rebase` as in [`Mul`]).
     Cube { rebase: bool },
-    /// Element-wise floor division.
-    Div,
     /// Floor division by a constant scalar.
     ScalarConstDiv { divisor: i32 },
     /// Fused tensor contraction: i64 accumulate, floor-rescale by `2^s`; a
@@ -324,8 +322,6 @@ define_ops! {
     /// SiLU), computed as `max(x, 0)` plus a table-lookup correction that vanishes outside
     /// the table's clamped domain.
     SmoothRelu { form: SmoothReluForm },
-    /// Symmetric clamp into `[-2^bound_log, 2^bound_log)`.
-    Clamp { bound_log: u32 },
     /// Element-wise select `mask·a + (1-mask)·b`; mask must be 0/1.
     Iff,
     /// Boolean product; both operands must be 0/1.

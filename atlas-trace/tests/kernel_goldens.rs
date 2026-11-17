@@ -69,7 +69,6 @@ fn exact_class_golden() {
     let x = b.input(&dims);
     let y = b.input(&dims);
 
-    let divisor = b.constant(Tensor::random_range(&mut rng, &dims, 1..5000));
     let mask = b.constant(Tensor::random_range(&mut rng, &dims, 0..2));
     let boolean = b.constant(Tensor::random_range(&mut rng, &dims, 0..2));
 
@@ -80,13 +79,11 @@ fn exact_class_golden() {
     let mul = b.push(Op::Mul(op::Mul { rebase: true }), &[relu, y]);
     let square = b.push(Op::Square(op::Square { rebase: true }), &[mul]);
     let cube = b.push(Op::Cube(op::Cube { rebase: true }), &[square]);
-    let div = b.push(Op::Div(op::Div), &[cube, divisor]);
     let scd = b.push(
         Op::ScalarConstDiv(op::ScalarConstDiv { divisor: -3 }),
-        &[div],
+        &[cube],
     );
-    let clamp = b.push(Op::Clamp(op::Clamp { bound_log: 16 }), &[scd]);
-    let iff = b.push(Op::Iff(op::Iff), &[mask, clamp, x]);
+    let iff = b.push(Op::Iff(op::Iff), &[mask, scd, x]);
     let _and = b.push(Op::And(op::And), &[mask, boolean]);
     let _isnan = b.push(Op::IsNan(op::IsNan), &[iff]);
     let rsqrt = b.push(Op::Rsqrt(op::Rsqrt), &[iff]);
@@ -100,7 +97,7 @@ fn exact_class_golden() {
         random_tensor(&mut rng, &dims, 1 << 14),
         random_tensor(&mut rng, &dims, 1 << 14),
     ];
-    assert_eq!(trace_hash(&model, &inputs), 0x3ff788728f84ea20);
+    assert_eq!(trace_hash(&model, &inputs), 0x317ddc21f429cd79);
 }
 
 /// Structural ops + einsum (constant and dynamic operands) + gather.

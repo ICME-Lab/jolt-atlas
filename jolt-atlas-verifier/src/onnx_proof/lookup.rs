@@ -28,7 +28,7 @@ use atlas_algebra::{
 };
 use atlas_claims::{challenge, derived, opening};
 use atlas_lookup_tables::{
-    clamp::{ActivationClampTable, ClampTable, SiluClampTable, SoftmaxClampTable},
+    clamp::{ActivationClampTable, SiluClampTable, SoftmaxClampTable},
     relu::ReluTable,
     right_shift::RightShiftTable,
     JoltLookupTable, PrefixSuffixDecompositionTrait,
@@ -299,8 +299,6 @@ impl RaOneHotEncoding for RaEncoding {
 pub enum PrefixSuffixTable {
     /// `ReLU`.
     Relu,
-    /// `Clamp`'s symmetric clamp.
-    Clamp,
     /// A clamped activation's input clamp.
     ActivationClamp,
     /// SiLU's input clamp, twice as wide as the clamped activations'.
@@ -448,11 +446,6 @@ pub fn table_read_verifier<F: JoltField, T: Transcript>(
     accumulator.append_virtual(transcript, read.operand, r_cycle)?;
     Ok(match read.table {
         PrefixSuffixTable::Relu => Box::new(ps_read_raf_verifier::<F, T, ReluTable<XLEN>, XLEN>(
-            read,
-            accumulator,
-            transcript,
-        )?),
-        PrefixSuffixTable::Clamp => Box::new(ps_read_raf_verifier::<F, T, ClampTable<XLEN>, XLEN>(
             read,
             accumulator,
             transcript,

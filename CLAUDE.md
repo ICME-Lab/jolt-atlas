@@ -210,9 +210,9 @@ the arkworks compressed encoding the format was defined with.
 - Fused-rescale ops (einsum, mul, square, cube, mean-of-squares) accumulate in `i64`, split
   `acc = quotient·D + remainder` (Euclidean, `remainder ∈ [0, D)`), and emit the quotient,
   which must lie in `i32`. Quotient and remainder are captured in the trace for the prover.
-- Division-like ops capture their advice the same way: Div and ScalarConstDiv their
-  floor-division remainder, Rsqrt its division quotient and both remainders, Sin and Cos the
-  period reduction their table indexes by.
+- Division-like ops capture their advice the same way: ScalarConstDiv its floor-division
+  remainder, Rsqrt its division quotient and both remainders, Sin and Cos the period reduction
+  their table indexes by.
 - Arithmetic is exact or absent: a sum or difference (each pairwise step of Add and Sub), an
   axis sum, a negation or a rescaled quotient outside `i32` is an execution error, never a
   clamped value.

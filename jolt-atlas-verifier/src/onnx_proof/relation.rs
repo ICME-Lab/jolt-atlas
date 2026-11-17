@@ -119,10 +119,6 @@ pub enum OpRelKind {
     SubAccumulation,
     /// `Iff`: the masked select.
     Iff,
-    /// `Div`: the floor division identity, at a point drawn from the transcript.
-    Div,
-    /// `Div`: the committed quotient is the node's reduced output.
-    DivQuotient,
     /// `ScalarConstDiv`: the quotient by a constant.
     ConstantDivision,
     /// `Rsqrt`: the fused division and square-root identities.
@@ -174,8 +170,6 @@ impl OpRelKind {
             Self::And | Self::Mul | Self::Square | Self::Cube => RelationId::Product,
             Self::AddAccumulation | Self::SubAccumulation => RelationId::Accumulation,
             Self::Iff => RelationId::Select,
-            Self::Div => RelationId::Division,
-            Self::DivQuotient => RelationId::DivisionQuotient,
             Self::ConstantDivision => RelationId::ConstantDivision,
             Self::Rsqrt => RelationId::Rsqrt,
             Self::Identity | Self::Neg => RelationId::SignedCopy,
@@ -208,7 +202,6 @@ impl OpRelKind {
             Self::AddAccumulation => matches!(op, Op::Add(_)),
             Self::SubAccumulation => matches!(op, Op::Sub(_)),
             Self::Iff => matches!(op, Op::Iff(_)),
-            Self::Div | Self::DivQuotient => matches!(op, Op::Div(_)),
             Self::ConstantDivision => matches!(op, Op::ScalarConstDiv(_)),
             Self::Rsqrt => matches!(op, Op::Rsqrt(_)),
             Self::Identity => matches!(op, Op::Identity(_)),

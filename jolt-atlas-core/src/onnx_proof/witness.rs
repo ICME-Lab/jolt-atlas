@@ -41,7 +41,7 @@ use rayon::prelude::*;
 /// address polynomial.
 ///
 /// This pattern appears in every operand type that decomposes lookup indices across multiple
-/// dimensions (NodeOutputRaD, SymmetricClampRaD, etc.).
+/// dimensions (NodeOutputRaD, ActivationClampRaD, etc.).
 pub(crate) fn build_one_hot_rad_witness<F: JoltField>(
     lookup_indices: &[LookupBits],
     d: usize,
@@ -149,18 +149,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let lookup_indices = compute_lookup_indices(operand_refs[0]);
                 build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
             }
-            CommittedPoly::SymmetricClampRaD(node_idx, d) => {
-                let computation_node = &model.view(*node_idx);
-                let layer_data = TraceView::layer_data(trace, computation_node);
-                let padded_operands: Vec<_> = layer_data
-                    .operands
-                    .iter()
-                    .map(|tensor| tensor.padded_pow2())
-                    .collect();
-                let operand_refs: Vec<_> = padded_operands.iter().collect();
-                let lookup_indices = compute_lookup_indices(operand_refs[0]);
-                build_one_hot_rad_witness(&lookup_indices, *d, XLEN)
-            }
             CommittedPoly::ActivationClampRaD(node_idx, d) => {
                 let computation_node = &model.view(*node_idx);
                 let layer_data = TraceView::layer_data(trace, computation_node);
@@ -184,13 +172,6 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
             CommittedPoly::GlobalRemainderDigit(..) => {
                 unreachable!("range bucket witnesses are built at the model level")
-            }
-            CommittedPoly::DivNodeQuotient(node_idx) => {
-                let computation_node = &model.view(*node_idx);
-                assert!(matches!(computation_node.operator, Op::Div(_)));
-                let layer_data = TraceView::layer_data(trace, computation_node);
-                let q = layer_data.output;
-                MultilinearPolynomial::from(q.clone())
             }
             CommittedPoly::TrigPeriodQuotient(node_idx) => {
                 let computation_node = &model.view(*node_idx);

@@ -60,11 +60,6 @@ canonical_serde_enum! {
         TrigDownscaleRaD(usize, usize),
 
         // ----- Scalar advice polynomials (node_index) -----
-        /// Advice polynomial for the **quotient** in integer division.
-        ///
-        /// * `0` – node index
-        DivNodeQuotient(usize),
-
         /// Advice polynomial for the fused Rsqrt **quotient** `⌊S³ / x̂⌋`,
         /// i.e. the value fed into the integer square root.
         ///
@@ -98,13 +93,6 @@ canonical_serde_enum! {
         ///
         /// * `0` – node index
         SoftmaxShift(usize),
-
-        /// One-hot read-address decomposition for the **Clamp** operator's
-        /// symmetric-range lookup.
-        ///
-        /// * `0` – node index
-        /// * `1` – decomposition index `d`
-        SymmetricClampRaD(usize, usize),
 
         /// One-hot read-address decomposition for the clamped Erf/Sigmoid/Tanh
         /// variants' activation-clamp lookup stage (see [`VirtualPoly::ActivationClampRa`]).
@@ -296,13 +284,6 @@ canonical_serde_enum! {
         /// * `0` – node index
         RescaleRemainder(usize),
 
-        /// Read-address polynomial for the **Clamp** operator's symmetric-range
-        /// lookup. Virtualized — [`CommittedPoly::SymmetricClampRaD`] commits its
-        /// decomposition.
-        ///
-        /// * `0` – node index
-        SymmetricClampRa(usize),
-
         /// The clamped Erf/Sigmoid/Tanh variants' internal "clamped input" claim,
         /// shared by both of the node's sumchecks: the small-table execution stage
         /// uses it (gamma-batched) as part of its input claim, and the
@@ -320,8 +301,7 @@ canonical_serde_enum! {
         SmoothReluRelu(usize),
 
         /// Read-address polynomial for the clamped Erf/Sigmoid/Tanh variants'
-        /// activation-clamp lookup stage (natively-symmetric clamp table, same shape as
-        /// [`Self::SymmetricClampRa`]). Virtualized --
+        /// activation-clamp lookup stage (a natively symmetric clamp table). Virtualized --
         /// [`CommittedPoly::ActivationClampRaD`] commits its decomposition.
         ///
         /// * `0` – node index

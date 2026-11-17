@@ -206,9 +206,7 @@ impl ModelView for atlas_trace::Model {
         Ok(match &node.operator {
             Op::Tanh(_)
             | Op::Cos(_)
-            | Op::Div(_)
             | Op::Erf(_)
-            | Op::Clamp(_)
             | Op::ReLU(_)
             | Op::SmoothRelu(_)
             | Op::Rsqrt(_)

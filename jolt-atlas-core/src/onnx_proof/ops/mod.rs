@@ -8,7 +8,7 @@
 //!
 //! ## Op Categories
 //!
-//! **Arithmetic Operations**: [`add`], [`sub`], [`neg`], [`mul`], [`div`], [`square`], [`cube`],
+//! **Arithmetic Operations**: [`add`], [`sub`], [`neg`], [`mul`], [`square`], [`cube`],
 //! [`scalar_const_div`], [`mean_of_squares`]
 //!
 //! **Activation Functions**: [`relu`], [`activation_clamped`], [`smooth_relu`], [`trig`],
@@ -17,7 +17,7 @@
 //! **Tensor Operations**: [`einsum`], [`sum`], [`reshape`], [`broadcast`], [`moveaxis`],
 //! [`slice`], [`concat`], [`gather`]
 //!
-//! **Special Operations**: [`rsqrt`] (reciprocal square root), [`clamp`], [`iff`] (conditional select)
+//! **Special Operations**: [`rsqrt`] (reciprocal square root), [`iff`] (conditional select)
 //!
 //! **Logic Operations**: [`and`], [`is_nan`]
 //!
@@ -44,14 +44,10 @@ pub mod activation_clamped;
 pub mod add;
 /// Broadcast tensors to target shapes.
 pub mod broadcast;
-/// Clamp values to a specified range.
-pub mod clamp;
 /// Concatenate tensors along an axis.
 pub mod concat;
 /// Constant tensor nodes.
 pub mod constant;
-/// Element-wise division operation.
-pub mod div;
 /// Einstein summation for tensor contractions.
 pub mod einsum;
 /// Op-scoped evaluation reduction helpers.
@@ -291,7 +287,6 @@ fn witness_kind<F: JoltField>(relation: &OpRelation<F>) -> &'static str {
     match relation {
         OpRelation::TableRead(read) => match read.table {
             lookup::PrefixSuffixTable::Relu => "relu",
-            lookup::PrefixSuffixTable::Clamp => "clamp",
             lookup::PrefixSuffixTable::ActivationClamp | lookup::PrefixSuffixTable::SiluClamp => {
                 "activation_clamp"
             }
@@ -551,7 +546,6 @@ pub fn op_rel_witnesses<F: JoltField>(
             mul::product_witnesses(relation, trace)
         }
         OpRelKind::Iff => iff::select_witnesses(node, trace),
-        OpRelKind::Div => div::division_witnesses(node, trace),
         OpRelKind::ConstantDivision => scalar_const_div::constant_division_witnesses(node, trace),
         OpRelKind::Rsqrt => rsqrt::reciprocal_sqrt_witnesses(node, trace),
         OpRelKind::SumAxis => sum::axis::axis_sum_witnesses(relation, trace, &setup.incoming_point),
@@ -567,7 +561,6 @@ pub fn op_rel_witnesses<F: JoltField>(
         }
         OpRelKind::AddAccumulation
         | OpRelKind::SubAccumulation
-        | OpRelKind::DivQuotient
         | OpRelKind::Identity
         | OpRelKind::Neg
         | OpRelKind::ZeroOutput
@@ -599,7 +592,6 @@ pub fn op_rel_tie_claims<F: JoltField>(
         OpRelKind::AddAccumulation | OpRelKind::SubAccumulation => {
             add::accumulation_claims(node, trace, &setup.incoming_point)
         }
-        OpRelKind::DivQuotient => div::division_quotient_claims(node, accumulator),
         OpRelKind::Identity | OpRelKind::Neg => {
             neg::signed_copy_claims(node, relation.kind, accumulator)
         }
@@ -619,7 +611,6 @@ pub fn op_rel_tie_claims<F: JoltField>(
         | OpRelKind::Square
         | OpRelKind::Cube
         | OpRelKind::Iff
-        | OpRelKind::Div
         | OpRelKind::ConstantDivision
         | OpRelKind::Rsqrt
         | OpRelKind::SumAxis
@@ -656,14 +647,12 @@ pub fn op_rel_prover<F: JoltField, T: Transcript>(
         | OpRelKind::Square
         | OpRelKind::Cube
         | OpRelKind::Iff
-        | OpRelKind::Div
         | OpRelKind::ConstantDivision
         | OpRelKind::Rsqrt
         | OpRelKind::SumAxis
         | OpRelKind::SoftmaxSums
         | OpRelKind::AddAccumulation
         | OpRelKind::SubAccumulation
-        | OpRelKind::DivQuotient
         | OpRelKind::Identity
         | OpRelKind::Neg
         | OpRelKind::ZeroOutput
@@ -694,7 +683,6 @@ pub fn op_rel_setup_claims<F: JoltField>(
         | OpRelKind::Square
         | OpRelKind::Cube
         | OpRelKind::Iff
-        | OpRelKind::Div
         | OpRelKind::ConstantDivision
         | OpRelKind::Rsqrt
         | OpRelKind::SumAxis
@@ -703,7 +691,6 @@ pub fn op_rel_setup_claims<F: JoltField>(
         | OpRelKind::Contraction
         | OpRelKind::AddAccumulation
         | OpRelKind::SubAccumulation
-        | OpRelKind::DivQuotient
         | OpRelKind::Identity
         | OpRelKind::Neg
         | OpRelKind::ZeroOutput

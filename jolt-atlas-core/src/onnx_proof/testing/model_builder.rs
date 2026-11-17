@@ -105,18 +105,6 @@ impl ModelBuilder {
         self.push(Op::And(op::And), vec![a, b], d)
     }
 
-    /// Symmetric clamp into `[-2^bound_log, 2^bound_log)`.
-    pub fn clamp(&mut self, input: Wire, bound_log: usize) -> Wire {
-        let d = self.dims(input);
-        self.push(
-            Op::Clamp(op::Clamp {
-                bound_log: bound_log as u32,
-            }),
-            vec![input],
-            d,
-        )
-    }
-
     /// Fused rescaling multiplication.
     pub fn mul(&mut self, a: Wire, b: Wire) -> Wire {
         let d = self.dims(a);
@@ -127,12 +115,6 @@ impl ModelBuilder {
     pub fn mul_raw(&mut self, a: Wire, b: Wire) -> Wire {
         let d = self.dims(a);
         self.push(Op::Mul(op::Mul { rebase: false }), vec![a, b], d)
-    }
-
-    /// Floor division.
-    pub fn div(&mut self, a: Wire, b: Wire) -> Wire {
-        let d = self.dims(a);
-        self.push(Op::Div(op::Div), vec![a, b], d)
     }
 
     /// Floor division by a constant.

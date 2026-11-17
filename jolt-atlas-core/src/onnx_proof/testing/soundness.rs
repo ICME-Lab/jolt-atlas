@@ -475,10 +475,8 @@ fn live_cells(model: &Model) -> Vec<Vec<bool>> {
                 | Op::Identity(_)
                 | Op::ReLU(_)
                 | Op::SmoothRelu(_)
-                | Op::Clamp(_)
                 | Op::Square(_)
                 | Op::Cube(_)
-                | Op::Div(_)
                 | Op::ScalarConstDiv(_)
                 | Op::Rsqrt(_)
                 | Op::Tanh(_)
@@ -1036,26 +1034,6 @@ fn forge_output_quotient(node: usize, elem: usize, step: i32, bound: i32) -> For
 
 #[test]
 #[serial(soundness_probe)]
-fn div_remainder_is_bounded() {
-    let mut b = ModelBuilder::new();
-    let x = b.input(vec![8]);
-    let divisor = b.constant(Tensor::from_slice(&[7; 8], &[8]).unwrap());
-    let out = b.div(x, divisor);
-    b.mark_output(out);
-    let inputs = vec![Tensor::from_slice(&[100, -100, 3, 46, 1 << 20, -5, 13, 6], &[8]).unwrap()];
-    assert_bound_holds(
-        "Div",
-        &b.build(),
-        &inputs,
-        vec![
-            ("quotient − 1", forge_output_quotient(out, 3, -1, 7)),
-            ("quotient + 1", forge_output_quotient(out, 3, 1, 7)),
-        ],
-    );
-}
-
-#[test]
-#[serial(soundness_probe)]
 fn scalar_const_div_remainder_is_bounded() {
     // A divisor that is not a power of two (the two-sided claim), and `2^14` (one claim).
     for divisor in [7, 1 << 14] {
@@ -1401,24 +1379,11 @@ fn reduction_overflow_has_no_proof() {
     );
 }
 
-/// A bound that is not positive has no proof: a negative divisor (floor division puts its
-/// remainder in `(B, 0]`) and an `Rsqrt` of a negative input (output 0).
+/// A bound that is not positive has no proof: an `Rsqrt` of a negative input (output 0).
 #[test]
 #[serial(soundness_probe)]
 fn non_positive_bounds_have_no_proof() {
     let _probe = ProbeGuard::enter();
-
-    let mut b = ModelBuilder::new();
-    let x = b.input(vec![8]);
-    let divisor = b.constant(Tensor::from_slice(&[-7; 8], &[8]).unwrap());
-    let out = b.div(x, divisor);
-    b.mark_output(out);
-    let inputs = vec![Tensor::from_slice(&[100, -100, 3, 46, 1 << 20, -5, 13, 6], &[8]).unwrap()];
-    let outcome = bound_outcome(&b.build(), &inputs, &mut |_| {});
-    assert!(
-        matches!(outcome, Outcome::Rejected(_)),
-        "Div by −7: {outcome:?}"
-    );
 
     let mut b = ModelBuilder::new();
     let x = b.input(vec![8]);

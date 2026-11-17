@@ -210,12 +210,6 @@ pub enum KernelError {
     /// A shape constraint failed.
     #[error(transparent)]
     Shape(#[from] ShapeError),
-    /// Integer division by zero in `Div`.
-    #[error("division by zero at element {element}")]
-    DivByZero {
-        /// Flat element index of the zero divisor.
-        element: usize,
-    },
     /// A gather index is out of range for the dictionary.
     #[error("gather index {index} out of range for dict of {dict_len}")]
     GatherOutOfRange {

@@ -59,8 +59,6 @@ pub struct BucketNode {
 pub enum Remainder {
     /// A fused rescale's remainder (`Einsum`, `Mul`, `Square`, `Cube`, `MeanOfSquares`).
     Rescale,
-    /// `Div`'s remainder.
-    Div,
     /// `ScalarConstDiv`'s remainder.
     ScalarConstDiv,
     /// `Rsqrt`'s division remainder `S³ mod x`.
@@ -86,7 +84,7 @@ impl Remainder {
         let poly = match self {
             Self::Output => return None,
             Self::Rescale => VirtualPoly::RescaleRemainder(node_idx),
-            Self::Div | Self::RsqrtDiv => VirtualPoly::DivRemainder(node_idx),
+            Self::RsqrtDiv => VirtualPoly::DivRemainder(node_idx),
             Self::ScalarConstDiv => VirtualPoly::ScalarConstDivRemainder(node_idx),
             Self::RsqrtSqrt => VirtualPoly::SqrtRemainder(node_idx),
             Self::TrigPeriod => VirtualPoly::TrigPeriodRemainder(node_idx),
@@ -311,7 +309,6 @@ pub fn node_remainders(
             }
             vec![(Remainder::Rescale, Bound::Const(divisor))]
         }
-        Op::Div(_) => vec![(Remainder::Div, Bound::Node(operand(1)?))],
         Op::ScalarConstDiv(op) => {
             if op.divisor < 1 {
                 return Err(malformed(format!(

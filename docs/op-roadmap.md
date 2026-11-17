@@ -8,8 +8,8 @@ up. Last updated 2026-11-15.
 
 ## Starting point
 
-The trace IR has 33 op variants (`atlas_trace::Op`). The single-input nonlinear ones are ReLU,
-Clamp, Tanh, Sigmoid, Erf, Sin, Cos and Rsqrt, plus the softmax exponential. Three gaps follow
+The trace IR has 32 op variants (`atlas_trace::Op`). The single-input nonlinear ones are ReLU,
+Tanh, Sigmoid, Erf, Sin, Cos and Rsqrt, plus the softmax exponential. Three gaps follow
 from that set:
 
 - **No fused activations.** GELU and SiLU reach the prover as chains: the Tanh, Erf or Sigmoid

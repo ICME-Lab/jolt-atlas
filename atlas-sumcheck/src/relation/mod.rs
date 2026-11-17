@@ -119,10 +119,6 @@ pub enum RelationId {
     Rsqrt,
     /// An einsum contraction.
     Contraction,
-    /// Floor division `left = right·q + rem`.
-    Division,
-    /// A committed division quotient equal to the node's reduced output.
-    DivisionQuotient,
     /// Selection `mask·a + (1 − mask)·b`.
     Select,
     /// An exact add or subtract, `out = left ± right`.

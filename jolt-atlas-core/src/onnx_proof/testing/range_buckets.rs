@@ -161,7 +161,7 @@ fn every_range_claim_is_in_exactly_one_bucket() {
     }
     assert_eq!(
         families.len(),
-        9,
+        8,
         "the probe models hold every range-claim family: {families:?}"
     );
 }
@@ -177,7 +177,7 @@ fn range_claim_rejects_a_bound_at_another_point() {
 
     let (node, divisor) = (5usize, 3usize);
     let claim = RangeClaim {
-        remainder: Remainder::Div,
+        remainder: Remainder::RsqrtDiv,
         slack: Some(Bound::Node(divisor)),
     };
     let point = |seed: u64| OpeningPoint::new((0..4).map(|i| Fp128::from_u64(seed + i)).collect());
@@ -188,7 +188,9 @@ fn range_claim_rejects_a_bound_at_another_point() {
     let stage = |bound_point| {
         let mut accumulator = VerifierOpeningAccumulator::<Fp128>::new();
         accumulator.openings.insert(
-            Remainder::Div.opening_id(node).expect("an advice opening"),
+            Remainder::RsqrtDiv
+                .opening_id(node)
+                .expect("an advice opening"),
             (point(1), Fp128::from_u64(2)),
         );
         accumulator

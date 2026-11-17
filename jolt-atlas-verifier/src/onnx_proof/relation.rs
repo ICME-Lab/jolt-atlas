@@ -225,6 +225,12 @@ pub enum OpRelKind {
     ConstantDivision,
     /// `Rsqrt`: the fused division and square-root identities.
     Rsqrt,
+    /// `Identity`: the operand is the output.
+    Identity,
+    /// `Neg`: the operand is the output, negated.
+    Neg,
+    /// `IsNan`: the output is zero.
+    ZeroOutput,
 }
 
 impl OpRelKind {
@@ -238,6 +244,8 @@ impl OpRelKind {
             Self::DivQuotient => RelationId::DivisionQuotient,
             Self::ConstantDivision => RelationId::ConstantDivision,
             Self::Rsqrt => RelationId::Rsqrt,
+            Self::Identity | Self::Neg => RelationId::SignedCopy,
+            Self::ZeroOutput => RelationId::ZeroOutput,
         }
     }
 
@@ -255,6 +263,9 @@ impl OpRelKind {
             Self::Div | Self::DivQuotient => matches!(op, Op::Div(_)),
             Self::ConstantDivision => matches!(op, Op::ScalarConstDiv(_)),
             Self::Rsqrt => matches!(op, Op::Rsqrt(_)),
+            Self::Identity => matches!(op, Op::Identity(_)),
+            Self::Neg => matches!(op, Op::Neg(_)),
+            Self::ZeroOutput => matches!(op, Op::IsNan(_)),
         }
     }
 }

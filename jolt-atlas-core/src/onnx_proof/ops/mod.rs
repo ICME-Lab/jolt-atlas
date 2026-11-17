@@ -781,11 +781,8 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie<F>, prover: &mut P
         OpTie::Concat(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Constant(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Input(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::Identity(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::Neg(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Reshape(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Slice(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::ZeroOutput(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::TeleportInput(relation) => {
             let node = &relation.node;
             let accessor = AccOpeningAccessor::new(&*accumulator, node);
@@ -823,7 +820,12 @@ pub fn op_rel_witnesses<F: JoltField>(
         OpRelKind::Div => div::division_witnesses(node, trace),
         OpRelKind::ConstantDivision => scalar_const_div::constant_division_witnesses(node, trace),
         OpRelKind::Rsqrt => rsqrt::reciprocal_sqrt_witnesses(node, trace),
-        OpRelKind::AddAccumulation | OpRelKind::SubAccumulation | OpRelKind::DivQuotient => {
+        OpRelKind::AddAccumulation
+        | OpRelKind::SubAccumulation
+        | OpRelKind::DivQuotient
+        | OpRelKind::Identity
+        | OpRelKind::Neg
+        | OpRelKind::ZeroOutput => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
     }
@@ -844,6 +846,10 @@ pub fn op_rel_tie_claims<F: JoltField>(
             add::accumulation_claims(node, trace, &setup.incoming_point)
         }
         OpRelKind::DivQuotient => div::division_quotient_claims(node, accumulator),
+        OpRelKind::Identity | OpRelKind::Neg => {
+            neg::signed_copy_claims(node, relation.kind, accumulator)
+        }
+        OpRelKind::ZeroOutput => is_nan::zero_output_claims(node, trace, &setup.incoming_point),
         OpRelKind::And
         | OpRelKind::Mul
         | OpRelKind::Square

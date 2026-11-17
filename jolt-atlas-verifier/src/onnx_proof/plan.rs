@@ -34,10 +34,8 @@ use crate::onnx_proof::{
         einsum::ContractionRelation,
         erf::ErfTableMarker,
         gather::{self, small::GatherSmallShape, GatherRelation},
-        is_nan::ZeroOutputRelation,
         mean_of_squares::MeanOfSquaresRelation,
         moveaxis::AxisPermutationRelation,
-        neg::SignedCopyRelation,
         reshape::FlatCopyRelation,
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
@@ -63,7 +61,7 @@ use atlas_sumcheck::{
     shout,
 };
 use atlas_trace::{
-    op::{Constant, Identity, Input, Neg},
+    op::{Constant, Input},
     trace::ModelExecutionIO,
     Model,
 };
@@ -398,16 +396,10 @@ pub enum OpTie<F: JoltField> {
     Constant(PublicRelation<Constant>),
     /// `Input`: the output is the public input.
     Input(PublicRelation<Input>),
-    /// `Identity`: the operand is the output.
-    Identity(SignedCopyRelation<Identity>),
-    /// `Neg`: the operand is the output, negated.
-    Neg(SignedCopyRelation<Neg>),
     /// `Reshape`: the operand at the same point.
     Reshape(FlatCopyRelation),
     /// `Slice`: the operand's subcube the slice selects.
     Slice(SubcubeSelectRelation),
-    /// `IsNan`: the output is zero.
-    ZeroOutput(ZeroOutputRelation),
     /// A trig op's input is `P·q + r` over its teleport quotient and remainder claims.
     TeleportInput(TeleportInputRelation),
     /// A softmax in-the-clear check, as `ops::softmax_last_axis` lists them.
@@ -428,11 +420,8 @@ impl<F: JoltField> OpTie<F> {
             Self::Concat(relation) => verify_tie(relation, accumulator, transcript),
             Self::Constant(relation) => verify_tie(relation, accumulator, transcript),
             Self::Input(relation) => verify_tie(relation, accumulator, transcript),
-            Self::Identity(relation) => verify_tie(relation, accumulator, transcript),
-            Self::Neg(relation) => verify_tie(relation, accumulator, transcript),
             Self::Reshape(relation) => verify_tie(relation, accumulator, transcript),
             Self::Slice(relation) => verify_tie(relation, accumulator, transcript),
-            Self::ZeroOutput(relation) => verify_tie(relation, accumulator, transcript),
             Self::TeleportInput(relation) => relation.verify(accumulator, transcript),
             Self::Softmax(tie) => tie.verify(accumulator, transcript),
         }

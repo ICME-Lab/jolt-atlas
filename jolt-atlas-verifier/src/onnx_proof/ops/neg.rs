@@ -1,24 +1,17 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
-    atlas_relation_types,
-    onnx_proof::relation::{
-        reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
-        RelationSetup, TieRelation,
+    onnx_proof::{
+        ops::OpLayout,
+        relation::{OpRel, OpRelKind, RelationOpening},
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_algebra::field::Ring;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_claims::{constant, opening, SymbolicSumcheck};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::op::{Identity, Neg, OpSpec};
-use atlas_transcript::Transcript;
-use std::marker::PhantomData;
+use atlas_claims::{constant, opening, Int};
+use atlas_trace::op::Neg;
 
-crate::impl_plan_op!(Neg, SignedCopyRelation<Neg>);
+impl OpLayout for Neg {}
 
 impl OpPlan for Neg {
     fn plan<F: atlas_algebra::field::JoltField>(
@@ -30,24 +23,19 @@ impl OpPlan for Neg {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Neg(SignedCopyRelation::<Neg>::new(node.clone())),
+                relation: OpTie::Op(signed_copy(node, OpRelKind::Neg)),
             },
         ]))
     }
 }
 
-/// An op whose output is `±` its single operand.
-pub trait CopySign: OpSpec + 'static {
-    /// `+1` for `Identity`, `−1` for `Neg`.
-    const SIGN: i64;
-}
-
-impl CopySign for Identity {
-    const SIGN: i64 = 1;
-}
-
-impl CopySign for Neg {
-    const SIGN: i64 = -1;
+/// The sign of a copy kind: `−1` for `Neg`, `+1` otherwise.
+pub fn sign(kind: OpRelKind) -> i64 {
+    if kind == OpRelKind::Neg {
+        -1
+    } else {
+        1
+    }
 }
 
 /// `out = ±operand` as a tie at the output point `r`: no sumcheck, the identity holds at `r`
@@ -61,75 +49,13 @@ impl CopySign for Neg {
 /// **S ⊆ R.** `Identity` passes its operand through. `Neg` negates element-wise and its
 /// execution fails on `i32::MIN`, whose negation is outside `i32`, so the tie holds at every
 /// element of every execution that exists.
-pub struct SignedCopyRelation<S> {
-    node: ComputationNode,
-    _spec: PhantomData<fn() -> S>,
-}
-
-impl<S: CopySign> SymbolicSumcheck for SignedCopyRelation<S> {
-    atlas_relation_types!();
-
-    fn id(&self) -> RelationId {
-        RelationId::SignedCopy
-    }
-
-    fn rounds(&self) -> usize {
-        0
-    }
-
-    fn degree(&self) -> usize {
-        1
-    }
-
-    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::ReducedNodeOutput(self.node.idx))
-    }
-
-    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        constant(F::from_i64(S::SIGN)) * opening(RelationOpening::Id(self.input()))
+pub fn signed_copy<F: JoltField>(node: &ComputationNode, kind: OpRelKind) -> OpRel<F> {
+    let operand = OpeningIdBuilder::new(node).nodeio(Target::Input(0));
+    OpRel {
+        degree: 1,
+        input: opening(RelationOpening::ReducedNodeOutput(node.idx)),
+        output: constant(Int(i128::from(sign(kind)))) * opening(RelationOpening::Id(operand)),
+        produced: vec![operand],
+        ..OpRel::base(kind, node)
     }
 }
-
-impl<S: CopySign> SignedCopyRelation<S> {
-    /// The relation for the given shape.
-    pub fn new(node: ComputationNode) -> Self {
-        Self {
-            node,
-            _spec: PhantomData,
-        }
-    }
-}
-
-impl<S: CopySign> SignedCopyRelation<S> {
-    fn input(&self) -> OpeningId {
-        OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))
-    }
-}
-
-impl<S: CopySign> Produces for SignedCopyRelation<S> {
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![self.input()]
-    }
-}
-
-impl<F: JoltField, S: CopySign> Relation<F> for SignedCopyRelation<S> {}
-
-impl<F: JoltField, S: CopySign> SetupRelation<F> for SignedCopyRelation<S> {
-    fn setup<T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        reduced_output_setup(accumulator, &self.node)
-    }
-}
-
-impl<S: CopySign> AtlasRelation for SignedCopyRelation<S> {
-    type Spec = S;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
-    }
-}
-
-impl<F: JoltField, S: CopySign> TieRelation<F> for SignedCopyRelation<S> {}

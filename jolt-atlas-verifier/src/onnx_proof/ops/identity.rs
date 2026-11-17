@@ -1,10 +1,11 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::neg::SignedCopyRelation;
+use crate::onnx_proof::ops::{neg::signed_copy, OpLayout};
 use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use crate::onnx_proof::relation::OpRelKind;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::op::Identity;
 
-crate::impl_plan_op!(Identity, SignedCopyRelation<Identity>);
+impl OpLayout for Identity {}
 
 impl OpPlan for Identity {
     fn plan<F: atlas_algebra::field::JoltField>(
@@ -16,7 +17,7 @@ impl OpPlan for Identity {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Identity(SignedCopyRelation::<Identity>::new(node.clone())),
+                relation: OpTie::Op(signed_copy(node, OpRelKind::Identity)),
             },
         ]))
     }

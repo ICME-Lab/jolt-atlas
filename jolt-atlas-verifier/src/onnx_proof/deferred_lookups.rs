@@ -15,8 +15,8 @@
 //! across instances, which turns hundreds of tiny sequential sumchecks into a few large
 //! parallel ones.
 use crate::onnx_proof::{
-    range_bucket::remainder_buckets,
     plan::{OpRelation, Plan, Step},
+    range_bucket::remainder_buckets,
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;

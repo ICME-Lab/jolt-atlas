@@ -27,7 +27,7 @@
 //! Bucket capacity is the largest member's (padded) size, so no bucket polynomial is larger
 //! than a node's output. The layout is a pure function of the model, so prover and verifier
 //! derive it independently.
-use super::{range_check, fused_rebase::rebase_bits, ops::mean_of_squares::mos_divisor};
+use super::{fused_rebase::rebase_bits, ops::mean_of_squares::mos_divisor, range_check};
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use atlas_algebra::utils::errors::ProofVerifyError;

@@ -31,7 +31,7 @@
 use crate::onnx_proof::ops::eval_reduction::NodeEvalReductionProve;
 pub use jolt_atlas_verifier::onnx_proof::ops::*;
 
-/// Shared plumbing for the clamped Erf/Sigmoid/Tanh variants.
+/// The clamped activations Erf, Sigmoid and Tanh.
 pub mod activation_clamped;
 /// Element-wise addition operation.
 pub mod add;
@@ -75,6 +75,8 @@ pub mod slice;
 pub mod softmax_last_axis;
 /// Sum reduction along axes.
 pub mod sum;
+/// Sin and Cos.
+pub mod trig;
 
 use crate::node_view::ComputationNode;
 
@@ -86,34 +88,19 @@ use atlas_transcript::Transcript;
 use eval_reduction::NodeEvalReduction;
 
 use crate::onnx_proof::{
-    range_check::{self, ValueParams, ValueProver},
     deferred_lookups::{DeferredBatch, DeferredSetup, DEFERRED_PROOF_IDX},
     fused_rebase::rebase_remainder,
-    neural_teleport::{
-        cos::CosTable,
-        sin::SinTable,
-        small_table::{SmallTable, SmallTableRelation, TrigTableProver},
-        trig_downscale::TrigDownscaleOperands,
-    },
+    lookup,
     op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProve, OpLookupProvider},
     ops::softmax_last_axis::SoftmaxRelation,
     ops::{
-        activation_clamped::{
-            small_table_params, ActivationClampOperands, SmallTableProver, SmallTableRaEncoding,
-        },
-        clamp::SymmetricClampOperands,
-        cos::CosRaEncoding,
-        einsum::dot::EinsumDotProver,
-        erf::ErfTableMarker,
-        gather::GatherProver,
-        mean_of_squares::MeanOfSquaresReductionProver,
-        sigmoid::SigmoidTableMarker,
-        sin::SinRaEncoding,
-        smooth_relu::{GeluErfTable, GeluTanhTable, SiluTable, SmoothReluOperands},
-        softmax_last_axis::SoftmaxAddresses,
-        tanh::TanhTableMarker,
+        activation_clamped::ActivationClampOperands, clamp::SymmetricClampOperands,
+        einsum::dot::EinsumDotProver, gather::GatherProver,
+        mean_of_squares::MeanOfSquaresReductionProver, smooth_relu::SmoothReluOperands,
+        softmax_last_axis::SoftmaxAddresses, trig::TrigDownscaleOperands,
     },
-    plan::{OpActivation, OpLookup, OpOpen, OpPlan, OpRelation, OpTrig, Plan, Step},
+    plan::{OpLookup, OpOpen, OpPlan, OpRelation, Plan, Step},
+    range_check::{self, ValueParams, ValueProver},
     relation::{
         op_rel_params, prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
     },
@@ -134,7 +121,7 @@ use atlas_sumcheck::relation::prover::{
 };
 use atlas_sumcheck::shout::{self, RaOneHotEncoding, RaOneHotParams};
 use atlas_trace::Trace;
-use common::consts::{TRIG_DOWNSCALE_BITS, XLEN};
+use common::consts::XLEN;
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
 
@@ -172,10 +159,8 @@ impl OperatorProver {
 pub enum Addresses {
     /// An [`OpRelation::Lookup`].
     Lookup(OpLookup),
-    /// An [`OpRelation::SmallActivation`].
-    SmallActivation,
-    /// An [`OpRelation::Trig`].
-    Trig,
+    /// A small table's read ([`lookup::small_table`]).
+    SmallTable,
     /// A softmax stage's lookup.
     Softmax(SoftmaxAddresses),
 }
@@ -343,12 +328,9 @@ fn witness_kind<F: JoltField>(relation: &OpRelation<F>) -> &'static str {
         OpRelation::Lookup(OpLookup::SymmetricClamp, _) => "clamp",
         OpRelation::Lookup(OpLookup::ActivationClamp, _) => "activation_clamp",
         OpRelation::Lookup(OpLookup::TrigDownscale, _) => "trig_downscale",
-        OpRelation::SmallActivation(..) => "small_activation",
-        OpRelation::Trig(..) => "trig",
+        OpRelation::Op(relation) if relation.kind == OpRelKind::SmallTable => "small_table",
         OpRelation::Softmax(_) => "softmax",
-        OpRelation::LookupOneHot(..)
-        | OpRelation::SmallActivationOneHot(_)
-        | OpRelation::TrigOneHot(..) => "one_hot",
+        OpRelation::LookupOneHot(..) | OpRelation::SmallTableOneHot(_) => "one_hot",
         OpRelation::GatherLargeOneHot(_)
         | OpRelation::GatherSmallOneHot(_)
         | OpRelation::GatherSmallHammingWeight(_) => "gather_one_hot",
@@ -405,21 +387,9 @@ fn prepare<F: JoltField, T: Transcript>(
             node.idx,
             prover,
         ),
-        OpRelation::SmallActivationOneHot(node) => onehot(
-            &SmallTableRaEncoding::for_node(&node),
-            Addresses::SmallActivation,
-            node.idx,
-            prover,
-        ),
-        OpRelation::TrigOneHot(OpTrig::Cos, node) => onehot(
-            &CosRaEncoding::new(&node),
-            Addresses::Trig,
-            node.idx,
-            prover,
-        ),
-        OpRelation::TrigOneHot(OpTrig::Sin, node) => onehot(
-            &SinRaEncoding::new(&node),
-            Addresses::Trig,
+        OpRelation::SmallTableOneHot(node) => onehot(
+            &lookup::SmallTableRaEncoding::for_node(&node).expect("the node reads a small table"),
+            Addresses::SmallTable,
             node.idx,
             prover,
         ),
@@ -524,46 +494,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         prover.leave_addresses(Addresses::Lookup(kind), node_idx, indices);
         vec![Box::new(witness)]
     }
-    fn small_activation<F: JoltField, T: Transcript, Table: SmallTable>(
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-        let params =
-            small_table_params::<F, Table>(node, &prover.accumulator, &mut prover.transcript)
-                .expect("the prover holds every claim it reads");
-        let exec = SmallTableProver::<F, Table>::initialize(
-            params,
-            &prover.trace,
-            &mut prover.accumulator,
-            &mut prover.transcript,
-        );
-        prover.leave_addresses(
-            Addresses::SmallActivation,
-            node.idx,
-            exec.lookup_indices.clone(),
-        );
-        vec![Box::new(exec)]
-    }
-    fn trig<
-        F: JoltField,
-        T: Transcript,
-        Table: crate::onnx_proof::neural_teleport::small_table::SmallTable,
-    >(
-        node: ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-        let node_idx = node.idx;
-        let downscaled = trig_downscaled(&node, &prover.trace);
-        let params = RelationParams::new(
-            SmallTableRelation::<Table>::new(node),
-            &prover.accumulator,
-            &mut prover.transcript,
-        );
-        let (exec, indices) =
-            TrigTableProver::initialize(&downscaled, params, &mut prover.accumulator);
-        prover.leave_addresses(Addresses::Trig, node_idx, indices);
-        vec![Box::new(exec)]
-    }
     match relation {
         OpRelation::Op(relation) => {
             let params = op_rel_params(
@@ -572,6 +502,11 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );
+            if params.relation().kind == OpRelKind::SmallTable {
+                let node = &params.relation().node;
+                let indices = lookup::small_table_lookup_indices(node, &prover.trace);
+                prover.leave_addresses(Addresses::SmallTable, node.idx, indices);
+            }
             vec![op_rel_prover(params, &prover.trace, &prover.accumulator)]
         }
         OpRelation::GatherLargeOneHot(node) => {
@@ -633,24 +568,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 );
             vec![Box::new(witness)]
         }
-        OpRelation::SmallActivation(OpActivation::Erf, node) => {
-            small_activation::<F, T, ErfTableMarker>(&node, prover)
-        }
-        OpRelation::SmallActivation(OpActivation::Sigmoid, node) => {
-            small_activation::<F, T, SigmoidTableMarker>(&node, prover)
-        }
-        OpRelation::SmallActivation(OpActivation::Tanh, node) => {
-            small_activation::<F, T, TanhTableMarker>(&node, prover)
-        }
-        OpRelation::SmallActivation(OpActivation::GeluErf, node) => {
-            small_activation::<F, T, GeluErfTable>(&node, prover)
-        }
-        OpRelation::SmallActivation(OpActivation::GeluTanh, node) => {
-            small_activation::<F, T, GeluTanhTable>(&node, prover)
-        }
-        OpRelation::SmallActivation(OpActivation::Silu, node) => {
-            small_activation::<F, T, SiluTable>(&node, prover)
-        }
         OpRelation::Softmax(relation) => {
             let Prover {
                 trace,
@@ -677,24 +594,14 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
             }
             witnesses
         }
-        OpRelation::Trig(OpTrig::Cos, node) => trig::<F, T, CosTable>(node, prover),
-        OpRelation::Trig(OpTrig::Sin, node) => trig::<F, T, SinTable>(node, prover),
         one_hot @ (OpRelation::LookupOneHot(..)
-        | OpRelation::SmallActivationOneHot(_)
-        | OpRelation::TrigOneHot(..)
+        | OpRelation::SmallTableOneHot(_)
         | OpRelation::RemainderBucketValue(_)
         | OpRelation::RemainderBucketDigits(_)) => {
             let prepared = prepare(one_hot, prover);
             build_all(vec![prepared], prover)
         }
     }
-}
-
-/// A trig node's downscaled teleport remainder, `(input mod P) >> TRIG_DOWNSCALE_BITS`.
-fn trig_downscaled(node: &ComputationNode, trace: &atlas_trace::Trace) -> atlas_trace::Tensor<i32> {
-    TraceView::teleport_advice(trace, node)
-        .remainder
-        .map(|v| v >> TRIG_DOWNSCALE_BITS)
 }
 
 /// Append a plan opening's claims from the trace.
@@ -722,7 +629,7 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
                 .append_advice(CommittedPoly::TeleportNodeQuotient, eval);
         }
         OpOpen::TrigDownscaled(node) => {
-            let downscaled = trig_downscaled(node, &prover.trace);
+            let downscaled = trig::downscaled(node, &prover.trace);
             let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
             let r0 = accessor.get_reduced_opening().expect(expect).0;
             let eval = downscaled.evaluate_mle(&r0.r);
@@ -766,7 +673,10 @@ pub fn op_rel_witnesses<F: JoltField>(
         OpRelKind::Rsqrt => rsqrt::reciprocal_sqrt_witnesses(node, trace),
         OpRelKind::SumAxis => sum::axis::axis_sum_witnesses(relation, trace, &setup.incoming_point),
         OpRelKind::SoftmaxSums => softmax_last_axis::sums_witnesses(node, trace),
-        OpRelKind::MeanOfSquares | OpRelKind::Contraction | OpRelKind::Gather => {
+        OpRelKind::MeanOfSquares
+        | OpRelKind::Contraction
+        | OpRelKind::Gather
+        | OpRelKind::SmallTable => {
             panic!(
                 "{:?} has a specialized prover, not the engine's",
                 relation.kind
@@ -817,9 +727,7 @@ pub fn op_rel_tie_claims<F: JoltField>(
         OpRelKind::Reshape => reshape::flat_copy_claims(node, trace, &setup.incoming_point),
         OpRelKind::Slice => slice::subcube_select_claims(relation, trace, &setup.incoming_point),
         OpRelKind::Concat => concat::subcube_tiling_claims(relation, trace, &setup.incoming_point),
-        OpRelKind::TrigPeriod => {
-            crate::onnx_proof::neural_teleport::division::trig_period_claims(node, accumulator)
-        }
+        OpRelKind::TrigPeriod => trig::trig_period_claims(node, accumulator),
         OpRelKind::SoftmaxAddressLink => {
             softmax_last_axis::address_link_claims(node, trace, &setup.incoming_point)
         }
@@ -835,7 +743,8 @@ pub fn op_rel_tie_claims<F: JoltField>(
         | OpRelKind::SoftmaxSums
         | OpRelKind::MeanOfSquares
         | OpRelKind::Contraction
-        | OpRelKind::Gather => {
+        | OpRelKind::Gather
+        | OpRelKind::SmallTable => {
             panic!("{:?} is proven by a sumcheck, not a tie", relation.kind)
         }
     }
@@ -854,6 +763,11 @@ pub fn op_rel_prover<F: JoltField, T: Transcript>(
         }
         OpRelKind::Contraction => Box::new(EinsumDotProver::initialize(trace, params)),
         OpRelKind::Gather => Box::new(GatherProver::initialize(trace, params, accumulator)),
+        OpRelKind::SmallTable => Box::new(lookup::SmallTableProver::initialize(
+            trace,
+            params,
+            accumulator,
+        )),
         OpRelKind::And
         | OpRelKind::Mul
         | OpRelKind::Square
@@ -891,6 +805,7 @@ pub fn op_rel_setup_claims<F: JoltField>(
 ) -> Vec<F> {
     match relation.kind {
         OpRelKind::Gather => gather::index_claim(relation, trace, setup),
+        OpRelKind::SmallTable => lookup::small_table_setup_claims(relation, trace, setup),
         OpRelKind::And
         | OpRelKind::Mul
         | OpRelKind::Square

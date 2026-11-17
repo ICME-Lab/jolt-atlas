@@ -11,8 +11,9 @@ use super::{models::probe_models, prove_verify_roundtrip, ModelBuilder, Roundtri
 use crate::node_view::ModelView;
 use crate::onnx_proof::{
     deferred_lookups::DEFERRED_PROOF_IDX,
+    prove,
     range_bucket::{checks_its_output, remainder_buckets, Remainder},
-    prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
+    AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
 /// A model output is a public `i32` tensor, so it is never a bucket member, whatever its values,

@@ -15,28 +15,21 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    range_check::{self, ValueParams},
     deferred_lookups::DeferredBatch,
     fused_rebase,
-    range_bucket::RangeBucket,
-    neural_teleport::{
-        cos::CosTable, sin::SinTable, small_table::SmallTableRelation,
-        trig_downscale::TrigDownscaleOperands,
-    },
+    lookup::SmallTableRaEncoding,
     op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProvider},
     ops::{
-        activation_clamped::{small_table_verifier, ActivationClampOperands, SmallTableRaEncoding},
+        activation_clamped::ActivationClampOperands,
         clamp::SymmetricClampOperands,
-        cos::CosRaEncoding,
-        erf::ErfTableMarker,
         gather::{self, small::GatherSmallShape},
-        sigmoid::SigmoidTableMarker,
-        sin::SinRaEncoding,
-        smooth_relu::{GeluErfTable, GeluTanhTable, SiluTable, SmoothReluOperands},
+        smooth_relu::SmoothReluOperands,
         softmax_last_axis::{SoftmaxOpen, SoftmaxRelation},
-        tanh::TanhTableMarker,
+        trig::TrigDownscaleOperands,
     },
-    relation::{op_rel_verifier, OpRel, RelationVerifier, SetupRelation},
+    range_bucket::RangeBucket,
+    range_check::{self, ValueParams},
+    relation::{op_rel_verifier, OpRel},
     ProofType,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
@@ -106,32 +99,6 @@ pub trait OpPlan {
     ) -> Result<Plan<F>, ProofVerifyError>;
 }
 
-/// The small activation table a clamped activation reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OpActivation {
-    /// `Erf`.
-    Erf,
-    /// `Sigmoid`.
-    Sigmoid,
-    /// `Tanh`.
-    Tanh,
-    /// The erf-form GELU's correction to `ReLU`.
-    GeluErf,
-    /// The tanh-form GELU's correction to `ReLU`.
-    GeluTanh,
-    /// SiLU's correction to `ReLU`.
-    Silu,
-}
-
-/// The trigonometric table a teleported trig op reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OpTrig {
-    /// `Cos`.
-    Cos,
-    /// `Sin`.
-    Sin,
-}
-
 /// A relation proven by a sumcheck, as a plan step holds it.
 pub enum OpRelation<F: JoltField> {
     /// An op relation.
@@ -148,17 +115,10 @@ pub enum OpRelation<F: JoltField> {
     /// The one-hot checks of a [`Self::Lookup`]'s read addresses: two relations (the address
     /// polynomial as the product of its chunks; the chunks' Booleanity and Hamming weight).
     LookupOneHot(OpLookup, ComputationNode),
-    /// A clamped activation's small-table execution: `γ` drawn, the clamped input's opening
-    /// appended at the reduced output point.
-    SmallActivation(OpActivation, ComputationNode),
-    /// The one-hot checks of a [`Self::SmallActivation`]'s read addresses (two relations).
-    SmallActivationOneHot(ComputationNode),
+    /// The one-hot checks of a small table's read addresses (two relations).
+    SmallTableOneHot(ComputationNode),
     /// A softmax stage, as `ops::softmax_last_axis` lists them.
     Softmax(SoftmaxRelation),
-    /// A trig op's table execution over the downscaled input.
-    Trig(OpTrig, ComputationNode),
-    /// The one-hot checks of a [`Self::Trig`]'s read addresses (two relations).
-    TrigOneHot(OpTrig, ComputationNode),
     /// A packed range bucket's value relation: the range claims of its members
     /// ([`range_bucket::RangeClaim`](crate::onnx_proof::range_bucket::RangeClaim)).
     RemainderBucketValue(RangeBucket),
@@ -191,17 +151,6 @@ impl<F: JoltField> OpRelation<F> {
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
-        fn one<F: JoltField, T: Transcript, R: SetupRelation<F> + 'static>(
-            relation: R,
-            accumulator: &VerifierOpeningAccumulator<F>,
-            transcript: &mut T,
-        ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
-            Ok(vec![Box::new(RelationVerifier::new(
-                relation,
-                accumulator,
-                transcript,
-            )?)])
-        }
         fn boxed<F: JoltField, T: Transcript>(
             verifier: impl DynRelationVerifier<F, T> + 'static,
         ) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
@@ -282,65 +231,13 @@ impl<F: JoltField> OpRelation<F> {
                 transcript,
             )?
             .into()),
-            Self::SmallActivation(OpActivation::Erf, node) => {
-                Ok(boxed(small_table_verifier::<F, ErfTableMarker>(
-                    &node,
-                    accumulator,
-                    transcript,
-                )?))
-            }
-            Self::SmallActivation(OpActivation::Sigmoid, node) => Ok(boxed(
-                small_table_verifier::<F, SigmoidTableMarker>(&node, accumulator, transcript)?,
-            )),
-            Self::SmallActivation(OpActivation::Tanh, node) => {
-                Ok(boxed(small_table_verifier::<F, TanhTableMarker>(
-                    &node,
-                    accumulator,
-                    transcript,
-                )?))
-            }
-            Self::SmallActivation(OpActivation::GeluErf, node) => Ok(boxed(
-                small_table_verifier::<F, GeluErfTable>(&node, accumulator, transcript)?,
-            )),
-            Self::SmallActivation(OpActivation::GeluTanh, node) => Ok(boxed(
-                small_table_verifier::<F, GeluTanhTable>(&node, accumulator, transcript)?,
-            )),
-            Self::SmallActivation(OpActivation::Silu, node) => {
-                Ok(boxed(small_table_verifier::<F, SiluTable>(
-                    &node,
-                    accumulator,
-                    transcript,
-                )?))
-            }
-            Self::SmallActivationOneHot(node) => Ok(shout::ra_onehot_verifiers(
-                &SmallTableRaEncoding::for_node(&node),
+            Self::SmallTableOneHot(node) => Ok(shout::ra_onehot_verifiers(
+                &SmallTableRaEncoding::for_node(&node)?,
                 accumulator,
                 transcript,
             )?
             .into()),
             Self::Softmax(relation) => relation.verifiers(accumulator, transcript),
-            Self::Trig(OpTrig::Cos, node) => one(
-                SmallTableRelation::<CosTable>::new(node),
-                accumulator,
-                transcript,
-            ),
-            Self::Trig(OpTrig::Sin, node) => one(
-                SmallTableRelation::<SinTable>::new(node),
-                accumulator,
-                transcript,
-            ),
-            Self::TrigOneHot(OpTrig::Cos, node) => Ok(shout::ra_onehot_verifiers(
-                &CosRaEncoding::new(&node),
-                accumulator,
-                transcript,
-            )?
-            .into()),
-            Self::TrigOneHot(OpTrig::Sin, node) => Ok(shout::ra_onehot_verifiers(
-                &SinRaEncoding::new(&node),
-                accumulator,
-                transcript,
-            )?
-            .into()),
             Self::RemainderBucketValue(bucket) => Ok(boxed(ValueParams::into_verifier(
                 range_check::remainder_value_params(&bucket, accumulator, transcript)?,
             ))),

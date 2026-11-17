@@ -9,7 +9,8 @@
 //!
 //! **Arithmetic Operations**: [`add`], [`sub`], [`mul`], [`div`], [`square`], [`cube`], [`scalar_const_div`]
 //!
-//! **Activation Functions**: [`relu`], [`tanh`], [`softmax_last_axis`]
+//! **Activation Functions**: [`relu`], [`activation_clamped`], [`smooth_relu`], [`trig`],
+//! [`softmax_last_axis`]
 //!
 //! **Tensor Operations**: [`einsum`], [`sum`], [`reshape`], [`broadcast`], [`moveaxis`], [`gather`]
 //!
@@ -26,7 +27,7 @@
 //! ordered steps over relations, run by the verifier's interpreter and walked by the prover);
 //! an operator with no committed polynomials binds its relation with `impl_plan_op`.
 
-/// Shared plumbing for the clamped Erf/Sigmoid/Tanh variants.
+/// The clamped activations Erf, Sigmoid and Tanh.
 pub mod activation_clamped;
 /// Element-wise addition operation.
 pub mod add;
@@ -40,16 +41,12 @@ pub mod clamp;
 pub mod concat;
 /// Constant tensor nodes.
 pub mod constant;
-/// Cos trigonometric function.
-pub mod cos;
 /// Element-wise cube (x³) operation.
 pub mod cube;
 /// Element-wise division operation.
 pub mod div;
 /// Einstein summation for tensor contractions.
 pub mod einsum;
-/// Erf activation function.
-pub mod erf;
 /// Op-scoped evaluation reduction helpers.
 pub mod eval_reduction;
 /// Gather elements from input tensor using indices.
@@ -78,10 +75,6 @@ pub mod reshape;
 pub mod rsqrt;
 /// Division by a scalar constant.
 pub mod scalar_const_div;
-/// Sigmoid activation function.
-pub mod sigmoid;
-/// Sin trigonometric function.
-pub mod sin;
 /// Slice tensor along one axis.
 pub mod slice;
 /// The smooth ReLUs (GELU, SiLU): ReLU plus a table-lookup correction.
@@ -94,8 +87,8 @@ pub mod square;
 pub mod sub;
 /// Sum reduction along axes.
 pub mod sum;
-/// Tanh activation function.
-pub mod tanh;
+/// Sin and Cos: the period reduction, the downscale and the table read.
+pub mod trig;
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{plan::OpPlan, Verifier};

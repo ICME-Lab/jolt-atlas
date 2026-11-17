@@ -19,20 +19,16 @@
 //! `out = ReLU(x) + H[clamp(x)]` on every element.
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::neural_teleport::small_table::SmallTable;
-use crate::onnx_proof::neural_teleport::utils::materialize_signed_activation_table;
+use crate::onnx_proof::lookup::{small_table, SmallTableDef};
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::relation::{RelationExpr, RelationOpening};
+use crate::onnx_proof::relation::{OpExpr, RelationOpening};
 use crate::onnx_proof::{
     deferred_lookups::DeferredBatch,
     op_lookups::{DefaultLookupOperands, LookupOperandsTrait, LookupRaPolys},
-    ops::activation_clamped::{
-        clamped_activation_committed_polynomials, clamped_opening_id, ActivationClampOperands,
-    },
-    plan::{OpActivation, OpLookup, OpOpen, OpPlan, OpRelation, Plan, Step},
+    ops::activation_clamped::{clamped_activation_committed_polynomials, ActivationClampOperands},
+    plan::{OpLookup, OpOpen, OpPlan, OpRelation, Plan, Step},
 };
 use crate::utils::opening_access::OpeningIdBuilder;
-use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     poly::point::{OpeningPoint, BIG_ENDIAN},
@@ -64,53 +60,30 @@ pub fn relu_opening_id(node: &ComputationNode) -> OpeningId {
     OpeningIdBuilder::new(node).advice(VirtualPoly::SmoothReluRelu)
 }
 
-macro_rules! correction_table {
-    ($(#[$doc:meta])* $name:ident, $form:ident) => {
-        $(#[$doc])*
-        pub struct $name;
-
-        impl SmallTable for $name {
-            const VARS: usize = match SmoothReluForm::$form {
-                SmoothReluForm::Silu => ACTIVATION_TABLE_VARS + 1,
-                _ => ACTIVATION_TABLE_VARS,
-            };
-            const RA: fn(usize) -> VirtualPoly = VirtualPoly::ActivationSmallRa;
-            const SIGNED: bool = true;
-            fn materialize() -> Result<Vec<i32>, ProofVerifyError> {
-                materialize_signed_activation_table(
-                    Self::VARS,
-                    1,
-                    MODEL_SCALE as u8,
-                    TableKind::$form,
-                )
-            }
-            fn address(node: &ComputationNode) -> OpeningId {
-                clamped_opening_id(node.idx)
-            }
-            /// The correction is the output less `ReLU(x)`.
-            fn value<G: Ring>(node: &ComputationNode) -> RelationExpr<G> {
-                opening::<G, _, _, _>(RelationOpening::ReducedNodeOutput(node.idx))
-                    - opening(RelationOpening::Id(relu_opening_id(node)))
-            }
-        }
-    };
+/// `form`'s correction table `H = f − ReLU`, read at the clamped input, whose opening the
+/// read's setup appends; the read's value is the output less `ReLU(x)`.
+pub fn table_def(form: SmoothReluForm) -> SmallTableDef {
+    SmallTableDef {
+        kind: match form {
+            SmoothReluForm::GeluErf => TableKind::GeluErf,
+            SmoothReluForm::GeluTanh => TableKind::GeluTanh,
+            SmoothReluForm::Silu => TableKind::Silu,
+        },
+        vars: table_vars(form),
+        signed: true,
+        ra: VirtualPoly::ActivationSmallRa,
+        ra_chunk: CommittedPoly::ActivationSmallRaD,
+        address: VirtualPoly::ActivationClampedOutput,
+        opens_address: true,
+        value: output_less_relu,
+    }
 }
 
-correction_table!(
-    /// The erf-form GELU's correction to `ReLU`.
-    GeluErfTable,
-    GeluErf
-);
-correction_table!(
-    /// The tanh-form GELU's correction to `ReLU`.
-    GeluTanhTable,
-    GeluTanh
-);
-correction_table!(
-    /// SiLU's correction to `ReLU`, over a domain twice as wide.
-    SiluTable,
-    Silu
-);
+/// The value a correction table's read equals: the node's reduced output less `ReLU(x)`.
+fn output_less_relu(node: &ComputationNode) -> OpExpr {
+    opening(RelationOpening::ReducedNodeOutput(node.idx))
+        - opening(RelationOpening::Id(relu_opening_id(node)))
+}
 
 /// Lookup operands of a smooth ReLU's `ReLU` read: the clamp lookup's operand and committed
 /// address, with `ReLU(x)` as the value read.
@@ -160,7 +133,10 @@ impl OpLayout for SmoothRelu {
         &self,
         node: &ComputationNode,
     ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        Ok(clamped_activation_committed_polynomials(node))
+        Ok(clamped_activation_committed_polynomials(
+            node,
+            table_def(self.form),
+        ))
     }
 }
 
@@ -181,22 +157,18 @@ impl OpPlan for SmoothRelu {
                 node.scale
             )));
         }
-        let (table, clamp) = match self.form {
-            SmoothReluForm::GeluErf => (OpActivation::GeluErf, OpLookup::ActivationClamp),
-            SmoothReluForm::GeluTanh => (OpActivation::GeluTanh, OpLookup::ActivationClamp),
-            SmoothReluForm::Silu => (OpActivation::Silu, OpLookup::SiluClamp),
+        let clamp = match self.form {
+            SmoothReluForm::GeluErf | SmoothReluForm::GeluTanh => OpLookup::ActivationClamp,
+            SmoothReluForm::Silu => OpLookup::SiluClamp,
         };
         let defer = |batch, relation| Step::Defer { batch, relation };
         Ok(Plan(vec![
             Step::Reduce,
             Step::Open(OpOpen::SmoothReluRelu(node.clone())),
-            defer(
-                DeferredBatch::Lookups,
-                OpRelation::SmallActivation(table, node.clone()),
-            ),
+            defer(DeferredBatch::Lookups, OpRelation::Op(small_table(node)?)),
             defer(
                 DeferredBatch::OneHot,
-                OpRelation::SmallActivationOneHot(node.clone()),
+                OpRelation::SmallTableOneHot(node.clone()),
             ),
             defer(
                 DeferredBatch::Lookups,

@@ -43,14 +43,15 @@ use super::{
     probe::{self, ProbeGuard},
 };
 use crate::onnx_proof::{
+    proof_serialization::serialize_proof,
+    prove, prove_from_trace,
+    range_bucket::{remainder_buckets, BucketWitnesses},
     range_check::{
         self,
         digit_tamper::{self, DigitTamper, DigitTamperForm},
     },
-    range_bucket::{remainder_buckets, BucketWitnesses},
-    proof_serialization::serialize_proof,
-    prove, prove_from_trace, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    AtlasVerifierPreprocessing, ONNXProof,
+    verify, AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
+    ONNXProof,
 };
 
 /// The instantiation the sweeps run under: Akita over Fp128. The sweep bodies are generic over the

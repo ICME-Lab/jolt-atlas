@@ -22,7 +22,6 @@
 //! prover and verifier helpers without widening any visibility. Proof fields
 //! are reached only through `jolt-atlas-verifier`'s `test-util` accessors.
 
-mod range_buckets;
 mod digests;
 pub(crate) mod harness;
 pub(crate) mod model_builder;
@@ -31,6 +30,7 @@ mod mutate;
 pub(crate) mod op_kind;
 pub(crate) mod op_surface;
 pub(crate) mod probe;
+mod range_buckets;
 pub(crate) mod relations;
 mod rounds;
 mod soundness;

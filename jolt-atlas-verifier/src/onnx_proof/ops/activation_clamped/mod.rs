@@ -1,9 +1,9 @@
-//! Shared plumbing for the clamped Erf/Sigmoid/Tanh variants.
+//! The clamped activations Erf, Sigmoid and Tanh.
 //!
 //! Each op fuses two lookup stages into one node:
-//! 1. **Execution**: `output = SmallTable[clamped]`, where `clamped` is an internal
-//!    advice claim (gamma-batched with the identity polynomial so the one-hot `ra`
-//!    address is soundly tied to its value).
+//! 1. **Execution**: `output = Table[clamped]` over the activation's small table
+//!    ([`small_table`]), where `clamped` is an internal advice claim (gamma-batched with the
+//!    identity polynomial so the one-hot `ra` address is soundly tied to its value).
 //! 2. **ActivationClamp**: proves that same `clamped` claim equals
 //!    `ActivationClampTable[raw_input]` (natively symmetric clamp lookup, same shape as
 //!    `Clamp`), which soundly ties `clamped` back to the real input rather than just
@@ -13,13 +13,12 @@
 //! reads join the lookup batch, their one-hot (`ra`/`hw`/`bool`) checks the one-hot batch.
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::neural_teleport::small_table::{SmallTable, SmallTableRelation};
-use crate::onnx_proof::ops::smooth_relu;
-use crate::onnx_proof::relation::{RelationParams, RelationVerifier, SetupRelation};
+use crate::onnx_proof::lookup::{output_value, small_table, SmallTableDef};
+use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::{
     deferred_lookups::DeferredBatch,
     op_lookups::{DefaultLookupOperands, LookupOperandsTrait, LookupRaPolys, OpLookupEncoding},
-    plan::{OpActivation, OpLookup, OpRelation, Plan, Step},
+    plan::{OpLookup, OpPlan, OpRelation, Plan, Step},
 };
 use atlas_algebra::{
     field::JoltField,
@@ -28,10 +27,15 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
+    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     shout::RaOneHotEncoding,
 };
-use atlas_transcript::Transcript;
+use atlas_trace::{
+    op::{Erf, Sigmoid, Tanh},
+    semantics::tables::TableKind,
+    trace::ModelExecutionIO,
+    Model,
+};
 use common::{
     consts::{ACTIVATION_TABLE_VARS, XLEN},
     CommittedPoly, VirtualPoly,
@@ -40,20 +44,28 @@ use common::{
 /// Degree of the small-table execution sumcheck.
 pub const EXEC_DEGREE_BOUND: usize = 2;
 
-/// A clamped-activation's small lookup table: `Table[i] = activation(i)`, for
-/// two's-complement `i` over [`ACTIVATION_TABLE_BOUND`] bits.
-pub trait SmallActivationTable: Send + Sync + 'static {
-    /// Materializes the full table (all `2^ACTIVATION_TABLE_BOUND` entries). `Err` if the
-    /// table's scale is not one the semantics define.
-    fn materialize() -> Result<Vec<i32>, ProofVerifyError>;
-}
-
 /// Opening of the clamped input the activation table is read at.
 pub fn clamped_opening_id(node_idx: usize) -> OpeningId {
     OpeningId::new(
         VirtualPoly::ActivationClampedOutput(node_idx),
         SumcheckId::NodeExecution(node_idx),
     )
+}
+
+/// A clamped activation's small table: `Table[i] = activation(i)` for two's-complement `i`
+/// over [`ACTIVATION_TABLE_VARS`] bits, read at the clamped input, whose opening the read's
+/// setup appends.
+pub fn table_def(kind: TableKind) -> SmallTableDef {
+    SmallTableDef {
+        kind,
+        vars: ACTIVATION_TABLE_VARS,
+        signed: true,
+        ra: VirtualPoly::ActivationSmallRa,
+        ra_chunk: CommittedPoly::ActivationSmallRaD,
+        address: VirtualPoly::ActivationClampedOutput,
+        opens_address: true,
+        value: output_value,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -103,116 +115,21 @@ impl LookupRaPolys for ActivationClampOperands {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Stage: Execution -- small dense-table lookup, gamma-batched with an identity
-// polynomial.
-// ---------------------------------------------------------------------------
-
-impl<Table: SmallActivationTable> SmallTable for Table {
-    const VARS: usize = ACTIVATION_TABLE_VARS;
-    const RA: fn(usize) -> VirtualPoly = VirtualPoly::ActivationSmallRa;
-    const SIGNED: bool = true;
-    fn materialize() -> Result<Vec<i32>, ProofVerifyError> {
-        <Table as SmallActivationTable>::materialize()
-    }
-    fn address(node: &ComputationNode) -> OpeningId {
-        clamped_opening_id(node.idx)
-    }
-}
-
-/// The execution check's relation, set up: `γ` drawn, the reduced output point read. Both sides
-/// then append the clamped input's opening at that point before the sumcheck. `Err` if the
-/// accumulator lacks the reduced output opening.
-pub fn small_table_params<F: JoltField, Table: SmallTable>(
+/// The plan of a clamped activation: the evaluation reduction, then the two stages queued for
+/// the post-loop lookup batch and their one-hot checks for the one-hot batch. `Err` if the
+/// node's operator reads no small table.
+pub fn clamped_activation_plan<F: JoltField>(
     node: &ComputationNode,
-    accumulator: &dyn OpeningAccumulator<F>,
-    transcript: &mut impl Transcript,
-) -> Result<RelationParams<F, SmallTableRelation<Table>>, ProofVerifyError> {
-    let relation = SmallTableRelation::new(node.clone());
-    let setup = relation.setup(accumulator, transcript)?;
-    Ok(RelationParams::at(relation, setup))
-}
-
-/// The execution check's verifier: set up, with the clamped input's opening appended at the
-/// reduced output point. `Err` if the accumulator lacks a claim it reads.
-pub fn small_table_verifier<F: JoltField, Table: SmallTable>(
-    node: &ComputationNode,
-    accumulator: &mut VerifierOpeningAccumulator<F>,
-    transcript: &mut impl Transcript,
-) -> Result<RelationVerifier<F, SmallTableRelation<Table>>, ProofVerifyError> {
-    let (relation, setup) =
-        small_table_params::<F, Table>(node, accumulator, transcript)?.into_parts();
-    accumulator.append_virtual(
-        transcript,
-        clamped_opening_id(node.idx),
-        OpeningPoint::new(setup.incoming_point.clone()),
-    )?;
-    Ok(RelationVerifier::at(relation, setup))
-}
-
-/// One-hot encoding of the small table's read addresses.
-pub struct SmallTableRaEncoding {
-    /// The node whose reads are encoded.
-    pub node_idx: usize,
-    /// The table's address variables.
-    pub log_k: usize,
-}
-
-impl SmallTableRaEncoding {
-    /// The encoding of `node`'s small-table read: [`ACTIVATION_TABLE_VARS`] address variables,
-    /// or the wider table's of a smooth ReLU ([`smooth_relu::table_vars`]).
-    pub fn for_node(node: &ComputationNode) -> Self {
-        let log_k = match &node.operator {
-            atlas_trace::Op::SmoothRelu(op) => smooth_relu::table_vars(op.form),
-            _ => ACTIVATION_TABLE_VARS,
-        };
-        Self {
-            node_idx: node.idx,
-            log_k,
-        }
-    }
-}
-
-impl RaOneHotEncoding for SmallTableRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::ActivationSmallRaD(self.node_idx, d)
-    }
-
-    fn r_cycle_source(&self) -> OpeningId {
-        clamped_opening_id(self.node_idx)
-    }
-
-    fn ra_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::ActivationSmallRa(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn log_k(&self) -> usize {
-        self.log_k
-    }
-
-    fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_k)
-    }
-}
-
-/// The plan of a clamped activation reading `table`: the evaluation reduction, then the two
-/// stages queued for the post-loop lookup batch and their one-hot checks for the one-hot batch.
-pub fn clamped_activation_plan<F: atlas_algebra::field::JoltField>(
-    node: &ComputationNode,
-    table: OpActivation,
-) -> Plan<F> {
-    Plan(vec![
+) -> Result<Plan<F>, ProofVerifyError> {
+    Ok(Plan(vec![
         Step::Reduce,
         Step::Defer {
             batch: DeferredBatch::Lookups,
-            relation: OpRelation::SmallActivation(table, node.clone()),
+            relation: OpRelation::Op(small_table(node)?),
         },
         Step::Defer {
             batch: DeferredBatch::OneHot,
-            relation: OpRelation::SmallActivationOneHot(node.clone()),
+            relation: OpRelation::SmallTableOneHot(node.clone()),
         },
         Step::Defer {
             batch: DeferredBatch::Lookups,
@@ -222,17 +139,90 @@ pub fn clamped_activation_plan<F: atlas_algebra::field::JoltField>(
             batch: DeferredBatch::OneHot,
             relation: OpRelation::LookupOneHot(OpLookup::ActivationClamp, node.clone()),
         },
-    ])
+    ]))
 }
 
-/// Committed polynomials for a clamped-activation node (both stages' one-hot RaD chunks).
-pub fn clamped_activation_committed_polynomials(node: &ComputationNode) -> Vec<CommittedPoly> {
+/// Committed polynomials for a node reading the small table `def` at its clamped input: both
+/// stages' one-hot chunks.
+pub fn clamped_activation_committed_polynomials(
+    node: &ComputationNode,
+    def: SmallTableDef,
+) -> Vec<CommittedPoly> {
     let clamp_encoding: OpLookupEncoding<ActivationClampOperands> = OpLookupEncoding::new(node);
-    let small_encoding = SmallTableRaEncoding::for_node(node);
     let clamp_d = clamp_encoding.one_hot_params().instruction_d;
-    let small_d = small_encoding.one_hot_params().instruction_d;
+    let small_d =
+        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), def.vars).instruction_d;
     let mut polys = vec![];
     polys.extend((0..clamp_d).map(|i| CommittedPoly::ActivationClampRaD(node.idx, i)));
-    polys.extend((0..small_d).map(|i| CommittedPoly::ActivationSmallRaD(node.idx, i)));
+    polys.extend((0..small_d).map(|i| (def.ra_chunk)(node.idx, i)));
     polys
+}
+
+impl OpLayout for Erf {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(clamped_activation_committed_polynomials(
+            node,
+            table_def(TableKind::Erf),
+        ))
+    }
+}
+
+impl OpPlan for Erf {
+    fn plan<F: JoltField>(
+        &self,
+        node: &ComputationNode,
+        _model: &Model,
+        _io: &ModelExecutionIO,
+    ) -> Result<Plan<F>, ProofVerifyError> {
+        clamped_activation_plan(node)
+    }
+}
+
+impl OpLayout for Sigmoid {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(clamped_activation_committed_polynomials(
+            node,
+            table_def(TableKind::Sigmoid),
+        ))
+    }
+}
+
+impl OpPlan for Sigmoid {
+    fn plan<F: JoltField>(
+        &self,
+        node: &ComputationNode,
+        _model: &Model,
+        _io: &ModelExecutionIO,
+    ) -> Result<Plan<F>, ProofVerifyError> {
+        clamped_activation_plan(node)
+    }
+}
+
+impl OpLayout for Tanh {
+    fn get_committed_polynomials(
+        &self,
+        node: &ComputationNode,
+    ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
+        Ok(clamped_activation_committed_polynomials(
+            node,
+            table_def(TableKind::Tanh),
+        ))
+    }
+}
+
+impl OpPlan for Tanh {
+    fn plan<F: JoltField>(
+        &self,
+        node: &ComputationNode,
+        _model: &Model,
+        _io: &ModelExecutionIO,
+    ) -> Result<Plan<F>, ProofVerifyError> {
+        clamped_activation_plan(node)
+    }
 }

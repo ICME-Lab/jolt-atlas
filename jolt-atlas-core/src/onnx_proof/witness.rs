@@ -21,11 +21,8 @@ use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::{
-    onnx_proof::{
-        neural_teleport::n_bits_to_usize,
-        ops::softmax_last_axis::{addresses, table_addresses},
-    },
-    utils::compute_lookup_indices,
+    onnx_proof::ops::softmax_last_axis::{addresses, table_addresses},
+    utils::{compute_lookup_indices, n_bits_to_usize},
 };
 use atlas_algebra::{
     field::JoltField,
@@ -200,11 +197,9 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let computation_node = &model.view(*node_idx);
                 let layer_data = TraceView::layer_data(trace, computation_node);
                 let input = &layer_data.operands[0];
-                let vars =
-                    crate::onnx_proof::ops::activation_clamped::SmallTableRaEncoding::for_node(
-                        computation_node,
-                    )
-                    .log_k;
+                let vars = crate::onnx_proof::lookup::SmallTableDef::for_node(computation_node)
+                    .expect("the node reads a small table")
+                    .vars;
                 build_activation_small_rad_witness(input, vars, *d)
             }
             CommittedPoly::GlobalRemainderDigit(..) => {
@@ -291,7 +286,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
             }
 
             CommittedPoly::CosRaD(node_idx, d_idx) | CommittedPoly::SinRaD(node_idx, d_idx) => {
-                use crate::onnx_proof::neural_teleport::cos::COS_TABLE_VARS;
+                use crate::onnx_proof::ops::trig::TRIG_TABLE_VARS;
                 use common::consts::TRIG_DOWNSCALE_BITS;
 
                 let computation_node = &model.view(*node_idx);
@@ -306,7 +301,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     .map(|&x| (x >> TRIG_DOWNSCALE_BITS) as usize)
                     .collect();
                 let one_hot_params =
-                    OneHotParams::from_config_and_log_K(&OneHotConfig::default(), COS_TABLE_VARS);
+                    OneHotParams::from_config_and_log_K(&OneHotConfig::default(), TRIG_TABLE_VARS);
                 let h_indices = atlas_sumcheck::shout::compute_instruction_h_indices(
                     &lookup_indices,
                     &one_hot_params,

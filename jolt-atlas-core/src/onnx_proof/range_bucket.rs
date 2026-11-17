@@ -3,7 +3,7 @@
 //! values, from the trace, and their dense digit columns.
 #[cfg(test)]
 use super::range_check::digit_tamper;
-use super::{range_check, fused_rebase::rebase_remainder, trace_view::TraceView};
+use super::{fused_rebase::rebase_remainder, range_check, trace_view::TraceView};
 use crate::node_view::{ComputationNode, ModelView};
 use atlas_algebra::{
     field::JoltField, poly::multilinear::MultilinearPolynomial, utils::lookup_bits::LookupBits,

@@ -12,8 +12,8 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
     deferred_lookups::DeferredBatch,
-    range_bucket::BucketWitnesses,
     ops::{Addresses, Deferred, OperatorProver},
+    range_bucket::BucketWitnesses,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
 use crate::utils::opening_access::IntoProverProvider;

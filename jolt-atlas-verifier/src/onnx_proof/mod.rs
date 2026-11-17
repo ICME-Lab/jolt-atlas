@@ -13,15 +13,15 @@ use atlas_transcript::{Transcript, VerifyingTranscript};
 
 // ── Submodules ───────────────────────────────────────────────────────────
 
-pub mod range_check;
 pub mod deferred_lookups;
 pub mod fused_rebase;
-pub mod range_bucket;
-pub mod neural_teleport;
+pub mod lookup;
 pub mod op_lookups;
 pub mod ops;
 pub mod plan;
 pub mod preprocessing;
+pub mod range_bucket;
+pub mod range_check;
 pub mod relation;
 pub mod verifier;
 

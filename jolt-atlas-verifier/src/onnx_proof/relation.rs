@@ -249,6 +249,9 @@ pub enum OpRelKind {
     TrigPeriod,
     /// `SoftmaxLastAxis`: the clamp lookup's operand is the shift minus the logit.
     SoftmaxAddressLink,
+    /// A small public table read through one-hot addresses (a clamped activation, a smooth
+    /// ReLU's correction, a trig op).
+    SmallTable,
 }
 
 impl OpRelKind {
@@ -277,6 +280,7 @@ impl OpRelKind {
             Self::SoftmaxSums => RelationId::SoftmaxSums,
             Self::TrigPeriod => RelationId::TrigPeriod,
             Self::SoftmaxAddressLink => RelationId::SoftmaxAddressLink,
+            Self::SmallTable => RelationId::SmallTable,
         }
     }
 
@@ -311,6 +315,15 @@ impl OpRelKind {
             Self::SoftmaxSums => matches!(op, Op::SoftmaxLastAxis(_)),
             Self::TrigPeriod => matches!(op, Op::Sin(_) | Op::Cos(_)),
             Self::SoftmaxAddressLink => matches!(op, Op::SoftmaxLastAxis(_)),
+            Self::SmallTable => matches!(
+                op,
+                Op::Erf(_)
+                    | Op::Sigmoid(_)
+                    | Op::Tanh(_)
+                    | Op::SmoothRelu(_)
+                    | Op::Sin(_)
+                    | Op::Cos(_)
+            ),
         }
     }
 }

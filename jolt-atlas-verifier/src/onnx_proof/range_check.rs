@@ -9,7 +9,7 @@
 //!    own point, to one opening of the packed value `V` at a fresh point `r'`;
 //! 2. a **digit range check** proves `V(r')` is the recomposition of [`num_digits`]`(width)`
 //!    committed base-[`DIGIT_BASE`] digits, each in range.
-use super::{deferred_lookups::DEFERRED_PROOF_IDX, range_bucket::RangeBucket};
+use super::{range_bucket::RangeBucket, schedule::DEFERRED_PROOF_IDX};
 use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,

@@ -6,6 +6,7 @@
 //! ([`BucketWitnesses`](crate::onnx_proof::range_bucket::BucketWitnesses)).
 use crate::onnx_proof::{
     ops::{prove_deferred_batches, prove_steps},
+    schedule::DEFERRED_PROOF_IDX,
     ProofId, Prover,
 };
 use atlas_algebra::{field::JoltField, utils::thread::drop_in_background_thread};

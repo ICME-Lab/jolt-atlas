@@ -1,9 +1,18 @@
 //! The verification schedule: what the verifier checks, in transcript order, as data.
 //!
 //! A [`Schedule`] is a list of [`Step`]s over a table of relations ([`OpRelation`]), each
-//! named by its [`RelId`]. An op's [`OpPlan::plan`] writes its node's steps to a
-//! [`ScheduleBuilder`]; [`ScheduleBuilder::finish`] checks that every relation is set up at
-//! most once and verified exactly once, and that no sumcheck is empty.
+//! named by its [`RelId`]. [`Schedule::compile`] builds a model's: each node's steps in reverse
+//! topological order, written by its op's [`OpPlan::plan`] to a [`ScheduleBuilder`], then the
+//! steps [`ScheduleBuilder::finish`] adds for the whole model: the packed range buckets' value
+//! sumcheck and digit range check, the lookups sumcheck (every table read) and the one-hot
+//! sumcheck (every one-hot check of a read's addresses). `finish` checks that every relation
+//! is set up at most once and verified exactly once, and that no sumcheck is empty. The
+//! interpreter ([`Verifier::run`](super::Verifier::run)) executes the steps in order.
+//!
+//! A table read is set up in its node's turn (a `Setup` step), where it draws its challenges
+//! and appends its operand claim, and is proven in the lookups sumcheck. A one-hot check
+//! reads the read-address claim that sumcheck (or its node's own read) produces, so it is set
+//! up only when the one-hot sumcheck runs.
 //!
 //! A step holds values, never closures. A relation is one variant of [`OpRelation`] per kind
 //! of verifier construction: an op relation ([`OpRel`]), a prefix-suffix table read
@@ -14,7 +23,7 @@
 //! [`SetupRelation::setup`](super::relation::SetupRelation::setup), which runs when the
 //! relation is set up: at its `Setup` step, or at its `Sumcheck` step when it has none.
 
-use crate::node_view::ComputationNode;
+use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::{
     fused_rebase,
     lookup::{table_read_verifier, RaEncoding, TableRead},
@@ -22,7 +31,7 @@ use crate::onnx_proof::{
         gather::{self, small::GatherSmallShape},
         softmax_last_axis::{self, SoftmaxOpen, SoftmaxShape},
     },
-    range_bucket::RangeBucket,
+    range_bucket::{range_buckets, RangeBucket},
     range_check::{self, ValueParams},
     relation::{op_rel_verifier, OpRel},
     ProofId, ProofType,
@@ -37,6 +46,10 @@ use atlas_sumcheck::{
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
+
+/// Node index under which the proofs of the model-wide sumcheck steps (the range buckets, the
+/// lookups, the one-hot checks) are stored.
+pub const DEFERRED_PROOF_IDX: usize = usize::MAX;
 
 /// The name of a relation in a schedule: its index in the schedule's relation table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -79,6 +92,23 @@ pub struct Schedule<F: JoltField> {
 }
 
 impl<F: JoltField> Schedule<F> {
+    /// The schedule of `model` for the public IO `io`. `Err` if a node does not have the shape
+    /// its operator proves.
+    pub fn compile(model: &Model, io: &ModelExecutionIO) -> Result<Self, ProofVerifyError> {
+        let mut builder = ScheduleBuilder::new();
+        for node in model.views().iter().rev() {
+            builder.enter_node(node.idx);
+            crate::dispatch_operator!(node, |inner| OpPlan::plan(
+                inner,
+                node,
+                model,
+                io,
+                &mut builder
+            ))?;
+        }
+        builder.finish(range_buckets(model)?)
+    }
+
     /// The steps, in transcript order.
     pub fn steps(&self) -> &[Step] {
         &self.steps
@@ -176,20 +206,25 @@ pub struct ScheduleBuilder<F: JoltField> {
     pub(crate) lookups: Vec<RelId>,
     /// The one-hot checks, in the order registered.
     pub(crate) one_hot: Vec<RelId>,
-    /// The node whose steps are being written.
+    /// The node whose steps are being written; [`DEFERRED_PROOF_IDX`] outside any node.
     node: usize,
 }
 
 impl<F: JoltField> ScheduleBuilder<F> {
-    /// An empty schedule, writing the steps of node `node`.
-    pub fn at_node(node: usize) -> Self {
+    /// An empty schedule.
+    pub fn new() -> Self {
         Self {
             relations: Vec::new(),
             steps: Vec::new(),
             lookups: Vec::new(),
             one_hot: Vec::new(),
-            node,
+            node: DEFERRED_PROOF_IDX,
         }
+    }
+
+    /// Write the steps that follow as node `node`'s.
+    pub fn enter_node(&mut self, node: usize) {
+        self.node = node;
     }
 
     fn register(&mut self, relation: OpRelation<F>) -> RelId {
@@ -254,10 +289,45 @@ impl<F: JoltField> ScheduleBuilder<F> {
         self.one_hot.push(id);
     }
 
-    /// The schedule written. `Err` unless every relation is set up at most once, before its
-    /// sumcheck, and verified exactly once (by one sumcheck or one tie), and every sumcheck
-    /// has a member.
-    pub fn finish(self) -> Result<Schedule<F>, ProofVerifyError> {
+    /// The schedule written, closed by the model-wide steps: the value sumcheck and the digit
+    /// range check of `buckets` (each one batch over the buckets), the lookups sumcheck, then
+    /// the one-hot sumcheck; a step with no member is left out. `Err` unless every relation is
+    /// set up at most once, before its sumcheck, and verified exactly once (by one sumcheck or
+    /// one tie), and every sumcheck has a member.
+    pub fn finish(mut self, buckets: Vec<RangeBucket>) -> Result<Schedule<F>, ProofVerifyError> {
+        self.node = DEFERRED_PROOF_IDX;
+        if !buckets.is_empty() {
+            self.batch(
+                ProofType::DeferredRemainderRC,
+                buckets
+                    .iter()
+                    .cloned()
+                    .map(OpRelation::RemainderBucketValue)
+                    .collect(),
+            );
+            self.batch(
+                ProofType::DeferredRemainderDigitRange,
+                buckets
+                    .into_iter()
+                    .map(OpRelation::RemainderBucketDigits)
+                    .collect(),
+            );
+        }
+        for (proof, members) in [
+            (
+                ProofType::DeferredLookups,
+                std::mem::take(&mut self.lookups),
+            ),
+            (ProofType::DeferredOneHot, std::mem::take(&mut self.one_hot)),
+        ] {
+            if !members.is_empty() {
+                self.steps.push(Step::Sumcheck {
+                    proof: ProofId(DEFERRED_PROOF_IDX, proof),
+                    members,
+                    batched: true,
+                });
+            }
+        }
         let schedule = Schedule {
             relations: self.relations,
             steps: self.steps,
@@ -450,7 +520,7 @@ mod tests {
 
     /// A builder holding one relation and no step.
     fn one_relation() -> (ScheduleBuilder<Fp128>, RelId) {
-        let mut builder = ScheduleBuilder::at_node(0);
+        let mut builder = ScheduleBuilder::new();
         builder.relations.push(relation());
         (builder, RelId(0))
     }
@@ -459,36 +529,36 @@ mod tests {
     fn schedule_accepts_a_setup_then_its_sumcheck() {
         let (mut builder, id) = one_relation();
         builder.steps = vec![Step::Setup(id), sumcheck(vec![id])];
-        assert!(builder.finish().is_ok());
+        assert!(builder.finish(Vec::new()).is_ok());
     }
 
     #[test]
     fn schedule_rejects_a_double_setup() {
         let (mut builder, id) = one_relation();
         builder.steps = vec![Step::Setup(id), Step::Setup(id), sumcheck(vec![id])];
-        assert!(builder.finish().is_err());
+        assert!(builder.finish(Vec::new()).is_err());
     }
 
     #[test]
     fn schedule_rejects_a_relation_in_two_sumchecks() {
         let (mut builder, id) = one_relation();
         builder.steps = vec![sumcheck(vec![id]), sumcheck(vec![id])];
-        assert!(builder.finish().is_err());
+        assert!(builder.finish(Vec::new()).is_err());
     }
 
     #[test]
     fn schedule_rejects_a_setup_after_its_sumcheck() {
         let (mut builder, id) = one_relation();
         builder.steps = vec![sumcheck(vec![id]), Step::Setup(id)];
-        assert!(builder.finish().is_err());
+        assert!(builder.finish(Vec::new()).is_err());
     }
 
     #[test]
     fn schedule_rejects_an_empty_sumcheck_and_an_unverified_relation() {
         let (mut builder, _) = one_relation();
         builder.steps = vec![sumcheck(Vec::new())];
-        assert!(builder.finish().is_err());
+        assert!(builder.finish(Vec::new()).is_err());
         let (builder, _) = one_relation();
-        assert!(builder.finish().is_err());
+        assert!(builder.finish(Vec::new()).is_err());
     }
 }

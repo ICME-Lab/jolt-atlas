@@ -110,7 +110,6 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     setup: impl FnOnce(&mut Verifier<'_, F, T>),
 ) -> Result<(), ProofVerifyError> {
     let mut verifier: Verifier<F, T> = Verifier::new(
-        &pp.shared,
         proof.proofs(),
         proof.eval_reduction_proofs(),
         io,
@@ -134,8 +133,10 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     // Verify output MLE at random point τ
     verifier::verify_output_claim(pp.model(), &mut verifier)?;
 
-    // Verify each operation in reverse topological order
-    verifier::verify_iop(pp.model(), &mut verifier)?;
+    // Run the model's schedule: each node in reverse topological order, then the model-wide
+    // sumchecks.
+    let schedule = schedule::Schedule::compile(pp.model(), io)?;
+    verifier.run(&schedule)?;
 
     // Verify reduced opening proof
     verifier::verify_reduced_openings(proof, pp, &mut verifier)?;

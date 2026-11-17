@@ -65,7 +65,8 @@ mod tests {
     use crate::node_view::ModelView;
     use crate::onnx_proof::testing::ModelBuilder;
     use crate::onnx_proof::{
-        prover, verifier, AtlasSharedPreprocessing, Claims, ONNXProof, ProofId, Verifier,
+        prover, schedule::Schedule, verifier, AtlasSharedPreprocessing, Claims, ONNXProof, ProofId,
+        Verifier,
     };
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::poly::{
@@ -217,16 +218,9 @@ mod tests {
     fn eval_reduction_verifier_single_opening_is_propagated() {
         let n = 1 << 3; // 8 points, i.e. 3 variables
         let output: Tensor<i32> = Tensor::construct((0..n).map(|i| i as i32).collect(), vec![n]);
-        let model = {
-            let mut b = ModelBuilder::new();
-            let x = b.input(vec![n]);
-            b.mark_output(x);
-            b.build()
-        };
         let producer_idx = 0;
         let consumer = 1;
 
-        let preprocessing = AtlasSharedPreprocessing::preprocess(model);
         let io = ModelExecutionIO {
             inputs: Vec::new(),
             outputs: Vec::new(),
@@ -236,15 +230,8 @@ mod tests {
 
         let proofs = BTreeMap::new();
         let eval_reductions = BTreeMap::new();
-        let mut verifier = Verifier::<Fr, Blake2bVerifier>::new(
-            &preprocessing,
-            &proofs,
-            &eval_reductions,
-            &io,
-            &[],
-        );
-
-        let producer_node = ComputationNode::new(producer_idx, Op::Add(Add), vec![], vec![n]);
+        let mut verifier =
+            Verifier::<Fr, Blake2bVerifier>::new(&proofs, &eval_reductions, &io, &[]);
 
         let output_mle = MultilinearPolynomial::from(output.padded_pow2());
         let num_vars = output_mle.get_num_vars();
@@ -260,7 +247,7 @@ mod tests {
         let opening = (OpeningPoint::new(point.clone()), claim);
         verifier.accumulator_mut().openings.insert(key, opening);
 
-        NodeEvalReduction::verify(&mut verifier, &producer_node)
+        NodeEvalReduction::verify(&mut verifier, producer_idx)
             .expect("single opening should be accepted and propagated by verifier");
 
         let reduced = verifier
@@ -303,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_iop_runs_in_isolation_after_verify_output_claim() {
+    fn schedule_runs_in_isolation_after_verify_output_claim() {
         let t = 1 << 4;
         let mut rng = StdRng::seed_from_u64(0x2020);
         let input = Tensor::<i32>::random_small(&mut rng, &[t]);
@@ -342,7 +329,6 @@ mod tests {
         );
 
         let mut verifier = Verifier::<_, Blake2bVerifier>::new(
-            &shared,
             partial_proof.proofs(),
             partial_proof.eval_reduction_proofs(),
             &io,
@@ -351,8 +337,10 @@ mod tests {
         verifier::populate_accumulator(&partial_proof, &mut verifier);
         verifier::verify_output_claim(shared.model(), &mut verifier)
             .expect("verify_output_claim should succeed for consistent partial proof state");
-        verifier::verify_iop(shared.model(), &mut verifier)
-            .expect("verify_iop should succeed in isolation after output-claim initialization");
+        let schedule = Schedule::compile(shared.model(), &io).expect("the model has a schedule");
+        verifier
+            .run(&schedule)
+            .expect("the schedule should run in isolation after output-claim initialization");
 
         let output_idx = shared.model().output_indices()[0];
         assert!(verifier

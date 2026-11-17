@@ -94,7 +94,7 @@ use atlas_transcript::Transcript;
 use eval_reduction::NodeEvalReduction;
 
 use crate::onnx_proof::{
-    deferred_lookups::{DeferredBatch, DeferredSetup, DEFERRED_PROOF_IDX},
+    deferred_lookups::{DeferredBatch, DeferredSetup},
     fused_rebase::rebase_remainder,
     lookup,
     ops::{
@@ -106,7 +106,7 @@ use crate::onnx_proof::{
     relation::{
         op_rel_params, prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
     },
-    schedule::{OpOpen, OpRelation},
+    schedule::{OpOpen, OpRelation, DEFERRED_PROOF_IDX},
     trace_view::TraceView,
     ProofId,
 };
@@ -160,8 +160,8 @@ pub enum Deferred<F: JoltField, T: Transcript> {
 }
 
 /// Walk `node`'s plan on the prover side: every step the verifier's interpreter
-/// ([`Verifier::run_plan`](crate::onnx_proof::Verifier::run_plan)) runs, in the same order, with
-/// the relations' witnesses.
+/// ([`Verifier::run`](crate::onnx_proof::Verifier::run)) runs for the node, in the same order,
+/// with the relations' witnesses.
 #[tracing::instrument(skip_all, name = "prove_plan", fields(node = node.idx, op = %node.operator))]
 pub fn prove_plan<F: JoltField, T: Transcript>(
     node: &ComputationNode,

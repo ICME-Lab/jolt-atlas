@@ -10,9 +10,9 @@ use rand::{rngs::StdRng, SeedableRng};
 use super::{models::probe_models, prove_verify_roundtrip, ModelBuilder, RoundtripOptions};
 use crate::node_view::ModelView;
 use crate::onnx_proof::{
-    deferred_lookups::DEFERRED_PROOF_IDX,
     prove,
     range_bucket::{checks_its_output, range_buckets, Remainder},
+    schedule::DEFERRED_PROOF_IDX,
     AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
@@ -218,7 +218,7 @@ fn scalar_const_div_rejects_a_non_positive_divisor() {
     let atlas_trace::Op::ScalarConstDiv(op) = &node.operator else {
         panic!("the output is a ScalarConstDiv");
     };
-    let mut schedule = ScheduleBuilder::<Fp128>::at_node(node.idx);
+    let mut schedule = ScheduleBuilder::<Fp128>::new();
     assert!(op.plan(&node, &model, &io, &mut schedule).is_err());
     assert!(range_buckets(&model).is_err());
 }

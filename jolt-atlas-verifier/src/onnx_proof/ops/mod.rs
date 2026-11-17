@@ -4,7 +4,8 @@
 //! type implements two traits:
 //!
 //! - [`OpLayout`]: the model-only facts (the committed polynomials)
-//! - [`OpPlan`]: its verification plan (`onnx_proof::plan`), run by the interpreter
+//! - [`OpPlan`](crate::onnx_proof::schedule::OpPlan): its steps of the model's schedule
+//!   (`onnx_proof::schedule`), run by the interpreter
 //!
 //! ## Op Categories
 //!
@@ -26,8 +27,9 @@
 //! ## Architecture
 //!
 //! Every operator's protocol is a relation (`onnx_proof::relation`): its claim algebra, from
-//! which the verifier is derived. An operator's verification is its plan (`onnx_proof::plan`:
-//! ordered steps over relations, run by the verifier's interpreter and walked by the prover).
+//! which the verifier is derived. An operator's verification is its plan: the ordered steps
+//! over relations it writes to the model's schedule (`onnx_proof::schedule`), run by the
+//! verifier's interpreter and walked by the prover.
 //! An op's relations are values ([`OpRel`](crate::onnx_proof::relation::OpRel)) built by
 //! constructor functions in its module, each documenting its S ⊆ R argument; the constructors
 //! are called from the op's plan, so a relation is built only for a node of its op. The trig
@@ -98,10 +100,8 @@ pub mod sum;
 pub mod trig;
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::{plan::Plan, Verifier};
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
-use atlas_transcript::Transcript;
 use common::CommittedPoly;
 
 use crate::onnx_proof::ProofId;
@@ -194,24 +194,5 @@ impl NodeCommittedPolynomials {
         dispatch_operator!(node, |inner| OpLayout::get_committed_polynomials(
             inner, node
         ))
-    }
-}
-
-/// Verifier dispatcher for operator proofs: the node's operator's plan, run by the
-/// interpreter.
-pub struct OperatorVerifier;
-
-impl OperatorVerifier {
-    /// Verify `node`: build its operator's plan from the model and the public IO, then run it.
-    pub fn verify<F, T>(
-        node: &ComputationNode,
-        verifier: &mut Verifier<'_, F, T>,
-    ) -> Result<(), ProofVerifyError>
-    where
-        F: JoltField,
-        T: Transcript,
-    {
-        let plan = Plan::of_node(node, verifier.preprocessing.model(), verifier.io)?;
-        verifier.run_plan(node, plan)
     }
 }

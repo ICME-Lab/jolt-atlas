@@ -1,19 +1,10 @@
-//! The post-loop plan: the packed buckets, then every lookup in two batches.
+//! Temporary: the post-loop batches as `jolt-atlas-core`'s per-node walk proves them.
 //!
-//! A table read consumes claims appended during its node's turn and produces a claim only on
-//! its own read address, and a one-hot check consumes only that read-address claim, so neither
-//! needs to run in the node loop: a plan step [`Step::Defer`](super::plan::Step::Defer) queues
-//! the read for [`DeferredBatch::Lookups`] and its one-hot check for
-//! [`DeferredBatch::OneHot`], and each batch is proven as one batched sumcheck after the loop.
-//! The range claims (remainders, their slacks, the outputs of the arithmetic nodes) are packed
-//! into model-level buckets ([`range_bucket`](super::range_bucket)); [`plan`] builds their steps
-//! from the model, with nothing to register during the loop, and they run before the two
-//! batches.
-//!
-//! The prover walks the same plan (`jolt_atlas_core::onnx_proof::deferred_lookups`), proving
-//! every batch with `prove_relation_batch_parallel`: instance messages are computed in parallel
-//! across instances, which turns hundreds of tiny sequential sumchecks into a few large
-//! parallel ones.
+//! The verifier runs the model's schedule ([`schedule`](super::schedule)), whose last steps are
+//! the packed buckets' two sumchecks, the lookups sumcheck and the one-hot sumcheck. Until the
+//! prover walks that schedule too, it queues a node's table reads for [`DeferredBatch::Lookups`]
+//! and its one-hot checks for [`DeferredBatch::OneHot`], and builds the buckets' steps with
+//! [`plan`]. This module goes away with [`plan`](super::plan).
 use crate::onnx_proof::{
     plan::{Plan, Step},
     range_bucket::range_buckets,
@@ -22,9 +13,6 @@ use crate::onnx_proof::{
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::Model;
-
-/// Node index under which the deferred (model-wide) lookup proofs are stored.
-pub const DEFERRED_PROOF_IDX: usize = usize::MAX;
 
 /// When a deferred relation is set up (its claims read, its challenges drawn).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,8 +57,8 @@ impl DeferredBatch {
 }
 
 /// The post-loop plan over the packed range buckets, from the model: their value sumchecks as
-/// one batch, then their digit range checks as a second. The deferred batches follow, run by
-/// the interpreter from its queue.
+/// one batch, then their digit range checks as a second. The deferred batches follow, proven
+/// from the prover's queue.
 pub fn plan<F: atlas_algebra::field::JoltField>(
     model: &Model,
 ) -> Result<Plan<F>, ProofVerifyError> {

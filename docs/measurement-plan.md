@@ -522,6 +522,42 @@ n = 29). Where the time is:
 Proof size is 1.3 MB against the proof-of-concept's 0.49 MB: Merkle paths are sent in full
 for every query, and all levels are at rate 1/2.
 
+### `atlas-pcs::bitz` after tuning (2026-11-17, `atlas-bench`, 16 threads)
+
+The same benchmark at `312e7e829`, after three prover-only changes; the proofs are the same
+bytes (every prover message is determined by the statement and the challenges, and the
+proof-of-work nonce is still the least accepted one).
+
+| n | commit ms | prove s | commit + prove s | verify ms | proof MB | peak GB |
+|---|---|---|---|---|---|---|
+| 28 | 64 | 0.82 | 0.89 | 39 | 1.24 | 0.84 |
+| 29 | 127 | 1.67 | **1.79** | 41 | 1.31 | 1.69 |
+| 30 | 254 | 3.28 | 3.54 | 59 | 1.61 | 3.32 |
+| 29, one thread | 856 | 17.6 | 18.4 | 112 | | 1.51 |
+
+The gate before stage 2 (2.0 s for commit + prove at n = 29) is met. Phases at n = 29:
+projection 0.18 s, grand product 1.25 s, ring switching 0.04 s, Ligerito 0.18 s. What moved,
+in order of effect:
+
+- **Proof of work on every thread** (`atlas-transcript`): projection 1.64 → 0.18 s, Ligerito
+  1.57 → 0.17 s. The search is still a Blake2b sponge probe per nonce; its time is a
+  geometric random variable, so other statements will land on either side of these.
+- **The grand product's memory traffic**: 4.07 → 1.25 s. A build with `-C target-cpu=native`
+  was only 10% faster than the default one, so the field multiplication was not the limit;
+  32 MB per-byte tables indexed in column order missed the cache on every read, each round
+  rebuilt an `eq` table the size of the layer, folds were collected through unindexed
+  iterators, and large buffers were zero-filled on one thread. The prover now works from a
+  row-ordered byte copy of the bits and stores layers as runs of columns.
+- **Unreduced sums** in the two hot loops: 1.37 → 1.25 s.
+
+The proof-of-concept's note on its own grand product (`docs/forest-gkr-note` in its tree) was
+read for techniques: never materialising `eq`, unreduced accumulation, fusing a fold into the
+next round's pass, and transposing the bits once are all in it. Not taken, because they
+change the proof: its two-coefficient round messages and its tree orientation (a node
+multiplies leaves half a column apart, which lets it sweep 64 values per word). Still open on
+our side: the remaining 1.25 s is about four times its 0.30 s, and proof size (1.3 MB against
+0.49 MB) is untouched.
+
 ### Baseline for the protocol-simplification specs (2026-11-16, commit c65753bfa)
 
 Taken after the owned-toolkit program (`docs/roadmap.md`, phases 1–7) and before any of the

@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-16                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          |                                |
 | Depends on  | `specs/one-clamp.md` (the clamp split, the exact flag and `clamp_lookups/` are gone; this spec does not convert them) |
 | Supersedes  | `specs/verifier-audit-simplification.md`'s "each op relation is bound to its op by `type Spec`" mechanism |
@@ -207,6 +207,12 @@ New:
       `OpLookup`, `OpActivation`, `OpTrig`, `SmallTable` and `SmallActivationTable` do not
       exist in either crate.
 - [ ] `jolt-atlas-verifier/src` contains no `PhantomData`.
+- [ ] `op_lookups/` does not exist in either crate: table reads have one module,
+      `onnx_proof::lookup`, and it is the file `lookup.rs` in each crate, not a directory
+      holding a lone `mod.rs`.
+- [ ] `SmallTableDef::for_node` is called once per relation built: the derived values and the
+      one-hot encoding read the definition from the relation, not by dispatching on the
+      node's operator again.
 - [ ] `ops/sin.rs`, `ops/cos.rs`, `ops/tanh.rs`, `ops/sigmoid.rs` and `ops/erf.rs` do not
       exist; the trig ops share `ops/trig.rs` and the clamped activations one file.
       `ops/smooth_relu.rs` keeps its plan, layout and table definitions and holds no
@@ -373,7 +379,8 @@ Each commit leaves the digests green.
    commit that changes names only.
 5. `TableRead`, `PrefixSuffixTable`, `RaEncoding`; delete the operand, provider and encoding
    types. The smooth ReLU's `ReLU` read is a `TableRead` whose `ra` names the clamp read's
-   committed chunks.
+   committed chunks. `op_lookups/` is then empty and is deleted, and `lookup/mod.rs` becomes
+   `lookup.rs` in both crates.
 6. Delete the traits, macros and enums of the acceptance list; retarget the tests; docs.
 
 ## References

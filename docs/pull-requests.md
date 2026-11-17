@@ -52,24 +52,30 @@ The final diff contains only what the merged code needs:
 Scaffolding allowed by 2.2 must therefore be gone by the tip, unless it is a `TODO` whose reason
 names its follow-up.
 
-## 4. Relation migrations
+## 4. Relations
 
-A PR that moves an op onto a symbolic relation (`onnx_proof/relation.rs`) also meets:
+A PR that adds an op relation (`onnx_proof/relation.rs`) also meets:
 
-- **4.1 Op binding.** The relation's `Spec` is the op's `atlas_trace` payload type, and the op is
-  dispatched through a `relation` arm of the proof macros (or `bind_relation!` beside a custom
-  `OperatorProofTrait` impl), so a wrong binding does not compile. A node of the op appears in a
-  probe model or the op gauntlet, so `relation_specs_match_their_dispatched_op_kind` sees it.
-- **4.2 S ⊆ R note.** The relation's doc argues that every execution of the op's semantics
-  satisfies it, naming the `atlas_trace::semantics` helper it relies on where one exists, and
-  names the protocols outside the relation that its argument needs (range checks, lookups).
-- **4.3 Digests.** The migration keeps the input claim, opening points and opening append order,
-  so `testing/digests.rs` passes unchanged. Changing an op's identity is a separate PR declared
-  protocol-breaking.
-- **4.4 Pairs deleted.** The op's hand-written `Params`/`Prover`/`Verifier` are gone in the same
-  PR: no `expected_output_claim` is written for it.
-- **4.5 Fast paths.** A specialized prover path for a relation is completeness-only and has a
-  `relation_prover_equiv_*` test comparing it with the engine's.
+- **4.1 A constructor.** The relation is an `OpRel` value built by a constructor function in
+  the op's module of `jolt-atlas-verifier` (`ops::mul::product`, `ops::add::accumulation`),
+  starting from `OpRel::base` and called from the op's plan. A tie is a constructor with zero
+  rounds. What is not the default goes in `Custom`, as functions, never closures.
+- **4.2 A kind.** The relation has an `OpRelKind` variant, with its arm in
+  `OpRelKind::relation_id` (the name it is registered under) and in `OpRelKind::serves` (the
+  ops it may be built for). A node of the op appears in a probe model or the op gauntlet, so
+  `relation_kinds_match_their_dispatched_op_kind` sees it.
+- **4.3 A prover arm.** The kind has its arm in each of `jolt-atlas-core`'s matches on
+  `OpRelKind` (`ops::{op_rel_witnesses, op_rel_tie_claims, op_rel_prover,
+  op_rel_setup_claims}`), which have no wildcard: the engine's witnesses, a tie's claims, or a
+  specialized prover. A specialized prover is completeness-only and has a
+  `relation_prover_equiv_*` test comparing it with the relation's reference messages.
+- **4.4 S ⊆ R note.** The constructor's doc argues that every execution of the op's semantics
+  satisfies the relation, naming the `atlas_trace::semantics` helper it relies on where one
+  exists, and names the protocols outside the relation that its argument needs (range checks,
+  lookups).
+- **4.5 Digests.** A PR that restates an existing relation keeps the input claim, opening
+  points and opening append order, so `testing/digests.rs` passes unchanged. Changing an op's
+  identity is a separate PR declared protocol-breaking.
 
 
 ## 5. Verifier changes
@@ -78,15 +84,17 @@ A PR that adds an op, a proof field or a check to `jolt-atlas-verifier` also mee
 (`docs/verifier.md` is the reading order and the trust-perimeter statement):
 
 - **5.1 A plan.** The op's verification is its `OpPlan::plan` (`onnx_proof/plan.rs`): ordered
-  `Step`s over relations held in the closed enums `OpRelation`, `OpTie` and `OpOpen`, built
-  from the model and the public IO alone. No step holds a closure; whatever depends on earlier
-  claims or on challenges is read and drawn in the relation's `setup` when the interpreter
-  reaches the step. The prover walks the same plan (`jolt-atlas-core`'s `ops::prove_plan`),
-  attaching a specialized witness at its `OpRelation` variant. A table read whose sumcheck
-  produces only its own read-address claim is a `Defer` to `DeferredBatch::Lookups`, and its
-  one-hot check a `Defer` to `DeferredBatch::OneHot`; neither runs in the node's turn.
+  `Step`s over values (`OpRelation` for a sumcheck, `OpRel` for a tie, `OpOpen` for advice
+  openings), built from the model and the public IO alone. No step holds a closure; whatever
+  depends on earlier claims or on challenges is read and drawn in the relation's `setup` when
+  the interpreter reaches the step. The prover walks the same plan (`jolt-atlas-core`'s
+  `ops::prove_plan`), attaching a specialized witness at its `OpRelation` variant, or at its
+  `OpRelKind` for an op relation. A table read whose sumcheck produces only its own
+  read-address claim is a `Defer` to `DeferredBatch::Lookups`, and its one-hot check a `Defer`
+  to `DeferredBatch::OneHot`; neither runs in the node's turn.
 - **5.2 Relations.** Every sumcheck of the plan is a relation meeting §4; an in-the-clear check
-  is an `OpTie` that reads its claims from the accumulator and returns `Err`.
+  is a `Step::Tie` over a zero-round `OpRel`, which `verify_tie` checks against claims the
+  accumulator holds, returning `Err` when the identity fails.
 - **5.3 Coverage.** A node of the op is in a probe model (`onnx_proof/testing/models.rs`) or the
   op gauntlet, so the soundness sweeps, `op_surface.rs` and `proof_types_all_exercised` see it; a
   new proof field has a `mutate::Site`, and every site is rejected (no tolerance list).

@@ -135,9 +135,11 @@ Workspace members, in dependency order:
     adapter and the sumcheck engine absorb. The challenge codec and grind pricing are
     `atlas-algebra::field::challenge`.
   - **atlas-lookup-tables** — the prefix-suffix lookup tables.
-  - **atlas-claims** — the symbolic-relation layer: `SymbolicSumcheck`, the `Expr` algebra and
-    the claim-data traits, owned by atlas (taken from upstream `jolt-claims` without its zkVM
-    protocol graph).
+  - **atlas-claims** — the symbolic-relation layer: `SymbolicSumcheck` (a relation value's
+    id, rounds, degree and input and output expressions), the `Expr` algebra, `Int` (the
+    integer coefficient ring of an expression stated once for every field; `Expr::cast` reads
+    it in a field) and the claim-data traits, owned by atlas (taken from upstream
+    `jolt-claims` without its zkVM protocol graph).
   - **atlas-sumcheck** — the batched sumcheck engine (`engine`: `prove_batch`, `ProveRounds`,
     `verify_compressed`, taken from upstream `jolt-sumcheck`), the relation core (`relation`), the opening
     accumulators (`opening_proof`), evaluation reduction, the one-hot and shout subprotocols,
@@ -168,9 +170,12 @@ Workspace members, in dependency order:
 - **jolt-atlas-verifier** — the proof object, its wire format, and all verification: `ONNXProof`
   (with `ONNXProof::verify`), `ReducedOpeningProof`, `Claims`, `ProofId`/`ProofType`,
   `proof_serialization`, and `onnx_proof` — every op's `OpLayout` and `OpPlan` (`plan.rs`: a
-  `Plan` of `Step`s over the closed relation enums; the only way an op is verified), the
-  relations and their parameters, the lookup/clamp/range-check/deferred-batch machinery's
-  verifier sides, the `Verifier` state (its interpreter `run_plan`/`run_deferred`; its
+  `Plan` of `Step`s over relation values; the only way an op is verified), the one op
+  relation type (`relation.rs`: `OpRel`, a value each op builds with a constructor function
+  in its `ops` module; `OpRelKind` names the relation and the ops it may serve), the table
+  reads (`lookup.rs`: `TableRead`, `SmallTableDef`, `RaEncoding`), the packed range buckets
+  and their checks (`range_bucket.rs`, `range_check.rs`), the fused rescale and the deferred
+  batches' verifier sides, the `Verifier` state (its interpreter `run_plan`/`run_deferred`; its
   accumulator, transcript, proof ledgers and deferral queue are crate-private),
   `verify`/`verify_with`, and the shared and verifier preprocessing; also
   `node_view` and `utils`. Every proof field is private (`from_parts` + `&` accessors; `&mut`
@@ -182,8 +187,10 @@ Workspace members, in dependency order:
   the audit reading order and the trust-perimeter statement.
 - **jolt-atlas-core** — the prover. `onnx_proof` mirrors the verifier crate's module tree: each
   module glob-re-exports its verifier counterpart and adds the prover side (`ops::prove_plan`
-  walks each op's plan with the relations' witnesses; prover instances; extension traits such
-  as `RelationWitnesses`, `TieClaims` and `OpLookupProve` for prover methods on shared types),
+  walks each op's plan with the relations' witnesses; the prover side of an `OpRel` is a
+  wildcard-free match on its `OpRelKind` in `ops/mod.rs`, giving the engine's witnesses
+  (`op_rel_witnesses`), a tie's claims (`op_rel_tie_claims`) or a specialized prover
+  (`op_rel_prover`), and that of a table read is `lookup::table_read_prover`),
   with `prover.rs`, `witness.rs`, `preprocessing.rs` (prover setup) and `types.rs`.
   `prove` and the free `verify` (adding the test-only lockstep debug comparison) are re-exported
   at the crate root. The whole test suite is under `onnx_proof/testing/`; the `prove` example is
@@ -254,10 +261,11 @@ the arkworks compressed encoding the format was defined with.
   `RelationProver` or a specialized `RelationWitness` that computes only its round messages.
   The relation core (`Relation`, `RelationVerifier`, the opening/derived/coefficient ids, the
   batched-sumcheck drivers) is `atlas_sumcheck::relation`; subprotocol relations (one-hot
-  checks, read-raf, range checks, opening reduction) take their setup from the caller. Each op
-  relation is bound to its op by `type Spec` (checked at compile time and by
-  `relation_specs_match_their_dispatched_op_kind`) and documents its S ⊆ R argument;
-  `docs/pull-requests.md` §4 is the checklist for a new relation.
+  checks, read-raf, range checks, opening reduction) take their setup from the caller. An op
+  relation is an `OpRel` value built by a constructor function, whose doc states its S ⊆ R
+  argument; it is bound to its ops by `OpRelKind::serves`, checked by
+  `relation_kinds_match_their_dispatched_op_kind`. `docs/pull-requests.md` §4 is the
+  checklist for a new relation.
 
 ## Development Guidelines
 

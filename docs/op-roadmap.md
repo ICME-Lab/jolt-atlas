@@ -107,8 +107,15 @@ From `CLAUDE.md` and `docs/pull-requests.md`:
   `KernelError::WitnessOverflow` outside `i32`, never a clamped value. Its
   `OpSpec::checks_output` is `true`, so the verifier range-checks the output in the packed
   buckets (`range_bucket`), and its relation's doc states the no-wrap bound.
-- A row in `onnx_proof/testing/op_surface.rs`, a probe model in `testing/models.rs` so the
-  soundness sweeps cover it, and a relation that follows `docs/pull-requests.md` §4.
+- An `OpLayout` and an `OpPlan` on the op's `atlas_trace` payload type, in
+  `jolt-atlas-verifier`'s `onnx_proof/ops/<op>.rs`, and the op's arm in `dispatch_operator!`
+  (`ops/mod.rs`). Each sumcheck or tie of the plan is an `OpRel`
+  built by a constructor function there, with an `OpRelKind` (its `relation_id` and `serves`
+  arms) and its arm in `jolt-atlas-core`'s matches on the kind (`docs/pull-requests.md` §4).
+  A table read is a `SmallTableDef` (a materialized table, read by `lookup::small_table`) or
+  a `TableRead` (a prefix-suffix table), with its `RaEncoding` for the one-hot checks.
+- A row in `onnx_proof/testing/op_surface.rs` and a probe model in `testing/models.rs` so the
+  soundness sweeps cover it.
 - A spec in `specs/` for anything over 500 non-trivial lines.
 
 ## Open decisions

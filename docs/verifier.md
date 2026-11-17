@@ -30,9 +30,11 @@ The crate has no prover code. Three mechanisms hold that:
   FusedIntermediates, NodeAux, SoftmaxWitness}`): the crate is **Trace-free**.
 - The `verifier-isolation` CI job builds the crate alone, rejects `jolt-atlas-core` in its
   dependency tree, and greps its sources for `::prover` / `::witness` paths and for `Trace`.
-- Prover methods on shared types are extension traits in `jolt-atlas-core`
-  (`RelationWitnesses`, `TieClaims`, `LookupWitness`, `EinsumFold`, `OpLookupProve`,
-  `NodeEvalReductionProve`).
+- The prover side of a shared value is a function in `jolt-atlas-core`, matching on
+  `OpRelKind` with no wildcard arm where it serves the op relations
+  (`ops::{op_rel_witnesses, op_rel_tie_claims, op_rel_prover, op_rel_setup_claims}`,
+  `lookup::{table_read_operand, table_read_prover}`), or an extension trait there
+  (`EinsumFold`, `NodeEvalReductionProve`).
 
 ## Reading order
 
@@ -47,14 +49,27 @@ The crate has no prover code. Three mechanisms hold that:
 3. **Relation core**: `atlas_sumcheck::relation` and `onnx_proof/relation.rs`, then
    `atlas-claims` (the `SymbolicSumcheck` trait and the `Expr` algebra they evaluate) and
    `atlas_sumcheck::engine` (`verify_compressed`: the round checks, the grind and the
-   transcript encoding every sumcheck runs through). Every
-   sumcheck is a symbolic relation; `RelationVerifier` is derived from it, and `verify_tie` checks a
-   zero-round one. Each op relation documents its S ⊆ R argument beside its definition in
-   `onnx_proof/ops/<op>.rs`.
-4. **Lookup machinery**: `onnx_proof/op_lookups/`, `range_check.rs`,
-   `range_bucket.rs`, `fused_rebase.rs`, `neural_teleport/`: the relations and model-only
-   layouts of the lookup and range-check subprotocols. Every remainder bound (the fused
-   rescales, Div, ScalarConstDiv, Rsqrt, MeanOfSquares, the trig teleport, softmax) is a range
+   transcript encoding every sumcheck runs through). Every sumcheck is a symbolic relation
+   and `RelationVerifier` is derived from it. An op relation is a value, `relation::OpRel`:
+   its kind (`OpRelKind`), node, rounds, degree, input and output expressions (`OpExpr`,
+   integer coefficients read in the field), produced openings, where its incoming point
+   comes from, the challenges its setup draws, the advice openings its setup appends, and
+   `Custom`, four optional `fn` hooks (`points`, `derive`, `finish_setup`, `table`) for what
+   is not the default. `op_rel_verifier` runs the setup and appends the setup opens;
+   `verify_tie` checks a zero-round relation. Each op builds its relations with constructor
+   functions in `onnx_proof/ops/<op>.rs` (`ops::mul::product`, `ops::add::accumulation`),
+   and a constructor's doc states the S ⊆ R argument. `OpRelKind` is the prover's dispatch
+   key; `OpRelKind::serves` declares the ops a kind may be built for.
+4. **Lookup machinery**: `onnx_proof/lookup.rs`, `range_check.rs`, `range_bucket.rs`,
+   `fused_rebase.rs`: the relations and model-only layouts of the lookup and range-check
+   subprotocols. `lookup.rs` holds the two descriptions of a table read and the encoding of
+   its addresses: `SmallTableDef`, a materialized small table read by the `small_table`
+   relation (the clamped activations, the smooth ReLU correction, the trig ops);
+   `TableRead`, a read of a prefix-suffix table of `atlas-lookup-tables`
+   (`PrefixSuffixTable`), verified by `table_read_verifier`; and `RaEncoding`, the committed
+   one-hot chunks and the openings the one-hot checks of a read start from. Every remainder
+   bound (the fused rescales, Div, ScalarConstDiv, Rsqrt, MeanOfSquares, the trig period
+   reduction, softmax) is a range
    claim in a packed range bucket (`range_bucket::RangeClaim`): the remainder, or its slack
    below the bound, checked by the dense digit range check. A bound that is not positive has
    no proof. The output of an exact-arithmetic node (Add, Sub, Sum, Einsum, MeanOfSquares and
@@ -70,10 +85,13 @@ Every op's verification is a `Plan` (`onnx_proof/plan.rs`): an ordered list of `
 relations, built by `OpPlan::plan(node, model, io)` before the transcript runs. `Reduce` is the
 node's evaluation reduction; `Open` appends advice openings at a stated point (`OpOpen`);
 `Relation` is a sumcheck stored under a `ProofType`; `Batch` several relations proven as one
-batched sumcheck; `Tie` a zero-round identity or an in-the-clear check (`OpTie`); `Defer`
+batched sumcheck; `Tie` a zero-round relation, an `OpRel` checked by `verify_tie`; `Defer`
 queues a relation for one of the post-loop batches (`DeferredBatch`, in
-`deferred_lookups.rs`). Steps hold relations (the closed enums `OpRelation`, `OpTie`, `OpOpen`),
-never closures; whatever depends on earlier claims or on challenges is read and drawn in the
+`deferred_lookups.rs`). Steps hold values, never closures: a sumcheck step an `OpRelation`
+(a closed enum with one variant per kind of verifier construction: an `OpRel`, a
+`TableRead`, the one-hot checks of an `RaEncoding`, GatherSmall's two one-hot stages,
+softmax's three-table read, a range bucket's value and digit relations), a `Tie` an `OpRel`,
+an `Open` an `OpOpen`. Whatever depends on earlier claims or on challenges is read and drawn in the
 relation's `setup` when the interpreter reaches the step (a relation queued for `OneHot` is set
 up when that batch runs, since it reads the `ra` claim a lookup produces; `DeferredBatch::setup`
 says which). `Verifier::run_plan` in `onnx_proof/verifier.rs` is the
@@ -136,23 +154,22 @@ Outside the lints' reach, and model- or code-driven rather than proof-driven: `a
 model constants, `Math::log_2`, `Model::node` indexing in `atlas-trace`, and slicing inside
 `atlas-sumcheck`'s subprotocols.
 
-## What moved out (the Trace-free inventory)
+## The Trace-free inventory
 
-Everything in the crate that took an `atlas_trace::Trace`, with its destination in
+What reads an `atlas_trace::Trace` for a verifier-crate item, and where it is in
 `jolt-atlas-core`:
 
-| Item | Destination |
+| Verifier-crate item | Its prover side in `jolt-atlas-core` |
 |------|-------------|
-| `EngineRelation::witnesses` | `relation::RelationWitnesses`, implemented in `ops/{iff, scalar_const_div, mul, rsqrt, div}.rs` and `ops/sum/axis.rs` |
-| `TieRelation::claims` | `relation::TieClaims`, implemented in `ops/{add, neg, is_nan, moveaxis, broadcast, constant, div}.rs` |
-| `LookupOperandsTrait::{witness, lookup_bits}` | `op_lookups::LookupWitness`, implemented beside each helper's prover (`op_lookups`, `ops/clamp.rs`, `ops/activation_clamped`, `neural_teleport/trig_downscale.rs`, `ops/softmax_last_axis/significance_clamp.rs`) |
-| `RangeBucket::assemble_bits` | `range_bucket::assemble_bits` |
-| `EinsumLayout::fold`, `Folded` | `ops/einsum/dot.rs` (`EinsumFold`, `Folded`), implemented in the three layout modules |
-| `neural_teleport::utils::compute_ra_evals_{nbits_2comp, from_usize_indices}` | `neural_teleport/utils.rs` |
-| `utils::compute_lookup_indices` | `utils` |
-| `onnx_proof/trace_view.rs` (`TraceView`) | `onnx_proof/trace_view.rs` |
-| `probe.rs`, `probe_assert!`, `probe_assert_eq!` | `onnx_proof/testing/probe.rs` |
+| `relation::OpRel`, a sumcheck | `ops::op_rel_witnesses` (the engine's witnesses), `ops::op_rel_prover` (the specialized provers), `ops::op_rel_setup_claims`, each a match on `OpRelKind` calling into the op's module |
+| `relation::OpRel`, a tie | `ops::op_rel_tie_claims`, a match on `OpRelKind` calling into the op's module; `relation::prove_tie` |
+| `lookup::TableRead` | `lookup::{table_read_operand, table_read_prover}` |
+| `lookup::small_table` | `lookup::{SmallTableProver, small_table_addresses, small_table_setup_claims}` |
+| `range_bucket::RangeBucket` | `range_bucket::assemble_bits` |
+| `EinsumLayout` | `ops/einsum/dot.rs` (`EinsumFold`, `Folded`), implemented in the three layout modules |
+| One-hot address evaluations | `lookup::compute_ra_evals_from_usize_indices` |
+| Lookup indices | `utils::compute_lookup_indices` |
+| Trace access by node | `onnx_proof/trace_view.rs` (`TraceView`) |
+| Prover self-checks | `onnx_proof/testing/probe.rs` (`probe_assert!`, `probe_assert_eq!`) |
 
-Deleted with the move, having no reader left: the `z` field of
-`SoftmaxSignificanceClampOperands` and `utils::dims::transpose_flat_matrix`. The `rayon` and
-`num` dependencies went with the moved code; the verifier is single-threaded.
+The verifier crate depends on neither `rayon` nor `num`: it is single-threaded.

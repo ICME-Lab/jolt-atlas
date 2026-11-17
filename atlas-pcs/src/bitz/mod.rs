@@ -6,4 +6,5 @@ pub mod ligerito;
 pub mod merkle;
 pub mod multilinear;
 pub mod pack;
+pub mod ring_switch;
 pub mod rs;

@@ -9,32 +9,22 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::deferred_lookups::DeferredBatch;
-use crate::onnx_proof::lookup::{output_value, small_table, SmallTableDef};
+use crate::onnx_proof::lookup::{
+    output_value, small_table, PrefixSuffixTable, SmallTableDef, TableRead,
+};
 use crate::onnx_proof::ops::OpLayout;
+use crate::onnx_proof::plan::{OpOpen, OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::{OpRel, OpRelKind, RelationOpening};
-use crate::onnx_proof::{
-    op_lookups::{LookupOperandsTrait, LookupRaPolys, OpLookupEncoding},
-    plan::{OpLookup, OpOpen, OpPlan, OpRelation, Plan, Step},
-};
-use crate::utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target};
-use atlas_algebra::{
-    field::JoltField,
-    poly::point::{OpeningPoint, BIG_ENDIAN},
-    utils::errors::ProofVerifyError,
-};
+use crate::utils::opening_access::{OpeningIdBuilder, Target};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::{constant, opening, Int};
-use atlas_sumcheck::{
-    config::{OneHotConfig, OneHotParams},
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
-    shout::RaOneHotEncoding,
-};
 use atlas_trace::{
     op::{Cos, Sin},
     semantics::tables::TableKind,
     trace::ModelExecutionIO,
     Model,
 };
-use common::consts::{MODEL_SCALE, TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS, XLEN};
+use common::consts::{MODEL_SCALE, TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS};
 use common::{CommittedPoly, VirtualPoly};
 
 /// Address variables of the Sin and Cos tables, after downscaling.
@@ -77,14 +67,9 @@ fn table_def(
 /// The committed polynomials of a trig node reading the table `def`: the period quotient, the
 /// downscale's address chunks and the table's.
 fn committed_polynomials(node: &ComputationNode, def: SmallTableDef) -> Vec<CommittedPoly> {
-    let table_d =
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), def.vars).instruction_d;
-    let downscale_d = OpLookupEncoding::<TrigDownscaleOperands>::new(node)
-        .one_hot_params()
-        .instruction_d;
     let mut polys = vec![CommittedPoly::TrigPeriodQuotient(node.idx)];
-    polys.extend((0..downscale_d).map(|i| CommittedPoly::TrigDownscaleRaD(node.idx, i)));
-    polys.extend((0..table_d).map(|i| (def.ra_chunk)(node.idx, i)));
+    polys.extend(downscale_read(node).ra.committed_polys());
+    polys.extend(def.ra_encoding(node).committed_polys());
     polys
 }
 
@@ -103,13 +88,15 @@ fn trig_plan<F: JoltField>(
             node.scale
         )));
     }
+    let downscale = downscale_read(node);
+    let downscale_ra = downscale.ra.clone();
     Ok(Plan(vec![
         Step::Reduce,
         Step::Open(OpOpen::TrigPeriodQuotient(node.clone())),
         Step::Open(OpOpen::TrigDownscaled(node.clone())),
         Step::Defer {
             batch: DeferredBatch::Lookups,
-            relation: OpRelation::Lookup(OpLookup::TrigDownscale, node.clone()),
+            relation: OpRelation::TableRead(downscale),
         },
         Step::Defer {
             batch: DeferredBatch::Lookups,
@@ -117,11 +104,11 @@ fn trig_plan<F: JoltField>(
         },
         Step::Defer {
             batch: DeferredBatch::OneHot,
-            relation: OpRelation::LookupOneHot(OpLookup::TrigDownscale, node.clone()),
+            relation: OpRelation::OneHot(downscale_ra),
         },
         Step::Defer {
             batch: DeferredBatch::OneHot,
-            relation: OpRelation::SmallTableOneHot(node.clone()),
+            relation: OpRelation::OneHot(SmallTableDef::for_node(node)?.ra_encoding(node)),
         },
         Step::Tie {
             relation: trig_period(node),
@@ -200,55 +187,18 @@ pub fn trig_period<F: JoltField>(node: &ComputationNode) -> OpRel<F> {
     }
 }
 
-/// Lookup operands of the downscale: the read's operand is the period remainder
-/// (`VirtualPoly::TrigPeriodRemainder`, whose claim the period reduction reads), its value the
-/// downscaled remainder, its one-hot addresses `VirtualPoly::TrigDownscaleRa` over the
-/// committed `CommittedPoly::TrigDownscaleRaD` chunks. Shared by Cos and Sin.
-#[derive(Default, Clone)]
-pub struct TrigDownscaleOperands;
-
-impl LookupOperandsTrait for TrigDownscaleOperands {
-    const LOG_K: usize = XLEN;
-
-    fn rv_claim<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<F, ProofVerifyError> {
-        Ok(AccOpeningAccessor::new(accumulator, node)
-            .get_advice(VirtualPoly::TrigDownscaled)?
-            .1)
-    }
-
-    fn witness_opening_id(node: &ComputationNode) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::TrigPeriodRemainder(node.idx),
-            SumcheckId::NodeExecution(node.idx),
-        )
-    }
-
-    fn r_cycle<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
-        Ok(AccOpeningAccessor::new(accumulator, node)
-            .get_reduced_opening()?
-            .0)
-    }
-
-    fn r_cycle_source(node_idx: usize) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::NodeOutput(node_idx),
-            SumcheckId::NodeExecution(node_idx),
-        )
-    }
-}
-
-impl LookupRaPolys for TrigDownscaleOperands {
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::TrigDownscaleRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::TrigDownscaleRaD(node_idx, d)
-    }
+/// The downscale's read: the downscaled remainder is `RightShift[rem]` at the reduced output
+/// point. Its operand is the period remainder, whose claim the period reduction reads.
+pub fn downscale_read(node: &ComputationNode) -> TableRead {
+    let ids = OpeningIdBuilder::new(node);
+    TableRead::new(
+        node,
+        PrefixSuffixTable::RightShift,
+        RelationOpening::Id(ids.advice(VirtualPoly::TrigDownscaled)),
+        ids.advice(VirtualPoly::TrigPeriodRemainder),
+        RelationOpening::ReducedNodeOutput(node.idx),
+        ids.nodeio(Target::Current),
+        VirtualPoly::TrigDownscaleRa,
+        CommittedPoly::TrigDownscaleRaD,
+    )
 }

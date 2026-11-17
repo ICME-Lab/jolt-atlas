@@ -1,15 +1,10 @@
 use super::*;
 use crate::onnx_proof::deferred_lookups::DeferredBatch;
+use crate::onnx_proof::lookup::RaEncoding;
 use crate::onnx_proof::{
     ops::OpLayout,
     plan::{OpPlan, OpRelation, Plan, Step},
     ProofType,
-};
-use atlas_sumcheck::opening_proof::SumcheckId;
-use atlas_sumcheck::{
-    config::{OneHotConfig, OneHotParams},
-    opening_proof::OpeningId,
-    shout::RaOneHotEncoding,
 };
 use atlas_trace::op::GatherLarge;
 use atlas_trace::trace::ModelExecutionIO;
@@ -20,11 +15,7 @@ impl OpLayout for GatherLarge {
         &self,
         node: &ComputationNode,
     ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        let encoding = GatherRaEncoding::new(node)?;
-        let d = encoding.one_hot_params().instruction_d;
-        Ok((0..d)
-            .map(|i| CommittedPoly::GatherRaD(node.idx, i))
-            .collect())
+        Ok(ra_encoding(node)?.committed_polys())
     }
 }
 
@@ -45,65 +36,27 @@ impl OpPlan for GatherLarge {
             },
             Step::Defer {
                 batch: DeferredBatch::OneHot,
-                relation: OpRelation::GatherLargeOneHot(node.clone()),
+                relation: OpRelation::OneHot(ra_encoding(node)?),
             },
         ]))
     }
 }
 
-/// One-hot encoding of a large gather's read addresses.
-pub struct GatherRaEncoding {
-    node_idx: usize,
-    index_input_idx: usize,
-    num_words: usize,
-}
-
-impl GatherRaEncoding {
-    /// The encoding for the node's dictionary. `Err` if the node is not a large gather with
-    /// an index operand.
-    pub fn new(computation_node: &ComputationNode) -> Result<Self, ProofVerifyError> {
-        let Op::GatherLarge(gather_op) = &computation_node.operator else {
-            return Err(unsupported(
-                computation_node,
-                "expected a GatherLarge operator",
-            ));
-        };
-        let index_input_idx = *computation_node
-            .inputs
-            .get(1)
-            .ok_or_else(|| unsupported(computation_node, "no index operand"))?;
-        Ok(Self {
-            node_idx: computation_node.idx,
-            index_input_idx,
-            num_words: gather_op.dict_len.next_power_of_two(),
-        })
+/// The one-hot encoding of a large gather's read addresses: the cycle point is the index
+/// operand's opening's. `Err` if the node is not a large gather with an index operand.
+pub fn ra_encoding(node: &ComputationNode) -> Result<RaEncoding, ProofVerifyError> {
+    let Op::GatherLarge(gather_op) = &node.operator else {
+        return Err(unsupported(node, "expected a GatherLarge operator"));
+    };
+    if node.inputs.get(1).is_none() {
+        return Err(unsupported(node, "no index operand"));
     }
-}
-
-impl RaOneHotEncoding for GatherRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::GatherRaD(self.node_idx, d)
-    }
-
-    fn r_cycle_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::NodeOutput(self.index_input_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn ra_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::NodeOutputRa(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn log_k(&self) -> usize {
-        self.num_words.log_2()
-    }
-
-    fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.log_k())
-    }
+    let ids = OpeningIdBuilder::new(node);
+    Ok(RaEncoding::chunked(
+        node.idx,
+        CommittedPoly::GatherRaD,
+        ids.advice(VirtualPoly::NodeOutputRa),
+        ids.nodeio(Target::Input(1)),
+        gather_op.dict_len.next_power_of_two().log_2(),
+    ))
 }

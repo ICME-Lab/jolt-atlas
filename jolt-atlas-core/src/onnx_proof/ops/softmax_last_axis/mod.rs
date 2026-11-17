@@ -1,21 +1,12 @@
 //! The prover's side of the log-partition softmax
 //! ([`jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis`]): the openings, the sums
-//! relation's witnesses, the table read and the clamp lookup, all from the trace's
+//! relation's witnesses and the table read, all from the trace's
 //! [`SoftmaxWitness`].
-use crate::onnx_proof::op_lookups::{LookupWitness, OpLookupProve};
 use crate::onnx_proof::trace_view::TraceView;
-use crate::utils::opening_access::IntoProverProvider;
+use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider};
 use atlas_sumcheck::relation::prover::DynRelationWitness;
 pub use jolt_atlas_verifier::onnx_proof::ops::softmax_last_axis::*;
 
-use crate::{
-    onnx_proof::{
-        op_lookups::OpLookupProvider,
-        ops::softmax_last_axis::significance_clamp::SoftmaxSignificanceClampOperands,
-    },
-    utils::{compute_lookup_indices, opening_access::AccOpeningAccessor},
-};
-use atlas_lookup_tables::clamp::SoftmaxClampTable;
 use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
 use atlas_trace::{SoftmaxWitness, Tensor, Trace};
 
@@ -28,9 +19,7 @@ use atlas_algebra::{
 };
 use atlas_sumcheck::shout;
 use atlas_transcript::Transcript;
-use common::{consts::XLEN, CommittedPoly, VirtualPoly};
-
-pub mod significance_clamp;
+use common::{CommittedPoly, VirtualPoly};
 
 fn witness<'a>(shape: &SoftmaxShape, trace: &'a Trace) -> &'a SoftmaxWitness {
     trace
@@ -70,15 +59,6 @@ fn row_values<F: JoltField>(shape: &SoftmaxShape, values: impl Iterator<Item = i
     let mut values: Vec<F> = values.map(F::from_i64).collect();
     values.resize(shape.F_N[0], F::zero());
     values
-}
-
-/// A softmax lookup whose read addresses the one-hot checks consume.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SoftmaxAddresses {
-    /// The table read.
-    Read,
-    /// The clamp lookup.
-    Clamp,
 }
 
 /// Append a softmax opening with the prover's claims from the trace.
@@ -151,94 +131,27 @@ pub fn sums_witnesses<F: JoltField>(
         .collect()
 }
 
-/// A softmax relation's provers, with the read addresses each lookup leaves for its one-hot
-/// checks.
-pub type StageProvers<F, T> = (
-    Vec<Box<dyn DynRelationWitness<F, T>>>,
-    Vec<(SoftmaxAddresses, Vec<usize>)>,
-);
-
-/// The provers of a softmax relation, set up against the prover's accumulator and transcript.
-/// `addresses` hands back the read addresses a lookup of this node left.
-pub fn prove_relation<F: JoltField, T: Transcript>(
-    relation: SoftmaxRelation,
+/// The prover of the table read at the reads' point, the mirror of [`read_verifier`], with
+/// the table addresses it reads, for their one-hot checks.
+pub fn read_prover<F: JoltField, T: Transcript>(
+    shape: &SoftmaxShape,
     trace: &Trace,
-    accumulator: &mut ProverOpeningAccumulator<F>,
+    accumulator: &ProverOpeningAccumulator<F>,
     transcript: &mut T,
-    addresses_left: &mut impl FnMut(SoftmaxAddresses) -> Option<Vec<usize>>,
-) -> StageProvers<F, T> {
-    let taken = |left: &mut dyn FnMut(SoftmaxAddresses) -> Option<Vec<usize>>,
-                 key: SoftmaxAddresses| {
-        left(key).unwrap_or_else(|| {
-            panic!("softmax: the {key:?} addresses were not left by their lookup")
-        })
-    };
-    match relation {
-        SoftmaxRelation::Read(shape) => {
-            let w = witness(&shape, trace);
-            let read = tables();
-            let indices = table_addresses(&shape.node, w);
-            let prover = shout::prover::read_raf_prover(
-                &ReadProvider { shape },
-                &indices,
-                &[&read.tables.out, &read.tables.sum, &read.sum_prev],
-                &*accumulator,
-                transcript,
-            );
-            (vec![prover], vec![(SoftmaxAddresses::Read, indices)])
-        }
-        SoftmaxRelation::Clamp(shape) => {
-            let w = witness(&shape, trace);
-            let u = addresses(&shape.node, w);
-            let indices: Vec<usize> = compute_lookup_indices(&u)
-                .iter()
-                .map(|&x| x.into())
-                .collect();
-            let u = u.map(|v| v as i64);
-            let provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
-                OpLookupProvider::new(shape.node.clone());
-            provider.append_witness_claim_for(&u, accumulator, transcript);
-            let prover = provider.read_raf_prover_from_bits::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
-                provider.helper.lookup_bits(&u),
-                accumulator,
-                transcript,
-            );
-            (
-                vec![Box::new(prover)],
-                vec![(SoftmaxAddresses::Clamp, indices)],
-            )
-        }
-        SoftmaxRelation::ReadOneHot(shape) => {
-            let indices = taken(addresses_left, SoftmaxAddresses::Read);
-            (
-                shout::prover::ra_onehot_provers(
-                    &ReadRaEncoding {
-                        node_idx: shape.idx(),
-                    },
-                    &indices,
-                    &*accumulator,
-                    transcript,
-                )
-                .into(),
-                Vec::new(),
-            )
-        }
-        SoftmaxRelation::ClampOneHot(shape) => {
-            let provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
-                OpLookupProvider::new(shape.node.clone());
-            let indices = taken(addresses_left, SoftmaxAddresses::Clamp);
-            (
-                shout::prover::ra_onehot_provers(
-                    &provider.encoding(),
-                    &indices,
-                    &*accumulator,
-                    transcript,
-                )
-                .into(),
-                Vec::new(),
-            )
-        }
-    }
+) -> (Box<dyn DynRelationWitness<F, T>>, Vec<usize>) {
+    let w = witness(shape, trace);
+    let read = tables();
+    let indices = table_addresses(&shape.node, w);
+    let prover = shout::prover::read_raf_prover(
+        &ReadProvider {
+            shape: shape.clone(),
+        },
+        &indices,
+        &[&read.tables.out, &read.tables.sum, &read.sum_prev],
+        accumulator,
+        transcript,
+    );
+    (prover, indices)
 }
 
 /// The claim of an [`address_link`]: the operand at the reads' point.

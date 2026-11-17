@@ -2,7 +2,9 @@
 //!
 //! A small public table (a clamped activation's, a smooth ReLU's correction, a trig op's) is
 //! read through one-hot addresses by one relation, [`small_table`], described by the table's
-//! [`SmallTableDef`].
+//! [`SmallTableDef`]. A prefix-suffix table of `atlas-lookup-tables` is read by a
+//! [`TableRead`], verified by [`table_read_verifier`]. The one-hot checks of any read's
+//! addresses start from its [`RaEncoding`].
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{activation_clamped, smooth_relu, trig};
@@ -10,24 +12,42 @@ use crate::onnx_proof::relation::{
     low_to_high_point, not_derived, Custom, OpExpr, OpRel, OpRelKind, RelationChallenge,
     RelationDerived, RelationOpening, RelationSetup, SetupOpen,
 };
-use crate::utils::{opening_access::OpeningIdBuilder, usize_to_n_bits};
+use crate::utils::{
+    opening_access::{OpeningIdBuilder, Target},
+    usize_to_n_bits,
+};
 use atlas_algebra::{
     field::JoltField,
     poly::{
         identity::IdentityPolynomial,
         multilinear::{MultilinearPolynomial, PolynomialEvaluation},
+        point::{OpeningPoint, BIG_ENDIAN},
         signed_identity::SignedIdentityPoly,
     },
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_claims::{challenge, derived, opening};
+use atlas_lookup_tables::{
+    clamp::{ActivationClampTable, ClampTable, SiluClampTable, SoftmaxClampTable},
+    relu::ReluTable,
+    right_shift::RightShiftTable,
+    JoltLookupTable, PrefixSuffixDecompositionTrait,
+};
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
-    opening_proof::{OpeningId, SumcheckId},
+    opening_proof::{
+        OpeningAccumulator, OpeningId, PolynomialId, SumcheckId, VerifierOpeningAccumulator,
+    },
+    ps_shout::{ps_read_raf_verifier, PrefixSuffixShoutProvider, RafShoutProvider, ReadRafClaims},
+    relation::{resolve, DynRelationVerifier},
     shout::RaOneHotEncoding,
 };
 use atlas_trace::{semantics::tables::TableKind, Op, SemVersion};
-use common::{consts::MODEL_SCALE, CommittedPoly, VirtualPoly};
+use atlas_transcript::Transcript;
+use common::{
+    consts::{MODEL_SCALE, XLEN},
+    CommittedPoly, VirtualPoly,
+};
 
 /// A small public table and how a node reads it.
 #[derive(Clone, Copy)]
@@ -111,6 +131,18 @@ impl SmallTableDef {
     /// The opening of `node`'s one-hot read addresses.
     pub fn ra_opening(&self, node: &ComputationNode) -> OpeningId {
         OpeningIdBuilder::new(node).advice(self.ra)
+    }
+
+    /// The one-hot encoding of `node`'s read addresses: the cycle point is the address
+    /// opening's.
+    pub fn ra_encoding(&self, node: &ComputationNode) -> RaEncoding {
+        RaEncoding::chunked(
+            node.idx,
+            self.ra_chunk,
+            self.ra_opening(node),
+            self.address_opening(node),
+            self.vars,
+        )
     }
 }
 
@@ -196,46 +228,259 @@ fn table_and_identity<F: JoltField>(
     })
 }
 
-/// One-hot encoding of a small table's read addresses.
-pub struct SmallTableRaEncoding {
-    node_idx: usize,
-    def: SmallTableDef,
+/// The one-hot encoding of a read's addresses: the committed chunks, and the openings the
+/// one-hot checks start from.
+#[derive(Clone, Debug)]
+pub struct RaEncoding {
+    /// The node whose read the addresses are.
+    pub node: usize,
+    /// Chunk `d` of the committed one-hot addresses of node `node`.
+    pub committed: fn(usize, usize) -> CommittedPoly,
+    /// The opening of the virtual read-address polynomial, at `address ‖ cycle`.
+    pub ra_source: OpeningId,
+    /// The opening whose point is the read's cycle point.
+    pub r_cycle_source: OpeningId,
+    /// Address variables: where the read-address opening's point splits.
+    pub log_k: usize,
+    /// The chunking of the addresses.
+    pub params: OneHotParams,
 }
 
-impl SmallTableRaEncoding {
-    /// The encoding of `node`'s small-table read. `Err` if its operator reads no small table.
-    pub fn for_node(node: &ComputationNode) -> Result<Self, ProofVerifyError> {
-        Ok(Self {
-            node_idx: node.idx,
-            def: SmallTableDef::for_node(node)?,
+impl RaEncoding {
+    /// The encoding of `log_k` address variables in the default chunking.
+    pub fn chunked(
+        node: usize,
+        committed: fn(usize, usize) -> CommittedPoly,
+        ra_source: OpeningId,
+        r_cycle_source: OpeningId,
+        log_k: usize,
+    ) -> Self {
+        Self {
+            node,
+            committed,
+            ra_source,
+            r_cycle_source,
+            log_k,
+            params: OneHotParams::from_config_and_log_K(&OneHotConfig::default(), log_k),
+        }
+    }
+
+    /// The committed chunks of the addresses, in chunk order.
+    pub fn committed_polys(&self) -> Vec<CommittedPoly> {
+        (0..self.params.instruction_d)
+            .map(|d| (self.committed)(self.node, d))
+            .collect()
+    }
+}
+
+impl RaOneHotEncoding for RaEncoding {
+    fn committed_poly(&self, d: usize) -> CommittedPoly {
+        (self.committed)(self.node, d)
+    }
+
+    fn r_cycle_source(&self) -> OpeningId {
+        self.r_cycle_source
+    }
+
+    fn ra_source(&self) -> OpeningId {
+        self.ra_source
+    }
+
+    fn log_k(&self) -> usize {
+        self.log_k
+    }
+
+    fn one_hot_params(&self) -> OneHotParams {
+        self.params.clone()
+    }
+}
+
+/// The `atlas-lookup-tables` tables the verifier reads through a prefix-suffix read-raf.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PrefixSuffixTable {
+    /// `ReLU`.
+    Relu,
+    /// `Clamp`'s symmetric clamp.
+    Clamp,
+    /// A clamped activation's input clamp.
+    ActivationClamp,
+    /// SiLU's input clamp, twice as wide as the clamped activations'.
+    SiluClamp,
+    /// A trig op's downscale of its period remainder.
+    RightShift,
+    /// Softmax's clamp of the address `u = c − x` to the tables' addresses.
+    SoftmaxClamp,
+}
+
+/// A prefix-suffix read: `value = table[operand]` at the cycle point, through one-hot
+/// addresses over `log_k` address variables.
+#[derive(Clone, Debug)]
+pub struct TableRead {
+    /// The node the read belongs to.
+    pub node: ComputationNode,
+    /// The table read.
+    pub table: PrefixSuffixTable,
+    /// The value read, an opening held at the cycle point.
+    pub value: RelationOpening,
+    /// The operand the table is read at: its opening is appended at the cycle point when the
+    /// read is set up.
+    pub operand: OpeningId,
+    /// The opening whose point is the read's cycle point.
+    pub cycle: RelationOpening,
+    /// The one-hot encoding of the read's addresses.
+    pub ra: RaEncoding,
+    /// The virtual read-address polynomial [`RaEncoding::ra_source`] opens.
+    pub address: VirtualPoly,
+    /// Address variables of the table.
+    pub log_k: usize,
+}
+
+impl TableRead {
+    /// A read of `node`'s first operand at the node's reduced output point: `value` is
+    /// `table[operand]` there, the addresses `ra` over the committed `committed` chunks.
+    pub fn of_operand(
+        node: &ComputationNode,
+        table: PrefixSuffixTable,
+        value: RelationOpening,
+        ra: fn(usize) -> VirtualPoly,
+        committed: fn(usize, usize) -> CommittedPoly,
+    ) -> Self {
+        let ids = OpeningIdBuilder::new(node);
+        Self::new(
+            node,
+            table,
+            value,
+            ids.nodeio(Target::Input(0)),
+            RelationOpening::ReducedNodeOutput(node.idx),
+            ids.nodeio(Target::Current),
+            ra,
+            committed,
+        )
+    }
+
+    /// A read of `operand` at the point of `cycle`, which `r_cycle_source` names as an
+    /// accumulator opening for the one-hot checks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        node: &ComputationNode,
+        table: PrefixSuffixTable,
+        value: RelationOpening,
+        operand: OpeningId,
+        cycle: RelationOpening,
+        r_cycle_source: OpeningId,
+        ra: fn(usize) -> VirtualPoly,
+        committed: fn(usize, usize) -> CommittedPoly,
+    ) -> Self {
+        let address = ra(node.idx);
+        Self {
+            node: node.clone(),
+            table,
+            value,
+            operand,
+            cycle,
+            address,
+            ra: RaEncoding {
+                node: node.idx,
+                committed,
+                ra_source: OpeningId::new(address, SumcheckId::NodeExecution(node.idx)),
+                r_cycle_source,
+                log_k: XLEN,
+                params: OneHotParams::new(node.pow2_padded_num_output_elements().log_2(), XLEN),
+            },
+            log_k: XLEN,
+        }
+    }
+
+    /// The read's cycle point. `Err` if the accumulator lacks the opening that fixes it.
+    pub fn cycle_point<F: JoltField>(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
+        Ok(match self.cycle {
+            RelationOpening::ReducedNodeOutput(node) => {
+                accumulator.get_node_output_opening(node)?.0
+            }
+            RelationOpening::Id(id) => match id.polynomial {
+                PolynomialId::Virtual(_) => accumulator.get_virtual_polynomial_opening(id)?.0,
+                PolynomialId::Committed(_) => accumulator.get_committed_polynomial_opening(id)?.0,
+            },
         })
     }
 }
 
-impl RaOneHotEncoding for SmallTableRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPoly {
-        (self.def.ra_chunk)(self.node_idx, d)
+impl<F: JoltField> RafShoutProvider<F> for TableRead {
+    fn r_cycle(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
+        self.cycle_point(accumulator)
     }
 
-    fn r_cycle_source(&self) -> OpeningId {
-        OpeningId::new(
-            (self.def.address)(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
+    fn ra_poly(&self) -> (VirtualPoly, SumcheckId) {
+        (self.address, self.ra.ra_source.sumcheck)
     }
+}
 
-    fn ra_source(&self) -> OpeningId {
-        OpeningId::new(
-            (self.def.ra)(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
+impl<F, LUT, const LOG_K: usize> PrefixSuffixShoutProvider<F, LUT, LOG_K> for TableRead
+where
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
+{
+    fn read_raf_claims(
+        &self,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Result<ReadRafClaims<F>, ProofVerifyError> {
+        Ok(ReadRafClaims {
+            rv_claim: resolve(accumulator, &self.value)?,
+            operand_claim: accumulator.get_virtual_polynomial_opening(self.operand)?.1,
+        })
     }
+}
 
-    fn log_k(&self) -> usize {
-        self.def.vars
-    }
-
-    fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), self.def.vars)
-    }
+/// The verifier of a prefix-suffix read: the operand's opening appended at the cycle point,
+/// then the read-raf relation of the read's table set up. `Err` if the accumulator lacks a
+/// claim the read reads.
+pub fn table_read_verifier<F: JoltField, T: Transcript>(
+    read: &TableRead,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<Box<dyn DynRelationVerifier<F, T>>, ProofVerifyError> {
+    let r_cycle = read.cycle_point(&*accumulator)?;
+    accumulator.append_virtual(transcript, read.operand, r_cycle)?;
+    Ok(match read.table {
+        PrefixSuffixTable::Relu => Box::new(ps_read_raf_verifier::<F, T, ReluTable<XLEN>, XLEN>(
+            read,
+            accumulator,
+            transcript,
+        )?),
+        PrefixSuffixTable::Clamp => Box::new(ps_read_raf_verifier::<F, T, ClampTable<XLEN>, XLEN>(
+            read,
+            accumulator,
+            transcript,
+        )?),
+        PrefixSuffixTable::ActivationClamp => Box::new(ps_read_raf_verifier::<
+            F,
+            T,
+            ActivationClampTable<XLEN>,
+            XLEN,
+        >(read, accumulator, transcript)?),
+        PrefixSuffixTable::SiluClamp => Box::new(ps_read_raf_verifier::<
+            F,
+            T,
+            SiluClampTable<XLEN>,
+            XLEN,
+        >(read, accumulator, transcript)?),
+        PrefixSuffixTable::RightShift => Box::new(ps_read_raf_verifier::<
+            F,
+            T,
+            RightShiftTable<XLEN>,
+            XLEN,
+        >(read, accumulator, transcript)?),
+        PrefixSuffixTable::SoftmaxClamp => Box::new(ps_read_raf_verifier::<
+            F,
+            T,
+            SoftmaxClampTable<XLEN>,
+            XLEN,
+        >(read, accumulator, transcript)?),
+    })
 }

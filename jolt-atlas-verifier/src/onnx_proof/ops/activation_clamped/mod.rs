@@ -13,33 +13,24 @@
 //! reads join the lookup batch, their one-hot (`ra`/`hw`/`bool`) checks the one-hot batch.
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::lookup::{output_value, small_table, SmallTableDef};
+use crate::onnx_proof::lookup::{
+    output_value, small_table, PrefixSuffixTable, SmallTableDef, TableRead,
+};
 use crate::onnx_proof::ops::OpLayout;
+use crate::onnx_proof::relation::RelationOpening;
 use crate::onnx_proof::{
     deferred_lookups::DeferredBatch,
-    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, LookupRaPolys, OpLookupEncoding},
-    plan::{OpLookup, OpPlan, OpRelation, Plan, Step},
+    plan::{OpPlan, OpRelation, Plan, Step},
 };
-use atlas_algebra::{
-    field::JoltField,
-    poly::point::{OpeningPoint, BIG_ENDIAN},
-    utils::errors::ProofVerifyError,
-};
-use atlas_sumcheck::{
-    config::{OneHotConfig, OneHotParams},
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
-    shout::RaOneHotEncoding,
-};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::{
     op::{Erf, Sigmoid, Tanh},
     semantics::tables::TableKind,
     trace::ModelExecutionIO,
     Model,
 };
-use common::{
-    consts::{ACTIVATION_TABLE_VARS, XLEN},
-    CommittedPoly, VirtualPoly,
-};
+use common::{consts::ACTIVATION_TABLE_VARS, CommittedPoly, VirtualPoly};
 
 /// Degree of the small-table execution sumcheck.
 pub const EXEC_DEGREE_BOUND: usize = 2;
@@ -68,51 +59,17 @@ pub fn table_def(kind: TableKind) -> SmallTableDef {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Stage: ActivationClamp -- prefix-suffix lookup proving the `ActivationClampedOutput`
-// advice equals `ActivationClampTable[raw_input]`, ties `clamped` back to the real input.
-// ---------------------------------------------------------------------------
-
-/// Lookup operands of the activation's input clamp.
-#[derive(Default)]
-pub struct ActivationClampOperands;
-
-impl LookupOperandsTrait for ActivationClampOperands {
-    const LOG_K: usize = XLEN;
-
-    fn rv_claim<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<F, ProofVerifyError> {
-        Ok(accumulator
-            .get_virtual_polynomial_opening(clamped_opening_id(node.idx))?
-            .1)
-    }
-
-    fn witness_opening_id(node: &ComputationNode) -> OpeningId {
-        DefaultLookupOperands::witness_opening_id(node)
-    }
-
-    fn r_cycle<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
-        DefaultLookupOperands::r_cycle(node, accumulator)
-    }
-
-    fn r_cycle_source(node_idx: usize) -> OpeningId {
-        DefaultLookupOperands::r_cycle_source(node_idx)
-    }
-}
-
-impl LookupRaPolys for ActivationClampOperands {
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::ActivationClampRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::ActivationClampRaD(node_idx, d)
-    }
+/// The input clamp's read: the clamped input is `table[operand]` at the reduced output point,
+/// `table` the clamp of the activation's width ([`PrefixSuffixTable::ActivationClamp`], or
+/// SiLU's wider [`PrefixSuffixTable::SiluClamp`]). It ties `clamped` back to the real input.
+pub fn clamp_read(node: &ComputationNode, table: PrefixSuffixTable) -> TableRead {
+    TableRead::of_operand(
+        node,
+        table,
+        RelationOpening::Id(clamped_opening_id(node.idx)),
+        VirtualPoly::ActivationClampRa,
+        CommittedPoly::ActivationClampRaD,
+    )
 }
 
 /// The plan of a clamped activation: the evaluation reduction, then the two stages queued for
@@ -121,6 +78,8 @@ impl LookupRaPolys for ActivationClampOperands {
 pub fn clamped_activation_plan<F: JoltField>(
     node: &ComputationNode,
 ) -> Result<Plan<F>, ProofVerifyError> {
+    let clamp = clamp_read(node, PrefixSuffixTable::ActivationClamp);
+    let clamp_ra = clamp.ra.clone();
     Ok(Plan(vec![
         Step::Reduce,
         Step::Defer {
@@ -129,15 +88,15 @@ pub fn clamped_activation_plan<F: JoltField>(
         },
         Step::Defer {
             batch: DeferredBatch::OneHot,
-            relation: OpRelation::SmallTableOneHot(node.clone()),
+            relation: OpRelation::OneHot(SmallTableDef::for_node(node)?.ra_encoding(node)),
         },
         Step::Defer {
             batch: DeferredBatch::Lookups,
-            relation: OpRelation::Lookup(OpLookup::ActivationClamp, node.clone()),
+            relation: OpRelation::TableRead(clamp),
         },
         Step::Defer {
             batch: DeferredBatch::OneHot,
-            relation: OpRelation::LookupOneHot(OpLookup::ActivationClamp, node.clone()),
+            relation: OpRelation::OneHot(clamp_ra),
         },
     ]))
 }
@@ -148,13 +107,10 @@ pub fn clamped_activation_committed_polynomials(
     node: &ComputationNode,
     def: SmallTableDef,
 ) -> Vec<CommittedPoly> {
-    let clamp_encoding: OpLookupEncoding<ActivationClampOperands> = OpLookupEncoding::new(node);
-    let clamp_d = clamp_encoding.one_hot_params().instruction_d;
-    let small_d =
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), def.vars).instruction_d;
-    let mut polys = vec![];
-    polys.extend((0..clamp_d).map(|i| CommittedPoly::ActivationClampRaD(node.idx, i)));
-    polys.extend((0..small_d).map(|i| (def.ra_chunk)(node.idx, i)));
+    let mut polys = clamp_read(node, PrefixSuffixTable::ActivationClamp)
+        .ra
+        .committed_polys();
+    polys.extend(def.ra_encoding(node).committed_polys());
     polys
 }
 

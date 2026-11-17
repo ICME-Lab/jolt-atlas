@@ -3,8 +3,10 @@
 pub use jolt_atlas_verifier::onnx_proof::lookup::*;
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::{activation_clamped, trig};
+use crate::onnx_proof::ops::{activation_clamped, softmax_last_axis, trig};
 use crate::onnx_proof::relation::{OpRel, RelationChallenge, RelationParams, RelationSetup};
+use crate::onnx_proof::trace_view::TraceView;
+use crate::utils::compute_lookup_indices;
 use crate::utils::n_bits_to_usize;
 use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
@@ -18,12 +20,23 @@ use atlas_algebra::{
         },
         signed_identity::SignedIdentityPoly,
     },
-    utils::thread::unsafe_allocate_zero_vec,
+    utils::{lookup_bits::LookupBits, thread::unsafe_allocate_zero_vec},
 };
 use atlas_claims::SymbolicSumcheck;
+use atlas_lookup_tables::{
+    clamp::{ActivationClampTable, ClampTable, SiluClampTable, SoftmaxClampTable},
+    relu::ReluTable,
+    right_shift::RightShiftTable,
+};
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
-use atlas_sumcheck::{opening_proof::OpeningAccumulator, relation::prover::RelationWitness};
+use atlas_sumcheck::{
+    opening_proof::{prover::ProverOpeningAccumulator, OpeningAccumulator},
+    ps_shout::prover::ps_read_raf_prover,
+    relation::prover::{DynRelationWitness, RelationWitness},
+};
 use atlas_trace::{Op, Tensor, Trace};
+use atlas_transcript::Transcript;
+use common::consts::XLEN;
 use common::parallel::par_enabled;
 use rayon::{
     iter::{
@@ -298,4 +311,110 @@ where
             .for_each(|(dest, &src)| *dest += src);
     }
     ra
+}
+
+/// The operand values a prefix-suffix read's table is read at, over the node's padded cells:
+/// the period remainder for a trig op's downscale, the address `u = c − x` for softmax's
+/// clamp, the node's first operand for the others.
+pub fn table_read_operand(read: &TableRead, trace: &Trace) -> Tensor<i64> {
+    let node = &read.node;
+    match read.table {
+        PrefixSuffixTable::RightShift => TraceView::trig_period_advice(trace, node)
+            .remainder
+            .map(|v| v as i64),
+        PrefixSuffixTable::SoftmaxClamp => {
+            let witness = trace
+                .softmax_witness(node.idx)
+                .expect("softmax node has a softmax witness in the trace");
+            softmax_last_axis::addresses(node, witness).map(|v| v as i64)
+        }
+        PrefixSuffixTable::Relu
+        | PrefixSuffixTable::Clamp
+        | PrefixSuffixTable::ActivationClamp
+        | PrefixSuffixTable::SiluClamp => TraceView::operand_tensors(trace, node)[0]
+            .padded_pow2()
+            .map(|v| v as i64),
+    }
+}
+
+/// The table address of each operand value of a prefix-suffix read: its `XLEN`-bit encoding.
+fn table_read_addresses(read: &TableRead, operand: &Tensor<i64>) -> Vec<LookupBits> {
+    match read.table {
+        PrefixSuffixTable::RightShift => operand
+            .iter()
+            .map(|&v| LookupBits::new(v as u64, XLEN))
+            .collect(),
+        PrefixSuffixTable::Relu
+        | PrefixSuffixTable::Clamp
+        | PrefixSuffixTable::ActivationClamp
+        | PrefixSuffixTable::SiluClamp
+        | PrefixSuffixTable::SoftmaxClamp => compute_lookup_indices(&operand.map(|v| v as i32)),
+    }
+}
+
+/// The prover of a prefix-suffix read, the mirror of [`table_read_verifier`]: the operand's
+/// opening appended at the cycle point with its claim from the trace, then the read-raf prover
+/// of the read's table set up. Returns the prover and the read's addresses, for its one-hot
+/// checks.
+pub fn table_read_prover<F: JoltField, T: Transcript>(
+    read: &TableRead,
+    trace: &Trace,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> (Box<dyn DynRelationWitness<F, T>>, Vec<usize>) {
+    let operand = table_read_operand(read, trace);
+    let r_cycle = read
+        .cycle_point(&*accumulator)
+        .expect("the prover holds every claim it reads");
+    let claim = operand.evaluate_mle(&r_cycle.r);
+    accumulator.append_virtual(transcript, read.operand, r_cycle, claim);
+    let addresses = table_read_addresses(read, &operand);
+    let indices: Vec<usize> = addresses.iter().map(|&x| x.into()).collect();
+    let prover: Box<dyn DynRelationWitness<F, T>> = match read.table {
+        PrefixSuffixTable::Relu => Box::new(ps_read_raf_prover::<F, T, ReluTable<XLEN>, XLEN>(
+            read,
+            addresses,
+            accumulator,
+            transcript,
+        )),
+        PrefixSuffixTable::Clamp => Box::new(ps_read_raf_prover::<F, T, ClampTable<XLEN>, XLEN>(
+            read,
+            addresses,
+            accumulator,
+            transcript,
+        )),
+        PrefixSuffixTable::ActivationClamp => Box::new(ps_read_raf_prover::<
+            F,
+            T,
+            ActivationClampTable<XLEN>,
+            XLEN,
+        >(
+            read, addresses, accumulator, transcript
+        )),
+        PrefixSuffixTable::SiluClamp => {
+            Box::new(ps_read_raf_prover::<F, T, SiluClampTable<XLEN>, XLEN>(
+                read,
+                addresses,
+                accumulator,
+                transcript,
+            ))
+        }
+        PrefixSuffixTable::RightShift => {
+            Box::new(ps_read_raf_prover::<F, T, RightShiftTable<XLEN>, XLEN>(
+                read,
+                addresses,
+                accumulator,
+                transcript,
+            ))
+        }
+        PrefixSuffixTable::SoftmaxClamp => {
+            Box::new(ps_read_raf_prover::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
+                read,
+                addresses,
+                accumulator,
+                transcript,
+            ))
+        }
+    };
+    (prover, indices)
 }

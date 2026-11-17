@@ -17,15 +17,10 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     deferred_lookups::DeferredBatch,
     fused_rebase,
-    lookup::SmallTableRaEncoding,
-    op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProvider},
+    lookup::{table_read_verifier, RaEncoding, TableRead},
     ops::{
-        activation_clamped::ActivationClampOperands,
-        clamp::SymmetricClampOperands,
         gather::{self, small::GatherSmallShape},
-        smooth_relu::SmoothReluOperands,
-        softmax_last_axis::{SoftmaxOpen, SoftmaxRelation},
-        trig::TrigDownscaleOperands,
+        softmax_last_axis::{self, SoftmaxOpen, SoftmaxShape},
     },
     range_bucket::RangeBucket,
     range_check::{self, ValueParams},
@@ -34,11 +29,6 @@ use crate::onnx_proof::{
 };
 use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_lookup_tables::{
-    clamp::{ActivationClampTable, ClampTable, SiluClampTable},
-    relu::ReluTable,
-    right_shift::RightShiftTable,
-};
 use atlas_sumcheck::{
     opening_proof::{PolynomialId, VerifierOpeningAccumulator},
     relation::DynRelationVerifier,
@@ -46,7 +36,7 @@ use atlas_sumcheck::{
 };
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use atlas_transcript::Transcript;
-use common::{consts::XLEN, CommittedPoly, VirtualPoly};
+use common::{CommittedPoly, VirtualPoly};
 
 /// One thing the verifier does for a node.
 pub enum Step<F: JoltField> {
@@ -99,48 +89,29 @@ pub trait OpPlan {
     ) -> Result<Plan<F>, ProofVerifyError>;
 }
 
-/// A relation proven by a sumcheck, as a plan step holds it.
+/// A relation proven by a sumcheck, as a plan step holds it: one variant per kind of verifier
+/// construction.
 pub enum OpRelation<F: JoltField> {
     /// An op relation.
     Op(OpRel<F>),
-    /// `GatherLarge`: the one-hot checks of its read addresses (two relations).
-    GatherLargeOneHot(ComputationNode),
+    /// A prefix-suffix table read: the operand's opening is appended at the read's cycle
+    /// point, then the read-raf relation is set up.
+    TableRead(TableRead),
+    /// The one-hot checks of a read's addresses: two relations (the address polynomial as the
+    /// product of its chunks; the chunks' Booleanity and Hamming weight).
+    OneHot(RaEncoding),
     /// `GatherSmall`: the Hamming-Booleanity and Booleanity checks of its one-hot `ra`.
     GatherSmallOneHot(GatherSmallShape),
     /// `GatherSmall`: the Hamming-weight check of its one-hot `ra`.
     GatherSmallHammingWeight(GatherSmallShape),
-    /// A prefix-suffix table lookup of the node's operand: the operand's opening is appended,
-    /// then the read-raf relation is set up.
-    Lookup(OpLookup, ComputationNode),
-    /// The one-hot checks of a [`Self::Lookup`]'s read addresses: two relations (the address
-    /// polynomial as the product of its chunks; the chunks' Booleanity and Hamming weight).
-    LookupOneHot(OpLookup, ComputationNode),
-    /// The one-hot checks of a small table's read addresses (two relations).
-    SmallTableOneHot(ComputationNode),
-    /// A softmax stage, as `ops::softmax_last_axis` lists them.
-    Softmax(SoftmaxRelation),
+    /// `SoftmaxLastAxis`: the read of the output, sum and shifted sum tables at the reads'
+    /// point.
+    SoftmaxRead(SoftmaxShape),
     /// A packed range bucket's value relation: the range claims of its members
     /// ([`range_bucket::RangeClaim`](crate::onnx_proof::range_bucket::RangeClaim)).
     RemainderBucketValue(RangeBucket),
     /// A packed range bucket's digit range check.
     RemainderBucketDigits(RangeBucket),
-}
-
-/// The table a lookup op reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OpLookup {
-    /// `ReLU`'s table.
-    Relu,
-    /// `Clamp`'s symmetric clamp table.
-    SymmetricClamp,
-    /// A clamped activation's input clamp (`clamped = ActivationClampTable[input]`).
-    ActivationClamp,
-    /// A trig op's downscale (right shift) of its remainder.
-    TrigDownscale,
-    /// SiLU's input clamp, twice as wide as the clamped activations'.
-    SiluClamp,
-    /// A smooth ReLU's `ReLU` read, through its clamp lookup's committed address.
-    SmoothRelu,
 }
 
 impl<F: JoltField> OpRelation<F> {
@@ -158,12 +129,10 @@ impl<F: JoltField> OpRelation<F> {
         }
         match self {
             Self::Op(relation) => Ok(boxed(op_rel_verifier(relation, accumulator, transcript)?)),
-            Self::GatherLargeOneHot(node) => Ok(shout::ra_onehot_verifiers(
-                &gather::large::GatherRaEncoding::new(&node)?,
-                accumulator,
-                transcript,
-            )?
-            .into()),
+            Self::TableRead(read) => Ok(vec![table_read_verifier(&read, accumulator, transcript)?]),
+            Self::OneHot(encoding) => {
+                Ok(shout::ra_onehot_verifiers(&encoding, accumulator, transcript)?.into())
+            }
             Self::GatherSmallOneHot(shape) => {
                 let (hamming_booleanity, booleanity) =
                     gather::small::build_stage2_verifiers(&shape, accumulator, transcript)?;
@@ -172,72 +141,11 @@ impl<F: JoltField> OpRelation<F> {
             Self::GatherSmallHammingWeight(shape) => Ok(boxed(
                 gather::small::build_stage3_verifier(&shape, accumulator, transcript)?,
             )),
-            Self::Lookup(OpLookup::Relu, node) => Ok(boxed(
-                OpLookupProvider::<DefaultLookupOperands>::new(node)
-                    .read_raf_verify::<F, T, ReluTable<XLEN>, XLEN>(accumulator, transcript)?,
-            )),
-            Self::Lookup(OpLookup::SymmetricClamp, node) => Ok(boxed(
-                OpLookupProvider::<SymmetricClampOperands>::new(node)
-                    .read_raf_verify::<F, T, ClampTable<XLEN>, XLEN>(accumulator, transcript)?,
-            )),
-            Self::Lookup(OpLookup::ActivationClamp, node) => Ok(boxed(
-                OpLookupProvider::<ActivationClampOperands>::new(node)
-                    .read_raf_verify::<F, T, ActivationClampTable<XLEN>, XLEN>(
-                        accumulator,
-                        transcript,
-                    )?,
-            )),
-            Self::Lookup(OpLookup::TrigDownscale, node) => Ok(boxed(
-                OpLookupProvider::<TrigDownscaleOperands>::new(node)
-                    .read_raf_verify::<F, T, RightShiftTable<XLEN>, XLEN>(
-                        accumulator,
-                        transcript,
-                    )?,
-            )),
-            Self::Lookup(OpLookup::SiluClamp, node) => Ok(boxed(
-                OpLookupProvider::<ActivationClampOperands>::new(node)
-                    .read_raf_verify::<F, T, SiluClampTable<XLEN>, XLEN>(accumulator, transcript)?,
-            )),
-            Self::Lookup(OpLookup::SmoothRelu, node) => Ok(boxed(
-                OpLookupProvider::<SmoothReluOperands>::new(node)
-                    .read_raf_verify::<F, T, ReluTable<XLEN>, XLEN>(accumulator, transcript)?,
-            )),
-            Self::LookupOneHot(OpLookup::Relu, node) => Ok(shout::ra_onehot_verifiers(
-                &OpLookupEncoding::<DefaultLookupOperands>::new(&node),
+            Self::SoftmaxRead(shape) => Ok(vec![softmax_last_axis::read_verifier(
+                shape,
                 accumulator,
                 transcript,
-            )?
-            .into()),
-            Self::LookupOneHot(OpLookup::SymmetricClamp, node) => Ok(shout::ra_onehot_verifiers(
-                &OpLookupEncoding::<SymmetricClampOperands>::new(&node),
-                accumulator,
-                transcript,
-            )?
-            .into()),
-            // One committed address serves a smooth ReLU's clamp and ReLU reads; its checks
-            // are the clamp's.
-            Self::LookupOneHot(
-                OpLookup::ActivationClamp | OpLookup::SiluClamp | OpLookup::SmoothRelu,
-                node,
-            ) => Ok(shout::ra_onehot_verifiers(
-                &OpLookupEncoding::<ActivationClampOperands>::new(&node),
-                accumulator,
-                transcript,
-            )?
-            .into()),
-            Self::LookupOneHot(OpLookup::TrigDownscale, node) => Ok(shout::ra_onehot_verifiers(
-                &OpLookupEncoding::<TrigDownscaleOperands>::new(&node),
-                accumulator,
-                transcript,
-            )?
-            .into()),
-            Self::SmallTableOneHot(node) => Ok(shout::ra_onehot_verifiers(
-                &SmallTableRaEncoding::for_node(&node)?,
-                accumulator,
-                transcript,
-            )?
-            .into()),
-            Self::Softmax(relation) => relation.verifiers(accumulator, transcript),
+            )?]),
             Self::RemainderBucketValue(bucket) => Ok(boxed(ValueParams::into_verifier(
                 range_check::remainder_value_params(&bucket, accumulator, transcript)?,
             ))),

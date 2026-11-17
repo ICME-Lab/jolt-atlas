@@ -16,7 +16,6 @@ use atlas_transcript::{Transcript, VerifyingTranscript};
 pub mod deferred_lookups;
 pub mod fused_rebase;
 pub mod lookup;
-pub mod op_lookups;
 pub mod ops;
 pub mod plan;
 pub mod preprocessing;

@@ -25,7 +25,6 @@ pub mod fused_rebase;
 #[cfg(any(test, feature = "fuzz"))]
 pub mod fuzz;
 pub mod lookup;
-pub mod op_lookups;
 pub mod ops;
 pub mod range_bucket;
 pub mod range_check;

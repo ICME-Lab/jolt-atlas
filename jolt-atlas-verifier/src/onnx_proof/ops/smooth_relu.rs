@@ -19,23 +19,18 @@
 //! `out = ReLU(x) + H[clamp(x)]` on every element.
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::lookup::{small_table, SmallTableDef};
+use crate::onnx_proof::lookup::{small_table, PrefixSuffixTable, SmallTableDef, TableRead};
 use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::{OpExpr, RelationOpening};
 use crate::onnx_proof::{
     deferred_lookups::DeferredBatch,
-    op_lookups::{DefaultLookupOperands, LookupOperandsTrait, LookupRaPolys},
-    ops::activation_clamped::{clamped_activation_committed_polynomials, ActivationClampOperands},
-    plan::{OpLookup, OpOpen, OpPlan, OpRelation, Plan, Step},
+    ops::activation_clamped::{clamp_read, clamped_activation_committed_polynomials},
+    plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
 };
 use crate::utils::opening_access::OpeningIdBuilder;
-use atlas_algebra::{
-    field::JoltField,
-    poly::point::{OpeningPoint, BIG_ENDIAN},
-    utils::errors::ProofVerifyError,
-};
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_claims::opening;
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_sumcheck::opening_proof::OpeningId;
 use atlas_trace::{
     op::{SmoothRelu, SmoothReluForm},
     semantics::tables::TableKind,
@@ -43,7 +38,7 @@ use atlas_trace::{
     Model,
 };
 use common::{
-    consts::{ACTIVATION_TABLE_VARS, MODEL_SCALE, XLEN},
+    consts::{ACTIVATION_TABLE_VARS, MODEL_SCALE},
     CommittedPoly, VirtualPoly,
 };
 
@@ -85,47 +80,16 @@ fn output_less_relu(node: &ComputationNode) -> OpExpr {
         - opening(RelationOpening::Id(relu_opening_id(node)))
 }
 
-/// Lookup operands of a smooth ReLU's `ReLU` read: the clamp lookup's operand and committed
-/// address, with `ReLU(x)` as the value read.
-#[derive(Default)]
-pub struct SmoothReluOperands;
-
-impl LookupOperandsTrait for SmoothReluOperands {
-    const LOG_K: usize = XLEN;
-
-    fn rv_claim<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<F, ProofVerifyError> {
-        Ok(accumulator
-            .get_virtual_polynomial_opening(relu_opening_id(node))?
-            .1)
-    }
-
-    fn witness_opening_id(node: &ComputationNode) -> OpeningId {
-        DefaultLookupOperands::witness_opening_id(node)
-    }
-
-    fn r_cycle<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
-        DefaultLookupOperands::r_cycle(node, accumulator)
-    }
-
-    fn r_cycle_source(node_idx: usize) -> OpeningId {
-        DefaultLookupOperands::r_cycle_source(node_idx)
-    }
-}
-
-impl LookupRaPolys for SmoothReluOperands {
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        ActivationClampOperands::ra_virtual_poly(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        ActivationClampOperands::ra_committed_poly(node_idx, d)
-    }
+/// A smooth ReLU's `ReLU` read: `ReLU(x)` is `ReLU[operand]` at the reduced output point,
+/// through the clamp read's addresses, so both reads see one `x`.
+pub fn relu_read(node: &ComputationNode) -> TableRead {
+    TableRead::of_operand(
+        node,
+        PrefixSuffixTable::Relu,
+        RelationOpening::Id(relu_opening_id(node)),
+        VirtualPoly::ActivationClampRa,
+        CommittedPoly::ActivationClampRaD,
+    )
 }
 
 impl OpLayout for SmoothRelu {
@@ -157,10 +121,16 @@ impl OpPlan for SmoothRelu {
                 node.scale
             )));
         }
-        let clamp = match self.form {
-            SmoothReluForm::GeluErf | SmoothReluForm::GeluTanh => OpLookup::ActivationClamp,
-            SmoothReluForm::Silu => OpLookup::SiluClamp,
-        };
+        let clamp = clamp_read(
+            node,
+            match self.form {
+                SmoothReluForm::GeluErf | SmoothReluForm::GeluTanh => {
+                    PrefixSuffixTable::ActivationClamp
+                }
+                SmoothReluForm::Silu => PrefixSuffixTable::SiluClamp,
+            },
+        );
+        let clamp_ra = clamp.ra.clone();
         let defer = |batch, relation| Step::Defer { batch, relation };
         Ok(Plan(vec![
             Step::Reduce,
@@ -168,20 +138,14 @@ impl OpPlan for SmoothRelu {
             defer(DeferredBatch::Lookups, OpRelation::Op(small_table(node)?)),
             defer(
                 DeferredBatch::OneHot,
-                OpRelation::SmallTableOneHot(node.clone()),
+                OpRelation::OneHot(table_def(self.form).ra_encoding(node)),
             ),
+            defer(DeferredBatch::Lookups, OpRelation::TableRead(clamp)),
             defer(
                 DeferredBatch::Lookups,
-                OpRelation::Lookup(clamp, node.clone()),
+                OpRelation::TableRead(relu_read(node)),
             ),
-            defer(
-                DeferredBatch::Lookups,
-                OpRelation::Lookup(OpLookup::SmoothRelu, node.clone()),
-            ),
-            defer(
-                DeferredBatch::OneHot,
-                OpRelation::LookupOneHot(OpLookup::ActivationClamp, node.clone()),
-            ),
+            defer(DeferredBatch::OneHot, OpRelation::OneHot(clamp_ra)),
         ]))
     }
 }

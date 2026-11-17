@@ -46,18 +46,16 @@ use atlas_sumcheck::relation::DynRelationVerifier;
 use crate::{
     onnx_proof::{
         deferred_lookups::DeferredBatch,
-        op_lookups::OpLookupProvider,
-        ops::softmax_last_axis::significance_clamp::SoftmaxSignificanceClampOperands,
+        lookup::{PrefixSuffixTable, RaEncoding, TableRead},
         plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
         ProofType,
     },
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
 };
-use atlas_lookup_tables::clamp::SoftmaxClampTable;
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
-    opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},
-    shout::{RaOneHotEncoding, ReadRafProvider},
+    opening_proof::{OpeningAccumulator, SumcheckId, VerifierOpeningAccumulator},
+    shout::ReadRafProvider,
 };
 
 use atlas_trace::{
@@ -84,9 +82,6 @@ use common::{
     CommittedPoly, VirtualPoly,
 };
 use std::sync::OnceLock;
-
-/// The clamp lookup of the address `u = c − x` (`SoftmaxSignificanceClampOperands`).
-pub mod significance_clamp;
 
 /// The softmax tables at [`MODEL_SCALE`] with the shifted sum table, generated once.
 pub struct ReadTables {
@@ -162,12 +157,9 @@ impl OpPlan for SoftmaxLastAxis {
         let open = |open: fn(SoftmaxShape) -> SoftmaxOpen| {
             Step::Open(OpOpen::Softmax(open(shape.clone())))
         };
-        let relation =
-            |stage: fn(SoftmaxShape) -> SoftmaxRelation| OpRelation::Softmax(stage(shape.clone()));
-        let defer = |batch, stage| Step::Defer {
-            batch,
-            relation: relation(stage),
-        };
+        let defer = |batch, relation| Step::Defer { batch, relation };
+        let clamp = clamp_read(node);
+        let clamp_ra = clamp.ra.clone();
         Ok(Plan(vec![
             Step::Reduce,
             open(SoftmaxOpen::Gaps),
@@ -176,13 +168,19 @@ impl OpPlan for SoftmaxLastAxis {
                 relation: OpRelation::Op(sums(node)?),
             },
             open(SoftmaxOpen::Addresses),
-            defer(DeferredBatch::Lookups, SoftmaxRelation::Read),
-            defer(DeferredBatch::Lookups, SoftmaxRelation::Clamp),
+            defer(
+                DeferredBatch::Lookups,
+                OpRelation::SoftmaxRead(shape.clone()),
+            ),
+            defer(DeferredBatch::Lookups, OpRelation::TableRead(clamp)),
             Step::Tie {
                 relation: address_link(node)?,
             },
-            defer(DeferredBatch::OneHot, SoftmaxRelation::ReadOneHot),
-            defer(DeferredBatch::OneHot, SoftmaxRelation::ClampOneHot),
+            defer(
+                DeferredBatch::OneHot,
+                OpRelation::OneHot(read_ra_encoding(node)),
+            ),
+            defer(DeferredBatch::OneHot, OpRelation::OneHot(clamp_ra)),
         ]))
     }
 }
@@ -584,100 +582,56 @@ impl<F: JoltField> ReadRafProvider<F> for ReadProvider {
     }
 }
 
-/// One-hot encoding of the softmax table read's addresses.
-pub struct ReadRaEncoding {
-    /// Index of the softmax node.
-    pub node_idx: usize,
+/// The one-hot encoding of the table read's addresses `ũ`: the cycle point is the reads'
+/// point.
+pub fn read_ra_encoding(node: &ComputationNode) -> RaEncoding {
+    let ids = OpeningIdBuilder::new(node);
+    RaEncoding::chunked(
+        node.idx,
+        CommittedPoly::SoftmaxAddrRaD,
+        ids.advice(VirtualPoly::SoftmaxAddrRa),
+        ids.advice(VirtualPoly::SoftmaxRead),
+        SOFTMAX_CLAMP_BOUND,
+    )
 }
 
-impl RaOneHotEncoding for ReadRaEncoding {
-    fn committed_poly(&self, d: usize) -> CommittedPoly {
-        CommittedPoly::SoftmaxAddrRaD(self.node_idx, d)
-    }
-
-    fn r_cycle_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::SoftmaxRead(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn ra_source(&self) -> OpeningId {
-        OpeningId::new(
-            VirtualPoly::SoftmaxAddrRa(self.node_idx),
-            SumcheckId::NodeExecution(self.node_idx),
-        )
-    }
-
-    fn log_k(&self) -> usize {
-        SOFTMAX_CLAMP_BOUND
-    }
-
-    fn one_hot_params(&self) -> OneHotParams {
-        OneHotParams::from_config_and_log_K(&OneHotConfig::default(), SOFTMAX_CLAMP_BOUND)
-    }
+/// The clamp read `ũ = Clamp[u]` of the signed 32-bit address `u = c − x`, in
+/// [`atlas_lookup_tables::clamp::SoftmaxClampTable`] (a negative address maps to 0, one above
+/// the tables' last address to that address). Its value is the table address `ũ` and its
+/// operand `u`, both at the point the reads are left at; the address link ties `u` to the
+/// shift and the logit.
+pub fn clamp_read(node: &ComputationNode) -> TableRead {
+    let ids = OpeningIdBuilder::new(node);
+    let reads_point = ids.advice(VirtualPoly::SoftmaxRead);
+    TableRead::new(
+        node,
+        PrefixSuffixTable::SoftmaxClamp,
+        RelationOpening::Id(ids.advice(VirtualPoly::SoftmaxClampedAddr)),
+        ids.advice(VirtualPoly::SoftmaxClampWitness),
+        RelationOpening::Id(reads_point),
+        reads_point,
+        VirtualPoly::SoftmaxClampRa,
+        CommittedPoly::SoftmaxClampRaD,
+    )
 }
 
-/// A softmax relation, as the plan holds it.
-pub enum SoftmaxRelation {
-    /// The table read at the reads' point.
-    Read(SoftmaxShape),
-    /// The clamp lookup `ũ = Clamp[u]` at the reads' point.
-    Clamp(SoftmaxShape),
-    /// The one-hot checks of the table address.
-    ReadOneHot(SoftmaxShape),
-    /// The one-hot checks of the clamp address.
-    ClampOneHot(SoftmaxShape),
-}
-
-impl SoftmaxRelation {
-    /// The relation's verifiers.
-    /// `Err` if the accumulator lacks a claim a setup reads.
-    pub fn verifiers<F: JoltField, T: Transcript>(
-        self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
-        match self {
-            Self::Read(shape) => {
-                let read = read_tables()?;
-                Ok(vec![shout::read_raf_verifier(
-                    &ReadProvider { shape },
-                    vec![
-                        read.tables.out.clone(),
-                        read.tables.sum.clone(),
-                        read.sum_prev.clone(),
-                    ],
-                    &*accumulator,
-                    transcript,
-                )?])
-            }
-            Self::Clamp(shape) => {
-                let provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
-                    OpLookupProvider::new(shape.node);
-                Ok(vec![Box::new(
-                    provider.read_raf_verify::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
-                        accumulator,
-                        transcript,
-                    )?,
-                )])
-            }
-            Self::ReadOneHot(shape) => Ok(shout::ra_onehot_verifiers(
-                &ReadRaEncoding {
-                    node_idx: shape.idx(),
-                },
-                &*accumulator,
-                transcript,
-            )?
-            .into()),
-            Self::ClampOneHot(shape) => {
-                let provider: OpLookupProvider<SoftmaxSignificanceClampOperands> =
-                    OpLookupProvider::new(shape.node);
-                Ok(
-                    shout::ra_onehot_verifiers(&provider.encoding(), &*accumulator, transcript)?
-                        .into(),
-                )
-            }
-        }
-    }
+/// The verifier of the table read at the reads' point: the output, sum and shifted sum tables
+/// through the table address. `Err` if the tables are not available or the accumulator lacks
+/// a claim the read reads.
+pub fn read_verifier<F: JoltField, T: Transcript>(
+    shape: SoftmaxShape,
+    accumulator: &VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<Box<dyn DynRelationVerifier<F, T>>, ProofVerifyError> {
+    let read = read_tables()?;
+    shout::read_raf_verifier(
+        &ReadProvider { shape },
+        vec![
+            read.tables.out.clone(),
+            read.tables.sum.clone(),
+            read.sum_prev.clone(),
+        ],
+        accumulator,
+        transcript,
+    )
 }

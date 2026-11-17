@@ -91,15 +91,11 @@ use crate::onnx_proof::{
     deferred_lookups::{DeferredBatch, DeferredSetup, DEFERRED_PROOF_IDX},
     fused_rebase::rebase_remainder,
     lookup,
-    op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProve, OpLookupProvider},
-    ops::softmax_last_axis::SoftmaxRelation,
     ops::{
-        activation_clamped::ActivationClampOperands, clamp::SymmetricClampOperands,
         einsum::dot::EinsumDotProver, gather::GatherProver,
-        mean_of_squares::MeanOfSquaresReductionProver, smooth_relu::SmoothReluOperands,
-        softmax_last_axis::SoftmaxAddresses, trig::TrigDownscaleOperands,
+        mean_of_squares::MeanOfSquaresReductionProver,
     },
-    plan::{OpLookup, OpOpen, OpPlan, OpRelation, Plan, Step},
+    plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
     range_check::{self, ValueParams, ValueProver},
     relation::{
         op_rel_params, prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
@@ -109,19 +105,13 @@ use crate::onnx_proof::{
 };
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider};
 use atlas_algebra::poly::multilinear::MultilinearPolynomial;
-use atlas_lookup_tables::{
-    clamp::{ActivationClampTable, ClampTable, SiluClampTable},
-    relu::ReluTable,
-    right_shift::RightShiftTable,
-};
 use atlas_sumcheck::digit_range::DigitRangeParams;
-use atlas_sumcheck::opening_proof::OpeningAccumulator;
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
 };
-use atlas_sumcheck::shout::{self, RaOneHotEncoding, RaOneHotParams};
+use atlas_sumcheck::shout::{self, RaOneHotParams};
 use atlas_trace::Trace;
-use common::consts::XLEN;
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
 
@@ -153,17 +143,10 @@ impl OperatorProver {
     }
 }
 
-/// The read addresses a lookup leaves for its one-hot checks, keyed by the lookup and its
-/// node (`usize::MAX` for a model-level one).
+/// The key a read leaves its addresses under for its one-hot checks: the opening of its
+/// read-address polynomial ([`RaEncoding::ra_source`](lookup::RaEncoding::ra_source)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Addresses {
-    /// An [`OpRelation::Lookup`].
-    Lookup(OpLookup),
-    /// A small table's read ([`lookup::small_table`]).
-    SmallTable,
-    /// A softmax stage's lookup.
-    Softmax(SoftmaxAddresses),
-}
+pub struct Addresses(pub OpeningId);
 
 /// A queued deferred relation on the prover's side: its witnesses built in the node's turn,
 /// or the relation waiting for its batch.
@@ -324,17 +307,24 @@ fn kind_span(kind: &'static str) -> tracing::Span {
 
 fn witness_kind<F: JoltField>(relation: &OpRelation<F>) -> &'static str {
     match relation {
-        OpRelation::Lookup(OpLookup::Relu, _) => "relu",
-        OpRelation::Lookup(OpLookup::SymmetricClamp, _) => "clamp",
-        OpRelation::Lookup(OpLookup::ActivationClamp, _) => "activation_clamp",
-        OpRelation::Lookup(OpLookup::TrigDownscale, _) => "trig_downscale",
+        OpRelation::TableRead(read) => match read.table {
+            lookup::PrefixSuffixTable::Relu => "relu",
+            lookup::PrefixSuffixTable::Clamp => "clamp",
+            lookup::PrefixSuffixTable::ActivationClamp | lookup::PrefixSuffixTable::SiluClamp => {
+                "activation_clamp"
+            }
+            lookup::PrefixSuffixTable::RightShift => "trig_downscale",
+            lookup::PrefixSuffixTable::SoftmaxClamp => "softmax",
+        },
         OpRelation::Op(relation) if relation.kind == OpRelKind::SmallTable => "small_table",
-        OpRelation::Softmax(_) => "softmax",
-        OpRelation::LookupOneHot(..) | OpRelation::SmallTableOneHot(_) => "one_hot",
-        OpRelation::GatherLargeOneHot(_)
-        | OpRelation::GatherSmallOneHot(_)
-        | OpRelation::GatherSmallHammingWeight(_) => "gather_one_hot",
-        _ => "node",
+        OpRelation::SoftmaxRead(_) => "softmax",
+        OpRelation::OneHot(_) => "one_hot",
+        OpRelation::GatherSmallOneHot(_) | OpRelation::GatherSmallHammingWeight(_) => {
+            "gather_one_hot"
+        }
+        OpRelation::Op(_)
+        | OpRelation::RemainderBucketValue(_)
+        | OpRelation::RemainderBucketDigits(_) => "node",
     }
 }
 
@@ -346,53 +336,16 @@ fn prepare<F: JoltField, T: Transcript>(
     let kind = witness_kind(&relation);
     let _span = kind_span(kind).entered();
     let expect = "the prover holds every claim it reads";
-    fn onehot<F: JoltField, T: Transcript>(
-        encoding: &impl RaOneHotEncoding,
-        key: Addresses,
-        node_idx: usize,
-        prover: &mut Prover<F, T>,
-    ) -> Prepared<F, T> {
-        let challenges = shout::ra_onehot_challenges::<F, T>(encoding, &mut prover.transcript);
-        let params = shout::ra_onehot_params(encoding, &prover.accumulator, challenges)
-            .expect("the prover holds the one-hot checks' claims");
-        Prepared::OneHot(Box::new(params), prover.take_addresses(key, node_idx))
-    }
     let prepared = match relation {
-        OpRelation::LookupOneHot(kind @ OpLookup::Relu, node) => onehot(
-            &OpLookupEncoding::<DefaultLookupOperands>::new(&node),
-            Addresses::Lookup(kind),
-            node.idx,
-            prover,
-        ),
-        OpRelation::LookupOneHot(kind @ OpLookup::SymmetricClamp, node) => onehot(
-            &OpLookupEncoding::<SymmetricClampOperands>::new(&node),
-            Addresses::Lookup(kind),
-            node.idx,
-            prover,
-        ),
-        // A smooth ReLU's clamp and ReLU reads share one committed address, left under the
-        // clamp's key.
-        OpRelation::LookupOneHot(
-            OpLookup::ActivationClamp | OpLookup::SiluClamp | OpLookup::SmoothRelu,
-            node,
-        ) => onehot(
-            &OpLookupEncoding::<ActivationClampOperands>::new(&node),
-            Addresses::Lookup(OpLookup::ActivationClamp),
-            node.idx,
-            prover,
-        ),
-        OpRelation::LookupOneHot(kind @ OpLookup::TrigDownscale, node) => onehot(
-            &OpLookupEncoding::<TrigDownscaleOperands>::new(&node),
-            Addresses::Lookup(kind),
-            node.idx,
-            prover,
-        ),
-        OpRelation::SmallTableOneHot(node) => onehot(
-            &lookup::SmallTableRaEncoding::for_node(&node).expect("the node reads a small table"),
-            Addresses::SmallTable,
-            node.idx,
-            prover,
-        ),
+        OpRelation::OneHot(encoding) => {
+            let challenges = shout::ra_onehot_challenges::<F, T>(&encoding, &mut prover.transcript);
+            let params = shout::ra_onehot_params(&encoding, &prover.accumulator, challenges)
+                .expect("the prover holds the one-hot checks' claims");
+            Prepared::OneHot(
+                Box::new(params),
+                prover.take_addresses(Addresses(encoding.ra_source), encoding.node),
+            )
+        }
         OpRelation::RemainderBucketValue(bucket) => Prepared::RemainderValue(
             range_check::remainder_value_params(
                 &bucket,
@@ -470,30 +423,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
     relation: OpRelation<F>,
     prover: &mut Prover<F, T>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-    fn lookup<F: JoltField, T: Transcript, H, LUT>(
-        kind: OpLookup,
-        node: ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<Box<dyn DynRelationWitness<F, T>>>
-    where
-        H: Default
-            + crate::onnx_proof::op_lookups::LookupWitness
-            + crate::onnx_proof::op_lookups::LookupRaPolys,
-        LUT: atlas_lookup_tables::JoltLookupTable
-            + atlas_lookup_tables::PrefixSuffixDecompositionTrait<XLEN>
-            + Default
-            + 'static,
-    {
-        let node_idx = node.idx;
-        let (witness, indices) = OpLookupProvider::<H>::new(node)
-            .read_raf_prove::<F, T, LUT, XLEN>(
-                &prover.trace,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-        prover.leave_addresses(Addresses::Lookup(kind), node_idx, indices);
-        vec![Box::new(witness)]
-    }
     match relation {
         OpRelation::Op(relation) => {
             let params = op_rel_params(
@@ -502,24 +431,38 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );
-            if params.relation().kind == OpRelKind::SmallTable {
-                let node = &params.relation().node;
-                let indices = lookup::small_table_lookup_indices(node, &prover.trace);
-                prover.leave_addresses(Addresses::SmallTable, node.idx, indices);
+            // A read through committed address chunks leaves its addresses for their
+            // one-hot checks, under its read-address opening.
+            let relation = params.relation();
+            let node = &relation.node;
+            let addresses = match (relation.kind, &node.operator) {
+                (OpRelKind::SmallTable, _) => {
+                    Some(lookup::small_table_lookup_indices(node, &prover.trace))
+                }
+                (OpRelKind::Gather, atlas_trace::Op::GatherLarge(_)) => {
+                    Some(gather::large::gather_lookup_indices(node, &prover.trace))
+                }
+                _ => None,
+            };
+            if let (Some(indices), Some(ra)) = (addresses, relation.produced.first()) {
+                prover.leave_addresses(Addresses(*ra), node.idx, indices);
             }
             vec![op_rel_prover(params, &prover.trace, &prover.accumulator)]
         }
-        OpRelation::GatherLargeOneHot(node) => {
-            let encoding = gather::large::GatherRaEncoding::new(&node)
-                .expect("the node is a large gather with an index operand");
-            let indices = gather::large::gather_lookup_indices(&node, &prover.trace);
-            shout::prover::ra_onehot_provers(
-                &encoding,
-                &indices,
-                &prover.accumulator,
+        OpRelation::TableRead(read) => {
+            let (witness, indices) = lookup::table_read_prover(
+                &read,
+                &prover.trace,
+                &mut prover.accumulator,
                 &mut prover.transcript,
-            )
-            .into()
+            );
+            // Reads that share one committed address (a smooth ReLU's clamp and ReLU reads)
+            // leave it once.
+            let key = (Addresses(read.ra.ra_source), read.node.idx);
+            if !prover.lookup_addresses.contains_key(&key) {
+                prover.leave_addresses(key.0, key.1, indices);
+            }
+            vec![witness]
         }
         OpRelation::GatherSmallOneHot(shape) => {
             let (hamming_booleanity, booleanity) = gather::small::build_stage2_provers::<F>(
@@ -538,64 +481,19 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 &mut prover.transcript,
             ))]
         }
-        OpRelation::Lookup(kind @ OpLookup::Relu, node) => {
-            lookup::<F, T, DefaultLookupOperands, ReluTable<XLEN>>(kind, node, prover)
-        }
-        OpRelation::Lookup(kind @ OpLookup::SymmetricClamp, node) => {
-            lookup::<F, T, SymmetricClampOperands, ClampTable<XLEN>>(kind, node, prover)
-        }
-        OpRelation::Lookup(kind @ OpLookup::ActivationClamp, node) => {
-            lookup::<F, T, ActivationClampOperands, ActivationClampTable<XLEN>>(kind, node, prover)
-        }
-        OpRelation::Lookup(kind @ OpLookup::TrigDownscale, node) => {
-            lookup::<F, T, TrigDownscaleOperands, RightShiftTable<XLEN>>(kind, node, prover)
-        }
-        OpRelation::Lookup(OpLookup::SiluClamp, node) => {
-            lookup::<F, T, ActivationClampOperands, SiluClampTable<XLEN>>(
-                OpLookup::ActivationClamp,
-                node,
-                prover,
-            )
-        }
-        OpRelation::Lookup(OpLookup::SmoothRelu, node) => {
-            // The same addresses as the node's clamp read, which leaves them for the one-hot
-            // checks.
-            let (witness, _) = OpLookupProvider::<SmoothReluOperands>::new(node)
-                .read_raf_prove::<F, T, ReluTable<XLEN>, XLEN>(
-                    &prover.trace,
-                    &mut prover.accumulator,
-                    &mut prover.transcript,
-                );
-            vec![Box::new(witness)]
-        }
-        OpRelation::Softmax(relation) => {
-            let Prover {
-                trace,
-                accumulator,
-                transcript,
-                lookup_addresses,
-                ..
-            } = prover;
-            let node_idx = match &relation {
-                SoftmaxRelation::Read(s)
-                | SoftmaxRelation::Clamp(s)
-                | SoftmaxRelation::ReadOneHot(s)
-                | SoftmaxRelation::ClampOneHot(s) => s.idx(),
-            };
-            let (witnesses, left) = softmax_last_axis::prove_relation(
-                relation,
-                trace,
-                accumulator,
-                transcript,
-                &mut |key| lookup_addresses.remove(&(Addresses::Softmax(key), node_idx)),
+        OpRelation::SoftmaxRead(shape) => {
+            let node_idx = shape.idx();
+            let (witness, indices) = softmax_last_axis::read_prover(
+                &shape,
+                &prover.trace,
+                &prover.accumulator,
+                &mut prover.transcript,
             );
-            for (key, indices) in left {
-                prover.leave_addresses(Addresses::Softmax(key), node_idx, indices);
-            }
-            witnesses
+            let ra = softmax_last_axis::read_ra_encoding(&shape.node).ra_source;
+            prover.leave_addresses(Addresses(ra), node_idx, indices);
+            vec![witness]
         }
-        one_hot @ (OpRelation::LookupOneHot(..)
-        | OpRelation::SmallTableOneHot(_)
+        one_hot @ (OpRelation::OneHot(_)
         | OpRelation::RemainderBucketValue(_)
         | OpRelation::RemainderBucketDigits(_)) => {
             let prepared = prepare(one_hot, prover);

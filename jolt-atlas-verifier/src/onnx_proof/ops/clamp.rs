@@ -1,62 +1,24 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::deferred_lookups::DeferredBatch;
-use crate::onnx_proof::op_lookups::{
-    DefaultLookupOperands, LookupOperandsTrait, LookupRaPolys, OpLookupEncoding,
-};
+use crate::onnx_proof::lookup::{PrefixSuffixTable, TableRead};
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::plan::{OpLookup, OpPlan, OpRelation, Plan, Step};
-use atlas_algebra::{
-    field::JoltField,
-    poly::point::{OpeningPoint, BIG_ENDIAN},
-    utils::errors::ProofVerifyError,
-};
+use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
+use crate::onnx_proof::relation::RelationOpening;
+use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_lookup_tables::clamp::CLAMP_BOUND;
-use atlas_sumcheck::{
-    opening_proof::{OpeningAccumulator, OpeningId},
-    shout::RaOneHotEncoding,
-};
 use atlas_trace::op::Clamp;
 use common::{CommittedPoly, VirtualPoly};
 
-/// Lookup helper for the ONNX `Clamp` op, backed by `atlas_lookup_tables::clamp`'s
-/// symmetric clamp table (`[-2^CLAMP_BOUND, 2^CLAMP_BOUND - 1]`).
-#[derive(Default)]
-pub struct SymmetricClampOperands;
-
-impl LookupOperandsTrait for SymmetricClampOperands {
-    const LOG_K: usize = DefaultLookupOperands::LOG_K;
-
-    fn rv_claim<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<F, ProofVerifyError> {
-        DefaultLookupOperands::rv_claim(node, accumulator)
-    }
-
-    fn witness_opening_id(node: &ComputationNode) -> OpeningId {
-        DefaultLookupOperands::witness_opening_id(node)
-    }
-
-    fn r_cycle<F: JoltField>(
-        node: &ComputationNode,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError> {
-        DefaultLookupOperands::r_cycle(node, accumulator)
-    }
-
-    fn r_cycle_source(node_idx: usize) -> OpeningId {
-        DefaultLookupOperands::r_cycle_source(node_idx)
-    }
-}
-
-impl LookupRaPolys for SymmetricClampOperands {
-    fn ra_virtual_poly(node_idx: usize) -> VirtualPoly {
-        VirtualPoly::SymmetricClampRa(node_idx)
-    }
-
-    fn ra_committed_poly(node_idx: usize, d: usize) -> CommittedPoly {
-        CommittedPoly::SymmetricClampRaD(node_idx, d)
-    }
+/// `Clamp`'s read: the node's output is its operand read in `atlas_lookup_tables::clamp`'s
+/// symmetric clamp table (`[-2^CLAMP_BOUND, 2^CLAMP_BOUND - 1]`) at the reduced output point.
+pub fn read(node: &ComputationNode) -> TableRead {
+    TableRead::of_operand(
+        node,
+        PrefixSuffixTable::Clamp,
+        RelationOpening::ReducedNodeOutput(node.idx),
+        VirtualPoly::SymmetricClampRa,
+        CommittedPoly::SymmetricClampRaD,
+    )
 }
 
 impl OpLayout for Clamp {
@@ -64,11 +26,7 @@ impl OpLayout for Clamp {
         &self,
         node: &ComputationNode,
     ) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-        let encoding = OpLookupEncoding::<SymmetricClampOperands>::new(node);
-        let d = encoding.one_hot_params().instruction_d;
-        Ok((0..d)
-            .map(|i| CommittedPoly::SymmetricClampRaD(node.idx, i))
-            .collect())
+        Ok(read(node).ra.committed_polys())
     }
 }
 
@@ -86,15 +44,17 @@ impl OpPlan for Clamp {
                 node.idx, self.bound_log
             )));
         }
+        let read = read(node);
+        let ra = read.ra.clone();
         Ok(Plan(vec![
             Step::Reduce,
             Step::Defer {
                 batch: DeferredBatch::Lookups,
-                relation: OpRelation::Lookup(OpLookup::SymmetricClamp, node.clone()),
+                relation: OpRelation::TableRead(read),
             },
             Step::Defer {
                 batch: DeferredBatch::OneHot,
-                relation: OpRelation::LookupOneHot(OpLookup::SymmetricClamp, node.clone()),
+                relation: OpRelation::OneHot(ra),
             },
         ]))
     }

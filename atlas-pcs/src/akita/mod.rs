@@ -64,7 +64,7 @@ use atlas_algebra::{
     poly::{eq::EqPolynomial, multilinear::MultilinearPolynomial},
     utils::errors::ProofVerifyError,
 };
-use atlas_transcript::{AppendToTranscript, Transcript};
+use atlas_transcript::{AppendToTranscript, ProvingTranscript, Transcript, VerifyingTranscript};
 
 use super::commitment_scheme::{BatchCommitOutput, CommitmentScheme};
 
@@ -747,7 +747,6 @@ impl CommitmentScheme for AkitaScheme {
     type VerifierSetup = AkitaSetup;
     type Commitment = AkitaSlot;
     type Proof = AkitaJointProof;
-    type BatchedProof = AkitaJointProof;
     type OpeningProofHint = AkitaHint;
     type BatchCommitment = AkitaBatchCommitment;
 
@@ -759,26 +758,6 @@ impl CommitmentScheme for AkitaScheme {
         setup.clone()
     }
 
-    fn commit(
-        poly: &MultilinearPolynomial<Self::Field>,
-        setup: &Self::ProverSetup,
-    ) -> (Self::Commitment, Self::OpeningProofHint) {
-        Self::batch_commit_all(std::slice::from_ref(poly), setup)
-            .1
-            .pop()
-            .expect("one polynomial was committed")
-    }
-
-    fn batch_commit<U>(
-        polys: &[U],
-        setup: &Self::ProverSetup,
-    ) -> Vec<(Self::Commitment, Self::OpeningProofHint)>
-    where
-        U: std::borrow::Borrow<MultilinearPolynomial<Self::Field>> + Sync,
-    {
-        Self::batch_commit_all(polys, setup).1
-    }
-
     fn batch_commit_all<U>(polys: &[U], setup: &Self::ProverSetup) -> BatchCommitOutput<Self>
     where
         U: std::borrow::Borrow<MultilinearPolynomial<Self::Field>> + Sync,
@@ -786,18 +765,8 @@ impl CommitmentScheme for AkitaScheme {
         batch_commit(polys, setup, MAX_DENSE_CLASS_NUM_VARS)
     }
 
-    fn prove<ProofTranscript: Transcript>(
-        _setup: &Self::ProverSetup,
-        _poly: &MultilinearPolynomial<Self::Field>,
-        _opening_point: &[<Self::Field as JoltField>::Challenge],
-        _hint: Option<Self::OpeningProofHint>,
-        _transcript: &mut ProofTranscript,
-    ) -> Self::Proof {
-        unimplemented!("Akita openings go through `prove_rlc`")
-    }
-
     #[tracing::instrument(skip_all, name = "AkitaScheme::prove_rlc")]
-    fn prove_rlc<ProofTranscript: Transcript>(
+    fn prove_rlc<ProofTranscript: ProvingTranscript>(
         _setup: &Self::ProverSetup,
         _polynomials: &BTreeMap<common::CommittedPoly, MultilinearPolynomial<Self::Field>>,
         _coeffs: &[Self::Field],
@@ -876,19 +845,8 @@ impl CommitmentScheme for AkitaScheme {
         AkitaJointProof { classes: openings }
     }
 
-    fn verify<ProofTranscript: Transcript>(
-        _proof: &Self::Proof,
-        _setup: &Self::VerifierSetup,
-        _transcript: &mut ProofTranscript,
-        _opening_point: &[<Self::Field as JoltField>::Challenge],
-        _opening: &Self::Field,
-        _commitment: &Self::Commitment,
-    ) -> Result<(), ProofVerifyError> {
-        Err(invalid("Akita openings are verified through `verify_rlc`"))
-    }
-
     #[tracing::instrument(skip_all, name = "AkitaScheme::verify_rlc")]
-    fn verify_rlc<ProofTranscript: Transcript>(
+    fn verify_rlc<ProofTranscript: VerifyingTranscript>(
         proof: &Self::Proof,
         setup: &Self::VerifierSetup,
         transcript: &mut ProofTranscript,
@@ -1023,10 +981,6 @@ impl CommitmentScheme for AkitaScheme {
             })
         };
         result
-    }
-
-    fn protocol_name() -> &'static [u8] {
-        b"AkitaScheme"
     }
 }
 

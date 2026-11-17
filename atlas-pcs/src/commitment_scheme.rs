@@ -4,7 +4,7 @@ use std::{borrow::Borrow, fmt::Debug};
 use atlas_algebra::{
     field::JoltField, poly::multilinear::MultilinearPolynomial, utils::errors::ProofVerifyError,
 };
-use atlas_transcript::{AppendToTranscript, Transcript};
+use atlas_transcript::{ProvingTranscript, VerifyingTranscript};
 
 /// The result of committing a whole batch: the scheme-level batch commitment and one
 /// `(commitment, hint)` per polynomial, in input order.
@@ -16,193 +16,61 @@ pub type BatchCommitOutput<PCS> = (
     )>,
 );
 
+/// A commitment to every polynomial of a proof at once, opened once: at one point, as a
+/// linear combination of the polynomials.
 pub trait CommitmentScheme: Clone + Sync + Send + 'static {
     type Field: JoltField + Sized;
     type ProverSetup: Clone + Sync + Send + Debug + Canonical;
     type VerifierSetup: Clone + Sync + Send + Debug + Canonical;
-    type Commitment: Default
-        + Debug
-        + Sync
-        + Send
-        + PartialEq
-        + Canonical
-        + AppendToTranscript
-        + Clone;
+    /// What identifies one polynomial inside the batch commitment.
+    type Commitment: Default + Debug + Sync + Send + PartialEq + Canonical + Clone;
     type Proof: Sync + Send + Canonical + Clone + Debug;
-    type BatchedProof: Sync + Send + Canonical;
-    /// A hint that helps the prover compute an opening proof: a byproduct of the commitment
-    /// computation (Akita's packed class data).
+    /// What the prover keeps of a commitment to open it.
     type OpeningProofHint: Sync + Send + Clone + Debug + PartialEq;
-    /// Commitment data shared by a whole batch of committed polynomials (Akita's packed class
-    /// commitments). Homomorphic schemes commit each polynomial independently and use `()`, which
-    /// absorbs and serializes nothing.
-    type BatchCommitment: Default
-        + Debug
-        + Sync
-        + Send
-        + PartialEq
-        + Canonical
-        + AppendToTranscript
-        + Clone;
+    /// The commitment to the whole batch.
+    type BatchCommitment: Default + Debug + Sync + Send + PartialEq + Canonical + Clone;
 
-    /// Generates the prover setup for this PCS. `max_num_vars` is the maximum number of
-    /// variables of any polynomial that will be committed using this setup.
+    /// Generates the prover setup. `max_num_vars` is the largest number of variables of any
+    /// polynomial that will be committed with it.
     fn setup_prover(max_num_vars: usize) -> Self::ProverSetup;
 
     /// Generates the verifier setup from the prover setup.
     fn setup_verifier(setup: &Self::ProverSetup) -> Self::VerifierSetup;
 
-    /// Commits to a multilinear polynomial using the provided setup.
-    ///
-    /// # Arguments
-    /// * `poly` - The multilinear polynomial to commit to
-    /// * `setup` - The prover setup for the commitment scheme
-    ///
-    /// # Returns
-    /// A tuple containing the commitment to the polynomial and a hint that can be used
-    /// to optimize opening proof generation
-    fn commit(
-        poly: &MultilinearPolynomial<Self::Field>,
-        setup: &Self::ProverSetup,
-    ) -> (Self::Commitment, Self::OpeningProofHint);
-
-    /// Commits to multiple multilinear polynomials in batch.
-    ///
-    /// # Arguments
-    /// * `polys` - A slice of multilinear polynomials to commit to
-    /// * `gens` - The prover setup for the commitment scheme
-    ///
-    /// # Returns
-    /// A vector of commitments, one for each input polynomial
-    fn batch_commit<U>(
-        polys: &[U],
-        gens: &Self::ProverSetup,
-    ) -> Vec<(Self::Commitment, Self::OpeningProofHint)>
+    /// Commits to every polynomial of a proof: the batch commitment, plus one
+    /// `(commitment, hint)` per polynomial in input order.
+    fn batch_commit_all<U>(polys: &[U], setup: &Self::ProverSetup) -> BatchCommitOutput<Self>
     where
         U: Borrow<MultilinearPolynomial<Self::Field>> + Sync;
 
-    /// Commits to every polynomial of a proof at once: the batch commitment, plus one
-    /// `(commitment, hint)` per polynomial in input order. The default commits each polynomial
-    /// independently; schemes without an additive homomorphism (Akita) override it to pack
-    /// polynomials into shared commitments.
-    fn batch_commit_all<U>(polys: &[U], setup: &Self::ProverSetup) -> BatchCommitOutput<Self>
-    where
-        U: Borrow<MultilinearPolynomial<Self::Field>> + Sync,
-    {
-        use rayon::prelude::*;
-        // Rayon jobs were overly fragmented, and the resulting context switching degraded
-        // performance, so the parallelism granularity is limited to the polynomial level.
-        let _guard = common::parallel::ParallelFlagGuard::disabled();
-        let per_poly = polys
-            .par_iter()
-            .map(|poly| Self::commit(poly.borrow(), setup))
-            .collect();
-        (Self::BatchCommitment::default(), per_poly)
-    }
-
-    /// Homomorphically combines multiple commitments into a single commitment, computed as a
-    /// linear combination with the given coefficients.
-    fn combine_commitments<C: Borrow<Self::Commitment>>(
-        _commitments: &[C],
-        _coeffs: &[Self::Field],
-    ) -> Self::Commitment {
-        todo!("`combine_commitments` should be on a separate `AdditivelyHomomorphic` trait")
-    }
-
-    /// Generates a proof of evaluation for a polynomial at a specific point.
-    ///
-    /// # Arguments
-    /// * `setup` - The prover setup for the commitment scheme
-    /// * `poly` - The multilinear polynomial being proved
-    /// * `opening_point` - The point at which the polynomial is evaluated
-    /// * `hint` - An optional hint that helps optimize the proof generation.
-    ///   When `None`, implementations should compute the hint internally if needed.
-    /// * `transcript` - The transcript for Fiat-Shamir transformation
-    ///
-    /// # Returns
-    /// A proof of the polynomial evaluation at the specified point
-    fn prove<ProofTranscript: Transcript>(
-        setup: &Self::ProverSetup,
-        poly: &MultilinearPolynomial<Self::Field>,
-        opening_point: &[<Self::Field as JoltField>::Challenge],
-        hint: Option<Self::OpeningProofHint>,
-        transcript: &mut ProofTranscript,
-    ) -> Self::Proof;
-
-    /// Opens the random linear combination `Σ_i γ_i · f_i` (every `f_i`
-    /// overlapped at index 0) at `opening_point`, given the per-polynomial
-    /// commit hints in the same order as `polynomials`/`coeffs`.
-    ///
-    /// The default materializes the joint polynomial and calls [`Self::prove`];
-    /// schemes that can open the combination without materializing it (see
-    /// Akita) override this.
-    fn prove_rlc<ProofTranscript: Transcript>(
+    /// Opens the linear combination `Σ_i γ_i · f_i` at `opening_point`, every `f_i` taken at
+    /// the last `n_i` coordinates of the point and zero-padded above its own `2^{n_i}`
+    /// values, given the polynomials' commit hints in the order of `polynomials` and `coeffs`.
+    fn prove_rlc<T: ProvingTranscript>(
         setup: &Self::ProverSetup,
         polynomials: &std::collections::BTreeMap<
             common::CommittedPoly,
             MultilinearPolynomial<Self::Field>,
         >,
         coeffs: &[Self::Field],
-        _hints: Vec<Self::OpeningProofHint>,
+        hints: Vec<Self::OpeningProofHint>,
         opening_point: &[<Self::Field as JoltField>::Challenge],
-        transcript: &mut ProofTranscript,
-    ) -> Self::Proof {
-        let rlc = atlas_algebra::poly::rlc::build_materialized_rlc(coeffs, polynomials);
-        Self::prove(setup, &rlc, opening_point, None, transcript)
-    }
+        transcript: &mut T,
+    ) -> Self::Proof;
 
-    /// Verifies a proof of polynomial evaluation at a specific point.
-    ///
-    /// # Arguments
-    /// * `proof` - The proof to be verified
-    /// * `setup` - The verifier setup for the commitment scheme
-    /// * `transcript` - The transcript for Fiat-Shamir transformation
-    /// * `opening_point` - The point at which the polynomial is evaluated
-    /// * `opening` - The claimed evaluation value of the polynomial at the opening point
-    /// * `commitment` - The commitment to the polynomial
-    ///
-    /// # Returns
-    /// Ok(()) if the proof is valid, otherwise a ProofVerifyError
-    fn verify<ProofTranscript: Transcript>(
-        proof: &Self::Proof,
-        setup: &Self::VerifierSetup,
-        transcript: &mut ProofTranscript,
-        opening_point: &[<Self::Field as JoltField>::Challenge],
-        opening: &Self::Field,
-        commitment: &Self::Commitment,
-    ) -> Result<(), ProofVerifyError>;
-
-    /// Verifies the joint opening `Σ_i γ_i · f_i(r) = joint_claim` (every `f_i` overlapped at
-    /// index 0) given the opened polynomials' commitments, coefficients and variable counts, all
-    /// aligned. The default combines the commitments homomorphically and verifies one opening;
-    /// schemes without an additive homomorphism override it.
+    /// Verifies the joint opening `Σ_i γ_i · f_i(r) = joint_claim` of [`Self::prove_rlc`],
+    /// given the opened polynomials' commitments, coefficients and variable counts, all
+    /// aligned, and the batch commitment.
     #[allow(clippy::too_many_arguments)]
-    fn verify_rlc<ProofTranscript: Transcript>(
+    fn verify_rlc<T: VerifyingTranscript>(
         proof: &Self::Proof,
         setup: &Self::VerifierSetup,
-        transcript: &mut ProofTranscript,
+        transcript: &mut T,
         opening_point: &[<Self::Field as JoltField>::Challenge],
         joint_claim: &Self::Field,
         commitments: &[&Self::Commitment],
         coeffs: &[Self::Field],
-        _num_vars: &[usize],
-        _batch_commitment: &Self::BatchCommitment,
-    ) -> Result<(), ProofVerifyError> {
-        let joint_commitment = Self::combine_commitments(commitments, coeffs);
-        Self::verify(
-            proof,
-            setup,
-            transcript,
-            opening_point,
-            joint_claim,
-            &joint_commitment,
-        )
-    }
-
-    fn protocol_name() -> &'static [u8];
-}
-
-pub trait StreamingCommitmentScheme: CommitmentScheme {
-    /// The type representing chunk state (tier 1 commitments)
-    type ChunkState: Send + Sync + Clone + PartialEq + Debug;
+        num_vars: &[usize],
+        batch_commitment: &Self::BatchCommitment,
+    ) -> Result<(), ProofVerifyError>;
 }

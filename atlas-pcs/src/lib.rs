@@ -13,6 +13,3 @@ pub mod akita;
 pub mod bitz;
 pub mod commitment_scheme;
 pub mod openings;
-
-#[cfg(any(test, feature = "test-feature"))]
-pub mod mock;

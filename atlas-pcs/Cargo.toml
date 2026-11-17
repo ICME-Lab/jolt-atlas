@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "The atlas polynomial commitment interface and the Akita scheme."
 
-[features]
-test-feature = []
-
 [dependencies]
 # Internal
 common.workspace = true

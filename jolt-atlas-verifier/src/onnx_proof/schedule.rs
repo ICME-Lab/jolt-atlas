@@ -46,6 +46,7 @@ use atlas_sumcheck::{
 use atlas_trace::{trace::ModelExecutionIO, Model};
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
+use std::collections::BTreeSet;
 
 /// Node index under which the proofs of the model-wide sumcheck steps (the range buckets, the
 /// lookups, the one-hot checks) are stored.
@@ -107,6 +108,21 @@ impl<F: JoltField> Schedule<F> {
             ))?;
         }
         builder.finish(range_buckets(model)?)
+    }
+
+    /// The committed polynomials the schedule opens, sorted and without repeats: those of every
+    /// `Open` step and of every relation.
+    pub fn committed(&self) -> Vec<CommittedPoly> {
+        let mut polys = BTreeSet::new();
+        for step in &self.steps {
+            if let Step::Open(open) = step {
+                polys.extend(open.committed());
+            }
+        }
+        for relation in &self.relations {
+            polys.extend(relation.committed());
+        }
+        polys.into_iter().collect()
     }
 
     /// The steps, in transcript order.
@@ -376,6 +392,29 @@ pub enum OpRelation<F: JoltField> {
 }
 
 impl<F: JoltField> OpRelation<F> {
+    /// The committed polynomials the relation opens: an op relation's committed produced and
+    /// setup openings, a one-hot check's address chunks, a small gather's one-hot `ra`, a
+    /// digit range check's digit columns.
+    pub fn committed(&self) -> Vec<CommittedPoly> {
+        match self {
+            Self::Op(relation) => relation
+                .produced
+                .iter()
+                .chain(relation.setup_opens.iter().map(|open| &open.id))
+                .filter_map(|id| match id.polynomial {
+                    PolynomialId::Committed(poly) => Some(poly),
+                    PolynomialId::Virtual(_) => None,
+                })
+                .collect(),
+            Self::OneHot(encoding) => encoding.committed_polys(),
+            Self::RemainderBucketDigits(bucket) => bucket.committed_polys(),
+            Self::GatherSmallOneHot(shape) | Self::GatherSmallHammingWeight(shape) => {
+                vec![CommittedPoly::GatherRa(shape.node.idx)]
+            }
+            Self::TableRead(_) | Self::SoftmaxRead(_) | Self::RemainderBucketValue(_) => Vec::new(),
+        }
+    }
+
     /// The relation's verifiers (one, or the several of a stage or a one-hot check), set up
     /// against the accumulator and transcript.
     pub fn verifiers<T: Transcript>(
@@ -438,6 +477,17 @@ pub enum OpOpen {
 }
 
 impl OpOpen {
+    /// The committed polynomials the step opens.
+    pub fn committed(&self) -> Vec<CommittedPoly> {
+        match self {
+            Self::TrigPeriodQuotient(node) => vec![CommittedPoly::TrigPeriodQuotient(node.idx)],
+            Self::Softmax(open) => open.committed(),
+            Self::RescaleRemainder(_) | Self::TrigDownscaled(_) | Self::SmoothReluRelu(_) => {
+                Vec::new()
+            }
+        }
+    }
+
     /// Append the openings.
     pub fn verify<F: JoltField, T: Transcript>(
         &self,

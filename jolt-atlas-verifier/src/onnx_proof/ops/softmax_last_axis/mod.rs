@@ -283,6 +283,14 @@ pub enum SoftmaxOpen {
 }
 
 impl SoftmaxOpen {
+    /// The committed polynomials the step opens.
+    pub fn committed(&self) -> Vec<CommittedPoly> {
+        match self {
+            Self::Gaps(_) => Vec::new(),
+            Self::Addresses(shape) => vec![CommittedPoly::SoftmaxShift(shape.idx())],
+        }
+    }
+
     /// Append the openings. `Err` if the accumulator lacks a claim or point it reads.
     pub fn verify<F: JoltField, T: Transcript>(
         &self,

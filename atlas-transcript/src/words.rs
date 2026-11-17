@@ -1,6 +1,6 @@
 //! The deployed proof format's word encodings, for protocols that absorb fixed-layout words
 //! rather than the transcript's tagged values: the Akita adapter's statement and setup binding
-//! and the sumcheck engine's claims and round polynomials.
+//! and the sumcheck engine's input claims and round labels.
 //!
 //! Every encoding is one [`Transcript::append_bytes`] call per value:
 //!

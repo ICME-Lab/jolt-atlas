@@ -101,10 +101,11 @@ A PR that adds an op, a proof field or a check to `jolt-atlas-verifier` also mee
   is a `tie` over a zero-round `OpRel`, which `verify_tie` checks against claims the
   accumulator holds, returning `Err` when the identity fails.
 - **5.3 Coverage.** A node of the op is in a probe model (`onnx_proof/testing/models.rs`) or the
-  op gauntlet, so the soundness sweeps, `op_surface.rs` and `proof_types_all_exercised` see it; a
-  new proof field has a `mutate::Site`, and every site is rejected (no tolerance list).
+  op gauntlet, so the soundness sweeps, `op_surface.rs` and `relation_kinds_all_exercised` see
+  it; a new read is a mutation site by construction (the sweep takes its sites from the log of
+  the verifier's reads), and every site is rejected (no tolerance list).
 - **5.4 No new allow.** The crate-root `deny` lints stay on with no `#[allow]` outside
-  `#[cfg(test)]`; a missing claim, proof entry or malformed input is an `Err`. The crate stays
+  `#[cfg(test)]`; a missing claim, a failed read or malformed input is an `Err`. The crate stays
   Trace-free: witness code goes to `jolt-atlas-core`.
 - **5.5 Digests.** A behavior-preserving change keeps `testing/digests.rs` unchanged; a
   protocol-breaking change re-pins them in its own commit and says so.

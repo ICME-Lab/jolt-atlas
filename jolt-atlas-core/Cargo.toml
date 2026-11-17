@@ -47,7 +47,7 @@ serial_test.workspace = true
 [dev-dependencies]
 # `&mut` proof-field accessors for testing/mutate.rs.
 jolt-atlas-verifier = { workspace = true, features = ["test-util"] }
-# Digest of serialized proofs in the cross-stage digest harness.
+# Digest of proof bytes in the cross-stage digest harness.
 blake2 = "0.10"
 # Test hooks of the proof-system crates (forgery, lockstep transcript history), tests only
 atlas-algebra = { workspace = true, features = ["test-feature"] }

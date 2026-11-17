@@ -230,7 +230,7 @@ fn single_member_reduces_to_the_multilinear_evaluation() {
 }
 
 /// A degree-1 round message is one coefficient, the constant: a stream with it changed still
-/// parses, and no longer reduces to the member's evaluation.
+/// parses, and does not reduce to the member's evaluation.
 #[test]
 fn tampered_round_does_not_reduce_to_the_evaluation() {
     let sum = f(77);
@@ -247,7 +247,7 @@ fn tampered_round_does_not_reduce_to_the_evaluation() {
     absorb_input_claims(&[sum], &mut verifier);
     let _: F = verifier.challenge_scalar();
     match verify_compressed(&claim(2, 1, prelude.claimed_sum), &mut verifier) {
-        // The changed message moved the challenge, so the nonce after it no longer checks...
+        // The changed message moved the challenge, so the nonce after it does not check...
         Err(SumcheckError::ProofOfWork { .. }) => {}
         // ... or it does, and the reduction lands elsewhere.
         Ok((value, point)) => assert_ne!(

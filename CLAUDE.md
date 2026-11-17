@@ -131,10 +131,14 @@ Workspace members, in dependency order:
     from it.
   - **atlas-transcript** — the Fiat-Shamir transcript (taken from upstream `jolt-transcript`):
     one `Transcript` trait; the prover uses a `ProvingTranscript` (spongefish `ProverState`,
-    proof-of-work grinding behind the `prover` feature), the verifier a `VerifyingTranscript`
-    over the proof's NARG string; `words`, the deployed format's word encodings the Akita
-    adapter and the sumcheck engine absorb. The challenge codec and grind pricing are
-    `atlas-algebra::field::challenge`.
+    proof-of-work grinding behind the `prover` feature), which sends values (`send_scalar`,
+    `send_scalars`, `send_serializable`) as prover messages into its NARG string, and the
+    verifier a `VerifyingTranscript` over that string, whose reads (`read_scalar`,
+    `read_scalars`, `read_serializable`) absorb what they return. The NARG string is the
+    proof: every commitment, claim, round message, proof-of-work nonce and the joint opening
+    proof, in the order the verifier reads them. `words` is the deployed format's word
+    encodings the Akita adapter and the sumcheck engine absorb. The challenge codec and grind
+    pricing are `atlas-algebra::field::challenge`.
   - **atlas-lookup-tables** — the prefix-suffix lookup tables.
   - **atlas-claims** — the symbolic-relation layer: `SymbolicSumcheck` (a relation value's
     id, rounds, degree and input and output expressions), the `Expr` algebra, `Int` (the
@@ -142,8 +146,10 @@ Workspace members, in dependency order:
     it in a field) and the claim-data traits, owned by atlas (taken from upstream
     `jolt-claims` without its zkVM protocol graph).
   - **atlas-sumcheck** — the batched sumcheck engine (`engine`: `prove_batch`, `ProveRounds`,
-    `verify_compressed`, taken from upstream `jolt-sumcheck`), the relation core (`relation`), the opening
-    accumulators (`opening_proof`), evaluation reduction, the one-hot and shout subprotocols,
+    `verify_compressed`, taken from upstream `jolt-sumcheck`; round messages are sent and read
+    through the transcript), the relation core (`relation`), the opening
+    accumulators (`opening_proof`: an append binds an id to a point and sends or reads its
+    claim), evaluation reduction, the one-hot and shout subprotocols,
     `config`. As
     upstream's protocol crates do, it ships both sides; prover items live in each module's
     `prover` submodule, which the verifier may not name (CI path check).
@@ -168,9 +174,9 @@ Workspace members, in dependency order:
   static shape inference, whitelist constant folding, rewrite passes, weight quantization, and
   lowering to the `atlas-trace` IR. Golden output hashes for the model zoo live in `tests/`;
   cargo-fuzz targets and their regression corpus in `fuzz/` (see `fuzz/README.md`).
-- **jolt-atlas-verifier** — the proof object, its wire format, and all verification: `ONNXProof`
-  (with `ONNXProof::verify`), `ReducedOpeningProof`, `Claims`, `ProofId`/`ProofType`,
-  `proof_serialization`, and `onnx_proof` — the verification schedule (`schedule.rs`: a
+- **jolt-atlas-verifier** — the proof and all verification: `ONNXProof` (with
+  `ONNXProof::verify`), a newtype over the bytes of the prover's transcript with no type
+  parameter and no format of its own, and `onnx_proof` — the verification schedule (`schedule.rs`: a
   model's `Schedule` of `Step`s over relation values, compiled from the model alone by
   `Schedule::compile` when the preprocessing is constructed; each op's `OpPlan::plan` writes
   its node's steps to a `ScheduleBuilder`, the only way an op is verified; the committed
@@ -180,11 +186,13 @@ Workspace members, in dependency order:
   reads (`lookup.rs`: `TableRead`, `SmallTableDef`, `RaEncoding`), the packed range buckets
   and their checks (`range_bucket.rs`, `range_check.rs`), the fused rescale's verifier side,
   the `Verifier` state (its interpreter `Verifier::run`, one loop over the schedule's steps;
-  its accumulator, transcript and proof ledgers are crate-private),
-  `verify`/`verify_with`, and the shared and verifier preprocessing (the verifier's holds the
-  schedule); also
-  `node_view` and `utils`. Every proof field is private (`from_parts` + `&` accessors; `&mut`
-  behind the `test-util` feature). No prover dependency and no prover code: the crate is
+  its accumulator and transcript are crate-private, with `&mut` accessors behind the
+  `test-util` feature),
+  `verify`/`verify_with` (read the commitments, run the schedule, read the joint opening
+  proof, require the bytes to end), and the shared and verifier preprocessing (the verifier's
+  holds the schedule); also
+  `node_view` and `utils`. The verifier reaches the proof only through its transcript's
+  sequential reads, in schedule order. No prover dependency and no prover code: the crate is
   Trace-free (nothing in it names `atlas_trace::Trace` or its witness types; witness
   construction is in `jolt-atlas-core`). CI checks it builds in isolation, `clippy.toml`
   disallows the trace types and the prover items of the vendored and atlas protocol crates, and
@@ -207,9 +215,9 @@ Pipeline: ONNX file → `atlas-onnx-import` (decode, infer, fold, lower) → `at
 → execute to a trace → `jolt-atlas-core` preprocess, commit, prove → verify against the model's
 public IO. The proof crosses the prover/verifier boundary as a `jolt-atlas-verifier` type.
 
-No arkworks crate is in the graph (CI checks `Cargo.lock`): proofs, commitments and transcript
-messages encode through `atlas_algebra::serialize::Canonical` (`common::serialize`), byte for byte
-the arkworks compressed encoding the format was defined with.
+No arkworks crate is in the graph (CI checks `Cargo.lock`): commitments, opening proofs, setups
+and transcript messages encode through `atlas_algebra::serialize::Canonical` (`common::serialize`),
+byte for byte the arkworks compressed encoding the format was defined with.
 
 ### The atlas-trace Behavioral Contract
 
@@ -236,28 +244,33 @@ the arkworks compressed encoding the format was defined with.
 ### Prover/Verifier Invariants
 
 - The verifier never trusts the prover for anything the trace semantics define. Soundness is
-  tested generically in `onnx_proof/testing/soundness.rs`: every field of a finished proof is
-  mutated (`proof_mutation_sweep`), the trace is tampered before proving
+  tested generically in `onnx_proof/testing/soundness.rs`: every value the verifier reads from
+  a finished proof is mutated (`proof_mutation_sweep`, its sites taken from the read log of a
+  recording transcript, `testing/recording.rs`), the trace is tampered before proving
   (`witness_tamper_sweep`, via `prove_from_trace`), and every opening claim is forged
   at the accumulator (`opening_forgery_sweep`, via the test-feature hook
   `atlas_sumcheck::opening_proof::forgery`). A new op or witness column is covered once it
-  appears in one of the probe models in `onnx_proof/testing/models.rs`; a new proof field needs a
-  `mutate::Site`. Prover-side `#[cfg(test)]` self-checks use `probe_assert!` so a tampered proof
-  still reaches the verifier.
-- The verifier rejects, never panics, and consumes the proof exactly. `jolt-atlas-verifier`
-  denies `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!`/indexing at the crate root with no
-  `#[allow]` outside tests; a missing claim or proof entry and a public IO of the wrong shape
-  are `Err`s; `verify` ends with the drain check (every sumcheck and evaluation-reduction
-  proof taken exactly once, every opening claim bound to a point). Every `mutate::Site` must
-  be rejected with an `Err` (no tolerance list), every `ProofType` is emitted for some
-  checked-in model (`proof_types_all_exercised`), and `fuzz_regressions_replay` replays the
-  `verify` fuzz target's driver (`jolt-atlas-core/fuzz/`, run by hand, not in CI).
+  appears in one of the probe models in `onnx_proof/testing/models.rs`; a new read is a
+  mutation site by construction. Prover-side `#[cfg(test)]` self-checks use `probe_assert!` so
+  a tampered proof still reaches the verifier.
+- The verifier rejects, never panics, and reads the proof exactly once, front to back.
+  `jolt-atlas-verifier` denies `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!`/indexing at
+  the crate root with no `#[allow]` outside tests; a short read, a non-canonical field
+  element, a frame longer than the bytes left and a public IO of the wrong shape are `Err`s;
+  every read is absorbed by the read itself; how many values are read and how long each is
+  comes from the schedule, never from the proof; a claim exists only from the append that
+  binds it; `verify` ends by requiring the end of the bytes. Every `mutate::Site` must be
+  rejected with an `Err` (no tolerance list), as must the proof cut at each read boundary or
+  extended by a byte; every relation kind is in the schedule of some checked-in model
+  (`relation_kinds_all_exercised`), and `fuzz_regressions_replay` replays the `verify` fuzz
+  target's driver (`jolt-atlas-core/fuzz/`, run by hand, not in CI).
 - Every `atlas_trace::Op` variant has a row in `onnx_proof/testing/op_surface.rs`; `OpKind::of`
   is a wildcard-free match, so adding a variant fails to compile until the table declares a
   stance (a proving case, an `#[ignore]` with its reason, or an expected rejection).
 - Protocol-level changes (sumcheck ordering, transcript absorption, claim lifecycle, opening
-  reduction) need the zoo tests in `onnx_proof/testing/zoo.rs` (every e2e also round-trips the
-  proof through serialization) and at least one real-model prove & verify run.
+  reduction) need the zoo tests in `onnx_proof/testing/zoo.rs` (every e2e also verifies the
+  proof again from its bytes, and requires those bytes plus one to be rejected) and at least
+  one real-model prove & verify run.
 - An open gap is pinned as an `#[ignore]`d `known_gap_*` test whose message states the failure;
   it must fail today and turn green when fixed. Never allowlist a sweep finding silently.
 - Lookup table generation has one owner in `atlas-trace`. Never regenerate or approximate a

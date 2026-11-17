@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-16                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          |                                |
 | Depends on  | `specs/verification-schedule.md` (the schedule fixes the order the stream is read in), `specs/one-clamp.md` (no proof part is optional on a claim's value) |
 | Supersedes  | `specs/verifier-audit-simplification.md`'s "exact proof shape" mechanisms (`ProofLedger`, the drain check, the orphan mutation sites), which this spec makes unnecessary |

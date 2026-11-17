@@ -14,11 +14,11 @@ A verdict of `jolt_atlas_verifier::onnx_proof::verify` depends on:
 | `atlas-sumcheck` | `engine` (`verify_compressed`, `absorb_input_claims`, `BatchPrelude`), `relation` (`RelationVerifier`, `verify_relation{,_batch}`, `resolve`, `relation_input_claim`), `opening_proof` (`VerifierOpeningAccumulator`, the opening-reduction relation), `evaluation_reduction` (verify side), the one-hot, booleanity, shout and prefix-suffix relations and their parameters. Not the `prover` submodules. |
 | `atlas-claims` | all of it: `SymbolicSumcheck`, the `Expr` algebra and its evaluation, the claim-data traits |
 | `atlas-pcs` | `CommitmentScheme::{setup_verifier, verify, verify_rlc}` and the `akita` implementation of them, including `akita::backend` (the adapter over `akita-*`) and `openings` |
-| `atlas-transcript` | `VerifyingTranscript`, the sponge and the spongefish verifier surface under it (`VerifierTranscript`, session setup, the proof-of-work check, the challenge sponges), and `words` |
+| `atlas-transcript` | `VerifyingTranscript` and its reads (`read_scalar`, `read_scalars`, `read_serializable`: the only way a value leaves the proof), the sponge and the spongefish verifier surface under it (`VerifierTranscript`, session setup, the proof-of-work check, the challenge sponges), and `words` |
 | `atlas-algebra` | `field::fp128`, multilinear evaluation, `EqPolynomial`, opening points, `univariate` (`CompressedPoly` round messages, evaluation reduction's `UnivariatePoly`) |
 | `atlas-lookup-tables` | table evaluation (`evaluate_mle`) and the prefix-suffix decompositions |
 | `atlas-trace` | `Model` and its ops, `ModelExecutionIO`, `Tensor`, and `semantics` (the table generators). Not `Trace` or the executor. |
-| `common::serialize` (`atlas_algebra::serialize`) | `Canonical` and its decoders: the proof's byte format, decoded with validation and bounded allocation |
+| `common::serialize` (`atlas_algebra::serialize`) | `Canonical` and its decoders: the encoding of a field element and of the framed values a proof carries (the commitments, the joint opening proof), decoded with validation and bounded allocation |
 | `atlas-algebra::field` | the Solinas field (`Fp128`, its kernels and assembly), the `Ring`/`Field` spine, unreduced products |
 | `jolt-field`, `jolt-poly` (root) | the `atlas-algebra` re-exports `akita-*` binds; no code |
 | LayerZero's `akita-*` crates | by git at `dfdbd767` (`docs/upstream-inventory.md`) |
@@ -38,10 +38,14 @@ The crate has no prover code. Three mechanisms hold that:
 
 ## Reading order
 
-1. **Entry point**: `onnx_proof/mod.rs`. `verify` binds the public inputs into the transcript
-   (`append_inputs_to_transcript`), loads the proof's claims and commitments, checks the output
-   claim against the public outputs, runs the model's schedule (each node in reverse
-   topological order, then the model-wide sumchecks), then verifies the reduced opening proof.
+1. **Entry point**: `onnx_proof/mod.rs`. `verify` hands the proof's bytes to its transcript
+   and reads them there, front to back: it binds the public inputs into the transcript
+   (`append_inputs_to_transcript`), reads the commitments (`verifier::read_commitments`: the
+   batch commitment, then one per polynomial the schedule opens), checks the output claim
+   against the public outputs, runs the model's schedule (each node in reverse topological
+   order, then the model-wide sumchecks), reduces the committed openings to one point and
+   verifies the joint opening proof it reads there (`verifier::verify_reduced_openings`), and
+   requires the bytes to end (`VerifyingTranscript::finish`).
 2. **The schedule and its interpreter**: `onnx_proof/schedule.rs` (`Schedule`, `Step`,
    `ScheduleBuilder` and its checks, the closed relation enum `OpRelation` and the `OpPlan`
    trait each op implements), `onnx_proof/verifier.rs` (the `Verifier` state and
@@ -78,8 +82,11 @@ The crate has no prover code. Three mechanisms hold that:
    the fused Mul, Square and Cube) that is not a model output is a range claim in the same
    buckets: `out + 2^31 ∈ [0, 2^32)`, read from the node's reduced output opening. A model
    output is a public `i32` tensor and has no claim.
-5. **Proof object**: `proof.rs`, `types.rs` (`ProofId`, `ProofType`, `Claims`) and
-   `proof_serialization.rs` (the wire format).
+5. **The proof**: `proof.rs`. `ONNXProof` is the NARG byte string of the prover's transcript,
+   with no field, key or format of its own; its doc lists the order of the stream. Under it,
+   `atlas_transcript::sponge` (`SpongeVerifier`'s reads) and
+   `atlas_sumcheck::opening_proof` (`VerifierOpeningAccumulator`, where a claim is read when an
+   append binds it).
 
 ## The schedule
 
@@ -94,8 +101,9 @@ the checked-in models.
 The steps: `Reduce` is a node's evaluation reduction; `Open` appends advice openings at a
 stated point (`OpOpen`); `Setup` runs a relation's setup (its draws and appends) and leaves it
 to a later sumcheck; `Sumcheck` sets up each member not yet set up, in order, then verifies
-the members as the one sumcheck stored under its `ProofId` (one relation's sumcheck, or a
-batch, which draws a coefficient per instance); `Tie` checks a zero-round relation, an `OpRel`,
+the members as one sumcheck (one relation's sumcheck, or a batch, which draws a coefficient
+per instance), reading its round messages and then its members' produced claims from the
+transcript; `Tie` checks a zero-round relation, an `OpRel`,
 with `verify_tie`. Steps hold values, never closures: a relation is an `OpRelation` (a closed
 enum with one variant per kind of verifier construction: an `OpRel`, a `TableRead`, the
 one-hot checks of an `RaEncoding`, GatherSmall's two one-hot stages, softmax's three-table
@@ -117,7 +125,7 @@ sumcheck in its node's turn, since it produces a claim on its dictionary operand
 checks are in the one-hot sumcheck. `finish` returns `Err` unless every relation is set up at
 most once, before its sumcheck, and verified exactly once, and no sumcheck is empty: a model
 with no range claim has no bucket step, a model with no table read no lookups or one-hot
-step, and neither carries a proof entry.
+step, and its proof carries nothing for either.
 
 `Verifier::run` in `onnx_proof/verifier.rs` is the interpreter: one loop over the steps,
 keeping the verifiers of a relation set up by a `Setup` step until its `Sumcheck`. The
@@ -158,17 +166,41 @@ per-row work; the tables are generated once per process.
   outputs with one tensor of the node's dims each (`verifier::check_io_shape`). The list of
   committed polynomials is a function of the model alone: the ones its schedule opens
   (`Schedule::committed`), in sorted order.
-- **Exact consumption.** Sumcheck proofs and evaluation-reduction proofs are read through
-  `ProofLedger::take`, which fails on a missing entry and on a second take.
-  `Verifier::check_consumed` ends `verify`: an entry never taken, or an opening claim no append
-  bound to a point, is an `Err`.
-- **No dead fields.** A node with a single claim on its output has no evaluation-reduction
-  entry (the claim is the reduced instance). Every `ProofType` is emitted for some checked-in
-  model; deleted tags (1 to 8, 11, 13 to 15, 17 to 26) do not deserialize.
-- **What holds it.** The mutation sweep requires an `Err` at every site (no tolerance), with
-  orphan sites for claims, sumcheck proofs and reduction proofs and count/shape sites for the
-  IO; `proof_types_all_exercised`; `fuzz_regressions_replay` and the cargo-fuzz target in
-  `jolt-atlas-core/fuzz/`.
+- **One stream, read once.** The proof is the bytes the prover's transcript wrote, and the
+  verifier has no access to them but its transcript's sequential reads: the commitments, then
+  what each step of the schedule reads (an `Open`'s claims; a `Reduce`'s restriction
+  polynomial when a node's output has several claims; a `Sumcheck`'s round messages, each
+  followed by its proof-of-work nonce, then its members' produced claims; a `Tie`'s produced
+  claims), then the opening reduction's sumcheck and reduced claims and the joint opening
+  proof. There is no key to look a value up by, so a value cannot be missing, unread, read
+  twice or stored where nothing asks: a missing value is a short read, a surplus one is
+  trailing bytes, and `VerifyingTranscript::finish` ends `verify`. A model that opens no
+  committed polynomial has no opening reduction and no opening proof in its stream.
+- **Every read is absorbed.** A read is a spongefish prover message: the sponge absorbs it in
+  the read itself, so no challenge drawn afterwards is independent of it. No `read_*` returns
+  a value it did not absorb.
+- **Sizes are the verifier's.** The number of commitments, of claims, of rounds, of
+  coefficients in a round message (the relation's degree) and in an evaluation reduction's
+  polynomial (its degree bound, `evaluation_reduction::h_coefficients`) come from the
+  schedule. The one length the bytes state is that of a framed value (a commitment, the joint
+  opening proof), checked against the bytes left before anything is copied. A field element
+  is read only from its canonical encoding, and a frame must hold exactly one value.
+- **A claim exists from its bind.** `VerifierOpeningAccumulator` holds a claim only from the
+  append that reads it, at the point that append states. An id bound again at its point (an
+  op whose operands are one node names one opening twice) reads nothing, since the stream
+  carries each claim once; an id bound at another point is an `Err`.
+- **The joint opening has its own transcript.** A commitment scheme draws its challenges
+  while it builds its proof, so it cannot send the finished proof before them on one
+  transcript. `verify_reduced_openings` seeds a second transcript from the proof's
+  (`seed_opening_transcript`: two challenges drawn there, binding everything read so far),
+  reads the joint opening proof as the last value of the stream, and runs
+  `PCS::verify_rlc` on the seeded transcript. The scheme sends nothing through a transcript:
+  what it sends is in its proof.
+- **What holds it.** The mutation sweep takes its sites from the log of a recording
+  transcript (`testing/recording.rs`), so every value read is a site, and requires an `Err`
+  at each (no tolerance), at the proof cut at every read boundary and at the proof with a
+  byte appended, with count and shape sites for the IO; `relation_kinds_all_exercised`;
+  `fuzz_regressions_replay` and the cargo-fuzz target in `jolt-atlas-core/fuzz/`.
 
 Outside the lints' reach, and model- or code-driven rather than proof-driven: `assert!`s on
 model constants, `Math::log_2`, `Model::node` indexing in `atlas-trace`, and slicing inside

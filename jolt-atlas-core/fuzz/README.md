@@ -2,8 +2,10 @@
 
 libFuzzer harness (via [cargo-fuzz]) for `jolt_atlas_verifier::onnx_proof::verify`. The
 `verify` target takes an honest proof of the checked-in op gauntlet
-(`models/op_gauntlet`), lets the fuzzer mutate its serialized bytes and the public IO, and
-verifies the result. The verifier must return on every input: `Err` is the expected verdict;
+(`models/op_gauntlet`), lets the fuzzer mutate its bytes and the public IO, and
+verifies the result. An input is an 8-byte header that edits the public IO, then the proof:
+the bytes after the header are the proof (the byte string the verifier's transcript reads),
+handed to `verify` as they are, with no decoding step in between. The verifier must return on every input: `Err` is the expected verdict;
 a panic, an arithmetic-overflow abort, an OOM or a timeout is a finding. The input format and
 the driver live in `jolt_atlas_core::onnx_proof::fuzz`, shared with the regression replay.
 
@@ -55,7 +57,8 @@ None yet.
 
 - `fuzz/` is its own cargo workspace, so the sanitizer/nightly build never touches the main
   workspace.
-- An input is tied to the op gauntlet and to the proof format: after a protocol-breaking
-  change, re-seed the corpus; old regression inputs then exercise only the deserializer.
+- An input is tied to the op gauntlet and to the order of the proof's stream: after a
+  protocol-breaking change, re-seed the corpus; old regression inputs then exercise only the
+  verifier's first failing read.
 
 [cargo-fuzz]: https://github.com/rust-fuzz/cargo-fuzz

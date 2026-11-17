@@ -45,7 +45,7 @@ pub enum ProofVerifyError {
     ProofOfWork,
     #[error("Transcript NARG string not fully consumed")]
     TrailingNarg,
-    #[error("The proof carries no claim for {0}")]
+    #[error("No claim is bound for {0}")]
     MissingClaim(String),
     #[error("Malformed proof or public IO: {0}")]
     Malformed(String),

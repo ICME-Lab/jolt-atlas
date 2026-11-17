@@ -152,8 +152,8 @@ cargo nextest run -p jolt-atlas-core --run-ignored ignored-only -E 'test(known_g
 * `op_surface.rs` is a table with one case per `atlas_trace::Op` variant (plus
   overflow rejection, tiny-tensor, non-power-of-two, padded and rejection cases).
   Adding an op variant fails to compile until the table declares a stance for it.
-* `soundness.rs` attacks the proof system generically: every field of a
-  finished proof is perturbed (`proof_mutation_sweep`), the execution trace is
+* `soundness.rs` attacks the proof system generically: every value the verifier
+  reads from a finished proof is perturbed (`proof_mutation_sweep`), the execution trace is
   tampered before proving (`witness_tamper_sweep`), and every opening claim is
   forged at the accumulator (`opening_forgery_sweep`). Set
   `JOLT_SOUNDNESS_EXHAUSTIVE=1` for every site instead of the sampled default

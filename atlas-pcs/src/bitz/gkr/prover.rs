@@ -3,12 +3,19 @@
 //! The four layers nearest the leaves are never stored: a node there is a product of at most
 //! eight adjacent rows of one column, so it is read from a table indexed by the node and the
 //! column's bits under it. A sumcheck on such a layer runs its first rounds on those tables and
-//! stores the layer only once enough row variables are bound for it to be a sixteenth of the
-//! bit count. Layers above are stored.
+//! stores the layer only once enough row variables are bound for it to be a small fraction of
+//! the bit count. Layers above are stored.
+//!
+//! Everything is laid out for sequential passes. The bits are copied once into bytes ordered
+//! by row, then column, so a pass over one byte position reads one table row and the columns'
+//! bytes in order. A stored layer holds, for each row index, its first child's run over the
+//! columns and then its second child's, so binding a row variable combines adjacent runs, and
+//! the `eq` weight of an entry is the product of a row weight and a column weight, never a
+//! table of its own.
 #![allow(clippy::indexing_slicing)]
 
 use super::{draw_combine, draw_output_point, round_pow_bits, LayerProof, Proof};
-use crate::bitz::gf128::Gf128;
+use crate::bitz::gf128::{Gf128, WideSum};
 use crate::bitz::multilinear::{eq_table, fold_first};
 use atlas_transcript::Transcript;
 use rayon::prelude::*;
@@ -16,20 +23,55 @@ use rayon::prelude::*;
 /// Layers within this many levels of the leaves are read from tables.
 const TABLE_DEPTH: usize = 4;
 
-/// The bit matrix: bit `(row, column)` at index `row + 2^log_rows · column`.
-struct Bits<'a> {
-    words: &'a [u64],
+/// A sumcheck on a table layer runs this many rounds on the tables beyond the ones that bring
+/// the layer to a sixteenth of the bit count: a table round is one pass over the bits, and
+/// each halves what is then stored.
+const EXTRA_TABLE_ROUNDS: usize = 2;
+
+/// The bit matrix as bytes: the byte at `position << log_columns | column` holds the eight
+/// rows `8·position ..` of `column`, low row in the low bit.
+struct ByteMatrix {
+    bytes: Vec<u8>,
     log_rows: usize,
+    log_columns: usize,
 }
 
-impl Bits<'_> {
-    /// The `2^depth` bits of `column` under node `node` of the layer `depth` levels above the
-    /// leaves, as an integer.
-    #[inline]
-    fn pattern(&self, column: usize, node: usize, depth: usize) -> usize {
-        let start = (column << self.log_rows) + (node << depth);
-        let mask = (1usize << (1 << depth)) - 1;
-        (self.words[start / 64] >> (start % 64)) as usize & mask
+impl ByteMatrix {
+    /// From the word-packed bits, bit `(row, column)` at index `row + 2^log_rows · column`.
+    fn new(words: &[u64], log_rows: usize, log_columns: usize) -> Self {
+        let columns = 1usize << log_columns;
+        let words_per_column = (1usize << log_rows) / 64;
+        let mut bytes = vec![0u8; words.len() * 8];
+        bytes
+            .par_chunks_mut(8 * columns)
+            .enumerate()
+            .for_each(|(word_index, rows)| {
+                for column in 0..columns {
+                    let word = words[column * words_per_column + word_index];
+                    for (k, byte) in word.to_le_bytes().into_iter().enumerate() {
+                        rows[k * columns + column] = byte;
+                    }
+                }
+            });
+        Self {
+            bytes,
+            log_rows,
+            log_columns,
+        }
+    }
+
+    fn columns(&self) -> usize {
+        1 << self.log_columns
+    }
+
+    /// The number of byte positions in a column.
+    fn positions(&self) -> usize {
+        (1 << self.log_rows) / 8
+    }
+
+    /// Every column's byte at `position`.
+    fn row(&self, position: usize) -> &[u8] {
+        &self.bytes[position << self.log_columns..(position + 1) << self.log_columns]
     }
 }
 
@@ -50,6 +92,44 @@ fn node_table(factors: &[Gf128], depth: usize) -> Vec<Gf128> {
             values
         })
         .collect()
+}
+
+/// The three sums a round sends: `t(0)`, `t(1)` and the leading coefficient of `t`.
+type RoundSums = (Gf128, Gf128, Gf128);
+
+const NO_SUMS: RoundSums = (Gf128::ZERO, Gf128::ZERO, Gf128::ZERO);
+
+fn add_sums(a: RoundSums, b: RoundSums) -> RoundSums {
+    (a.0 + b.0, a.1 + b.1, a.2 + b.2)
+}
+
+fn scale_sums(weight: Gf128, sums: RoundSums) -> RoundSums {
+    (weight * sums.0, weight * sums.1, weight * sums.2)
+}
+
+/// The three products of a term, from the two factors at the round variable's two values.
+#[inline]
+fn term(p: [Gf128; 2], q: [Gf128; 2]) -> RoundSums {
+    (p[0] * q[0], p[1] * q[1], (p[0] + p[1]) * (q[0] + q[1]))
+}
+
+/// A weighted sum of terms, with the weight folded into one factor and the three products
+/// accumulated unreduced: two multiplications and three carry-less products per term.
+#[derive(Default)]
+struct WeightedSums([WideSum; 3]);
+
+impl WeightedSums {
+    #[inline]
+    fn add_term(&mut self, weight: Gf128, p: [Gf128; 2], q: [Gf128; 2]) {
+        let p = [weight * p[0], weight * p[1]];
+        self.0[0].add_product(p[0], q[0]);
+        self.0[1].add_product(p[1], q[1]);
+        self.0[2].add_product(p[0] + p[1], q[0] + q[1]);
+    }
+
+    fn reduce(&self) -> RoundSums {
+        (self.0[0].reduce(), self.0[1].reduce(), self.0[2].reduce())
+    }
 }
 
 /// The running state of one sumcheck of `scalar · eq(point, ·) · P · Q`.
@@ -75,11 +155,11 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
         }
     }
 
-    /// Sends a round given `t(0)`, `t(1)` and the leading coefficient of the quadratic
+    /// Sends a round given the sums of the quadratic
     /// `t(X) = Σ_x eq(rest, x)·P(X, x)·Q(X, x)`, for the variable whose `eq` coordinate is
     /// `coordinate`. The round polynomial is `scalar · eq(coordinate, X) · t(X)`, and
     /// `eq(coordinate, X) = 1 + coordinate + X`.
-    fn round(&mut self, coordinate: Gf128, at_zero: Gf128, at_one: Gf128, leading: Gf128) -> Gf128 {
+    fn round(&mut self, coordinate: Gf128, (at_zero, at_one, leading): RoundSums) -> Gf128 {
         let linear = at_zero + at_one + leading;
         let shifted = self.scalar * (Gf128::ONE + coordinate);
         let message = [
@@ -107,27 +187,89 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
         r
     }
 
-    /// Runs the remaining rounds on stored `P` and `Q`, whose variables have the `eq`
-    /// coordinates `point`. Returns the values the two end on.
+    /// Runs the rounds of the row variables on a stored layer: for each row index, the run of
+    /// `P` over the columns, then the run of `Q`. A round pairs two adjacent row indices.
+    /// Returns `P` and `Q` over the columns alone.
+    fn bind_rows(
+        &mut self,
+        mut layer: Vec<Gf128>,
+        row_point: &[Gf128],
+        column_weights: &[Gf128],
+    ) -> (Vec<Gf128>, Vec<Gf128>) {
+        let columns = column_weights.len();
+        debug_assert_eq!(layer.len(), (2 * columns) << row_point.len());
+        // The sums of a pair of row indices, given as the runs `[P0, Q0, P1, Q1]`.
+        let pair_sums = |pair: &[Gf128]| -> RoundSums {
+            let (first, second) = pair.split_at(2 * columns);
+            let ((p0, q0), (p1, q1)) = (first.split_at(columns), second.split_at(columns));
+            let mut acc = WeightedSums::default();
+            for (c, &weight) in column_weights.iter().enumerate() {
+                acc.add_term(weight, [p0[c], p1[c]], [q0[c], q1[c]]);
+            }
+            acc.reduce()
+        };
+        let Some((&first, later)) = row_point.split_first() else {
+            let high = layer.split_off(columns);
+            return (layer, high);
+        };
+        let mut coordinate = first;
+        let mut sums = eq_table(later)
+            .par_iter()
+            .zip(layer.par_chunks_exact(4 * columns))
+            .map(|(&weight, pair)| scale_sums(weight, pair_sums(pair)))
+            .reduce(|| NO_SUMS, add_sums);
+        let mut rest = later;
+        loop {
+            let r = self.round(coordinate, sums);
+            let fold = |out: &mut [Gf128], pair: &[Gf128]| {
+                let (low, high) = pair.split_at(2 * columns);
+                for ((o, &x), &y) in out.iter_mut().zip(low).zip(high) {
+                    *o = x + r * (x + y);
+                }
+            };
+            let mut folded = Gf128::zeros(layer.len() / 2);
+            let Some((&next, later)) = rest.split_first() else {
+                folded
+                    .par_chunks_mut(2 * columns)
+                    .zip(layer.par_chunks_exact(4 * columns))
+                    .for_each(|(out, pair)| fold(out, pair));
+                let high = folded.split_off(columns);
+                return (folded, high);
+            };
+            // Fold two pairs and take the next round's sums of the result in one pass.
+            sums = eq_table(later)
+                .par_iter()
+                .zip(
+                    folded
+                        .par_chunks_mut(4 * columns)
+                        .zip(layer.par_chunks_exact(8 * columns)),
+                )
+                .map(|(&weight, (out, pairs))| {
+                    let (out_low, out_high) = out.split_at_mut(2 * columns);
+                    let (low, high) = pairs.split_at(4 * columns);
+                    fold(out_low, low);
+                    fold(out_high, high);
+                    scale_sums(weight, pair_sums(out))
+                })
+                .reduce(|| NO_SUMS, add_sums);
+            layer = folded;
+            coordinate = next;
+            rest = later;
+        }
+    }
+
+    /// Runs the remaining rounds on stored `P` and `Q` whose variables, first to last, have
+    /// the `eq` coordinates `point`. Returns the values the two end on.
     fn finish(&mut self, mut p: Vec<Gf128>, mut q: Vec<Gf128>, point: &[Gf128]) -> (Gf128, Gf128) {
         debug_assert_eq!(p.len(), 1 << point.len());
         for (j, &coordinate) in point.iter().enumerate() {
             let rest = eq_table(&point[j + 1..]);
-            let (at_zero, at_one, leading) = rest
+            let sums = rest
                 .par_iter()
                 .zip(p.par_chunks_exact(2).zip(q.par_chunks_exact(2)))
-                .map(|(&w, (p, q))| {
-                    (
-                        w * (p[0] * q[0]),
-                        w * (p[1] * q[1]),
-                        w * ((p[0] + p[1]) * (q[0] + q[1])),
-                    )
-                })
-                .reduce(
-                    || (Gf128::ZERO, Gf128::ZERO, Gf128::ZERO),
-                    |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2),
-                );
-            let r = self.round(coordinate, at_zero, at_one, leading);
+                .map(|(&w, (p, q))| scale_sums(w, term([p[0], p[1]], [q[0], q[1]])))
+                .reduce(|| NO_SUMS, add_sums);
+            let r = self.round(coordinate, sums);
             p = fold_first(&p, r);
             q = fold_first(&q, r);
         }
@@ -135,23 +277,28 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
     }
 }
 
-/// A layer read from tables, during a sumcheck with `bound` row variables fixed.
+/// A layer read from tables, during a sumcheck with `bound` of its row variables fixed.
+///
+/// A node of the layer is indexed by its child bit, then the bound row variables, then the
+/// rest. With the bound variables summed out against `eq` of their challenges, the two
+/// children at a remaining row index `rest` and round variable `τ` are sums over a block of
+/// `2^(depth + bound + 2)` adjacent rows of one column, the half of the block with the low
+/// rows belonging to `τ = 0`.
 struct TableLayer<'a> {
-    bits: &'a Bits<'a>,
+    bytes: &'a ByteMatrix,
     depth: usize,
+    bound: usize,
     /// The layer's node table with each node's entries scaled by `eq` of the bound
     /// challenges at the node's bound bits.
     scaled: Vec<Gf128>,
-    bound: usize,
 }
 
 impl<'a> TableLayer<'a> {
-    fn new(bits: &'a Bits<'a>, table: &[Gf128], depth: usize, challenges: &[Gf128]) -> Self {
+    fn new(bytes: &'a ByteMatrix, table: &[Gf128], depth: usize, challenges: &[Gf128]) -> Self {
         let patterns = 1usize << (1 << depth);
         let bound = challenges.len();
         let weights = eq_table(challenges);
         let mask = weights.len() - 1;
-        // Node index: child bit, then the bound row variables, then the rest.
         let scaled = table
             .par_chunks(patterns)
             .enumerate()
@@ -161,25 +308,156 @@ impl<'a> TableLayer<'a> {
             })
             .collect();
         Self {
-            bits,
+            bytes,
             depth,
-            scaled,
             bound,
+            scaled,
         }
     }
 
-    /// The child `child` of the layer, with its bound variables fixed, at the remaining row
-    /// index `rest` of `column`: the sum over the bound variables' cube.
-    #[inline]
-    fn value(&self, column: usize, rest: usize, child: usize) -> Gf128 {
-        let patterns_log = 1 << self.depth;
-        let mut acc = Gf128::ZERO;
-        for beta in 0..1usize << self.bound {
-            let node = rest << (self.bound + 1) | beta << 1 | child;
-            let pattern = self.bits.pattern(column, node, self.depth);
-            acc += self.scaled[node << patterns_log | pattern];
+    /// `log2` of the rows in a round's block.
+    fn log_block(&self) -> usize {
+        self.depth + self.bound + 2
+    }
+
+    /// For every byte position and every value of the byte, the sum of the byte's nodes of
+    /// each child: entry `position << 8 | value` holds `[child 0, child 1]`. A node lies
+    /// inside one byte since `depth ≤ 3`.
+    fn byte_sums(&self) -> Vec<[Gf128; 2]> {
+        let nodes_per_byte = 8usize >> self.depth;
+        let pattern_bits = 1usize << self.depth;
+        let pattern_mask = (1usize << pattern_bits) - 1;
+        (0..self.bytes.positions() << 8)
+            .into_par_iter()
+            .map(|index| {
+                let (position, value) = (index >> 8, index & 0xff);
+                let mut sums = [Gf128::ZERO; 2];
+                for j in 0..nodes_per_byte {
+                    let node = position * nodes_per_byte + j;
+                    let pattern = (value >> (j * pattern_bits)) & pattern_mask;
+                    sums[node & 1] += self.scaled[node << pattern_bits | pattern];
+                }
+                sums
+            })
+            .collect()
+    }
+
+    /// A round whose block is at most a byte: the three products of a term depend only on
+    /// the block's bits, so the column weights are summed per block and pattern before any
+    /// multiplication.
+    fn bucketed_round(&self, rest_weights: &[Gf128], column_weights: &[Gf128]) -> RoundSums {
+        let block_bits = 1usize << self.log_block();
+        let patterns = 1usize << block_bits;
+        let blocks_per_byte = 8 / block_bits;
+        let pattern_bits = 1usize << self.depth;
+        let pattern_mask = (1usize << pattern_bits) - 1;
+        (0..self.bytes.positions())
+            .into_par_iter()
+            .map(|position| {
+                let mut buckets = vec![Gf128::ZERO; blocks_per_byte * patterns];
+                for (&value, &weight) in self.bytes.row(position).iter().zip(column_weights) {
+                    for block in 0..blocks_per_byte {
+                        let pattern = (value as usize >> (block * block_bits)) & (patterns - 1);
+                        buckets[block * patterns + pattern] += weight;
+                    }
+                }
+                let mut sums = NO_SUMS;
+                for block in 0..blocks_per_byte {
+                    let rest = position * blocks_per_byte + block;
+                    let mut block_sums = NO_SUMS;
+                    for pattern in 0..patterns {
+                        let bucket = buckets[block * patterns + pattern];
+                        if bucket.is_zero() {
+                            continue;
+                        }
+                        // The children `[τ = 0, τ = 1]` of each child bit under this pattern.
+                        let mut children = [[Gf128::ZERO; 2]; 2];
+                        for local in 0..1usize << (self.bound + 2) {
+                            let node = rest << (self.bound + 2) | local;
+                            let sub = (pattern >> (local * pattern_bits)) & pattern_mask;
+                            children[local & 1][local >> (self.bound + 1)] +=
+                                self.scaled[node << pattern_bits | sub];
+                        }
+                        let products = term(children[0], children[1]);
+                        block_sums = add_sums(block_sums, scale_sums(bucket, products));
+                    }
+                    sums = add_sums(sums, scale_sums(rest_weights[rest], block_sums));
+                }
+                sums
+            })
+            .reduce(|| NO_SUMS, add_sums)
+    }
+
+    /// A round whose half-block is whole bytes: each child is a sum of per-byte table
+    /// entries, accumulated for every column one byte position at a time.
+    fn byte_round(&self, rest_weights: &[Gf128], column_weights: &[Gf128]) -> RoundSums {
+        let sums_table = self.byte_sums();
+        let bytes_per_half = 1usize << (self.log_block() - 4);
+        let columns = self.bytes.columns();
+        rest_weights
+            .par_iter()
+            .enumerate()
+            .map_init(
+                || vec![[[Gf128::ZERO; 2]; 2]; columns],
+                |children, (rest, &rest_weight)| {
+                    children.fill([[Gf128::ZERO; 2]; 2]);
+                    for tau in 0..2 {
+                        for k in 0..bytes_per_half {
+                            let position = (2 * rest + tau) * bytes_per_half + k;
+                            let entries = &sums_table[position << 8..(position + 1) << 8];
+                            for (child, &value) in children.iter_mut().zip(self.bytes.row(position))
+                            {
+                                let entry = entries[value as usize];
+                                child[0][tau] += entry[0];
+                                child[1][tau] += entry[1];
+                            }
+                        }
+                    }
+                    let mut acc = WeightedSums::default();
+                    for (child, &weight) in children.iter().zip(column_weights) {
+                        acc.add_term(weight, child[0], child[1]);
+                    }
+                    scale_sums(rest_weight, acc.reduce())
+                },
+            )
+            .reduce(|| NO_SUMS, add_sums)
+    }
+
+    /// The round's three sums for the next row variable, whose remaining row indices have the
+    /// weights `rest_weights`.
+    fn round(&self, rest_weights: &[Gf128], column_weights: &[Gf128]) -> RoundSums {
+        if self.log_block() <= 3 {
+            self.bucketed_round(rest_weights, column_weights)
+        } else {
+            self.byte_round(rest_weights, column_weights)
         }
-        acc
+    }
+
+    /// The two children with the bound variables fixed, stored: for each remaining row index,
+    /// the run of the first child over the columns, then the run of the second. A node's rows
+    /// are then `2^(depth + bound + 1)`, whole bytes.
+    fn materialize(&self, rest_vars: usize) -> Vec<Gf128> {
+        let sums_table = self.byte_sums();
+        let bytes_per_node = 1usize << (self.depth + self.bound + 1 - 3);
+        let columns = self.bytes.columns();
+        let mut layer = Gf128::zeros((2 * columns) << rest_vars);
+        layer
+            .par_chunks_mut(2 * columns)
+            .enumerate()
+            .for_each(|(rest, children)| {
+                let (low, high) = children.split_at_mut(columns);
+                for k in 0..bytes_per_node {
+                    let position = rest * bytes_per_node + k;
+                    let entries = &sums_table[position << 8..(position + 1) << 8];
+                    let values = self.bytes.row(position);
+                    for ((p, q), &value) in low.iter_mut().zip(high.iter_mut()).zip(values) {
+                        let entry = entries[value as usize];
+                        *p += entry[0];
+                        *q += entry[1];
+                    }
+                }
+            });
+        layer
     }
 }
 
@@ -199,30 +477,43 @@ pub fn prove<T: Transcript>(
         "a column is whole bytes of whole table nodes"
     );
     assert_eq!(words.len() * 64, 1 << (log_rows + log_columns), "bit count");
-    let bits = Bits { words, log_rows };
     let columns = 1usize << log_columns;
+    let bytes = ByteMatrix::new(words, log_rows, log_columns);
 
     // The stored layers, `stored[i] = L_i` for `i ≤ log_rows − TABLE_DEPTH`, each indexed by
-    // node, then column.
+    // column, then node.
+    let span = tracing::info_span!("gkr_stored_layers").entered();
     let top = log_rows - TABLE_DEPTH;
     let byte_table = node_table(factors, 3);
     let mut stored: Vec<Vec<Gf128>> = vec![Vec::new(); top + 1];
-    stored[top] = (0..columns << top)
-        .into_par_iter()
-        .map(|index| {
-            let (node, column) = (index & ((1 << top) - 1), index >> top);
-            let low = byte_table[(2 * node) << 8 | bits.pattern(column, 2 * node, 3)];
-            let high = byte_table[(2 * node + 1) << 8 | bits.pattern(column, 2 * node + 1, 3)];
-            low * high
-        })
-        .collect();
+    let mut top_layer = Gf128::zeros(columns << top);
+    top_layer
+        .par_chunks_mut(columns)
+        .enumerate()
+        .for_each(|(node, values)| {
+            let (low, high) = (2 * node, 2 * node + 1);
+            let low_values = &byte_table[low << 8..(low + 1) << 8];
+            let high_values = &byte_table[high << 8..(high + 1) << 8];
+            for ((value, &a), &b) in values.iter_mut().zip(bytes.row(low)).zip(bytes.row(high)) {
+                *value = low_values[a as usize] * high_values[b as usize];
+            }
+        });
+    stored[top] = top_layer;
     for i in (0..top).rev() {
-        stored[i] = stored[i + 1]
-            .par_chunks_exact(2)
-            .map(|pair| pair[0] * pair[1])
-            .collect();
+        let mut above = Gf128::zeros(columns << i);
+        above
+            .par_chunks_mut(columns)
+            .zip(stored[i + 1].par_chunks_exact(2 * columns))
+            .for_each(|(out, pair)| {
+                let (low, high) = pair.split_at(columns);
+                for ((o, &x), &y) in out.iter_mut().zip(low).zip(high) {
+                    *o = x * y;
+                }
+            });
+        stored[i] = above;
     }
     let outputs = stored[0].clone();
+    drop(span);
 
     #[allow(clippy::expect_used)]
     let mut point = draw_output_point(log_columns, target_bits, transcript)
@@ -236,59 +527,28 @@ pub fn prove<T: Transcript>(
     for row_vars in 0..log_rows {
         // The layer below has `row_vars` row variables after its child bit.
         let depth = log_rows - row_vars - 1;
+        let _span = tracing::info_span!("gkr_layer", depth).entered();
+        let (row_point, column_point) = point.split_at(row_vars);
+        let column_weights = eq_table(column_point);
         let mut sumcheck = Sumcheck::new(claim, target_bits, transcript);
-        let (low, high) = if depth >= TABLE_DEPTH {
+        let (p, q) = if depth >= TABLE_DEPTH {
+            // A stored layer is its two children's runs, alternating.
             let below = std::mem::take(&mut stored[row_vars + 1]);
-            let p = below.par_iter().step_by(2).copied().collect();
-            let q = below.par_iter().skip(1).step_by(2).copied().collect();
-            sumcheck.finish(p, q, &point)
+            sumcheck.bind_rows(below, row_point, &column_weights)
         } else {
             let table = node_table(factors, depth);
-            let streamed = TABLE_DEPTH - depth;
-            let (row_point, column_point) = point.split_at(row_vars);
-            let column_weights = eq_table(column_point);
+            let streamed = (TABLE_DEPTH - depth + EXTRA_TABLE_ROUNDS).min(row_vars);
             for bound in 0..streamed {
-                let layer = TableLayer::new(&bits, &table, depth, &sumcheck.challenges);
+                let layer = TableLayer::new(&bytes, &table, depth, &sumcheck.challenges);
                 let rest_weights = eq_table(&row_point[bound + 1..]);
-                let (at_zero, at_one, leading) = (0..columns)
-                    .into_par_iter()
-                    .map(|column| {
-                        let mut acc = (Gf128::ZERO, Gf128::ZERO, Gf128::ZERO);
-                        for (rest, &w) in rest_weights.iter().enumerate() {
-                            let p = [
-                                layer.value(column, 2 * rest, 0),
-                                layer.value(column, 2 * rest + 1, 0),
-                            ];
-                            let q = [
-                                layer.value(column, 2 * rest, 1),
-                                layer.value(column, 2 * rest + 1, 1),
-                            ];
-                            acc.0 += w * (p[0] * q[0]);
-                            acc.1 += w * (p[1] * q[1]);
-                            acc.2 += w * ((p[0] + p[1]) * (q[0] + q[1]));
-                        }
-                        let w = column_weights[column];
-                        (w * acc.0, w * acc.1, w * acc.2)
-                    })
-                    .reduce(
-                        || (Gf128::ZERO, Gf128::ZERO, Gf128::ZERO),
-                        |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2),
-                    );
-                sumcheck.round(row_point[bound], at_zero, at_one, leading);
+                let sums = layer.round(&rest_weights, &column_weights);
+                sumcheck.round(row_point[bound], sums);
             }
-            let layer = TableLayer::new(&bits, &table, depth, &sumcheck.challenges);
-            let rest_vars = row_vars - streamed;
-            let materialize = |child: usize| -> Vec<Gf128> {
-                (0..columns << rest_vars)
-                    .into_par_iter()
-                    .map(|index| {
-                        layer.value(index >> rest_vars, index & ((1 << rest_vars) - 1), child)
-                    })
-                    .collect()
-            };
-            let (p, q) = (materialize(0), materialize(1));
-            sumcheck.finish(p, q, &point[streamed..])
+            let layer = TableLayer::new(&bytes, &table, depth, &sumcheck.challenges);
+            let below = layer.materialize(row_vars - streamed);
+            sumcheck.bind_rows(below, &row_point[streamed..], &column_weights)
         };
+        let (low, high) = sumcheck.finish(p, q, column_point);
         let Sumcheck {
             rounds, challenges, ..
         } = sumcheck;
@@ -304,34 +564,28 @@ pub fn prove<T: Transcript>(
 
     // The leaves: 1 + (y_b + 1)·bit(b, c). Fix the columns at the point and run a sumcheck
     // over the rows of eq · (y + 1) · bits(·, column point).
+    let _span = tracing::info_span!("gkr_leaves").entered();
     let (row_point, column_point) = point.split_at(log_rows);
     let column_weights = eq_table(column_point);
-    let row_words = (1usize << log_rows) / 64;
-    let bits_at_columns = words
-        .par_chunks(row_words)
-        .zip(column_weights.par_iter())
-        .fold(
-            || vec![Gf128::ZERO; 1 << log_rows],
-            |mut acc, (column, &w)| {
-                for (i, &word) in column.iter().enumerate() {
-                    let mut rest = word;
-                    while rest != 0 {
-                        acc[64 * i + rest.trailing_zeros() as usize] += w;
-                        rest &= rest - 1;
+    let bits_at_columns: Vec<Gf128> = (0..bytes.positions())
+        .into_par_iter()
+        .flat_map_iter(|position| {
+            // The column weights summed per byte value, then per row of the byte.
+            let mut buckets = [Gf128::ZERO; 256];
+            for (&value, &weight) in bytes.row(position).iter().zip(&column_weights) {
+                buckets[value as usize] += weight;
+            }
+            let mut rows = [Gf128::ZERO; 8];
+            for (value, &bucket) in buckets.iter().enumerate() {
+                for (row, sum) in rows.iter_mut().enumerate() {
+                    if (value >> row) & 1 == 1 {
+                        *sum += bucket;
                     }
                 }
-                acc
-            },
-        )
-        .reduce(
-            || vec![Gf128::ZERO; 1 << log_rows],
-            |mut a, b| {
-                for (x, y) in a.iter_mut().zip(&b) {
-                    *x += *y;
-                }
-                a
-            },
-        );
+            }
+            rows
+        })
+        .collect();
     let factors_plus_one: Vec<Gf128> = factors.par_iter().map(|&y| y + Gf128::ONE).collect();
     let mut sumcheck = Sumcheck::new(claim + Gf128::ONE, target_bits, transcript);
     let (_, bits_value) = sumcheck.finish(factors_plus_one, bits_at_columns, row_point);

@@ -116,7 +116,7 @@ records it as stage 6 closed.
 
 - **Relation-defined** (verifier derived from a `SymbolicSumcheck` in `onnx_proof/relation.rs`):
   Input, Constant, Identity, Neg, IsNan, Broadcast, MoveAxis (ties); Add and Sub (accumulation
-  ties); Mul, And, Square, Cube, Rsqrt, Div, Iff, ScalarConstDiv (eq-weighted
+  ties); Mul, And, Square, Cube, Rsqrt, Iff, ScalarConstDiv (eq-weighted
   engine relations); Reshape, Slice, Concat, Sum (dense engine relations); Einsum and
   MeanOfSquares (relations with specialized provers, checked by `relation_prover_equiv_*`).
 - **Lookup family, moved as code at stage 8**: ReLU, Clamp, Tanh, Sigmoid, Erf, Sin, Cos,

@@ -96,7 +96,7 @@ impl Trace {
         }
     }
 
-    /// The floor-division remainder of a node, if it is a `Div` or a `ScalarConstDiv`.
+    /// The floor-division remainder of a node, if it is a `ScalarConstDiv`.
     pub fn remainder(&self, id: NodeId) -> Option<&Tensor<i32>> {
         match self.aux.get(&id)? {
             NodeAux::Remainder(r) => Some(r),
@@ -165,7 +165,7 @@ pub enum NodeAux {
     Fused(FusedIntermediates),
     /// Softmax witness.
     Softmax(Box<SoftmaxWitness>),
-    /// The remainder of a floor division (`Div`, `ScalarConstDiv`): `a = out·b + remainder`,
+    /// The remainder of a floor division (`ScalarConstDiv`): `a = out·b + remainder`,
     /// with the sign of the divisor.
     Remainder(Tensor<i32>),
     /// The division and square-root advice of an `Rsqrt`.

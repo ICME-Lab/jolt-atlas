@@ -195,8 +195,7 @@ impl<const XLEN: usize, const BOUND: usize, const SYMMETRIC: bool> JoltLookupTab
     }
 }
 
-/// The effective bound of the ONNX `Clamp` op: it clamps into `[-2^CLAMP_BOUND, 2^CLAMP_BOUND - 1]`
-/// (see `jolt_atlas_core::onnx_proof::ops::clamp`).
+/// The bound of [`ClampTable`], which clamps into `[-2^CLAMP_BOUND, 2^CLAMP_BOUND - 1]`.
 pub const CLAMP_BOUND: usize = 9;
 
 /// The bound index (log2 of `i32::MAX + 1`) used to saturate an accumulation to i32's exact
@@ -207,8 +206,9 @@ pub const SIGN_BIT_I32: usize = 31;
 /// an i64 accumulation (e.g. the sum of two i32 operands) before it's saturated to i32's range.
 pub const LARGE_XLEN: usize = 64;
 
-/// Clamps the ONNX `Clamp` op's input natively to `[-2^CLAMP_BOUND, 2^CLAMP_BOUND - 1]`
-/// (see `jolt_atlas_core::onnx_proof::ops::clamp`).
+/// A symmetric clamp to `[-2^CLAMP_BOUND, 2^CLAMP_BOUND - 1]`. No op reads it: its bound is
+/// small enough for the exhaustive hypercube test of [`ClampBoundedTable`]'s formula, which the
+/// tables the proof reads are too wide for.
 pub type ClampTable<const XLEN: usize> = ClampBoundedTable<XLEN, CLAMP_BOUND, true>;
 
 impl<const XLEN: usize> ClampSpec for ClampTable<XLEN> {

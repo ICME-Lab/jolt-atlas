@@ -13,6 +13,8 @@
 //! hashes in `tests/`, is the spec.
 
 use crate::id::{Scale, SemVersion};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::{
     coeffs::{INV_SQRT2_Q62, SQRT_2_OVER_PI_Q62, TWO_OVER_SQRT_PI_Q62},
@@ -122,6 +124,22 @@ pub fn table(kind: TableKind, scale: Scale, version: SemVersion) -> ActivationTa
         TableKind::Sin => trig_table(scale, true),
         TableKind::Cos => trig_table(scale, false),
     }
+}
+
+/// [`table`], generated once per process for each `(kind, scale, version)` and shared: a
+/// table is a pure function of the three, and one model reads the same table at many nodes.
+pub fn shared_table(kind: TableKind, scale: Scale, version: SemVersion) -> Arc<ActivationTable> {
+    type Cache = Mutex<HashMap<(TableKind, Scale, SemVersion), Arc<ActivationTable>>>;
+    static TABLES: OnceLock<Cache> = OnceLock::new();
+    let tables = TABLES.get_or_init(Default::default);
+    // A panic while the lock was held cannot leave a partial entry: entries are inserted whole.
+    let mut tables = tables
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    tables
+        .entry((kind, scale, version))
+        .or_insert_with(|| Arc::new(table(kind, scale, version)))
+        .clone()
 }
 
 /// `1.0` in Q2.62.
@@ -318,6 +336,24 @@ mod tests {
 
     fn s14() -> Scale {
         Scale::new(14).unwrap()
+    }
+
+    #[test]
+    fn shared_tables_are_the_generated_tables() {
+        for kind in [TableKind::GeluTanh, TableKind::Silu, TableKind::Sin] {
+            let shared = shared_table(kind, s14(), SemVersion::V1);
+            assert_eq!(*shared, table(kind, s14(), SemVersion::V1));
+            // The second request is the first one's table.
+            assert!(Arc::ptr_eq(
+                &shared,
+                &shared_table(kind, s14(), SemVersion::V1)
+            ));
+        }
+        let other = shared_table(TableKind::Tanh, Scale::new(8).unwrap(), SemVersion::V1);
+        assert_eq!(
+            *other,
+            table(TableKind::Tanh, Scale::new(8).unwrap(), SemVersion::V1)
+        );
     }
 
     #[test]

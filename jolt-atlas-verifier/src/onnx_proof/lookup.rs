@@ -103,7 +103,7 @@ impl SmallTableDef {
     pub fn materialize(&self) -> Result<Vec<i32>, ProofVerifyError> {
         let scale = atlas_trace::Scale::new(MODEL_SCALE as u8)
             .map_err(|e| ProofVerifyError::Malformed(format!("model: table scale: {e}")))?;
-        let table = atlas_trace::semantics::tables::table(self.kind, scale, SemVersion::V1);
+        let table = atlas_trace::semantics::tables::shared_table(self.kind, scale, SemVersion::V1);
         let size = 1usize << self.vars;
         if self.signed {
             return Ok((0..size)

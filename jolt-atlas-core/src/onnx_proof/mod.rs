@@ -20,7 +20,6 @@ use std::collections::BTreeMap;
 
 // ── Submodules ───────────────────────────────────────────────────────────
 
-pub mod deferred_lookups;
 pub mod fused_rebase;
 #[cfg(any(test, feature = "fuzz"))]
 pub mod fuzz;
@@ -42,7 +41,7 @@ pub(crate) mod testing;
 // ── Re-exports ───────────────────────────────────────────────────────────
 
 pub use jolt_atlas_verifier::onnx_proof::{
-    append_inputs_to_transcript, plan, schedule, verifier, verify_with, Verifier,
+    append_inputs_to_transcript, schedule, verifier, verify_with, Verifier,
 };
 pub use jolt_atlas_verifier::{
     proof_serialization, Claims, ONNXProof, ProofId, ProofType, ReducedOpeningProof,

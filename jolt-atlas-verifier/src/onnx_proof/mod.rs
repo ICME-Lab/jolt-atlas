@@ -13,11 +13,9 @@ use atlas_transcript::{Transcript, VerifyingTranscript};
 
 // ── Submodules ───────────────────────────────────────────────────────────
 
-pub mod deferred_lookups;
 pub mod fused_rebase;
 pub mod lookup;
 pub mod ops;
-pub mod plan;
 pub mod preprocessing;
 pub mod range_bucket;
 pub mod range_check;

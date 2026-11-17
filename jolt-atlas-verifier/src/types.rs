@@ -61,9 +61,10 @@ pub enum ProofType {
     DeferredRemainderRC = 16,
     /// All range buckets' digit range checks, batched.
     DeferredRemainderDigitRange = 27,
-    /// Every deferred table read (`DeferredBatch::Lookups`), as one batched sumcheck.
+    /// The lookups sumcheck: every table read set up in its node's turn, as one batched
+    /// sumcheck; absent when the model has no such read.
     DeferredLookups = 28,
-    /// Every one-hot check of a read address (`DeferredBatch::OneHot`), as one batched
+    /// The one-hot sumcheck: every one-hot check of a read address, as one batched
     /// sumcheck; absent when the model has no lookup.
     DeferredOneHot = 29,
     /// A softmax node's reduction of its output claim and its two row sums to its table reads.

@@ -15,7 +15,8 @@ use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 /// The packed buckets' witnesses, built once from the trace before the commitment and read
-/// again by the post-loop plan's provers: every bucket's packed values with its width.
+/// again by the provers of the buckets' sumcheck steps: every bucket's packed values with its
+/// width.
 #[derive(Default)]
 pub struct BucketWitnesses {
     /// The buckets' packed values and widths, by bucket.

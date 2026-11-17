@@ -14,7 +14,7 @@
 //! The node's output is the Euclidean quotient of the accumulation, which must lie in `i32`
 //! (an execution whose quotient does not is an error and has no trace); `R` is the rescaling
 //! remainder, appended as advice (`VirtualPoly::RescaleRemainder`) and range-checked. The
-//! prover's side of the plan is in `ops::prove_plan`; this module holds the trace
+//! prover's side of the plan is in `ops::prove_schedule`; this module holds the trace
 //! intermediates it reads.
 
 use atlas_trace::{Tensor, Trace};

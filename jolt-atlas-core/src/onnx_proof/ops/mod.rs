@@ -1,9 +1,10 @@
 //! # Neural Network Op Proofs Module
 //!
 //! The prover side of every supported ONNX operation. The verifier crate defines each op's
-//! relations, its [`OpLayout`] (committed polynomials) and its [`OpPlan`]; this module walks
-//! the plan with the relations' witnesses ([`prove_plan`]), so an op's transcript order is its
-//! plan's step order on both sides.
+//! relations, its [`OpLayout`] (committed polynomials) and its plan, the steps it writes to the
+//! model's schedule (`onnx_proof::schedule`); this module walks the schedule with the
+//! relations' witnesses ([`prove_schedule`]), so the transcript order is the schedule's step
+//! order on both sides.
 //!
 //! ## Op Categories
 //!
@@ -84,8 +85,6 @@ pub mod sum;
 /// Sin and Cos.
 pub mod trig;
 
-use crate::node_view::ComputationNode;
-
 use atlas_algebra::{
     field::JoltField, poly::multilinear::EvaluateMle, utils::thread::drop_in_background_thread,
 };
@@ -93,22 +92,21 @@ use atlas_sumcheck::evaluation_reduction::EvalReductionProof;
 use atlas_transcript::Transcript;
 use eval_reduction::NodeEvalReduction;
 
+use crate::node_view::ModelView;
 use crate::onnx_proof::{
-    deferred_lookups::{DeferredBatch, DeferredSetup},
     fused_rebase::rebase_remainder,
     lookup,
     ops::{
         einsum::dot::EinsumDotProver, gather::GatherProver,
         mean_of_squares::MeanOfSquaresReductionProver,
     },
-    plan::{Plan, Step},
     range_check::{self, ValueParams, ValueProver},
     relation::{
         op_rel_params, prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
     },
-    schedule::{OpOpen, OpRelation, DEFERRED_PROOF_IDX},
+    schedule::{OpOpen, OpRelation, RelId, Schedule, Step, DEFERRED_PROOF_IDX},
     trace_view::TraceView,
-    ProofId,
+    ProofId, ProofType,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider};
 use atlas_algebra::poly::multilinear::MultilinearPolynomial;
@@ -118,155 +116,137 @@ use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
 };
 use atlas_sumcheck::shout::{self, RaOneHotParams};
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_trace::Trace;
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
+use std::collections::BTreeMap;
 
 use crate::onnx_proof::Prover;
-
-/// Prover dispatcher for operator proofs: the node's operator's plan, walked with the
-/// relations' witnesses.
-pub struct OperatorProver;
-
-impl OperatorProver {
-    /// Prove `node`: build its operator's plan from the model and the public IO, then walk it.
-    /// Returns the node's evaluation-reduction proof and its execution proofs.
-    pub fn prove<F, T>(
-        node: &ComputationNode,
-        prover: &mut Prover<F, T>,
-    ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>)
-    where
-        F: JoltField,
-        T: Transcript,
-    {
-        let plan = Plan::of_node(node, prover.preprocessing.model(), &prover.io)
-            .expect("the prover's model has a plan for every node");
-        prove_plan(node, prover, plan)
-    }
-}
 
 /// The key a read leaves its addresses under for its one-hot checks: the opening of its
 /// read-address polynomial ([`RaEncoding::ra_source`](lookup::RaEncoding::ra_source)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Addresses(pub OpeningId);
 
-/// A queued deferred relation on the prover's side: its witnesses built in the node's turn,
-/// or the relation waiting for its batch.
-pub enum Deferred<F: JoltField, T: Transcript> {
-    /// Built in the node's turn.
-    Ready(Vec<Box<dyn DynRelationWitness<F, T>>>),
-    /// Built when its batch runs.
-    Pending(Box<OpRelation<F>>),
-}
-
-/// Walk `node`'s plan on the prover side: every step the verifier's interpreter
-/// ([`Verifier::run`](crate::onnx_proof::Verifier::run)) runs for the node, in the same order,
-/// with the relations' witnesses.
-#[tracing::instrument(skip_all, name = "prove_plan", fields(node = node.idx, op = %node.operator))]
-pub fn prove_plan<F: JoltField, T: Transcript>(
-    node: &ComputationNode,
+/// Walk `schedule` on the prover side: every step the verifier's interpreter
+/// ([`Verifier::run`](crate::onnx_proof::Verifier::run)) runs, in the same order, with the
+/// relations' witnesses. A relation set up by a `Setup` step keeps its witnesses until the
+/// `Sumcheck` step that names it; a batched sumcheck builds the witnesses of its other members
+/// in parallel. Each sumcheck proof goes to `proofs` under its step's id, each node's
+/// evaluation-reduction proof to `eval_reduction_proofs`.
+#[tracing::instrument(skip_all, name = "prove_schedule")]
+pub fn prove_schedule<F: JoltField, T: Transcript>(
+    schedule: &Schedule<F>,
     prover: &mut Prover<F, T>,
-    plan: Plan<F>,
-) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
-    prove_steps(prover, node.idx, Some(node), plan.0)
-}
-
-/// Run `steps` whose sumcheck proofs are stored under `proof_idx`; `node` is the node of a
-/// node plan (`None` for the post-loop plan, which has no evaluation reduction).
-pub fn prove_steps<F: JoltField, T: Transcript>(
-    prover: &mut Prover<F, T>,
-    proof_idx: usize,
-    node: Option<&ComputationNode>,
-    steps: Vec<Step<F>>,
-) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
-    let mut reduction = None;
-    let mut proofs = Vec::new();
-    for step in steps {
-        match step {
-            Step::Reduce => {
-                let node = node.expect("the post-loop plan has no node to reduce");
-                reduction = NodeEvalReduction::prove(prover, node);
+    proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
+    eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
+) {
+    let relation = |id: &RelId| {
+        schedule
+            .relation(*id)
+            .expect("a finished schedule names its own relations")
+    };
+    let mut set_up: Vec<Option<Witnesses<F, T>>> =
+        schedule.relations().iter().map(|_| None).collect();
+    // The span of the node whose steps are running: a node's turn starts with its reduction
+    // or with a sumcheck of its own.
+    let mut turn: Option<(usize, tracing::span::EnteredSpan)> = None;
+    for step in schedule.steps() {
+        let step_node = match step {
+            Step::Reduce { node } => Some(*node),
+            Step::Sumcheck { proof, .. } => Some(proof.0),
+            Step::Open(_) | Step::Setup(_) | Step::Tie(_) => None,
+        };
+        if let Some(node) = step_node.filter(|node| turn.as_ref().map(|turn| turn.0) != Some(*node))
+        {
+            drop(turn.take());
+            if node != DEFERRED_PROOF_IDX {
+                let op = prover.preprocessing.model().view(node).operator;
+                turn = Some((
+                    node,
+                    tracing::span!(tracing::Level::INFO, "prove_node", node, op = %op).entered(),
+                ));
             }
-            Step::Open(open) => prove_open(&open, prover),
-            Step::Relation { proof, relation } => {
-                let mut witnesses = relation_witnesses(relation, prover);
+        }
+        match step {
+            Step::Reduce { node } => {
+                let node = prover.preprocessing.model().view(*node);
+                if let Some(reduction) = NodeEvalReduction::prove(prover, &node) {
+                    eval_reduction_proofs.insert(node.idx, reduction);
+                }
+            }
+            Step::Open(open) => prove_open(open, prover),
+            Step::Setup(id) => {
+                let relation = relation(id);
+                let _span = witness_span(relation).entered();
+                set_up[id.0] = Some(relation_witnesses(relation.clone(), prover));
+            }
+            Step::Sumcheck {
+                proof,
+                members,
+                batched: false,
+            } => {
+                let mut witnesses: Witnesses<F, T> = members
+                    .iter()
+                    .flat_map(|id| relation_witnesses(relation(id).clone(), prover))
+                    .collect();
                 let [witness] = witnesses.as_mut_slice() else {
-                    panic!("node {proof_idx}'s {proof:?} step is not a single relation")
+                    panic!("the sumcheck {proof:?} is not a single relation")
                 };
                 let (sumcheck, _) = prove_relation(
                     witness.as_mut(),
                     &mut prover.accumulator,
                     &mut prover.transcript,
                 );
-                proofs.push((ProofId(proof_idx, proof), sumcheck));
+                proofs.insert(proof.clone(), sumcheck);
             }
-            Step::Batch { proof, relations } => {
-                let prepared: Vec<(&'static str, Prepared<F, T>)> = relations
-                    .into_iter()
-                    .map(|relation| prepare(relation, prover))
+            Step::Sumcheck {
+                proof,
+                members,
+                batched: true,
+            } => {
+                let _span =
+                    tracing::span!(tracing::Level::INFO, "deferred::batch", kind = ?proof.1)
+                        .entered();
+                let prepared: Vec<(&'static str, Prepared<F, T>)> = members
+                    .iter()
+                    .map(|id| match set_up[id.0].take() {
+                        Some(witnesses) => ("ready", Prepared::Ready(witnesses)),
+                        None => prepare(relation(id).clone(), prover),
+                    })
                     .collect();
                 let witnesses = build_all(prepared, prover);
-                proofs.push((ProofId(proof_idx, proof), prove_batch(witnesses, prover)));
+                proofs.insert(proof.clone(), prove_batch(witnesses, prover));
+                // The digit range check is the last reader of the bucket witnesses.
+                if proof.1 == ProofType::DeferredRemainderDigitRange {
+                    drop_in_background_thread(std::mem::take(&mut prover.buckets));
+                }
             }
-            Step::Tie { relation } => prove_tie(
-                &relation,
-                &prover.trace,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            ),
-            Step::Defer { batch, relation } => {
-                let item = match batch.setup() {
-                    DeferredSetup::InNodeLoop => {
-                        let _span = witness_span(&relation).entered();
-                        Deferred::Ready(relation_witnesses(relation, prover))
-                    }
-                    DeferredSetup::AtBatch => Deferred::Pending(Box::new(relation)),
+            Step::Tie(id) => {
+                let OpRelation::Op(relation) = relation(id) else {
+                    panic!("the tie {id:?} is not an op relation")
                 };
-                prover.deferred.entry(batch).or_default().push(item);
+                prove_tie(
+                    relation,
+                    &prover.trace,
+                    &mut prover.accumulator,
+                    &mut prover.transcript,
+                );
             }
         }
     }
-    (reduction, proofs)
 }
 
-/// Prove the deferral queue: every batch in [`DeferredBatch`] order, as one batched sumcheck
-/// each, stored under [`DEFERRED_PROOF_IDX`].
-pub fn prove_deferred_batches<F: JoltField, T: Transcript>(
-    prover: &mut Prover<F, T>,
-) -> ExecutionProofs<F> {
-    let mut proofs = Vec::new();
-    let mut queue = std::mem::take(&mut prover.deferred);
-    for batch in DeferredBatch::ALL {
-        let Some(deferred) = queue.remove(&batch) else {
-            continue;
-        };
-        let _span =
-            tracing::span!(tracing::Level::INFO, "deferred::batch", kind = ?batch).entered();
-        let prepared: Vec<(&'static str, Prepared<F, T>)> = deferred
-            .into_iter()
-            .map(|item| match item {
-                Deferred::Ready(witnesses) => ("ready", Prepared::Ready(witnesses)),
-                Deferred::Pending(relation) => prepare(*relation, prover),
-            })
-            .collect();
-        let witnesses = build_all(prepared, prover);
-        // No instance, no proof (the verifier skips the batch the same way).
-        if !witnesses.is_empty() {
-            proofs.push((
-                ProofId(DEFERRED_PROOF_IDX, batch.proof_type()),
-                prove_batch(witnesses, prover),
-            ));
-        }
-    }
-    proofs
-}
+/// The witnesses of one relation, set up.
+type Witnesses<F, T> = Vec<Box<dyn DynRelationWitness<F, T>>>;
 
 /// Prove `witnesses` as one batched sumcheck, instance messages computed in parallel across
 /// instances.
 fn prove_batch<F: JoltField, T: Transcript>(
     mut witnesses: Vec<Box<dyn DynRelationWitness<F, T>>>,
     prover: &mut Prover<F, T>,
-) -> atlas_sumcheck::sumcheck::SumcheckInstanceProof<F> {
+) -> SumcheckInstanceProof<F> {
     let (proof, _) = if witnesses.len() > 1 {
         prove_relation_batch_parallel(
             witnesses.iter_mut().map(|w| &mut **w as _).collect(),
@@ -418,7 +398,7 @@ fn build_one<F: JoltField, T: Transcript>(
     }
 }
 
-/// The provers of a plan relation (one, or the several of a stage or a one-hot check), set up
+/// The provers of a schedule's relation (one, or the several of a stage or a one-hot check), set up
 /// against the prover's accumulator and transcript. A lookup leaves its read addresses on the
 /// prover for the one-hot checks that follow it.
 pub fn relation_witnesses<F: JoltField, T: Transcript>(
@@ -507,7 +487,7 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
     }
 }
 
-/// Append a plan opening's claims from the trace.
+/// Append an open step's claims from the trace.
 fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F, T>) {
     let expect = "the prover holds every claim it reads";
     match open {

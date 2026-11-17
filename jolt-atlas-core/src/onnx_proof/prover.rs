@@ -11,9 +11,9 @@ use super::{
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::{
-    deferred_lookups::DeferredBatch,
-    ops::{Addresses, Deferred, OperatorProver},
+    ops::{prove_schedule, Addresses},
     range_bucket::BucketWitnesses,
+    schedule::Schedule,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
 use crate::utils::opening_access::IntoProverProvider;
@@ -44,20 +44,16 @@ pub struct Prover<F: JoltField, T: Transcript> {
     pub trace: Trace,
     /// Shared preprocessing data (model structure).
     pub preprocessing: AtlasSharedPreprocessing,
-    /// The public IO of the execution: the statement the plans are built for.
+    /// The public IO of the execution: the statement the schedule is built for.
     pub io: ModelExecutionIO,
     /// Opening accumulator for batching polynomial openings.
     pub accumulator: ProverOpeningAccumulator<F>,
     /// Interactive proof transcript.
     pub transcript: T,
-    /// The deferral queue: relations the node loop's `Defer` steps queued, proven after the
-    /// loop as one batched sumcheck per batch (see
-    /// [`deferred_lookups`](crate::onnx_proof::deferred_lookups)).
-    pub deferred: BTreeMap<DeferredBatch, Vec<Deferred<F, T>>>,
     /// The read addresses each lookup left for its one-hot checks, by lookup and node.
     pub lookup_addresses: BTreeMap<(Addresses, usize), Vec<usize>>,
     /// The packed buckets' witnesses, built with the prover (before the commitment) and read by
-    /// the commitment and the post-loop plan.
+    /// the commitment and the buckets' sumcheck steps.
     pub buckets: BucketWitnesses,
 }
 
@@ -74,7 +70,6 @@ impl<F: JoltField, T: Transcript> Prover<F, T> {
             preprocessing,
             accumulator: ProverOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof"),
-            deferred: BTreeMap::new(),
             lookup_addresses: BTreeMap::new(),
         }
     }
@@ -176,8 +171,8 @@ pub(crate) fn output_claim<F: JoltField, T: Transcript>(prover: &mut Prover<F, T
     provider.append_custom(output_opening_id, output_claim);
 }
 
-/// Iterate over computation graph in reverse topological order
-/// Prove each operation using sum-check and virtual polynomials
+/// Walk the model's schedule: each node in reverse topological order, then the model-wide
+/// sumchecks.
 #[tracing::instrument(skip_all, name = "ONNXProof::iop")]
 pub(crate) fn iop<F: JoltField, T: Transcript>(
     model: &Model,
@@ -185,14 +180,9 @@ pub(crate) fn iop<F: JoltField, T: Transcript>(
     proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
     eval_reduction_proofs: &mut BTreeMap<usize, EvalReductionProof<F>>,
 ) {
-    for node in model.views().iter().rev() {
-        let (eval_reduction_proof, execution_proofs) = OperatorProver::prove(node, prover);
-        if let Some(eval_reduction_proof) = eval_reduction_proof {
-            eval_reduction_proofs.insert(node.idx, eval_reduction_proof);
-        }
-        proofs.extend(execution_proofs);
-    }
-    crate::onnx_proof::deferred_lookups::prove_all(prover, proofs);
+    let schedule = Schedule::compile(model, &prover.io)
+        .expect("the model's nodes have the shapes their ops prove");
+    prove_schedule(&schedule, prover, proofs, eval_reduction_proofs);
 }
 
 #[tracing::instrument(skip_all, name = "ONNXProof::prove_reduced_openings")]

@@ -236,6 +236,16 @@ pub enum OpRelKind {
     Constant,
     /// `Input`: the output is the public input.
     Input,
+    /// `MoveAxis`: the operand at the permuted point.
+    AxisPermutation,
+    /// `Broadcast`: the operand replicated along the broadcast axes.
+    Broadcast,
+    /// `Reshape`: the operand at the same point.
+    Reshape,
+    /// `Slice`: the operand's subcube the slice selects.
+    Slice,
+    /// `Concat`: the operands' blocks tile the output's axis.
+    Concat,
 }
 
 impl OpRelKind {
@@ -252,6 +262,11 @@ impl OpRelKind {
             Self::Identity | Self::Neg => RelationId::SignedCopy,
             Self::ZeroOutput => RelationId::ZeroOutput,
             Self::Constant | Self::Input => RelationId::PublicValue,
+            Self::AxisPermutation => RelationId::AxisPermutation,
+            Self::Broadcast => RelationId::Broadcast,
+            Self::Reshape => RelationId::Reshape,
+            Self::Slice => RelationId::Slice,
+            Self::Concat => RelationId::Concat,
         }
     }
 
@@ -274,6 +289,11 @@ impl OpRelKind {
             Self::ZeroOutput => matches!(op, Op::IsNan(_)),
             Self::Constant => matches!(op, Op::Constant(_)),
             Self::Input => matches!(op, Op::Input(_)),
+            Self::AxisPermutation => matches!(op, Op::MoveAxis(_)),
+            Self::Broadcast => matches!(op, Op::Broadcast(_)),
+            Self::Reshape => matches!(op, Op::Reshape(_)),
+            Self::Slice => matches!(op, Op::Slice(_)),
+            Self::Concat => matches!(op, Op::Concat(_)),
         }
     }
 }
@@ -372,6 +392,10 @@ pub struct OpRel<F: JoltField> {
     pub binding: BindingOrder,
     /// The public tensor the output equals, for a public-value tie.
     pub public: Option<Arc<Tensor<i32>>>,
+    /// Dims the relation's custom functions read beyond its node's (its operands' dims, a
+    /// normalized shape), as its constructor lays them out; empty for a relation that reads
+    /// none.
+    pub dims: Vec<Vec<usize>>,
     /// What is not the default.
     pub custom: Custom<F>,
 }
@@ -393,8 +417,19 @@ impl<F: JoltField> OpRel<F> {
             setup_opens: Vec::new(),
             binding: BindingOrder::LowToHigh,
             public: None,
+            dims: Vec::new(),
             custom: Custom::default(),
         }
+    }
+
+    /// The `index`-th entry of [`Self::dims`]. `Err` if the constructor laid out fewer.
+    pub fn dims_at(&self, index: usize) -> Result<&[usize], ProofVerifyError> {
+        self.dims.get(index).map(Vec::as_slice).ok_or_else(|| {
+            ProofVerifyError::Malformed(format!(
+                "{:?} on node {} holds no dims at position {index}",
+                self.kind, self.node.idx
+            ))
+        })
     }
 }
 

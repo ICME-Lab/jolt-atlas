@@ -1,27 +1,23 @@
 use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
-    atlas_relation_types,
-    onnx_proof::relation::{
-        not_derived, reduced_output_setup, AtlasRelation, RelationDerived, RelationExpr,
-        RelationId, RelationOpening, RelationSetup, TieRelation,
+    onnx_proof::{
+        ops::OpLayout,
+        relation::{
+            not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
+        },
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     poly::multilinear::EvaluateMle,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_claims::{derived, opening, SymbolicSumcheck};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_claims::{derived, opening};
 use atlas_trace::{op::Broadcast, Model, Tensor};
-use atlas_transcript::Transcript;
 
-crate::impl_plan_op!(Broadcast, BroadcastRelation);
+impl OpLayout for Broadcast {}
 
 impl OpPlan for Broadcast {
     fn plan<F: atlas_algebra::field::JoltField>(
@@ -33,16 +29,10 @@ impl OpPlan for Broadcast {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Broadcast(BroadcastRelation::for_node(model, node.clone())?),
+                relation: OpTie::Op(broadcast(model, node)?),
             },
         ]))
     }
-}
-
-/// A broadcast node and its operand's dims.
-pub struct BroadcastShape {
-    node: ComputationNode,
-    input_dims: Vec<usize>,
 }
 
 /// `Broadcast` as a tie: the output at `r` is the operand at the non-broadcast coordinates of
@@ -53,129 +43,78 @@ pub struct BroadcastShape {
 /// output claim  ones(r_broadcast) · operand(r_input)
 /// ```
 ///
+/// The relation's [`dims`](OpRel::dims) are the operand's. `Err` if the node's operand is not
+/// a node of the model.
+///
 /// **S ⊆ R.** Broadcasting replicates each operand element along the broadcast axes, so the
 /// output tensor is the operand's tensor product with an all-ones tensor.
-pub struct BroadcastRelation {
-    shape: BroadcastShape,
+pub fn broadcast<F: JoltField>(
+    model: &Model,
+    node: &ComputationNode,
+) -> Result<OpRel<F>, ProofVerifyError> {
+    let input = node
+        .inputs
+        .first()
+        .copied()
+        .filter(|&input| input < model.num_nodes())
+        .ok_or_else(|| unsupported("the operand is not a node"))?;
+    let operand = OpeningIdBuilder::new(node).nodeio(Target::Input(0));
+    Ok(OpRel {
+        degree: 1,
+        input: opening(RelationOpening::ReducedNodeOutput(node.idx)),
+        output: derived(RelationDerived::BroadcastOnes) * opening(RelationOpening::Id(operand)),
+        produced: vec![operand],
+        dims: vec![model.view(input).output_dims],
+        custom: Custom {
+            points: Some(operand_point),
+            derive: Some(ones_at_broadcast_coordinates),
+            ..Custom::default()
+        },
+        ..OpRel::base(OpRelKind::Broadcast, node)
+    })
 }
 
-impl BroadcastRelation {
-    /// The relation of a broadcast `node` of `model`. `Err` if the node's operand is not a node
-    /// of the model.
-    pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
-        let input = node
-            .inputs
-            .first()
-            .copied()
-            .filter(|&input| input < model.num_nodes())
-            .ok_or_else(|| unsupported("the operand is not a node"))?;
-        let input_dims = model.view(input).output_dims;
-        Ok(Self::new(BroadcastShape { node, input_dims }))
-    }
+/// `(r_input, r_broadcast)`: the incoming point of a [`broadcast`] split into the operand's
+/// coordinates and the broadcast ones. `Err` if the operand's dims do not broadcast to the
+/// node's, or `r_output` is not a point of the node's padded domain.
+pub fn split<F: JoltField>(
+    relation: &OpRel<F>,
+    r_output: &[F],
+) -> Result<(Vec<F>, Vec<F>), ProofVerifyError> {
+    let output_dims = &relation.node.output_dims;
+    let ones = build_broadcast_tensor(relation.dims_at(0)?, output_dims)?;
+    split_broadcast_vars(output_dims, ones.dims(), r_output)
+}
 
-    /// `(r_input, r_broadcast)`: the incoming point split into the operand's coordinates and the
-    /// broadcast ones. `Err` if the operand's dims do not broadcast to the node's, or
-    /// `r_output` is not a point of the node's padded domain.
-    pub fn split<F: JoltField>(
-        &self,
-        r_output: &[F],
-    ) -> Result<(Vec<F>, Vec<F>), ProofVerifyError> {
-        let output_dims = &self.shape.node.output_dims;
-        let ones = build_broadcast_tensor(&self.shape.input_dims, output_dims)?;
-        split_broadcast_vars(output_dims, ones.dims(), r_output)
-    }
+/// The operand's point of a [`broadcast`]: the non-broadcast coordinates of the incoming point.
+fn operand_point<F: JoltField>(
+    relation: &OpRel<F>,
+    setup: &RelationSetup<F>,
+    _challenges: &[F],
+) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+    Ok(vec![split(relation, &setup.incoming_point)?.0])
+}
 
-    fn input(&self) -> OpeningId {
-        OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))
-    }
+/// [`RelationDerived::BroadcastOnes`] of a [`broadcast`]: the all-ones replication tensor's
+/// MLE at the broadcast coordinates of the incoming point.
+fn ones_at_broadcast_coordinates<F: JoltField>(
+    relation: &OpRel<F>,
+    id: &RelationDerived,
+    setup: &RelationSetup<F>,
+    _challenges: &[F],
+) -> Result<F, ProofVerifyError> {
+    Ok(match id {
+        RelationDerived::BroadcastOnes => {
+            let ones = build_broadcast_tensor(relation.dims_at(0)?, &relation.node.output_dims)?;
+            ones.evaluate_mle(&split(relation, &setup.incoming_point)?.1)
+        }
+        other => return Err(not_derived(other)),
+    })
 }
 
 fn unsupported(what: impl std::fmt::Display) -> ProofVerifyError {
     ProofVerifyError::Malformed(format!("model: broadcast: {what}"))
 }
-
-impl SymbolicSumcheck for BroadcastRelation {
-    atlas_relation_types!();
-
-    fn id(&self) -> RelationId {
-        RelationId::Broadcast
-    }
-
-    fn rounds(&self) -> usize {
-        0
-    }
-
-    fn degree(&self) -> usize {
-        1
-    }
-
-    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::ReducedNodeOutput(self.shape.node.idx))
-    }
-
-    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        derived(RelationDerived::BroadcastOnes) * opening(RelationOpening::Id(self.input()))
-    }
-}
-
-impl BroadcastRelation {
-    /// The relation for the given shape.
-    pub fn new(shape: BroadcastShape) -> Self {
-        Self { shape }
-    }
-}
-
-impl Produces for BroadcastRelation {
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![self.input()]
-    }
-}
-
-impl<F: JoltField> Relation<F> for BroadcastRelation {
-    fn opening_points(
-        &self,
-        setup: &RelationSetup<F>,
-        _challenges: &[F],
-    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
-        Ok(vec![self.split(&setup.incoming_point)?.0])
-    }
-
-    fn derive(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        _challenges: &[F],
-    ) -> Result<F, ProofVerifyError> {
-        Ok(match id {
-            RelationDerived::BroadcastOnes => {
-                let ones =
-                    build_broadcast_tensor(&self.shape.input_dims, &self.shape.node.output_dims)?;
-                ones.evaluate_mle(&self.split(&setup.incoming_point)?.1)
-            }
-            other => return Err(not_derived(other)),
-        })
-    }
-}
-
-impl<F: JoltField> SetupRelation<F> for BroadcastRelation {
-    fn setup<T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        reduced_output_setup(accumulator, &self.shape.node)
-    }
-}
-
-impl AtlasRelation for BroadcastRelation {
-    type Spec = Broadcast;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-}
-
-impl<F: JoltField> TieRelation<F> for BroadcastRelation {}
 
 /// Builds a unit tensor used for broadcast operation
 ///

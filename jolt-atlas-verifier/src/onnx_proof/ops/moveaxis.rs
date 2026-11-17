@@ -1,26 +1,20 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
-    atlas_relation_types,
-    onnx_proof::relation::{
-        reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
-        RelationSetup, TieRelation,
+    onnx_proof::{
+        ops::OpLayout,
+        relation::{Custom, OpRel, OpRelKind, RelationOpening, RelationSetup},
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_claims::{opening, SymbolicSumcheck};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_claims::opening;
 use atlas_trace::{op::MoveAxis, Op};
-use atlas_transcript::Transcript;
 
-crate::impl_plan_op!(MoveAxis, AxisPermutationRelation);
+impl OpLayout for MoveAxis {}
 
 impl OpPlan for MoveAxis {
     fn plan<F: atlas_algebra::field::JoltField>(
@@ -32,7 +26,7 @@ impl OpPlan for MoveAxis {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::AxisPermutation(AxisPermutationRelation::new(node.clone())),
+                relation: OpTie::Op(axis_permutation(node)),
             },
         ]))
     }
@@ -48,86 +42,34 @@ impl OpPlan for MoveAxis {
 ///
 /// **S ⊆ R.** Moving an axis reorders elements without changing them, so the output's MLE is
 /// the operand's with its variable groups permuted.
-pub struct AxisPermutationRelation {
-    node: ComputationNode,
-}
-
-impl AxisPermutationRelation {
-    fn input(&self) -> OpeningId {
-        OpeningIdBuilder::new(&self.node).nodeio(Target::Input(0))
+pub fn axis_permutation<F: JoltField>(node: &ComputationNode) -> OpRel<F> {
+    let operand = OpeningIdBuilder::new(node).nodeio(Target::Input(0));
+    OpRel {
+        degree: 1,
+        input: opening(RelationOpening::ReducedNodeOutput(node.idx)),
+        output: opening(RelationOpening::Id(operand)),
+        produced: vec![operand],
+        custom: Custom {
+            points: Some(permuted_point),
+            ..Custom::default()
+        },
+        ..OpRel::base(OpRelKind::AxisPermutation, node)
     }
 }
 
-impl SymbolicSumcheck for AxisPermutationRelation {
-    atlas_relation_types!();
-
-    fn id(&self) -> RelationId {
-        RelationId::AxisPermutation
-    }
-
-    fn rounds(&self) -> usize {
-        0
-    }
-
-    fn degree(&self) -> usize {
-        1
-    }
-
-    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::ReducedNodeOutput(self.node.idx))
-    }
-
-    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::Id(self.input()))
-    }
+/// The operand's point of an [`axis_permutation`]: the incoming point with its axis groups
+/// permuted back.
+fn permuted_point<F: JoltField>(
+    relation: &OpRel<F>,
+    setup: &RelationSetup<F>,
+    _challenges: &[F],
+) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+    Ok(vec![permute_challenge_groups(
+        &relation.node.output_dims,
+        &setup.incoming_point,
+        &relation.node.operator,
+    )?])
 }
-
-impl AxisPermutationRelation {
-    /// The relation for the given shape.
-    pub fn new(node: ComputationNode) -> Self {
-        Self { node }
-    }
-}
-
-impl Produces for AxisPermutationRelation {
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![self.input()]
-    }
-}
-
-impl<F: JoltField> Relation<F> for AxisPermutationRelation {
-    fn opening_points(
-        &self,
-        setup: &RelationSetup<F>,
-        _challenges: &[F],
-    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
-        Ok(vec![permute_challenge_groups(
-            &self.node.output_dims,
-            &setup.incoming_point,
-            &self.node.operator,
-        )?])
-    }
-}
-
-impl<F: JoltField> SetupRelation<F> for AxisPermutationRelation {
-    fn setup<T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        reduced_output_setup(accumulator, &self.node)
-    }
-}
-
-impl AtlasRelation for AxisPermutationRelation {
-    type Spec = MoveAxis;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
-    }
-}
-
-impl<F: JoltField> TieRelation<F> for AxisPermutationRelation {}
 
 /// Permutes challenge variable groups to reverse the moveaxis transformation. `Err` if the
 /// operator is not a move of two of `output_dims`' axes, or `r_output` is not a point of their

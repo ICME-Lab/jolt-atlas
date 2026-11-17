@@ -26,19 +26,14 @@ use crate::onnx_proof::{
     op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProvider},
     ops::{
         activation_clamped::{small_table_verifier, ActivationClampOperands, SmallTableRaEncoding},
-        broadcast::BroadcastRelation,
         clamp::SymmetricClampOperands,
-        concat::SubcubeTilingRelation,
         cos::CosRaEncoding,
         einsum::ContractionRelation,
         erf::ErfTableMarker,
         gather::{self, small::GatherSmallShape, GatherRelation},
         mean_of_squares::MeanOfSquaresRelation,
-        moveaxis::AxisPermutationRelation,
-        reshape::FlatCopyRelation,
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
-        slice::SubcubeSelectRelation,
         smooth_relu::{GeluErfTable, GeluTanhTable, SiluTable, SmoothReluOperands},
         softmax_last_axis::{SoftmaxOpen, SoftmaxRelation, SoftmaxTie},
         sum::axis::SumAxisRelation,
@@ -381,16 +376,6 @@ impl<F: JoltField> OpRelation<F> {
 pub enum OpTie<F: JoltField> {
     /// An op relation with no rounds.
     Op(OpRel<F>),
-    /// `MoveAxis`: the operand at the permuted point.
-    AxisPermutation(AxisPermutationRelation),
-    /// `Broadcast`: the operand replicated along the broadcast axes.
-    Broadcast(BroadcastRelation),
-    /// `Concat`: the operands' blocks tile the output's axis.
-    Concat(SubcubeTilingRelation),
-    /// `Reshape`: the operand at the same point.
-    Reshape(FlatCopyRelation),
-    /// `Slice`: the operand's subcube the slice selects.
-    Slice(SubcubeSelectRelation),
     /// A trig op's input is `P·q + r` over its teleport quotient and remainder claims.
     TeleportInput(TeleportInputRelation),
     /// A softmax in-the-clear check, as `ops::softmax_last_axis` lists them.
@@ -406,11 +391,6 @@ impl<F: JoltField> OpTie<F> {
     ) -> Result<(), ProofVerifyError> {
         match self {
             Self::Op(relation) => verify_tie(relation, accumulator, transcript),
-            Self::AxisPermutation(relation) => verify_tie(relation, accumulator, transcript),
-            Self::Broadcast(relation) => verify_tie(relation, accumulator, transcript),
-            Self::Concat(relation) => verify_tie(relation, accumulator, transcript),
-            Self::Reshape(relation) => verify_tie(relation, accumulator, transcript),
-            Self::Slice(relation) => verify_tie(relation, accumulator, transcript),
             Self::TeleportInput(relation) => relation.verify(accumulator, transcript),
             Self::Softmax(tie) => tie.verify(accumulator, transcript),
         }

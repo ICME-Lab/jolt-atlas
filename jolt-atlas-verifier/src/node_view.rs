@@ -6,9 +6,7 @@
 //! that bundle, built on demand by [`ModelView::view`]; the model itself is
 //! stored and serialized only as the raw `atlas_trace::Model`.
 
-use crate::onnx_proof::ops::{
-    concat::SubcubeTilingRelation, reshape::FlatCopyRelation, slice::SubcubeSelectRelation,
-};
+use crate::onnx_proof::ops::{concat, reshape, slice};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::Op;
 use serde::{Deserialize, Serialize};
@@ -84,15 +82,9 @@ pub fn check_model_shape(model: &atlas_trace::Model) -> Result<(), ProofVerifyEr
             )));
         }
         match &node.op {
-            atlas_trace::Op::Reshape(_) => {
-                FlatCopyRelation::for_node(model, model.view(idx))?;
-            }
-            atlas_trace::Op::Slice(op) => {
-                SubcubeSelectRelation::for_node(model, model.view(idx), op)?;
-            }
-            atlas_trace::Op::Concat(op) => {
-                SubcubeTilingRelation::for_node(model, model.view(idx), op)?;
-            }
+            atlas_trace::Op::Reshape(_) => reshape::check_dims(model, &model.view(idx))?,
+            atlas_trace::Op::Slice(_) => slice::check_dims(model, &model.view(idx))?,
+            atlas_trace::Op::Concat(_) => concat::check_dims(model, &model.view(idx))?,
             _ => {}
         }
     }

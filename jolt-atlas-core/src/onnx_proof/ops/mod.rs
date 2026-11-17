@@ -776,11 +776,6 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie<F>, prover: &mut P
     } = prover;
     match relation {
         OpTie::Op(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::AxisPermutation(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::Broadcast(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::Concat(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::Reshape(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::Slice(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::TeleportInput(relation) => {
             let node = &relation.node;
             let accessor = AccOpeningAccessor::new(&*accumulator, node);
@@ -825,7 +820,12 @@ pub fn op_rel_witnesses<F: JoltField>(
         | OpRelKind::Neg
         | OpRelKind::ZeroOutput
         | OpRelKind::Constant
-        | OpRelKind::Input => {
+        | OpRelKind::Input
+        | OpRelKind::AxisPermutation
+        | OpRelKind::Broadcast
+        | OpRelKind::Reshape
+        | OpRelKind::Slice
+        | OpRelKind::Concat => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
     }
@@ -851,6 +851,11 @@ pub fn op_rel_tie_claims<F: JoltField>(
         }
         OpRelKind::ZeroOutput => is_nan::zero_output_claims(node, trace, &setup.incoming_point),
         OpRelKind::Constant | OpRelKind::Input => constant::public_value_claims(),
+        OpRelKind::AxisPermutation => moveaxis::axis_permutation_claims(node, accumulator),
+        OpRelKind::Broadcast => broadcast::broadcast_claims(relation, trace, &setup.incoming_point),
+        OpRelKind::Reshape => reshape::flat_copy_claims(node, trace, &setup.incoming_point),
+        OpRelKind::Slice => slice::subcube_select_claims(relation, trace, &setup.incoming_point),
+        OpRelKind::Concat => concat::subcube_tiling_claims(relation, trace, &setup.incoming_point),
         OpRelKind::And
         | OpRelKind::Mul
         | OpRelKind::Square

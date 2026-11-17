@@ -539,9 +539,8 @@ fn relation_prover_equiv_contraction() {
 /// random point is the tie's combination of the operands' extensions at its opening points.
 #[test]
 fn layout_ties_hold_on_padded_models() {
-    use crate::onnx_proof::ops::{
-        concat::SubcubeTilingRelation, reshape::FlatCopyRelation, slice::SubcubeSelectRelation,
-    };
+    use crate::onnx_proof::ops::{concat, reshape, slice};
+    use crate::onnx_proof::relation::OpRel;
     use atlas_algebra::poly::multilinear::EvaluateMle;
     use atlas_sumcheck::relation::RelationDerived;
     use rand::Rng;
@@ -619,20 +618,18 @@ fn layout_ties_hold_on_padded_models() {
         let expect = "a model compiled with padding has the dims the ties hold for";
         let (points, coefficients): (Vec<Vec<Fr>>, Vec<Fr>) = match &node.operator {
             Op::Reshape(_) => {
-                FlatCopyRelation::for_node(&model, node.clone()).expect(expect);
+                reshape::flat_copy::<Fr>(&model, &node).expect(expect);
                 (vec![r.clone()], vec![Fr::from_u64(1)])
             }
-            Op::Slice(op) => {
-                let relation =
-                    SubcubeSelectRelation::for_node(&model, node.clone(), op).expect(expect);
+            Op::Slice(_) => {
+                let relation: OpRel<Fr> = slice::subcube_select(&model, &node).expect(expect);
                 (
-                    vec![relation.operand_point(&r).expect(expect)],
+                    vec![slice::operand_point(&relation, &r).expect(expect)],
                     vec![Fr::from_u64(1)],
                 )
             }
-            Op::Concat(op) => {
-                let relation =
-                    SubcubeTilingRelation::for_node(&model, node.clone(), op).expect(expect);
+            Op::Concat(_) => {
+                let relation: OpRel<Fr> = concat::subcube_tiling(&model, &node).expect(expect);
                 let coefficients = (0..operands.len())
                     .map(|i| {
                         relation
@@ -640,7 +637,10 @@ fn layout_ties_hold_on_padded_models() {
                             .expect(expect)
                     })
                     .collect();
-                (relation.operand_points(&r).expect(expect), coefficients)
+                (
+                    concat::operand_points(&relation, &r).expect(expect),
+                    coefficients,
+                )
             }
             other => panic!("not a layout op: {other}"),
         };

@@ -8,25 +8,19 @@
 
 use crate::node_view::{ComputationNode, ModelView};
 use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::utils::dims::{axis_groups, bits_msb_first, pow2_log};
 use crate::{
-    atlas_relation_types,
-    onnx_proof::relation::{
-        reduced_output_setup, AtlasRelation, RelationExpr, RelationId, RelationOpening,
-        RelationSetup, TieRelation,
+    onnx_proof::{
+        ops::OpLayout,
+        relation::{Custom, OpRel, OpRelKind, RelationOpening, RelationSetup},
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_algebra::field::Ring;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_claims::{opening, SymbolicSumcheck};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_trace::{op::Slice, Model};
-use atlas_transcript::Transcript;
+use atlas_claims::opening;
+use atlas_trace::{op::Slice, Model, Op};
 
-crate::impl_plan_op!(Slice, SubcubeSelectRelation);
+impl OpLayout for Slice {}
 
 impl OpPlan for Slice {
     fn plan<F: atlas_algebra::field::JoltField>(
@@ -38,15 +32,14 @@ impl OpPlan for Slice {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Slice(SubcubeSelectRelation::for_node(model, node.clone(), self)?),
+                relation: OpTie::Op(subcube_select(model, node)?),
             },
         ]))
     }
 }
 
-/// An aligned slice node: its axis, and the subcube of the operand it selects.
-pub struct SliceShape {
-    node: ComputationNode,
+/// An aligned slice: its axis, and the subcube of the operand it selects.
+struct SliceShape {
     axis: usize,
     /// `start / extent`: which extent-sized block of the operand's axis the slice is.
     block: usize,
@@ -62,82 +55,119 @@ pub struct SliceShape {
 /// output claim  operand(r with bits(start / extent) ‖ r_axis on the axis)
 /// ```
 ///
+/// The relation's [`dims`](OpRel::dims) are the operand's. `Err` if the node is not a slice
+/// the tie holds for ([`check_dims`]).
+///
 /// **S ⊆ R.** Every dim is a power of two and `start` is a multiple of the extent, so output
 /// cell `j` on the axis is operand cell `start + j`, whose axis index is the block index's bits
 /// followed by `j`'s. Fixing those high bits of the operand's extension to the block's leaves
 /// the extension of that subcube, which is the output's.
-pub struct SubcubeSelectRelation {
-    shape: SliceShape,
+pub fn subcube_select<F: JoltField>(
+    model: &Model,
+    node: &ComputationNode,
+) -> Result<OpRel<F>, ProofVerifyError> {
+    let input_dims = input_dims(model, node)?;
+    slice_shape(node, &input_dims)?;
+    let operand = OpeningIdBuilder::new(node).nodeio(Target::Input(0));
+    Ok(OpRel {
+        degree: 1,
+        input: opening(RelationOpening::ReducedNodeOutput(node.idx)),
+        output: opening(RelationOpening::Id(operand)),
+        produced: vec![operand],
+        dims: vec![input_dims],
+        custom: Custom {
+            points: Some(subcube_point),
+            ..Custom::default()
+        },
+        ..OpRel::base(OpRelKind::Slice, node)
+    })
 }
 
-impl SubcubeSelectRelation {
-    /// The relation of a slice `node` of `model`. `Err` if the node's operand is not a node of
-    /// the model, a dim is not a power of two, the node's dims are not the operand's with the
-    /// slice's extent on its axis, or the slice's start is not a multiple of its extent.
-    pub fn for_node(
-        model: &Model,
-        node: ComputationNode,
-        op: &Slice,
-    ) -> Result<Self, ProofVerifyError> {
-        let [input_dims] = operand_dims(model, &node)?
-            .try_into()
-            .map_err(|_| unsupported(&node, "a slice has one operand"))?;
-        let (axis, start, end) = (op.axis, op.start, op.end);
-        let Some(&input_extent) = input_dims.get(axis) else {
-            return Err(unsupported(&node, "the axis is out of range"));
-        };
-        if start >= end || end > input_extent {
-            return Err(unsupported(
-                &node,
-                format!("{start}..{end} of {input_extent}"),
-            ));
-        }
-        let extent = end - start;
-        let mut expected = input_dims.clone();
-        if let Some(dim) = expected.get_mut(axis) {
-            *dim = extent;
-        }
-        if node.output_dims != expected {
-            return Err(unsupported(
-                &node,
-                format!("dims {:?}, the slice's are {expected:?}", node.output_dims),
-            ));
-        }
-        for &dim in input_dims.iter().chain(&node.output_dims) {
-            pow2_log(dim)?;
-        }
-        if !start.is_multiple_of(extent) {
-            return Err(unsupported(
-                &node,
-                format!("start {start} is not a multiple of the extent {extent}"),
-            ));
-        }
-        Ok(Self::new(SliceShape {
-            block: start / extent,
-            block_vars: pow2_log(input_extent)? - pow2_log(extent)?,
+/// Check that a slice `node` of `model` is one its tie holds for. `Err` if the node's operand
+/// is not a node of the model, a dim is not a power of two, the node's dims are not the
+/// operand's with the slice's extent on its axis, or the slice's start is not a multiple of its
+/// extent.
+pub fn check_dims(model: &Model, node: &ComputationNode) -> Result<(), ProofVerifyError> {
+    slice_shape(node, &input_dims(model, node)?).map(|_| ())
+}
+
+/// The dims of a slice `node`'s one operand.
+fn input_dims(model: &Model, node: &ComputationNode) -> Result<Vec<usize>, ProofVerifyError> {
+    let [input_dims] = operand_dims(model, node)?
+        .try_into()
+        .map_err(|_| unsupported(node, "a slice has one operand"))?;
+    Ok(input_dims)
+}
+
+/// The subcube a slice `node` selects of an operand of `input_dims`.
+fn slice_shape(
+    node: &ComputationNode,
+    input_dims: &[usize],
+) -> Result<SliceShape, ProofVerifyError> {
+    let Op::Slice(op) = &node.operator else {
+        return Err(unsupported(node, "not a slice"));
+    };
+    let (axis, start, end) = (op.axis, op.start, op.end);
+    let Some(&input_extent) = input_dims.get(axis) else {
+        return Err(unsupported(node, "the axis is out of range"));
+    };
+    if start >= end || end > input_extent {
+        return Err(unsupported(
             node,
-            axis,
-        }))
+            format!("{start}..{end} of {input_extent}"),
+        ));
     }
-
-    fn input(&self) -> OpeningId {
-        OpeningIdBuilder::new(&self.shape.node).nodeio(Target::Input(0))
+    let extent = end - start;
+    let mut expected = input_dims.to_vec();
+    if let Some(dim) = expected.get_mut(axis) {
+        *dim = extent;
     }
+    if node.output_dims != expected {
+        return Err(unsupported(
+            node,
+            format!("dims {:?}, the slice's are {expected:?}", node.output_dims),
+        ));
+    }
+    for &dim in input_dims.iter().chain(&node.output_dims) {
+        pow2_log(dim)?;
+    }
+    if !start.is_multiple_of(extent) {
+        return Err(unsupported(
+            node,
+            format!("start {start} is not a multiple of the extent {extent}"),
+        ));
+    }
+    Ok(SliceShape {
+        block: start / extent,
+        block_vars: pow2_log(input_extent)? - pow2_log(extent)?,
+        axis,
+    })
+}
 
-    /// The operand's point for the output point `r`.
-    pub fn operand_point<F: JoltField>(&self, r: &[F]) -> Result<Vec<F>, ProofVerifyError> {
-        let mut point = Vec::with_capacity(r.len() + self.shape.block_vars);
-        for (axis, group) in axis_groups(&self.shape.node.output_dims, r)?
-            .into_iter()
-            .enumerate()
-        {
-            if axis == self.shape.axis {
-                point.extend(bits_msb_first::<F>(self.shape.block, self.shape.block_vars));
-            }
-            point.extend_from_slice(group);
+/// The operand's point of a [`subcube_select`] for the output point `r`.
+pub fn operand_point<F: JoltField>(
+    relation: &OpRel<F>,
+    r: &[F],
+) -> Result<Vec<F>, ProofVerifyError> {
+    let node = &relation.node;
+    let shape = slice_shape(node, relation.dims_at(0)?)?;
+    let mut point = Vec::with_capacity(r.len() + shape.block_vars);
+    for (axis, group) in axis_groups(&node.output_dims, r)?.into_iter().enumerate() {
+        if axis == shape.axis {
+            point.extend(bits_msb_first::<F>(shape.block, shape.block_vars));
         }
-        Ok(point)
+        point.extend_from_slice(group);
     }
+    Ok(point)
+}
+
+/// The opening point of a [`subcube_select`]: the operand's point for the incoming point.
+fn subcube_point<F: JoltField>(
+    relation: &OpRel<F>,
+    setup: &RelationSetup<F>,
+    _challenges: &[F],
+) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+    Ok(vec![operand_point(relation, &setup.incoming_point)?])
 }
 
 /// The dims of `node`'s operands. `Err` if an operand is not a node of `model`.
@@ -159,70 +189,3 @@ fn operand_dims(
 fn unsupported(node: &ComputationNode, what: impl std::fmt::Display) -> ProofVerifyError {
     ProofVerifyError::Malformed(format!("model: slice node {}: {what}", node.idx))
 }
-
-impl SymbolicSumcheck for SubcubeSelectRelation {
-    atlas_relation_types!();
-
-    fn id(&self) -> RelationId {
-        RelationId::Slice
-    }
-
-    fn rounds(&self) -> usize {
-        0
-    }
-
-    fn degree(&self) -> usize {
-        1
-    }
-
-    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::ReducedNodeOutput(self.shape.node.idx))
-    }
-
-    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::Id(self.input()))
-    }
-}
-
-impl SubcubeSelectRelation {
-    /// The relation for the given shape.
-    pub fn new(shape: SliceShape) -> Self {
-        Self { shape }
-    }
-}
-
-impl Produces for SubcubeSelectRelation {
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![self.input()]
-    }
-}
-
-impl<F: JoltField> Relation<F> for SubcubeSelectRelation {
-    fn opening_points(
-        &self,
-        setup: &RelationSetup<F>,
-        _challenges: &[F],
-    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
-        Ok(vec![self.operand_point(&setup.incoming_point)?])
-    }
-}
-
-impl<F: JoltField> SetupRelation<F> for SubcubeSelectRelation {
-    fn setup<T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        reduced_output_setup(accumulator, &self.shape.node)
-    }
-}
-
-impl AtlasRelation for SubcubeSelectRelation {
-    type Spec = Slice;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-}
-
-impl<F: JoltField> TieRelation<F> for SubcubeSelectRelation {}

@@ -55,7 +55,7 @@ impl OpPlan for ScalarConstDiv {
 /// **S ⊆ R.** `atlas_trace::semantics::fixed::floor_div` and `rem_floor` satisfy
 /// `left = d·q + rem` at every element, with `0 ≤ rem < d` for the positive divisor the plan
 /// requires. The relation proves the identity; the bound, which pins `q` to the floor, is the
-/// remainder's range claim in the packed remainder buckets (`range_bucket::node_remainders`).
+/// remainder's range claim in the packed range buckets (`range_bucket::node_remainders`).
 pub fn constant_division<F: JoltField>(
     node: &ComputationNode,
 ) -> Result<OpRel<F>, ProofVerifyError> {

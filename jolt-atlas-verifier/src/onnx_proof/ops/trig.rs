@@ -88,6 +88,7 @@ fn trig_plan<F: JoltField>(
             node.scale
         )));
     }
+    let def = SmallTableDef::for_node(node)?;
     let downscale = downscale_read(node);
     let downscale_ra = downscale.ra.clone();
     Ok(Plan(vec![
@@ -100,7 +101,7 @@ fn trig_plan<F: JoltField>(
         },
         Step::Defer {
             batch: DeferredBatch::Lookups,
-            relation: OpRelation::Op(small_table(node)?),
+            relation: OpRelation::Op(small_table(node, def)),
         },
         Step::Defer {
             batch: DeferredBatch::OneHot,
@@ -108,7 +109,7 @@ fn trig_plan<F: JoltField>(
         },
         Step::Defer {
             batch: DeferredBatch::OneHot,
-            relation: OpRelation::OneHot(SmallTableDef::for_node(node)?.ra_encoding(node)),
+            relation: OpRelation::OneHot(def.ra_encoding(node)),
         },
         Step::Tie {
             relation: trig_period(node),

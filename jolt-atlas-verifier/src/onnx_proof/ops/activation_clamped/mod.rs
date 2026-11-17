@@ -80,15 +80,16 @@ pub fn clamped_activation_plan<F: JoltField>(
 ) -> Result<Plan<F>, ProofVerifyError> {
     let clamp = clamp_read(node, PrefixSuffixTable::ActivationClamp);
     let clamp_ra = clamp.ra.clone();
+    let def = SmallTableDef::for_node(node)?;
     Ok(Plan(vec![
         Step::Reduce,
         Step::Defer {
             batch: DeferredBatch::Lookups,
-            relation: OpRelation::Op(small_table(node)?),
+            relation: OpRelation::Op(small_table(node, def)),
         },
         Step::Defer {
             batch: DeferredBatch::OneHot,
-            relation: OpRelation::OneHot(SmallTableDef::for_node(node)?.ra_encoding(node)),
+            relation: OpRelation::OneHot(def.ra_encoding(node)),
         },
         Step::Defer {
             batch: DeferredBatch::Lookups,

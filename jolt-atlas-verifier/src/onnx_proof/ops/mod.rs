@@ -1,32 +1,38 @@
 //! # Neural Network Op Proofs Module
 //!
-//! The verification of every supported ONNX operation. Each operator implements two traits:
+//! The verification of every supported ONNX operation. Each operator's `atlas_trace` payload
+//! type implements two traits:
 //!
 //! - [`OpLayout`]: the model-only facts (the committed polynomials)
 //! - [`OpPlan`]: its verification plan (`onnx_proof::plan`), run by the interpreter
 //!
 //! ## Op Categories
 //!
-//! **Arithmetic Operations**: [`add`], [`sub`], [`mul`], [`div`], [`square`], [`cube`], [`scalar_const_div`]
+//! **Arithmetic Operations**: [`add`], [`sub`], [`neg`], [`mul`], [`div`], [`square`], [`cube`],
+//! [`scalar_const_div`], [`mean_of_squares`]
 //!
 //! **Activation Functions**: [`relu`], [`activation_clamped`], [`smooth_relu`], [`trig`],
 //! [`softmax_last_axis`]
 //!
-//! **Tensor Operations**: [`einsum`], [`sum`], [`reshape`], [`broadcast`], [`moveaxis`], [`gather`]
+//! **Tensor Operations**: [`einsum`], [`sum`], [`reshape`], [`broadcast`], [`moveaxis`],
+//! [`slice`], [`concat`], [`gather`]
 //!
 //! **Special Operations**: [`rsqrt`] (reciprocal square root), [`clamp`], [`iff`] (conditional select)
 //!
 //! **Logic Operations**: [`and`], [`is_nan`]
 //!
-//! **Infrastructure**: [`input`], [`constant`], [`identity`]
+//! **Infrastructure**: [`input`], [`constant`], [`identity`], [`eval_reduction`]
 //!
 //! ## Architecture
 //!
 //! Every operator's protocol is a relation (`onnx_proof::relation`): its claim algebra, from
 //! which the verifier is derived. An operator's verification is its plan (`onnx_proof::plan`:
 //! ordered steps over relations, run by the verifier's interpreter and walked by the prover).
-//! An op's relations are values built by constructor functions in its module; the constructors
-//! are called from the op's plan, so a relation is built only for a node of its op.
+//! An op's relations are values ([`OpRel`](crate::onnx_proof::relation::OpRel)) built by
+//! constructor functions in its module, each documenting its S ⊆ R argument; the constructors
+//! are called from the op's plan, so a relation is built only for a node of its op. The trig
+//! ops share [`trig`] (the period reduction, the downscale, the Sin and Cos plans); the small
+//! tables and the prefix-suffix reads are `onnx_proof::lookup`.
 
 /// The clamped activations Erf, Sigmoid and Tanh.
 pub mod activation_clamped;

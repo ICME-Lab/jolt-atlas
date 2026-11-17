@@ -34,7 +34,7 @@ impl OpPlan for Div {
     ) -> Result<Plan<F>, ProofVerifyError> {
         // The division identity runs before the reduction: it adds a claim on the node's own
         // output (the quotient), which the reduction then folds in.
-        // The remainder's bound `0 ≤ rem < right` is proven in the packed remainder buckets
+        // The remainder's bound `0 ≤ rem < right` is proven in the packed range buckets
         // after the node loop (`range_bucket::node_remainders`).
         Ok(Plan(vec![
             Step::Relation {

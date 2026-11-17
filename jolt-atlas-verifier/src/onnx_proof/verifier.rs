@@ -138,7 +138,7 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
         self.run_steps(node.idx, Some(node), plan.0)
     }
 
-    /// The post-loop plan: the packed clamp and remainder buckets
+    /// The post-loop plan: the packed range buckets
     /// ([`deferred_lookups::plan`]), then the deferral queue, batch by batch in
     /// [`DeferredBatch`] order.
     #[tracing::instrument(skip_all, name = "Verifier::run_deferred")]

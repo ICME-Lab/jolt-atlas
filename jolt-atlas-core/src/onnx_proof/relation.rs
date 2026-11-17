@@ -1,5 +1,7 @@
 //! Op protocols written as symbolic relations ([`atlas_claims::SymbolicSumcheck`]) and the engine
-//! that proves and verifies them.
+//! that proves and verifies them. An op relation is an [`OpRel`] value, defined with its
+//! constructors in the verifier crate; this module sets one up on the prover's side
+//! ([`op_rel_params`]), proves a zero-round one ([`prove_tie`]) and holds the engine's prover.
 //!
 //! A relation declares, over atlas openings, its **input-claim expression** (the claimed sum,
 //! from openings at the incoming point `r₀`) and its **output expression** (the expected final

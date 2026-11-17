@@ -153,19 +153,17 @@ impl SmallTableDef {
 /// output claim  ra(ρ ‖ r_out) · (table(ρ) + γ·id(ρ))  (ρ the low-to-high bound address point)
 /// ```
 ///
-/// with `id` the signed identity for two's-complement addresses. `Err` if the node's
-/// operator reads no small table.
+/// with `id` the signed identity for two's-complement addresses.
 ///
 /// **S ⊆ R.** The values ([`SmallTableDef::value`], the op's output unless the table holds
 /// only a part of it) are the table read at the addresses, so an honest one-hot `ra` reads
 /// them and, through the identity, the addresses. The setup takes the reduced output point as
 /// its incoming point, draws `γ`, and appends the address opening there when the table's
 /// definition says so.
-pub fn small_table<F: JoltField>(node: &ComputationNode) -> Result<OpRel<F>, ProofVerifyError> {
-    let def = SmallTableDef::for_node(node)?;
+pub fn small_table<F: JoltField>(node: &ComputationNode, def: SmallTableDef) -> OpRel<F> {
     let ra = def.ra_opening(node);
     let address = def.address_opening(node);
-    Ok(OpRel {
+    OpRel {
         rounds: def.vars,
         degree: 2,
         input: (def.value)(node)
@@ -188,8 +186,9 @@ pub fn small_table<F: JoltField>(node: &ComputationNode) -> Result<OpRel<F>, Pro
             derive: Some(table_and_identity),
             ..Custom::default()
         },
+        table: Some(def),
         ..OpRel::base(OpRelKind::SmallTable, node)
-    })
+    }
 }
 
 /// The opening point of a [`small_table`]'s one-hot addresses: the bound address point, then
@@ -214,7 +213,7 @@ fn table_and_identity<F: JoltField>(
     _setup: &RelationSetup<F>,
     challenges: &[F],
 ) -> Result<F, ProofVerifyError> {
-    let def = SmallTableDef::for_node(&relation.node)?;
+    let def = relation.small_table()?;
     let point = low_to_high_point(challenges);
     Ok(match id {
         RelationDerived::Table(0) => {

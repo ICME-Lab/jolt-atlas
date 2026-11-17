@@ -19,7 +19,7 @@
 //! The first three are one sumcheck ([`sums`]) that leaves `v`, `t`, `t⁻` at one point;
 //! one table read through the table address proves them there, the clamp lookup ties `ũ` to
 //! `u`, and the address link ties `u` to the operand. `g` and `g⁻` are range-checked in the
-//! remainder buckets.
+//! range buckets.
 //!
 //! **S ⊆ R.** The one-hot checks make `u` an integer in `[−2^31, 2^31)` and `ũ` an integer in
 //! `[0, 2^D)` per entry with `ũ = min(max(u, 0), top)`, and every read a table entry. The

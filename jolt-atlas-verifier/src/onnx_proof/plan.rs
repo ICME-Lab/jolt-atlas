@@ -6,11 +6,15 @@
 //! prover walks the same plan with the relations' witnesses. The transcript order of an op is
 //! therefore its plan's step order on both sides.
 //!
-//! A step holds relations, never closures. A relation whose parameters depend on earlier claims
-//! or on challenges reads and draws them in its
+//! A step holds values, never closures. A sumcheck step holds an [`OpRelation`], one variant
+//! per kind of verifier construction: an op relation ([`OpRel`]), a prefix-suffix table read
+//! ([`TableRead`]), the one-hot checks of a read's addresses ([`RaEncoding`]), and the stages
+//! with their own shape. A tie step holds a zero-round [`OpRel`], checked by
+//! [`verify_tie`](super::relation::verify_tie); an open step an [`OpOpen`]. A relation whose
+//! parameters depend on earlier claims or on challenges reads and draws them in its
 //! [`SetupRelation::setup`](super::relation::SetupRelation::setup), which runs when the
-//! interpreter reaches the step. The post-loop work (the packed clamp and remainder buckets,
-//! the deferred batches) is a plan too: [`deferred_lookups::plan`](super::deferred_lookups::plan)
+//! interpreter reaches the step. The post-loop work (the packed range buckets, the deferred
+//! batches) is a plan too: [`deferred_lookups::plan`](super::deferred_lookups::plan)
 //! builds it from the model and the public IO once the node loop is done.
 
 use crate::node_view::ComputationNode;

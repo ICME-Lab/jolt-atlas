@@ -7,26 +7,32 @@
 //!
 //! ## Op Categories
 //!
-//! **Arithmetic Operations**: [`add`], [`sub`], [`mul`], [`div`], [`square`], [`cube`], [`scalar_const_div`]
+//! **Arithmetic Operations**: [`add`], [`sub`], [`neg`], [`mul`], [`div`], [`square`], [`cube`],
+//! [`scalar_const_div`], [`mean_of_squares`]
 //!
-//! **Activation Functions**: [`relu`], [`tanh`], [`softmax_last_axis`]
+//! **Activation Functions**: [`relu`], [`activation_clamped`], [`smooth_relu`], [`trig`],
+//! [`softmax_last_axis`]
 //!
-//! **Tensor Operations**: [`einsum`], [`sum`], [`reshape`], [`broadcast`], [`moveaxis`], [`gather`]
+//! **Tensor Operations**: [`einsum`], [`sum`], [`reshape`], [`broadcast`], [`moveaxis`],
+//! [`slice`], [`concat`], [`gather`]
 //!
 //! **Special Operations**: [`rsqrt`] (reciprocal square root), [`clamp`], [`iff`] (conditional select)
 //!
 //! **Logic Operations**: [`and`], [`is_nan`]
 //!
-//! **Infrastructure**: [`input`], [`constant`], [`identity`]
+//! **Infrastructure**: [`input`], [`constant`], [`identity`], [`eval_reduction`]
 //!
 //! ## Architecture
 //!
 //! Every operator's protocol is a relation (`onnx_proof::relation`): its claim algebra, from
-//! which the verifier is derived. A generic relation is proven by
+//! which the verifier is derived. The prover side of an op relation ([`OpRel`]) is a match on
+//! its [`OpRelKind`] with no wildcard arm: a relation of the engine's shape is proven by
 //! [`RelationProver`](crate::onnx_proof::relation::RelationProver) over its witnesses
-//! ([`op_rel_witnesses`]); a specialized witness (the einsum dot engine, the mean-of-squares
-//! reduction, the lookup provers) attaches at its [`OpRelation`] variant, or at its
-//! [`OpRelKind`] for an op relation, in [`relation_witnesses`].
+//! ([`op_rel_witnesses`]), a tie's claims come from [`op_rel_tie_claims`], the claims of a
+//! relation's setup opens from [`op_rel_setup_claims`], and a specialized witness (the einsum
+//! dot engine, the mean-of-squares reduction, the gather and small-table provers) attaches in
+//! [`op_rel_prover`]. The other [`OpRelation`] variants (the prefix-suffix reads, the one-hot
+//! checks, the range buckets) get their provers in [`relation_witnesses`].
 
 use crate::onnx_proof::ops::eval_reduction::NodeEvalReductionProve;
 pub use jolt_atlas_verifier::onnx_proof::ops::*;
@@ -436,7 +442,10 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
             let relation = params.relation();
             let node = &relation.node;
             let addresses = if relation.kind == OpRelKind::SmallTable {
-                Some(lookup::small_table_lookup_indices(node, &prover.trace))
+                let def = relation
+                    .small_table()
+                    .expect("the relation was built for a small table");
+                Some(lookup::small_table_lookup_indices(node, def, &prover.trace))
             } else if relation.kind == OpRelKind::Gather
                 && matches!(node.operator, atlas_trace::Op::GatherLarge(_))
             {

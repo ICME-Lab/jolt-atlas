@@ -974,7 +974,7 @@ fn fuzz_regressions_replay() {
 //
 // Each test below moves a quotient by one and its remainder by the bound in the opposite
 // direction, so the op's own identity still holds and only the remainder's range claim in the
-// packed remainder buckets can reject. The op is the model output, so no consumer relation
+// packed range buckets can reject. The op is the model output, so no consumer relation
 // sees the forged quotient.
 
 /// An edit of the honest trace.

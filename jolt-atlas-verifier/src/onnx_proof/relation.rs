@@ -33,6 +33,7 @@
 //! reduction produces for it.
 
 use crate::node_view::ComputationNode;
+use crate::onnx_proof::lookup::SmallTableDef;
 use atlas_algebra::field::{IntoOpening, Ring};
 use atlas_algebra::{
     field::JoltField,
@@ -51,8 +52,9 @@ use atlas_trace::Tensor;
 use atlas_transcript::Transcript;
 use std::sync::Arc;
 
-/// Verify a zero-round relation (a tie): append its produced openings at the incoming point and
-/// require the input claim to equal the output expression.
+/// Verify a zero-round relation (a tie): run its setup, append its produced openings at their
+/// opening points (the incoming point unless the relation places them) and require the input
+/// claim to equal the output expression.
 pub fn verify_tie<F: JoltField, T: Transcript>(
     relation: &OpRel<F>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
@@ -343,11 +345,23 @@ pub struct OpRel<F: JoltField> {
     /// normalized shape), as its constructor lays them out; empty for a relation that reads
     /// none.
     pub dims: Vec<Vec<usize>>,
+    /// The small table read, for a small-table lookup.
+    pub table: Option<SmallTableDef>,
     /// What is not the default.
     pub custom: Custom<F>,
 }
 
 impl<F: JoltField> OpRel<F> {
+    /// The small table the relation reads. `Err` if it was built for none.
+    pub fn small_table(&self) -> Result<&SmallTableDef, ProofVerifyError> {
+        self.table.as_ref().ok_or_else(|| {
+            ProofVerifyError::Malformed(format!(
+                "{:?} on node {} reads no small table",
+                self.kind, self.node.idx
+            ))
+        })
+    }
+
     /// A relation of `kind` on `node` with no rounds, no openings and the default setup: the
     /// base a constructor fills in.
     pub fn base(kind: OpRelKind, node: &ComputationNode) -> Self {
@@ -365,6 +379,7 @@ impl<F: JoltField> OpRel<F> {
             binding: BindingOrder::LowToHigh,
             public: None,
             dims: Vec::new(),
+            table: None,
             custom: Custom::default(),
         }
     }

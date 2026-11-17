@@ -1,4 +1,7 @@
-//! The prover's side of the table reads ([`jolt_atlas_verifier::onnx_proof::lookup`]).
+//! The prover's side of the table reads ([`jolt_atlas_verifier::onnx_proof::lookup`] states
+//! the relations): the small-table relation's prover ([`SmallTableProver`]) with its addresses
+//! and setup claims from the trace, and a prefix-suffix read's operand and prover
+//! ([`table_read_operand`], [`table_read_prover`]).
 
 pub use jolt_atlas_verifier::onnx_proof::lookup::*;
 
@@ -75,19 +78,24 @@ pub fn small_table_setup_claims<F: JoltField>(
     setup: &RelationSetup<F>,
 ) -> Vec<F> {
     let node = &relation.node;
-    let def = SmallTableDef::for_node(node).expect("the relation was built for a small table");
+    let def = relation
+        .small_table()
+        .expect("the relation was built for a small table");
     let addresses = small_table_addresses(node, trace, def.vars).padded_pow2();
     vec![addresses.evaluate_mle(&setup.incoming_point)]
 }
 
 /// The table index each padded cell of `node` reads, for the read's one-hot checks.
-pub fn small_table_lookup_indices(node: &ComputationNode, trace: &Trace) -> Vec<usize> {
-    let def = SmallTableDef::for_node(node).expect("the node reads a small table");
+pub fn small_table_lookup_indices(
+    node: &ComputationNode,
+    def: &SmallTableDef,
+    trace: &Trace,
+) -> Vec<usize> {
     small_table_addresses(node, trace, def.vars)
         .padded_pow2()
         .par_iter()
         .with_min_len(par_enabled())
-        .map(|&address| table_index(&def, address))
+        .map(|&address| table_index(def, address))
         .collect()
 }
 
@@ -139,7 +147,9 @@ impl<F: JoltField> SmallTableProver<F> {
         let (relation, setup) = params.into_parts();
         crate::onnx_proof::relation::note_dispatch(&relation);
         let node = &relation.node;
-        let def = SmallTableDef::for_node(node).expect("the relation was built for a small table");
+        let def = *relation
+            .small_table()
+            .expect("the relation was built for a small table");
         let gamma = setup.challenge(&RelationChallenge::Gamma);
         let table_size = 1 << def.vars;
         let addresses = small_table_addresses(node, trace, def.vars);

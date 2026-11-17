@@ -132,13 +132,17 @@ impl OpPlan for SmoothRelu {
         );
         let clamp_ra = clamp.ra.clone();
         let defer = |batch, relation| Step::Defer { batch, relation };
+        let def = table_def(self.form);
         Ok(Plan(vec![
             Step::Reduce,
             Step::Open(OpOpen::SmoothReluRelu(node.clone())),
-            defer(DeferredBatch::Lookups, OpRelation::Op(small_table(node)?)),
+            defer(
+                DeferredBatch::Lookups,
+                OpRelation::Op(small_table(node, def)),
+            ),
             defer(
                 DeferredBatch::OneHot,
-                OpRelation::OneHot(table_def(self.form).ra_encoding(node)),
+                OpRelation::OneHot(def.ra_encoding(node)),
             ),
             defer(DeferredBatch::Lookups, OpRelation::TableRead(clamp)),
             defer(

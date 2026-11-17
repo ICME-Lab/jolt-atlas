@@ -44,7 +44,7 @@ fn bucket_sumcheck_id() -> SumcheckId {
 // Packed value range check: Σ_t W(t)·V(t) = Σ_n γ_n·V_n(r_n)
 // ---------------------------------------------------------------------------
 
-/// Opening id of a remainder bucket's packed value at the value sumcheck's output point.
+/// Opening id of a range bucket's packed value at the value sumcheck's output point.
 pub fn remainder_value_id(bucket_idx: usize) -> OpeningId {
     OpeningId::new(
         VirtualPoly::GlobalRemainderValue(bucket_idx),
@@ -138,14 +138,14 @@ impl<F: JoltField> Relation<F> for ValueParams<F> {
 /// Verifier of the value sumcheck: its relation.
 pub type ValueVerifier<F> = RelationVerifier<F, ValueParams<F>>;
 
-/// A remainder bucket's digit columns, most significant first.
+/// A range bucket's digit columns, most significant first.
 pub fn remainder_digit_polys(bucket: &RangeBucket) -> Vec<CommittedPoly> {
     (0..num_digits(bucket.width))
         .map(|j| CommittedPoly::GlobalRemainderDigit(bucket.idx, j))
         .collect()
 }
 
-/// Draw a remainder bucket's digit range check: its digit columns in range and recomposing the
+/// Draw a range bucket's digit range check: its digit columns in range and recomposing the
 /// packed value the value sumcheck opened. `Err` if the accumulator lacks that opening.
 pub fn remainder_digit_range_params<F: JoltField, T: Transcript>(
     bucket: &RangeBucket,
@@ -162,7 +162,7 @@ pub fn remainder_digit_range_params<F: JoltField, T: Transcript>(
     )
 }
 
-/// Parameters of a remainder bucket's range check: the value sumcheck over the packed
+/// Parameters of a range bucket's range check: the value sumcheck over the packed
 /// remainders, its input claim `Σ_n γ_n·R_n(r_n)` with `γ` drawn here.
 /// `Err` if the accumulator lacks a claim it reads.
 pub fn remainder_value_params<F: JoltField, T: Transcript>(

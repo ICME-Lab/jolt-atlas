@@ -172,8 +172,23 @@ not pursued (section 6).
 
 - **Bias into the einsum rebase (C1):** 72 einsum → constant-Add pairs on GPT-2, 12% of the
   clamp output chunks; `acc' = Σ L·R + b·2^S` leaves the remainder unchanged and the quotient `q + b`,
-  so one clamped node disappears per linear layer. Outputs differ only where the un-biased
-  quotient would have saturated. Nothing on the encoder models.
+  so one checked node disappears per linear layer. Under decision 2 the outputs are equal
+  wherever both forms execute: the fused form no longer requires the un-biased quotient to lie
+  in `i32`, so it accepts a superset of executions and needs no new `SemVersion`. Nothing on
+  the encoder models.
+- **One rescale per linear chain (the general form of C1):** an unrescaled accumulation is not
+  a free witness. Its relation fixes it as an exact function of operands that are already
+  range-checked, so it needs no range claim of its own, only a static magnitude bound for the
+  no-wrap note of the relation that consumes it. A fused product followed by Add, Sub or Sum
+  with any operand (a residual, not only a constant) can therefore carry the wide value,
+  taking the other operand times `2^S`, and rescale once at the end of the chain: one
+  remainder claim and one output claim fewer per element at every interior node. Unlike C1
+  this rounds once where today's chain rounds at each product, so outputs change and it needs
+  a `SemVersion`. The chain ends before a second multiplication (31-bit operands give a 62-bit
+  product; a product of two of those is at the field's width) and before every table read,
+  which needs a narrow index. Not yet counted: the fused product → non-constant Add, Sub or
+  Sum pairs on GPT-2, bge-small and Qwen, taken from the lowered graph in step 5's session.
+  It is worth a spec only if that count is material next to C1's 72 pairs.
 - **Fused LayerNorm:** each norm is nine lowered ops, eight of them clamped, holding the widest
   quotients in the model (27–29 bits). One op with per-row range checks (VerInf, DeepProve) and
   the rsqrt relation of item 7 removes most of them. Needs an importer pass and a tracer op.
@@ -305,7 +320,8 @@ lands on: stage times within 3%, peak memory within 5%, unless the spec states t
 7. `digits-as-trace` stages 2 and 3: digit-backed relations batched outside the node loop
    (needs a memory plan), then the relation compiler and the end of the chain.
 8. Item 5's bias fusion (C1) and fused LayerNorm with item 7's Rsqrt relation; then item 6's
-   B2, C2 and C3, which C1 and step 2 make reachable.
+   B2, C2 and C3, which C1 and step 2 make reachable. Item 5's one rescale per chain only if
+   step 5's pair count justifies it.
 9. Item 10: the field kernel port (independent of the commitment scheme) and the engine
    microbenchmarks; item 8 and the rev bump if Akita stays; item 11 any time.
 
@@ -386,6 +402,12 @@ The order of steps 6–9 is provisional: step 5's profile decides it.
   rsqrt, base-2 or polynomial softmax, prover-chosen softmax shifts: exactness and uniqueness of
   outputs.
 - Sub-quadratic attention (ruled out by theorem).
+- One range check for all the remainders, or none. The bound `rem ∈ [0, 2^S)` is what makes the
+  quotient of `acc = out·2^S + rem` unique: without it any `out` has a balancing `rem`. Each
+  remainder is a separate free value and needs its own bound; the claims are already proved
+  together in the post-loop buckets, and what is paid per node is the committed digits.
+- No rescaling. Values at twice the scale cannot be multiplied again inside the field, and
+  every table read needs its index at the model's scale. Rescaling less often is item 5.
 
 ## 7. Reads still owed
 

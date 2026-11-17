@@ -6,7 +6,7 @@ use crate::onnx_proof::{
         cos::COS_TABLE_VARS, division::trig_period, trig_downscale::TrigDownscaleOperands,
     },
     op_lookups::{OpLookupEncoding, OpLookupProvider},
-    plan::{OpLookup, OpOpen, OpPlan, OpRelation, OpTie, OpTrig, Plan, Step},
+    plan::{OpLookup, OpOpen, OpPlan, OpRelation, OpTrig, Plan, Step},
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::{
@@ -75,7 +75,7 @@ impl OpPlan for Cos {
                 relation: OpRelation::TrigOneHot(OpTrig::Cos, node.clone()),
             },
             Step::Tie {
-                relation: OpTie::Op(trig_period(node)),
+                relation: trig_period(node),
             },
         ]))
     }

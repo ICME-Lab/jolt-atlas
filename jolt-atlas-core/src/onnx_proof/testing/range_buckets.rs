@@ -1,4 +1,4 @@
-//! The packed range buckets ([`global_clamp`](crate::onnx_proof::global_clamp)): what they hold
+//! The packed range buckets ([`range_bucket`](crate::onnx_proof::range_bucket)): what they hold
 //! and commit for a model.
 
 use atlas_pcs::akita::AkitaScheme;
@@ -11,7 +11,7 @@ use super::{models::probe_models, prove_verify_roundtrip, ModelBuilder, Roundtri
 use crate::node_view::ModelView;
 use crate::onnx_proof::{
     deferred_lookups::DEFERRED_PROOF_IDX,
-    global_clamp::{checks_its_output, remainder_buckets, Remainder},
+    range_bucket::{checks_its_output, remainder_buckets, Remainder},
     prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
@@ -129,7 +129,7 @@ fn scalars_probe_layout() {
 /// per range claim.
 #[test]
 fn every_range_claim_is_in_exactly_one_bucket() {
-    use crate::onnx_proof::global_clamp::{node_range_claims, RangeClaim};
+    use crate::onnx_proof::range_bucket::{node_range_claims, RangeClaim};
     let mut families = std::collections::BTreeSet::new();
     for probe in probe_models() {
         let model = probe.model;
@@ -168,7 +168,7 @@ fn every_range_claim_is_in_exactly_one_bucket() {
 /// A slack claim whose bound is opened at another point than its remainder is rejected.
 #[test]
 fn range_claim_rejects_a_bound_at_another_point() {
-    use crate::onnx_proof::global_clamp::{Bound, RangeClaim, Remainder};
+    use crate::onnx_proof::range_bucket::{Bound, RangeClaim, Remainder};
     use atlas_algebra::field::Ring;
     use atlas_algebra::poly::point::OpeningPoint;
     use atlas_sumcheck::opening_proof::VerifierOpeningAccumulator;

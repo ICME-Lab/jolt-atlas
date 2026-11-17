@@ -131,7 +131,7 @@ canonical_serde_enum! {
 
         /// Dense base-`b` digit of a packed range bucket's value (a remainder, a slack, or an
         /// offset output `out + 2^31`), most significant first (`U8Scalars` in `[0, b)`; see
-        /// `jolt_atlas_verifier::onnx_proof::clamp_split`).
+        /// `jolt_atlas_verifier::onnx_proof::range_check`).
         ///
         /// * `0` – bucket index
         /// * `1` – digit index `j`

@@ -46,7 +46,7 @@ impl AtlasSharedPreprocessing {
         for node in &self.model.views() {
             polys.extend(NodeCommittedPolynomials::get_committed_polynomials(node)?);
         }
-        polys.extend(crate::onnx_proof::global_clamp::bucket_committed_polys(
+        polys.extend(crate::onnx_proof::range_bucket::bucket_committed_polys(
             &self.model,
         )?);
         Ok(polys)

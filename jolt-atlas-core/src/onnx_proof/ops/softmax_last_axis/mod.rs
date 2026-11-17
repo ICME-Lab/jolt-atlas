@@ -241,22 +241,11 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
     }
 }
 
-/// Append the opening a softmax tie produces: the operand at the reads' point.
-pub fn prove_tie<F: JoltField, T: Transcript>(
-    tie: &SoftmaxTie,
+/// The claim of an [`address_link`]: the operand at the reads' point.
+pub fn address_link_claims<F: JoltField>(
+    node: &crate::node_view::ComputationNode,
     trace: &Trace,
-    accumulator: &mut ProverOpeningAccumulator<F>,
-    transcript: &mut T,
-) {
-    match tie {
-        SoftmaxTie::AddressLink(shape) => {
-            let r1 = AccOpeningAccessor::new(&*accumulator, &shape.node)
-                .get_advice(VirtualPoly::SoftmaxRead)
-                .expect("the prover holds every claim it reads")
-                .0;
-            let operand = TraceView::operand_tensors(trace, &shape.node)[0];
-            let claim = operand.evaluate_mle(&r1.r);
-            accumulator.append_virtual(transcript, SoftmaxTie::operand(shape), r1, claim);
-        }
-    }
+    point: &[F],
+) -> Vec<F> {
+    vec![TraceView::operand_tensors(trace, node)[0].evaluate_mle(point)]
 }

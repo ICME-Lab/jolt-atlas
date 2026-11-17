@@ -825,8 +825,8 @@ op_surface! {
 
     // Multi-node and padded builds
     /// `Add` nodes of two different sizes in one model, packed into one range bucket of
-    /// `global_clamp`; an identity is the model output, so both are members.
-    clamp_bucket_packing_mixed_sizes: Add => |rng| {
+    /// `range_bucket`; an identity is the model output, so both are members.
+    range_bucket_packing_mixed_sizes: Add => |rng| {
         let mut b = ModelBuilder::new();
         let x = b.input(vec![T]);
         let c = b.constant(Tensor::random_small(rng, &[T]));

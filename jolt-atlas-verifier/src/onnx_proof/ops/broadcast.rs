@@ -1,5 +1,5 @@
 use crate::node_view::{ComputationNode, ModelView};
-use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use crate::onnx_proof::plan::{OpPlan, Plan, Step};
 use crate::{
     onnx_proof::{
         ops::OpLayout,
@@ -29,7 +29,7 @@ impl OpPlan for Broadcast {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Op(broadcast(model, node)?),
+                relation: broadcast(model, node)?,
             },
         ]))
     }

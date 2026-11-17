@@ -6,7 +6,7 @@
 //! the read for [`DeferredBatch::Lookups`] and its one-hot check for
 //! [`DeferredBatch::OneHot`], and each batch is proven as one batched sumcheck after the loop.
 //! The range claims (remainders, their slacks, the outputs of the arithmetic nodes) are packed
-//! into model-level buckets ([`global_clamp`](super::global_clamp)); [`plan`] builds their steps
+//! into model-level buckets ([`range_bucket`](super::range_bucket)); [`plan`] builds their steps
 //! from the model, with nothing to register during the loop, and they run before the two
 //! batches.
 //!
@@ -15,7 +15,7 @@
 //! across instances, which turns hundreds of tiny sequential sumchecks into a few large
 //! parallel ones.
 use crate::onnx_proof::{
-    global_clamp::remainder_buckets,
+    range_bucket::remainder_buckets,
     plan::{OpRelation, Plan, Step},
     ProofType,
 };

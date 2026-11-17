@@ -1,5 +1,5 @@
 //! The prover side of the packed range checks
-//! ([`jolt_atlas_verifier::onnx_proof::clamp_split`] states the protocol): the value sumcheck
+//! ([`jolt_atlas_verifier::onnx_proof::range_check`] states the protocol): the value sumcheck
 //! over a bucket's packed values ([`ValueProver`]) and the digit range check over its dense
 //! base-[`DIGIT_BASE`] digit columns ([`digit_columns`], [`digit_columns_provers`]).
 use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
@@ -14,7 +14,7 @@ use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::relation::prover::DynRelationWitness;
 use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
-pub use jolt_atlas_verifier::onnx_proof::clamp_split::*;
+pub use jolt_atlas_verifier::onnx_proof::range_check::*;
 use rayon::prelude::*;
 
 /// Prover of the value sumcheck.
@@ -131,7 +131,7 @@ pub fn digit_columns_provers<F: JoltField, T: Transcript>(
 /// Test-only tamper of one bucket's digits, for the witness tamper sweep's `BucketDigit` sites:
 /// the trace holds no digits, so a trace tamper cannot reach them. The sweep sets the tamper
 /// before proving and clears it after; the bucket's witnesses read it in
-/// [`BucketWitnesses`](crate::onnx_proof::global_clamp::BucketWitnesses).
+/// [`BucketWitnesses`](crate::onnx_proof::range_bucket::BucketWitnesses).
 #[cfg(test)]
 pub(crate) mod digit_tamper {
     use super::DIGIT_BASE;

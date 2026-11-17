@@ -1,6 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::{neg::signed_copy, OpLayout};
-use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use crate::onnx_proof::plan::{OpPlan, Plan, Step};
 use crate::onnx_proof::relation::OpRelKind;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::op::Identity;
@@ -17,7 +17,7 @@ impl OpPlan for Identity {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Op(signed_copy(node, OpRelKind::Identity)),
+                relation: signed_copy(node, OpRelKind::Identity),
             },
         ]))
     }

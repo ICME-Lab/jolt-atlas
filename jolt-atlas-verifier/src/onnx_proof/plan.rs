@@ -15,10 +15,10 @@
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    clamp_split::{self, ValueParams},
+    range_check::{self, ValueParams},
     deferred_lookups::DeferredBatch,
     fused_rebase,
-    global_clamp::ClampBucket,
+    range_bucket::RangeBucket,
     neural_teleport::{
         cos::CosTable, sin::SinTable, small_table::SmallTableRelation,
         trig_downscale::TrigDownscaleOperands,
@@ -33,10 +33,10 @@ use crate::onnx_proof::{
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
         smooth_relu::{GeluErfTable, GeluTanhTable, SiluTable, SmoothReluOperands},
-        softmax_last_axis::{SoftmaxOpen, SoftmaxRelation, SoftmaxTie},
+        softmax_last_axis::{SoftmaxOpen, SoftmaxRelation},
         tanh::TanhTableMarker,
     },
-    relation::{op_rel_verifier, verify_tie, OpRel, RelationVerifier, SetupRelation},
+    relation::{op_rel_verifier, OpRel, RelationVerifier, SetupRelation},
     ProofType,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
@@ -79,7 +79,7 @@ pub enum Step<F: JoltField> {
     /// Check a zero-round relation: append its openings and require the identity to hold.
     Tie {
         /// The relation checked.
-        relation: OpTie<F>,
+        relation: OpRel<F>,
     },
     /// Queue `relation` for the post-loop batch `batch`, proven as one batched sumcheck with
     /// every other relation queued there. The relation is set up when the batch says
@@ -160,10 +160,10 @@ pub enum OpRelation<F: JoltField> {
     /// The one-hot checks of a [`Self::Trig`]'s read addresses (two relations).
     TrigOneHot(OpTrig, ComputationNode),
     /// A packed range bucket's value relation: the range claims of its members
-    /// ([`global_clamp::RangeClaim`](crate::onnx_proof::global_clamp::RangeClaim)).
-    RemainderBucketValue(ClampBucket),
+    /// ([`range_bucket::RangeClaim`](crate::onnx_proof::range_bucket::RangeClaim)).
+    RemainderBucketValue(RangeBucket),
     /// A packed range bucket's digit range check.
-    RemainderBucketDigits(ClampBucket),
+    RemainderBucketDigits(RangeBucket),
 }
 
 /// The table a lookup op reads.
@@ -342,34 +342,12 @@ impl<F: JoltField> OpRelation<F> {
             )?
             .into()),
             Self::RemainderBucketValue(bucket) => Ok(boxed(ValueParams::into_verifier(
-                clamp_split::remainder_value_params(&bucket, accumulator, transcript)?,
+                range_check::remainder_value_params(&bucket, accumulator, transcript)?,
             ))),
             Self::RemainderBucketDigits(bucket) => Ok(boxed(
-                clamp_split::remainder_digit_range_params(&bucket, accumulator, transcript)?
+                range_check::remainder_digit_range_params(&bucket, accumulator, transcript)?
                     .into_verifier(),
             )),
-        }
-    }
-}
-
-/// A zero-round relation or an in-the-clear check, as a plan step holds it.
-pub enum OpTie<F: JoltField> {
-    /// An op relation with no rounds.
-    Op(OpRel<F>),
-    /// A softmax in-the-clear check, as `ops::softmax_last_axis` lists them.
-    Softmax(SoftmaxTie),
-}
-
-impl<F: JoltField> OpTie<F> {
-    /// Append the tie's produced openings and check its identity.
-    pub fn verify<T: Transcript>(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<(), ProofVerifyError> {
-        match self {
-            Self::Op(relation) => verify_tie(relation, accumulator, transcript),
-            Self::Softmax(tie) => tie.verify(accumulator, transcript),
         }
     }
 }

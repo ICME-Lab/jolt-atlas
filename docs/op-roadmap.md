@@ -106,7 +106,7 @@ From `CLAUDE.md` and `docs/pull-requests.md`:
   rescaled quotient narrows it with `atlas_trace::semantics::fixed::narrow_i32` and returns
   `KernelError::WitnessOverflow` outside `i32`, never a clamped value. Its
   `OpSpec::checks_output` is `true`, so the verifier range-checks the output in the packed
-  buckets (`global_clamp`), and its relation's doc states the no-wrap bound.
+  buckets (`range_bucket`), and its relation's doc states the no-wrap bound.
 - A row in `onnx_proof/testing/op_surface.rs`, a probe model in `testing/models.rs` so the
   soundness sweeps cover it, and a relation that follows `docs/pull-requests.md` §4.
 - A spec in `specs/` for anything over 500 non-trivial lines.

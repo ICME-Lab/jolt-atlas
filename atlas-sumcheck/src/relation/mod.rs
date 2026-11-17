@@ -173,6 +173,8 @@ pub enum RelationId {
     TrigPeriod,
     /// Softmax: the output claim and the two row sums reduced to the table reads.
     SoftmaxSums,
+    /// Softmax: the clamp lookup's operand is the shift minus the logit.
+    SoftmaxAddressLink,
     /// A group of committed openings reduced to one claim for the joint opening proof.
     OpeningReduction,
 }

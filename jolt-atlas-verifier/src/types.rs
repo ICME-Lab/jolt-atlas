@@ -47,7 +47,7 @@ pub enum ProofType {
     Execution = 0,
     /// Axis-reduction sumcheck for `Sum` (proves the output equals the sum over the
     /// reduced axis; the output's range claim is in the packed range buckets, see
-    /// `global_clamp`).
+    /// `range_bucket`).
     SumReduction = 9,
     /// Einsum contraction (matmul) sumcheck proving
     /// `Σ_k L·R = out·2^S + R` (the range claims of `out` and `R` are in the packed

@@ -7,7 +7,7 @@
 //! with any other dims on a reshape is rejected here.
 
 use crate::node_view::{ComputationNode, ModelView};
-use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use crate::onnx_proof::plan::{OpPlan, Plan, Step};
 use crate::utils::dims::pow2_log;
 use crate::{
     onnx_proof::{
@@ -32,7 +32,7 @@ impl OpPlan for Reshape {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Op(flat_copy(model, node)?),
+                relation: flat_copy(model, node)?,
             },
         ]))
     }

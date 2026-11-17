@@ -1,6 +1,6 @@
 //! Packed range checks: the value sumcheck and the digit range check of a range bucket.
 //!
-//! A range bucket ([`global_clamp`](super::global_clamp)) packs values that must lie in
+//! A range bucket ([`range_bucket`](super::range_bucket)) packs values that must lie in
 //! `[0, 2^width)`: rescale and division remainders, their slacks below a bound, softmax's row
 //! gaps, and the offset output `out + 2^31` of every arithmetic node that is not a model output
 //! (so that the node's output is an `i32`). Per bucket:
@@ -9,7 +9,7 @@
 //!    own point, to one opening of the packed value `V` at a fresh point `r'`;
 //! 2. a **digit range check** proves `V(r')` is the recomposition of [`num_digits`]`(width)`
 //!    committed base-[`DIGIT_BASE`] digits, each in range.
-use super::{deferred_lookups::DEFERRED_PROOF_IDX, global_clamp::ClampBucket};
+use super::{deferred_lookups::DEFERRED_PROOF_IDX, range_bucket::RangeBucket};
 use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
     low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
@@ -139,7 +139,7 @@ impl<F: JoltField> Relation<F> for ValueParams<F> {
 pub type ValueVerifier<F> = RelationVerifier<F, ValueParams<F>>;
 
 /// A remainder bucket's digit columns, most significant first.
-pub fn remainder_digit_polys(bucket: &ClampBucket) -> Vec<CommittedPoly> {
+pub fn remainder_digit_polys(bucket: &RangeBucket) -> Vec<CommittedPoly> {
     (0..num_digits(bucket.width))
         .map(|j| CommittedPoly::GlobalRemainderDigit(bucket.idx, j))
         .collect()
@@ -148,7 +148,7 @@ pub fn remainder_digit_polys(bucket: &ClampBucket) -> Vec<CommittedPoly> {
 /// Draw a remainder bucket's digit range check: its digit columns in range and recomposing the
 /// packed value the value sumcheck opened. `Err` if the accumulator lacks that opening.
 pub fn remainder_digit_range_params<F: JoltField, T: Transcript>(
-    bucket: &ClampBucket,
+    bucket: &RangeBucket,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<DigitRangeParams<F>, ProofVerifyError> {
@@ -166,7 +166,7 @@ pub fn remainder_digit_range_params<F: JoltField, T: Transcript>(
 /// remainders, its input claim `Σ_n γ_n·R_n(r_n)` with `γ` drawn here.
 /// `Err` if the accumulator lacks a claim it reads.
 pub fn remainder_value_params<F: JoltField, T: Transcript>(
-    bucket: &ClampBucket,
+    bucket: &RangeBucket,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<ValueParams<F>, ProofVerifyError> {

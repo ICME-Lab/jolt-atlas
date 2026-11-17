@@ -51,11 +51,11 @@ The crate has no prover code. Three mechanisms hold that:
    sumcheck is a symbolic relation; `RelationVerifier` is derived from it, and `verify_tie` checks a
    zero-round one. Each op relation documents its S ⊆ R argument beside its definition in
    `onnx_proof/ops/<op>.rs`.
-4. **Lookup machinery**: `onnx_proof/op_lookups/`, `clamp_split.rs`,
-   `global_clamp.rs`, `fused_rebase.rs`, `neural_teleport/`: the relations and model-only
+4. **Lookup machinery**: `onnx_proof/op_lookups/`, `range_check.rs`,
+   `range_bucket.rs`, `fused_rebase.rs`, `neural_teleport/`: the relations and model-only
    layouts of the lookup and range-check subprotocols. Every remainder bound (the fused
    rescales, Div, ScalarConstDiv, Rsqrt, MeanOfSquares, the trig teleport, softmax) is a range
-   claim in a packed range bucket (`global_clamp::RangeClaim`): the remainder, or its slack
+   claim in a packed range bucket (`range_bucket::RangeClaim`): the remainder, or its slack
    below the bound, checked by the dense digit range check. A bound that is not positive has
    no proof. The output of an exact-arithmetic node (Add, Sub, Sum, Einsum, MeanOfSquares and
    the fused Mul, Square and Cube) that is not a model output is a range claim in the same
@@ -146,7 +146,7 @@ Everything in the crate that took an `atlas_trace::Trace`, with its destination 
 | `EngineRelation::witnesses` | `relation::RelationWitnesses`, implemented in `ops/{iff, scalar_const_div, mul, rsqrt, div}.rs` and `ops/sum/axis.rs` |
 | `TieRelation::claims` | `relation::TieClaims`, implemented in `ops/{add, neg, is_nan, moveaxis, broadcast, constant, div}.rs` |
 | `LookupOperandsTrait::{witness, lookup_bits}` | `op_lookups::LookupWitness`, implemented beside each helper's prover (`op_lookups`, `ops/clamp.rs`, `ops/activation_clamped`, `neural_teleport/trig_downscale.rs`, `ops/softmax_last_axis/significance_clamp.rs`) |
-| `ClampBucket::assemble_bits` | `global_clamp::assemble_bits` |
+| `RangeBucket::assemble_bits` | `range_bucket::assemble_bits` |
 | `EinsumLayout::fold`, `Folded` | `ops/einsum/dot.rs` (`EinsumFold`, `Folded`), implemented in the three layout modules |
 | `neural_teleport::utils::compute_ra_evals_{nbits_2comp, from_usize_indices}` | `neural_teleport/utils.rs` |
 | `utils::compute_lookup_indices` | `utils` |

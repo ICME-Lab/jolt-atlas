@@ -20,12 +20,12 @@ use std::collections::BTreeMap;
 
 // ── Submodules ───────────────────────────────────────────────────────────
 
-pub mod clamp_split;
+pub mod range_check;
 pub mod deferred_lookups;
 pub mod fused_rebase;
 #[cfg(any(test, feature = "fuzz"))]
 pub mod fuzz;
-pub mod global_clamp;
+pub mod range_bucket;
 pub mod neural_teleport;
 pub mod op_lookups;
 pub mod ops;

@@ -8,7 +8,7 @@
 //! A bucket sumcheck over the packed cycle space uses the cycle weight
 //! `Σ_n γ_n·eq(r_n, t − off_n)` ([`CycleWeight::Packed`]) so its input claim
 //! is a `γ`-combination of the member nodes' existing openings. Each bucket is proven by a
-//! value sumcheck and a digit range check, both in [`super::clamp_split`]. Gaps at the
+//! value sumcheck and a digit range check, both in [`super::range_check`]. Gaps at the
 //! end of a bucket hold zero-weight dummy cycles.
 //!
 //! A range claim is a remainder `R` some node's relation leaves to be bounded
@@ -27,7 +27,7 @@
 //! Bucket capacity is the largest member's (padded) size, so no bucket polynomial is larger
 //! than a node's output. The layout is a pure function of the model, so prover and verifier
 //! derive it independently.
-use super::{clamp_split, fused_rebase::rebase_bits, ops::mean_of_squares::mos_divisor};
+use super::{range_check, fused_rebase::rebase_bits, ops::mean_of_squares::mos_divisor};
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -172,7 +172,7 @@ pub const TWO_SIDED_WIDTH: usize = 32;
 /// width `w` when the bound is `2^w` with `w` a whole number of digits, otherwise `R` and the
 /// slack `B − 1 − R` at [`TWO_SIDED_WIDTH`].
 pub fn range_claims(remainder: Remainder, bound: Bound) -> Vec<(RangeClaim, usize)> {
-    let digit_bits = clamp_split::DIGIT_BASE.trailing_zeros() as usize;
+    let digit_bits = range_check::DIGIT_BASE.trailing_zeros() as usize;
     if let Bound::Const(b) = bound {
         if b > 0 && b.count_ones() == 1 {
             let width = b.trailing_zeros() as usize;
@@ -243,7 +243,7 @@ impl RangeClaim {
 
 /// One packed range check: members whose values lie in `[0, 2^width)`.
 #[derive(Clone, Debug)]
-pub struct ClampBucket {
+pub struct RangeBucket {
     /// Bucket index.
     pub idx: usize,
     /// The bit width every member's value is bounded by.
@@ -335,7 +335,7 @@ pub fn node_remainders(
         Op::SoftmaxLastAxis(_) => {
             // `g ∈ [0, S']` and `g⁻ ∈ [0, N·(S' + 1))`, each bounded by the power of two with a
             // whole number of digits above it.
-            let digit_bits = clamp_split::DIGIT_BASE.trailing_zeros() as usize;
+            let digit_bits = range_check::DIGIT_BASE.trailing_zeros() as usize;
             let width = |bits: usize| bits.next_multiple_of(digit_bits);
             let sum_scale_bits =
                 node.scale as usize + atlas_trace::semantics::softmax::SUM_EXTRA_BITS as usize;
@@ -367,7 +367,7 @@ pub fn node_remainders(
 
 /// Partition the model's range claims ([`node_range_claims`]) into buckets keyed by width.
 /// `Err` for a node whose bound cannot be range-checked.
-pub fn remainder_buckets(model: &Model) -> Result<Vec<ClampBucket>, ProofVerifyError> {
+pub fn remainder_buckets(model: &Model) -> Result<Vec<RangeBucket>, ProofVerifyError> {
     let mut items: Vec<BucketItem> = Vec::new();
     for n in &model.views() {
         for (claim, width) in node_range_claims(model, n)? {
@@ -382,17 +382,17 @@ type BucketItem = (usize, Option<RangeClaim>, usize, usize);
 
 /// First-fit-decreasing packing of `(node, width, padded size)` items, grouped
 /// by width, into a capacity equal to the largest item.
-fn pack_buckets(clamped: Vec<BucketItem>) -> Vec<ClampBucket> {
-    let Some(capacity) = clamped.iter().map(|c| c.3).max() else {
+fn pack_buckets(items: Vec<BucketItem>) -> Vec<RangeBucket> {
+    let Some(capacity) = items.iter().map(|c| c.3).max() else {
         return Vec::new();
     };
-    let mut widths: Vec<usize> = clamped.iter().map(|c| c.2).collect();
+    let mut widths: Vec<usize> = items.iter().map(|c| c.2).collect();
     widths.sort_unstable();
     widths.dedup();
 
-    let mut buckets: Vec<ClampBucket> = Vec::new();
+    let mut buckets: Vec<RangeBucket> = Vec::new();
     for w in widths {
-        let mut group: Vec<(usize, Option<RangeClaim>, usize)> = clamped
+        let mut group: Vec<(usize, Option<RangeClaim>, usize)> = items
             .iter()
             .filter(|c| c.2 == w)
             .map(|c| (c.0, c.1, c.3))
@@ -417,7 +417,7 @@ fn pack_buckets(clamped: Vec<BucketItem>) -> Vec<ClampBucket> {
             }
         }
         for (fill, members) in open {
-            buckets.push(ClampBucket {
+            buckets.push(RangeBucket {
                 idx: buckets.len(),
                 width: w,
                 log_t: fill.next_power_of_two().log_2(),
@@ -428,10 +428,10 @@ fn pack_buckets(clamped: Vec<BucketItem>) -> Vec<ClampBucket> {
     buckets
 }
 
-impl ClampBucket {
+impl RangeBucket {
     /// The bucket's committed polynomials: its digit columns.
     pub fn committed_polys(&self) -> Vec<CommittedPoly> {
-        clamp_split::remainder_digit_polys(self)
+        range_check::remainder_digit_polys(self)
     }
 
     /// Size of the bucket's cycle space.

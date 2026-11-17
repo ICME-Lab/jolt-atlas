@@ -42,7 +42,7 @@ impl OpLayout for Rsqrt {
 
 /// The plan: the fused relation's sumcheck (its point drawn from the transcript), then the
 /// evaluation reduction. The two remainder bounds are proven in the packed remainder buckets
-/// after the node loop (`global_clamp::node_remainders`).
+/// after the node loop (`range_bucket::node_remainders`).
 impl OpPlan for Rsqrt {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,

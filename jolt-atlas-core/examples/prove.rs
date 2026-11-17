@@ -144,7 +144,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     };
     let mut by_fam: BTreeMap<String, Fam> = BTreeMap::new();
     for (p, poly) in
-        jolt_atlas_core::onnx_proof::global_clamp::BucketWitnesses::build(model, &trace)
+        jolt_atlas_core::onnx_proof::range_bucket::BucketWitnesses::build(model, &trace)
             .committed_polys::<Fp128>(model)
     {
         let name = format!("{p:?}");
@@ -199,7 +199,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     let mut digits_needed = 0usize;
     let mut elems_total = 0usize;
     for n in &views {
-        if !jolt_atlas_core::onnx_proof::global_clamp::checks_its_output(n) {
+        if !jolt_atlas_core::onnx_proof::range_bucket::checks_its_output(n) {
             continue;
         }
         let out = trace.node_outputs[n.idx].data();
@@ -314,7 +314,7 @@ fn tokenize(model_dir: &std::path::Path, text: &str) -> Vec<i32> {
 
 /// The model's nodes, the packed range buckets, and the largest nodes.
 fn print_stats(model: &Model) {
-    use jolt_atlas_core::onnx_proof::global_clamp::remainder_buckets;
+    use jolt_atlas_core::onnx_proof::range_bucket::remainder_buckets;
     println!("{}", model.pretty_print());
     println!(
         "max num vars: {}",

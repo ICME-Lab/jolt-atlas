@@ -1,5 +1,5 @@
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::plan::{OpPlan, OpRelation, OpTie, Plan, Step};
+use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::{
     node_view::ComputationNode,
     onnx_proof::{
@@ -35,7 +35,7 @@ impl OpPlan for Div {
         // The division identity runs before the reduction: it adds a claim on the node's own
         // output (the quotient), which the reduction then folds in.
         // The remainder's bound `0 ≤ rem < right` is proven in the packed remainder buckets
-        // after the node loop (`global_clamp::node_remainders`).
+        // after the node loop (`range_bucket::node_remainders`).
         Ok(Plan(vec![
             Step::Relation {
                 proof: ProofType::Execution,
@@ -43,7 +43,7 @@ impl OpPlan for Div {
             },
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Op(division_quotient(node)),
+                relation: division_quotient(node),
             },
         ]))
     }

@@ -3,7 +3,7 @@
 //! `prove_relation_batch_parallel`. The plan itself is the verifier's
 //! ([`plan`](jolt_atlas_verifier::onnx_proof::deferred_lookups::plan)); the bucket witnesses
 //! are the ones built for the commitment
-//! ([`BucketWitnesses`](crate::onnx_proof::global_clamp::BucketWitnesses)).
+//! ([`BucketWitnesses`](crate::onnx_proof::range_bucket::BucketWitnesses)).
 use crate::onnx_proof::{
     ops::{prove_deferred_batches, prove_steps},
     ProofId, Prover,

@@ -210,9 +210,11 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
                     }
                     self.verify_batch(proof_idx, proof, instances)?;
                 }
-                Step::Tie { relation } => {
-                    relation.verify(&mut self.accumulator, &mut self.transcript)?
-                }
+                Step::Tie { relation } => super::relation::verify_tie(
+                    &relation,
+                    &mut self.accumulator,
+                    &mut self.transcript,
+                )?,
                 Step::Defer { batch, relation } => {
                     let item = match batch.setup() {
                         DeferredSetup::InNodeLoop => Deferred::Ready(

@@ -2,7 +2,7 @@ use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
         ops::OpLayout,
-        plan::{OpPlan, OpTie, Plan, Step},
+        plan::{OpPlan, Plan, Step},
         relation::{OpRel, OpRelKind, RelationOpening},
     },
     utils::opening_access::{OpeningIdBuilder, Target},
@@ -23,7 +23,7 @@ impl OpLayout for Add {}
 ///
 /// Unless the node is a model output, its output is shown to lie in `i32` by a range claim in
 /// the packed range buckets, proven after the node loop
-/// ([`global_clamp`](crate::onnx_proof::global_clamp)).
+/// ([`range_bucket`](crate::onnx_proof::range_bucket)).
 impl OpPlan for Add {
     fn plan<F: JoltField>(
         &self,
@@ -41,7 +41,7 @@ pub fn accumulation_plan<F: JoltField>(node: &ComputationNode, kind: OpRelKind) 
     Plan(vec![
         Step::Reduce,
         Step::Tie {
-            relation: OpTie::Op(accumulation(node, kind)),
+            relation: accumulation(node, kind),
         },
     ])
 }

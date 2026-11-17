@@ -247,6 +247,8 @@ pub enum OpRelKind {
     SoftmaxSums,
     /// `Sin` / `Cos`: the period reduction, the input is `P·q + r`.
     TrigPeriod,
+    /// `SoftmaxLastAxis`: the clamp lookup's operand is the shift minus the logit.
+    SoftmaxAddressLink,
 }
 
 impl OpRelKind {
@@ -274,6 +276,7 @@ impl OpRelKind {
             Self::Gather => RelationId::Gather,
             Self::SoftmaxSums => RelationId::SoftmaxSums,
             Self::TrigPeriod => RelationId::TrigPeriod,
+            Self::SoftmaxAddressLink => RelationId::SoftmaxAddressLink,
         }
     }
 
@@ -307,6 +310,7 @@ impl OpRelKind {
             Self::Gather => matches!(op, Op::GatherSmall(_) | Op::GatherLarge(_)),
             Self::SoftmaxSums => matches!(op, Op::SoftmaxLastAxis(_)),
             Self::TrigPeriod => matches!(op, Op::Sin(_) | Op::Cos(_)),
+            Self::SoftmaxAddressLink => matches!(op, Op::SoftmaxLastAxis(_)),
         }
     }
 }

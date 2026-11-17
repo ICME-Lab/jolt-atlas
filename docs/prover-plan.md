@@ -31,7 +31,7 @@ empty columns are free, see below):
 
 | family | share of rows | what it is |
 |---|---|---|
-| clamp output chunks (`OUT = out + 2^31`, 8 per element, `clamp_split.rs`) | ~71% | the clamped output of every einsum, Add, Sub, Sum, Mul, Cube, MeanOfSquares |
+| clamp output chunks (`OUT = out + 2^31`, 8 per element, `range_check.rs`) | ~71% | the clamped output of every einsum, Add, Sub, Sum, Mul, Cube, MeanOfSquares |
 | rescale remainders (14 bits = 4 chunks; 28 for Cube) | ~22% | `acc mod 2^S` |
 | Tanh (GELU) lookups | ~3% | the activation's clamp and table address |
 | softmax | ~1.5% | clamp, exp digits, two remainders |
@@ -108,20 +108,20 @@ range-check protocol only; outputs and golden hashes do not move unless the item
 
 **Implemented on `dev`** (spec `specs/clamp-dense-digit-range-check.md`): `OUT` is 16 base-4
 `U8Scalars` digit columns under `atlas_sumcheck::digit_range`, and the Booleanity check keeps the
-slack chunks only. The base is the one constant `clamp_split::DIGIT_BASE`. Not yet measured: the
+slack chunks only. The base is the one constant `range_check::DIGIT_BASE`. Not yet measured: the
 Phase 1 gate run and decision 3 below are pending. A first GPT-2 run (16 tokens) proved in
 34.5 s against the 40.2 s baseline, verified in 2.20 s, with a 2.24 MiB proof; the stage split
 is not yet measured.
 
 Today each bucket commits `OUT = out + 2^31` as 8 one-hot chunks per row plus empty slack chunks,
 checked by a split sumcheck and the Booleanity chunk check with a linear term
-(`clamp_split.rs`); there is no lookup on the buckets already. Replace the one-hot chunks by
+(`range_check.rs`); there is no lookup on the buckets already. Replace the one-hot chunks by
 base-4 digit columns (`U8Scalars` in [0, 4), sixteen per element) with a batched zero-check
 `d(d−1)(d−2)(d−3) = 0` (degree 4 in the digit, 5 with the eq factor) in place of Booleanity and the same linear recomposition of
 `OUT` and `S`; the split sumcheck keeps its shape. Measured commit cost 25–37 ns per 4-bit digit
 against 143. Decide base 4 against Booleans (57–69 ns; `d(d−1) = 0`, degree 3 with eq) in the prototype by
 total time, not commit time alone. Needs: new witness columns in
-`global_clamp.rs`/`clamp_split.rs`, a model-level bucket relation (no `type Spec`; those are
+`range_bucket.rs`/`range_check.rs`, a model-level bucket relation (no `type Spec`; those are
 node-level), the soundness sweeps over the new columns, zoo
 tests, one real-model run. Prototype on `gpt2-tiny` in the test profile first.
 
@@ -368,7 +368,7 @@ The order of steps 6–9 is provisional: step 5's profile decides it.
    output by one 32-bit range claim. A narrower declared width (item 4) keeps this form: the
    tracer asserts the width.
 3. **Base 4 or Booleans** for item 1, by measured total time. Open: item 1 ships base 4 on
-   `dev`; switching to Booleans is the one constant `clamp_split::DIGIT_BASE = 2`. Decided by
+   `dev`; switching to Booleans is the one constant `range_check::DIGIT_BASE = 2`. Decided by
    the Phase 1 gate run, not yet made.
 
 ## 6. Not pursuing

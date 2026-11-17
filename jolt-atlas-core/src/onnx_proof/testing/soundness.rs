@@ -43,11 +43,11 @@ use super::{
     probe::{self, ProbeGuard},
 };
 use crate::onnx_proof::{
-    clamp_split::{
+    range_check::{
         self,
         digit_tamper::{self, DigitTamper, DigitTamperForm},
     },
-    global_clamp::{remainder_buckets, BucketWitnesses},
+    range_bucket::{remainder_buckets, BucketWitnesses},
     proof_serialization::serialize_proof,
     prove, prove_from_trace, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing,
     AtlasVerifierPreprocessing, ONNXProof,
@@ -314,7 +314,7 @@ fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
             // cell that has one: a member whose values are all below the digit base gets the
             // raise-top form only.
             let keep_value_cycle = (member.offset..member.offset + (1 << member.log_t))
-                .find(|&t| values[t] >= clamp_split::DIGIT_BASE);
+                .find(|&t| values[t] >= range_check::DIGIT_BASE);
             let forms = [
                 (DigitTamperForm::KeepValue, keep_value_cycle),
                 (DigitTamperForm::RaiseTop, Some(member.offset)),

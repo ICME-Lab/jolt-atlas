@@ -48,7 +48,7 @@ use crate::{
         deferred_lookups::DeferredBatch,
         op_lookups::OpLookupProvider,
         ops::softmax_last_axis::significance_clamp::SoftmaxSignificanceClampOperands,
-        plan::{OpOpen, OpPlan, OpRelation, OpTie, Plan, Step},
+        plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
         ProofType,
     },
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
@@ -179,7 +179,7 @@ impl OpPlan for SoftmaxLastAxis {
             defer(DeferredBatch::Lookups, SoftmaxRelation::Read),
             defer(DeferredBatch::Lookups, SoftmaxRelation::Clamp),
             Step::Tie {
-                relation: OpTie::Softmax(SoftmaxTie::AddressLink(shape.clone())),
+                relation: address_link(node)?,
             },
             defer(DeferredBatch::OneHot, SoftmaxRelation::ReadOneHot),
             defer(DeferredBatch::OneHot, SoftmaxRelation::ClampOneHot),
@@ -331,44 +331,50 @@ impl SoftmaxOpen {
     }
 }
 
-/// A softmax check in the clear.
-pub enum SoftmaxTie {
-    /// The address link: the clamp lookup's operand `u(r1)` is `c(r1_row) − x(r1)`. Appends the
-    /// operand's opening at `r1`.
-    AddressLink(SoftmaxShape),
+/// The address link of a softmax node as a tie at the reads' point `r1`: the clamp lookup's
+/// operand `u` is the shift minus the logit.
+///
+/// ```text
+/// input claim   c(r1_row) − u(r1)      (the committed shift, the clamp lookup's operand)
+/// output claim  x(r1)                  (the operand, opened at r1)
+/// ```
+///
+/// The setup's incoming point is `r1`, the point the sums relation leaves the reads at.
+/// `Err` if the node is not a softmax.
+///
+/// **S ⊆ R.** The trace's address is `u = c − x` at every cell, with `c` constant along a
+/// row, so `x = c − u` between the extensions at every point: the shift's extension over the
+/// rows, read at `r1`'s row coordinates, is its extension over the cells at `r1`.
+pub fn address_link<F: JoltField>(node: &ComputationNode) -> Result<OpRel<F>, ProofVerifyError> {
+    let shape = SoftmaxShape::for_node(node)?;
+    let ids = shape.ids();
+    let operand = ids.nodeio(Target::Input(0));
+    Ok(OpRel {
+        degree: 1,
+        input: opening(RelationOpening::Id(ids.advice(CommittedPoly::SoftmaxShift)))
+            - opening(RelationOpening::Id(
+                ids.advice(VirtualPoly::SoftmaxClampWitness),
+            )),
+        output: opening(RelationOpening::Id(operand)),
+        produced: vec![operand],
+        custom: Custom {
+            finish_setup: Some(incoming_read_point),
+            ..Custom::default()
+        },
+        ..OpRel::base(OpRelKind::SoftmaxAddressLink, node)
+    })
 }
 
-impl SoftmaxTie {
-    /// The operand's opening the link appends.
-    pub fn operand(shape: &SoftmaxShape) -> OpeningId {
-        shape.ids().nodeio(Target::Input(0))
-    }
-
-    /// Append the operand's opening and check the identity. `Err` if a claim is missing or the
-    /// identity fails.
-    pub fn verify<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<(), ProofVerifyError> {
-        match self {
-            Self::AddressLink(shape) => {
-                let r1 = shape.read_point(&*accumulator)?;
-                accumulator.append_virtual(transcript, Self::operand(shape), r1)?;
-                let accessor = AccOpeningAccessor::new(&*accumulator, &shape.node);
-                let x = accessor.get_nodeio(Target::Input(0))?.1;
-                let c = accessor.get_advice(CommittedPoly::SoftmaxShift)?.1;
-                let u = accessor.get_advice(VirtualPoly::SoftmaxClampWitness)?.1;
-                if u != c - x {
-                    return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                        "softmax node {}: the lookup address is not the shift minus the logit",
-                        shape.idx()
-                    )));
-                }
-                Ok(())
-            }
-        }
-    }
+/// The incoming point of an [`address_link`]: the reads' point.
+fn incoming_read_point<F: JoltField>(
+    relation: &OpRel<F>,
+    accumulator: &dyn OpeningAccumulator<F>,
+    setup: &mut RelationSetup<F>,
+) -> Result<(), ProofVerifyError> {
+    setup.incoming_point = SoftmaxShape::for_node(&relation.node)?
+        .read_point(accumulator)?
+        .r;
+    Ok(())
 }
 
 /// The reduction of a softmax node's output claim and its two row sums to the reads at one

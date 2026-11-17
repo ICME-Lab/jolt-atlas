@@ -6,7 +6,7 @@ use crate::onnx_proof::{
         division::trig_period, sin::SIN_TABLE_VARS, trig_downscale::TrigDownscaleOperands,
     },
     op_lookups::{OpLookupEncoding, OpLookupProvider},
-    plan::{OpLookup, OpOpen, OpPlan, OpRelation, OpTie, OpTrig, Plan, Step},
+    plan::{OpLookup, OpOpen, OpPlan, OpRelation, OpTrig, Plan, Step},
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::{
@@ -75,7 +75,7 @@ impl OpPlan for Sin {
                 relation: OpRelation::TrigOneHot(OpTrig::Sin, node.clone()),
             },
             Step::Tie {
-                relation: OpTie::Op(trig_period(node)),
+                relation: trig_period(node),
             },
         ]))
     }

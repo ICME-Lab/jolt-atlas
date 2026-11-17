@@ -1,16 +1,16 @@
 //! The prover side of the packed range buckets
-//! ([`jolt_atlas_verifier::onnx_proof::global_clamp`] states the layout): each bucket's packed
+//! ([`jolt_atlas_verifier::onnx_proof::range_bucket`] states the layout): each bucket's packed
 //! values, from the trace, and their dense digit columns.
 #[cfg(test)]
-use super::clamp_split::digit_tamper;
-use super::{clamp_split, fused_rebase::rebase_remainder, trace_view::TraceView};
+use super::range_check::digit_tamper;
+use super::{range_check, fused_rebase::rebase_remainder, trace_view::TraceView};
 use crate::node_view::{ComputationNode, ModelView};
 use atlas_algebra::{
     field::JoltField, poly::multilinear::MultilinearPolynomial, utils::lookup_bits::LookupBits,
 };
 use atlas_trace::{Model, Tensor, Trace};
 use common::CommittedPoly;
-pub use jolt_atlas_verifier::onnx_proof::global_clamp::*;
+pub use jolt_atlas_verifier::onnx_proof::range_bucket::*;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
@@ -24,7 +24,7 @@ pub struct BucketWitnesses {
 
 impl BucketWitnesses {
     /// Build every bucket's witness, in parallel across buckets.
-    #[tracing::instrument(skip_all, name = "global_clamp::BucketWitnesses::build")]
+    #[tracing::instrument(skip_all, name = "range_bucket::BucketWitnesses::build")]
     pub fn build(model: &Model, trace: &Trace) -> Self {
         let remainder_values = remainder_buckets(model)
             .expect("the model's range claims have bounds the buckets can check")
@@ -58,7 +58,7 @@ impl BucketWitnesses {
         {
             let (values, width) = self.remainder_values(bucket_idx);
             let mut raised = values.to_vec();
-            raised[cycle] += clamp_split::DIGIT_BASE.pow(clamp_split::num_digits(width) as u32);
+            raised[cycle] += range_check::DIGIT_BASE.pow(range_check::num_digits(width) as u32);
             return raised;
         }
         self.remainder_values(bucket_idx).0.to_vec()
@@ -67,7 +67,7 @@ impl BucketWitnesses {
     /// A bucket's digit columns, most significant first.
     pub fn remainder_digits(&self, bucket_idx: usize) -> Vec<Vec<u8>> {
         let (values, width) = self.remainder_values(bucket_idx);
-        let digits = clamp_split::digit_columns(values, clamp_split::num_digits(width));
+        let digits = range_check::digit_columns(values, range_check::num_digits(width));
         #[cfg(test)]
         let digits = {
             let mut digits = digits;
@@ -80,7 +80,7 @@ impl BucketWitnesses {
     }
 
     /// The buckets' committed polynomials with their witnesses: every bucket's digit columns.
-    #[tracing::instrument(skip_all, name = "global_clamp::BucketWitnesses::committed_polys")]
+    #[tracing::instrument(skip_all, name = "range_bucket::BucketWitnesses::committed_polys")]
     pub fn committed_polys<F: JoltField>(
         &self,
         model: &Model,
@@ -89,7 +89,7 @@ impl BucketWitnesses {
             .expect("the model's range claims have bounds the buckets can check")
             .into_iter()
             .flat_map(|bucket| {
-                clamp_split::remainder_digit_polys(&bucket)
+                range_check::remainder_digit_polys(&bucket)
                     .into_iter()
                     .zip(self.remainder_digits(bucket.idx))
                     .map(|(poly, digits)| (poly, MultilinearPolynomial::from(digits)))
@@ -163,7 +163,7 @@ fn range_claim_bits(
 /// Lay each member's lookup addresses into the bucket's cycle space; the
 /// unused tail holds index-0 lookups.
 pub fn assemble_bits(
-    bucket: &ClampBucket,
+    bucket: &RangeBucket,
     mut per_node: impl FnMut(&BucketNode) -> Vec<LookupBits>,
 ) -> Vec<LookupBits> {
     let mut bits = vec![LookupBits::new(0, bucket.width); bucket.cycle_len()];

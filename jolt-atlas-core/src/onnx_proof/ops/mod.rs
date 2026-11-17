@@ -86,7 +86,7 @@ use atlas_transcript::Transcript;
 use eval_reduction::NodeEvalReduction;
 
 use crate::onnx_proof::{
-    clamp_split::{self, ValueParams, ValueProver},
+    range_check::{self, ValueParams, ValueProver},
     deferred_lookups::{DeferredBatch, DeferredSetup, DEFERRED_PROOF_IDX},
     fused_rebase::rebase_remainder,
     neural_teleport::{
@@ -113,7 +113,7 @@ use crate::onnx_proof::{
         softmax_last_axis::SoftmaxAddresses,
         tanh::TanhTableMarker,
     },
-    plan::{OpActivation, OpLookup, OpOpen, OpPlan, OpRelation, OpTie, OpTrig, Plan, Step},
+    plan::{OpActivation, OpLookup, OpOpen, OpPlan, OpRelation, OpTrig, Plan, Step},
     relation::{
         op_rel_params, prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
     },
@@ -238,7 +238,12 @@ pub fn prove_steps<F: JoltField, T: Transcript>(
                 let witnesses = build_all(prepared, prover);
                 proofs.push((ProofId(proof_idx, proof), prove_batch(witnesses, prover)));
             }
-            Step::Tie { relation } => prove_op_tie(&relation, prover),
+            Step::Tie { relation } => prove_tie(
+                &relation,
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            ),
             Step::Defer { batch, relation } => {
                 let item = match batch.setup() {
                     DeferredSetup::InNodeLoop => {
@@ -419,7 +424,7 @@ fn prepare<F: JoltField, T: Transcript>(
             prover,
         ),
         OpRelation::RemainderBucketValue(bucket) => Prepared::RemainderValue(
-            clamp_split::remainder_value_params(
+            range_check::remainder_value_params(
                 &bucket,
                 &prover.accumulator,
                 &mut prover.transcript,
@@ -428,7 +433,7 @@ fn prepare<F: JoltField, T: Transcript>(
             bucket.idx,
         ),
         OpRelation::RemainderBucketDigits(bucket) => Prepared::RemainderDigits(
-            clamp_split::remainder_digit_range_params(
+            range_check::remainder_digit_range_params(
                 &bucket,
                 &prover.accumulator,
                 &mut prover.transcript,
@@ -469,7 +474,7 @@ fn build_all<F: JoltField, T: Transcript>(
 /// One relation's provers from its parameters.
 fn build_one<F: JoltField, T: Transcript>(
     prepared: Prepared<F, T>,
-    buckets: &crate::onnx_proof::global_clamp::BucketWitnesses,
+    buckets: &crate::onnx_proof::range_bucket::BucketWitnesses,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     match prepared {
         Prepared::Ready(witnesses) => witnesses,
@@ -483,7 +488,7 @@ fn build_one<F: JoltField, T: Transcript>(
             )) as Box<dyn DynRelationWitness<F, T>>]
         }
         Prepared::RemainderDigits(params, bucket) => {
-            clamp_split::digit_columns_provers::<F, T>(params, buckets.remainder_digits(bucket))
+            range_check::digit_columns_provers::<F, T>(params, buckets.remainder_digits(bucket))
         }
     }
 }
@@ -743,20 +748,6 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
     }
 }
 
-/// Append a plan tie's produced openings with the prover's claims.
-fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie<F>, prover: &mut Prover<F, T>) {
-    let Prover {
-        trace,
-        accumulator,
-        transcript,
-        ..
-    } = prover;
-    match relation {
-        OpTie::Op(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::Softmax(tie) => softmax_last_axis::prove_tie(tie, trace, accumulator, transcript),
-    }
-}
-
 /// The witnesses of an engine-proven [`OpRel`], aligned with its produced openings: a
 /// polynomial over the sumcheck's hypercube whose final bound value is the opening's claim.
 pub fn op_rel_witnesses<F: JoltField>(
@@ -794,7 +785,8 @@ pub fn op_rel_witnesses<F: JoltField>(
         | OpRelKind::Reshape
         | OpRelKind::Slice
         | OpRelKind::Concat
-        | OpRelKind::TrigPeriod => {
+        | OpRelKind::TrigPeriod
+        | OpRelKind::SoftmaxAddressLink => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
     }
@@ -827,6 +819,9 @@ pub fn op_rel_tie_claims<F: JoltField>(
         OpRelKind::Concat => concat::subcube_tiling_claims(relation, trace, &setup.incoming_point),
         OpRelKind::TrigPeriod => {
             crate::onnx_proof::neural_teleport::division::trig_period_claims(node, accumulator)
+        }
+        OpRelKind::SoftmaxAddressLink => {
+            softmax_last_axis::address_link_claims(node, trace, &setup.incoming_point)
         }
         OpRelKind::And
         | OpRelKind::Mul
@@ -882,7 +877,8 @@ pub fn op_rel_prover<F: JoltField, T: Transcript>(
         | OpRelKind::Reshape
         | OpRelKind::Slice
         | OpRelKind::Concat
-        | OpRelKind::TrigPeriod => Box::new(RelationProver::initialize(trace, params)),
+        | OpRelKind::TrigPeriod
+        | OpRelKind::SoftmaxAddressLink => Box::new(RelationProver::initialize(trace, params)),
     }
 }
 
@@ -920,7 +916,8 @@ pub fn op_rel_setup_claims<F: JoltField>(
         | OpRelKind::Reshape
         | OpRelKind::Slice
         | OpRelKind::Concat
-        | OpRelKind::TrigPeriod => {
+        | OpRelKind::TrigPeriod
+        | OpRelKind::SoftmaxAddressLink => {
             panic!("{:?} has no setup opens", relation.kind)
         }
     }

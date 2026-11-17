@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use crate::onnx_proof::plan::{OpPlan, Plan, Step};
 use crate::onnx_proof::{
     ops::OpLayout,
     relation::{
@@ -25,7 +25,7 @@ impl OpPlan for Constant {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Op(public_value(node, OpRelKind::Constant, self.0.clone())),
+                relation: public_value(node, OpRelKind::Constant, self.0.clone()),
             },
         ]))
     }

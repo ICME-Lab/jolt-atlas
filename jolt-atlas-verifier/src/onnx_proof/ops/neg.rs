@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use crate::onnx_proof::plan::{OpPlan, Plan, Step};
 use crate::{
     onnx_proof::{
         ops::OpLayout,
@@ -23,7 +23,7 @@ impl OpPlan for Neg {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Op(signed_copy(node, OpRelKind::Neg)),
+                relation: signed_copy(node, OpRelKind::Neg),
             },
         ]))
     }

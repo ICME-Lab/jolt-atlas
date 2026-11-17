@@ -8,7 +8,7 @@
 //! accepts only such concats; any other is rejected here.
 
 use crate::node_view::{ComputationNode, ModelView};
-use crate::onnx_proof::plan::{OpPlan, OpTie, Plan, Step};
+use crate::onnx_proof::plan::{OpPlan, Plan, Step};
 use crate::utils::dims::{axis_groups, bits_msb_first, pow2_log};
 use crate::{
     onnx_proof::{
@@ -36,7 +36,7 @@ impl OpPlan for Concat {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Op(subcube_tiling(model, node)?),
+                relation: subcube_tiling(model, node)?,
             },
         ]))
     }

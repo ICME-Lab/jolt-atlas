@@ -17,7 +17,7 @@
 //!    einsum **High** eq-schedule (`eq·op·op`, eq over the retained/high bits,
 //!    free sum over the reduced/low bits) specialized to one operand.
 //! 3. **Range claims** in the packed range buckets
-//!    ([`global_clamp::node_range_claims`](crate::onnx_proof::global_clamp::node_range_claims)),
+//!    ([`range_bucket::node_range_claims`](crate::onnx_proof::range_bucket::node_range_claims)),
 //!    after the node loop: the remainder bound `R < D` and, unless the node is a model
 //!    output, the output range `out + 2^31 ∈ [0, 2^32)`.
 //!
@@ -61,7 +61,7 @@ impl OpLayout for MeanOfSquares {}
 
 /// The plan: the evaluation reduction; the remainder advice (1); the reduction sumcheck (2).
 /// The remainder bound `R < D` and the output's range are proven in the packed range buckets
-/// after the node loop (`global_clamp::node_range_claims`).
+/// after the node loop (`range_bucket::node_range_claims`).
 impl OpPlan for MeanOfSquares {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,

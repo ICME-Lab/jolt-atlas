@@ -2,6 +2,7 @@
 //! Reed–Solomon encoded, against which one evaluation claim over Fp128 is proven.
 
 pub mod gf128;
+pub mod gkr;
 pub mod ligerito;
 pub mod merkle;
 pub mod multilinear;

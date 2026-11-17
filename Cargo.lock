@@ -485,6 +485,7 @@ dependencies = [
  "atlas-transcript",
  "blake2 0.11.0",
  "getrandom 0.4.3",
+ "rayon",
  "spongefish 0.8.0",
  "tracing-subscriber",
 ]

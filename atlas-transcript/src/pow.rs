@@ -82,6 +82,14 @@ impl<H: DuplexSpongeInterface<U = u8> + Sync> Probe for MessageSearch<H> {
     }
 }
 
+/// The nonces `0..=SEQUENTIAL_NONCES` are searched on the calling thread.
+#[cfg(feature = "prover")]
+const SEQUENTIAL_NONCES: u32 = 255;
+
+/// The nonces each thread scans in one parallel block of the search.
+#[cfg(feature = "prover")]
+const NONCES_PER_THREAD: u32 = 1 << 12;
+
 /// The layout of one proof-of-work step at a difficulty of `1..=MAX_POW_BITS`.
 #[derive(Clone, Copy)]
 pub(crate) struct SpongePow {
@@ -157,10 +165,37 @@ impl SpongePow {
         self.accepts(out)
     }
 
-    /// The least accepted nonce, scanned in increasing order.
+    /// The least accepted nonce.
+    ///
+    /// The first [`SEQUENTIAL_NONCES`] are scanned in order, which settles a low difficulty
+    /// without leaving the calling thread. The rest are scanned a block at a time, each block
+    /// split over the thread pool, so every thread works near the least accepted nonce and
+    /// the result does not depend on the number of threads.
     #[cfg(feature = "prover")]
     pub(crate) fn search(self, probe: &impl Probe) -> Option<u32> {
-        (0..=self.last_nonce()).find(|&nonce| self.accepts_nonce(probe, nonce))
+        use rayon::prelude::*;
+
+        let last = self.last_nonce();
+        let sequential_end = SEQUENTIAL_NONCES.min(last);
+        if let Some(nonce) = (0..=sequential_end).find(|&nonce| self.accepts_nonce(probe, nonce)) {
+            return Some(nonce);
+        }
+        let threads = u32::try_from(rayon::current_num_threads())
+            .unwrap_or(1)
+            .max(1);
+        let block = NONCES_PER_THREAD.saturating_mul(threads);
+        let mut end = sequential_end;
+        while end < last {
+            let start = end + 1;
+            end = start.saturating_add(block - 1).min(last);
+            let found = (start..=end)
+                .into_par_iter()
+                .find_first(|&nonce| self.accepts_nonce(probe, nonce));
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
     }
 }
 

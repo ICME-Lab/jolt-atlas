@@ -7,7 +7,7 @@ description = "The atlas Fiat-Shamir transcript, on spongefish."
 [features]
 # The prover's proof-of-work nonce search copies the sponge state, which spongefish 0.8.0
 # exposes only under `yolocrypto`; verifier builds leave it off.
-prover = ["spongefish/yolocrypto"]
+prover = ["spongefish/yolocrypto", "dep:rayon"]
 test-feature = ["prover"]
 
 [dependencies]
@@ -15,6 +15,8 @@ atlas-algebra.workspace = true
 # spongefish 0.8's `Hash` bridge takes a `digest 0.11` hash.
 blake2 = "0.11.0-rc.6"
 spongefish = { version = "=0.8.0", default-features = false, features = ["getrandom", "turboshake128"] }
+# The prover's nonce search runs on every thread.
+rayon = { workspace = true, optional = true }
 
 # spongefish seeds the prover's private RNG from getrandom 0.4, which needs an explicit backend
 # on wasm32-unknown-unknown.

@@ -37,10 +37,21 @@ pub trait Transcript: Send + Sync + 'static {
     fn compare_to(&mut self, history: Vec<[u8; 32]>);
 }
 
-/// The prover's side: a fresh transcript whose proof of work is written to a NARG string that
-/// travels with the proof.
+/// The prover's side: a fresh transcript whose prover messages (the values it sends and its
+/// proof-of-work nonces) are written, in order, to a NARG string.
 pub trait ProvingTranscript: Transcript {
     fn new(label: &'static [u8]) -> Self;
+
+    /// Send a field element: absorb it and write its canonical encoding to the NARG string.
+    fn send_scalar<F: JoltField>(&mut self, scalar: &F);
+
+    /// Send field elements as one message: absorb them and write their canonical encodings,
+    /// with no count, to the NARG string. The verifier knows how many it reads.
+    fn send_scalars<F: JoltField>(&mut self, scalars: &[F]);
+
+    /// Send a `Canonical` value: absorb its encoding and write it to the NARG string, framed
+    /// by its byte length (a little-endian `u64`).
+    fn send_serializable<C: Canonical>(&mut self, value: &C);
 
     /// The NARG string written so far.
     fn narg(&self) -> &[u8];
@@ -48,9 +59,23 @@ pub trait ProvingTranscript: Transcript {
     fn into_narg(self) -> Vec<u8>;
 }
 
-/// The verifier's side: a transcript that reads the prover's NARG string.
+/// The verifier's side: a transcript that reads the prover's NARG string front to back. Every
+/// read absorbs what it returns, so a challenge drawn after a read depends on the value read.
 pub trait VerifyingTranscript: Transcript {
     fn new(label: &'static [u8], narg: Vec<u8>) -> Self;
+
+    /// Read a field element the prover sent. `Err` on a short read, or on bytes that are not the
+    /// canonical encoding of a field element.
+    fn read_scalar<F: JoltField>(&mut self) -> Result<F, ProofVerifyError>;
+
+    /// Read `n` field elements the prover sent as one message. `Err` as for
+    /// [`read_scalar`](Self::read_scalar).
+    fn read_scalars<F: JoltField>(&mut self, n: usize) -> Result<Vec<F>, ProofVerifyError>;
+
+    /// Read a `Canonical` value the prover sent. `Err` if the frame's stated length exceeds the
+    /// bytes left (checked before anything is allocated), or the frame is not exactly one
+    /// encoding of a `C`.
+    fn read_serializable<C: Canonical>(&mut self) -> Result<C, ProofVerifyError>;
 
     /// Reject unless the whole NARG string was consumed.
     fn finish(self) -> Result<(), ProofVerifyError>;

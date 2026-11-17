@@ -37,7 +37,7 @@ use atlas_algebra::{
     utils::errors::ProofVerifyError,
 };
 use atlas_claims::{Expr, Source, SymbolicSumcheck};
-use atlas_transcript::Transcript;
+use atlas_transcript::{Transcript, VerifyingTranscript};
 use common::CommittedPoly;
 
 /// An opening a relation reads or produces.
@@ -282,8 +282,9 @@ pub trait Relation<F: JoltField>:
     }
 
     /// Append the produced openings at their points, in Fiat-Shamir order: one append per
-    /// opening, or one per [`Self::sparse_groups`] group.
-    fn append_produced_requests<T: Transcript>(
+    /// opening, or one per [`Self::sparse_groups`] group. Each append reads the opening's claim
+    /// from the transcript.
+    fn append_produced_requests<T: VerifyingTranscript>(
         &self,
         setup: &RelationSetup<F>,
         challenges: &[F],

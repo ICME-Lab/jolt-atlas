@@ -8,11 +8,11 @@ use std::collections::BTreeMap;
 use atlas_algebra::serialize::{encode_slice, slice_encoded_len, Canonical, Error};
 use std::io::{Read, Write};
 
-use atlas_algebra::{field::JoltField, poly::point::OpeningPoint};
+use atlas_algebra::field::JoltField;
 use atlas_pcs::commitment_scheme::CommitmentScheme;
-use atlas_sumcheck::{opening_proof::OpeningId, sumcheck::SumcheckInstanceProof};
+use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 
-use crate::{Claims, ONNXProof, ReducedOpeningProof};
+use crate::{ONNXProof, ReducedOpeningProof};
 
 // ---------------------------------------------------------------------------
 // BTreeMap helpers
@@ -72,41 +72,6 @@ fn insert_ascending<K: Ord, V>(map: &mut BTreeMap<K, V>, k: K, v: V) -> Result<(
 }
 
 // ---------------------------------------------------------------------------
-// Claims<F>
-// ---------------------------------------------------------------------------
-
-impl<F: JoltField> Canonical for Claims<F> {
-    fn encode<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        (self.openings().len() as u64).encode(&mut writer)?;
-        for (key, (_point, claim)) in self.openings().iter() {
-            key.encode(&mut writer)?;
-            claim.encode(&mut writer)?;
-        }
-        Ok(())
-    }
-
-    fn encoded_len(&self) -> usize {
-        let mut size = 0u64.encoded_len();
-        for (key, (_point, claim)) in self.openings().iter() {
-            size += key.encoded_len();
-            size += claim.encoded_len();
-        }
-        size
-    }
-
-    fn decode<R: Read>(mut reader: R) -> Result<Self, Error> {
-        let len = u64::decode(&mut reader)? as usize;
-        let mut claims = BTreeMap::new();
-        for _ in 0..len {
-            let key = OpeningId::decode(&mut reader)?;
-            let claim = F::decode(&mut reader)?;
-            insert_ascending(&mut claims, key, (OpeningPoint::default(), claim))?;
-        }
-        Ok(Claims::from_parts(claims))
-    }
-}
-
-// ---------------------------------------------------------------------------
 // ReducedOpeningProof<F, PCS>
 // ---------------------------------------------------------------------------
 
@@ -117,26 +82,18 @@ where
 {
     fn encode<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         self.sumcheck_proof().encode(&mut writer)?;
-        encode_slice(self.sumcheck_claims(), &mut writer)?;
         self.joint_opening_proof().encode(&mut writer)?;
         Ok(())
     }
 
     fn encoded_len(&self) -> usize {
-        self.sumcheck_proof().encoded_len()
-            + slice_encoded_len(self.sumcheck_claims())
-            + self.joint_opening_proof().encoded_len()
+        self.sumcheck_proof().encoded_len() + self.joint_opening_proof().encoded_len()
     }
 
     fn decode<R: Read>(mut reader: R) -> Result<Self, Error> {
         let sumcheck_proof = SumcheckInstanceProof::decode(&mut reader)?;
-        let sumcheck_claims = Vec::decode(&mut reader)?;
         let joint_opening_proof = PCS::Proof::decode(&mut reader)?;
-        Ok(Self::from_parts(
-            sumcheck_proof,
-            sumcheck_claims,
-            joint_opening_proof,
-        ))
+        Ok(Self::from_parts(sumcheck_proof, joint_opening_proof))
     }
 }
 
@@ -150,35 +107,31 @@ where
     PCS: CommitmentScheme<Field = F>,
 {
     fn encode<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        // 1. Opening claims
-        self.opening_claims().encode(&mut writer)?;
-
-        // 2. Proofs (BTreeMap<ProofId, SumcheckInstanceProof>)
+        // 1. Proofs (BTreeMap<ProofId, SumcheckInstanceProof>)
         serialize_btreemap(self.proofs(), &mut writer)?;
 
-        // 3. Commitments: the batch commitment, then one per polynomial
+        // 2. Commitments: the batch commitment, then one per polynomial
         self.batch_commitment().encode(&mut writer)?;
         encode_slice(self.commitments(), &mut writer)?;
 
-        // 4. In-IOP evaluation reduction artifacts
+        // 3. In-IOP evaluation reduction artifacts
         serialize_btreemap(self.eval_reduction_proofs(), &mut writer)?;
 
-        // 5. Reduced opening proof (an `Option`: a `bool` tag, then the value)
+        // 4. Reduced opening proof (an `Option`: a `bool` tag, then the value)
         let reduced = self.reduced_opening_proof();
         reduced.is_some().encode(&mut writer)?;
         if let Some(r) = reduced {
             r.encode(&mut writer)?;
         }
 
-        // 6. Transcript NARG string
+        // 5. Transcript NARG string
         encode_slice(self.narg(), &mut writer)?;
 
         Ok(())
     }
 
     fn encoded_len(&self) -> usize {
-        self.opening_claims().encoded_len()
-            + serialized_size_btreemap(self.proofs())
+        serialized_size_btreemap(self.proofs())
             + self.batch_commitment().encoded_len()
             + slice_encoded_len(self.commitments())
             + serialized_size_btreemap(self.eval_reduction_proofs())
@@ -188,7 +141,6 @@ where
     }
 
     fn decode<R: Read>(mut reader: R) -> Result<Self, Error> {
-        let opening_claims = Claims::decode(&mut reader)?;
         let proofs = deserialize_btreemap(&mut reader)?;
         let batch_commitment = PCS::BatchCommitment::decode(&mut reader)?;
         let commitments = Vec::decode(&mut reader)?;
@@ -197,7 +149,6 @@ where
         let narg = Vec::<u8>::decode(&mut reader)?;
 
         Ok(Self::from_parts(
-            opening_claims,
             proofs,
             batch_commitment,
             commitments,

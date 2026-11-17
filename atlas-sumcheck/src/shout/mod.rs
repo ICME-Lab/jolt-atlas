@@ -22,7 +22,7 @@ use atlas_algebra::{
     utils::thread::unsafe_allocate_zero_vec,
 };
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
-use atlas_transcript::Transcript;
+use atlas_transcript::{Transcript, VerifyingTranscript};
 use common::parallel::par_enabled;
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
@@ -37,7 +37,7 @@ const READ_RAF_DEGREE_BOUND: usize = 2;
 
 /// The verifier of a read of `tables` through one read address: one value claim per table
 /// ([`ReadRafProvider::rv_claims`]), folded with powers of a challenge.
-pub fn read_raf_verifier<F: JoltField, T: Transcript>(
+pub fn read_raf_verifier<F: JoltField, T: VerifyingTranscript>(
     provider: &impl ReadRafProvider<F>,
     tables: Vec<Vec<i32>>,
     accumulator: &VerifierOpeningAccumulator<F>,
@@ -426,7 +426,7 @@ pub fn ra_onehot_params<F: JoltField>(
 /// Transcript challenge draw order matches [`ra_onehot_provers`].
 ///
 /// Returns `[RaVirtual, Booleanity (+ Hamming weight)]`.
-pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
+pub fn ra_onehot_verifiers<F: JoltField, T: VerifyingTranscript>(
     encoding: &impl RaOneHotEncoding,
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
@@ -436,7 +436,7 @@ pub fn ra_onehot_verifiers<F: JoltField, T: Transcript>(
 }
 
 /// [`ra_onehot_verifiers`] with the challenges already drawn (no transcript).
-pub fn ra_onehot_verifiers_with<F: JoltField, T: Transcript>(
+pub fn ra_onehot_verifiers_with<F: JoltField, T: VerifyingTranscript>(
     encoding: &impl RaOneHotEncoding,
     accumulator: &dyn OpeningAccumulator<F>,
     challenges: RaOneHotChallenges<F>,
@@ -449,7 +449,7 @@ pub fn ra_onehot_verifiers_with<F: JoltField, T: Transcript>(
 }
 
 /// Build the RA one-hot verifiers from resolved parameters.
-pub fn ra_onehot_verifiers_with_params<F: JoltField, T: Transcript>(
+pub fn ra_onehot_verifiers_with_params<F: JoltField, T: VerifyingTranscript>(
     params: RaOneHotParams<F>,
 ) -> [Box<dyn DynRelationVerifier<F, T>>; 2] {
     let (ra_params, booleanity_params) = params;

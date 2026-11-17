@@ -49,13 +49,13 @@ use atlas_sumcheck::opening_proof::{
 };
 pub use atlas_sumcheck::relation::*;
 use atlas_trace::Tensor;
-use atlas_transcript::Transcript;
+use atlas_transcript::{Transcript, VerifyingTranscript};
 use std::sync::Arc;
 
 /// Verify a zero-round relation (a tie): run its setup, append its produced openings at their
 /// opening points (the incoming point unless the relation places them) and require the input
 /// claim to equal the output expression.
-pub fn verify_tie<F: JoltField, T: Transcript>(
+pub fn verify_tie<F: JoltField, T: VerifyingTranscript>(
     relation: &OpRel<F>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
@@ -503,7 +503,7 @@ impl<F: JoltField> SetupRelation<F> for OpRel<F> {
 /// [`setup_opens`](OpRel::setup_opens) appended at its coordinates of the incoming point.
 /// `Err` if the accumulator lacks a claim the setup reads or an advice opening's range is not
 /// within the incoming point.
-pub fn op_rel_verifier<F: JoltField, T: Transcript>(
+pub fn op_rel_verifier<F: JoltField, T: VerifyingTranscript>(
     relation: OpRel<F>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,

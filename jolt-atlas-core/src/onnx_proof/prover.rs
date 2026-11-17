@@ -5,8 +5,7 @@
 //! `prove` delegates to.
 
 use super::{
-    types::ProverDebugInfo, AtlasSharedPreprocessing, Claims, ONNXProof, ProofId,
-    ReducedOpeningProof,
+    types::ProverDebugInfo, AtlasSharedPreprocessing, ONNXProof, ProofId, ReducedOpeningProof,
 };
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
@@ -30,7 +29,7 @@ use atlas_sumcheck::{
     sumcheck::SumcheckInstanceProof,
 };
 use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
-use atlas_transcript::{AppendToTranscript, ProvingTranscript, Transcript};
+use atlas_transcript::{AppendToTranscript, ProvingTranscript};
 use common::{CommittedPoly, VirtualPoly};
 use std::collections::BTreeMap;
 
@@ -40,7 +39,7 @@ use std::collections::BTreeMap;
 
 /// Prover state that owns all data needed during proving.
 /// Created once before the proving loop and passed to operator handlers.
-pub struct Prover<F: JoltField, T: Transcript> {
+pub struct Prover<F: JoltField, T: ProvingTranscript> {
     /// Execution trace of the neural network model.
     pub trace: Trace,
     /// Shared preprocessing data (model structure).
@@ -58,7 +57,7 @@ pub struct Prover<F: JoltField, T: Transcript> {
     pub buckets: BucketWitnesses,
 }
 
-impl<F: JoltField, T: Transcript> Prover<F, T> {
+impl<F: JoltField, T: ProvingTranscript> Prover<F, T> {
     /// Create a new prover with the given preprocessing and trace
     pub fn new(preprocessing: AtlasSharedPreprocessing, trace: Trace) -> Self
     where
@@ -111,7 +110,7 @@ pub(super) struct WitnessCommitments<PCS: CommitmentScheme> {
 #[allow(clippy::type_complexity)]
 pub(super) fn commit_witness_polynomials<
     F: JoltField,
-    T: Transcript,
+    T: ProvingTranscript,
     PCS: CommitmentScheme<Field = F>,
 >(
     schedule: &Schedule<F>,
@@ -140,7 +139,7 @@ pub(super) fn commit_witness_polynomials<
     (poly_map, commitments, hints)
 }
 
-pub(crate) fn output_claim<F: JoltField, T: Transcript>(prover: &mut Prover<F, T>) {
+pub(crate) fn output_claim<F: JoltField, T: ProvingTranscript>(prover: &mut Prover<F, T>) {
     // Construct output polynomial
     let output_index = prover.preprocessing.model().output_indices()[0];
     let output_computation_node = &prover.preprocessing.model().view(output_index);
@@ -169,14 +168,14 @@ pub(crate) fn output_claim<F: JoltField, T: Transcript>(prover: &mut Prover<F, T
     let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, output_computation_node)
         .into_provider(&mut prover.transcript, r_node_output.into());
 
-    // append_virtual handles both transcript append and insertion into openings
+    // Bind the output opening at the point and send its claim.
     provider.append_custom(output_opening_id, output_claim);
 }
 
 /// Walk the model's schedule: each node in reverse topological order, then the model-wide
 /// sumchecks.
 #[tracing::instrument(skip_all, name = "ONNXProof::iop")]
-pub(crate) fn iop<F: JoltField, T: Transcript>(
+pub(crate) fn iop<F: JoltField, T: ProvingTranscript>(
     schedule: &Schedule<F>,
     prover: &mut Prover<F, T>,
     proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
@@ -188,7 +187,7 @@ pub(crate) fn iop<F: JoltField, T: Transcript>(
 #[tracing::instrument(skip_all, name = "ONNXProof::prove_reduced_openings")]
 pub(super) fn prove_reduced_openings<
     F: JoltField,
-    T: Transcript,
+    T: ProvingTranscript,
     PCS: CommitmentScheme<Field = F>,
 >(
     prover: &mut Prover<F, T>,
@@ -228,11 +227,10 @@ pub(super) fn prove_reduced_openings<
         .accumulator
         .prove_batch_opening_sumcheck(&mut prover.transcript);
 
-    // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
+    // Finalize sumcheck (uses the claims the groups sent, derives gamma, cleans up)
     let state = prover
         .accumulator
         .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
-    let sumcheck_claims: Vec<F> = state.sumcheck_claims.clone();
     // Joint opening of the RLC `Σ γ_i · poly_i` (materialized or not, per PCS)
     debug_assert!(state.polynomials.iter().eq(poly_map.keys()));
     let joint_opening_proof = PCS::prove_rlc(
@@ -245,7 +243,6 @@ pub(super) fn prove_reduced_openings<
     );
     Some(ReducedOpeningProof::from_parts(
         accumulator_sumcheck_proof,
-        sumcheck_claims,
         joint_opening_proof,
     ))
 }
@@ -256,7 +253,7 @@ pub(super) fn finalize_proof<
     T: ProvingTranscript,
     PCS: CommitmentScheme<Field = F>,
 >(
-    mut prover: Prover<F, T>,
+    prover: Prover<F, T>,
     io: ModelExecutionIO,
     commitments: WitnessCommitments<PCS>,
     proofs: BTreeMap<ProofId, SumcheckInstanceProof<F>>,
@@ -274,11 +271,9 @@ pub(super) fn finalize_proof<
     });
     #[cfg(not(test))]
     let debug_info = None;
-    let opening_claims = prover.accumulator.take();
     let narg = prover.transcript.into_narg();
     (
         ONNXProof::from_parts(
-            Claims::from_parts(opening_claims),
             proofs,
             commitments.batch,
             commitments.polys,

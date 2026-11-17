@@ -12,7 +12,7 @@ use atlas_algebra::{
 use atlas_sumcheck::opening_proof::{
     OpeningAccumulator, OpeningId, PolynomialId, SumcheckId, VerifierOpeningAccumulator,
 };
-use atlas_transcript::Transcript;
+use atlas_transcript::VerifyingTranscript;
 use common::VirtualPoly;
 
 /// Selects the node index source used to build opening identifiers.
@@ -193,9 +193,9 @@ impl<'a, F: JoltField> AccOpeningAccessor<'a, VerifierOpeningAccumulator<F>> {
     /// from the accumulator using `transcript` and `opening_point`.
     pub fn into_provider(
         self,
-        transcript: &'a mut impl Transcript,
+        transcript: &'a mut impl VerifyingTranscript,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
-    ) -> VerifierAccOpeningProvider<'a, F, impl Transcript> {
+    ) -> VerifierAccOpeningProvider<'a, F, impl VerifyingTranscript> {
         VerifierAccOpeningProvider::from_accessor(self, transcript, opening_point)
     }
 }
@@ -204,7 +204,7 @@ impl<'a, F: JoltField> AccOpeningAccessor<'a, VerifierOpeningAccumulator<F>> {
 // so a small macro keeps the two provider impl blocks focused on append behavior.
 macro_rules! impl_accessor_methods {
     ($provider:ident) => {
-        impl<'a, F: JoltField, T: Transcript> $provider<'a, F, T> {
+        impl<'a, F: JoltField, T: VerifyingTranscript> $provider<'a, F, T> {
             /// Read the reduced opening claim for the current node.
             ///
             /// Returns the post-reduction evaluation from the evaluation-reduction protocol,
@@ -254,13 +254,13 @@ macro_rules! impl_accessor_methods {
 // requests because the claimed evaluations are supplied later by verification.
 /// Verifier-side helper that can be created from either shared or mutable
 /// accumulator references.
-pub struct VerifierAccOpeningProvider<'a, F: JoltField, T: Transcript> {
+pub struct VerifierAccOpeningProvider<'a, F: JoltField, T: VerifyingTranscript> {
     accessor: AccOpeningAccessor<'a, VerifierOpeningAccumulator<F>>,
     transcript: &'a mut T,
     opening_point: OpeningPoint<BIG_ENDIAN, F>,
 }
 
-impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
+impl<'a, F: JoltField, T: VerifyingTranscript> VerifierAccOpeningProvider<'a, F, T> {
     fn from_accessor(
         accessor: AccOpeningAccessor<'a, VerifierOpeningAccumulator<F>>,
         transcript: &'a mut T,

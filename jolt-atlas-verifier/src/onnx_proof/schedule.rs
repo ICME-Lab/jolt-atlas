@@ -44,7 +44,7 @@ use atlas_sumcheck::{
     shout,
 };
 use atlas_trace::Model;
-use atlas_transcript::Transcript;
+use atlas_transcript::VerifyingTranscript;
 use common::{CommittedPoly, VirtualPoly};
 use std::collections::BTreeSet;
 
@@ -512,12 +512,12 @@ impl<F: JoltField> OpRelation<F> {
 
     /// The relation's verifiers (one, or the several of a stage or a one-hot check), set up
     /// against the accumulator and transcript.
-    pub fn verifiers<T: Transcript>(
+    pub fn verifiers<T: VerifyingTranscript>(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
-        fn boxed<F: JoltField, T: Transcript>(
+        fn boxed<F: JoltField, T: VerifyingTranscript>(
             verifier: impl DynRelationVerifier<F, T> + 'static,
         ) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
             vec![Box::new(verifier)]
@@ -607,13 +607,13 @@ impl OpOpen {
     }
 
     /// Append the openings.
-    pub fn verify<F: JoltField, T: Transcript>(
+    pub fn verify<F: JoltField, T: VerifyingTranscript>(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
         /// Append the node's advice `poly` at its reduced output point.
-        fn at_reduced_output<F: JoltField, T: Transcript, Poly: Into<PolynomialId>>(
+        fn at_reduced_output<F: JoltField, T: VerifyingTranscript, Poly: Into<PolynomialId>>(
             node: &ComputationNode,
             accumulator: &mut VerifierOpeningAccumulator<F>,
             transcript: &mut T,

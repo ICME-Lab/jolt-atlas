@@ -290,7 +290,6 @@ mod tests {
     use super::prover::*;
     use crate::opening_proof::{prover::ProverOpeningAccumulator, VerifierOpeningAccumulator};
     use atlas_algebra::field::fp128::Fp128 as Fr;
-    use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
     use common::CommittedPoly;
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
@@ -358,14 +357,6 @@ mod tests {
             verifier_transcript.challenge_vector_optimized::<Fr>(log_lookups);
         let _r_words: Vec<<Fr as JoltField>::Challenge> =
             verifier_transcript.challenge_vector_optimized::<Fr>(log_words);
-
-        // Take claims
-        for (key, (_, value)) in &prover_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
-            verifier_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
 
         let verifier = prover.params.into_verifier();
         verify_relation(

@@ -21,7 +21,9 @@ use atlas_algebra::{
     utils::lookup_bits::LookupBits,
 };
 use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
-use atlas_transcript::{Blake2bProver, ProvingTranscript, Transcript};
+use atlas_transcript::{
+    Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
+};
 use common::VirtualPoly;
 use itertools::Itertools;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -53,9 +55,9 @@ where
     let (proof, prover_challenges) =
         prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
-    let (mut verifier_transcript, _) = new_test_transcript();
+    let mut verifier_transcript = Blake2bVerifier::new(b"test", prover_transcript.into_narg());
+    let _: Vec<Fr> = verifier_transcript.challenge_vector(LOG_NUM_LOOKUPS);
     let mut verifier_accumulator = VerifierOpeningAccumulator::new();
-    transfer_openings(&prover_accumulator, &mut verifier_accumulator);
 
     let verifier = ps_read_raf_verifier(
         &provider,
@@ -86,17 +88,6 @@ fn compute_operand_claim<const XLEN: usize>(lookup_indices: &[u64], r_cycle: &[F
             .collect::<Vec<_>>(),
     )
     .evaluate(r_cycle)
-}
-
-fn transfer_openings(
-    prover_acc: &ProverOpeningAccumulator<Fr>,
-    verifier_acc: &mut VerifierOpeningAccumulator<Fr>,
-) {
-    for (key, (_, claim)) in &prover_acc.openings {
-        verifier_acc
-            .openings
-            .insert(*key, (OpeningPoint::default(), *claim));
-    }
 }
 
 struct TestTrace {

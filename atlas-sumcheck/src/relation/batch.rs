@@ -12,10 +12,10 @@ use atlas_algebra::{
     field::{IntoOpening, JoltField},
     utils::errors::ProofVerifyError,
 };
-use atlas_transcript::Transcript;
+use atlas_transcript::VerifyingTranscript;
 
 /// A set-up relation as a member of a batch, its relation type erased.
-pub trait DynRelationVerifier<F: JoltField, T: Transcript> {
+pub trait DynRelationVerifier<F: JoltField, T: VerifyingTranscript> {
     /// The relation's rounds.
     fn rounds(&self) -> usize;
 
@@ -38,8 +38,8 @@ pub trait DynRelationVerifier<F: JoltField, T: Transcript> {
         sumcheck_challenges: &[F::Challenge],
     ) -> Result<F, ProofVerifyError>;
 
-    /// Append the produced openings' requests at the bound point.
-    /// `Err` if the accumulator lacks a claim it reads.
+    /// Append the produced openings at the bound point, reading their claims from the
+    /// transcript. `Err` on a failed read.
     fn append_produced(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
@@ -48,7 +48,7 @@ pub trait DynRelationVerifier<F: JoltField, T: Transcript> {
     ) -> Result<(), ProofVerifyError>;
 }
 
-impl<F: JoltField, T: Transcript, R: Relation<F>> DynRelationVerifier<F, T>
+impl<F: JoltField, T: VerifyingTranscript, R: Relation<F>> DynRelationVerifier<F, T>
     for RelationVerifier<F, R>
 {
     fn rounds(&self) -> usize {
@@ -97,7 +97,7 @@ impl<F: JoltField, T: Transcript, R: Relation<F>> DynRelationVerifier<F, T>
 /// rounds than the batch is bound in its last rounds, and its input claim is scaled by two per
 /// round it sits out. Returns the batch's challenges.
 #[tracing::instrument(skip_all, name = "verify_relation_batch")]
-pub fn verify_relation_batch<F: JoltField, T: Transcript>(
+pub fn verify_relation_batch<F: JoltField, T: VerifyingTranscript>(
     proof: &SumcheckInstanceProof<F>,
     relations: Vec<&dyn DynRelationVerifier<F, T>>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
@@ -143,7 +143,7 @@ pub fn verify_relation_batch<F: JoltField, T: Transcript>(
 
 /// Verify one relation proven as its own sumcheck. Returns its challenges.
 #[tracing::instrument(skip_all, name = "verify_relation")]
-pub fn verify_relation<F: JoltField, T: Transcript>(
+pub fn verify_relation<F: JoltField, T: VerifyingTranscript>(
     proof: &SumcheckInstanceProof<F>,
     relation: &dyn DynRelationVerifier<F, T>,
     accumulator: &mut VerifierOpeningAccumulator<F>,

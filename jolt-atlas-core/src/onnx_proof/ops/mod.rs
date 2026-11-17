@@ -85,7 +85,7 @@ use atlas_algebra::{
     field::JoltField, poly::multilinear::EvaluateMle, utils::thread::drop_in_background_thread,
 };
 use atlas_sumcheck::evaluation_reduction::EvalReductionProof;
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 use eval_reduction::NodeEvalReduction;
 
 use crate::node_view::ModelView;
@@ -132,7 +132,7 @@ pub struct Addresses(pub OpeningId);
 /// in parallel. Each sumcheck proof goes to `proofs` under its step's id, each node's
 /// evaluation-reduction proof to `eval_reduction_proofs`.
 #[tracing::instrument(skip_all, name = "prove_schedule")]
-pub fn prove_schedule<F: JoltField, T: Transcript>(
+pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
     schedule: &Schedule<F>,
     prover: &mut Prover<F, T>,
     proofs: &mut BTreeMap<ProofId, SumcheckInstanceProof<F>>,
@@ -248,7 +248,7 @@ type Witnesses<F, T> = Vec<Box<dyn DynRelationWitness<F, T>>>;
 
 /// Prove `witnesses` as one batched sumcheck, instance messages computed in parallel across
 /// instances.
-fn prove_batch<F: JoltField, T: Transcript>(
+fn prove_batch<F: JoltField, T: ProvingTranscript>(
     mut witnesses: Vec<Box<dyn DynRelationWitness<F, T>>>,
     prover: &mut Prover<F, T>,
 ) -> SumcheckInstanceProof<F> {
@@ -271,7 +271,7 @@ fn prove_batch<F: JoltField, T: Transcript>(
 
 /// A relation of a batch after its sequential part (claims read, challenges drawn, openings
 /// appended): its witnesses, or the parameters its heavy construction runs from in parallel.
-enum Prepared<F: JoltField, T: Transcript> {
+enum Prepared<F: JoltField, T: ProvingTranscript> {
     /// Witnesses built already.
     Ready(Vec<Box<dyn DynRelationWitness<F, T>>>),
     /// A one-hot check's parameters and its lookup's read addresses.
@@ -315,7 +315,7 @@ fn witness_kind<F: JoltField>(relation: &OpRelation<F>) -> &'static str {
 }
 
 /// The sequential part of a batch relation's prover.
-fn prepare<F: JoltField, T: Transcript>(
+fn prepare<F: JoltField, T: ProvingTranscript>(
     relation: OpRelation<F>,
     prover: &mut Prover<F, T>,
 ) -> (&'static str, Prepared<F, T>) {
@@ -356,7 +356,7 @@ fn prepare<F: JoltField, T: Transcript>(
 }
 
 /// The heavy part of a batch's provers, in parallel across the batch.
-fn build_all<F: JoltField, T: Transcript>(
+fn build_all<F: JoltField, T: ProvingTranscript>(
     prepared: Vec<(&'static str, Prepared<F, T>)>,
     prover: &Prover<F, T>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
@@ -381,7 +381,7 @@ fn build_all<F: JoltField, T: Transcript>(
 }
 
 /// One relation's provers from its parameters.
-fn build_one<F: JoltField, T: Transcript>(
+fn build_one<F: JoltField, T: ProvingTranscript>(
     prepared: Prepared<F, T>,
     buckets: &crate::onnx_proof::range_bucket::BucketWitnesses,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
@@ -405,7 +405,7 @@ fn build_one<F: JoltField, T: Transcript>(
 /// The provers of a schedule's relation (one, or the several of a stage or a one-hot check), set up
 /// against the prover's accumulator and transcript. A lookup leaves its read addresses on the
 /// prover for the one-hot checks that follow it.
-pub fn relation_witnesses<F: JoltField, T: Transcript>(
+pub fn relation_witnesses<F: JoltField, T: ProvingTranscript>(
     relation: OpRelation<F>,
     prover: &mut Prover<F, T>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
@@ -492,7 +492,7 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
 }
 
 /// Append an open step's claims from the trace.
-fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F, T>) {
+fn prove_open<F: JoltField, T: ProvingTranscript>(open: &OpOpen, prover: &mut Prover<F, T>) {
     let expect = "the prover holds every claim it reads";
     match open {
         OpOpen::RescaleRemainder(node) => {
@@ -635,7 +635,7 @@ pub fn op_rel_tie_claims<F: JoltField>(
 
 /// The prover of an op relation set up as `params`: its specialized witness, or the engine's
 /// over its witnesses.
-pub fn op_rel_prover<F: JoltField, T: Transcript>(
+pub fn op_rel_prover<F: JoltField, T: ProvingTranscript>(
     params: RelationParams<F, OpRel<F>>,
     trace: &Trace,
     accumulator: &dyn OpeningAccumulator<F>,

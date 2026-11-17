@@ -16,10 +16,7 @@ use crate::utils::opening_access::AccOpeningAccessor;
 use crate::{ONNXProof, ProofId};
 use atlas_algebra::{
     field::JoltField,
-    poly::{
-        multilinear::{MultilinearPolynomial, PolynomialEvaluation},
-        point::OpeningPoint,
-    },
+    poly::multilinear::{MultilinearPolynomial, PolynomialEvaluation},
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;
@@ -30,7 +27,7 @@ use atlas_sumcheck::{
     sumcheck::SumcheckInstanceProof,
 };
 use atlas_trace::{trace::ModelExecutionIO, Model};
-use atlas_transcript::{AppendToTranscript, Transcript, VerifyingTranscript};
+use atlas_transcript::{AppendToTranscript, VerifyingTranscript};
 use common::{CommittedPoly, VirtualPoly};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,7 +37,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Verifier state that owns all data needed during verification.
 /// Created once before the schedule runs.
-pub struct Verifier<'a, F: JoltField, T: Transcript> {
+pub struct Verifier<'a, F: JoltField, T: VerifyingTranscript> {
     /// Opening accumulator for batching polynomial openings.
     pub(crate) accumulator: VerifierOpeningAccumulator<F>,
     /// Interactive proof transcript.
@@ -53,7 +50,7 @@ pub struct Verifier<'a, F: JoltField, T: Transcript> {
     pub(crate) io: &'a ModelExecutionIO,
 }
 
-impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
+impl<'a, F: JoltField, T: VerifyingTranscript> Verifier<'a, F, T> {
     /// Create a new verifier with the given proofs, IO, and the proof's transcript NARG
     /// string.
     pub fn new(
@@ -92,10 +89,9 @@ impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
     }
 }
 
-impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
+impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
     /// The drain check: the proof was consumed exactly. `Err` if a sumcheck proof or an
-    /// evaluation-reduction proof was never taken, or an opening claim was never bound to a
-    /// point.
+    /// evaluation-reduction proof was never taken.
     pub fn check_consumed(&self) -> Result<(), ProofVerifyError> {
         if let Some(id) = self.proofs.first_unconsumed() {
             return Err(ProofVerifyError::UnconsumedProof(format!("{id:?}")));
@@ -103,14 +99,11 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
         if let Some(node) = self.eval_reductions.first_unconsumed() {
             return Err(ProofVerifyError::UnconsumedEvalReduction(*node));
         }
-        if let Some(id) = self.accumulator.first_unbound_claim() {
-            return Err(ProofVerifyError::UnboundClaim(format!("{id:?}")));
-        }
         Ok(())
     }
 }
 
-impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
+impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
     /// The interpreter: run `schedule`, step by step, in transcript order. A relation set up
     /// by a `Setup` step keeps its verifiers until the `Sumcheck` step that names it.
     #[tracing::instrument(skip_all, name = "Verifier::run")]
@@ -233,21 +226,15 @@ impl<'a, K: Ord + Clone + std::fmt::Debug, V> ProofLedger<'a, K, V> {
 // Internal verification helpers
 // ---------------------------------------------------------------------------
 
-/// Populate the verifier accumulator with opening claims and
-/// commitments from the proof.
-pub fn populate_accumulator<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+/// Absorb the proof's commitments.
+pub fn populate_accumulator<
+    F: JoltField,
+    T: VerifyingTranscript,
+    PCS: CommitmentScheme<Field = F>,
+>(
     proof: &ONNXProof<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
 ) {
-    // Load all opening claims from the proof (NodeOutput+Execution claims
-    // are now stored directly in opening_claims alongside everything else).
-    for (key, (_, claim)) in proof.opening_claims().openings() {
-        verifier
-            .accumulator
-            .openings
-            .insert(*key, (OpeningPoint::default(), *claim));
-    }
-
     proof
         .batch_commitment()
         .append_to_transcript(&mut verifier.transcript);
@@ -280,7 +267,7 @@ pub fn check_io_shape(model: &Model, io: &ModelExecutionIO) -> Result<(), ProofV
 }
 
 /// Verify that the output MLE evaluates correctly at the random challenge point τ.
-pub fn verify_output_claim<F: JoltField, T: Transcript>(
+pub fn verify_output_claim<F: JoltField, T: VerifyingTranscript>(
     model: &Model,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
@@ -310,10 +297,9 @@ pub fn verify_output_claim<F: JoltField, T: Transcript>(
     let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, output_computation_node)
         .into_provider(&mut verifier.transcript, r_node_output.into());
 
-    // append_virtual now handles both transcript append and opening point update.
-    // The claim was loaded from opening_claims in populate_accumulator.
+    // Bind the output opening at the point: its claim is read from the transcript.
     provider.append_custom(output_opening_id)?;
-    // Read the prover's claimed value and compare against IO.
+    // Compare the prover's claimed value against the IO.
     let output_claim = provider.get_custom(output_opening_id)?.1;
     if expected_output_claim != output_claim {
         return Err(ProofVerifyError::InvalidOpeningProof(
@@ -325,16 +311,19 @@ pub fn verify_output_claim<F: JoltField, T: Transcript>(
 
 /// Verify the reduced opening proof (sumcheck reduction + PCS verification).
 #[tracing::instrument(skip_all, name = "ONNXProof::verify_reduced_openings")]
-pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
+pub fn verify_reduced_openings<
+    F: JoltField,
+    T: VerifyingTranscript,
+    PCS: CommitmentScheme<Field = F>,
+>(
     proof: &ONNXProof<F, PCS>,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
     if let Some(reduced_opening_proof) = proof.reduced_opening_proof() {
-        verifier.accumulator.prepare_for_sumcheck(
-            reduced_opening_proof.sumcheck_claims(),
-            &mut verifier.transcript,
-        )?;
+        verifier
+            .accumulator
+            .prepare_for_sumcheck(&mut verifier.transcript);
 
         let reduction_res = verifier.accumulator.verify_batch_opening_sumcheck(
             reduced_opening_proof.sumcheck_proof(),
@@ -343,11 +332,9 @@ pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentSchem
         let r_sumcheck = reduction_res
             .inspect_err(|e| tracing::debug!(?e, "opening reduction via sumcheck failed"))?;
 
-        let verifier_state = verifier.accumulator.finalize_batch_opening_sumcheck(
-            r_sumcheck,
-            reduced_opening_proof.sumcheck_claims(),
-            &mut verifier.transcript,
-        );
+        let verifier_state = verifier
+            .accumulator
+            .finalize_batch_opening_sumcheck(r_sumcheck, &mut verifier.transcript)?;
 
         // The proof commits the polynomials the schedule opens, in sorted `CommittedPoly`
         // order (the prover's `poly_map`); the joint opening covers the opened subset.
@@ -388,7 +375,7 @@ pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentSchem
             &num_vars,
             proof.batch_commitment(),
         )?;
-    } else if verifier.accumulator.sumchecks_keys().next().is_some() {
+    } else if verifier.accumulator.has_committed_openings() {
         // Some committed polynomial was opened: a joint opening is required.
         return Err(ProofVerifyError::MissingReductionProof);
     }

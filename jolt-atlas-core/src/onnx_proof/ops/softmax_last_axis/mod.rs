@@ -18,7 +18,7 @@ use atlas_algebra::{
     },
 };
 use atlas_sumcheck::shout;
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 use common::{CommittedPoly, VirtualPoly};
 
 fn witness<'a>(shape: &SoftmaxShape, trace: &'a Trace) -> &'a SoftmaxWitness {
@@ -62,7 +62,7 @@ fn row_values<F: JoltField>(shape: &SoftmaxShape, values: impl Iterator<Item = i
 }
 
 /// Append a softmax opening with the prover's claims from the trace.
-pub fn prove_open<F: JoltField, T: Transcript>(
+pub fn prove_open<F: JoltField, T: ProvingTranscript>(
     open: &SoftmaxOpen,
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,
@@ -133,7 +133,7 @@ pub fn sums_witnesses<F: JoltField>(
 
 /// The prover of the table read at the reads' point, the mirror of [`read_verifier`], with
 /// the table addresses it reads, for their one-hot checks.
-pub fn read_prover<F: JoltField, T: Transcript>(
+pub fn read_prover<F: JoltField, T: ProvingTranscript>(
     shape: &SoftmaxShape,
     trace: &Trace,
     accumulator: &ProverOpeningAccumulator<F>,

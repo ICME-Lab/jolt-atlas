@@ -12,12 +12,12 @@ use crate::{
 use allocative::Allocative;
 use atlas_algebra::serialize::{Canonical, Error};
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_transcript::Transcript;
+use atlas_transcript::{Transcript, VerifyingTranscript};
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
 use std::io::{Read, Write};
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 pub use atlas_algebra::poly::point::{Endianness, OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN};
 
@@ -29,7 +29,7 @@ pub type Openings<F> = BTreeMap<OpeningId, Opening<F>>;
 ///
 /// Soundness sweeps set a target [`OpeningId`]; every claim the prover
 /// appends under that id (dense, sparse or virtual) is bumped by one before
-/// it reaches the transcript, so the forged value flows into the prover's
+/// it is sent, so the forged value flows into the proof, the prover's
 /// own Fiat-Shamir state and downstream claims exactly as a malicious prover
 /// would arrange. The verifier must still reject. This is the single choke
 /// point every opening passes through, including those appended from inside
@@ -69,16 +69,18 @@ pub mod forgery {
 
 /// Accumulates openings encountered by the verifier over the course of Jolt,
 /// so that they can all be reduced to a single opening proof verification using sumcheck.
+///
+/// A claim enters the accumulator when an `append_*` call binds its id to a point: the call
+/// reads the claim from the transcript, which absorbs it. The accumulator holds no claim that
+/// was not bound, and the stream carries each claim once.
 pub struct VerifierOpeningAccumulator<F>
 where
     F: JoltField,
 {
     /// See `ProverOpeningAccumulator::sumchecks`.
     sumchecks: BTreeMap<OpeningId, OpeningReductionGroup<F>>,
-    pub openings: Openings<F>,
-    /// Ids bound by an `append_*` call, to reject one id bound at two
-    /// different points (see [`Self::mark_appended`]).
-    appended: BTreeSet<OpeningId>,
+    /// The claims bound so far, each at its point.
+    openings: Openings<F>,
     /// Mapping for nodes reduced opening points
     pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
     /// In testing, the Jolt verifier may be provided the prover's openings so that we
@@ -155,7 +157,9 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         &self,
         opening_id: OpeningId,
     ) -> Option<(OpeningPoint<BIG_ENDIAN, F>, F)> {
-        self.appended_opening(opening_id)
+        self.openings
+            .get(&opening_id)
+            .map(|(point, claim)| (point.clone(), *claim))
     }
 
     fn get_virtual_polynomial_opening(
@@ -165,7 +169,9 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         if opening_id.virtual_poly().is_none() {
             return Err(missing_claim(opening_id));
         }
-        self.appended_opening(opening_id)
+        self.openings
+            .get(&opening_id)
+            .map(|(point, claim)| (point.clone(), *claim))
             .ok_or_else(|| missing_claim(opening_id))
     }
 
@@ -176,7 +182,9 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         if opening_id.committed_poly().is_none() {
             return Err(missing_claim(opening_id));
         }
-        self.appended_opening(opening_id)
+        self.openings
+            .get(&opening_id)
+            .map(|(point, claim)| (point.clone(), *claim))
             .ok_or_else(|| missing_claim(opening_id))
     }
 
@@ -199,50 +207,41 @@ where
         Self {
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
-            appended: BTreeSet::new(),
             reduced_evaluations: BTreeMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
         }
     }
 
-    /// Record that `opening_id` was bound at `new_point`. A re-append is only
-    /// legal when it re-binds the same point (the same opening registered by
-    /// two instances of one sumcheck batch, e.g. `SoftmaxExpQ` from both
-    /// RecipMult and ExpSum): binding one id at two different points would
-    /// silently discard the first binding, leaving a claim some check believes
-    /// it constrained but the accumulator no longer holds. Appends are driven
-    /// by verifier code (the model), never by proof data, so a violation is a
-    /// code bug and panics.
-    fn mark_appended(&mut self, opening_id: OpeningId, new_point: &[F]) {
-        if !self.appended.insert(opening_id) {
-            if let Some((existing, _)) = self.openings.get(&opening_id) {
-                assert_eq!(
-                    existing.r, new_point,
-                    "opening {opening_id:?} appended twice at different points"
-                );
-            }
-        }
+    /// The claims bound so far, each at its point.
+    pub fn openings(&self) -> &Openings<F> {
+        &self.openings
     }
 
-    /// The opening under `opening_id`, once an append has bound it to its point. A claim that
-    /// is loaded but not yet appended is not readable: no relation reads a claim before the
-    /// step that binds it.
-    fn appended_opening(&self, opening_id: OpeningId) -> Option<Opening<F>> {
-        if !self.appended.contains(&opening_id) {
-            return None;
+    /// Bind `opening_id` at `point`: read its claim from the transcript and hold it there.
+    ///
+    /// An id is bound once. A second bind at the same point (one opening named twice by a
+    /// relation whose operands are one node, or by two relations of one step) reads nothing:
+    /// the stream carries the claim once and every reader sees that claim. A second bind at
+    /// another point is an `Err`: it would replace a claim some check has already read.
+    fn bind<T: VerifyingTranscript>(
+        &mut self,
+        transcript: &mut T,
+        opening_id: OpeningId,
+        point: OpeningPoint<BIG_ENDIAN, F>,
+    ) -> Result<(), ProofVerifyError> {
+        if let Some((bound, _)) = self.openings.get(&opening_id) {
+            return if bound.r == point.r {
+                Ok(())
+            } else {
+                Err(ProofVerifyError::Malformed(format!(
+                    "opening {opening_id:?} is bound at two points"
+                )))
+            };
         }
-        self.openings
-            .get(&opening_id)
-            .map(|(point, claim)| (point.clone(), *claim))
-    }
-
-    /// A claim loaded from the proof that no append bound to a point, if any.
-    pub fn first_unbound_claim(&self) -> Option<OpeningId> {
-        self.openings
-            .keys()
-            .find(|id| !self.appended.contains(id))
-            .copied()
+        let claim = transcript.read_scalar()?;
+        self.openings.insert(opening_id, (point, claim));
+        Ok(())
     }
 
     pub fn get_node_openings(&self, node_idx: usize) -> Vec<&Opening<F>> {
@@ -258,14 +257,12 @@ where
         );
         self.openings
             .range(lo..=hi)
-            .filter(|(id, _)| self.appended.contains(id))
             .map(|(_, opening)| opening)
             .collect()
     }
 
-    /// Adds an opening of a dense polynomial the accumulator.
-    /// The given `polynomial` is opened at `opening_point`. `Err` if the proof carried no
-    /// claim for it.
+    /// Adds an opening of a dense polynomial to the accumulator: `polynomial` is opened at
+    /// `opening_point`, and its claim is read from the transcript. `Err` on a failed read.
     pub fn append_dense<T, U>(
         &mut self,
         transcript: &mut T,
@@ -273,21 +270,14 @@ where
         opening_point: Vec<U>,
     ) -> Result<(), ProofVerifyError>
     where
-        T: Transcript,
+        T: VerifyingTranscript,
         U: Copy + Send + Sync + Into<F>,
     {
         let polynomial = opening_id
             .committed_poly()
             .ok_or_else(|| missing_claim(opening_id))?;
         let point = OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone());
-        let &(_, claim) = self
-            .openings
-            .get(&opening_id)
-            .ok_or_else(|| missing_claim(opening_id))?;
-        self.mark_appended(opening_id, &point.r);
-        // The claim was pre-loaded from the proof.
-        transcript.append_scalar(&claim);
-        self.openings.insert(opening_id, (point, claim));
+        self.bind(transcript, opening_id, point)?;
 
         self.sumchecks.insert(
             opening_id,
@@ -296,12 +286,10 @@ where
         Ok(())
     }
 
-    /// Adds openings to the accumulator. The polynomials underlying the given
-    /// `commitments` are opened at `opening_point`, yielding the claimed evaluations
-    /// `claims`.
+    /// Adds openings to the accumulator: the `polynomials` are opened at `opening_point`, and
+    /// their claims are read from the transcript, in order.
     /// Multiple sparse polynomials opened at a single point are NOT batched into
-    /// a single polynomial opened at the same point. `Err` if the proof carried no claim for
-    /// one of them.
+    /// a single polynomial opened at the same point. `Err` on a failed read.
     pub fn append_sparse<T, U>(
         &mut self,
         transcript: &mut T,
@@ -310,25 +298,18 @@ where
         opening_point: Vec<U>,
     ) -> Result<(), ProofVerifyError>
     where
-        T: Transcript,
+        T: VerifyingTranscript,
         U: Copy + Send + Sync + Into<F>,
     {
         let Some(&first) = polynomials.first() else {
             return Ok(());
         };
-        let point_f: Vec<F> = opening_point.iter().map(|u| (*u).into()).collect();
         for label in polynomials.iter().copied() {
-            let key = OpeningId::new(label, sumcheck);
-            let &(_, claim) = self.openings.get(&key).ok_or_else(|| missing_claim(key))?;
-            self.mark_appended(key, &point_f);
-            transcript.append_scalar(&claim);
-            self.openings.insert(
-                key,
-                (
-                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
-                    claim,
-                ),
-            );
+            self.bind(
+                transcript,
+                OpeningId::new(label, sumcheck),
+                OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
+            )?;
         }
         let key = OpeningId::new(first, sumcheck);
         self.sumchecks.insert(
@@ -338,9 +319,9 @@ where
         Ok(())
     }
 
-    /// Populates the opening point for an existing claim in the evaluation_openings map.
-    /// `Err` if the proof carried no claim for it.
-    pub fn append_virtual<T: Transcript>(
+    /// Adds an opening of a virtual polynomial at `opening_point`; its claim is read from the
+    /// transcript. `Err` on a failed read.
+    pub fn append_virtual<T: VerifyingTranscript>(
         &mut self,
         transcript: &mut T,
         opening_id: OpeningId,
@@ -355,15 +336,7 @@ where
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }
-        let &(_, claim) = self
-            .openings
-            .get(&opening_id)
-            .ok_or_else(|| missing_claim(opening_id))?;
-        self.mark_appended(opening_id, &opening_point.r);
-        // The claim was pre-loaded from the proof. Append to transcript.
-        transcript.append_scalar(&claim);
-        self.openings.insert(opening_id, (opening_point, claim));
-        Ok(())
+        self.bind(transcript, opening_id, opening_point)
     }
 }
 
@@ -371,54 +344,31 @@ impl<F> VerifierOpeningAccumulator<F>
 where
     F: JoltField,
 {
-    /// The distinct committed polynomials with a registered opening, sorted —
-    /// the order of the proof's reduced claims and of the prover's
-    /// `state.polynomials` from `finalize_batch_opening_sumcheck`.
-    /// Committed polynomials without an opening are not part of the joint
-    /// opening.
-    pub fn sumchecks_keys(&self) -> impl Iterator<Item = CommittedPoly> + '_ {
-        let polys: BTreeSet<CommittedPoly> = self
-            .sumchecks
-            .values()
-            .flat_map(|s| s.polynomials.iter().copied())
-            .collect();
-        polys.into_iter()
-    }
-
     // ========== Batch Opening Reduction Sumcheck ==========
 
-    #[tracing::instrument(skip_all, name = "VerifierOpeningAccumulator::prepare_for_sumcheck")]
-    /// Prepares the verifier for the batch opening reduction sumcheck: draws
-    /// the in-group coefficient and populates the per-instance claims from the proof.
-    pub fn prepare_for_sumcheck<T: Transcript>(
-        &mut self,
-        sumcheck_claims: &[F],
-        transcript: &mut T,
-    ) -> Result<(), ProofVerifyError> {
-        let rho: F = transcript.challenge_scalar();
-        if sumcheck_claims.len() != self.sumchecks.len() {
-            return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                "expected {} reduced claims, found {}",
-                self.sumchecks.len(),
-                sumcheck_claims.len()
-            )));
-        }
-        self.sumchecks
-            .values_mut()
-            .zip(sumcheck_claims)
-            .for_each(|(opening, claim)| {
-                opening.set_coefficients(rho);
-                opening.sumcheck_claim = Some(*claim);
-            });
-        Ok(())
+    /// Whether any committed polynomial was opened: whether the proof carries an opening
+    /// reduction and a joint opening proof.
+    pub fn has_committed_openings(&self) -> bool {
+        !self.sumchecks.is_empty()
     }
 
-    /// Verifies the batch opening reduction sumcheck (Stage 7).
+    #[tracing::instrument(skip_all, name = "VerifierOpeningAccumulator::prepare_for_sumcheck")]
+    /// Prepares the verifier for the batch opening reduction sumcheck: draws the in-group
+    /// coefficient.
+    pub fn prepare_for_sumcheck<T: Transcript>(&mut self, transcript: &mut T) {
+        let rho: F = transcript.challenge_scalar();
+        self.sumchecks
+            .values_mut()
+            .for_each(|opening| opening.set_coefficients(rho));
+    }
+
+    /// Verifies the batch opening reduction sumcheck (Stage 7): each group's reduced claim is
+    /// read from the transcript once the rounds are bound, and kept with its group.
     #[tracing::instrument(
         skip_all,
         name = "VerifierOpeningAccumulator::verify_batch_opening_sumcheck"
     )]
-    pub fn verify_batch_opening_sumcheck<T: Transcript>(
+    pub fn verify_batch_opening_sumcheck<T: VerifyingTranscript>(
         &mut self,
         sumcheck_proof: &SumcheckInstanceProof<F>,
         transcript: &mut T,
@@ -432,23 +382,36 @@ where
             .iter()
             .map(|verifier| verifier as &dyn DynRelationVerifier<F, T>)
             .collect();
-        verify_relation_batch(sumcheck_proof, instances, self, transcript)
+        let r_sumcheck = verify_relation_batch(sumcheck_proof, instances, self, transcript)?;
+        for (group, verifier) in self.sumchecks.values_mut().zip(&verifiers) {
+            group.sumcheck_claim = verifier.reduced_claim();
+        }
+        Ok(r_sumcheck)
     }
 
     #[tracing::instrument(
         skip_all,
         name = "VerifierOpeningAccumulator::finalize_batch_opening_sumcheck"
     )]
-    /// Finalizes the batch opening reduction sumcheck verification.
-    /// Returns the state needed for verify joint opening.
+    /// Finalizes the batch opening reduction sumcheck verification: draws the per-group
+    /// batching coefficients. Returns the state needed to verify the joint opening. `Err` if a
+    /// group's reduced claim was not read.
     pub fn finalize_batch_opening_sumcheck<T: Transcript>(
         &self,
         r_sumcheck: Vec<F::Challenge>,
-        sumcheck_claims: &[F],
         transcript: &mut T,
-    ) -> OpeningReductionState<F> {
-        // Append claims and derive per-instance gamma powers
-        transcript.append_scalars(sumcheck_claims);
+    ) -> Result<OpeningReductionState<F>, ProofVerifyError> {
+        let sumcheck_claims: Vec<F> = self
+            .sumchecks
+            .values()
+            .map(|group| {
+                group.sumcheck_claim.ok_or_else(|| {
+                    ProofVerifyError::Malformed(
+                        "an opening group has no reduced claim before the joint opening".into(),
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
         let gamma_powers: Vec<F> = transcript.challenge_scalar_powers(self.sumchecks.len());
         let (polynomials, poly_coeffs) = joint_coefficients(
             self.sumchecks
@@ -457,13 +420,13 @@ where
             &gamma_powers,
         );
 
-        OpeningReductionState {
+        Ok(OpeningReductionState {
             r_sumcheck,
             gamma_powers,
-            sumcheck_claims: sumcheck_claims.to_vec(),
+            sumcheck_claims,
             polynomials,
             poly_coeffs,
-        }
+        })
     }
 
     // ========== Batch Opening Verification ==========
@@ -688,11 +651,15 @@ impl Canonical for OpeningId {
 
 #[cfg(test)]
 mod guardrail_tests {
-    use super::{prover::ProverOpeningAccumulator, OpeningId, OpeningPoint, SumcheckId};
+    use super::{
+        prover::ProverOpeningAccumulator, OpeningAccumulator, OpeningId, OpeningPoint, SumcheckId,
+    };
     use crate::evaluation_reduction::ReducedInstance;
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::field::Ring as _;
-    use atlas_transcript::{Blake2bProver, ProvingTranscript};
+    use atlas_transcript::{
+        Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
+    };
     use common::VirtualPoly;
 
     #[test]
@@ -702,52 +669,84 @@ mod guardrail_tests {
         let _ = acc.get_node_output_opening(7);
     }
 
-    /// One opening id bound at two different points would silently discard
-    /// the first binding, leaving a check constraining a claim the
-    /// accumulator no longer holds.
-    #[test]
-    #[should_panic(expected = "appended twice at different points")]
-    fn verifier_append_rejects_rebinding_at_a_different_point() {
-        let mut acc = super::VerifierOpeningAccumulator::<Fr>::new();
-        let id = OpeningId::new(
+    fn hamming_weight_id() -> OpeningId {
+        OpeningId::new(
             VirtualPoly::HammingWeight(0),
             SumcheckId::RamHammingBooleanity,
-        );
-        acc.openings
-            .insert(id, (OpeningPoint::default(), Fr::from_u64(1u64)));
-
-        let mut transcript = Blake2bProver::new(b"guardrail_test");
-        acc.append_virtual(
-            &mut transcript,
-            id,
-            OpeningPoint::new(vec![Fr::from_u64(1u64), Fr::from_u64(2u64)]),
         )
-        .unwrap();
-        acc.append_virtual(
-            &mut transcript,
-            id,
-            OpeningPoint::new(vec![Fr::from_u64(3u64), Fr::from_u64(4u64)]),
-        )
-        .unwrap();
     }
 
-    /// Re-binding the same id at the same point is legal (two instances of
-    /// one batch registering a shared opening).
-    #[test]
-    fn verifier_append_allows_rebinding_at_the_same_point() {
-        let mut acc = super::VerifierOpeningAccumulator::<Fr>::new();
-        let id = OpeningId::new(
-            VirtualPoly::HammingWeight(0),
-            SumcheckId::RamHammingBooleanity,
-        );
-        acc.openings
-            .insert(id, (OpeningPoint::default(), Fr::from_u64(1u64)));
+    fn point(seed: u64) -> OpeningPoint<{ super::BIG_ENDIAN }, Fr> {
+        OpeningPoint::new(vec![Fr::from_u64(seed), Fr::from_u64(seed + 1)])
+    }
 
-        let mut transcript = Blake2bProver::new(b"guardrail_test");
-        let point = OpeningPoint::new(vec![Fr::from_u64(1u64), Fr::from_u64(2u64)]);
-        acc.append_virtual(&mut transcript, id, point.clone())
-            .unwrap();
-        acc.append_virtual(&mut transcript, id, point).unwrap();
+    /// A stream of two claims, and the verifier's transcript over it.
+    fn two_claims() -> Blake2bVerifier {
+        let mut prover = Blake2bProver::new(b"guardrail_test");
+        prover.send_scalar(&Fr::from_u64(5));
+        prover.send_scalar(&Fr::from_u64(6));
+        Blake2bVerifier::new(b"guardrail_test", prover.into_narg())
+    }
+
+    /// A claim is held only from its bind: no getter returns one before.
+    #[test]
+    fn verifier_holds_no_claim_before_its_bind() {
+        let mut acc = super::VerifierOpeningAccumulator::<Fr>::new();
+        let id = hamming_weight_id();
+        assert!(acc.openings().is_empty());
+        assert!(acc.get_virtual_polynomial_opening(id).is_err());
+        assert!(acc.try_get_virtual_polynomial_opening(id).is_none());
+
+        let mut transcript = two_claims();
+        acc.append_virtual(&mut transcript, id, point(1)).unwrap();
+        assert_eq!(
+            acc.get_virtual_polynomial_opening(id).unwrap(),
+            (point(1), Fr::from_u64(5))
+        );
+    }
+
+    /// One opening id bound at two different points would discard the first binding, leaving
+    /// a check constraining a claim the accumulator does not hold.
+    #[test]
+    fn verifier_append_rejects_rebinding_at_a_different_point() {
+        let mut acc = super::VerifierOpeningAccumulator::<Fr>::new();
+        let id = hamming_weight_id();
+        let mut transcript = two_claims();
+        acc.append_virtual(&mut transcript, id, point(1)).unwrap();
+        assert!(acc.append_virtual(&mut transcript, id, point(3)).is_err());
+        // The first binding stands.
+        assert_eq!(
+            acc.get_virtual_polynomial_opening(id).unwrap(),
+            (point(1), Fr::from_u64(5))
+        );
+    }
+
+    /// Binding an id again at its point reads nothing: the stream carries the claim once, so
+    /// the next read is the next claim.
+    #[test]
+    fn verifier_append_at_the_same_point_reads_the_claim_once() {
+        let mut acc = super::VerifierOpeningAccumulator::<Fr>::new();
+        let id = hamming_weight_id();
+        let mut transcript = two_claims();
+        acc.append_virtual(&mut transcript, id, point(1)).unwrap();
+        acc.append_virtual(&mut transcript, id, point(1)).unwrap();
+        assert_eq!(
+            acc.get_virtual_polynomial_opening(id).unwrap().1,
+            Fr::from_u64(5)
+        );
+        assert_eq!(transcript.read_scalar::<Fr>().unwrap(), Fr::from_u64(6));
+        transcript.finish().unwrap();
+    }
+
+    /// A bind with nothing left to read is an error, not a default claim.
+    #[test]
+    fn verifier_append_rejects_a_short_stream() {
+        let mut acc = super::VerifierOpeningAccumulator::<Fr>::new();
+        let mut transcript = Blake2bVerifier::new(b"guardrail_test", Vec::new());
+        assert!(acc
+            .append_virtual(&mut transcript, hamming_weight_id(), point(1))
+            .is_err());
+        assert!(acc.openings().is_empty());
     }
 
     #[test]

@@ -299,14 +299,6 @@ mod tests {
         let _r_words: Vec<<Fr as JoltField>::Challenge> =
             verifier_transcript.challenge_vector_optimized::<Fr>(log_K);
 
-        // Take claims
-        for (key, (_, value)) in &prover_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
-            verifier_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
-
         let verifier = params.into_verifier();
         verify_relation(
             &proof,

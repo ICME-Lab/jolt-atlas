@@ -18,10 +18,11 @@ use crate::{
 use atlas_algebra::field::MaybeAllocative;
 #[cfg(not(target_arch = "wasm32"))]
 use atlas_algebra::utils::profiling::print_current_memory_usage;
+use atlas_transcript::ProvingTranscript;
 use rayon::prelude::*;
 
 /// Append the relation's produced openings, with their `claims`, at their points.
-pub fn append_produced<F: JoltField, T: Transcript, R: Relation<F>>(
+pub fn append_produced<F: JoltField, T: ProvingTranscript, R: Relation<F>>(
     relation: &R,
     setup: &RelationSetup<F>,
     accumulator: &mut ProverOpeningAccumulator<F>,
@@ -79,7 +80,7 @@ pub trait RelationWitness<F: JoltField>: ProveRounds<F> + Send + Sync + MaybeAll
 
     /// Append the produced openings with their claims, mirroring
     /// [`Relation::append_produced_requests`]. Defaults to [`append_produced`].
-    fn append_claims<T: Transcript>(
+    fn append_claims<T: ProvingTranscript>(
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
         transcript: &mut T,
@@ -98,7 +99,7 @@ pub trait RelationWitness<F: JoltField>: ProveRounds<F> + Send + Sync + MaybeAll
 
 /// A relation witness as a member of a batch, its relation type erased. Every
 /// [`RelationWitness`] is one.
-pub trait DynRelationWitness<F: JoltField, T: Transcript>:
+pub trait DynRelationWitness<F: JoltField, T: ProvingTranscript>:
     ProveRounds<F> + Send + Sync + MaybeAllocative
 {
     /// The degree of the relation's round polynomials.
@@ -116,7 +117,7 @@ pub trait DynRelationWitness<F: JoltField, T: Transcript>:
     );
 }
 
-impl<F: JoltField, T: Transcript, W: RelationWitness<F>> DynRelationWitness<F, T> for W {
+impl<F: JoltField, T: ProvingTranscript, W: RelationWitness<F>> DynRelationWitness<F, T> for W {
     fn degree(&self) -> usize {
         self.relation().degree()
     }
@@ -139,7 +140,7 @@ impl<F: JoltField, T: Transcript, W: RelationWitness<F>> DynRelationWitness<F, T
 /// Prove a batch of relations as one front-loaded batched sumcheck, the prover side of
 /// [`super::verify_relation_batch`]. Returns the proof and the batch's challenges.
 #[tracing::instrument(skip_all, name = "prove_relation_batch")]
-pub fn prove_relation_batch<F: JoltField, T: Transcript>(
+pub fn prove_relation_batch<F: JoltField, T: ProvingTranscript>(
     witnesses: Vec<&mut dyn DynRelationWitness<F, T>>,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
@@ -154,7 +155,7 @@ pub fn prove_relation_batch<F: JoltField, T: Transcript>(
 /// `RwLock` (the opening-reduction groups' shared eq tables) deadlock when a rayon thread holding
 /// a write guard steals a job that takes the same lock. Use [`prove_relation_batch`] for those.
 #[tracing::instrument(skip_all, name = "prove_relation_batch_parallel")]
-pub fn prove_relation_batch_parallel<F: JoltField, T: Transcript>(
+pub fn prove_relation_batch_parallel<F: JoltField, T: ProvingTranscript>(
     witnesses: Vec<&mut dyn DynRelationWitness<F, T>>,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
@@ -162,7 +163,7 @@ pub fn prove_relation_batch_parallel<F: JoltField, T: Transcript>(
     prove_batch_inner(witnesses, accumulator, transcript, true)
 }
 
-fn prove_batch_inner<F: JoltField, T: Transcript>(
+fn prove_batch_inner<F: JoltField, T: ProvingTranscript>(
     mut witnesses: Vec<&mut dyn DynRelationWitness<F, T>>,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
@@ -210,7 +211,7 @@ fn prove_batch_inner<F: JoltField, T: Transcript>(
 /// Prove one relation as its own sumcheck, the prover side of [`super::verify_relation`]: a
 /// batch of one with coefficient one and no coefficient drawn.
 #[tracing::instrument(skip_all, name = "prove_relation")]
-pub fn prove_relation<F: JoltField, T: Transcript>(
+pub fn prove_relation<F: JoltField, T: ProvingTranscript>(
     witness: &mut dyn DynRelationWitness<F, T>,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
@@ -231,7 +232,7 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
 }
 
 /// Run the engine's batch prover over `members` and record the round polynomials.
-fn run_engine<F: JoltField, T: Transcript>(
+fn run_engine<F: JoltField, T: ProvingTranscript>(
     prelude: &BatchPrelude<F>,
     members: &mut [&mut dyn ProveRounds<F>],
     many_members: bool,
@@ -349,7 +350,7 @@ impl<F: JoltField> RoundScheduler<F> for InstanceRounds {
 impl<F: JoltField, R: SetupRelation<F>> RelationParams<F, R> {
     /// `relation`, set up against the prover's accumulator and transcript. The prover holds
     /// every claim its setup reads: a missing one is a prover bug and panics.
-    pub fn new<T: Transcript>(
+    pub fn new<T: ProvingTranscript>(
         relation: R,
         accumulator: &dyn OpeningAccumulator<F>,
         transcript: &mut T,

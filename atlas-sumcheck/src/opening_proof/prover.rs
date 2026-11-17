@@ -16,7 +16,7 @@ use atlas_algebra::{
     field::{IntoOpening, JoltField},
     poly::multilinear::MultilinearPolynomial,
 };
-use atlas_transcript::Transcript;
+use atlas_transcript::{ProvingTranscript, Transcript};
 use common::{CommittedPoly, VirtualPoly};
 #[cfg(any(test, feature = "test-feature"))]
 use std::cell::RefCell;
@@ -192,9 +192,25 @@ where
             .collect::<Vec<_>>()
     }
 
+    /// Whether `opening_id` is already bound at `point`: the claim was sent then, and the
+    /// stream carries it once (see `VerifierOpeningAccumulator::bind`). Binding an id at two
+    /// points is a prover bug and panics.
+    fn is_bound(&self, opening_id: OpeningId, point: &[F]) -> bool {
+        match self.openings.get(&opening_id) {
+            Some((bound, _)) => {
+                assert_eq!(
+                    bound.r, point,
+                    "opening {opening_id:?} appended twice at different points"
+                );
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Adds an opening of a dense polynomial to the accumulator.
     /// The given `polynomial` is opened at `opening_point`, yielding the claimed
-    /// evaluation `claim`.
+    /// evaluation `claim`, which is sent.
     #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::append_dense")]
     pub fn append_dense<T, U>(
         &mut self,
@@ -203,17 +219,21 @@ where
         opening_point: Vec<U>,
         claim: F,
     ) where
-        T: Transcript,
+        T: ProvingTranscript,
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
+        let point: Vec<F> = opening_point.iter().map(|&u| u.into()).collect();
+        if self.is_bound(opening_id, &point) {
+            return;
+        }
         #[cfg(any(test, feature = "test-feature"))]
         let claim = forgery::apply(opening_id, claim);
-        transcript.append_scalar(&claim);
+        transcript.send_scalar(&claim);
 
         let shared_eq = self
             .eq_cycle_map
-            .entry(opening_point.iter().map(|&u| u.into()).collect())
+            .entry(point)
             .or_insert_with(|| Arc::new(RwLock::new(EqCycleState::new(&opening_point))));
 
         // Add opening to map
@@ -249,20 +269,26 @@ where
         r_cycle: Vec<U>,
         claims: Vec<F>,
     ) where
-        T: Transcript,
+        T: ProvingTranscript,
         U: Copy + Send + Sync + Into<F>,
         F: Mul<U, Output = F>,
     {
-        #[cfg(any(test, feature = "test-feature"))]
+        let r_concat = [r_address.as_slice(), r_cycle.as_slice()].concat();
+        let point: Vec<F> = r_concat.iter().map(|&u| u.into()).collect();
         let claims: Vec<F> = polynomials
             .iter()
             .zip(claims)
-            .map(|(&poly, claim)| forgery::apply(OpeningId::new(poly, sumcheck), claim))
+            .map(|(&poly, claim)| {
+                let opening_id = OpeningId::new(poly, sumcheck);
+                if self.is_bound(opening_id, &point) {
+                    return self.openings[&opening_id].1;
+                }
+                #[cfg(any(test, feature = "test-feature"))]
+                let claim = forgery::apply(opening_id, claim);
+                transcript.send_scalar(&claim);
+                claim
+            })
             .collect();
-        claims.iter().for_each(|claim| {
-            transcript.append_scalar(claim);
-        });
-        let r_concat = [r_address.as_slice(), r_cycle.as_slice()].concat();
 
         let shared_eq_address = Arc::new(RwLock::new(EqAddressState::new(&r_address)));
         let shared_eq_cycle = self
@@ -290,7 +316,8 @@ where
         self.sumchecks.insert(key, sumcheck_instance);
     }
 
-    pub fn append_virtual<T: Transcript>(
+    /// Adds an opening of a virtual polynomial at `opening_point`; its `claim` is sent.
+    pub fn append_virtual<T: ProvingTranscript>(
         &mut self,
         transcript: &mut T,
         opening_id: OpeningId,
@@ -306,26 +333,17 @@ where
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }
+        if self.is_bound(opening_id, &opening_point.r) {
+            return;
+        }
         #[cfg(any(test, feature = "test-feature"))]
         let claim = forgery::apply(opening_id, claim);
 
-        transcript.append_scalar(&claim);
+        transcript.send_scalar(&claim);
 
         self.openings.insert(opening_id, (opening_point, claim));
         #[cfg(any(test, feature = "test-feature"))]
         self.appended_virtual_openings.borrow_mut().push(opening_id);
-    }
-
-    /// Take the openings, removing the points to reduce proof size
-    ///
-    /// # Returns:
-    /// `Openings<F>` - The openings with points removed
-    pub fn take(&mut self) -> Openings<F> {
-        // to reduce proof size, remove all the opening points from accumulator.openings and just leave the claims
-        for (_, opening) in self.openings.iter_mut() {
-            opening.0.r.clear();
-        }
-        std::mem::take(&mut self.openings)
     }
 }
 
@@ -397,7 +415,7 @@ where
         skip_all,
         name = "ProverOpeningAccumulator::prove_batch_opening_sumcheck"
     )]
-    pub fn prove_batch_opening_sumcheck<T: Transcript>(
+    pub fn prove_batch_opening_sumcheck<T: ProvingTranscript>(
         &mut self,
         transcript: &mut T,
     ) -> (SumcheckInstanceProof<F>, Vec<F::Challenge>) {
@@ -432,7 +450,7 @@ where
     }
 
     /// Finalizes the batch opening reduction sumcheck.
-    /// Uses cached claims from `cache_openings`, appends them to transcript, derives gamma powers,
+    /// Uses the claims the groups sent and cached, derives gamma powers,
     /// and cleans up sumcheck instances.
     /// Returns the state needed for Stage 8.
     #[tracing::instrument(
@@ -451,7 +469,6 @@ where
                 .unzip();
         debug_assert!(keys.iter().eq(self.sumchecks.keys()));
 
-        transcript.append_scalars(&sumcheck_claims);
         let gamma_powers: Vec<F> = transcript.challenge_scalar_powers(sumcheck_claims.len());
 
         // Per-polynomial coefficient of the joint RLC: Σ over the instances

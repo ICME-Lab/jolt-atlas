@@ -24,7 +24,7 @@ use atlas_algebra::{
         thread::{drop_in_background_thread, unsafe_allocate_zero_vec},
     },
 };
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 use num_traits::Zero;
@@ -71,7 +71,7 @@ impl<F: JoltField> RelationWitness<F> for OpeningProofReductionSumcheckProver<F>
     }
 
     /// The point and the coefficients: the input claim's setup. The reduced claim the output
-    /// expression reads is the prover's own final claim, sent in the proof.
+    /// expression reads is the prover's own final claim, sent once the rounds are bound.
     fn setup(&self) -> &RelationSetup<F> {
         &self.setup
     }
@@ -80,17 +80,19 @@ impl<F: JoltField> RelationWitness<F> for OpeningProofReductionSumcheckProver<F>
         Vec::new()
     }
 
-    /// The group produces no openings; its final claim is cached for the joint opening proof.
-    fn append_claims<T: Transcript>(
+    /// The group produces no openings; its final claim is sent, and cached for the joint
+    /// opening proof.
+    fn append_claims<T: ProvingTranscript>(
         &self,
         accumulator: &mut ProverOpeningAccumulator<F>,
-        _transcript: &mut T,
+        transcript: &mut T,
         _sumcheck_challenges: &[F::Challenge],
     ) {
         let claim = match &self.prover_state {
             ProverOpening::Dense(opening) => opening.final_claim(),
             ProverOpening::OneHot(opening) => opening.final_claim(),
         };
+        transcript.send_scalar(&claim);
         accumulator.cache_opening_reduction_claim(self.key(), claim);
     }
 }

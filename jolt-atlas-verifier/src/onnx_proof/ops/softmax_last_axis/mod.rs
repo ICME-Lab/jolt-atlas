@@ -72,7 +72,7 @@ use atlas_algebra::{
 };
 use atlas_claims::{challenge, derived, opening};
 use atlas_sumcheck::shout;
-use atlas_transcript::Transcript;
+use atlas_transcript::VerifyingTranscript;
 use common::{
     consts::{MODEL_SCALE, SOFTMAX_CLAMP_BOUND},
     CommittedPoly, VirtualPoly,
@@ -266,7 +266,7 @@ impl SoftmaxOpen {
     }
 
     /// Append the openings. `Err` if the accumulator lacks a claim or point it reads.
-    pub fn verify<F: JoltField, T: Transcript>(
+    pub fn verify<F: JoltField, T: VerifyingTranscript>(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
@@ -585,7 +585,7 @@ pub fn clamp_read(node: &ComputationNode) -> TableRead {
 /// The verifier of the table read at the reads' point: the output, sum and shifted sum tables
 /// through the table address. `Err` if the tables are not available or the accumulator lacks
 /// a claim the read reads.
-pub fn read_verifier<F: JoltField, T: Transcript>(
+pub fn read_verifier<F: JoltField, T: VerifyingTranscript>(
     shape: SoftmaxShape,
     accumulator: &VerifierOpeningAccumulator<F>,
     transcript: &mut T,

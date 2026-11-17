@@ -6,14 +6,14 @@ use atlas_sumcheck::{
     hamming_booleanity::prover::HammingBooleanitySumcheckProver,
     hamming_weight::prover::HammingWeightSumcheckProver,
 };
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::small::*;
 
 pub(crate) fn build_stage2_provers<F: JoltField>(
     computation_node: &ComputationNode,
     trace: &Trace,
     accumulator: &ProverOpeningAccumulator<F>,
-    transcript: &mut impl Transcript,
+    transcript: &mut impl ProvingTranscript,
 ) -> (
     HammingBooleanitySumcheckProver<F>,
     SmallBooleanitySumcheckProver<F>,
@@ -59,7 +59,7 @@ pub(crate) fn build_stage3_prover<F: JoltField>(
     computation_node: &ComputationNode,
     trace: &Trace,
     accumulator: &ProverOpeningAccumulator<F>,
-    transcript: &mut impl Transcript,
+    transcript: &mut impl ProvingTranscript,
 ) -> HammingWeightSumcheckProver<F> {
     let Op::GatherSmall(gather_op) = &computation_node.operator else {
         panic!("Expected GatherSmall operator")

@@ -43,7 +43,7 @@ use atlas_sumcheck::{
     shout::RaOneHotEncoding,
 };
 use atlas_trace::{semantics::tables::TableKind, Op, SemVersion};
-use atlas_transcript::Transcript;
+use atlas_transcript::VerifyingTranscript;
 use common::{
     consts::{MODEL_SCALE, XLEN},
     CommittedPoly, VirtualPoly,
@@ -437,7 +437,7 @@ where
 /// The verifier of a prefix-suffix read: the operand's opening appended at the cycle point,
 /// then the read-raf relation of the read's table set up. `Err` if the accumulator lacks a
 /// claim the read reads.
-pub fn table_read_verifier<F: JoltField, T: Transcript>(
+pub fn table_read_verifier<F: JoltField, T: VerifyingTranscript>(
     read: &TableRead,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,

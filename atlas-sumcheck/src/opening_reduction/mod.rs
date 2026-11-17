@@ -5,10 +5,11 @@
 
 use crate::relation::not_derived;
 use crate::{
-    opening_proof::{OpeningId, SumcheckId},
+    opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator},
     relation::{
-        Produces, Relation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
-        RelationOpening, RelationSetup, RelationVerifier,
+        relation_input_claim, DynRelationVerifier, Produces, Relation, RelationChallenge,
+        RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
+        RelationVerifier,
     },
 };
 use allocative::Allocative;
@@ -27,10 +28,12 @@ use atlas_algebra::{
     utils::{expanding_table::ExpandingTable, math::Math},
 };
 use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
+use atlas_transcript::VerifyingTranscript;
 use common::parallel::par_enabled;
 use common::CommittedPoly;
 use num_traits::Zero;
 use rayon::prelude::*;
+use std::cell::Cell;
 use std::ops::Mul;
 
 /// Degree of the sumcheck round polynomials in opening reduction.
@@ -86,7 +89,7 @@ where
     pub point: Vec<F>,
     /// Per-polynomial coefficients `ρ^i`.
     pub coefficients: Vec<F>,
-    /// The group's reduced claim, from the proof.
+    /// The group's reduced claim, read once the reduction sumcheck's rounds are bound.
     pub sumcheck_claim: Option<F>,
 }
 
@@ -127,26 +130,85 @@ impl<F: JoltField> OpeningReductionGroup<F> {
             .collect();
     }
 
-    /// The group's reduction check, set up with its point, coefficients and reduced claim.
-    pub fn verifier(&self) -> RelationVerifier<F, OpeningReductionRelation> {
-        let relation = OpeningReductionRelation::group(
-            self.polynomials.clone(),
-            self.sumcheck_id,
-            self.num_vars(),
-        );
-        let mut challenges = coefficient_challenges(&self.coefficients);
-        challenges.push((
-            RelationChallenge::Claim,
-            self.sumcheck_claim
-                .expect("the reduced claims are loaded before the sumcheck"),
-        ));
-        RelationVerifier::at(
-            relation,
-            RelationSetup {
+    /// The group's reduction check, set up with its point and coefficients.
+    pub fn verifier(&self) -> OpeningReductionVerifier<F> {
+        OpeningReductionVerifier {
+            relation: OpeningReductionRelation::group(
+                self.polynomials.clone(),
+                self.sumcheck_id,
+                self.num_vars(),
+            ),
+            setup: RelationSetup {
                 incoming_point: self.point.clone(),
-                challenges,
+                challenges: coefficient_challenges(&self.coefficients),
             },
-        )
+            reduced_claim: Cell::new(None),
+        }
+    }
+}
+
+/// The verifier of one group's reduction as a batch member. The group produces no opening:
+/// what it produces is its reduced claim, which the prover sends once the rounds are bound, so
+/// the member reads it where a relation appends its produced openings and checks the output
+/// expression against it.
+pub struct OpeningReductionVerifier<F: JoltField> {
+    relation: OpeningReductionRelation,
+    /// The group's point and in-group coefficients.
+    setup: RelationSetup<F>,
+    reduced_claim: Cell<Option<F>>,
+}
+
+impl<F: JoltField> OpeningReductionVerifier<F> {
+    /// The group's reduced claim, once read.
+    pub fn reduced_claim(&self) -> Option<F> {
+        self.reduced_claim.get()
+    }
+}
+
+impl<F: JoltField, T: VerifyingTranscript> DynRelationVerifier<F, T>
+    for OpeningReductionVerifier<F>
+{
+    fn rounds(&self) -> usize {
+        self.relation.rounds()
+    }
+
+    fn degree(&self) -> usize {
+        self.relation.degree()
+    }
+
+    fn input_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+    ) -> Result<F, ProofVerifyError> {
+        relation_input_claim(&self.relation, &self.setup, accumulator)
+    }
+
+    fn output_claim(
+        &self,
+        accumulator: &VerifierOpeningAccumulator<F>,
+        sumcheck_challenges: &[F::Challenge],
+    ) -> Result<F, ProofVerifyError> {
+        let reduced_claim = self.reduced_claim.get().ok_or_else(|| {
+            ProofVerifyError::Malformed(
+                "an opening group's reduced claim is checked before it is read".into(),
+            )
+        })?;
+        let mut setup = self.setup.clone();
+        setup
+            .challenges
+            .push((RelationChallenge::Claim, reduced_claim));
+        let verifier = RelationVerifier::at(self.relation.clone(), setup);
+        DynRelationVerifier::<F, T>::output_claim(&verifier, accumulator, sumcheck_challenges)
+    }
+
+    fn append_produced(
+        &self,
+        _accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+        _sumcheck_challenges: &[F::Challenge],
+    ) -> Result<(), ProofVerifyError> {
+        self.reduced_claim.set(Some(transcript.read_scalar()?));
+        Ok(())
     }
 }
 
@@ -155,7 +217,7 @@ impl<F: JoltField> OpeningReductionGroup<F> {
 ///
 /// ```text
 /// input claim   Σ_i ρ^i · p_i(r)
-/// output claim  eq(r, ρ′) · c                         (c the group's reduced claim, from the proof)
+/// output claim  eq(r, ρ′) · c                         (c the group's reduced claim, sent after the rounds)
 /// ```
 ///
 /// **S ⊆ R.** `Σ_i ρ^i·p_i(r) = Σ_x eq(r, x)·Σ_i ρ^i·p_i(x)`, and `c` is claimed to be the folded
@@ -386,7 +448,6 @@ mod tests {
         poly::{
             multilinear::{MultilinearPolynomial, PolynomialEvaluation},
             one_hot::OneHotPolynomial,
-            point::{OpeningPoint, BIG_ENDIAN},
             rlc::build_materialized_rlc,
         },
     };
@@ -458,7 +519,6 @@ mod tests {
         // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
         let state = prover_opening_accumulator
             .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover_tr);
-        let sumcheck_claims: Vec<Fr> = state.sumcheck_claims.clone();
 
         // Build RLC
         let rlc = build_materialized_rlc(&state.poly_coeffs, &polynomial_map);
@@ -468,13 +528,6 @@ mod tests {
         verifier_tr.compare_to(prover_tr.state_history().to_vec());
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
-        // Take claims
-        for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
-            verifier_opening_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
             let id = OpeningId::new(
@@ -486,10 +539,8 @@ mod tests {
                 .unwrap();
         });
 
-        // Prepare - populate sumcheck claims
-        verifier_opening_accumulator
-            .prepare_for_sumcheck(&sumcheck_claims, &mut verifier_tr)
-            .unwrap();
+        // Prepare: the in-group coefficient
+        verifier_opening_accumulator.prepare_for_sumcheck(&mut verifier_tr);
 
         // Verify sumcheck
         let r_sumcheck = verifier_opening_accumulator
@@ -497,11 +548,11 @@ mod tests {
             .unwrap();
 
         // Finalize and store state in accumulator for Stage 8
-        let verifier_state = verifier_opening_accumulator.finalize_batch_opening_sumcheck(
-            r_sumcheck,
-            &sumcheck_claims,
-            &mut verifier_tr,
-        );
+        let verifier_state = verifier_opening_accumulator
+            .finalize_batch_opening_sumcheck(r_sumcheck, &mut verifier_tr)
+            .unwrap();
+        // The reduced claims the verifier read are the prover's.
+        assert_eq!(verifier_state.sumcheck_claims, state.sumcheck_claims);
 
         // The reduced claim is the RLC of the committed polynomials at the sumcheck point.
         assert_eq!(
@@ -615,7 +666,6 @@ mod tests {
         // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
         let state = prover_opening_accumulator
             .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover_tr);
-        let sumcheck_claims: Vec<Fr> = state.sumcheck_claims.clone();
 
         // Build RLC
         let rlc = build_materialized_rlc(&state.poly_coeffs, &polynomial_map);
@@ -625,13 +675,6 @@ mod tests {
         verifier_tr.compare_to(prover_tr.state_history().to_vec());
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
-        // Take claims
-        for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
-            verifier_opening_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
             let id = OpeningId::new(
@@ -654,10 +697,8 @@ mod tests {
                 .unwrap();
         });
 
-        // Prepare - populate sumcheck claims
-        verifier_opening_accumulator
-            .prepare_for_sumcheck(&sumcheck_claims, &mut verifier_tr)
-            .unwrap();
+        // Prepare: the in-group coefficient
+        verifier_opening_accumulator.prepare_for_sumcheck(&mut verifier_tr);
 
         // Verify sumcheck
         let r_sumcheck = verifier_opening_accumulator
@@ -665,11 +706,11 @@ mod tests {
             .unwrap();
 
         // Finalize and store state in accumulator for Stage 8
-        let verifier_state = verifier_opening_accumulator.finalize_batch_opening_sumcheck(
-            r_sumcheck,
-            &sumcheck_claims,
-            &mut verifier_tr,
-        );
+        let verifier_state = verifier_opening_accumulator
+            .finalize_batch_opening_sumcheck(r_sumcheck, &mut verifier_tr)
+            .unwrap();
+        // The reduced claims the verifier read are the prover's.
+        assert_eq!(verifier_state.sumcheck_claims, state.sumcheck_claims);
 
         // The reduced claim is the RLC of the committed polynomials at the sumcheck point.
         assert_eq!(
@@ -782,7 +823,6 @@ mod tests {
         // Finalize sumcheck (uses claims cached via cache_openings, derives gamma, cleans up)
         let state = prover_opening_accumulator
             .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover_tr);
-        let sumcheck_claims: Vec<Fr> = state.sumcheck_claims.clone();
 
         // Build RLC
         let rlc = build_materialized_rlc(&state.poly_coeffs, &polynomial_map);
@@ -792,13 +832,6 @@ mod tests {
         verifier_tr.compare_to(prover_tr.state_history().to_vec());
         let mut verifier_opening_accumulator: VerifierOpeningAccumulator<Fr> =
             VerifierOpeningAccumulator::new();
-        // Take claims
-        for (key, (_, value)) in &prover_opening_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
-            verifier_opening_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
 
         dense_polys.iter().enumerate().for_each(|(i, data)| {
             let id = OpeningId::new(
@@ -821,10 +854,8 @@ mod tests {
                 .unwrap();
         });
 
-        // Prepare - populate sumcheck claims
-        verifier_opening_accumulator
-            .prepare_for_sumcheck(&sumcheck_claims, &mut verifier_tr)
-            .unwrap();
+        // Prepare: the in-group coefficient
+        verifier_opening_accumulator.prepare_for_sumcheck(&mut verifier_tr);
 
         // Verify sumcheck
         let r_sumcheck = verifier_opening_accumulator
@@ -832,11 +863,11 @@ mod tests {
             .unwrap();
 
         // Finalize and store state in accumulator for Stage 8
-        let verifier_state = verifier_opening_accumulator.finalize_batch_opening_sumcheck(
-            r_sumcheck,
-            &sumcheck_claims,
-            &mut verifier_tr,
-        );
+        let verifier_state = verifier_opening_accumulator
+            .finalize_batch_opening_sumcheck(r_sumcheck, &mut verifier_tr)
+            .unwrap();
+        // The reduced claims the verifier read are the prover's.
+        assert_eq!(verifier_state.sumcheck_claims, state.sumcheck_claims);
 
         // The reduced claim is the RLC of the committed polynomials at the sumcheck point.
         assert_eq!(

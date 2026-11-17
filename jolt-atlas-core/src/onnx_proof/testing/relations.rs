@@ -724,8 +724,12 @@ fn softmax_proof_has_no_per_row_claims() {
         let pp = AtlasProverPreprocessing::<Fr, AkitaScheme>::new(
             AtlasSharedPreprocessing::preprocess(b.build()),
         );
-        let (proof, _, _) = prove::<Fr, Blake2bProver, AkitaScheme>(&pp, &inputs);
-        proof.opening_claims().openings().len()
+        let (_, _, debug) = prove::<Fr, Blake2bProver, AkitaScheme>(&pp, &inputs);
+        debug
+            .expect("test builds carry debug info")
+            .opening_accumulator
+            .openings
+            .len()
     };
     assert_eq!(claims(2), claims(16));
 }

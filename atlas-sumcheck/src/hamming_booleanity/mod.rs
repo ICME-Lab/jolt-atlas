@@ -135,7 +135,6 @@ mod tests {
     use atlas_algebra::field::fp128::Fp128 as Fr;
     use atlas_algebra::field::IntoOpening;
     use atlas_algebra::field::Ring;
-    use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
     use crate::relation::{prover::prove_relation, verify_relation};
@@ -178,14 +177,6 @@ mod tests {
         let _r_cycle: Vec<Fr> = verifier_transcript
             .challenge_vector_optimized::<Fr>(log_T)
             .into_opening();
-
-        // Take claims
-        for (key, (_, value)) in &prover_accumulator.openings {
-            let empty_point = OpeningPoint::<BIG_ENDIAN, Fr>::default();
-            verifier_accumulator
-                .openings
-                .insert(*key, (empty_point, *value));
-        }
 
         let verifier = params.into_verifier();
         verify_relation(

@@ -1,7 +1,7 @@
 //! Jolt Atlas Verifier - the verifier side of the ONNX proof system.
 //!
 //! This crate owns the proof object ([`ONNXProof`] with its
-//! [`ReducedOpeningProof`], [`Claims`] and [`ProofId`]/[`ProofType`] keys), its
+//! [`ReducedOpeningProof`] and [`ProofId`]/[`ProofType`] keys), its
 //! wire format ([`proof_serialization`]), and verification ([`onnx_proof`]:
 //! [`onnx_proof::verify`] and [`ONNXProof::verify`], the per-op verifiers, the
 //! relations they derive from, and the verifier preprocessing). It depends on
@@ -37,4 +37,4 @@ mod types;
 pub mod utils;
 
 pub use proof::{ONNXProof, ReducedOpeningProof};
-pub use types::{Claims, ProofId, ProofType};
+pub use types::{ProofId, ProofType};

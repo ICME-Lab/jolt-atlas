@@ -227,6 +227,7 @@ mod tests {
     use atlas_algebra::field::Field;
     use atlas_algebra::poly::multilinear::{MultilinearPolynomial, PolynomialEvaluation};
     use atlas_algebra::poly::point::{OpeningPoint, BIG_ENDIAN};
+    use atlas_algebra::serialize::Canonical;
     use atlas_transcript::{
         Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
     };
@@ -310,10 +311,11 @@ mod tests {
     }
 
     /// Prove the check over `digits` and verify it against `verifier_value`, the value claim
-    /// the verifier holds. `r`, `γ` and `β` are drawn first, as the caller's protocol draws them
-    /// after the value is fixed; the prover then claims its digits' true hypercube sum (over
-    /// `β`), which is the only claim its round messages can support, and the verifier must
-    /// reject unless that sum is `β·verifier_value`.
+    /// the verifier's protocol holds. `r`, `γ` and `β` are drawn first, as the caller's protocol
+    /// draws them after the value is fixed; the prover then claims its digits' true hypercube
+    /// sum (over `β`), which is the only claim its round messages can support, and the verifier
+    /// reads `verifier_value` where the stream carries that claim: it must reject unless the
+    /// two agree.
     fn run(base: u64, digits: &[Vec<u8>], verifier_value: Fr) -> Result<(), ProofVerifyError> {
         let n = digits.len();
         let mut prover_transcript = Blake2bProver::new(b"digit_range");
@@ -346,20 +348,15 @@ mod tests {
         let (proof, _) =
             prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 
-        let mut verifier_transcript =
-            Blake2bVerifier::new(b"digit_range", prover_transcript.narg().to_vec());
+        // The value claim is the stream's first message.
+        let mut narg = Vec::new();
+        Canonical::encode(&verifier_value, &mut narg).unwrap();
+        narg.extend_from_slice(&prover_transcript.narg()[narg.len()..]);
+        let mut verifier_transcript = Blake2bVerifier::new(b"digit_range", narg);
         let _: Vec<Fr> = verifier_transcript.challenge_vector(LOG_T);
         let _: Vec<Fr> = verifier_transcript.challenge_scalar_powers(n);
         let _: Fr = verifier_transcript.challenge_scalar();
         let mut verifier_accumulator = VerifierOpeningAccumulator::<Fr>::new();
-        for (key, (_, value)) in &prover_accumulator.openings {
-            verifier_accumulator
-                .openings
-                .insert(*key, (OpeningPoint::default(), *value));
-        }
-        verifier_accumulator
-            .openings
-            .insert(value_id(), (OpeningPoint::default(), verifier_value));
         verifier_accumulator.append_virtual(
             &mut verifier_transcript,
             value_id(),

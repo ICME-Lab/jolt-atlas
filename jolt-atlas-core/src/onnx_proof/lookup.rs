@@ -38,7 +38,7 @@ use atlas_sumcheck::{
     relation::prover::{DynRelationWitness, RelationWitness},
 };
 use atlas_trace::{Op, Tensor, Trace};
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 use common::consts::XLEN;
 use common::parallel::par_enabled;
 use rayon::{
@@ -365,7 +365,7 @@ fn table_read_addresses(read: &TableRead, operand: &Tensor<i64>) -> Vec<LookupBi
 /// opening appended at the cycle point with its claim from the trace, then the read-raf prover
 /// of the read's table set up. Returns the prover and the read's addresses, for its one-hot
 /// checks.
-pub fn table_read_prover<F: JoltField, T: Transcript>(
+pub fn table_read_prover<F: JoltField, T: ProvingTranscript>(
     read: &TableRead,
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,

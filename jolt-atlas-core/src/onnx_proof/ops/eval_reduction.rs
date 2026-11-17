@@ -6,13 +6,13 @@ use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::Prover;
 use atlas_algebra::{field::JoltField, poly::multilinear::MultilinearPolynomial};
 use atlas_sumcheck::evaluation_reduction::{EvalReductionProof, EvalReductionProtocol};
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 
 /// Prover-side methods of [`NodeEvalReduction`].
 pub trait NodeEvalReductionProve {
     /// Run node-output evaluation reduction on the prover side for the given node. A node with
     /// a single claim on its output needs no proof: the claim is the reduced instance.
-    fn prove<F: JoltField, T: Transcript>(
+    fn prove<F: JoltField, T: ProvingTranscript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
     ) -> Option<EvalReductionProof<F>>;
@@ -21,7 +21,7 @@ pub trait NodeEvalReductionProve {
 impl NodeEvalReductionProve for NodeEvalReduction {
     /// Run node-output evaluation reduction on the prover side for the given node.
     #[tracing::instrument(skip_all, name = "NodeEvalReduction::prove", fields(node = computation_node.idx))]
-    fn prove<F: JoltField, T: Transcript>(
+    fn prove<F: JoltField, T: ProvingTranscript>(
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
     ) -> Option<EvalReductionProof<F>> {
@@ -65,7 +65,7 @@ mod tests {
     use crate::node_view::ModelView;
     use crate::onnx_proof::testing::ModelBuilder;
     use crate::onnx_proof::{
-        prover, schedule::Schedule, verifier, AtlasSharedPreprocessing, Claims, ONNXProof, ProofId,
+        prover, schedule::Schedule, verifier, AtlasSharedPreprocessing, ONNXProof, ProofId,
         Verifier,
     };
     use atlas_algebra::field::fp128::Fp128 as Fr;
@@ -84,7 +84,7 @@ mod tests {
     use atlas_trace::Op;
     use atlas_trace::Tensor;
     use atlas_transcript::{
-        Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
+        Blake2bProver, Blake2bVerifier, ProvingTranscript, Transcript, VerifyingTranscript,
     };
     use common::VirtualPoly;
     use rand::{rngs::StdRng, SeedableRng};
@@ -246,18 +246,17 @@ mod tests {
             VirtualPoly::NodeOutput(producer_idx),
             SumcheckId::NodeExecution(consumer),
         );
-        verifier
-            .accumulator_mut()
-            .openings
-            .insert(key, (OpeningPoint::default(), claim));
+        // The claim reaches the accumulator through a stream of its own.
+        let mut claims = Blake2bProver::new(b"claims");
+        claims.send_scalar(&claim);
         verifier
             .accumulator_mut()
             .append_virtual(
-                &mut Blake2bVerifier::new(b"claims", Vec::new()),
+                &mut Blake2bVerifier::new(b"claims", claims.into_narg()),
                 key,
                 OpeningPoint::new(point.clone()),
             )
-            .expect("the claim is loaded");
+            .expect("the stream carries the claim");
 
         NodeEvalReduction::verify(&mut verifier, producer_idx)
             .expect("single opening should be accepted and propagated by verifier");
@@ -321,7 +320,7 @@ mod tests {
             .expect("model execution failed");
         let io = trace.io(shared.model());
 
-        // Build just enough prover state for (opening_claims, proofs, eval_reduction_proofs)
+        // Build just enough prover state for (proofs, eval_reduction_proofs, NARG string)
         // using output_claim + iop (no commitments, no reduced opening proof stage).
         let mut prover = Prover::<_, Blake2bProver>::new(shared.clone(), trace);
         let mut proofs = BTreeMap::new();
@@ -336,9 +335,7 @@ mod tests {
             &mut eval_reduction_proofs,
         );
 
-        let opening_claims = Claims::from_parts(prover.accumulator.take());
         let partial_proof = ONNXProof::<_, MockCommitScheme<Fr>>::from_parts(
-            opening_claims,
             proofs,
             (),
             vec![],

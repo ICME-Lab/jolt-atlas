@@ -7,15 +7,11 @@
 //! A site whose mutation is accepted is a dead field (proof malleability) or
 //! an orphan claim; a verifier panic is a robustness bug.
 
-use atlas_algebra::field::{Field, Ring};
-use atlas_algebra::poly::{
-    point::{OpeningPoint, BIG_ENDIAN},
-    univariate::{CompressedPoly, UnivariatePoly},
-};
+use atlas_algebra::field::Field;
+use atlas_algebra::poly::univariate::{CompressedPoly, UnivariatePoly};
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
-use common::VirtualPoly;
 use num_traits::One;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
@@ -150,12 +146,6 @@ impl PcsMutations for AkitaScheme {
 /// One mutation of a proof or its IO.
 #[derive(Clone, Debug)]
 pub(crate) enum Site {
-    /// `opening_claims[id] += 1`.
-    Claim(OpeningId),
-    /// Remove `opening_claims[id]`.
-    ClaimRemoved(OpeningId),
-    /// Insert a claim for an id nothing consumes.
-    ClaimOrphan,
     /// Insert a sumcheck proof under an id nothing consumes.
     ProofOrphan,
     /// One compressed round-polynomial coefficient `+= 1`.
@@ -187,8 +177,6 @@ pub(crate) enum Site {
     BatchCommitment(BatchSite),
     /// Reduced-opening sumcheck coefficient `+= 1`.
     ReducedRoundCoeff { round: usize, k: usize },
-    /// `sumcheck_claims[i] += 1`.
-    ReducedClaim { i: usize },
     /// No reduced opening proof at all.
     ReducedRemoved,
     /// The reduced opening proof of a second honest execution.
@@ -281,14 +269,6 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
     let all = exhaustive();
     let mut sites = vec![];
 
-    let mut strata = std::collections::HashSet::new();
-    for id in proof.opening_claims().openings().keys() {
-        if all || strata.insert(opening_stratum(id, model)) {
-            sites.push(Site::Claim(*id));
-            sites.push(Site::ClaimRemoved(*id));
-        }
-    }
-    sites.push(Site::ClaimOrphan);
     sites.push(Site::ProofOrphan);
 
     for (id, sc) in proof.proofs() {
@@ -381,19 +361,6 @@ pub(crate) fn enumerate_sites<PCS: PcsMutations>(
                 sites.push(Site::ReducedRoundCoeff { round, k });
             }
         }
-        let claims = rop.sumcheck_claims().len();
-        let chosen: Vec<usize> = if all || claims <= 8 {
-            (0..claims).collect()
-        } else {
-            (0..claims)
-                .collect::<Vec<_>>()
-                .choose_multiple(&mut rng, 8)
-                .copied()
-                .collect()
-        };
-        for i in chosen {
-            sites.push(Site::ReducedClaim { i });
-        }
         sites.push(Site::ReducedRemoved);
         sites.push(Site::ReducedSpliced);
         for s in PCS::sites(rop.joint_opening_proof()) {
@@ -443,30 +410,6 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
 ) {
     let one = PCS::Field::one();
     match site {
-        Site::Claim(id) => {
-            proof
-                .opening_claims_mut()
-                .openings_mut()
-                .get_mut(id)
-                .expect("site")
-                .1 += one
-        }
-        Site::ClaimRemoved(id) => {
-            proof.opening_claims_mut().openings_mut().remove(id);
-        }
-        Site::ClaimOrphan => {
-            let id = OpeningId::new(
-                VirtualPoly::NodeOutput(usize::MAX - 7),
-                SumcheckId::NodeExecution(usize::MAX - 7),
-            );
-            proof.opening_claims_mut().openings_mut().insert(
-                id,
-                (
-                    OpeningPoint::<BIG_ENDIAN, PCS::Field>::default(),
-                    PCS::Field::from_u64(7),
-                ),
-            );
-        }
         Site::RoundCoeff {
             proof: id,
             round,
@@ -535,13 +478,6 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
             .sumcheck_proof_mut()
             .compressed_polys[*round]
             .edit(|c| c[*k] += one),
-        Site::ReducedClaim { i } => {
-            proof
-                .reduced_opening_proof_mut()
-                .as_mut()
-                .expect("site")
-                .sumcheck_claims_mut()[*i] += one
-        }
         Site::ReducedRemoved => *proof.reduced_opening_proof_mut() = None,
         Site::ReducedSpliced => {
             *proof.reduced_opening_proof_mut() = other.reduced_opening_proof().cloned()
@@ -583,9 +519,6 @@ pub(crate) fn apply_site<PCS: PcsMutations>(
 /// A short label for grouping sites in reports.
 pub(crate) fn site_class(site: &Site) -> &'static str {
     match site {
-        Site::Claim(_) => "Claim",
-        Site::ClaimRemoved(_) => "ClaimRemoved",
-        Site::ClaimOrphan => "ClaimOrphan",
         Site::RoundCoeff { .. } => "RoundCoeff",
         Site::RoundExtraCoeff { .. } => "RoundExtraCoeff",
         Site::RoundDropped { .. } => "RoundDropped",
@@ -599,7 +532,6 @@ pub(crate) fn site_class(site: &Site) -> &'static str {
         Site::CommitmentDropped => "CommitmentDropped",
         Site::BatchCommitment(_) => "BatchCommitment",
         Site::ReducedRoundCoeff { .. } => "ReducedRoundCoeff",
-        Site::ReducedClaim { .. } => "ReducedClaim",
         Site::ReducedRemoved => "ReducedRemoved",
         Site::ReducedSpliced => "ReducedSpliced",
         Site::ReducedPcs(_) => "ReducedPcs",

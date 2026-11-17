@@ -134,16 +134,25 @@ struct Honest<PCS: CommitmentScheme> {
     inputs: Vec<Tensor<i32>>,
     proof: ONNXProof<PCS::Field, PCS>,
     io: ModelExecutionIO,
+    /// Every opening the prover bound, in id order.
+    openings: Vec<OpeningId>,
 }
 
 fn honest<PCS: CommitmentScheme>(m: ProbeModel) -> Honest<PCS> {
     let shared = AtlasSharedPreprocessing::preprocess(m.model);
     let prover_pp = AtlasProverPreprocessing::<PCS::Field, PCS>::new(shared);
     let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
-    let (proof, io, _) = prove::<PCS::Field, Blake2bProver, PCS>(&prover_pp, &m.inputs);
+    let (proof, io, debug) = prove::<PCS::Field, Blake2bProver, PCS>(&prover_pp, &m.inputs);
     verify::<PCS::Field, Blake2bVerifier, PCS>(&proof, &verifier_pp, &io, None)
         .expect("probe model must prove honestly");
+    let openings = debug
+        .expect("test builds carry debug info")
+        .opening_accumulator
+        .openings
+        .into_keys()
+        .collect();
     Honest {
+        openings,
         name: m.name,
         prover_pp,
         verifier_pp,
@@ -680,14 +689,10 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
 
 /// Stratified sample of opening ids: one per (polynomial kind, sumcheck
 /// kind, op kind of the executing node). Exhaustive mode takes all.
-fn forgery_targets<PCS: CommitmentScheme>(
-    proof: &ONNXProof<PCS::Field, PCS>,
-    model: &Model,
-    all: bool,
-) -> Vec<OpeningId> {
+fn forgery_targets(openings: &[OpeningId], model: &Model, all: bool) -> Vec<OpeningId> {
     let mut seen = std::collections::HashSet::new();
     let mut targets = vec![];
-    for id in proof.opening_claims().openings().keys() {
+    for id in openings {
         if all || seen.insert(opening_stratum(id, model)) {
             targets.push(*id);
         }
@@ -708,7 +713,7 @@ fn opening_forgery_sweep_for<PCS: PcsMutations>() {
     let mut unreached: Vec<String> = vec![];
     for m in probe_models() {
         let h = honest::<PCS>(m);
-        let targets = forgery_targets(&h.proof, h.prover_pp.model(), all);
+        let targets = forgery_targets(&h.openings, h.prover_pp.model(), all);
         let mut rejected = 0usize;
         for id in &targets {
             forgery::set(Some(*id));
@@ -738,7 +743,7 @@ fn opening_forgery_sweep_for<PCS: PcsMutations>() {
             "opening forgery sweep [{}]: {} of {} openings targeted{}, {rejected} rejected",
             h.name,
             targets.len(),
-            h.proof.opening_claims().openings().len(),
+            h.openings.len(),
             if all {
                 " (exhaustive)"
             } else {
@@ -751,7 +756,7 @@ fn opening_forgery_sweep_for<PCS: PcsMutations>() {
     }
     assert!(
         unreached.is_empty(),
-        "{} opening ids in the proof were never appended through the accumulator:\n{}",
+        "{} opening ids the prover bound were never appended through the accumulator:\n{}",
         unreached.len(),
         unreached.join("\n")
     );

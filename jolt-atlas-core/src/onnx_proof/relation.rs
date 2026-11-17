@@ -40,7 +40,7 @@ use atlas_sumcheck::{
     opening_proof::{prover::ProverOpeningAccumulator, OpeningId, PolynomialId},
 };
 use atlas_trace::Trace;
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::relation::*;
 use rayon::prelude::*;
@@ -50,7 +50,7 @@ pub use atlas_sumcheck::relation::prover::{append_produced, RelationWitness};
 /// Prove a tie: append its produced openings with their claims
 /// ([`op_rel_tie_claims`](crate::onnx_proof::ops::op_rel_tie_claims)). Nothing else enters the
 /// transcript; [`verify_tie`] checks the input claim against the output expression.
-pub fn prove_tie<F: JoltField, T: Transcript>(
+pub fn prove_tie<F: JoltField, T: ProvingTranscript>(
     relation: &OpRel<F>,
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,
@@ -68,7 +68,7 @@ pub fn prove_tie<F: JoltField, T: Transcript>(
 /// An op relation set up on the prover's side, the mirror of [`op_rel_verifier`]: its setup
 /// run, then each of its setup opens appended at its coordinates of the incoming point with
 /// its claim from the trace.
-pub fn op_rel_params<F: JoltField, T: Transcript>(
+pub fn op_rel_params<F: JoltField, T: ProvingTranscript>(
     relation: OpRel<F>,
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,

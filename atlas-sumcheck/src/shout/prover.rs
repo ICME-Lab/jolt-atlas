@@ -16,11 +16,11 @@ use atlas_algebra::poly::{
 use atlas_algebra::{
     field::JoltField, poly::eq::EqPolynomial, utils::thread::unsafe_allocate_zero_vec,
 };
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 use common::parallel::par_enabled;
 use std::array;
 
-pub fn read_raf_prover<F: JoltField, T: Transcript>(
+pub fn read_raf_prover<F: JoltField, T: ProvingTranscript>(
     provider: &impl ReadRafProvider<F>,
     lookup_indices: &[usize],
     tables: &[&[i32]],
@@ -202,7 +202,7 @@ impl<F: JoltField> ProveRounds<F> for ReadRafProver<F> {
 /// 3. RaVirtual — no challenges
 ///
 /// Returns `[RaVirtual, Booleanity (+ Hamming weight)]`.
-pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
+pub fn ra_onehot_provers<F: JoltField, T: ProvingTranscript>(
     encoding: &impl RaOneHotEncoding,
     lookup_indices: &[usize],
     accumulator: &dyn OpeningAccumulator<F>,
@@ -213,7 +213,7 @@ pub fn ra_onehot_provers<F: JoltField, T: Transcript>(
 }
 
 /// [`ra_onehot_provers`] with the challenges already drawn (no transcript).
-pub fn ra_onehot_provers_with<F: JoltField, T: Transcript>(
+pub fn ra_onehot_provers_with<F: JoltField, T: ProvingTranscript>(
     encoding: &impl RaOneHotEncoding,
     lookup_indices: &[usize],
     accumulator: &dyn OpeningAccumulator<F>,
@@ -226,7 +226,7 @@ pub fn ra_onehot_provers_with<F: JoltField, T: Transcript>(
 
 /// Build the RA one-hot provers from resolved parameters (no accumulator
 /// or transcript access — safe to run in parallel across instances).
-pub fn ra_onehot_provers_from_params<F: JoltField, T: Transcript>(
+pub fn ra_onehot_provers_from_params<F: JoltField, T: ProvingTranscript>(
     params: RaOneHotParams<F>,
     lookup_indices: &[usize],
 ) -> [Box<dyn DynRelationWitness<F, T>>; 2] {

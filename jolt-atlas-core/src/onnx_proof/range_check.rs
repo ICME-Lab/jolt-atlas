@@ -12,7 +12,7 @@ use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::digit_range::{prover::DigitRangeProver, DigitRangeParams};
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::relation::prover::DynRelationWitness;
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::range_check::*;
 use rayon::prelude::*;
@@ -117,7 +117,7 @@ pub fn digit_columns<T: Copy + Into<u64> + Sync>(values: &[T], n: usize) -> Vec<
 }
 
 /// Build a digit range-check prover over digit columns.
-pub fn digit_columns_provers<F: JoltField, T: Transcript>(
+pub fn digit_columns_provers<F: JoltField, T: ProvingTranscript>(
     params: DigitRangeParams<F>,
     digits: Vec<Vec<u8>>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {

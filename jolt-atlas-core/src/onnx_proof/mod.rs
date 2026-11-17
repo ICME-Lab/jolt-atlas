@@ -44,7 +44,7 @@ pub use jolt_atlas_verifier::onnx_proof::{
     append_inputs_to_transcript, schedule, verifier, verify_with, Verifier,
 };
 pub use jolt_atlas_verifier::{
-    proof_serialization, Claims, ONNXProof, ProofId, ProofType, ReducedOpeningProof,
+    proof_serialization, ONNXProof, ProofId, ProofType, ReducedOpeningProof,
 };
 pub use preprocessing::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,

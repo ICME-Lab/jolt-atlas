@@ -25,7 +25,7 @@ pub mod verifier;
 
 // ── Re-exports ───────────────────────────────────────────────────────────
 
-pub use crate::{proof_serialization, Claims, ONNXProof, ProofId, ProofType, ReducedOpeningProof};
+pub use crate::{proof_serialization, ONNXProof, ProofId, ProofType, ReducedOpeningProof};
 pub use preprocessing::{AtlasSharedPreprocessing, AtlasVerifierPreprocessing};
 pub use verifier::Verifier;
 
@@ -125,7 +125,7 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     // state history and before any commitment is absorbed.
     append_inputs_to_transcript(&mut verifier.transcript, io);
 
-    // Populate claims and commitments in the verifier accumulator.
+    // Absorb the commitments.
     verifier::populate_accumulator(proof, &mut verifier);
 
     // Verify output MLE at random point τ
@@ -138,10 +138,10 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     // Verify reduced opening proof
     verifier::verify_reduced_openings(proof, pp, &mut verifier)?;
 
-    // The proof was consumed exactly: no sumcheck or reduction proof left over, no claim unbound.
+    // The proof was consumed exactly: no sumcheck or reduction proof left over.
     verifier.check_consumed()?;
 
-    // Every proof-of-work nonce in the NARG string must have been read.
+    // Every claim and proof-of-work nonce in the NARG string must have been read.
     verifier.transcript.finish()
 }
 

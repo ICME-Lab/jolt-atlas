@@ -1,8 +1,6 @@
-//! Proof identifiers, proof classification, and the opening-claim wrapper.
+//! Proof identifiers and proof classification.
 
-use atlas_algebra::field::JoltField;
 use atlas_algebra::serialize::{Canonical, Error};
-use atlas_sumcheck::opening_proof::Openings;
 use std::io::{Read, Write};
 
 // ---------------------------------------------------------------------------
@@ -109,31 +107,5 @@ impl Canonical for ProofType {
     fn decode<R: Read>(reader: R) -> Result<Self, Error> {
         let tag = u8::decode(reader)?;
         ProofType::try_from(tag)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Claims
-// ---------------------------------------------------------------------------
-
-/// Wrapper for polynomial opening claims.
-#[derive(Debug, Clone)]
-pub struct Claims<F: JoltField>(Openings<F>);
-
-impl<F: JoltField> Claims<F> {
-    /// Wrap the prover's final openings.
-    pub fn from_parts(openings: Openings<F>) -> Self {
-        Self(openings)
-    }
-
-    /// The claims, keyed by opening id.
-    pub fn openings(&self) -> &Openings<F> {
-        &self.0
-    }
-
-    /// Mutable claims, for the soundness harness (`test-util`).
-    #[cfg(feature = "test-util")]
-    pub fn openings_mut(&mut self) -> &mut Openings<F> {
-        &mut self.0
     }
 }

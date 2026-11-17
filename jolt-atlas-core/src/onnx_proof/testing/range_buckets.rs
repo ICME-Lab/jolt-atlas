@@ -170,7 +170,7 @@ fn range_claim_rejects_a_bound_at_another_point() {
     use atlas_algebra::field::Ring;
     use atlas_algebra::poly::point::OpeningPoint;
     use atlas_sumcheck::opening_proof::VerifierOpeningAccumulator;
-    use atlas_transcript::{Blake2bVerifier, VerifyingTranscript};
+    use atlas_transcript::{Blake2bVerifier, ProvingTranscript, VerifyingTranscript};
     use common::VirtualPoly;
 
     let (node, divisor) = (5usize, 3usize);
@@ -185,17 +185,19 @@ fn range_claim_rejects_a_bound_at_another_point() {
     );
     let stage = |bound_point| {
         let mut accumulator = VerifierOpeningAccumulator::<Fp128>::new();
-        let mut transcript = Blake2bVerifier::new(b"range_claim", Vec::new());
         let remainder_id = Remainder::RsqrtDiv
             .opening_id(node)
             .expect("an advice opening");
-        for (id, at, claim) in [(remainder_id, point(1), 2), (bound_id, bound_point, 7)] {
-            accumulator
-                .openings
-                .insert(id, (OpeningPoint::default(), Fp128::from_u64(claim)));
+        let claims = [(remainder_id, point(1), 2), (bound_id, bound_point, 7)];
+        let mut prover = Blake2bProver::new(b"range_claim");
+        for (_, _, claim) in &claims {
+            prover.send_scalar(&Fp128::from_u64(*claim));
+        }
+        let mut transcript = Blake2bVerifier::new(b"range_claim", prover.into_narg());
+        for (id, at, _) in claims {
             accumulator
                 .append_virtual(&mut transcript, id, at)
-                .expect("the claim is loaded");
+                .expect("the stream carries the claim");
         }
         accumulator
     };

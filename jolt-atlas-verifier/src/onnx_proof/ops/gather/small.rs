@@ -13,7 +13,7 @@ use atlas_sumcheck::{
     hamming_weight::{HammingWeightSumcheckParams, HammingWeightSumcheckVerifier},
 };
 use atlas_trace::op::GatherSmall;
-use atlas_transcript::Transcript;
+use atlas_transcript::{Transcript, VerifyingTranscript};
 use common::CommittedPoly;
 
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its `ra`
@@ -81,7 +81,7 @@ fn dictionary_words(
 pub fn build_stage2_verifiers<F: JoltField>(
     shape: &GatherSmallShape,
     accumulator: &VerifierOpeningAccumulator<F>,
-    transcript: &mut impl Transcript,
+    transcript: &mut impl VerifyingTranscript,
 ) -> Result<
     (
         HammingBooleanitySumcheckVerifier<F>,
@@ -163,7 +163,7 @@ pub fn ra_booleanity_params<F: JoltField>(
 pub fn build_stage3_verifier<F: JoltField>(
     shape: &GatherSmallShape,
     accumulator: &VerifierOpeningAccumulator<F>,
-    transcript: &mut impl Transcript,
+    transcript: &mut impl VerifyingTranscript,
 ) -> Result<HammingWeightSumcheckVerifier<F>, ProofVerifyError> {
     let hw_params =
         ra_hamming_weight_params::<F>(&shape.node, shape.num_words, accumulator, transcript)?;

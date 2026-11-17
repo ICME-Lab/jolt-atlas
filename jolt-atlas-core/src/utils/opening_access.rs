@@ -8,13 +8,13 @@ use atlas_algebra::{
     poly::point::{OpeningPoint, BIG_ENDIAN},
 };
 use atlas_sumcheck::opening_proof::{prover::ProverOpeningAccumulator, OpeningId, PolynomialId};
-use atlas_transcript::Transcript;
+use atlas_transcript::ProvingTranscript;
 
 /// The prover's conversion of an accessor into a [`ProverAccOpeningProvider`].
 pub trait IntoProverProvider<'a, F: JoltField> {
     /// Convert this accessor into a prover provider that can append openings
     /// to the accumulator using `transcript` and `opening_point`.
-    fn into_provider<T: Transcript>(
+    fn into_provider<T: ProvingTranscript>(
         self,
         transcript: &'a mut T,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
@@ -24,7 +24,7 @@ pub trait IntoProverProvider<'a, F: JoltField> {
 impl<'a, F: JoltField> IntoProverProvider<'a, F>
     for AccOpeningAccessor<'a, ProverOpeningAccumulator<F>>
 {
-    fn into_provider<T: Transcript>(
+    fn into_provider<T: ProvingTranscript>(
         self,
         transcript: &'a mut T,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
@@ -38,7 +38,7 @@ impl<'a, F: JoltField> IntoProverProvider<'a, F>
 // The prover holds every claim it reads, so a missing one is a prover bug and panics.
 macro_rules! impl_accessor_methods {
     ($provider:ident) => {
-        impl<'a, F: JoltField, T: Transcript> $provider<'a, F, T> {
+        impl<'a, F: JoltField, T: ProvingTranscript> $provider<'a, F, T> {
             /// Read the reduced opening claim for the current node.
             ///
             /// Returns the post-reduction evaluation from the evaluation-reduction protocol,
@@ -86,13 +86,13 @@ macro_rules! impl_accessor_methods {
 // also carry claimed values into the accumulator.
 /// Prover-side helper that couples a node-scoped opening builder with a
 /// mutable opening accumulator.
-pub struct ProverAccOpeningProvider<'a, F: JoltField, T: Transcript> {
+pub struct ProverAccOpeningProvider<'a, F: JoltField, T: ProvingTranscript> {
     accessor: AccOpeningAccessor<'a, ProverOpeningAccumulator<F>>,
     transcript: &'a mut T,
     opening_point: OpeningPoint<BIG_ENDIAN, F>,
 }
 
-impl<'a, F: JoltField, T: Transcript> ProverAccOpeningProvider<'a, F, T> {
+impl<'a, F: JoltField, T: ProvingTranscript> ProverAccOpeningProvider<'a, F, T> {
     fn from_accessor(
         accessor: AccOpeningAccessor<'a, ProverOpeningAccumulator<F>>,
         transcript: &'a mut T,

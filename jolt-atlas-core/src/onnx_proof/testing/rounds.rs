@@ -25,8 +25,8 @@ use super::{
 };
 use crate::{
     node_view::ModelView,
-    onnx_proof::ops::{cube::CubeRelation, mul::MulRelation, square::SquareRelation},
-    onnx_proof::relation::{RelationParams, RelationProver, RelationSetup},
+    onnx_proof::ops::mul::product,
+    onnx_proof::relation::{OpRelKind, RelationParams, RelationProver, RelationSetup},
 };
 
 const NUM_VARS: usize = 3;
@@ -127,7 +127,7 @@ fn mul_rounds_where_eq_vanishes() {
         incoming_point: f.r_node.clone(),
         challenges: Vec::new(),
     };
-    let params = RelationParams::at(MulRelation::new(f.model.view(f.node)), setup);
+    let params = RelationParams::at(product(&f.model.view(f.node), OpRelKind::Mul), setup);
     let mut prover = RelationProver::initialize(&f.trace, params);
     f.check(&mut prover, &[&f.operands[0], &f.operands[1]]);
 }
@@ -139,7 +139,7 @@ fn square_rounds_where_eq_vanishes() {
         incoming_point: f.r_node.clone(),
         challenges: Vec::new(),
     };
-    let params = RelationParams::at(SquareRelation::new(f.model.view(f.node)), setup);
+    let params = RelationParams::at(product(&f.model.view(f.node), OpRelKind::Square), setup);
     let mut prover = RelationProver::initialize(&f.trace, params);
     f.check(&mut prover, &[&f.operands[0], &f.operands[0]]);
 }
@@ -151,7 +151,7 @@ fn cube_rounds_where_eq_vanishes() {
         incoming_point: f.r_node.clone(),
         challenges: Vec::new(),
     };
-    let params = RelationParams::at(CubeRelation::new(f.model.view(f.node)), setup);
+    let params = RelationParams::at(product(&f.model.view(f.node), OpRelKind::Cube), setup);
     let mut prover = RelationProver::initialize(&f.trace, params);
     f.check(
         &mut prover,

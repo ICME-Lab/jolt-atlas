@@ -73,12 +73,12 @@ impl OpLayout for Clamp {
 }
 
 impl OpPlan for Clamp {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         // The clamp table is the symmetric one at this bound.
         if self.bound_log as usize != CLAMP_BOUND {
             return Err(ProofVerifyError::Malformed(format!(

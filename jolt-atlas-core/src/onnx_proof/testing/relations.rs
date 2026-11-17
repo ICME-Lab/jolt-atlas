@@ -33,20 +33,18 @@ use crate::{
     onnx_proof::{
         fused_rebase,
         ops::{
-            cube::CubeRelation,
             div::DivRelation,
             einsum::{dot::EinsumDotProver, ContractionRelation},
             iff::IffRelation,
             mean_of_squares::{MeanOfSquaresReductionProver, MeanOfSquaresRelation},
-            mul::MulRelation,
+            mul::product,
             rsqrt::RsqrtRelation,
             scalar_const_div::ConstantDivisionRelation,
-            square::SquareRelation,
             sum::axis::SumAxisRelation,
         },
         relation::{
-            AtlasRelation, Relation, RelationChallenge, RelationExpr, RelationOpening,
-            RelationParams, RelationProver, RelationSetup, RelationWitnesses,
+            OpRelKind, Relation, RelationChallenge, RelationExpr, RelationOpening, RelationParams,
+            RelationProver, RelationSetup, RelationWitnesses,
         },
         trace_view::TraceView,
     },
@@ -60,15 +58,26 @@ use atlas_sumcheck::engine::prover::ProveRounds;
 use atlas_trace::{trace::LayerData, Model, Tensor, Trace};
 use rand::{rngs::StdRng, SeedableRng};
 
-/// `(op kind of the node, the relation's Spec type)` for every relation the prover has run.
-static DISPATCHES: Mutex<Vec<(OpKind, &'static str)>> = Mutex::new(Vec::new());
+/// `(op kind of the node, the name of the op the relation is for)` for every relation the
+/// prover has run: the node's own op name for an `OpRel` whose kind serves the node's
+/// operator, the relation's `Spec` type otherwise.
+static DISPATCHES: Mutex<Vec<(OpKind, String)>> = Mutex::new(Vec::new());
 
-/// Record that relation `R` was dispatched for `node`.
-pub(crate) fn record_dispatch<R: AtlasRelation>(node: &ComputationNode) {
-    DISPATCHES
-        .lock()
-        .expect("dispatch log")
-        .push((OpKind::of(&node.operator), std::any::type_name::<R::Spec>()));
+/// Record that a relation of `kind`, or one bound to the op type `spec`, was dispatched for
+/// `node`.
+pub(crate) fn record_dispatch(
+    node: &ComputationNode,
+    kind: Option<OpRelKind>,
+    spec: Option<&'static str>,
+) {
+    let op = OpKind::of(&node.operator);
+    let name = match (kind, spec) {
+        (Some(kind), _) if kind.serves(&node.operator) => op.to_string(),
+        (Some(kind), _) => format!("{kind:?}"),
+        (None, Some(spec)) => spec.to_string(),
+        (None, None) => String::new(),
+    };
+    DISPATCHES.lock().expect("dispatch log").push((op, name));
 }
 
 #[test]
@@ -81,23 +90,23 @@ fn relation_specs_match_their_dispatched_op_kind() {
     prove_verify_roundtrip::<AkitaScheme>(gauntlet.model, &inputs, Default::default());
 
     let dispatches = DISPATCHES.lock().expect("dispatch log");
-    for &(kind, spec) in dispatches.iter() {
+    for (kind, spec) in dispatches.iter() {
         let spec_name = spec.rsplit("::").next().expect("a type name");
         assert_eq!(spec_name, kind.to_string(), "{spec} dispatched for {kind}");
     }
     let relation_kinds: Vec<OpKind> = OpKind::iter()
         .filter(|&kind| disposition(kind) == Disposition::Relation)
         .collect();
-    for &(kind, spec) in dispatches.iter() {
+    for (kind, spec) in dispatches.iter() {
         assert!(
-            relation_kinds.contains(&kind),
+            relation_kinds.contains(kind),
             "{kind} ran through {spec} but its disposition is {:?}",
-            disposition(kind)
+            disposition(*kind)
         );
     }
     for kind in relation_kinds {
         assert!(
-            dispatches.iter().any(|&(k, _)| k == kind),
+            dispatches.iter().any(|(k, _)| *k == kind),
             "no {kind} node ran through its relation"
         );
     }
@@ -196,7 +205,7 @@ fn fused_product_reads_its_output_and_remainder() {
         VirtualPoly::RescaleRemainder(fused.idx),
         SumcheckId::NodeExecution(fused.idx),
     ));
-    let input = openings(&MulRelation::new(fused.clone()).input_expression::<Fr>());
+    let input = openings(&product::<Fr>(fused, OpRelKind::Mul).input_expression::<Fr>());
     assert_eq!(
         input,
         vec![RelationOpening::ReducedNodeOutput(fused.idx), remainder]
@@ -214,7 +223,7 @@ fn raw_product_reads_a_multi_consumer_reduction() {
         consumers(&nodes, raw.idx).len() >= 2,
         "the reduction folds several claims"
     );
-    let input = openings(&MulRelation::new(raw.clone()).input_expression::<Fr>());
+    let input = openings(&product::<Fr>(raw, OpRelKind::Mul).input_expression::<Fr>());
     assert_eq!(input, vec![RelationOpening::ReducedNodeOutput(raw.idx)]);
 }
 
@@ -231,7 +240,7 @@ fn produced_opening_joins_a_shared_operand_reduction() {
         })
         .expect("an operand shared by a product and another op");
     for mul in muls.iter().filter(|m| m.inputs.contains(&shared)) {
-        let produced = openings(&MulRelation::new(mul.clone()).output_expression::<Fr>());
+        let produced = openings(&product::<Fr>(mul, OpRelKind::Mul).output_expression::<Fr>());
         let operand = RelationOpening::Id(OpeningId::new(
             VirtualPoly::NodeOutput(shared),
             SumcheckId::NodeExecution(mul.idx),
@@ -244,7 +253,7 @@ fn produced_opening_joins_a_shared_operand_reduction() {
 /// `0..=degree`: round `j`'s message at `x` sums the output expression over every point whose
 /// first `j` coordinates are `challenges[..j]`, whose `j`-th is `x`, and whose rest is Boolean,
 /// with each produced opening read through `open(position, point)`.
-fn reference_messages<R: AtlasRelation + Relation<Fr>>(
+fn reference_messages<R: Relation<Fr>>(
     relation: &R,
     setup: &RelationSetup<Fr>,
     open: &dyn Fn(usize, &[Fr]) -> Fr,
@@ -291,7 +300,7 @@ fn reference_messages<R: AtlasRelation + Relation<Fr>>(
 
 /// Drive `member` on `challenges` and check every round message against the relation's
 /// reference messages.
-fn assert_matches_reference<R: AtlasRelation + Relation<Fr>>(
+fn assert_matches_reference<R: Relation<Fr>>(
     member: &mut dyn ProveRounds<Fr>,
     relation: &R,
     setup: &RelationSetup<Fr>,
@@ -378,9 +387,9 @@ fn relation_prover_equiv_engine() {
         let (_, trace, node, mut rng) = single_node(seed, &dims, build);
         let rng = &mut rng;
         match node.operator {
-            Op::Mul(_) => check_engine(|| MulRelation::new(node.clone()), &trace, rng),
-            Op::Square(_) => check_engine(|| SquareRelation::new(node.clone()), &trace, rng),
-            Op::Cube(_) => check_engine(|| CubeRelation::new(node.clone()), &trace, rng),
+            Op::Mul(_) => check_engine(|| product(&node, OpRelKind::Mul), &trace, rng),
+            Op::Square(_) => check_engine(|| product(&node, OpRelKind::Square), &trace, rng),
+            Op::Cube(_) => check_engine(|| product(&node, OpRelKind::Cube), &trace, rng),
             Op::Rsqrt(_) => check_engine(|| RsqrtRelation::new(node.clone()), &trace, rng),
             Op::Div(_) => check_engine(|| DivRelation::new(node.clone()), &trace, rng),
             Op::Iff(_) => check_engine(|| IffRelation::new(node.clone()), &trace, rng),

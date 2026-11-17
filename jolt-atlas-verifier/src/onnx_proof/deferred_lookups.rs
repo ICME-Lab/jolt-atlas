@@ -70,7 +70,9 @@ impl DeferredBatch {
 /// The post-loop plan over the packed range buckets, from the model: their value sumchecks as
 /// one batch, then their digit range checks as a second. The deferred batches follow, run by
 /// the interpreter from its queue.
-pub fn plan(model: &Model) -> Result<Plan, ProofVerifyError> {
+pub fn plan<F: atlas_algebra::field::JoltField>(
+    model: &Model,
+) -> Result<Plan<F>, ProofVerifyError> {
     let mut steps = Vec::new();
     let buckets = remainder_buckets(model)?;
     if !buckets.is_empty() {

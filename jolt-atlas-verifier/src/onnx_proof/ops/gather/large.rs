@@ -24,12 +24,12 @@ impl OpLayout for GatherLarge {
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its
 /// read addresses, queued for the post-loop one-hot batch.
 impl OpPlan for GatherLarge {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Relation {

@@ -21,12 +21,12 @@ impl OpLayout for GatherSmall {
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its `ra`
 /// (Hamming-Booleanity, Booleanity and Hamming weight), queued for the post-loop one-hot batch.
 impl OpPlan for GatherSmall {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         let shape = GatherSmallShape::for_node(model, node)?;
         Ok(Plan(vec![
             Step::Reduce,

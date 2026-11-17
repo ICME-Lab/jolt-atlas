@@ -71,12 +71,12 @@ impl OpLayout for MeanOfSquares {}
 /// The remainder bound `R < D` and the output's range are proven in the packed range buckets
 /// after the node loop (`global_clamp::node_range_claims`).
 impl OpPlan for MeanOfSquares {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Open(OpOpen::RescaleRemainder(node.clone())),

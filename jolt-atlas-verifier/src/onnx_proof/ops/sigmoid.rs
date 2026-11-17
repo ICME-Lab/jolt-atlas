@@ -37,12 +37,12 @@ impl OpLayout for Sigmoid {
 }
 
 impl OpPlan for Sigmoid {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(clamped_activation_plan(node, OpActivation::Sigmoid))
     }
 }

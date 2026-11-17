@@ -1,26 +1,28 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
-use crate::onnx_proof::{ops::mul::ProductRelation, ProofType};
-use atlas_algebra::utils::errors::ProofVerifyError;
+use crate::onnx_proof::{
+    ops::{mul::product, OpLayout},
+    plan::{OpPlan, OpRelation, Plan, Step},
+    relation::OpRelKind,
+    ProofType,
+};
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_trace::op::And;
 
-/// `And` on booleans is their product.
-pub type AndRelation = ProductRelation<And>;
+impl OpLayout for And {}
 
-crate::impl_plan_op!(And, AndRelation);
-
+/// `And` on booleans is their product ([`product`]).
 impl OpPlan for And {
-    fn plan(
+    fn plan<F: JoltField>(
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Relation {
                 proof: ProofType::Execution,
-                relation: OpRelation::And(AndRelation::new(node.clone())),
+                relation: OpRelation::Op(product(node, OpRelKind::And)),
             },
         ]))
     }

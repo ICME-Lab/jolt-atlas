@@ -20,12 +20,12 @@ use atlas_transcript::Transcript;
 crate::impl_plan_op!(IsNan, ZeroOutputRelation);
 
 impl OpPlan for IsNan {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {

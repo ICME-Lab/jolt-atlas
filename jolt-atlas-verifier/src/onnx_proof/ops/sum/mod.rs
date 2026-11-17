@@ -23,12 +23,12 @@ pub mod axis;
 /// Unless the node is a model output, its output is shown to lie in `i32` by a range claim in
 /// the packed range buckets after the node loop, as for [`Add`](super::add).
 impl OpPlan for Sum {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Relation {

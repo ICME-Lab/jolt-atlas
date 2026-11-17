@@ -50,12 +50,12 @@ pub mod mk_kn_mn;
 crate::impl_plan_op!(Einsum, ContractionRelation);
 
 impl OpPlan for Einsum {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(fused_rescale_plan(
             node,
             ProofType::EinsumMatmul,

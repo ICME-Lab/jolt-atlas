@@ -34,12 +34,12 @@ impl OpLayout for Div {
 }
 
 impl OpPlan for Div {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         // The division identity runs before the reduction: it adds a claim on the node's own
         // output (the quotient), which the reduction then folds in.
         // The remainder's bound `0 ≤ rem < right` is proven in the packed remainder buckets

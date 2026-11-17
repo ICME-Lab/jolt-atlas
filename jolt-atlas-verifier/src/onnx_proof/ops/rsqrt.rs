@@ -53,12 +53,12 @@ impl OpLayout for Rsqrt {
 /// evaluation reduction. The two remainder bounds are proven in the packed remainder buckets
 /// after the node loop (`global_clamp::node_remainders`).
 impl OpPlan for Rsqrt {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Relation {
                 proof: ProofType::Execution,

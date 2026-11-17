@@ -64,7 +64,7 @@ pub enum Deferred<F: JoltField, T: Transcript> {
     /// Set up in the node's turn; its verifiers are ready.
     Ready(Vec<Box<dyn DynRelationVerifier<F, T>>>),
     /// Set up when its batch runs.
-    Pending(Box<OpRelation>),
+    Pending(Box<OpRelation<F>>),
 }
 
 impl<'a, F: JoltField, T: Transcript> Verifier<'a, F, T> {
@@ -130,7 +130,11 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
 impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
     /// The interpreter: run `node`'s plan, step by step, in transcript order.
     #[tracing::instrument(skip_all, name = "Verifier::run_plan", fields(node = node.idx))]
-    pub fn run_plan(&mut self, node: &ComputationNode, plan: Plan) -> Result<(), ProofVerifyError> {
+    pub fn run_plan(
+        &mut self,
+        node: &ComputationNode,
+        plan: Plan<F>,
+    ) -> Result<(), ProofVerifyError> {
         self.run_steps(node.idx, Some(node), plan.0)
     }
 
@@ -168,7 +172,7 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
         &mut self,
         proof_idx: usize,
         node: Option<&ComputationNode>,
-        steps: Vec<Step>,
+        steps: Vec<Step<F>>,
     ) -> Result<(), ProofVerifyError> {
         for step in steps {
             match step {

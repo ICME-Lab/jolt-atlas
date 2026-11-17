@@ -169,12 +169,12 @@ impl OpLayout for SmoothRelu {
 /// batch; the table address's and the 32-bit address's one-hot checks, queued for the one-hot
 /// batch.
 impl OpPlan for SmoothRelu {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         if node.scale as usize != MODEL_SCALE {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "SmoothRelu verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} (got {})",

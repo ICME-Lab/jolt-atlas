@@ -30,12 +30,12 @@ crate::bind_relation!(ScalarConstDiv, ConstantDivisionRelation);
 impl OpLayout for ScalarConstDiv {}
 
 impl OpPlan for ScalarConstDiv {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         // The remainder's bound `0 ≤ rem < divisor` is a range claim in the packed remainder
         // buckets, which have no proof for a bound that is not positive.
         if self.divisor < 1 {

@@ -97,9 +97,13 @@ pub fn prove_tie<F: JoltField, T: Transcript, R: TieClaims<F>>(
 }
 
 /// Tell the test suite which relation ran for a node.
-pub(crate) fn note_dispatch<R: AtlasRelation>(relation: &R) {
+pub(crate) fn note_dispatch<R: RelationNode>(relation: &R) {
     #[cfg(test)]
-    crate::onnx_proof::testing::relations::record_dispatch::<R>(relation.node());
+    crate::onnx_proof::testing::relations::record_dispatch(
+        relation.node(),
+        relation.kind(),
+        relation.spec_name(),
+    );
     #[cfg(not(test))]
     let _ = relation;
 }
@@ -432,4 +436,21 @@ fn dense_message<F: JoltField, const D: usize>(
             |a, b| std::array::from_fn(|k| a[k] + b[k]),
         );
     UnivariatePoly::from_evals_and_hint(previous_claim, &evals)
+}
+
+impl<F: JoltField> RelationWitnesses<F> for OpRel<F> {
+    fn witnesses(&self, trace: &Trace, setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
+        crate::onnx_proof::ops::op_rel_witnesses(self, trace, setup)
+    }
+}
+
+impl<F: JoltField> TieClaims<F> for OpRel<F> {
+    fn claims(
+        &self,
+        trace: &Trace,
+        setup: &RelationSetup<F>,
+        accumulator: &dyn OpeningAccumulator<F>,
+    ) -> Vec<F> {
+        crate::onnx_proof::ops::op_rel_tie_claims(self, trace, setup, accumulator)
+    }
 }

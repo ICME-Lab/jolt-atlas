@@ -1,28 +1,27 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    ops::mul::ProductRelation,
+    ops::{mul::product, OpLayout},
     plan::{fused_rescale_plan, OpPlan, OpRelation, Plan},
+    relation::OpRelKind,
     ProofType,
 };
-use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_trace::{op::Cube, trace::ModelExecutionIO, Model};
 
-/// Element-wise cube as a product relation.
-pub type CubeRelation = ProductRelation<Cube>;
+impl OpLayout for Cube {}
 
-crate::impl_plan_op!(Cube, CubeRelation);
-
+/// Element-wise cube as a product ([`product`]).
 impl OpPlan for Cube {
-    fn plan(
+    fn plan<F: JoltField>(
         &self,
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(fused_rescale_plan(
             node,
             ProofType::RescaleArith,
-            OpRelation::Cube(CubeRelation::new(node.clone())),
+            OpRelation::Op(product(node, OpRelKind::Cube)),
         ))
     }
 }

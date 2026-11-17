@@ -217,6 +217,6 @@ fn scalar_const_div_rejects_a_non_positive_divisor() {
     let atlas_trace::Op::ScalarConstDiv(op) = &node.operator else {
         panic!("the output is a ScalarConstDiv");
     };
-    assert!(op.plan(&node, &model, &io).is_err());
+    assert!(op.plan::<Fp128>(&node, &model, &io).is_err());
     assert!(remainder_buckets(&model).is_err());
 }

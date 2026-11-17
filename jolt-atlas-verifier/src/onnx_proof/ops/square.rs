@@ -1,28 +1,27 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
-    ops::mul::ProductRelation,
+    ops::{mul::product, OpLayout},
     plan::{fused_rescale_plan, OpPlan, OpRelation, Plan},
+    relation::OpRelKind,
     ProofType,
 };
-use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_trace::{op::Square, trace::ModelExecutionIO, Model};
 
-/// Element-wise square as a product relation.
-pub type SquareRelation = ProductRelation<Square>;
+impl OpLayout for Square {}
 
-crate::impl_plan_op!(Square, SquareRelation);
-
+/// Element-wise square as a product ([`product`]).
 impl OpPlan for Square {
-    fn plan(
+    fn plan<F: JoltField>(
         &self,
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(fused_rescale_plan(
             node,
             ProofType::RescaleArith,
-            OpRelation::Square(SquareRelation::new(node.clone())),
+            OpRelation::Op(product(node, OpRelKind::Square)),
         ))
     }
 }

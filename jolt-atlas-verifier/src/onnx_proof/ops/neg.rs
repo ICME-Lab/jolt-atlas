@@ -21,12 +21,12 @@ use std::marker::PhantomData;
 crate::impl_plan_op!(Neg, SignedCopyRelation<Neg>);
 
 impl OpPlan for Neg {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {

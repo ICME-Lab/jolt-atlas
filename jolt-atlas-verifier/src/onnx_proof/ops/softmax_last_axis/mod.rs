@@ -146,12 +146,12 @@ impl OpLayout for SoftmaxLastAxis {
 /// queued for the post-loop lookup batch; the address link in the clear; the two addresses'
 /// one-hot checks, queued for the one-hot batch.
 impl OpPlan for SoftmaxLastAxis {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         // The clamp table's bound is `SOFTMAX_CLAMP_BOUND` at `MODEL_SCALE`.
         if node.scale as usize != MODEL_SCALE {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(

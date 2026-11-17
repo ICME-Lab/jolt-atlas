@@ -8,12 +8,12 @@ use std::sync::Arc;
 crate::impl_plan_op!(Input, PublicRelation<Input>);
 
 impl OpPlan for Input {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         // The public tensor the IO carries for this input node.
         let input = io
             .input_indices

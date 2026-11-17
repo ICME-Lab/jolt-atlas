@@ -26,14 +26,11 @@ use crate::onnx_proof::{
     op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProvider},
     ops::{
         activation_clamped::{small_table_verifier, ActivationClampOperands, SmallTableRaEncoding},
-        add::AccumulationRelation,
-        and::AndRelation,
         broadcast::BroadcastRelation,
         clamp::SymmetricClampOperands,
         concat::SubcubeTilingRelation,
         constant::PublicRelation,
         cos::CosRaEncoding,
-        cube::CubeRelation,
         div::{DivQuotientRelation, DivRelation},
         einsum::ContractionRelation,
         erf::ErfTableMarker,
@@ -42,7 +39,6 @@ use crate::onnx_proof::{
         is_nan::ZeroOutputRelation,
         mean_of_squares::MeanOfSquaresRelation,
         moveaxis::AxisPermutationRelation,
-        mul::MulRelation,
         neg::SignedCopyRelation,
         reshape::FlatCopyRelation,
         rsqrt::RsqrtRelation,
@@ -52,11 +48,10 @@ use crate::onnx_proof::{
         slice::SubcubeSelectRelation,
         smooth_relu::{GeluErfTable, GeluTanhTable, SiluTable, SmoothReluOperands},
         softmax_last_axis::{SoftmaxOpen, SoftmaxRelation, SoftmaxTie},
-        square::SquareRelation,
         sum::axis::SumAxisRelation,
         tanh::TanhTableMarker,
     },
-    relation::{verify_tie, RelationVerifier, SetupRelation},
+    relation::{verify_tie, OpRel, RelationVerifier, SetupRelation},
     ProofType,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
@@ -72,7 +67,7 @@ use atlas_sumcheck::{
     shout,
 };
 use atlas_trace::{
-    op::{Add, Constant, Identity, Input, Neg, Sub},
+    op::{Constant, Identity, Input, Neg},
     trace::ModelExecutionIO,
     Model,
 };
@@ -80,7 +75,7 @@ use atlas_transcript::Transcript;
 use common::{consts::XLEN, CommittedPoly, VirtualPoly};
 
 /// One thing the verifier does for a node.
-pub enum Step {
+pub enum Step<F: JoltField> {
     /// Reduce the claims on the node's output to one (the node's evaluation reduction).
     Reduce,
     /// Append advice openings at a stated point; their claims come from the proof.
@@ -90,7 +85,7 @@ pub enum Step {
         /// The proof slot of the sumcheck.
         proof: ProofType,
         /// The relation proven.
-        relation: OpRelation,
+        relation: OpRelation<F>,
     },
     /// Verify several relations as one batched sumcheck stored under `proof`, their setups run
     /// in list order.
@@ -98,12 +93,12 @@ pub enum Step {
         /// The proof slot of the batched sumcheck.
         proof: ProofType,
         /// The relations of the batch.
-        relations: Vec<OpRelation>,
+        relations: Vec<OpRelation<F>>,
     },
     /// Check a zero-round relation: append its openings and require the identity to hold.
     Tie {
         /// The relation checked.
-        relation: OpTie,
+        relation: OpTie<F>,
     },
     /// Queue `relation` for the post-loop batch `batch`, proven as one batched sumcheck with
     /// every other relation queued there. The relation is set up when the batch says
@@ -112,22 +107,22 @@ pub enum Step {
         /// The batch the relation joins.
         batch: DeferredBatch,
         /// The relation queued.
-        relation: OpRelation,
+        relation: OpRelation<F>,
     },
 }
 
 /// A node's verification, in transcript order.
-pub struct Plan(pub Vec<Step>);
+pub struct Plan<F: JoltField>(pub Vec<Step<F>>);
 
 /// An op's verification plan for one node.
 pub trait OpPlan {
     /// The steps that verify `node`, from the model and the public IO alone.
-    fn plan(
+    fn plan<F: JoltField>(
         &self,
         node: &ComputationNode,
         model: &Model,
         io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError>;
+    ) -> Result<Plan<F>, ProofVerifyError>;
 }
 
 /// The small activation table a clamped activation reads.
@@ -157,15 +152,13 @@ pub enum OpTrig {
 }
 
 /// A relation proven by a sumcheck, as a plan step holds it.
-pub enum OpRelation {
-    /// `And`: the product of two booleans.
-    And(AndRelation),
+pub enum OpRelation<F: JoltField> {
+    /// An op relation.
+    Op(OpRel<F>),
     /// `ScalarConstDiv`: the quotient by a constant.
     ConstantDivision(ConstantDivisionRelation),
     /// `Einsum`: the contraction, its input claim the fused rescale's `q·2^S + rem`.
     Contraction(ContractionRelation),
-    /// `Cube`: `x³`.
-    Cube(CubeRelation),
     /// `Div`: the floor division identity, at a point drawn from the transcript.
     Div(DivRelation),
     /// `GatherSmall` / `GatherLarge`: the dictionary read; the index operand's opening is
@@ -187,8 +180,6 @@ pub enum OpRelation {
     LookupOneHot(OpLookup, ComputationNode),
     /// `MeanOfSquares`: the squared-sum reduction, its input claim `q·D + rem`.
     MeanOfSquares(MeanOfSquaresRelation),
-    /// `Mul`: `left·right`.
-    Mul(MulRelation),
     /// `Rsqrt`: the fused division and square-root identities.
     Rsqrt(RsqrtRelation),
     /// A clamped activation's small-table execution: `γ` drawn, the clamped input's opening
@@ -198,8 +189,6 @@ pub enum OpRelation {
     SmallActivationOneHot(ComputationNode),
     /// A softmax stage, as `ops::softmax_last_axis` lists them.
     Softmax(SoftmaxRelation),
-    /// `Square`: `x²`.
-    Square(SquareRelation),
     /// `Sum`: the axis reduction of the output.
     SumAxis(SumAxisRelation),
     /// A trig op's table execution over the downscaled input.
@@ -230,10 +219,10 @@ pub enum OpLookup {
     SmoothRelu,
 }
 
-impl OpRelation {
+impl<F: JoltField> OpRelation<F> {
     /// The relation's verifiers (one, or the several of a stage or a one-hot check), set up
     /// against the accumulator and transcript.
-    pub fn verifiers<F: JoltField, T: Transcript>(
+    pub fn verifiers<T: Transcript>(
         self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
@@ -255,10 +244,9 @@ impl OpRelation {
             vec![Box::new(verifier)]
         }
         match self {
-            Self::And(relation) => one(relation, accumulator, transcript),
+            Self::Op(relation) => one(relation, accumulator, transcript),
             Self::ConstantDivision(relation) => one(relation, accumulator, transcript),
             Self::Contraction(relation) => one(relation, accumulator, transcript),
-            Self::Cube(relation) => one(relation, accumulator, transcript),
             Self::Div(relation) => one(relation, accumulator, transcript),
             Self::Gather(relation) => Ok(boxed(gather::gather_verifier(
                 relation,
@@ -340,7 +328,6 @@ impl OpRelation {
             )?
             .into()),
             Self::MeanOfSquares(relation) => one(relation, accumulator, transcript),
-            Self::Mul(relation) => one(relation, accumulator, transcript),
             Self::Rsqrt(relation) => one(relation, accumulator, transcript),
             Self::SmallActivation(OpActivation::Erf, node) => {
                 Ok(boxed(small_table_verifier::<F, ErfTableMarker>(
@@ -379,7 +366,6 @@ impl OpRelation {
             )?
             .into()),
             Self::Softmax(relation) => relation.verifiers(accumulator, transcript),
-            Self::Square(relation) => one(relation, accumulator, transcript),
             Self::SumAxis(relation) => one(relation, accumulator, transcript),
             Self::Trig(OpTrig::Cos, node) => one(
                 SmallTableRelation::<CosTable>::new(node),
@@ -415,9 +401,9 @@ impl OpRelation {
 }
 
 /// A zero-round relation or an in-the-clear check, as a plan step holds it.
-pub enum OpTie {
-    /// `Add`: the output is `left + right`.
-    AddAccumulation(AccumulationRelation<Add>),
+pub enum OpTie<F: JoltField> {
+    /// An op relation with no rounds.
+    Op(OpRel<F>),
     /// `MoveAxis`: the operand at the permuted point.
     AxisPermutation(AxisPermutationRelation),
     /// `Broadcast`: the operand replicated along the broadcast axes.
@@ -438,8 +424,6 @@ pub enum OpTie {
     Reshape(FlatCopyRelation),
     /// `Slice`: the operand's subcube the slice selects.
     Slice(SubcubeSelectRelation),
-    /// `Sub`: the output is `left − right`.
-    SubAccumulation(AccumulationRelation<Sub>),
     /// `IsNan`: the output is zero.
     ZeroOutput(ZeroOutputRelation),
     /// A trig op's input is `P·q + r` over its teleport quotient and remainder claims.
@@ -448,15 +432,15 @@ pub enum OpTie {
     Softmax(SoftmaxTie),
 }
 
-impl OpTie {
+impl<F: JoltField> OpTie<F> {
     /// Append the tie's produced openings and check its identity.
-    pub fn verify<F: JoltField, T: Transcript>(
+    pub fn verify<T: Transcript>(
         &self,
         accumulator: &mut VerifierOpeningAccumulator<F>,
         transcript: &mut T,
     ) -> Result<(), ProofVerifyError> {
         match self {
-            Self::AddAccumulation(relation) => verify_tie(relation, accumulator, transcript),
+            Self::Op(relation) => verify_tie(relation, accumulator, transcript),
             Self::AxisPermutation(relation) => verify_tie(relation, accumulator, transcript),
             Self::Broadcast(relation) => verify_tie(relation, accumulator, transcript),
             Self::Concat(relation) => verify_tie(relation, accumulator, transcript),
@@ -467,7 +451,6 @@ impl OpTie {
             Self::Neg(relation) => verify_tie(relation, accumulator, transcript),
             Self::Reshape(relation) => verify_tie(relation, accumulator, transcript),
             Self::Slice(relation) => verify_tie(relation, accumulator, transcript),
-            Self::SubAccumulation(relation) => verify_tie(relation, accumulator, transcript),
             Self::ZeroOutput(relation) => verify_tie(relation, accumulator, transcript),
             Self::TeleportInput(relation) => relation.verify(accumulator, transcript),
             Self::Softmax(tie) => tie.verify(accumulator, transcript),
@@ -533,7 +516,11 @@ impl OpOpen {
 /// is `out·2^S + rem`. The remainder, and the output unless the node is a model output, are
 /// range-checked in the packed buckets after the node loop. A node without a rescale
 /// (`bits == 0`) proves the arithmetic relation alone against its reduced output.
-pub fn fused_rescale_plan(node: &ComputationNode, proof: ProofType, relation: OpRelation) -> Plan {
+pub fn fused_rescale_plan<F: JoltField>(
+    node: &ComputationNode,
+    proof: ProofType,
+    relation: OpRelation<F>,
+) -> Plan<F> {
     let mut steps = vec![Step::Reduce];
     if fused_rebase::rebase_bits(node).is_some_and(|bits| bits > 0) {
         steps.push(Step::Open(OpOpen::RescaleRemainder(node.clone())));

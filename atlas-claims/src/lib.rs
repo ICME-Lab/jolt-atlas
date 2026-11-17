@@ -1,6 +1,7 @@
 //! The symbolic-relation layer: claim expressions ([`Expr`] over openings, derived values and
 //! challenges), the [`SymbolicSumcheck`] description every atlas sumcheck implements, and the
-//! claim-data traits.
+//! claim-data traits. [`Int`] is the coefficient ring of an expression stated once for every
+//! field.
 //!
 //! Owned by atlas. It was taken from upstream `a16z/jolt`'s `jolt-claims` (`claims`,
 //! `claim_data`, `symbolic`, `ops`, `sumcheck`) at rev `f3265b5a`, without the zkVM protocol
@@ -26,6 +27,7 @@
 
 mod claim_data;
 mod claims;
+mod int;
 mod ops;
 mod sumcheck;
 mod symbolic;
@@ -35,5 +37,6 @@ pub use claim_data::{
     OutputClaims, SumcheckChallenges,
 };
 pub use claims::{challenge, constant, derived, opening, Expr, Source, Term};
+pub use int::Int;
 pub use sumcheck::SumcheckDomain;
 pub use symbolic::SymbolicSumcheck;

@@ -41,12 +41,12 @@ impl OpLayout for Sin {
 /// teleport identity `a = P·q + r` in the clear, once `q` and `r` both hold claims at the
 /// reduced output point.
 impl OpPlan for Sin {
-    fn plan(
+    fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan, ProofVerifyError> {
+    ) -> Result<Plan<F>, ProofVerifyError> {
         if node.scale != MODEL_SCALE as u8 {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "Sin teleportation verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} \

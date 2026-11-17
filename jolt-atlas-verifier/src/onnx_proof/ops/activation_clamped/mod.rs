@@ -200,7 +200,10 @@ impl RaOneHotEncoding for SmallTableRaEncoding {
 
 /// The plan of a clamped activation reading `table`: the evaluation reduction, then the two
 /// stages queued for the post-loop lookup batch and their one-hot checks for the one-hot batch.
-pub fn clamped_activation_plan(node: &ComputationNode, table: OpActivation) -> Plan {
+pub fn clamped_activation_plan<F: atlas_algebra::field::JoltField>(
+    node: &ComputationNode,
+    table: OpActivation,
+) -> Plan<F> {
     Plan(vec![
         Step::Reduce,
         Step::Defer {

@@ -114,21 +114,27 @@ use crate::onnx_proof::{
         tanh::TanhTableMarker,
     },
     plan::{OpActivation, OpLookup, OpOpen, OpPlan, OpRelation, OpTie, OpTrig, Plan, Step},
-    relation::{prove_tie, RelationParams, RelationProver, RelationWitnesses},
+    relation::{
+        prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
+        RelationWitnesses,
+    },
     trace_view::TraceView,
     ProofId,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider, Target};
+use atlas_algebra::poly::multilinear::MultilinearPolynomial;
 use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable, SiluClampTable},
     relu::ReluTable,
     right_shift::RightShiftTable,
 };
 use atlas_sumcheck::digit_range::DigitRangeParams;
+use atlas_sumcheck::opening_proof::OpeningAccumulator;
 use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
 };
 use atlas_sumcheck::shout::{self, RaOneHotEncoding, RaOneHotParams};
+use atlas_trace::Trace;
 use common::consts::{TRIG_DOWNSCALE_BITS, XLEN};
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
@@ -181,7 +187,7 @@ pub enum Deferred<F: JoltField, T: Transcript> {
     /// Built in the node's turn.
     Ready(Vec<Box<dyn DynRelationWitness<F, T>>>),
     /// Built when its batch runs.
-    Pending(Box<OpRelation>),
+    Pending(Box<OpRelation<F>>),
 }
 
 /// Walk `node`'s plan on the prover side: every step the verifier's interpreter
@@ -191,7 +197,7 @@ pub enum Deferred<F: JoltField, T: Transcript> {
 pub fn prove_plan<F: JoltField, T: Transcript>(
     node: &ComputationNode,
     prover: &mut Prover<F, T>,
-    plan: Plan,
+    plan: Plan<F>,
 ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
     prove_steps(prover, node.idx, Some(node), plan.0)
 }
@@ -202,7 +208,7 @@ pub fn prove_steps<F: JoltField, T: Transcript>(
     prover: &mut Prover<F, T>,
     proof_idx: usize,
     node: Option<&ComputationNode>,
-    steps: Vec<Step>,
+    steps: Vec<Step<F>>,
 ) -> (Option<EvalReductionProof<F>>, ExecutionProofs<F>) {
     let mut reduction = None;
     let mut proofs = Vec::new();
@@ -319,7 +325,7 @@ enum Prepared<F: JoltField, T: Transcript> {
 
 /// The span a deferred relation's witness build runs under, so a batch's time stays
 /// attributable to the kinds of relation in it.
-fn witness_span(relation: &OpRelation) -> tracing::Span {
+fn witness_span<F: JoltField>(relation: &OpRelation<F>) -> tracing::Span {
     kind_span(witness_kind(relation))
 }
 
@@ -327,7 +333,7 @@ fn kind_span(kind: &'static str) -> tracing::Span {
     tracing::span!(tracing::Level::INFO, "deferred::witness", kind)
 }
 
-fn witness_kind(relation: &OpRelation) -> &'static str {
+fn witness_kind<F: JoltField>(relation: &OpRelation<F>) -> &'static str {
     match relation {
         OpRelation::Lookup(OpLookup::Relu, _) => "relu",
         OpRelation::Lookup(OpLookup::SymmetricClamp, _) => "clamp",
@@ -348,7 +354,7 @@ fn witness_kind(relation: &OpRelation) -> &'static str {
 
 /// The sequential part of a batch relation's prover.
 fn prepare<F: JoltField, T: Transcript>(
-    relation: OpRelation,
+    relation: OpRelation<F>,
     prover: &mut Prover<F, T>,
 ) -> (&'static str, Prepared<F, T>) {
     let kind = witness_kind(&relation);
@@ -487,7 +493,7 @@ fn build_one<F: JoltField, T: Transcript>(
 /// against the prover's accumulator and transcript. A lookup leaves its read addresses on the
 /// prover for the one-hot checks that follow it.
 pub fn relation_witnesses<F: JoltField, T: Transcript>(
-    relation: OpRelation,
+    relation: OpRelation<F>,
     prover: &mut Prover<F, T>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     fn engine<F: JoltField, T: Transcript, R: RelationWitnesses<F> + 'static>(
@@ -562,13 +568,12 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         vec![Box::new(exec)]
     }
     match relation {
-        OpRelation::And(relation) => engine(relation, prover),
+        OpRelation::Op(relation) => engine(relation, prover),
         OpRelation::ConstantDivision(relation) => engine(relation, prover),
         OpRelation::Contraction(relation) => {
             let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
             vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
         }
-        OpRelation::Cube(relation) => engine(relation, prover),
         OpRelation::Div(relation) => engine(relation, prover),
         OpRelation::Gather(relation) => {
             let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
@@ -646,7 +651,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 params,
             ))]
         }
-        OpRelation::Mul(relation) => engine(relation, prover),
         OpRelation::Rsqrt(relation) => engine(relation, prover),
         OpRelation::SmallActivation(OpActivation::Erf, node) => {
             small_activation::<F, T, ErfTableMarker>(&node, prover)
@@ -693,7 +697,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
             }
             witnesses
         }
-        OpRelation::Square(relation) => engine(relation, prover),
         OpRelation::SumAxis(relation) => engine(relation, prover),
         OpRelation::Trig(OpTrig::Cos, node) => trig::<F, T, CosTable>(node, prover),
         OpRelation::Trig(OpTrig::Sin, node) => trig::<F, T, SinTable>(node, prover),
@@ -767,7 +770,7 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
 }
 
 /// Append a plan tie's produced openings with the prover's claims.
-fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prover<F, T>) {
+fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie<F>, prover: &mut Prover<F, T>) {
     let expect = "the prover holds every claim it reads";
     let Prover {
         trace,
@@ -776,7 +779,7 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
         ..
     } = prover;
     match relation {
-        OpTie::AddAccumulation(relation) => prove_tie(relation, trace, accumulator, transcript),
+        OpTie::Op(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::AxisPermutation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Broadcast(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Concat(relation) => prove_tie(relation, trace, accumulator, transcript),
@@ -787,7 +790,6 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
         OpTie::Neg(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Reshape(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Slice(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::SubAccumulation(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::ZeroOutput(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::TeleportInput(relation) => {
             let node = &relation.node;
@@ -807,5 +809,43 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie, prover: &mut Prov
                 .append_nodeio(Target::Input(0), a_claim);
         }
         OpTie::Softmax(tie) => softmax_last_axis::prove_tie(tie, trace, accumulator, transcript),
+    }
+}
+
+/// The witnesses of an engine-proven [`OpRel`], aligned with its produced openings: a
+/// polynomial over the sumcheck's hypercube whose final bound value is the opening's claim.
+pub fn op_rel_witnesses<F: JoltField>(
+    relation: &OpRel<F>,
+    trace: &Trace,
+    _setup: &RelationSetup<F>,
+) -> Vec<MultilinearPolynomial<F>> {
+    let node = &relation.node;
+    match relation.kind {
+        OpRelKind::And | OpRelKind::Mul | OpRelKind::Square | OpRelKind::Cube => {
+            mul::product_witnesses(node, relation.kind, trace)
+        }
+        OpRelKind::AddAccumulation | OpRelKind::SubAccumulation => {
+            panic!("{:?} is a tie: it has no round witnesses", relation.kind)
+        }
+    }
+}
+
+/// The prover's values of a tie's produced openings, aligned with them at their opening
+/// points: read off the trace, or taken from claims the accumulator already holds where the
+/// tie fixes them.
+pub fn op_rel_tie_claims<F: JoltField>(
+    relation: &OpRel<F>,
+    trace: &Trace,
+    setup: &RelationSetup<F>,
+    _accumulator: &dyn OpeningAccumulator<F>,
+) -> Vec<F> {
+    let node = &relation.node;
+    match relation.kind {
+        OpRelKind::AddAccumulation | OpRelKind::SubAccumulation => {
+            add::accumulation_claims(node, trace, &setup.incoming_point)
+        }
+        OpRelKind::And | OpRelKind::Mul | OpRelKind::Square | OpRelKind::Cube => {
+            panic!("{:?} is proven by a sumcheck, not a tie", relation.kind)
+        }
     }
 }

@@ -4,7 +4,7 @@
 //! named by its [`RelId`]. [`Schedule::compile`] builds a model's: each node's steps in reverse
 //! topological order, written by its op's [`OpPlan::plan`] to a [`ScheduleBuilder`], then the
 //! steps [`ScheduleBuilder::finish`] adds for the whole model: the packed range buckets' value
-//! sumcheck and digit range check, the lookups sumcheck (every table read) and the one-hot
+//! sumcheck, the lookups sumcheck (every table read) and the one-hot
 //! sumcheck (every one-hot check of a read's addresses). `finish` checks that every relation
 //! is set up at most once and verified exactly once, and that no sumcheck is empty. The
 //! interpreter ([`Verifier::run`](super::Verifier::run)) executes the steps in order.
@@ -364,8 +364,8 @@ impl<F: JoltField> ScheduleBuilder<F> {
         self.one_hot.push(id);
     }
 
-    /// The schedule written, closed by the model-wide steps: the value sumcheck and the digit
-    /// range check of `buckets` (each one batch over the buckets), the lookups sumcheck, then
+    /// The schedule written, closed by the model-wide steps: the value sumcheck of `buckets`
+    /// (one batch over the buckets), the lookups sumcheck, then
     /// the one-hot sumcheck; a step with no member is left out. `Err` unless every relation is
     /// set up at most once, before its sumcheck, and verified exactly once (by one sumcheck or
     /// one tie), and every sumcheck has a member.
@@ -373,15 +373,8 @@ impl<F: JoltField> ScheduleBuilder<F> {
         if !buckets.is_empty() {
             self.batch(
                 buckets
-                    .iter()
-                    .cloned()
-                    .map(OpRelation::RemainderBucketValue)
-                    .collect(),
-            );
-            self.batch(
-                buckets
                     .into_iter()
-                    .map(OpRelation::RemainderBucketDigits)
+                    .map(OpRelation::RemainderBucketValue)
                     .collect(),
             );
         }
@@ -438,8 +431,6 @@ pub enum OpRelation<F: JoltField> {
     /// A packed range bucket's value relation: the range claims of its members
     /// ([`range_bucket::RangeClaim`](crate::onnx_proof::range_bucket::RangeClaim)).
     RemainderBucketValue(RangeBucket),
-    /// A packed range bucket's digit range check.
-    RemainderBucketDigits(RangeBucket),
 }
 
 impl<F: JoltField> OpRelation<F> {
@@ -453,7 +444,7 @@ impl<F: JoltField> OpRelation<F> {
                 Some(shape.node.idx)
             }
             Self::SoftmaxRead(shape) => Some(shape.idx()),
-            Self::RemainderBucketValue(_) | Self::RemainderBucketDigits(_) => None,
+            Self::RemainderBucketValue(_) => None,
         }
     }
 
@@ -476,13 +467,12 @@ impl<F: JoltField> OpRelation<F> {
             Self::GatherSmallHammingWeight(_) => "GatherSmallHammingWeight".to_string(),
             Self::SoftmaxRead(_) => "SoftmaxRead".to_string(),
             Self::RemainderBucketValue(bucket) => format!("BucketValue({})", bucket.idx),
-            Self::RemainderBucketDigits(bucket) => format!("BucketDigits({})", bucket.idx),
         }
     }
 
     /// The committed polynomials the relation opens: an op relation's committed produced and
     /// setup openings, a one-hot check's address chunks, a small gather's one-hot `ra`, a
-    /// digit range check's digit columns.
+    /// range bucket's digit columns.
     pub fn committed(&self) -> Vec<CommittedPoly> {
         match self {
             Self::Op(relation) => relation
@@ -495,11 +485,11 @@ impl<F: JoltField> OpRelation<F> {
                 })
                 .collect(),
             Self::OneHot(encoding) => encoding.committed_polys(),
-            Self::RemainderBucketDigits(bucket) => bucket.committed_polys(),
+            Self::RemainderBucketValue(bucket) => bucket.committed_polys(),
             Self::GatherSmallOneHot(shape) | Self::GatherSmallHammingWeight(shape) => {
                 vec![CommittedPoly::GatherRa(shape.node.idx)]
             }
-            Self::TableRead(_) | Self::SoftmaxRead(_) | Self::RemainderBucketValue(_) => Vec::new(),
+            Self::TableRead(_) | Self::SoftmaxRead(_) => Vec::new(),
         }
     }
 
@@ -541,10 +531,6 @@ impl<F: JoltField> OpRelation<F> {
             Self::RemainderBucketValue(bucket) => Ok(boxed(ValueParams::into_verifier(
                 range_check::remainder_value_params(bucket, accumulator, transcript)?,
             ))),
-            Self::RemainderBucketDigits(bucket) => Ok(boxed(
-                range_check::remainder_digit_range_params(bucket, accumulator, transcript)?
-                    .into_verifier(),
-            )),
         }
     }
 }

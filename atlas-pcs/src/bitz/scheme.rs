@@ -307,6 +307,16 @@ impl CommitmentScheme for BitzScheme {
         prover::commit(polys)
     }
 
+    /// A polynomial is its bit planes: one committed without a shift has coefficients below
+    /// two to its declared bits.
+    fn coefficient_bits(
+        batch_commitment: &Self::BatchCommitment,
+        commitment: &Self::Commitment,
+    ) -> Option<u32> {
+        let shape = batch_commitment.shapes.get(commitment.0 as usize)?;
+        (!shape.signed).then_some(shape.bits as u32)
+    }
+
     #[tracing::instrument(skip_all, name = "BitzScheme::prove_rlc")]
     fn prove_rlc<T: ProvingTranscript>(
         _setup: &Self::ProverSetup,

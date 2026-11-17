@@ -41,7 +41,7 @@ fn assert_schedule_pin(name: &str, pin: &str) {
 fn schedule_pin_op_gauntlet() {
     assert_schedule_pin(
         "op_gauntlet",
-        "8c55fa5eacca94a10b19d49f89b2a3199118b201f9945ae87a16f022a58fcd8e",
+        "3378335db2ac694d8641b28e9bb91b035fb4d524d999d5559d171c0a0a5ffa89",
     );
 }
 
@@ -49,7 +49,7 @@ fn schedule_pin_op_gauntlet() {
 fn schedule_pin_gpt2_tiny() {
     assert_schedule_pin(
         "gpt2-tiny",
-        "b0c4f4008d2e20559ed38ef76a3f53690fb9db054671fe5c0a353e797eebc4cd",
+        "42bc673b52a256f565335d559eee29bcd07e17e81c4ee04c8fd458e22f977649",
     );
 }
 
@@ -57,7 +57,7 @@ fn schedule_pin_gpt2_tiny() {
 fn schedule_pin_qwen2_tiny() {
     assert_schedule_pin(
         "qwen2-tiny",
-        "b2a43615dccf786870df70cf25340e3223022d028a6389505421d828493b78f9",
+        "b9c9301c44a820ed50e2f24a5ea9c268ea20d983bc3e9903b8d527975fc4138f",
     );
 }
 
@@ -65,7 +65,7 @@ fn schedule_pin_qwen2_tiny() {
 fn schedule_pin_bge_tiny() {
     assert_schedule_pin(
         "bge-tiny",
-        "6144fe613fa101801894f1bf31ccf026ec321e83d3d70aef9490a61961b068c7",
+        "dedae5954d0a4c20f90c76b2642b1213fa926c5bf10d7b8248f55a4754cf9d3f",
     );
 }
 
@@ -88,9 +88,7 @@ fn schedule_of_a_lookup_free_model_has_no_lookup_step() {
     let is_read = |relation: &OpRelation<Fp128>| {
         !matches!(
             relation,
-            OpRelation::Op(_)
-                | OpRelation::RemainderBucketValue(_)
-                | OpRelation::RemainderBucketDigits(_)
+            OpRelation::Op(_) | OpRelation::RemainderBucketValue(_)
         )
     };
     let setups = schedule

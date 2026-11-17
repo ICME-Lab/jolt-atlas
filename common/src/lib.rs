@@ -314,11 +314,5 @@ canonical_serde_enum! {
         /// * `0` – node index
         ActivationSmallRa(usize),
 
-        /// A packed range bucket's value (virtual; the recomposition of
-        /// [`CommittedPoly::GlobalRemainderDigit`]'s digits).
-        ///
-        /// * `0` – bucket index
-        GlobalRemainderValue(usize),
-
     }
 }

@@ -1,18 +1,16 @@
 //! The prover side of the packed range checks
 //! ([`jolt_atlas_verifier::onnx_proof::range_check`] states the protocol): the value sumcheck
-//! over a bucket's packed values ([`ValueProver`]) and the digit range check over its dense
-//! base-[`DIGIT_BASE`] digit columns ([`digit_columns`], [`digit_columns_provers`]).
-use crate::onnx_proof::relation::{RelationSetup, RelationWitness};
+//! over a bucket's packed values ([`ValueProver`]), which opens the bucket's dense
+//! base-[`DIGIT_BASE`] digit columns ([`digit_columns`]).
+use crate::onnx_proof::relation::{low_to_high_point, RelationSetup, RelationWitness};
 use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
+    poly::eq::EqPolynomial,
     poly::multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
 };
 use atlas_claims::SymbolicSumcheck;
-use atlas_sumcheck::digit_range::{prover::DigitRangeProver, DigitRangeParams};
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
-use atlas_sumcheck::relation::prover::DynRelationWitness;
-use atlas_transcript::ProvingTranscript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::range_check::*;
 use rayon::prelude::*;
@@ -23,17 +21,23 @@ pub struct ValueProver<F: JoltField> {
     setup: RelationSetup<F>,
     w: MultilinearPolynomial<F>,
     value: MultilinearPolynomial<F>,
+    /// The digit columns the packed values recompose, most significant first.
+    digits: Vec<Vec<u8>>,
+    /// The challenges bound so far, first round first.
+    challenges: Vec<F>,
 }
 
 impl<F: JoltField> ValueProver<F> {
-    /// Build from resolved parameters and the packed values.
-    pub fn new(params: ValueParams<F>, values: Vec<u64>) -> Self {
+    /// Build from resolved parameters, the packed values and their digit columns.
+    pub fn new(params: ValueParams<F>, values: Vec<u64>, digits: Vec<Vec<u8>>) -> Self {
         let w = MultilinearPolynomial::from(params.cycle.evals());
         Self {
             setup: params.relation_setup(),
             params,
             w,
             value: MultilinearPolynomial::from(values),
+            digits,
+            challenges: Vec::new(),
         }
     }
 }
@@ -49,8 +53,28 @@ impl<F: JoltField> RelationWitness<F> for ValueProver<F> {
         &self.setup
     }
 
+    /// Every digit column at the bound point. The rounds run on the packed values; the
+    /// digits are read once, here, against the `eq` table of the point.
     fn produced_claims(&self) -> Vec<F> {
-        vec![self.value.final_claim()]
+        let point = low_to_high_point(&self.challenges);
+        let weights = EqPolynomial::<F>::evals(&point);
+        self.digits
+            .par_iter()
+            .map(|column| {
+                // A digit is below the base: sum the weights per digit value, then scale.
+                let mut by_digit = [F::zero(); DIGIT_BASE as usize];
+                for (&digit, &weight) in column.iter().zip(&weights) {
+                    by_digit[digit as usize] += weight;
+                }
+                by_digit
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .fold(F::zero(), |acc, (digit, &sum)| {
+                        acc + sum.mul_u64(digit as u64)
+                    })
+            })
+            .collect()
     }
 }
 
@@ -73,6 +97,7 @@ impl<F: JoltField> ValueProver<F> {
 
     fn bind(&mut self, r: F, _round: usize) {
         let r_j = F::challenge_from_field(r);
+        self.challenges.push(r);
         self.w.bind_parallel(r_j, BindingOrder::LowToHigh);
         self.value.bind_parallel(r_j, BindingOrder::LowToHigh);
     }
@@ -114,18 +139,6 @@ pub fn digit_columns<T: Copy + Into<u64> + Sync>(values: &[T], n: usize) -> Vec<
                 .collect()
         })
         .collect()
-}
-
-/// Build a digit range-check prover over digit columns.
-pub fn digit_columns_provers<F: JoltField, T: ProvingTranscript>(
-    params: DigitRangeParams<F>,
-    digits: Vec<Vec<u8>>,
-) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-    let columns = digits
-        .into_iter()
-        .map(MultilinearPolynomial::from)
-        .collect();
-    vec![Box::new(DigitRangeProver::new(params, columns))]
 }
 
 /// Test-only tamper of one bucket's digits, for the witness tamper sweep's `BucketDigit` sites:

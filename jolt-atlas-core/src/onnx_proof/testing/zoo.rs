@@ -242,14 +242,13 @@ fn relation_kinds_all_exercised() {
     }
 
     /// The kinds of relation a schedule holds beside the op relations.
-    const OTHER_KINDS: [&str; 7] = [
+    const OTHER_KINDS: [&str; 6] = [
         "TableRead",
         "OneHot",
         "GatherSmallOneHot",
         "GatherSmallHammingWeight",
         "SoftmaxRead",
         "RemainderBucketValue",
-        "RemainderBucketDigits",
     ];
 
     /// The kind of a relation that is not an op relation: one of [`OTHER_KINDS`]. The match has
@@ -263,7 +262,6 @@ fn relation_kinds_all_exercised() {
             OpRelation::GatherSmallHammingWeight(_) => "GatherSmallHammingWeight",
             OpRelation::SoftmaxRead(_) => "SoftmaxRead",
             OpRelation::RemainderBucketValue(_) => "RemainderBucketValue",
-            OpRelation::RemainderBucketDigits(_) => "RemainderBucketDigits",
         })
     }
 

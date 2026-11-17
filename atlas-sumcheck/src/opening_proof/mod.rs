@@ -487,8 +487,6 @@ pub enum SumcheckId {
     RLC(usize),
     /// Eval-shift sumcheck used in the trig ops
     NTEvalShift,
-    /// A dense digit range check (`digit_range`).
-    DigitRange,
 }
 
 impl Canonical for SumcheckId {
@@ -509,7 +507,6 @@ impl Canonical for SumcheckId {
                 idx.encode(&mut writer)?;
             }
             Self::NTEvalShift => 9u8.encode(&mut writer)?,
-            Self::DigitRange => 10u8.encode(&mut writer)?,
         }
         Ok(())
     }
@@ -539,7 +536,6 @@ impl Canonical for SumcheckId {
                 Ok(Self::RLC(idx))
             }
             9 => Ok(Self::NTEvalShift),
-            10 => Ok(Self::DigitRange),
             _ => Err(Error::InvalidData),
         }
     }

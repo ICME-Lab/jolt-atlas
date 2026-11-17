@@ -1,14 +1,17 @@
-//! Packed range checks: the value sumcheck and the digit range check of a range bucket.
+//! Packed range checks: the value sumcheck of a range bucket.
 //!
 //! A range bucket ([`range_bucket`](super::range_bucket)) packs values that must lie in
 //! `[0, 2^width)`: rescale and division remainders, their slacks below a bound, softmax's row
 //! gaps, and the offset output `out + 2^31` of every arithmetic node that is not a model output
-//! (so that the node's output is an `i32`). Per bucket:
+//! (so that the node's output is an `i32`). The packed value `V` is not a polynomial of its
+//! own: it is the recomposition `Σ_j b^(n−1−j)·d_j` of the bucket's [`num_digits`]`(width)`
+//! committed base-[`DIGIT_BASE`] digit columns, most significant first. A degree-2 **value
+//! sumcheck** ([`ValueParams`]) reduces the members' claims, each at its own point, to one
+//! opening of every digit column at a fresh point.
 //!
-//! 1. a degree-2 **value sumcheck** ([`ValueParams`]) reduces the members' claims, each at its
-//!    own point, to one opening of the packed value `V` at a fresh point `r'`;
-//! 2. a **digit range check** proves `V(r')` is the recomposition of [`num_digits`]`(width)`
-//!    committed base-[`DIGIT_BASE`] digits, each in range.
+//! That a digit is in `[0, b)` is held by the commitment, which commits a digit column at
+//! `log₂ b` bits a coefficient ([`committed_bits`]); the verifier requires that width when it
+//! reads the commitments. With `n` digits the recomposition is in `[0, b^n)` and never wraps.
 use super::range_bucket::RangeBucket;
 use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
@@ -18,14 +21,13 @@ use crate::onnx_proof::relation::{
 use atlas_algebra::field::JoltField;
 use atlas_algebra::field::Ring;
 use atlas_algebra::utils::errors::ProofVerifyError;
-use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
-use atlas_sumcheck::digit_range::DigitRangeParams;
+use atlas_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ps_shout::CycleWeight,
 };
 use atlas_transcript::Transcript;
-use common::{CommittedPoly, VirtualPoly};
+use common::CommittedPoly;
 
 /// The base of a bucket's dense digits.
 pub const DIGIT_BASE: u64 = 4;
@@ -46,41 +48,55 @@ fn bucket_sumcheck_id() -> SumcheckId {
 // Packed value range check: Σ_t W(t)·V(t) = Σ_n γ_n·V_n(r_n)
 // ---------------------------------------------------------------------------
 
-/// Opening id of a range bucket's packed value at the value sumcheck's output point.
-pub fn remainder_value_id(bucket_idx: usize) -> OpeningId {
-    OpeningId::new(
-        VirtualPoly::GlobalRemainderValue(bucket_idx),
-        bucket_sumcheck_id(),
-    )
+/// The bits the commitment must bound a committed polynomial's coefficients by, if the
+/// protocol relies on a bound: a digit column holds base-[`DIGIT_BASE`] digits.
+pub fn committed_bits(poly: &CommittedPoly) -> Option<u32> {
+    match poly {
+        CommittedPoly::GlobalRemainderDigit(..) => Some(DIGIT_BASE.ilog2()),
+        _ => None,
+    }
 }
 
-/// A packed bucket of small non-negative values (`< 2^width`) to range-check:
-/// a degree-2 *value sumcheck* opens the packed value `V` at a fresh point
-/// `r'`, and the digit range check ([`remainder_digit_range_params`]) proves
-/// `V(r')` is the recomposition of [`num_digits`]`(width)` committed digits in
-/// `[0, DIGIT_BASE)` — so pointwise `V ∈ [0, 2^width)` (for an even width;
-/// `[0, 2^(width+1))` for an odd one at `DIGIT_BASE = 4`).
+/// `b^(n−1−j)` for `j < n`: the place value of each digit, most significant first.
+pub fn place_values(n: usize) -> Vec<u64> {
+    (0..n).map(|j| DIGIT_BASE.pow((n - 1 - j) as u32)).collect()
+}
+
+/// The value sumcheck of a packed bucket of small non-negative values (`< 2^width`): it opens
+/// every digit column of the bucket at a fresh point `r'`, where their recomposition is the
+/// packed value `V(r')`. The digits are in `[0, DIGIT_BASE)` by their commitment, so pointwise
+/// `V ∈ [0, 2^width)` (for an even width; `[0, 2^(width+1))` for an odd one at
+/// `DIGIT_BASE = 4`).
 #[derive(Clone)]
 pub struct ValueParams<F: JoltField> {
     /// Bucket index.
     pub bucket_idx: usize,
-    /// Opening id of the packed value at the sumcheck's output point.
-    pub value_id: OpeningId,
+    /// The bucket's committed digit columns, most significant first.
+    pub digits: Vec<CommittedPoly>,
     /// Packed cycle weight.
     pub cycle: CycleWeight<F>,
     /// `Σ_n γ_n·V_n(r_n)`.
     pub input_claim: F,
 }
 
-/// The value sumcheck as a relation: `Σ_n γ_n·V_n(r_n)` against `W(r′)·V(r′)` at the
-/// low-to-high bound point `r′`, with `W` the packed cycle weight. **S ⊆ R.** `W` places each
-/// node's eq weight on its own segment, so the sum is the batched claims. The parameters carry the
+/// The value sumcheck as a relation: `Σ_n γ_n·V_n(r_n)` against `W(r′)·Σ_j b^(n−1−j)·d_j(r′)`
+/// at the low-to-high bound point `r′`, with `W` the packed cycle weight and `d_j` the digit
+/// columns. **S ⊆ R.** `W` places each node's eq weight on its own segment and the digits
+/// recompose the packed value, so the sum is the batched claims. The parameters carry the
 /// cycle weight; the setup carries the input claim.
 impl<F: JoltField> ValueParams<F> {
     /// The relation these parameters instantiate, with its setup.
     pub fn into_verifier(self) -> ValueVerifier<F> {
         let setup = self.relation_setup();
         RelationVerifier::at(self, setup)
+    }
+
+    /// The openings of the digit columns at the sumcheck's output point.
+    pub fn digit_ids(&self) -> Vec<OpeningId> {
+        self.digits
+            .iter()
+            .map(|&digit| OpeningId::new(digit, bucket_sumcheck_id()))
+            .collect()
     }
 
     /// The relation's setup: the input claim.
@@ -112,14 +128,19 @@ impl<F: JoltField> SymbolicSumcheck for ValueParams<F> {
     }
 
     fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
-        derived::<G, _, _, _>(RelationDerived::CycleEq)
-            * opening(RelationOpening::Id(self.value_id))
+        let value = place_values(self.digits.len())
+            .into_iter()
+            .zip(self.digit_ids())
+            .fold(RelationExpr::zero(), |acc, (place, id)| {
+                acc + constant::<G, _, _, _>(G::from_u64(place)) * opening(RelationOpening::Id(id))
+            });
+        derived::<G, _, _, _>(RelationDerived::CycleEq) * value
     }
 }
 
 impl<F: JoltField> Produces for ValueParams<F> {
     fn produced(&self) -> Vec<OpeningId> {
-        vec![self.value_id]
+        self.digit_ids()
     }
 }
 
@@ -147,23 +168,6 @@ pub fn remainder_digit_polys(bucket: &RangeBucket) -> Vec<CommittedPoly> {
         .collect()
 }
 
-/// Draw a range bucket's digit range check: its digit columns in range and recomposing the
-/// packed value the value sumcheck opened. `Err` if the accumulator lacks that opening.
-pub fn remainder_digit_range_params<F: JoltField, T: Transcript>(
-    bucket: &RangeBucket,
-    accumulator: &dyn OpeningAccumulator<F>,
-    transcript: &mut T,
-) -> Result<DigitRangeParams<F>, ProofVerifyError> {
-    DigitRangeParams::draw(
-        DIGIT_BASE,
-        remainder_digit_polys(bucket),
-        remainder_value_id(bucket.idx),
-        SumcheckId::DigitRange,
-        accumulator,
-        transcript,
-    )
-}
-
 /// Parameters of a range bucket's range check: the value sumcheck over the packed
 /// remainders, its input claim `Σ_n γ_n·R_n(r_n)` with `γ` drawn here.
 /// `Err` if the accumulator lacks a claim it reads.
@@ -176,7 +180,7 @@ pub fn remainder_value_params<F: JoltField, T: Transcript>(
     let (input_claim, cycle) = bucket.remainder_inputs(&gammas, accumulator)?;
     Ok(ValueParams {
         bucket_idx: bucket.idx,
-        value_id: remainder_value_id(bucket.idx),
+        digits: remainder_digit_polys(bucket),
         cycle,
         input_claim,
     })

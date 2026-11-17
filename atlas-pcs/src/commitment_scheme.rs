@@ -43,6 +43,14 @@ pub trait CommitmentScheme: Clone + Sync + Send + 'static {
     where
         U: Borrow<MultilinearPolynomial<Self::Field>> + Sync;
 
+    /// The number of bits the batch commitment bounds every coefficient of a polynomial by:
+    /// `Some(b)` if the committed coefficients are integers in `[0, 2^b)` whatever the prover
+    /// committed, `None` if the scheme gives no such bound for this polynomial.
+    fn coefficient_bits(
+        batch_commitment: &Self::BatchCommitment,
+        commitment: &Self::Commitment,
+    ) -> Option<u32>;
+
     /// Opens the linear combination `Σ_i γ_i · f_i` at `opening_point`, every `f_i` taken at
     /// the last `n_i` coordinates of the point and zero-padded above its own `2^{n_i}`
     /// values, given the polynomials' commit hints in the order of `polynomials` and `coeffs`.

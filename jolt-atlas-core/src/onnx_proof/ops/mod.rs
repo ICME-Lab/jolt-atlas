@@ -104,7 +104,6 @@ use crate::onnx_proof::{
 };
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider};
 use atlas_algebra::poly::multilinear::MultilinearPolynomial;
-use atlas_sumcheck::digit_range::DigitRangeParams;
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
@@ -206,8 +205,8 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
                     .collect();
                 let witnesses = build_all(prepared, prover);
                 prove_batch(witnesses, prover);
-                // The digit range check is the last reader of the bucket witnesses.
-                if matches!(first, OpRelation::RemainderBucketDigits(_)) {
+                // The value sumcheck is the last reader of the bucket witnesses.
+                if matches!(first, OpRelation::RemainderBucketValue(_)) {
                     drop_in_background_thread(std::mem::take(&mut prover.buckets));
                 }
             }
@@ -240,7 +239,6 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
 fn batch_kind<F: JoltField>(first: &OpRelation<F>) -> &'static str {
     match first {
         OpRelation::RemainderBucketValue(_) => "BucketValues",
-        OpRelation::RemainderBucketDigits(_) => "BucketDigits",
         OpRelation::TableRead(_) | OpRelation::SoftmaxRead(_) => "Lookups",
         OpRelation::OneHot(_)
         | OpRelation::GatherSmallOneHot(_)
@@ -283,8 +281,6 @@ enum Prepared<F: JoltField, T: ProvingTranscript> {
     OneHot(Box<RaOneHotParams<F>>, Vec<usize>),
     /// A range bucket's value sumcheck parameters.
     RemainderValue(ValueParams<F>, usize),
-    /// A range bucket's digit range-check parameters.
-    RemainderDigits(DigitRangeParams<F>, usize),
 }
 
 /// The span a deferred relation's witness build runs under, so a batch's time stays
@@ -313,9 +309,7 @@ fn witness_kind<F: JoltField>(relation: &OpRelation<F>) -> &'static str {
         OpRelation::GatherSmallOneHot(_) | OpRelation::GatherSmallHammingWeight(_) => {
             "gather_one_hot"
         }
-        OpRelation::Op(_)
-        | OpRelation::RemainderBucketValue(_)
-        | OpRelation::RemainderBucketDigits(_) => "node",
+        OpRelation::Op(_) | OpRelation::RemainderBucketValue(_) => "node",
     }
 }
 
@@ -339,15 +333,6 @@ fn prepare<F: JoltField, T: ProvingTranscript>(
         }
         OpRelation::RemainderBucketValue(bucket) => Prepared::RemainderValue(
             range_check::remainder_value_params(
-                &bucket,
-                &prover.accumulator,
-                &mut prover.transcript,
-            )
-            .expect(expect),
-            bucket.idx,
-        ),
-        OpRelation::RemainderBucketDigits(bucket) => Prepared::RemainderDigits(
-            range_check::remainder_digit_range_params(
                 &bucket,
                 &prover.accumulator,
                 &mut prover.transcript,
@@ -399,10 +384,8 @@ fn build_one<F: JoltField, T: ProvingTranscript>(
             vec![Box::new(ValueProver::new(
                 params,
                 buckets.remainder_value_column(bucket),
+                buckets.remainder_digits(bucket),
             )) as Box<dyn DynRelationWitness<F, T>>]
-        }
-        Prepared::RemainderDigits(params, bucket) => {
-            range_check::digit_columns_provers::<F, T>(params, buckets.remainder_digits(bucket))
         }
     }
 }
@@ -487,9 +470,7 @@ pub fn relation_witnesses<F: JoltField, T: ProvingTranscript>(
             prover.leave_addresses(Addresses(ra), node_idx, indices);
             vec![witness]
         }
-        one_hot @ (OpRelation::OneHot(_)
-        | OpRelation::RemainderBucketValue(_)
-        | OpRelation::RemainderBucketDigits(_)) => {
+        one_hot @ (OpRelation::OneHot(_) | OpRelation::RemainderBucketValue(_)) => {
             let prepared = prepare(one_hot, prover);
             build_all(vec![prepared], prover)
         }

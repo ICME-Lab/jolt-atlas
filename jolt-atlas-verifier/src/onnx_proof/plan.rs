@@ -61,7 +61,6 @@ use crate::onnx_proof::{
 };
 use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable, SiluClampTable},
     relu::ReluTable,

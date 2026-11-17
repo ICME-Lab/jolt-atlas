@@ -26,7 +26,6 @@ use atlas_algebra::{
     poly::point::{OpeningPoint, BIG_ENDIAN},
     utils::errors::ProofVerifyError,
 };
-use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator},

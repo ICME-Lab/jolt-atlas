@@ -193,13 +193,8 @@ pub fn coefficient_challenges<F: Copy>(coefficients: &[F]) -> Vec<(RelationChall
 
 impl SymbolicSumcheck for OpeningReductionRelation {
     crate::relation_types!();
-    type Shape = Self;
 
-    fn new(shape: Self) -> Self {
-        shape
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::OpeningReduction
     }
 

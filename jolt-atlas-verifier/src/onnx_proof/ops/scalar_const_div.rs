@@ -90,17 +90,8 @@ impl ConstantDivisionRelation {
 
 impl SymbolicSumcheck for ConstantDivisionRelation {
     atlas_relation_types!();
-    type Shape = ComputationNode;
 
-    fn new(node: ComputationNode) -> Self {
-        let divisor = match &node.operator {
-            Op::ScalarConstDiv(op) => Some(op.divisor),
-            _ => None,
-        };
-        Self { node, divisor }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::ConstantDivision
     }
 
@@ -123,6 +114,17 @@ impl SymbolicSumcheck for ConstantDivisionRelation {
         let left = open(self.ids().nodeio(Target::Input(0)));
         let remainder = open(self.ids().advice(VirtualPoly::ScalarConstDivRemainder));
         derived(RelationDerived::Eq) * (left - remainder)
+    }
+}
+
+impl ConstantDivisionRelation {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        let divisor = match &node.operator {
+            Op::ScalarConstDiv(op) => Some(op.divisor),
+            _ => None,
+        };
+        Self { node, divisor }
     }
 }
 

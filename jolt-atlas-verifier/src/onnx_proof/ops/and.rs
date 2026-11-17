@@ -20,9 +20,7 @@ impl OpPlan for And {
             Step::Reduce,
             Step::Relation {
                 proof: ProofType::Execution,
-                relation: OpRelation::And(<AndRelation as atlas_claims::SymbolicSumcheck>::new(
-                    node.clone(),
-                )),
+                relation: OpRelation::And(AndRelation::new(node.clone())),
             },
         ]))
     }

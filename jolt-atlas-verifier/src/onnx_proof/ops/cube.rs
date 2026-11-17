@@ -5,7 +5,6 @@ use crate::onnx_proof::{
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
-use atlas_claims::SymbolicSumcheck;
 use atlas_trace::{op::Cube, trace::ModelExecutionIO, Model};
 
 /// Element-wise cube as a product relation.

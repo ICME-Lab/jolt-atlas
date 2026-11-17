@@ -102,16 +102,8 @@ impl<S: SmallTable> SmallTableRelation<S> {
 
 impl<S: SmallTable> SymbolicSumcheck for SmallTableRelation<S> {
     crate::atlas_relation_types!();
-    type Shape = ComputationNode;
 
-    fn new(node: ComputationNode) -> Self {
-        Self {
-            node,
-            _table: PhantomData,
-        }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::SmallTable
     }
 
@@ -134,6 +126,16 @@ impl<S: SmallTable> SymbolicSumcheck for SmallTableRelation<S> {
             * (derived::<G, _, _, _>(RelationDerived::Table(0))
                 + challenge::<G, _, _, _>(RelationChallenge::Gamma)
                     * derived(RelationDerived::Identity))
+    }
+}
+
+impl<S: SmallTable> SmallTableRelation<S> {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        Self {
+            node,
+            _table: PhantomData,
+        }
     }
 }
 

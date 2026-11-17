@@ -52,13 +52,8 @@ pub struct ZeroOutputRelation {
 
 impl SymbolicSumcheck for ZeroOutputRelation {
     atlas_relation_types!();
-    type Shape = ComputationNode;
 
-    fn new(node: ComputationNode) -> Self {
-        Self { node }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::ZeroOutput
     }
 
@@ -76,6 +71,13 @@ impl SymbolicSumcheck for ZeroOutputRelation {
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         Expr::zero()
+    }
+}
+
+impl ZeroOutputRelation {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        Self { node }
     }
 }
 

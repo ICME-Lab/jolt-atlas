@@ -92,13 +92,8 @@ impl<F: JoltField> ValueParams<F> {
 
 impl<F: JoltField> SymbolicSumcheck for ValueParams<F> {
     crate::atlas_relation_types!();
-    type Shape = Self;
 
-    fn new(shape: Self) -> Self {
-        shape
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::PackedValue
     }
 

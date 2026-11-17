@@ -60,13 +60,8 @@ impl AxisPermutationRelation {
 
 impl SymbolicSumcheck for AxisPermutationRelation {
     atlas_relation_types!();
-    type Shape = ComputationNode;
 
-    fn new(node: ComputationNode) -> Self {
-        Self { node }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::AxisPermutation
     }
 
@@ -84,6 +79,13 @@ impl SymbolicSumcheck for AxisPermutationRelation {
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         opening(RelationOpening::Id(self.input()))
+    }
+}
+
+impl AxisPermutationRelation {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        Self { node }
     }
 }
 

@@ -4,18 +4,13 @@ use crate::{Expr, Source, SumcheckDomain};
 
 /// Pure symbolic description of one sumcheck relation: its id, sumcheck spec, and
 /// input/output algebra over the relation's id types. The expression methods are
-/// generic over the field `F`, so the implementing object is field-independent (it
-/// holds only its [`Shape`](Self::Shape)) and emits expressions for any field on
-/// demand. See upstream `a16z/jolt` `specs/symbolic-sumcheck.md`.
+/// generic over the field `F`, so the implementing object emits expressions for any
+/// field on demand. See upstream `a16z/jolt` `specs/symbolic-sumcheck.md`.
 pub trait SymbolicSumcheck {
     type RelationId;
     type OpeningId;
     type DerivedId;
     type ChallengeId;
-
-    /// The construction input that fully determines this relation's structure (its
-    /// expressions and sumcheck spec). Field-independent for every relation.
-    type Shape;
 
     /// The relation's drawn Fiat-Shamir challenges, parameterized by the field
     /// (challenges carry no opening point). A relation with no challenges uses
@@ -31,27 +26,23 @@ pub trait SymbolicSumcheck {
     /// [`NoOutputs`](crate::NoOutputs).
     type Outputs<C>;
 
-    fn new(shape: Self::Shape) -> Self;
-
-    /// The relation this sumcheck belongs to. A type-level constant; NOT a unique
+    /// The relation this sumcheck belongs to. NOT a unique
     /// key — several sumchecks can share one relation id (address/cycle-phase
     /// splits, the full/committed bytecode modes, the Spartan uni-skip/remainder
     /// pairs).
-    fn id() -> Self::RelationId;
+    fn id(&self) -> Self::RelationId;
 
     /// The domain this sumcheck runs over. Defaults to the Boolean hypercube;
     /// only the univariate-skip relations override it (centered-integer domain).
-    /// A fixed constant per relation, independent of the [`Shape`](Self::Shape);
-    /// it takes `&self` only so it reads like its `rounds`/`degree` siblings at
-    /// the (instance) call sites.
+    /// A fixed constant per relation.
     fn domain(&self) -> SumcheckDomain {
         SumcheckDomain::BooleanHypercube
     }
 
-    /// The sumcheck round count, derived from [`Shape`](Self::Shape).
+    /// The sumcheck round count.
     fn rounds(&self) -> usize;
 
-    /// The per-round degree bound, derived from [`Shape`](Self::Shape).
+    /// The per-round degree bound.
     fn degree(&self) -> usize;
 
     fn input_expression<F: Ring>(
@@ -115,16 +106,11 @@ mod tests {
         type OpeningId = Opening;
         type DerivedId = Derived;
         type ChallengeId = Challenge;
-        type Shape = ();
         type Challenges<F> = NoChallenges<F>;
         type Inputs<C> = NoInputs<C>;
         type Outputs<C> = NoOutputs<C>;
 
-        fn new((): ()) -> Self {
-            Self
-        }
-
-        fn id() -> u8 {
+        fn id(&self) -> u8 {
             7
         }
 
@@ -165,20 +151,20 @@ mod tests {
 
     #[test]
     fn nested_output_expression_evaluates_to_hand_computed_value() {
-        let output = resolve(&Mock::new(()).output_expression::<Fr>());
+        let output = resolve(&Mock.output_expression::<Fr>());
         assert_eq!(output, Fr::from_u64(45));
     }
 
     #[test]
     fn expected_output_openings_deduplicate_and_skip_non_opening_leaves() {
-        let openings = Mock::new(()).expected_output_openings::<Fr>();
+        let openings = Mock.expected_output_openings::<Fr>();
         let expected: BTreeSet<Opening> = [Opening::A, Opening::B].into_iter().collect();
         assert_eq!(openings, expected);
     }
 
     #[test]
     fn try_evaluate_propagates_resolver_errors_and_agrees_with_evaluate() {
-        let expr = Mock::new(()).output_expression::<Fr>();
+        let expr = Mock.output_expression::<Fr>();
 
         let failed: Result<Fr, &str> = expr.try_evaluate(
             |id| match id {

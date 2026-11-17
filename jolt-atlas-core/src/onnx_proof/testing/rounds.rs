@@ -11,7 +11,6 @@
 use atlas_algebra::field::fp128::Fp128 as Fr;
 use atlas_algebra::field::Ring;
 use atlas_algebra::poly::{eq::EqPolynomial, split_eq::CHECK_GRUEN_ENDPOINTS};
-use atlas_claims::SymbolicSumcheck;
 use atlas_pcs::akita::AkitaScheme;
 use atlas_sumcheck::engine::prover::ProveRounds;
 use atlas_trace::{Model, Tensor};

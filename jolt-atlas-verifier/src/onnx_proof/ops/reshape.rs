@@ -112,13 +112,8 @@ fn unsupported(node: &ComputationNode, what: impl std::fmt::Display) -> ProofVer
 
 impl SymbolicSumcheck for FlatCopyRelation {
     atlas_relation_types!();
-    type Shape = ReshapeShape;
 
-    fn new(shape: ReshapeShape) -> Self {
-        Self { shape }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Reshape
     }
 
@@ -136,6 +131,13 @@ impl SymbolicSumcheck for FlatCopyRelation {
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         opening(RelationOpening::Id(self.input()))
+    }
+}
+
+impl FlatCopyRelation {
+    /// The relation for the given shape.
+    pub fn new(shape: ReshapeShape) -> Self {
+        Self { shape }
     }
 }
 

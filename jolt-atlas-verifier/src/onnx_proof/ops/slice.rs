@@ -162,13 +162,8 @@ fn unsupported(node: &ComputationNode, what: impl std::fmt::Display) -> ProofVer
 
 impl SymbolicSumcheck for SubcubeSelectRelation {
     atlas_relation_types!();
-    type Shape = SliceShape;
 
-    fn new(shape: SliceShape) -> Self {
-        Self { shape }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Slice
     }
 
@@ -186,6 +181,13 @@ impl SymbolicSumcheck for SubcubeSelectRelation {
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         opening(RelationOpening::Id(self.input()))
+    }
+}
+
+impl SubcubeSelectRelation {
+    /// The relation for the given shape.
+    pub fn new(shape: SliceShape) -> Self {
+        Self { shape }
     }
 }
 

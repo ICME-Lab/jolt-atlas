@@ -86,16 +86,11 @@ impl SymbolicSumcheck for DivRelation {
     type OpeningId = RelationOpening;
     type DerivedId = RelationDerived;
     type ChallengeId = RelationChallenge;
-    type Shape = ComputationNode;
     type Challenges<F> = NoChallenges<F>;
     type Inputs<C> = NoInputs<C>;
     type Outputs<C> = NoOutputs<C>;
 
-    fn new(node: ComputationNode) -> Self {
-        Self { node }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Division
     }
 
@@ -118,6 +113,13 @@ impl SymbolicSumcheck for DivRelation {
         let quotient = open(self.ids().nodeio(Target::Current));
         let remainder = open(self.ids().advice(VirtualPoly::DivRemainder));
         derived(RelationDerived::Eq) * (right * quotient + remainder - left)
+    }
+}
+
+impl DivRelation {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        Self { node }
     }
 }
 
@@ -178,16 +180,11 @@ impl SymbolicSumcheck for DivQuotientRelation {
     type OpeningId = RelationOpening;
     type DerivedId = RelationDerived;
     type ChallengeId = RelationChallenge;
-    type Shape = ComputationNode;
     type Challenges<F> = NoChallenges<F>;
     type Inputs<C> = NoInputs<C>;
     type Outputs<C> = NoOutputs<C>;
 
-    fn new(node: ComputationNode) -> Self {
-        Self { node }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::DivisionQuotient
     }
 
@@ -205,6 +202,13 @@ impl SymbolicSumcheck for DivQuotientRelation {
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         opening(RelationOpening::Id(self.quotient()))
+    }
+}
+
+impl DivQuotientRelation {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        Self { node }
     }
 }
 

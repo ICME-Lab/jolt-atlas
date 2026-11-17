@@ -121,19 +121,11 @@ impl<S: OpSpec + ProductShape + 'static> SymbolicSumcheck for ProductRelation<S>
     type OpeningId = RelationOpening;
     type DerivedId = RelationDerived;
     type ChallengeId = RelationChallenge;
-    type Shape = ComputationNode;
     type Challenges<F> = NoChallenges<F>;
     type Inputs<C> = NoInputs<C>;
     type Outputs<C> = NoOutputs<C>;
 
-    fn new(node: ComputationNode) -> Self {
-        Self {
-            node,
-            _spec: PhantomData,
-        }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Product
     }
 
@@ -158,6 +150,16 @@ impl<S: OpSpec + ProductShape + 'static> SymbolicSumcheck for ProductRelation<S>
                         self.ids().nodeio(Target::Input(position)),
                     ))
             })
+    }
+}
+
+impl<S: OpSpec + ProductShape + 'static> ProductRelation<S> {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        Self {
+            node,
+            _spec: PhantomData,
+        }
     }
 }
 

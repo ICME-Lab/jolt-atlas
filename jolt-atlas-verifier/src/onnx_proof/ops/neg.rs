@@ -68,16 +68,8 @@ pub struct SignedCopyRelation<S> {
 
 impl<S: CopySign> SymbolicSumcheck for SignedCopyRelation<S> {
     atlas_relation_types!();
-    type Shape = ComputationNode;
 
-    fn new(node: ComputationNode) -> Self {
-        Self {
-            node,
-            _spec: PhantomData,
-        }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::SignedCopy
     }
 
@@ -95,6 +87,16 @@ impl<S: CopySign> SymbolicSumcheck for SignedCopyRelation<S> {
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         constant(F::from_i64(S::SIGN)) * opening(RelationOpening::Id(self.input()))
+    }
+}
+
+impl<S: CopySign> SignedCopyRelation<S> {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        Self {
+            node,
+            _spec: PhantomData,
+        }
     }
 }
 

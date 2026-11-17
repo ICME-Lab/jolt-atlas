@@ -123,16 +123,11 @@ impl SymbolicSumcheck for RsqrtRelation {
     type OpeningId = RelationOpening;
     type DerivedId = RelationDerived;
     type ChallengeId = RelationChallenge;
-    type Shape = ComputationNode;
     type Challenges<F> = NoChallenges<F>;
     type Inputs<C> = NoInputs<C>;
     type Outputs<C> = NoOutputs<C>;
 
-    fn new(node: ComputationNode) -> Self {
-        Self { node }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Rsqrt
     }
 
@@ -159,6 +154,13 @@ impl SymbolicSumcheck for RsqrtRelation {
         let division = input * quotient.clone() + div_remainder - s_cubed;
         let sqrt = output.clone() * output + sqrt_remainder - quotient;
         derived(RelationDerived::Eq) * (division + challenge(RelationChallenge::Gamma) * sqrt)
+    }
+}
+
+impl RsqrtRelation {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        Self { node }
     }
 }
 

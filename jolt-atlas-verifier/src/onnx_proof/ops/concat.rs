@@ -201,13 +201,8 @@ fn unsupported(node: &ComputationNode, what: impl std::fmt::Display) -> ProofVer
 
 impl SymbolicSumcheck for SubcubeTilingRelation {
     atlas_relation_types!();
-    type Shape = ConcatShape;
 
-    fn new(shape: ConcatShape) -> Self {
-        Self { shape }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Concat
     }
 
@@ -230,6 +225,13 @@ impl SymbolicSumcheck for SubcubeTilingRelation {
                     * opening(RelationOpening::Id(self.input(operand)))
             })
             .fold(RelationExpr::zero(), |sum, term| sum + term)
+    }
+}
+
+impl SubcubeTilingRelation {
+    /// The relation for the given shape.
+    pub fn new(shape: ConcatShape) -> Self {
+        Self { shape }
     }
 }
 

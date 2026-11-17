@@ -154,19 +154,8 @@ impl MeanOfSquaresRelation {
 
 impl SymbolicSumcheck for MeanOfSquaresRelation {
     atlas_relation_types!();
-    type Shape = ComputationNode;
 
-    fn new(node: ComputationNode) -> Self {
-        let reduction = match &node.operator {
-            Op::MeanOfSquares(op) if op.padded_count.is_power_of_two() => {
-                Some((mos_divisor(op, node.scale), op.padded_count.log_2()))
-            }
-            _ => None,
-        };
-        Self { node, reduction }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::MeanOfSquares
     }
 
@@ -190,6 +179,19 @@ impl SymbolicSumcheck for MeanOfSquaresRelation {
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         let x = opening(RelationOpening::Id(self.ids().nodeio(Target::Input(0))));
         derived(RelationDerived::RetainedEq) * x.clone() * x
+    }
+}
+
+impl MeanOfSquaresRelation {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        let reduction = match &node.operator {
+            Op::MeanOfSquares(op) if op.padded_count.is_power_of_two() => {
+                Some((mos_divisor(op, node.scale), op.padded_count.log_2()))
+            }
+            _ => None,
+        };
+        Self { node, reduction }
     }
 }
 

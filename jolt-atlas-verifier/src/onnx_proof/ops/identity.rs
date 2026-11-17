@@ -16,11 +16,7 @@ impl OpPlan for Identity {
         Ok(Plan(vec![
             Step::Reduce,
             Step::Tie {
-                relation: OpTie::Identity(
-                    <SignedCopyRelation<Identity> as atlas_claims::SymbolicSumcheck>::new(
-                        node.clone(),
-                    ),
-                ),
+                relation: OpTie::Identity(SignedCopyRelation::<Identity>::new(node.clone())),
             },
         ]))
     }

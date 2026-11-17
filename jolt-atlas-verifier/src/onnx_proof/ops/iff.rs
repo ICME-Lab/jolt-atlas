@@ -68,16 +68,11 @@ impl SymbolicSumcheck for IffRelation {
     type OpeningId = RelationOpening;
     type DerivedId = RelationDerived;
     type ChallengeId = RelationChallenge;
-    type Shape = ComputationNode;
     type Challenges<F> = NoChallenges<F>;
     type Inputs<C> = NoInputs<C>;
     type Outputs<C> = NoOutputs<C>;
 
-    fn new(node: ComputationNode) -> Self {
-        Self { node }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Select
     }
 
@@ -100,6 +95,13 @@ impl SymbolicSumcheck for IffRelation {
             ))
         });
         derived(RelationDerived::Eq) * (mask.clone() * a + (constant(F::one()) - mask) * b)
+    }
+}
+
+impl IffRelation {
+    /// The relation for the given shape.
+    pub fn new(node: ComputationNode) -> Self {
+        Self { node }
     }
 }
 

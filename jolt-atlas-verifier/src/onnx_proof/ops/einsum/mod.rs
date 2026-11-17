@@ -155,16 +155,11 @@ impl SymbolicSumcheck for ContractionRelation {
     type OpeningId = RelationOpening;
     type DerivedId = RelationDerived;
     type ChallengeId = RelationChallenge;
-    type Shape = ContractionShape;
     type Challenges<F> = NoChallenges<F>;
     type Inputs<C> = NoInputs<C>;
     type Outputs<C> = NoOutputs<C>;
 
-    fn new(shape: ContractionShape) -> Self {
-        Self { shape }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Contraction
     }
 
@@ -184,6 +179,13 @@ impl SymbolicSumcheck for ContractionRelation {
         let [left, right] = [Target::Input(0), Target::Input(1)]
             .map(|operand| opening(RelationOpening::Id(self.ids().nodeio(operand))));
         derived(RelationDerived::ContractionEq) * left * right
+    }
+}
+
+impl ContractionRelation {
+    /// The relation for the given shape.
+    pub fn new(shape: ContractionShape) -> Self {
+        Self { shape }
     }
 }
 

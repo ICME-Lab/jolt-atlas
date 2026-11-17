@@ -86,13 +86,8 @@ impl SumAxisRelation {
 
 impl SymbolicSumcheck for SumAxisRelation {
     atlas_relation_types!();
-    type Shape = SumShape;
 
-    fn new(shape: SumShape) -> Self {
-        Self { shape }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::AxisSum
     }
 
@@ -110,6 +105,13 @@ impl SymbolicSumcheck for SumAxisRelation {
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         opening(RelationOpening::Id(self.ids().nodeio(Target::Input(0))))
+    }
+}
+
+impl SumAxisRelation {
+    /// The relation for the given shape.
+    pub fn new(shape: SumShape) -> Self {
+        Self { shape }
     }
 }
 

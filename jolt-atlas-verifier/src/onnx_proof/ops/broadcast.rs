@@ -96,13 +96,8 @@ fn unsupported(what: impl std::fmt::Display) -> ProofVerifyError {
 
 impl SymbolicSumcheck for BroadcastRelation {
     atlas_relation_types!();
-    type Shape = BroadcastShape;
 
-    fn new(shape: BroadcastShape) -> Self {
-        Self { shape }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Broadcast
     }
 
@@ -120,6 +115,13 @@ impl SymbolicSumcheck for BroadcastRelation {
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         derived(RelationDerived::BroadcastOnes) * opening(RelationOpening::Id(self.input()))
+    }
+}
+
+impl BroadcastRelation {
+    /// The relation for the given shape.
+    pub fn new(shape: BroadcastShape) -> Self {
+        Self { shape }
     }
 }
 

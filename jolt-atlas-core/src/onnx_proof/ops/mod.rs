@@ -119,7 +119,6 @@ use crate::onnx_proof::{
     ProofId,
 };
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider, Target};
-use atlas_claims::SymbolicSumcheck;
 use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable, SiluClampTable},
     relu::ReluTable,

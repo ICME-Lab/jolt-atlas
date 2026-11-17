@@ -117,7 +117,7 @@ pub fn verify_tie<F: JoltField, T: Transcript, R: AtlasRelation + SetupRelation<
     if relation.rounds() != 0 {
         return Err(ProofVerifyError::Malformed(format!(
             "{:?} on node {} is not a tie: it has {} rounds",
-            R::id(),
+            relation.id(),
             relation.node().idx,
             relation.rounds()
         )));
@@ -144,7 +144,7 @@ pub fn verify_tie<F: JoltField, T: Transcript, R: AtlasRelation + SetupRelation<
     if input != output {
         return Err(ProofVerifyError::InvalidOpeningProof(format!(
             "{:?} tie on node {} does not hold",
-            R::id(),
+            relation.id(),
             relation.node().idx
         )));
     }

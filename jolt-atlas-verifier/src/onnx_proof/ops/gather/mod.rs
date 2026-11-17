@@ -114,13 +114,8 @@ impl GatherRelation {
 
 impl SymbolicSumcheck for GatherRelation {
     crate::atlas_relation_types!();
-    type Shape = GatherShape;
 
-    fn new(shape: GatherShape) -> Self {
-        Self { shape }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::Gather
     }
 
@@ -145,6 +140,13 @@ impl SymbolicSumcheck for GatherRelation {
             * (opening::<G, _, _, _>(dict)
                 + challenge::<G, _, _, _>(RelationChallenge::Gamma)
                     * derived(RelationDerived::Identity))
+    }
+}
+
+impl GatherRelation {
+    /// The relation for the given shape.
+    pub fn new(shape: GatherShape) -> Self {
+        Self { shape }
     }
 }
 

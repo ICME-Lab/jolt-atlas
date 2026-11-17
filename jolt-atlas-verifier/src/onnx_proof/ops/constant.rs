@@ -73,16 +73,8 @@ pub struct PublicRelation<S> {
 
 impl<S: OpSpec + 'static> SymbolicSumcheck for PublicRelation<S> {
     atlas_relation_types!();
-    type Shape = PublicShape;
 
-    fn new(shape: PublicShape) -> Self {
-        Self {
-            shape,
-            _spec: PhantomData,
-        }
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::PublicValue
     }
 
@@ -100,6 +92,16 @@ impl<S: OpSpec + 'static> SymbolicSumcheck for PublicRelation<S> {
 
     fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
         derived(RelationDerived::Public)
+    }
+}
+
+impl<S: OpSpec + 'static> PublicRelation<S> {
+    /// The relation for the given shape.
+    pub fn new(shape: PublicShape) -> Self {
+        Self {
+            shape,
+            _spec: PhantomData,
+        }
     }
 }
 

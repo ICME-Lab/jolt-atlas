@@ -53,13 +53,8 @@ impl HammingWeightRelation {
 
 impl SymbolicSumcheck for HammingWeightRelation {
     crate::relation_types!();
-    type Shape = Self;
 
-    fn new(shape: Self) -> Self {
-        shape
-    }
-
-    fn id() -> RelationId {
+    fn id(&self) -> RelationId {
         RelationId::HammingWeight
     }
 

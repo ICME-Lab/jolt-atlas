@@ -67,8 +67,8 @@ pub enum Remainder {
     RsqrtDiv,
     /// `Rsqrt`'s square-root remainder `q − out²`.
     RsqrtSqrt,
-    /// A trig op's teleport remainder `x mod P`.
-    Teleport,
+    /// A trig op's period remainder `x mod P`.
+    TrigPeriod,
     /// The node's output offset by `2^31`: in `[0, 2^32)` exactly when the output is an `i32`.
     /// Read from the node's reduced output opening, not from an advice opening.
     Output,
@@ -89,7 +89,7 @@ impl Remainder {
             Self::Div | Self::RsqrtDiv => VirtualPoly::DivRemainder(node_idx),
             Self::ScalarConstDiv => VirtualPoly::ScalarConstDivRemainder(node_idx),
             Self::RsqrtSqrt => VirtualPoly::SqrtRemainder(node_idx),
-            Self::Teleport => VirtualPoly::TeleportRemainder(node_idx),
+            Self::TrigPeriod => VirtualPoly::TrigPeriodRemainder(node_idx),
             Self::SoftmaxSumGap => VirtualPoly::SoftmaxSumGap(node_idx),
             Self::SoftmaxPrevSumGap => VirtualPoly::SoftmaxPrevSumGap(node_idx),
         };
@@ -329,7 +329,7 @@ pub fn node_remainders(
             (Remainder::RsqrtSqrt, Bound::TwiceNodePlusOne(node.idx)),
         ],
         Op::Sin(_) | Op::Cos(_) => vec![(
-            Remainder::Teleport,
+            Remainder::TrigPeriod,
             Bound::Const(i64::from(TRIG_PERIOD_MODULUS)),
         )],
         Op::SoftmaxLastAxis(_) => {

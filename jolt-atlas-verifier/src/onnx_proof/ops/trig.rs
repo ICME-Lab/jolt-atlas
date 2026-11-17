@@ -82,7 +82,7 @@ fn committed_polynomials(node: &ComputationNode, def: SmallTableDef) -> Vec<Comm
     let downscale_d = OpLookupEncoding::<TrigDownscaleOperands>::new(node)
         .one_hot_params()
         .instruction_d;
-    let mut polys = vec![CommittedPoly::TeleportNodeQuotient(node.idx)];
+    let mut polys = vec![CommittedPoly::TrigPeriodQuotient(node.idx)];
     polys.extend((0..downscale_d).map(|i| CommittedPoly::TrigDownscaleRaD(node.idx, i)));
     polys.extend((0..table_d).map(|i| (def.ra_chunk)(node.idx, i)));
     polys
@@ -105,7 +105,7 @@ fn trig_plan<F: JoltField>(
     }
     Ok(Plan(vec![
         Step::Reduce,
-        Step::Open(OpOpen::TeleportQuotient(node.clone())),
+        Step::Open(OpOpen::TrigPeriodQuotient(node.clone())),
         Step::Open(OpOpen::TrigDownscaled(node.clone())),
         Step::Defer {
             batch: DeferredBatch::Lookups,
@@ -189,10 +189,10 @@ pub fn trig_period<F: JoltField>(node: &ComputationNode) -> OpRel<F> {
         degree: 1,
         input: constant(Int(i128::from(TRIG_PERIOD_MODULUS as i32)))
             * opening(RelationOpening::Id(
-                ids.advice(CommittedPoly::TeleportNodeQuotient),
+                ids.advice(CommittedPoly::TrigPeriodQuotient),
             ))
             + opening(RelationOpening::Id(
-                ids.advice(VirtualPoly::TeleportRemainder),
+                ids.advice(VirtualPoly::TrigPeriodRemainder),
             )),
         output: opening(RelationOpening::Id(input)),
         produced: vec![input],
@@ -201,7 +201,7 @@ pub fn trig_period<F: JoltField>(node: &ComputationNode) -> OpRel<F> {
 }
 
 /// Lookup operands of the downscale: the read's operand is the period remainder
-/// (`VirtualPoly::TeleportRemainder`, whose claim the period reduction reads), its value the
+/// (`VirtualPoly::TrigPeriodRemainder`, whose claim the period reduction reads), its value the
 /// downscaled remainder, its one-hot addresses `VirtualPoly::TrigDownscaleRa` over the
 /// committed `CommittedPoly::TrigDownscaleRaD` chunks. Shared by Cos and Sin.
 #[derive(Default, Clone)]
@@ -221,7 +221,7 @@ impl LookupOperandsTrait for TrigDownscaleOperands {
 
     fn witness_opening_id(node: &ComputationNode) -> OpeningId {
         OpeningId::new(
-            VirtualPoly::TeleportRemainder(node.idx),
+            VirtualPoly::TrigPeriodRemainder(node.idx),
             SumcheckId::NodeExecution(node.idx),
         )
     }

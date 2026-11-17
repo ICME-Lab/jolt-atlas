@@ -24,11 +24,11 @@ pub fn trig_period_claims<F: JoltField>(
     let expect = "the prover holds every claim it reads";
     let accessor = AccOpeningAccessor::new(accumulator, node);
     let quotient = accessor
-        .get_advice(CommittedPoly::TeleportNodeQuotient)
+        .get_advice(CommittedPoly::TrigPeriodQuotient)
         .expect(expect)
         .1;
     let remainder = accessor
-        .get_advice(VirtualPoly::TeleportRemainder)
+        .get_advice(VirtualPoly::TrigPeriodRemainder)
         .expect(expect)
         .1;
     vec![F::from_i32(TRIG_PERIOD_MODULUS as i32) * quotient + remainder]
@@ -37,7 +37,7 @@ pub fn trig_period_claims<F: JoltField>(
 /// A trig node's downscaled period remainder, `(input mod P) >> TRIG_DOWNSCALE_BITS`: the
 /// addresses its table is read at.
 pub fn downscaled(node: &ComputationNode, trace: &Trace) -> Tensor<i32> {
-    TraceView::teleport_advice(trace, node)
+    TraceView::trig_period_advice(trace, node)
         .remainder
         .map(|v| v >> TRIG_DOWNSCALE_BITS)
 }
@@ -45,7 +45,7 @@ pub fn downscaled(node: &ComputationNode, trace: &Trace) -> Tensor<i32> {
 impl LookupWitness for TrigDownscaleOperands {
     /// The period remainder the trace captured.
     fn witness(&self, node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
-        TraceView::teleport_advice(trace, node)
+        TraceView::trig_period_advice(trace, node)
             .remainder
             .map(|v| v as i64)
     }

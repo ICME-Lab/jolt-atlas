@@ -119,7 +119,7 @@ pub struct Eval {
     /// The node's quantized output.
     pub output: Tensor<i32>,
     /// The advice the op captures for the prover, if any: fused-rescale intermediates, the
-    /// softmax witness, a division remainder, the rsqrt or teleport intermediates.
+    /// softmax witness, a division remainder, the rsqrt or trig-period intermediates.
     pub aux: Option<NodeAux>,
 }
 

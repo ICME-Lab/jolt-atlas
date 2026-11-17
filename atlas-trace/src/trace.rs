@@ -113,9 +113,9 @@ impl Trace {
     }
 
     /// The period reduction of a node's input, if it is a `Sin` or a `Cos`.
-    pub fn teleport(&self, id: NodeId) -> Option<&TeleportAdvice> {
+    pub fn trig_period(&self, id: NodeId) -> Option<&TrigPeriodAdvice> {
         match self.aux.get(&id)? {
-            NodeAux::Teleport(a) => Some(a),
+            NodeAux::TrigPeriod(a) => Some(a),
             _ => None,
         }
     }
@@ -171,7 +171,7 @@ pub enum NodeAux {
     /// The division and square-root advice of an `Rsqrt`.
     Rsqrt(RsqrtAdvice),
     /// The period reduction of a `Sin` or `Cos` input.
-    Teleport(TeleportAdvice),
+    TrigPeriod(TrigPeriodAdvice),
 }
 
 /// The intermediates of `rsqrt(x) = ⌊√⌊S³ / x⌋⌋` for `x > 0`:
@@ -191,7 +191,7 @@ pub struct RsqrtAdvice {
 /// The Euclidean reduction of a trig input by the period modulus `P`:
 /// `x = P·quotient + remainder` with `remainder ∈ [0, P)`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TeleportAdvice {
+pub struct TrigPeriodAdvice {
     /// `x div P`.
     pub quotient: Tensor<i32>,
     /// `x mod P`, the value the table index is taken from.

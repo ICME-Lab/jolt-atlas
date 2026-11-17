@@ -71,10 +71,10 @@ canonical_serde_enum! {
         /// * `0` – node index
         RsqrtQuotient(usize),
 
-        /// Advice polynomial for the teleportation division op.
+        /// Advice polynomial for the trig period reduction.
         ///
         /// * `0` – node index
-        TeleportNodeQuotient(usize),
+        TrigPeriodQuotient(usize),
 
         /// Read-address polynomial for the **Gather** operator.
         ///
@@ -162,7 +162,7 @@ canonical_serde_enum! {
     /// | `{Cos,Sin}Ra` | Read-address polynomials for activation-function lookups |
     /// | `Softmax*` | Intermediate polynomials arising in the softmax sub-protocol |
     /// | `HammingWeight` | Polynomial used in the Hamming-weight sumcheck |
-    /// | `Div* / Sqrt* / Teleport*` | Advice polynomials of the division, square-root and teleport identities |
+    /// | `Div* / Sqrt* / TrigPeriod*` | Advice polynomials of the division, square-root and trig-period identities |
     #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Allocative)]
     pub enum VirtualPoly {
         // ----- Node output -----
@@ -222,18 +222,18 @@ canonical_serde_enum! {
         /// * `0` – node index
         SqrtRemainder(usize),
 
-        /// Quotient polynomial for the **neural teleportation** division.
+        /// Quotient polynomial of the trig period reduction.
         ///
         /// * `0` – node index
-        TeleportQuotient(usize),
+        TrigPeriodQuotient(usize),
 
-        /// Remainder polynomial for the **neural teleportation** division.
+        /// Remainder polynomial of the trig period reduction.
         ///
         /// * `0` – node index
-        TeleportRemainder(usize),
+        TrigPeriodRemainder(usize),
 
-        /// The Cos/Sin trig-table downscaled value: `TeleportRemainder >> TRIG_DOWNSCALE_BITS`,
-        /// evaluated at the same opening point as `TeleportRemainder`. Shared by Cos and Sin
+        /// The Cos/Sin trig-table downscaled value: `TrigPeriodRemainder >> TRIG_DOWNSCALE_BITS`,
+        /// evaluated at the same opening point as `TrigPeriodRemainder`. Shared by Cos and Sin
         /// nodes; this is what the Cos/Sin table lookup actually reads.
         ///
         /// * `0` – node index

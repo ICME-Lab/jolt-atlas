@@ -8,7 +8,7 @@
 use crate::node_view::ComputationNode;
 use atlas_trace::{
     trace::{FusedIntermediates, LayerData},
-    NodeId, RsqrtAdvice, SoftmaxWitness, TeleportAdvice, Tensor, Trace,
+    NodeId, RsqrtAdvice, SoftmaxWitness, Tensor, Trace, TrigPeriodAdvice,
 };
 
 /// Node-view-based accessors over the raw trace.
@@ -22,7 +22,7 @@ pub trait TraceView {
     /// The division and square-root advice of an `Rsqrt` node. Panics for any other.
     fn rsqrt_advice(&self, n: &ComputationNode) -> &RsqrtAdvice;
     /// The period reduction of a `Sin` or `Cos` node's input. Panics for any other.
-    fn teleport_advice(&self, n: &ComputationNode) -> &TeleportAdvice;
+    fn trig_period_advice(&self, n: &ComputationNode) -> &TrigPeriodAdvice;
     /// Operands and output of a node.
     fn layer_data<'a>(&'a self, n: &ComputationNode) -> LayerData<'a>;
     /// Operand tensors of a node.
@@ -56,10 +56,10 @@ impl TraceView for Trace {
         })
     }
 
-    fn teleport_advice(&self, n: &ComputationNode) -> &TeleportAdvice {
-        self.teleport(NodeId(n.idx as u32)).unwrap_or_else(|| {
+    fn trig_period_advice(&self, n: &ComputationNode) -> &TrigPeriodAdvice {
+        self.trig_period(NodeId(n.idx as u32)).unwrap_or_else(|| {
             panic!(
-                "node {} ({}) has no teleport advice in the trace",
+                "node {} ({}) has no trig-period advice in the trace",
                 n.idx, n.operator
             )
         })

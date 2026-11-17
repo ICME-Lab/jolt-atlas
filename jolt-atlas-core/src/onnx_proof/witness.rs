@@ -212,13 +212,13 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                 let q = layer_data.output;
                 MultilinearPolynomial::from(q.clone())
             }
-            CommittedPoly::TeleportNodeQuotient(node_idx) => {
+            CommittedPoly::TrigPeriodQuotient(node_idx) => {
                 let computation_node = &model.view(*node_idx);
                 // For nodes that use the quotient for a lookup (erf/sigmoid ...),
                 // the quotient is virtualized from a one-hot encoding.
                 assert!(matches!(computation_node.operator, Op::Cos(_) | Op::Sin(_)));
                 MultilinearPolynomial::from(
-                    TraceView::teleport_advice(trace, computation_node)
+                    TraceView::trig_period_advice(trace, computation_node)
                         .quotient
                         .clone(),
                 )
@@ -294,7 +294,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     matches!(computation_node.operator, Op::Cos(_) | Op::Sin(_)),
                     "Expected Cos or Sin operator for CosRaD/SinRaD committed polynomial"
                 );
-                let remainder = &TraceView::teleport_advice(trace, computation_node).remainder;
+                let remainder = &TraceView::trig_period_advice(trace, computation_node).remainder;
                 let lookup_indices: Vec<usize> = remainder
                     .par_iter()
                     .with_min_len(par_enabled())
@@ -321,7 +321,7 @@ impl<F: JoltField> WitnessGenerator<F> for CommittedPoly {
                     matches!(computation_node.operator, Op::Cos(_) | Op::Sin(_)),
                     "Expected Cos or Sin operator for TrigDownscaleRaD committed polynomial"
                 );
-                let remainder = &TraceView::teleport_advice(trace, computation_node).remainder;
+                let remainder = &TraceView::trig_period_advice(trace, computation_node).remainder;
                 let lookup_indices = compute_lookup_indices(remainder);
                 build_one_hot_rad_witness(&lookup_indices, *d_idx, XLEN)
             }

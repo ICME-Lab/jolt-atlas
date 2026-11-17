@@ -50,4 +50,6 @@ pub use id::{NodeId, Scale, SemVersion};
 pub use model::{CompileOptions, Model};
 pub use op::Op;
 pub use tensor::Tensor;
-pub use trace::{FusedIntermediates, NodeAux, RsqrtAdvice, SoftmaxWitness, TeleportAdvice, Trace};
+pub use trace::{
+    FusedIntermediates, NodeAux, RsqrtAdvice, SoftmaxWitness, Trace, TrigPeriodAdvice,
+};

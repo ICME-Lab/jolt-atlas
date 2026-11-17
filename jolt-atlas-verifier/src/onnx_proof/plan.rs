@@ -253,8 +253,8 @@ impl<F: JoltField> OpRelation<F> {
 pub enum OpOpen {
     /// A fused node's rescale remainder at the reduced output point.
     RescaleRemainder(ComputationNode),
-    /// A trig op's teleport quotient at the reduced output point.
-    TeleportQuotient(ComputationNode),
+    /// A trig op's period quotient at the reduced output point.
+    TrigPeriodQuotient(ComputationNode),
     /// A trig op's downscaled remainder at the reduced output point.
     TrigDownscaled(ComputationNode),
     /// A smooth ReLU's `ReLU(x)` at the reduced output point.
@@ -285,11 +285,11 @@ impl OpOpen {
             Self::RescaleRemainder(node) => {
                 at_reduced_output(node, accumulator, transcript, VirtualPoly::RescaleRemainder)
             }
-            Self::TeleportQuotient(node) => at_reduced_output(
+            Self::TrigPeriodQuotient(node) => at_reduced_output(
                 node,
                 accumulator,
                 transcript,
-                CommittedPoly::TeleportNodeQuotient,
+                CommittedPoly::TrigPeriodQuotient,
             ),
             Self::TrigDownscaled(node) => {
                 at_reduced_output(node, accumulator, transcript, VirtualPoly::TrigDownscaled)

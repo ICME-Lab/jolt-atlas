@@ -8,7 +8,7 @@ use crate::{
     error::{KernelError, ShapeError},
     semantics::tables::{IndexRule, TableKind},
     tensor::Tensor,
-    trace::{NodeAux, TeleportAdvice},
+    trace::{NodeAux, TrigPeriodAdvice},
 };
 
 use super::{
@@ -79,7 +79,7 @@ macro_rules! impl_activation {
                 let table = ctx.tables.get($kind, ctx.scale, ctx.version);
                 Ok(Eval {
                     output: inputs[0].map(|x| table.lookup(x)),
-                    aux: teleport_advice(table.index, inputs[0]),
+                    aux: trig_period_advice(table.index, inputs[0]),
                 })
             }
 
@@ -96,12 +96,12 @@ macro_rules! impl_activation {
 
 /// The period reduction a trig table indexes by, captured for the prover; `None` for a table
 /// that does not reduce its input.
-fn teleport_advice(index: IndexRule, input: &Tensor<i32>) -> Option<NodeAux> {
+fn trig_period_advice(index: IndexRule, input: &Tensor<i32>) -> Option<NodeAux> {
     let IndexRule::TrigReduced { modulus, .. } = index else {
         return None;
     };
     let modulus = modulus as i32;
-    Some(NodeAux::Teleport(TeleportAdvice {
+    Some(NodeAux::TrigPeriod(TrigPeriodAdvice {
         quotient: input.map(|x| x.div_euclid(modulus)),
         remainder: input.map(|x| x.rem_euclid(modulus)),
     }))
@@ -161,7 +161,7 @@ mod tests {
             else {
                 panic!("trig tables reduce by a period");
             };
-            let Some(NodeAux::Teleport(advice)) = eval.aux else {
+            let Some(NodeAux::TrigPeriod(advice)) = eval.aux else {
                 panic!("trig ops capture their reduction");
             };
             for (i, &x) in values.iter().enumerate() {

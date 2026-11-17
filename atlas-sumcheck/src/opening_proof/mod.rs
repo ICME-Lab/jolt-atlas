@@ -519,7 +519,7 @@ pub enum SumcheckId {
     HammingWeight,
     /// RLC sumcheck for the execution of a specific node.
     RLC(usize),
-    /// Eval-shift sumcheck used in neural teleport ops
+    /// Eval-shift sumcheck used in the trig ops
     NTEvalShift,
     /// A dense digit range check (`digit_range`).
     DigitRange,

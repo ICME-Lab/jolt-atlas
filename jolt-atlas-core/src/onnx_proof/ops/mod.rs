@@ -617,8 +617,8 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
                 .into_provider(&mut prover.transcript, r0)
                 .append_advice(VirtualPoly::RescaleRemainder, eval);
         }
-        OpOpen::TeleportQuotient(node) => {
-            let quotient = TraceView::teleport_advice(&prover.trace, node)
+        OpOpen::TrigPeriodQuotient(node) => {
+            let quotient = TraceView::trig_period_advice(&prover.trace, node)
                 .quotient
                 .clone();
             let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
@@ -626,7 +626,7 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
             let eval = quotient.evaluate_mle(&r0.r);
             accessor
                 .into_provider(&mut prover.transcript, r0)
-                .append_advice(CommittedPoly::TeleportNodeQuotient, eval);
+                .append_advice(CommittedPoly::TrigPeriodQuotient, eval);
         }
         OpOpen::TrigDownscaled(node) => {
             let downscaled = trig::downscaled(node, &prover.trace);

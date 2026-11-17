@@ -135,7 +135,7 @@ fn range_claim_bits(
         }
         Remainder::RsqrtDiv => padded(&TraceView::rsqrt_advice(trace, node).div_remainder),
         Remainder::RsqrtSqrt => padded(&TraceView::rsqrt_advice(trace, node).sqrt_remainder),
-        Remainder::Teleport => padded(&TraceView::teleport_advice(trace, node).remainder),
+        Remainder::TrigPeriod => padded(&TraceView::trig_period_advice(trace, node).remainder),
         Remainder::SoftmaxSumGap => per_row(&softmax().sum_gap),
         Remainder::SoftmaxPrevSumGap => per_row(&softmax().prev_sum_gap),
     };

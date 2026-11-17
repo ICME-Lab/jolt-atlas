@@ -247,7 +247,7 @@ enum WitnessSite {
         field: &'static str,
         elem: usize,
     },
-    /// One element of a division, rsqrt or teleport advice tensor (see [`bump_advice`]).
+    /// One element of a division, rsqrt or trig-period advice tensor (see [`bump_advice`]).
     Advice {
         node: usize,
         field: &'static str,
@@ -355,7 +355,7 @@ fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
             }
             atlas_trace::trace::NodeAux::Remainder(_)
             | atlas_trace::trace::NodeAux::Rsqrt(_)
-            | atlas_trace::trace::NodeAux::Teleport(_) => {
+            | atlas_trace::trace::NodeAux::TrigPeriod(_) => {
                 let len = trace.node_outputs[node].data().len();
                 for &field in advice_fields(aux) {
                     for elem in probe_elems(len, all) {
@@ -368,13 +368,13 @@ fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
     sites
 }
 
-/// The tamperable tensors of a division, rsqrt or teleport advice.
+/// The tamperable tensors of a division, rsqrt or trig-period advice.
 fn advice_fields(aux: &atlas_trace::trace::NodeAux) -> &'static [&'static str] {
     use atlas_trace::trace::NodeAux;
     match aux {
         NodeAux::Remainder(_) => &["remainder"],
         NodeAux::Rsqrt(_) => &["quotient", "div_remainder", "sqrt_remainder"],
-        NodeAux::Teleport(_) => &["teleport_quotient", "teleport_remainder"],
+        NodeAux::TrigPeriod(_) => &["trig_period_quotient", "trig_period_remainder"],
         NodeAux::Fused(_) | NodeAux::Softmax(_) => &[],
     }
 }
@@ -391,8 +391,8 @@ fn bump_advice(aux: &mut atlas_trace::trace::NodeAux, field: &str, elem: usize, 
         }
         (NodeAux::Rsqrt(a), "div_remainder") => bump(a.div_remainder.data_mut()),
         (NodeAux::Rsqrt(a), "sqrt_remainder") => bump(a.sqrt_remainder.data_mut()),
-        (NodeAux::Teleport(a), "teleport_quotient") => bump(a.quotient.data_mut()),
-        (NodeAux::Teleport(a), "teleport_remainder") => bump(a.remainder.data_mut()),
+        (NodeAux::TrigPeriod(a), "trig_period_quotient") => bump(a.quotient.data_mut()),
+        (NodeAux::TrigPeriod(a), "trig_period_remainder") => bump(a.remainder.data_mut()),
         (_, field) => panic!("no advice field `{field}` on this node"),
     }
 }

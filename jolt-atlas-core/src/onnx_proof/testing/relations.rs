@@ -39,7 +39,7 @@ use crate::{
             mean_of_squares::{MeanOfSquaresReductionProver, MeanOfSquaresRelation},
             mul::product,
             rsqrt::RsqrtRelation,
-            scalar_const_div::ConstantDivisionRelation,
+            scalar_const_div::constant_division,
             sum::axis::SumAxisRelation,
         },
         relation::{
@@ -393,9 +393,11 @@ fn relation_prover_equiv_engine() {
             Op::Rsqrt(_) => check_engine(|| RsqrtRelation::new(node.clone()), &trace, rng),
             Op::Div(_) => check_engine(|| division(&node), &trace, rng),
             Op::Iff(_) => check_engine(|| select(&node), &trace, rng),
-            Op::ScalarConstDiv(_) => {
-                check_engine(|| ConstantDivisionRelation::new(node.clone()), &trace, rng)
-            }
+            Op::ScalarConstDiv(_) => check_engine(
+                || constant_division(&node).expect("a ScalarConstDiv node"),
+                &trace,
+                rng,
+            ),
             ref other => panic!("no engine relation for {other}"),
         }
     }

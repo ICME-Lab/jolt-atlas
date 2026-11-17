@@ -40,7 +40,6 @@ use crate::onnx_proof::{
         neg::SignedCopyRelation,
         reshape::FlatCopyRelation,
         rsqrt::RsqrtRelation,
-        scalar_const_div::ConstantDivisionRelation,
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
         slice::SubcubeSelectRelation,
@@ -153,8 +152,6 @@ pub enum OpTrig {
 pub enum OpRelation<F: JoltField> {
     /// An op relation.
     Op(OpRel<F>),
-    /// `ScalarConstDiv`: the quotient by a constant.
-    ConstantDivision(ConstantDivisionRelation),
     /// `Einsum`: the contraction, its input claim the fused rescale's `q·2^S + rem`.
     Contraction(ContractionRelation),
     /// `GatherSmall` / `GatherLarge`: the dictionary read; the index operand's opening is
@@ -239,7 +236,6 @@ impl<F: JoltField> OpRelation<F> {
         }
         match self {
             Self::Op(relation) => one(relation, accumulator, transcript),
-            Self::ConstantDivision(relation) => one(relation, accumulator, transcript),
             Self::Contraction(relation) => one(relation, accumulator, transcript),
             Self::Gather(relation) => Ok(boxed(gather::gather_verifier(
                 relation,

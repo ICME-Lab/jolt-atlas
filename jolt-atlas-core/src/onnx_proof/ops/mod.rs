@@ -569,7 +569,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
     }
     match relation {
         OpRelation::Op(relation) => engine(relation, prover),
-        OpRelation::ConstantDivision(relation) => engine(relation, prover),
         OpRelation::Contraction(relation) => {
             let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
             vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
@@ -823,6 +822,7 @@ pub fn op_rel_witnesses<F: JoltField>(
         }
         OpRelKind::Iff => iff::select_witnesses(node, trace),
         OpRelKind::Div => div::division_witnesses(node, trace),
+        OpRelKind::ConstantDivision => scalar_const_div::constant_division_witnesses(node, trace),
         OpRelKind::AddAccumulation | OpRelKind::SubAccumulation | OpRelKind::DivQuotient => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
@@ -849,7 +849,8 @@ pub fn op_rel_tie_claims<F: JoltField>(
         | OpRelKind::Square
         | OpRelKind::Cube
         | OpRelKind::Iff
-        | OpRelKind::Div => {
+        | OpRelKind::Div
+        | OpRelKind::ConstantDivision => {
             panic!("{:?} is proven by a sumcheck, not a tie", relation.kind)
         }
     }

@@ -221,6 +221,8 @@ pub enum OpRelKind {
     Div,
     /// `Div`: the committed quotient is the node's reduced output.
     DivQuotient,
+    /// `ScalarConstDiv`: the quotient by a constant.
+    ConstantDivision,
 }
 
 impl OpRelKind {
@@ -232,6 +234,7 @@ impl OpRelKind {
             Self::Iff => RelationId::Select,
             Self::Div => RelationId::Division,
             Self::DivQuotient => RelationId::DivisionQuotient,
+            Self::ConstantDivision => RelationId::ConstantDivision,
         }
     }
 
@@ -247,6 +250,7 @@ impl OpRelKind {
             Self::SubAccumulation => matches!(op, Op::Sub(_)),
             Self::Iff => matches!(op, Op::Iff(_)),
             Self::Div | Self::DivQuotient => matches!(op, Op::Div(_)),
+            Self::ConstantDivision => matches!(op, Op::ScalarConstDiv(_)),
         }
     }
 }

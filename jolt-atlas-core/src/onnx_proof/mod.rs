@@ -67,7 +67,8 @@ pub fn prove<F: JoltField, T: ProvingTranscript, PCS: CommitmentScheme<Field = F
     pp: &AtlasProverPreprocessing<F, PCS>,
     inputs: &[Tensor<i32>],
 ) -> (ONNXProof, ModelExecutionIO, Option<ProverDebugInfo<F>>) {
-    let trace = pp.model().trace(inputs).expect("model execution failed");
+    let trace = tracing::info_span!("trace")
+        .in_scope(|| pp.model().trace(inputs).expect("model execution failed"));
     prove_from_trace::<F, T, PCS>(pp, trace)
 }
 

@@ -35,7 +35,6 @@ use crate::onnx_proof::{
         einsum::ContractionRelation,
         erf::ErfTableMarker,
         gather::{self, small::GatherSmallShape, GatherRelation},
-        iff::IffRelation,
         is_nan::ZeroOutputRelation,
         mean_of_squares::MeanOfSquaresRelation,
         moveaxis::AxisPermutationRelation,
@@ -170,8 +169,6 @@ pub enum OpRelation<F: JoltField> {
     GatherSmallOneHot(GatherSmallShape),
     /// `GatherSmall`: the Hamming-weight check of its one-hot `ra`.
     GatherSmallHammingWeight(GatherSmallShape),
-    /// `Iff`: the masked select.
-    Iff(IffRelation),
     /// A prefix-suffix table lookup of the node's operand: the operand's opening is appended,
     /// then the read-raf relation is set up.
     Lookup(OpLookup, ComputationNode),
@@ -267,7 +264,6 @@ impl<F: JoltField> OpRelation<F> {
             Self::GatherSmallHammingWeight(shape) => Ok(boxed(
                 gather::small::build_stage3_verifier(&shape, accumulator, transcript)?,
             )),
-            Self::Iff(relation) => one(relation, accumulator, transcript),
             Self::Lookup(OpLookup::Relu, node) => Ok(boxed(
                 OpLookupProvider::<DefaultLookupOperands>::new(node)
                     .read_raf_verify::<F, T, ReluTable<XLEN>, XLEN>(accumulator, transcript)?,

@@ -613,7 +613,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 &mut prover.transcript,
             ))]
         }
-        OpRelation::Iff(relation) => engine(relation, prover),
         OpRelation::Lookup(kind @ OpLookup::Relu, node) => {
             lookup::<F, T, DefaultLookupOperands, ReluTable<XLEN>>(kind, node, prover)
         }
@@ -824,6 +823,7 @@ pub fn op_rel_witnesses<F: JoltField>(
         OpRelKind::And | OpRelKind::Mul | OpRelKind::Square | OpRelKind::Cube => {
             mul::product_witnesses(node, relation.kind, trace)
         }
+        OpRelKind::Iff => iff::select_witnesses(node, trace),
         OpRelKind::AddAccumulation | OpRelKind::SubAccumulation => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
@@ -844,7 +844,7 @@ pub fn op_rel_tie_claims<F: JoltField>(
         OpRelKind::AddAccumulation | OpRelKind::SubAccumulation => {
             add::accumulation_claims(node, trace, &setup.incoming_point)
         }
-        OpRelKind::And | OpRelKind::Mul | OpRelKind::Square | OpRelKind::Cube => {
+        OpRelKind::And | OpRelKind::Mul | OpRelKind::Square | OpRelKind::Cube | OpRelKind::Iff => {
             panic!("{:?} is proven by a sumcheck, not a tie", relation.kind)
         }
     }

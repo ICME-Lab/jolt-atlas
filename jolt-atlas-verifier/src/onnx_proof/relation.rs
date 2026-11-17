@@ -215,6 +215,8 @@ pub enum OpRelKind {
     AddAccumulation,
     /// `Sub`: the output is `left − right`.
     SubAccumulation,
+    /// `Iff`: the masked select.
+    Iff,
 }
 
 impl OpRelKind {
@@ -223,6 +225,7 @@ impl OpRelKind {
         match self {
             Self::And | Self::Mul | Self::Square | Self::Cube => RelationId::Product,
             Self::AddAccumulation | Self::SubAccumulation => RelationId::Accumulation,
+            Self::Iff => RelationId::Select,
         }
     }
 
@@ -236,6 +239,7 @@ impl OpRelKind {
             Self::Cube => matches!(op, Op::Cube(_)),
             Self::AddAccumulation => matches!(op, Op::Add(_)),
             Self::SubAccumulation => matches!(op, Op::Sub(_)),
+            Self::Iff => matches!(op, Op::Iff(_)),
         }
     }
 }

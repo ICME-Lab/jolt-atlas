@@ -1,30 +1,21 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     onnx_proof::{
-        relation::{
-            AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
-            RelationId, RelationOpening, RelationSetup,
-        },
+        ops::OpLayout,
+        relation::{OpRel, OpRelKind, RelationDerived, RelationOpening},
         ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_claims::{
-    constant, derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck,
-};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_claims::{constant, derived, opening, Int};
 use atlas_trace::op::Iff;
-use atlas_transcript::Transcript;
 
-crate::impl_plan_op!(Iff, IffRelation);
+impl OpLayout for Iff {}
 
 impl OpPlan for Iff {
     fn plan<F: atlas_algebra::field::JoltField>(
@@ -37,7 +28,7 @@ impl OpPlan for Iff {
             Step::Reduce,
             Step::Relation {
                 proof: ProofType::Execution,
-                relation: OpRelation::Iff(IffRelation::new(node.clone())),
+                relation: OpRelation::Op(select(node)),
             },
         ]))
     }
@@ -53,87 +44,16 @@ impl OpPlan for Iff {
 /// **S ⊆ R.** `Iff`'s semantics require a Boolean mask and compute `m·a + (1 − m)·b` exactly
 /// (`atlas_trace::op::Iff`), so the output equals the summand at every hypercube point and its
 /// MLE at `r₀` is the sum.
-pub struct IffRelation {
-    node: ComputationNode,
-}
-
-impl IffRelation {
-    fn ids(&self) -> OpeningIdBuilder<'_> {
-        OpeningIdBuilder::new(&self.node)
+pub fn select<F: JoltField>(node: &ComputationNode) -> OpRel<F> {
+    let ids = OpeningIdBuilder::new(node);
+    let operands = [0, 1, 2].map(|position| ids.nodeio(Target::Input(position)));
+    let [mask, a, b] = operands.map(|id| opening(RelationOpening::Id(id)));
+    OpRel {
+        rounds: node.pow2_padded_num_output_elements().log_2(),
+        degree: 3,
+        input: opening(RelationOpening::ReducedNodeOutput(node.idx)),
+        output: derived(RelationDerived::Eq) * (mask.clone() * a + (constant(Int(1)) - mask) * b),
+        produced: operands.to_vec(),
+        ..OpRel::base(OpRelKind::Iff, node)
     }
 }
-
-impl SymbolicSumcheck for IffRelation {
-    type RelationId = RelationId;
-    type OpeningId = RelationOpening;
-    type DerivedId = RelationDerived;
-    type ChallengeId = RelationChallenge;
-    type Challenges<F> = NoChallenges<F>;
-    type Inputs<C> = NoInputs<C>;
-    type Outputs<C> = NoOutputs<C>;
-
-    fn id(&self) -> RelationId {
-        RelationId::Select
-    }
-
-    fn rounds(&self) -> usize {
-        self.node.pow2_padded_num_output_elements().log_2()
-    }
-
-    fn degree(&self) -> usize {
-        3
-    }
-
-    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        opening(RelationOpening::ReducedNodeOutput(self.node.idx))
-    }
-
-    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        let [mask, a, b] = [0, 1, 2].map(|position| {
-            opening(RelationOpening::Id(
-                self.ids().nodeio(Target::Input(position)),
-            ))
-        });
-        derived(RelationDerived::Eq) * (mask.clone() * a + (constant(F::one()) - mask) * b)
-    }
-}
-
-impl IffRelation {
-    /// The relation for the given shape.
-    pub fn new(node: ComputationNode) -> Self {
-        Self { node }
-    }
-}
-
-impl Produces for IffRelation {
-    fn produced(&self) -> Vec<OpeningId> {
-        (0..3)
-            .map(|position| self.ids().nodeio(Target::Input(position)))
-            .collect()
-    }
-}
-
-impl<F: JoltField> Relation<F> for IffRelation {}
-
-impl<F: JoltField> SetupRelation<F> for IffRelation {
-    fn setup<T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        Ok(RelationSetup {
-            incoming_point: accumulator.get_node_output_opening(self.node.idx)?.0.r,
-            challenges: Vec::new(),
-        })
-    }
-}
-
-impl AtlasRelation for IffRelation {
-    type Spec = Iff;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
-    }
-}
-
-impl<F: JoltField> EngineRelation<F> for IffRelation {}

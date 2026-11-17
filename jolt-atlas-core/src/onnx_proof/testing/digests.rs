@@ -57,7 +57,7 @@ fn digest_op_gauntlet() {
         "op_gauntlet",
         imported.model,
         &inputs,
-        "d9469cd85243e8dd240120ffd80080a266479127eff61ca4d9cace213e41f137",
+        "369116d7316d463303a5ca18280d402dfd3c74be7565950214ed28ebff547e33",
         "fc751ff1da419143adc242ee3671868adbea23e30cc4e9c135f4a30d5b0f5535",
     );
 }
@@ -70,7 +70,7 @@ fn digest_gpt2_tiny() {
         "gpt2-tiny",
         imported.model,
         &inputs,
-        "30795c0426dda025ec3a541fd5d831126e068355b3abf91f929ceb19199d936c",
+        "eddc3f401ed2ee7d21a01e4a6fefc6e9655e595b10c481eacb401c42ecc3ba81",
         "cea3a75cf7e37737d23e9cbd464247271382ace27aa577b34c03dc7b901eda67",
     );
 }
@@ -83,7 +83,7 @@ fn digest_qwen2_tiny() {
         "qwen2-tiny",
         imported.model,
         &inputs,
-        "6b3b835cee70770ea5fde4d3671416e2d6b566e244bf8d05880a01627da0f211",
+        "eb0647326f0e745af7e13fb70c73c56343255c4fae98c21319913ddcfb7abf11",
         "00a84f22c32059c4962fdd7b12f4da23fb428a74909fd7c341c3171587b265dd",
     );
 }
@@ -96,7 +96,7 @@ fn digest_bge_tiny() {
         "bge-tiny",
         imported.model,
         &inputs,
-        "b70156c7c8b3c7fcd237afca844314d49f1e1fab47a445eb8b5bb3bef47c2277",
+        "8668d016bcd4db16b6a26a8f38ceee250bd24a62e00e423289c990b9dccdb3c9",
         "0df65c93b0b5c2b2cb231948de8e8a504108f0895ac3d4aaad9dca218edeb763",
     );
 }

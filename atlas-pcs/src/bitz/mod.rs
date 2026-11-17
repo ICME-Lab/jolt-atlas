@@ -3,6 +3,7 @@
 
 pub mod gf128;
 pub mod gkr;
+pub mod integers;
 pub mod ligerito;
 pub mod merkle;
 pub mod multilinear;

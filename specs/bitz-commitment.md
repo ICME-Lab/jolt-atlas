@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-17                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          | (filled when the PR opens, or at merge) |
 | Depends on  | `specs/one-clamp.md`, `specs/own-pcs-adapter.md` |
 | Supersedes  | `docs/prover-plan.md` §3 item 8 and §5 decisions 1 and 3; the `akita-*` rev bump of item 10 |
@@ -169,10 +169,12 @@ Later stages:
       `Cargo.lock`; `jolt-field/` and `jolt-poly/` are deleted. GPT-2: commit
       0.26 s, openings 3.02 s. The real-model tests (the heavy job) were not run; the gate
       proves and verifies GPT-2 and bge-small with the release binary.
-- [ ] Stage 3 PR: `atlas_sumcheck::digit_range` and the Booleanity checks are gone; the
+- [x] Stage 3 PR: `atlas_sumcheck::digit_range` and the Booleanity checks are gone; the
       soundness sweeps pass with the range now held by the commitment (the witness-tamper
       sweep's digit sites are rejected at the opening); GPT-2 at 16 tokens proves in at most
-      12 s on the benchmark machine.
+      12 s on the benchmark machine. 9.07 s. The
+      digit-tamper sites are rejected when the commitments are read, where the verifier
+      requires the declared width, not at the opening.
 
 ### Testing Strategy
 
@@ -288,6 +290,18 @@ and loses the ones nothing called; `jolt-atlas-core` and `jolt-atlas-verifier` c
 the scheme type they name. Shapes (variables, bits, sign) are declared in the batch
 commitment by the prover and bound by the transcript; stage 3 is where the verifier starts to
 require a declared width.
+
+### As built (stage 3)
+
+The digit range check also carried the digits' recomposition, so it was not only deleted:
+the bucket's value sumcheck now ends on the committed digit columns themselves, whose
+recomposition is the packed value. The Booleanity check shared one sumcheck with the
+Hamming-weight check; the standalone Hamming-weight relation the small gather already used
+replaces both, over the address bits alone. The verifier requires two bits for a digit
+column and one for a one-hot polynomial when it reads the commitments
+(`CommitmentScheme::coefficient_bits`). Not in the spec: the projection's proof of work is a
+keyed BLAKE3 search with its nonce in the BitZ proof, after the sponge search proved to cost
+up to 2 s on GPT-2.
 
 ## Documentation
 

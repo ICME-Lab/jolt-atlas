@@ -282,6 +282,12 @@ The work is carried by specs; this is the one order. Each spec names the items i
 and rewrites their text here when it lands. Every step is gated by `bench/gate.sh` on
 `gpt2 --seq-len 16` and `bge-small-en-v1.5` on the benchmark machine, against the commit it
 lands on: stage times within 3%, peak memory within 5%, unless the spec states tighter bounds.
+Qwen joins the gate at step 1 below.
+
+**Targets (set 2026-11-17).** GPT-2 at 16 tokens in about 1 s and Qwen in about 3 s. Today
+GPT-2 proves in about 9.5 s and Qwen in about 30 s on a developer laptop; GPT-2 is at about
+the same on the benchmark machine. Qwen's target assumes it scales as GPT-2 does; step 1
+checks that.
 
 **Landed on `dev`:**
 
@@ -292,47 +298,65 @@ lands on: stage times within 3%, peak memory within 5%, unless the spec states t
 | `no-scalar-special-cases` | one-element nodes join the buckets (no item) |
 | `post-loop-batches` | every lookup in two post-loop batches (no item) |
 | `structural-ops-as-ties` | 5, the Reshape, Slice and Concat part of B4 |
+| `log-partition-softmax` | 6, the softmax line |
+| `fused-gelu` | 6, C4 |
+| `one-clamp` | decision 2; item 4 reduces to widths below 32 bits |
+| `stream-proof` | the proof is the transcript; the verifier walks one schedule (no item) |
+| `bitz-commitment` | decision 1: BitZ replaces Akita; item 8 and the `akita-*` bump are dropped; the digit-range and Booleanity sumchecks are gone |
 
-**In progress, in dependency order:**
+`bitz-commitment` took GPT-2 from 24.4 s to 9.1 s on the benchmark machine
+(`docs/measurement-plan.md`).
 
-1. `log-partition-softmax` — item 6's softmax line, under `SemVersion::V2`. One table read per
-   entry instead of 28 committed cells, any width provable. Fused attention (C3) stays open.
-2. `fused-gelu` — item 6's C4. GELU and SiLU chains become one `SmoothRelu` op at 13 cells per
-   element; on GPT-2 that is about 5.5 of 12.8 million clamped elements, and it removes the
-   Cube, the only node that saturates on any model we run.
-3. `one-clamp` — decision 2: a result outside `i32` is a `KernelError`. Needs step 2. The
-   pre-clamp accumulation, the slack, the split sumcheck, the exact flag and the 40–64 width
-   ladder go; item 3's prerequisite is met and item 4 reduces to widths below 32 bits.
-4. `digits-as-trace`, stage 1 — item 9 for the nodes that have digits: their output claims are
-   discharged at the bucket's value sumcheck and their evaluation reductions disappear. Needs
-   step 3.
+**Where GPT-2's 9.1 s is** (benchmark machine, after `bitz-commitment`), and what each part
+has to become for 1 s. The targets are estimates of what the work below can reach, not
+measurements.
 
-**After those, not yet specified:**
+| Part | Now s | Target s | Steps |
+|---|---|---|---|
+| Trace execution and witness generation | 3.6 | 0.25 | 2 |
+| Sumchecks over the model (`iop`) | 2.35 | 0.35 | 5, 6, 7 |
+| Opening-reduction sumcheck | 1.3 | 0.1 | 4 |
+| BitZ commit and opening | 1.8 | 0.3 | 3, 6 |
+| **Total** | **9.1** | **about 1.0** | |
 
-5. Measure before choosing. Section 1's profile is from an M3 at `25c7218f1`, before every
-   change above; redo it on the benchmark machine at the commit step 4 lands on. The same
-   session settles decision 3 (base 4 or Booleans) and runs the BitZ and Mosaic arm of
-   decision 1 (`docs/measurement-plan.md`, "BitZ under the Mosaic layout"). That arm comes
-   before any Akita-specific work: if the scheme changes, item 8 and the `akita-*` rev bump are
-   moot. **Run 2026-11-17:** BitZ commits and opens our volume in about 0.45 s against
-   Akita's 15.2 s, and the projection for GPT-2 at 16 tokens is about 10 s. The scheme change
-   is specified in `specs/bitz-commitment.md` (three stages) and goes ahead of steps 6–9;
-   item 8 and the rev bump are dropped.
-   **Stage 2 landed 2026-11-17:** the prover runs on BitZ and Akita is deleted; GPT-2 at 16
-   tokens proves in 10.8 s on the benchmark machine against 24.4 s (commit 7.3 → 0.26 s,
-   openings 9.7 → 3.0 s). Next for speed: stage 3 (the 1.6 s digit-range batch), trace
-   execution (item 11), and the rest of the BitZ grand product.
-6. Item 3's standalone relation test with the negative test, then on the MLP rows; item 4's
-   narrower declared widths.
-7. `digits-as-trace` stages 2 and 3: digit-backed relations batched outside the node loop
-   (needs a memory plan), then the relation compiler and the end of the chain.
-8. Item 5's bias fusion (C1) and fused LayerNorm with item 7's Rsqrt relation; then item 6's
-   B2, C2 and C3, which C1 and step 2 make reachable. Item 5's one rescale per chain only if
-   step 5's pair count justifies it.
-9. Item 10: the field kernel port (independent of the commitment scheme) and the engine
-   microbenchmarks; item 8 and the rev bump if Akita stays; item 11 any time.
+**The route, in order.** Each step states the GPT-2 time it is expected to leave; the
+expectations are estimates and each step's gate replaces its own.
 
-The order of steps 6–9 is provisional: step 5's profile decides it.
+1. **Profile Qwen.** Put Qwen on the benchmark machine (a `scripts/remote.sh` subcommand that
+   downloads a model there), take the same per-stage table, and add Qwen to the gate. Qwen
+   has four times GPT-2's weights, 24 identical blocks, RMSNorm (Rsqrt), SiLU and grouped
+   attention heads (small gathers); the profile says whether the steps below serve it in the
+   same order or it needs work of its own (the Rsqrt relation of item 7 and fused attention
+   are the candidates). Also here: `digits-as-trace` stage 1, already specified.
+2. **The tracer (item 11).** Trace execution and witness generation are the largest part and
+   unoptimised: a float forward pass of either model takes a fraction of a second. Integer
+   einsum and normalisation kernels, parallel over rows. Expected: GPT-2 about 6 s. It
+   scales with the weights, so it is the largest step for Qwen.
+3. **BitZ to its reference speed.** Our grand product is about four times the
+   proof-of-concept's (1.2 s against 0.3 s at the same size): joint case tables in its
+   bottom rounds, fused generation of the first stored layer, and no work on all-zero
+   columns. Expected: about 5 s.
+4. **The opening reduction.** Every digit column is already opened at one point, the output
+   of the buckets' value sumcheck, and they are 93% of committed rows: hand that point to
+   the opening and reduce only the one-hot claims. Measure the reduction's split by member
+   kind first. Making the one-hot claims share a point is open: it lengthens their
+   sumchecks and needs a spec. Expected: about 4 s.
+5. **The sumcheck engine (item 10).** The einsum dot engine on the split-eq polynomial with
+   unreduced accumulation, the row-major fold, the parallel evaluation reduction.
+   Microbenchmark on Fp128 first. Expected: about 3 s.
+6. **Committed volume (items 3 and 4).** The row check on wide rows and declared widths
+   below 32 bits shrink the range buckets, and with them the BitZ opening and the buckets'
+   sumcheck. Item 3's standalone relation test with the negative test comes first.
+7. **One sumcheck for the model (`digits-as-trace` stages 2 and 3, item 9).** Digit-backed
+   relations leave the node loop and stack across identical layers (twelve in GPT-2,
+   twenty-four in Qwen), then the relation compiler. Needs a memory plan. Expected with
+   step 6: about 1.5 s.
+8. **The last factor.** What is left after step 7 is passes of field arithmetic over the
+   weights. Closing 1.5 s to 1 s on sixteen cores is not planned work; more cores, or the
+   GPU backend, is.
+
+Still open and unordered: item 5's bias fusion (C1) and fused LayerNorm with item 7's Rsqrt
+relation; item 6's B2, C2 and C3. Step 1's Qwen profile decides where they go.
 
 ## 4. Positions (research, condensed)
 

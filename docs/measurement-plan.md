@@ -581,6 +581,33 @@ is trace execution and witness generation.
 To run a binary from before the cutover the gate script takes the Akita schedule files from
 that commit (`bench/bin/schedules-<sha>`); nothing else is needed.
 
+### Stage 3 of the BitZ spec (2026-11-17, `atlas-bench`, `bench/gate.sh 07f6b7f47 f1a7aa183 --runs 3`)
+
+The digit-range and Booleanity sumchecks removed (the commitment holds both), and the
+projection's proof of work moved to a keyed BLAKE3 search. Against the cutover, medians of
+three interleaved runs at 16 tokens:
+
+| | GPT-2, cutover | GPT-2, stage 3 | bge-small, cutover | bge-small, stage 3 |
+|---|---|---|---|---|
+| prove s | 10.92 | **9.07** | 8.81 | **8.00** |
+| commit s | 0.26 | 0.26 | 0.26 | 0.27 |
+| iop s | 3.97 | 2.35 | 3.50 | 2.76 |
+| openings s | 3.10 | 2.86 | 4.28 | 4.18 |
+| verify s | 1.10 | 1.10 | 1.86 | 1.85 |
+| peak GB | 6.1 | 5.8 | 2.1 | 2.1 |
+
+The gate script flags bge-small's commit stage (0.260 → 0.268 s, +3.1%), a difference of
+8 ms on a stage this change does not touch. GPT-2's openings are now the reduction sumcheck
+1.30 s and the BitZ opening 1.51 s (grand product 1.23 s); what is outside the three stages
+is 3.6 s.
+
+Two intermediate runs are worth keeping. With the digit-range sumcheck gone but the
+proof of work still on the transcript's sponge, GPT-2 proved in 10.17 s and then 10.97 s:
+`iop` fell by 1.6 s and the projection's proof of work rose from 0.18 s to 1.09 s and
+2.02 s, because the nonce search is a geometric draw that depends on the transcript. That
+search needs 22 to 23 bits here, and a sponge probe costs about a microsecond a thread. The
+BLAKE3 search brought the whole projection back to about 0.2 s.
+
 ### Baseline for the protocol-simplification specs (2026-11-16, commit c65753bfa)
 
 Taken after the owned-toolkit program (`docs/roadmap.md`, phases 1–7) and before any of the

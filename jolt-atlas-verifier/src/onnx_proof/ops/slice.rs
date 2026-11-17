@@ -22,7 +22,6 @@ impl OpPlan for Slice {
         &self,
         node: &ComputationNode,
         model: &atlas_trace::Model,
-        _io: &atlas_trace::trace::ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         schedule.reduce();

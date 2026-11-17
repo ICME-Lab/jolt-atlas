@@ -156,7 +156,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     let mut node_rows = 0usize;
     // The polynomials the schedule opens besides the buckets' digits: each names its node
     // first.
-    let committed = Schedule::<Fp128>::compile(model, &trace.io(model))
+    let committed = Schedule::<Fp128>::compile(model)
         .expect("the model has a schedule")
         .committed();
     for p in &committed {

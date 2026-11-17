@@ -5,7 +5,8 @@
 //! delegates to.
 
 use super::{
-    ops::eval_reduction::NodeEvalReduction,
+    ops::{constant::with_public_input, eval_reduction::NodeEvalReduction},
+    relation::{verify_tie, OpRelKind},
     schedule::{Schedule, Step},
     AtlasVerifierPreprocessing,
 };
@@ -167,11 +168,19 @@ impl<F: JoltField, T: Transcript> Verifier<'_, F, T> {
                     };
                     verified.inspect_err(|e| tracing::debug!(?proof_id, ?e, "sumcheck failed"))?;
                 }
-                Step::Tie(id) => super::relation::verify_tie(
-                    schedule.tie(*id)?,
-                    &mut self.accumulator,
-                    &mut self.transcript,
-                )?,
+                Step::Tie(id) => {
+                    let relation = schedule.tie(*id)?;
+                    // An input's tie takes its public tensor from the IO: the one step that
+                    // reads it.
+                    let with_input;
+                    let relation = if relation.kind == OpRelKind::Input {
+                        with_input = with_public_input(relation, self.io)?;
+                        &with_input
+                    } else {
+                        relation
+                    };
+                    verify_tie(relation, &mut self.accumulator, &mut self.transcript)?;
+                }
             }
         }
         Ok(())
@@ -318,7 +327,6 @@ pub fn verify_output_claim<F: JoltField, T: Transcript>(
 pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentScheme<Field = F>>(
     proof: &ONNXProof<F, PCS>,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
-    schedule: &Schedule<F>,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
     if let Some(reduced_opening_proof) = proof.reduced_opening_proof() {
@@ -342,7 +350,7 @@ pub fn verify_reduced_openings<F: JoltField, T: Transcript, PCS: CommitmentSchem
 
         // The proof commits the polynomials the schedule opens, in sorted `CommittedPoly`
         // order (the prover's `poly_map`); the joint opening covers the opened subset.
-        let committed = schedule.committed();
+        let committed = pp.schedule.committed();
         if committed.len() != proof.commitments().len() {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "expected {} commitments, found {}",

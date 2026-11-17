@@ -12,7 +12,7 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::{
     prove,
     range_bucket::{checks_its_output, range_buckets, Remainder},
-    schedule::{Schedule, DEFERRED_PROOF_IDX},
+    schedule::DEFERRED_PROOF_IDX,
     AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
@@ -44,11 +44,8 @@ fn model_outputs_are_not_range_checked() {
         vec![tensor([i32::MAX, 0, i32::MIN, -1]), tensor([0, 0, 0, 0])],
     ] {
         let io = model.trace(&inputs).expect("honest execution").io(&model);
-        let committed = Schedule::<Fp128>::compile(&model, &io)
-            .expect("the model has a schedule")
-            .committed();
         let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &inputs);
-        assert_eq!(proof.commitments().len(), committed.len());
+        assert_eq!(proof.commitments().len(), pp.schedule.committed().len());
         prove_verify_roundtrip::<AkitaScheme>(model.clone(), &inputs, RoundtripOptions::default());
         if inputs[0].data()[0] == i32::MAX {
             assert_eq!(io.outputs[0].data()[0], i32::MAX);
@@ -208,19 +205,12 @@ fn range_claim_rejects_a_bound_at_another_point() {
 /// `ScalarConstDiv` by a divisor that is not positive is rejected before anything is proven.
 #[test]
 fn scalar_const_div_rejects_a_non_positive_divisor() {
-    use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
+    use crate::onnx_proof::schedule::Schedule;
     let mut b = ModelBuilder::new();
     let x = b.input(vec![8]);
     let out = b.scalar_const_div(x, -3);
     b.mark_output(out);
     let model = b.build();
-    let inputs = vec![Tensor::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8], &[8]).unwrap()];
-    let io = model.trace(&inputs).expect("honest execution").io(&model);
-    let node = model.views()[out].clone();
-    let atlas_trace::Op::ScalarConstDiv(op) = &node.operator else {
-        panic!("the output is a ScalarConstDiv");
-    };
-    let mut schedule = ScheduleBuilder::<Fp128>::new();
-    assert!(op.plan(&node, &model, &io, &mut schedule).is_err());
+    assert!(Schedule::<Fp128>::compile(&model).is_err());
     assert!(range_buckets(&model).is_err());
 }

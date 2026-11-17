@@ -13,14 +13,13 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_claims::{derived, opening};
-use atlas_trace::{op::Mul, trace::ModelExecutionIO, Model};
+use atlas_trace::{op::Mul, Model};
 
 impl OpPlan for Mul {
     fn plan<F: JoltField>(
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         fused_rescale_plan(

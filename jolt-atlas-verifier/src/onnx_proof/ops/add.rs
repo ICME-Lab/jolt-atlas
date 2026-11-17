@@ -8,7 +8,7 @@ use crate::{
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::opening;
-use atlas_trace::{op::Add, trace::ModelExecutionIO, Model};
+use atlas_trace::{op::Add, Model};
 
 /// Proof for exact element-wise addition: `output = left + right`, where a sum outside `i32`
 /// is an execution error. The plan ([`accumulation_plan`]) has two parts:
@@ -26,7 +26,6 @@ impl OpPlan for Add {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         accumulation_plan(node, OpRelKind::AddAccumulation, schedule);

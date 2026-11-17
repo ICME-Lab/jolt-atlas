@@ -13,7 +13,6 @@ impl OpPlan for Neg {
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
-        _io: &atlas_trace::trace::ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         schedule.reduce();

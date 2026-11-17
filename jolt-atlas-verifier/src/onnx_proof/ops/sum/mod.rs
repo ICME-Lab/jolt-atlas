@@ -5,7 +5,7 @@ use crate::onnx_proof::{
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
-use atlas_trace::{op::Sum, trace::ModelExecutionIO, Model};
+use atlas_trace::{op::Sum, Model};
 
 /// Axis-wise sum implementations for sumcheck protocol.
 pub mod axis;
@@ -25,7 +25,6 @@ impl OpPlan for Sum {
         &self,
         node: &ComputationNode,
         model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         schedule.reduce();

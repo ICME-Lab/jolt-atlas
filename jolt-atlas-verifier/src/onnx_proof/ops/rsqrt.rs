@@ -14,7 +14,7 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_claims::{challenge, constant, derived, opening, Int};
-use atlas_trace::{op::Rsqrt, trace::ModelExecutionIO, Model, Op};
+use atlas_trace::{op::Rsqrt, Model, Op};
 use common::{CommittedPoly, VirtualPoly};
 
 /// Dividend `S³` of the fused rsqrt division relation, where `S = 2^scale` is the
@@ -38,7 +38,6 @@ impl OpPlan for Rsqrt {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         schedule.relation(ProofType::Execution, OpRelation::Op(reciprocal_sqrt(node)));

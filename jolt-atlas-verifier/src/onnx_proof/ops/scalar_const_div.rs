@@ -20,7 +20,6 @@ impl OpPlan for ScalarConstDiv {
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
-        _io: &atlas_trace::trace::ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         // The remainder's bound `0 ≤ rem < divisor` is a range claim in the packed remainder

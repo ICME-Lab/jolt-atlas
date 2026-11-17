@@ -5,7 +5,6 @@ use crate::onnx_proof::{
     ProofType,
 };
 use atlas_trace::op::GatherLarge;
-use atlas_trace::trace::ModelExecutionIO;
 use common::CommittedPoly;
 
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its
@@ -15,7 +14,6 @@ impl OpPlan for GatherLarge {
         &self,
         node: &ComputationNode,
         model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         schedule.reduce();

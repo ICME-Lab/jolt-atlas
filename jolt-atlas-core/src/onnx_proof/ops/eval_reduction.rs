@@ -281,8 +281,8 @@ mod tests {
 
         let output_idx = prover.preprocessing.model().output_indices()[0];
         assert_eq!(prover.accumulator.get_node_openings(output_idx).len(), 1);
-        let schedule = Schedule::compile(prover.preprocessing.model(), &prover.io)
-            .expect("the model has a schedule");
+        let schedule =
+            Schedule::compile(prover.preprocessing.model()).expect("the model has a schedule");
 
         prover::iop(
             &schedule,
@@ -315,7 +315,7 @@ mod tests {
         let mut proofs = BTreeMap::new();
         let mut eval_reduction_proofs = BTreeMap::new();
 
-        let schedule = Schedule::compile(shared.model(), &io).expect("the model has a schedule");
+        let schedule = Schedule::compile(shared.model()).expect("the model has a schedule");
         prover::output_claim(&mut prover);
         prover::iop(
             &schedule,

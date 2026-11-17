@@ -19,7 +19,6 @@ use atlas_claims::{constant, opening, Int};
 use atlas_trace::{
     op::{Cos, Sin},
     semantics::tables::TableKind,
-    trace::ModelExecutionIO,
     Model,
 };
 use common::consts::{MODEL_SCALE, TRIG_DOWNSCALE_BITS, TRIG_PERIOD_MODULUS};
@@ -97,7 +96,6 @@ impl OpPlan for Sin {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         trig_plan(node, "Sin", schedule)
@@ -109,7 +107,6 @@ impl OpPlan for Cos {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         trig_plan(node, "Cos", schedule)

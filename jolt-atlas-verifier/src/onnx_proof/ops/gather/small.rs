@@ -13,7 +13,6 @@ use atlas_sumcheck::{
     hamming_weight::{HammingWeightSumcheckParams, HammingWeightSumcheckVerifier},
 };
 use atlas_trace::op::GatherSmall;
-use atlas_trace::trace::ModelExecutionIO;
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
 
@@ -24,7 +23,6 @@ impl OpPlan for GatherSmall {
         &self,
         node: &ComputationNode,
         model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         let shape = GatherSmallShape::for_node(model, node)?;

@@ -6,7 +6,7 @@ use crate::onnx_proof::{
     ProofType,
 };
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_trace::{op::Square, trace::ModelExecutionIO, Model};
+use atlas_trace::{op::Square, Model};
 
 /// Element-wise square as a product ([`product`]).
 impl OpPlan for Square {
@@ -14,7 +14,6 @@ impl OpPlan for Square {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         fused_rescale_plan(

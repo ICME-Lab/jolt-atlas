@@ -1,5 +1,6 @@
 //! Prover preprocessing: the shared model preprocessing plus the commitment scheme's prover
-//! setup. The shared and verifier halves live in `jolt-atlas-verifier`.
+//! setup and the model's verification schedule, compiled at construction. The shared and
+//! verifier halves live in `jolt-atlas-verifier`.
 
 use atlas_algebra::field::JoltField;
 use atlas_pcs::commitment_scheme::CommitmentScheme;
@@ -7,6 +8,7 @@ use atlas_trace::Model;
 use jolt_atlas_verifier::node_view::ModelView;
 
 pub use jolt_atlas_verifier::onnx_proof::preprocessing::*;
+use jolt_atlas_verifier::onnx_proof::schedule::Schedule;
 
 // ---------------------------------------------------------------------------
 // Prover
@@ -21,6 +23,8 @@ pub struct AtlasProverPreprocessing<F: JoltField, PCS: CommitmentScheme<Field = 
     pub generators: PCS::ProverSetup,
     /// Shared preprocessing data.
     pub shared: AtlasSharedPreprocessing,
+    /// The model's verification schedule: what the prover proves, in order.
+    pub schedule: Schedule<F>,
 }
 
 impl<F, PCS> AtlasProverPreprocessing<F, PCS>
@@ -38,7 +42,13 @@ where
             .expect("the model's nodes have the shapes their ops prove");
         tracing::info!("Prover preprocessing: max_num_vars = {max_num_vars}");
         let generators = PCS::setup_prover(max_num_vars);
-        AtlasProverPreprocessing { generators, shared }
+        let schedule = Schedule::compile(shared.model())
+            .expect("the model's nodes have the shapes their ops prove");
+        AtlasProverPreprocessing {
+            generators,
+            shared,
+            schedule,
+        }
     }
 
     /// Get a reference to the ONNX model.
@@ -60,6 +70,7 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> From<&AtlasProverPreprocess
         Self {
             generators,
             shared: prover_preprocessing.shared.clone(),
+            schedule: prover_preprocessing.schedule.clone(),
         }
     }
 }

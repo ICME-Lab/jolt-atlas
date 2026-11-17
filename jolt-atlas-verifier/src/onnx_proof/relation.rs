@@ -332,8 +332,12 @@ pub struct OpRel<F: JoltField> {
     /// The order a dense relation binds its variables in (an eq-weighted one binds
     /// low-to-high).
     pub binding: BindingOrder,
-    /// The public tensor the output equals, for a public-value tie.
+    /// The public tensor the output equals, for a public-value tie. An `Input` tie in a
+    /// schedule holds none: the public IO supplies it when the tie is checked.
     pub public: Option<Arc<Tensor<i32>>>,
+    /// The position, among the model's inputs, of the input the output equals, for an `Input`
+    /// tie.
+    pub public_input: Option<usize>,
     /// Dims the relation's custom functions read beyond its node's (its operands' dims, a
     /// normalized shape), as its constructor lays them out; empty for a relation that reads
     /// none.
@@ -371,6 +375,7 @@ impl<F: JoltField> OpRel<F> {
             setup_opens: Vec::new(),
             binding: BindingOrder::LowToHigh,
             public: None,
+            public_input: None,
             dims: Vec::new(),
             table: None,
             custom: Custom::default(),

@@ -5,7 +5,7 @@ use crate::onnx_proof::{
     schedule::{OpPlan, ScheduleBuilder},
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
-use atlas_trace::{op::Sub, trace::ModelExecutionIO, Model};
+use atlas_trace::{op::Sub, Model};
 
 /// Proof for exact element-wise subtraction: `output = left - right`, where a difference
 /// outside `i32` is an execution error.
@@ -19,7 +19,6 @@ impl OpPlan for Sub {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         accumulation_plan(node, OpRelKind::SubAccumulation, schedule);

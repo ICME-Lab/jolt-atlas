@@ -58,7 +58,6 @@ use atlas_sumcheck::{
 use atlas_trace::{
     op::SoftmaxLastAxis,
     semantics::softmax::{softmax_tables, SoftmaxTables},
-    trace::ModelExecutionIO,
     Model, Op, Scale, SemVersion,
 };
 
@@ -118,7 +117,6 @@ impl OpPlan for SoftmaxLastAxis {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         // The clamp table's bound is `SOFTMAX_CLAMP_BOUND` at `MODEL_SCALE`.

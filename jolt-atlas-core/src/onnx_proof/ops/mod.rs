@@ -223,6 +223,15 @@ pub fn prove_schedule<F: JoltField, T: Transcript>(
                 let OpRelation::Op(relation) = relation(id) else {
                     panic!("the tie {id:?} is not an op relation")
                 };
+                // An input's tie takes its public tensor from the trace's IO.
+                let with_input;
+                let relation = if relation.kind == OpRelKind::Input {
+                    with_input = constant::with_public_input(relation, &prover.io)
+                        .expect("the trace holds every input");
+                    &with_input
+                } else {
+                    relation
+                };
                 prove_tie(
                     relation,
                     &prover.trace,

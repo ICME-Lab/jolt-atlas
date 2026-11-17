@@ -107,10 +107,8 @@ pub(crate) fn prove_from_trace<
 
     // Commit to the polynomials the model's schedule opens and append the commitments to the
     // transcript
-    let schedule = schedule::Schedule::compile(pp.model(), &io)
-        .expect("the model's nodes have the shapes their ops prove");
     let (poly_map, commitments, hints) = prover::commit_witness_polynomials::<F, T, PCS>(
-        &schedule,
+        &pp.schedule,
         pp.model(),
         &prover.trace,
         &prover.buckets,
@@ -124,7 +122,7 @@ pub(crate) fn prove_from_trace<
     // IOP portion
     let mut eval_reduction_proofs = BTreeMap::new();
     prover::iop(
-        &schedule,
+        &pp.schedule,
         &mut prover,
         &mut proofs,
         &mut eval_reduction_proofs,

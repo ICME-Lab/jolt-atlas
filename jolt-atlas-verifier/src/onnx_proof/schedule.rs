@@ -43,7 +43,7 @@ use atlas_sumcheck::{
     relation::DynRelationVerifier,
     shout,
 };
-use atlas_trace::{trace::ModelExecutionIO, Model};
+use atlas_trace::Model;
 use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
 use std::collections::BTreeSet;
@@ -85,17 +85,27 @@ pub enum Step {
 }
 
 /// A verification schedule: the relations checked and the steps that check them, in transcript
-/// order. Built by a [`ScheduleBuilder`], whose [`finish`](ScheduleBuilder::finish) checks it.
+/// order. A function of the model: the one step that reads the public IO is an `Input` node's
+/// tie, whose public tensor the interpreter fills in. Built by a [`ScheduleBuilder`], whose
+/// [`finish`](ScheduleBuilder::finish) checks it.
 #[derive(Clone)]
 pub struct Schedule<F: JoltField> {
     relations: Vec<OpRelation<F>>,
     steps: Vec<Step>,
 }
 
+impl<F: JoltField> std::fmt::Debug for Schedule<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Schedule")
+            .field("relations", &self.relations.len())
+            .field("steps", &self.steps.len())
+            .finish()
+    }
+}
+
 impl<F: JoltField> Schedule<F> {
-    /// The schedule of `model` for the public IO `io`. `Err` if a node does not have the shape
-    /// its operator proves.
-    pub fn compile(model: &Model, io: &ModelExecutionIO) -> Result<Self, ProofVerifyError> {
+    /// The schedule of `model`. `Err` if a node does not have the shape its operator proves.
+    pub fn compile(model: &Model) -> Result<Self, ProofVerifyError> {
         let mut builder = ScheduleBuilder::new();
         for node in model.views().iter().rev() {
             builder.enter_node(node.idx);
@@ -103,7 +113,6 @@ impl<F: JoltField> Schedule<F> {
                 inner,
                 node,
                 model,
-                io,
                 &mut builder
             ))?;
         }
@@ -355,12 +364,11 @@ impl<F: JoltField> ScheduleBuilder<F> {
 
 /// An op's verification, written to a schedule.
 pub trait OpPlan {
-    /// Write the steps that verify `node`, from the model and the public IO alone.
+    /// Write the steps that verify `node`, from the model alone.
     fn plan<F: JoltField>(
         &self,
         node: &ComputationNode,
         model: &Model,
-        io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError>;
 }

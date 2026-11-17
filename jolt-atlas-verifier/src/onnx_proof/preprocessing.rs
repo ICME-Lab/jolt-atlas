@@ -1,17 +1,22 @@
 //! Preprocessing for ONNX proof generation and verification.
 //!
 //! Preprocessing converts an ONNX [`Model`] into the data structures needed by
-//! the prover and verifier — most importantly, a polynomial commitment scheme
-//! setup (SRS / verification key).
+//! the prover and verifier: a polynomial commitment scheme setup (SRS / verification key) and
+//! the model's verification [`Schedule`].
 //!
 //! Three structs form a hierarchy:
 //!
-//! 1. [`AtlasSharedPreprocessing`] — model-only, shared by both parties.
-//! 2. [`AtlasProverPreprocessing`]  — adds the PCS prover setup (SRS).
-//! 3. [`AtlasVerifierPreprocessing`] — adds the PCS verifier setup (VK).
+//! 1. [`AtlasSharedPreprocessing`] — the model alone, shared by both parties and serializable.
+//! 2. `AtlasProverPreprocessing` (in `jolt-atlas-core`) — adds the PCS prover setup (SRS) and
+//!    the schedule.
+//! 3. [`AtlasVerifierPreprocessing`] — adds the PCS verifier setup (VK) and the schedule.
+//!
+//! The schedule is compiled from the model when the prover's or the verifier's preprocessing
+//! is constructed, and is never serialized.
 
 use crate::node_view::ModelView;
-use atlas_algebra::field::JoltField;
+use crate::onnx_proof::schedule::Schedule;
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_trace::Model;
 use serde::{Deserialize, Serialize};
@@ -64,9 +69,26 @@ where
     pub generators: PCS::VerifierSetup,
     /// Shared preprocessing data.
     pub shared: AtlasSharedPreprocessing,
+    /// The model's verification schedule: what `verify` checks, in order.
+    pub schedule: Schedule<F>,
 }
 
 impl<F: JoltField, PCS: CommitmentScheme<Field = F>> AtlasVerifierPreprocessing<F, PCS> {
+    /// The verifier preprocessing of `shared`'s model under the verification key `generators`,
+    /// with the model's schedule compiled. `Err` if a node does not have the shape its operator
+    /// proves.
+    pub fn new(
+        generators: PCS::VerifierSetup,
+        shared: AtlasSharedPreprocessing,
+    ) -> Result<Self, ProofVerifyError> {
+        let schedule = Schedule::compile(shared.model())?;
+        Ok(Self {
+            generators,
+            shared,
+            schedule,
+        })
+    }
+
     /// Get a reference to the ONNX model.
     pub fn model(&self) -> &Model {
         &self.shared.model

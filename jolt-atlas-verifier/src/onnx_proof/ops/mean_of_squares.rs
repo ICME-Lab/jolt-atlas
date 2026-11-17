@@ -27,7 +27,7 @@
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
 
-use atlas_trace::{op::MeanOfSquares, trace::ModelExecutionIO, Model, Op};
+use atlas_trace::{op::MeanOfSquares, Model, Op};
 
 use crate::{
     node_view::ComputationNode,
@@ -64,7 +64,6 @@ impl OpPlan for MeanOfSquares {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         schedule.reduce();

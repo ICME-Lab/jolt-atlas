@@ -133,11 +133,10 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
 
     // Run the model's schedule: each node in reverse topological order, then the model-wide
     // sumchecks.
-    let schedule = schedule::Schedule::compile(pp.model(), io)?;
-    verifier.run(&schedule)?;
+    verifier.run(&pp.schedule)?;
 
     // Verify reduced opening proof
-    verifier::verify_reduced_openings(proof, pp, &schedule, &mut verifier)?;
+    verifier::verify_reduced_openings(proof, pp, &mut verifier)?;
 
     // The proof was consumed exactly: no sumcheck or reduction proof left over, no claim unbound.
     verifier.check_consumed()?;

@@ -1,37 +1,18 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::ops::constant::public_value;
-use crate::onnx_proof::relation::OpRelKind;
+use crate::onnx_proof::ops::constant::public_input;
 use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::op::Input;
-use std::sync::Arc;
 
 impl OpPlan for Input {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
-        _model: &atlas_trace::Model,
-        io: &atlas_trace::trace::ModelExecutionIO,
+        model: &atlas_trace::Model,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
-        // The public tensor the IO carries for this input node.
-        let input = io
-            .input_indices
-            .iter()
-            .position(|&idx| idx == node.idx)
-            .and_then(|position| io.inputs.get(position))
-            .ok_or_else(|| {
-                ProofVerifyError::Malformed(format!(
-                    "public IO: no tensor for input node {}",
-                    node.idx
-                ))
-            })?;
         schedule.reduce();
-        schedule.tie(public_value(
-            node,
-            OpRelKind::Input,
-            Arc::new(input.clone()),
-        ));
+        schedule.tie(public_input(model, node)?);
         Ok(())
     }
 }

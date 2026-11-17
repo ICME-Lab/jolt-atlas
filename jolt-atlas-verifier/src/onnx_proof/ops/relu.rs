@@ -22,7 +22,6 @@ impl OpPlan for ReLU {
         &self,
         node: &ComputationNode,
         _model: &atlas_trace::Model,
-        _io: &atlas_trace::trace::ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         let read = read(node);

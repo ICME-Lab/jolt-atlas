@@ -22,7 +22,6 @@ use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::{
     op::{Erf, Sigmoid, Tanh},
     semantics::tables::TableKind,
-    trace::ModelExecutionIO,
     Model,
 };
 use common::{consts::ACTIVATION_TABLE_VARS, CommittedPoly, VirtualPoly};
@@ -90,7 +89,6 @@ impl OpPlan for Erf {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         clamped_activation_plan(node, schedule)
@@ -102,7 +100,6 @@ impl OpPlan for Sigmoid {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         clamped_activation_plan(node, schedule)
@@ -114,7 +111,6 @@ impl OpPlan for Tanh {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         clamped_activation_plan(node, schedule)

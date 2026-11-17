@@ -32,7 +32,6 @@ use atlas_sumcheck::opening_proof::OpeningId;
 use atlas_trace::{
     op::{SmoothRelu, SmoothReluForm},
     semantics::tables::TableKind,
-    trace::ModelExecutionIO,
     Model,
 };
 use common::{
@@ -99,7 +98,6 @@ impl OpPlan for SmoothRelu {
         &self,
         node: &ComputationNode,
         _model: &Model,
-        _io: &ModelExecutionIO,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
         if node.scale as usize != MODEL_SCALE {

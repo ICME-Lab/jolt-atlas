@@ -91,7 +91,7 @@ impl<F: JoltField> ValueParams<F> {
 }
 
 impl<F: JoltField> SymbolicSumcheck for ValueParams<F> {
-    crate::atlas_relation_types!();
+    atlas_sumcheck::relation_types!();
 
     fn id(&self) -> RelationId {
         RelationId::PackedValue

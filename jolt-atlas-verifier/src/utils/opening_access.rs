@@ -97,13 +97,12 @@ impl<'a, V: ?Sized> Reference<'a, V> {
 
 // Read-only and mutable access layer shared by prover and verifier helpers.
 /// Generic helper for recovering existing opening claims.
-pub struct AccOpeningAccessor<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> {
+pub struct AccOpeningAccessor<'a, Acc: ?Sized> {
     accumulator: Reference<'a, Acc>,
     builder: OpeningIdBuilder<'a>,
-    _field: core::marker::PhantomData<F>,
 }
 
-impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'a, F, Acc> {
+impl<'a, Acc: ?Sized> AccOpeningAccessor<'a, Acc> {
     /// Build a claim accessor from an accumulator and a computation node.
     #[allow(private_bounds)]
     pub fn new<AccRef>(accumulator: AccRef, computation_node: &'a ComputationNode) -> Self
@@ -113,7 +112,6 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
         Self {
             accumulator: accumulator.into(),
             builder: OpeningIdBuilder::new(computation_node),
-            _field: core::marker::PhantomData,
         }
     }
 
@@ -136,28 +134,35 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
     }
 
     /// Read the reduced opening claim for the current node. `Err` if the accumulator lacks it.
-    pub fn get_reduced_opening(
+    pub fn get_reduced_opening<F: JoltField>(
         &self,
-    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>
+    where
+        Acc: OpeningAccumulator<F>,
+    {
         self.acc().get_node_output_opening(self.builder.node.idx)
     }
 
     /// Read a node I/O opening for the selected target. `Err` if the accumulator lacks it.
-    pub fn get_nodeio(
+    pub fn get_nodeio<F: JoltField>(
         &self,
         target: Target,
-    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>
+    where
+        Acc: OpeningAccumulator<F>,
+    {
         let opening_id = self.builder.nodeio(target);
         self.acc().get_virtual_polynomial_opening(opening_id)
     }
 
     /// Read an advice opening for the current node. `Err` if the accumulator lacks it.
-    pub fn get_advice<Poly>(
+    pub fn get_advice<F: JoltField, Poly>(
         &self,
         poly_ctor: impl FnOnce(usize) -> Poly,
     ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>
     where
         Poly: Into<PolynomialId>,
+        Acc: OpeningAccumulator<F>,
     {
         let opening_id = self.builder.advice(poly_ctor);
         self.get_custom(opening_id)
@@ -168,10 +173,13 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
     /// This is useful when the caller has already constructed an `OpeningId`
     /// (for example, for virtual polynomials with custom indexing schemes).
     /// `Err` if the accumulator lacks it.
-    pub fn get_custom(
+    pub fn get_custom<F: JoltField>(
         &self,
         opening_id: impl Into<OpeningId>,
-    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
+    ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>
+    where
+        Acc: OpeningAccumulator<F>,
+    {
         let opening_id = opening_id.into();
         match opening_id.polynomial {
             PolynomialId::Virtual(_) => self.acc().get_virtual_polynomial_opening(opening_id),
@@ -180,7 +188,7 @@ impl<'a, F: JoltField, Acc: OpeningAccumulator<F> + ?Sized> AccOpeningAccessor<'
     }
 }
 
-impl<'a, F: JoltField> AccOpeningAccessor<'a, F, VerifierOpeningAccumulator<F>> {
+impl<'a, F: JoltField> AccOpeningAccessor<'a, VerifierOpeningAccumulator<F>> {
     /// Convert this accessor into a verifier provider that can request openings
     /// from the accumulator using `transcript` and `opening_point`.
     pub fn into_provider(
@@ -247,14 +255,14 @@ macro_rules! impl_accessor_methods {
 /// Verifier-side helper that can be created from either shared or mutable
 /// accumulator references.
 pub struct VerifierAccOpeningProvider<'a, F: JoltField, T: Transcript> {
-    accessor: AccOpeningAccessor<'a, F, VerifierOpeningAccumulator<F>>,
+    accessor: AccOpeningAccessor<'a, VerifierOpeningAccumulator<F>>,
     transcript: &'a mut T,
     opening_point: OpeningPoint<BIG_ENDIAN, F>,
 }
 
 impl<'a, F: JoltField, T: Transcript> VerifierAccOpeningProvider<'a, F, T> {
     fn from_accessor(
-        accessor: AccOpeningAccessor<'a, F, VerifierOpeningAccumulator<F>>,
+        accessor: AccOpeningAccessor<'a, VerifierOpeningAccumulator<F>>,
         transcript: &'a mut T,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) -> Self {

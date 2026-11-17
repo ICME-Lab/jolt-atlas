@@ -9,8 +9,8 @@
 //! restates it. For an op proven this way the relation is the protocol: the verifier is
 //! [`RelationVerifier`], derived from it, and no hand-written verifier exists.
 //!
-//! Most relations have the engine's shape ([`EngineRelation`]): every output term is
-//! `eq(r₀, r′)` times produced openings at the one low-to-high bound point `r′`. The engine,
+//! Most relations have the engine's shape: every output term is `eq(r₀, r′)` times produced
+//! openings at the one low-to-high bound point `r′`, or no term has an eq factor. The engine,
 //! [`RelationProver`], owns that eq factor (an upstream Gruen split eq over `r₀`), binds every
 //! produced opening's witness and appends the openings in declared order. A relation of another
 //! shape keeps a specialized prover, a [`RelationWitness`]: it computes its own round messages,
@@ -31,13 +31,11 @@ use atlas_algebra::{
         split_eq::SplitEqUnreducedFold,
     },
 };
-use atlas_claims::Source;
+use atlas_claims::{Source, SymbolicSumcheck};
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::{
     engine::prover::round_check_failed,
-    opening_proof::{
-        prover::ProverOpeningAccumulator, OpeningAccumulator, OpeningId, PolynomialId,
-    },
+    opening_proof::{prover::ProverOpeningAccumulator, OpeningId, PolynomialId},
 };
 use atlas_trace::Trace;
 use atlas_transcript::Transcript;
@@ -45,47 +43,13 @@ use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::relation::*;
 use rayon::prelude::*;
 
-/// The [`SymbolicSumcheck`] items every atlas relation shares: the atlas id types and no
-/// upstream claim structs (openings resolve through the accumulator).
-#[macro_export]
-macro_rules! atlas_relation_types {
-    () => {
-        type RelationId = $crate::onnx_proof::relation::RelationId;
-        type OpeningId = $crate::onnx_proof::relation::RelationOpening;
-        type DerivedId = $crate::onnx_proof::relation::RelationDerived;
-        type ChallengeId = $crate::onnx_proof::relation::RelationChallenge;
-        type Challenges<C> = atlas_claims::NoChallenges<C>;
-        type Inputs<C> = atlas_claims::NoInputs<C>;
-        type Outputs<C> = atlas_claims::NoOutputs<C>;
-    };
-}
-
 pub use atlas_sumcheck::relation::prover::{append_produced, RelationWitness};
 
-/// The prover's side of an [`EngineRelation`]: its witness polynomials, read from the trace.
-pub trait RelationWitnesses<F: JoltField>: EngineRelation<F> {
-    /// The witness behind each produced opening, aligned with [`AtlasRelation::produced`]: a
-    /// polynomial over the sumcheck's hypercube whose final bound value is the opening's claim.
-    fn witnesses(&self, trace: &Trace, setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>>;
-}
-
-/// The prover's side of a [`TieRelation`]: the values of its produced openings.
-pub trait TieClaims<F: JoltField>: TieRelation<F> {
-    /// The prover's values of the produced openings, aligned with [`AtlasRelation::produced`]
-    /// at their [`opening_points`](AtlasRelation::opening_points): read off the trace, or taken
-    /// from claims the accumulator already holds where the tie fixes them.
-    fn claims(
-        &self,
-        trace: &Trace,
-        setup: &RelationSetup<F>,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F>;
-}
-
-/// Prove a tie: append its produced openings with their [`TieClaims::claims`]. Nothing else
-/// enters the transcript; [`verify_tie`] checks the input claim against the output expression.
-pub fn prove_tie<F: JoltField, T: Transcript, R: TieClaims<F>>(
-    relation: &R,
+/// Prove a tie: append its produced openings with their claims
+/// ([`op_rel_tie_claims`](crate::onnx_proof::ops::op_rel_tie_claims)). Nothing else enters the
+/// transcript; [`verify_tie`] checks the input claim against the output expression.
+pub fn prove_tie<F: JoltField, T: Transcript>(
+    relation: &OpRel<F>,
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
@@ -95,7 +59,7 @@ pub fn prove_tie<F: JoltField, T: Transcript, R: TieClaims<F>>(
     let setup = relation
         .setup(&*accumulator, transcript)
         .expect("the prover holds every claim it reads");
-    let claims = relation.claims(trace, &setup, &*accumulator);
+    let claims = crate::onnx_proof::ops::op_rel_tie_claims(relation, trace, &setup, &*accumulator);
     append_produced(relation, &setup, accumulator, transcript, &[], &claims);
 }
 
@@ -137,20 +101,17 @@ pub fn op_rel_params<F: JoltField, T: Transcript>(
 }
 
 /// Tell the test suite which relation ran for a node.
-pub(crate) fn note_dispatch<R: RelationNode>(relation: &R) {
+pub(crate) fn note_dispatch<F: JoltField>(relation: &OpRel<F>) {
     #[cfg(test)]
-    crate::onnx_proof::testing::relations::record_dispatch(
-        relation.node(),
-        relation.kind(),
-        relation.spec_name(),
-    );
+    crate::onnx_proof::testing::relations::record_dispatch(&relation.node, relation.kind);
     #[cfg(not(test))]
     let _ = relation;
 }
 
-/// The engine's prover for an [`EngineRelation`]: its summand folded over the split eq.
-pub struct RelationProver<F: JoltField, R: RelationWitnesses<F>> {
-    relation: R,
+/// The engine's prover for an op relation of the engine's shape: its summand folded over the
+/// split eq, or summed densely.
+pub struct RelationProver<F: JoltField> {
+    relation: OpRel<F>,
     setup: RelationSetup<F>,
     /// The Gruen split eq of an eq-weighted relation; `None` for a dense one.
     eq: Option<GruenSplitEqPolynomial<F>>,
@@ -163,10 +124,10 @@ pub struct RelationProver<F: JoltField, R: RelationWitnesses<F>> {
     wires: Vec<MultilinearPolynomial<F>>,
 }
 
-impl<F: JoltField, R: RelationWitnesses<F>> RelationProver<F, R> {
+impl<F: JoltField> RelationProver<F> {
     /// The prover for `params`, its witnesses read from `trace`.
     #[tracing::instrument(skip_all, name = "RelationProver::initialize")]
-    pub fn initialize(trace: &Trace, params: RelationParams<F, R>) -> Self {
+    pub fn initialize(trace: &Trace, params: RelationParams<F, OpRel<F>>) -> Self {
         let (relation, setup) = params.into_parts();
         note_dispatch(&relation);
         let produced = relation.produced();
@@ -188,7 +149,7 @@ impl<F: JoltField, R: RelationWitnesses<F>> RelationProver<F, R> {
             expected_degree,
             "an engine relation's degree is its summand's"
         );
-        let mut wires = relation.witnesses(trace, &setup);
+        let mut wires = crate::onnx_proof::ops::op_rel_witnesses(&relation, trace, &setup);
         assert_eq!(
             wires.len(),
             produced.len(),
@@ -202,7 +163,7 @@ impl<F: JoltField, R: RelationWitnesses<F>> RelationProver<F, R> {
             )
         }));
         assert!(
-            !eq_weighted || relation.binding_order() == BindingOrder::LowToHigh,
+            !eq_weighted || relation.binding == BindingOrder::LowToHigh,
             "an eq-weighted relation binds low-to-high"
         );
         let eq = eq_weighted.then(|| {
@@ -227,14 +188,14 @@ impl<F: JoltField, R: RelationWitnesses<F>> RelationProver<F, R> {
         if let Some(eq) = &mut self.eq {
             eq.bind(r);
         }
-        let order = self.relation.binding_order();
+        let order = self.relation.binding;
         for wire in &mut self.wires {
             wire.bind_parallel(r_j, order);
         }
     }
 }
 
-impl<F: JoltField, R: RelationWitnesses<F>> ProveRounds<F> for RelationProver<F, R> {
+impl<F: JoltField> ProveRounds<F> for RelationProver<F> {
     fn num_rounds(&self) -> usize {
         self.relation.rounds()
     }
@@ -257,7 +218,7 @@ impl<F: JoltField, R: RelationWitnesses<F>> ProveRounds<F> for RelationProver<F,
         } = self;
         let (summand, wires) = (&*summand, &*wires);
         let Some(eq) = eq else {
-            let order = self.relation.binding_order();
+            let order = self.relation.binding;
             return Ok(match self.relation.degree() {
                 1 => dense_message::<F, 1>(summand, wires, order, previous_claim),
                 2 => dense_message::<F, 2>(summand, wires, order, previous_claim),
@@ -341,10 +302,10 @@ impl<F: JoltField, R: RelationWitnesses<F>> ProveRounds<F> for RelationProver<F,
     }
 }
 
-impl<F: JoltField, R: RelationWitnesses<F>> RelationWitness<F> for RelationProver<F, R> {
-    type Relation = R;
+impl<F: JoltField> RelationWitness<F> for RelationProver<F> {
+    type Relation = OpRel<F>;
 
-    fn relation(&self) -> &R {
+    fn relation(&self) -> &OpRel<F> {
         &self.relation
     }
 
@@ -380,7 +341,7 @@ impl<F: JoltField> SummandTerm<F> {
 }
 
 /// The output expression as the prover's summand: each term must carry the eq factor exactly
-/// once and otherwise multiply produced openings (indices into [`AtlasRelation::produced`]) and
+/// once and otherwise multiply produced openings (indices into the relation's produced openings) and
 /// drawn challenges.
 fn compile_summand<F: JoltField>(
     expr: RelationExpr<F>,
@@ -476,21 +437,4 @@ fn dense_message<F: JoltField, const D: usize>(
             |a, b| std::array::from_fn(|k| a[k] + b[k]),
         );
     UnivariatePoly::from_evals_and_hint(previous_claim, &evals)
-}
-
-impl<F: JoltField> RelationWitnesses<F> for OpRel<F> {
-    fn witnesses(&self, trace: &Trace, setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
-        crate::onnx_proof::ops::op_rel_witnesses(self, trace, setup)
-    }
-}
-
-impl<F: JoltField> TieClaims<F> for OpRel<F> {
-    fn claims(
-        &self,
-        trace: &Trace,
-        setup: &RelationSetup<F>,
-        accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Vec<F> {
-        crate::onnx_proof::ops::op_rel_tie_claims(self, trace, setup, accumulator)
-    }
 }

@@ -24,8 +24,9 @@
 //!
 //! Every operator's protocol is a relation (`onnx_proof::relation`): its claim algebra, from
 //! which the verifier is derived. An operator's verification is its plan (`onnx_proof::plan`:
-//! ordered steps over relations, run by the verifier's interpreter and walked by the prover);
-//! an operator with no committed polynomials binds its relation with `impl_plan_op`.
+//! ordered steps over relations, run by the verifier's interpreter and walked by the prover).
+//! An op's relations are values built by constructor functions in its module; the constructors
+//! are called from the op's plan, so a relation is built only for a node of its op.
 
 /// The clamped activations Erf, Sigmoid and Tanh.
 pub mod activation_clamped;
@@ -212,16 +213,4 @@ impl OperatorVerifier {
         ))?;
         verifier.run_plan(node, plan)
     }
-}
-
-/// Compile-time op binding of a relation-dispatched op: the relation's
-/// [`Spec`](crate::onnx_proof::relation::AtlasRelation::Spec) must be the op it is dispatched for.
-#[macro_export]
-macro_rules! bind_relation {
-    ($inner_ty:ty, $relation:ty) => {
-        const _: () = {
-            fn bound<R: $crate::onnx_proof::relation::AtlasRelation<Spec = $inner_ty>>() {}
-            let _ = bound::<$relation>;
-        };
-    };
 }

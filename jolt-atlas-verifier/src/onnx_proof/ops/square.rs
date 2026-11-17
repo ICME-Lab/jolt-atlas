@@ -21,7 +21,7 @@ impl OpPlan for Square {
         Ok(fused_rescale_plan(
             node,
             ProofType::RescaleArith,
-            OpRelation::Op(product(node, OpRelKind::Square)),
+            OpRelation::Op(product(node, OpRelKind::Square, &[0, 0])),
         ))
     }
 }

@@ -127,7 +127,10 @@ fn mul_rounds_where_eq_vanishes() {
         incoming_point: f.r_node.clone(),
         challenges: Vec::new(),
     };
-    let params = RelationParams::at(product(&f.model.view(f.node), OpRelKind::Mul), setup);
+    let params = RelationParams::at(
+        product(&f.model.view(f.node), OpRelKind::Mul, &[0, 1]),
+        setup,
+    );
     let mut prover = RelationProver::initialize(&f.trace, params);
     f.check(&mut prover, &[&f.operands[0], &f.operands[1]]);
 }
@@ -139,7 +142,10 @@ fn square_rounds_where_eq_vanishes() {
         incoming_point: f.r_node.clone(),
         challenges: Vec::new(),
     };
-    let params = RelationParams::at(product(&f.model.view(f.node), OpRelKind::Square), setup);
+    let params = RelationParams::at(
+        product(&f.model.view(f.node), OpRelKind::Square, &[0, 0]),
+        setup,
+    );
     let mut prover = RelationProver::initialize(&f.trace, params);
     f.check(&mut prover, &[&f.operands[0], &f.operands[0]]);
 }
@@ -151,7 +157,10 @@ fn cube_rounds_where_eq_vanishes() {
         incoming_point: f.r_node.clone(),
         challenges: Vec::new(),
     };
-    let params = RelationParams::at(product(&f.model.view(f.node), OpRelKind::Cube), setup);
+    let params = RelationParams::at(
+        product(&f.model.view(f.node), OpRelKind::Cube, &[0, 0, 0]),
+        setup,
+    );
     let mut prover = RelationProver::initialize(&f.trace, params);
     f.check(
         &mut prover,

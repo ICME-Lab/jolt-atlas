@@ -137,6 +137,7 @@ impl<F: JoltField> SmallTableProver<F> {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
         let (relation, setup) = params.into_parts();
+        crate::onnx_proof::relation::note_dispatch(&relation);
         let node = &relation.node;
         let def = SmallTableDef::for_node(node).expect("the relation was built for a small table");
         let gamma = setup.challenge(&RelationChallenge::Gamma);

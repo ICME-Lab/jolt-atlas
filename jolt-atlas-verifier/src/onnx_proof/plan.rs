@@ -227,15 +227,3 @@ pub fn fused_rescale_plan<F: JoltField>(
     steps.push(Step::Relation { proof, relation });
     Plan(steps)
 }
-
-/// Bind a plan-verified op with no committed polynomials: `$relation` (a relation of the plan)
-/// is checked to be a relation of that op, and its [`OpLayout`](super::ops::OpLayout) is the
-/// default. An op that commits polynomials writes its own `OpLayout` and uses `bind_relation!`.
-#[macro_export]
-macro_rules! impl_plan_op {
-    ($inner_ty:ty, $relation:ty) => {
-        $crate::bind_relation!($inner_ty, $relation);
-
-        impl $crate::onnx_proof::ops::OpLayout for $inner_ty {}
-    };
-}

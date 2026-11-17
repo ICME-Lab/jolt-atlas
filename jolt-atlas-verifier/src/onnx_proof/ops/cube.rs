@@ -21,7 +21,7 @@ impl OpPlan for Cube {
         Ok(fused_rescale_plan(
             node,
             ProofType::RescaleArith,
-            OpRelation::Op(product(node, OpRelKind::Cube)),
+            OpRelation::Op(product(node, OpRelKind::Cube, &[0, 0, 0])),
         ))
     }
 }

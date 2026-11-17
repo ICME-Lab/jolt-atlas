@@ -1,7 +1,7 @@
 //! Op protocols written as symbolic relations ([`atlas_claims::SymbolicSumcheck`]) and the engine
 //! that proves and verifies them. The relation core (ids, setup, [`RelationVerifier`]) is
-//! `atlas_sumcheck::relation`, shared with the subprotocol relations; this module binds a
-//! relation to the op it proves.
+//! `atlas_sumcheck::relation`, shared with the subprotocol relations; this module holds the one
+//! op relation type, [`OpRel`], a value each op builds with a constructor function.
 //!
 //! A relation declares, over atlas openings, its **input-claim expression** (the claimed sum,
 //! from openings at the incoming point `r₀`) and its **output expression** (the expected final
@@ -11,13 +11,22 @@
 //! restates it. For an op proven this way the relation is the protocol: the verifier is
 //! [`RelationVerifier`], derived from it, and no hand-written verifier exists.
 //!
-//! Most relations have the engine's shape ([`EngineRelation`]): every output term is
-//! `eq(r₀, r′)` times produced openings at the one low-to-high bound point `r′`. The engine,
-//! [`RelationProver`], owns that eq factor (an upstream Gruen split eq over `r₀`), binds every
-//! produced opening's witness and appends the openings in declared order. A relation of another
-//! shape keeps a specialized prover, which reads its input claim and appends its openings
-//! through [`relation_input_claim`] and [`append_produced`]; such a prover is completeness-only
-//! and is checked against the relation's reference messages (`relation_prover_equiv_*`).
+//! Most relations have the engine's shape, binding low-to-high with their produced openings at
+//! the bound point, in one of two forms:
+//!
+//! * **eq-weighted**: each output term is [`RelationDerived::Eq`] times at most three produced
+//!   openings, with constant or challenge coefficients; the engine folds over a Gruen split eq;
+//! * **dense**: no term has an eq factor; each term multiplies produced openings and public
+//!   tables ([`RelationDerived::Table`]), and the engine sends the message's evaluations at
+//!   `0, 2, …, degree` with the claim as hint.
+//!
+//! The prover's engine owns the eq factor, binds every produced opening's witness and appends
+//! the openings in declared order. A relation of another shape keeps a specialized prover,
+//! which reads its input claim through [`relation_input_claim`]; such a prover is
+//! completeness-only and is checked against the relation's reference messages
+//! (`relation_prover_equiv_*`). A zero-round relation is a tie: its produced openings sit at
+//! points derived from the incoming point, and [`verify_tie`] checks the input claim against
+//! the output expression there.
 //!
 //! The claim store stays the atlas accumulator: a relation's openings are accumulator
 //! [`OpeningId`]s or a node output's reduced opening, the instance the multi-consumer evaluation
@@ -38,112 +47,14 @@ use atlas_sumcheck::opening_proof::{
     OpeningAccumulator, OpeningId, PolynomialId, VerifierOpeningAccumulator,
 };
 pub use atlas_sumcheck::relation::*;
-use atlas_trace::{op::OpSpec, Tensor};
+use atlas_trace::Tensor;
 use atlas_transcript::Transcript;
 use std::sync::Arc;
 
-/// An op protocol as a symbolic relation on one computation node.
-///
-/// Each relation documents its **S ⊆ R** argument: every execution of the op's semantics
-/// (`atlas_trace::semantics`, through [`Self::Spec`]) satisfies the relation, so an honest prover
-/// always succeeds. That is a review obligation; the compiler checks only the op binding.
-pub trait AtlasRelation:
-    SymbolicSumcheck<
-        RelationId = RelationId,
-        OpeningId = RelationOpening,
-        DerivedId = RelationDerived,
-        ChallengeId = RelationChallenge,
-    > + Send
-    + Sync
-{
-    /// The op this relation proves. The dispatch macros require it to be the op the relation is
-    /// dispatched for.
-    type Spec: OpSpec + 'static;
-
-    /// The node the relation proves.
-    fn node(&self) -> &ComputationNode;
-}
-
-/// The node a relation proves. Temporary: it lets the relation types and [`OpRel`] share the
-/// generic drivers until every relation is an [`OpRel`].
-pub trait RelationNode {
-    /// The node the relation proves.
-    fn node(&self) -> &ComputationNode;
-
-    /// The relation's kind, when it is an [`OpRel`].
-    fn kind(&self) -> Option<OpRelKind>;
-
-    /// The name of the op type the relation is bound to, when it is a relation type.
-    fn spec_name(&self) -> Option<&'static str>;
-}
-
-impl<R: AtlasRelation> RelationNode for R {
-    fn node(&self) -> &ComputationNode {
-        AtlasRelation::node(self)
-    }
-
-    fn kind(&self) -> Option<OpRelKind> {
-        None
-    }
-
-    fn spec_name(&self) -> Option<&'static str> {
-        Some(std::any::type_name::<R::Spec>())
-    }
-}
-
-impl<F: JoltField> RelationNode for OpRel<F> {
-    fn node(&self) -> &ComputationNode {
-        &self.node
-    }
-
-    fn kind(&self) -> Option<OpRelKind> {
-        Some(self.kind)
-    }
-
-    fn spec_name(&self) -> Option<&'static str> {
-        None
-    }
-}
-
-/// A relation the engine proves, binding low-to-high with its produced openings at the bound
-/// point (or a prefix of it), in one of two shapes:
-///
-/// * **eq-weighted**: each output term is [`RelationDerived::Eq`] times at most three produced
-///   openings, with constant or challenge coefficients; the engine folds over a Gruen split eq;
-/// * **dense**: no term has an eq factor; each term multiplies produced openings and public
-///   tables ([`RelationDerived::Table`]), and the engine sends the message's evaluations at
-///   `0, 2, …, degree` with the claim as hint.
-pub trait EngineRelation<F: JoltField>: RelationNode + SetupRelation<F> {
-    /// The order a dense relation binds its variables in (an eq-weighted one binds
-    /// low-to-high).
-    fn binding_order(&self) -> BindingOrder {
-        BindingOrder::LowToHigh
-    }
-}
-
-/// The [`SymbolicSumcheck`] items every atlas relation shares: the atlas id types and no
-/// upstream claim structs (openings resolve through the accumulator).
-#[macro_export]
-macro_rules! atlas_relation_types {
-    () => {
-        type RelationId = $crate::onnx_proof::relation::RelationId;
-        type OpeningId = $crate::onnx_proof::relation::RelationOpening;
-        type DerivedId = $crate::onnx_proof::relation::RelationDerived;
-        type ChallengeId = $crate::onnx_proof::relation::RelationChallenge;
-        type Challenges<C> = atlas_claims::NoChallenges<C>;
-        type Inputs<C> = atlas_claims::NoInputs<C>;
-        type Outputs<C> = atlas_claims::NoOutputs<C>;
-    };
-}
-
-/// A zero-round relation (a tie): its produced openings sit at points derived from the
-/// incoming point, and the verifier checks the input claim against the output expression there.
-pub trait TieRelation<F: JoltField>: RelationNode + SetupRelation<F> {}
-
 /// Verify a zero-round relation (a tie): append its produced openings at the incoming point and
 /// require the input claim to equal the output expression.
-pub fn verify_tie<F: JoltField, T: Transcript, R: RelationNode + SetupRelation<F>>(
-    relation: &R,
+pub fn verify_tie<F: JoltField, T: Transcript>(
+    relation: &OpRel<F>,
     accumulator: &mut VerifierOpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<(), ProofVerifyError> {
@@ -151,7 +62,7 @@ pub fn verify_tie<F: JoltField, T: Transcript, R: RelationNode + SetupRelation<F
         return Err(ProofVerifyError::Malformed(format!(
             "{:?} on node {} is not a tie: it has {} rounds",
             relation.id(),
-            relation.node().idx,
+            relation.node.idx,
             relation.rounds()
         )));
     }
@@ -178,7 +89,7 @@ pub fn verify_tie<F: JoltField, T: Transcript, R: RelationNode + SetupRelation<F
         return Err(ProofVerifyError::InvalidOpeningProof(format!(
             "{:?} tie on node {} does not hold",
             relation.id(),
-            relation.node().idx
+            relation.node.idx
         )));
     }
     Ok(())
@@ -574,14 +485,6 @@ impl<F: JoltField> SetupRelation<F> for OpRel<F> {
         Ok(setup)
     }
 }
-
-impl<F: JoltField> EngineRelation<F> for OpRel<F> {
-    fn binding_order(&self) -> BindingOrder {
-        self.binding
-    }
-}
-
-impl<F: JoltField> TieRelation<F> for OpRel<F> {}
 
 /// The verifier of an op relation: its setup run, then each of its
 /// [`setup_opens`](OpRel::setup_opens) appended at its coordinates of the incoming point.

@@ -22,7 +22,7 @@ impl OpPlan for And {
             Step::Reduce,
             Step::Relation {
                 proof: ProofType::Execution,
-                relation: OpRelation::Op(product(node, OpRelKind::And)),
+                relation: OpRelation::Op(product(node, OpRelKind::And, &[0, 1])),
             },
         ]))
     }

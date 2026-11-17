@@ -22,7 +22,7 @@ pub trait IntoProverProvider<'a, F: JoltField> {
 }
 
 impl<'a, F: JoltField> IntoProverProvider<'a, F>
-    for AccOpeningAccessor<'a, F, ProverOpeningAccumulator<F>>
+    for AccOpeningAccessor<'a, ProverOpeningAccumulator<F>>
 {
     fn into_provider<T: Transcript>(
         self,
@@ -87,14 +87,14 @@ macro_rules! impl_accessor_methods {
 /// Prover-side helper that couples a node-scoped opening builder with a
 /// mutable opening accumulator.
 pub struct ProverAccOpeningProvider<'a, F: JoltField, T: Transcript> {
-    accessor: AccOpeningAccessor<'a, F, ProverOpeningAccumulator<F>>,
+    accessor: AccOpeningAccessor<'a, ProverOpeningAccumulator<F>>,
     transcript: &'a mut T,
     opening_point: OpeningPoint<BIG_ENDIAN, F>,
 }
 
 impl<'a, F: JoltField, T: Transcript> ProverAccOpeningProvider<'a, F, T> {
     fn from_accessor(
-        accessor: AccOpeningAccessor<'a, F, ProverOpeningAccumulator<F>>,
+        accessor: AccOpeningAccessor<'a, ProverOpeningAccumulator<F>>,
         transcript: &'a mut T,
         opening_point: OpeningPoint<BIG_ENDIAN, F>,
     ) -> Self {

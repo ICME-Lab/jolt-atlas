@@ -55,6 +55,7 @@ impl<F: JoltField> GatherProver<F> {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
         let (relation, setup) = params.into_parts();
+        crate::onnx_proof::relation::note_dispatch(&relation);
         let gamma = setup.challenge(&RelationChallenge::Gamma);
         let num_words = num_words(&relation.node).expect("the relation was built for a gather");
         let LayerData { operands, .. } = TraceView::layer_data(trace, &relation.node);

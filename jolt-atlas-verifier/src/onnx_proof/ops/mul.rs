@@ -28,35 +28,14 @@ impl OpPlan for Mul {
         Ok(fused_rescale_plan(
             node,
             ProofType::RescaleArith,
-            OpRelation::Op(product(node, OpRelKind::Mul)),
+            OpRelation::Op(product(node, OpRelKind::Mul, &[0, 1])),
         ))
     }
 }
 
-/// The operand position of each factor of a product kind: `[0, 1]` for `L·R`, `[0, 0]` for
-/// `X²`. Empty for a kind that is not a product.
-pub fn factors(kind: OpRelKind) -> &'static [usize] {
-    match kind {
-        OpRelKind::Mul | OpRelKind::And => &[0, 1],
-        OpRelKind::Square => &[0, 0],
-        OpRelKind::Cube => &[0, 0, 0],
-        _ => &[],
-    }
-}
-
-/// The operand positions a product kind reads, each once, in first-factor order.
-pub fn operands(kind: OpRelKind) -> Vec<usize> {
-    let mut operands = Vec::new();
-    for &position in factors(kind) {
-        if !operands.contains(&position) {
-            operands.push(position);
-        }
-    }
-    operands
-}
-
 /// An element-wise product of operands (`Mul`, `Square`, `Cube`, and `And` on booleans) as a
-/// relation, `Π` running over the kind's [`factors`]:
+/// relation, `Π` running over `factors`, the operand position of each factor (`[0, 1]` for
+/// `L·R`, `[0, 0]` for `X²`); each operand read is produced once, in first-factor order:
 ///
 /// ```text
 /// input claim   out(r₀)·2^S + rem(r₀)  (fused rescale: the output is the quotient)
@@ -79,9 +58,18 @@ pub fn operands(kind: OpRelKind) -> Vec<usize> {
 /// at most `2^62` since `S ≤ 30` (the scale is at most 15, `atlas_trace::Scale`). Both sides
 /// are integers of magnitude below `2^94`, far below half the 128-bit field modulus, so
 /// their equality in the field is their equality over the integers.
-pub fn product<F: JoltField>(node: &ComputationNode, kind: OpRelKind) -> OpRel<F> {
+pub fn product<F: JoltField>(
+    node: &ComputationNode,
+    kind: OpRelKind,
+    factors: &[usize],
+) -> OpRel<F> {
     let ids = OpeningIdBuilder::new(node);
-    let factors = factors(kind);
+    let mut operands: Vec<usize> = Vec::new();
+    for &position in factors {
+        if !operands.contains(&position) {
+            operands.push(position);
+        }
+    }
     OpRel {
         rounds: node.pow2_padded_num_output_elements().log_2(),
         degree: factors.len() + 1,
@@ -91,7 +79,7 @@ pub fn product<F: JoltField>(node: &ComputationNode, kind: OpRelKind) -> OpRel<F
             .fold(derived(RelationDerived::Eq), |product, &position| {
                 product * opening(RelationOpening::Id(ids.nodeio(Target::Input(position))))
             }),
-        produced: operands(kind)
+        produced: operands
             .into_iter()
             .map(|position| ids.nodeio(Target::Input(position)))
             .collect(),

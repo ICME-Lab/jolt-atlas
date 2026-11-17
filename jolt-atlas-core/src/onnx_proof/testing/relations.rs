@@ -1,10 +1,10 @@
 //! Relation-defined ops ([`crate::onnx_proof::relation`]).
 //!
-//! * Op binding and completeness: every relation the prover runs is recorded with the node it
-//!   ran on, and [`relation_specs_match_their_dispatched_op_kind`] checks each relation's `Spec`
-//!   against the [`OpKind`] it was dispatched under, over the probe models and the op gauntlet.
-//!   Every op has a [`disposition`]; the ops marked [`Disposition::Relation`] are exactly the
-//!   ones that ran through relations.
+//! * Op binding and completeness: every op relation the prover runs is recorded with the node
+//!   it ran on, and [`relation_kinds_match_their_dispatched_op_kind`] checks each relation's
+//!   kind serves that node's operator, over the probe models and the op gauntlet. Every op has
+//!   a [`disposition`]; the ops marked [`Disposition::Relation`] are exactly the ones that ran
+//!   through op relations.
 //! * Prover equivalence: every prover of a relation, the engine's and the specialized ones,
 //!   produces the relation's reference round messages (`relation_prover_equiv_*`), computed
 //!   from its expressions alone by summing the output expression over the hypercube.
@@ -38,13 +38,14 @@ use crate::{
             iff::select,
             mean_of_squares::{squared_sum_reduction, MeanOfSquaresReductionProver},
             mul::product,
+            op_rel_witnesses,
             rsqrt::reciprocal_sqrt,
             scalar_const_div::constant_division,
             sum::axis::axis_sum,
         },
         relation::{
-            OpRelKind, Relation, RelationChallenge, RelationExpr, RelationOpening, RelationParams,
-            RelationProver, RelationSetup, RelationWitnesses,
+            OpRel, OpRelKind, Relation, RelationChallenge, RelationExpr, RelationOpening,
+            RelationParams, RelationProver, RelationSetup,
         },
         trace_view::TraceView,
     },
@@ -58,30 +59,21 @@ use atlas_sumcheck::engine::prover::ProveRounds;
 use atlas_trace::{trace::LayerData, Model, Tensor, Trace};
 use rand::{rngs::StdRng, SeedableRng};
 
-/// `(op kind of the node, the name of the op the relation is for)` for every relation the
-/// prover has run: the node's own op name for an `OpRel` whose kind serves the node's
-/// operator, the relation's `Spec` type otherwise.
-static DISPATCHES: Mutex<Vec<(OpKind, String)>> = Mutex::new(Vec::new());
+/// `(the node's op kind, the relation's kind, whether the kind serves the node's operator)`
+/// for every op relation the prover has run.
+static DISPATCHES: Mutex<Vec<(OpKind, OpRelKind, bool)>> = Mutex::new(Vec::new());
 
-/// Record that a relation of `kind`, or one bound to the op type `spec`, was dispatched for
-/// `node`.
-pub(crate) fn record_dispatch(
-    node: &ComputationNode,
-    kind: Option<OpRelKind>,
-    spec: Option<&'static str>,
-) {
-    let op = OpKind::of(&node.operator);
-    let name = match (kind, spec) {
-        (Some(kind), _) if kind.serves(&node.operator) => op.to_string(),
-        (Some(kind), _) => format!("{kind:?}"),
-        (None, Some(spec)) => spec.to_string(),
-        (None, None) => String::new(),
-    };
-    DISPATCHES.lock().expect("dispatch log").push((op, name));
+/// Record that a relation of `kind` was dispatched for `node`.
+pub(crate) fn record_dispatch(node: &ComputationNode, kind: OpRelKind) {
+    DISPATCHES.lock().expect("dispatch log").push((
+        OpKind::of(&node.operator),
+        kind,
+        kind.serves(&node.operator),
+    ));
 }
 
 #[test]
-fn relation_specs_match_their_dispatched_op_kind() {
+fn relation_kinds_match_their_dispatched_op_kind() {
     for probe in probe_models() {
         prove_verify_roundtrip::<AkitaScheme>(probe.model, &probe.inputs, Default::default());
     }
@@ -90,37 +82,43 @@ fn relation_specs_match_their_dispatched_op_kind() {
     prove_verify_roundtrip::<AkitaScheme>(gauntlet.model, &inputs, Default::default());
 
     let dispatches = DISPATCHES.lock().expect("dispatch log");
-    for (kind, spec) in dispatches.iter() {
-        let spec_name = spec.rsplit("::").next().expect("a type name");
-        assert_eq!(spec_name, kind.to_string(), "{spec} dispatched for {kind}");
-    }
-    let relation_kinds: Vec<OpKind> = OpKind::iter()
-        .filter(|&kind| disposition(kind) == Disposition::Relation)
-        .collect();
-    for (kind, spec) in dispatches.iter() {
+    for (op, kind, serves) in dispatches.iter() {
         assert!(
-            relation_kinds.contains(kind),
-            "{kind} ran through {spec} but its disposition is {:?}",
-            disposition(*kind)
+            serves,
+            "{kind:?} dispatched for {op}, an op it does not serve"
         );
     }
-    for kind in relation_kinds {
+    let relation_ops: Vec<OpKind> = OpKind::iter()
+        .filter(|&op| disposition(op) == Disposition::Relation)
+        .collect();
+    for (op, kind, _) in dispatches.iter() {
         assert!(
-            dispatches.iter().any(|(k, _)| *k == kind),
-            "no {kind} node ran through its relation"
+            relation_ops.contains(op),
+            "{op} ran through {kind:?} but its disposition is {:?}",
+            disposition(*op)
+        );
+    }
+    for op in relation_ops {
+        // No probe model or gauntlet node is a large gather; its row of the op-surface table
+        // proves one.
+        let probed = op != OpKind::GatherLarge;
+        assert_eq!(
+            dispatches.iter().any(|(o, ..)| *o == op),
+            probed,
+            "whether a {op} node ran through an op relation"
         );
     }
 }
 
-/// How an op is proven once stage 6 of `specs/adoption-program.md` closes.
+/// Whether an op's protocol has an op relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Disposition {
-    /// Its algebraic protocol is a relation (`onnx_proof::relation`); the verifier is derived
-    /// from it. Any lookup or range check it also needs stays with the lookup family.
+    /// Some step of its plan is an op relation ([`OpRel`](crate::onnx_proof::relation::OpRel)),
+    /// from which the verifier is derived. Any table read it also needs is a
+    /// [`TableRead`](crate::onnx_proof::lookup::TableRead).
     Relation,
-    /// A lookup-family protocol (read-raf lookups over one-hot addresses, clamp and activation
-    /// tables): kept as code and moved as code at stage 8.
-    LookupFamily,
+    /// Its plan is a prefix-suffix table read and its one-hot checks, with no op relation.
+    TableReadOnly,
 }
 
 /// Every op's disposition. Exhaustive on purpose: a new op variant does not compile until it
@@ -153,15 +151,14 @@ fn disposition(kind: OpKind) -> Disposition {
         | OpKind::MoveAxis
         | OpKind::SoftmaxLastAxis
         | OpKind::Sin
-        | OpKind::Cos => Relation,
-        OpKind::Tanh
+        | OpKind::Cos
+        | OpKind::Tanh
         | OpKind::Sigmoid
         | OpKind::Erf
-        | OpKind::ReLU
         | OpKind::SmoothRelu
-        | OpKind::Clamp
         | OpKind::GatherSmall
-        | OpKind::GatherLarge => LookupFamily,
+        | OpKind::GatherLarge => Relation,
+        OpKind::ReLU | OpKind::Clamp => TableReadOnly,
     }
 }
 
@@ -205,7 +202,7 @@ fn fused_product_reads_its_output_and_remainder() {
         VirtualPoly::RescaleRemainder(fused.idx),
         SumcheckId::NodeExecution(fused.idx),
     ));
-    let input = openings(&product::<Fr>(fused, OpRelKind::Mul).input_expression::<Fr>());
+    let input = openings(&product::<Fr>(fused, OpRelKind::Mul, &[0, 1]).input_expression::<Fr>());
     assert_eq!(
         input,
         vec![RelationOpening::ReducedNodeOutput(fused.idx), remainder]
@@ -223,7 +220,7 @@ fn raw_product_reads_a_multi_consumer_reduction() {
         consumers(&nodes, raw.idx).len() >= 2,
         "the reduction folds several claims"
     );
-    let input = openings(&product::<Fr>(raw, OpRelKind::Mul).input_expression::<Fr>());
+    let input = openings(&product::<Fr>(raw, OpRelKind::Mul, &[0, 1]).input_expression::<Fr>());
     assert_eq!(input, vec![RelationOpening::ReducedNodeOutput(raw.idx)]);
 }
 
@@ -240,7 +237,8 @@ fn produced_opening_joins_a_shared_operand_reduction() {
         })
         .expect("an operand shared by a product and another op");
     for mul in muls.iter().filter(|m| m.inputs.contains(&shared)) {
-        let produced = openings(&product::<Fr>(mul, OpRelKind::Mul).output_expression::<Fr>());
+        let produced =
+            openings(&product::<Fr>(mul, OpRelKind::Mul, &[0, 1]).output_expression::<Fr>());
         let operand = RelationOpening::Id(OpeningId::new(
             VirtualPoly::NodeOutput(shared),
             SumcheckId::NodeExecution(mul.idx),
@@ -387,9 +385,13 @@ fn relation_prover_equiv_engine() {
         let (_, trace, node, mut rng) = single_node(seed, &dims, build);
         let rng = &mut rng;
         match node.operator {
-            Op::Mul(_) => check_engine(|| product(&node, OpRelKind::Mul), &trace, rng),
-            Op::Square(_) => check_engine(|| product(&node, OpRelKind::Square), &trace, rng),
-            Op::Cube(_) => check_engine(|| product(&node, OpRelKind::Cube), &trace, rng),
+            Op::Mul(_) => check_engine(|| product(&node, OpRelKind::Mul, &[0, 1]), &trace, rng),
+            Op::Square(_) => {
+                check_engine(|| product(&node, OpRelKind::Square, &[0, 0]), &trace, rng)
+            }
+            Op::Cube(_) => {
+                check_engine(|| product(&node, OpRelKind::Cube, &[0, 0, 0]), &trace, rng)
+            }
             Op::Rsqrt(_) => check_engine(|| reciprocal_sqrt(&node), &trace, rng),
             Op::Div(_) => check_engine(|| division(&node), &trace, rng),
             Op::Iff(_) => check_engine(|| select(&node), &trace, rng),
@@ -404,18 +406,14 @@ fn relation_prover_equiv_engine() {
 }
 
 /// The engine's messages for `relation()` match its reference messages.
-fn check_engine<R: RelationWitnesses<Fr>>(
-    relation: impl Fn() -> R,
-    trace: &Trace,
-    rng: &mut StdRng,
-) {
+fn check_engine(relation: impl Fn() -> OpRel<Fr>, trace: &Trace, rng: &mut StdRng) {
     let rounds = relation().rounds();
     let setup = RelationSetup {
         incoming_point: random_point(rng, rounds),
         challenges: vec![(RelationChallenge::Gamma, random_point(rng, 1)[0])],
     };
     let challenges = random_point(rng, rounds);
-    let witnesses = relation().witnesses(trace, &setup);
+    let witnesses = op_rel_witnesses(&relation(), trace, &setup);
     let open = |i: usize, point: &[Fr]| witnesses[i].evaluate(point);
     let mut prover =
         RelationProver::initialize(trace, RelationParams::at(relation(), setup.clone()));
@@ -459,8 +457,8 @@ fn relation_prover_equiv_dense() {
 }
 
 /// The engine's messages for a dense `relation()` match its reference messages.
-fn check_dense<R: RelationWitnesses<Fr>>(
-    relation: impl Fn() -> R,
+fn check_dense(
+    relation: impl Fn() -> OpRel<Fr>,
     trace: &Trace,
     node: &ComputationNode,
     open: &dyn Fn(usize, &[Fr]) -> Fr,
@@ -540,7 +538,6 @@ fn relation_prover_equiv_contraction() {
 #[test]
 fn layout_ties_hold_on_padded_models() {
     use crate::onnx_proof::ops::{concat, reshape, slice};
-    use crate::onnx_proof::relation::OpRel;
     use atlas_algebra::poly::multilinear::EvaluateMle;
     use atlas_sumcheck::relation::RelationDerived;
     use rand::Rng;

@@ -23,8 +23,8 @@
 //!
 //! Every operator's protocol is a relation (`onnx_proof::relation`): its claim algebra, from
 //! which the verifier is derived. A generic relation is proven by
-//! [`RelationProver`](crate::onnx_proof::relation::RelationProver) over its
-//! [`RelationWitnesses`]; a specialized witness (the einsum dot engine, the mean-of-squares
+//! [`RelationProver`](crate::onnx_proof::relation::RelationProver) over its witnesses
+//! ([`op_rel_witnesses`]); a specialized witness (the einsum dot engine, the mean-of-squares
 //! reduction, the lookup provers) attaches at its [`OpRelation`] variant, or at its
 //! [`OpRelKind`] for an op relation, in [`relation_witnesses`].
 
@@ -435,14 +435,14 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
             // one-hot checks, under its read-address opening.
             let relation = params.relation();
             let node = &relation.node;
-            let addresses = match (relation.kind, &node.operator) {
-                (OpRelKind::SmallTable, _) => {
-                    Some(lookup::small_table_lookup_indices(node, &prover.trace))
-                }
-                (OpRelKind::Gather, atlas_trace::Op::GatherLarge(_)) => {
-                    Some(gather::large::gather_lookup_indices(node, &prover.trace))
-                }
-                _ => None,
+            let addresses = if relation.kind == OpRelKind::SmallTable {
+                Some(lookup::small_table_lookup_indices(node, &prover.trace))
+            } else if relation.kind == OpRelKind::Gather
+                && matches!(node.operator, atlas_trace::Op::GatherLarge(_))
+            {
+                Some(gather::large::gather_lookup_indices(node, &prover.trace))
+            } else {
+                None
             };
             if let (Some(indices), Some(ra)) = (addresses, relation.produced.first()) {
                 prover.leave_addresses(Addresses(*ra), node.idx, indices);
@@ -563,7 +563,7 @@ pub fn op_rel_witnesses<F: JoltField>(
     let node = &relation.node;
     match relation.kind {
         OpRelKind::And | OpRelKind::Mul | OpRelKind::Square | OpRelKind::Cube => {
-            mul::product_witnesses(node, relation.kind, trace)
+            mul::product_witnesses(relation, trace)
         }
         OpRelKind::Iff => iff::select_witnesses(node, trace),
         OpRelKind::Div => div::division_witnesses(node, trace),

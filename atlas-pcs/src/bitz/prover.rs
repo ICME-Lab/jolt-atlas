@@ -75,6 +75,7 @@ pub fn prove<T: Transcript>(
     let (row_lifts, column_lifts) = (lift(eq_table(row_point)), lift(eq_table(column_point)));
 
     // Round 1: the claim over the integers, then its projection onto a random prime.
+    let span = tracing::info_span!("bitz_projection").entered();
     #[allow(clippy::expect_used)]
     let lifted_claim = column_sums(&words, &row_lifts)
         .iter()
@@ -101,8 +102,10 @@ pub fn prove<T: Transcript>(
         })
         .collect();
     transcript.append_serializable(&column_sums);
+    drop(span);
 
     // Phase 3: each column sum in the exponent of the generator, as a grand product.
+    let span = tracing::info_span!("bitz_grand_product").entered();
     let factors: Vec<Gf128> = row_residues
         .par_iter()
         .map(|&residue| GENERATOR.pow(residue))
@@ -119,10 +122,16 @@ pub fn prove<T: Transcript>(
         .zip(&column_sums)
         .all(|(&output, &sum)| output == GENERATOR.pow(sum)));
 
+    drop(span);
+
     // Phase 4: the claim left on the bits, against the packed commitment.
+    let span = tracing::info_span!("bitz_ring_switch").entered();
     let (ring_columns, weights, _) =
         ring_switch::prover::reduce(&packed, &bits_point, params.target_bits, transcript);
+    drop(span);
+    let span = tracing::info_span!("bitz_ligerito").entered();
     let opening = ligerito::prover::prove(packed, weights, level, &params.ligerito, transcript);
+    drop(span);
     (
         claim,
         Proof {

@@ -83,7 +83,9 @@ mod tests {
     use atlas_trace::Model;
     use atlas_trace::Op;
     use atlas_trace::Tensor;
-    use atlas_transcript::{Blake2bProver, Blake2bVerifier, ProvingTranscript};
+    use atlas_transcript::{
+        Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript,
+    };
     use common::VirtualPoly;
     use rand::{rngs::StdRng, SeedableRng};
     use std::collections::BTreeMap;
@@ -244,8 +246,18 @@ mod tests {
             VirtualPoly::NodeOutput(producer_idx),
             SumcheckId::NodeExecution(consumer),
         );
-        let opening = (OpeningPoint::new(point.clone()), claim);
-        verifier.accumulator_mut().openings.insert(key, opening);
+        verifier
+            .accumulator_mut()
+            .openings
+            .insert(key, (OpeningPoint::default(), claim));
+        verifier
+            .accumulator_mut()
+            .append_virtual(
+                &mut Blake2bVerifier::new(b"claims", Vec::new()),
+                key,
+                OpeningPoint::new(point.clone()),
+            )
+            .expect("the claim is loaded");
 
         NodeEvalReduction::verify(&mut verifier, producer_idx)
             .expect("single opening should be accepted and propagated by verifier");

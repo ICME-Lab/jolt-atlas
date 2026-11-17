@@ -155,9 +155,7 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         &self,
         opening_id: OpeningId,
     ) -> Option<(OpeningPoint<BIG_ENDIAN, F>, F)> {
-        self.openings
-            .get(&opening_id)
-            .map(|(point, claim)| (point.clone(), *claim))
+        self.appended_opening(opening_id)
     }
 
     fn get_virtual_polynomial_opening(
@@ -167,9 +165,7 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         if opening_id.virtual_poly().is_none() {
             return Err(missing_claim(opening_id));
         }
-        self.openings
-            .get(&opening_id)
-            .map(|(point, claim)| (point.clone(), *claim))
+        self.appended_opening(opening_id)
             .ok_or_else(|| missing_claim(opening_id))
     }
 
@@ -180,9 +176,7 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
         if opening_id.committed_poly().is_none() {
             return Err(missing_claim(opening_id));
         }
-        self.openings
-            .get(&opening_id)
-            .map(|(point, claim)| (point.clone(), *claim))
+        self.appended_opening(opening_id)
             .ok_or_else(|| missing_claim(opening_id))
     }
 
@@ -231,6 +225,18 @@ where
         }
     }
 
+    /// The opening under `opening_id`, once an append has bound it to its point. A claim that
+    /// is loaded but not yet appended is not readable: no relation reads a claim before the
+    /// step that binds it.
+    fn appended_opening(&self, opening_id: OpeningId) -> Option<Opening<F>> {
+        if !self.appended.contains(&opening_id) {
+            return None;
+        }
+        self.openings
+            .get(&opening_id)
+            .map(|(point, claim)| (point.clone(), *claim))
+    }
+
     /// A claim loaded from the proof that no append bound to a point, if any.
     pub fn first_unbound_claim(&self) -> Option<OpeningId> {
         self.openings
@@ -252,6 +258,7 @@ where
         );
         self.openings
             .range(lo..=hi)
+            .filter(|(id, _)| self.appended.contains(id))
             .map(|(_, opening)| opening)
             .collect()
     }

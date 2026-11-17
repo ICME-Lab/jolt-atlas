@@ -332,9 +332,11 @@ mod tests {
         let prover_value = true_sum(&params, digits) * beta.inverse().unwrap();
 
         let mut prover_accumulator = ProverOpeningAccumulator::<Fr>::new();
-        prover_accumulator.openings.insert(
+        prover_accumulator.append_virtual(
+            &mut prover_transcript,
             value_id(),
-            (OpeningPoint::<BIG_ENDIAN, Fr>::new(r.clone()), prover_value),
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(r.clone()),
+            prover_value,
         );
         let columns: Vec<MultilinearPolynomial<Fr>> = digits
             .iter()
@@ -355,10 +357,14 @@ mod tests {
                 .openings
                 .insert(*key, (OpeningPoint::default(), *value));
         }
-        verifier_accumulator.openings.insert(
+        verifier_accumulator
+            .openings
+            .insert(value_id(), (OpeningPoint::default(), verifier_value));
+        verifier_accumulator.append_virtual(
+            &mut verifier_transcript,
             value_id(),
-            (OpeningPoint::<BIG_ENDIAN, Fr>::new(r), verifier_value),
-        );
+            OpeningPoint::<BIG_ENDIAN, Fr>::new(r),
+        )?;
         verify_relation(
             &proof,
             &params.into_verifier(),

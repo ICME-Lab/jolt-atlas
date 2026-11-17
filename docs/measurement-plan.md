@@ -489,6 +489,39 @@ decision this arm was for (`docs/prover-plan.md` section 5, decision 1) can be t
 next step is a spec for an owned BitZ behind `CommitmentScheme` under the one-polynomial
 layout.
 
+### `atlas-pcs::bitz`, stage 1 as first written (2026-11-17, `atlas-bench`, 16 threads)
+
+`cargo run --release -p atlas-pcs --example bitz_bench -- <n> --reps 3 --trace`, random bits,
+one claim over Fp128 at a 128-bit target (rows 2^⌈n/2⌉, primes of 108–118 bits, Ligerito at
+rate 1/2 with 314 queries per level). The proof-of-concept rows are from stage 3 above at its
+128-bit setting, which does not run the projection onto a 128-bit prime.
+
+| n | commit ms | prove s | projection s | grand product s | Ligerito s | verify ms | proof MB | peak GB |
+|---|---|---|---|---|---|---|---|---|
+| 24 | 5 | 0.71 | 0.51 | 0.16 | 0.03 | 22 | 0.79 | 0.06 |
+| 28 | 68 | 3.44 | 1.03 | 1.92 | 0.50 | 39 | 1.24 | 0.98 |
+| 29 | 135 | 7.33 | 1.64 | 4.07 | 1.57 | 42 | 1.31 | 1.91 |
+| 30 | 270 | 15.2 | 5.89 | 7.98 | 1.39 | 60 | 1.61 | 3.77 |
+| 29, one thread | 955 | 52.9 | | | | 118 | | 1.74 |
+| 29, proof-of-concept | 53 | 0.39 | | 0.30 | 0.04 | 33 | 0.49 | 1.6 |
+
+The scheme is correct and inside the 4 GB bound at n = 29; it is 19 times slower than the
+proof-of-concept and misses the 2.0 s gate that precedes stage 2 (7.5 s for commit + prove at
+n = 29). Where the time is:
+
+- **Projection.** Mostly the proof of work before the prime is drawn (20 bits cost 0.5 s at
+  n = 24, where the two passes over the bits are negligible): `Transcript::pow` grinds the
+  transcript's Blake2b sponge at about 2 million hashes a second. The paper prices 23 bits at
+  26 ms with a parallel BLAKE3 search.
+- **Grand product.** The table layers read one node per lookup with three field
+  multiplications per term; the paper's joint tables and bucketing (§2.3, §6.2) remove the
+  multiplications from the first rounds of the bottom layers.
+- **Ligerito.** Each level adds 314 generator rows to the weight, one tensor expansion per
+  row, and every sumcheck round is preceded by proof of work through the same sponge.
+
+Proof size is 1.3 MB against the proof-of-concept's 0.49 MB: Merkle paths are sent in full
+for every query, and all levels are at rate 1/2.
+
 ### Baseline for the protocol-simplification specs (2026-11-16, commit c65753bfa)
 
 Taken after the owned-toolkit program (`docs/roadmap.md`, phases 1–7) and before any of the

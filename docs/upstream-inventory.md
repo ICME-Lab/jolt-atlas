@@ -180,6 +180,15 @@ base:
 A later upstream pull diffs `crates/jolt-akita` and `crates/jolt-openings` from `f3265b5a` and
 ports the change across these renames.
 
+## BitZ (`specs/bitz-commitment.md`)
+
+`atlas-pcs::bitz` has no upstream source. It is written from the papers: BitZ (ePrint
+2026/2141) for the construction and parameters, Ligerito (ePrint 2025/1187) for the opening,
+Diamond and Posen (ePrint 2024/504) for ring switching, and Lin, Chung and Han's novel
+polynomial basis for the Reed–Solomon encoding. No file is taken from the BitZ
+proof-of-concept (`albert-garreta/BitZ-PoC`) or from Flock, and neither is a dependency; the
+proof-of-concept is run by hand for the comparison in `docs/measurement-plan.md`.
+
 ## The sumcheck engine owned (`specs/own-sumcheck-engine.md`)
 
 `atlas-sumcheck::engine` is upstream `jolt-sumcheck` at `f3265b5a` (`crates/jolt-sumcheck/src`),

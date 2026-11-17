@@ -156,7 +156,11 @@ Workspace members, in dependency order:
   - **atlas-pcs** — the `CommitmentScheme` interface, `akita` over Fp128 (its `backend`
     submodule is the adapter over LayerZero's `akita-*` crates, a git dependency, taken from
     upstream `jolt-akita`; the schedule catalogs are in `atlas-pcs/schedules/`), `openings`
-    (prefix packing, group claims), and the test `mock`.
+    (prefix packing, group claims), the test `mock`, and `bitz` (`specs/bitz-commitment.md`,
+    stage 1): a commitment to a vector of bits packed into `F_{2^128}`, with one evaluation
+    claim over Fp128 proven against it by a projection onto a random prime, a grand product
+    (`gkr`), ring switching and a Ligerito opening. Written from the papers; no caller yet.
+    Its example `bitz_bench` is the scheme's benchmark.
   No BN254 or curve crate is in the resolved dependency graph (checked in CI); the vendored
   crates' optional `bn254` features stay off. Every sumcheck is a relation: the verifier runs
   `relation::verify_relation{,_batch}` over `RelationVerifier`s, the prover

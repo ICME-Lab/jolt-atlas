@@ -1,30 +1,21 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
 use crate::{
     onnx_proof::{
         plan::{OpPlan, OpRelation, Plan, Step},
         relation::{
-            AtlasRelation, EngineRelation, RelationChallenge, RelationDerived, RelationExpr,
-            RelationId, RelationOpening, RelationSetup,
+            Incoming, OpRel, OpRelKind, RelationChallenge, RelationDerived, RelationOpening,
         },
         ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_algebra::field::Ring;
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
+    field::JoltField,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_claims::{
-    challenge, constant, derived, opening, Expr, NoChallenges, NoInputs, NoOutputs,
-    SymbolicSumcheck,
-};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
+use atlas_claims::{challenge, constant, derived, opening, Int};
 use atlas_trace::{op::Rsqrt, trace::ModelExecutionIO, Model, Op};
-use atlas_transcript::Transcript;
 use common::{CommittedPoly, VirtualPoly};
 
 /// Dividend `S³` of the fused rsqrt division relation, where `S = 2^scale` is the
@@ -62,7 +53,7 @@ impl OpPlan for Rsqrt {
         Ok(Plan(vec![
             Step::Relation {
                 proof: ProofType::Execution,
-                relation: OpRelation::Rsqrt(RsqrtRelation::new(node.clone())),
+                relation: OpRelation::Op(reciprocal_sqrt(node)),
             },
             Step::Reduce,
         ]))
@@ -90,8 +81,6 @@ impl OpPlan for Rsqrt {
 // The bounds `div_remainder < x̂` and `sqrt_remainder ≤ 2·output` are enforced by the
 // range checks in `prove_range_and_onehot`.
 
-crate::bind_relation!(Rsqrt, RsqrtRelation);
-
 /// The fused reciprocal square root as a relation (see above):
 ///
 /// ```text
@@ -107,100 +96,28 @@ crate::bind_relation!(Rsqrt, RsqrtRelation);
 /// `r_div < x̂` and `r_sqrt ≤ 2·out` that make the witness unique are the range checks below,
 /// outside the relation. Non-positive inputs (where the semantics return 0) are outside the
 /// relation's domain: the division range check rejects them.
-pub struct RsqrtRelation {
-    /// The node being proven.
-    pub node: ComputationNode,
-}
-
-impl RsqrtRelation {
-    fn ids(&self) -> OpeningIdBuilder<'_> {
-        OpeningIdBuilder::new(&self.node)
+pub fn reciprocal_sqrt<F: JoltField>(node: &ComputationNode) -> OpRel<F> {
+    let ids = OpeningIdBuilder::new(node);
+    let produced = [
+        ids.nodeio(Target::Input(0)),
+        ids.advice(CommittedPoly::RsqrtQuotient),
+        ids.nodeio(Target::Current),
+        ids.advice(VirtualPoly::DivRemainder),
+        ids.advice(VirtualPoly::SqrtRemainder),
+    ];
+    let [input, quotient, output, div_remainder, sqrt_remainder] =
+        produced.map(|id| opening(RelationOpening::Id(id)));
+    let s_cubed = constant(Int(i128::from(rsqrt_dividend(node))));
+    let division = input * quotient.clone() + div_remainder - s_cubed;
+    let sqrt = output.clone() * output + sqrt_remainder - quotient;
+    OpRel {
+        rounds: node.pow2_padded_num_output_elements().log_2(),
+        degree: 3,
+        output: derived(RelationDerived::Eq)
+            * (division + challenge(RelationChallenge::Gamma) * sqrt),
+        produced: produced.to_vec(),
+        incoming: Incoming::Fresh,
+        draws: vec![RelationChallenge::Gamma],
+        ..OpRel::base(OpRelKind::Rsqrt, node)
     }
 }
-
-impl SymbolicSumcheck for RsqrtRelation {
-    type RelationId = RelationId;
-    type OpeningId = RelationOpening;
-    type DerivedId = RelationDerived;
-    type ChallengeId = RelationChallenge;
-    type Challenges<F> = NoChallenges<F>;
-    type Inputs<C> = NoInputs<C>;
-    type Outputs<C> = NoOutputs<C>;
-
-    fn id(&self) -> RelationId {
-        RelationId::Rsqrt
-    }
-
-    fn rounds(&self) -> usize {
-        self.node.pow2_padded_num_output_elements().log_2()
-    }
-
-    fn degree(&self) -> usize {
-        3
-    }
-
-    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        Expr::zero()
-    }
-
-    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        let open = |id| opening(RelationOpening::Id(id));
-        let input = open(self.ids().nodeio(Target::Input(0)));
-        let quotient = open(self.ids().advice(CommittedPoly::RsqrtQuotient));
-        let output = open(self.ids().nodeio(Target::Current));
-        let div_remainder = open(self.ids().advice(VirtualPoly::DivRemainder));
-        let sqrt_remainder = open(self.ids().advice(VirtualPoly::SqrtRemainder));
-        let s_cubed = constant(F::from_i64(rsqrt_dividend(&self.node)));
-        let division = input * quotient.clone() + div_remainder - s_cubed;
-        let sqrt = output.clone() * output + sqrt_remainder - quotient;
-        derived(RelationDerived::Eq) * (division + challenge(RelationChallenge::Gamma) * sqrt)
-    }
-}
-
-impl RsqrtRelation {
-    /// The relation for the given shape.
-    pub fn new(node: ComputationNode) -> Self {
-        Self { node }
-    }
-}
-
-impl Produces for RsqrtRelation {
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![
-            self.ids().nodeio(Target::Input(0)),
-            self.ids().advice(CommittedPoly::RsqrtQuotient),
-            self.ids().nodeio(Target::Current),
-            self.ids().advice(VirtualPoly::DivRemainder),
-            self.ids().advice(VirtualPoly::SqrtRemainder),
-        ]
-    }
-}
-
-impl<F: JoltField> Relation<F> for RsqrtRelation {}
-
-impl<F: JoltField> SetupRelation<F> for RsqrtRelation {
-    fn setup<T: Transcript>(
-        &self,
-        _accumulator: &dyn OpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        let incoming_point = transcript
-            .challenge_vector_optimized::<F>(self.rounds())
-            .into_opening();
-        let gamma = transcript.challenge_scalar();
-        Ok(RelationSetup {
-            incoming_point,
-            challenges: vec![(RelationChallenge::Gamma, gamma)],
-        })
-    }
-}
-
-impl AtlasRelation for RsqrtRelation {
-    type Spec = Rsqrt;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
-    }
-}
-
-impl<F: JoltField> EngineRelation<F> for RsqrtRelation {}

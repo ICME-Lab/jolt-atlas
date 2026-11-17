@@ -648,7 +648,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 params,
             ))]
         }
-        OpRelation::Rsqrt(relation) => engine(relation, prover),
         OpRelation::SmallActivation(OpActivation::Erf, node) => {
             small_activation::<F, T, ErfTableMarker>(&node, prover)
         }
@@ -823,6 +822,7 @@ pub fn op_rel_witnesses<F: JoltField>(
         OpRelKind::Iff => iff::select_witnesses(node, trace),
         OpRelKind::Div => div::division_witnesses(node, trace),
         OpRelKind::ConstantDivision => scalar_const_div::constant_division_witnesses(node, trace),
+        OpRelKind::Rsqrt => rsqrt::reciprocal_sqrt_witnesses(node, trace),
         OpRelKind::AddAccumulation | OpRelKind::SubAccumulation | OpRelKind::DivQuotient => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
@@ -850,7 +850,8 @@ pub fn op_rel_tie_claims<F: JoltField>(
         | OpRelKind::Cube
         | OpRelKind::Iff
         | OpRelKind::Div
-        | OpRelKind::ConstantDivision => {
+        | OpRelKind::ConstantDivision
+        | OpRelKind::Rsqrt => {
             panic!("{:?} is proven by a sumcheck, not a tie", relation.kind)
         }
     }

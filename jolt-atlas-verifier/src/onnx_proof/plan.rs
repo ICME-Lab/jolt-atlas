@@ -39,7 +39,6 @@ use crate::onnx_proof::{
         moveaxis::AxisPermutationRelation,
         neg::SignedCopyRelation,
         reshape::FlatCopyRelation,
-        rsqrt::RsqrtRelation,
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
         slice::SubcubeSelectRelation,
@@ -171,8 +170,6 @@ pub enum OpRelation<F: JoltField> {
     LookupOneHot(OpLookup, ComputationNode),
     /// `MeanOfSquares`: the squared-sum reduction, its input claim `q·D + rem`.
     MeanOfSquares(MeanOfSquaresRelation),
-    /// `Rsqrt`: the fused division and square-root identities.
-    Rsqrt(RsqrtRelation),
     /// A clamped activation's small-table execution: `γ` drawn, the clamped input's opening
     /// appended at the reduced output point.
     SmallActivation(OpActivation, ComputationNode),
@@ -316,7 +313,6 @@ impl<F: JoltField> OpRelation<F> {
             )?
             .into()),
             Self::MeanOfSquares(relation) => one(relation, accumulator, transcript),
-            Self::Rsqrt(relation) => one(relation, accumulator, transcript),
             Self::SmallActivation(OpActivation::Erf, node) => {
                 Ok(boxed(small_table_verifier::<F, ErfTableMarker>(
                     &node,

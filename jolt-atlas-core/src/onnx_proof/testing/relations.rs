@@ -38,7 +38,7 @@ use crate::{
             iff::select,
             mean_of_squares::{MeanOfSquaresReductionProver, MeanOfSquaresRelation},
             mul::product,
-            rsqrt::RsqrtRelation,
+            rsqrt::reciprocal_sqrt,
             scalar_const_div::constant_division,
             sum::axis::SumAxisRelation,
         },
@@ -390,7 +390,7 @@ fn relation_prover_equiv_engine() {
             Op::Mul(_) => check_engine(|| product(&node, OpRelKind::Mul), &trace, rng),
             Op::Square(_) => check_engine(|| product(&node, OpRelKind::Square), &trace, rng),
             Op::Cube(_) => check_engine(|| product(&node, OpRelKind::Cube), &trace, rng),
-            Op::Rsqrt(_) => check_engine(|| RsqrtRelation::new(node.clone()), &trace, rng),
+            Op::Rsqrt(_) => check_engine(|| reciprocal_sqrt(&node), &trace, rng),
             Op::Div(_) => check_engine(|| division(&node), &trace, rng),
             Op::Iff(_) => check_engine(|| select(&node), &trace, rng),
             Op::ScalarConstDiv(_) => check_engine(

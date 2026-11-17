@@ -223,6 +223,8 @@ pub enum OpRelKind {
     DivQuotient,
     /// `ScalarConstDiv`: the quotient by a constant.
     ConstantDivision,
+    /// `Rsqrt`: the fused division and square-root identities.
+    Rsqrt,
 }
 
 impl OpRelKind {
@@ -235,6 +237,7 @@ impl OpRelKind {
             Self::Div => RelationId::Division,
             Self::DivQuotient => RelationId::DivisionQuotient,
             Self::ConstantDivision => RelationId::ConstantDivision,
+            Self::Rsqrt => RelationId::Rsqrt,
         }
     }
 
@@ -251,6 +254,7 @@ impl OpRelKind {
             Self::Iff => matches!(op, Op::Iff(_)),
             Self::Div | Self::DivQuotient => matches!(op, Op::Div(_)),
             Self::ConstantDivision => matches!(op, Op::ScalarConstDiv(_)),
+            Self::Rsqrt => matches!(op, Op::Rsqrt(_)),
         }
     }
 }

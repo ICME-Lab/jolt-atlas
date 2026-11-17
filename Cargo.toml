@@ -60,6 +60,9 @@ serde_json = { version = "1.0", default-features = false }
 # Parallel Processing
 rayon = "1.10"
 
+# Hashing
+blake3 = "1.8"
+
 # Randomness
 rand = { version = "0.8.5", default-features = false }
 rand_core = { version = "0.6.4", default-features = false }

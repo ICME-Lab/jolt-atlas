@@ -16,6 +16,8 @@ atlas-transcript.workspace = true
 # Serialization
 serde = { workspace = true, features = ["alloc", "rc"] }
 blake2 = "0.10"
+# The Merkle tree of the BitZ commitment.
+blake3.workspace = true
 # LayerZero's Akita lattice PCS, behind `akita::backend`.
 akita-algebra = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }
 akita-config = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "dfdbd7674cab5cfbe95243e947d1b10a982f232b", default-features = false }

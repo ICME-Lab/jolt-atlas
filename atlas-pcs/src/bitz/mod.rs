@@ -2,3 +2,6 @@
 //! Reed–Solomon encoded, against which one evaluation claim over Fp128 is proven.
 
 pub mod gf128;
+pub mod merkle;
+pub mod pack;
+pub mod rs;

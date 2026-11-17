@@ -7,8 +7,9 @@
 //! * [`range_buckets`]: what the packed range buckets hold and commit for a model.
 //! * [`zoo`]: the checked-in model zoo (tiny GPT-2 / Qwen2 / BERT stand-ins,
 //!   op gauntlet) on every run; the real downloads behind `#[ignore]`.
-//! * [`soundness`] (+ [`mutate`], [`probe`], [`models`]): generic attacks on
-//!   the proof system: proof-field mutation, witness tamper, opening forgery,
+//! * [`soundness`] (+ [`mutate`], [`recording`], [`probe`], [`models`]): generic
+//!   attacks on the proof system: mutation of every value the verifier reads
+//!   (the sites come from a recorded read log), witness tamper, opening forgery,
 //!   binding tests, and pinned `known_gap_*` tests.
 //! * [`digests`]: cross-stage pins of the zoo's proof bytes and final
 //!   transcript state, so a coordinated prover+verifier change is visible.
@@ -32,6 +33,7 @@ pub(crate) mod op_kind;
 pub(crate) mod op_surface;
 pub(crate) mod probe;
 mod range_buckets;
+mod recording;
 pub(crate) mod relations;
 mod rounds;
 mod schedules;

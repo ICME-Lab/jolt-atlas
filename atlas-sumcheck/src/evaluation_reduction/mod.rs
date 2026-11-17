@@ -27,7 +27,7 @@ use atlas_algebra::{
 use atlas_transcript::{ProvingTranscript, VerifyingTranscript};
 
 /// Transcript label before the coefficients of `h`.
-const H_BEGIN_TRANSCRIPT_LABEL: &[u8] = b"UncompressedUniPoly_begin";
+pub const H_BEGIN_TRANSCRIPT_LABEL: &[u8] = b"UncompressedUniPoly_begin";
 /// Transcript label after the coefficients of `h`.
 const H_END_TRANSCRIPT_LABEL: &[u8] = b"UncompressedUniPoly_end";
 

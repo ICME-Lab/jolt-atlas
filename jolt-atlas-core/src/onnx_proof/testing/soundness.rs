@@ -1,7 +1,10 @@
 //! Soundness sweeps: generic, op-agnostic attacks on the proof system.
 //!
-//! * [`proof_mutation_sweep`]: the bytes of a finished proof (and the
-//!   public IO) are perturbed in turn; the verifier must reject.
+//! * [`proof_mutation_sweep`]: every value the verifier reads from a
+//!   finished proof is perturbed in turn (the sites are the log of a
+//!   recording transcript), the proof is cut at every read boundary and
+//!   extended by a byte, parts of a second execution's proof are spliced in,
+//!   and the public IO is perturbed; the verifier must reject each.
 //! * [`witness_tamper_sweep`]: the execution trace is perturbed *before*
 //!   proving (node outputs, fused remainders, every softmax
 //!   witness column), and so are the range buckets' digits, which the trace
@@ -19,7 +22,7 @@
 //! Set `JOLT_SOUNDNESS_EXHAUSTIVE=1` to sweep every site instead of the
 //! sampled default; `JOLT_SOUNDNESS_SEED` picks the sample.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
@@ -36,8 +39,11 @@ use super::{
         padded_add_model, padded_broadcast_sum_model, probe_models, probe_models_alt, square_model,
         sub_const_model, ProbeModel,
     },
-    mutate::{apply_site, enumerate_sites, exhaustive, opening_stratum, site_class, Site},
+    mutate::{
+        apply_site, enumerate_sites, exhaustive, opening_stratum, site_class, LoggedProof, Site,
+    },
     probe::{self, ProbeGuard},
+    recording::{Read, ReadKind, Recording},
 };
 use crate::onnx_proof::{
     prove, prove_from_trace,
@@ -46,8 +52,8 @@ use crate::onnx_proof::{
         self,
         digit_tamper::{self, DigitTamper, DigitTamperForm},
     },
-    verify, AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
-    ONNXProof,
+    verify, verify_with, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+    AtlasVerifierPreprocessing, ONNXProof,
 };
 
 /// The instantiation the sweeps run under: Akita over Fp128. The sweep bodies are generic over the
@@ -167,13 +173,54 @@ fn proof_mutation_sweep() {
     proof_mutation_sweep_for::<Pcs>();
 }
 
+/// Verify an honest proof under a recording transcript: the log of the verifier's reads.
+fn read_log<PCS: CommitmentScheme>(
+    proof: &ONNXProof,
+    vpp: &AtlasVerifierPreprocessing<PCS::Field, PCS>,
+    io: &ModelExecutionIO,
+) -> Vec<Read> {
+    let mut log = None;
+    verify_with::<PCS::Field, Recording<Blake2bVerifier>, PCS>(proof, vpp, io, |verifier| {
+        log = Some(verifier.transcript_mut().log());
+    })
+    .expect("an honest proof verifies under the recording transcript");
+    let log = log.expect("the verifier ran its setup");
+    let reads = log.lock().expect("read log").clone();
+    reads
+}
+
 fn proof_mutation_sweep_for<PCS: CommitmentScheme>() {
     let _probe = ProbeGuard::enter();
     let mut violations: Vec<String> = vec![];
+    let mut kinds_mutated: BTreeSet<ReadKind> = BTreeSet::new();
     for (m, alt) in probe_models().into_iter().zip(probe_models_alt()) {
         let h = honest::<PCS>(m);
-        let (other, _, _) = prove::<PCS::Field, Blake2bProver, PCS>(&h.prover_pp, &alt.inputs);
-        let sites = enumerate_sites(&h.proof, &h.io);
+        let (other, other_io, _) =
+            prove::<PCS::Field, Blake2bProver, PCS>(&h.prover_pp, &alt.inputs);
+        let reads = read_log::<PCS>(&h.proof, &h.verifier_pp, &h.io);
+        let other_reads = read_log::<PCS>(&other, &h.verifier_pp, &other_io);
+        let honest_proof = LoggedProof {
+            proof: &h.proof,
+            reads: &reads,
+        };
+        let other_proof = LoggedProof {
+            proof: &other,
+            reads: &other_reads,
+        };
+        // Every byte of the proof is read exactly once, and the schedule, not the proof,
+        // fixes what is read: a second execution has the same reads.
+        honest_proof.assert_covers_the_proof();
+        other_proof.assert_covers_the_proof();
+        assert!(
+            reads
+                .iter()
+                .map(|read| read.kind)
+                .eq(other_reads.iter().map(|read| read.kind)),
+            "{}: two executions of one model have different reads",
+            h.name
+        );
+
+        let sites = enumerate_sites(&honest_proof, &other_proof, &h.io);
         // Sequential on purpose: a verifier crash (stack overflow) must be
         // attributable to the site being tried, which the exhaustive run
         // logs site by site.
@@ -182,10 +229,9 @@ fn proof_mutation_sweep_for<PCS: CommitmentScheme>() {
             if exhaustive() {
                 eprintln!("  [{}] trying {site:?}", h.name);
             }
-            let mut proof = h.proof.clone();
             let mut io = h.io.clone();
-            apply_site(&mut proof, &mut io, &other, &site);
-            let outcome = run_verify(&proof, &h.verifier_pp, &io);
+            let proof = apply_site(&honest_proof, &mut io, &other_proof, &site);
+            let outcome = run_verify::<PCS>(&proof, &h.verifier_pp, &io);
             outcomes.push((site, outcome));
         }
 
@@ -202,6 +248,9 @@ fn proof_mutation_sweep_for<PCS: CommitmentScheme>() {
             } else {
                 model_violations.push(format!("{}: {site:?} -> {outcome:?}", h.name));
             }
+            if let Site::Read { kind, .. } = site {
+                kinds_mutated.insert(*kind);
+            }
         }
         for v in &model_violations {
             println!("  VIOLATION {v}");
@@ -209,8 +258,9 @@ fn proof_mutation_sweep_for<PCS: CommitmentScheme>() {
         violations.extend(model_violations);
         report(
             &format!(
-                "proof mutation sweep [{}]: {} sites{}",
+                "proof mutation sweep [{}]: {} reads, {} sites{}",
                 h.name,
+                reads.len(),
                 outcomes.len(),
                 if exhaustive() {
                     " (exhaustive)"
@@ -226,6 +276,14 @@ fn proof_mutation_sweep_for<PCS: CommitmentScheme>() {
         "{} proof mutations were accepted or crashed the verifier:\n{}",
         violations.len(),
         violations.join("\n")
+    );
+    let unmutated: Vec<ReadKind> = ReadKind::ALL
+        .into_iter()
+        .filter(|kind| !kinds_mutated.contains(kind))
+        .collect();
+    assert!(
+        unmutated.is_empty(),
+        "no probe model's proof has a read of these kinds: {unmutated:?}"
     );
 }
 

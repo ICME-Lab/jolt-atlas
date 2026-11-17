@@ -283,9 +283,337 @@ impl WideSum {
     }
 }
 
+/// The sums `Σ_i p0_i·q0_i` and `Σ_i (p0_i + p1_i)·(q0_i + q1_i)` over slices of one length:
+/// the value at zero and the leading coefficient of `Σ_i P_i(X)·Q_i(X)` for the linear `P_i`,
+/// `Q_i` through the given values at zero and one.
+pub fn product_sums(p0: &[Gf128], p1: &[Gf128], q0: &[Gf128], q1: &[Gf128]) -> [Gf128; 2] {
+    let n = p0.len();
+    assert!(p1.len() == n && q0.len() == n && q1.len() == n);
+    #[cfg(target_arch = "aarch64")]
+    if cfg!(target_feature = "aes") || std::arch::is_aarch64_feature_detected!("aes") {
+        // SAFETY: the `aes` feature, which provides `PMULL`, is present on this CPU.
+        return unsafe { neon::product_sums(p0, p1, q0, q1) };
+    }
+    let mut sums = [WideSum::ZERO; 2];
+    for i in 0..n {
+        sums[0].add_product(p0[i], q0[i]);
+        sums[1].add_product(p0[i] + p1[i], q0[i] + q1[i]);
+    }
+    [sums[0].reduce(), sums[1].reduce()]
+}
+
+/// Adds to `sums[i]` the two products [`product_sums`] takes of index `i`, unreduced.
+pub fn add_products(
+    sums: &mut [[WideSum; 2]],
+    p0: &[Gf128],
+    p1: &[Gf128],
+    q0: &[Gf128],
+    q1: &[Gf128],
+) {
+    let n = sums.len();
+    assert!(p0.len() == n && p1.len() == n && q0.len() == n && q1.len() == n);
+    #[cfg(target_arch = "aarch64")]
+    if cfg!(target_feature = "aes") || std::arch::is_aarch64_feature_detected!("aes") {
+        // SAFETY: the `aes` feature, which provides `PMULL`, is present on this CPU.
+        return unsafe { neon::add_products(sums, p0, p1, q0, q1) };
+    }
+    for (i, sum) in sums.iter_mut().enumerate() {
+        sum[0].add_product(p0[i], q0[i]);
+        sum[1].add_product(p0[i] + p1[i], q0[i] + q1[i]);
+    }
+}
+
+/// `values_i ← values_i · factors_i`.
+pub fn scale_pairs(values: &mut [Gf128], factors: &[Gf128]) {
+    assert_eq!(values.len(), factors.len());
+    #[cfg(target_arch = "aarch64")]
+    if cfg!(target_feature = "aes") || std::arch::is_aarch64_feature_detected!("aes") {
+        // SAFETY: the `aes` feature, which provides `PMULL`, is present on this CPU.
+        return unsafe { neon::scale_pairs(values, factors) };
+    }
+    for (value, &factor) in values.iter_mut().zip(factors) {
+        *value *= factor;
+    }
+}
+
+/// The inverse of every element, with one inversion. `None` if an element is zero.
+pub fn inverses(values: &[Gf128]) -> Option<Vec<Gf128>> {
+    let mut prefix = Vec::with_capacity(values.len());
+    let mut product = Gf128::ONE;
+    for &value in values {
+        prefix.push(product);
+        product *= value;
+    }
+    let mut suffix_inverse = product.inverse()?;
+    let mut out = prefix;
+    for (slot, &value) in out.iter_mut().zip(values).rev() {
+        *slot *= suffix_inverse;
+        suffix_inverse *= value;
+    }
+    Some(out)
+}
+
+/// `out_i = low_i + r·(low_i + high_i)`: the linear function through `low_i` at zero and
+/// `high_i` at one, at `r`.
+pub fn fold_pairs(out: &mut [Gf128], low: &[Gf128], high: &[Gf128], r: Gf128) {
+    assert!(low.len() == out.len() && high.len() == out.len());
+    #[cfg(target_arch = "aarch64")]
+    if cfg!(target_feature = "aes") || std::arch::is_aarch64_feature_detected!("aes") {
+        // SAFETY: the `aes` feature, which provides `PMULL`, is present on this CPU.
+        return unsafe { neon::fold_pairs(out, low, high, r) };
+    }
+    for ((o, &x), &y) in out.iter_mut().zip(low).zip(high) {
+        *o = x + r * (x + y);
+    }
+}
+
+/// `out_i = a_i · b_i`.
+pub fn mul_pairs(out: &mut [Gf128], a: &[Gf128], b: &[Gf128]) {
+    assert!(a.len() == out.len() && b.len() == out.len());
+    #[cfg(target_arch = "aarch64")]
+    if cfg!(target_feature = "aes") || std::arch::is_aarch64_feature_detected!("aes") {
+        // SAFETY: the `aes` feature, which provides `PMULL`, is present on this CPU.
+        return unsafe { neon::mul_pairs(out, a, b) };
+    }
+    for ((o, &x), &y) in out.iter_mut().zip(a).zip(b) {
+        *o = x * y;
+    }
+}
+
+/// The slice kernels with every element held in a vector register from load to store: a
+/// multiplication called on its own returns its 256-bit product through memory.
+#[cfg(target_arch = "aarch64")]
+mod neon {
+    #![allow(clippy::indexing_slicing)]
+    use super::{Gf128, WideSum};
+    use core::arch::aarch64::{
+        uint64x2_t, vdupq_n_u64, veorq_u64, vextq_u64, vgetq_lane_u64, vld1q_u64, vmull_high_p64,
+        vmull_p64, vreinterpretq_p64_u64, vreinterpretq_u64_p128, vst1q_u64,
+    };
+
+    /// The element as `[low 64 bits, high 64 bits]`.
+    #[inline(always)]
+    unsafe fn load(x: &Gf128) -> uint64x2_t {
+        // SAFETY: a `Gf128` is a `u128`: sixteen readable bytes, low half first.
+        unsafe { vld1q_u64((x as *const Gf128).cast()) }
+    }
+
+    #[inline(always)]
+    unsafe fn store(out: &mut Gf128, value: uint64x2_t) {
+        // SAFETY: a `Gf128` is a `u128`: sixteen writable bytes, low half first.
+        unsafe { vst1q_u64((out as *mut Gf128).cast(), value) }
+    }
+
+    /// The carry-less product of the low halves.
+    #[inline(always)]
+    unsafe fn clmul_low(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
+        // SAFETY: the caller has `PMULL`.
+        unsafe { vreinterpretq_u64_p128(vmull_p64(vgetq_lane_u64(a, 0), vgetq_lane_u64(b, 0))) }
+    }
+
+    /// The carry-less product of the high halves.
+    #[inline(always)]
+    unsafe fn clmul_high(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
+        // SAFETY: the caller has `PMULL`.
+        unsafe {
+            vreinterpretq_u64_p128(vmull_high_p64(
+                vreinterpretq_p64_u64(a),
+                vreinterpretq_p64_u64(b),
+            ))
+        }
+    }
+
+    /// The unreduced product as `(high 128 bits, low 128 bits)`, by Karatsuba.
+    #[inline(always)]
+    unsafe fn wide(a: uint64x2_t, b: uint64x2_t) -> (uint64x2_t, uint64x2_t) {
+        // SAFETY: the caller has `PMULL`.
+        unsafe {
+            let zero = vdupq_n_u64(0);
+            let (low, high) = (clmul_low(a, b), clmul_high(a, b));
+            let cross = clmul_low(
+                veorq_u64(a, vextq_u64(a, a, 1)),
+                veorq_u64(b, vextq_u64(b, b, 1)),
+            );
+            let mid = veorq_u64(veorq_u64(cross, low), high);
+            (
+                veorq_u64(high, vextq_u64(mid, zero, 1)),
+                veorq_u64(low, vextq_u64(zero, mid, 1)),
+            )
+        }
+    }
+
+    /// `high · x^128 + low` modulo `x^128 + x^7 + x^2 + x + 1`: the high half of `high`
+    /// times `x^7 + x^2 + x + 1` lands on bit 64 and overflows by seven bits, which join the
+    /// low half of `high` for the second multiplication.
+    #[inline(always)]
+    unsafe fn reduce(high: uint64x2_t, low: uint64x2_t) -> uint64x2_t {
+        // SAFETY: the caller has `PMULL`.
+        unsafe {
+            let zero = vdupq_n_u64(0);
+            let modulus = vdupq_n_u64(0x87);
+            let upper = clmul_high(high, modulus);
+            let low = veorq_u64(low, vextq_u64(zero, upper, 1));
+            let rest = veorq_u64(high, vextq_u64(upper, zero, 1));
+            veorq_u64(low, clmul_low(rest, modulus))
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn mul(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
+        // SAFETY: the caller has `PMULL`.
+        unsafe {
+            let (high, low) = wide(a, b);
+            reduce(high, low)
+        }
+    }
+
+    #[target_feature(enable = "neon,aes")]
+    pub(super) unsafe fn product_sums(
+        p0: &[Gf128],
+        p1: &[Gf128],
+        q0: &[Gf128],
+        q1: &[Gf128],
+    ) -> [Gf128; 2] {
+        // SAFETY: this function has `PMULL`.
+        unsafe {
+            let zero = vdupq_n_u64(0);
+            let (mut zero_high, mut zero_low) = (zero, zero);
+            let (mut lead_high, mut lead_low) = (zero, zero);
+            for i in 0..p0.len() {
+                let (a0, a1) = (load(&p0[i]), load(&p1[i]));
+                let (b0, b1) = (load(&q0[i]), load(&q1[i]));
+                let (high, low) = wide(a0, b0);
+                zero_high = veorq_u64(zero_high, high);
+                zero_low = veorq_u64(zero_low, low);
+                let (high, low) = wide(veorq_u64(a0, a1), veorq_u64(b0, b1));
+                lead_high = veorq_u64(lead_high, high);
+                lead_low = veorq_u64(lead_low, low);
+            }
+            let mut sums = [Gf128::ZERO; 2];
+            store(&mut sums[0], reduce(zero_high, zero_low));
+            store(&mut sums[1], reduce(lead_high, lead_low));
+            sums
+        }
+    }
+
+    /// Adds the unreduced product `(high, low)` to `sum`.
+    #[inline(always)]
+    unsafe fn accumulate(sum: &mut WideSum, (high, low): (uint64x2_t, uint64x2_t)) {
+        // SAFETY: each half of a `WideSum` is a `u128`: sixteen bytes, low half first.
+        unsafe {
+            let hi = (&mut sum.hi as *mut u128).cast::<u64>();
+            let lo = (&mut sum.lo as *mut u128).cast::<u64>();
+            vst1q_u64(hi, veorq_u64(vld1q_u64(hi), high));
+            vst1q_u64(lo, veorq_u64(vld1q_u64(lo), low));
+        }
+    }
+
+    #[target_feature(enable = "neon,aes")]
+    pub(super) unsafe fn add_products(
+        sums: &mut [[WideSum; 2]],
+        p0: &[Gf128],
+        p1: &[Gf128],
+        q0: &[Gf128],
+        q1: &[Gf128],
+    ) {
+        // SAFETY: this function has `PMULL`.
+        unsafe {
+            for (i, sum) in sums.iter_mut().enumerate() {
+                let (a0, a1) = (load(&p0[i]), load(&p1[i]));
+                let (b0, b1) = (load(&q0[i]), load(&q1[i]));
+                accumulate(&mut sum[0], wide(a0, b0));
+                accumulate(&mut sum[1], wide(veorq_u64(a0, a1), veorq_u64(b0, b1)));
+            }
+        }
+    }
+
+    #[target_feature(enable = "neon,aes")]
+    pub(super) unsafe fn scale_pairs(values: &mut [Gf128], factors: &[Gf128]) {
+        // SAFETY: this function has `PMULL`.
+        unsafe {
+            for (value, factor) in values.iter_mut().zip(factors) {
+                let product = mul(load(value), load(factor));
+                store(value, product);
+            }
+        }
+    }
+
+    #[target_feature(enable = "neon,aes")]
+    pub(super) unsafe fn fold_pairs(out: &mut [Gf128], low: &[Gf128], high: &[Gf128], r: Gf128) {
+        // SAFETY: this function has `PMULL`.
+        unsafe {
+            let r = load(&r);
+            for i in 0..out.len() {
+                let (x, y) = (load(&low[i]), load(&high[i]));
+                store(&mut out[i], veorq_u64(x, mul(r, veorq_u64(x, y))));
+            }
+        }
+    }
+
+    #[target_feature(enable = "neon,aes")]
+    pub(super) unsafe fn mul_pairs(out: &mut [Gf128], a: &[Gf128], b: &[Gf128]) {
+        // SAFETY: this function has `PMULL`.
+        unsafe {
+            for i in 0..out.len() {
+                store(&mut out[i], mul(load(&a[i]), load(&b[i])));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn random_elements(rng: &mut StdRng, n: usize) -> Vec<Gf128> {
+        (0..n)
+            .map(|_| Gf128((rng.next_u64() as u128) << 64 | rng.next_u64() as u128))
+            .collect()
+    }
+
+    /// The slice kernels against the element operations they stand for.
+    #[test]
+    fn slice_kernels_are_the_element_operations() {
+        let mut rng = StdRng::seed_from_u64(0x51CE);
+        for n in [0usize, 1, 7, 64] {
+            let [w, p0, p1, q0, q1] = [(); 5].map(|()| random_elements(&mut rng, n));
+            let mut want = [Gf128::ZERO; 2];
+            for i in 0..n {
+                want[0] += p0[i] * q0[i];
+                want[1] += (p0[i] + p1[i]) * (q0[i] + q1[i]);
+            }
+            assert_eq!(product_sums(&p0, &p1, &q0, &q1), want);
+
+            // Accumulated twice, each sum is its two products twice: zero.
+            let mut sums = vec![[WideSum::ZERO; 2]; n];
+            add_products(&mut sums, &p0, &p1, &q0, &q1);
+            for i in 0..n {
+                assert_eq!(sums[i][0].reduce(), p0[i] * q0[i]);
+                assert_eq!(sums[i][1].reduce(), (p0[i] + p1[i]) * (q0[i] + q1[i]));
+            }
+            add_products(&mut sums, &p0, &p1, &q0, &q1);
+            assert!(sums.iter().flatten().all(|sum| sum.reduce().is_zero()));
+
+            let mut scaled = p0.clone();
+            scale_pairs(&mut scaled, &w);
+            let inverse = inverses(&w).expect("random elements are nonzero");
+            for i in 0..n {
+                assert_eq!(scaled[i], p0[i] * w[i]);
+                assert_eq!(inverse[i] * w[i], Gf128::ONE);
+            }
+            assert!(n == 0 || inverses(&[w[0], Gf128::ZERO]).is_none());
+
+            let r = random_elements(&mut rng, 1)[0];
+            let mut folded = vec![Gf128::ZERO; n];
+            fold_pairs(&mut folded, &p0, &p1, r);
+            let mut products = vec![Gf128::ZERO; n];
+            mul_pairs(&mut products, &q0, &q1);
+            for i in 0..n {
+                assert_eq!(folded[i], p0[i] + r * (p0[i] + p1[i]));
+                assert_eq!(products[i], q0[i] * q1[i]);
+            }
+        }
+    }
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
     /// `x^128` reduced: `x^7 + x^2 + x + 1`.

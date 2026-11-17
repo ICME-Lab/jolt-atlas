@@ -15,7 +15,9 @@
 #![allow(clippy::indexing_slicing)]
 
 use super::{draw_combine, draw_output_point, round_pow_bits, LayerProof, Proof};
-use crate::bitz::gf128::{Gf128, WideSum};
+use crate::bitz::gf128::{
+    add_products, fold_pairs, inverses, mul_pairs, product_sums, scale_pairs, Gf128, WideSum,
+};
 use crate::bitz::multilinear::{eq_table, fold_first};
 use atlas_transcript::Transcript;
 use rayon::prelude::*;
@@ -27,6 +29,15 @@ const TABLE_DEPTH: usize = 4;
 /// the layer to a sixteenth of the bit count: a table round is one pass over the bits, and
 /// each halves what is then stored.
 const EXTRA_TABLE_ROUNDS: usize = 2;
+
+/// A table round takes the columns this many at a time, so the children it accumulates for
+/// them stay in the first-level cache.
+const COLUMN_RUN: usize = 256;
+
+/// A table round sums each column's products over [`REST_RUN`] row indices for this many
+/// columns at a time: the unreduced sums of a tile stay in the second-level cache.
+const COLUMN_TILE: usize = 4096;
+const REST_RUN: usize = 64;
 
 /// The bit matrix as bytes: the byte at `position << log_columns | column` holds the eight
 /// rows `8·position ..` of `column`, low row in the low bit.
@@ -94,42 +105,24 @@ fn node_table(factors: &[Gf128], depth: usize) -> Vec<Gf128> {
         .collect()
 }
 
-/// The three sums a round sends: `t(0)`, `t(1)` and the leading coefficient of `t`.
-type RoundSums = (Gf128, Gf128, Gf128);
+/// The two sums a round computes: `t(0)` and the leading coefficient of the quadratic `t`.
+/// `t(1)` follows from the running claim.
+type RoundSums = (Gf128, Gf128);
 
-const NO_SUMS: RoundSums = (Gf128::ZERO, Gf128::ZERO, Gf128::ZERO);
+const NO_SUMS: RoundSums = (Gf128::ZERO, Gf128::ZERO);
 
 fn add_sums(a: RoundSums, b: RoundSums) -> RoundSums {
-    (a.0 + b.0, a.1 + b.1, a.2 + b.2)
+    (a.0 + b.0, a.1 + b.1)
 }
 
 fn scale_sums(weight: Gf128, sums: RoundSums) -> RoundSums {
-    (weight * sums.0, weight * sums.1, weight * sums.2)
+    (weight * sums.0, weight * sums.1)
 }
 
-/// The three products of a term, from the two factors at the round variable's two values.
+/// The two products of a term, from the two factors at the round variable's two values.
 #[inline]
 fn term(p: [Gf128; 2], q: [Gf128; 2]) -> RoundSums {
-    (p[0] * q[0], p[1] * q[1], (p[0] + p[1]) * (q[0] + q[1]))
-}
-
-/// A weighted sum of terms, with the weight folded into one factor and the three products
-/// accumulated unreduced: two multiplications and three carry-less products per term.
-#[derive(Default)]
-struct WeightedSums([WideSum; 3]);
-
-impl WeightedSums {
-    #[inline]
-    fn add_term(&mut self, weight: Gf128, p: [Gf128; 2], q: [Gf128; 2]) {
-        let p = [weight * p[0], weight * p[1]];
-        self.0[0].add_product(p[0], q[0]);
-        self.0[1].add_product(p[1], q[1]);
-        self.0[2].add_product(p[0] + p[1], q[0] + q[1]);
-    }
-
-    fn reduce(&self) -> RoundSums {
-        (self.0[0].reduce(), self.0[1].reduce(), self.0[2].reduce())
-    }
+    (p[0] * q[0], (p[0] + p[1]) * (q[0] + q[1]))
 }
 
 /// The running state of one sumcheck of `scalar · eq(point, ·) · P · Q`.
@@ -157,11 +150,17 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
 
     /// Sends a round given the sums of the quadratic
     /// `t(X) = Σ_x eq(rest, x)·P(X, x)·Q(X, x)`, for the variable whose `eq` coordinate is
-    /// `coordinate`. The round polynomial is `scalar · eq(coordinate, X) · t(X)`, and
-    /// `eq(coordinate, X) = 1 + coordinate + X`.
-    fn round(&mut self, coordinate: Gf128, (at_zero, at_one, leading): RoundSums) -> Gf128 {
-        let linear = at_zero + at_one + leading;
+    /// `coordinate`. The round polynomial is `h = scalar · eq(coordinate, X) · t(X)`, with
+    /// `eq(coordinate, X) = 1 + coordinate + X`, so `h(0) + h(1) = claim` gives `t(1)` from
+    /// `t(0)`: `scalar · coordinate · t(1) = claim + scalar · (1 + coordinate) · t(0)`.
+    fn round(&mut self, coordinate: Gf128, (at_zero, leading): RoundSums) -> Gf128 {
         let shifted = self.scalar * (Gf128::ONE + coordinate);
+        #[allow(clippy::expect_used)]
+        let divisor = (self.scalar * coordinate)
+            .inverse()
+            .expect("the point's challenges are nonzero");
+        let at_one = (self.claim + shifted * at_zero) * divisor;
+        let linear = at_zero + at_one + leading;
         let message = [
             shifted * at_zero,
             shifted * leading + self.scalar * linear,
@@ -202,16 +201,20 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
         let pair_sums = |pair: &[Gf128]| -> RoundSums {
             let (first, second) = pair.split_at(2 * columns);
             let ((p0, q0), (p1, q1)) = (first.split_at(columns), second.split_at(columns));
-            let mut acc = WeightedSums::default();
-            for (c, &weight) in column_weights.iter().enumerate() {
-                acc.add_term(weight, [p0[c], p1[c]], [q0[c], q1[c]]);
-            }
-            acc.reduce()
+            let [at_zero, leading] = product_sums(p0, p1, q0, q1);
+            (at_zero, leading)
         };
         let Some((&first, later)) = row_point.split_first() else {
             let high = layer.split_off(columns);
             return (layer, high);
         };
+        // Every `P` carries its column's weight through the rounds, which are linear in it,
+        // so no term multiplies by a weight; the weights are divided out of what is returned.
+        layer
+            .par_chunks_mut(2 * columns)
+            .for_each(|runs| scale_pairs(&mut runs[..columns], column_weights));
+        #[allow(clippy::expect_used)]
+        let unweight = inverses(column_weights).expect("the point's challenges are not bits");
         let mut coordinate = first;
         let mut sums = eq_table(later)
             .par_iter()
@@ -223,9 +226,7 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
             let r = self.round(coordinate, sums);
             let fold = |out: &mut [Gf128], pair: &[Gf128]| {
                 let (low, high) = pair.split_at(2 * columns);
-                for ((o, &x), &y) in out.iter_mut().zip(low).zip(high) {
-                    *o = x + r * (x + y);
-                }
+                fold_pairs(out, low, high, r);
             };
             let mut folded = Gf128::zeros(layer.len() / 2);
             let Some((&next, later)) = rest.split_first() else {
@@ -234,6 +235,7 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
                     .zip(layer.par_chunks_exact(4 * columns))
                     .for_each(|(out, pair)| fold(out, pair));
                 let high = folded.split_off(columns);
+                scale_pairs(&mut folded, &unweight);
                 return (folded, high);
             };
             // Fold two pairs and take the next round's sums of the result in one pass.
@@ -342,7 +344,7 @@ impl<'a> TableLayer<'a> {
             .collect()
     }
 
-    /// A round whose block is at most a byte: the three products of a term depend only on
+    /// A round whose block is at most a byte: the two products of a term depend only on
     /// the block's bits, so the column weights are summed per block and pattern before any
     /// multiplication.
     fn bucketed_round(&self, rest_weights: &[Gf128], column_weights: &[Gf128]) -> RoundSums {
@@ -390,40 +392,70 @@ impl<'a> TableLayer<'a> {
 
     /// A round whose half-block is whole bytes: each child is a sum of per-byte table
     /// entries, accumulated for every column one byte position at a time.
+    ///
+    /// The first child's entries carry their row index's weight, so a term is two products
+    /// with no weight in them. The products of a column are summed unreduced over a run of
+    /// row indices and meet the column's weight once per run.
     fn byte_round(&self, rest_weights: &[Gf128], column_weights: &[Gf128]) -> RoundSums {
-        let sums_table = self.byte_sums();
         let bytes_per_half = 1usize << (self.log_block() - 4);
-        let columns = self.bytes.columns();
-        rest_weights
-            .par_iter()
+        let mut sums_table = self.byte_sums();
+        sums_table
+            .par_chunks_mut((2 * bytes_per_half) << 8)
+            .zip(rest_weights)
+            .for_each(|(entries, &weight)| entries.iter_mut().for_each(|entry| entry[0] *= weight));
+        let sums_table = &sums_table;
+        let rests: Vec<usize> = (0..rest_weights.len()).collect();
+        column_weights
+            .par_chunks(COLUMN_TILE)
             .enumerate()
-            .map_init(
-                || vec![[[Gf128::ZERO; 2]; 2]; columns],
-                |children, (rest, &rest_weight)| {
-                    children.fill([[Gf128::ZERO; 2]; 2]);
-                    for tau in 0..2 {
-                        for k in 0..bytes_per_half {
-                            let position = (2 * rest + tau) * bytes_per_half + k;
-                            let entries = &sums_table[position << 8..(position + 1) << 8];
-                            for (child, &value) in children.iter_mut().zip(self.bytes.row(position))
-                            {
-                                let entry = entries[value as usize];
-                                child[0][tau] += entry[0];
-                                child[1][tau] += entry[1];
+            .flat_map(|(tile, weights)| {
+                rests
+                    .par_chunks(REST_RUN)
+                    .map(move |rests| (tile * COLUMN_TILE, weights, rests))
+            })
+            .map(|(first_column, weights, rests)| {
+                let mut products = vec![[WideSum::ZERO; 2]; weights.len()];
+                // The children at the round variable's two values, `P` then `Q`.
+                let mut children = [[Gf128::ZERO; COLUMN_RUN]; 4];
+                for &rest in rests {
+                    for (run, products) in products.chunks_mut(COLUMN_RUN).enumerate() {
+                        let (start, len) = (first_column + run * COLUMN_RUN, products.len());
+                        children
+                            .iter_mut()
+                            .for_each(|child| child.fill(Gf128::ZERO));
+                        let [p0, p1, q0, q1] = &mut children;
+                        for (tau, (p, q)) in [(&mut *p0, &mut *q0), (&mut *p1, &mut *q1)]
+                            .into_iter()
+                            .enumerate()
+                        {
+                            for k in 0..bytes_per_half {
+                                let position = (2 * rest + tau) * bytes_per_half + k;
+                                let entries = &sums_table[position << 8..(position + 1) << 8];
+                                let values = &self.bytes.row(position)[start..start + len];
+                                for ((p, q), &value) in p.iter_mut().zip(q.iter_mut()).zip(values) {
+                                    let entry = entries[value as usize];
+                                    *p += entry[0];
+                                    *q += entry[1];
+                                }
                             }
                         }
+                        add_products(products, &p0[..len], &p1[..len], &q0[..len], &q1[..len]);
                     }
-                    let mut acc = WeightedSums::default();
-                    for (child, &weight) in children.iter().zip(column_weights) {
-                        acc.add_term(weight, child[0], child[1]);
-                    }
-                    scale_sums(rest_weight, acc.reduce())
-                },
-            )
+                }
+                products
+                    .iter()
+                    .zip(weights)
+                    .fold(NO_SUMS, |acc, (sums, &weight)| {
+                        add_sums(
+                            acc,
+                            scale_sums(weight, (sums[0].reduce(), sums[1].reduce())),
+                        )
+                    })
+            })
             .reduce(|| NO_SUMS, add_sums)
     }
 
-    /// The round's three sums for the next row variable, whose remaining row indices have the
+    /// The round's two sums for the next row variable, whose remaining row indices have the
     /// weights `rest_weights`.
     fn round(&self, rest_weights: &[Gf128], column_weights: &[Gf128]) -> RoundSums {
         if self.log_block() <= 3 {
@@ -506,9 +538,7 @@ pub fn prove<T: Transcript>(
             .zip(stored[i + 1].par_chunks_exact(2 * columns))
             .for_each(|(out, pair)| {
                 let (low, high) = pair.split_at(columns);
-                for ((o, &x), &y) in out.iter_mut().zip(low).zip(high) {
-                    *o = x * y;
-                }
+                mul_pairs(out, low, high);
             });
         stored[i] = above;
     }

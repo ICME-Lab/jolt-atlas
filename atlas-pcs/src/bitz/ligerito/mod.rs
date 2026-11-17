@@ -57,18 +57,29 @@ impl Schedule {
             folds.push(fold);
             remaining -= fold;
         }
-        // A word outside the unique-decoding radius passes one query with probability at most
-        // `(1 + rate) / 2`; the levels share the target by a union bound.
-        let per_query_bits = -((1.0 + 0.5f64.powi(log_inv_rate as i32)) / 2.0).log2();
-        let level_bits = (folds.len() as f64).log2();
-        let queries = ((target_bits as f64 + level_bits) / per_query_bits).ceil() as usize;
-        Some(Self {
+        let mut schedule = Self {
             num_vars,
             folds,
             log_inv_rate,
-            queries,
+            queries: 0,
             target_bits,
-        })
+        };
+        let level_bits = (schedule.levels() as f64).log2();
+        schedule.queries =
+            ((target_bits as f64 + level_bits) / schedule.per_query_bits()).ceil() as usize;
+        Some(schedule)
+    }
+
+    /// A word outside the unique-decoding radius passes one query with probability at most
+    /// `(1 + rate) / 2`: `−log2` of that.
+    fn per_query_bits(&self) -> f64 {
+        -((1.0 + 0.5f64.powi(self.log_inv_rate as i32)) / 2.0).log2()
+    }
+
+    /// `−log2` of the probability that some level's queries all miss a word outside the
+    /// unique-decoding radius, by a union bound over the levels.
+    pub fn query_error_bits(&self) -> f64 {
+        self.queries as f64 * self.per_query_bits() - (self.levels() as f64).log2()
     }
 
     pub fn levels(&self) -> usize {

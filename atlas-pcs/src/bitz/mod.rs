@@ -8,5 +8,15 @@ pub mod ligerito;
 pub mod merkle;
 pub mod multilinear;
 pub mod pack;
+pub mod params;
+pub mod proof;
+pub mod prover;
 pub mod ring_switch;
 pub mod rs;
+pub mod verifier;
+
+pub use params::Params;
+pub use proof::{Commitment, Proof};
+
+#[cfg(test)]
+mod tests;

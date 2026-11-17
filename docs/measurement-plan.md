@@ -558,6 +558,29 @@ multiplies leaves half a column apart, which lets it sweep 64 values per word). 
 our side: the remaining 1.25 s is about four times its 0.30 s, and proof size (1.3 MB against
 0.49 MB) is untouched.
 
+### The cutover to BitZ (2026-11-17, `atlas-bench`, `bench/gate.sh akita-last eb9418c3d --runs 3`)
+
+Stage 2 of `specs/bitz-commitment.md`: the prover on `BitzScheme` against the last commit on
+Akita (the tag `akita-last`). Medians of three interleaved runs at 16 tokens.
+
+| | GPT-2, Akita | GPT-2, BitZ | bge-small, Akita | bge-small, BitZ |
+|---|---|---|---|---|
+| prove s | 24.44 | **10.83** | 15.63 | **8.65** |
+| commit s | 7.26 | 0.26 | 2.62 | 0.25 |
+| iop s | 4.07 | 3.95 | 3.59 | 3.48 |
+| openings s | 9.73 | 3.02 | 8.77 | 4.15 |
+| verify s | 1.20 | 1.10 | 1.97 | 1.86 |
+| peak GB | 14.4 | 6.1 | 4.3 | 2.1 |
+
+The spec's bounds for GPT-2 (commit at most 1.5 s, openings at most 4.0 s) are met. GPT-2's
+proof is 1.47 MiB against 1.27 MiB. Inside GPT-2's openings: the reduction sumcheck 1.30 s,
+the BitZ opening 1.63 s (its grand product 1.16 s). Inside the IOP, the bucket digit-range
+batch is 1.62 s, which stage 3 removes. What remains outside the three stages, about 3.6 s,
+is trace execution and witness generation.
+
+To run a binary from before the cutover the gate script takes the Akita schedule files from
+that commit (`bench/bin/schedules-<sha>`); nothing else is needed.
+
 ### Baseline for the protocol-simplification specs (2026-11-16, commit c65753bfa)
 
 Taken after the owned-toolkit program (`docs/roadmap.md`, phases 1–7) and before any of the

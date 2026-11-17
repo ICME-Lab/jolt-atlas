@@ -318,6 +318,10 @@ lands on: stage times within 3%, peak memory within 5%, unless the spec states t
    Akita's 15.2 s, and the projection for GPT-2 at 16 tokens is about 10 s. The scheme change
    is specified in `specs/bitz-commitment.md` (three stages) and goes ahead of steps 6–9;
    item 8 and the rev bump are dropped.
+   **Stage 2 landed 2026-11-17:** the prover runs on BitZ and Akita is deleted; GPT-2 at 16
+   tokens proves in 10.8 s on the benchmark machine against 24.4 s (commit 7.3 → 0.26 s,
+   openings 9.7 → 3.0 s). Next for speed: stage 3 (the 1.6 s digit-range batch), trace
+   execution (item 11), and the rest of the BitZ grand product.
 6. Item 3's standalone relation test with the negative test, then on the MLP rows; item 4's
    narrower declared widths.
 7. `digits-as-trace` stages 2 and 3: digit-backed relations batched outside the node loop

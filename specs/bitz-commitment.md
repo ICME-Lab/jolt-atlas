@@ -161,12 +161,14 @@ Stage 1 (this spec's PR):
 
 Later stages:
 
-- [ ] Before stage 2: `bitz_bench 29` at 16 threads reports commit + prove at or below
-      2.0 s (stage 1 as merged, or the tuning PR).
-- [ ] Stage 2 PR: the zoo and the real-model tests prove and verify with one commitment and
+- [x] Before stage 2: `bitz_bench 29` at 16 threads reports commit + prove at or below
+      2.0 s (stage 1 as merged, or the tuning PR). 1.79 s after tuning.
+- [x] Stage 2 PR: the zoo and the real-model tests prove and verify with one commitment and
       one opening per proof; `bench/gate.sh` on `gpt2 --seq-len 16` against `akita-last`
       shows `commit` at or below 1.5 s and `openings` at or below 4.0 s; no `akita` in
-      `Cargo.lock`; `jolt-field/` and `jolt-poly/` are deleted.
+      `Cargo.lock`; `jolt-field/` and `jolt-poly/` are deleted. GPT-2: commit
+      0.26 s, openings 3.02 s. The real-model tests (the heavy job) were not run; the gate
+      proves and verifies GPT-2 and bge-small with the release binary.
 - [ ] Stage 3 PR: `atlas_sumcheck::digit_range` and the Booleanity checks are gone; the
       soundness sweeps pass with the range now held by the commitment (the witness-tamper
       sweep's digit sites are rejected at the opening); GPT-2 at 16 tokens proves in at most
@@ -273,6 +275,19 @@ op relations, lookups ──► opening claims ──► reduction sumcheck ─�
 - **The plane-evaluation pass** (stage 2). The proof-of-concept spends 1.8 s computing a
   2^29-bit evaluation claim outside its timed section. Ours is one parallel pass and is priced
   by stage 2's `openings` bound.
+
+### As built (stage 2)
+
+The cutover is smaller than the Architecture section describes. The opening-reduction sumcheck
+already brings every committed polynomial to one point, zero-padded, and hands the scheme the
+coefficients of one linear combination. That combination of bit planes is one inner product
+of the bit vector with a row `eq` table times a per-column weight, which is the claim BitZ
+proves, so the prover sends no plane evaluations and the verifier recomposes nothing.
+`CommitmentScheme` keeps its three calls (batch commitment, joint opening, its verification)
+and loses the ones nothing called; `jolt-atlas-core` and `jolt-atlas-verifier` change only in
+the scheme type they name. Shapes (variables, bits, sign) are declared in the batch
+commitment by the prover and bound by the transcript; stage 3 is where the verifier starts to
+require a declared width.
 
 ## Documentation
 

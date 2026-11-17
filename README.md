@@ -30,7 +30,8 @@ cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen \
     --input "The quick brown fox jumps over the lazy dog" --use-cache
 ```
 
-The commitment scheme is Akita over the 128-bit Solinas field. Options: `--seq-len N` (default
+The commitment scheme is BitZ: bit commitments over `F_{2^128}`, opened for claims over the
+128-bit Solinas field. Options: `--seq-len N` (default
 16), `--input "<text>"` (tokenizes with the model's `tokenizer.json`), `--use-cache` (reuse the
 shared preprocessing across runs), `--stats` (the model, its packed range buckets and its
 largest nodes), `--trace` (Chrome Tracing JSON, view in `chrome://tracing`) or
@@ -68,23 +69,21 @@ cargo test -p atlas-onnx-import --test golden_zoo    # prints the new hashes on 
 
 GPT-2 is a 125-million-parameter transformer model from OpenAI.
 
-**JOLT Atlas** (Akita lattice PCS over the 128-bit Solinas field)
+**JOLT Atlas** (BitZ commitment, claims over the 128-bit Solinas field)
 
 | Stage | Wall clock |
 | ----- | ---------- |
-| Witness + commitment phase (`ONNXProof::commit_witness_polynomials`) | 25.2 s |
-| IOP proving (`ONNXProof::iop`) | 5.28 s |
-| Opening reduction sumcheck + Akita class openings (`ONNXProof::prove_reduced_openings`) | 6.72 s |
-| Proof time (`ONNXProof::prove`) | 40.6 s |
-| Verify time (`ONNXProof::verify`) | 2.21 s |
+| Witness + commitment phase (`commit_witness_polynomials`) | 0.26 s |
+| IOP proving (`iop`) | 3.95 s |
+| Opening reduction sumcheck + BitZ opening (`prove_reduced_openings`) | 3.02 s |
+| Proof time (`prove`) | 10.8 s |
+| Verify time (`verify`) | 1.10 s |
 
-Stage rows come from one `--trace-terminal` run, which adds tracing overhead. Akita's setups
-are derived from public schedule catalogs on first use, inside the proof time. Without
-tracing, the median of 3 runs is 39.9 s to prove and 2.17 s to verify, with a 2.42 MiB proof
-and 6.2 GB peak memory. Before BN254 was removed, the Dory backend (cached URS) proved the
-same model in 26.7 s and verified in 3.42 s, with a 2.37 MiB proof and 6.6 GB peak memory. Akita
-is the benchmark backend: the per-stage performance gate in `specs/adoption-program.md` measures this
-command.
+Medians of three `--trace-terminal` runs at 16 tokens on a 16-core arm64 machine (AWS
+c7g.4xlarge, 30 GB), from `bench/gate.sh`; the proof is 1.47 MiB and peak memory 6.1 GB. The
+rest of the proof time is trace execution and witness generation. The last commit on the
+Akita lattice scheme (tag `akita-last`) proved the same model in 24.4 s on the same machine
+(commit 7.3 s, openings 9.7 s), with a 1.27 MiB proof and 14.4 GB peak memory.
 
 ### How to reproduce locally
 

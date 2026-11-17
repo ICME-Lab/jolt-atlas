@@ -715,8 +715,8 @@ op_surface! {
     /// A two-row dictionary (one address variable): the shape `repeat_to_gather`
     /// produces for Qwen2's 2 KV heads.
     gather_small_dict2: GatherSmall => |rng| gather_model(rng, &[8, 16], 2, 8);
-    /// A one-row dictionary has zero address variables, so the booleanity
-    /// one-hot opening carries no claims and the prover asserts. This is the
+    /// A one-row dictionary has zero address variables, so its one-hot
+    /// opening carries no claims and the prover asserts. This is the
     /// shape `repeat_to_gather` produces for a single-KV-head (MQA) model.
     #[ignore = "known gap: GatherSmall with dict_len == 1 panics in the prover \
                 (opening_reduction::new_one_hot: polynomials.len() == claims.len(), 1 vs 0)"]

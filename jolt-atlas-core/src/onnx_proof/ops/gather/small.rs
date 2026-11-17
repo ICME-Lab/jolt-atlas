@@ -2,57 +2,33 @@ use super::*;
 use crate::onnx_proof::trace_view::TraceView;
 use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
 use atlas_sumcheck::{
-    booleanity::prover::SmallBooleanitySumcheckProver,
     hamming_booleanity::prover::HammingBooleanitySumcheckProver,
     hamming_weight::prover::HammingWeightSumcheckProver,
 };
 use atlas_transcript::ProvingTranscript;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::small::*;
 
-pub(crate) fn build_stage2_provers<F: JoltField>(
+pub(crate) fn build_stage2_prover<F: JoltField>(
     computation_node: &ComputationNode,
     trace: &Trace,
     accumulator: &ProverOpeningAccumulator<F>,
     transcript: &mut impl ProvingTranscript,
-) -> (
-    HammingBooleanitySumcheckProver<F>,
-    SmallBooleanitySumcheckProver<F>,
-) {
-    let Op::GatherSmall(gather_op) = &computation_node.operator else {
-        panic!("Expected GatherSmall operator")
-    };
+) -> HammingBooleanitySumcheckProver<F> {
     let LayerData { operands, .. } = TraceView::layer_data(trace, computation_node);
-    let [dict, indexes] = operands[..] else {
+    let [_, indexes] = operands[..] else {
         panic!("Expected two operands for Gather operation")
     };
-    let num_words = dict.dims()[gather_op.axis];
     let num_lookups = indexes.len();
 
     let hb_params =
         ra_hamming_bool_params::<F>(computation_node, num_lookups, accumulator, transcript)
             .expect("the prover holds every claim it reads");
-    let bool_params = ra_booleanity_params::<F>(
-        computation_node,
-        num_words,
-        num_lookups,
-        accumulator,
-        transcript,
-    )
-    .expect("the prover holds every claim it reads");
-
     let hw = {
         let mut lookup_vec = vec![F::one(); indexes.len()];
         lookup_vec.resize(indexes.len().next_power_of_two(), F::zero());
         lookup_vec
     };
-    let ra_evals = compute_ra_evals(&bool_params.r_cycle, indexes, num_words);
-    let indexes_u = indexes.iter().map(|&x| Some(x as u16)).collect();
-
-    let hb_sumcheck = HammingBooleanitySumcheckProver::gen(hb_params, vec![hw]);
-    let bool_sumcheck =
-        SmallBooleanitySumcheckProver::gen(bool_params, vec![ra_evals], vec![indexes_u]);
-
-    (hb_sumcheck, bool_sumcheck)
+    HammingBooleanitySumcheckProver::gen(hb_params, vec![hw])
 }
 
 pub(crate) fn build_stage3_prover<F: JoltField>(

@@ -419,9 +419,9 @@ pub enum OpRelation<F: JoltField> {
     /// point, then the read-raf relation is set up.
     TableRead(TableRead),
     /// The one-hot checks of a read's addresses: two relations (the address polynomial as the
-    /// product of its chunks; the chunks' Booleanity and Hamming weight).
+    /// product of its chunks; the chunks' Hamming weight).
     OneHot(RaEncoding),
-    /// `GatherSmall`: the Hamming-Booleanity and Booleanity checks of its one-hot `ra`.
+    /// `GatherSmall`: the Hamming-Booleanity check of its one-hot `ra`.
     GatherSmallOneHot(GatherSmallShape),
     /// `GatherSmall`: the Hamming-weight check of its one-hot `ra`.
     GatherSmallHammingWeight(GatherSmallShape),
@@ -515,11 +515,11 @@ impl<F: JoltField> OpRelation<F> {
             Self::OneHot(encoding) => {
                 Ok(shout::ra_onehot_verifiers(encoding, accumulator, transcript)?.into())
             }
-            Self::GatherSmallOneHot(shape) => {
-                let (hamming_booleanity, booleanity) =
-                    gather::small::build_stage2_verifiers(shape, accumulator, transcript)?;
-                Ok(vec![Box::new(hamming_booleanity), Box::new(booleanity)])
-            }
+            Self::GatherSmallOneHot(shape) => Ok(boxed(gather::small::build_stage2_verifier(
+                shape,
+                accumulator,
+                transcript,
+            )?)),
             Self::GatherSmallHammingWeight(shape) => Ok(boxed(
                 gather::small::build_stage3_verifier(shape, accumulator, transcript)?,
             )),

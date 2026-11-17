@@ -442,13 +442,12 @@ pub fn relation_witnesses<F: JoltField, T: ProvingTranscript>(
             vec![witness]
         }
         OpRelation::GatherSmallOneHot(shape) => {
-            let (hamming_booleanity, booleanity) = gather::small::build_stage2_provers::<F>(
+            vec![Box::new(gather::small::build_stage2_prover::<F>(
                 &shape.node,
                 &prover.trace,
                 &prover.accumulator,
                 &mut prover.transcript,
-            );
-            vec![Box::new(hamming_booleanity), Box::new(booleanity)]
+            ))]
         }
         OpRelation::GatherSmallHammingWeight(shape) => {
             vec![Box::new(gather::small::build_stage3_prover::<F>(

@@ -11,7 +11,7 @@ A verdict of `jolt_atlas_verifier::onnx_proof::verify` depends on:
 | Crate | Items a verdict depends on |
 |-------|----------------------------|
 | `jolt-atlas-verifier` | all of it |
-| `atlas-sumcheck` | `engine` (`verify_compressed`, `absorb_input_claims`, `BatchPrelude`), `relation` (`RelationVerifier`, `verify_relation{,_batch}`, `resolve`, `relation_input_claim`), `opening_proof` (`VerifierOpeningAccumulator`, the opening-reduction relation), `evaluation_reduction` (verify side), the one-hot, booleanity, shout and prefix-suffix relations and their parameters. Not the `prover` submodules. |
+| `atlas-sumcheck` | `engine` (`verify_compressed`, `absorb_input_claims`, `BatchPrelude`), `relation` (`RelationVerifier`, `verify_relation{,_batch}`, `resolve`, `relation_input_claim`), `opening_proof` (`VerifierOpeningAccumulator`, the opening-reduction relation), `evaluation_reduction` (verify side), the one-hot (virtualization, Hamming weight, Hamming-Booleanity), shout and prefix-suffix relations and their parameters. Not the `prover` submodules. |
 | `atlas-claims` | all of it: `SymbolicSumcheck`, the `Expr` algebra and its evaluation, the claim-data traits |
 | `atlas-pcs` | `CommitmentScheme::{setup_verifier, verify_rlc}` and the `bitz` implementation: `bitz::scheme` (`Layout`, `opening_weights`, `verify_rlc`), `bitz::verifier`, `gkr::verify`, `ring_switch::reduce`, `ligerito::verifier`, `integers` (the prime draw), `params` (the soundness parameters), `merkle::verify_row`, `rs::Code`, `gf128`; BLAKE3 for the Merkle tree |
 | `atlas-transcript` | `VerifyingTranscript` and its reads (`read_scalar`, `read_scalars`, `read_serializable`: the only way a value leaves the proof), the sponge and the spongefish verifier surface under it (`VerifierTranscript`, session setup, the proof-of-work check, the challenge sponges), and `words` |
@@ -75,7 +75,9 @@ The crate has no prover code. Three mechanisms hold that:
    bound (the fused rescales, ScalarConstDiv, Rsqrt, MeanOfSquares, the trig period
    reduction, softmax) is a range
    claim in a packed range bucket (`range_bucket::RangeClaim`): the remainder, or its slack
-   below the bound, checked by the dense digit range check. A bound that is not positive has
+   below the bound, recomposed from committed base-4 digits whose range the commitment
+   holds (BitZ commits a digit column as two bit planes; `read_commitments` requires that
+   width). A bound that is not positive has
    no proof. The output of an exact-arithmetic node (Add, Sub, Sum, Einsum, MeanOfSquares and
    the fused Mul, Square and Cube) that is not a model output is a range claim in the same
    buckets: `out + 2^31 ∈ [0, 2^32)`, read from the node's reduced output opening. A model
@@ -105,17 +107,19 @@ transcript; `Tie` checks a zero-round relation, an `OpRel`,
 with `verify_tie`. Steps hold values, never closures: a relation is an `OpRelation` (a closed
 enum with one variant per kind of verifier construction: an `OpRel`, a `TableRead`, the
 one-hot checks of an `RaEncoding`, GatherSmall's two one-hot stages, softmax's three-table
-read, a range bucket's value and digit relations), an opening an `OpOpen`. Whatever depends on
+read, a range bucket's value relation), an opening an `OpOpen`. Whatever depends on
 earlier claims or on challenges is read and drawn in the relation's `setup`, when the
 interpreter sets the relation up.
 
 The schedule is each node's steps in reverse topological order, written by its op's
 `OpPlan::plan(node, model, builder)` to a `ScheduleBuilder`, followed by the model-wide steps
 `ScheduleBuilder::finish` adds: the packed range buckets' value sumchecks as one batched
-sumcheck, each opening its bucket's packed value at a fresh point; the digit range checks of
-their dense digits (`atlas_sumcheck::digit_range`) as a second; the lookups sumcheck, every
+sumcheck, each opening its bucket's committed digit columns at a fresh point, where their
+recomposition is the packed value; the lookups sumcheck, every
 table read whose sumcheck produces only its own read-address claim; and the one-hot sumcheck,
-every one-hot check of a read address. A table read is set up in its node's turn (`lookup`
+every one-hot check of a read address: the virtualization of the address from its
+committed chunks and each chunk's Hamming weight. That a chunk is boolean is held by its
+commitment, at one bit a coefficient, which `read_commitments` requires. A table read is set up in its node's turn (`lookup`
 emits a `Setup` there), where it draws its challenges and appends its operand claim; a
 one-hot check reads the read-address claim a read produces, so it has no step in its node's
 turn (`one_hot`) and is set up when the one-hot sumcheck runs. Gather's dictionary read is a

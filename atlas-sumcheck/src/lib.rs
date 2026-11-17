@@ -9,7 +9,6 @@
     non_snake_case,
     type_alias_bounds
 )]
-pub mod booleanity;
 pub mod config;
 pub mod engine;
 pub mod evaluation_reduction;

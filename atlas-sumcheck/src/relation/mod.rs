@@ -71,12 +71,8 @@ pub enum RelationDerived {
     /// `eq(r₀, r′_retained)`: eq between the incoming point and the leading (retained)
     /// coordinates of a high-to-low reduction's bound point.
     RetainedEq,
-    /// A one-hot check's eq factor over its address-then-cycle point (see the relation).
-    OneHotEq,
-    /// A one-hot check's eq factor over its cycle coordinates alone.
+    /// A check's eq factor over its cycle coordinates.
     CycleEq,
-    /// The address index `Σ_j 2^j·r_j` at the bound address coordinates.
-    AddressIndex,
     /// The identity polynomial `Σ_j 2^j·r_j` over a read-raf check's address point.
     Identity,
     /// A read-raf check's read-address claim at its bound address point.
@@ -96,8 +92,6 @@ pub enum RelationChallenge {
     Gamma,
     /// The `i`-th batching coefficient of a batched check.
     Batching(usize),
-    /// The `i`-th coefficient of a second batched check sharing the sumcheck.
-    SecondBatching(usize),
     /// The `i`-th weight of a linear term.
     Weight(usize),
     /// The constant of a claimed sum.
@@ -145,8 +139,6 @@ pub enum RelationId {
     AxisSum,
     /// The mean of squares along the reduced axes, rescaled.
     MeanOfSquares,
-    /// One-hot chunks are boolean (with an optional linear check sharing their opening).
-    Booleanity,
     /// Hamming-weight indicators are boolean.
     HammingBooleanity,
     /// One-hot chunks have Hamming weight one.

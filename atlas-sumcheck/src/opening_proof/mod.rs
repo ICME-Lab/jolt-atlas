@@ -481,7 +481,6 @@ pub enum SumcheckId {
     RaVirtualization,
     RamHammingBooleanity,
     RamHammingWeight,
-    Booleanity,
     HammingWeight,
     /// RLC sumcheck for the execution of a specific node.
     RLC(usize),
@@ -500,7 +499,6 @@ impl Canonical for SumcheckId {
             Self::RaVirtualization => 2u8.encode(&mut writer)?,
             Self::RamHammingBooleanity => 3u8.encode(&mut writer)?,
             Self::RamHammingWeight => 4u8.encode(&mut writer)?,
-            Self::Booleanity => 5u8.encode(&mut writer)?,
             Self::HammingWeight => 6u8.encode(&mut writer)?,
             Self::RLC(idx) => {
                 7u8.encode(&mut writer)?;
@@ -529,7 +527,6 @@ impl Canonical for SumcheckId {
             2 => Ok(Self::RaVirtualization),
             3 => Ok(Self::RamHammingBooleanity),
             4 => Ok(Self::RamHammingWeight),
-            5 => Ok(Self::Booleanity),
             6 => Ok(Self::HammingWeight),
             7 => {
                 let idx = usize::decode(&mut reader)?;

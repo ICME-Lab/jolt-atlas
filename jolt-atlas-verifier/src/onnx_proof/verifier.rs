@@ -156,10 +156,32 @@ pub struct Commitments<PCS: CommitmentScheme> {
     polys: Vec<PCS::Commitment>,
 }
 
+/// The bits the commitment must bound a committed polynomial's coefficients by, where the
+/// protocol relies on a bound: a one-hot polynomial is boolean (with its Hamming-weight check
+/// that makes it one-hot) and a digit column holds base-[`range_check::DIGIT_BASE`] digits.
+/// The quotient and shift columns are bounded by relations of their own.
+fn committed_bits(poly: &CommittedPoly) -> Option<u32> {
+    match poly {
+        CommittedPoly::NodeOutputRaD(..)
+        | CommittedPoly::CosRaD(..)
+        | CommittedPoly::SinRaD(..)
+        | CommittedPoly::TrigDownscaleRaD(..)
+        | CommittedPoly::GatherRa(..)
+        | CommittedPoly::GatherRaD(..)
+        | CommittedPoly::SoftmaxAddrRaD(..)
+        | CommittedPoly::ActivationClampRaD(..)
+        | CommittedPoly::ActivationSmallRaD(..)
+        | CommittedPoly::SoftmaxClampRaD(..) => Some(1),
+        CommittedPoly::GlobalRemainderDigit(..) => Some(range_check::DIGIT_BASE.ilog2()),
+        CommittedPoly::RsqrtQuotient(..)
+        | CommittedPoly::TrigPeriodQuotient(..)
+        | CommittedPoly::SoftmaxShift(..) => None,
+    }
+}
+
 /// Read the commitments from the transcript: the batch commitment, then as many commitments
 /// as the schedule opens committed polynomials. `Err` on a failed read, or if a polynomial the
-/// protocol relies on being bounded ([`range_check::committed_bits`]) is not committed within
-/// that bound.
+/// protocol relies on being bounded ([`committed_bits`]) is not committed within that bound.
 pub fn read_commitments<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<Field = F>>(
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
@@ -171,7 +193,7 @@ pub fn read_commitments<F: JoltField, T: VerifyingTranscript, PCS: CommitmentSch
         .map(|_| verifier.transcript.read_serializable())
         .collect::<Result<_, _>>()?;
     for (poly, commitment) in committed.iter().zip(&polys) {
-        if let Some(bound) = range_check::committed_bits(poly) {
+        if let Some(bound) = committed_bits(poly) {
             let bits = PCS::coefficient_bits(&batch, commitment);
             if bits.is_none_or(|bits| bits > bound) {
                 return Err(ProofVerifyError::InvalidOpeningProof(format!(

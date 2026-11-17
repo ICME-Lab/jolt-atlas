@@ -10,8 +10,8 @@
 //! opening of every digit column at a fresh point.
 //!
 //! That a digit is in `[0, b)` is held by the commitment, which commits a digit column at
-//! `log₂ b` bits a coefficient ([`committed_bits`]); the verifier requires that width when it
-//! reads the commitments. With `n` digits the recomposition is in `[0, b^n)` and never wraps.
+//! `log₂ b` bits a coefficient; the verifier requires that width when it reads the
+//! commitments ([`read_commitments`](super::verifier::read_commitments)). With `n` digits the recomposition is in `[0, b^n)` and never wraps.
 use super::range_bucket::RangeBucket;
 use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
@@ -47,15 +47,6 @@ fn bucket_sumcheck_id() -> SumcheckId {
 // ---------------------------------------------------------------------------
 // Packed value range check: Σ_t W(t)·V(t) = Σ_n γ_n·V_n(r_n)
 // ---------------------------------------------------------------------------
-
-/// The bits the commitment must bound a committed polynomial's coefficients by, if the
-/// protocol relies on a bound: a digit column holds base-[`DIGIT_BASE`] digits.
-pub fn committed_bits(poly: &CommittedPoly) -> Option<u32> {
-    match poly {
-        CommittedPoly::GlobalRemainderDigit(..) => Some(DIGIT_BASE.ilog2()),
-        _ => None,
-    }
-}
 
 /// `b^(n−1−j)` for `j < n`: the place value of each digit, most significant first.
 pub fn place_values(n: usize) -> Vec<u64> {

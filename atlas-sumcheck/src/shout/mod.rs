@@ -2,8 +2,8 @@ use crate::opening_proof::missing_claim;
 use crate::relation::not_derived;
 use crate::relation::DynRelationVerifier;
 use crate::{
-    booleanity::{BooleanitySumcheckParams, LinearClaim, LinearTerm},
     config::OneHotParams,
+    hamming_weight::HammingWeightSumcheckParams,
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ra_virtual::RaSumcheckParams,
     relation::{
@@ -14,7 +14,7 @@ use crate::{
 use atlas_algebra::field::Ring;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_algebra::{
-    field::{FieldChallengeOps, IntoOpening, JoltField},
+    field::{FieldChallengeOps, JoltField},
     poly::{
         eq::EqPolynomial,
         point::{OpeningPoint, BIG_ENDIAN},
@@ -306,8 +306,8 @@ fn resolve_vp_opening<F: JoltField>(
     }
 }
 
-/// Describes the polynomial configuration for the three RA one-hot sumchecks
-/// (RaVirtual, HammingWeight, Booleanity). Implementors specify which
+/// Describes the polynomial configuration for the two RA one-hot sumchecks
+/// (RaVirtual, HammingWeight). Implementors specify which
 /// `CommittedPoly` / `VirtualPoly` variants to use, the split
 /// point for R_a, and the `OneHotParams`.
 pub trait RaOneHotEncoding {
@@ -315,7 +315,7 @@ pub trait RaOneHotEncoding {
     fn committed_poly(&self, d: usize) -> CommittedPoly;
 
     /// The opening id whose opening point supplies
-    /// `r_cycle` for HammingWeight and Booleanity.
+    /// `r_cycle` for HammingWeight.
     fn r_cycle_source(&self) -> OpeningId;
 
     /// The opening id whose opening gives `(r, ra_claim)`
@@ -329,7 +329,7 @@ pub trait RaOneHotEncoding {
     /// One-hot encoding parameters (chunk size, instruction_d, etc.).
     fn one_hot_params(&self) -> OneHotParams;
 
-    /// The cycle point `r_cycle` for HammingWeight and Booleanity. By default
+    /// The cycle point `r_cycle` for HammingWeight. By default
     /// the opening point of [`Self::r_cycle_source`]; encodings whose cycle
     /// space has no single node opening (packed instances) override it.
     /// `Err` if the accumulator lacks a claim it reads.
@@ -345,15 +345,12 @@ pub trait RaOneHotEncoding {
 // Generic RA one-hot prover / verifier construction
 // ---------------------------------------------------------------------------
 
-/// The transcript challenges of the three RA one-hot sumchecks, drawn in the
-/// fixed order HammingWeight `gamma_powers`, Booleanity `gammas`, Booleanity
-/// `r_address` (RaVirtual draws none). Separating the draw from the (heavy)
+/// The transcript challenges of the RA one-hot sumchecks: HammingWeight's
+/// `gamma_powers` (RaVirtual draws none). Separating the draw from the (heavy)
 /// prover construction lets many instances be built in parallel after their
 /// challenges were drawn sequentially.
 pub struct RaOneHotChallenges<F: JoltField> {
     pub gamma_powers: Vec<F>,
-    pub gammas: Vec<F::Challenge>,
-    pub r_address: Vec<F::Challenge>,
 }
 
 /// Draw the challenges for [`ra_onehot_provers_with`] / [`ra_onehot_verifiers_with`].
@@ -364,18 +361,12 @@ pub fn ra_onehot_challenges<F: JoltField, T: Transcript>(
     let one_hot_params = encoding.one_hot_params();
     let d = one_hot_params.instruction_d;
     let gamma_powers = transcript.challenge_scalar_powers(d);
-    let gammas = transcript.challenge_vector_optimized::<F>(d);
-    let r_address = transcript.challenge_vector_optimized::<F>(one_hot_params.log_k_chunk);
-    RaOneHotChallenges {
-        gamma_powers,
-        gammas,
-        r_address,
-    }
+    RaOneHotChallenges { gamma_powers }
 }
 
-/// The three RA one-hot sumchecks' parameters, resolved from the accumulator
+/// The RA one-hot sumchecks' parameters, resolved from the accumulator
 /// (cheap; lets the heavy prover construction run without it, e.g. in parallel).
-pub type RaOneHotParams<F> = (RaSumcheckParams<F>, BooleanitySumcheckParams<F>);
+pub type RaOneHotParams<F> = (RaSumcheckParams<F>, HammingWeightSumcheckParams<F>);
 
 /// Resolve the RA one-hot parameters from the accumulator and drawn challenges.
 /// `Err` if the accumulator lacks a claim it reads.
@@ -389,24 +380,16 @@ pub fn ra_onehot_params<F: JoltField>(
     let polynomial_types: Vec<CommittedPoly> = (0..d).map(|i| encoding.committed_poly(i)).collect();
 
     let r_cycle = encoding.r_cycle(accumulator)?;
-    // The Hamming-weight check (`Σ_k ra_d(k, r_cycle) = 1`, batched by
-    // `gamma_powers`) is folded into Booleanity as its linear term, so every
-    // chunk is opened once.
-    let hamming: F = challenges.gamma_powers.iter().sum();
-    let booleanity_params = BooleanitySumcheckParams {
-        linear: Some(LinearTerm {
-            gammas: challenges.gamma_powers,
-            weights: vec![F::zero(); d],
-            claim: LinearClaim::constant(hamming),
-        }),
+    // The Hamming-weight check, `Σ_k ra_d(k, r_cycle) = 1` batched by `gamma_powers`. With
+    // it a chunk is one-hot in every cycle given that its coefficients are bits, which the
+    // commitment holds.
+    let hamming_weight_params = HammingWeightSumcheckParams {
         d,
-        log_k_chunk: one_hot_params.log_k_chunk,
-        log_t: r_cycle.len(),
-        r_cycle,
-        r_address: challenges.r_address.into_opening(),
-        gammas: challenges.gammas,
+        num_rounds: one_hot_params.log_k_chunk,
+        gamma_powers: challenges.gamma_powers,
         polynomial_types: polynomial_types.clone(),
-        sumcheck_id: SumcheckId::Booleanity,
+        sumcheck_id: SumcheckId::HammingWeight,
+        r_cycle,
     };
     let (r, ra_claim) = accumulator.get_virtual_polynomial_opening(encoding.ra_source())?;
     let (r_address_ra, r_cycle_ra) = r.split_at(encoding.log_k());
@@ -417,15 +400,15 @@ pub fn ra_onehot_params<F: JoltField>(
         ra_claim,
         polynomial_types,
     };
-    Ok((ra_params, booleanity_params))
+    Ok((ra_params, hamming_weight_params))
 }
 
-/// Build the RA one-hot sumcheck **verifiers** (RaVirtual,
-/// HammingWeight, Booleanity) from an [`RaOneHotEncoding`].
+/// Build the RA one-hot sumcheck **verifiers** (RaVirtual, HammingWeight)
+/// from an [`RaOneHotEncoding`].
 ///
 /// Transcript challenge draw order matches [`ra_onehot_provers`].
 ///
-/// Returns `[RaVirtual, Booleanity (+ Hamming weight)]`.
+/// Returns `[RaVirtual, HammingWeight]`.
 pub fn ra_onehot_verifiers<F: JoltField, T: VerifyingTranscript>(
     encoding: &impl RaOneHotEncoding,
     accumulator: &dyn OpeningAccumulator<F>,
@@ -452,10 +435,10 @@ pub fn ra_onehot_verifiers_with<F: JoltField, T: VerifyingTranscript>(
 pub fn ra_onehot_verifiers_with_params<F: JoltField, T: VerifyingTranscript>(
     params: RaOneHotParams<F>,
 ) -> [Box<dyn DynRelationVerifier<F, T>>; 2] {
-    let (ra_params, booleanity_params) = params;
+    let (ra_params, hamming_weight_params) = params;
     [
         Box::new(ra_params.into_verifier()),
-        Box::new(booleanity_params.into_verifier()),
+        Box::new(hamming_weight_params.into_verifier()),
     ]
 }
 

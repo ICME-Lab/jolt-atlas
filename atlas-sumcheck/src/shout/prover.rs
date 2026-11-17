@@ -5,7 +5,7 @@ use crate::engine::{prover::ProveRounds, SumcheckError};
 use crate::relation::prover::DynRelationWitness;
 use crate::relation::prover::RelationWitness;
 use crate::{
-    booleanity::prover::BooleanitySumcheckProver, opening_proof::OpeningAccumulator,
+    hamming_weight::prover::HammingWeightSumcheckProver, opening_proof::OpeningAccumulator,
     ra_virtual::prover::RaSumcheckProver,
 };
 use atlas_algebra::poly::univariate::UnivariatePoly;
@@ -193,15 +193,14 @@ impl<F: JoltField> ProveRounds<F> for ReadRafProver<F> {
     }
 }
 
-/// Build the RA one-hot sumcheck **provers** (RaVirtual, HammingWeight,
-/// Booleanity) from an [`RaOneHotEncoding`] and pre-computed `lookup_indices`.
+/// Build the RA one-hot sumcheck **provers** (RaVirtual, HammingWeight) from an
+/// [`RaOneHotEncoding`] and pre-computed `lookup_indices`.
 ///
 /// Transcript challenge draw order:
 /// 1. HammingWeight — `gamma_powers`
-/// 2. Booleanity — `gammas`, then `r_address`
-/// 3. RaVirtual — no challenges
+/// 2. RaVirtual — no challenges
 ///
-/// Returns `[RaVirtual, Booleanity (+ Hamming weight)]`.
+/// Returns `[RaVirtual, HammingWeight]`.
 pub fn ra_onehot_provers<F: JoltField, T: ProvingTranscript>(
     encoding: &impl RaOneHotEncoding,
     lookup_indices: &[usize],
@@ -230,19 +229,19 @@ pub fn ra_onehot_provers_from_params<F: JoltField, T: ProvingTranscript>(
     params: RaOneHotParams<F>,
     lookup_indices: &[usize],
 ) -> [Box<dyn DynRelationWitness<F, T>>; 2] {
-    let (ra_params, booleanity_params) = params;
+    let (ra_params, hamming_weight_params) = params;
     let one_hot_params = &ra_params.one_hot_params;
 
-    // --- Compute G and H_indices once (shared across both provers) ---
-    let G = compute_ra_evals(lookup_indices, one_hot_params, &booleanity_params.r_cycle);
+    // --- G for the Hamming-weight check, H_indices for the virtualization ---
+    let G = compute_ra_evals(
+        lookup_indices,
+        one_hot_params,
+        &hamming_weight_params.r_cycle,
+    );
     let H_indices = compute_instruction_h_indices(lookup_indices, one_hot_params);
 
     [
-        Box::new(RaSumcheckProver::gen(ra_params, H_indices.clone())),
-        Box::new(BooleanitySumcheckProver::gen(
-            booleanity_params,
-            G,
-            H_indices,
-        )),
+        Box::new(RaSumcheckProver::gen(ra_params, H_indices)),
+        Box::new(HammingWeightSumcheckProver::gen(hamming_weight_params, G)),
     ]
 }

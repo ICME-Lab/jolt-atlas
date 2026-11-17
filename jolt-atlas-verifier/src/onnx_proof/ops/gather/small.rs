@@ -1,11 +1,9 @@
 use super::*;
 use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_algebra::field::IntoOpening;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, SumcheckId, VerifierOpeningAccumulator};
 use atlas_sumcheck::{
-    booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier},
     hamming_booleanity::{HammingBooleanitySumcheckParams, HammingBooleanitySumcheckVerifier},
     hamming_weight::{HammingWeightSumcheckParams, HammingWeightSumcheckVerifier},
 };
@@ -14,7 +12,8 @@ use atlas_transcript::{Transcript, VerifyingTranscript};
 use common::CommittedPoly;
 
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its `ra`
-/// (Hamming-Booleanity, Booleanity and Hamming weight), proven in the one-hot sumcheck.
+/// (Hamming-Booleanity and Hamming weight), proven in the one-hot sumcheck. That `ra` is
+/// boolean is held by its commitment.
 impl OpPlan for GatherSmall {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,
@@ -73,29 +72,16 @@ fn dictionary_words(
         .ok_or_else(|| unsupported(computation_node, "the gather axis is not a dictionary axis"))
 }
 
-/// The second-stage verifier instances (one-hot checks) of a small gather.
+/// The second-stage verifier instance (Hamming-Booleanity) of a small gather.
 /// `Err` if the accumulator lacks a claim it reads.
-pub fn build_stage2_verifiers<F: JoltField>(
+pub fn build_stage2_verifier<F: JoltField>(
     shape: &GatherSmallShape,
     accumulator: &VerifierOpeningAccumulator<F>,
     transcript: &mut impl VerifyingTranscript,
-) -> Result<
-    (
-        HammingBooleanitySumcheckVerifier<F>,
-        BooleanitySumcheckVerifier<F>,
-    ),
-    ProofVerifyError,
-> {
+) -> Result<HammingBooleanitySumcheckVerifier<F>, ProofVerifyError> {
     let hb_params =
         ra_hamming_bool_params::<F>(&shape.node, shape.num_lookups, accumulator, transcript)?;
-    let bool_params = ra_booleanity_params::<F>(
-        &shape.node,
-        shape.num_words,
-        shape.num_lookups,
-        accumulator,
-        transcript,
-    )?;
-    Ok((hb_params.into_verifier(), bool_params.into_verifier()))
+    Ok(hb_params.into_verifier())
 }
 
 /// Hamming-booleanity parameters of the read addresses.
@@ -120,38 +106,6 @@ pub fn ra_hamming_bool_params<F: JoltField>(
         polynomial_types,
         r_cycle: r_lookup,
         sumcheck_id: SumcheckId::RamHammingBooleanity,
-    })
-}
-
-/// Booleanity parameters of the read addresses.
-/// `Err` if the accumulator lacks a claim it reads.
-pub fn ra_booleanity_params<F: JoltField>(
-    computation_node: &ComputationNode,
-    num_words: usize,
-    num_lookups: usize,
-    opening_accumulator: &dyn OpeningAccumulator<F>,
-    transcript: &mut impl Transcript,
-) -> Result<BooleanitySumcheckParams<F>, ProofVerifyError> {
-    let polynomial_type = CommittedPoly::GatherRa(computation_node.idx);
-
-    let r_lookup = AccOpeningAccessor::new(opening_accumulator, computation_node)
-        .get_nodeio(Target::Input(1))?
-        .0
-        .r;
-    let r_address = transcript
-        .challenge_vector_optimized::<F>(num_words.log_2())
-        .into_opening();
-
-    Ok(BooleanitySumcheckParams {
-        linear: None,
-        d: 1,
-        log_k_chunk: num_words.log_2(),
-        log_t: num_lookups.log_2(),
-        r_cycle: r_lookup,
-        r_address,
-        polynomial_types: vec![polynomial_type],
-        gammas: vec![F::Challenge::from(1)],
-        sumcheck_id: SumcheckId::Booleanity,
     })
 }
 

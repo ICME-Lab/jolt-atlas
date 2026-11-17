@@ -10,6 +10,7 @@
 //! and the prover already use).
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::error::ShapeError;
 
@@ -25,10 +26,11 @@ impl Element for u32 {}
 impl Element for bool {}
 impl Element for f64 {}
 
-/// A dense row-major tensor.
+/// A dense row-major tensor. Its data is shared by its clones and copied by the first write
+/// to one of them: a model's constants appear in every trace without being copied.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tensor<T> {
-    data: Vec<T>,
+    data: Arc<Vec<T>>,
     dims: Vec<usize>,
 }
 
@@ -55,7 +57,7 @@ impl<T: Element> Tensor<T> {
             });
         }
         Ok(Tensor {
-            data,
+            data: Arc::new(data),
             dims: dims.to_vec(),
         })
     }
@@ -63,7 +65,7 @@ impl<T: Element> Tensor<T> {
     /// A tensor of the given shape with every element equal to `value`.
     pub fn filled(value: T, dims: &[usize]) -> Self {
         Tensor {
-            data: vec![value; dims.iter().product()],
+            data: Arc::new(vec![value; dims.iter().product()]),
             dims: dims.to_vec(),
         }
     }
@@ -76,7 +78,7 @@ impl<T: Element> Tensor<T> {
     /// A rank-1 scalar tensor (`dims == [1]`).
     pub fn scalar(value: T) -> Self {
         Tensor {
-            data: vec![value],
+            data: Arc::new(vec![value]),
             dims: vec![1],
         }
     }
@@ -94,12 +96,12 @@ impl<T: Element> Tensor<T> {
     /// Mutable access to the flat data (element values only — the shape
     /// invariant cannot be broken through a slice).
     pub fn data_mut(&mut self) -> &mut [T] {
-        &mut self.data
+        Arc::make_mut(&mut self.data).as_mut_slice()
     }
 
     /// Consume the tensor, returning its flat data.
     pub fn into_data(self) -> Vec<T> {
-        self.data
+        Arc::try_unwrap(self.data).unwrap_or_else(|shared| (*shared).clone())
     }
 
     /// Total number of elements.
@@ -156,7 +158,7 @@ impl<T: Element> Tensor<T> {
     /// Apply `f` to every element.
     pub fn map<U: Element>(&self, f: impl Fn(T) -> U) -> Tensor<U> {
         Tensor {
-            data: self.data.iter().map(|&x| f(x)).collect(),
+            data: Arc::new(self.data.iter().map(|&x| f(x)).collect()),
             dims: self.dims.clone(),
         }
     }
@@ -175,12 +177,13 @@ impl<T: Element> Tensor<T> {
             });
         }
         Ok(Tensor {
-            data: self
-                .data
-                .iter()
-                .zip(&rhs.data)
-                .map(|(&a, &b)| f(a, b))
-                .collect(),
+            data: Arc::new(
+                self.data
+                    .iter()
+                    .zip(rhs.data.iter())
+                    .map(|(&a, &b)| f(a, b))
+                    .collect(),
+            ),
             dims: self.dims.clone(),
         })
     }
@@ -332,7 +335,7 @@ impl<T: Element> Tensor<T> {
             return Ok(self.clone());
         }
         let mut out = Tensor::zeros(target);
-        copy_strided(&self.data, &mut out.data, &self.dims, target);
+        copy_strided(&self.data, out.data_mut(), &self.dims, target);
         Ok(out)
     }
 
@@ -358,7 +361,7 @@ impl<T: Element> Tensor<T> {
             return Ok(self.clone());
         }
         let mut out = Tensor::zeros(target);
-        copy_strided_crop(&self.data, &mut out.data, &self.dims, target);
+        copy_strided_crop(&self.data, out.data_mut(), &self.dims, target);
         Ok(out)
     }
 }

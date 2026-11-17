@@ -13,10 +13,12 @@ pub mod proof;
 pub mod prover;
 pub mod ring_switch;
 pub mod rs;
+pub mod scheme;
 pub mod verifier;
 
 pub use params::Params;
 pub use proof::{Commitment, Proof};
+pub use scheme::BitzScheme;
 
 #[cfg(test)]
 mod tests;

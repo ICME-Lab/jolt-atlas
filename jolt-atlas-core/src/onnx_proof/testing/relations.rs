@@ -33,7 +33,7 @@ use crate::{
     onnx_proof::{
         fused_rebase,
         ops::{
-            div::DivRelation,
+            div::division,
             einsum::{dot::EinsumDotProver, ContractionRelation},
             iff::select,
             mean_of_squares::{MeanOfSquaresReductionProver, MeanOfSquaresRelation},
@@ -391,7 +391,7 @@ fn relation_prover_equiv_engine() {
             Op::Square(_) => check_engine(|| product(&node, OpRelKind::Square), &trace, rng),
             Op::Cube(_) => check_engine(|| product(&node, OpRelKind::Cube), &trace, rng),
             Op::Rsqrt(_) => check_engine(|| RsqrtRelation::new(node.clone()), &trace, rng),
-            Op::Div(_) => check_engine(|| DivRelation::new(node.clone()), &trace, rng),
+            Op::Div(_) => check_engine(|| division(&node), &trace, rng),
             Op::Iff(_) => check_engine(|| select(&node), &trace, rng),
             Op::ScalarConstDiv(_) => {
                 check_engine(|| ConstantDivisionRelation::new(node.clone()), &trace, rng)

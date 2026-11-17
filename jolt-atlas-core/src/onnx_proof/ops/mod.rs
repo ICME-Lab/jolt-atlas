@@ -574,7 +574,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
             let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
             vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
         }
-        OpRelation::Div(relation) => engine(relation, prover),
         OpRelation::Gather(relation) => {
             let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
             vec![Box::new(GatherProver::initialize(
@@ -784,7 +783,6 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie<F>, prover: &mut P
         OpTie::Concat(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Constant(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Input(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::DivQuotient(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Identity(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Neg(relation) => prove_tie(relation, trace, accumulator, transcript),
         OpTie::Reshape(relation) => prove_tie(relation, trace, accumulator, transcript),
@@ -824,7 +822,8 @@ pub fn op_rel_witnesses<F: JoltField>(
             mul::product_witnesses(node, relation.kind, trace)
         }
         OpRelKind::Iff => iff::select_witnesses(node, trace),
-        OpRelKind::AddAccumulation | OpRelKind::SubAccumulation => {
+        OpRelKind::Div => div::division_witnesses(node, trace),
+        OpRelKind::AddAccumulation | OpRelKind::SubAccumulation | OpRelKind::DivQuotient => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
     }
@@ -837,14 +836,20 @@ pub fn op_rel_tie_claims<F: JoltField>(
     relation: &OpRel<F>,
     trace: &Trace,
     setup: &RelationSetup<F>,
-    _accumulator: &dyn OpeningAccumulator<F>,
+    accumulator: &dyn OpeningAccumulator<F>,
 ) -> Vec<F> {
     let node = &relation.node;
     match relation.kind {
         OpRelKind::AddAccumulation | OpRelKind::SubAccumulation => {
             add::accumulation_claims(node, trace, &setup.incoming_point)
         }
-        OpRelKind::And | OpRelKind::Mul | OpRelKind::Square | OpRelKind::Cube | OpRelKind::Iff => {
+        OpRelKind::DivQuotient => div::division_quotient_claims(node, accumulator),
+        OpRelKind::And
+        | OpRelKind::Mul
+        | OpRelKind::Square
+        | OpRelKind::Cube
+        | OpRelKind::Iff
+        | OpRelKind::Div => {
             panic!("{:?} is proven by a sumcheck, not a tie", relation.kind)
         }
     }

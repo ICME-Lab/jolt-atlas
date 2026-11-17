@@ -31,7 +31,6 @@ use crate::onnx_proof::{
         concat::SubcubeTilingRelation,
         constant::PublicRelation,
         cos::CosRaEncoding,
-        div::{DivQuotientRelation, DivRelation},
         einsum::ContractionRelation,
         erf::ErfTableMarker,
         gather::{self, small::GatherSmallShape, GatherRelation},
@@ -158,8 +157,6 @@ pub enum OpRelation<F: JoltField> {
     ConstantDivision(ConstantDivisionRelation),
     /// `Einsum`: the contraction, its input claim the fused rescale's `q·2^S + rem`.
     Contraction(ContractionRelation),
-    /// `Div`: the floor division identity, at a point drawn from the transcript.
-    Div(DivRelation),
     /// `GatherSmall` / `GatherLarge`: the dictionary read; the index operand's opening is
     /// appended at the lookup variables of the setup's point.
     Gather(GatherRelation),
@@ -244,7 +241,6 @@ impl<F: JoltField> OpRelation<F> {
             Self::Op(relation) => one(relation, accumulator, transcript),
             Self::ConstantDivision(relation) => one(relation, accumulator, transcript),
             Self::Contraction(relation) => one(relation, accumulator, transcript),
-            Self::Div(relation) => one(relation, accumulator, transcript),
             Self::Gather(relation) => Ok(boxed(gather::gather_verifier(
                 relation,
                 accumulator,
@@ -410,8 +406,6 @@ pub enum OpTie<F: JoltField> {
     Constant(PublicRelation<Constant>),
     /// `Input`: the output is the public input.
     Input(PublicRelation<Input>),
-    /// `Div`: the committed quotient is the node's reduced output.
-    DivQuotient(DivQuotientRelation),
     /// `Identity`: the operand is the output.
     Identity(SignedCopyRelation<Identity>),
     /// `Neg`: the operand is the output, negated.
@@ -442,7 +436,6 @@ impl<F: JoltField> OpTie<F> {
             Self::Concat(relation) => verify_tie(relation, accumulator, transcript),
             Self::Constant(relation) => verify_tie(relation, accumulator, transcript),
             Self::Input(relation) => verify_tie(relation, accumulator, transcript),
-            Self::DivQuotient(relation) => verify_tie(relation, accumulator, transcript),
             Self::Identity(relation) => verify_tie(relation, accumulator, transcript),
             Self::Neg(relation) => verify_tie(relation, accumulator, transcript),
             Self::Reshape(relation) => verify_tie(relation, accumulator, transcript),

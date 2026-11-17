@@ -1,9 +1,10 @@
 //! The binary field `F_{2^128} = F_2[x] / (x^128 + x^7 + x^2 + x + 1)`.
 //!
 //! An element is its coefficient vector: bit `i` of the `u128` is the coefficient of `x^i`.
-//! Addition is XOR. Multiplication is a carry-less 128 × 128 product followed by reduction with
-//! `x^128 = x^7 + x^2 + x + 1`; the 64 × 64 carry-less products use `PMULL` on aarch64 and
-//! `PCLMULQDQ` on x86-64 when the CPU has them, and a bitwise loop otherwise.
+//! Addition is XOR. Multiplication is a carry-less 128 × 128 product, from three 64 × 64
+//! products, followed by reduction with `x^128 = x^7 + x^2 + x + 1`; the 64 × 64 products use
+//! `PMULL` on aarch64 and `PCLMULQDQ` on x86-64 when the CPU has them, and a bitwise loop
+//! otherwise.
 //!
 //! [`GENERATOR`] generates the multiplicative group, of order `2^128 − 1`: BitZ proves integer
 //! claims in its exponent.
@@ -14,6 +15,7 @@ use std::ops::{Add, AddAssign, Mul, MulAssign};
 
 /// An element of `F_{2^128}`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct Gf128(pub u128);
 
 /// A generator of the multiplicative group `F_{2^128}^*`.
@@ -39,6 +41,22 @@ pub const GROUP_ORDER_FACTORS: [u128; 9] = [
 impl Gf128 {
     pub const ZERO: Self = Self(0);
     pub const ONE: Self = Self(1);
+
+    /// A vector of `len` zeros. The memory comes zeroed from the allocator, so nothing is
+    /// written until an element is, on whichever thread writes it.
+    pub fn zeros(len: usize) -> Vec<Self> {
+        let mut words = std::mem::ManuallyDrop::new(vec![0u128; len]);
+        // SAFETY: `Gf128` is `repr(transparent)` over `u128`, so the two vectors have the same
+        // element layout, and the pointer, length and capacity are those of a live `Vec` that
+        // is not dropped.
+        unsafe {
+            Vec::from_raw_parts(
+                words.as_mut_ptr().cast::<Self>(),
+                words.len(),
+                words.capacity(),
+            )
+        }
+    }
 
     #[inline]
     pub fn is_zero(self) -> bool {
@@ -75,7 +93,7 @@ impl Gf128 {
 
     /// The product computed without CPU carry-less multiply instructions.
     pub fn mul_portable(self, rhs: Self) -> Self {
-        let (hi, lo) = clmul128(self.0, rhs.0, clmul64_portable);
+        let (hi, lo) = mul_wide_portable(self.0, rhs.0);
         Self(reduce(hi, lo))
     }
 }
@@ -101,8 +119,7 @@ impl Mul for Gf128 {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        let (hi, lo) = clmul128(self.0, rhs.0, clmul64);
-        Self(reduce(hi, lo))
+        Self(mul(self.0, rhs.0))
     }
 }
 
@@ -127,16 +144,12 @@ impl Canonical for Gf128 {
     }
 }
 
-/// The 256-bit carry-less product of two 128-bit polynomials, as `(high, low)` halves, from four
-/// 64 × 64 products.
+/// Combines the three 64 × 64 products of Karatsuba's method, `a0·b0`, `a1·b1` and
+/// `(a0 + a1)·(b0 + b1)`, into the 256-bit product as `(high, low)` halves.
 #[inline(always)]
-fn clmul128(a: u128, b: u128, clmul: impl Fn(u64, u64) -> u128) -> (u128, u128) {
-    let (a0, a1) = (a as u64, (a >> 64) as u64);
-    let (b0, b1) = (b as u64, (b >> 64) as u64);
-    let lo = clmul(a0, b0);
-    let hi = clmul(a1, b1);
-    let mid = clmul(a0, b1) ^ clmul(a1, b0);
-    (hi ^ (mid >> 64), lo ^ (mid << 64))
+fn karatsuba(low: u128, high: u128, cross: u128) -> (u128, u128) {
+    let mid = cross ^ low ^ high;
+    (high ^ (mid >> 64), low ^ (mid << 64))
 }
 
 /// Reduces a 256-bit polynomial `high · x^128 + low` modulo `x^128 + x^7 + x^2 + x + 1`.
@@ -162,43 +175,112 @@ fn clmul64_portable(a: u64, b: u64) -> u128 {
     acc
 }
 
+fn mul_wide_portable(a: u128, b: u128) -> (u128, u128) {
+    let (a0, a1) = (a as u64, (a >> 64) as u64);
+    let (b0, b1) = (b as u64, (b >> 64) as u64);
+    karatsuba(
+        clmul64_portable(a0, b0),
+        clmul64_portable(a1, b1),
+        clmul64_portable(a0 ^ a1, b0 ^ b1),
+    )
+}
+
+/// The unreduced product, in one call whether or not the build enables the CPU's carry-less multiply:
+/// with the feature enabled at compile time the accelerated body is inlined, and otherwise
+/// it is reached through one runtime-detected call for the whole multiplication.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn clmul64(a: u64, b: u64) -> u128 {
+fn mul_wide(a: u128, b: u128) -> (u128, u128) {
+    #[inline]
     #[target_feature(enable = "neon,aes")]
-    unsafe fn pmull(a: u64, b: u64) -> u128 {
-        core::arch::aarch64::vmull_p64(a, b)
+    unsafe fn accelerated(a: u128, b: u128) -> (u128, u128) {
+        use core::arch::aarch64::vmull_p64;
+        let (a0, a1) = (a as u64, (a >> 64) as u64);
+        let (b0, b1) = (b as u64, (b >> 64) as u64);
+        karatsuba(
+            vmull_p64(a0, b0),
+            vmull_p64(a1, b1),
+            vmull_p64(a0 ^ a1, b0 ^ b1),
+        )
     }
     if cfg!(target_feature = "aes") || std::arch::is_aarch64_feature_detected!("aes") {
         // SAFETY: the `aes` feature, which provides `PMULL`, is present on this CPU.
-        unsafe { pmull(a, b) }
+        unsafe { accelerated(a, b) }
     } else {
-        clmul64_portable(a, b)
+        mul_wide_portable(a, b)
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-fn clmul64(a: u64, b: u64) -> u128 {
+fn mul_wide(a: u128, b: u128) -> (u128, u128) {
+    #[inline]
     #[target_feature(enable = "pclmulqdq,sse2")]
-    unsafe fn pclmul(a: u64, b: u64) -> u128 {
-        use core::arch::x86_64::{_mm_clmulepi64_si128, _mm_set_epi64x};
-        let product =
-            _mm_clmulepi64_si128(_mm_set_epi64x(0, a as i64), _mm_set_epi64x(0, b as i64), 0);
-        core::mem::transmute::<_, u128>(product)
+    unsafe fn accelerated(a: u128, b: u128) -> (u128, u128) {
+        use core::arch::x86_64::{__m128i, _mm_clmulepi64_si128, _mm_set_epi64x};
+        let clmul = |x: u64, y: u64| -> u128 {
+            let product: __m128i =
+                _mm_clmulepi64_si128(_mm_set_epi64x(0, x as i64), _mm_set_epi64x(0, y as i64), 0);
+            core::mem::transmute::<__m128i, u128>(product)
+        };
+        let (a0, a1) = (a as u64, (a >> 64) as u64);
+        let (b0, b1) = (b as u64, (b >> 64) as u64);
+        karatsuba(clmul(a0, b0), clmul(a1, b1), clmul(a0 ^ a1, b0 ^ b1))
     }
     if cfg!(target_feature = "pclmulqdq") || std::arch::is_x86_feature_detected!("pclmulqdq") {
         // SAFETY: `PCLMULQDQ` is present on this CPU; SSE2 is part of x86-64.
-        unsafe { pclmul(a, b) }
+        unsafe { accelerated(a, b) }
     } else {
-        clmul64_portable(a, b)
+        mul_wide_portable(a, b)
     }
 }
 
 #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 #[inline(always)]
-fn clmul64(a: u64, b: u64) -> u128 {
-    clmul64_portable(a, b)
+fn mul_wide(a: u128, b: u128) -> (u128, u128) {
+    mul_wide_portable(a, b)
+}
+
+/// The product of two elements.
+#[inline(always)]
+fn mul(a: u128, b: u128) -> u128 {
+    let (hi, lo) = mul_wide(a, b);
+    reduce(hi, lo)
+}
+
+/// A sum of products, kept unreduced: reduction is `F_2`-linear, so the 256-bit carry-less
+/// products are added as they are and reduced once.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WideSum {
+    hi: u128,
+    lo: u128,
+}
+
+impl WideSum {
+    pub const ZERO: Self = Self { hi: 0, lo: 0 };
+
+    /// Adds `a · b`.
+    #[inline(always)]
+    pub fn add_product(&mut self, a: Gf128, b: Gf128) {
+        let (hi, lo) = mul_wide(a.0, b.0);
+        self.hi ^= hi;
+        self.lo ^= lo;
+    }
+
+    /// The sum of two sums.
+    #[inline]
+    pub fn plus(self, other: Self) -> Self {
+        Self {
+            hi: self.hi ^ other.hi,
+            lo: self.lo ^ other.lo,
+        }
+    }
+
+    /// The sum as a field element.
+    #[inline]
+    pub fn reduce(self) -> Gf128 {
+        Gf128(reduce(self.hi, self.lo))
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +374,31 @@ mod tests {
         assert!(has_full_order(GENERATOR));
         // The pinned generator is the smallest such element.
         assert!((2..GENERATOR_BITS).all(|g| !has_full_order(Gf128(g))));
+    }
+
+    #[test]
+    fn wide_sums_reduce_to_the_sum_of_products() {
+        let values = samples();
+        let mut wide = WideSum::ZERO;
+        let mut expected = Gf128::ZERO;
+        for pair in values.chunks_exact(2) {
+            wide.add_product(pair[0], pair[1]);
+            expected += mul_reference(pair[0], pair[1]);
+        }
+        assert_eq!(wide.reduce(), expected);
+        assert_eq!(wide.plus(wide).reduce(), Gf128::ZERO);
+        assert_eq!(WideSum::ZERO.reduce(), Gf128::ZERO);
+    }
+
+    #[test]
+    fn zero_vectors_are_zero_and_writable() {
+        let mut zeros = Gf128::zeros(1000);
+        assert_eq!(zeros.len(), 1000);
+        assert!(zeros.iter().all(|z| z.is_zero()));
+        zeros[999] = Gf128::ONE;
+        zeros.push(Gf128(7));
+        assert_eq!((zeros[999], zeros[1000]), (Gf128::ONE, Gf128(7)));
+        assert!(Gf128::zeros(0).is_empty());
     }
 
     #[test]

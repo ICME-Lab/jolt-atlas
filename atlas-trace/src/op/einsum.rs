@@ -192,6 +192,57 @@ fn permuted<'a>(tensor: &'a Tensor<i32>, order: &[usize]) -> Cow<'a, [i32]> {
     Cow::Owned(out)
 }
 
+/// The contraction when the second operand is laid out summed letters first and the output is
+/// the first operand's kept letters followed by the second's (`mk,kn->mn`): an output row is
+/// the sum of the second operand's rows scaled by the first operand's entries, read in place.
+/// `None` if the equation is not of that form.
+fn scaled_rows_acc_i64(
+    eq: &EinsumEq,
+    inputs: &[&Tensor<i32>],
+    sum_letters: &[u8],
+    sum_total: usize,
+) -> Option<Vec<i64>> {
+    let kept = |letters: &[u8]| -> Vec<u8> {
+        letters
+            .iter()
+            .copied()
+            .filter(|c| !sum_letters.contains(c))
+            .collect()
+    };
+    let (kept_a, kept_b) = (kept(&eq.inputs[0]), kept(&eq.inputs[1]));
+    let second_in_place = eq.inputs[1].iter().eq(sum_letters.iter().chain(&kept_b));
+    let output_is_rows = eq.output.iter().eq(kept_a.iter().chain(&kept_b));
+    if kept_b.is_empty() || !second_in_place || !output_is_rows {
+        return None;
+    }
+    let position = |c: &u8| eq.inputs[0].iter().position(|l| l == c).expect("carried");
+    let order: Vec<usize> = kept_a.iter().chain(sum_letters).map(position).collect();
+    let a = permuted(inputs[0], &order);
+    let b = inputs[1].data();
+    let run = b.len() / sum_total;
+    let fill = |(row, out): (usize, &mut [i64])| {
+        let scales = &a[row * sum_total..(row + 1) * sum_total];
+        for (&scale, values) in scales.iter().zip(b.chunks_exact(run)) {
+            if scale == 0 {
+                continue;
+            }
+            let scale = scale as i64;
+            for (o, &value) in out.iter_mut().zip(values) {
+                *o += scale * value as i64;
+            }
+        }
+    };
+    let mut out = vec![0i64; a.len() / sum_total * run];
+    #[cfg(feature = "rayon")]
+    {
+        use rayon::prelude::*;
+        out.par_chunks_mut(run).enumerate().for_each(fill);
+    }
+    #[cfg(not(feature = "rayon"))]
+    out.chunks_mut(run).enumerate().for_each(fill);
+    Some(out)
+}
+
 /// The contraction of two operands that both carry every summed letter: each operand is
 /// laid out with its summed letters last, so an output entry is a dot product of two
 /// contiguous runs. `None` if the equation is not of that form.
@@ -235,6 +286,9 @@ fn pairwise_acc_i64(
             .collect();
         (order, terms)
     };
+    if let Some(data) = scaled_rows_acc_i64(eq, inputs, &sum_letters, sum_total) {
+        return Some(data);
+    }
     let (order_a, terms_a) = layout(&eq.inputs[0], inputs[0]);
     let (order_b, terms_b) = layout(&eq.inputs[1], inputs[1]);
     let a = permuted(inputs[0], &order_a);
@@ -475,6 +529,27 @@ mod tests {
                     a.data()[(ia * dk + k) * dm + m] as i64
                         * b.data()[(ib * dk + k) * dn + n] as i64
                 })
+                .sum();
+            assert_eq!(got, want, "entry {flat}");
+        }
+    }
+
+    /// A matrix product with zero entries in both operands, against the sum written out.
+    #[test]
+    fn matmul_with_zeros_matches_the_sum() {
+        let eq: EinsumEq = "mk,kn->mn".parse().unwrap();
+        let (dm, dk, dn) = (3usize, 5, 4);
+        let value = |seed: usize| (seed * 29 % 7) as i32 - 3;
+        let a: Vec<i32> = (0..dm * dk).map(value).collect();
+        let b: Vec<i32> = (0..dk * dn).map(|i| value(i + 3)).collect();
+        assert!(a.contains(&0) && b.contains(&0));
+        let (a, b) = (t(&a, &[dm, dk]), t(&b, &[dk, dn]));
+        let acc = einsum_acc_i64(&eq, &[&a, &b]).unwrap();
+        assert_eq!(acc.dims(), &[dm, dn]);
+        for (flat, &got) in acc.data().iter().enumerate() {
+            let (m, n) = (flat / dn, flat % dn);
+            let want: i64 = (0..dk)
+                .map(|k| a.data()[m * dk + k] as i64 * b.data()[k * dn + n] as i64)
                 .sum();
             assert_eq!(got, want, "entry {flat}");
         }

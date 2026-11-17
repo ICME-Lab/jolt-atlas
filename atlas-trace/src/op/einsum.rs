@@ -1,5 +1,6 @@
 //! The fused einsum contraction and its parsed equation type.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -155,6 +156,119 @@ impl<'de> Deserialize<'de> for EinsumEq {
     }
 }
 
+/// `tensor`'s data with its axes reordered: axis `order[i]` of the tensor is axis `i` of the
+/// result, row-major. Borrowed when the order is the tensor's own.
+fn permuted<'a>(tensor: &'a Tensor<i32>, order: &[usize]) -> Cow<'a, [i32]> {
+    let data = tensor.data();
+    if order.iter().copied().eq(0..order.len()) {
+        return Cow::Borrowed(data);
+    }
+    let source_strides = strides(tensor.dims());
+    let dims: Vec<usize> = order.iter().map(|&axis| tensor.dims()[axis]).collect();
+    let steps: Vec<usize> = order.iter().map(|&axis| source_strides[axis]).collect();
+    let (&run, outer_dims) = dims.split_last().expect("a reordered tensor has axes");
+    let (&run_step, outer_steps) = steps.split_last().expect("a reordered tensor has axes");
+    let outer_strides = strides(outer_dims);
+    // One run of the last axis: a strided read of the source.
+    let fill = |(index, out): (usize, &mut [i32])| {
+        let base: usize = outer_strides
+            .iter()
+            .zip(outer_dims)
+            .zip(outer_steps)
+            .map(|((&stride, &dim), &step)| (index / stride) % dim * step)
+            .sum();
+        for (j, value) in out.iter_mut().enumerate() {
+            *value = data[base + j * run_step];
+        }
+    };
+    let mut out = vec![0i32; data.len()];
+    #[cfg(feature = "rayon")]
+    {
+        use rayon::prelude::*;
+        out.par_chunks_mut(run.max(1)).enumerate().for_each(fill);
+    }
+    #[cfg(not(feature = "rayon"))]
+    out.chunks_mut(run.max(1)).enumerate().for_each(fill);
+    Cow::Owned(out)
+}
+
+/// The contraction of two operands that both carry every summed letter: each operand is
+/// laid out with its summed letters last, so an output entry is a dot product of two
+/// contiguous runs. `None` if the equation is not of that form.
+fn pairwise_acc_i64(
+    eq: &EinsumEq,
+    inputs: &[&Tensor<i32>],
+    sizes: &HashMap<u8, usize>,
+    out_shape: &[usize],
+) -> Option<Vec<i64>> {
+    let sum_letters = eq.contracted();
+    let carries_sums = |letters: &Vec<u8>| sum_letters.iter().all(|c| letters.contains(c));
+    if inputs.len() != 2 || sum_letters.is_empty() || !eq.inputs.iter().all(carries_sums) {
+        return None;
+    }
+    let sum_total: usize = sum_letters.iter().map(|c| sizes[c]).product();
+    let out_strides = strides(out_shape);
+
+    // Each operand's data with its summed letters last, and for each of its output letters
+    // the output axis's stride and size and the operand's step along it.
+    type Kept = Vec<(usize, usize, usize)>;
+    let layout = |letters: &Vec<u8>, tensor: &'_ Tensor<i32>| -> (Vec<usize>, Kept) {
+        let position = |c: &u8| letters.iter().position(|l| l == c).expect("carried");
+        let kept: Vec<u8> = letters
+            .iter()
+            .copied()
+            .filter(|c| !sum_letters.contains(c))
+            .collect();
+        let order: Vec<usize> = kept.iter().chain(&sum_letters).map(position).collect();
+        let kept_dims: Vec<usize> = kept.iter().map(|c| tensor.dims()[position(c)]).collect();
+        let terms = kept
+            .iter()
+            .zip(strides(&kept_dims))
+            .map(|(c, stride)| {
+                let axis = eq
+                    .output
+                    .iter()
+                    .position(|o| o == c)
+                    .expect("an output letter");
+                (out_strides[axis], out_shape[axis], stride * sum_total)
+            })
+            .collect();
+        (order, terms)
+    };
+    let (order_a, terms_a) = layout(&eq.inputs[0], inputs[0]);
+    let (order_b, terms_b) = layout(&eq.inputs[1], inputs[1]);
+    let a = permuted(inputs[0], &order_a);
+    let b = permuted(inputs[1], &order_b);
+
+    let base = |terms: &Kept, out_flat: usize| -> usize {
+        terms
+            .iter()
+            .map(|&(stride, dim, step)| (out_flat / stride) % dim * step)
+            .sum()
+    };
+    let eval_one = |out_flat: usize| -> i64 {
+        let (start_a, start_b) = (base(&terms_a, out_flat), base(&terms_b, out_flat));
+        a[start_a..start_a + sum_total]
+            .iter()
+            .zip(&b[start_b..start_b + sum_total])
+            .map(|(&x, &y)| x as i64 * y as i64)
+            .sum()
+    };
+    let out_total: usize = out_shape.iter().product();
+    #[cfg(feature = "rayon")]
+    let data: Vec<i64> = {
+        use rayon::prelude::*;
+        (0..out_total)
+            .into_par_iter()
+            .with_min_len(64)
+            .map(eval_one)
+            .collect()
+    };
+    #[cfg(not(feature = "rayon"))]
+    let data: Vec<i64> = (0..out_total).map(eval_one).collect();
+    Some(data)
+}
+
 /// Raw i64 contraction `acc[out] = Σ_sum Π_i operand_i[...]`.
 fn einsum_acc_i64(eq: &EinsumEq, inputs: &[&Tensor<i32>]) -> Result<Tensor<i64>, ShapeError> {
     let dims: Vec<&[usize]> = inputs.iter().map(|t| t.dims()).collect();
@@ -163,6 +277,9 @@ fn einsum_acc_i64(eq: &EinsumEq, inputs: &[&Tensor<i32>]) -> Result<Tensor<i64>,
     let mut out_shape: Vec<usize> = eq.output.iter().map(|c| sizes[c]).collect();
     if out_shape.is_empty() {
         out_shape.push(1);
+    }
+    if let Some(data) = pairwise_acc_i64(eq, inputs, &sizes, &out_shape) {
+        return Tensor::new(data, &out_shape);
     }
     let sum_letters = eq.contracted();
     let sum_sizes: Vec<usize> = sum_letters.iter().map(|c| sizes[c]).collect();
@@ -336,6 +453,31 @@ mod tests {
             panic!()
         };
         assert!(f.remainder.data().iter().all(|&r| (0..16).contains(&r)));
+    }
+
+    /// A batched contraction whose summed letter is not last in either operand, against the
+    /// sum written out.
+    #[test]
+    fn reordered_contraction_matches_the_sum() {
+        let eq: EinsumEq = "akm,bkn->abmn".parse().unwrap();
+        let (da, db, dk, dm, dn) = (2usize, 3, 4, 5, 2);
+        let value = |seed: usize| (seed * 37 % 23) as i32 - 11;
+        let a: Vec<i32> = (0..da * dk * dm).map(value).collect();
+        let b: Vec<i32> = (0..db * dk * dn).map(|i| value(i + 7)).collect();
+        let (a, b) = (t(&a, &[da, dk, dm]), t(&b, &[db, dk, dn]));
+        let acc = einsum_acc_i64(&eq, &[&a, &b]).unwrap();
+        assert_eq!(acc.dims(), &[da, db, dm, dn]);
+        for (flat, &got) in acc.data().iter().enumerate() {
+            let (n, m) = (flat % dn, flat / dn % dm);
+            let (ib, ia) = (flat / (dn * dm) % db, flat / (dn * dm * db));
+            let want: i64 = (0..dk)
+                .map(|k| {
+                    a.data()[(ia * dk + k) * dm + m] as i64
+                        * b.data()[(ib * dk + k) * dn + n] as i64
+                })
+                .sum();
+            assert_eq!(got, want, "entry {flat}");
+        }
     }
 
     #[test]

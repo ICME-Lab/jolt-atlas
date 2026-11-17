@@ -1,7 +1,8 @@
 //! Verifier state and internal verification helpers for [`ONNXProof`].
 //!
 //! The public entry point is [`verify`](super::verify) (defined in the parent module).
-//! This file houses the [`Verifier`] struct and the helper functions that `verify`
+//! This file houses the [`Verifier`] struct, its interpreter [`Verifier::run`] (the one loop
+//! over the steps of the model's [`Schedule`]) and the helper functions that `verify`
 //! delegates to.
 
 use super::{

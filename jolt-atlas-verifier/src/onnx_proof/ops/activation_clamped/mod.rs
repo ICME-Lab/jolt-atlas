@@ -8,8 +8,8 @@
 //!    `ActivationClampTable[raw_input]` (natively symmetric clamp lookup), which soundly
 //!    ties `clamped` back to the real input rather than just asserting it.
 //!
-//! Both stages are deferred to the post-loop batches ([`clamped_activation_plan`]): the two
-//! reads join the lookup batch, their one-hot (`ra`/`hw`/`bool`) checks the one-hot batch.
+//! Both stages are proven in the model-wide sumchecks ([`clamped_activation_plan`]): the two
+//! reads join the lookups sumcheck, their one-hot (`ra`/`hw`/`bool`) checks the one-hot sumcheck.
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::lookup::{
@@ -66,8 +66,8 @@ pub fn clamp_read(node: &ComputationNode, table: PrefixSuffixTable) -> TableRead
     )
 }
 
-/// The plan of a clamped activation: the evaluation reduction, then the two stages queued for
-/// the post-loop lookup batch and their one-hot checks for the one-hot batch. `Err` if the
+/// The plan of a clamped activation: the evaluation reduction, then the two stages, proven in
+/// the lookups sumcheck, and their one-hot checks, proven in the one-hot sumcheck. `Err` if the
 /// node's operator reads no small table.
 pub fn clamped_activation_plan<F: JoltField>(
     node: &ComputationNode,

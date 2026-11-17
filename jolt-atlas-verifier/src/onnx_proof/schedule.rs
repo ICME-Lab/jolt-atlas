@@ -103,6 +103,48 @@ impl<F: JoltField> std::fmt::Debug for Schedule<F> {
     }
 }
 
+/// One line per step: where it runs (`n<node>`, or `model` for a sumcheck over relations of
+/// several nodes or of none), its kind (`Sumcheck` is one relation's sumcheck, `Batch` a
+/// batched one) and what it checks: an op relation by its [`OpRelKind`](super::relation::OpRelKind), any other relation or
+/// an opening by name, a member of a `model` step with its node. For people and for the
+/// schedule pins; nothing parses it.
+impl<F: JoltField> std::fmt::Display for Schedule<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let relation = |id: &RelId| self.relations.get(id.0);
+        let name = |id: &RelId| relation(id).map_or_else(|| "?".to_string(), OpRelation::name);
+        let node = |id: &RelId| relation(id).and_then(OpRelation::node);
+        let at = |node: Option<usize>| node.map_or_else(|| "n?".to_string(), |n| format!("n{n}"));
+        for step in &self.steps {
+            match step {
+                Step::Reduce { node } => writeln!(f, "n{node} Reduce")?,
+                Step::Open(open) => writeln!(f, "n{} Open [{}]", open.node(), open.name())?,
+                Step::Setup(id) => writeln!(f, "{} Setup [{}]", at(node(id)), name(id))?,
+                Step::Tie(id) => writeln!(f, "{} Tie [{}]", at(node(id)), name(id))?,
+                Step::Sumcheck {
+                    members, batched, ..
+                } => {
+                    let kind = if *batched { "Batch" } else { "Sumcheck" };
+                    let shared = members.first().and_then(node);
+                    if shared.is_some() && members.iter().all(|id| node(id) == shared) {
+                        let names: Vec<String> = members.iter().map(name).collect();
+                        writeln!(f, "{} {kind} [{}]", at(shared), names.join(", "))?;
+                    } else {
+                        let names: Vec<String> = members
+                            .iter()
+                            .map(|id| match node(id) {
+                                Some(node) => format!("n{node}:{}", name(id)),
+                                None => name(id),
+                            })
+                            .collect();
+                        writeln!(f, "model {kind} [{}]", names.join(", "))?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<F: JoltField> Schedule<F> {
     /// The schedule of `model`. `Err` if a node does not have the shape its operator proves.
     pub fn compile(model: &Model) -> Result<Self, ProofVerifyError> {
@@ -132,6 +174,14 @@ impl<F: JoltField> Schedule<F> {
             polys.extend(relation.committed());
         }
         polys.into_iter().collect()
+    }
+
+    /// The sumcheck proofs a proof of this schedule carries, in step order.
+    pub fn proof_ids(&self) -> impl Iterator<Item = &ProofId> {
+        self.steps.iter().filter_map(|step| match step {
+            Step::Sumcheck { proof, .. } => Some(proof),
+            _ => None,
+        })
     }
 
     /// The steps, in transcript order.
@@ -400,6 +450,43 @@ pub enum OpRelation<F: JoltField> {
 }
 
 impl<F: JoltField> OpRelation<F> {
+    /// The node the relation belongs to; `None` for a range bucket's, which spans nodes.
+    pub fn node(&self) -> Option<usize> {
+        match self {
+            Self::Op(relation) => Some(relation.node.idx),
+            Self::TableRead(read) => Some(read.node.idx),
+            Self::OneHot(encoding) => Some(encoding.node),
+            Self::GatherSmallOneHot(shape) | Self::GatherSmallHammingWeight(shape) => {
+                Some(shape.node.idx)
+            }
+            Self::SoftmaxRead(shape) => Some(shape.idx()),
+            Self::RemainderBucketValue(_) | Self::RemainderBucketDigits(_) => None,
+        }
+    }
+
+    /// The relation's name in a rendered schedule: an op relation's kind, a table read's
+    /// table, a one-hot check's read-address polynomial, a bucket relation's bucket.
+    pub fn name(&self) -> String {
+        match self {
+            Self::Op(relation) => format!("{:?}", relation.kind),
+            Self::TableRead(read) => format!("TableRead({:?})", read.table),
+            Self::OneHot(encoding) => {
+                // The read-address polynomial checked, without its node.
+                let address = match encoding.ra_source.polynomial {
+                    PolynomialId::Virtual(poly) => format!("{poly:?}"),
+                    PolynomialId::Committed(poly) => format!("{poly:?}"),
+                };
+                let address = address.split('(').next().unwrap_or_default();
+                format!("OneHot({address})")
+            }
+            Self::GatherSmallOneHot(_) => "GatherSmallOneHot".to_string(),
+            Self::GatherSmallHammingWeight(_) => "GatherSmallHammingWeight".to_string(),
+            Self::SoftmaxRead(_) => "SoftmaxRead".to_string(),
+            Self::RemainderBucketValue(bucket) => format!("BucketValue({})", bucket.idx),
+            Self::RemainderBucketDigits(bucket) => format!("BucketDigits({})", bucket.idx),
+        }
+    }
+
     /// The committed polynomials the relation opens: an op relation's committed produced and
     /// setup openings, a one-hot check's address chunks, a small gather's one-hot `ra`, a
     /// digit range check's digit columns.
@@ -485,6 +572,29 @@ pub enum OpOpen {
 }
 
 impl OpOpen {
+    /// The node whose advice is opened.
+    pub fn node(&self) -> usize {
+        match self {
+            Self::RescaleRemainder(node)
+            | Self::TrigPeriodQuotient(node)
+            | Self::TrigDownscaled(node)
+            | Self::SmoothReluRelu(node) => node.idx,
+            Self::Softmax(SoftmaxOpen::Gaps(shape) | SoftmaxOpen::Addresses(shape)) => shape.idx(),
+        }
+    }
+
+    /// The opening's name in a rendered schedule.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::RescaleRemainder(_) => "RescaleRemainder",
+            Self::TrigPeriodQuotient(_) => "TrigPeriodQuotient",
+            Self::TrigDownscaled(_) => "TrigDownscaled",
+            Self::SmoothReluRelu(_) => "SmoothReluRelu",
+            Self::Softmax(SoftmaxOpen::Gaps(_)) => "SoftmaxGaps",
+            Self::Softmax(SoftmaxOpen::Addresses(_)) => "SoftmaxAddresses",
+        }
+    }
+
     /// The committed polynomials the step opens.
     pub fn committed(&self) -> Vec<CommittedPoly> {
         match self {

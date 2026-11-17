@@ -17,7 +17,7 @@ use atlas_transcript::Transcript;
 use common::CommittedPoly;
 
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its `ra`
-/// (Hamming-Booleanity, Booleanity and Hamming weight), queued for the post-loop one-hot batch.
+/// (Hamming-Booleanity, Booleanity and Hamming weight), proven in the one-hot sumcheck.
 impl OpPlan for GatherSmall {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,

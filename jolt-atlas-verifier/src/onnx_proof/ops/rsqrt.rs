@@ -32,7 +32,7 @@ pub fn rsqrt_dividend(node: &ComputationNode) -> i64 {
 
 /// The plan: the fused relation's sumcheck (its point drawn from the transcript), then the
 /// evaluation reduction. The two remainder bounds are proven in the packed range buckets
-/// after the node loop (`range_bucket::node_remainders`).
+/// after the nodes' steps (`range_bucket::node_remainders`).
 impl OpPlan for Rsqrt {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,

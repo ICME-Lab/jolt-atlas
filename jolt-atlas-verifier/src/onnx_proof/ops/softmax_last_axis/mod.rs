@@ -110,8 +110,8 @@ pub fn read_tables() -> Result<&'static ReadTables, ProofVerifyError> {
 /// The plan: the evaluation reduction; the row gaps opened at the reduced point's row
 /// coordinates; the sums relation, which leaves the three reads at one point `r1`; the shift at
 /// `r1`'s row coordinates and the table address at `r1`; the table read and the clamp lookup,
-/// queued for the post-loop lookup batch; the address link in the clear; the two addresses'
-/// one-hot checks, queued for the one-hot batch.
+/// proven in the lookups sumcheck; the address link in the clear; the two addresses'
+/// one-hot checks, proven in the one-hot sumcheck.
 impl OpPlan for SoftmaxLastAxis {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,

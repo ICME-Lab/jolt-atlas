@@ -40,12 +40,14 @@ The crate has no prover code. Three mechanisms hold that:
 
 1. **Entry point**: `onnx_proof/mod.rs`. `verify` binds the public inputs into the transcript
    (`append_inputs_to_transcript`), loads the proof's claims and commitments, checks the output
-   claim against the public outputs, runs the IOP over the nodes in reverse topological order,
-   then verifies the reduced opening proof.
-2. **Interpreter**: `onnx_proof/verifier.rs` (the `Verifier` state, `run_plan` and
-   `run_deferred`), `onnx_proof/plan.rs` (`Plan`, `Step`, the closed relation enums and every
-   op's `OpPlan`), `onnx_proof/ops/mod.rs` (dispatch on `atlas_trace::Op`, `OpLayout`) and
-   `onnx_proof/deferred_lookups.rs` (the post-loop plan and the deferred batches).
+   claim against the public outputs, runs the model's schedule (each node in reverse
+   topological order, then the model-wide sumchecks), then verifies the reduced opening proof.
+2. **The schedule and its interpreter**: `onnx_proof/schedule.rs` (`Schedule`, `Step`,
+   `ScheduleBuilder` and its checks, the closed relation enum `OpRelation` and the `OpPlan`
+   trait each op implements), `onnx_proof/verifier.rs` (the `Verifier` state and
+   `Verifier::run`, the one loop over the schedule's steps), `onnx_proof/preprocessing.rs`
+   (where the schedule is compiled) and `onnx_proof/ops/mod.rs` (dispatch on
+   `atlas_trace::Op`).
 3. **Relation core**: `atlas_sumcheck::relation` and `onnx_proof/relation.rs`, then
    `atlas-claims` (the `SymbolicSumcheck` trait and the `Expr` algebra they evaluate) and
    `atlas_sumcheck::engine` (`verify_compressed`: the round checks, the grind and the
@@ -79,35 +81,53 @@ The crate has no prover code. Three mechanisms hold that:
 5. **Proof object**: `proof.rs`, `types.rs` (`ProofId`, `ProofType`, `Claims`) and
    `proof_serialization.rs` (the wire format).
 
-## Plans
+## The schedule
 
-Every op's verification is a `Plan` (`onnx_proof/plan.rs`): an ordered list of `Step`s over
-relations, built by `OpPlan::plan(node, model, io)` before the transcript runs. `Reduce` is the
-node's evaluation reduction; `Open` appends advice openings at a stated point (`OpOpen`);
-`Relation` is a sumcheck stored under a `ProofType`; `Batch` several relations proven as one
-batched sumcheck; `Tie` a zero-round relation, an `OpRel` checked by `verify_tie`; `Defer`
-queues a relation for one of the post-loop batches (`DeferredBatch`, in
-`deferred_lookups.rs`). Steps hold values, never closures: a sumcheck step an `OpRelation`
-(a closed enum with one variant per kind of verifier construction: an `OpRel`, a
-`TableRead`, the one-hot checks of an `RaEncoding`, GatherSmall's two one-hot stages,
-softmax's three-table read, a range bucket's value and digit relations), a `Tie` an `OpRel`,
-an `Open` an `OpOpen`. Whatever depends on earlier claims or on challenges is read and drawn in the
-relation's `setup` when the interpreter reaches the step (a relation queued for `OneHot` is set
-up when that batch runs, since it reads the `ra` claim a lookup produces; `DeferredBatch::setup`
-says which). `Verifier::run_plan` in `onnx_proof/verifier.rs` is the
-interpreter; the prover's `ops::prove_plan` walks the same plan with the relations' witnesses,
-so an op's transcript order is its plan's step order on both sides.
+What the verifier checks for a model, and in what order, is one `Schedule`
+(`onnx_proof/schedule.rs`): a table of relations and a list of `Step`s over them. It is a
+function of the model alone (`Schedule::compile(model)`), compiled once when the prover's or
+the verifier's preprocessing is constructed and held there; `verify` does no planning.
+`cargo run --release -p jolt-atlas-core --example prove -- --model <dir> --schedule` prints a
+model's schedule, one line per step, and `testing/schedules.rs` pins a hash of that text for
+the checked-in models.
 
-After the node loop, `Verifier::run_deferred` runs the post-loop plan
-(`deferred_lookups::plan`, built from the model alone: the packed range buckets' value
-sumchecks as one batched sumcheck, each opening its bucket's packed value at a fresh point,
-then the digit range checks of their dense digits (`atlas_sumcheck::digit_range`) as a second),
-then drains the one deferral queue in two batches: `Lookups`, every table read whose sumcheck
-produces only its own read-address claim (set up in its node's turn), then `OneHot`, every
-one-hot check of a read address. Gather's dictionary read stays in its node's turn, since it
-produces a claim on its dictionary operand; its one-hot checks are in `OneHot`. A model with
-no range claim has no bucket entries, and a deferred batch with no sumcheck instance (a model
-with no lookup) carries no proof entry.
+The steps: `Reduce` is a node's evaluation reduction; `Open` appends advice openings at a
+stated point (`OpOpen`); `Setup` runs a relation's setup (its draws and appends) and leaves it
+to a later sumcheck; `Sumcheck` sets up each member not yet set up, in order, then verifies
+the members as the one sumcheck stored under its `ProofId` (one relation's sumcheck, or a
+batch, which draws a coefficient per instance); `Tie` checks a zero-round relation, an `OpRel`,
+with `verify_tie`. Steps hold values, never closures: a relation is an `OpRelation` (a closed
+enum with one variant per kind of verifier construction: an `OpRel`, a `TableRead`, the
+one-hot checks of an `RaEncoding`, GatherSmall's two one-hot stages, softmax's three-table
+read, a range bucket's value and digit relations), an opening an `OpOpen`. Whatever depends on
+earlier claims or on challenges is read and drawn in the relation's `setup`, when the
+interpreter sets the relation up.
+
+The schedule is each node's steps in reverse topological order, written by its op's
+`OpPlan::plan(node, model, builder)` to a `ScheduleBuilder`, followed by the model-wide steps
+`ScheduleBuilder::finish` adds: the packed range buckets' value sumchecks as one batched
+sumcheck, each opening its bucket's packed value at a fresh point; the digit range checks of
+their dense digits (`atlas_sumcheck::digit_range`) as a second; the lookups sumcheck, every
+table read whose sumcheck produces only its own read-address claim; and the one-hot sumcheck,
+every one-hot check of a read address. A table read is set up in its node's turn (`lookup`
+emits a `Setup` there), where it draws its challenges and appends its operand claim; a
+one-hot check reads the read-address claim a read produces, so it has no step in its node's
+turn (`one_hot`) and is set up when the one-hot sumcheck runs. Gather's dictionary read is a
+sumcheck in its node's turn, since it produces a claim on its dictionary operand; its one-hot
+checks are in the one-hot sumcheck. `finish` returns `Err` unless every relation is set up at
+most once, before its sumcheck, and verified exactly once, and no sumcheck is empty: a model
+with no range claim has no bucket step, a model with no table read no lookups or one-hot
+step, and neither carries a proof entry.
+
+`Verifier::run` in `onnx_proof/verifier.rs` is the interpreter: one loop over the steps,
+keeping the verifiers of a relation set up by a `Setup` step until its `Sumcheck`. The
+prover's `ops::prove_schedule` is the same loop with the relations' witnesses, so the
+transcript order is the schedule's step order on both sides. One step reads the public IO: an
+`Input` node's tie records the input's position, and the interpreter fills in its public
+tensor from the IO it holds (the prover's walk from its trace) before checking the tie. The
+polynomials a proof commits are the ones the schedule opens (`Schedule::committed`: every
+`Open` step's and every relation's committed openings), so no committed polynomial goes
+unopened.
 
 The layout ops are ties, not sumchecks: MoveAxis, Broadcast, Identity, and also Reshape, Slice
 and Concat, whose ties re-point the node's reduced output claim at the operands (Reshape at
@@ -119,10 +139,10 @@ the model the verifier is handed. A Slice's tie opens its operand at a point who
 coordinates are fixed bits, so the cells a Slice discards, when nothing else reads them, are
 not checked: they are no part of the statement about the public output.
 
-Softmax is a plan like any other: the row gaps as an `Open`, one in-loop sumcheck that leaves
-its three table reads at one point, the row shift and the table address as an `Open`, a table
-read and the clamp lookup as `Defer`s to `Lookups`, the address link as a `Tie`, and the two
-one-hot checks as `Defer`s to `OneHot`. Nothing is sent per row and the verifier does no
+Softmax is a plan like any other: the row gaps as an `Open`, one sumcheck in its node's turn
+that leaves its three table reads at one point, the row shift and the table address as an
+`Open`, a table read and the clamp lookup set up there and proven in the lookups sumcheck, the
+address link as a `Tie`, and the two one-hot checks in the one-hot sumcheck. Nothing is sent per row and the verifier does no
 per-row work; the tables are generated once per process.
 
 ## Proof-shape rules
@@ -136,8 +156,8 @@ per-row work; the tables are generated once per process.
 - **Checked inputs.** `verify` first checks that every node's operands are earlier nodes
   (`node_view::check_model_shape`) and that the public IO names the model's inputs and
   outputs with one tensor of the node's dims each (`verifier::check_io_shape`). The list of
-  committed polynomials is a function of the model alone
-  (`get_models_committed_polynomials`).
+  committed polynomials is a function of the model alone: the ones its schedule opens
+  (`Schedule::committed`), in sorted order.
 - **Exact consumption.** Sumcheck proofs and evaluation-reduction proofs are read through
   `ProofLedger::take`, which fails on a missing entry and on a second take.
   `Verifier::check_consumed` ends `verify`: an entry never taken, or an opening claim no append

@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-16                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          |                                |
 | Depends on  | `specs/one-clamp.md` (no relation is chosen by a proof-carried claim; the committed set does not depend on the public IO), `specs/relations-as-values.md` (a relation is a value a schedule can hold) |
 | Supersedes  | `specs/post-loop-batches.md`'s deferral queue (`DeferredBatch`, `DeferredSetup`), as a mechanism; its two-batch ordering is kept |

@@ -19,7 +19,7 @@ use atlas_trace::{op::Add, Model};
 ///    `left`/`right` at `r`, and the verifier checks `left(r) + right(r) == output(r)`.
 ///
 /// Unless the node is a model output, its output is shown to lie in `i32` by a range claim in
-/// the packed range buckets, proven after the node loop
+/// the packed range buckets, proven after the nodes' steps
 /// ([`range_bucket`](crate::onnx_proof::range_bucket)).
 impl OpPlan for Add {
     fn plan<F: JoltField>(
@@ -34,7 +34,7 @@ impl OpPlan for Add {
 }
 
 /// The plan of `left ± right`: the evaluation reduction, then the tie of the output to the
-/// operands. The output is range-checked in the packed buckets after the node loop.
+/// operands. The output is range-checked in the packed buckets after the nodes' steps.
 pub fn accumulation_plan<F: JoltField>(
     node: &ComputationNode,
     kind: OpRelKind,

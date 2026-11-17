@@ -12,6 +12,8 @@
 //!   binding tests, and pinned `known_gap_*` tests.
 //! * [`digests`]: cross-stage pins of the zoo's proof bytes and final
 //!   transcript state, so a coordinated prover+verifier change is visible.
+//! * [`schedules`]: pins of the zoo's verification schedules, so a change to what the
+//!   verifier checks for a model, or to its order, is visible.
 //! * [`rounds`]: native sumcheck members driven round by round at eq points
 //!   no end-to-end run reaches.
 //! * [`relations`]: relation-defined ops' op binding and the claim flows
@@ -33,6 +35,7 @@ pub(crate) mod probe;
 mod range_buckets;
 pub(crate) mod relations;
 mod rounds;
+mod schedules;
 mod soundness;
 mod zoo;
 

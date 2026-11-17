@@ -8,7 +8,7 @@ use atlas_trace::op::GatherLarge;
 use common::CommittedPoly;
 
 /// The plan: the evaluation reduction, the dictionary read, then the one-hot checks of its
-/// read addresses, queued for the post-loop one-hot batch.
+/// read addresses, proven in the one-hot sumcheck.
 impl OpPlan for GatherLarge {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,

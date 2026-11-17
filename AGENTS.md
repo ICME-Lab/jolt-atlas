@@ -76,6 +76,7 @@ cargo nextest run -p jolt-atlas-core --run-ignored ignored-only -E 'test(known_g
 # The example (release): proves and verifies any model directory; also the benchmark driver.
 cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen2-tiny
 cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2 --trace-terminal
+cargo run --release -p jolt-atlas-core --example prove -- --model models/op_gauntlet --schedule  # the verification schedule, one line per step
 cargo run --release -p atlas-onnx-import --example dump_lowered_ops -- <model.onnx>
 
 # Regenerating the tiny fixtures (changes weights → re-pin atlas-onnx-import/tests/golden_zoo.rs)
@@ -169,15 +170,19 @@ Workspace members, in dependency order:
   cargo-fuzz targets and their regression corpus in `fuzz/` (see `fuzz/README.md`).
 - **jolt-atlas-verifier** — the proof object, its wire format, and all verification: `ONNXProof`
   (with `ONNXProof::verify`), `ReducedOpeningProof`, `Claims`, `ProofId`/`ProofType`,
-  `proof_serialization`, and `onnx_proof` — every op's `OpLayout` and `OpPlan` (`plan.rs`: a
-  `Plan` of `Step`s over relation values; the only way an op is verified), the one op
+  `proof_serialization`, and `onnx_proof` — the verification schedule (`schedule.rs`: a
+  model's `Schedule` of `Step`s over relation values, compiled from the model alone by
+  `Schedule::compile` when the preprocessing is constructed; each op's `OpPlan::plan` writes
+  its node's steps to a `ScheduleBuilder`, the only way an op is verified; the committed
+  polynomials are `Schedule::committed`), the one op
   relation type (`relation.rs`: `OpRel`, a value each op builds with a constructor function
   in its `ops` module; `OpRelKind` names the relation and the ops it may serve), the table
   reads (`lookup.rs`: `TableRead`, `SmallTableDef`, `RaEncoding`), the packed range buckets
-  and their checks (`range_bucket.rs`, `range_check.rs`), the fused rescale and the deferred
-  batches' verifier sides, the `Verifier` state (its interpreter `run_plan`/`run_deferred`; its
-  accumulator, transcript, proof ledgers and deferral queue are crate-private),
-  `verify`/`verify_with`, and the shared and verifier preprocessing; also
+  and their checks (`range_bucket.rs`, `range_check.rs`), the fused rescale's verifier side,
+  the `Verifier` state (its interpreter `Verifier::run`, one loop over the schedule's steps;
+  its accumulator, transcript and proof ledgers are crate-private),
+  `verify`/`verify_with`, and the shared and verifier preprocessing (the verifier's holds the
+  schedule); also
   `node_view` and `utils`. Every proof field is private (`from_parts` + `&` accessors; `&mut`
   behind the `test-util` feature). No prover dependency and no prover code: the crate is
   Trace-free (nothing in it names `atlas_trace::Trace` or its witness types; witness
@@ -186,12 +191,14 @@ Workspace members, in dependency order:
   CI rejects `prover`/`witness` module paths and `Trace` in its sources. `docs/verifier.md` is
   the audit reading order and the trust-perimeter statement.
 - **jolt-atlas-core** — the prover. `onnx_proof` mirrors the verifier crate's module tree: each
-  module glob-re-exports its verifier counterpart and adds the prover side (`ops::prove_plan`
-  walks each op's plan with the relations' witnesses; the prover side of an `OpRel` is a
+  module glob-re-exports its verifier counterpart and adds the prover side
+  (`ops::prove_schedule` walks the model's schedule with the relations' witnesses, the
+  prover's one loop over its steps; the prover side of an `OpRel` is a
   wildcard-free match on its `OpRelKind` in `ops/mod.rs`, giving the engine's witnesses
   (`op_rel_witnesses`), a tie's claims (`op_rel_tie_claims`) or a specialized prover
   (`op_rel_prover`), and that of a table read is `lookup::table_read_prover`),
-  with `prover.rs`, `witness.rs`, `preprocessing.rs` (prover setup) and `types.rs`.
+  with `prover.rs`, `witness.rs`, `preprocessing.rs` (prover setup and the schedule) and
+  `types.rs`.
   `prove` and the free `verify` (adding the test-only lockstep debug comparison) are re-exported
   at the crate root. The whole test suite is under `onnx_proof/testing/`; the `prove` example is
   in `examples/`.

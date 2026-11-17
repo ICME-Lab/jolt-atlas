@@ -80,7 +80,7 @@ fn attention_like(seed: u64) -> ProbeModel {
 
 /// The claim flows a relation-defined op takes part in (`Mul`, see `onnx_proof::relation`):
 /// a fused product, whose input claim reads the node's reduced output and remainder advice and
-/// whose range claims are proven in the packed buckets after the node loop; a raw product with two
+/// whose range claims are proven in the packed buckets after the nodes' steps; a raw product with two
 /// consumers, whose input claim is the evaluation reduction's instance for its output; and an
 /// operand shared by a product and an add, whose reduction folds the relation's produced
 /// opening with the add's.

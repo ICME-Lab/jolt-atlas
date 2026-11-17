@@ -19,7 +19,7 @@ pub mod axis;
 ///    `output(r) = Σ_axis operand`, reducing to the operand opening.
 ///
 /// Unless the node is a model output, its output is shown to lie in `i32` by a range claim in
-/// the packed range buckets after the node loop, as for [`Add`](super::add).
+/// the packed range buckets after the nodes' steps, as for [`Add`](super::add).
 impl OpPlan for Sum {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,

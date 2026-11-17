@@ -83,17 +83,22 @@ A PR that adds an op relation (`onnx_proof/relation.rs`) also meets:
 A PR that adds an op, a proof field or a check to `jolt-atlas-verifier` also meets
 (`docs/verifier.md` is the reading order and the trust-perimeter statement):
 
-- **5.1 A plan.** The op's verification is its `OpPlan::plan` (`onnx_proof/plan.rs`): ordered
-  `Step`s over values (`OpRelation` for a sumcheck, `OpRel` for a tie, `OpOpen` for advice
-  openings), built from the model and the public IO alone. No step holds a closure; whatever
-  depends on earlier claims or on challenges is read and drawn in the relation's `setup` when
-  the interpreter reaches the step. The prover walks the same plan (`jolt-atlas-core`'s
-  `ops::prove_plan`), attaching a specialized witness at its `OpRelation` variant, or at its
-  `OpRelKind` for an op relation. A table read whose sumcheck produces only its own
-  read-address claim is a `Defer` to `DeferredBatch::Lookups`, and its one-hot check a `Defer`
-  to `DeferredBatch::OneHot`; neither runs in the node's turn.
+- **5.1 A plan.** The op's verification is one function, its `OpPlan::plan`
+  (`onnx_proof/schedule.rs`), which writes the node's steps to the model's schedule through a
+  `ScheduleBuilder` (`reduce`, `open`, `relation`, `tie`, `lookup`, `one_hot`) over values
+  (`OpRelation` for a sumcheck, `OpRel` for a tie, `OpOpen` for advice openings), from the
+  model alone. No step holds a closure; whatever depends on earlier claims or on challenges is
+  read and drawn in the relation's `setup` when the interpreter sets the relation up. The
+  prover walks the same schedule (`jolt-atlas-core`'s `ops::prove_schedule`), attaching a
+  specialized witness at its `OpRelation` variant, or at its `OpRelKind` for an op relation.
+  A table read whose sumcheck produces only its own read-address claim is a `lookup` (set up
+  in the node's turn, proven in the lookups sumcheck), and its one-hot check a `one_hot`
+  (set up and proven in the one-hot sumcheck). The committed polynomials are the ones the
+  steps open; there is no separate list to keep. A changed schedule pin
+  (`testing/schedules.rs`) is expected when an op's plan or a zoo model changes: review the
+  `--schedule` output and re-pin in the same PR.
 - **5.2 Relations.** Every sumcheck of the plan is a relation meeting §4; an in-the-clear check
-  is a `Step::Tie` over a zero-round `OpRel`, which `verify_tie` checks against claims the
+  is a `tie` over a zero-round `OpRel`, which `verify_tie` checks against claims the
   accumulator holds, returning `Err` when the identity fails.
 - **5.3 Coverage.** A node of the op is in a probe model (`onnx_proof/testing/models.rs`) or the
   op gauntlet, so the soundness sweeps, `op_surface.rs` and `proof_types_all_exercised` see it; a

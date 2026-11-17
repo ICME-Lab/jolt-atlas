@@ -17,6 +17,7 @@
 //! * `--input "<text>"`       tokenize with `<dir>/tokenizer.json`; sequence length = token count
 //! * `--use-cache`            reuse `<dir>/shared_preprocessing.seq<N>.bin` when present
 //! * `--stats`                print the model, the packed range buckets and the largest nodes
+//! * `--schedule`             print the model's verification schedule, one line per step, and exit
 //! * `--trace` / `--trace-terminal`  Chrome-trace JSON / terminal timings
 //!
 //! Inputs other than the token ids are synthesized from the importer's input
@@ -44,6 +45,7 @@ struct Args {
     use_cache: bool,
     stats: bool,
     census: bool,
+    schedule: bool,
 }
 
 fn parse_args() -> Args {
@@ -58,7 +60,7 @@ fn parse_args() -> Args {
     let model_dir = PathBuf::from(value("--model").unwrap_or_else(|| {
         eprintln!(
             "usage: prove --model <dir> [--seq-len N] [--input TEXT] [--use-cache] [--stats] \
-             [--census] [--trace|--trace-terminal]"
+             [--census] [--schedule] [--trace|--trace-terminal]"
         );
         std::process::exit(2);
     }));
@@ -69,6 +71,7 @@ fn parse_args() -> Args {
         use_cache: argv.iter().any(|a| a == "--use-cache"),
         stats: argv.iter().any(|a| a == "--stats"),
         census: argv.iter().any(|a| a == "--census"),
+        schedule: argv.iter().any(|a| a == "--schedule"),
     }
 }
 
@@ -507,6 +510,13 @@ fn main() {
     );
 
     let (shared, descriptors) = load(&args, &run_args);
+    if args.schedule {
+        use jolt_atlas_core::onnx_proof::schedule::Schedule;
+        let schedule = Schedule::<Fp128>::compile(shared.model())
+            .expect("the model's nodes have the shapes their ops prove");
+        print!("{schedule}");
+        return;
+    }
     // `synth_inputs` only needs the model for the gather dictionary bound;
     // rebuild a minimal `ImportedModel` view around the preprocessed model.
     let imported = ImportedModel {

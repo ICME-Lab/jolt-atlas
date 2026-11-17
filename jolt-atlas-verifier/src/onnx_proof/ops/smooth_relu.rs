@@ -90,9 +90,9 @@ pub fn relu_read(node: &ComputationNode) -> TableRead {
 }
 
 /// The plan: the evaluation reduction; `ReLU(x)` opened at the reduced output point; the
-/// correction table's read, the clamp read and the ReLU read, queued for the post-loop lookup
-/// batch; the table address's and the 32-bit address's one-hot checks, queued for the one-hot
-/// batch.
+/// correction table's read, the clamp read and the ReLU read, proven in the lookups
+/// sumcheck; the table address's and the 32-bit address's one-hot checks, proven in the one-hot
+/// sumcheck.
 impl OpPlan for SmoothRelu {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,

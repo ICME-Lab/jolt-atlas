@@ -63,7 +63,7 @@ fn table_def(
 
 /// The plan of a trig node `name`: the evaluation reduction; the period quotient and the
 /// downscaled remainder opened at the reduced output point; the downscale and table reads and
-/// their one-hot checks, queued for the post-loop batches; then the period reduction
+/// their one-hot checks, proven in the lookups and one-hot sumchecks; then the period reduction
 /// `input = P·q + rem` in the clear, once `q` and `rem` both hold claims at the reduced output
 /// point.
 fn trig_plan<F: JoltField>(

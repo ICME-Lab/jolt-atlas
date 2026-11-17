@@ -53,8 +53,8 @@ fn model_outputs_are_not_range_checked() {
     }
 }
 
-/// A model with no table lookup and no range-checked value proves nothing after the node loop: its
-/// proof has no post-loop entry (a stray one would fail the drain check).
+/// A model with no table lookup and no range-checked value proves nothing after the nodes' steps: its
+/// proof has no model-wide entry (a stray one would fail the drain check).
 #[test]
 fn lookup_free_model_has_no_post_loop_proof() {
     let mut rng = StdRng::seed_from_u64(0x10F0);
@@ -71,7 +71,7 @@ fn lookup_free_model_has_no_post_loop_proof() {
     let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &inputs);
     assert!(
         proof.proofs().keys().all(|id| id.0 != DEFERRED_PROOF_IDX),
-        "a lookup-free model's proof has a post-loop entry"
+        "a lookup-free model's proof has a model-wide entry"
     );
     prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
 }

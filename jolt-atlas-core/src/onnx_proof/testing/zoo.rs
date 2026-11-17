@@ -11,7 +11,7 @@
 use atlas_algebra::field::fp128::Fp128 as Fr;
 use atlas_onnx_import::fixtures::{standard_bindings, synth_inputs, GOLDEN_SEED};
 use atlas_onnx_import::ImportedModel;
-use atlas_pcs::akita::AkitaScheme;
+use atlas_pcs::bitz::BitzScheme;
 use atlas_trace::Tensor;
 
 use super::{prove_verify_roundtrip, RoundtripOptions};
@@ -83,7 +83,7 @@ pub(super) fn op_gauntlet_inputs(imported: &ImportedModel) -> Vec<Tensor<i32>> {
 fn op_gauntlet() {
     let imported = zoo("op_gauntlet", 16);
     let inputs = op_gauntlet_inputs(&imported);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 /// GPT-2 architecture (2 layers, 48 hidden, 3 heads, vocab 1000) exported
@@ -103,7 +103,7 @@ fn gpt2_tiny() {
         ],
     );
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 /// Qwen2 architecture (2 layers, 56 hidden, 7 query heads over 1 KV head):
@@ -129,7 +129,7 @@ fn qwen2_tiny() {
         "qwen2-tiny must lower the GQA outer-product einsum"
     );
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 /// Same model at a non-power-of-two sequence length: would pad the sequence
@@ -141,7 +141,7 @@ fn qwen2_tiny() {
 fn known_gap_qwen2_tiny_seq12() {
     let imported = zoo("qwen2-tiny", 12);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 /// BERT architecture (2 layers, 48 hidden, 3 heads) at opset 14: Erf GELU,
@@ -154,7 +154,7 @@ fn bge_tiny() {
         &["norm_fusion", "rsqrt_eps_floor", "matmul_gemm_to_einsum"],
     );
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 // ── real models (heavy CI job) ───────────────────────────────────────────
@@ -164,7 +164,7 @@ fn bge_tiny() {
 fn gpt2() {
     let imported = zoo("gpt2", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn gpt2() {
 fn bge_small_en_v1_5() {
     let imported = zoo("bge-small-en-v1.5", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 #[test]
@@ -180,7 +180,7 @@ fn bge_small_en_v1_5() {
 fn qwen() {
     let imported = zoo("qwen", 8);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    prove_verify_roundtrip::<AkitaScheme>(imported.model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(imported.model, &inputs, RoundtripOptions::default());
 }
 
 // ── transcript binding (issue #230) ──────────────────────────────────────

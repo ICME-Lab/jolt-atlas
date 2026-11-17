@@ -12,11 +12,11 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use jolt_atlas_core::onnx_proof::{fuzz::VerifyTarget, AkitaScheme, Fp128};
+use jolt_atlas_core::onnx_proof::{fuzz::VerifyTarget, BitzScheme, Fp128};
 use libfuzzer_sys::fuzz_target;
 
-fn target() -> &'static VerifyTarget<Fp128, AkitaScheme> {
-    static TARGET: OnceLock<VerifyTarget<Fp128, AkitaScheme>> = OnceLock::new();
+fn target() -> &'static VerifyTarget<Fp128, BitzScheme> {
+    static TARGET: OnceLock<VerifyTarget<Fp128, BitzScheme>> = OnceLock::new();
     TARGET.get_or_init(|| {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let target = VerifyTarget::new(&repo_root);

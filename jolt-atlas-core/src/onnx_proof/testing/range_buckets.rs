@@ -1,7 +1,7 @@
 //! The packed range buckets ([`range_bucket`](crate::onnx_proof::range_bucket)): what they hold
 //! and commit for a model.
 
-use atlas_pcs::akita::AkitaScheme;
+use atlas_pcs::bitz::BitzScheme;
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::Tensor;
 use atlas_transcript::Blake2bProver;
@@ -41,7 +41,7 @@ fn model_outputs_are_not_range_checked() {
         vec![tensor([i32::MAX, 0, i32::MIN, -1]), tensor([0, 0, 0, 0])],
     ] {
         let io = model.trace(&inputs).expect("honest execution").io(&model);
-        prove_verify_roundtrip::<AkitaScheme>(model.clone(), &inputs, RoundtripOptions::default());
+        prove_verify_roundtrip::<BitzScheme>(model.clone(), &inputs, RoundtripOptions::default());
         if inputs[0].data()[0] == i32::MAX {
             assert_eq!(io.outputs[0].data()[0], i32::MAX);
         }
@@ -61,7 +61,7 @@ fn lookup_free_model_has_no_post_loop_proof() {
     let model = b.build();
     let inputs = [Tensor::random_small(&mut rng, &[16])];
 
-    let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(
+    let pp = AtlasProverPreprocessing::<Fp128, BitzScheme>::new(
         AtlasSharedPreprocessing::preprocess(model.clone()),
     );
     assert!(
@@ -70,7 +70,7 @@ fn lookup_free_model_has_no_post_loop_proof() {
             .all(|members| pp.schedule.sumcheck_node(members).is_some()),
         "a lookup-free model's schedule has a model-wide sumcheck"
     );
-    prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(model, &inputs, RoundtripOptions::default());
 }
 
 /// The `scalars` probe model puts one-element nodes under the soundness sweeps: every range

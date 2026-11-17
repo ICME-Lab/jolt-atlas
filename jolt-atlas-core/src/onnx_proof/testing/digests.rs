@@ -2,13 +2,13 @@
 //!
 //! The zoo tests prove and verify with the same build, so a coordinated
 //! prover+verifier change passes them unseen. These tests pin, for each
-//! checked-in model on its golden inputs under Akita over Fp128, a
+//! checked-in model on its golden inputs under BitZ over Fp128, a
 //! blake2b-256 hash of the proof's bytes and the prover's final transcript
 //! state. A behavior-preserving change leaves every pin untouched; a
 //! protocol-breaking change re-pins in its own commit, naming the cause.
 
 use atlas_onnx_import::fixtures::{synth_inputs, GOLDEN_SEED};
-use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
+use atlas_pcs::{bitz::BitzScheme, commitment_scheme::CommitmentScheme};
 use atlas_trace::{Model, Tensor};
 use atlas_transcript::Blake2bProver;
 use blake2::{digest::consts::U32, Blake2b, Digest};
@@ -50,12 +50,12 @@ fn assert_digest<PCS: CommitmentScheme>(
 fn digest_op_gauntlet() {
     let imported = zoo("op_gauntlet", 16);
     let inputs = op_gauntlet_inputs(&imported);
-    assert_digest::<AkitaScheme>(
+    assert_digest::<BitzScheme>(
         "op_gauntlet",
         imported.model,
         &inputs,
-        "f7e523de87457b3f73b281d36e8a8375ce85ec93ea4086288a2c75ec3b09f0cb",
-        "4cc32e3f596cc1a8b4536545523116a9e0197f298c0ee34453ca26843f73da13",
+        "7fb77ff08c1f86e898c8d2d656dcb2dc7c80ea97362e8edfbacc7130ec4c71f7",
+        "133c878b546e5fd32302257a759505b2020d0232f747368120ab7de5d5c44f90",
     );
 }
 
@@ -63,12 +63,12 @@ fn digest_op_gauntlet() {
 fn digest_gpt2_tiny() {
     let imported = zoo("gpt2-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    assert_digest::<AkitaScheme>(
+    assert_digest::<BitzScheme>(
         "gpt2-tiny",
         imported.model,
         &inputs,
-        "b030c746addcee6fb3dd8b471889d68ac484547874292ddfb275a125e20a132c",
-        "5344f40889b3572faf407eec8b950440ff8b4006a73b049e42385e9c4021a5a9",
+        "c484da45ab6ae6659883074739450efa2a9a9153b6c5b288a9d812359d72c4a0",
+        "2ddb49a2eac0d928df5ea52ae3358bd0805b25e2a333fcd4162c33f4cce59143",
     );
 }
 
@@ -76,12 +76,12 @@ fn digest_gpt2_tiny() {
 fn digest_qwen2_tiny() {
     let imported = zoo("qwen2-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    assert_digest::<AkitaScheme>(
+    assert_digest::<BitzScheme>(
         "qwen2-tiny",
         imported.model,
         &inputs,
-        "9e5f9cb99d842331fcd1d3bf156254b8b62f73c3d7474652fca487e6d6cc2416",
-        "844e2a848173f8a78850a30d62133e9803995f833b3874fa005c7ce4451c8895",
+        "0092b4b937f1195085280e65110b47aeaf8a76aa347df062d57a610bfa072041",
+        "b22b29266512f6effabba7f32e3d75f105516587787c493c77a0f0cf2b2eb6b8",
     );
 }
 
@@ -89,11 +89,11 @@ fn digest_qwen2_tiny() {
 fn digest_bge_tiny() {
     let imported = zoo("bge-tiny", 16);
     let inputs = synth_inputs(&imported, GOLDEN_SEED);
-    assert_digest::<AkitaScheme>(
+    assert_digest::<BitzScheme>(
         "bge-tiny",
         imported.model,
         &inputs,
-        "e0d6bc9584bc2c989d46ec2dfdd7f42e2ca515eea52f955f430640a942cdabc1",
-        "32666ecbf2127b74d72104a084a4adeb97bef08e0bd0a11f15bb9a06306beb6d",
+        "598cf9799622ec468515ddf97d0da1679499168f749e5f2a1c9198534c4f62f4",
+        "0db86f035876238b6e44337c9974d6373d41c458cd187168fb90b26d9f38a9b3",
     );
 }

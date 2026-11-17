@@ -1,7 +1,7 @@
 //! The exhaustive single-op prove/verify table.
 //!
 //! One `#[test]` per case (nextest runs each in its own process and names
-//! failures), all driven by [`prove_verify_roundtrip`] under Akita over Fp128. Two
+//! failures), all driven by [`prove_verify_roundtrip`] under BitZ over Fp128. Two
 //! meta-tests make the table total: every [`OpKind`] must have at least one
 //! declared case (an `#[ignore]`d case is a declared stance), and every case's
 //! model must contain a node of the kind it claims to cover.
@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 
-use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
+use atlas_pcs::{bitz::BitzScheme, commitment_scheme::CommitmentScheme};
 use atlas_trace::{op::SmoothReluForm, Model, Tensor};
 use common::consts::{ACTIVATION_BOUND, MODEL_SCALE, TRIG_PERIOD_MODULUS};
 use rand::{rngs::StdRng, SeedableRng};
@@ -80,7 +80,7 @@ macro_rules! op_surface {
             #[test]
             $(#[$meta])*
             fn $name() {
-                run_named::<AkitaScheme>(stringify!($name));
+                run_named::<BitzScheme>(stringify!($name));
             }
         )*
     };

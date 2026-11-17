@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use atlas_pcs::{akita::AkitaScheme, commitment_scheme::CommitmentScheme};
+use atlas_pcs::{bitz::BitzScheme, commitment_scheme::CommitmentScheme};
 use atlas_sumcheck::opening_proof::{forgery, OpeningId};
 use atlas_trace::{trace::ModelExecutionIO, Model, NodeId, Op, Tensor, Trace};
 use atlas_transcript::{Blake2bProver, Blake2bVerifier};
@@ -56,9 +56,9 @@ use crate::onnx_proof::{
     AtlasVerifierPreprocessing, ONNXProof,
 };
 
-/// The instantiation the sweeps run under: Akita over Fp128. The sweep bodies are generic over the
+/// The instantiation the sweeps run under: BitZ over Fp128. The sweep bodies are generic over the
 /// PCS (and its field).
-type Pcs = AkitaScheme;
+type Pcs = BitzScheme;
 
 /// What happened when a (possibly tampered) proof met the verifier. The
 /// payloads are reported through `Debug`.
@@ -977,10 +977,10 @@ mod known_gaps {
 fn fuzz_regressions_replay() {
     use crate::onnx_proof::fuzz::{VerifyTarget, HEADER_LEN};
     use atlas_algebra::field::fp128::Fp128;
-    use atlas_pcs::akita::AkitaScheme;
+    use atlas_pcs::bitz::BitzScheme;
 
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let target = VerifyTarget::<Fp128, AkitaScheme>::new(&manifest_dir.join(".."));
+    let target = VerifyTarget::<Fp128, BitzScheme>::new(&manifest_dir.join(".."));
     let seed = target.seed().to_vec();
     assert!(
         matches!(target.run(&seed), Some(Ok(()))),

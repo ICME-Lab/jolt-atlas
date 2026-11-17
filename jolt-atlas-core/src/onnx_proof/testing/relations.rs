@@ -14,7 +14,7 @@
 
 use atlas_algebra::field::fp128::Fp128 as Fr;
 use atlas_claims::{Source, SymbolicSumcheck};
-use atlas_pcs::akita::AkitaScheme;
+use atlas_pcs::bitz::BitzScheme;
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::Op;
 use common::VirtualPoly;
@@ -74,11 +74,11 @@ pub(crate) fn record_dispatch(node: &ComputationNode, kind: OpRelKind) {
 #[test]
 fn relation_kinds_match_their_dispatched_op_kind() {
     for probe in probe_models() {
-        prove_verify_roundtrip::<AkitaScheme>(probe.model, &probe.inputs, Default::default());
+        prove_verify_roundtrip::<BitzScheme>(probe.model, &probe.inputs, Default::default());
     }
     let gauntlet = zoo("op_gauntlet", 16);
     let inputs = op_gauntlet_inputs(&gauntlet);
-    prove_verify_roundtrip::<AkitaScheme>(gauntlet.model, &inputs, Default::default());
+    prove_verify_roundtrip::<BitzScheme>(gauntlet.model, &inputs, Default::default());
 
     let dispatches = DISPATCHES.lock().expect("dispatch log");
     for (op, kind, serves) in dispatches.iter() {
@@ -721,10 +721,10 @@ fn softmax_proof_has_no_per_row_claims() {
         let out = b.softmax_last_axis(x);
         b.mark_output(out);
         let inputs = [Tensor::random_range(&mut rng, &[rows, 8], SMALL)];
-        let pp = AtlasProverPreprocessing::<Fr, AkitaScheme>::new(
+        let pp = AtlasProverPreprocessing::<Fr, BitzScheme>::new(
             AtlasSharedPreprocessing::preprocess(b.build()),
         );
-        let (_, _, debug) = prove::<Fr, Blake2bProver, AkitaScheme>(&pp, &inputs);
+        let (_, _, debug) = prove::<Fr, Blake2bProver, BitzScheme>(&pp, &inputs);
         debug
             .expect("test builds carry debug info")
             .opening_accumulator

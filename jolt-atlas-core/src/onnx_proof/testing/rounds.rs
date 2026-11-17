@@ -11,7 +11,7 @@
 use atlas_algebra::field::fp128::Fp128 as Fr;
 use atlas_algebra::field::Ring;
 use atlas_algebra::poly::{eq::EqPolynomial, split_eq::CHECK_GRUEN_ENDPOINTS};
-use atlas_pcs::akita::AkitaScheme;
+use atlas_pcs::bitz::BitzScheme;
 use atlas_sumcheck::engine::prover::ProveRounds;
 use atlas_trace::{Model, Tensor};
 use num_traits::{One, Zero};
@@ -173,9 +173,9 @@ fn gruen_endpoint_closures_agree_with_division() {
     // nextest runs each test in its own process, so the flag reaches no other test.
     CHECK_GRUEN_ENDPOINTS.store(true, std::sync::atomic::Ordering::Relaxed);
     for probe in probe_models() {
-        prove_verify_roundtrip::<AkitaScheme>(probe.model, &probe.inputs, Default::default());
+        prove_verify_roundtrip::<BitzScheme>(probe.model, &probe.inputs, Default::default());
     }
     let gauntlet = zoo("op_gauntlet", 16);
     let inputs = op_gauntlet_inputs(&gauntlet);
-    prove_verify_roundtrip::<AkitaScheme>(gauntlet.model, &inputs, Default::default());
+    prove_verify_roundtrip::<BitzScheme>(gauntlet.model, &inputs, Default::default());
 }

@@ -34,8 +34,8 @@ use common::utils::logging::setup_tracing;
 use jolt_atlas_core::loader::{load_imported, RunArgs};
 use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
-    prove, verify, AkitaScheme, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-    AtlasVerifierPreprocessing, Blake2bProver, Blake2bVerifier, Fp128,
+    prove, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
+    BitzScheme, Blake2bProver, Blake2bVerifier, Fp128,
 };
 
 struct Args {
@@ -466,11 +466,11 @@ fn load(args: &Args, run_args: &RunArgs) -> (AtlasSharedPreprocessing, Vec<Input
 /// Prove + verify, reporting timings and proof size.
 fn run(shared: AtlasSharedPreprocessing, inputs: &[Tensor<i32>]) {
     let t = Instant::now();
-    let prover_pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(shared);
+    let prover_pp = AtlasProverPreprocessing::<Fp128, BitzScheme>::new(shared);
     println!("prover setup: {:.2?}", t.elapsed());
 
     let t = Instant::now();
-    let (proof, io, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&prover_pp, inputs);
+    let (proof, io, _) = prove::<Fp128, Blake2bProver, BitzScheme>(&prover_pp, inputs);
     println!("prove: {:.2?}", t.elapsed());
     println!(
         "proof size: {:.2} MiB ({} commitments, {} sumcheck proofs)",
@@ -479,9 +479,9 @@ fn run(shared: AtlasSharedPreprocessing, inputs: &[Tensor<i32>]) {
         prover_pp.schedule.sumchecks().count()
     );
 
-    let verifier_pp = AtlasVerifierPreprocessing::<Fp128, AkitaScheme>::from(&prover_pp);
+    let verifier_pp = AtlasVerifierPreprocessing::<Fp128, BitzScheme>::from(&prover_pp);
     let t = Instant::now();
-    verify::<Fp128, Blake2bVerifier, AkitaScheme>(&proof, &verifier_pp, &io, None)
+    verify::<Fp128, Blake2bVerifier, BitzScheme>(&proof, &verifier_pp, &io, None)
         .expect("verification failed");
     println!("verify: {:.2?}", t.elapsed());
     println!("Proof verified successfully!");

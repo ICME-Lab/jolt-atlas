@@ -7,7 +7,7 @@
 //! --model models/<name> --schedule` prints the text a pin hashes.
 
 use atlas_algebra::field::fp128::Fp128;
-use atlas_pcs::akita::AkitaScheme;
+use atlas_pcs::bitz::BitzScheme;
 use atlas_trace::Tensor;
 use blake2::{digest::consts::U32, Blake2b, Digest};
 use rand::{rngs::StdRng, SeedableRng};
@@ -107,5 +107,5 @@ fn schedule_of_a_lookup_free_model_has_no_lookup_step() {
         Tensor::random_small(&mut rng, &[8]),
         Tensor::random_small(&mut rng, &[8]),
     ];
-    prove_verify_roundtrip::<AkitaScheme>(model, &inputs, RoundtripOptions::default());
+    prove_verify_roundtrip::<BitzScheme>(model, &inputs, RoundtripOptions::default());
 }

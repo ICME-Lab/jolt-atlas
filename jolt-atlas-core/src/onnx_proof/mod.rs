@@ -50,7 +50,7 @@ pub use prover::Prover;
 pub use types::ProverDebugInfo;
 
 pub use atlas_algebra::field::fp128::Fp128;
-pub use atlas_pcs::akita::AkitaScheme;
+pub use atlas_pcs::bitz::BitzScheme;
 pub use atlas_transcript::{Blake2bProver, Blake2bVerifier};
 
 // ── Core proof structures ────────────────────────────────────────────────

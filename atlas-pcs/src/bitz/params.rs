@@ -29,7 +29,7 @@ pub struct Params {
     /// The projection prime is uniform among the primes in `[2^low, 2^high)`.
     pub prime_low_bits: u32,
     pub prime_high_bits: u32,
-    /// The proof of work before the prime is drawn.
+    /// The proof of work before the prime is drawn ([`grinding`](super::grinding)).
     pub projection_pow_bits: u32,
     pub ligerito: Schedule,
 }

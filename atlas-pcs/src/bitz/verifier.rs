@@ -13,7 +13,7 @@ use super::gf128::{Gf128, GENERATOR};
 use super::integers::{add_mod, mul_mod, sample_prime, Wide, FP128_MODULUS};
 use super::params::Params;
 use super::proof::{bind_statement, eq_table, Commitment, Proof};
-use super::{gkr, ligerito, ring_switch};
+use super::{gkr, grinding, ligerito, ring_switch};
 use atlas_algebra::field::fp128::Fp128;
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_transcript::Transcript;
@@ -71,7 +71,11 @@ pub fn verify<T: Transcript>(
         transcript,
     );
     transcript.append_serializable(&proof.lifted_claim);
-    transcript.pow(params.projection_pow_bits)?;
+    grinding::verify(
+        params.projection_pow_bits,
+        proof.projection_nonce,
+        transcript,
+    )?;
     let prime = sample_prime(params.prime_low_bits, params.prime_high_bits, transcript)?;
 
     // Round 2. Each column sum is at most 2^log_rows·(q − 1), below the generator's order, and

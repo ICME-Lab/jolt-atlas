@@ -5,7 +5,7 @@ use super::integers::{sample_prime, Wide};
 use super::pack::pack;
 use super::params::Params;
 use super::proof::{bind_statement, eq_table, Commitment, Proof};
-use super::{gkr, ligerito, ring_switch};
+use super::{gkr, grinding, ligerito, ring_switch};
 use atlas_algebra::field::fp128::Fp128;
 use atlas_transcript::Transcript;
 use rayon::prelude::*;
@@ -99,11 +99,10 @@ pub fn prove<T: Transcript>(
         transcript,
     );
     transcript.append_serializable(&lifted_claim);
+    let projection_nonce = grinding::prove(params.projection_pow_bits, transcript);
     #[allow(clippy::expect_used)]
-    let prime = transcript
-        .pow(params.projection_pow_bits)
-        .and_then(|()| sample_prime(params.prime_low_bits, params.prime_high_bits, transcript))
-        .expect("the prover's proof of work and prime draw cannot fail");
+    let prime = sample_prime(params.prime_low_bits, params.prime_high_bits, transcript)
+        .expect("a prime is among the transcript's candidates");
 
     // Round 2: one integer per column, small enough to be an exponent.
     let row_residues: Vec<u128> = row_lifts.par_iter().map(|&lift| lift % prime).collect();
@@ -150,6 +149,7 @@ pub fn prove<T: Transcript>(
         claim,
         Proof {
             lifted_claim,
+            projection_nonce,
             column_sums,
             grand_product,
             ring_columns,

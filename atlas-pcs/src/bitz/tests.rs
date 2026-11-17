@@ -231,6 +231,9 @@ fn every_proof_field_is_checked() {
         proof.lifted_claim.0[limb] ^= 1;
         assert!(!instance.accepts(&proof), "lifted claim limb {limb}");
     }
+    let mut proof = instance.proof.clone();
+    proof.projection_nonce ^= 1;
+    assert!(!instance.accepts(&proof), "projection nonce");
     for column in 0..instance.proof.column_sums.len() {
         let mut proof = instance.proof.clone();
         proof.column_sums[column] ^= 1;
@@ -333,10 +336,10 @@ fn proofs_have_one_encoding() {
     trailing.push(0);
     assert!(from_bytes::<Proof>(&trailing).is_err());
     assert!(from_bytes::<Proof>(&bytes[..bytes.len() - 1]).is_err());
-    // The first vector is the column sums, after the five limbs of the lifted claim: a forged
-    // length fails at the end of the input.
+    // The first vector is the column sums, after the five limbs of the lifted claim and the
+    // nonce: a forged length fails at the end of the input.
     let mut forged = bytes.clone();
-    forged[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
+    forged[48..56].copy_from_slice(&u64::MAX.to_le_bytes());
     assert!(from_bytes::<Proof>(&forged).is_err());
     // A field element of the ring-switching columns is any 16 bytes, but a claim is not: the
     // canonical encoding of Fp128 rejects values at or above the modulus.

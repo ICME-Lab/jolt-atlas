@@ -49,6 +49,8 @@ pub struct Proof {
     /// The claim over the integers: the inner product of the bits with the tensor of the
     /// canonical representatives of the row `eq` table and of the column weights.
     pub lifted_claim: Wide,
+    /// The proof-of-work nonce before the projection prime is drawn.
+    pub projection_nonce: u64,
     /// For each column, the inner product over the integers of its bits with the row table
     /// reduced modulo the projection prime.
     pub column_sums: Vec<u128>,
@@ -60,6 +62,7 @@ pub struct Proof {
 
 impl_canonical_struct!([] Proof {
     lifted_claim,
+    projection_nonce,
     column_sums,
     grand_product,
     ring_columns,

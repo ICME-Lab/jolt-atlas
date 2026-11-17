@@ -3,7 +3,7 @@ use crate::onnx_proof::deferred_lookups::DeferredBatch;
 use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::{
     neural_teleport::{
-        division::TeleportInputRelation, sin::SIN_TABLE_VARS, trig_downscale::TrigDownscaleOperands,
+        division::trig_period, sin::SIN_TABLE_VARS, trig_downscale::TrigDownscaleOperands,
     },
     op_lookups::{OpLookupEncoding, OpLookupProvider},
     plan::{OpLookup, OpOpen, OpPlan, OpRelation, OpTie, OpTrig, Plan, Step},
@@ -15,7 +15,7 @@ use atlas_sumcheck::{
     shout::RaOneHotEncoding,
 };
 use atlas_trace::{op::Sin, trace::ModelExecutionIO, Model};
-use common::consts::{MODEL_SCALE, TRIG_PERIOD_MODULUS};
+use common::consts::MODEL_SCALE;
 use common::{CommittedPoly, VirtualPoly};
 
 impl OpLayout for Sin {
@@ -75,10 +75,7 @@ impl OpPlan for Sin {
                 relation: OpRelation::TrigOneHot(OpTrig::Sin, node.clone()),
             },
             Step::Tie {
-                relation: OpTie::TeleportInput(TeleportInputRelation {
-                    node: node.clone(),
-                    tau: TRIG_PERIOD_MODULUS as i32,
-                }),
+                relation: OpTie::Op(trig_period(node)),
             },
         ]))
     }

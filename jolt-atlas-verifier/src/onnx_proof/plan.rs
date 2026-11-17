@@ -20,8 +20,8 @@ use crate::onnx_proof::{
     fused_rebase,
     global_clamp::ClampBucket,
     neural_teleport::{
-        cos::CosTable, division::TeleportInputRelation, sin::SinTable,
-        small_table::SmallTableRelation, trig_downscale::TrigDownscaleOperands,
+        cos::CosTable, sin::SinTable, small_table::SmallTableRelation,
+        trig_downscale::TrigDownscaleOperands,
     },
     op_lookups::{DefaultLookupOperands, OpLookupEncoding, OpLookupProvider},
     ops::{
@@ -356,8 +356,6 @@ impl<F: JoltField> OpRelation<F> {
 pub enum OpTie<F: JoltField> {
     /// An op relation with no rounds.
     Op(OpRel<F>),
-    /// A trig op's input is `P·q + r` over its teleport quotient and remainder claims.
-    TeleportInput(TeleportInputRelation),
     /// A softmax in-the-clear check, as `ops::softmax_last_axis` lists them.
     Softmax(SoftmaxTie),
 }
@@ -371,7 +369,6 @@ impl<F: JoltField> OpTie<F> {
     ) -> Result<(), ProofVerifyError> {
         match self {
             Self::Op(relation) => verify_tie(relation, accumulator, transcript),
-            Self::TeleportInput(relation) => relation.verify(accumulator, transcript),
             Self::Softmax(tie) => tie.verify(accumulator, transcript),
         }
     }

@@ -169,6 +169,8 @@ pub enum RelationId {
     SmallTable,
     /// A gather's read of its dictionary.
     Gather,
+    /// A trig op's period reduction: the input is `P·q + rem`.
+    TrigPeriod,
     /// Softmax: the output claim and the two row sums reduced to the table reads.
     SoftmaxSums,
     /// A group of committed openings reduced to one claim for the joint opening proof.

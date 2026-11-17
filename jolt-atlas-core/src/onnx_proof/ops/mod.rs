@@ -120,7 +120,7 @@ use crate::onnx_proof::{
     trace_view::TraceView,
     ProofId,
 };
-use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider, Target};
+use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider};
 use atlas_algebra::poly::multilinear::MultilinearPolynomial;
 use atlas_lookup_tables::{
     clamp::{ActivationClampTable, ClampTable, SiluClampTable},
@@ -561,54 +561,13 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
     }
     match relation {
         OpRelation::Op(relation) => {
-            let kind = relation.kind;
             let params = op_rel_params(
                 relation,
                 &prover.trace,
                 &mut prover.accumulator,
                 &mut prover.transcript,
             );
-            match kind {
-                OpRelKind::Contraction => {
-                    vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
-                }
-                OpRelKind::MeanOfSquares => {
-                    vec![Box::new(MeanOfSquaresReductionProver::initialize(
-                        &prover.trace,
-                        params,
-                    ))]
-                }
-                OpRelKind::Gather => vec![Box::new(GatherProver::initialize(
-                    &prover.trace,
-                    params,
-                    &prover.accumulator,
-                ))],
-                OpRelKind::And
-                | OpRelKind::Mul
-                | OpRelKind::Square
-                | OpRelKind::Cube
-                | OpRelKind::AddAccumulation
-                | OpRelKind::SubAccumulation
-                | OpRelKind::Iff
-                | OpRelKind::Div
-                | OpRelKind::DivQuotient
-                | OpRelKind::ConstantDivision
-                | OpRelKind::Rsqrt
-                | OpRelKind::Identity
-                | OpRelKind::Neg
-                | OpRelKind::ZeroOutput
-                | OpRelKind::Constant
-                | OpRelKind::Input
-                | OpRelKind::AxisPermutation
-                | OpRelKind::Broadcast
-                | OpRelKind::Reshape
-                | OpRelKind::Slice
-                | OpRelKind::Concat
-                | OpRelKind::SumAxis
-                | OpRelKind::SoftmaxSums => {
-                    vec![Box::new(RelationProver::initialize(&prover.trace, params))]
-                }
-            }
+            vec![op_rel_prover(params, &prover.trace, &prover.accumulator)]
         }
         OpRelation::GatherLargeOneHot(node) => {
             let encoding = gather::large::GatherRaEncoding::new(&node)
@@ -786,7 +745,6 @@ fn prove_open<F: JoltField, T: Transcript>(open: &OpOpen, prover: &mut Prover<F,
 
 /// Append a plan tie's produced openings with the prover's claims.
 fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie<F>, prover: &mut Prover<F, T>) {
-    let expect = "the prover holds every claim it reads";
     let Prover {
         trace,
         accumulator,
@@ -795,23 +753,6 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie<F>, prover: &mut P
     } = prover;
     match relation {
         OpTie::Op(relation) => prove_tie(relation, trace, accumulator, transcript),
-        OpTie::TeleportInput(relation) => {
-            let node = &relation.node;
-            let accessor = AccOpeningAccessor::new(&*accumulator, node);
-            let (r_node_output, _) = accessor.get_reduced_opening().expect(expect);
-            let q_claim = accessor
-                .get_advice(CommittedPoly::TeleportNodeQuotient)
-                .expect(expect)
-                .1;
-            let r_claim = accessor
-                .get_advice(VirtualPoly::TeleportRemainder)
-                .expect(expect)
-                .1;
-            let a_claim = F::from_i32(relation.tau) * q_claim + r_claim;
-            AccOpeningAccessor::new(accumulator, node)
-                .into_provider(transcript, r_node_output)
-                .append_nodeio(Target::Input(0), a_claim);
-        }
         OpTie::Softmax(tie) => softmax_last_axis::prove_tie(tie, trace, accumulator, transcript),
     }
 }
@@ -852,7 +793,8 @@ pub fn op_rel_witnesses<F: JoltField>(
         | OpRelKind::Broadcast
         | OpRelKind::Reshape
         | OpRelKind::Slice
-        | OpRelKind::Concat => {
+        | OpRelKind::Concat
+        | OpRelKind::TrigPeriod => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
     }
@@ -883,6 +825,9 @@ pub fn op_rel_tie_claims<F: JoltField>(
         OpRelKind::Reshape => reshape::flat_copy_claims(node, trace, &setup.incoming_point),
         OpRelKind::Slice => slice::subcube_select_claims(relation, trace, &setup.incoming_point),
         OpRelKind::Concat => concat::subcube_tiling_claims(relation, trace, &setup.incoming_point),
+        OpRelKind::TrigPeriod => {
+            crate::onnx_proof::neural_teleport::division::trig_period_claims(node, accumulator)
+        }
         OpRelKind::And
         | OpRelKind::Mul
         | OpRelKind::Square
@@ -898,6 +843,46 @@ pub fn op_rel_tie_claims<F: JoltField>(
         | OpRelKind::Gather => {
             panic!("{:?} is proven by a sumcheck, not a tie", relation.kind)
         }
+    }
+}
+
+/// The prover of an op relation set up as `params`: its specialized witness, or the engine's
+/// over its witnesses.
+pub fn op_rel_prover<F: JoltField, T: Transcript>(
+    params: RelationParams<F, OpRel<F>>,
+    trace: &Trace,
+    accumulator: &dyn OpeningAccumulator<F>,
+) -> Box<dyn DynRelationWitness<F, T>> {
+    match params.relation().kind {
+        OpRelKind::MeanOfSquares => {
+            Box::new(MeanOfSquaresReductionProver::initialize(trace, params))
+        }
+        OpRelKind::Contraction => Box::new(EinsumDotProver::initialize(trace, params)),
+        OpRelKind::Gather => Box::new(GatherProver::initialize(trace, params, accumulator)),
+        OpRelKind::And
+        | OpRelKind::Mul
+        | OpRelKind::Square
+        | OpRelKind::Cube
+        | OpRelKind::Iff
+        | OpRelKind::Div
+        | OpRelKind::ConstantDivision
+        | OpRelKind::Rsqrt
+        | OpRelKind::SumAxis
+        | OpRelKind::SoftmaxSums
+        | OpRelKind::AddAccumulation
+        | OpRelKind::SubAccumulation
+        | OpRelKind::DivQuotient
+        | OpRelKind::Identity
+        | OpRelKind::Neg
+        | OpRelKind::ZeroOutput
+        | OpRelKind::Constant
+        | OpRelKind::Input
+        | OpRelKind::AxisPermutation
+        | OpRelKind::Broadcast
+        | OpRelKind::Reshape
+        | OpRelKind::Slice
+        | OpRelKind::Concat
+        | OpRelKind::TrigPeriod => Box::new(RelationProver::initialize(trace, params)),
     }
 }
 
@@ -934,7 +919,8 @@ pub fn op_rel_setup_claims<F: JoltField>(
         | OpRelKind::Broadcast
         | OpRelKind::Reshape
         | OpRelKind::Slice
-        | OpRelKind::Concat => {
+        | OpRelKind::Concat
+        | OpRelKind::TrigPeriod => {
             panic!("{:?} has no setup opens", relation.kind)
         }
     }

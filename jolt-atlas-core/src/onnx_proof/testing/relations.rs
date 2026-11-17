@@ -151,12 +151,12 @@ fn disposition(kind: OpKind) -> Disposition {
         | OpKind::Reshape
         | OpKind::Broadcast
         | OpKind::MoveAxis
-        | OpKind::SoftmaxLastAxis => Relation,
+        | OpKind::SoftmaxLastAxis
+        | OpKind::Sin
+        | OpKind::Cos => Relation,
         OpKind::Tanh
         | OpKind::Sigmoid
         | OpKind::Erf
-        | OpKind::Sin
-        | OpKind::Cos
         | OpKind::ReLU
         | OpKind::SmoothRelu
         | OpKind::Clamp

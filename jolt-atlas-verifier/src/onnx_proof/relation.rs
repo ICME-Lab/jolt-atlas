@@ -245,6 +245,8 @@ pub enum OpRelKind {
     Gather,
     /// `SoftmaxLastAxis`: the output claim and the two row sums reduced to the table reads.
     SoftmaxSums,
+    /// `Sin` / `Cos`: the period reduction, the input is `P·q + r`.
+    TrigPeriod,
 }
 
 impl OpRelKind {
@@ -271,6 +273,7 @@ impl OpRelKind {
             Self::Contraction => RelationId::Contraction,
             Self::Gather => RelationId::Gather,
             Self::SoftmaxSums => RelationId::SoftmaxSums,
+            Self::TrigPeriod => RelationId::TrigPeriod,
         }
     }
 
@@ -303,6 +306,7 @@ impl OpRelKind {
             Self::Contraction => matches!(op, Op::Einsum(_)),
             Self::Gather => matches!(op, Op::GatherSmall(_) | Op::GatherLarge(_)),
             Self::SoftmaxSums => matches!(op, Op::SoftmaxLastAxis(_)),
+            Self::TrigPeriod => matches!(op, Op::Sin(_) | Op::Cos(_)),
         }
     }
 }

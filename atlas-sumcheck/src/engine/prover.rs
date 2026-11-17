@@ -42,6 +42,16 @@ pub trait ProveRounds<F: JoltField> {
         previous_claim: F,
     ) -> Result<UnivariatePoly<F>, SumcheckError<F>>;
 
+    /// Bind `bind`, the challenge of member-local `round`, into state the member shares with
+    /// other members of its batch. A [`RoundScheduler`] calls this for every member, one at a
+    /// time, before the round's [`prove_round`]s (and before the [`finish_rounds`]s), which it
+    /// may then run in parallel: those take no exclusive access to shared state. A member
+    /// with shared state binds it here and nowhere else; the default has none.
+    ///
+    /// [`prove_round`]: Self::prove_round
+    /// [`finish_rounds`]: Self::finish_rounds
+    fn bind_shared(&mut self, _bind: F, _round: usize) {}
+
     /// Bind the member's final active round's challenge. Called once after the batch's round
     /// loop, for every member that was ever active; the member is fully bound afterwards.
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>>;

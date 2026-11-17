@@ -98,11 +98,10 @@ impl<F: JoltField> RelationWitness<F> for OpeningProofReductionSumcheckProver<F>
 }
 
 impl<F: JoltField> OpeningProofReductionSumcheckProver<F> {
+    /// Bind the member's own state; its shared state is bound by [`ProveRounds::bind_shared`].
     fn bind(&mut self, r: F, round: usize) {
-        let r_j = F::challenge_from_field(r);
-        match &mut self.prover_state {
-            ProverOpening::Dense(opening) => opening.bind(r_j, round),
-            ProverOpening::OneHot(opening) => opening.bind(r_j, round),
+        if let ProverOpening::OneHot(opening) = &mut self.prover_state {
+            opening.bind(F::challenge_from_field(r), round);
         }
     }
 }
@@ -126,6 +125,16 @@ impl<F: JoltField> ProveRounds<F> for OpeningProofReductionSumcheckProver<F> {
             ProverOpening::OneHot(opening) => opening.compute_message(round, previous_claim),
         }
         .map_err(round_check_failed(round, previous_claim))
+    }
+
+    /// The eq tables of the member's point and a dense polynomial are shared by the members
+    /// that open at that point or open that polynomial: the first of them to get here binds.
+    fn bind_shared(&mut self, bind: F, round: usize) {
+        let r_j = F::challenge_from_field(bind);
+        match &mut self.prover_state {
+            ProverOpening::Dense(opening) => opening.bind(r_j, round),
+            ProverOpening::OneHot(opening) => opening.bind_shared(r_j, round),
+        }
     }
 
     fn finish_rounds(&mut self, bind: F) -> Result<(), SumcheckError<F>> {
@@ -376,15 +385,13 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
         }
     }
 
-    #[tracing::instrument(skip_all, name = "OneHotPolynomialProverOpening::bind")]
-    pub fn bind(&mut self, r: F::Challenge, round: usize) {
+    /// Bind the eq tables the member shares, unless a member bound them this round already.
+    pub fn bind_shared(&mut self, r: F::Challenge, round: usize) {
         let mut shared_eq_address = self.eq_address_state.write().unwrap();
         let mut shared_eq_cycle = self.eq_cycle_state.write().unwrap();
         let log_K = self.K.log_2();
         let num_variables_bound =
             shared_eq_address.num_variables_bound + shared_eq_cycle.num_variables_bound;
-
-        // Bind shared state if not already bound
         if num_variables_bound <= round {
             if round < log_K {
                 shared_eq_address
@@ -398,6 +405,13 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
                 shared_eq_cycle.num_variables_bound += 1;
             }
         }
+    }
+
+    /// Bind the member's own state, after [`Self::bind_shared`] of the same round.
+    #[tracing::instrument(skip_all, name = "OneHotPolynomialProverOpening::bind")]
+    pub fn bind(&mut self, r: F::Challenge, round: usize) {
+        let shared_eq_address = self.eq_address_state.read().unwrap();
+        let log_K = self.K.log_2();
 
         // For the first two log T rounds we want to use F still
         if round == log_K - 1 {
@@ -460,6 +474,29 @@ where
             sumcheck_id,
             opening_point,
             vec![claim],
+            opening.into(),
+        )
+    }
+
+    /// Dense polynomials opened at one point, reduced as their combination with the in-group
+    /// coefficients, which is built when the reduction is prepared.
+    pub fn new_dense_group(
+        polynomials: Vec<CommittedPoly>,
+        sumcheck_id: SumcheckId,
+        eq_poly: Arc<RwLock<EqCycleState<F>>>,
+        opening_point: Vec<F>,
+        claims: Vec<F>,
+    ) -> Self {
+        assert_eq!(polynomials.len(), claims.len());
+        let opening = DensePolynomialProverOpening {
+            polynomial: None,
+            eq_poly,
+        };
+        Self::group(
+            polynomials,
+            sumcheck_id,
+            opening_point,
+            claims,
             opening.into(),
         )
     }
@@ -567,8 +604,29 @@ where
 
         match &mut self.prover_state {
             ProverOpening::Dense(opening) => {
-                let poly = shared_dense_polynomials.get(&self.polynomials[0]).unwrap();
-                opening.polynomial = Some(poly.clone());
+                opening.polynomial = Some(match self.polynomials.as_slice() {
+                    [polynomial] => shared_dense_polynomials.get(polynomial).unwrap().clone(),
+                    group => {
+                        // The group's combination `Σ_i ρ^i · f_i`, one coefficient at a time.
+                        let members: Vec<(&MultilinearPolynomial<F>, F)> = group
+                            .iter()
+                            .zip(&self.coefficients)
+                            .map(|(id, &c)| (polynomials_map.get(id).unwrap(), c))
+                            .collect();
+                        let combined: Vec<F> = (0..1usize << self.point.len())
+                            .into_par_iter()
+                            .map(|index| {
+                                members
+                                    .iter()
+                                    .map(|(poly, c)| poly.get_scaled_coeff(index, *c))
+                                    .sum()
+                            })
+                            .collect();
+                        Arc::new(RwLock::new(SharedDensePolynomial::new(
+                            MultilinearPolynomial::from(combined),
+                        )))
+                    }
+                });
             }
             ProverOpening::OneHot(opening) => {
                 let group: Vec<(OneHotPolynomial<F>, F)> = self

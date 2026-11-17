@@ -46,6 +46,21 @@ pub fn append_produced<F: JoltField, T: ProvingTranscript, R: Relation<F>>(
         }
         return;
     }
+    if let Some(groups) = relation.dense_groups() {
+        let mut claims = claims.iter().copied();
+        let groups = dense_group_points(groups, points).expect("a point per produced opening");
+        for (group, point) in groups {
+            let group_claims = claims.by_ref().take(group.polynomials.len()).collect();
+            accumulator.append_dense_group(
+                transcript,
+                group.polynomials,
+                group.sumcheck,
+                point,
+                group_claims,
+            );
+        }
+        return;
+    }
     for ((&id, point), &claim) in relation.produced().iter().zip(points).zip(claims) {
         match id.polynomial {
             PolynomialId::Virtual(_) => accumulator.append_virtual(
@@ -147,10 +162,8 @@ pub fn prove_relation_batch<F: JoltField, T: ProvingTranscript>(
 
 /// Like [`prove_relation_batch`], but computes each round's per-witness messages *and* ingests
 /// each challenge in parallel across witnesses (nested with each witness's own parallelism).
-///
-/// Only for batches of mutually independent witnesses: witnesses that share state behind an
-/// `RwLock` (the opening-reduction groups' shared eq tables) deadlock when a rayon thread holding
-/// a write guard steals a job that takes the same lock. Use [`prove_relation_batch`] for those.
+/// State the witnesses share is bound first, one witness at a time
+/// ([`ProveRounds::bind_shared`]), so the parallel pass only reads it.
 #[tracing::instrument(skip_all, name = "prove_relation_batch_parallel")]
 pub fn prove_relation_batch_parallel<F: JoltField, T: ProvingTranscript>(
     witnesses: Vec<&mut dyn DynRelationWitness<F, T>>,
@@ -307,6 +320,11 @@ impl<F: JoltField> RoundScheduler<F> for InstanceRounds {
         #[cfg(not(target_arch = "wasm32"))]
         print_current_memory_usage(format!("Sumcheck round {}", self.round).as_str());
         self.round += 1;
+        for item in work.iter_mut() {
+            if let Some(bind) = item.bind {
+                item.member.bind_shared(bind, item.local_round - 1);
+            }
+        }
         if self.parallel {
             work.iter_mut()
                 .map(SendRound)
@@ -322,6 +340,10 @@ impl<F: JoltField> RoundScheduler<F> for InstanceRounds {
         &mut self,
         finishes: &mut [MemberFinish<'_, F>],
     ) -> Result<(), SumcheckError<F>> {
+        for item in finishes.iter_mut() {
+            let last_round = item.member.num_rounds() - 1;
+            item.member.bind_shared(item.bind, last_round);
+        }
         if self.parallel {
             finishes
                 .iter_mut()

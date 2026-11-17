@@ -113,6 +113,7 @@ fn dense_polynomial_equivalence<const LOG_K: usize, const LOG_T: usize>(vanishin
         let univariate_poly = UnivariatePoly::from_evals(&univariate_evals);
         previous_claim = univariate_poly.evaluate(r);
 
+        one_hot_opening.bind_shared(r, round);
         one_hot_opening.bind(r, round);
         dense_poly.bind_parallel(r, BindingOrder::HighToLow);
         eq.bind_parallel(r, BindingOrder::HighToLow);

@@ -283,11 +283,10 @@ where
         Ok(())
     }
 
-    /// Adds openings to the accumulator: the `polynomials` are opened at `opening_point`, and
-    /// their claims are read from the transcript, in order.
-    /// Multiple sparse polynomials opened at a single point are NOT batched into
-    /// a single polynomial opened at the same point. `Err` on a failed read.
-    pub fn append_sparse<T, U>(
+    /// Adds a group of openings to the accumulator: the `polynomials`, one-hot or dense, are
+    /// opened at `opening_point`, and their claims are read from the transcript, in order. The
+    /// opening reduction reduces the group as one member. `Err` on a failed read.
+    pub fn append_group<T, U>(
         &mut self,
         transcript: &mut T,
         polynomials: Vec<CommittedPoly>,

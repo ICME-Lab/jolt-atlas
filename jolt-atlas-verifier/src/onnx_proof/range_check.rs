@@ -25,6 +25,7 @@ use atlas_claims::{challenge, constant, derived, opening, SymbolicSumcheck};
 use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ps_shout::CycleWeight,
+    relation::DenseGroup,
 };
 use atlas_transcript::Transcript;
 use common::CommittedPoly;
@@ -136,6 +137,15 @@ impl<F: JoltField> Produces for ValueParams<F> {
 }
 
 impl<F: JoltField> Relation<F> for ValueParams<F> {
+    /// The digit columns are opened at one point: the opening reduction takes them as one
+    /// group.
+    fn dense_groups(&self) -> Option<Vec<DenseGroup>> {
+        Some(vec![DenseGroup {
+            polynomials: self.digits.clone(),
+            sumcheck: bucket_sumcheck_id(),
+        }])
+    }
+
     fn derive(
         &self,
         id: &RelationDerived,

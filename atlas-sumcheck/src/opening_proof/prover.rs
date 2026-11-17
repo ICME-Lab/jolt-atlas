@@ -1,7 +1,7 @@
 //! The prover side of [`super`].
 
 use super::*;
-use crate::relation::prover::prove_relation_batch;
+use crate::relation::prover::prove_relation_batch_parallel;
 use crate::{
     evaluation_reduction::ReducedInstance,
     opening_reduction::{
@@ -258,6 +258,60 @@ where
         self.sumchecks.insert(opening_id, sumcheck);
     }
 
+    /// Adds openings of dense polynomials at one point as one group: their claims are sent in
+    /// order, and the opening reduction folds the polynomials into one before it reduces them.
+    #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::append_dense_group")]
+    pub fn append_dense_group<T: ProvingTranscript>(
+        &mut self,
+        transcript: &mut T,
+        polynomials: Vec<CommittedPoly>,
+        sumcheck: SumcheckId,
+        opening_point: Vec<F>,
+        claims: Vec<F>,
+    ) {
+        assert_eq!(polynomials.len(), claims.len());
+        let Some(&first) = polynomials.first() else {
+            return;
+        };
+        let claims: Vec<F> = polynomials
+            .iter()
+            .zip(claims)
+            .map(|(&poly, claim)| {
+                let opening_id = OpeningId::new(poly, sumcheck);
+                if self.is_bound(opening_id, &opening_point) {
+                    return self.openings[&opening_id].1;
+                }
+                #[cfg(any(test, feature = "test-feature"))]
+                let claim = forgery::apply(opening_id, claim);
+                transcript.send_scalar(&claim);
+                claim
+            })
+            .collect();
+        let shared_eq = self
+            .eq_cycle_map
+            .entry(opening_point.clone())
+            .or_insert_with(|| Arc::new(RwLock::new(EqCycleState::new(&opening_point))))
+            .clone();
+        for (&poly, &claim) in polynomials.iter().zip(&claims) {
+            self.openings.insert(
+                OpeningId::new(poly, sumcheck),
+                (
+                    OpeningPoint::<BIG_ENDIAN, F>::new(opening_point.clone()),
+                    claim,
+                ),
+            );
+        }
+        let instance = OpeningProofReductionSumcheckProver::new_dense_group(
+            polynomials,
+            sumcheck,
+            shared_eq,
+            opening_point,
+            claims,
+        );
+        self.sumchecks
+            .insert(OpeningId::new(first, sumcheck), instance);
+    }
+
     #[tracing::instrument(skip_all, name = "ProverOpeningAccumulator::append_sparse")]
     pub fn append_sparse<T, U>(
         &mut self,
@@ -394,8 +448,12 @@ where
 
         // Populate dense_polynomial_map
         for (_, sumcheck) in self.sumchecks.iter() {
-            if let ProverOpening::Dense(_) = &sumcheck.prover_state {
-                let poly_id = sumcheck.polynomials[0];
+            // A dense polynomial opened alone is shared by its openings; a group of them is
+            // folded into a polynomial of the group's own.
+            if let (ProverOpening::Dense(_), [poly_id]) =
+                (&sumcheck.prover_state, sumcheck.polynomials.as_slice())
+            {
+                let poly_id = *poly_id;
                 self.dense_polynomial_map.entry(poly_id).or_insert_with(|| {
                     let poly = polynomials.get(&poly_id).unwrap().clone();
                     Arc::new(RwLock::new(SharedDensePolynomial::new(poly)))
@@ -426,14 +484,14 @@ where
             write_flamegraph_svg(flamegraph, "stage7_start_flamechart.svg");
         }
 
-        // Temporarily take sumchecks so we can pass self to prove_relation_batch
+        // Temporarily take sumchecks so we can pass self to the batch prover
         let mut sumchecks = std::mem::take(&mut self.sumchecks);
         let instances = sumchecks
             .iter_mut()
             .map(|(_, opening)| opening as &mut _)
             .collect();
 
-        let r_sumcheck = prove_relation_batch(instances, self, transcript);
+        let r_sumcheck = prove_relation_batch_parallel(instances, self, transcript);
 
         // Restore sumchecks (with cached claims from cache_openings)
         self.sumchecks = sumchecks;

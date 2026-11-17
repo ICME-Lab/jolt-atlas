@@ -688,7 +688,7 @@ mod tests {
 
         oh_polys.iter().enumerate().for_each(|(i, data)| {
             verifier_opening_accumulator
-                .append_sparse(
+                .append_group(
                     &mut verifier_tr,
                     vec![CommittedPoly::NodeOutputRaD(i, 0)],
                     SumcheckId::NodeExecution(0),
@@ -845,7 +845,7 @@ mod tests {
 
         oh_polys.iter().enumerate().for_each(|(i, data)| {
             verifier_opening_accumulator
-                .append_sparse(
+                .append_group(
                     &mut verifier_tr,
                     vec![CommittedPoly::NodeOutputRaD(i, 0)],
                     SumcheckId::NodeExecution(0),

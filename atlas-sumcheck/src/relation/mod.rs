@@ -204,6 +204,35 @@ pub struct SparseGroup {
     pub address_vars: usize,
 }
 
+/// Committed dense openings appended together as one group: polynomials opened at one point,
+/// which the opening reduction folds into one polynomial before it reduces them.
+pub struct DenseGroup {
+    /// The group's polynomials, in produced order.
+    pub polynomials: Vec<CommittedPoly>,
+    /// The sumcheck the openings come from.
+    pub sumcheck: SumcheckId,
+}
+
+/// Each dense group with its point: the point of its first produced opening. `Err` if a group
+/// has no point.
+pub fn dense_group_points<F>(
+    groups: Vec<DenseGroup>,
+    points: Vec<Vec<F>>,
+) -> Result<Vec<(DenseGroup, Vec<F>)>, ProofVerifyError> {
+    let mut points = points.into_iter();
+    groups
+        .into_iter()
+        .map(|group| {
+            let mut members = points.by_ref().take(group.polynomials.len());
+            let point = members.next().ok_or_else(|| {
+                ProofVerifyError::Malformed("a dense group has no produced opening point".into())
+            })?;
+            members.for_each(drop);
+            Ok((group, point))
+        })
+        .collect()
+}
+
 /// Each group with its point: the point of its first produced opening (a group's openings share
 /// one point). `Err` if a group has no point.
 pub fn group_points<F>(
@@ -271,9 +300,15 @@ pub trait Relation<F: JoltField>:
         None
     }
 
+    /// The produced openings as dense groups, in produced order, when they are appended that
+    /// way: committed dense polynomials opened at one point. `None` appends them one by one.
+    fn dense_groups(&self) -> Option<Vec<DenseGroup>> {
+        None
+    }
+
     /// Append the produced openings at their points, in Fiat-Shamir order: one append per
-    /// opening, or one per [`Self::sparse_groups`] group. Each append reads the opening's claim
-    /// from the transcript.
+    /// opening, or one per [`Self::sparse_groups`] or [`Self::dense_groups`] group. Each append
+    /// reads the opening's claim from the transcript.
     fn append_produced_requests<T: VerifyingTranscript>(
         &self,
         setup: &RelationSetup<F>,
@@ -284,7 +319,13 @@ pub trait Relation<F: JoltField>:
         let points = self.opening_points(setup, challenges)?;
         if let Some(groups) = self.sparse_groups() {
             for (group, point) in group_points(groups, points)? {
-                accumulator.append_sparse(transcript, group.polynomials, group.sumcheck, point)?;
+                accumulator.append_group(transcript, group.polynomials, group.sumcheck, point)?;
+            }
+            return Ok(());
+        }
+        if let Some(groups) = self.dense_groups() {
+            for (group, point) in dense_group_points(groups, points)? {
+                accumulator.append_group(transcript, group.polynomials, group.sumcheck, point)?;
             }
             return Ok(());
         }

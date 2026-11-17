@@ -604,7 +604,8 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 | OpRelKind::Reshape
                 | OpRelKind::Slice
                 | OpRelKind::Concat
-                | OpRelKind::SumAxis => {
+                | OpRelKind::SumAxis
+                | OpRelKind::SoftmaxSums => {
                     vec![Box::new(RelationProver::initialize(&prover.trace, params))]
                 }
             }
@@ -695,8 +696,7 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 ..
             } = prover;
             let node_idx = match &relation {
-                SoftmaxRelation::Sums(s)
-                | SoftmaxRelation::Read(s)
+                SoftmaxRelation::Read(s)
                 | SoftmaxRelation::Clamp(s)
                 | SoftmaxRelation::ReadOneHot(s)
                 | SoftmaxRelation::ClampOneHot(s) => s.idx(),
@@ -833,6 +833,7 @@ pub fn op_rel_witnesses<F: JoltField>(
         OpRelKind::ConstantDivision => scalar_const_div::constant_division_witnesses(node, trace),
         OpRelKind::Rsqrt => rsqrt::reciprocal_sqrt_witnesses(node, trace),
         OpRelKind::SumAxis => sum::axis::axis_sum_witnesses(relation, trace, &setup.incoming_point),
+        OpRelKind::SoftmaxSums => softmax_last_axis::sums_witnesses(node, trace),
         OpRelKind::MeanOfSquares | OpRelKind::Contraction | OpRelKind::Gather => {
             panic!(
                 "{:?} has a specialized prover, not the engine's",
@@ -891,6 +892,7 @@ pub fn op_rel_tie_claims<F: JoltField>(
         | OpRelKind::ConstantDivision
         | OpRelKind::Rsqrt
         | OpRelKind::SumAxis
+        | OpRelKind::SoftmaxSums
         | OpRelKind::MeanOfSquares
         | OpRelKind::Contraction
         | OpRelKind::Gather => {
@@ -917,6 +919,7 @@ pub fn op_rel_setup_claims<F: JoltField>(
         | OpRelKind::ConstantDivision
         | OpRelKind::Rsqrt
         | OpRelKind::SumAxis
+        | OpRelKind::SoftmaxSums
         | OpRelKind::MeanOfSquares
         | OpRelKind::Contraction
         | OpRelKind::AddAccumulation

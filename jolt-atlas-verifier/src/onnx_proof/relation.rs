@@ -28,7 +28,7 @@ use atlas_algebra::field::{IntoOpening, Ring};
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        multilinear::BindingOrder,
+        multilinear::{BindingOrder, MultilinearPolynomial, PolynomialEvaluation},
         point::{OpeningPoint, BIG_ENDIAN},
     },
     utils::errors::ProofVerifyError,
@@ -243,6 +243,8 @@ pub enum OpRelKind {
     /// `GatherSmall` / `GatherLarge`: the dictionary read; the setup appends the index operand's
     /// opening at the index coordinates of the output point.
     Gather,
+    /// `SoftmaxLastAxis`: the output claim and the two row sums reduced to the table reads.
+    SoftmaxSums,
 }
 
 impl OpRelKind {
@@ -268,6 +270,7 @@ impl OpRelKind {
             Self::MeanOfSquares => RelationId::MeanOfSquares,
             Self::Contraction => RelationId::Contraction,
             Self::Gather => RelationId::Gather,
+            Self::SoftmaxSums => RelationId::SoftmaxSums,
         }
     }
 
@@ -299,6 +302,7 @@ impl OpRelKind {
             Self::MeanOfSquares => matches!(op, Op::MeanOfSquares(_)),
             Self::Contraction => matches!(op, Op::Einsum(_)),
             Self::Gather => matches!(op, Op::GatherSmall(_) | Op::GatherLarge(_)),
+            Self::SoftmaxSums => matches!(op, Op::SoftmaxLastAxis(_)),
         }
     }
 }
@@ -335,6 +339,9 @@ pub type FinishSetupFn<F> = fn(
     &mut RelationSetup<F>,
 ) -> Result<(), ProofVerifyError>;
 
+/// A public table of a relation's output expression, over the sumcheck's hypercube.
+pub type TableFn<F> = fn(&OpRel<F>, usize, &RelationSetup<F>) -> Result<Vec<F>, ProofVerifyError>;
+
 /// What a relation computes that is not the default. Each member is a function, never a
 /// closure: a relation captures no state.
 pub struct Custom<F: JoltField> {
@@ -346,6 +353,8 @@ pub struct Custom<F: JoltField> {
     pub derive: Option<DeriveFn<F>>,
     /// Entries added to the setup after the draws. It has no transcript.
     pub finish_setup: Option<FinishSetupFn<F>>,
+    /// The public tables [`RelationDerived::Table`] names; the default has none.
+    pub table: Option<TableFn<F>>,
 }
 
 impl<F: JoltField> Clone for Custom<F> {
@@ -362,6 +371,7 @@ impl<F: JoltField> Default for Custom<F> {
             points: None,
             derive: None,
             finish_setup: None,
+            table: None,
         }
     }
 }
@@ -497,7 +507,21 @@ impl<F: JoltField> Relation<F> for OpRel<F> {
                 &setup.incoming_point,
                 &low_to_high_point(challenges),
             )),
+            (None, RelationDerived::Table(index)) => {
+                Ok(MultilinearPolynomial::from(self.table(*index, setup)?)
+                    .evaluate(&low_to_high_point(challenges)))
+            }
             (None, other) => Err(not_derived(other)),
+        }
+    }
+
+    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Result<Vec<F>, ProofVerifyError> {
+        match self.custom.table {
+            Some(table) => table(self, index, setup),
+            None => Err(ProofVerifyError::Malformed(format!(
+                "{:?} on node {} has no table {index}",
+                self.kind, self.node.idx
+            ))),
         }
     }
 }

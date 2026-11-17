@@ -16,7 +16,7 @@
 //! u[k,j]    = c[k] − x[k,j]
 //! ```
 //!
-//! The first three are one sumcheck ([`SumsRelation`]) that leaves `v`, `t`, `t⁻` at one point;
+//! The first three are one sumcheck ([`sums`]) that leaves `v`, `t`, `t⁻` at one point;
 //! one table read through the table address proves them there, the clamp lookup ties `ũ` to
 //! `u`, and the address link ties `u` to the operand. `g` and `g⁻` are range-checked in the
 //! remainder buckets.
@@ -38,9 +38,8 @@
 //! supported.
 use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::{
-    low_to_high_point, not_derived, AtlasRelation, EngineRelation, Produces, Relation,
-    RelationChallenge, RelationDerived, RelationExpr, RelationId, RelationOpening, RelationSetup,
-    RelationVerifier, SetupRelation,
+    low_to_high_point, not_derived, Custom, OpRel, OpRelKind, RelationChallenge, RelationDerived,
+    RelationOpening, RelationSetup,
 };
 use atlas_sumcheck::relation::DynRelationVerifier;
 
@@ -69,7 +68,6 @@ use atlas_trace::{
 };
 
 use crate::node_view::ComputationNode;
-use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     poly::{
@@ -78,7 +76,7 @@ use atlas_algebra::{
     },
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
+use atlas_claims::{challenge, derived, opening};
 use atlas_sumcheck::shout;
 use atlas_transcript::Transcript;
 use common::{
@@ -175,7 +173,7 @@ impl OpPlan for SoftmaxLastAxis {
             open(SoftmaxOpen::Gaps),
             Step::Relation {
                 proof: ProofType::SoftmaxSums,
-                relation: relation(SoftmaxRelation::Sums),
+                relation: OpRelation::Op(sums(node)?),
             },
             open(SoftmaxOpen::Addresses),
             defer(DeferredBatch::Lookups, SoftmaxRelation::Read),
@@ -382,194 +380,151 @@ impl SoftmaxTie {
 /// ```
 ///
 /// with `A[k,j] = a(j)·eq(r0, (k,j))` and `B[k,j] = a(j)·eq(r0_row, k)`, `a` the selector of the
-/// live lanes.
+/// live lanes. The setup draws `γ`; `γ²` and the claim's constant follow from it. `Err` if the
+/// node is not a softmax or the softmax tables are not available.
 ///
 /// **S ⊆ R.** `out = a·v`, so `out(r0) = Σ A·v`; and `Σ B·t = Σ_k eq(r0_row, k)·Σ_j a(j)·t[k,j]`
 /// is the live row sums' extension at `r0_row`, which is `S' − g(r0_row)` when `g` is the gap of
 /// every row, likewise for `t⁻` and `g⁻`. `γ` separates the three.
-pub struct SumsRelation {
-    shape: SoftmaxShape,
-    sum_scale: i64,
-}
-
-impl SumsRelation {
-    /// The relation of a softmax node. `Err` if the softmax tables are not available.
-    pub fn new(shape: SoftmaxShape) -> Result<Self, ProofVerifyError> {
-        Ok(Self {
-            shape,
-            sum_scale: read_tables()?.tables.sum_scale,
-        })
-    }
-
-    /// The reads' openings: `v`, `t`, `t⁻`.
-    fn reads(&self) -> [OpeningId; 3] {
-        let ids = self.shape.ids();
-        [
-            ids.advice(VirtualPoly::SoftmaxRead),
-            ids.advice(VirtualPoly::SoftmaxSumRead),
-            ids.advice(VirtualPoly::SoftmaxPrevSumRead),
-        ]
-    }
-
-    /// The live-lane selector's values over a row.
-    fn selector<F: JoltField>(&self) -> Vec<F> {
-        (0..self.shape.F_N[1])
-            .map(|j| {
-                if j < self.shape.active_len {
-                    F::one()
-                } else {
-                    F::zero()
-                }
-            })
-            .collect()
-    }
-}
-
-impl SymbolicSumcheck for SumsRelation {
-    crate::atlas_relation_types!();
-
-    fn id(&self) -> RelationId {
-        RelationId::SoftmaxSums
-    }
-
-    fn rounds(&self) -> usize {
-        self.shape.log_f() + self.shape.log_n()
-    }
-
-    fn degree(&self) -> usize {
-        2
-    }
-
-    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
-        let ids = self.shape.ids();
-        opening::<G, _, _, _>(RelationOpening::ReducedNodeOutput(self.shape.idx()))
-            + challenge::<G, _, _, _>(RelationChallenge::ClaimConstant)
-            - challenge::<G, _, _, _>(RelationChallenge::Batching(0))
+pub fn sums<F: JoltField>(node: &ComputationNode) -> Result<OpRel<F>, ProofVerifyError> {
+    read_tables()?;
+    let shape = SoftmaxShape::for_node(node)?;
+    let ids = shape.ids();
+    let reads = [
+        ids.advice(VirtualPoly::SoftmaxRead),
+        ids.advice(VirtualPoly::SoftmaxSumRead),
+        ids.advice(VirtualPoly::SoftmaxPrevSumRead),
+    ];
+    let [v, t, t_prev] = reads.map(|id| opening(RelationOpening::Id(id)));
+    Ok(OpRel {
+        rounds: shape.log_f() + shape.log_n(),
+        degree: 2,
+        input: opening(RelationOpening::ReducedNodeOutput(node.idx))
+            + challenge(RelationChallenge::ClaimConstant)
+            - challenge(RelationChallenge::Batching(0))
                 * opening(RelationOpening::Id(ids.advice(VirtualPoly::SoftmaxSumGap)))
-            + challenge::<G, _, _, _>(RelationChallenge::Batching(1))
+            + challenge(RelationChallenge::Batching(1))
                 * opening(RelationOpening::Id(
                     ids.advice(VirtualPoly::SoftmaxPrevSumGap),
-                ))
-    }
-
-    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
-        let [v, t, t_prev] = self
-            .reads()
-            .map(|id| opening::<G, _, _, _>(RelationOpening::Id(id)));
-        derived::<G, _, _, _>(RelationDerived::Table(0)) * v
-            + derived::<G, _, _, _>(RelationDerived::Table(1)) * t
-            + derived::<G, _, _, _>(RelationDerived::Table(2)) * t_prev
-    }
+                )),
+        output: derived(RelationDerived::Table(0)) * v
+            + derived(RelationDerived::Table(1)) * t
+            + derived(RelationDerived::Table(2)) * t_prev,
+        produced: reads.to_vec(),
+        draws: vec![RelationChallenge::Batching(0)],
+        custom: Custom {
+            derive: Some(sums_weight_at_bound_point),
+            finish_setup: Some(sums_coefficients),
+            table: Some(sums_weight_table),
+            ..Custom::default()
+        },
+        ..OpRel::base(OpRelKind::SoftmaxSums, node)
+    })
 }
 
-impl Produces for SumsRelation {
-    fn produced(&self) -> Vec<OpeningId> {
-        self.reads().to_vec()
-    }
+/// The coefficients of a [`sums`] relation that follow from its drawn `γ`: `γ²`, and the
+/// claim's constant `γ·S' + γ²·(S' + 1)`.
+fn sums_coefficients<F: JoltField>(
+    _relation: &OpRel<F>,
+    _accumulator: &dyn OpeningAccumulator<F>,
+    setup: &mut RelationSetup<F>,
+) -> Result<(), ProofVerifyError> {
+    let gamma = setup.challenge(&RelationChallenge::Batching(0));
+    let gamma_sq = gamma * gamma;
+    let sum_scale = F::from_i64(read_tables()?.tables.sum_scale);
+    setup
+        .challenges
+        .push((RelationChallenge::Batching(1), gamma_sq));
+    setup.challenges.push((
+        RelationChallenge::ClaimConstant,
+        gamma * sum_scale + gamma_sq * (sum_scale + F::one()),
+    ));
+    Ok(())
 }
 
-impl<F: JoltField> Relation<F> for SumsRelation {
-    /// The weight tables over the node's cells: `A`, `γ·B` and `γ²·B`, for the prover.
-    fn table(&self, index: usize, setup: &RelationSetup<F>) -> Result<Vec<F>, ProofVerifyError> {
-        let (r0_row, _) = self.shape.split(&setup.incoming_point)?;
-        let selector = self.selector::<F>();
-        let n = self.shape.F_N[1];
-        Ok(match index {
-            0 => {
-                let mut eq = EqPolynomial::evals(&setup.incoming_point);
-                for (cell, value) in eq.iter_mut().enumerate() {
-                    if cell % n >= self.shape.active_len {
-                        *value = F::zero();
-                    }
+/// The weight tables of a [`sums`] relation over the node's cells: `A`, `γ·B` and `γ²·B`, for
+/// the prover.
+fn sums_weight_table<F: JoltField>(
+    relation: &OpRel<F>,
+    index: usize,
+    setup: &RelationSetup<F>,
+) -> Result<Vec<F>, ProofVerifyError> {
+    let shape = SoftmaxShape::for_node(&relation.node)?;
+    let (r0_row, _) = shape.split(&setup.incoming_point)?;
+    let n = shape.F_N[1];
+    Ok(match index {
+        0 => {
+            let mut eq = EqPolynomial::evals(&setup.incoming_point);
+            for (cell, value) in eq.iter_mut().enumerate() {
+                if cell % n >= shape.active_len {
+                    *value = F::zero();
                 }
-                eq
             }
-            1 | 2 => {
-                let gamma = setup.challenge(&RelationChallenge::Batching(index - 1));
-                EqPolynomial::evals(r0_row)
-                    .into_iter()
-                    .flat_map(|row| selector.iter().map(move |lane| gamma * row * *lane))
-                    .collect()
-            }
-            _ => {
-                return Err(ProofVerifyError::Malformed(format!(
-                    "the softmax sums have three weight tables, no table {index}"
-                )))
-            }
-        })
-    }
-
-    /// The weight tables' extensions at the bound point, in `O(log)`: the row part is an `eq`,
-    /// the lane part a sum over the live lanes.
-    fn derive(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Result<F, ProofVerifyError> {
-        let RelationDerived::Table(index) = id else {
-            return Err(not_derived(id));
-        };
-        let point = low_to_high_point(challenges);
-        let (rho_row, rho_lane) = self.shape.split(&point)?;
-        let (r0_row, r0_lane) = self.shape.split(&setup.incoming_point)?;
-        let row = EqPolynomial::mle(r0_row, rho_row);
-        let complement = |x: &F| F::one() - *x;
-        Ok(match index {
-            0 => {
-                // Σ_{j live} eq(r0_lane, j)·eq(ρ_lane, j).
-                let one: Vec<F> = r0_lane.iter().zip(rho_lane).map(|(a, b)| *a * *b).collect();
-                let zero: Vec<F> = r0_lane
-                    .iter()
-                    .zip(rho_lane)
-                    .map(|(a, b)| complement(a) * complement(b))
-                    .collect();
-                row * live_lane_sum(self.shape.active_len, &zero, &one)
-            }
-            1 | 2 => {
-                // Σ_{j live} eq(ρ_lane, j).
-                let zero: Vec<F> = rho_lane.iter().map(complement).collect();
-                setup.challenge(&RelationChallenge::Batching(index - 1))
-                    * row
-                    * live_lane_sum(self.shape.active_len, &zero, rho_lane)
-            }
-            _ => return Err(not_derived(id)),
-        })
-    }
+            eq
+        }
+        1 | 2 => {
+            let gamma = setup.challenge(&RelationChallenge::Batching(index - 1));
+            // The live-lane selector's values over a row.
+            let selector: Vec<F> = (0..n)
+                .map(|j| {
+                    if j < shape.active_len {
+                        F::one()
+                    } else {
+                        F::zero()
+                    }
+                })
+                .collect();
+            EqPolynomial::evals(r0_row)
+                .into_iter()
+                .flat_map(|row| selector.iter().map(move |lane| gamma * row * *lane))
+                .collect()
+        }
+        _ => {
+            return Err(ProofVerifyError::Malformed(format!(
+                "the softmax sums have three weight tables, no table {index}"
+            )))
+        }
+    })
 }
 
-impl<F: JoltField> SetupRelation<F> for SumsRelation {
-    fn setup<T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        let gamma: F = transcript.challenge_scalar();
-        let gamma_sq = gamma * gamma;
-        let sum_scale = F::from_i64(self.sum_scale);
-        Ok(RelationSetup {
-            incoming_point: accumulator.get_node_output_opening(self.shape.idx())?.0.r,
-            challenges: vec![
-                (RelationChallenge::Batching(0), gamma),
-                (RelationChallenge::Batching(1), gamma_sq),
-                (
-                    RelationChallenge::ClaimConstant,
-                    gamma * sum_scale + gamma_sq * (sum_scale + F::one()),
-                ),
-            ],
-        })
-    }
+/// [`RelationDerived::Table`] of a [`sums`] relation: the weight tables' extensions at the
+/// bound point, in `O(log)`: the row part is an `eq`, the lane part a sum over the live lanes.
+fn sums_weight_at_bound_point<F: JoltField>(
+    relation: &OpRel<F>,
+    id: &RelationDerived,
+    setup: &RelationSetup<F>,
+    challenges: &[F],
+) -> Result<F, ProofVerifyError> {
+    let RelationDerived::Table(index) = id else {
+        return Err(not_derived(id));
+    };
+    let shape = SoftmaxShape::for_node(&relation.node)?;
+    let point = low_to_high_point(challenges);
+    let (rho_row, rho_lane) = shape.split(&point)?;
+    let (r0_row, r0_lane) = shape.split(&setup.incoming_point)?;
+    let row = EqPolynomial::mle(r0_row, rho_row);
+    let complement = |x: &F| F::one() - *x;
+    Ok(match index {
+        0 => {
+            // Σ_{j live} eq(r0_lane, j)·eq(ρ_lane, j).
+            let one: Vec<F> = r0_lane.iter().zip(rho_lane).map(|(a, b)| *a * *b).collect();
+            let zero: Vec<F> = r0_lane
+                .iter()
+                .zip(rho_lane)
+                .map(|(a, b)| complement(a) * complement(b))
+                .collect();
+            row * live_lane_sum(shape.active_len, &zero, &one)
+        }
+        1 | 2 => {
+            // Σ_{j live} eq(ρ_lane, j).
+            let zero: Vec<F> = rho_lane.iter().map(complement).collect();
+            setup.challenge(&RelationChallenge::Batching(index - 1))
+                * row
+                * live_lane_sum(shape.active_len, &zero, rho_lane)
+        }
+        _ => return Err(not_derived(id)),
+    })
 }
-
-impl AtlasRelation for SumsRelation {
-    type Spec = SoftmaxLastAxis;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-}
-
-impl<F: JoltField> EngineRelation<F> for SumsRelation {}
 
 /// The table read at the reads' point: the output, sum and shifted sum tables through the
 /// table address, with the address itself as the read's `raf`.
@@ -659,8 +614,6 @@ impl RaOneHotEncoding for ReadRaEncoding {
 
 /// A softmax relation, as the plan holds it.
 pub enum SoftmaxRelation {
-    /// The sums relation ([`SumsRelation`]).
-    Sums(SoftmaxShape),
     /// The table read at the reads' point.
     Read(SoftmaxShape),
     /// The clamp lookup `ũ = Clamp[u]` at the reads' point.
@@ -680,11 +633,6 @@ impl SoftmaxRelation {
         transcript: &mut T,
     ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
         match self {
-            Self::Sums(shape) => Ok(vec![Box::new(RelationVerifier::new(
-                SumsRelation::new(shape)?,
-                &*accumulator,
-                transcript,
-            )?)]),
             Self::Read(shape) => {
                 let read = read_tables()?;
                 Ok(vec![shout::read_raf_verifier(

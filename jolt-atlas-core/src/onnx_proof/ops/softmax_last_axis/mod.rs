@@ -3,9 +3,6 @@
 //! relation's witnesses, the table read and the clamp lookup, all from the trace's
 //! [`SoftmaxWitness`].
 use crate::onnx_proof::op_lookups::{LookupWitness, OpLookupProve};
-use crate::onnx_proof::relation::{
-    AtlasRelation, RelationParams, RelationProver, RelationSetup, RelationWitnesses,
-};
 use crate::onnx_proof::trace_view::TraceView;
 use crate::utils::opening_access::IntoProverProvider;
 use atlas_sumcheck::relation::prover::DynRelationWitness;
@@ -135,25 +132,23 @@ pub fn prove_open<F: JoltField, T: Transcript>(
     }
 }
 
-/// The reads `v`, `t`, `t⁻` over the node's padded cells, aligned with the sums relation's
-/// produced openings.
-impl<F: JoltField> RelationWitnesses<F> for SumsRelation {
-    fn witnesses(&self, trace: &Trace, _setup: &RelationSetup<F>) -> Vec<MultilinearPolynomial<F>> {
-        let node = self.node();
-        let w = trace
-            .softmax_witness(node.idx)
-            .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx));
-        let read = tables();
-        let addresses = table_addresses(node, w);
-        [&read.tables.out, &read.tables.sum, &read.sum_prev]
-            .into_iter()
-            .map(|table| {
-                MultilinearPolynomial::from(
-                    addresses.iter().map(|&a| table[a]).collect::<Vec<i32>>(),
-                )
-            })
-            .collect()
-    }
+/// The witnesses of a [`sums`] relation: the reads `v`, `t`, `t⁻` over the node's padded
+/// cells.
+pub fn sums_witnesses<F: JoltField>(
+    node: &crate::node_view::ComputationNode,
+    trace: &Trace,
+) -> Vec<MultilinearPolynomial<F>> {
+    let w = trace
+        .softmax_witness(node.idx)
+        .unwrap_or_else(|| panic!("softmax node {} has no trace witness", node.idx));
+    let read = tables();
+    let addresses = table_addresses(node, w);
+    [&read.tables.out, &read.tables.sum, &read.sum_prev]
+        .into_iter()
+        .map(|table| {
+            MultilinearPolynomial::from(addresses.iter().map(|&a| table[a]).collect::<Vec<i32>>())
+        })
+        .collect()
 }
 
 /// A softmax relation's provers, with the read addresses each lookup leaves for its one-hot
@@ -179,14 +174,6 @@ pub fn prove_relation<F: JoltField, T: Transcript>(
         })
     };
     match relation {
-        SoftmaxRelation::Sums(shape) => {
-            let relation = SumsRelation::new(shape).expect("the softmax tables are available");
-            let params = RelationParams::new(relation, &*accumulator, transcript);
-            (
-                vec![Box::new(RelationProver::initialize(trace, params))],
-                Vec::new(),
-            )
-        }
         SoftmaxRelation::Read(shape) => {
             let w = witness(&shape, trace);
             let read = tables();

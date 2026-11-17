@@ -25,8 +25,9 @@ loop's order, the rule that an operand claim must be appended before the operand
 per-node evaluation reduction that merges the claims of several consumers into one (a
 line-restriction proof per multi-consumer node), the distinction between relations that may be
 deferred and relations that may not, and the fact that the node relations of a model cannot be
-batched or proven in parallel. Yet since the dense-digit change, most of the trace is
-committed: every clamped node's output sits in a bucket as digit columns, fixed before any
+batched or proven in parallel. Yet since `specs/one-clamp.md`, most of the trace is committed:
+every node whose op is exact arithmetic narrowed to `i32`, and that is not a model output, has
+its output in a range bucket as the 16 base-4 digit columns of `out + 2^31`, fixed before any
 challenge. A claim on such an output can be checked against the commitment directly, at any
 point, as one more term of the bucket's value sumcheck. Then the node's relation no longer
 depends on its consumers, and the chain falls apart into independent statements about committed
@@ -37,9 +38,15 @@ polynomials. This spec takes that step for the nodes that have digits.
 ### Goal
 
 Stage 1 (this spec's PR): for every node whose output is a range-bucket member (a
-**digit-backed** node), discharge every claim on its output at the bucket's value sumcheck,
-draw the point of the node's own relation fresh from the transcript, and remove its evaluation
-reduction.
+**digit-backed** node: `global_clamp::node_range_claims` gives it a `Remainder::Output` claim,
+which is an `Add`, `Sub`, `Sum`, rescaling `Mul`, `Square` or `Cube`, `MeanOfSquares` or
+`Einsum` that is not a model output), discharge every claim on its output at the bucket's value
+sumcheck, draw the point of the node's own relation fresh from the transcript, and remove its
+evaluation reduction.
+
+Today such a node has one bucket member, at its reduced output point: `Step::Reduce` adopts the
+single claim of a one-consumer node as is (no proof), and runs the line-restriction protocol
+(`EvalReductionProof`) for a node with several.
 
 Concretely, for a digit-backed node `n`:
 
@@ -47,21 +54,27 @@ Concretely, for a digit-backed node `n`:
   sumcheck (one more `PackedSegment` with its own `γ`), instead of an input to `Step::Reduce`;
 - `n`'s plan starts with `Step::Point`, which draws `τ_n`, takes the prover's claim
   `out_n(τ_n)` and adds it as one more bucket member; the node's relation runs on that claim;
+- `n`'s other range claims (a fused node's `RescaleRemainder`), which are opened at the point
+  of its relation, are opened at `τ_n`;
 - `n` has no `EvalReductionProof`.
 
-Nodes that are not digit-backed (lookup outputs, softmax, Gather, Div, Rsqrt, the structural
-ties, constants, inputs and model outputs) keep `Step::Reduce` and the chain, and the node loop
-keeps its order.
+Nodes that are not digit-backed (lookup outputs including the smooth ReLUs, softmax, Gather,
+Div, Rsqrt, `Neg`, the raw products, the structural ties, constants, inputs and model outputs)
+keep `Step::Reduce` and the chain, and the node loop keeps its order.
 
 Introduced or modified:
 
-- `jolt-atlas-verifier`: `plan.rs` (`Step::Point`), `verifier.rs` (the interpreter; claims on
-  digit-backed nodes route to a per-bucket member list), `global_clamp.rs` and `clamp_split.rs`
-  (a member is a `(node, point)` pair, not a node), `ops/eval_reduction.rs` (not reached for
-  digit-backed nodes), the plans of the eight clamped ops.
-- `atlas-sumcheck`: `opening_proof` (an append of a `NodeOutput` claim after the node's turn is
-  legal for a digit-backed node); `relation::RelationOpening::ReducedNodeOutput` resolves to
-  the `Step::Point` claim for such a node.
+- `jolt-atlas-verifier`: `plan.rs` (`Step::Point`; `fused_rescale_plan`, `accumulation_plan`
+  and the `Sum`, `MeanOfSquares` and `Einsum` plans start with it when the node is
+  digit-backed), `verifier.rs` (the interpreter), `global_clamp.rs` (`ClampBucket::
+  remainder_inputs` builds one `PackedSegment` per `(node, point)` output member, where it
+  builds one per node from `Remainder::opening`), `clamp_split.rs` (`ValueParams` takes the
+  member count from the accumulator's claims), `ops/eval_reduction.rs` (not reached for
+  digit-backed nodes).
+- `atlas-sumcheck`: `opening_proof` (the accumulator returns every `NodeOutput(n)` claim of a
+  digit-backed node, and `get_node_output_opening(n)` returns the `Step::Point` claim);
+  `relation::RelationOpening::ReducedNodeOutput` therefore resolves to that claim and no op
+  relation changes.
 - `jolt-atlas-core`: the mirrors; the prover evaluates `out_n(τ_n)` and each consumer claim
   from the trace as it does today.
 
@@ -106,12 +119,16 @@ New:
 - **C. No evaluation-reduction proof for a digit-backed node.** *Mechanism:* the proof carries
   no entry; a stray entry fails the drain check; a `mutate::Site` inserts one.
 - **D. Mixed regime is ordered.** A digit-backed node's relation still appends its operand
-  claims during its turn in the node loop, so a non-digit-backed operand's `Reduce` sees them.
-  *Mechanism:* the accumulator's existing check that no claim is appended to a reduced node,
+  claims during its turn in the node loop, so a non-digit-backed operand's `Reduce` sees them,
+  and every claim on a digit-backed node exists before the post-loop value sumcheck draws its
+  batching coefficients. *Mechanism:* the accumulator's existing check that no claim is
+  appended to a reduced node ("cannot append opening for node … after evaluation reduction"),
   which stays for non-digit-backed nodes; the zoo.
-- **E. Member count is a function of the model.** The number of members of each bucket's value
-  sumcheck is the node's consumer-claim count plus one, computed from the model before the
-  transcript runs. *Mechanism:* the plan builder; a test on a node with three consumers.
+- **E. Members are a function of the model.** The output members of a bucket are, for each of
+  its digit-backed nodes, the claims its consumers' plans append plus the one at `τ_n`, in
+  one fixed order (node, then opening id). Prover and verifier enumerate them from their
+  accumulators, and the count never depends on the proof. *Mechanism:* a test on the
+  `relation_flows` probe's shared `Add` (three consumers): four members.
 
 ### Non-Goals
 
@@ -128,9 +145,8 @@ New:
 
 Stage 1, this PR:
 
-- [ ] Before implementation, the baseline's evaluation-reduction time and the count of
-      multi-consumer digit-backed nodes on GPT-2 and bge-small are recorded in the PR (from the
-      spans of `bench/runs/c65753bfa/`), so the expected movement is a number.
+- [ ] The measurement of the Performance section is reproduced in the PR at the commit this
+      lands on, if that is not `c90a4652e`.
 - [ ] No digit-backed node's plan contains `Step::Reduce`; each begins with `Step::Point`.
 - [ ] No proof of a checked-in model carries an `EvalReductionProof` for a digit-backed node.
 - [ ] Invariant A: the extended drain check exists; the forgery sweep reaches every
@@ -139,8 +155,9 @@ Stage 1, this PR:
       digit-backed node is rejected.
 - [ ] Invariant E: the three-consumer test passes.
 - [ ] The three sweeps pass over the probe models with no tolerance entry.
-- [ ] `relation_flows` and the tests of `testing/relations.rs` that pin multi-consumer
-      reductions are updated to the new flow and pass.
+- [ ] `produced_opening_joins_a_shared_operand_reduction` in `testing/relations.rs` is
+      rewritten to the new flow; `raw_product_reads_a_multi_consumer_reduction` (a raw product
+      is not digit-backed) passes unchanged.
 - [ ] The importer's golden hashes are untouched; `testing/digests.rs` is re-pinned in its own
       commit; the `fuzz_regressions_replay` corpus is regenerated there.
 - [ ] `cargo fmt --all --check`, `RUSTFLAGS="-D warnings" cargo clippy --workspace
@@ -159,10 +176,11 @@ Later stages (not ticked by this PR):
 Existing tests that must keep passing: the workspace run; every op-surface row; the three
 sweeps; the zoo with its serialization round-trip; `relation_prover_equiv_*`.
 
-Changed tests: `raw_product_reads_a_multi_consumer_reduction` and
-`produced_opening_joins_a_shared_operand_reduction` in `testing/relations.rs` pin the flow
-this spec replaces for digit-backed nodes; each is rewritten to assert the new flow (the
-claims become bucket members) and kept for a non-digit-backed operand.
+Changed tests: `produced_opening_joins_a_shared_operand_reduction` in `testing/relations.rs`
+pins the flow this spec replaces (its shared operand is an `Add`); it is rewritten to assert
+that the claims become bucket members. `raw_product_reads_a_multi_consumer_reduction` keeps
+pinning the reduction for a node that is not digit-backed. The witness sweep's `BucketDigit`
+sites and `scalars_probe_layout` follow the member layout.
 
 New tests: the forgery coverage of invariant A; the `mutate::Site` of invariant C; the
 three-consumer case; a digit-backed node with no consumer other than the model output check.
@@ -172,17 +190,33 @@ dispatched exhaustive soundness run before merge. The `zk` feature is not touche
 
 ### Performance
 
-Benchmark: the run table of `docs/measurement-plan.md` on `gpt2 --seq-len 16` and
-`bge-small-en-v1.5` against `bench/bin/prove-c65753bfa`.
+Benchmark: `bench/gate.sh` on `gpt2 --seq-len 16` and on `bge-small-en-v1.5`, against this
+spec's parent commit, on the benchmark machine.
 
-Expected: the IOP stage down by the evaluation reductions of digit-backed nodes (the prover
-evaluates a node's polynomial along a curve for each; the amount is the first acceptance
-criterion's measurement, not estimated here); the value sumchecks slightly up (more members
-per bucket, each one more `eq` table in the cycle weight); proof size down by the reduction
-proofs, up by one claim per digit-backed node. Commit and openings unchanged.
+Measured at `c90a4652e` on the benchmark machine (16 tokens; node counts from the lowered
+graph, times from the `NodeEvalReduction::prove` spans of the gate's trace):
 
-Bounds: prove and verify within 3% of baseline or better on both models; proof size within 2%;
-peak memory no higher.
+| | GPT-2 | bge-small |
+|---|---|---|
+| digit-backed nodes with one consumer | 380 (6.51 M cells) | 355 (2.58 M cells) |
+| digit-backed nodes with several consumers | 50 (0.82 M cells) | 75 (0.61 M cells) |
+| output member cells today | 7.33 M | 3.19 M |
+| output member cells after | 15.86 M | 7.18 M |
+| evaluation reduction of digit-backed nodes | 0.19 s of 25.0 s prove | 0.14 s of 16.1 s prove |
+
+Expected: prove and verify flat. The removed line-restriction proofs are under 1% of prove
+time. Against them, every digit-backed node gains one member at `τ_n` and a node with `k`
+consumers goes from one member to `k + 1`: one more evaluation of the output by the prover
+and one more `eq` table of the node's size in the bucket's cycle weight per added member,
+about 8.5 M cells on GPT-2, which is linear work of the size of one pass over the outputs.
+Proof size: down by 50 (GPT-2) and 75 (bge-small) line-restriction proofs, up by one claim
+per digit-backed node. Commit and openings unchanged.
+
+Stage 1 is not a performance change. It is justified by what stage 2 builds on it and by the
+verifier's simpler claim lifecycle for these nodes.
+
+Bounds (the gate's defaults): prove and verify within 3% of the reference on both models; peak
+memory within 5%; proof size within 2%.
 
 ## Design
 
@@ -200,10 +234,13 @@ stage 1:   consumer relation → claim on out_n ──→ bucket member
            post-loop: value sumcheck over all members, digit range
 ```
 
-A bucket's cycle weight today is `W(t) = Σ_n γ_n·eq(prefix_n, hi)·eq(r_n, lo)` with one term
-per node. It becomes one term per `(node, point)` member; the relation, its degree and its
-output opening are unchanged. The input claim is the `γ`-combination of the members' claims
-(each `out(r) + 2^31` after `specs/one-clamp.md`).
+A bucket's cycle weight today is `W(t) = Σ_m γ_m·eq(prefix_m, hi)·eq(r_m, lo)`
+(`CycleWeight::Packed`, one `PackedSegment` per range claim, built by
+`ClampBucket::remainder_inputs`). An output claim contributes one term per `(node, point)`
+member where it contributes one per node; the other range claims (remainders, slacks, softmax
+gaps) keep one term each. The relation (`ValueParams`), its degree and its output opening are
+unchanged. The input claim is the `γ`-combination of the members' claims, each
+`out(r) + 2^31` (`Remainder::opening`, `OUTPUT_OFFSET`).
 
 `Step::Point` is the only new step: draw `τ_n` of the node's output arity, append the
 `NodeOutput(n)` claim at `τ_n`, register the member. `RelationOpening::ReducedNodeOutput(n)`
@@ -213,18 +250,20 @@ The interpreter knows which nodes are digit-backed from the bucket layout, which
 of the model. A consumer's claim on a digit-backed node is registered as a member when it is
 appended; on any other node it waits for `Reduce` as today.
 
-Why stage 1 depends on `specs/one-clamp.md`: with saturation, the split relation weights
-`OUT`, the indicator and the slack by one cycle weight built from one point per node. Extra
-output-only members would need a second weight on `OUT` alone. With exact arithmetic the
-value relation is `Σ W·OUT`, and a member is just a term of `W`.
+What `specs/one-clamp.md` made possible: the value relation of every bucket is `Σ W·value`
+over one digit family, so an output member is a term of `W` and nothing else. (The split
+relation it removed weighted the output, the indicator and the slack by one cycle weight built
+from one point per node.)
 
 ### Alternatives Considered
 
 - **Keep the chain; speed up the evaluation reduction** (`docs/prover-plan.md` item 10, A3).
   A valid optimisation, but it keeps the ordering and the non-batchable node loop.
 - **Reuse one consumer's point for the node's own relation** instead of a fresh `τ_n`, saving
-  one member per node. Rejected: it ties the node to a consumer again, which is what stage 2
-  needs gone, and model outputs and unconsumed nodes would need a special case.
+  one member per node; for a one-consumer node (380 of 430 on GPT-2) this is exactly today's
+  flow. Rejected: it ties the node to a consumer again, which is what stage 2 needs gone, it
+  leaves two regimes among digit-backed nodes, and the measurement above puts the cost of the
+  uniform rule well inside the bounds.
 - **Do stages 1–3 in one change.** Rejected: stage 3 needs a relation compiler and a decision
   on table outputs; stage 2 needs a memory plan. Stage 1 changes the claim lifecycle alone and
   is testable by the existing sweeps.
@@ -247,17 +286,20 @@ value relation is `Σ W·OUT`, and a member is just a term of `W`.
 
 ## Execution
 
-Suggested order: (1) the measurement of the first criterion; (2) `(node, point)` members in
-the bucket code with one member per node, digests unchanged; (3) `Step::Point` and consumer
-routing for one op (Add) behind the probe models; (4) the other seven ops; (5) the drain-check
-extension and the sweeps' new sites; (6) the digest re-pin and docs.
+Suggested order: (1) the measurement of the first criterion; (2) `(node, point)` output
+members in `remainder_inputs` and the prover's `BucketWitnesses`, with one member per node,
+digests unchanged; (3) `Step::Point` and consumer routing for `Add` and `Sub`
+(`accumulation_plan`) behind the probe models; (4) the fused products, `Sum`, `MeanOfSquares`
+and `Einsum`; (5) the drain-check extension and the sweeps' new sites; (6) the digest re-pin
+and docs.
 
 ## References
 
 - `docs/prover-plan.md` §3 item 9 (the idea) and item 10 A3 (the alternative).
 - `atlas-sumcheck/src/evaluation_reduction/`, `atlas-sumcheck/src/opening_proof/`;
   `jolt-atlas-verifier/src/onnx_proof/ops/eval_reduction.rs`, `verifier.rs`.
-- `jolt-atlas-verifier/src/onnx_proof/global_clamp.rs` (`PackedSegment`), `clamp_split.rs`
-  (`ValueParams`).
+- `jolt-atlas-verifier/src/onnx_proof/global_clamp.rs` (`Remainder::Output`,
+  `node_range_claims`, `ClampBucket::remainder_inputs`), `clamp_split.rs` (`ValueParams`);
+  `atlas-sumcheck/src/ps_shout/mod.rs` (`PackedSegment`, `CycleWeight`).
 - `specs/verifier-audit-simplification.md` (the plan interpreter this extends).
 - a16z/jolt #2336 (per-round degree schedule).

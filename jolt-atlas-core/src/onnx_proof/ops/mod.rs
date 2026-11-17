@@ -115,8 +115,7 @@ use crate::onnx_proof::{
     },
     plan::{OpActivation, OpLookup, OpOpen, OpPlan, OpRelation, OpTie, OpTrig, Plan, Step},
     relation::{
-        prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
-        RelationWitnesses,
+        op_rel_params, prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
     },
     trace_view::TraceView,
     ProofId,
@@ -496,13 +495,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
     relation: OpRelation<F>,
     prover: &mut Prover<F, T>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-    fn engine<F: JoltField, T: Transcript, R: RelationWitnesses<F> + 'static>(
-        relation: R,
-        prover: &mut Prover<F, T>,
-    ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
-        let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
-        vec![Box::new(RelationProver::initialize(&prover.trace, params))]
-    }
     fn lookup<F: JoltField, T: Transcript, H, LUT>(
         kind: OpLookup,
         node: ComputationNode,
@@ -568,51 +560,54 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         vec![Box::new(exec)]
     }
     match relation {
-        OpRelation::Op(relation) => match relation.kind {
-            OpRelKind::Contraction => {
-                let params =
-                    RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
-                vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
-            }
-            OpRelKind::MeanOfSquares => {
-                let params =
-                    RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
-                vec![Box::new(MeanOfSquaresReductionProver::initialize(
-                    &prover.trace,
-                    params,
-                ))]
-            }
-            OpRelKind::And
-            | OpRelKind::Mul
-            | OpRelKind::Square
-            | OpRelKind::Cube
-            | OpRelKind::AddAccumulation
-            | OpRelKind::SubAccumulation
-            | OpRelKind::Iff
-            | OpRelKind::Div
-            | OpRelKind::DivQuotient
-            | OpRelKind::ConstantDivision
-            | OpRelKind::Rsqrt
-            | OpRelKind::Identity
-            | OpRelKind::Neg
-            | OpRelKind::ZeroOutput
-            | OpRelKind::Constant
-            | OpRelKind::Input
-            | OpRelKind::AxisPermutation
-            | OpRelKind::Broadcast
-            | OpRelKind::Reshape
-            | OpRelKind::Slice
-            | OpRelKind::Concat
-            | OpRelKind::SumAxis => engine(relation, prover),
-        },
-        OpRelation::Gather(relation) => {
-            let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
-            vec![Box::new(GatherProver::initialize(
+        OpRelation::Op(relation) => {
+            let kind = relation.kind;
+            let params = op_rel_params(
+                relation,
                 &prover.trace,
-                params,
                 &mut prover.accumulator,
                 &mut prover.transcript,
-            ))]
+            );
+            match kind {
+                OpRelKind::Contraction => {
+                    vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
+                }
+                OpRelKind::MeanOfSquares => {
+                    vec![Box::new(MeanOfSquaresReductionProver::initialize(
+                        &prover.trace,
+                        params,
+                    ))]
+                }
+                OpRelKind::Gather => vec![Box::new(GatherProver::initialize(
+                    &prover.trace,
+                    params,
+                    &prover.accumulator,
+                ))],
+                OpRelKind::And
+                | OpRelKind::Mul
+                | OpRelKind::Square
+                | OpRelKind::Cube
+                | OpRelKind::AddAccumulation
+                | OpRelKind::SubAccumulation
+                | OpRelKind::Iff
+                | OpRelKind::Div
+                | OpRelKind::DivQuotient
+                | OpRelKind::ConstantDivision
+                | OpRelKind::Rsqrt
+                | OpRelKind::Identity
+                | OpRelKind::Neg
+                | OpRelKind::ZeroOutput
+                | OpRelKind::Constant
+                | OpRelKind::Input
+                | OpRelKind::AxisPermutation
+                | OpRelKind::Broadcast
+                | OpRelKind::Reshape
+                | OpRelKind::Slice
+                | OpRelKind::Concat
+                | OpRelKind::SumAxis => {
+                    vec![Box::new(RelationProver::initialize(&prover.trace, params))]
+                }
+            }
         }
         OpRelation::GatherLargeOneHot(node) => {
             let encoding = gather::large::GatherRaEncoding::new(&node)
@@ -838,7 +833,7 @@ pub fn op_rel_witnesses<F: JoltField>(
         OpRelKind::ConstantDivision => scalar_const_div::constant_division_witnesses(node, trace),
         OpRelKind::Rsqrt => rsqrt::reciprocal_sqrt_witnesses(node, trace),
         OpRelKind::SumAxis => sum::axis::axis_sum_witnesses(relation, trace, &setup.incoming_point),
-        OpRelKind::MeanOfSquares | OpRelKind::Contraction => {
+        OpRelKind::MeanOfSquares | OpRelKind::Contraction | OpRelKind::Gather => {
             panic!(
                 "{:?} has a specialized prover, not the engine's",
                 relation.kind
@@ -897,8 +892,47 @@ pub fn op_rel_tie_claims<F: JoltField>(
         | OpRelKind::Rsqrt
         | OpRelKind::SumAxis
         | OpRelKind::MeanOfSquares
-        | OpRelKind::Contraction => {
+        | OpRelKind::Contraction
+        | OpRelKind::Gather => {
             panic!("{:?} is proven by a sumcheck, not a tie", relation.kind)
+        }
+    }
+}
+
+/// The prover's claims of an [`OpRel`]'s setup opens, aligned with them at their coordinates
+/// of the incoming point.
+pub fn op_rel_setup_claims<F: JoltField>(
+    relation: &OpRel<F>,
+    trace: &Trace,
+    setup: &RelationSetup<F>,
+) -> Vec<F> {
+    match relation.kind {
+        OpRelKind::Gather => gather::index_claim(relation, trace, setup),
+        OpRelKind::And
+        | OpRelKind::Mul
+        | OpRelKind::Square
+        | OpRelKind::Cube
+        | OpRelKind::Iff
+        | OpRelKind::Div
+        | OpRelKind::ConstantDivision
+        | OpRelKind::Rsqrt
+        | OpRelKind::SumAxis
+        | OpRelKind::MeanOfSquares
+        | OpRelKind::Contraction
+        | OpRelKind::AddAccumulation
+        | OpRelKind::SubAccumulation
+        | OpRelKind::DivQuotient
+        | OpRelKind::Identity
+        | OpRelKind::Neg
+        | OpRelKind::ZeroOutput
+        | OpRelKind::Constant
+        | OpRelKind::Input
+        | OpRelKind::AxisPermutation
+        | OpRelKind::Broadcast
+        | OpRelKind::Reshape
+        | OpRelKind::Slice
+        | OpRelKind::Concat => {
+            panic!("{:?} has no setup opens", relation.kind)
         }
     }
 }

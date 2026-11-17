@@ -1,12 +1,22 @@
 use super::*;
 use crate::onnx_proof::deferred_lookups::DeferredBatch;
+use crate::onnx_proof::{
+    ops::OpLayout,
+    plan::{OpPlan, OpRelation, Plan, Step},
+    ProofType,
+};
+use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_algebra::field::IntoOpening;
 use atlas_algebra::utils::errors::ProofVerifyError;
+use atlas_sumcheck::opening_proof::{OpeningAccumulator, SumcheckId, VerifierOpeningAccumulator};
 use atlas_sumcheck::{
     booleanity::{BooleanitySumcheckParams, BooleanitySumcheckVerifier},
     hamming_booleanity::{HammingBooleanitySumcheckParams, HammingBooleanitySumcheckVerifier},
     hamming_weight::{HammingWeightSumcheckParams, HammingWeightSumcheckVerifier},
 };
 use atlas_trace::op::GatherSmall;
+use atlas_trace::trace::ModelExecutionIO;
+use atlas_transcript::Transcript;
 use common::CommittedPoly;
 
 impl OpLayout for GatherSmall {
@@ -32,7 +42,7 @@ impl OpPlan for GatherSmall {
             Step::Reduce,
             Step::Relation {
                 proof: ProofType::Execution,
-                relation: OpRelation::Gather(GatherRelation::for_node(model, node.clone())?),
+                relation: OpRelation::Op(gather(model, node)?),
             },
             Step::Defer {
                 batch: DeferredBatch::OneHot,

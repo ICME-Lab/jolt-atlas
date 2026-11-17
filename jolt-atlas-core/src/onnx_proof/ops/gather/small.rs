@@ -1,10 +1,12 @@
 use super::*;
 use crate::onnx_proof::trace_view::TraceView;
+use atlas_sumcheck::opening_proof::prover::ProverOpeningAccumulator;
 use atlas_sumcheck::{
     booleanity::prover::SmallBooleanitySumcheckProver,
     hamming_booleanity::prover::HammingBooleanitySumcheckProver,
     hamming_weight::prover::HammingWeightSumcheckProver,
 };
+use atlas_transcript::Transcript;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::small::*;
 
 pub(crate) fn build_stage2_provers<F: JoltField>(

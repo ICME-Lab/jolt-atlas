@@ -1,8 +1,6 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::relation::{RelationChallenge, RelationParams, RelationSetup};
+use crate::onnx_proof::relation::{OpRel, RelationChallenge, RelationParams, RelationSetup};
 use crate::onnx_proof::trace_view::TraceView;
-use crate::utils::opening_access::IntoProverProvider;
-use crate::utils::opening_access::{AccOpeningAccessor, Target};
 use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
@@ -13,17 +11,13 @@ use atlas_algebra::{
             BindingOrder, EvaluateMle, MultilinearPolynomial, PolynomialBinding,
             PolynomialEvaluation,
         },
-        point::OpeningPoint,
     },
     utils::{math::Math, thread::unsafe_allocate_zero_vec},
 };
 use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
-use atlas_sumcheck::{
-    opening_proof::prover::ProverOpeningAccumulator, relation::prover::RelationWitness,
-};
+use atlas_sumcheck::{opening_proof::OpeningAccumulator, relation::prover::RelationWitness};
 use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
-use atlas_transcript::Transcript;
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::*;
 use rayon::{
@@ -44,7 +38,7 @@ pub mod small;
 /// Implements a Read-Raf sumcheck asserting that each output[i] corresponds to a lookup
 /// into the input dictionary at index input1[i].
 pub struct GatherProver<F: JoltField> {
-    relation: GatherRelation,
+    relation: OpRel<F>,
     setup: RelationSetup<F>,
     gamma: F,
     dictionary: MultilinearPolynomial<F>,
@@ -53,17 +47,17 @@ pub struct GatherProver<F: JoltField> {
 }
 
 impl<F: JoltField> GatherProver<F> {
-    /// Initialize the prover with trace data, the set-up relation, accumulator, and transcript.
+    /// The prover for `params`, whose setup has appended the index opening: the one-hot
+    /// read addresses and the dictionary folded at the output point, read from `trace`.
     pub fn initialize(
         trace: &Trace,
-        params: RelationParams<F, GatherRelation>,
-        accumulator: &mut ProverOpeningAccumulator<F>,
-        transcript: &mut impl Transcript,
+        params: RelationParams<F, OpRel<F>>,
+        accumulator: &dyn OpeningAccumulator<F>,
     ) -> Self {
         let (relation, setup) = params.into_parts();
         let gamma = setup.challenge(&RelationChallenge::Gamma);
-        let num_words = relation.num_words();
-        let LayerData { operands, .. } = TraceView::layer_data(trace, relation.node());
+        let num_words = num_words(&relation.node).expect("the relation was built for a gather");
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &relation.node);
         let [dictionary, indexes] = operands[..] else {
             panic!("Expected two operands for Gather operation")
         };
@@ -71,15 +65,11 @@ impl<F: JoltField> GatherProver<F> {
         let dict_len = dictionary.dims()[0];
         let word_dim = dictionary.dims().iter().product::<usize>() / dict_len;
 
-        let (r_index, r_word) = setup.incoming_point.split_at(relation.lookup_vars());
+        let lookup_vars = lookup_vars(&relation).expect("the relation holds its index dims");
+        let (r_index, r_word) = setup.incoming_point.split_at(lookup_vars);
         assert_eq!(r_word.len(), word_dim.log_2());
 
         let padded_indexes = indexes.padded_pow2();
-        let index_claim = padded_indexes.evaluate_mle(r_index);
-
-        let mut provider = AccOpeningAccessor::new(accumulator, relation.node())
-            .into_provider(transcript, OpeningPoint::new(r_index.to_vec()));
-        provider.append_nodeio(Target::Input(1), index_claim);
 
         let index_onehot: Vec<F> = compute_ra_evals(r_index, &padded_indexes, num_words);
         let dict: Vec<F> = fold_dictionary(r_word, dictionary, num_words);
@@ -91,7 +81,9 @@ impl<F: JoltField> GatherProver<F> {
 
         #[cfg(test)]
         {
-            let rv_claim = provider.get_reduced_opening().1;
+            let input_claim =
+                crate::onnx_proof::relation::relation_input_claim(&relation, &setup, accumulator)
+                    .expect("the prover holds every claim it reads");
             let claim = (0..index_onehot.len())
                 .map(|i| {
                     let a = index_onehot.get_bound_coeff(i);
@@ -100,11 +92,10 @@ impl<F: JoltField> GatherProver<F> {
                     a * (b + gamma * int)
                 })
                 .sum();
-            crate::onnx_proof::testing::probe::probe_assert_eq!(
-                rv_claim + gamma * index_claim,
-                claim
-            )
+            crate::onnx_proof::testing::probe::probe_assert_eq!(input_claim, claim)
         }
+        #[cfg(not(test))]
+        let _ = accumulator;
         Self {
             relation,
             setup,
@@ -117,9 +108,9 @@ impl<F: JoltField> GatherProver<F> {
 }
 
 impl<F: JoltField> RelationWitness<F> for GatherProver<F> {
-    type Relation = GatherRelation;
+    type Relation = OpRel<F>;
 
-    fn relation(&self) -> &GatherRelation {
+    fn relation(&self) -> &OpRel<F> {
         &self.relation
     }
 
@@ -197,6 +188,20 @@ impl<F: JoltField> ProveRounds<F> for GatherProver<F> {
         self.bind(bind, self.relation.rounds() - 1);
         Ok(())
     }
+}
+
+/// The claim of a [`gather`]'s setup open: the index operand at the index coordinates of the
+/// output point.
+pub fn index_claim<F: JoltField>(
+    relation: &OpRel<F>,
+    trace: &Trace,
+    setup: &RelationSetup<F>,
+) -> Vec<F> {
+    let LayerData { operands, .. } = TraceView::layer_data(trace, &relation.node);
+    let lookup_vars = lookup_vars(relation).expect("the relation holds its index dims");
+    vec![operands[1]
+        .padded_pow2()
+        .evaluate_mle(&setup.incoming_point[..lookup_vars])]
 }
 
 // From the read indexes, computes the bound ra vector.

@@ -27,6 +27,7 @@ use atlas_algebra::{
     field::JoltField,
     poly::{
         multilinear::{BindingOrder, MultilinearPolynomial, PolynomialBinding},
+        point::{OpeningPoint, BIG_ENDIAN},
         split_eq::SplitEqUnreducedFold,
     },
 };
@@ -34,7 +35,9 @@ use atlas_claims::Source;
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::{
     engine::prover::round_check_failed,
-    opening_proof::{prover::ProverOpeningAccumulator, OpeningAccumulator, OpeningId},
+    opening_proof::{
+        prover::ProverOpeningAccumulator, OpeningAccumulator, OpeningId, PolynomialId,
+    },
 };
 use atlas_trace::Trace;
 use atlas_transcript::Transcript;
@@ -94,6 +97,43 @@ pub fn prove_tie<F: JoltField, T: Transcript, R: TieClaims<F>>(
         .expect("the prover holds every claim it reads");
     let claims = relation.claims(trace, &setup, &*accumulator);
     append_produced(relation, &setup, accumulator, transcript, &[], &claims);
+}
+
+/// An op relation set up on the prover's side, the mirror of [`op_rel_verifier`]: its setup
+/// run, then each of its setup opens appended at its coordinates of the incoming point with
+/// its claim from the trace.
+pub fn op_rel_params<F: JoltField, T: Transcript>(
+    relation: OpRel<F>,
+    trace: &Trace,
+    accumulator: &mut ProverOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> RelationParams<F, OpRel<F>> {
+    let params = RelationParams::new(relation, &*accumulator, transcript);
+    let (relation, setup) = (params.relation(), params.setup());
+    if !relation.setup_opens.is_empty() {
+        let claims = crate::onnx_proof::ops::op_rel_setup_claims(relation, trace, setup);
+        assert_eq!(
+            claims.len(),
+            relation.setup_opens.len(),
+            "one claim per setup open"
+        );
+        for (open, claim) in relation.setup_opens.iter().zip(claims) {
+            let point = setup_open_point(relation, open, setup)
+                .expect("the incoming point has the coordinates of the setup opens");
+            match open.id.polynomial {
+                PolynomialId::Virtual(_) => accumulator.append_virtual(
+                    transcript,
+                    open.id,
+                    OpeningPoint::<BIG_ENDIAN, F>::new(point),
+                    claim,
+                ),
+                PolynomialId::Committed(_) => {
+                    accumulator.append_dense(transcript, open.id, point, claim)
+                }
+            }
+        }
+    }
+    params
 }
 
 /// Tell the test suite which relation ran for a node.

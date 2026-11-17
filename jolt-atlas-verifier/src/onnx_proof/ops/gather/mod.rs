@@ -1,28 +1,17 @@
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
-use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
-use crate::onnx_proof::relation::not_derived;
 use crate::onnx_proof::relation::{
-    low_to_high_point, Produces, Relation, RelationChallenge, RelationDerived, RelationExpr,
-    RelationId, RelationOpening, RelationSetup, RelationVerifier, SetupRelation,
+    low_to_high_point, not_derived, Custom, OpRel, OpRelKind, RelationChallenge, RelationDerived,
+    RelationOpening, RelationSetup, SetupOpen,
 };
-use crate::{
-    onnx_proof::ProofType,
-    utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
-};
-use atlas_algebra::field::Ring;
+use crate::utils::opening_access::{OpeningIdBuilder, Target};
 use atlas_algebra::{
-    field::{IntoOpening, JoltField},
-    poly::{identity::IdentityPolynomial, multilinear::PolynomialEvaluation, point::OpeningPoint},
+    field::JoltField,
+    poly::{identity::IdentityPolynomial, multilinear::PolynomialEvaluation},
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_claims::{challenge, derived, opening, SymbolicSumcheck};
-use atlas_sumcheck::opening_proof::{
-    OpeningAccumulator, OpeningId, SumcheckId, VerifierOpeningAccumulator,
-};
-use atlas_trace::{trace::ModelExecutionIO, Model, Op};
-use atlas_transcript::Transcript;
+use atlas_claims::{challenge, derived, opening};
+use atlas_trace::{Model, Op};
 use common::VirtualPoly;
 
 /// Gather over a large dictionary (read-raf lookup).
@@ -52,13 +41,6 @@ fn operand(
         .ok_or_else(|| unsupported(node, format!("operand {position} is not a node")))
 }
 
-/// The dictionary shape of a gather node.
-pub struct GatherShape {
-    node: ComputationNode,
-    lookup_vars: usize,
-    num_words: usize,
-}
-
 /// The read of a gather's indices from its dictionary:
 ///
 /// ```text
@@ -66,165 +48,99 @@ pub struct GatherShape {
 /// output claim  ra(ρ ‖ r_index) · (dict(ρ ‖ r_word) + γ·id(ρ))
 /// ```
 ///
+/// The relation's [`dims`](OpRel::dims) are the index operand's. `Err` if the node is not a
+/// gather or its index operand is not a node of the model.
+///
 /// **S ⊆ R.** Each output row is the dictionary row its index names, so an honest one-hot `ra`
-/// reads the output rows and, through the identity, the indices. The setup draws `γ` and takes
-/// the reduced output point as its incoming point; the index opening at `r_index` is appended
-/// by [`gather_verifier`] between the setup and the sumcheck.
-pub struct GatherRelation {
-    shape: GatherShape,
+/// reads the output rows and, through the identity, the indices. The setup takes the reduced
+/// output point as its incoming point, draws `γ`, and appends the index opening at `r_index`,
+/// the leading coordinates of that point.
+pub fn gather<F: JoltField>(
+    model: &Model,
+    node: &ComputationNode,
+) -> Result<OpRel<F>, ProofVerifyError> {
+    let num_words = num_words(node)?;
+    let indices = operand(model, node, 1)?;
+    let ids = OpeningIdBuilder::new(node);
+    let index = ids.nodeio(Target::Input(1));
+    let ra = ids.advice(VirtualPoly::NodeOutputRa);
+    let dict = ids.nodeio(Target::Input(0));
+    Ok(OpRel {
+        rounds: num_words.log_2(),
+        degree: DEGREE_BOUND,
+        input: opening(RelationOpening::ReducedNodeOutput(node.idx))
+            + challenge(RelationChallenge::Gamma) * opening(RelationOpening::Id(index)),
+        output: opening(RelationOpening::Id(ra))
+            * (opening(RelationOpening::Id(dict))
+                + challenge(RelationChallenge::Gamma) * derived(RelationDerived::Identity)),
+        produced: vec![ra, dict],
+        draws: vec![RelationChallenge::Gamma],
+        setup_opens: vec![SetupOpen {
+            id: index,
+            range: 0..indices.pow2_padded_num_output_elements().log_2(),
+        }],
+        dims: vec![indices.output_dims],
+        custom: Custom {
+            points: Some(read_points),
+            derive: Some(identity_at_bound_point),
+            ..Custom::default()
+        },
+        ..OpRel::base(OpRelKind::Gather, node)
+    })
 }
 
-impl GatherRelation {
-    /// The relation of a gather `node` of `model`. `Err` if the node is not a gather or its
-    /// index operand is not a node of the model.
-    pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
-        let dict_len = match &node.operator {
-            Op::GatherSmall(gather_op) => gather_op.dict_len,
-            Op::GatherLarge(gather_op) => gather_op.dict_len,
-            _ => return Err(unsupported(&node, "expected a Gather operator")),
-        };
-        let indices = operand(model, &node, 1)?;
-        let lookup_vars = indices.pow2_padded_num_output_elements().log_2();
-        Ok(Self::new(GatherShape {
-            node,
-            lookup_vars,
-            num_words: dict_len.next_power_of_two(),
-        }))
-    }
-
-    /// The gather node.
-    pub fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
-
-    /// Variables of the index tensor: the leading coordinates of the output point.
-    pub fn lookup_vars(&self) -> usize {
-        self.shape.lookup_vars
-    }
-
-    /// Dictionary rows, padded to a power of two.
-    pub fn num_words(&self) -> usize {
-        self.shape.num_words
-    }
-
-    fn builder(&self) -> OpeningIdBuilder<'_> {
-        OpeningIdBuilder::new(&self.shape.node)
-    }
+/// Dictionary rows of a gather `node`, padded to a power of two. `Err` if the node is not a
+/// gather.
+pub fn num_words(node: &ComputationNode) -> Result<usize, ProofVerifyError> {
+    let dict_len = match &node.operator {
+        Op::GatherSmall(gather_op) => gather_op.dict_len,
+        Op::GatherLarge(gather_op) => gather_op.dict_len,
+        _ => return Err(unsupported(node, "expected a Gather operator")),
+    };
+    Ok(dict_len.next_power_of_two())
 }
 
-impl SymbolicSumcheck for GatherRelation {
-    crate::atlas_relation_types!();
-
-    fn id(&self) -> RelationId {
-        RelationId::Gather
-    }
-
-    fn rounds(&self) -> usize {
-        self.shape.num_words.log_2()
-    }
-
-    fn degree(&self) -> usize {
-        DEGREE_BOUND
-    }
-
-    fn input_expression<G: Ring>(&self) -> RelationExpr<G> {
-        opening::<G, _, _, _>(RelationOpening::ReducedNodeOutput(self.shape.node.idx))
-            + challenge::<G, _, _, _>(RelationChallenge::Gamma)
-                * opening(RelationOpening::Id(self.builder().nodeio(Target::Input(1))))
-    }
-
-    fn output_expression<G: Ring>(&self) -> RelationExpr<G> {
-        let ra = RelationOpening::Id(self.builder().advice(VirtualPoly::NodeOutputRa));
-        let dict = RelationOpening::Id(self.builder().nodeio(Target::Input(0)));
-        opening::<G, _, _, _>(ra)
-            * (opening::<G, _, _, _>(dict)
-                + challenge::<G, _, _, _>(RelationChallenge::Gamma)
-                    * derived(RelationDerived::Identity))
-    }
+/// Variables of a [`gather`]'s index tensor: the leading coordinates of the output point.
+pub fn lookup_vars<F: JoltField>(relation: &OpRel<F>) -> Result<usize, ProofVerifyError> {
+    Ok(relation
+        .dims_at(0)?
+        .iter()
+        .map(|dim| dim.next_power_of_two())
+        .product::<usize>()
+        .log_2())
 }
 
-impl GatherRelation {
-    /// The relation for the given shape.
-    pub fn new(shape: GatherShape) -> Self {
-        Self { shape }
-    }
-}
-
-impl Produces for GatherRelation {
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![
-            self.builder().advice(VirtualPoly::NodeOutputRa),
-            self.builder().nodeio(Target::Input(0)),
-        ]
-    }
-}
-
-impl<F: JoltField> Relation<F> for GatherRelation {
-    fn opening_points(
-        &self,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
-        let rho = low_to_high_point(challenges);
-        let (r_index, r_word) = setup
-            .incoming_point
-            .split_at_checked(self.shape.lookup_vars)
-            .ok_or_else(|| {
-                unsupported(
-                    &self.shape.node,
-                    "the output point is shorter than the index variables",
-                )
-            })?;
-        Ok(vec![[&rho, r_index].concat(), [&rho, r_word].concat()])
-    }
-
-    fn derive(
-        &self,
-        id: &RelationDerived,
-        _setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Result<F, ProofVerifyError> {
-        Ok(match id {
-            RelationDerived::Identity => IdentityPolynomial::new(self.shape.num_words.log_2())
-                .evaluate(&low_to_high_point(challenges)),
-            other => return Err(not_derived(other)),
-        })
-    }
-}
-
-impl<F: JoltField> SetupRelation<F> for GatherRelation {
-    fn setup<T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        let gamma = transcript.challenge_scalar();
-        let (r_node_output, _) =
-            AccOpeningAccessor::new(accumulator, &self.shape.node).get_reduced_opening()?;
-        Ok(RelationSetup {
-            incoming_point: r_node_output.r,
-            challenges: vec![(RelationChallenge::Gamma, gamma)],
-        })
-    }
-}
-
-/// The execution verifier of a gather `node`: the relation set up, then the index opening
-/// appended at the output point's index coordinates.
-/// `Err` if the accumulator lacks a claim it reads.
-pub fn gather_verifier<F: JoltField, T: Transcript>(
-    relation: GatherRelation,
-    accumulator: &mut VerifierOpeningAccumulator<F>,
-    transcript: &mut T,
-) -> Result<RelationVerifier<F, GatherRelation>, ProofVerifyError> {
-    let setup = relation.setup(accumulator, transcript)?;
-    let node = &relation.shape.node;
-    let r_index = setup
+/// The opening points of a [`gather`]: the bound address `ρ` before the index coordinates
+/// (the one-hot `ra`) and before the word coordinates (the dictionary).
+fn read_points<F: JoltField>(
+    relation: &OpRel<F>,
+    setup: &RelationSetup<F>,
+    challenges: &[F],
+) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+    let rho = low_to_high_point(challenges);
+    let (r_index, r_word) = setup
         .incoming_point
-        .get(..relation.shape.lookup_vars)
-        .ok_or_else(|| unsupported(node, "the output point is shorter than the index variables"))?
-        .to_vec();
-    AccOpeningAccessor::new(accumulator, node)
-        .into_provider(transcript, OpeningPoint::new(r_index))
-        .append_nodeio(Target::Input(1))?;
-    Ok(RelationVerifier::at(relation, setup))
+        .split_at_checked(lookup_vars(relation)?)
+        .ok_or_else(|| {
+            unsupported(
+                &relation.node,
+                "the output point is shorter than the index variables",
+            )
+        })?;
+    Ok(vec![[&rho, r_index].concat(), [&rho, r_word].concat()])
+}
+
+/// [`RelationDerived::Identity`] of a [`gather`]: the address index at the bound point.
+fn identity_at_bound_point<F: JoltField>(
+    relation: &OpRel<F>,
+    id: &RelationDerived,
+    _setup: &RelationSetup<F>,
+    challenges: &[F],
+) -> Result<F, ProofVerifyError> {
+    Ok(match id {
+        RelationDerived::Identity => {
+            IdentityPolynomial::new(relation.rounds).evaluate(&low_to_high_point(challenges))
+        }
+        other => return Err(not_derived(other)),
+    })
 }

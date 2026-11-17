@@ -1,11 +1,18 @@
 use super::*;
 use crate::onnx_proof::deferred_lookups::DeferredBatch;
+use crate::onnx_proof::{
+    ops::OpLayout,
+    plan::{OpPlan, OpRelation, Plan, Step},
+    ProofType,
+};
+use atlas_sumcheck::opening_proof::SumcheckId;
 use atlas_sumcheck::{
     config::{OneHotConfig, OneHotParams},
     opening_proof::OpeningId,
     shout::RaOneHotEncoding,
 };
 use atlas_trace::op::GatherLarge;
+use atlas_trace::trace::ModelExecutionIO;
 use common::CommittedPoly;
 
 impl OpLayout for GatherLarge {
@@ -34,7 +41,7 @@ impl OpPlan for GatherLarge {
             Step::Reduce,
             Step::Relation {
                 proof: ProofType::Execution,
-                relation: OpRelation::Gather(GatherRelation::for_node(model, node.clone())?),
+                relation: OpRelation::Op(gather(model, node)?),
             },
             Step::Defer {
                 batch: DeferredBatch::OneHot,

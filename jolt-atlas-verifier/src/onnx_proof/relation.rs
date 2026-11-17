@@ -240,6 +240,9 @@ pub enum OpRelKind {
     MeanOfSquares,
     /// `Einsum`: the contraction, its input claim the fused rescale's `q·2^S + rem`.
     Contraction,
+    /// `GatherSmall` / `GatherLarge`: the dictionary read; the setup appends the index operand's
+    /// opening at the index coordinates of the output point.
+    Gather,
 }
 
 impl OpRelKind {
@@ -264,6 +267,7 @@ impl OpRelKind {
             Self::SumAxis => RelationId::AxisSum,
             Self::MeanOfSquares => RelationId::MeanOfSquares,
             Self::Contraction => RelationId::Contraction,
+            Self::Gather => RelationId::Gather,
         }
     }
 
@@ -294,6 +298,7 @@ impl OpRelKind {
             Self::SumAxis => matches!(op, Op::Sum(_)),
             Self::MeanOfSquares => matches!(op, Op::MeanOfSquares(_)),
             Self::Contraction => matches!(op, Op::Einsum(_)),
+            Self::Gather => matches!(op, Op::GatherSmall(_) | Op::GatherLarge(_)),
         }
     }
 }
@@ -532,3 +537,46 @@ impl<F: JoltField> EngineRelation<F> for OpRel<F> {
 }
 
 impl<F: JoltField> TieRelation<F> for OpRel<F> {}
+
+/// The verifier of an op relation: its setup run, then each of its
+/// [`setup_opens`](OpRel::setup_opens) appended at its coordinates of the incoming point.
+/// `Err` if the accumulator lacks a claim the setup reads or an advice opening's range is not
+/// within the incoming point.
+pub fn op_rel_verifier<F: JoltField, T: Transcript>(
+    relation: OpRel<F>,
+    accumulator: &mut VerifierOpeningAccumulator<F>,
+    transcript: &mut T,
+) -> Result<RelationVerifier<F, OpRel<F>>, ProofVerifyError> {
+    let setup = relation.setup(&*accumulator, transcript)?;
+    for open in &relation.setup_opens {
+        let point = setup_open_point(&relation, open, &setup)?;
+        match open.id.polynomial {
+            PolynomialId::Virtual(_) => accumulator.append_virtual(
+                transcript,
+                open.id,
+                OpeningPoint::<BIG_ENDIAN, F>::new(point),
+            )?,
+            PolynomialId::Committed(_) => accumulator.append_dense(transcript, open.id, point)?,
+        }
+    }
+    Ok(RelationVerifier::at(relation, setup))
+}
+
+/// The point of a setup's advice opening: its coordinates of the incoming point. `Err` if the
+/// incoming point does not have them.
+pub fn setup_open_point<F: JoltField>(
+    relation: &OpRel<F>,
+    open: &SetupOpen,
+    setup: &RelationSetup<F>,
+) -> Result<Vec<F>, ProofVerifyError> {
+    setup
+        .incoming_point
+        .get(open.range.clone())
+        .map(<[F]>::to_vec)
+        .ok_or_else(|| {
+            ProofVerifyError::Malformed(format!(
+                "{:?} on node {}: the incoming point lacks coordinates {:?}",
+                relation.kind, relation.node.idx, open.range
+            ))
+        })
+}

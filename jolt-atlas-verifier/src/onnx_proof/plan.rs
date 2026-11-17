@@ -29,14 +29,14 @@ use crate::onnx_proof::{
         clamp::SymmetricClampOperands,
         cos::CosRaEncoding,
         erf::ErfTableMarker,
-        gather::{self, small::GatherSmallShape, GatherRelation},
+        gather::{self, small::GatherSmallShape},
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
         smooth_relu::{GeluErfTable, GeluTanhTable, SiluTable, SmoothReluOperands},
         softmax_last_axis::{SoftmaxOpen, SoftmaxRelation, SoftmaxTie},
         tanh::TanhTableMarker,
     },
-    relation::{verify_tie, OpRel, RelationVerifier, SetupRelation},
+    relation::{op_rel_verifier, verify_tie, OpRel, RelationVerifier, SetupRelation},
     ProofType,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
@@ -136,9 +136,6 @@ pub enum OpTrig {
 pub enum OpRelation<F: JoltField> {
     /// An op relation.
     Op(OpRel<F>),
-    /// `GatherSmall` / `GatherLarge`: the dictionary read; the index operand's opening is
-    /// appended at the lookup variables of the setup's point.
-    Gather(GatherRelation),
     /// `GatherLarge`: the one-hot checks of its read addresses (two relations).
     GatherLargeOneHot(ComputationNode),
     /// `GatherSmall`: the Hamming-Booleanity and Booleanity checks of its one-hot `ra`.
@@ -211,12 +208,7 @@ impl<F: JoltField> OpRelation<F> {
             vec![Box::new(verifier)]
         }
         match self {
-            Self::Op(relation) => one(relation, accumulator, transcript),
-            Self::Gather(relation) => Ok(boxed(gather::gather_verifier(
-                relation,
-                accumulator,
-                transcript,
-            )?)),
+            Self::Op(relation) => Ok(boxed(op_rel_verifier(relation, accumulator, transcript)?)),
             Self::GatherLargeOneHot(node) => Ok(shout::ra_onehot_verifiers(
                 &gather::large::GatherRaEncoding::new(&node)?,
                 accumulator,

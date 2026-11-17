@@ -26,7 +26,7 @@ impl BucketWitnesses {
     /// Build every bucket's witness, in parallel across buckets.
     #[tracing::instrument(skip_all, name = "range_bucket::BucketWitnesses::build")]
     pub fn build(model: &Model, trace: &Trace) -> Self {
-        let remainder_values = remainder_buckets(model)
+        let remainder_values = range_buckets(model)
             .expect("the model's range claims have bounds the buckets can check")
             .par_iter()
             .map(|bucket| {
@@ -85,7 +85,7 @@ impl BucketWitnesses {
         &self,
         model: &Model,
     ) -> Vec<(CommittedPoly, MultilinearPolynomial<F>)> {
-        remainder_buckets(model)
+        range_buckets(model)
             .expect("the model's range claims have bounds the buckets can check")
             .into_iter()
             .flat_map(|bucket| {

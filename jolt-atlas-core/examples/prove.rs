@@ -314,7 +314,7 @@ fn tokenize(model_dir: &std::path::Path, text: &str) -> Vec<i32> {
 
 /// The model's nodes, the packed range buckets, and the largest nodes.
 fn print_stats(model: &Model) {
-    use jolt_atlas_core::onnx_proof::range_bucket::remainder_buckets;
+    use jolt_atlas_core::onnx_proof::range_bucket::range_buckets;
     println!("{}", model.pretty_print());
     println!(
         "max num vars: {}",
@@ -330,8 +330,7 @@ fn print_stats(model: &Model) {
             .to_string()
     };
     println!("range buckets (idx width log_t members | largest member):");
-    for b in
-        &remainder_buckets(model).expect("the model's range claims have bounds the buckets check")
+    for b in &range_buckets(model).expect("the model's range claims have bounds the buckets check")
     {
         let big = b.nodes.iter().max_by_key(|n| n.log_t).unwrap();
         println!(

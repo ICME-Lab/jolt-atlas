@@ -45,7 +45,7 @@ use super::{
 use crate::onnx_proof::{
     proof_serialization::serialize_proof,
     prove, prove_from_trace,
-    range_bucket::{remainder_buckets, BucketWitnesses},
+    range_bucket::{range_buckets, BucketWitnesses},
     range_check::{
         self,
         digit_tamper::{self, DigitTamper, DigitTamperForm},
@@ -307,7 +307,7 @@ fn probe_elems(len: usize, all: bool) -> Vec<usize> {
 fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
     let mut sites = vec![];
     let bucket_witnesses = BucketWitnesses::build(model, trace);
-    for bucket in remainder_buckets(model).expect("bucket layout") {
+    for bucket in range_buckets(model).expect("bucket layout") {
         let (values, _) = bucket_witnesses.remainder_values(bucket.idx);
         // Every member is its own range claim.
         for member in &bucket.nodes {

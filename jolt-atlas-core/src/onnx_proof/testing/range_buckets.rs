@@ -12,7 +12,7 @@ use crate::node_view::ModelView;
 use crate::onnx_proof::{
     deferred_lookups::DEFERRED_PROOF_IDX,
     prove,
-    range_bucket::{checks_its_output, remainder_buckets, Remainder},
+    range_bucket::{checks_its_output, range_buckets, Remainder},
     AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
@@ -29,7 +29,7 @@ fn model_outputs_are_not_range_checked() {
     b.mark_output(out);
     let model = b.build();
 
-    let buckets = remainder_buckets(&model).expect("bucket layout");
+    let buckets = range_buckets(&model).expect("bucket layout");
     let members: Vec<usize> = buckets
         .iter()
         .flat_map(|bucket| bucket.nodes.iter().map(|n| n.idx))
@@ -103,7 +103,7 @@ fn scalars_probe_layout() {
         "a Mul and two Adds; the Sub is the output"
     );
 
-    let buckets = remainder_buckets(&model).expect("bucket layout");
+    let buckets = range_buckets(&model).expect("bucket layout");
     assert_eq!(buckets.len(), checked.len() + 1, "one bucket per claim");
     for bucket in &buckets {
         assert_eq!(bucket.log_t, 0);
@@ -141,7 +141,7 @@ fn every_range_claim_is_in_exactly_one_bucket() {
                 expected.push((node.idx, claim, width));
             }
         }
-        let mut packed: Vec<(usize, RangeClaim, usize)> = remainder_buckets(&model)
+        let mut packed: Vec<(usize, RangeClaim, usize)> = range_buckets(&model)
             .expect("remainder layout")
             .iter()
             .flat_map(|bucket| {
@@ -219,5 +219,5 @@ fn scalar_const_div_rejects_a_non_positive_divisor() {
         panic!("the output is a ScalarConstDiv");
     };
     assert!(op.plan::<Fp128>(&node, &model, &io).is_err());
-    assert!(remainder_buckets(&model).is_err());
+    assert!(range_buckets(&model).is_err());
 }

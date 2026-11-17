@@ -367,7 +367,7 @@ pub fn node_remainders(
 
 /// Partition the model's range claims ([`node_range_claims`]) into buckets keyed by width.
 /// `Err` for a node whose bound cannot be range-checked.
-pub fn remainder_buckets(model: &Model) -> Result<Vec<RangeBucket>, ProofVerifyError> {
+pub fn range_buckets(model: &Model) -> Result<Vec<RangeBucket>, ProofVerifyError> {
     let mut items: Vec<BucketItem> = Vec::new();
     for n in &model.views() {
         for (claim, width) in node_range_claims(model, n)? {
@@ -493,7 +493,7 @@ impl RangeBucket {
 /// The buckets' committed polynomials: every range bucket's digit columns. A function of the
 /// model alone. `Err` for a node whose bound cannot be range-checked.
 pub fn bucket_committed_polys(model: &Model) -> Result<Vec<CommittedPoly>, ProofVerifyError> {
-    Ok(remainder_buckets(model)?
+    Ok(range_buckets(model)?
         .iter()
         .flat_map(|bucket| bucket.committed_polys())
         .collect())

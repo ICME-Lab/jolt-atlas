@@ -16,7 +16,7 @@
 //! parallel ones.
 use crate::onnx_proof::{
     plan::{OpRelation, Plan, Step},
-    range_bucket::remainder_buckets,
+    range_bucket::range_buckets,
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -74,7 +74,7 @@ pub fn plan<F: atlas_algebra::field::JoltField>(
     model: &Model,
 ) -> Result<Plan<F>, ProofVerifyError> {
     let mut steps = Vec::new();
-    let buckets = remainder_buckets(model)?;
+    let buckets = range_buckets(model)?;
     if !buckets.is_empty() {
         steps.push(Step::Batch {
             proof: ProofType::DeferredRemainderRC,

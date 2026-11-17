@@ -4,7 +4,7 @@
 use super::integers::{Wide, FP128_MODULUS};
 use super::pack::bit;
 use super::params::{Params, MIN_VARS};
-use super::proof::{Commitment, Proof};
+use super::proof::{eq_table, Commitment, Proof};
 use super::{prover, verifier};
 use atlas_algebra::field::fp128::Fp128;
 use atlas_algebra::serialize::{from_bytes, to_bytes};
@@ -33,6 +33,13 @@ fn evaluate(words: &[u64], point: &[Fp128]) -> Fp128 {
         })
 }
 
+/// An evaluation point as the scheme takes it: the row coordinates, and the `eq` table of the
+/// column coordinates as the column weights.
+fn split<'a>(params: &Params, point: &'a [Fp128]) -> (&'a [Fp128], Vec<Fp128>) {
+    let (rows, columns) = point.split_at(params.log_rows);
+    (rows, eq_table(columns))
+}
+
 struct Instance {
     params: Params,
     words: Vec<u64>,
@@ -50,7 +57,15 @@ fn instance_of(words: Vec<u64>, seed: u64) -> Instance {
     let point = random_point(num_vars, &mut rng);
     let (commitment, committed) = prover::commit(words.clone(), &params);
     let mut transcript = Blake2bProver::new(LABEL);
-    let (claim, proof) = prover::prove(&commitment, committed, &point, &params, &mut transcript);
+    let (rows, weights) = split(&params, &point);
+    let (claim, proof) = prover::prove(
+        &commitment,
+        &committed,
+        rows,
+        &weights,
+        &params,
+        &mut transcript,
+    );
     Instance {
         params,
         words,
@@ -90,7 +105,22 @@ impl Instance {
         proof: &Proof,
     ) -> Result<(), ProofVerifyError> {
         let mut transcript = Blake2bVerifier::new(LABEL, self.narg.clone());
-        verifier::verify(commitment, point, claim, proof, params, &mut transcript)
+        if point.len() != params.num_vars {
+            return Err(ProofVerifyError::InvalidInputLength(
+                params.num_vars,
+                point.len(),
+            ));
+        }
+        let (rows, weights) = split(params, point);
+        verifier::verify(
+            commitment,
+            rows,
+            &weights,
+            claim,
+            proof,
+            params,
+            &mut transcript,
+        )
     }
 
     fn accepts(&self, proof: &Proof) -> bool {

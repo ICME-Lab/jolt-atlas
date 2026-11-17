@@ -23,27 +23,32 @@ fn rejected(what: &str) -> ProofVerifyError {
     ProofVerifyError::InvalidOpeningProof(format!("BitZ: {what}"))
 }
 
-/// Verifies that the committed bits satisfy `Σ_x eq(point, x)·bits(x) = claim` in Fp128.
+/// Verifies that the committed bits satisfy
+/// `Σ eq(row_point, row)·column_weights[column]·bit(row, column) = claim` in Fp128.
 pub fn verify<T: Transcript>(
     commitment: &Commitment,
-    point: &[Fp128],
+    row_point: &[Fp128],
+    column_weights: &[Fp128],
     claim: &Fp128,
     proof: &Proof,
     params: &Params,
     transcript: &mut T,
 ) -> Result<(), ProofVerifyError> {
-    if point.len() != params.num_vars {
+    if row_point.len() != params.log_rows {
         return Err(ProofVerifyError::InvalidInputLength(
-            params.num_vars,
-            point.len(),
+            params.log_rows,
+            row_point.len(),
         ));
     }
-    let (row_point, column_point) = point
-        .split_at_checked(params.log_rows)
-        .ok_or_else(|| rejected("point"))?;
+    if column_weights.len() != 1 << params.log_columns {
+        return Err(ProofVerifyError::InvalidInputLength(
+            1 << params.log_columns,
+            column_weights.len(),
+        ));
+    }
     let lift =
-        |table: Vec<Fp128>| -> Vec<u128> { table.iter().map(|x| x.to_canonical_u128()).collect() };
-    let (row_lifts, column_lifts) = (lift(eq_table(row_point)), lift(eq_table(column_point)));
+        |table: &[Fp128]| -> Vec<u128> { table.iter().map(|x| x.to_canonical_u128()).collect() };
+    let (row_lifts, column_lifts) = (lift(&eq_table(row_point)), lift(column_weights));
 
     // Round 1. The lifted claim of an honest prover is at most 2^n·(p − 1)²; it must reduce to
     // the claim modulo p.
@@ -57,7 +62,14 @@ pub fn verify<T: Transcript>(
     if proof.lifted_claim.to_fp128() != *claim {
         return Err(rejected("the lifted claim does not reduce to the claim"));
     }
-    bind_statement(commitment, point, claim, params, transcript);
+    bind_statement(
+        commitment,
+        row_point,
+        column_weights,
+        claim,
+        params,
+        transcript,
+    );
     transcript.append_serializable(&proof.lifted_claim);
     transcript.pow(params.projection_pow_bits)?;
     let prime = sample_prime(params.prime_low_bits, params.prime_high_bits, transcript)?;

@@ -55,36 +55,49 @@ fn column_sums(words: &[u64], weights: &[u128]) -> Vec<(u128, u64)> {
         .collect()
 }
 
-/// Proves the value of `Σ_x eq(point, x)·bits(x)` in Fp128 and returns it with the proof.
+/// Proves the value in Fp128 of `Σ eq(row_point, row)·column_weights[column]·bit(row, column)`
+/// and returns it with the proof.
 pub fn prove<T: Transcript>(
     commitment: &Commitment,
-    committed: Committed,
-    point: &[Fp128],
+    committed: &Committed,
+    row_point: &[Fp128],
+    column_weights: &[Fp128],
     params: &Params,
     transcript: &mut T,
 ) -> (Fp128, Proof) {
-    assert_eq!(point.len(), params.num_vars, "point length");
+    assert_eq!(row_point.len(), params.log_rows, "row point length");
+    assert_eq!(
+        column_weights.len(),
+        1 << params.log_columns,
+        "column weight count"
+    );
     let Committed {
         words,
         packed,
         level,
     } = committed;
-    let (row_point, column_point) = point.split_at(params.log_rows);
     let lift =
-        |table: Vec<Fp128>| -> Vec<u128> { table.iter().map(|x| x.to_canonical_u128()).collect() };
-    let (row_lifts, column_lifts) = (lift(eq_table(row_point)), lift(eq_table(column_point)));
+        |table: &[Fp128]| -> Vec<u128> { table.iter().map(|x| x.to_canonical_u128()).collect() };
+    let (row_lifts, column_lifts) = (lift(&eq_table(row_point)), lift(column_weights));
 
     // Round 1: the claim over the integers, then its projection onto a random prime.
     let span = tracing::info_span!("bitz_projection").entered();
     #[allow(clippy::expect_used)]
-    let lifted_claim = column_sums(&words, &row_lifts)
+    let lifted_claim = column_sums(words, &row_lifts)
         .iter()
         .zip(&column_lifts)
         .map(|(&sum, &weight)| Wide::product(sum, weight))
         .try_fold(Wide::default(), |acc, term| acc.checked_add(&term))
         .expect("the lifted claim is below 2^320");
     let claim = lifted_claim.to_fp128();
-    bind_statement(commitment, point, &claim, params, transcript);
+    bind_statement(
+        commitment,
+        row_point,
+        column_weights,
+        &claim,
+        params,
+        transcript,
+    );
     transcript.append_serializable(&lifted_claim);
     #[allow(clippy::expect_used)]
     let prime = transcript
@@ -94,7 +107,7 @@ pub fn prove<T: Transcript>(
 
     // Round 2: one integer per column, small enough to be an exponent.
     let row_residues: Vec<u128> = row_lifts.par_iter().map(|&lift| lift % prime).collect();
-    let column_sums: Vec<u128> = column_sums(&words, &row_residues)
+    let column_sums: Vec<u128> = column_sums(words, &row_residues)
         .into_iter()
         .map(|(low, high)| {
             debug_assert_eq!(high, 0, "a column sum of residues fits 128 bits");
@@ -111,7 +124,7 @@ pub fn prove<T: Transcript>(
         .map(|&residue| GENERATOR.pow(residue))
         .collect();
     let (grand_product, outputs, bits_point, _) = gkr::prover::prove(
-        &words,
+        words,
         &factors,
         params.log_columns,
         params.target_bits,
@@ -127,10 +140,11 @@ pub fn prove<T: Transcript>(
     // Phase 4: the claim left on the bits, against the packed commitment.
     let span = tracing::info_span!("bitz_ring_switch").entered();
     let (ring_columns, weights, _) =
-        ring_switch::prover::reduce(&packed, &bits_point, params.target_bits, transcript);
+        ring_switch::prover::reduce(packed, &bits_point, params.target_bits, transcript);
     drop(span);
     let span = tracing::info_span!("bitz_ligerito").entered();
-    let opening = ligerito::prover::prove(packed, weights, level, &params.ligerito, transcript);
+    let opening =
+        ligerito::prover::prove(packed.clone(), weights, level, &params.ligerito, transcript);
     drop(span);
     (
         claim,

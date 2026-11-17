@@ -51,13 +51,15 @@ pub fn commit(values: &[Gf128], schedule: &Schedule) -> (Digest, Level) {
 pub fn prove<T: Transcript>(
     values: Vec<Gf128>,
     weights: Vec<Gf128>,
-    first: Level,
+    first: &Level,
     schedule: &Schedule,
     transcript: &mut T,
 ) -> Proof {
     assert_eq!(values.len(), 1 << schedule.num_vars, "polynomial size");
     assert_eq!(weights.len(), values.len(), "weight size");
-    let (mut values, mut weights, mut level) = (values, weights, first);
+    let (mut values, mut weights) = (values, weights);
+    // The level being opened: the caller's first, then each one committed here.
+    let mut later: Option<Level> = None;
     let mut proof = Proof {
         roots: Vec::new(),
         rounds: Vec::new(),
@@ -89,6 +91,7 @@ pub fn prove<T: Transcript>(
             None
         };
 
+        let level = later.as_ref().unwrap_or(first);
         let block_mask = (1usize << level.code.log_block()) - 1;
         let queried: Vec<usize> = (0..schedule.queries)
             .map(|_| transcript.challenge_u128() as usize & block_mask)
@@ -135,7 +138,7 @@ pub fn prove<T: Transcript>(
             for (w, row) in weights.iter_mut().zip(&rows) {
                 *w += *row;
             }
-            level = next;
+            later = Some(next);
         }
     }
     proof

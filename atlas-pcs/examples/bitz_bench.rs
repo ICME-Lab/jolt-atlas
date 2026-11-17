@@ -7,7 +7,7 @@
 
 use atlas_algebra::field::fp128::Fp128;
 use atlas_algebra::serialize::Canonical;
-use atlas_pcs::bitz::{prover, verifier, Params};
+use atlas_pcs::bitz::{proof::eq_table, prover, verifier, Params};
 use atlas_transcript::{Blake2bProver, Blake2bVerifier, ProvingTranscript, VerifyingTranscript};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use std::time::{Duration, Instant};
@@ -89,6 +89,10 @@ fn main() {
         .map(|_| Fp128::from(((rng.next_u64() as u128) << 64) | rng.next_u64() as u128))
         .collect();
 
+    // An evaluation claim: the row coordinates, and the `eq` table of the column coordinates.
+    let (rows, columns) = point.split_at(params.log_rows);
+    let weights = eq_table(columns);
+
     let (mut commits, mut proves, mut verifies) = (Vec::new(), Vec::new(), Vec::new());
     let mut proof_bytes = 0;
     for _ in 0..reps {
@@ -99,8 +103,14 @@ fn main() {
 
         let mut transcript = Blake2bProver::new(LABEL);
         let start = Instant::now();
-        let (claim, proof) =
-            prover::prove(&commitment, committed, &point, &params, &mut transcript);
+        let (claim, proof) = prover::prove(
+            &commitment,
+            &committed,
+            rows,
+            &weights,
+            &params,
+            &mut transcript,
+        );
         proves.push(start.elapsed());
         let narg = transcript.into_narg();
         proof_bytes = proof.encoded_len() + narg.len();
@@ -109,7 +119,8 @@ fn main() {
         let start = Instant::now();
         verifier::verify(
             &commitment,
-            &point,
+            rows,
+            &weights,
             &claim,
             &proof,
             &params,

@@ -42,11 +42,12 @@ impl Canonical for Wide {
     }
 }
 
-/// A proof that `Σ_x eq(point, x)·bits(x)` is a claimed value in Fp128.
+/// A proof that `Σ_{row, column} eq(row point, row)·weight(column)·bit(row, column)` is a
+/// claimed value in Fp128, bit `(row, column)` being bit `row + 2^log_rows · column`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Proof {
     /// The claim over the integers: the inner product of the bits with the tensor of the
-    /// canonical representatives of the `eq` tables of the point's two halves.
+    /// canonical representatives of the row `eq` table and of the column weights.
     pub lifted_claim: Wide,
     /// For each column, the inner product over the integers of its bits with the row table
     /// reduced modulo the projection prime.
@@ -66,7 +67,7 @@ impl_canonical_struct!([] Proof {
 });
 
 /// `eq(point, b)` over Fp128 for every `b` in the cube, variable `j` being bit `j` of `b`.
-pub(super) fn eq_table(point: &[Fp128]) -> Vec<Fp128> {
+pub fn eq_table(point: &[Fp128]) -> Vec<Fp128> {
     let mut table = Vec::with_capacity(1 << point.len());
     table.push(Fp128::from(1u128));
     for &coordinate in point {
@@ -84,18 +85,21 @@ pub(super) fn eq_table(point: &[Fp128]) -> Vec<Fp128> {
     table
 }
 
-/// Binds the statement: the commitment, the size, the point and the claimed value.
+/// Binds the statement: the commitment, the shape, the weights and the claimed value.
 pub(super) fn bind_statement<T: Transcript>(
     commitment: &Commitment,
-    point: &[Fp128],
+    row_point: &[Fp128],
+    column_weights: &[Fp128],
     claim: &Fp128,
     params: &Params,
     transcript: &mut T,
 ) {
     transcript.append_message(b"bitz-opening");
     transcript.append_bytes(&commitment.root);
-    transcript.append_u64(params.num_vars as u64);
+    transcript.append_u64(params.log_rows as u64);
+    transcript.append_u64(params.log_columns as u64);
     transcript.append_u64(params.target_bits as u64);
-    transcript.append_scalars::<Fp128>(point);
+    transcript.append_scalars::<Fp128>(row_point);
+    transcript.append_scalars::<Fp128>(column_weights);
     transcript.append_scalar(claim);
 }

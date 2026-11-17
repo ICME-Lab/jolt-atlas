@@ -45,22 +45,39 @@ impl Params {
     /// As [`Self::new`] with a given Ligerito schedule; `None` if the schedule does not reach
     /// the target.
     pub fn with_schedule(num_vars: usize, target_bits: u32, ligerito: Schedule) -> Option<Self> {
+        let log_rows = num_vars.div_ceil(2).max(LOG_PACKING);
+        Self::with_shape(
+            log_rows,
+            num_vars.checked_sub(log_rows)?,
+            target_bits,
+            ligerito,
+        )
+    }
+
+    /// The parameters for a matrix of `2^log_rows` rows by `2^log_columns` columns.
+    pub fn with_shape(
+        log_rows: usize,
+        log_columns: usize,
+        target_bits: u32,
+        ligerito: Schedule,
+    ) -> Option<Self> {
+        let num_vars = log_rows + log_columns;
         if !(MIN_VARS..=MAX_VARS).contains(&num_vars)
+            || !(LOG_PACKING..FIELD_BITS as usize).contains(&log_rows)
             || ligerito.num_vars + LOG_PACKING != num_vars
             || ligerito.target_bits != target_bits
             || ligerito.query_error_bits() < target_bits as f64
         {
             return None;
         }
-        let log_rows = num_vars.div_ceil(2).max(LOG_PACKING);
         // The grand product proves integer equalities in the exponent of a generator of order
         // 2^128 − 1: a sum of 2^log_rows residues must stay below it.
         let prime_high_bits = FIELD_BITS - log_rows as u32;
-        let prime_low_bits = prime_high_bits - PRIME_INTERVAL_BITS;
+        let prime_low_bits = prime_high_bits.checked_sub(PRIME_INTERVAL_BITS)?;
         let mut params = Self {
             num_vars,
             log_rows,
-            log_columns: num_vars - log_rows,
+            log_columns,
             target_bits,
             prime_low_bits,
             prime_high_bits,
@@ -70,6 +87,13 @@ impl Params {
         let deficit = target_bits as f64 - params.projection_error_bits();
         params.projection_pow_bits = deficit.ceil().max(0.0) as u32;
         Some(params)
+    }
+
+    /// The parameters for a `2^log_rows` by `2^log_columns` matrix with the default schedule.
+    pub fn for_shape(log_rows: usize, log_columns: usize, target_bits: u32) -> Option<Self> {
+        let num_vars = log_rows + log_columns;
+        let ligerito = Schedule::new(num_vars.checked_sub(LOG_PACKING)?, target_bits)?;
+        Self::with_shape(log_rows, log_columns, target_bits, ligerito)
     }
 
     /// `−log2` of the projection's error (the paper's `κ_0`, Theorem 4.7 with Lemma 4.3 for a

@@ -25,7 +25,7 @@ pub mod verifier;
 
 // ── Re-exports ───────────────────────────────────────────────────────────
 
-pub use crate::{proof_serialization, ONNXProof, ReducedOpeningProof};
+pub use crate::ONNXProof;
 pub use preprocessing::{AtlasSharedPreprocessing, AtlasVerifierPreprocessing};
 pub use verifier::Verifier;
 
@@ -88,10 +88,11 @@ pub fn append_inputs_to_transcript<T: Transcript>(transcript: &mut T, io: &Model
 
 /// Verify a proof for an ONNX neural network computation.
 ///
-/// Checks all sumcheck proofs, validates opening claims, and verifies that the
-/// computation produces the expected output.
+/// Reads the proof front to back through the transcript: the commitments, then what each
+/// step of the model's schedule reads, then the opening reduction and the joint opening
+/// proof, and requires the bytes to end there.
 pub fn verify<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<Field = F>>(
-    proof: &ONNXProof<F, PCS>,
+    proof: &ONNXProof,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     io: &ModelExecutionIO,
 ) -> Result<(), ProofVerifyError> {
@@ -102,12 +103,12 @@ pub fn verify<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<Field 
 /// prover's test-only lockstep comparison installs its expected transcript history here).
 #[tracing::instrument(skip_all, name = "ONNXProof::verify")]
 pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<Field = F>>(
-    proof: &ONNXProof<F, PCS>,
+    proof: &ONNXProof,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     io: &ModelExecutionIO,
     setup: impl FnOnce(&mut Verifier<'_, F, T>),
 ) -> Result<(), ProofVerifyError> {
-    let mut verifier: Verifier<F, T> = Verifier::new(io, proof.narg());
+    let mut verifier: Verifier<F, T> = Verifier::new(io, &proof.0);
     setup(&mut verifier);
 
     // Every node's operands are earlier nodes, the layout ops have the dims their ties hold
@@ -117,11 +118,11 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
 
     // Bind public inputs into the transcript before any challenge (issue #230).
     // Must mirror the prover's first append, after `setup` installs any expected
-    // state history and before any commitment is absorbed.
+    // state history and before any commitment is read.
     append_inputs_to_transcript(&mut verifier.transcript, io);
 
-    // Absorb the commitments.
-    verifier::populate_accumulator(proof, &mut verifier);
+    // Read the commitments: the schedule says how many.
+    let commitments = verifier::read_commitments(pp, &mut verifier)?;
 
     // Verify output MLE at random point τ
     verifier::verify_output_claim(pp.model(), &mut verifier)?;
@@ -130,17 +131,16 @@ pub fn verify_with<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<F
     // sumchecks.
     verifier.run(&pp.schedule)?;
 
-    // Verify reduced opening proof
-    verifier::verify_reduced_openings(proof, pp, &mut verifier)?;
+    // Reduce the committed openings to one point and verify the joint opening proof.
+    verifier::verify_reduced_openings(&commitments, pp, &mut verifier)?;
 
-    // The NARG string was read to its end: every claim, round message and proof-of-work nonce
-    // was read, and nothing follows them.
+    // The proof was read to its end: nothing follows the last value the verifier needs.
     verifier.transcript.finish()
 }
 
-impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
+impl ONNXProof {
     /// Verify this proof against the model's preprocessing and public IO; see [`verify`].
-    pub fn verify<T: VerifyingTranscript>(
+    pub fn verify<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<Field = F>>(
         &self,
         pp: &AtlasVerifierPreprocessing<F, PCS>,
         io: &ModelExecutionIO,

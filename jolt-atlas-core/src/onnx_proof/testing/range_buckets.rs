@@ -10,14 +10,14 @@ use rand::{rngs::StdRng, SeedableRng};
 use super::{models::probe_models, prove_verify_roundtrip, ModelBuilder, RoundtripOptions};
 use crate::node_view::ModelView;
 use crate::onnx_proof::{
-    prove,
     range_bucket::{checks_its_output, range_buckets, Remainder},
     AtlasProverPreprocessing, AtlasSharedPreprocessing, Fp128,
 };
 
 /// A model output is a public `i32` tensor, so it is never a bucket member, whatever its values,
-/// and the committed polynomials are a function of the model: the prover commits the same list
-/// for an execution whose output holds `i32::MAX` as for any other, and both proofs verify.
+/// and the committed polynomials are a function of the model: the verifier reads the
+/// schedule's list of commitments for an execution whose output holds `i32::MAX` as for any
+/// other, and both proofs verify.
 #[test]
 fn model_outputs_are_not_range_checked() {
     let mut b = ModelBuilder::new();
@@ -35,16 +35,12 @@ fn model_outputs_are_not_range_checked() {
         .collect();
     assert_eq!(members, vec![hidden], "the hidden sum only");
 
-    let shared = AtlasSharedPreprocessing::preprocess(model.clone());
-    let pp = AtlasProverPreprocessing::<Fp128, AkitaScheme>::new(shared);
     let tensor = |values: [i32; 4]| Tensor::from_slice(&values, &[4]).unwrap();
     for inputs in [
         vec![tensor([1, -2, 3, -4]), tensor([5, 6, -7, 8])],
         vec![tensor([i32::MAX, 0, i32::MIN, -1]), tensor([0, 0, 0, 0])],
     ] {
         let io = model.trace(&inputs).expect("honest execution").io(&model);
-        let (proof, _, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&pp, &inputs);
-        assert_eq!(proof.commitments().len(), pp.schedule.committed().len());
         prove_verify_roundtrip::<AkitaScheme>(model.clone(), &inputs, RoundtripOptions::default());
         if inputs[0].data()[0] == i32::MAX {
             assert_eq!(io.outputs[0].data()[0], i32::MAX);

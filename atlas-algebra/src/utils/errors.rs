@@ -41,20 +41,12 @@ pub enum ProofVerifyError {
     SumcheckVerificationError,
     #[error("Univariate-skip round verification failed")]
     UniSkipVerificationError,
-    #[error("Missing proof for node {0}")]
-    MissingProof(usize),
-    #[error("Missing reduction proof")]
-    MissingReductionProof,
     #[error("Transcript proof of work failed")]
     ProofOfWork,
     #[error("Transcript NARG string not fully consumed")]
     TrailingNarg,
     #[error("The proof carries no claim for {0}")]
     MissingClaim(String),
-    #[error("Sumcheck proof {0} was not consumed")]
-    UnconsumedProof(String),
-    #[error("Evaluation-reduction proof for node {0} was not consumed")]
-    UnconsumedEvalReduction(usize),
     #[error("Malformed proof or public IO: {0}")]
     Malformed(String),
 }

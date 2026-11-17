@@ -1,8 +1,7 @@
 //! Soundness sweeps: generic, op-agnostic attacks on the proof system.
 //!
-//! * [`proof_mutation_sweep`]: every field of a finished proof (and of the
-//!   public IO) is perturbed in turn; the verifier must reject, or, for the
-//!   few documented dead fields, at least not panic.
+//! * [`proof_mutation_sweep`]: the bytes of a finished proof (and the
+//!   public IO) are perturbed in turn; the verifier must reject.
 //! * [`witness_tamper_sweep`]: the execution trace is perturbed *before*
 //!   proving (node outputs, fused remainders, every softmax
 //!   witness column), and so are the range buckets' digits, which the trace
@@ -37,13 +36,10 @@ use super::{
         padded_add_model, padded_broadcast_sum_model, probe_models, probe_models_alt, square_model,
         sub_const_model, ProbeModel,
     },
-    mutate::{
-        apply_site, enumerate_sites, exhaustive, opening_stratum, site_class, PcsMutations, Site,
-    },
+    mutate::{apply_site, enumerate_sites, exhaustive, opening_stratum, site_class, Site},
     probe::{self, ProbeGuard},
 };
 use crate::onnx_proof::{
-    proof_serialization::serialize_proof,
     prove, prove_from_trace,
     range_bucket::{range_buckets, BucketWitnesses},
     range_check::{
@@ -80,8 +76,8 @@ fn payload(p: Box<dyn std::any::Any + Send>) -> String {
 
 /// Verify without debug lockstep (tampering must surface as `Err`, not as a
 /// transcript-compare panic), catching verifier panics.
-pub(crate) fn run_verify<PCS: PcsMutations>(
-    proof: &ONNXProof<PCS::Field, PCS>,
+pub(crate) fn run_verify<PCS: CommitmentScheme>(
+    proof: &ONNXProof,
     vpp: &AtlasVerifierPreprocessing<PCS::Field, PCS>,
     io: &ModelExecutionIO,
 ) -> Outcome {
@@ -97,22 +93,16 @@ pub(crate) fn run_verify<PCS: PcsMutations>(
 }
 
 /// A proof of a tampered trace, or the prover's panic message.
-pub(crate) type TamperedProve<PCS> = Result<
-    (
-        ONNXProof<<PCS as CommitmentScheme>::Field, PCS>,
-        ModelExecutionIO,
-    ),
-    String,
->;
+pub(crate) type TamperedProve = Result<(ONNXProof, ModelExecutionIO), String>;
 
 /// Execute, apply `tamper` to the trace, prove from the tampered trace.
 /// Returns the tampered trace too, so callers can tell an effective tamper
 /// from a no-op one.
-pub(crate) fn prove_tampered<PCS: PcsMutations>(
+pub(crate) fn prove_tampered<PCS: CommitmentScheme>(
     pp: &AtlasProverPreprocessing<PCS::Field, PCS>,
     inputs: &[Tensor<i32>],
     tamper: &mut dyn FnMut(&mut Trace),
-) -> (Trace, TamperedProve<PCS>) {
+) -> (Trace, TamperedProve) {
     let mut trace = pp.model().trace(inputs).expect("honest execution");
     tamper(&mut trace);
     let tampered = trace.clone();
@@ -132,7 +122,7 @@ struct Honest<PCS: CommitmentScheme> {
     prover_pp: AtlasProverPreprocessing<PCS::Field, PCS>,
     verifier_pp: AtlasVerifierPreprocessing<PCS::Field, PCS>,
     inputs: Vec<Tensor<i32>>,
-    proof: ONNXProof<PCS::Field, PCS>,
+    proof: ONNXProof,
     io: ModelExecutionIO,
     /// Every opening the prover bound, in id order.
     openings: Vec<OpeningId>,
@@ -177,13 +167,13 @@ fn proof_mutation_sweep() {
     proof_mutation_sweep_for::<Pcs>();
 }
 
-fn proof_mutation_sweep_for<PCS: PcsMutations>() {
+fn proof_mutation_sweep_for<PCS: CommitmentScheme>() {
     let _probe = ProbeGuard::enter();
     let mut violations: Vec<String> = vec![];
     for (m, alt) in probe_models().into_iter().zip(probe_models_alt()) {
         let h = honest::<PCS>(m);
         let (other, _, _) = prove::<PCS::Field, Blake2bProver, PCS>(&h.prover_pp, &alt.inputs);
-        let sites = enumerate_sites::<PCS>(&h.proof, &other, &h.io);
+        let sites = enumerate_sites(&h.proof, &h.io);
         // Sequential on purpose: a verifier crash (stack overflow) must be
         // attributable to the site being tried, which the exhaustive run
         // logs site by site.
@@ -524,7 +514,7 @@ fn live_cells(model: &Model) -> Vec<Vec<bool>> {
     live
 }
 
-fn witness_tamper_sweep_for<PCS: PcsMutations>() {
+fn witness_tamper_sweep_for<PCS: CommitmentScheme>() {
     let _probe = ProbeGuard::enter();
     let all = exhaustive();
     let mut violations: Vec<String> = vec![];
@@ -534,13 +524,11 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
         let h = honest::<PCS>(m);
         let model = h.prover_pp.model().clone();
         let honest_trace = model.trace(&h.inputs).expect("honest execution");
-        let honest_bytes = serialize_proof(&h.proof).expect("serializes");
         {
             // The "proof unchanged" oracle below needs a deterministic prover.
             let (again, _, _) = prove::<PCS::Field, Blake2bProver, PCS>(&h.prover_pp, &h.inputs);
             assert_eq!(
-                serialize_proof(&again).unwrap(),
-                honest_bytes,
+                again, h.proof,
                 "proving is not deterministic; the witness oracle cannot rely on proof equality"
             );
         }
@@ -592,9 +580,8 @@ fn witness_tamper_sweep_for<PCS: PcsMutations>() {
                     //    are not part of the statement.
                     // An input pushed out of its domain (a non-boolean mask)
                     // does not execute at all; that is reported, not judged.
-                    let same_proof = io.inputs == h.io.inputs
-                        && io.outputs == h.io.outputs
-                        && serialize_proof(&proof).expect("serializes") == honest_bytes;
+                    let same_proof =
+                        io.inputs == h.io.inputs && io.outputs == h.io.outputs && proof == h.proof;
                     if matches!(site, WitnessSite::BucketDigit { .. }) {
                         // The trace is untouched, so neither rule applies; an unchanged proof
                         // means the tamper never reached the digits.
@@ -706,7 +693,7 @@ fn opening_forgery_sweep() {
     opening_forgery_sweep_for::<Pcs>();
 }
 
-fn opening_forgery_sweep_for<PCS: PcsMutations>() {
+fn opening_forgery_sweep_for<PCS: CommitmentScheme>() {
     let _probe = ProbeGuard::enter();
     let all = exhaustive();
     let mut violations: Vec<String> = vec![];

@@ -34,8 +34,8 @@ use common::utils::logging::setup_tracing;
 use jolt_atlas_core::loader::{load_imported, RunArgs};
 use jolt_atlas_core::node_view::ModelView;
 use jolt_atlas_core::onnx_proof::{
-    proof_serialization::serialize_proof, prove, verify, AkitaScheme, AtlasProverPreprocessing,
-    AtlasSharedPreprocessing, AtlasVerifierPreprocessing, Blake2bProver, Blake2bVerifier, Fp128,
+    prove, verify, AkitaScheme, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+    AtlasVerifierPreprocessing, Blake2bProver, Blake2bVerifier, Fp128,
 };
 
 struct Args {
@@ -472,11 +472,10 @@ fn run(shared: AtlasSharedPreprocessing, inputs: &[Tensor<i32>]) {
     let t = Instant::now();
     let (proof, io, _) = prove::<Fp128, Blake2bProver, AkitaScheme>(&prover_pp, inputs);
     println!("prove: {:.2?}", t.elapsed());
-    let bytes = serialize_proof(&proof).expect("proof serializes");
     println!(
         "proof size: {:.2} MiB ({} commitments, {} sumcheck proofs)",
-        bytes.len() as f64 / (1024.0 * 1024.0),
-        proof.commitments().len(),
+        proof.0.len() as f64 / (1024.0 * 1024.0),
+        prover_pp.schedule.committed().len(),
         prover_pp.schedule.sumchecks().count()
     );
 

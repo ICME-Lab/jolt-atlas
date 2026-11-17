@@ -1,119 +1,22 @@
-//! The proof object and its batched opening proof.
+//! The proof: the byte string the prover's transcript wrote.
 
-use atlas_algebra::field::JoltField;
-use atlas_pcs::commitment_scheme::CommitmentScheme;
-
-/// Proof for an ONNX neural network computation.
+/// Proof for an ONNX neural network computation: the NARG string of the prover's transcript,
+/// which the verifier's transcript reads front to back.
 ///
-/// Contains the polynomial commitments, the joint opening proof and the NARG string, which
-/// holds every opening claim, sumcheck round message and evaluation-reduction polynomial where
-/// the verifier reads it. Fields are
-/// private: the prover builds a proof with [`ONNXProof::from_parts`] and
-/// readers go through the `&` accessors, so a finished proof is immutable.
-#[derive(Debug, Clone)]
-pub struct ONNXProof<F: JoltField, PCS: CommitmentScheme<Field = F>> {
-    /// Commitment data shared by every witness polynomial (empty for homomorphic schemes).
-    batch_commitment: PCS::BatchCommitment,
-    /// Polynomial commitments for witness polynomials.
-    commitments: Vec<PCS::Commitment>,
-    /// The joint opening proof of the committed polynomials at the opening reduction's point.
-    reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
-    /// The transcript's NARG string: the opening claims, the round messages, the reduction
-    /// polynomials and the proof-of-work nonces, in the order the verifier's transcript reads
-    /// them back; it rejects a string it does not consume exactly.
-    narg: Vec<u8>,
-}
-
-impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
-    /// Assemble a proof from every field.
-    pub fn from_parts(
-        batch_commitment: PCS::BatchCommitment,
-        commitments: Vec<PCS::Commitment>,
-        reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
-        narg: Vec<u8>,
-    ) -> Self {
-        Self {
-            batch_commitment,
-            commitments,
-            reduced_opening_proof,
-            narg,
-        }
-    }
-
-    /// Commitment data shared by every witness polynomial.
-    pub fn batch_commitment(&self) -> &PCS::BatchCommitment {
-        &self.batch_commitment
-    }
-
-    /// Witness polynomial commitments, in sorted `CommittedPoly` order.
-    pub fn commitments(&self) -> &[PCS::Commitment] {
-        &self.commitments
-    }
-
-    /// The batched opening proof, absent when nothing committed was opened.
-    pub fn reduced_opening_proof(&self) -> Option<&ReducedOpeningProof<F, PCS>> {
-        self.reduced_opening_proof.as_ref()
-    }
-
-    /// The transcript's NARG string.
-    pub fn narg(&self) -> &[u8] {
-        &self.narg
-    }
-}
-
-/// Mutable field access for the soundness harness (`test-util`).
-#[cfg(feature = "test-util")]
-impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ONNXProof<F, PCS> {
-    /// Mutable batch commitment.
-    pub fn batch_commitment_mut(&mut self) -> &mut PCS::BatchCommitment {
-        &mut self.batch_commitment
-    }
-
-    /// Mutable commitments.
-    pub fn commitments_mut(&mut self) -> &mut Vec<PCS::Commitment> {
-        &mut self.commitments
-    }
-
-    /// Mutable NARG string.
-    pub fn narg_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.narg
-    }
-
-    /// Mutable batched opening proof.
-    pub fn reduced_opening_proof_mut(&mut self) -> &mut Option<ReducedOpeningProof<F, PCS>> {
-        &mut self.reduced_opening_proof
-    }
-}
-
-/// The joint opening proof of the committed polynomials. The opening reduction's sumcheck and
-/// its reduced claims are in the NARG string.
-#[derive(Debug, Clone)]
-pub struct ReducedOpeningProof<F: JoltField, PCS: CommitmentScheme<Field = F>> {
-    /// Joint opening proof for the batched polynomial.
-    joint_opening_proof: PCS::Proof,
-    _field: std::marker::PhantomData<F>,
-}
-
-impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ReducedOpeningProof<F, PCS> {
-    /// Assemble a reduced opening proof from every field.
-    pub fn from_parts(joint_opening_proof: PCS::Proof) -> Self {
-        Self {
-            joint_opening_proof,
-            _field: std::marker::PhantomData,
-        }
-    }
-
-    /// The PCS opening proof of the batched polynomial.
-    pub fn joint_opening_proof(&self) -> &PCS::Proof {
-        &self.joint_opening_proof
-    }
-}
-
-/// Mutable field access for the soundness harness (`test-util`).
-#[cfg(feature = "test-util")]
-impl<F: JoltField, PCS: CommitmentScheme<Field = F>> ReducedOpeningProof<F, PCS> {
-    /// Mutable PCS opening proof.
-    pub fn joint_opening_proof_mut(&mut self) -> &mut PCS::Proof {
-        &mut self.joint_opening_proof
-    }
-}
+/// The bytes are the prover's messages in the order the verifier needs them, with no key, tag
+/// or count between them:
+///
+/// 1. the batch commitment, then one commitment per polynomial the model's schedule opens;
+/// 2. the output claim;
+/// 3. for each step of the schedule, what the step reads: an opening's claims, an evaluation
+///    reduction's polynomial, a sumcheck's round messages (each followed by its proof-of-work
+///    nonce) and then its members' produced claims, a tie's produced claims;
+/// 4. the opening reduction's sumcheck and its reduced claims, then the joint opening proof,
+///    when the schedule opens a committed polynomial.
+///
+/// How many values there are and how long each is comes from the schedule, never from the
+/// bytes; the one length the bytes state is that of a framed value (a commitment, the joint
+/// opening proof), bounded by the bytes left. A missing value is a short read and a surplus
+/// one is trailing bytes: both are rejected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ONNXProof(pub Vec<u8>);

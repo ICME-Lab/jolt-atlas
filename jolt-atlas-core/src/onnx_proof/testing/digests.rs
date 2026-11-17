@@ -3,7 +3,7 @@
 //! The zoo tests prove and verify with the same build, so a coordinated
 //! prover+verifier change passes them unseen. These tests pin, for each
 //! checked-in model on its golden inputs under Akita over Fp128, a
-//! blake2b-256 hash of the serialized proof and the prover's final transcript
+//! blake2b-256 hash of the proof's bytes and the prover's final transcript
 //! state. A behavior-preserving change leaves every pin untouched; a
 //! protocol-breaking change re-pins in its own commit, naming the cause.
 
@@ -14,9 +14,7 @@ use atlas_transcript::Blake2bProver;
 use blake2::{digest::consts::U32, Blake2b, Digest};
 
 use super::zoo::{op_gauntlet_inputs, zoo};
-use crate::onnx_proof::{
-    proof_serialization::serialize_proof, prove, AtlasProverPreprocessing, AtlasSharedPreprocessing,
-};
+use crate::onnx_proof::{prove, AtlasProverPreprocessing, AtlasSharedPreprocessing};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -35,8 +33,7 @@ fn assert_digest<PCS: CommitmentScheme>(
         AtlasSharedPreprocessing::preprocess(model),
     );
     let (p, _, debug) = prove::<PCS::Field, Blake2bProver, PCS>(&pp, inputs);
-    let bytes = serialize_proof(&p).expect("proof serializes");
-    let got_proof = hex(&Blake2b::<U32>::digest(&bytes));
+    let got_proof = hex(&Blake2b::<U32>::digest(&p.0));
     let debug = debug.expect("test builds carry debug info");
     let got_transcript = hex(debug
         .transcript_history

@@ -2,8 +2,8 @@
 //!
 //! This module implements the core proving and verification logic for ONNX neural networks.
 //! It provides:
-//! - [`ONNXProof`]: The main proof structure containing all sumcheck proofs and commitments,
-//!   owned by `jolt-atlas-verifier` together with its wire format and re-exported here
+//! - [`ONNXProof`]: the proof, the byte string the prover's transcript wrote, owned by
+//!   `jolt-atlas-verifier` and re-exported here
 //! - [`prove`]: Generate a proof for an ONNX model execution
 //! - [`verify`]: Verify a proof against expected IO
 //! - Preprocessing structs for model setup and commitment scheme initialization
@@ -42,7 +42,7 @@ pub(crate) mod testing;
 pub use jolt_atlas_verifier::onnx_proof::{
     append_inputs_to_transcript, schedule, verifier, verify_with, Verifier,
 };
-pub use jolt_atlas_verifier::{proof_serialization, ONNXProof, ReducedOpeningProof};
+pub use jolt_atlas_verifier::ONNXProof;
 pub use preprocessing::{
     AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
 };
@@ -59,19 +59,14 @@ pub use atlas_transcript::{Blake2bProver, Blake2bVerifier};
 
 /// Generate a proof for an ONNX neural network computation.
 ///
-/// Executes the model with the given inputs, generates a trace, and produces
-/// sumcheck proofs for each operation. Returns the proof, execution IO, and
+/// Executes the model with the given inputs, generates a trace, and proves each step of
+/// the model's schedule through the transcript. Returns the proof, execution IO, and
 /// optional debug information.
 #[tracing::instrument(skip_all, name = "ONNXProof::prove")]
-#[allow(clippy::type_complexity)]
 pub fn prove<F: JoltField, T: ProvingTranscript, PCS: CommitmentScheme<Field = F>>(
     pp: &AtlasProverPreprocessing<F, PCS>,
     inputs: &[Tensor<i32>],
-) -> (
-    ONNXProof<F, PCS>,
-    ModelExecutionIO,
-    Option<ProverDebugInfo<F>>,
-) {
+) -> (ONNXProof, ModelExecutionIO, Option<ProverDebugInfo<F>>) {
     let trace = pp.model().trace(inputs).expect("model execution failed");
     prove_from_trace::<F, T, PCS>(pp, trace)
 }
@@ -79,7 +74,6 @@ pub fn prove<F: JoltField, T: ProvingTranscript, PCS: CommitmentScheme<Field = F
 /// Prove from an already-executed trace. The public IO is derived from
 /// the trace, so this is the prover's *claimed* statement; the soundness
 /// sweeps tamper with the trace before calling it.
-#[allow(clippy::type_complexity)]
 pub(crate) fn prove_from_trace<
     F: JoltField,
     T: ProvingTranscript,
@@ -87,11 +81,7 @@ pub(crate) fn prove_from_trace<
 >(
     pp: &AtlasProverPreprocessing<F, PCS>,
     trace: atlas_trace::Trace,
-) -> (
-    ONNXProof<F, PCS>,
-    ModelExecutionIO,
-    Option<ProverDebugInfo<F>>,
-) {
+) -> (ONNXProof, ModelExecutionIO, Option<ProverDebugInfo<F>>) {
     let io = trace.io(pp.model());
 
     // Initialize prover state
@@ -101,9 +91,8 @@ pub(crate) fn prove_from_trace<
     // Bind public inputs into the transcript before any challenge (issue #230).
     append_inputs_to_transcript(&mut prover.transcript, &io);
 
-    // Commit to the polynomials the model's schedule opens and append the commitments to the
-    // transcript
-    let (poly_map, commitments, hints) = prover::commit_witness_polynomials::<F, T, PCS>(
+    // Commit to the polynomials the model's schedule opens and send the commitments
+    let (poly_map, hints) = prover::commit_witness_polynomials::<F, T, PCS>(
         &pp.schedule,
         pp.model(),
         &prover.trace,
@@ -119,9 +108,8 @@ pub(crate) fn prove_from_trace<
     prover::iop(&pp.schedule, &mut prover);
 
     // Reduction sum-check + PCS::prove
-    let reduced_opening_proof =
-        prover::prove_reduced_openings(&mut prover, &poly_map, hints, &pp.generators);
-    prover::finalize_proof(prover, io, commitments, reduced_opening_proof)
+    prover::prove_reduced_openings::<F, T, PCS>(&mut prover, &poly_map, hints, &pp.generators);
+    prover::finalize_proof(prover, io)
 }
 
 /// Verify a proof for an ONNX neural network computation.
@@ -130,7 +118,7 @@ pub(crate) fn prove_from_trace<
 /// the prover's `debug_info`, the verifier checks its transcript and opening accumulator against
 /// the prover's step by step.
 pub fn verify<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<Field = F>>(
-    proof: &ONNXProof<F, PCS>,
+    proof: &ONNXProof,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     io: &ModelExecutionIO,
     _debug_info: Option<ProverDebugInfo<F>>,

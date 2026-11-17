@@ -1,9 +1,9 @@
 //! The `verify` fuzz target's input format and driver, shared by the cargo-fuzz harness in
 //! `fuzz/` and the regression replay in the test suite.
 //!
-//! An input is an 8-byte header followed by a serialized proof. The header edits a copy of the
-//! honest public IO (`[kind, tensor, index_lo, index_hi, delta, ..]`, see [`mutate_io`]); the
-//! rest is handed to the proof deserializer. Whatever the bytes, the verifier must return: an
+//! An input is an 8-byte header followed by a proof. The header edits a copy of the honest
+//! public IO (`[kind, tensor, index_lo, index_hi, delta, ..]`, see [`mutate_io`]); the rest is
+//! the proof, handed to the verifier as it is. Whatever the bytes, the verifier must return: an
 //! `Err` is the expected outcome, a panic is a finding.
 
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
@@ -14,11 +14,11 @@ use atlas_transcript::{Blake2bProver, Blake2bVerifier};
 
 use crate::loader::{load_imported, RunArgs};
 use crate::onnx_proof::{
-    proof_serialization::{deserialize_proof, serialize_proof},
     prove, AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
+    ONNXProof,
 };
 
-/// Bytes of the IO-edit header in front of the serialized proof.
+/// Bytes of the IO-edit header in front of the proof.
 pub const HEADER_LEN: usize = 8;
 
 /// The model the target verifies against, with an honest proof of it: the checked-in op
@@ -43,7 +43,7 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> VerifyTarget<F, PCS> {
         );
         let (proof, io, _) = prove::<F, Blake2bProver, PCS>(&prover_pp, &inputs);
         let mut seed = vec![0; HEADER_LEN];
-        seed.extend(serialize_proof(&proof).expect("the honest proof serializes"));
+        seed.extend(proof.0);
         Self {
             verifier_pp: AtlasVerifierPreprocessing::from(&prover_pp),
             io,
@@ -56,14 +56,13 @@ impl<F: JoltField, PCS: CommitmentScheme<Field = F>> VerifyTarget<F, PCS> {
         &self.seed
     }
 
-    /// Verify one fuzz input. `None` if the bytes are too short or do not deserialize to a
-    /// proof; otherwise the verifier's verdict on the decoded proof and the edited IO.
+    /// Verify one fuzz input. `None` if the bytes are shorter than the header; otherwise the
+    /// verifier's verdict on the bytes after it, as the proof, and the edited IO.
     pub fn run(&self, data: &[u8]) -> Option<Result<(), ProofVerifyError>> {
-        let (header, proof_bytes) = data.split_at_checked(HEADER_LEN)?;
-        let proof = deserialize_proof::<F, PCS>(proof_bytes).ok()?;
+        let (header, proof) = data.split_at_checked(HEADER_LEN)?;
         let mut io = self.io.clone();
         mutate_io(&mut io, header);
-        Some(proof.verify::<Blake2bVerifier>(&self.verifier_pp, &io))
+        Some(ONNXProof(proof.to_vec()).verify::<F, Blake2bVerifier, PCS>(&self.verifier_pp, &io))
     }
 }
 

@@ -65,7 +65,6 @@ mod tests {
         multilinear::{MultilinearPolynomial, PolynomialEvaluation},
         point::OpeningPoint,
     };
-    use atlas_pcs::mock::MockCommitScheme;
     use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
     use atlas_trace::op::Add;
     use atlas_trace::trace::ModelExecutionIO;
@@ -301,23 +300,17 @@ mod tests {
             .expect("model execution failed");
         let io = trace.io(shared.model());
 
-        // Build just enough prover state for the NARG string
-        // using output_claim + iop (no commitments, no reduced opening proof stage).
+        // Build just enough prover state for the stream of the output claim and the schedule
+        // (no commitments, no opening reduction).
         let mut prover = Prover::<_, Blake2bProver>::new(shared.clone(), trace);
 
         let schedule = Schedule::compile(shared.model()).expect("the model has a schedule");
         prover::output_claim(&mut prover);
         prover::iop(&schedule, &mut prover);
 
-        let partial_proof = ONNXProof::<_, MockCommitScheme<Fr>>::from_parts(
-            (),
-            vec![],
-            None,
-            prover.transcript.into_narg(),
-        );
+        let partial_proof = ONNXProof(prover.transcript.into_narg());
 
-        let mut verifier = Verifier::<_, Blake2bVerifier>::new(&io, partial_proof.narg());
-        verifier::populate_accumulator(&partial_proof, &mut verifier);
+        let mut verifier = Verifier::<Fr, Blake2bVerifier>::new(&io, &partial_proof.0);
         verifier::verify_output_claim(shared.model(), &mut verifier)
             .expect("verify_output_claim should succeed for consistent partial proof state");
         verifier

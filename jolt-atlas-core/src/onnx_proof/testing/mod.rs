@@ -1,7 +1,7 @@
 //! The crate's test suite, in one place.
 //!
-//! * [`harness`]: one prove → verify → serialize → deserialize → verify path
-//!   that every end-to-end test goes through, generic over the PCS.
+//! * [`harness`]: one prove → verify → verify-from-bytes path that every
+//!   end-to-end test goes through, generic over the PCS.
 //! * [`op_kind`] + [`op_surface`]: the exhaustive single-op table. A new
 //!   `atlas_trace::Op` variant fails to compile here until a case exists.
 //! * [`range_buckets`]: what the packed range buckets hold and commit for a model.
@@ -21,8 +21,7 @@
 //! * [`model_builder`]: programmatic model construction.
 //!
 //! This module is a descendant of `onnx_proof` so tests can reach the
-//! prover and verifier helpers without widening any visibility. Proof fields
-//! are reached only through `jolt-atlas-verifier`'s `test-util` accessors.
+//! prover and verifier helpers without widening any visibility.
 
 mod digests;
 pub(crate) mod harness;

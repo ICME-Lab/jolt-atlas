@@ -4,7 +4,11 @@
 //! This file houses the [`Prover`] struct and the private helper functions that
 //! `prove` delegates to.
 
-use super::{types::ProverDebugInfo, AtlasSharedPreprocessing, ONNXProof, ReducedOpeningProof};
+use super::{
+    types::ProverDebugInfo,
+    verifier::{seed_opening_transcript, OPENING_TRANSCRIPT_LABEL},
+    AtlasSharedPreprocessing, ONNXProof,
+};
 use crate::node_view::ModelView;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::witness::WitnessGenerator;
@@ -23,7 +27,7 @@ use atlas_algebra::{
 use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_sumcheck::opening_proof::{prover::ProverOpeningAccumulator, OpeningId, SumcheckId};
 use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
-use atlas_transcript::{AppendToTranscript, ProvingTranscript};
+use atlas_transcript::ProvingTranscript;
 use common::{CommittedPoly, VirtualPoly};
 use std::collections::BTreeMap;
 
@@ -91,15 +95,8 @@ impl<F: JoltField, T: ProvingTranscript> Prover<F, T> {
 // Internal proving helpers
 // ---------------------------------------------------------------------------
 
-/// Commitments to a proof's witness polynomials: the scheme's batch commitment plus one
-/// commitment per polynomial, in `poly_map` order.
-pub(super) struct WitnessCommitments<PCS: CommitmentScheme> {
-    pub(super) batch: PCS::BatchCommitment,
-    pub(super) polys: Vec<PCS::Commitment>,
-}
-
-/// Build the witness polynomial map, commit to every polynomial, and append the commitments to
-/// the transcript (the batch commitment first).
+/// Build the witness polynomial map, commit to every polynomial, and send the commitments
+/// (the batch commitment first, then one per polynomial in `poly_map` order).
 #[tracing::instrument(skip_all, name = "ONNXProof::commit_witness_polynomials")]
 #[allow(clippy::type_complexity)]
 pub(super) fn commit_witness_polynomials<
@@ -115,22 +112,17 @@ pub(super) fn commit_witness_polynomials<
     transcript: &mut T,
 ) -> (
     BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
-    WitnessCommitments<PCS>,
     Vec<PCS::OpeningProofHint>,
 ) {
     let poly_map = polynomial_map::<F>(schedule, model, trace, buckets);
     let polys: Vec<&MultilinearPolynomial<F>> = poly_map.values().collect();
     let (batch, per_poly) = PCS::batch_commit_all(&polys, generators);
-    let (commitments, hints): (Vec<_>, Vec<_>) = per_poly.into_iter().unzip();
-    batch.append_to_transcript(transcript);
+    let (commitments, hints): (Vec<PCS::Commitment>, Vec<_>) = per_poly.into_iter().unzip();
+    transcript.send_serializable(&batch);
     for commitment in &commitments {
-        transcript.append_serializable(commitment);
+        transcript.send_serializable(commitment);
     }
-    let commitments = WitnessCommitments {
-        batch,
-        polys: commitments,
-    };
-    (poly_map, commitments, hints)
+    (poly_map, hints)
 }
 
 pub(crate) fn output_claim<F: JoltField, T: ProvingTranscript>(prover: &mut Prover<F, T>) {
@@ -176,6 +168,8 @@ pub(crate) fn iop<F: JoltField, T: ProvingTranscript>(
     prove_schedule(schedule, prover);
 }
 
+/// Reduce the committed openings to one point and send the joint opening proof there. A
+/// proof that opens no committed polynomial carries neither.
 #[tracing::instrument(skip_all, name = "ONNXProof::prove_reduced_openings")]
 pub(super) fn prove_reduced_openings<
     F: JoltField,
@@ -186,17 +180,14 @@ pub(super) fn prove_reduced_openings<
     poly_map: &BTreeMap<CommittedPoly, MultilinearPolynomial<F>>,
     hints: Vec<PCS::OpeningProofHint>,
     generators: &PCS::ProverSetup,
-) -> Option<ReducedOpeningProof<F, PCS>> {
-    if poly_map.is_empty() {
-        return None;
-    }
+) {
     // Committed polynomials nobody opened stay out of the joint opening; the
     // verifier selects the same subset from its openings.
     let opened = prover.accumulator.opened_polynomials();
     if opened.is_empty() {
         // Nothing was opened (every committed polynomial is unused): no joint
         // opening.
-        return None;
+        return;
     }
     let (poly_map, hints): (BTreeMap<CommittedPoly, MultilinearPolynomial<F>>, Vec<_>) =
         if opened.len() == poly_map.len() {
@@ -223,34 +214,27 @@ pub(super) fn prove_reduced_openings<
     let state = prover
         .accumulator
         .finalize_batch_opening_sumcheck(r_sumcheck_acc.clone(), &mut prover.transcript);
-    // Joint opening of the RLC `Σ γ_i · poly_i` (materialized or not, per PCS)
+    // Joint opening of the RLC `Σ γ_i · poly_i` (materialized or not, per PCS), on the
+    // opening's own transcript; the proof is the last message of the prover's.
     debug_assert!(state.polynomials.iter().eq(poly_map.keys()));
+    let mut opening_transcript = T::new(OPENING_TRANSCRIPT_LABEL);
+    seed_opening_transcript::<F, _, _>(&mut prover.transcript, &mut opening_transcript);
     let joint_opening_proof = PCS::prove_rlc(
         generators,
         poly_map,
         &state.poly_coeffs,
         hints,
         &state.r_sumcheck,
-        &mut prover.transcript,
+        &mut opening_transcript,
     );
-    Some(ReducedOpeningProof::from_parts(joint_opening_proof))
+    prover.transcript.send_serializable(&joint_opening_proof);
 }
 
-#[allow(clippy::type_complexity)]
-pub(super) fn finalize_proof<
-    F: JoltField,
-    T: ProvingTranscript,
-    PCS: CommitmentScheme<Field = F>,
->(
+/// The proof: the bytes the prover's transcript wrote.
+pub(super) fn finalize_proof<F: JoltField, T: ProvingTranscript>(
     prover: Prover<F, T>,
     io: ModelExecutionIO,
-    commitments: WitnessCommitments<PCS>,
-    reduced_opening_proof: Option<ReducedOpeningProof<F, PCS>>,
-) -> (
-    ONNXProof<F, PCS>,
-    ModelExecutionIO,
-    Option<ProverDebugInfo<F>>,
-) {
+) -> (ONNXProof, ModelExecutionIO, Option<ProverDebugInfo<F>>) {
     #[cfg(test)]
     let debug_info = Some(ProverDebugInfo {
         transcript_history: prover.transcript.state_history().to_vec(),
@@ -258,17 +242,7 @@ pub(super) fn finalize_proof<
     });
     #[cfg(not(test))]
     let debug_info = None;
-    let narg = prover.transcript.into_narg();
-    (
-        ONNXProof::from_parts(
-            commitments.batch,
-            commitments.polys,
-            reduced_opening_proof,
-            narg,
-        ),
-        io,
-        debug_info,
-    )
+    (ONNXProof(prover.transcript.into_narg()), io, debug_info)
 }
 
 /// The witness of every polynomial the proof commits: the ones the schedule opens, the

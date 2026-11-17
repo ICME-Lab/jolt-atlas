@@ -7,7 +7,6 @@ use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use atlas_transcript::{Blake2bProver, Blake2bVerifier};
 
 use crate::onnx_proof::{
-    proof_serialization::{deserialize_proof, serialize_proof},
     prove, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
     ONNXProof,
 };
@@ -18,21 +17,22 @@ pub(crate) struct RoundtripOptions {
     /// Verify with the prover's debug info so the verifier's transcript and
     /// opening accumulator are compared step by step against the prover's.
     pub lockstep_debug: bool,
-    /// Serialize → deserialize → verify again → re-serialize byte-identically.
-    pub serialization_roundtrip: bool,
+    /// Verify a proof rebuilt from the proof's bytes, and require the bytes followed by one
+    /// more to be rejected.
+    pub bytes_roundtrip: bool,
 }
 
 impl Default for RoundtripOptions {
     fn default() -> Self {
         Self {
             lockstep_debug: true,
-            serialization_roundtrip: true,
+            bytes_roundtrip: true,
         }
     }
 }
 
-/// Prove `model` on `inputs`, verify, and round-trip the proof through the
-/// wire format. Panics on any failure. Returns the public IO.
+/// Prove `model` on `inputs`, verify, and verify again from the proof's bytes.
+/// Panics on any failure. Returns the public IO.
 pub(crate) fn prove_verify_roundtrip<PCS>(
     model: Model,
     inputs: &[Tensor<i32>],
@@ -71,21 +71,19 @@ where
     .expect("honest proof must verify");
     println!("verify: {:?}", t.elapsed());
 
-    if opts.serialization_roundtrip {
-        let bytes = serialize_proof(&proof).expect("proof serializes");
-        println!("proof size: {} bytes", bytes.len());
-        let de: ONNXProof<PCS::Field, PCS> = deserialize_proof(&bytes).expect("proof deserializes");
-        let trailing = [bytes.as_slice(), &[0]].concat();
+    if opts.bytes_roundtrip {
+        println!("proof size: {} bytes", proof.0.len());
+        verify::<PCS::Field, Blake2bVerifier, PCS>(
+            &ONNXProof(proof.0.clone()),
+            &verifier_pp,
+            &io,
+            None,
+        )
+        .expect("the proof's bytes must verify");
+        let trailing = ONNXProof([proof.0.as_slice(), &[0]].concat());
         assert!(
-            deserialize_proof::<PCS::Field, PCS>(&trailing).is_err(),
-            "a proof followed by trailing bytes must not deserialize"
-        );
-        verify::<PCS::Field, Blake2bVerifier, PCS>(&de, &verifier_pp, &io, None)
-            .expect("deserialized proof must verify");
-        assert_eq!(
-            serialize_proof(&de).expect("re-serializes"),
-            bytes,
-            "serialization must be idempotent"
+            verify::<PCS::Field, Blake2bVerifier, PCS>(&trailing, &verifier_pp, &io, None).is_err(),
+            "a proof followed by one more byte must not verify"
         );
     }
     io

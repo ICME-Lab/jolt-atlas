@@ -2,10 +2,10 @@
 name = "jolt-atlas-verifier"
 version = "0.1.0"
 edition = "2021"
-description = "The jolt-atlas proof object, its wire format and its verifier, with no prover dependency."
+description = "The jolt-atlas proof and its verifier, with no prover dependency."
 
 [features]
-# `&mut` proof-field accessors for the soundness harness. Inert unless called.
+# `&mut` accessors to the verifier's accumulator and transcript for tests. Inert unless called.
 test-util = []
 
 [dependencies]

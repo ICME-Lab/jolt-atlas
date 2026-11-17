@@ -1,4 +1,4 @@
-//! Verifier state and internal verification helpers for [`ONNXProof`].
+//! Verifier state and internal verification helpers for [`ONNXProof`](crate::ONNXProof).
 //!
 //! The public entry point is [`verify`](super::verify) (defined in the parent module).
 //! This file houses the [`Verifier`] struct, its interpreter [`Verifier::run`] (the one loop
@@ -13,7 +13,6 @@ use super::{
 };
 use crate::node_view::ModelView;
 use crate::utils::opening_access::AccOpeningAccessor;
-use crate::ONNXProof;
 use atlas_algebra::{
     field::JoltField,
     poly::multilinear::{MultilinearPolynomial, PolynomialEvaluation},
@@ -23,7 +22,7 @@ use atlas_pcs::commitment_scheme::CommitmentScheme;
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator};
 use atlas_sumcheck::relation::{verify_relation, verify_relation_batch, DynRelationVerifier};
 use atlas_trace::{trace::ModelExecutionIO, Model};
-use atlas_transcript::{AppendToTranscript, VerifyingTranscript};
+use atlas_transcript::{Transcript, VerifyingTranscript};
 use common::{CommittedPoly, VirtualPoly};
 use std::collections::BTreeMap;
 
@@ -149,21 +148,47 @@ type Verifiers<F, T> = Vec<Box<dyn DynRelationVerifier<F, T>>>;
 // Internal verification helpers
 // ---------------------------------------------------------------------------
 
-/// Absorb the proof's commitments.
-pub fn populate_accumulator<
-    F: JoltField,
-    T: VerifyingTranscript,
-    PCS: CommitmentScheme<Field = F>,
->(
-    proof: &ONNXProof<F, PCS>,
+/// The commitments a proof opens with: the scheme's batch commitment, then one commitment per
+/// polynomial the schedule opens, in sorted `CommittedPoly` order (the prover's `poly_map`).
+pub struct Commitments<PCS: CommitmentScheme> {
+    batch: PCS::BatchCommitment,
+    polys: Vec<PCS::Commitment>,
+}
+
+/// Read the commitments from the transcript: the batch commitment, then as many commitments
+/// as the schedule opens committed polynomials. `Err` on a failed read.
+pub fn read_commitments<F: JoltField, T: VerifyingTranscript, PCS: CommitmentScheme<Field = F>>(
+    pp: &AtlasVerifierPreprocessing<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
+) -> Result<Commitments<PCS>, ProofVerifyError> {
+    let batch = verifier.transcript.read_serializable()?;
+    let polys = pp
+        .schedule
+        .committed()
+        .iter()
+        .map(|_| verifier.transcript.read_serializable())
+        .collect::<Result<_, _>>()?;
+    Ok(Commitments { batch, polys })
+}
+
+/// The transcript label of the joint opening's own transcript.
+pub const OPENING_TRANSCRIPT_LABEL: &[u8] = b"ONNXProof/joint_opening";
+
+/// Seed the joint opening's own transcript from the proof's transcript: two field elements
+/// drawn there, which bind everything absorbed so far, absorbed here. Prover and verifier run
+/// it at the same state of the proof's transcript, on a fresh `opening_transcript`.
+///
+/// The commitment scheme draws its challenges while it builds its proof, so the prover cannot
+/// send the finished proof before them on one transcript. The scheme runs on this transcript
+/// instead; the proof's transcript carries the opening proof as its last message. The scheme
+/// sends nothing through its transcript: everything it sends is in its proof.
+pub fn seed_opening_transcript<F: JoltField, T: Transcript, O: Transcript>(
+    transcript: &mut T,
+    opening_transcript: &mut O,
 ) {
-    proof
-        .batch_commitment()
-        .append_to_transcript(&mut verifier.transcript);
-    for commitment in proof.commitments() {
-        verifier.transcript.append_serializable(commitment);
-    }
+    let seed: Vec<F> = transcript.challenge_vector(2);
+    opening_transcript.append_message(b"joint_opening_seed");
+    opening_transcript.append_scalars(&seed);
 }
 
 /// The public IO names the model's inputs and outputs, in order, with one tensor of the node's
@@ -232,74 +257,68 @@ pub fn verify_output_claim<F: JoltField, T: VerifyingTranscript>(
     Ok(())
 }
 
-/// Verify the reduced opening proof (sumcheck reduction + PCS verification).
+/// Reduce the committed openings to one point and verify the joint opening proof there. A
+/// schedule that opens no committed polynomial has neither in its proof.
 #[tracing::instrument(skip_all, name = "ONNXProof::verify_reduced_openings")]
 pub fn verify_reduced_openings<
     F: JoltField,
     T: VerifyingTranscript,
     PCS: CommitmentScheme<Field = F>,
 >(
-    proof: &ONNXProof<F, PCS>,
+    commitments: &Commitments<PCS>,
     pp: &AtlasVerifierPreprocessing<F, PCS>,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    if let Some(reduced_opening_proof) = proof.reduced_opening_proof() {
-        verifier
-            .accumulator
-            .prepare_for_sumcheck(&mut verifier.transcript);
-
-        let reduction_res = verifier
-            .accumulator
-            .verify_batch_opening_sumcheck(&mut verifier.transcript);
-        let r_sumcheck = reduction_res
-            .inspect_err(|e| tracing::debug!(?e, "opening reduction via sumcheck failed"))?;
-
-        let verifier_state = verifier
-            .accumulator
-            .finalize_batch_opening_sumcheck(r_sumcheck, &mut verifier.transcript)?;
-
-        // The proof commits the polynomials the schedule opens, in sorted `CommittedPoly`
-        // order (the prover's `poly_map`); the joint opening covers the opened subset.
-        let committed = pp.schedule.committed();
-        if committed.len() != proof.commitments().len() {
-            return Err(ProofVerifyError::InvalidOpeningProof(format!(
-                "expected {} commitments, found {}",
-                committed.len(),
-                proof.commitments().len()
-            )));
-        }
-        let by_poly: BTreeMap<CommittedPoly, &PCS::Commitment> = committed
-            .iter()
-            .copied()
-            .zip(proof.commitments().iter())
-            .collect();
-        let selected: Vec<&PCS::Commitment> = verifier_state
-            .polynomials
-            .iter()
-            .map(|p| {
-                by_poly.get(p).copied().ok_or_else(|| {
-                    ProofVerifyError::InvalidOpeningProof(format!(
-                        "opening of uncommitted polynomial {p:?}"
-                    ))
-                })
-            })
-            .collect::<Result<_, _>>()?;
-        let joint_claim = verifier.accumulator.compute_joint_claim(&verifier_state);
-        let num_vars = verifier.accumulator.opened_num_vars(&verifier_state);
-        PCS::verify_rlc(
-            reduced_opening_proof.joint_opening_proof(),
-            &pp.generators,
-            &mut verifier.transcript,
-            &verifier_state.r_sumcheck,
-            &joint_claim,
-            &selected,
-            &verifier_state.poly_coeffs,
-            &num_vars,
-            proof.batch_commitment(),
-        )?;
-    } else if verifier.accumulator.has_committed_openings() {
-        // Some committed polynomial was opened: a joint opening is required.
-        return Err(ProofVerifyError::MissingReductionProof);
+    if !verifier.accumulator.has_committed_openings() {
+        return Ok(());
     }
-    Ok(())
+    verifier
+        .accumulator
+        .prepare_for_sumcheck(&mut verifier.transcript);
+
+    let reduction_res = verifier
+        .accumulator
+        .verify_batch_opening_sumcheck(&mut verifier.transcript);
+    let r_sumcheck = reduction_res
+        .inspect_err(|e| tracing::debug!(?e, "opening reduction via sumcheck failed"))?;
+
+    let verifier_state = verifier
+        .accumulator
+        .finalize_batch_opening_sumcheck(r_sumcheck, &mut verifier.transcript)?;
+
+    // The joint opening covers the opened subset of the committed polynomials.
+    let by_poly: BTreeMap<CommittedPoly, &PCS::Commitment> = pp
+        .schedule
+        .committed()
+        .into_iter()
+        .zip(commitments.polys.iter())
+        .collect();
+    let selected: Vec<&PCS::Commitment> = verifier_state
+        .polynomials
+        .iter()
+        .map(|p| {
+            by_poly.get(p).copied().ok_or_else(|| {
+                ProofVerifyError::InvalidOpeningProof(format!(
+                    "opening of uncommitted polynomial {p:?}"
+                ))
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let joint_claim = verifier.accumulator.compute_joint_claim(&verifier_state);
+    let num_vars = verifier.accumulator.opened_num_vars(&verifier_state);
+
+    let mut opening_transcript = T::new(OPENING_TRANSCRIPT_LABEL, Vec::new());
+    seed_opening_transcript::<F, _, _>(&mut verifier.transcript, &mut opening_transcript);
+    let joint_opening_proof: PCS::Proof = verifier.transcript.read_serializable()?;
+    PCS::verify_rlc(
+        &joint_opening_proof,
+        &pp.generators,
+        &mut opening_transcript,
+        &verifier_state.r_sumcheck,
+        &joint_claim,
+        &selected,
+        &verifier_state.poly_coeffs,
+        &num_vars,
+        &commitments.batch,
+    )
 }

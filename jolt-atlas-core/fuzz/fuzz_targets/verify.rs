@@ -1,8 +1,8 @@
 //! Fuzz the verifier on mutated honest proofs and mutated public IO.
 //!
 //! The input format and the driver are `jolt_atlas_core::onnx_proof::fuzz`: an 8-byte IO-edit
-//! header, then a serialized proof of the checked-in op gauntlet. `Err` verdicts (and inputs
-//! that do not deserialize) are expected; a panic, an abort, an OOM or a timeout is a finding.
+//! header, then a proof of the checked-in op gauntlet, handed to the verifier as it is. `Err`
+//! verdicts are expected; a panic, an abort, an OOM or a timeout is a finding.
 //!
 //! `ATLAS_FUZZ_WRITE_SEED=<path>` writes the honest input to `<path>` at startup, to seed the
 //! corpus.

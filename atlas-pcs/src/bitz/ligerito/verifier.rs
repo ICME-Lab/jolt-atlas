@@ -11,6 +11,7 @@
 
 use super::{Proof, Schedule};
 use crate::bitz::gf128::Gf128;
+use crate::bitz::grinding;
 use crate::bitz::merkle::{verify_row, Digest};
 use crate::bitz::multilinear::{eq_table, tensor_expand};
 use crate::bitz::rs::Code;
@@ -62,6 +63,7 @@ pub fn verify<T: Transcript>(
     let mut claim = claim;
     let mut root = *root;
     let mut rounds = proof.rounds.iter();
+    let mut nonces = proof.nonces.iter();
     let mut next_roots = proof.roots.iter();
     let mut challenges: Vec<Gf128> = Vec::new();
     let mut earlier: Vec<LevelClaims> = Vec::new();
@@ -80,7 +82,11 @@ pub fn verify<T: Transcript>(
             let message = rounds.next().ok_or_else(|| malformed("missing round"))?;
             let [constant, leading] = *message;
             transcript.append_serializable(message);
-            transcript.pow(pow_bits)?;
+            grinding::verify(
+                pow_bits,
+                *nonces.next().ok_or_else(|| malformed("missing nonce"))?,
+                transcript,
+            )?;
             let r = Gf128(transcript.challenge_u128());
             // h(0) + h(1) = claim fixes the linear coefficient.
             let linear = claim + leading;
@@ -129,7 +135,11 @@ pub fn verify<T: Transcript>(
         let code = Code::new(row_vars, schedule.log_inv_rate);
         match next_root {
             Some(next) => {
-                transcript.pow(schedule.batch_pow_bits())?;
+                grinding::verify(
+                    schedule.batch_pow_bits(),
+                    *nonces.next().ok_or_else(|| malformed("missing nonce"))?,
+                    transcript,
+                )?;
                 let beta = Gf128(transcript.challenge_u128());
                 let mut power = beta;
                 for &symbol in &symbols {
@@ -159,8 +169,8 @@ pub fn verify<T: Transcript>(
             }
         }
     }
-    if rounds.next().is_some() || next_roots.next().is_some() {
-        return Err(malformed("trailing rounds or roots"));
+    if rounds.next().is_some() || next_roots.next().is_some() || nonces.next().is_some() {
+        return Err(malformed("trailing rounds, roots or nonces"));
     }
 
     // The weight left after every fold: the caller's, plus each earlier level's batched

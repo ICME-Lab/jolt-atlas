@@ -2,6 +2,7 @@
 
 use super::{Proof, RowOpening, Schedule};
 use crate::bitz::gf128::Gf128;
+use crate::bitz::grinding;
 use crate::bitz::merkle::{Digest, Tree};
 use crate::bitz::multilinear::{fold_first, tensor_expand};
 use crate::bitz::rs::Code;
@@ -65,6 +66,7 @@ pub fn prove<T: Transcript>(
         rounds: Vec::new(),
         final_values: Vec::new(),
         openings: Vec::new(),
+        nonces: Vec::new(),
     };
     for (index, &fold) in schedule.folds.iter().enumerate() {
         #[allow(clippy::expect_used)]
@@ -74,7 +76,7 @@ pub fn prove<T: Transcript>(
         for _ in 0..fold {
             let message = round_message(&values, &weights);
             transcript.append_serializable(&message);
-            grind(transcript, pow_bits);
+            proof.nonces.push(grinding::prove(pow_bits, transcript));
             let r = Gf128(transcript.challenge_u128());
             values = fold_first(&values, r);
             weights = fold_first(&weights, r);
@@ -101,7 +103,9 @@ pub fn prove<T: Transcript>(
             .push(queried.par_iter().map(|&row| level.open(row)).collect());
 
         if let Some(next) = next {
-            grind(transcript, schedule.batch_pow_bits());
+            proof
+                .nonces
+                .push(grinding::prove(schedule.batch_pow_bits(), transcript));
             let beta = Gf128(transcript.challenge_u128());
             // Each opened row, folded, is a symbol of the next level's codeword: the inner
             // product of the generator row with the next polynomial. Batch those claims into
@@ -153,11 +157,4 @@ fn round_message(values: &[Gf128], weights: &[Gf128]) -> [Gf128; 2] {
         .map(|(v, w)| (v[0] * w[0], (v[0] + v[1]) * (w[0] + w[1])))
         .reduce(|| (Gf128::ZERO, Gf128::ZERO), |x, y| (x.0 + y.0, x.1 + y.1));
     [constant, leading]
-}
-
-fn grind<T: Transcript>(transcript: &mut T, bits: u32) {
-    #[allow(clippy::expect_used)]
-    transcript
-        .pow(bits)
-        .expect("the prover's proof of work cannot fail");
 }

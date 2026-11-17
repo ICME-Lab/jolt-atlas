@@ -140,9 +140,12 @@ pub struct Proof {
     pub final_values: Vec<Gf128>,
     /// The opened rows of each level, in query order.
     pub openings: Vec<Vec<RowOpening>>,
+    /// The proof-of-work nonces, in the order the challenges they guard are drawn: one per
+    /// sumcheck round and one per batching challenge.
+    pub nonces: Vec<u64>,
 }
 
-impl_canonical_struct!([] Proof { roots, rounds, final_values, openings });
+impl_canonical_struct!([] Proof { roots, rounds, final_values, openings, nonces });
 
 #[cfg(test)]
 mod tests {

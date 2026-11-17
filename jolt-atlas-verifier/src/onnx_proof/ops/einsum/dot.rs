@@ -23,7 +23,7 @@
 //! ## Where the claim comes from
 //!
 //! The claim algebra is the einsum's
-//! [`ContractionRelation`](super::ContractionRelation): its input claim is the
+//! [`contraction`](super::contraction): its input claim is the
 //! fused rescale's `out(r)·2^S + R(r)` (or the plain output opening), its
 //! output claim `L·R·EQ` at the scattered operand points. This engine is the
 //! relation's specialized prover; the verifier is the relation's.

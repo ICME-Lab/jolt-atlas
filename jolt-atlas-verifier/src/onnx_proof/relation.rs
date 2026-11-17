@@ -121,18 +121,6 @@ pub trait EngineRelation<F: JoltField>: RelationNode + SetupRelation<F> {
     }
 }
 
-/// The setup of a relation whose incoming point is `node`'s reduced output point, with no
-/// challenges. `Err` if the accumulator lacks the node's reduced opening.
-pub fn reduced_output_setup<F: JoltField>(
-    accumulator: &dyn OpeningAccumulator<F>,
-    node: &ComputationNode,
-) -> Result<RelationSetup<F>, ProofVerifyError> {
-    Ok(RelationSetup {
-        incoming_point: accumulator.get_node_output_opening(node.idx)?.0.r,
-        challenges: Vec::new(),
-    })
-}
-
 /// The [`SymbolicSumcheck`] items every atlas relation shares: the atlas id types and no
 /// upstream claim structs (openings resolve through the accumulator).
 #[macro_export]
@@ -246,6 +234,12 @@ pub enum OpRelKind {
     Slice,
     /// `Concat`: the operands' blocks tile the output's axis.
     Concat,
+    /// `Sum`: the axis reduction of the output.
+    SumAxis,
+    /// `MeanOfSquares`: the squared-sum reduction, its input claim `q·D + rem`.
+    MeanOfSquares,
+    /// `Einsum`: the contraction, its input claim the fused rescale's `q·2^S + rem`.
+    Contraction,
 }
 
 impl OpRelKind {
@@ -267,6 +261,9 @@ impl OpRelKind {
             Self::Reshape => RelationId::Reshape,
             Self::Slice => RelationId::Slice,
             Self::Concat => RelationId::Concat,
+            Self::SumAxis => RelationId::AxisSum,
+            Self::MeanOfSquares => RelationId::MeanOfSquares,
+            Self::Contraction => RelationId::Contraction,
         }
     }
 
@@ -294,6 +291,9 @@ impl OpRelKind {
             Self::Reshape => matches!(op, Op::Reshape(_)),
             Self::Slice => matches!(op, Op::Slice(_)),
             Self::Concat => matches!(op, Op::Concat(_)),
+            Self::SumAxis => matches!(op, Op::Sum(_)),
+            Self::MeanOfSquares => matches!(op, Op::MeanOfSquares(_)),
+            Self::Contraction => matches!(op, Op::Einsum(_)),
         }
     }
 }

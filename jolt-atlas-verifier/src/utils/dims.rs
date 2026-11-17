@@ -392,6 +392,16 @@ pub fn sum_config(
         return Err(unsupported("the operand is not a node".into()));
     }
 
+    sum_config_over(computation_node, &model.view(*input_idx).output_dims)
+}
+
+/// [`sum_config`] of a sum node whose operand has dims `input_dims`. `Err` if the node is not
+/// a single-axis sum over such an operand.
+pub fn sum_config_over(
+    computation_node: &ComputationNode,
+    input_dims: &[usize],
+) -> Result<SumConfig, ProofVerifyError> {
+    let unsupported = |what: String| ProofVerifyError::Malformed(format!("model: sum: {what}"));
     // Ensure we have a Sum operator and extract it
     let Op::Sum(sum_operator) = &computation_node.operator else {
         return Err(unsupported("expected a Sum operator".into()));
@@ -404,8 +414,6 @@ pub fn sum_config(
         ));
     };
 
-    // Get dimension information from the model
-    let input_dims = &model.view(*input_idx).output_dims;
     let output_dims = &computation_node.output_dims;
     let ndim = input_dims.len();
 

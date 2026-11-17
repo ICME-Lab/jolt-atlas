@@ -27,34 +27,26 @@
 //! any constant — e.g. GPT-2's 768). Zero-padded lanes contribute nothing to
 //! `Σx²`, so the two are consistent.
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::relation::not_derived;
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
 
 use atlas_trace::{op::MeanOfSquares, trace::ModelExecutionIO, Model, Op};
 
 use crate::{
-    atlas_relation_types,
     node_view::ComputationNode,
     onnx_proof::{
         plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
         relation::{
-            reduced_output_setup, AtlasRelation, RelationDerived, RelationExpr, RelationId,
-            RelationOpening, RelationSetup,
+            not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
         },
         ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
-use atlas_algebra::field::Ring;
 use atlas_algebra::{
     field::JoltField,
     poly::eq::EqPolynomial,
     utils::{errors::ProofVerifyError, math::Math},
 };
-use atlas_claims::{constant, derived, opening, SymbolicSumcheck};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_transcript::Transcript;
+use atlas_claims::{constant, derived, opening, Int};
 use common::VirtualPoly;
 
 /// Degree of the execution sumcheck.
@@ -82,7 +74,7 @@ impl OpPlan for MeanOfSquares {
             Step::Open(OpOpen::RescaleRemainder(node.clone())),
             Step::Relation {
                 proof: ProofType::RescaleArith,
-                relation: OpRelation::MeanOfSquares(MeanOfSquaresRelation::new(node.clone())),
+                relation: OpRelation::Op(squared_sum_reduction(node)?),
             },
         ]))
     }
@@ -92,8 +84,6 @@ impl OpPlan for MeanOfSquares {
 // Reduction sumcheck: acc(r) = Σ_{h,j} eq(r,h)·x[h,j]²
 // ---------------------------------------------------------------------------
 
-crate::bind_relation!(MeanOfSquares, MeanOfSquaresRelation);
-
 /// The mean-of-squares reduction as a relation, binding high-to-low over the operand laid out
 /// `[retained (high), reduced (low)]`:
 ///
@@ -102,7 +92,8 @@ crate::bind_relation!(MeanOfSquares, MeanOfSquaresRelation);
 /// output claim  eq(r₀, r′_retained) · x(r′)²
 /// ```
 ///
-/// `MeanOfSquaresReductionProver` is its prover; the verifier is the relation's.
+/// `MeanOfSquaresReductionProver` is its prover; the verifier is the relation's. `Err` if the
+/// node is not a mean of squares with a power-of-two padded reduced count.
 ///
 /// **S ⊆ R.** The op accumulates `acc = Σ_reduced x²` in `i64` per retained index and splits it
 /// with `atlas_trace::semantics::fixed::rebase` by `D` into `out·D + rem`, failing when the
@@ -116,137 +107,81 @@ crate::bind_relation!(MeanOfSquares, MeanOfSquaresRelation);
 /// `|out·D + rem| < 2^63`. For any tensor that fits in memory (`n < 2^64`) both sides are
 /// integers of magnitude at most `2^126`, less than half the 128-bit field modulus, so their
 /// equality in the field is their equality over the integers.
-pub struct MeanOfSquaresRelation {
-    /// The node being proven.
-    pub node: ComputationNode,
-    /// The rescale divisor `D` and log₂ of the padded reduced count; `None` unless the node is
-    /// a mean of squares with a power-of-two padded reduced count, which the setup requires.
-    reduction: Option<(i64, usize)>,
+pub fn squared_sum_reduction<F: JoltField>(
+    node: &ComputationNode,
+) -> Result<OpRel<F>, ProofVerifyError> {
+    let (divisor, log_reduced) = reduction(node)?;
+    let ids = OpeningIdBuilder::new(node);
+    let operand = ids.nodeio(Target::Input(0));
+    let remainder = ids.advice(VirtualPoly::RescaleRemainder);
+    let x = opening(RelationOpening::Id(operand));
+    Ok(OpRel {
+        rounds: log_retained(node) + log_reduced,
+        degree: DEGREE,
+        input: constant(Int(i128::from(divisor as u64)))
+            * opening(RelationOpening::ReducedNodeOutput(node.idx))
+            + opening(RelationOpening::Id(remainder)),
+        output: derived(RelationDerived::RetainedEq) * x.clone() * x,
+        produced: vec![operand],
+        custom: Custom {
+            points: Some(bound_point),
+            derive: Some(retained_eq),
+            ..Custom::default()
+        },
+        ..OpRel::base(OpRelKind::MeanOfSquares, node)
+    })
 }
 
-impl MeanOfSquaresRelation {
-    fn reduction(&self) -> Result<(i64, usize), ProofVerifyError> {
-        self.reduction.ok_or_else(|| {
-            ProofVerifyError::Malformed(format!(
-                "model: node {} is not a mean of squares with a power-of-two padded reduced count",
-                self.node.idx
-            ))
-        })
-    }
-
-    /// The retained (output) variables: the eq cube, bound in the first rounds.
-    pub fn log_retained(&self) -> usize {
-        self.node.pow2_padded_num_output_elements().log_2()
-    }
-
-    /// The reduced (summed) variables, bound last.
-    pub fn log_reduced(&self) -> usize {
+/// The rescale divisor `D` and log₂ of the padded reduced count of a mean-of-squares `node`.
+/// `Err` unless the node is a mean of squares with a power-of-two padded reduced count.
+pub fn reduction(node: &ComputationNode) -> Result<(i64, usize), ProofVerifyError> {
+    match &node.operator {
         // The sumcheck cube splits the flat-padded operand into `[retained, reduced]`, so the
-        // padded reduced count sizes the low rounds; the divisor stays semantic. The setup
-        // rejects a node without a reduction, so the zero is never proven against.
-        self.reduction.map_or(0, |(_, log_reduced)| log_reduced)
-    }
-
-    fn ids(&self) -> OpeningIdBuilder<'_> {
-        OpeningIdBuilder::new(&self.node)
-    }
-}
-
-impl SymbolicSumcheck for MeanOfSquaresRelation {
-    atlas_relation_types!();
-
-    fn id(&self) -> RelationId {
-        RelationId::MeanOfSquares
-    }
-
-    fn rounds(&self) -> usize {
-        self.log_retained() + self.log_reduced()
-    }
-
-    fn degree(&self) -> usize {
-        DEGREE
-    }
-
-    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        // The setup rejects a node without a reduction, so the zero is never proven against.
-        let divisor = self.reduction.map_or(0, |(divisor, _)| divisor);
-        let remainder = self.ids().advice(VirtualPoly::RescaleRemainder);
-        constant(F::from_u64(divisor as u64))
-            * opening(RelationOpening::ReducedNodeOutput(self.node.idx))
-            + opening(RelationOpening::Id(remainder))
-    }
-
-    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        let x = opening(RelationOpening::Id(self.ids().nodeio(Target::Input(0))));
-        derived(RelationDerived::RetainedEq) * x.clone() * x
+        // padded reduced count sizes the low rounds; the divisor stays semantic.
+        Op::MeanOfSquares(op) if op.padded_count.is_power_of_two() => {
+            Ok((mos_divisor(op, node.scale), op.padded_count.log_2()))
+        }
+        _ => Err(ProofVerifyError::Malformed(format!(
+            "model: node {} is not a mean of squares with a power-of-two padded reduced count",
+            node.idx
+        ))),
     }
 }
 
-impl MeanOfSquaresRelation {
-    /// The relation for the given shape.
-    pub fn new(node: ComputationNode) -> Self {
-        let reduction = match &node.operator {
-            Op::MeanOfSquares(op) if op.padded_count.is_power_of_two() => {
-                Some((mos_divisor(op, node.scale), op.padded_count.log_2()))
-            }
-            _ => None,
-        };
-        Self { node, reduction }
-    }
+/// The retained (output) variables of `node`: the eq cube, bound in the first rounds.
+pub fn log_retained(node: &ComputationNode) -> usize {
+    node.pow2_padded_num_output_elements().log_2()
 }
 
-impl Produces for MeanOfSquaresRelation {
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![self.ids().nodeio(Target::Input(0))]
-    }
+/// The operand's point of a [`squared_sum_reduction`]: the challenges in round order.
+fn bound_point<F: JoltField>(
+    _relation: &OpRel<F>,
+    _setup: &RelationSetup<F>,
+    challenges: &[F],
+) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+    Ok(vec![challenges.to_vec()])
 }
 
-impl<F: JoltField> Relation<F> for MeanOfSquaresRelation {
-    fn opening_points(
-        &self,
-        _setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
-        Ok(vec![challenges.to_vec()])
-    }
-
-    fn derive(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Result<F, ProofVerifyError> {
-        Ok(match id {
-            RelationDerived::RetainedEq => {
-                let retained = challenges.get(..self.log_retained()).ok_or_else(|| {
-                    ProofVerifyError::Malformed(format!(
-                        "mean of squares: {} challenges for {} retained variables",
-                        challenges.len(),
-                        self.log_retained()
-                    ))
-                })?;
-                EqPolynomial::mle(&setup.incoming_point, retained)
-            }
-            other => return Err(not_derived(other)),
-        })
-    }
-}
-
-impl<F: JoltField> SetupRelation<F> for MeanOfSquaresRelation {
-    fn setup<T: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut T,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        self.reduction()?;
-        reduced_output_setup(accumulator, &self.node)
-    }
-}
-
-impl AtlasRelation for MeanOfSquaresRelation {
-    type Spec = MeanOfSquares;
-
-    fn node(&self) -> &ComputationNode {
-        &self.node
-    }
+/// [`RelationDerived::RetainedEq`] of a [`squared_sum_reduction`]: eq between the incoming
+/// point and the retained coordinates of the bound point.
+fn retained_eq<F: JoltField>(
+    relation: &OpRel<F>,
+    id: &RelationDerived,
+    setup: &RelationSetup<F>,
+    challenges: &[F],
+) -> Result<F, ProofVerifyError> {
+    Ok(match id {
+        RelationDerived::RetainedEq => {
+            let log_retained = log_retained(&relation.node);
+            let retained = challenges.get(..log_retained).ok_or_else(|| {
+                ProofVerifyError::Malformed(format!(
+                    "mean of squares: {} challenges for {} retained variables",
+                    challenges.len(),
+                    log_retained
+                ))
+            })?;
+            EqPolynomial::mle(&setup.incoming_point, retained)
+        }
+        other => return Err(not_derived(other)),
+    })
 }

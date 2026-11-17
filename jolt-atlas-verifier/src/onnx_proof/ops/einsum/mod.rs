@@ -1,22 +1,21 @@
 use crate::onnx_proof::plan::{fused_rescale_plan, OpPlan, OpRelation, Plan};
-use crate::onnx_proof::relation::not_derived;
-use crate::onnx_proof::relation::Produces;
-use crate::onnx_proof::relation::{Relation, SetupRelation};
 use atlas_trace::{op::Einsum, trace::ModelExecutionIO, Model, Op};
 
 use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
         fused_rebase,
-        ops::einsum::{
-            abmk_abnk_abmn::AbmkAbnkAbmnLayout,
-            dot::{EinsumGeometry, EinsumLayout, EqSchedule},
-            k_nk_n::KNkNLayout,
-            mk_kn_mn::MkKnMnLayout,
+        ops::{
+            einsum::{
+                abmk_abnk_abmn::AbmkAbnkAbmnLayout,
+                dot::{EinsumGeometry, EinsumLayout},
+                k_nk_n::KNkNLayout,
+                mk_kn_mn::MkKnMnLayout,
+            },
+            OpLayout,
         },
         relation::{
-            AtlasRelation, RelationChallenge, RelationDerived, RelationExpr, RelationId,
-            RelationOpening, RelationSetup,
+            not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
         },
         ProofType,
     },
@@ -25,11 +24,8 @@ use crate::{
         opening_access::{OpeningIdBuilder, Target},
     },
 };
-use atlas_algebra::field::Ring;
 use atlas_algebra::{field::JoltField, poly::point::OpeningPoint, utils::errors::ProofVerifyError};
-use atlas_claims::{derived, opening, NoChallenges, NoInputs, NoOutputs, SymbolicSumcheck};
-use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
-use atlas_transcript::Transcript;
+use atlas_claims::{derived, opening};
 
 pub mod abmk_abnk_abmn;
 /// Shared sumcheck engine for einsum contraction patterns.
@@ -47,7 +43,7 @@ pub mod mk_kn_mn;
 // - amk,ank->amn    → abmk_abnk_abmn (batch pack 1×a)
 // - abmk,abnk->abmn → abmk_abnk_abmn
 
-crate::impl_plan_op!(Einsum, ContractionRelation);
+impl OpLayout for Einsum {}
 
 impl OpPlan for Einsum {
     fn plan<F: atlas_algebra::field::JoltField>(
@@ -59,7 +55,7 @@ impl OpPlan for Einsum {
         Ok(fused_rescale_plan(
             node,
             ProofType::EinsumMatmul,
-            OpRelation::Contraction(ContractionRelation::for_node(model, node.clone())?),
+            OpRelation::Op(contraction(model, node)?),
         ))
     }
 }
@@ -74,17 +70,6 @@ fn einsum_equation(computation_node: &ComputationNode) -> Result<String, ProofVe
     }
 }
 
-/// The canonical pattern an einsum node contracts, with its dims and the round geometry of
-/// the pattern's layout over them.
-#[derive(Clone)]
-pub struct ContractionShape {
-    node: ComputationNode,
-    equation: &'static str,
-    dims: EinsumDims,
-    num_rounds: usize,
-    schedule: EqSchedule,
-}
-
 /// An einsum contraction as a relation:
 ///
 /// ```text
@@ -96,6 +81,10 @@ pub struct ContractionShape {
 /// where the operand points `ρ_L`, `ρ_R` and the batch factor `EQ` (one for a plain
 /// contraction) come from the pattern's [`EinsumLayout`] given `r₀` and the sumcheck point. The
 /// [`dot`] engine is its prover.
+///
+/// The relation's [`dims`](OpRel::dims) are the flattened dims the pattern's layout folds
+/// over: the left operand's, the right operand's and the output's. `Err` if the node is not an
+/// einsum of a registered equation over operands of that equation's shape.
 ///
 /// **S ⊆ R.** The einsum accumulates `acc(m, n) = Σ_k L(m, k)·R(k, n)` (batched patterns per
 /// batch index) in `i64` and splits it with `atlas_trace::semantics::fixed::rebase` into
@@ -110,143 +99,80 @@ pub struct ContractionShape {
 /// in memory (`n < 2^64`) both sides are integers of magnitude at most `2^126`, less than
 /// half the 128-bit field modulus, so their equality in the field is their equality over the
 /// integers.
-pub struct ContractionRelation {
-    shape: ContractionShape,
+pub fn contraction<F: JoltField>(
+    model: &Model,
+    node: &ComputationNode,
+) -> Result<OpRel<F>, ProofVerifyError> {
+    let config = lookup_einsum_config(&einsum_equation(node)?)?;
+    let dims = (config.dims_extractor)(node, model)?;
+    let geometry = einsum_geometry(config.equation, &dims)?;
+    let ids = OpeningIdBuilder::new(node);
+    let produced = [Target::Input(0), Target::Input(1)].map(|operand| ids.nodeio(operand));
+    let [left, right] = produced.map(|id| opening(RelationOpening::Id(id)));
+    Ok(OpRel {
+        rounds: geometry.num_rounds(),
+        degree: geometry.schedule().degree(),
+        input: fused_rebase::input_expression(node),
+        output: derived(RelationDerived::ContractionEq) * left * right,
+        produced: produced.to_vec(),
+        dims: vec![
+            dims.left_operand().to_vec(),
+            dims.right_operand().to_vec(),
+            dims.output().to_vec(),
+        ],
+        custom: Custom {
+            points: Some(operand_points),
+            derive: Some(batch_eq),
+            ..Custom::default()
+        },
+        ..OpRel::base(OpRelKind::Contraction, node)
+    })
 }
 
-impl ContractionRelation {
-    /// The relation of an einsum `node` of `model`. `Err` if the node is not an einsum of a
-    /// registered equation over operands of that equation's shape.
-    pub fn for_node(model: &Model, node: ComputationNode) -> Result<Self, ProofVerifyError> {
-        let config = lookup_einsum_config(&einsum_equation(&node)?)?;
-        let dims = (config.dims_extractor)(&node, model)?;
-        let geometry = einsum_geometry(config.equation, &dims)?;
-        Ok(Self::new(ContractionShape {
-            node,
-            equation: config.equation,
-            dims,
-            num_rounds: geometry.num_rounds(),
-            schedule: geometry.schedule(),
-        }))
-    }
-
-    /// The canonical equation the node contracts.
-    pub fn equation(&self) -> &'static str {
-        self.shape.equation
-    }
-
-    /// The flattened dims the pattern's layout folds over.
-    pub fn dims(&self) -> &EinsumDims {
-        &self.shape.dims
-    }
-
-    /// The pattern's layout at field `F`. `Err` if the dims are not the equation's.
-    pub fn layout<F: JoltField>(&self) -> Result<Box<dyn EinsumLayout<F>>, ProofVerifyError> {
-        einsum_layout(self.shape.equation, &self.shape.dims)
-    }
-
-    fn ids(&self) -> OpeningIdBuilder<'_> {
-        OpeningIdBuilder::new(&self.shape.node)
-    }
+/// The canonical equation a [`contraction`] contracts.
+pub fn equation<F: JoltField>(relation: &OpRel<F>) -> Result<&'static str, ProofVerifyError> {
+    Ok(lookup_einsum_config(&einsum_equation(&relation.node)?)?.equation)
 }
 
-impl SymbolicSumcheck for ContractionRelation {
-    type RelationId = RelationId;
-    type OpeningId = RelationOpening;
-    type DerivedId = RelationDerived;
-    type ChallengeId = RelationChallenge;
-    type Challenges<F> = NoChallenges<F>;
-    type Inputs<C> = NoInputs<C>;
-    type Outputs<C> = NoOutputs<C>;
-
-    fn id(&self) -> RelationId {
-        RelationId::Contraction
-    }
-
-    fn rounds(&self) -> usize {
-        self.shape.num_rounds
-    }
-
-    fn degree(&self) -> usize {
-        self.shape.schedule.degree()
-    }
-
-    fn input_expression<F: Ring>(&self) -> RelationExpr<F> {
-        fused_rebase::input_expression(&self.shape.node)
-    }
-
-    fn output_expression<F: Ring>(&self) -> RelationExpr<F> {
-        let [left, right] = [Target::Input(0), Target::Input(1)]
-            .map(|operand| opening(RelationOpening::Id(self.ids().nodeio(operand))));
-        derived(RelationDerived::ContractionEq) * left * right
-    }
+/// The flattened dims a [`contraction`]'s layout folds over.
+pub fn dims<F: JoltField>(relation: &OpRel<F>) -> Result<EinsumDims, ProofVerifyError> {
+    Ok(EinsumDims::new(
+        relation.dims_at(0)?.to_vec(),
+        relation.dims_at(1)?.to_vec(),
+        relation.dims_at(2)?.to_vec(),
+    ))
 }
 
-impl ContractionRelation {
-    /// The relation for the given shape.
-    pub fn new(shape: ContractionShape) -> Self {
-        Self { shape }
-    }
+/// The layout of a [`contraction`]'s pattern. `Err` if the dims are not the equation's.
+pub fn layout<F: JoltField>(
+    relation: &OpRel<F>,
+) -> Result<Box<dyn EinsumLayout<F>>, ProofVerifyError> {
+    einsum_layout(equation(relation)?, &dims(relation)?)
 }
 
-impl Produces for ContractionRelation {
-    fn produced(&self) -> Vec<OpeningId> {
-        vec![
-            self.ids().nodeio(Target::Input(0)),
-            self.ids().nodeio(Target::Input(1)),
-        ]
-    }
+/// The operand points of a [`contraction`]: the layout's scatter of the sumcheck point.
+fn operand_points<F: JoltField>(
+    relation: &OpRel<F>,
+    setup: &RelationSetup<F>,
+    challenges: &[F],
+) -> Result<Vec<Vec<F>>, ProofVerifyError> {
+    let (left, right) = layout(relation)?
+        .operand_points(&OpeningPoint::new(setup.incoming_point.clone()), challenges);
+    Ok(vec![left, right])
 }
 
-impl<F: JoltField> Relation<F> for ContractionRelation {
-    fn opening_points(
-        &self,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Result<Vec<Vec<F>>, ProofVerifyError> {
-        let (left, right) = self
-            .layout::<F>()?
-            .operand_points(&OpeningPoint::new(setup.incoming_point.clone()), challenges);
-        Ok(vec![left, right])
-    }
-
-    fn derive(
-        &self,
-        id: &RelationDerived,
-        setup: &RelationSetup<F>,
-        challenges: &[F],
-    ) -> Result<F, ProofVerifyError> {
-        Ok(match id {
-            RelationDerived::ContractionEq => self
-                .layout::<F>()?
-                .output_eq(&OpeningPoint::new(setup.incoming_point.clone()), challenges),
-            other => return Err(not_derived(other)),
-        })
-    }
-}
-
-impl<F: JoltField> SetupRelation<F> for ContractionRelation {
-    fn setup<Tr: Transcript>(
-        &self,
-        accumulator: &dyn OpeningAccumulator<F>,
-        _transcript: &mut Tr,
-    ) -> Result<RelationSetup<F>, ProofVerifyError> {
-        Ok(RelationSetup {
-            incoming_point: accumulator
-                .get_node_output_opening(self.shape.node.idx)?
-                .0
-                .r,
-            challenges: Vec::new(),
-        })
-    }
-}
-
-impl AtlasRelation for ContractionRelation {
-    type Spec = Einsum;
-
-    fn node(&self) -> &ComputationNode {
-        &self.shape.node
-    }
+/// [`RelationDerived::ContractionEq`] of a [`contraction`]: the layout's batch eq factor.
+fn batch_eq<F: JoltField>(
+    relation: &OpRel<F>,
+    id: &RelationDerived,
+    setup: &RelationSetup<F>,
+    challenges: &[F],
+) -> Result<F, ProofVerifyError> {
+    Ok(match id {
+        RelationDerived::ContractionEq => layout(relation)?
+            .output_eq(&OpeningPoint::new(setup.incoming_point.clone()), challenges),
+        other => return Err(not_derived(other)),
+    })
 }
 
 fn unexpected_equation(equation: &str) -> ProofVerifyError {

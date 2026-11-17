@@ -25,8 +25,8 @@
 //! which the verifier is derived. A generic relation is proven by
 //! [`RelationProver`](crate::onnx_proof::relation::RelationProver) over its
 //! [`RelationWitnesses`]; a specialized witness (the einsum dot engine, the mean-of-squares
-//! reduction, the lookup provers) attaches at its [`OpRelation`] variant in
-//! [`relation_witnesses`].
+//! reduction, the lookup provers) attaches at its [`OpRelation`] variant, or at its
+//! [`OpRelKind`] for an op relation, in [`relation_witnesses`].
 
 use crate::onnx_proof::ops::eval_reduction::NodeEvalReductionProve;
 pub use jolt_atlas_verifier::onnx_proof::ops::*;
@@ -568,11 +568,43 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
         vec![Box::new(exec)]
     }
     match relation {
-        OpRelation::Op(relation) => engine(relation, prover),
-        OpRelation::Contraction(relation) => {
-            let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
-            vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
-        }
+        OpRelation::Op(relation) => match relation.kind {
+            OpRelKind::Contraction => {
+                let params =
+                    RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
+                vec![Box::new(EinsumDotProver::initialize(&prover.trace, params))]
+            }
+            OpRelKind::MeanOfSquares => {
+                let params =
+                    RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
+                vec![Box::new(MeanOfSquaresReductionProver::initialize(
+                    &prover.trace,
+                    params,
+                ))]
+            }
+            OpRelKind::And
+            | OpRelKind::Mul
+            | OpRelKind::Square
+            | OpRelKind::Cube
+            | OpRelKind::AddAccumulation
+            | OpRelKind::SubAccumulation
+            | OpRelKind::Iff
+            | OpRelKind::Div
+            | OpRelKind::DivQuotient
+            | OpRelKind::ConstantDivision
+            | OpRelKind::Rsqrt
+            | OpRelKind::Identity
+            | OpRelKind::Neg
+            | OpRelKind::ZeroOutput
+            | OpRelKind::Constant
+            | OpRelKind::Input
+            | OpRelKind::AxisPermutation
+            | OpRelKind::Broadcast
+            | OpRelKind::Reshape
+            | OpRelKind::Slice
+            | OpRelKind::Concat
+            | OpRelKind::SumAxis => engine(relation, prover),
+        },
         OpRelation::Gather(relation) => {
             let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
             vec![Box::new(GatherProver::initialize(
@@ -641,13 +673,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
                 );
             vec![Box::new(witness)]
         }
-        OpRelation::MeanOfSquares(relation) => {
-            let params = RelationParams::new(relation, &prover.accumulator, &mut prover.transcript);
-            vec![Box::new(MeanOfSquaresReductionProver::initialize(
-                &prover.trace,
-                params,
-            ))]
-        }
         OpRelation::SmallActivation(OpActivation::Erf, node) => {
             small_activation::<F, T, ErfTableMarker>(&node, prover)
         }
@@ -693,7 +718,6 @@ pub fn relation_witnesses<F: JoltField, T: Transcript>(
             }
             witnesses
         }
-        OpRelation::SumAxis(relation) => engine(relation, prover),
         OpRelation::Trig(OpTrig::Cos, node) => trig::<F, T, CosTable>(node, prover),
         OpRelation::Trig(OpTrig::Sin, node) => trig::<F, T, SinTable>(node, prover),
         one_hot @ (OpRelation::LookupOneHot(..)
@@ -802,7 +826,7 @@ fn prove_op_tie<F: JoltField, T: Transcript>(relation: &OpTie<F>, prover: &mut P
 pub fn op_rel_witnesses<F: JoltField>(
     relation: &OpRel<F>,
     trace: &Trace,
-    _setup: &RelationSetup<F>,
+    setup: &RelationSetup<F>,
 ) -> Vec<MultilinearPolynomial<F>> {
     let node = &relation.node;
     match relation.kind {
@@ -813,6 +837,13 @@ pub fn op_rel_witnesses<F: JoltField>(
         OpRelKind::Div => div::division_witnesses(node, trace),
         OpRelKind::ConstantDivision => scalar_const_div::constant_division_witnesses(node, trace),
         OpRelKind::Rsqrt => rsqrt::reciprocal_sqrt_witnesses(node, trace),
+        OpRelKind::SumAxis => sum::axis::axis_sum_witnesses(relation, trace, &setup.incoming_point),
+        OpRelKind::MeanOfSquares | OpRelKind::Contraction => {
+            panic!(
+                "{:?} has a specialized prover, not the engine's",
+                relation.kind
+            )
+        }
         OpRelKind::AddAccumulation
         | OpRelKind::SubAccumulation
         | OpRelKind::DivQuotient
@@ -863,7 +894,10 @@ pub fn op_rel_tie_claims<F: JoltField>(
         | OpRelKind::Iff
         | OpRelKind::Div
         | OpRelKind::ConstantDivision
-        | OpRelKind::Rsqrt => {
+        | OpRelKind::Rsqrt
+        | OpRelKind::SumAxis
+        | OpRelKind::MeanOfSquares
+        | OpRelKind::Contraction => {
             panic!("{:?} is proven by a sumcheck, not a tie", relation.kind)
         }
     }

@@ -28,15 +28,12 @@ use crate::onnx_proof::{
         activation_clamped::{small_table_verifier, ActivationClampOperands, SmallTableRaEncoding},
         clamp::SymmetricClampOperands,
         cos::CosRaEncoding,
-        einsum::ContractionRelation,
         erf::ErfTableMarker,
         gather::{self, small::GatherSmallShape, GatherRelation},
-        mean_of_squares::MeanOfSquaresRelation,
         sigmoid::SigmoidTableMarker,
         sin::SinRaEncoding,
         smooth_relu::{GeluErfTable, GeluTanhTable, SiluTable, SmoothReluOperands},
         softmax_last_axis::{SoftmaxOpen, SoftmaxRelation, SoftmaxTie},
-        sum::axis::SumAxisRelation,
         tanh::TanhTableMarker,
     },
     relation::{verify_tie, OpRel, RelationVerifier, SetupRelation},
@@ -139,8 +136,6 @@ pub enum OpTrig {
 pub enum OpRelation<F: JoltField> {
     /// An op relation.
     Op(OpRel<F>),
-    /// `Einsum`: the contraction, its input claim the fused rescale's `q·2^S + rem`.
-    Contraction(ContractionRelation),
     /// `GatherSmall` / `GatherLarge`: the dictionary read; the index operand's opening is
     /// appended at the lookup variables of the setup's point.
     Gather(GatherRelation),
@@ -156,8 +151,6 @@ pub enum OpRelation<F: JoltField> {
     /// The one-hot checks of a [`Self::Lookup`]'s read addresses: two relations (the address
     /// polynomial as the product of its chunks; the chunks' Booleanity and Hamming weight).
     LookupOneHot(OpLookup, ComputationNode),
-    /// `MeanOfSquares`: the squared-sum reduction, its input claim `q·D + rem`.
-    MeanOfSquares(MeanOfSquaresRelation),
     /// A clamped activation's small-table execution: `γ` drawn, the clamped input's opening
     /// appended at the reduced output point.
     SmallActivation(OpActivation, ComputationNode),
@@ -165,8 +158,6 @@ pub enum OpRelation<F: JoltField> {
     SmallActivationOneHot(ComputationNode),
     /// A softmax stage, as `ops::softmax_last_axis` lists them.
     Softmax(SoftmaxRelation),
-    /// `Sum`: the axis reduction of the output.
-    SumAxis(SumAxisRelation),
     /// A trig op's table execution over the downscaled input.
     Trig(OpTrig, ComputationNode),
     /// The one-hot checks of a [`Self::Trig`]'s read addresses (two relations).
@@ -221,7 +212,6 @@ impl<F: JoltField> OpRelation<F> {
         }
         match self {
             Self::Op(relation) => one(relation, accumulator, transcript),
-            Self::Contraction(relation) => one(relation, accumulator, transcript),
             Self::Gather(relation) => Ok(boxed(gather::gather_verifier(
                 relation,
                 accumulator,
@@ -300,7 +290,6 @@ impl<F: JoltField> OpRelation<F> {
                 transcript,
             )?
             .into()),
-            Self::MeanOfSquares(relation) => one(relation, accumulator, transcript),
             Self::SmallActivation(OpActivation::Erf, node) => {
                 Ok(boxed(small_table_verifier::<F, ErfTableMarker>(
                     &node,
@@ -338,7 +327,6 @@ impl<F: JoltField> OpRelation<F> {
             )?
             .into()),
             Self::Softmax(relation) => relation.verifiers(accumulator, transcript),
-            Self::SumAxis(relation) => one(relation, accumulator, transcript),
             Self::Trig(OpTrig::Cos, node) => one(
                 SmallTableRelation::<CosTable>::new(node),
                 accumulator,

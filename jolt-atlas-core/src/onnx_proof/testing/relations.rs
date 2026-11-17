@@ -34,13 +34,13 @@ use crate::{
         fused_rebase,
         ops::{
             div::division,
-            einsum::{dot::EinsumDotProver, ContractionRelation},
+            einsum::{contraction, dot::EinsumDotProver},
             iff::select,
-            mean_of_squares::{MeanOfSquaresReductionProver, MeanOfSquaresRelation},
+            mean_of_squares::{squared_sum_reduction, MeanOfSquaresReductionProver},
             mul::product,
             rsqrt::reciprocal_sqrt,
             scalar_const_div::constant_division,
-            sum::axis::SumAxisRelation,
+            sum::axis::axis_sum,
         },
         relation::{
             OpRelKind, Relation, RelationChallenge, RelationExpr, RelationOpening, RelationParams,
@@ -445,7 +445,7 @@ fn relation_prover_equiv_dense() {
         match node.operator {
             Op::Sum(_) => check_dense(
                 || {
-                    SumAxisRelation::for_node(&model, node.clone())
+                    axis_sum(&model, &node)
                         .expect("the model\'s nodes have the shapes their ops prove")
                 },
                 &trace,
@@ -481,7 +481,7 @@ fn relation_prover_equiv_mean_of_squares() {
     let (_, trace, node, mut rng) = single_node(0xA17_0631, &[(vec![8, 4], SMALL)], |b, i| {
         b.mean_of_squares(i[0], vec![1], vec![8, 1])
     });
-    let relation = || MeanOfSquaresRelation::new(node.clone());
+    let relation = || squared_sum_reduction::<Fr>(&node).expect("a mean-of-squares node");
     let setup = RelationSetup {
         incoming_point: random_point(&mut rng, node.pow2_padded_num_output_elements().log_2()),
         challenges: Vec::new(),
@@ -514,7 +514,7 @@ fn relation_prover_equiv_contraction() {
     for (seed, (dims, build)) in (0xA17_0611..).zip(cases) {
         let (model, trace, node, mut rng) = single_node(seed, &dims, build);
         let relation = || {
-            ContractionRelation::for_node(&model, node.clone())
+            contraction::<Fr>(&model, &node)
                 .expect("the model\'s nodes have the shapes their ops prove")
         };
         let setup = RelationSetup {

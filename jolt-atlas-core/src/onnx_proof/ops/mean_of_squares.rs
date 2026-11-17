@@ -33,7 +33,9 @@ use std::array;
 
 use atlas_trace::{trace::LayerData, Trace};
 
-use crate::onnx_proof::relation::{note_dispatch, RelationParams, RelationSetup, RelationWitness};
+use crate::onnx_proof::relation::{
+    note_dispatch, OpRel, RelationParams, RelationSetup, RelationWitness,
+};
 use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
@@ -47,12 +49,12 @@ use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use common::parallel::par_enabled;
 use rayon::prelude::*;
 
-/// The specialized prover of a [`MeanOfSquaresRelation`]: the operand squared against the
+/// The specialized prover of a [`squared_sum_reduction`]: the operand squared against the
 /// retained-dim eq table, read by index rather than expanded. Completeness-only:
 /// `relation_prover_equiv_mean_of_squares` checks its messages against the relation's reference
 /// messages.
 pub struct MeanOfSquaresReductionProver<F: JoltField> {
-    relation: MeanOfSquaresRelation,
+    relation: OpRel<F>,
     setup: RelationSetup<F>,
     log_retained: usize,
     log_reduced: usize,
@@ -67,14 +69,16 @@ pub struct MeanOfSquaresReductionProver<F: JoltField> {
 impl<F: JoltField> MeanOfSquaresReductionProver<F> {
     /// Initialize by loading the operand and the retained-dim eq-poly.
     #[tracing::instrument(skip_all, name = "MeanOfSquaresReductionProver::initialize")]
-    pub fn initialize(trace: &Trace, params: RelationParams<F, MeanOfSquaresRelation>) -> Self {
+    pub fn initialize(trace: &Trace, params: RelationParams<F, OpRel<F>>) -> Self {
         let (relation, setup) = params.into_parts();
         note_dispatch(&relation);
         let LayerData { operands, .. } = TraceView::layer_data(trace, &relation.node);
         let [operand] = operands[..] else {
             panic!("Expected one operand for MeanOfSquares operation")
         };
-        let (log_retained, log_reduced) = (relation.log_retained(), relation.log_reduced());
+        let log_retained = log_retained(&relation.node);
+        let (_, log_reduced) =
+            reduction(&relation.node).expect("the relation was built for a mean of squares");
         let operand = MultilinearPolynomial::from(operand.padded_pow2());
         assert_eq!(
             operand.get_num_vars(),
@@ -99,9 +103,9 @@ impl<F: JoltField> MeanOfSquaresReductionProver<F> {
 }
 
 impl<F: JoltField> RelationWitness<F> for MeanOfSquaresReductionProver<F> {
-    type Relation = MeanOfSquaresRelation;
+    type Relation = OpRel<F>;
 
-    fn relation(&self) -> &MeanOfSquaresRelation {
+    fn relation(&self) -> &OpRel<F> {
         &self.relation
     }
 

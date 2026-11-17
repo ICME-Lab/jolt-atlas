@@ -23,7 +23,7 @@
 //! ## Where the claim comes from
 //!
 //! The claim algebra is the einsum's
-//! [`ContractionRelation`](super::ContractionRelation): its input claim is the
+//! [`contraction`](super::contraction): its input claim is the
 //! fused rescale's `out(r)·2^S + R(r)` (or the plain output opening), its
 //! output claim `L·R·EQ` at the scattered operand points. This engine is the
 //! relation's specialized prover; the verifier is the relation's.
@@ -34,12 +34,9 @@ use std::array;
 
 use atlas_trace::{trace::LayerData, Tensor, Trace};
 
-use super::{
-    abmk_abnk_abmn::AbmkAbnkAbmnLayout, k_nk_n::KNkNLayout, mk_kn_mn::MkKnMnLayout,
-    ContractionRelation,
-};
+use super::{abmk_abnk_abmn::AbmkAbnkAbmnLayout, k_nk_n::KNkNLayout, mk_kn_mn::MkKnMnLayout};
 use crate::onnx_proof::relation::{
-    note_dispatch, AtlasRelation, RelationParams, RelationSetup, RelationWitness,
+    note_dispatch, OpRel, RelationParams, RelationSetup, RelationWitness,
 };
 use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
@@ -57,11 +54,11 @@ use common::parallel::par_enabled;
 use rayon::prelude::*;
 
 /// The dot engine: the specialized prover of a
-/// [`ContractionRelation`](super::ContractionRelation). Completeness-only: the verifier is the
+/// [`contraction`](super::contraction). Completeness-only: the verifier is the
 /// relation's, and `relation_prover_equiv_contraction` checks these messages against the
 /// relation's reference messages.
 pub struct EinsumDotProver<F: JoltField> {
-    relation: ContractionRelation,
+    relation: OpRel<F>,
     setup: RelationSetup<F>,
     schedule: EqSchedule,
     left: MultilinearPolynomial<F>,
@@ -74,13 +71,11 @@ pub struct EinsumDotProver<F: JoltField> {
 impl<F: JoltField> EinsumDotProver<F> {
     /// Initialize the prover by folding the operands at the output randomness.
     #[tracing::instrument(skip_all, name = "EinsumDotProver::initialize")]
-    pub fn initialize(trace: &Trace, params: RelationParams<F, ContractionRelation>) -> Self {
+    pub fn initialize(trace: &Trace, params: RelationParams<F, OpRel<F>>) -> Self {
         let (relation, setup) = params.into_parts();
         note_dispatch(&relation);
-        let layout = relation
-            .layout::<F>()
-            .expect("the relation\'s dims are its equation\'s");
-        let LayerData { operands, .. } = TraceView::layer_data(trace, relation.node());
+        let layout = super::layout(&relation).expect("the relation\'s dims are its equation\'s");
+        let LayerData { operands, .. } = TraceView::layer_data(trace, &relation.node);
         let [left_operand, right_operand] = operands[..] else {
             panic!("Expected two operands for einsum operation")
         };
@@ -108,9 +103,9 @@ impl<F: JoltField> EinsumDotProver<F> {
 }
 
 impl<F: JoltField> RelationWitness<F> for EinsumDotProver<F> {
-    type Relation = ContractionRelation;
+    type Relation = OpRel<F>;
 
-    fn relation(&self) -> &ContractionRelation {
+    fn relation(&self) -> &OpRel<F> {
         &self.relation
     }
 
@@ -259,13 +254,13 @@ pub trait EinsumFold<F: JoltField> {
 
 /// Fold `relation`'s operands with its canonical equation's layout.
 fn fold_operands<F: JoltField>(
-    relation: &ContractionRelation,
+    relation: &OpRel<F>,
     left_operand: &Tensor<i32>,
     right_operand: &Tensor<i32>,
     r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
 ) -> Folded<F> {
-    let dims = relation.dims();
-    match relation.equation() {
+    let dims = &super::dims(relation).expect("the relation holds its contraction dims");
+    match super::equation(relation).expect("the relation was built for an einsum") {
         "mk,kn->mn" => MkKnMnLayout::new(dims)
             .expect("the dims are the equation\'s")
             .fold(left_operand, right_operand, r_node_output),

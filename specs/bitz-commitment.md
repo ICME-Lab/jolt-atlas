@@ -13,10 +13,6 @@ Status is `proposed` until the implementation merges, then `implemented`. A spec
 merge: it records what was decided and why at that point in time. The code is the source of
 truth for current behavior, and nobody updates old specs when the code moves on.
 
-This is a draft written from the measurements, without the `/new-spec` interview. The points
-that an interview would have settled are collected under "Open questions" and are the first
-thing `/analyze-spec` should close.
-
 ## Summary
 
 Commitment and opening are most of the prover. On GPT-2 at 16 tokens (25.0 s on the benchmark
@@ -46,25 +42,32 @@ common point stays as it is. The projection for GPT-2 at 16 tokens is about 10 s
 Commit every witness column as bit planes of one polynomial under an owned BitZ scheme in
 `atlas-pcs`, open it once per proof, and delete Akita.
 
-The work is four PRs. This spec's PR is stage 1; the later stages are specified here so the
-scheme is built for them, and each is ticked by its own PR.
+The work is three PRs, with a tuning PR between the first two if the gate below needs it.
+This spec's PR is stage 1; the later stages are specified here so the scheme is built for
+them, and each is ticked by its own PR. One commitment scheme is in the tree at any time.
 
 - **Stage 1, the scheme.** `atlas-pcs::bitz`: commit a bit vector of 2^n bits, prove and
   verify one claim `⟨eq(z, ·), bits⟩ = µ` with `z ∈ Fp128^n`, at a 128-bit target. Standalone:
   nothing in the prover calls it. Includes the `F_{2^128}` arithmetic, the Reed–Solomon
   encoding and Ligerito opening, the grand-product GKR, BitZ's Round 1 (the projection of an
   Fp128 claim to a transcript-sampled prime, which a 128-bit prime requires), the proof codec
-  through `atlas_algebra::serialize::Canonical`, and a benchmark example.
+  through `atlas_algebra::serialize::Canonical`, and a benchmark example. It is written from
+  the papers (BitZ, Ligerito), on our field, transcript and serialization; no code is taken
+  from the BitZ proof-of-concept or from Flock. Stage 1 merges on correctness and records its
+  benchmark.
+- **Gate before stage 2.** Commit + prove at 2^29 bits, 16 threads, at or below 2.0 s on the
+  benchmark machine. If stage 1 is above it, a tuning PR (kernels only, no protocol or format
+  change) comes first.
 - **Stage 2, the cutover.** The layout (`atlas-pcs::bitz::layout`: column, bit width, aligned
   offset), bit-plane witness generation, the `CommitmentScheme` interface reshaped to one
   commitment and one opening per proof, the prover and verifier on it, proof digests
-  re-pinned. Akita stays in the tree, unused by the default build, for one release.
+  re-pinned. The same PR deletes Akita: `atlas-pcs::akita`, `atlas-pcs/schedules/`, the
+  `akita-*` git dependency, the root `jolt-field` and `jolt-poly` compatibility packages and
+  the `[patch]` that points at them. The last commit with Akita is tagged `akita-last` so it
+  can be benchmarked or restored; falling back is a revert.
 - **Stage 3, what the bits make redundant.** `atlas_sumcheck::digit_range` and its two
   deferred batches are deleted, as is the Booleanity half of the one-hot checks; the
   Hamming-weight half stays.
-- **Stage 4, deletion.** `atlas-pcs::akita`, `atlas-pcs/schedules/`, the `akita-*` git
-  dependency, the root `jolt-field` and `jolt-poly` compatibility packages and the `[patch]`
-  that points at them.
 
 Stage 1 introduces:
 
@@ -72,10 +75,14 @@ Stage 1 introduces:
   aarch64 and x86-64 with a portable path), `pack` (bits to `F_{2^128}` elements), `ligerito`
   (encoding, Merkle commitment over BLAKE3, the opening), `gkr` (the batched grand product),
   `round1` (the prime draw and projection), `params` (the shape split `t = ⌈3n/5⌉ − 1`, the
-  ladder, the grinding schedule), `prover`, `verifier`, `proof`.
+  ladder, the grinding schedule), `prover`, `verifier`, `proof`. Supported sizes are
+  `12 ≤ n ≤ 31`; a shorter vector is padded with zeros to 2^12 by the caller. The ladder is
+  the unique-decoding one at the 128-bit target.
 - `atlas-pcs/examples/bitz_bench.rs`: commits random bits at a given `n` and prints commit,
   prove, verify, proof bytes and peak memory.
-- `blake3` as a workspace dependency.
+- `blake3` as a workspace dependency, for the Merkle tree only. (`sha3` and `keccak` are in
+  the graph through the transcript's sponge; the measurements this spec rests on use BLAKE3,
+  and the Merkle tree is the commit's hot loop.)
 
 ### Invariants
 
@@ -100,7 +107,9 @@ Stage 1 introduces:
   `atlas-pcs::bitz::verifier` and `proof`; a mutation test over every field of a proof at
   `n = 16`.
 - **Prover and verifier modules stay apart.** `atlas-pcs::bitz::prover` is not named by the
-  verifier side. Mechanism: the existing CI path check for `prover` modules.
+  verifier side. Mechanism at stage 1: review-held. The CI path check and `jolt-atlas-verifier/clippy.toml` cover it from
+  stage 2, when `jolt-atlas-verifier` first names the scheme: they scan that crate's sources
+  only.
 - **No new curve or arkworks crate.** Mechanism: the existing CI graph checks on `Cargo.lock`.
 - **Transcript.** Every BitZ message is absorbed through `atlas_transcript::Transcript`;
   Ligerito's challenges come from the same transcript, not a second sponge. Mechanism: a test
@@ -137,24 +146,31 @@ Stage 1 (this spec's PR):
       rejects trailing bytes and a forged length without allocating it.
 - [ ] `params` accepts a ladder at the 128-bit target and rejects `custom:1:4` at it, each
       pinned by a unit test that states the computed bound.
-- [ ] `cargo run --release -p atlas-pcs --example bitz_bench -- 29` on the benchmark machine
-      reports commit + prove at or below 1.0 s at 16 threads and peak memory at or below
-      4 GB, with the 128-bit ladder. (The proof-of-concept is at 0.44 s and 1.6 GB without
-      Round 1 on a 128-bit prime.)
-- [ ] The workspace builds with no dependency on the BitZ proof-of-concept or on Flock;
-      `docs/upstream-inventory.md` records the provenance of every file taken from either.
+- [ ] `cargo run --release -p atlas-pcs --example bitz_bench -- 29` runs on the benchmark
+      machine with the 128-bit ladder, verifies, and its commit, prove, verify, proof size and
+      peak memory at `n` = 28, 29, 30 are recorded in `docs/measurement-plan.md` beside the
+      proof-of-concept's (0.44 s and 1.6 GB at 29, without Round 1 on a 128-bit prime). Peak
+      memory at 29 is at or below 4 GB. Time is recorded, not gated, in this PR.
+- [ ] The workspace has no dependency on the BitZ proof-of-concept or on Flock, and no file
+      taken from either; `docs/upstream-inventory.md` says so.
+- [ ] Round 1 is exercised by every test: all claims are over Fp128. If its error bound at
+      `n = 30` cannot be brought to the target by grinding at the cost the paper states, the
+      PR implements the paper's Method 2 instead and says so; it does not ship a smaller
+      prime.
 - [ ] `cargo nextest run --workspace` and the CI graph and path checks pass.
 
 Later stages:
 
+- [ ] Before stage 2: `bitz_bench 29` at 16 threads reports commit + prove at or below
+      2.0 s (stage 1 as merged, or the tuning PR).
 - [ ] Stage 2 PR: the zoo and the real-model tests prove and verify with one commitment and
-      one opening per proof; `bench/gate.sh` on `gpt2 --seq-len 16` shows `commit` at or
-      below 1.0 s and `openings` at or below 3.0 s.
+      one opening per proof; `bench/gate.sh` on `gpt2 --seq-len 16` against `akita-last`
+      shows `commit` at or below 1.5 s and `openings` at or below 4.0 s; no `akita` in
+      `Cargo.lock`; `jolt-field/` and `jolt-poly/` are deleted.
 - [ ] Stage 3 PR: `atlas_sumcheck::digit_range` and the Booleanity checks are gone; the
       soundness sweeps pass with the range now held by the commitment (the witness-tamper
-      sweep's digit sites are rejected at the opening).
-- [ ] Stage 4 PR: no `akita` in `Cargo.lock`; `jolt-field/` and `jolt-poly/` are deleted;
-      GPT-2 at 16 tokens proves in at most 11 s on the benchmark machine.
+      sweep's digit sites are rejected at the opening); GPT-2 at 16 tokens proves in at most
+      12 s on the benchmark machine.
 
 ### Testing Strategy
 
@@ -163,12 +179,14 @@ op-surface table, the soundness sweeps, the zoo and the golden hashes are unaffe
 keep passing unchanged, digests included. New tests: the round trips and rejections above;
 `gf128` against a bitwise reference multiplication and against the portable path on the
 machine's accelerated path; the Reed–Solomon encoder against direct polynomial evaluation at
-small sizes; Round 1 against a big-integer reference of the lifted claim at `n ≤ 12`. Ground
+small sizes; Round 1 against a big-integer reference of the lifted claim at `n = 12`. Ground
 truth is the reference computation in each case, never a second copy of the optimized kernel.
+The proof-of-concept is not a test dependency; it is run by hand on the benchmark machine for
+the comparison table only.
 
 Stage 2 needs a `mutate::Site` for each new proof field (the opening, the plane evaluations)
 and removes the sites of the fields that go; the forgery sweep covers plane claims through the
-accumulator. Stages 2 to 4 each need the heavy job (GPT-2, bge-small, Qwen).
+accumulator. Stages 2 and 3 each need the heavy job (GPT-2, bge-small, Qwen).
 
 The `zk` feature is not involved.
 
@@ -183,13 +201,14 @@ Reference, same machine, `c90a4652e`, GPT-2 at 16 tokens: prove 25.0 s; `commit`
 two bucket batches are 1.65 s; trace execution 3.8 s; verify 1.22 s; proof 1.27 MiB; peak
 14.5 GB.
 
-Expected after stage 2: `commit` 7.1 → under 1 s; `openings` 9.9 → about 2.5 s (the reduction
-sumcheck, the plane evaluations, one opening); verify and peak memory down; proof size about
-the same (the opening is 0.5 MiB against thirteen Akita openings). After stage 3: `iop` down
-by the digit-range batch. Trace execution is then the largest single item and is outside
-this spec.
+Expected after stage 2, with the scheme at its 2.0 s gate: `commit` 7.1 → about 1 s;
+`openings` 9.9 → about 3.5 s (the reduction sumcheck, the plane evaluations, one opening);
+verify and peak memory down; proof size about the same (the opening is 0.5 MiB against
+thirteen Akita openings). After stage 3: `iop` down by the digit-range batch. That is about
+11.5 s on GPT-2, and about 10 s if the scheme reaches the proof-of-concept's speed. Trace
+execution is then the largest single item and is outside this spec.
 
-Bounds: no stage may raise prove time, verify time or peak memory on either model.
+Bounds: stages 2 and 3 may not raise prove time, verify time or peak memory on either model.
 
 ## Design
 
@@ -219,11 +238,9 @@ op relations, lookups ──► opening claims ──► reduction sumcheck ─�
 - **`jolt-atlas-verifier` / `jolt-atlas-core`** (stage 2): `ReducedOpeningProof` carries one
   opening and the plane evaluations; `commit_witness_polynomials` builds planes instead of
   classes. Columns that are signed today are committed with an offset so every plane is a bit.
-- **Source.** The proof-of-concept (`albert-garreta/BitZ-PoC`, MIT) and Flock's Ligerito (MIT
-  or Apache-2.0) are the reference implementations. Their code is taken where it fits, moved
-  onto our field, transcript and serialization, with provenance in
-  `docs/upstream-inventory.md`, as the owned-toolkit program did; nothing is vendored and
-  neither becomes a dependency.
+- **Source.** Written from the papers. The proof-of-concept (`albert-garreta/BitZ-PoC`) and
+  Flock's Ligerito are read as references and benchmarked against; no code is taken from
+  either.
 
 ### Alternatives Considered
 
@@ -233,42 +250,41 @@ op relations, lookups ──► opening claims ──► reduction sumcheck ─�
   the 2^28 class alone is 10.5 s of commit and opening.
 - **The Mosaic layout on Akita.** Not available as one polynomial, for the same cap; its
   Akita form is item 8, which this spec supersedes.
-- **Depend on the proof-of-concept.** Rejected: it is a research artifact with competitor
-  benchmarks and 77,000 vendored lines, its field holds at most 113 bits so it cannot take our
-  claim, and the program this tree just finished removed every such dependency.
+- **Depend on the proof-of-concept, or port its kernels.** Rejected: it is a research artifact
+  with competitor benchmarks and 77,000 vendored lines, its field holds at most 113 bits so
+  it cannot take our claim, and the program this tree just finished removed every such
+  dependency. Porting would keep its measured speed; writing from the paper is chosen
+  instead, which is why time is a gate before stage 2 and not a criterion of stage 1.
+- **Keep Akita selectable for a release after the cutover.** Rejected: the reshaped interface
+  would have to fit two schemes and the digit-range path would have to stay for Akita's sake.
+  A tag and a revert are the fallback.
 - **BitZ per class, keeping thirteen openings.** Rejected: the opening is 0.4 s at 2^29 and
   sub-linear in practice, so thirteen cost more than one, and the layout is what removes the
   per-class bookkeeping.
 - **One cutover PR.** Rejected: the scheme is testable alone against reference computations,
   and a scheme bug found through an end-to-end proof is the expensive way to find it.
 
-### Open questions
+### Open points left to the implementation
 
-1. **Take the proof-of-concept's kernels or write from the paper?** The draft says take, with
-   provenance. The GKR and Ligerito kernels are where its speed is.
-2. **Which 128-bit ladder.** Unique decoding is accepted today (494 KB opening). A Johnson
-   ladder with more out-of-domain samples would give a smaller proof; `custom:1:4` as shipped
-   reaches 118.4 bits.
-3. **Round 1 on a 128-bit prime has never been run.** The proof-of-concept's field stops at
-   113 bits. The paper prices it at `O(2^n)` integer additions and about 2^-105 error at
-   `n = 30` before grinding. Stage 1's benchmark criterion is where this is measured; if it
-   fails, the fallback is the paper's Method 2 or a larger binary field.
-4. **The plane-evaluation pass.** The proof-of-concept spends 1.8 s computing a 2^29-bit
-   evaluation claim outside its timed section. Ours has to be parallel and is not yet priced.
-5. **Does Akita stay for a release after stage 2**, as written, or go in the same PR?
-6. **Small models.** The shape split and the ladders are tuned for large `n`; the zoo's tiny
-   models commit a few thousand bits. The minimum supported `n` and its parameters are open.
+- **A Johnson ladder at 128 bits.** `custom:1:4` as the proof-of-concept ships it reaches
+  118.4 bits; more out-of-domain samples would close it and give a smaller opening than the
+  unique-decoding ladder's 494 KB. Not in stage 1; a later change to `params` and the proof
+  format.
+- **The plane-evaluation pass** (stage 2). The proof-of-concept spends 1.8 s computing a
+  2^29-bit evaluation claim outside its timed section. Ours is one parallel pass and is priced
+  by stage 2's `openings` bound.
 
 ## Documentation
 
 - `docs/prover-plan.md`: decision 1 recorded as taken; item 8 and decision 3 marked
-  superseded; "Order and gates" updated with the four stages.
+  superseded; "Order and gates" updated with the stages.
 - `docs/measurement-plan.md`: stage 1's benchmark numbers beside the proof-of-concept's.
-- `docs/upstream-inventory.md`: the BitZ and Flock provenance.
+- `docs/upstream-inventory.md`: a line stating that `atlas-pcs::bitz` has no upstream source;
+  the `akita` and compatibility-package rows removed at stage 2.
 - `docs/verifier.md`: the trust perimeter gains the hash-based scheme and loses the lattice
-  one (stage 2 and stage 4).
+  one (stage 2).
 - `CLAUDE.md` / `AGENTS.md`: the crate map's `atlas-pcs` entry (each stage), the
-  compatibility packages (stage 4).
+  compatibility packages (stage 2).
 - `README.md`: the benchmark table and the scheme description (stage 2).
 
 ## Execution

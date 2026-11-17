@@ -33,10 +33,10 @@ use atlas_trace::{op::MeanOfSquares, trace::ModelExecutionIO, Model, Op};
 use crate::{
     node_view::ComputationNode,
     onnx_proof::{
-        plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
         relation::{
             not_derived, Custom, OpRel, OpRelKind, RelationDerived, RelationOpening, RelationSetup,
         },
+        schedule::{OpOpen, OpPlan, OpRelation, ScheduleBuilder},
         ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
@@ -68,15 +68,15 @@ impl OpPlan for MeanOfSquares {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Open(OpOpen::RescaleRemainder(node.clone())),
-            Step::Relation {
-                proof: ProofType::RescaleArith,
-                relation: OpRelation::Op(squared_sum_reduction(node)?),
-            },
-        ]))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        schedule.reduce();
+        schedule.open(OpOpen::RescaleRemainder(node.clone()));
+        schedule.relation(
+            ProofType::RescaleArith,
+            OpRelation::Op(squared_sum_reduction(node)?),
+        );
+        Ok(())
     }
 }
 

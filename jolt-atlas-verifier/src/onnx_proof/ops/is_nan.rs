@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::plan::{OpPlan, Plan, Step};
+use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use crate::{
     onnx_proof::{
         ops::OpLayout,
@@ -19,13 +19,11 @@ impl OpPlan for IsNan {
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Tie {
-                relation: zero_output(node),
-            },
-        ]))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        schedule.reduce();
+        schedule.tie(zero_output(node));
+        Ok(())
     }
 }
 

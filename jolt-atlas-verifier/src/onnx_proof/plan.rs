@@ -1,46 +1,22 @@
-//! Verification plans: what the verifier checks for an op, in order, as data.
+//! Temporary: a node's steps as the per-node interpreters run them.
 //!
-//! An op's [`OpPlan::plan`] returns its [`Plan`], an ordered list of [`Step`]s over relations,
-//! built from the model and the public IO before the transcript runs. The interpreter
-//! ([`Verifier::run_plan`](super::Verifier::run_plan)) executes the steps; `jolt-atlas-core`'s
-//! prover walks the same plan with the relations' witnesses. The transcript order of an op is
-//! therefore its plan's step order on both sides.
-//!
-//! A step holds values, never closures. A sumcheck step holds an [`OpRelation`], one variant
-//! per kind of verifier construction: an op relation ([`OpRel`]), a prefix-suffix table read
-//! ([`TableRead`]), the one-hot checks of a read's addresses ([`RaEncoding`]), and the stages
-//! with their own shape. A tie step holds a zero-round [`OpRel`], checked by
-//! [`verify_tie`](super::relation::verify_tie); an open step an [`OpOpen`]. A relation whose
-//! parameters depend on earlier claims or on challenges reads and draws them in its
-//! [`SetupRelation::setup`](super::relation::SetupRelation::setup), which runs when the
-//! interpreter reaches the step. The post-loop work (the packed range buckets, the deferred
-//! batches) is a plan too: [`deferred_lookups::plan`](super::deferred_lookups::plan)
-//! builds it from the model and the public IO once the node loop is done.
+//! The per-op plan functions write to a [`ScheduleBuilder`](super::schedule::ScheduleBuilder).
+//! Until the verifier and the prover walk one schedule for the whole model, [`Plan::of_node`]
+//! reads one node's steps back out of a builder in the form
+//! [`Verifier::run_plan`](super::Verifier::run_plan) and `jolt-atlas-core`'s `prove_plan`
+//! execute: a table read is a [`Step::Defer`] to [`DeferredBatch::Lookups`], a one-hot check a
+//! [`Step::Defer`] to [`DeferredBatch::OneHot`]. This module goes away with those
+//! interpreters.
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     deferred_lookups::DeferredBatch,
-    fused_rebase,
-    lookup::{table_read_verifier, RaEncoding, TableRead},
-    ops::{
-        gather::{self, small::GatherSmallShape},
-        softmax_last_axis::{self, SoftmaxOpen, SoftmaxShape},
-    },
-    range_bucket::RangeBucket,
-    range_check::{self, ValueParams},
-    relation::{op_rel_verifier, OpRel},
+    relation::OpRel,
+    schedule::{self, OpOpen, OpPlan, OpRelation, ScheduleBuilder},
     ProofType,
 };
-use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
-use atlas_sumcheck::{
-    opening_proof::{PolynomialId, VerifierOpeningAccumulator},
-    relation::DynRelationVerifier,
-    shout,
-};
 use atlas_trace::{trace::ModelExecutionIO, Model};
-use atlas_transcript::Transcript;
-use common::{CommittedPoly, VirtualPoly};
 
 /// One thing the verifier does for a node.
 pub enum Step<F: JoltField> {
@@ -82,152 +58,90 @@ pub enum Step<F: JoltField> {
 /// A node's verification, in transcript order.
 pub struct Plan<F: JoltField>(pub Vec<Step<F>>);
 
-/// An op's verification plan for one node.
-pub trait OpPlan {
-    /// The steps that verify `node`, from the model and the public IO alone.
-    fn plan<F: JoltField>(
-        &self,
+impl<F: JoltField> Plan<F> {
+    /// The steps `node`'s operator writes, as the per-node interpreters run them. The one-hot
+    /// checks, which have no step in the node's turn, are queued after the node's steps in the
+    /// order they were registered.
+    pub fn of_node(
         node: &ComputationNode,
         model: &Model,
         io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError>;
-}
-
-/// A relation proven by a sumcheck, as a plan step holds it: one variant per kind of verifier
-/// construction.
-pub enum OpRelation<F: JoltField> {
-    /// An op relation.
-    Op(OpRel<F>),
-    /// A prefix-suffix table read: the operand's opening is appended at the read's cycle
-    /// point, then the read-raf relation is set up.
-    TableRead(TableRead),
-    /// The one-hot checks of a read's addresses: two relations (the address polynomial as the
-    /// product of its chunks; the chunks' Booleanity and Hamming weight).
-    OneHot(RaEncoding),
-    /// `GatherSmall`: the Hamming-Booleanity and Booleanity checks of its one-hot `ra`.
-    GatherSmallOneHot(GatherSmallShape),
-    /// `GatherSmall`: the Hamming-weight check of its one-hot `ra`.
-    GatherSmallHammingWeight(GatherSmallShape),
-    /// `SoftmaxLastAxis`: the read of the output, sum and shifted sum tables at the reads'
-    /// point.
-    SoftmaxRead(SoftmaxShape),
-    /// A packed range bucket's value relation: the range claims of its members
-    /// ([`range_bucket::RangeClaim`](crate::onnx_proof::range_bucket::RangeClaim)).
-    RemainderBucketValue(RangeBucket),
-    /// A packed range bucket's digit range check.
-    RemainderBucketDigits(RangeBucket),
-}
-
-impl<F: JoltField> OpRelation<F> {
-    /// The relation's verifiers (one, or the several of a stage or a one-hot check), set up
-    /// against the accumulator and transcript.
-    pub fn verifiers<T: Transcript>(
-        self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
-        fn boxed<F: JoltField, T: Transcript>(
-            verifier: impl DynRelationVerifier<F, T> + 'static,
-        ) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
-            vec![Box::new(verifier)]
+    ) -> Result<Self, ProofVerifyError> {
+        let mut builder = ScheduleBuilder::at_node(node.idx);
+        crate::dispatch_operator!(node, |inner| OpPlan::plan(
+            inner,
+            node,
+            model,
+            io,
+            &mut builder
+        ))?;
+        let ScheduleBuilder {
+            relations,
+            steps,
+            one_hot,
+            ..
+        } = builder;
+        let mut relations: Vec<Option<OpRelation<F>>> = relations.into_iter().map(Some).collect();
+        let mut take = |id: schedule::RelId| {
+            relations
+                .get_mut(id.0)
+                .and_then(Option::take)
+                .ok_or_else(|| {
+                    ProofVerifyError::Malformed(format!(
+                        "plan: node {}'s relation {} is used twice",
+                        node.idx, id.0
+                    ))
+                })
+        };
+        let mut plan = Vec::new();
+        for step in steps {
+            plan.push(match step {
+                schedule::Step::Reduce { .. } => Step::Reduce,
+                schedule::Step::Open(open) => Step::Open(open),
+                schedule::Step::Setup(id) => Step::Defer {
+                    batch: DeferredBatch::Lookups,
+                    relation: take(id)?,
+                },
+                schedule::Step::Sumcheck {
+                    proof,
+                    members,
+                    batched,
+                } => {
+                    let mut relations = members
+                        .into_iter()
+                        .map(&mut take)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    match (batched, relations.pop()) {
+                        (false, Some(relation)) if relations.is_empty() => Step::Relation {
+                            proof: proof.1,
+                            relation,
+                        },
+                        (_, last) => {
+                            relations.extend(last);
+                            Step::Batch {
+                                proof: proof.1,
+                                relations,
+                            }
+                        }
+                    }
+                }
+                schedule::Step::Tie(id) => match take(id)? {
+                    OpRelation::Op(relation) => Step::Tie { relation },
+                    _ => {
+                        return Err(ProofVerifyError::Malformed(format!(
+                            "plan: node {}'s tie is not an op relation",
+                            node.idx
+                        )))
+                    }
+                },
+            });
         }
-        match self {
-            Self::Op(relation) => Ok(boxed(op_rel_verifier(relation, accumulator, transcript)?)),
-            Self::TableRead(read) => Ok(vec![table_read_verifier(&read, accumulator, transcript)?]),
-            Self::OneHot(encoding) => {
-                Ok(shout::ra_onehot_verifiers(&encoding, accumulator, transcript)?.into())
-            }
-            Self::GatherSmallOneHot(shape) => {
-                let (hamming_booleanity, booleanity) =
-                    gather::small::build_stage2_verifiers(&shape, accumulator, transcript)?;
-                Ok(vec![Box::new(hamming_booleanity), Box::new(booleanity)])
-            }
-            Self::GatherSmallHammingWeight(shape) => Ok(boxed(
-                gather::small::build_stage3_verifier(&shape, accumulator, transcript)?,
-            )),
-            Self::SoftmaxRead(shape) => Ok(vec![softmax_last_axis::read_verifier(
-                shape,
-                accumulator,
-                transcript,
-            )?]),
-            Self::RemainderBucketValue(bucket) => Ok(boxed(ValueParams::into_verifier(
-                range_check::remainder_value_params(&bucket, accumulator, transcript)?,
-            ))),
-            Self::RemainderBucketDigits(bucket) => Ok(boxed(
-                range_check::remainder_digit_range_params(&bucket, accumulator, transcript)?
-                    .into_verifier(),
-            )),
+        for id in one_hot {
+            plan.push(Step::Defer {
+                batch: DeferredBatch::OneHot,
+                relation: take(id)?,
+            });
         }
+        Ok(Self(plan))
     }
-}
-
-/// Advice openings a plan step appends; the point is stated, the claim is the proof's.
-pub enum OpOpen {
-    /// A fused node's rescale remainder at the reduced output point.
-    RescaleRemainder(ComputationNode),
-    /// A trig op's period quotient at the reduced output point.
-    TrigPeriodQuotient(ComputationNode),
-    /// A trig op's downscaled remainder at the reduced output point.
-    TrigDownscaled(ComputationNode),
-    /// A smooth ReLU's `ReLU(x)` at the reduced output point.
-    SmoothReluRelu(ComputationNode),
-    /// A softmax opening, as `ops::softmax_last_axis` lists them.
-    Softmax(SoftmaxOpen),
-}
-
-impl OpOpen {
-    /// Append the openings.
-    pub fn verify<F: JoltField, T: Transcript>(
-        &self,
-        accumulator: &mut VerifierOpeningAccumulator<F>,
-        transcript: &mut T,
-    ) -> Result<(), ProofVerifyError> {
-        /// Append the node's advice `poly` at its reduced output point.
-        fn at_reduced_output<F: JoltField, T: Transcript, Poly: Into<PolynomialId>>(
-            node: &ComputationNode,
-            accumulator: &mut VerifierOpeningAccumulator<F>,
-            transcript: &mut T,
-            poly: fn(usize) -> Poly,
-        ) -> Result<(), ProofVerifyError> {
-            let accessor = AccOpeningAccessor::new(accumulator, node);
-            let r0 = accessor.get_reduced_opening()?.0;
-            accessor.into_provider(transcript, r0).append_advice(poly)
-        }
-        match self {
-            Self::RescaleRemainder(node) => {
-                at_reduced_output(node, accumulator, transcript, VirtualPoly::RescaleRemainder)
-            }
-            Self::TrigPeriodQuotient(node) => at_reduced_output(
-                node,
-                accumulator,
-                transcript,
-                CommittedPoly::TrigPeriodQuotient,
-            ),
-            Self::TrigDownscaled(node) => {
-                at_reduced_output(node, accumulator, transcript, VirtualPoly::TrigDownscaled)
-            }
-            Self::SmoothReluRelu(node) => {
-                at_reduced_output(node, accumulator, transcript, VirtualPoly::SmoothReluRelu)
-            }
-            Self::Softmax(open) => open.verify(accumulator, transcript),
-        }
-    }
-}
-
-/// The fused-rescale skeleton around an op's arithmetic relation (`Einsum`, `Mul`, `Square`,
-/// `Cube`): the remainder advice, then the arithmetic sumcheck under `proof`, whose input claim
-/// is `out·2^S + rem`. The remainder, and the output unless the node is a model output, are
-/// range-checked in the packed buckets after the node loop. A node without a rescale
-/// (`bits == 0`) proves the arithmetic relation alone against its reduced output.
-pub fn fused_rescale_plan<F: JoltField>(
-    node: &ComputationNode,
-    proof: ProofType,
-    relation: OpRelation<F>,
-) -> Plan<F> {
-    let mut steps = vec![Step::Reduce];
-    if fused_rebase::rebase_bits(node).is_some_and(|bits| bits > 0) {
-        steps.push(Step::Open(OpOpen::RescaleRemainder(node.clone())));
-    }
-    steps.push(Step::Relation { proof, relation });
-    Plan(steps)
 }

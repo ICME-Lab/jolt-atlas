@@ -8,13 +8,12 @@
 //! downscale's rescale back to `2^MODEL_SCALE` precision.
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::deferred_lookups::DeferredBatch;
 use crate::onnx_proof::lookup::{
     output_value, small_table, PrefixSuffixTable, SmallTableDef, TableRead,
 };
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::plan::{OpOpen, OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::{OpRel, OpRelKind, RelationOpening};
+use crate::onnx_proof::schedule::{OpOpen, OpPlan, OpRelation, ScheduleBuilder};
 use crate::utils::opening_access::{OpeningIdBuilder, Target};
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_claims::{constant, opening, Int};
@@ -81,7 +80,8 @@ fn committed_polynomials(node: &ComputationNode, def: SmallTableDef) -> Vec<Comm
 fn trig_plan<F: JoltField>(
     node: &ComputationNode,
     name: &str,
-) -> Result<Plan<F>, ProofVerifyError> {
+    schedule: &mut ScheduleBuilder<F>,
+) -> Result<(), ProofVerifyError> {
     if node.scale != MODEL_SCALE as u8 {
         return Err(ProofVerifyError::InvalidOpeningProof(format!(
             "{name} verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} (got {})",
@@ -91,30 +91,15 @@ fn trig_plan<F: JoltField>(
     let def = SmallTableDef::for_node(node)?;
     let downscale = downscale_read(node);
     let downscale_ra = downscale.ra.clone();
-    Ok(Plan(vec![
-        Step::Reduce,
-        Step::Open(OpOpen::TrigPeriodQuotient(node.clone())),
-        Step::Open(OpOpen::TrigDownscaled(node.clone())),
-        Step::Defer {
-            batch: DeferredBatch::Lookups,
-            relation: OpRelation::TableRead(downscale),
-        },
-        Step::Defer {
-            batch: DeferredBatch::Lookups,
-            relation: OpRelation::Op(small_table(node, def)),
-        },
-        Step::Defer {
-            batch: DeferredBatch::OneHot,
-            relation: OpRelation::OneHot(downscale_ra),
-        },
-        Step::Defer {
-            batch: DeferredBatch::OneHot,
-            relation: OpRelation::OneHot(def.ra_encoding(node)),
-        },
-        Step::Tie {
-            relation: trig_period(node),
-        },
-    ]))
+    schedule.reduce();
+    schedule.open(OpOpen::TrigPeriodQuotient(node.clone()));
+    schedule.open(OpOpen::TrigDownscaled(node.clone()));
+    schedule.lookup(OpRelation::TableRead(downscale));
+    schedule.lookup(OpRelation::Op(small_table(node, def)));
+    schedule.one_hot(OpRelation::OneHot(downscale_ra));
+    schedule.one_hot(OpRelation::OneHot(def.ra_encoding(node)));
+    schedule.tie(trig_period(node));
+    Ok(())
 }
 
 impl OpLayout for Sin {
@@ -132,8 +117,9 @@ impl OpPlan for Sin {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        trig_plan(node, "Sin")
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        trig_plan(node, "Sin", schedule)
     }
 }
 
@@ -152,8 +138,9 @@ impl OpPlan for Cos {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        trig_plan(node, "Cos")
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        trig_plan(node, "Cos", schedule)
     }
 }
 

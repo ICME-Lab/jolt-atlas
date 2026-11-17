@@ -45,9 +45,8 @@ use atlas_sumcheck::relation::DynRelationVerifier;
 
 use crate::{
     onnx_proof::{
-        deferred_lookups::DeferredBatch,
         lookup::{PrefixSuffixTable, RaEncoding, TableRead},
-        plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
+        schedule::{OpOpen, OpPlan, OpRelation, ScheduleBuilder},
         ProofType,
     },
     utils::opening_access::{AccOpeningAccessor, OpeningIdBuilder, Target},
@@ -144,7 +143,8 @@ impl OpPlan for SoftmaxLastAxis {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
         // The clamp table's bound is `SOFTMAX_CLAMP_BOUND` at `MODEL_SCALE`.
         if node.scale as usize != MODEL_SCALE {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
@@ -154,34 +154,18 @@ impl OpPlan for SoftmaxLastAxis {
         }
         read_tables()?;
         let shape = SoftmaxShape::for_node(node)?;
-        let open = |open: fn(SoftmaxShape) -> SoftmaxOpen| {
-            Step::Open(OpOpen::Softmax(open(shape.clone())))
-        };
-        let defer = |batch, relation| Step::Defer { batch, relation };
         let clamp = clamp_read(node);
         let clamp_ra = clamp.ra.clone();
-        Ok(Plan(vec![
-            Step::Reduce,
-            open(SoftmaxOpen::Gaps),
-            Step::Relation {
-                proof: ProofType::SoftmaxSums,
-                relation: OpRelation::Op(sums(node)?),
-            },
-            open(SoftmaxOpen::Addresses),
-            defer(
-                DeferredBatch::Lookups,
-                OpRelation::SoftmaxRead(shape.clone()),
-            ),
-            defer(DeferredBatch::Lookups, OpRelation::TableRead(clamp)),
-            Step::Tie {
-                relation: address_link(node)?,
-            },
-            defer(
-                DeferredBatch::OneHot,
-                OpRelation::OneHot(read_ra_encoding(node)),
-            ),
-            defer(DeferredBatch::OneHot, OpRelation::OneHot(clamp_ra)),
-        ]))
+        schedule.reduce();
+        schedule.open(OpOpen::Softmax(SoftmaxOpen::Gaps(shape.clone())));
+        schedule.relation(ProofType::SoftmaxSums, OpRelation::Op(sums(node)?));
+        schedule.open(OpOpen::Softmax(SoftmaxOpen::Addresses(shape.clone())));
+        schedule.lookup(OpRelation::SoftmaxRead(shape));
+        schedule.lookup(OpRelation::TableRead(clamp));
+        schedule.tie(address_link(node)?);
+        schedule.one_hot(OpRelation::OneHot(read_ra_encoding(node)));
+        schedule.one_hot(OpRelation::OneHot(clamp_ra));
+        Ok(())
     }
 }
 
@@ -289,6 +273,7 @@ fn live_lane_sum<F: JoltField>(active_len: usize, zero: &[F], one: &[F]) -> F {
 }
 
 /// A softmax advice opening.
+#[derive(Clone)]
 pub enum SoftmaxOpen {
     /// The row gaps `g` and `g⁻` at the row coordinates of the reduced output point.
     Gaps(SoftmaxShape),

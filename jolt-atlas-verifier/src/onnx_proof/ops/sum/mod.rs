@@ -1,7 +1,7 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     ops::{sum::axis::axis_sum, OpLayout},
-    plan::{OpPlan, OpRelation, Plan, Step},
+    schedule::{OpPlan, OpRelation, ScheduleBuilder},
     ProofType,
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -28,13 +28,13 @@ impl OpPlan for Sum {
         node: &ComputationNode,
         model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Relation {
-                proof: ProofType::SumReduction,
-                relation: OpRelation::Op(axis_sum(model, node)?),
-            },
-        ]))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        schedule.reduce();
+        schedule.relation(
+            ProofType::SumReduction,
+            OpRelation::Op(axis_sum(model, node)?),
+        );
+        Ok(())
     }
 }

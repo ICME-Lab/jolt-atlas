@@ -1,5 +1,5 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
+use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use crate::{
     onnx_proof::{
         ops::OpLayout,
@@ -23,14 +23,11 @@ impl OpPlan for Iff {
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Relation {
-                proof: ProofType::Execution,
-                relation: OpRelation::Op(select(node)),
-            },
-        ]))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        schedule.reduce();
+        schedule.relation(ProofType::Execution, OpRelation::Op(select(node)));
+        Ok(())
     }
 }
 

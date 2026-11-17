@@ -18,10 +18,7 @@ use crate::onnx_proof::lookup::{
 };
 use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::RelationOpening;
-use crate::onnx_proof::{
-    deferred_lookups::DeferredBatch,
-    plan::{OpPlan, OpRelation, Plan, Step},
-};
+use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId};
 use atlas_trace::{
@@ -77,29 +74,17 @@ pub fn clamp_read(node: &ComputationNode, table: PrefixSuffixTable) -> TableRead
 /// node's operator reads no small table.
 pub fn clamped_activation_plan<F: JoltField>(
     node: &ComputationNode,
-) -> Result<Plan<F>, ProofVerifyError> {
+    schedule: &mut ScheduleBuilder<F>,
+) -> Result<(), ProofVerifyError> {
     let clamp = clamp_read(node, PrefixSuffixTable::ActivationClamp);
     let clamp_ra = clamp.ra.clone();
     let def = SmallTableDef::for_node(node)?;
-    Ok(Plan(vec![
-        Step::Reduce,
-        Step::Defer {
-            batch: DeferredBatch::Lookups,
-            relation: OpRelation::Op(small_table(node, def)),
-        },
-        Step::Defer {
-            batch: DeferredBatch::OneHot,
-            relation: OpRelation::OneHot(def.ra_encoding(node)),
-        },
-        Step::Defer {
-            batch: DeferredBatch::Lookups,
-            relation: OpRelation::TableRead(clamp),
-        },
-        Step::Defer {
-            batch: DeferredBatch::OneHot,
-            relation: OpRelation::OneHot(clamp_ra),
-        },
-    ]))
+    schedule.reduce();
+    schedule.lookup(OpRelation::Op(small_table(node, def)));
+    schedule.one_hot(OpRelation::OneHot(def.ra_encoding(node)));
+    schedule.lookup(OpRelation::TableRead(clamp));
+    schedule.one_hot(OpRelation::OneHot(clamp_ra));
+    Ok(())
 }
 
 /// Committed polynomials for a node reading the small table `def` at its clamped input: both
@@ -133,8 +118,9 @@ impl OpPlan for Erf {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        clamped_activation_plan(node)
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        clamped_activation_plan(node, schedule)
     }
 }
 
@@ -156,8 +142,9 @@ impl OpPlan for Sigmoid {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        clamped_activation_plan(node)
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        clamped_activation_plan(node, schedule)
     }
 }
 
@@ -179,7 +166,8 @@ impl OpPlan for Tanh {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        clamped_activation_plan(node)
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        clamped_activation_plan(node, schedule)
     }
 }

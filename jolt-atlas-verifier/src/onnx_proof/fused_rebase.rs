@@ -16,7 +16,7 @@
 //! remainder, appended as advice ([`VirtualPoly::RescaleRemainder`]) and range-checked. The
 //! arithmetic relation's input expression is [`input_expression`], so its initial claim is
 //! the raw `acc(r)` while its `Σ L·R` body is unchanged. The sequence is the plan
-//! [`fused_rescale_plan`](super::plan::fused_rescale_plan).
+//! [`fused_rescale_plan`](super::schedule::fused_rescale_plan).
 
 use atlas_trace::Op;
 

@@ -101,11 +101,12 @@ use crate::onnx_proof::{
         einsum::dot::EinsumDotProver, gather::GatherProver,
         mean_of_squares::MeanOfSquaresReductionProver,
     },
-    plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
+    plan::{Plan, Step},
     range_check::{self, ValueParams, ValueProver},
     relation::{
         op_rel_params, prove_tie, OpRel, OpRelKind, RelationParams, RelationProver, RelationSetup,
     },
+    schedule::{OpOpen, OpRelation},
     trace_view::TraceView,
     ProofId,
 };
@@ -138,13 +139,8 @@ impl OperatorProver {
         F: JoltField,
         T: Transcript,
     {
-        let plan = jolt_atlas_verifier::dispatch_operator!(node, |inner| OpPlan::plan(
-            inner,
-            node,
-            prover.preprocessing.model(),
-            &prover.io
-        ))
-        .expect("the prover's model has a plan for every node");
+        let plan = Plan::of_node(node, prover.preprocessing.model(), &prover.io)
+            .expect("the prover's model has a plan for every node");
         prove_plan(node, prover, plan)
     }
 }

@@ -1,5 +1,5 @@
 use crate::node_view::{ComputationNode, ModelView};
-use crate::onnx_proof::plan::{OpPlan, Plan, Step};
+use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use crate::{
     onnx_proof::{
         ops::OpLayout,
@@ -25,13 +25,11 @@ impl OpPlan for Broadcast {
         node: &ComputationNode,
         model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Tie {
-                relation: broadcast(model, node)?,
-            },
-        ]))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        schedule.reduce();
+        schedule.tie(broadcast(model, node)?);
+        Ok(())
     }
 }
 

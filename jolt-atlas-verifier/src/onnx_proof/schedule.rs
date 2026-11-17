@@ -1,0 +1,494 @@
+//! The verification schedule: what the verifier checks, in transcript order, as data.
+//!
+//! A [`Schedule`] is a list of [`Step`]s over a table of relations ([`OpRelation`]), each
+//! named by its [`RelId`]. An op's [`OpPlan::plan`] writes its node's steps to a
+//! [`ScheduleBuilder`]; [`ScheduleBuilder::finish`] checks that every relation is set up at
+//! most once and verified exactly once, and that no sumcheck is empty.
+//!
+//! A step holds values, never closures. A relation is one variant of [`OpRelation`] per kind
+//! of verifier construction: an op relation ([`OpRel`]), a prefix-suffix table read
+//! ([`TableRead`]), the one-hot checks of a read's addresses ([`RaEncoding`]), and the stages
+//! with their own shape. A tie step names a zero-round [`OpRel`], checked by
+//! [`verify_tie`](super::relation::verify_tie); an open step holds an [`OpOpen`]. A relation
+//! whose parameters depend on earlier claims or on challenges reads and draws them in its
+//! [`SetupRelation::setup`](super::relation::SetupRelation::setup), which runs when the
+//! relation is set up: at its `Setup` step, or at its `Sumcheck` step when it has none.
+
+use crate::node_view::ComputationNode;
+use crate::onnx_proof::{
+    fused_rebase,
+    lookup::{table_read_verifier, RaEncoding, TableRead},
+    ops::{
+        gather::{self, small::GatherSmallShape},
+        softmax_last_axis::{self, SoftmaxOpen, SoftmaxShape},
+    },
+    range_bucket::RangeBucket,
+    range_check::{self, ValueParams},
+    relation::{op_rel_verifier, OpRel},
+    ProofId, ProofType,
+};
+use crate::utils::opening_access::AccOpeningAccessor;
+use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_sumcheck::{
+    opening_proof::{PolynomialId, VerifierOpeningAccumulator},
+    relation::DynRelationVerifier,
+    shout,
+};
+use atlas_trace::{trace::ModelExecutionIO, Model};
+use atlas_transcript::Transcript;
+use common::{CommittedPoly, VirtualPoly};
+
+/// The name of a relation in a schedule: its index in the schedule's relation table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RelId(pub usize);
+
+/// One thing the verifier does.
+#[derive(Clone)]
+pub enum Step {
+    /// Reduce the claims on `node`'s output to one (the node's evaluation reduction).
+    Reduce {
+        /// The node whose output claims are reduced.
+        node: usize,
+    },
+    /// Append advice openings at a stated point; their claims come from the proof.
+    Open(OpOpen),
+    /// Set a relation up (its draws and appends); a later `Sumcheck` verifies it.
+    Setup(RelId),
+    /// Set up each member not yet set up, in order, then verify the members as the one
+    /// sumcheck stored under `proof`.
+    Sumcheck {
+        /// Where the proof stores the sumcheck.
+        proof: ProofId,
+        /// The relations proven, in instance order.
+        members: Vec<RelId>,
+        /// Whether the sumcheck is a batch, which draws a coefficient per instance (even for
+        /// one instance); otherwise it is the sumcheck of its single member's one instance.
+        batched: bool,
+    },
+    /// Check a zero-round relation (an [`OpRel`]): append its openings and require the
+    /// identity to hold.
+    Tie(RelId),
+}
+
+/// A verification schedule: the relations checked and the steps that check them, in transcript
+/// order. Built by a [`ScheduleBuilder`], whose [`finish`](ScheduleBuilder::finish) checks it.
+#[derive(Clone)]
+pub struct Schedule<F: JoltField> {
+    relations: Vec<OpRelation<F>>,
+    steps: Vec<Step>,
+}
+
+impl<F: JoltField> Schedule<F> {
+    /// The steps, in transcript order.
+    pub fn steps(&self) -> &[Step] {
+        &self.steps
+    }
+
+    /// The relations the steps name, indexed by [`RelId`].
+    pub fn relations(&self) -> &[OpRelation<F>] {
+        &self.relations
+    }
+
+    /// The relation `id` names. `Err` if the schedule holds no such relation.
+    pub fn relation(&self, id: RelId) -> Result<&OpRelation<F>, ProofVerifyError> {
+        self.relations
+            .get(id.0)
+            .ok_or_else(|| ProofVerifyError::Malformed(format!("schedule: no relation {}", id.0)))
+    }
+
+    /// The zero-round relation a `Tie` step names. `Err` if `id` does not name an op relation.
+    pub fn tie(&self, id: RelId) -> Result<&OpRel<F>, ProofVerifyError> {
+        match self.relation(id)? {
+            OpRelation::Op(relation) => Ok(relation),
+            _ => Err(ProofVerifyError::Malformed(format!(
+                "schedule: relation {} is tied but is not an op relation",
+                id.0
+            ))),
+        }
+    }
+
+    /// Every relation is the target of at most one `Setup`, and a member of exactly one
+    /// `Sumcheck` or the target of exactly one `Tie`; a `Setup` precedes the `Sumcheck` that
+    /// holds its relation; no `Sumcheck` is empty.
+    fn validate(&self) -> Result<(), ProofVerifyError> {
+        let malformed =
+            |what: String| Err(ProofVerifyError::Malformed(format!("schedule: {what}")));
+        let mut set_up = vec![false; self.relations.len()];
+        let mut verified = vec![false; self.relations.len()];
+        // Mark `id` in `marks`; `Ok(true)` if it was marked already.
+        let mark = |marks: &mut Vec<bool>, id: RelId| match marks.get_mut(id.0) {
+            Some(mark) => Ok(std::mem::replace(mark, true)),
+            None => Err(ProofVerifyError::Malformed(format!(
+                "schedule: no relation {}",
+                id.0
+            ))),
+        };
+        let is_marked = |marks: &[bool], id: RelId| marks.get(id.0).copied().unwrap_or(false);
+        for step in &self.steps {
+            match step {
+                Step::Reduce { .. } | Step::Open(_) => {}
+                Step::Setup(id) => {
+                    if is_marked(&verified, *id) {
+                        return malformed(format!(
+                            "relation {} is set up after it is verified",
+                            id.0
+                        ));
+                    }
+                    if mark(&mut set_up, *id)? {
+                        return malformed(format!("relation {} is set up twice", id.0));
+                    }
+                }
+                Step::Sumcheck { proof, members, .. } => {
+                    if members.is_empty() {
+                        return malformed(format!("the sumcheck {proof:?} has no member"));
+                    }
+                    for id in members {
+                        if mark(&mut verified, *id)? {
+                            return malformed(format!("relation {} is verified twice", id.0));
+                        }
+                    }
+                }
+                Step::Tie(id) => {
+                    self.tie(*id)?;
+                    if is_marked(&set_up, *id) {
+                        return malformed(format!("the tie {} has a setup step", id.0));
+                    }
+                    if mark(&mut verified, *id)? {
+                        return malformed(format!("relation {} is verified twice", id.0));
+                    }
+                }
+            }
+        }
+        match verified.iter().position(|verified| !verified) {
+            Some(id) => malformed(format!("relation {id} is never verified")),
+            None => Ok(()),
+        }
+    }
+}
+
+/// What the per-op plan functions write a schedule to.
+pub struct ScheduleBuilder<F: JoltField> {
+    /// The relations registered so far.
+    pub(crate) relations: Vec<OpRelation<F>>,
+    /// The steps emitted so far.
+    pub(crate) steps: Vec<Step>,
+    /// The table reads set up in their node's turn, in the order registered.
+    pub(crate) lookups: Vec<RelId>,
+    /// The one-hot checks, in the order registered.
+    pub(crate) one_hot: Vec<RelId>,
+    /// The node whose steps are being written.
+    node: usize,
+}
+
+impl<F: JoltField> ScheduleBuilder<F> {
+    /// An empty schedule, writing the steps of node `node`.
+    pub fn at_node(node: usize) -> Self {
+        Self {
+            relations: Vec::new(),
+            steps: Vec::new(),
+            lookups: Vec::new(),
+            one_hot: Vec::new(),
+            node,
+        }
+    }
+
+    fn register(&mut self, relation: OpRelation<F>) -> RelId {
+        self.relations.push(relation);
+        RelId(self.relations.len() - 1)
+    }
+
+    /// The node's evaluation reduction.
+    pub fn reduce(&mut self) {
+        self.steps.push(Step::Reduce { node: self.node });
+    }
+
+    /// Advice openings at a stated point.
+    pub fn open(&mut self, open: OpOpen) {
+        self.steps.push(Step::Open(open));
+    }
+
+    /// `relation`'s sumcheck, stored under the node's `proof` slot: the relation is set up,
+    /// then verified, at this step.
+    pub fn relation(&mut self, proof: ProofType, relation: OpRelation<F>) {
+        let id = self.register(relation);
+        self.steps.push(Step::Sumcheck {
+            proof: ProofId(self.node, proof),
+            members: vec![id],
+            batched: false,
+        });
+    }
+
+    /// Several relations as one batched sumcheck stored under the node's `proof` slot, their
+    /// setups run in list order at this step.
+    pub fn batch(&mut self, proof: ProofType, relations: Vec<OpRelation<F>>) {
+        let members = relations
+            .into_iter()
+            .map(|relation| self.register(relation))
+            .collect();
+        self.steps.push(Step::Sumcheck {
+            proof: ProofId(self.node, proof),
+            members,
+            batched: true,
+        });
+    }
+
+    /// A zero-round relation, checked at this step.
+    pub fn tie(&mut self, relation: OpRel<F>) {
+        let id = self.register(OpRelation::Op(relation));
+        self.steps.push(Step::Tie(id));
+    }
+
+    /// A table read: set up at this step, in its node's turn, and proven with every other
+    /// read in the lookups sumcheck.
+    pub fn lookup(&mut self, relation: OpRelation<F>) {
+        let id = self.register(relation);
+        self.steps.push(Step::Setup(id));
+        self.lookups.push(id);
+    }
+
+    /// A one-hot check of a read's addresses: set up and proven with every other one-hot check
+    /// in the one-hot sumcheck, which runs after the lookups sumcheck has produced the
+    /// read-address claim it reads.
+    pub fn one_hot(&mut self, relation: OpRelation<F>) {
+        let id = self.register(relation);
+        self.one_hot.push(id);
+    }
+
+    /// The schedule written. `Err` unless every relation is set up at most once, before its
+    /// sumcheck, and verified exactly once (by one sumcheck or one tie), and every sumcheck
+    /// has a member.
+    pub fn finish(self) -> Result<Schedule<F>, ProofVerifyError> {
+        let schedule = Schedule {
+            relations: self.relations,
+            steps: self.steps,
+        };
+        schedule.validate()?;
+        Ok(schedule)
+    }
+}
+
+/// An op's verification, written to a schedule.
+pub trait OpPlan {
+    /// Write the steps that verify `node`, from the model and the public IO alone.
+    fn plan<F: JoltField>(
+        &self,
+        node: &ComputationNode,
+        model: &Model,
+        io: &ModelExecutionIO,
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError>;
+}
+
+/// A relation proven by a sumcheck, as a schedule holds it: one variant per kind of verifier
+/// construction.
+#[derive(Clone)]
+pub enum OpRelation<F: JoltField> {
+    /// An op relation.
+    Op(OpRel<F>),
+    /// A prefix-suffix table read: the operand's opening is appended at the read's cycle
+    /// point, then the read-raf relation is set up.
+    TableRead(TableRead),
+    /// The one-hot checks of a read's addresses: two relations (the address polynomial as the
+    /// product of its chunks; the chunks' Booleanity and Hamming weight).
+    OneHot(RaEncoding),
+    /// `GatherSmall`: the Hamming-Booleanity and Booleanity checks of its one-hot `ra`.
+    GatherSmallOneHot(GatherSmallShape),
+    /// `GatherSmall`: the Hamming-weight check of its one-hot `ra`.
+    GatherSmallHammingWeight(GatherSmallShape),
+    /// `SoftmaxLastAxis`: the read of the output, sum and shifted sum tables at the reads'
+    /// point.
+    SoftmaxRead(SoftmaxShape),
+    /// A packed range bucket's value relation: the range claims of its members
+    /// ([`range_bucket::RangeClaim`](crate::onnx_proof::range_bucket::RangeClaim)).
+    RemainderBucketValue(RangeBucket),
+    /// A packed range bucket's digit range check.
+    RemainderBucketDigits(RangeBucket),
+}
+
+impl<F: JoltField> OpRelation<F> {
+    /// The relation's verifiers (one, or the several of a stage or a one-hot check), set up
+    /// against the accumulator and transcript.
+    pub fn verifiers<T: Transcript>(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> Result<Vec<Box<dyn DynRelationVerifier<F, T>>>, ProofVerifyError> {
+        fn boxed<F: JoltField, T: Transcript>(
+            verifier: impl DynRelationVerifier<F, T> + 'static,
+        ) -> Vec<Box<dyn DynRelationVerifier<F, T>>> {
+            vec![Box::new(verifier)]
+        }
+        match self {
+            Self::Op(relation) => Ok(boxed(op_rel_verifier(
+                relation.clone(),
+                accumulator,
+                transcript,
+            )?)),
+            Self::TableRead(read) => Ok(vec![table_read_verifier(read, accumulator, transcript)?]),
+            Self::OneHot(encoding) => {
+                Ok(shout::ra_onehot_verifiers(encoding, accumulator, transcript)?.into())
+            }
+            Self::GatherSmallOneHot(shape) => {
+                let (hamming_booleanity, booleanity) =
+                    gather::small::build_stage2_verifiers(shape, accumulator, transcript)?;
+                Ok(vec![Box::new(hamming_booleanity), Box::new(booleanity)])
+            }
+            Self::GatherSmallHammingWeight(shape) => Ok(boxed(
+                gather::small::build_stage3_verifier(shape, accumulator, transcript)?,
+            )),
+            Self::SoftmaxRead(shape) => Ok(vec![softmax_last_axis::read_verifier(
+                shape.clone(),
+                accumulator,
+                transcript,
+            )?]),
+            Self::RemainderBucketValue(bucket) => Ok(boxed(ValueParams::into_verifier(
+                range_check::remainder_value_params(bucket, accumulator, transcript)?,
+            ))),
+            Self::RemainderBucketDigits(bucket) => Ok(boxed(
+                range_check::remainder_digit_range_params(bucket, accumulator, transcript)?
+                    .into_verifier(),
+            )),
+        }
+    }
+}
+
+/// Advice openings a step appends; the point is stated, the claim is the proof's.
+#[derive(Clone)]
+pub enum OpOpen {
+    /// A fused node's rescale remainder at the reduced output point.
+    RescaleRemainder(ComputationNode),
+    /// A trig op's period quotient at the reduced output point.
+    TrigPeriodQuotient(ComputationNode),
+    /// A trig op's downscaled remainder at the reduced output point.
+    TrigDownscaled(ComputationNode),
+    /// A smooth ReLU's `ReLU(x)` at the reduced output point.
+    SmoothReluRelu(ComputationNode),
+    /// A softmax opening, as `ops::softmax_last_axis` lists them.
+    Softmax(SoftmaxOpen),
+}
+
+impl OpOpen {
+    /// Append the openings.
+    pub fn verify<F: JoltField, T: Transcript>(
+        &self,
+        accumulator: &mut VerifierOpeningAccumulator<F>,
+        transcript: &mut T,
+    ) -> Result<(), ProofVerifyError> {
+        /// Append the node's advice `poly` at its reduced output point.
+        fn at_reduced_output<F: JoltField, T: Transcript, Poly: Into<PolynomialId>>(
+            node: &ComputationNode,
+            accumulator: &mut VerifierOpeningAccumulator<F>,
+            transcript: &mut T,
+            poly: fn(usize) -> Poly,
+        ) -> Result<(), ProofVerifyError> {
+            let accessor = AccOpeningAccessor::new(accumulator, node);
+            let r0 = accessor.get_reduced_opening()?.0;
+            accessor.into_provider(transcript, r0).append_advice(poly)
+        }
+        match self {
+            Self::RescaleRemainder(node) => {
+                at_reduced_output(node, accumulator, transcript, VirtualPoly::RescaleRemainder)
+            }
+            Self::TrigPeriodQuotient(node) => at_reduced_output(
+                node,
+                accumulator,
+                transcript,
+                CommittedPoly::TrigPeriodQuotient,
+            ),
+            Self::TrigDownscaled(node) => {
+                at_reduced_output(node, accumulator, transcript, VirtualPoly::TrigDownscaled)
+            }
+            Self::SmoothReluRelu(node) => {
+                at_reduced_output(node, accumulator, transcript, VirtualPoly::SmoothReluRelu)
+            }
+            Self::Softmax(open) => open.verify(accumulator, transcript),
+        }
+    }
+}
+
+/// The fused-rescale skeleton around an op's arithmetic relation (`Einsum`, `Mul`, `Square`,
+/// `Cube`): the remainder advice, then the arithmetic sumcheck under `proof`, whose input claim
+/// is `out·2^S + rem`. The remainder, and the output unless the node is a model output, are
+/// range-checked in the packed buckets. A node without a rescale (`bits == 0`) proves the
+/// arithmetic relation alone against its reduced output.
+pub fn fused_rescale_plan<F: JoltField>(
+    node: &ComputationNode,
+    proof: ProofType,
+    relation: OpRelation<F>,
+    schedule: &mut ScheduleBuilder<F>,
+) {
+    schedule.reduce();
+    if fused_rebase::rebase_bits(node).is_some_and(|bits| bits > 0) {
+        schedule.open(OpOpen::RescaleRemainder(node.clone()));
+    }
+    schedule.relation(proof, relation);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OpRelation, RelId, ScheduleBuilder, Step};
+    use crate::onnx_proof::{range_bucket::RangeBucket, ProofId, ProofType};
+    use atlas_algebra::field::fp128::Fp128;
+
+    /// A relation that needs no node: an empty bucket's value relation.
+    fn relation() -> OpRelation<Fp128> {
+        OpRelation::RemainderBucketValue(RangeBucket {
+            idx: 0,
+            width: 8,
+            log_t: 0,
+            nodes: Vec::new(),
+        })
+    }
+
+    fn sumcheck(members: Vec<RelId>) -> Step {
+        Step::Sumcheck {
+            proof: ProofId(0, ProofType::Execution),
+            members,
+            batched: true,
+        }
+    }
+
+    /// A builder holding one relation and no step.
+    fn one_relation() -> (ScheduleBuilder<Fp128>, RelId) {
+        let mut builder = ScheduleBuilder::at_node(0);
+        builder.relations.push(relation());
+        (builder, RelId(0))
+    }
+
+    #[test]
+    fn schedule_accepts_a_setup_then_its_sumcheck() {
+        let (mut builder, id) = one_relation();
+        builder.steps = vec![Step::Setup(id), sumcheck(vec![id])];
+        assert!(builder.finish().is_ok());
+    }
+
+    #[test]
+    fn schedule_rejects_a_double_setup() {
+        let (mut builder, id) = one_relation();
+        builder.steps = vec![Step::Setup(id), Step::Setup(id), sumcheck(vec![id])];
+        assert!(builder.finish().is_err());
+    }
+
+    #[test]
+    fn schedule_rejects_a_relation_in_two_sumchecks() {
+        let (mut builder, id) = one_relation();
+        builder.steps = vec![sumcheck(vec![id]), sumcheck(vec![id])];
+        assert!(builder.finish().is_err());
+    }
+
+    #[test]
+    fn schedule_rejects_a_setup_after_its_sumcheck() {
+        let (mut builder, id) = one_relation();
+        builder.steps = vec![sumcheck(vec![id]), Step::Setup(id)];
+        assert!(builder.finish().is_err());
+    }
+
+    #[test]
+    fn schedule_rejects_an_empty_sumcheck_and_an_unverified_relation() {
+        let (mut builder, _) = one_relation();
+        builder.steps = vec![sumcheck(Vec::new())];
+        assert!(builder.finish().is_err());
+        let (builder, _) = one_relation();
+        assert!(builder.finish().is_err());
+    }
+}

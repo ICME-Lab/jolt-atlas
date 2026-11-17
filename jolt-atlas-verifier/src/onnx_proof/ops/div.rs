@@ -1,5 +1,5 @@
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
+use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use crate::{
     node_view::ComputationNode,
     onnx_proof::{
@@ -31,21 +31,16 @@ impl OpPlan for Div {
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
         // The division identity runs before the reduction: it adds a claim on the node's own
         // output (the quotient), which the reduction then folds in.
         // The remainder's bound `0 ≤ rem < right` is proven in the packed range buckets
         // after the node loop (`range_bucket::node_remainders`).
-        Ok(Plan(vec![
-            Step::Relation {
-                proof: ProofType::Execution,
-                relation: OpRelation::Op(division(node)),
-            },
-            Step::Reduce,
-            Step::Tie {
-                relation: division_quotient(node),
-            },
-        ]))
+        schedule.relation(ProofType::Execution, OpRelation::Op(division(node)));
+        schedule.reduce();
+        schedule.tie(division_quotient(node));
+        Ok(())
     }
 }
 

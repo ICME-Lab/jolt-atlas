@@ -206,7 +206,7 @@ fn range_claim_rejects_a_bound_at_another_point() {
 /// `ScalarConstDiv` by a divisor that is not positive is rejected before anything is proven.
 #[test]
 fn scalar_const_div_rejects_a_non_positive_divisor() {
-    use crate::onnx_proof::plan::OpPlan;
+    use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
     let mut b = ModelBuilder::new();
     let x = b.input(vec![8]);
     let out = b.scalar_const_div(x, -3);
@@ -218,6 +218,7 @@ fn scalar_const_div_rejects_a_non_positive_divisor() {
     let atlas_trace::Op::ScalarConstDiv(op) = &node.operator else {
         panic!("the output is a ScalarConstDiv");
     };
-    assert!(op.plan::<Fp128>(&node, &model, &io).is_err());
+    let mut schedule = ScheduleBuilder::<Fp128>::at_node(node.idx);
+    assert!(op.plan(&node, &model, &io, &mut schedule).is_err());
     assert!(range_buckets(&model).is_err());
 }

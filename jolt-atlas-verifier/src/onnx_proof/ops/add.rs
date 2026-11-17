@@ -2,8 +2,8 @@ use crate::node_view::ComputationNode;
 use crate::{
     onnx_proof::{
         ops::OpLayout,
-        plan::{OpPlan, Plan, Step},
         relation::{OpRel, OpRelKind, RelationOpening},
+        schedule::{OpPlan, ScheduleBuilder},
     },
     utils::opening_access::{OpeningIdBuilder, Target},
 };
@@ -30,20 +30,22 @@ impl OpPlan for Add {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(accumulation_plan(node, OpRelKind::AddAccumulation))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        accumulation_plan(node, OpRelKind::AddAccumulation, schedule);
+        Ok(())
     }
 }
 
 /// The plan of `left ± right`: the evaluation reduction, then the tie of the output to the
 /// operands. The output is range-checked in the packed buckets after the node loop.
-pub fn accumulation_plan<F: JoltField>(node: &ComputationNode, kind: OpRelKind) -> Plan<F> {
-    Plan(vec![
-        Step::Reduce,
-        Step::Tie {
-            relation: accumulation(node, kind),
-        },
-    ])
+pub fn accumulation_plan<F: JoltField>(
+    node: &ComputationNode,
+    kind: OpRelKind,
+    schedule: &mut ScheduleBuilder<F>,
+) {
+    schedule.reduce();
+    schedule.tie(accumulation(node, kind));
 }
 
 /// `out = left ± right` as a tie at the output point `r`: no sumcheck, the identity holds at

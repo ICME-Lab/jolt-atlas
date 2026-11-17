@@ -2,10 +2,10 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::OpLayout;
 use crate::{
     onnx_proof::{
-        plan::{OpPlan, OpRelation, Plan, Step},
         relation::{
             Incoming, OpRel, OpRelKind, RelationChallenge, RelationDerived, RelationOpening,
         },
+        schedule::{OpPlan, OpRelation, ScheduleBuilder},
         ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
@@ -49,14 +49,11 @@ impl OpPlan for Rsqrt {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(Plan(vec![
-            Step::Relation {
-                proof: ProofType::Execution,
-                relation: OpRelation::Op(reciprocal_sqrt(node)),
-            },
-            Step::Reduce,
-        ]))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        schedule.relation(ProofType::Execution, OpRelation::Op(reciprocal_sqrt(node)));
+        schedule.reduce();
+        Ok(())
     }
 }
 

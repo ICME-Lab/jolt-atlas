@@ -3,8 +3,8 @@ use crate::{
     onnx_proof::{
         fused_rebase,
         ops::OpLayout,
-        plan::{fused_rescale_plan, OpPlan, OpRelation, Plan},
         relation::{OpRel, OpRelKind, RelationDerived, RelationOpening},
+        schedule::{fused_rescale_plan, OpPlan, OpRelation, ScheduleBuilder},
         ProofType,
     },
     utils::opening_access::{OpeningIdBuilder, Target},
@@ -24,12 +24,15 @@ impl OpPlan for Mul {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(fused_rescale_plan(
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        fused_rescale_plan(
             node,
             ProofType::RescaleArith,
             OpRelation::Op(product(node, OpRelKind::Mul, &[0, 1])),
-        ))
+            schedule,
+        );
+        Ok(())
     }
 }
 

@@ -1,8 +1,7 @@
 use super::*;
-use crate::onnx_proof::deferred_lookups::DeferredBatch;
 use crate::onnx_proof::{
     ops::OpLayout,
-    plan::{OpPlan, OpRelation, Plan, Step},
+    schedule::{OpPlan, OpRelation, ScheduleBuilder},
     ProofType,
 };
 use crate::utils::opening_access::AccOpeningAccessor;
@@ -36,23 +35,14 @@ impl OpPlan for GatherSmall {
         node: &ComputationNode,
         model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
         let shape = GatherSmallShape::for_node(model, node)?;
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Relation {
-                proof: ProofType::Execution,
-                relation: OpRelation::Op(gather(model, node)?),
-            },
-            Step::Defer {
-                batch: DeferredBatch::OneHot,
-                relation: OpRelation::GatherSmallOneHot(shape.clone()),
-            },
-            Step::Defer {
-                batch: DeferredBatch::OneHot,
-                relation: OpRelation::GatherSmallHammingWeight(shape),
-            },
-        ]))
+        schedule.reduce();
+        schedule.relation(ProofType::Execution, OpRelation::Op(gather(model, node)?));
+        schedule.one_hot(OpRelation::GatherSmallOneHot(shape.clone()));
+        schedule.one_hot(OpRelation::GatherSmallHammingWeight(shape));
+        Ok(())
     }
 }
 

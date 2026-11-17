@@ -23,9 +23,8 @@ use crate::onnx_proof::lookup::{small_table, PrefixSuffixTable, SmallTableDef, T
 use crate::onnx_proof::ops::OpLayout;
 use crate::onnx_proof::relation::{OpExpr, RelationOpening};
 use crate::onnx_proof::{
-    deferred_lookups::DeferredBatch,
     ops::activation_clamped::{clamp_read, clamped_activation_committed_polynomials},
-    plan::{OpOpen, OpPlan, OpRelation, Plan, Step},
+    schedule::{OpOpen, OpPlan, OpRelation, ScheduleBuilder},
 };
 use crate::utils::opening_access::OpeningIdBuilder;
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -114,7 +113,8 @@ impl OpPlan for SmoothRelu {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
         if node.scale as usize != MODEL_SCALE {
             return Err(ProofVerifyError::InvalidOpeningProof(format!(
                 "SmoothRelu verifying is only calibrated for MODEL_SCALE={MODEL_SCALE} (got {})",
@@ -131,25 +131,14 @@ impl OpPlan for SmoothRelu {
             },
         );
         let clamp_ra = clamp.ra.clone();
-        let defer = |batch, relation| Step::Defer { batch, relation };
         let def = table_def(self.form);
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Open(OpOpen::SmoothReluRelu(node.clone())),
-            defer(
-                DeferredBatch::Lookups,
-                OpRelation::Op(small_table(node, def)),
-            ),
-            defer(
-                DeferredBatch::OneHot,
-                OpRelation::OneHot(def.ra_encoding(node)),
-            ),
-            defer(DeferredBatch::Lookups, OpRelation::TableRead(clamp)),
-            defer(
-                DeferredBatch::Lookups,
-                OpRelation::TableRead(relu_read(node)),
-            ),
-            defer(DeferredBatch::OneHot, OpRelation::OneHot(clamp_ra)),
-        ]))
+        schedule.reduce();
+        schedule.open(OpOpen::SmoothReluRelu(node.clone()));
+        schedule.lookup(OpRelation::Op(small_table(node, def)));
+        schedule.one_hot(OpRelation::OneHot(def.ra_encoding(node)));
+        schedule.lookup(OpRelation::TableRead(clamp));
+        schedule.lookup(OpRelation::TableRead(relu_read(node)));
+        schedule.one_hot(OpRelation::OneHot(clamp_ra));
+        Ok(())
     }
 }

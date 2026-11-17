@@ -22,6 +22,7 @@ pub mod preprocessing;
 pub mod range_bucket;
 pub mod range_check;
 pub mod relation;
+pub mod schedule;
 pub mod verifier;
 
 // ── Re-exports ───────────────────────────────────────────────────────────

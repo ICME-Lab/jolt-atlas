@@ -8,7 +8,7 @@
 //! accepts only such concats; any other is rejected here.
 
 use crate::node_view::{ComputationNode, ModelView};
-use crate::onnx_proof::plan::{OpPlan, Plan, Step};
+use crate::onnx_proof::schedule::{OpPlan, ScheduleBuilder};
 use crate::utils::dims::{axis_groups, bits_msb_first, pow2_log};
 use crate::{
     onnx_proof::{
@@ -32,13 +32,11 @@ impl OpPlan for Concat {
         node: &ComputationNode,
         model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Tie {
-                relation: subcube_tiling(model, node)?,
-            },
-        ]))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        schedule.reduce();
+        schedule.tie(subcube_tiling(model, node)?);
+        Ok(())
     }
 }
 

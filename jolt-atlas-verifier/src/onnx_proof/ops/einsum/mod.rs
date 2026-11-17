@@ -1,4 +1,4 @@
-use crate::onnx_proof::plan::{fused_rescale_plan, OpPlan, OpRelation, Plan};
+use crate::onnx_proof::schedule::{fused_rescale_plan, OpPlan, OpRelation, ScheduleBuilder};
 use atlas_trace::{op::Einsum, trace::ModelExecutionIO, Model, Op};
 
 use crate::node_view::ComputationNode;
@@ -51,12 +51,15 @@ impl OpPlan for Einsum {
         node: &ComputationNode,
         model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(fused_rescale_plan(
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        fused_rescale_plan(
             node,
             ProofType::EinsumMatmul,
             OpRelation::Op(contraction(model, node)?),
-        ))
+            schedule,
+        );
+        Ok(())
     }
 }
 

@@ -1,9 +1,8 @@
 use super::*;
-use crate::onnx_proof::deferred_lookups::DeferredBatch;
 use crate::onnx_proof::lookup::RaEncoding;
 use crate::onnx_proof::{
     ops::OpLayout,
-    plan::{OpPlan, OpRelation, Plan, Step},
+    schedule::{OpPlan, OpRelation, ScheduleBuilder},
     ProofType,
 };
 use atlas_trace::op::GatherLarge;
@@ -27,18 +26,12 @@ impl OpPlan for GatherLarge {
         node: &ComputationNode,
         model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Relation {
-                proof: ProofType::Execution,
-                relation: OpRelation::Op(gather(model, node)?),
-            },
-            Step::Defer {
-                batch: DeferredBatch::OneHot,
-                relation: OpRelation::OneHot(ra_encoding(node)?),
-            },
-        ]))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        schedule.reduce();
+        schedule.relation(ProofType::Execution, OpRelation::Op(gather(model, node)?));
+        schedule.one_hot(OpRelation::OneHot(ra_encoding(node)?));
+        Ok(())
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
+use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use crate::{
     onnx_proof::{
         relation::{OpRel, OpRelKind, RelationDerived, RelationOpening},
@@ -24,7 +24,8 @@ impl OpPlan for ScalarConstDiv {
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
         // The remainder's bound `0 ≤ rem < divisor` is a range claim in the packed remainder
         // buckets, which have no proof for a bound that is not positive.
         if self.divisor < 1 {
@@ -33,13 +34,12 @@ impl OpPlan for ScalarConstDiv {
                 node.idx, self.divisor
             )));
         }
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Relation {
-                proof: ProofType::Execution,
-                relation: OpRelation::Op(constant_division(node)?),
-            },
-        ]))
+        schedule.reduce();
+        schedule.relation(
+            ProofType::Execution,
+            OpRelation::Op(constant_division(node)?),
+        );
+        Ok(())
     }
 }
 

@@ -1,9 +1,8 @@
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::deferred_lookups::DeferredBatch;
 use crate::onnx_proof::lookup::{PrefixSuffixTable, TableRead};
 use crate::onnx_proof::ops::OpLayout;
-use crate::onnx_proof::plan::{OpPlan, OpRelation, Plan, Step};
 use crate::onnx_proof::relation::RelationOpening;
+use crate::onnx_proof::schedule::{OpPlan, OpRelation, ScheduleBuilder};
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_lookup_tables::clamp::CLAMP_BOUND;
 use atlas_trace::op::Clamp;
@@ -36,7 +35,8 @@ impl OpPlan for Clamp {
         node: &ComputationNode,
         _model: &atlas_trace::Model,
         _io: &atlas_trace::trace::ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
         // The clamp table is the symmetric one at this bound.
         if self.bound_log as usize != CLAMP_BOUND {
             return Err(ProofVerifyError::Malformed(format!(
@@ -46,16 +46,9 @@ impl OpPlan for Clamp {
         }
         let read = read(node);
         let ra = read.ra.clone();
-        Ok(Plan(vec![
-            Step::Reduce,
-            Step::Defer {
-                batch: DeferredBatch::Lookups,
-                relation: OpRelation::TableRead(read),
-            },
-            Step::Defer {
-                batch: DeferredBatch::OneHot,
-                relation: OpRelation::OneHot(ra),
-            },
-        ]))
+        schedule.reduce();
+        schedule.lookup(OpRelation::TableRead(read));
+        schedule.one_hot(OpRelation::OneHot(ra));
+        Ok(())
     }
 }

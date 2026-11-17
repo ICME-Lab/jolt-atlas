@@ -98,7 +98,7 @@ pub mod sum;
 pub mod trig;
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::{plan::OpPlan, Verifier};
+use crate::onnx_proof::{plan::Plan, Verifier};
 use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
 use atlas_sumcheck::sumcheck::SumcheckInstanceProof;
 use atlas_transcript::Transcript;
@@ -211,12 +211,7 @@ impl OperatorVerifier {
         F: JoltField,
         T: Transcript,
     {
-        let plan = dispatch_operator!(node, |inner| OpPlan::plan(
-            inner,
-            node,
-            verifier.preprocessing.model(),
-            verifier.io
-        ))?;
+        let plan = Plan::of_node(node, verifier.preprocessing.model(), verifier.io)?;
         verifier.run_plan(node, plan)
     }
 }

@@ -7,7 +7,8 @@
 use super::{
     deferred_lookups::{self, DeferredBatch, DeferredSetup, DEFERRED_PROOF_IDX},
     ops::eval_reduction::NodeEvalReduction,
-    plan::{OpRelation, Plan, Step},
+    plan::{Plan, Step},
+    schedule::OpRelation,
     AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
 };
 use crate::node_view::ComputationNode;

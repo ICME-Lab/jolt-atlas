@@ -1,8 +1,8 @@
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::{
     ops::{add::accumulation_plan, OpLayout},
-    plan::{OpPlan, Plan},
     relation::OpRelKind,
+    schedule::{OpPlan, ScheduleBuilder},
 };
 use atlas_algebra::utils::errors::ProofVerifyError;
 use atlas_trace::{op::Sub, trace::ModelExecutionIO, Model};
@@ -22,7 +22,9 @@ impl OpPlan for Sub {
         node: &ComputationNode,
         _model: &Model,
         _io: &ModelExecutionIO,
-    ) -> Result<Plan<F>, ProofVerifyError> {
-        Ok(accumulation_plan(node, OpRelKind::SubAccumulation))
+        schedule: &mut ScheduleBuilder<F>,
+    ) -> Result<(), ProofVerifyError> {
+        accumulation_plan(node, OpRelKind::SubAccumulation, schedule);
+        Ok(())
     }
 }

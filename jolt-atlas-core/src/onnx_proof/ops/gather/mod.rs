@@ -5,6 +5,7 @@ use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
     poly::{
+        compact::{LimbTable, UNREDUCED_LOW_VARS},
         eq::EqPolynomial,
         identity::IdentityPolynomial,
         multilinear::{
@@ -246,17 +247,15 @@ pub(crate) fn fold_dictionary<F: JoltField>(
     dictionary: &Tensor<i32>,
     num_words: usize,
 ) -> Vec<F> {
-    let eq = EqPolynomial::evals(r);
-
+    // eq(r, ·) as eq_high ⊗ eq_low: each word vector is summed against the low table in
+    // integer limbs, run by run, and a run of zeros (the padded words, mostly) is skipped.
+    let low_vars = r.len().min(UNREDUCED_LOW_VARS);
+    let (r_high, r_low) = r.split_at(r.len() - low_vars);
+    let eq_high = EqPolynomial::evals(r_high);
+    let table = LimbTable::new(&EqPolynomial::evals(r_low));
     let mut folded: Vec<F> = dictionary
-        .par_chunks(eq.len())
-        .map(|word_vector| {
-            word_vector
-                .iter()
-                .zip(eq.iter())
-                .map(|(&word_coeff, &e)| F::from_i32(word_coeff) * e)
-                .sum()
-        })
+        .par_chunks(1 << r.len())
+        .map(|word_vector| table.split_sum(word_vector, &eq_high))
         .collect();
     folded.resize(num_words, F::zero());
     folded

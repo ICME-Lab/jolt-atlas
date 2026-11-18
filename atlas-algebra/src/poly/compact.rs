@@ -388,6 +388,15 @@ pub fn split_eq_sum_unreduced<T: SmallScalar, F: JoltField>(
 /// The fewest runs a task of [`split_eq_sum_unreduced`] takes.
 const RUNS_PER_TASK: usize = 16;
 
+/// Whether every value is zero: one branch-free pass the compiler vectorizes, in blocks that
+/// stop at the first block holding a value.
+#[inline]
+fn all_zero(values: &[i32]) -> bool {
+    values
+        .chunks(64)
+        .all(|block| block.iter().fold(0, |acc, &v| acc | v) == 0)
+}
+
 /// `Σ_i values[i]·limbs[k][i]` in `i64` for each limb `k`: one pass over the values with
 /// widening multiply-adds of `i32` lanes. Every `limbs[k]` is at least as long as `values`.
 #[inline]
@@ -499,16 +508,28 @@ impl<F: JoltField> LimbTable<F> {
         }
     }
 
+    /// `Σ_j eq_high[j]·self.sum(row[j·L..(j+1)·L])` with `L` the table's length: a row
+    /// weighted by `eq_high ⊗ weights`. `row.len()` must be `eq_high.len()·L`.
+    #[inline]
+    pub fn split_sum<T: SmallScalar>(&self, row: &[T], eq_high: &[F]) -> F {
+        debug_assert_eq!(row.len(), eq_high.len() * self.weights.len());
+        row.chunks_exact(self.weights.len())
+            .zip(eq_high)
+            .fold(F::zero(), |acc, (run, &high)| acc + high * self.sum(run))
+    }
+
     /// `Σ_i weights[i]·run[i]` for scalars of at most 32 bits, reduced once. A run of values
     /// that are all `i32` ([`SmallScalar::narrow_i32`]) is summed limb by limb: each product
     /// of a value and a limb is below `2^53` in magnitude, so a run of at most
-    /// `2^UNREDUCED_LOW_VARS` sums into an `i64` per limb exactly. Other runs are summed into
-    /// an unreduced field accumulator.
+    /// `2^UNREDUCED_LOW_VARS` sums into an `i64` per limb exactly. A run of `i32` zeros (the
+    /// padding of a weight matrix, mostly) costs the one pass that finds it zero. Other runs
+    /// are summed into an unreduced field accumulator.
     #[inline]
     pub fn sum<T: SmallScalar>(&self, run: &[T]) -> F {
         debug_assert!(run.len() <= self.weights.len());
         if !self.limbs.is_empty() && run.first().is_some_and(|v| v.narrow_i32().is_some()) {
             let acc = match T::as_i32_slice(run) {
+                Some(values) if all_zero(values) => return F::zero(),
                 Some(values) => limb_dots(values, &self.limbs),
                 None => {
                     let mut buffer = [0i32; 1 << UNREDUCED_LOW_VARS];
@@ -596,8 +617,8 @@ mod tests {
     }
 
     /// A limb table's sums are the field's, for `i32` runs (summed limb by limb, the extreme
-    /// values and every limb's top bit included), for a type copied into `i32`s, for a type
-    /// that is not, and for a run shorter than the table.
+    /// values and every limb's top bit included), for runs of zeros, for a type copied into
+    /// `i32`s, for a type that is not, for a run shorter than the table, and over a row.
     #[test]
     fn limb_sums_are_the_field_sums() {
         let weights: Vec<Fp128> = (0..512u128)
@@ -622,6 +643,18 @@ mod tests {
         assert_eq!(
             table.sum(&signed[..101]),
             field_sum(&as_i64(&signed[..101]))
+        );
+        // A run of zeros, and one whose only value is past the first zero-checked block.
+        let mut sparse = vec![0i32; 512];
+        assert_eq!(table.sum(&sparse), Fp128::from(0u128));
+        sparse[511] = -7;
+        assert_eq!(table.sum(&sparse), field_sum(&as_i64(&sparse)));
+        // A row weighted by eq_high ⊗ weights.
+        let eq_high = [Fp128::from(3u128), -Fp128::from(5u128)];
+        let row: Vec<i32> = signed.iter().chain(&sparse).copied().collect();
+        assert_eq!(
+            table.split_sum(&row, &eq_high),
+            eq_high[0] * field_sum(&as_i64(&signed)) + eq_high[1] * field_sum(&as_i64(&sparse))
         );
         let bytes: Vec<u8> = (0..512).map(|i| (i * 31 % 251) as u8).collect();
         let wide: Vec<i64> = bytes.iter().map(|&b| b as i64).collect();

@@ -48,10 +48,7 @@ impl<F: JoltField> EinsumFold<F> for MkKnMnLayout {
             .into_par_iter()
             .map(|j| {
                 let row = &right_data[j * n..(j + 1) * n];
-                row.chunks_exact(eq_low.len())
-                    .zip(&eq_high)
-                    .map(|(run, &high)| high * table.sum(run))
-                    .sum()
+                table.split_sum(row, &eq_high)
             })
             .collect();
         Folded {

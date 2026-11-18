@@ -110,10 +110,12 @@ Timings are comparable only between commits measured on the same machine in the 
 
 The remote gives huge pages only to memory that asks for them
 (`/sys/kernel/mm/transparent_hugepage/enabled` is `madvise`), and the prover streams over
-multi-gigabyte buffers. `GLIBC_TUNABLES=glibc.malloc.hugetlb=1` in front of a `prove` run makes
-the allocator ask: measured on 2026-11-18, Qwen 9.6 s to 7.5 s and GPT-2 3.1 s to 2.6 s on 16
-cores and Qwen 5.8 s to 4.9 s on 32, with up to 10% more peak memory and verify unchanged. `bench/gate.sh` does not set it, so compare
-runs with it only against runs with it. It has no effect on macOS.
+multi-gigabyte buffers. The `prove` example's global allocator, `common::huge_pages::HugePages`,
+asks for them on every allocation of 2 MiB or more: measured on 2026-11-18 on 32 cores, Qwen
+3.36 s to 2.77 s and GPT-2 1.34 s to 1.16 s, verify unchanged. `GLIBC_TUNABLES=glibc.malloc.hugetlb=1`,
+which makes malloc ask for every allocation, adds about 2% on Qwen. A `bench/gate.sh` run
+between a commit from before the allocator and one after it measures the allocator too. It has
+no effect on macOS.
 
 ## Architecture
 

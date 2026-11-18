@@ -487,6 +487,10 @@ fn run(shared: AtlasSharedPreprocessing, inputs: &[Tensor<i32>]) {
     println!("Proof verified successfully!");
 }
 
+/// Large buffers on huge pages where the kernel gives them only on request.
+#[global_allocator]
+static ALLOC: common::huge_pages::HugePages = common::huge_pages::HugePages;
+
 fn main() {
     let args = parse_args();
     let (_guard, _) = setup_tracing("jolt-atlas prove");

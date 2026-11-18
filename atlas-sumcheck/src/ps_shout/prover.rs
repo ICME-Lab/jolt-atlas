@@ -175,7 +175,6 @@ where
         self.params.rounds()
     }
 
-    #[tracing::instrument(skip_all, name = "InstructionReadRafSumcheckProver::prove_round")]
     fn prove_round(
         &mut self,
         bind: Option<F>,
@@ -385,7 +384,6 @@ impl<F: JoltField, LUT, const LOG_K: usize> ReadRafSumcheckProver<F, LUT, LOG_K>
 where
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
 {
-    #[tracing::instrument(skip_all, name = "InstructionReadRafSumcheckProver::bind")]
     fn bind(&mut self, r: F, round: usize) {
         let r_j = F::challenge_from_field(r);
         let log_m = LOG_K / self.phases;

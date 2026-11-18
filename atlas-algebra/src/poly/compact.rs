@@ -77,7 +77,6 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
         !self.bound_coeffs.is_empty()
     }
 
-    #[tracing::instrument(skip_all, name = "CompactPolynomial::bind")]
     fn bind(&mut self, r: F::Challenge, order: BindingOrder) {
         let n = self.len() / 2;
         if self.is_bound() {
@@ -154,7 +153,6 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
         self.len = n;
     }
 
-    #[tracing::instrument(skip_all, name = "CompactPolynomial::bind")]
     fn bind_parallel(&mut self, r: F::Challenge, order: BindingOrder) {
         let n = self.len() / 2;
         if self.is_bound() {

@@ -85,7 +85,6 @@ impl<F: JoltField> DensePolynomial<F> {
 
     /// Bounds the polynomial's most significant index bit to 'r' optimized for a
     /// high P(eval = 0).
-    #[tracing::instrument(skip_all)]
     pub fn bound_poly_var_top_zero_optimized(&mut self, r: &F::Challenge) {
         let n = self.len() / 2;
 
@@ -104,7 +103,6 @@ impl<F: JoltField> DensePolynomial<F> {
     }
 
     /// Note: does not truncate
-    #[tracing::instrument(skip_all)]
     pub fn bound_poly_var_bot(&mut self, r: &F::Challenge) {
         let n = self.len() / 2;
         for i in 0..n {

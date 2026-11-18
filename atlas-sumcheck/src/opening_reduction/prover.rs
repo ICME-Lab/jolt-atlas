@@ -169,7 +169,6 @@ pub struct DensePolynomialProverOpening<F: JoltField> {
 }
 
 impl<F: JoltField> DensePolynomialProverOpening<F> {
-    #[tracing::instrument(skip_all, name = "DensePolynomialProverOpening::compute_message")]
     pub fn compute_message(
         &mut self,
         _round: usize,
@@ -189,7 +188,6 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
         message
     }
 
-    #[tracing::instrument(skip_all, name = "DensePolynomialProverOpening::bind")]
     pub fn bind(&mut self, r_j: F::Challenge, round: usize) {
         // A lock held by another member means that member is binding it this round
         // ([`ProveRounds::bind_shared`]): leave it to that member.
@@ -301,7 +299,6 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
             .collect();
     }
 
-    #[tracing::instrument(skip_all, name = "OneHotPolynomialProverOpening::compute_message")]
     pub fn compute_message(
         &mut self,
         round: usize,
@@ -414,7 +411,6 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
     }
 
     /// Bind the member's own state, after [`Self::bind_shared`] of the same round.
-    #[tracing::instrument(skip_all, name = "OneHotPolynomialProverOpening::bind")]
     pub fn bind(&mut self, r: F::Challenge, round: usize) {
         let shared_eq_address = self.eq_address_state.read().unwrap();
         let log_K = self.K.log_2();

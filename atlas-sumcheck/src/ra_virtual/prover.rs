@@ -72,7 +72,6 @@ impl<F: JoltField> RelationWitness<F> for RaSumcheckProver<F> {
 }
 
 impl<F: JoltField> RaSumcheckProver<F> {
-    #[tracing::instrument(skip_all, name = "RaSumcheckProver::bind")]
     fn bind(&mut self, r: F) {
         let r_j = F::challenge_from_field(r);
         self.ra_i_polys
@@ -87,7 +86,6 @@ impl<F: JoltField> ProveRounds<F> for RaSumcheckProver<F> {
         self.relation.rounds()
     }
 
-    #[tracing::instrument(skip_all, name = "RaSumcheckProver::prove_round")]
     fn prove_round(
         &mut self,
         bind: Option<F>,

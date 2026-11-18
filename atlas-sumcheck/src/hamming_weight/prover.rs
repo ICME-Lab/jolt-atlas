@@ -79,7 +79,6 @@ impl<F: JoltField> HammingWeightSumcheckProver<F> {
         UnivariatePoly::from_evals_and_hint(previous_claim, &[eval_at_0])
     }
 
-    #[tracing::instrument(skip_all, name = "HammingWeightSumcheckProver::bind", fields(variant = ?self.relation.sumcheck_id()))]
     fn bind(&mut self, r: F, _round: usize) {
         let r_j = F::challenge_from_field(r);
         self.ra

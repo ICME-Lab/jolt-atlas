@@ -65,7 +65,6 @@ impl<F: JoltField> RelationWitness<F> for HammingBooleanitySumcheckProver<F> {
 }
 
 impl<F: JoltField> HammingBooleanitySumcheckProver<F> {
-    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::bind", fields(variant = ?self.relation.sumcheck_id()))]
     fn bind(&mut self, r: F) {
         let r_j = F::challenge_from_field(r);
         self.hw
@@ -81,7 +80,6 @@ impl<F: JoltField> ProveRounds<F> for HammingBooleanitySumcheckProver<F> {
         self.relation.rounds()
     }
 
-    #[tracing::instrument(skip_all, name = "HammingBooleanitySumcheckProver::prove_round", fields(variant = ?self.relation.sumcheck_id()))]
     fn prove_round(
         &mut self,
         bind: Option<F>,

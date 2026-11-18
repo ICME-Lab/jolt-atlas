@@ -107,9 +107,12 @@ relations as members (several, over a size budget). `Schedule::validate` checks 
 compiled schedule, from the steps themselves, that no claim is appended on a node's output
 after that node's reduction.
 
-The steps: `Reduce` is a node's evaluation reduction; `Point` takes a digit-backed node's
-output claim at a point drawn at that step, which the node's relation runs on and its bucket's
-value sumcheck checks together with every claim the node's consumers append; `Open` appends advice openings at a
+The steps: `Reduce` is a node's evaluation reduction; `Draw` draws the point a digit-backed
+node's output is opened at, and a wave draws the points of all its digit-backed nodes before
+any of their claims (the outputs are committed before any point is drawn, so a claim at one
+point is fixed whatever the others are); `Point` takes the node's output claim at that point,
+which the node's relation runs on and its bucket's value sumcheck checks together with every
+claim the node's consumers append; `Open` appends advice openings at a
 stated point (`OpOpen`); `Setup` runs a relation's setup (its draws and appends) and leaves it
 to a later sumcheck; `Sumcheck` sets up each member not yet set up, in order, then verifies
 the members as one sumcheck (one relation's sumcheck, or a batch, which draws a coefficient

@@ -108,6 +108,13 @@ scripts/remote.sh fetch bench/runs/gate                 # copy the raw logs back
 Timings are comparable only between commits measured on the same machine in the same session;
 `docs/prover-plan.md`'s tables are from an M3 and are not comparable to the remote's.
 
+The remote gives huge pages only to memory that asks for them
+(`/sys/kernel/mm/transparent_hugepage/enabled` is `madvise`), and the prover streams over
+multi-gigabyte buffers. `GLIBC_TUNABLES=glibc.malloc.hugetlb=1` in front of a `prove` run makes
+the allocator ask: measured on 2026-11-18, Qwen 9.6 s to 7.5 s and GPT-2 3.1 s to 2.6 s, with
+up to 10% more peak memory and verify unchanged. `bench/gate.sh` does not set it, so compare
+runs with it only against runs with it. It has no effect on macOS.
+
 ## Architecture
 
 ### Crate Map
@@ -180,7 +187,8 @@ Workspace members, in dependency order:
   parameter and no format of its own, and `onnx_proof` — the verification schedule (`schedule.rs`: a
   model's `Schedule` of `Step`s over relation values, compiled from the model alone by
   `Schedule::compile` when the preprocessing is constructed; each op's `OpPlan::plan` writes
-  its node's steps to a `ScheduleBuilder`, the only way an op is verified; the committed
+  its node's steps to a `ScheduleBuilder`, the only way an op is verified, and the steps run
+  in waves of ready nodes with one batched sumcheck per wave; the committed
   polynomials are `Schedule::committed`), the one op
   relation type (`relation.rs`: `OpRel`, a value each op builds with a constructor function
   in its `ops` module; `OpRelKind` names the relation and the ops it may serve), the table

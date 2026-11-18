@@ -4,8 +4,8 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-16                     |
-| Status      | proposed                       |
-| PR          |                                |
+| Status      | implemented (stage 1)          |
+| PR          | `dev` at `e71dbf772`           |
 | Depends on  | `specs/one-range-check.md`, `specs/one-clamp.md` |
 | Supersedes  | `docs/prover-plan.md` §3 item 9 |
 
@@ -15,6 +15,29 @@ truth for current behavior, and nobody updates old specs when the code moves on.
 
 This spec describes a program of three stages and is implementable for stage 1 only. Stages 2
 and 3 are stated so that stage 1 is built toward them; each gets its own spec before it starts.
+
+## As built (stage 1, 2026-11-18)
+
+Stage 1 landed on `dev` as one commit, against the code as it then stood: the files this spec
+names `plan.rs`, `global_clamp.rs` and `clamp_split.rs` are `schedule.rs`, `range_bucket.rs`
+and `range_check.rs`. Stage 2 is `specs/wave-schedule.md`.
+
+- No op plan changed. Every plan asks its `ScheduleBuilder` for the claim its relation runs
+  on (`reduce()`), and the builder writes `Step::Point` for a digit-backed node
+  (`range_bucket::is_digit_backed`) and `Step::Reduce` for any other.
+- A bucket's members are `RangeBucket::members`: a segment's own claim, and for an output
+  segment every claim the accumulator holds on the node's output
+  (`OpeningAccumulator::node_output_claims`). `CycleWeight::Packed` adds the weights of
+  members on one segment.
+- The proof is a stream, so there is no evaluation-reduction entry to insert: invariant C's
+  `mutate::Site` has no counterpart. A digit-backed node has no `Reduce` step, which
+  `digit_backed_nodes_take_a_point_and_no_reduction` checks over the zoo.
+- Not done: the three-consumer member-count test of invariant E, the explicit drain check of
+  invariant A (the members are every claim held when the value sumcheck is set up; the
+  forgery sweep passes), and the heavy real-model job.
+- Measured (`bench/gate.sh`, medians of three): Qwen prove 10.98 s to 10.90 s, GPT-2 3.60 s
+  to 3.59 s; the sumcheck stage fell 4 to 7%, and the openings stage read 1 to 8% higher,
+  which back-to-back runs attribute to memory layout, not to work.
 
 ## Summary
 

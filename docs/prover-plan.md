@@ -303,6 +303,29 @@ checks that.
 | `one-clamp` | decision 2; item 4 reduces to widths below 32 bits |
 | `stream-proof` | the proof is the transcript; the verifier walks one schedule (no item) |
 | `bitz-commitment` | decision 1: BitZ replaces Akita; item 8 and the `akita-*` bump are dropped; the digit-range and Booleanity sumchecks are gone |
+| `digits-as-trace` stage 1 | 9: a digit-backed output's claims are checked against its digits, at a point of the node's own |
+| `wave-schedule` | 9, stage 2: the schedule runs in waves, one batched sumcheck per wave (9 sumchecks for GPT-2 and for Qwen) |
+
+**Measured on the benchmark machine, 2026-11-18** (`bench/gate.sh`, 16 tokens, medians of
+three; the table and the route below are from 2026-11-17 and are kept as written):
+
+| | GPT-2 | Qwen |
+|---|---|---|
+| prove | 3.26 s | 10.20 s |
+| trace execution | about 0.45 s | about 1.4 s |
+| commit | 0.25 s | 0.83 s |
+| sumchecks (`iop`) | 1.20 s | 3.44 s |
+| openings | 1.37 s | 4.41 s |
+| verify | 0.34 s | 1.04 s |
+
+What moved since the 9.1 s table: the tracer's einsum and constants (route step 2), the
+opening reduction (step 4, now about 0.2 s on GPT-2), the grand product's field arithmetic
+(part of step 3), the cached activation tables, and the two specs above (step 7's first
+half). Qwen is profiled (step 1) and is in the gate by hand (`--model models/qwen`).
+Huge pages for the allocator are worth a further 17 to 22% on Linux and are not in these
+numbers (`CLAUDE.md`, "Remote runs"). What is left, largest first on Qwen: the BitZ grand
+product (about 2.7 s), the serial per-node steps between waves (about 1.2 s, over half of it
+lookup witness setup), the op batches (1.3 s) and the bucket-value batch (0.7 s).
 
 `bitz-commitment` took GPT-2 from 24.4 s to 9.1 s on the benchmark machine
 (`docs/measurement-plan.md`).

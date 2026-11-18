@@ -4,14 +4,37 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-18                     |
-| Status      | proposed                       |
-| PR          |                                |
+| Status      | implemented                    |
+| PR          | `dev` at `568b3dcc7`           |
 | Depends on  | `specs/digits-as-trace.md` stage 1 |
 | Supersedes  | `specs/digits-as-trace.md` stage 2 (the statement of it; this is its spec) |
 
 Status is `proposed` until the implementation merges, then `implemented`. A spec is frozen at
 merge: it records what was decided and why at that point in time. The code is the source of
 truth for current behavior, and nobody updates old specs when the code moves on.
+
+## As built (2026-11-18)
+
+- `Schedule::compile` runs every plan, then `waves` writes the steps. GPT-2 and Qwen each have
+  9 sumchecks in all, the three post-loop batches included (311 and 756 in the node walk
+  before).
+- `Schedule::validate` rejects a claim appended on a node's output after that node's
+  `Reduce`, from `OpRelation::appended_outputs`; `schedule_rejects_a_reduction_before_a_
+  consumer_claim` moves a reduction forward by hand and sees the rejection.
+- The budget counts rows (`Σ 2^rounds` over op relations, `WAVE_BUDGET = 2^24`), not rows times
+  wires; a relation that is not an op relation is a sumcheck of its own. The budget is a
+  constant, so the one-member-per-batch test of the criteria is not written.
+- The prover builds op-relation witnesses of a batch in parallel, except a gather's and a
+  small-table read's, which read the accumulator. Ties are not computed in lockstep.
+- A digit-backed node may receive a consumer's claim after its own `Point`; the accumulators
+  record such nodes (`own_points`) for the test-only ordering assertion.
+- Measured (`bench/gate.sh`, medians of three, against `5b08e87b3`): the sumcheck stage is
+  3.44 s on Qwen (75% of 4.57 s) and 1.20 s on GPT-2 (71% of 1.68 s), above the 70% bound;
+  prove is 10.20 s and 3.26 s (7% and 10% lower), verify 5% lower, peak memory 4 to 11% lower.
+  The gate flags the openings stage at 6 to 9% higher; back-to-back runs show the same
+  grand-product time for both builds. The parallel witness build gained under 2%: what remains
+  is the serial steps between waves, the op batches and the bucket-value batch.
+- Not done: the heavy real-model job, the exhaustive soundness run, the two-chain probe model.
 
 ## Summary
 

@@ -98,7 +98,18 @@ the verifier's preprocessing is constructed and held there; `verify` does no pla
 model's schedule, one line per step, and `testing/schedules.rs` pins a hash of that text for
 the checked-in models.
 
-The steps: `Reduce` is a node's evaluation reduction; `Open` appends advice openings at a
+The schedule is written in waves. Each op's plan is a list of steps for its node; a node is
+*ready* when every consumer of its output has run all its steps, or at once when it is
+*digit-backed* (its output is a range-bucket member, so its claims are checked against the
+committed digits and it waits for no consumer). A wave writes the ready nodes' steps up to
+each one's next sumcheck, then those sumchecks as one batched sumcheck with the nodes'
+relations as members (several, over a size budget). `Schedule::validate` checks on every
+compiled schedule, from the steps themselves, that no claim is appended on a node's output
+after that node's reduction.
+
+The steps: `Reduce` is a node's evaluation reduction; `Point` takes a digit-backed node's
+output claim at a point drawn at that step, which the node's relation runs on and its bucket's
+value sumcheck checks together with every claim the node's consumers append; `Open` appends advice openings at a
 stated point (`OpOpen`); `Setup` runs a relation's setup (its draws and appends) and leaves it
 to a later sumcheck; `Sumcheck` sets up each member not yet set up, in order, then verifies
 the members as one sumcheck (one relation's sumcheck, or a batch, which draws a coefficient

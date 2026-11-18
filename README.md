@@ -73,17 +73,17 @@ GPT-2 is a 125-million-parameter transformer model from OpenAI.
 
 | Stage | Wall clock |
 | ----- | ---------- |
-| Witness + commitment phase (`commit_witness_polynomials`) | 0.26 s |
-| IOP proving (`iop`) | 2.35 s |
-| Opening reduction sumcheck + BitZ opening (`prove_reduced_openings`) | 2.86 s |
-| Proof time (`prove`) | 9.07 s |
-| Verify time (`verify`) | 1.10 s |
+| Witness + commitment phase (`commit_witness_polynomials`) | 0.25 s |
+| IOP proving (`iop`) | 1.20 s |
+| Opening reduction sumcheck + BitZ opening (`prove_reduced_openings`) | 1.37 s |
+| Proof time (`prove`) | 3.26 s |
+| Verify time (`verify`) | 0.34 s |
 
 Medians of three `--trace-terminal` runs at 16 tokens on a 16-core arm64 machine (AWS
-c7g.4xlarge, 30 GB), from `bench/gate.sh`; the proof is 1.47 MiB and peak memory 5.8 GB. The
-rest of the proof time is trace execution and witness generation. The last commit on the
-Akita lattice scheme (tag `akita-last`) proved the same model in 24.4 s on the same machine
-(commit 7.3 s, openings 9.7 s), with a 1.27 MiB proof and 14.4 GB peak memory.
+c7g.4xlarge, 30 GB), from `bench/gate.sh`; the proof is 1.33 MiB (9 sumcheck proofs) and peak
+memory 3.2 GB. The rest of the proof time is trace execution. The last commit on the Akita
+lattice scheme (tag `akita-last`) proved the same model in 24.4 s on the same machine (commit
+7.3 s, openings 9.7 s), with a 1.27 MiB proof and 14.4 GB peak memory.
 
 ### How to reproduce locally
 

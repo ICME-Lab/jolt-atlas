@@ -117,22 +117,17 @@ impl<F: JoltField> DensePolynomial<F> {
 
     pub fn bound_poly_var_bot_01_optimized(&mut self, r: &F::Challenge) {
         let n = self.len() / 2;
-        let mut bound_Z = Vec::with_capacity(n);
-        (bound_Z.spare_capacity_mut(), self.Z.par_chunks_exact(2))
-            .into_par_iter()
-            .with_min_len(par_enabled_with(512))
-            .for_each(|(bound_coeff, coeffs)| {
-                let m = coeffs[1] - coeffs[0];
-                bound_coeff.write(if m.is_zero() {
-                    coeffs[0]
-                } else if m.is_one() {
-                    coeffs[0] + *r
-                } else {
-                    coeffs[0] + *r * m
-                });
-            });
-        unsafe { bound_Z.set_len(n) };
-        self.Z = bound_Z;
+        super::fold::fold_pairs_in_place(&mut self.Z[..2 * n], |low, high| {
+            let m = high - low;
+            if m.is_zero() {
+                low
+            } else if m.is_one() {
+                low + *r
+            } else {
+                low + *r * m
+            }
+        });
+        self.Z.truncate(n);
         self.num_vars -= 1;
         self.len = n;
     }

@@ -1,6 +1,7 @@
 pub mod compact;
 pub mod dense;
 pub mod eq;
+pub mod fold;
 pub mod identity;
 pub mod lagrange;
 pub mod multilinear;

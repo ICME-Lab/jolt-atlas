@@ -160,22 +160,17 @@ impl<T: SmallScalar, F: JoltField> PolynomialBinding<F> for CompactPolynomial<T,
         if self.is_bound() {
             match order {
                 BindingOrder::LowToHigh => {
-                    let mut bound_coeffs = Vec::with_capacity(n);
-                    (
-                        bound_coeffs.spare_capacity_mut(),
-                        self.bound_coeffs.par_chunks_exact(2),
-                    )
-                        .into_par_iter()
-                        .with_min_len(par_enabled_with(512))
-                        .for_each(|(bound_coeff, coeffs)| {
-                            bound_coeff.write(if coeffs[1] == coeffs[0] {
-                                coeffs[0]
+                    super::fold::fold_pairs_in_place(
+                        &mut self.bound_coeffs[..2 * n],
+                        |low, high| {
+                            if high == low {
+                                low
                             } else {
-                                (coeffs[1] - coeffs[0]) * r + coeffs[0]
-                            });
-                        });
-                    unsafe { bound_coeffs.set_len(n) };
-                    self.bound_coeffs = bound_coeffs;
+                                (high - low) * r + low
+                            }
+                        },
+                    );
+                    self.bound_coeffs.truncate(n);
                 }
                 BindingOrder::HighToLow => {
                     let (left, right) = self.bound_coeffs.split_at_mut(n);

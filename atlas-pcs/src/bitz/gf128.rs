@@ -405,66 +405,58 @@ mod neon {
     }
 
     /// The carry-less product of the low halves.
-    #[inline(always)]
-    unsafe fn clmul_low(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
-        // SAFETY: the caller has `PMULL`.
-        unsafe { vreinterpretq_u64_p128(vmull_p64(vgetq_lane_u64(a, 0), vgetq_lane_u64(b, 0))) }
+    #[inline]
+    #[target_feature(enable = "neon,aes")]
+    fn clmul_low(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
+        vreinterpretq_u64_p128(vmull_p64(vgetq_lane_u64(a, 0), vgetq_lane_u64(b, 0)))
     }
 
     /// The carry-less product of the high halves.
-    #[inline(always)]
-    unsafe fn clmul_high(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
-        // SAFETY: the caller has `PMULL`.
-        unsafe {
-            vreinterpretq_u64_p128(vmull_high_p64(
-                vreinterpretq_p64_u64(a),
-                vreinterpretq_p64_u64(b),
-            ))
-        }
+    #[inline]
+    #[target_feature(enable = "neon,aes")]
+    fn clmul_high(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
+        vreinterpretq_u64_p128(vmull_high_p64(
+            vreinterpretq_p64_u64(a),
+            vreinterpretq_p64_u64(b),
+        ))
     }
 
     /// The unreduced product as `(high 128 bits, low 128 bits)`, by Karatsuba.
-    #[inline(always)]
-    unsafe fn wide(a: uint64x2_t, b: uint64x2_t) -> (uint64x2_t, uint64x2_t) {
-        // SAFETY: the caller has `PMULL`.
-        unsafe {
-            let zero = vdupq_n_u64(0);
-            let (low, high) = (clmul_low(a, b), clmul_high(a, b));
-            let cross = clmul_low(
-                veorq_u64(a, vextq_u64(a, a, 1)),
-                veorq_u64(b, vextq_u64(b, b, 1)),
-            );
-            let mid = veorq_u64(veorq_u64(cross, low), high);
-            (
-                veorq_u64(high, vextq_u64(mid, zero, 1)),
-                veorq_u64(low, vextq_u64(zero, mid, 1)),
-            )
-        }
+    #[inline]
+    #[target_feature(enable = "neon,aes")]
+    fn wide(a: uint64x2_t, b: uint64x2_t) -> (uint64x2_t, uint64x2_t) {
+        let zero = vdupq_n_u64(0);
+        let (low, high) = (clmul_low(a, b), clmul_high(a, b));
+        let cross = clmul_low(
+            veorq_u64(a, vextq_u64(a, a, 1)),
+            veorq_u64(b, vextq_u64(b, b, 1)),
+        );
+        let mid = veorq_u64(veorq_u64(cross, low), high);
+        (
+            veorq_u64(high, vextq_u64(mid, zero, 1)),
+            veorq_u64(low, vextq_u64(zero, mid, 1)),
+        )
     }
 
     /// `high · x^128 + low` modulo `x^128 + x^7 + x^2 + x + 1`: the high half of `high`
     /// times `x^7 + x^2 + x + 1` lands on bit 64 and overflows by seven bits, which join the
     /// low half of `high` for the second multiplication.
-    #[inline(always)]
-    unsafe fn reduce(high: uint64x2_t, low: uint64x2_t) -> uint64x2_t {
-        // SAFETY: the caller has `PMULL`.
-        unsafe {
-            let zero = vdupq_n_u64(0);
-            let modulus = vdupq_n_u64(0x87);
-            let upper = clmul_high(high, modulus);
-            let low = veorq_u64(low, vextq_u64(zero, upper, 1));
-            let rest = veorq_u64(high, vextq_u64(upper, zero, 1));
-            veorq_u64(low, clmul_low(rest, modulus))
-        }
+    #[inline]
+    #[target_feature(enable = "neon,aes")]
+    fn reduce(high: uint64x2_t, low: uint64x2_t) -> uint64x2_t {
+        let zero = vdupq_n_u64(0);
+        let modulus = vdupq_n_u64(0x87);
+        let upper = clmul_high(high, modulus);
+        let low = veorq_u64(low, vextq_u64(zero, upper, 1));
+        let rest = veorq_u64(high, vextq_u64(upper, zero, 1));
+        veorq_u64(low, clmul_low(rest, modulus))
     }
 
-    #[inline(always)]
-    unsafe fn mul(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
-        // SAFETY: the caller has `PMULL`.
-        unsafe {
-            let (high, low) = wide(a, b);
-            reduce(high, low)
-        }
+    #[inline]
+    #[target_feature(enable = "neon,aes")]
+    fn mul(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
+        let (high, low) = wide(a, b);
+        reduce(high, low)
     }
 
     #[target_feature(enable = "neon,aes")]

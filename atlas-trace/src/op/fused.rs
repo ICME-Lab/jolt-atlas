@@ -9,7 +9,7 @@ use std::fmt;
 use crate::{
     error::{KernelError, ShapeError},
     id::Scale,
-    semantics::fixed::rebase,
+    semantics::fixed::{narrow_i32, rebase},
     tensor::Tensor,
     trace::{FusedIntermediates, NodeAux},
 };
@@ -24,22 +24,43 @@ pub(super) fn rebase_eval(
     divisor: i64,
     op: &'static str,
 ) -> Result<Eval, KernelError> {
+    // One pass: the quotient narrowed and the remainder, with a flag if a quotient does not
+    // fit, in which case the first one in order is the error.
+    let overflowed = std::sync::atomic::AtomicBool::new(false);
+    let split = |&v: &i64| {
+        let (quotient, remainder) = rebase(v, divisor);
+        if narrow_i32(quotient).is_none() {
+            overflowed.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        (quotient as i32, remainder)
+    };
     #[cfg(feature = "rayon")]
-    let (quotient, remainder): (Vec<i64>, Vec<i32>) = {
+    let (quotient, remainder): (Vec<i32>, Vec<i32>) = {
         use rayon::prelude::*;
         acc.data()
             .par_iter()
             .with_min_len(crate::tensor::PAR_MIN_LEN)
-            .map(|&v| rebase(v, divisor))
+            .map(split)
             .unzip()
     };
     #[cfg(not(feature = "rayon"))]
-    let (quotient, remainder): (Vec<i64>, Vec<i32>) =
-        acc.data().iter().map(|&v| rebase(v, divisor)).unzip();
+    let (quotient, remainder): (Vec<i32>, Vec<i32>) = acc.data().iter().map(split).unzip();
+    if overflowed.into_inner() {
+        let value = acc
+            .data()
+            .iter()
+            .map(|&v| rebase(v, divisor).0)
+            .find(|&quotient| narrow_i32(quotient).is_none())
+            .expect("a quotient was flagged");
+        return Err(KernelError::WitnessOverflow {
+            op,
+            what: "quotient",
+            value,
+        });
+    }
     let dims = acc.dims();
-    let quotient = Tensor::new(quotient, dims).expect("same length");
     Ok(Eval {
-        output: super::linear::narrow(&quotient, op, "quotient")?,
+        output: Tensor::new(quotient, dims).expect("same length"),
         aux: Some(NodeAux::Fused(FusedIntermediates {
             remainder: Tensor::new(remainder, dims).expect("same length"),
         })),

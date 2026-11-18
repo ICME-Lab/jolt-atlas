@@ -107,3 +107,83 @@ fn schedule_of_a_lookup_free_model_has_no_lookup_step() {
     ];
     prove_verify_roundtrip::<BitzScheme>(model, &inputs, RoundtripOptions::default());
 }
+
+/// A node's output claims may not be reduced before a consumer has appended its claim: a
+/// schedule that reduces an input first, ahead of the sums that read it, is rejected, whatever
+/// wrote it.
+#[test]
+fn schedule_rejects_a_reduction_before_a_consumer_claim() {
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![8]);
+    let y = b.input(vec![8]);
+    let hidden = b.add(x, y);
+    let out = b.add(hidden, y);
+    b.mark_output(out);
+    let schedule = Schedule::<Fp128>::compile(&b.build()).expect("the model has a schedule");
+
+    let mut steps = schedule.steps().to_vec();
+    assert!(schedule.with_steps(steps.clone()).is_ok());
+    let reduce = steps
+        .iter()
+        .rposition(|step| matches!(step, Step::Reduce { .. }))
+        .expect("an input's claims are reduced");
+    assert!(reduce > 0, "a consumer's steps precede the reduction");
+    let step = steps.remove(reduce);
+    steps.insert(0, step);
+    assert!(schedule.with_steps(steps).is_err());
+}
+
+/// The sumchecks of a model's nodes are batched by wave: a chain of sums has fewer sumchecks
+/// than nodes, and none outside a batch.
+#[test]
+fn schedule_batches_node_sumchecks_in_waves() {
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![8]);
+    let mut last = x;
+    let mut squares = 0;
+    for _ in 0..6 {
+        last = b.mul(last, x);
+        squares += 1;
+    }
+    b.mark_output(last);
+    let schedule = Schedule::<Fp128>::compile(&b.build()).expect("the model has a schedule");
+    let unbatched = schedule
+        .steps()
+        .iter()
+        .filter(|step| matches!(step, Step::Sumcheck { batched: false, .. }))
+        .count();
+    assert_eq!(unbatched, 0);
+    assert!(schedule.sumchecks().count() < squares);
+}
+
+/// A digit-backed node takes its claim at a point of its own and never reduces its
+/// consumers' claims; every other node that has a claim to run on reduces them.
+#[test]
+fn digit_backed_nodes_take_a_point_and_no_reduction() {
+    use crate::node_view::ModelView;
+    use crate::onnx_proof::range_bucket::is_digit_backed;
+    use std::collections::BTreeSet;
+
+    for name in ["op_gauntlet", "gpt2-tiny", "qwen2-tiny", "bge-tiny"] {
+        let model = zoo(name, 16).model;
+        let schedule = Schedule::<Fp128>::compile(&model).expect("the model has a schedule");
+        let digit_backed: BTreeSet<usize> = model
+            .views()
+            .iter()
+            .filter(|node| is_digit_backed(&model, node))
+            .map(|node| node.idx)
+            .collect();
+        assert!(!digit_backed.is_empty(), "{name}: a digit-backed node");
+        let mut pointed = BTreeSet::new();
+        for step in schedule.steps() {
+            match step {
+                Step::Point { node, .. } => assert!(pointed.insert(*node), "{name}: n{node}"),
+                Step::Reduce { node } => {
+                    assert!(!digit_backed.contains(node), "{name}: n{node} is reduced")
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(pointed, digit_backed, "{name}");
+    }
+}

@@ -41,7 +41,7 @@ use atlas_algebra::{
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_sumcheck::{
-    opening_proof::{PolynomialId, VerifierOpeningAccumulator},
+    opening_proof::{OpeningId, PolynomialId, VerifierOpeningAccumulator},
     relation::DynRelationVerifier,
     shout,
 };
@@ -326,6 +326,18 @@ impl<F: JoltField> Schedule<F> {
         &self.steps
     }
 
+    /// This schedule's relations under other steps. `Err` if the steps are not a valid
+    /// schedule of them.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn with_steps(&self, steps: Vec<Step>) -> Result<Self, ProofVerifyError> {
+        let schedule = Self {
+            relations: self.relations.clone(),
+            steps,
+        };
+        schedule.validate()?;
+        Ok(schedule)
+    }
+
     /// The relations the steps name, indexed by [`RelId`].
     pub fn relations(&self) -> &[OpRelation<F>] {
         &self.relations
@@ -351,7 +363,9 @@ impl<F: JoltField> Schedule<F> {
 
     /// Every relation is the target of at most one `Setup`, and a member of exactly one
     /// `Sumcheck` or the target of exactly one `Tie`; a `Setup` precedes the `Sumcheck` that
-    /// holds its relation; no `Sumcheck` is empty.
+    /// holds its relation; no `Sumcheck` is empty; and no step appends a claim on a node's
+    /// output after that node's `Reduce` ([`OpRelation::appended_outputs`]), whatever order
+    /// the steps were written in.
     fn validate(&self) -> Result<(), ProofVerifyError> {
         let malformed =
             |what: String| Err(ProofVerifyError::Malformed(format!("schedule: {what}")));
@@ -366,10 +380,32 @@ impl<F: JoltField> Schedule<F> {
             ))),
         };
         let is_marked = |marks: &[bool], id: RelId| marks.get(id.0).copied().unwrap_or(false);
+        // The nodes whose output claims have been reduced to one: no claim may be appended on
+        // one of them afterwards.
+        let mut reduced = BTreeSet::new();
+        let appended_late = |reduced: &BTreeSet<usize>, id: RelId, at_setup: bool| {
+            self.relations.get(id.0).and_then(|relation| {
+                relation
+                    .appended_outputs(at_setup)
+                    .into_iter()
+                    .find(|node| reduced.contains(node))
+            })
+        };
+        let late = |node: usize| {
+            malformed(format!(
+                "a claim on node {node}'s output is appended after its reduction"
+            ))
+        };
         for step in &self.steps {
             match step {
-                Step::Reduce { .. } | Step::Point { .. } | Step::Open(_) => {}
+                Step::Reduce { node } => {
+                    reduced.insert(*node);
+                }
+                Step::Point { .. } | Step::Open(_) => {}
                 Step::Setup(id) => {
+                    if let Some(node) = appended_late(&reduced, *id, true) {
+                        return late(node);
+                    }
                     if is_marked(&verified, *id) {
                         return malformed(format!(
                             "relation {} is set up after it is verified",
@@ -385,6 +421,14 @@ impl<F: JoltField> Schedule<F> {
                         return malformed("a sumcheck has no member".to_string());
                     }
                     for id in members {
+                        let own_setup = !is_marked(&set_up, *id);
+                        if let Some(node) = (own_setup
+                            .then(|| appended_late(&reduced, *id, true))
+                            .flatten())
+                        .or_else(|| appended_late(&reduced, *id, false))
+                        {
+                            return late(node);
+                        }
                         if mark(&mut verified, *id)? {
                             return malformed(format!("relation {} is verified twice", id.0));
                         }
@@ -394,6 +438,11 @@ impl<F: JoltField> Schedule<F> {
                     self.tie(*id)?;
                     if is_marked(&set_up, *id) {
                         return malformed(format!("the tie {} has a setup step", id.0));
+                    }
+                    if let Some(node) = appended_late(&reduced, *id, true)
+                        .or_else(|| appended_late(&reduced, *id, false))
+                    {
+                        return late(node);
                     }
                     if mark(&mut verified, *id)? {
                         return malformed(format!("relation {} is verified twice", id.0));
@@ -585,6 +634,24 @@ pub enum OpRelation<F: JoltField> {
 }
 
 impl<F: JoltField> OpRelation<F> {
+    /// The nodes on whose outputs the relation appends a claim: when it is set up
+    /// (`at_setup`: an op relation's setup opens, a table read's operand) or when it is
+    /// verified (an op relation's produced openings).
+    pub fn appended_outputs(&self, at_setup: bool) -> Vec<usize> {
+        let ids: Vec<OpeningId> = match (self, at_setup) {
+            (Self::Op(relation), true) => relation.setup_opens.iter().map(|open| open.id).collect(),
+            (Self::Op(relation), false) => relation.produced.clone(),
+            (Self::TableRead(read), true) => vec![read.operand],
+            _ => Vec::new(),
+        };
+        ids.into_iter()
+            .filter_map(|id| match id.virtual_poly() {
+                Some(VirtualPoly::NodeOutput(node)) => Some(node),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The node the relation belongs to; `None` for a range bucket's, which spans nodes.
     pub fn node(&self) -> Option<usize> {
         match self {

@@ -61,40 +61,65 @@ impl OpSpec for SoftmaxLastAxis {
             value,
         };
 
+        let mut address = vec![0i32; total];
+        let mut output = vec![0i32; total];
+        // One row: its shift and its two gaps, with its addresses and outputs written in place.
+        let row = |((live_row, address), output): ((&[i32], &mut [i32]), &mut [i32])| {
+            let c = tables
+                .shift(&live_row[..active_len])
+                .expect("active_len >= 1");
+            let shift = i32::try_from(c).map_err(|_| overflow("shift c", c))?;
+            // The proof commits `c − x` as a signed 32-bit lookup address on every lane.
+            for (address, &x) in address.iter_mut().zip(live_row) {
+                let u = c - x as i64;
+                *address = i32::try_from(u).map_err(|_| overflow("address c - x", u))?;
+            }
+            let (mut sum, mut prev_sum) = (0i64, 0i64);
+            for (output, &address) in output.iter_mut().zip(&*address).take(active_len) {
+                // A live lane has `c ≥ x`, so its address is non-negative.
+                let address = (address as i64).min(top) as usize;
+                *output = tables.out[address];
+                sum += tables.sum[address] as i64;
+                prev_sum += sum_prev[address] as i64;
+            }
+            Ok((
+                shift,
+                tables.sum_scale - sum,
+                prev_sum - tables.sum_scale - 1,
+            ))
+        };
+        #[cfg(feature = "rayon")]
+        let per_row: Vec<Result<(i32, i64, i64), KernelError>> = {
+            use rayon::prelude::*;
+            data.par_chunks(last_dim)
+                .zip(address.par_chunks_mut(last_dim))
+                .zip(output.par_chunks_mut(last_dim))
+                .map(row)
+                .collect()
+        };
+        #[cfg(not(feature = "rayon"))]
+        let per_row: Vec<Result<(i32, i64, i64), KernelError>> = data
+            .chunks(last_dim)
+            .zip(address.chunks_mut(last_dim))
+            .zip(output.chunks_mut(last_dim))
+            .map(row)
+            .collect();
+        // The first row in order that fails is the error.
         let mut w = SoftmaxWitness {
             last_dim,
             active_len,
             shift: Vec::with_capacity(rows),
-            address: vec![0; total],
+            address: Vec::new(),
             sum_gap: Vec::with_capacity(rows),
             prev_sum_gap: Vec::with_capacity(rows),
         };
-        let mut output = vec![0i32; total];
-
-        for k in 0..rows {
-            let offset = k * last_dim;
-            let live = &data[offset..offset + active_len];
-            let c = tables.shift(live).expect("active_len >= 1");
-            w.shift
-                .push(i32::try_from(c).map_err(|_| overflow("shift c", c))?);
-
-            // The proof commits `c − x` as a signed 32-bit lookup address on every lane.
-            for j in 0..last_dim {
-                let u = c - data[offset + j] as i64;
-                w.address[offset + j] =
-                    i32::try_from(u).map_err(|_| overflow("address c - x", u))?;
-            }
-            let (mut sum, mut prev_sum) = (0i64, 0i64);
-            for j in 0..active_len {
-                // A live lane has `c ≥ x`, so its address is non-negative.
-                let address = (w.address[offset + j] as i64).min(top) as usize;
-                output[offset + j] = tables.out[address];
-                sum += tables.sum[address] as i64;
-                prev_sum += sum_prev[address] as i64;
-            }
-            w.sum_gap.push(tables.sum_scale - sum);
-            w.prev_sum_gap.push(prev_sum - tables.sum_scale - 1);
+        for result in per_row {
+            let (shift, sum_gap, prev_sum_gap) = result?;
+            w.shift.push(shift);
+            w.sum_gap.push(sum_gap);
+            w.prev_sum_gap.push(prev_sum_gap);
         }
+        w.address = address;
 
         Ok(Eval {
             output: Tensor::new(output, dims)?,

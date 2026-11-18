@@ -160,9 +160,20 @@ impl<T: Element> Tensor<T> {
     }
 
     /// Apply `f` to every element.
-    pub fn map<U: Element>(&self, f: impl Fn(T) -> U) -> Tensor<U> {
+    pub fn map<U: Element>(&self, f: impl Fn(T) -> U + Sync) -> Tensor<U> {
+        #[cfg(feature = "rayon")]
+        let data: Vec<U> = {
+            use rayon::prelude::*;
+            self.data
+                .par_iter()
+                .with_min_len(PAR_MIN_LEN)
+                .map(|&x| f(x))
+                .collect()
+        };
+        #[cfg(not(feature = "rayon"))]
+        let data: Vec<U> = self.data.iter().map(|&x| f(x)).collect();
         Tensor {
-            data: Arc::new(self.data.iter().map(|&x| f(x)).collect()),
+            data: Arc::new(data),
             dims: self.dims.clone(),
         }
     }

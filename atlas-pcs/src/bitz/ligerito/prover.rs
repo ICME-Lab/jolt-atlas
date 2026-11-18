@@ -8,6 +8,7 @@ use crate::bitz::multilinear::{fold_first_into, tensor_expand};
 use crate::bitz::rs::Code;
 use atlas_transcript::Transcript;
 use rayon::prelude::*;
+use std::borrow::Cow;
 
 /// One committed level: its code, encoded matrix and Merkle tree.
 pub struct Level {
@@ -50,7 +51,7 @@ pub fn commit(values: &[Gf128], schedule: &Schedule) -> (Digest, Level) {
 /// Proves `Σ_b weights(b)·values(b) = claim` for the polynomial committed as `first`. The
 /// claim itself is not sent: the caller's protocol fixes it.
 pub fn prove<T: Transcript>(
-    values: Vec<Gf128>,
+    values: &[Gf128],
     weights: Vec<Gf128>,
     first: &Level,
     schedule: &Schedule,
@@ -58,7 +59,9 @@ pub fn prove<T: Transcript>(
 ) -> Proof {
     assert_eq!(values.len(), 1 << schedule.num_vars, "polynomial size");
     assert_eq!(weights.len(), values.len(), "weight size");
-    let (mut values, mut weights) = (values, weights);
+    // The polynomial is read in place until its first fold.
+    let mut values = Cow::Borrowed(values);
+    let mut weights = weights;
     // The level being opened: the caller's first, then each one committed here.
     // The buffers a fold writes into: the ones the fold before it read.
     let (mut spare_values, mut spare_weights) = (Vec::new(), Vec::new());
@@ -81,7 +84,11 @@ pub fn prove<T: Transcript>(
             proof.nonces.push(grinding::prove(pow_bits, transcript));
             let r = Gf128(transcript.challenge_u128());
             fold_first_into(&values, r, &mut spare_values);
-            std::mem::swap(&mut values, &mut spare_values);
+            let read =
+                std::mem::replace(&mut values, Cow::Owned(std::mem::take(&mut spare_values)));
+            if let Cow::Owned(read) = read {
+                spare_values = read;
+            }
             fold_first_into(&weights, r, &mut spare_weights);
             std::mem::swap(&mut weights, &mut spare_weights);
             proof.rounds.push(message);
@@ -92,8 +99,8 @@ pub fn prove<T: Transcript>(
             proof.roots.push(next.tree.root());
             Some(next)
         } else {
-            transcript.append_serializable(&values);
-            proof.final_values = values.clone();
+            proof.final_values = values.to_vec();
+            transcript.append_serializable(&proof.final_values);
             None
         };
 

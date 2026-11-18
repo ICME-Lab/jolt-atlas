@@ -296,7 +296,7 @@ mod tests {
             let mut pt = Blake2bProver::new(b"ring-switch-test");
             pt.append_bytes(&root);
             let (columns, weights, _) = prover::reduce(&packed, &point, 128, &mut pt);
-            let proof = ligerito::prover::prove(packed, weights, &level, &schedule, &mut pt);
+            let proof = ligerito::prover::prove(&packed, weights, &level, &schedule, &mut pt);
             let narg = pt.into_narg();
 
             let check = |claim: Gf128| {

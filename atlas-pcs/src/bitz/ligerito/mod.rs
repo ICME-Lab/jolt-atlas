@@ -184,7 +184,7 @@ mod tests {
         let (root, level) = prover::commit(&values, &schedule);
         let mut transcript = Prover::new(b"ligerito-test");
         transcript.append_bytes(&root);
-        let proof = prover::prove(values, weights, &level, &schedule, &mut transcript);
+        let proof = prover::prove(&values, weights, &level, &schedule, &mut transcript);
         Instance {
             schedule,
             root,

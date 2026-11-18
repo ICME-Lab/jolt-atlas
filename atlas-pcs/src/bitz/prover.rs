@@ -142,8 +142,7 @@ pub fn prove<T: Transcript>(
         ring_switch::prover::reduce(packed, &bits_point, params.target_bits, transcript);
     drop(span);
     let span = tracing::info_span!("bitz_ligerito").entered();
-    let opening =
-        ligerito::prover::prove(packed.clone(), weights, level, &params.ligerito, transcript);
+    let opening = ligerito::prover::prove(packed, weights, level, &params.ligerito, transcript);
     drop(span);
     (
         claim,

@@ -30,7 +30,7 @@ use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
 use atlas_transcript::ProvingTranscript;
 use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 // ---------------------------------------------------------------------------
 // Prover state
@@ -194,18 +194,21 @@ pub(super) fn prove_reduced_openings<
         // opening.
         return;
     }
-    let (poly_map, hints): (BTreeMap<CommittedPoly, MultilinearPolynomial<F>>, Vec<_>) =
-        if opened.len() == poly_map.len() {
-            (poly_map.clone(), hints)
-        } else {
-            poly_map
-                .iter()
-                .zip(hints)
-                .filter(|((p, _), _)| opened.contains(p))
-                .map(|((p, poly), h)| ((*p, poly.clone()), h))
-                .unzip()
-        };
-    let poly_map = &poly_map;
+    let (poly_map, hints): (
+        Cow<BTreeMap<CommittedPoly, MultilinearPolynomial<F>>>,
+        Vec<_>,
+    ) = if opened.len() == poly_map.len() {
+        (Cow::Borrowed(poly_map), hints)
+    } else {
+        let (map, hints) = poly_map
+            .iter()
+            .zip(hints)
+            .filter(|((p, _), _)| opened.contains(p))
+            .map(|((p, poly), h)| ((*p, poly.clone()), h))
+            .unzip();
+        (Cow::Owned(map), hints)
+    };
+    let poly_map = &*poly_map;
     prover
         .accumulator
         .prepare_for_sumcheck(poly_map, &mut prover.transcript);

@@ -77,13 +77,14 @@ fn waves<F: JoltField>(
     mut plans: Vec<NodePlan>,
     consumers: &[Vec<usize>],
     relations: &[OpRelation<F>],
-) -> Result<Vec<Step>, ProofVerifyError> {
+) -> Result<(Vec<Step>, Vec<usize>), ProofVerifyError> {
     let rows = |id: &RelId| match relations.get(id.0) {
         Some(OpRelation::Op(relation)) => 1usize << relation.rounds.min(usize::BITS as usize - 1),
         _ => WAVE_BUDGET,
     };
     let mut complete = vec![false; consumers.len()];
     let mut steps = Vec::new();
+    let mut starts = Vec::new();
     while plans.iter().any(|plan| !plan.steps.is_empty()) || complete.iter().any(|done| !done) {
         let is_ready = |plan: &NodePlan| {
             let waits_for_nobody = plan.digit_backed
@@ -102,6 +103,7 @@ fn waves<F: JoltField>(
                 "schedule: a node waits for a consumer that waits for it".to_string(),
             ));
         }
+        starts.push(steps.len());
         // The points of the wave's digit-backed nodes, before any step that reads a claim.
         for &at in &ready {
             let Some(plan) = plans.get(at) else {
@@ -163,7 +165,7 @@ fn waves<F: JoltField>(
             }
         }
     }
-    Ok(steps)
+    Ok((steps, starts))
 }
 
 /// The name of a relation in a schedule: its index in the schedule's relation table.
@@ -224,6 +226,10 @@ pub enum Step {
 pub struct Schedule<F: JoltField> {
     relations: Vec<OpRelation<F>>,
     steps: Vec<Step>,
+    /// The index of the first step of each wave, ascending: the nodes of a wave do not read
+    /// each other's claims, so every claim a wave's steps reduce is bound when it starts. Not
+    /// part of what is checked: a prover's hint, empty for a schedule built from steps alone.
+    wave_starts: Vec<usize>,
 }
 
 impl<F: JoltField> std::fmt::Debug for Schedule<F> {
@@ -316,8 +322,11 @@ impl<F: JoltField> Schedule<F> {
                 }
             }
         }
-        builder.steps = waves(plans, &consumers, &builder.relations)?;
-        builder.finish(range_buckets(model)?)
+        let (steps, wave_starts) = waves(plans, &consumers, &builder.relations)?;
+        builder.steps = steps;
+        let mut schedule = builder.finish(range_buckets(model)?)?;
+        schedule.wave_starts = wave_starts;
+        Ok(schedule)
     }
 
     /// The committed polynomials the schedule opens, sorted and without repeats: those of every
@@ -359,6 +368,12 @@ impl<F: JoltField> Schedule<F> {
         &self.steps
     }
 
+    /// The index of the first step of each wave, ascending; empty when the schedule does not
+    /// know its waves.
+    pub fn wave_starts(&self) -> &[usize] {
+        &self.wave_starts
+    }
+
     /// This schedule's relations under other steps. `Err` if the steps are not a valid
     /// schedule of them.
     #[cfg(any(test, feature = "test-util"))]
@@ -366,6 +381,7 @@ impl<F: JoltField> Schedule<F> {
         let schedule = Self {
             relations: self.relations.clone(),
             steps,
+            wave_starts: Vec::new(),
         };
         schedule.validate()?;
         Ok(schedule)
@@ -645,6 +661,7 @@ impl<F: JoltField> ScheduleBuilder<F> {
         let schedule = Schedule {
             relations: self.relations,
             steps: self.steps,
+            wave_starts: Vec::new(),
         };
         schedule.validate()?;
         Ok(schedule)

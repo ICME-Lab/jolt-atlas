@@ -109,7 +109,9 @@ use crate::onnx_proof::{
 };
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider};
 use atlas_algebra::poly::multilinear::MultilinearPolynomial;
-use atlas_sumcheck::evaluation_reduction::ReducedInstance;
+use atlas_sumcheck::evaluation_reduction::{
+    prover::PreparedReduction, EvalReductionInstance, ReducedInstance,
+};
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
@@ -153,7 +155,17 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
     let mut output_claims: BTreeMap<usize, F> = BTreeMap::new();
     let mut remainder_claims: BTreeMap<usize, F> = BTreeMap::new();
     let steps = schedule.steps();
+    // The reductions of the wave being walked, computed together where it starts.
+    let mut reductions: BTreeMap<usize, WaveReduction<F>> = BTreeMap::new();
     for (at, step) in steps.iter().enumerate() {
+        if let Ok(wave) = schedule.wave_starts().binary_search(&at) {
+            let end = schedule
+                .wave_starts()
+                .get(wave + 1)
+                .copied()
+                .unwrap_or(steps.len());
+            prepare_wave_reductions(prover, &steps[at..end], &mut reductions);
+        }
         let step_node = match step {
             Step::Reduce { node } | Step::Point { node, .. } => Some(Some(*node)),
             Step::Sumcheck { members, .. } => Some(schedule.sumcheck_node(members)),
@@ -170,10 +182,15 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
             }
         }
         match step {
-            Step::Reduce { node } => {
-                let node = prover.preprocessing.model().view(*node);
-                NodeEvalReduction::prove(prover, &node);
-            }
+            Step::Reduce { node } => match reductions.remove(node) {
+                Some((instance, prepared)) => {
+                    eval_reduction::send_reduction(prover, *node, instance, prepared)
+                }
+                None => {
+                    let node = prover.preprocessing.model().view(*node);
+                    NodeEvalReduction::prove(prover, &node);
+                }
+            },
             Step::Draw { node, vars } => {
                 let point: Vec<F> = prover
                     .transcript
@@ -299,6 +316,37 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
             }
         }
     }
+}
+
+/// A node's reduction, its witness-reading part done.
+type WaveReduction<F> = (EvalReductionInstance<F>, PreparedReduction<F>);
+
+/// The part of every reduction among a wave's `steps` that reads node outputs, computed side
+/// by side into `reductions`. A wave's nodes do not read each other's claims, so every claim
+/// each of them reduces is bound when the wave starts; only the sends and draws are left in
+/// transcript order, at each `Reduce` step.
+fn prepare_wave_reductions<F: JoltField, T: ProvingTranscript>(
+    prover: &Prover<F, T>,
+    steps: &[Step],
+    reductions: &mut BTreeMap<usize, WaveReduction<F>>,
+) {
+    let _span = tracing::info_span!("wave_reductions").entered();
+    let instances: Vec<(usize, EvalReductionInstance<F>)> = steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Reduce { node } => Some((*node, eval_reduction::node_instance(prover, *node))),
+            _ => None,
+        })
+        .collect();
+    let trace = &prover.trace;
+    let prepared: Vec<(usize, WaveReduction<F>)> = instances
+        .into_par_iter()
+        .map(|(node, instance)| {
+            let prepared = eval_reduction::prepare_reduction(&instance, trace, node);
+            (node, (instance, prepared))
+        })
+        .collect();
+    reductions.extend(prepared);
 }
 
 /// What a batched sumcheck proves, by the kind of its first member (a batch's members are of

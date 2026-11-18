@@ -4,7 +4,10 @@ use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::Prover;
 use atlas_algebra::field::JoltField;
-use atlas_sumcheck::evaluation_reduction::{EvalReductionProtocol, ReducedInstance};
+use atlas_sumcheck::evaluation_reduction::{
+    prover::PreparedReduction, EvalReductionInstance, EvalReductionWitness,
+};
+use atlas_trace::Trace;
 use atlas_transcript::ProvingTranscript;
 
 /// Prover-side methods of [`NodeEvalReduction`].
@@ -24,27 +27,47 @@ impl NodeEvalReductionProve for NodeEvalReduction {
         prover: &mut Prover<F, T>,
         computation_node: &ComputationNode,
     ) {
-        let node_idx = computation_node.idx;
-        let openings = prover.accumulator.get_node_openings(node_idx);
-
-        // Single consumer: the protocol's short path returns the opening as the
-        // reduced instance and never touches the output MLE (or the transcript),
-        // so skip converting the output tensor to field elements — that
-        // conversion is the whole cost for the ~2k single-consumer nodes.
-        let reduced = if openings.len() == 1 {
-            let (r, claim) = (openings[0].0.clone(), openings[0].1);
-            ReducedInstance { r: r.r, claim }
-        } else {
-            let output_mle = TraceView::value_poly(&prover.trace, computation_node.idx);
-            EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
-                .expect("Proving evaluation reduction should not fail")
-        };
-
-        prover
-            .accumulator
-            .reduced_evaluations
-            .insert(node_idx, reduced);
+        let instance = node_instance(prover, computation_node.idx);
+        let prepared = prepare_reduction(&instance, &prover.trace, computation_node.idx);
+        send_reduction(prover, computation_node.idx, instance, prepared);
     }
+}
+
+/// The instance of node `node_idx`'s reduction: the claims on its output.
+pub fn node_instance<F: JoltField, T: ProvingTranscript>(
+    prover: &Prover<F, T>,
+    node_idx: usize,
+) -> EvalReductionInstance<F> {
+    EvalReductionInstance::new(&prover.accumulator.get_node_openings(node_idx))
+}
+
+/// The part of node `node_idx`'s reduction that reads its output and not the transcript.
+/// Several nodes' are computed side by side when their claims are all bound. A node with a
+/// single claim on its output never converts the output to field elements: that conversion
+/// is the whole cost for the many single-consumer nodes.
+pub fn prepare_reduction<F: JoltField>(
+    instance: &EvalReductionInstance<F>,
+    trace: &Trace,
+    node_idx: usize,
+) -> PreparedReduction<F> {
+    instance
+        .prepare(|| EvalReductionWitness::new(TraceView::value_poly(trace, node_idx)))
+        .expect("Proving evaluation reduction should not fail")
+}
+
+/// The part of node `node_idx`'s reduction that writes the transcript, and the reduced
+/// instance recorded.
+pub fn send_reduction<F: JoltField, T: ProvingTranscript>(
+    prover: &mut Prover<F, T>,
+    node_idx: usize,
+    instance: EvalReductionInstance<F>,
+    prepared: PreparedReduction<F>,
+) {
+    let reduced = instance.send(prepared, &mut prover.transcript);
+    prover
+        .accumulator
+        .reduced_evaluations
+        .insert(node_idx, reduced);
 }
 
 #[cfg(test)]

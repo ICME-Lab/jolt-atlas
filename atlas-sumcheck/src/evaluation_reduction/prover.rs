@@ -7,6 +7,13 @@ use atlas_algebra::{
 };
 use atlas_transcript::ProvingTranscript;
 
+/// The part of a reduction that reads the witness: `h`, the witness restricted to the line
+/// through the opening points, ready to send ([`EvalReductionInstance::send`]). `None` for a
+/// single opening, which is its own reduced instance.
+pub struct PreparedReduction<F: JoltField> {
+    h: Option<(UnivariatePoly<F>, Vec<Vec<F>>)>,
+}
+
 impl<F: JoltField> EvalReductionInstance<F> {
     /// Reduce the instance's openings to one, sending `h` through the transcript. A single
     /// opening is the reduced instance and nothing is sent.
@@ -15,10 +22,40 @@ impl<F: JoltField> EvalReductionInstance<F> {
         witness: &EvalReductionWitness<F>,
         transcript: &mut T,
     ) -> Result<ReducedInstance<F>, ProvingError> {
+        let prepared = self.prepare_with(Some(witness), || witness.clone())?;
+        Ok(self.send(prepared, transcript))
+    }
+
+    /// The part of [`Self::prove`] that reads the witness and not the transcript. The witness
+    /// is built only when there is more than one opening to reduce.
+    pub fn prepare(
+        &self,
+        witness: impl FnOnce() -> EvalReductionWitness<F>,
+    ) -> Result<PreparedReduction<F>, ProvingError> {
+        self.prepare_with(None, witness)
+    }
+
+    /// [`Self::prepare`] on `given` when there is one, else on the witness `build` makes.
+    fn prepare_with(
+        &self,
+        given: Option<&EvalReductionWitness<F>>,
+        build: impl FnOnce() -> EvalReductionWitness<F>,
+    ) -> Result<PreparedReduction<F>, ProvingError> {
         if self.openings.is_empty() {
             return Err(ProvingError::EmptyInput);
         }
-
+        if self.openings.len() == 1 {
+            // The one opening is the reduced instance.
+            return Ok(PreparedReduction { h: None });
+        }
+        let built;
+        let witness = match given {
+            Some(witness) => witness,
+            None => {
+                built = build();
+                &built
+            }
+        };
         let opening_points = self.openings.iter().map(|(r, _)| r).collect::<Vec<_>>();
         let num_vars = witness.mle.get_num_vars();
 
@@ -27,16 +64,6 @@ impl<F: JoltField> EvalReductionInstance<F> {
                 witness.mle.get_num_vars(),
                 opening.len(),
             ));
-        }
-
-        if opening_points.len() == 1 {
-            // Short path:
-            // If there's only one opening, we can skip the reduction and directly return the claim as the reduced instance.
-            let (r, claim) = &self.openings[0];
-            return Ok(ReducedInstance {
-                r: r.clone(),
-                claim: *claim,
-            });
         }
 
         // i'th vector of this Vec<Vec<F>> is the vector of i'th variables across all evaluation points.
@@ -51,10 +78,29 @@ impl<F: JoltField> EvalReductionInstance<F> {
                 assert_eq!(eval_at_i, *claim, "h does not match opening claim at t={i}");
             }
         }
+        Ok(PreparedReduction {
+            h: Some((h, ri_vec)),
+        })
+    }
 
+    /// The part of [`Self::prove`] that writes the transcript: `h` sent, the point on its
+    /// line drawn, and the reduced instance there.
+    pub fn send<T: ProvingTranscript>(
+        &self,
+        prepared: PreparedReduction<F>,
+        transcript: &mut T,
+    ) -> ReducedInstance<F> {
+        let Some((h, ri_vec)) = prepared.h else {
+            let (r, claim) = &self.openings[0];
+            return ReducedInstance {
+                r: r.clone(),
+                claim: *claim,
+            };
+        };
+        let num_vars = ri_vec.len();
         // One coefficient per power up to the degree bound: the count the verifier reads.
         let mut coefficients = h.coefficients().to_vec();
-        let count = h_coefficients(num_vars, opening_points.len());
+        let count = h_coefficients(num_vars, self.openings.len());
         assert!(
             coefficients.len() <= count,
             "h has {} coefficients, above its degree bound's {count}",
@@ -66,10 +112,10 @@ impl<F: JoltField> EvalReductionInstance<F> {
         transcript.append_message(H_END_TRANSCRIPT_LABEL);
         let x_prime: F::Challenge = transcript.challenge_scalar_optimized::<F>();
 
-        Ok(ReducedInstance {
+        ReducedInstance {
             r: eval_on_l(&ri_vec, x_prime.into()),
             claim: h.evaluate(x_prime.into()),
-        })
+        }
     }
 }
 

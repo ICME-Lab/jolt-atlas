@@ -2,7 +2,7 @@
 //!
 //! A range bucket ([`range_bucket`](super::range_bucket)) packs values that must lie in
 //! `[0, 2^width)`: rescale and division remainders, their slacks below a bound, softmax's row
-//! gaps, and the offset output `out + 2^31` of every arithmetic node that is not a model output
+//! gaps, and the offset output `out + 2^31` of every arithmetic node whose output is not public
 //! (so that the node's output is an `i32`). The packed value `V` is not a polynomial of its
 //! own: it is the recomposition `Σ_j b^(n−1−j)·d_j` of the bucket's [`num_digits`]`(width)`
 //! committed base-[`DIGIT_BASE`] digit columns, most significant first. A degree-2 **value

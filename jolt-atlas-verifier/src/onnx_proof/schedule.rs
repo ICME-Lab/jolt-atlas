@@ -843,7 +843,7 @@ impl OpOpen {
 
 /// The fused-rescale skeleton around an op's arithmetic relation (`Einsum`, `Mul`, `Square`,
 /// `Cube`): the remainder advice, then the arithmetic sumcheck, whose input claim
-/// is `out·2^S + rem`. The remainder, and the output unless the node is a model output, are
+/// is `out·2^S + rem`. The remainder, and the output unless it is public, are
 /// range-checked in the packed buckets. A node without a rescale (`bits == 0`) proves the
 /// arithmetic relation alone against its reduced output.
 pub fn fused_rescale_plan<F: JoltField>(

@@ -19,14 +19,14 @@
 //! [`TWO_SIDED_WIDTH`] otherwise. Together the two claims give `B ≥ 1` and `0 ≤ R < B` over
 //! the integers; a bound that is not positive has no proof.
 //!
-//! A node whose op is exact arithmetic narrowed to `i32` ([`checks_its_output`]) and that is
-//! not a model output also contributes its output, offset to be non-negative
+//! A node whose op is exact arithmetic narrowed to `i32` ([`checks_its_output`]) and whose
+//! output is not public also contributes its output, offset to be non-negative
 //! ([`Remainder::Output`]): `out + 2^31 ∈ [0, 2^32)`. Such a node is *digit-backed*
 //! ([`is_digit_backed`]): its output is the committed digits of its segment, so every claim
 //! on the output is a member of the bucket ([`RangeBucket::members`]): the claim the node's
 //! relation runs on, taken at a point drawn for the node, and each claim a consumer appended.
-//! The node's relation therefore depends on no consumer. A model output is a public `i32`
-//! tensor and is never a member.
+//! The node's relation therefore depends on no consumer. A model output, or a node a model
+//! output is a reshape of ([`is_public_output`]), is a public `i32` tensor and is never a member.
 //!
 //! Bucket capacity is the largest member's (padded) size, so no bucket polynomial is larger
 //! than a node's output. The layout is a pure function of the model, so prover and verifier
@@ -40,7 +40,7 @@ use atlas_sumcheck::{
     opening_proof::{OpeningAccumulator, OpeningId, SumcheckId},
     ps_shout::{CycleWeight, PackedSegment},
 };
-use atlas_trace::{Model, Op};
+use atlas_trace::{Model, NodeId, Op};
 use common::{consts::TRIG_PERIOD_MODULUS, CommittedPoly, VirtualPoly};
 
 /// A node's segment inside a bucket's cycle space.
@@ -263,17 +263,30 @@ pub fn checks_its_output(node: &ComputationNode) -> bool {
 }
 
 /// Whether `node`'s output is a bucket member ([`Remainder::Output`]): its op checks its
-/// output and it is not a model output. The output of such a node is committed, as the
-/// bucket's digits on the node's segment, so the node takes the point of its relation fresh
-/// from the transcript and every claim on its output is a member of the bucket's value
-/// sumcheck.
+/// output and its output is not public ([`is_public_output`]). The output of such a node is
+/// committed, as the bucket's digits on the node's segment, so the node takes the point of
+/// its relation fresh from the transcript and every claim on its output is a member of the
+/// bucket's value sumcheck.
 pub fn is_digit_backed(model: &Model, node: &ComputationNode) -> bool {
-    checks_its_output(node) && !model.output_indices().contains(&node.idx)
+    checks_its_output(node) && !is_public_output(model, node.idx)
+}
+
+/// Whether the output of node `idx` is public: it is a model output, or a reshape of it is. A
+/// reshape keeps every element at its flat index ([`reshape`](super::ops::reshape)), so its
+/// operand is the same public `i32` tensor.
+pub fn is_public_output(model: &Model, idx: usize) -> bool {
+    let id = NodeId(idx as u32);
+    model.outputs().contains(&id)
+        || model.nodes().any(|(consumer, node)| {
+            matches!(node.op, Op::Reshape(_))
+                && node.inputs.contains(&id)
+                && is_public_output(model, consumer.index())
+        })
 }
 
 /// The range claims `node` contributes, each with its width: its remainders' ([`node_remainders`],
-/// [`range_claims`]), and its output's when its op checks it ([`checks_its_output`]) and it is
-/// not a model output (a public `i32` tensor needs no check). `Err` for a node whose bound
+/// [`range_claims`]), and its output's when its op checks it ([`checks_its_output`]) and its
+/// output is not public (a public `i32` tensor needs no check). `Err` for a node whose bound
 /// cannot be range-checked.
 pub fn node_range_claims(
     model: &Model,

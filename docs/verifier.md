@@ -79,9 +79,9 @@ The crate has no prover code. Three mechanisms hold that:
    holds (BitZ commits a digit column as two bit planes; `read_commitments` requires that
    width). A bound that is not positive has
    no proof. The output of an exact-arithmetic node (Add, Sub, Sum, Einsum, MeanOfSquares and
-   the fused Mul, Square and Cube) that is not a model output is a range claim in the same
+   the fused Mul, Square and Cube) whose output is not public is a range claim in the same
    buckets: `out + 2^31 ∈ [0, 2^32)`, read from the node's reduced output opening. A model
-   output is a public `i32` tensor and has no claim.
+   output, or a node a model output is a reshape of, is a public `i32` tensor and has no claim.
 5. **The proof**: `proof.rs`. `ONNXProof` is the NARG byte string of the prover's transcript,
    with no field, key or format of its own; its doc lists the order of the stream. Under it,
    `atlas_transcript::sponge` (`SpongeVerifier`'s reads) and

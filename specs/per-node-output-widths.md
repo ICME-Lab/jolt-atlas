@@ -17,10 +17,11 @@ truth for current behavior, and nobody updates old specs when the code moves on.
 
 Every exact-arithmetic node whose output is not public commits that output as 32 bits per
 element (`out + 2^31`, 16 base-4 digits), because the trace contract bounds it by `i32`. Those
-columns are 62% of the committed rows of Qwen and of GPT-2 at 64 tokens, and commit time,
-opening time and peak memory all grow with the committed bits. The values are far narrower
-than 32 bits: on both models over 98% of range-checked elements fit in 20 bits and none needs
-more than 29. This spec lets a compiled model state a width below 32 for a node's output. The
+columns were 62% of the committed rows of Qwen and 76% of GPT-2's at 64 tokens when measured
+(before the vocabulary projection's output became public), and commit time, opening time and
+peak memory all grow with the committed bits. The values are far narrower than 32 bits: on
+Qwen over 98% of range-checked elements fit in 20 bits, on GPT-2 over 99% fit in 24, and none
+on either model needs more than 29. This spec lets a compiled model state a width below 32 for a node's output. The
 tracer treats a value outside the width as an execution error, as it treats a value outside
 `i32` today, and the prover commits and range-checks the output at that width.
 

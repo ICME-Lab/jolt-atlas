@@ -1,17 +1,18 @@
 use atlas_algebra::field::JoltField;
-use atlas_algebra::poly::multilinear::EvaluateMle;
 pub use jolt_atlas_verifier::onnx_proof::ops::reshape::*;
 
 use crate::node_view::ComputationNode;
-use crate::onnx_proof::trace_view::TraceView;
-use atlas_trace::Trace;
+use atlas_sumcheck::opening_proof::OpeningAccumulator;
 
-/// The claim of a [`flat_copy`]: the operand at the output point.
+/// The claim of a [`flat_copy`]: the operand at the output point, which is the output's claim
+/// there, since the two are one flat vector.
 pub fn flat_copy_claims<F: JoltField>(
     node: &ComputationNode,
-    trace: &Trace,
-    point: &[F],
+    accumulator: &dyn OpeningAccumulator<F>,
 ) -> Vec<F> {
-    let operand = TraceView::operand_tensors(trace, node)[0];
-    vec![operand.evaluate_mle(point)]
+    let output = accumulator
+        .get_node_output_opening(node.idx)
+        .expect("the prover holds every claim it reads")
+        .1;
+    vec![output]
 }

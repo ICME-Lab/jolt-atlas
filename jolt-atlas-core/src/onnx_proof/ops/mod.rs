@@ -641,7 +641,7 @@ pub fn op_rel_tie_claims<F: JoltField>(
         OpRelKind::Constant | OpRelKind::Input => constant::public_value_claims(),
         OpRelKind::AxisPermutation => moveaxis::axis_permutation_claims(node, accumulator),
         OpRelKind::Broadcast => broadcast::broadcast_claims(relation, trace, &setup.incoming_point),
-        OpRelKind::Reshape => reshape::flat_copy_claims(node, trace, &setup.incoming_point),
+        OpRelKind::Reshape => reshape::flat_copy_claims(node, accumulator),
         OpRelKind::Slice => slice::subcube_select_claims(relation, trace, &setup.incoming_point),
         OpRelKind::Concat => concat::subcube_tiling_claims(relation, trace, &setup.incoming_point),
         OpRelKind::TrigPeriod => trig::trig_period_claims(node, accumulator),

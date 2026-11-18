@@ -41,7 +41,11 @@ pub trait RafShoutProvider<F: JoltField> {
         accumulator: &dyn OpeningAccumulator<F>,
     ) -> Result<OpeningPoint<BIG_ENDIAN, F>, ProofVerifyError>;
 }
-pub(crate) const NUM_PHASES: usize = 8;
+/// The address phases of a prefix-suffix read: each phase's start passes over every lookup
+/// for every suffix, so fewer, wider phases cost less while a phase's tables (`2^(log_k /
+/// NUM_PHASES)` entries per suffix) stay small. Four measured fastest on GPT-2 and Qwen,
+/// against eight and two.
+pub(crate) const NUM_PHASES: usize = 4;
 
 /// One node's slice of a packed (multi-node) cycle space: its opening point
 /// `r` (log T_n variables) lives at prefix `prefix` (`prefix_len` high bits),
@@ -176,20 +180,14 @@ pub(crate) enum CyclePoly<F: JoltField> {
 }
 
 /// Address-phase schedule for a `log_k`-bit lookup: `(phases, log_m)` with
-/// `phases * log_m == log_k`. Prefix checkpoints advance two rounds at a time,
-/// so `log_m` must be even: the default 8 phases work when `log_k / 8` is
-/// even (32, 48, 64, ...); otherwise (40, 56, ...) use 8-bit phases instead.
+/// `phases * log_m == log_k`. Prefix checkpoints advance two rounds at a time, so `log_m`
+/// must be even, which a width that is a multiple of 8 gives with [`NUM_PHASES`] phases.
 pub(crate) fn phase_schedule(log_k: usize) -> (usize, usize) {
     assert!(
         log_k.is_multiple_of(8),
         "lookup width must be a multiple of 8"
     );
-    let log_m = log_k / NUM_PHASES;
-    if log_m.is_multiple_of(2) {
-        (NUM_PHASES, log_m)
-    } else {
-        (log_k / 8, 8)
-    }
+    (NUM_PHASES, log_k / NUM_PHASES)
 }
 
 /// The read address's side of a read-raf: the operand whose signed value the address encodes.

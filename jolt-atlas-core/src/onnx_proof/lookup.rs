@@ -283,7 +283,9 @@ impl<F: JoltField> ProveRounds<F> for SmallTableProver<F> {
 }
 
 /// Compute one-hot read-address evaluations from non-negative table indices: entry `k` is the
-/// sum of `eq(r, j)` over the cells `j` that read index `k`.
+/// sum of `eq(r, j)` over the cells `j` that read index `k`. The cells are split over threads
+/// only as far as each part reads at least a table's worth of them: a part fills a table of its
+/// own, and the parts' tables are summed.
 pub fn compute_ra_evals_from_usize_indices<F, U>(
     r: &[U],
     indices_usize: &[usize],
@@ -294,31 +296,26 @@ where
     F: JoltField + FieldChallengeOps<U>,
 {
     let e = EqPolynomial::evals(r);
-    let num_threads = rayon::current_num_threads();
-    let chunk_size = indices_usize.len().div_ceil(num_threads);
-
-    let partial_results: Vec<Vec<F>> = indices_usize
+    let parts = (indices_usize.len() / table_size).clamp(1, rayon::current_num_threads());
+    let chunk_size = indices_usize.len().div_ceil(parts).max(1);
+    indices_usize
         .par_chunks(chunk_size)
-        .enumerate()
-        .map(|(chunk_idx, chunk)| {
-            let mut local_ra = unsafe_allocate_zero_vec::<F>(table_size);
-            let base_idx = chunk_idx * chunk_size;
-            chunk.iter().enumerate().for_each(|(local_j, &k)| {
-                let global_j = base_idx + local_j;
-                local_ra[k] += e[global_j];
-            });
-            local_ra
+        .zip(e.par_chunks(chunk_size))
+        .map(|(indices, weights)| {
+            let mut ra = unsafe_allocate_zero_vec::<F>(table_size);
+            for (&k, &weight) in indices.iter().zip(weights) {
+                ra[k] += weight;
+            }
+            ra
         })
-        .collect();
-
-    let mut ra = unsafe_allocate_zero_vec::<F>(table_size);
-    for partial in partial_results {
-        ra.par_iter_mut()
-            .zip(partial.par_iter())
-            .with_min_len(par_enabled())
-            .for_each(|(dest, &src)| *dest += src);
-    }
-    ra
+        .reduce_with(|mut ra, part| {
+            ra.par_iter_mut()
+                .zip(part.par_iter())
+                .with_min_len(par_enabled())
+                .for_each(|(dest, &src)| *dest += src);
+            ra
+        })
+        .unwrap_or_else(|| unsafe_allocate_zero_vec::<F>(table_size))
 }
 
 /// The operand values a prefix-suffix read's table is read at, over the node's padded cells:

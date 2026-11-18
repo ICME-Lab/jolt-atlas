@@ -7,7 +7,7 @@ use crate::{
         VerifierOpeningAccumulator,
     },
     ps_shout::{
-        prover::ps_read_raf_prover, ps_read_raf_verifier, PrefixSuffixShoutProvider,
+        prover::ps_read_raf_setup, ps_read_raf_verifier, PrefixSuffixShoutProvider,
         RafShoutProvider, ReadRafClaims,
     },
 };
@@ -46,12 +46,13 @@ where
 
     let provider = TestProvider::<LUT, XLEN>::new(rv_claim, operand_claim, r_cycle);
 
-    let mut prover = ps_read_raf_prover(
+    let mut prover = ps_read_raf_setup(
         &provider,
         trace.lookup_bits,
         &mut prover_accumulator,
         &mut prover_transcript,
-    );
+    )
+    .build();
     let prover_challenges =
         prove_relation(&mut prover, &mut prover_accumulator, &mut prover_transcript);
 

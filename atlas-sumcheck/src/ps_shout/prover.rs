@@ -509,9 +509,41 @@ impl<F: JoltField> OperandRafState<F> {
     }
 }
 
-/// The prover of a prefix-suffix lookup's read-raf over `lookup_indices`: `γ` drawn, the
+/// A prefix-suffix read-raf set up: `γ` drawn and the claims read from the accumulator. Its
+/// prover is built from it alone ([`ReadRafSetup::build`]).
+pub struct ReadRafSetup<F, LUT, const LOG_K: usize>
+where
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
+{
+    params: ReadRafSumcheckParams<F, LUT, LOG_K>,
+    lookup_indices: Vec<LookupBits>,
+}
+
+impl<F, LUT, const LOG_K: usize> ReadRafSetup<F, LUT, LOG_K>
+where
+    F: JoltField,
+    LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K>,
+{
+    /// The read-raf's prover: its tables over the lookup indices.
+    pub fn build(self) -> ReadRafSumcheckProver<F, LUT, LOG_K> {
+        let (_phases, log_m) = phase_schedule(LOG_K);
+        let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
+        let _guard = span.enter();
+        let identity_ps = PrefixSuffixDecomposition::new(
+            Box::new(SignedIdentityPoly::<F>::new(LOG_K)),
+            log_m,
+            LOG_K,
+        );
+        drop(_guard);
+        let raf_state = OperandRafState { identity_ps };
+        ReadRafSumcheckProver::new_inner(self.params, self.lookup_indices, raf_state)
+    }
+}
+
+/// The setup of a prefix-suffix lookup's read-raf over `lookup_indices`: `γ` drawn, the
 /// claims read from the accumulator.
-pub fn ps_read_raf_prover<
+pub fn ps_read_raf_setup<
     F: JoltField,
     T: Transcript,
     LUT: JoltLookupTable + PrefixSuffixDecompositionTrait<LOG_K> + Default,
@@ -521,7 +553,7 @@ pub fn ps_read_raf_prover<
     lookup_indices: Vec<LookupBits>,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
-) -> ReadRafSumcheckProver<F, LUT, LOG_K> {
+) -> ReadRafSetup<F, LUT, LOG_K> {
     let gamma = transcript.challenge_scalar();
     let claims = provider
         .read_raf_claims(accumulator)
@@ -545,12 +577,8 @@ pub fn ps_read_raf_prover<
         claims.rv_claim,
         raf,
     );
-    let (_phases, log_m) = phase_schedule(LOG_K);
-    let span = tracing::span!(tracing::Level::INFO, "Init PrefixSuffixDecomposition");
-    let _guard = span.enter();
-    let identity_ps =
-        PrefixSuffixDecomposition::new(Box::new(SignedIdentityPoly::<F>::new(LOG_K)), log_m, LOG_K);
-    drop(_guard);
-    let raf_state = OperandRafState { identity_ps };
-    ReadRafSumcheckProver::new_inner(params, lookup_indices, raf_state)
+    ReadRafSetup {
+        params,
+        lookup_indices,
+    }
 }

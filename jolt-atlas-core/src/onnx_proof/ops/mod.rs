@@ -301,6 +301,8 @@ enum Prepared<F: JoltField, T: ProvingTranscript> {
     /// An op relation set up, whose witness is built from the trace, with the input claim
     /// its build is checked against ([`op_params`]).
     Op(Box<RelationParams<F, OpRel<F>>>, Option<F>),
+    /// A relation set up, with the build of its witness.
+    Deferred(lookup::DeferredWitness<F, T>),
 }
 
 fn kind_span(kind: &'static str) -> tracing::Span {
@@ -358,6 +360,7 @@ fn prepare<F: JoltField, T: ProvingTranscript>(
             let (params, input_claim) = op_params(relation, prover);
             Prepared::Op(Box::new(params), input_claim)
         }
+        OpRelation::TableRead(read) => Prepared::Deferred(table_read_setup(&read, prover)),
         other => Prepared::Ready(relation_witnesses(other, prover)),
     };
     (kind, prepared)
@@ -397,6 +400,7 @@ fn build_one<F: JoltField, T: ProvingTranscript>(
     match prepared {
         Prepared::Ready(witnesses) => witnesses,
         Prepared::Op(params, input_claim) => vec![op_rel_prover(*params, trace, input_claim)],
+        Prepared::Deferred(build) => vec![build()],
         Prepared::OneHot(params, indices) => {
             shout::prover::ra_onehot_provers_from_params::<F, T>(*params, &indices).into()
         }
@@ -408,6 +412,26 @@ fn build_one<F: JoltField, T: ProvingTranscript>(
             )) as Box<dyn DynRelationWitness<F, T>>]
         }
     }
+}
+
+/// The sequential part of a table read's prover: its operand claim appended and its
+/// challenge drawn. Reads that share one committed address (a smooth ReLU's clamp and ReLU
+/// reads) leave it once for their one-hot checks.
+fn table_read_setup<F: JoltField, T: ProvingTranscript>(
+    read: &lookup::TableRead,
+    prover: &mut Prover<F, T>,
+) -> lookup::DeferredWitness<F, T> {
+    let (build, indices) = lookup::table_read_prover(
+        read,
+        &prover.trace,
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+    let key = (Addresses(read.ra.ra_source), read.node.idx);
+    if !prover.lookup_addresses.contains_key(&key) {
+        prover.leave_addresses(key.0, key.1, indices);
+    }
+    build
 }
 
 /// The sequential part of an op relation's prover: its setup. A read through committed
@@ -464,21 +488,7 @@ pub fn relation_witnesses<F: JoltField, T: ProvingTranscript>(
             let (params, input_claim) = op_params(relation, prover);
             vec![op_rel_prover(params, &prover.trace, input_claim)]
         }
-        OpRelation::TableRead(read) => {
-            let (witness, indices) = lookup::table_read_prover(
-                &read,
-                &prover.trace,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-            // Reads that share one committed address (a smooth ReLU's clamp and ReLU reads)
-            // leave it once.
-            let key = (Addresses(read.ra.ra_source), read.node.idx);
-            if !prover.lookup_addresses.contains_key(&key) {
-                prover.leave_addresses(key.0, key.1, indices);
-            }
-            vec![witness]
-        }
+        OpRelation::TableRead(read) => vec![table_read_setup(&read, prover)()],
         OpRelation::GatherSmallOneHot(shape) => {
             vec![Box::new(gather::small::build_stage2_prover::<F>(
                 &shape.node,

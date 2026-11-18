@@ -34,7 +34,7 @@ use atlas_lookup_tables::{
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::{
     opening_proof::prover::ProverOpeningAccumulator,
-    ps_shout::prover::ps_read_raf_prover,
+    ps_shout::prover::ps_read_raf_setup,
     relation::prover::{DynRelationWitness, RelationWitness},
 };
 use atlas_trace::{Op, Tensor, Trace};
@@ -355,6 +355,27 @@ fn table_read_addresses(read: &TableRead, operand: &Tensor<i64>) -> Vec<LookupBi
     }
 }
 
+/// A relation's prover still to be built: its setup is done, and the build reads neither the
+/// accumulator nor the transcript.
+pub type DeferredWitness<F, T> = Box<dyn FnOnce() -> Box<dyn DynRelationWitness<F, T>> + Send>;
+
+/// The deferred build of a prefix-suffix read-raf's prover.
+fn deferred<F, T, LUT, const LOG_K: usize>(
+    setup: atlas_sumcheck::ps_shout::prover::ReadRafSetup<F, LUT, LOG_K>,
+) -> DeferredWitness<F, T>
+where
+    F: JoltField,
+    T: ProvingTranscript,
+    LUT: atlas_lookup_tables::JoltLookupTable
+        + atlas_lookup_tables::PrefixSuffixDecompositionTrait<LOG_K>
+        + Send
+        + 'static,
+    atlas_sumcheck::ps_shout::prover::ReadRafSumcheckProver<F, LUT, LOG_K>:
+        DynRelationWitness<F, T>,
+{
+    Box::new(move || Box::new(setup.build()) as Box<dyn DynRelationWitness<F, T>>)
+}
+
 /// The prover of a prefix-suffix read, the mirror of [`table_read_verifier`]: the operand's
 /// opening appended at the cycle point with its claim from the trace, then the read-raf prover
 /// of the read's table set up. Returns the prover and the read's addresses, for its one-hot
@@ -364,7 +385,7 @@ pub fn table_read_prover<F: JoltField, T: ProvingTranscript>(
     trace: &Trace,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
-) -> (Box<dyn DynRelationWitness<F, T>>, Vec<usize>) {
+) -> (DeferredWitness<F, T>, Vec<usize>) {
     let operand = table_read_operand(read, trace);
     let r_cycle = read
         .cycle_point(&*accumulator)
@@ -373,23 +394,23 @@ pub fn table_read_prover<F: JoltField, T: ProvingTranscript>(
     accumulator.append_virtual(transcript, read.operand, r_cycle, claim);
     let addresses = table_read_addresses(read, &operand);
     let indices: Vec<usize> = addresses.iter().map(|&x| x.into()).collect();
-    let prover: Box<dyn DynRelationWitness<F, T>> = match read.table {
-        PrefixSuffixTable::Relu => Box::new(ps_read_raf_prover::<F, T, ReluTable<XLEN>, XLEN>(
+    let prover: DeferredWitness<F, T> = match read.table {
+        PrefixSuffixTable::Relu => deferred(ps_read_raf_setup::<F, T, ReluTable<XLEN>, XLEN>(
             read,
             addresses,
             accumulator,
             transcript,
         )),
-        PrefixSuffixTable::ActivationClamp => Box::new(ps_read_raf_prover::<
-            F,
-            T,
-            ActivationClampTable<XLEN>,
-            XLEN,
-        >(
-            read, addresses, accumulator, transcript
-        )),
+        PrefixSuffixTable::ActivationClamp => {
+            deferred(ps_read_raf_setup::<F, T, ActivationClampTable<XLEN>, XLEN>(
+                read,
+                addresses,
+                accumulator,
+                transcript,
+            ))
+        }
         PrefixSuffixTable::SiluClamp => {
-            Box::new(ps_read_raf_prover::<F, T, SiluClampTable<XLEN>, XLEN>(
+            deferred(ps_read_raf_setup::<F, T, SiluClampTable<XLEN>, XLEN>(
                 read,
                 addresses,
                 accumulator,
@@ -397,7 +418,7 @@ pub fn table_read_prover<F: JoltField, T: ProvingTranscript>(
             ))
         }
         PrefixSuffixTable::RightShift => {
-            Box::new(ps_read_raf_prover::<F, T, RightShiftTable<XLEN>, XLEN>(
+            deferred(ps_read_raf_setup::<F, T, RightShiftTable<XLEN>, XLEN>(
                 read,
                 addresses,
                 accumulator,
@@ -405,7 +426,7 @@ pub fn table_read_prover<F: JoltField, T: ProvingTranscript>(
             ))
         }
         PrefixSuffixTable::SoftmaxClamp => {
-            Box::new(ps_read_raf_prover::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
+            deferred(ps_read_raf_setup::<F, T, SoftmaxClampTable<XLEN>, XLEN>(
                 read,
                 addresses,
                 accumulator,

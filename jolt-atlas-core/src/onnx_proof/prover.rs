@@ -29,6 +29,7 @@ use atlas_sumcheck::opening_proof::{prover::ProverOpeningAccumulator, OpeningId,
 use atlas_trace::{trace::LayerData, trace::ModelExecutionIO, Model, Trace};
 use atlas_transcript::ProvingTranscript;
 use common::{CommittedPoly, VirtualPoly};
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
@@ -254,11 +255,10 @@ pub(super) fn polynomial_map<F: JoltField>(
     trace: &Trace,
     buckets: &BucketWitnesses,
 ) -> BTreeMap<CommittedPoly, MultilinearPolynomial<F>> {
-    // Polynomials are built one after another, each with the whole thread pool: the cost is
-    // dominated by a few large ones, which a parallel walk would pin to a single thread each.
+    // Polynomials are built side by side; a large one splits its own work over the pool.
     let mut polys: BTreeMap<CommittedPoly, MultilinearPolynomial<F>> = schedule
         .committed()
-        .into_iter()
+        .into_par_iter()
         .filter(|poly| !matches!(poly, CommittedPoly::GlobalRemainderDigit(..)))
         .map(|poly| {
             let witness = poly.generate_witness(model, trace);

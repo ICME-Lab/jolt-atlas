@@ -41,7 +41,7 @@ fn assert_schedule_pin(name: &str, pin: &str) {
 fn schedule_pin_op_gauntlet() {
     assert_schedule_pin(
         "op_gauntlet",
-        "ec0c675df29c6fea4fa3c3bbc34e1f3c9946e0e1f37a4b5f97b183150f1fd1c3",
+        "77924f7160108fe938a7742145ebe213567a6cf4f32926f094131c707ba2b5ec",
     );
 }
 
@@ -49,7 +49,7 @@ fn schedule_pin_op_gauntlet() {
 fn schedule_pin_gpt2_tiny() {
     assert_schedule_pin(
         "gpt2-tiny",
-        "2705bff414a86885bd1c2fed3c9fe013c98e469154423c8f0c653ac71f74adbc",
+        "607a6d33ec2b19122dcc02e74fed2e853c53b927299c487379fdb8e4e284c9d4",
     );
 }
 
@@ -57,7 +57,7 @@ fn schedule_pin_gpt2_tiny() {
 fn schedule_pin_qwen2_tiny() {
     assert_schedule_pin(
         "qwen2-tiny",
-        "2f80002a082d5c2f6e964924065367c590200614b42bebd0b903ce0bb5e874b6",
+        "cd0a3091bda3280d8f0e8b68277719489d6431a3aa6b5ee9ab21c6ad96bfeb6b",
     );
 }
 
@@ -186,4 +186,28 @@ fn digit_backed_nodes_take_a_point_and_no_reduction() {
         }
         assert_eq!(pointed, digit_backed, "{name}");
     }
+}
+
+/// A node a model output is a reshape of has a public output: it is no bucket member, though
+/// its op checks its output.
+#[test]
+fn a_reshaped_model_output_has_no_output_claim() {
+    use crate::node_view::ModelView;
+    use crate::onnx_proof::range_bucket::{checks_its_output, is_digit_backed, is_public_output};
+
+    let model = zoo("qwen2-tiny", 16).model;
+    let [output] = model.output_indices()[..] else {
+        panic!("one model output");
+    };
+    let reshape = model.view(output);
+    assert!(matches!(reshape.operator, atlas_trace::Op::Reshape(_)));
+    let operand = model.view(reshape.inputs[0]);
+    assert!(checks_its_output(&operand));
+    assert!(is_public_output(&model, operand.idx));
+    assert!(!is_digit_backed(&model, &operand));
+    // Its own operands are not public.
+    assert!(operand
+        .inputs
+        .iter()
+        .all(|&input| !is_public_output(&model, input)));
 }

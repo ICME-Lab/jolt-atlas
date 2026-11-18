@@ -15,11 +15,12 @@ use super::{
 use crate::node_view::ModelView;
 use crate::utils::opening_access::AccOpeningAccessor;
 use atlas_algebra::{
-    field::JoltField,
+    field::{IntoOpening, JoltField},
     poly::multilinear::{MultilinearPolynomial, PolynomialEvaluation},
     utils::{errors::ProofVerifyError, math::Math},
 };
 use atlas_pcs::commitment_scheme::CommitmentScheme;
+use atlas_sumcheck::evaluation_reduction::ReducedInstance;
 use atlas_sumcheck::opening_proof::{OpeningId, SumcheckId, VerifierOpeningAccumulator};
 use atlas_sumcheck::relation::{verify_relation, verify_relation_batch, DynRelationVerifier};
 use atlas_trace::{trace::ModelExecutionIO, Model};
@@ -82,6 +83,16 @@ impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
             match step {
                 Step::Reduce { node } => NodeEvalReduction::verify(self, *node)
                     .inspect_err(|e| tracing::debug!(node, ?e, "evaluation reduction failed"))?,
+                Step::Point { node, vars } => {
+                    let point: Vec<F> = self
+                        .transcript
+                        .challenge_vector_optimized::<F>(*vars)
+                        .into_opening();
+                    let claim = self.transcript.read_scalar()?;
+                    self.accumulator
+                        .reduced_evaluations
+                        .insert(*node, ReducedInstance { r: point, claim });
+                }
                 Step::Open(open) => open.verify(&mut self.accumulator, &mut self.transcript)?,
                 Step::Setup(id) => {
                     let verifiers = schedule

@@ -85,6 +85,13 @@ impl<F: JoltField> OpeningAccumulator<F> for ProverOpeningAccumulator<F> {
     ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError> {
         Ok(Self::get_node_output_opening(self, node_idx))
     }
+
+    fn node_output_claims(&self, node_idx: usize) -> Vec<(Vec<F>, F)> {
+        self.get_node_openings(node_idx)
+            .into_iter()
+            .map(|(point, claim)| (point.r.clone(), *claim))
+            .collect()
+    }
 }
 
 impl<F: JoltField> ProverOpeningAccumulator<F> {

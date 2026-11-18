@@ -82,7 +82,9 @@ pub mod sum;
 pub mod trig;
 
 use atlas_algebra::{
-    field::JoltField, poly::multilinear::EvaluateMle, utils::thread::drop_in_background_thread,
+    field::{IntoOpening, JoltField},
+    poly::multilinear::EvaluateMle,
+    utils::thread::drop_in_background_thread,
 };
 use atlas_transcript::ProvingTranscript;
 use eval_reduction::NodeEvalReduction;
@@ -104,6 +106,7 @@ use crate::onnx_proof::{
 };
 use crate::utils::opening_access::{AccOpeningAccessor, IntoProverProvider};
 use atlas_algebra::poly::multilinear::MultilinearPolynomial;
+use atlas_sumcheck::evaluation_reduction::ReducedInstance;
 use atlas_sumcheck::opening_proof::{OpeningAccumulator, OpeningId};
 use atlas_sumcheck::relation::prover::{
     prove_relation, prove_relation_batch, prove_relation_batch_parallel, DynRelationWitness,
@@ -143,7 +146,7 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
     let mut turn: Option<(usize, tracing::span::EnteredSpan)> = None;
     for step in schedule.steps() {
         let step_node = match step {
-            Step::Reduce { node } => Some(Some(*node)),
+            Step::Reduce { node } | Step::Point { node, .. } => Some(Some(*node)),
             Step::Sumcheck { members, .. } => Some(schedule.sumcheck_node(members)),
             Step::Open(_) | Step::Setup(_) | Step::Tie(_) => None,
         };
@@ -161,6 +164,20 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
             Step::Reduce { node } => {
                 let node = prover.preprocessing.model().view(*node);
                 NodeEvalReduction::prove(prover, &node);
+            }
+            Step::Point { node, vars } => {
+                let view = prover.preprocessing.model().view(*node);
+                let point: Vec<F> = prover
+                    .transcript
+                    .challenge_vector_optimized::<F>(*vars)
+                    .into_opening();
+                let output = TraceView::layer_data(&prover.trace, &view).output;
+                let claim: F = output.padded_pow2().data().evaluate_mle(&point);
+                prover.transcript.send_scalar(&claim);
+                prover
+                    .accumulator
+                    .reduced_evaluations
+                    .insert(*node, ReducedInstance { r: point, claim });
             }
             Step::Open(open) => prove_open(open, prover),
             Step::Setup(id) => {

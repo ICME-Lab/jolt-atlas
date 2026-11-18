@@ -58,7 +58,9 @@ pub struct PackedSegment<F: JoltField> {
 /// A single node's lookup uses `eq(r_cycle, t)`. A *packed* instance covers
 /// several nodes' lookups laid out in disjoint, power-of-two-aligned segments of
 /// one cycle space, and weights segment `n` by `γ_n · eq(r_n, t − off_n)` — so
-/// one sumcheck proves `Σ_n γ_n · (rv_n(r_n) + γ·raf_n(r_n))` for all of them.
+/// one sumcheck proves `Σ_n γ_n · (rv_n(r_n) + γ·raf_n(r_n))` for all of them. Several
+/// members may lie on one segment, each with its own point and coefficient: their weights
+/// add.
 #[derive(Clone, Debug)]
 pub enum CycleWeight<F: JoltField> {
     /// `eq(r, t)`.
@@ -91,7 +93,7 @@ impl<F: JoltField> CycleWeight<F> {
                         .par_iter_mut()
                         .zip(e.par_iter())
                         .with_min_len(par_enabled())
-                        .for_each(|(x, y)| *x = seg.gamma * *y);
+                        .for_each(|(x, y)| *x += seg.gamma * *y);
                 }
                 w
             }

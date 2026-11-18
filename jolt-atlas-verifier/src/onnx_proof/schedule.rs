@@ -31,12 +31,15 @@ use crate::onnx_proof::{
         gather::{self, small::GatherSmallShape},
         softmax_last_axis::{self, SoftmaxOpen, SoftmaxShape},
     },
-    range_bucket::{range_buckets, RangeBucket},
+    range_bucket::{is_digit_backed, range_buckets, RangeBucket},
     range_check::{self, ValueParams},
     relation::{op_rel_verifier, OpRel},
 };
 use crate::utils::opening_access::AccOpeningAccessor;
-use atlas_algebra::{field::JoltField, utils::errors::ProofVerifyError};
+use atlas_algebra::{
+    field::JoltField,
+    utils::{errors::ProofVerifyError, math::Math},
+};
 use atlas_sumcheck::{
     opening_proof::{PolynomialId, VerifierOpeningAccumulator},
     relation::DynRelationVerifier,
@@ -58,6 +61,15 @@ pub enum Step {
     Reduce {
         /// The node whose output claims are reduced.
         node: usize,
+    },
+    /// Take the claim of a digit-backed node's output at a point drawn here
+    /// ([`is_digit_backed`]): the node's relation runs on that claim, and the bucket holding
+    /// the output's digits checks it with every claim the node's consumers appended.
+    Point {
+        /// The node whose output is opened.
+        node: usize,
+        /// The number of coordinates of the point: log₂ of the node's padded output size.
+        vars: usize,
     },
     /// Append advice openings at a stated point; their claims are read from the transcript.
     Open(OpOpen),
@@ -110,6 +122,7 @@ impl<F: JoltField> std::fmt::Display for Schedule<F> {
         for step in &self.steps {
             match step {
                 Step::Reduce { node } => writeln!(f, "n{node} Reduce")?,
+                Step::Point { node, .. } => writeln!(f, "n{node} Point")?,
                 Step::Open(open) => writeln!(f, "n{} Open [{}]", open.node(), open.name())?,
                 Step::Setup(id) => writeln!(f, "{} Setup [{}]", at(node(id)), name(id))?,
                 Step::Tie(id) => writeln!(f, "{} Tie [{}]", at(node(id)), name(id))?,
@@ -143,6 +156,9 @@ impl<F: JoltField> Schedule<F> {
         let mut builder = ScheduleBuilder::new();
         for node in model.views().iter().rev() {
             builder.enter_node(node.idx);
+            if is_digit_backed(model, node) {
+                builder.fresh_point(node.pow2_padded_num_output_elements().log_2());
+            }
             crate::dispatch_operator!(node, |inner| OpPlan::plan(
                 inner,
                 node,
@@ -234,7 +250,7 @@ impl<F: JoltField> Schedule<F> {
         let is_marked = |marks: &[bool], id: RelId| marks.get(id.0).copied().unwrap_or(false);
         for step in &self.steps {
             match step {
-                Step::Reduce { .. } | Step::Open(_) => {}
+                Step::Reduce { .. } | Step::Point { .. } | Step::Open(_) => {}
                 Step::Setup(id) => {
                     if is_marked(&verified, *id) {
                         return malformed(format!(
@@ -286,6 +302,8 @@ pub struct ScheduleBuilder<F: JoltField> {
     pub(crate) one_hot: Vec<RelId>,
     /// The node whose steps are being written; `usize::MAX` before any node is entered.
     node: usize,
+    /// For a digit-backed node, the number of coordinates of its output's point.
+    point_vars: Option<usize>,
 }
 
 impl<F: JoltField> ScheduleBuilder<F> {
@@ -297,12 +315,20 @@ impl<F: JoltField> ScheduleBuilder<F> {
             lookups: Vec::new(),
             one_hot: Vec::new(),
             node: usize::MAX,
+            point_vars: None,
         }
     }
 
     /// Write the steps that follow as node `node`'s.
     pub fn enter_node(&mut self, node: usize) {
         self.node = node;
+        self.point_vars = None;
+    }
+
+    /// The node entered is digit-backed, its output a polynomial of `vars` variables: its
+    /// plan's [`reduce`](Self::reduce) takes the output's claim at a fresh point.
+    pub fn fresh_point(&mut self, vars: usize) {
+        self.point_vars = Some(vars);
     }
 
     fn register(&mut self, relation: OpRelation<F>) -> RelId {
@@ -310,9 +336,16 @@ impl<F: JoltField> ScheduleBuilder<F> {
         RelId(self.relations.len() - 1)
     }
 
-    /// The node's evaluation reduction.
+    /// The claim the node's relation runs on: its evaluation reduction, or for a
+    /// digit-backed node its output's claim at a fresh point.
     pub fn reduce(&mut self) {
-        self.steps.push(Step::Reduce { node: self.node });
+        self.steps.push(match self.point_vars {
+            Some(vars) => Step::Point {
+                node: self.node,
+                vars,
+            },
+            None => Step::Reduce { node: self.node },
+        });
     }
 
     /// Advice openings at a stated point.

@@ -112,6 +112,10 @@ pub trait OpeningAccumulator<F: JoltField> {
         &self,
         node_idx: usize,
     ) -> Result<(OpeningPoint<BIG_ENDIAN, F>, F), ProofVerifyError>;
+
+    /// Every claim appended on node `node_idx`'s output, each with its point, in opening-id
+    /// order: its consumers' claims.
+    fn node_output_claims(&self, node_idx: usize) -> Vec<(Vec<F>, F)>;
 }
 
 /// The error of a claim the accumulator does not hold.
@@ -193,6 +197,13 @@ impl<F: JoltField> OpeningAccumulator<F> for VerifierOpeningAccumulator<F> {
             ProofVerifyError::MissingClaim(format!("reduced evaluation of node {node_idx}"))
         })?;
         Ok((reduced_instance.r.clone().into(), reduced_instance.claim))
+    }
+
+    fn node_output_claims(&self, node_idx: usize) -> Vec<(Vec<F>, F)> {
+        self.get_node_openings(node_idx)
+            .into_iter()
+            .map(|(point, claim)| (point.r.clone(), *claim))
+            .collect()
     }
 }
 

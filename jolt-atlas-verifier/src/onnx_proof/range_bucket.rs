@@ -21,8 +21,12 @@
 //!
 //! A node whose op is exact arithmetic narrowed to `i32` ([`checks_its_output`]) and that is
 //! not a model output also contributes its output, offset to be non-negative
-//! ([`Remainder::Output`]): `out + 2^31 ∈ [0, 2^32)`, read from the node's reduced output
-//! opening. A model output is a public `i32` tensor and is never a member.
+//! ([`Remainder::Output`]): `out + 2^31 ∈ [0, 2^32)`. Such a node is *digit-backed*
+//! ([`is_digit_backed`]): its output is the committed digits of its segment, so every claim
+//! on the output is a member of the bucket ([`RangeBucket::members`]): the claim the node's
+//! relation runs on, taken at a point drawn for the node, and each claim a consumer appended.
+//! The node's relation therefore depends on no consumer. A model output is a public `i32`
+//! tensor and is never a member.
 //!
 //! Bucket capacity is the largest member's (padded) size, so no bucket polynomial is larger
 //! than a node's output. The layout is a pure function of the model, so prover and verifier
@@ -258,6 +262,15 @@ pub fn checks_its_output(node: &ComputationNode) -> bool {
     node.operator.spec().checks_output()
 }
 
+/// Whether `node`'s output is a bucket member ([`Remainder::Output`]): its op checks its
+/// output and it is not a model output. The output of such a node is committed, as the
+/// bucket's digits on the node's segment, so the node takes the point of its relation fresh
+/// from the transcript and every claim on its output is a member of the bucket's value
+/// sumcheck.
+pub fn is_digit_backed(model: &Model, node: &ComputationNode) -> bool {
+    checks_its_output(node) && !model.output_indices().contains(&node.idx)
+}
+
 /// The range claims `node` contributes, each with its width: its remainders' ([`node_remainders`],
 /// [`range_claims`]), and its output's when its op checks it ([`checks_its_output`]) and it is
 /// not a model output (a public `i32` tensor needs no check). `Err` for a node whose bound
@@ -270,7 +283,7 @@ pub fn node_range_claims(
     for (remainder, bound) in node_remainders(node)? {
         claims.extend(range_claims(remainder, bound));
     }
-    if checks_its_output(node) && !model.output_indices().contains(&node.idx) {
+    if is_digit_backed(model, node) {
         claims.push((
             RangeClaim {
                 remainder: Remainder::Output,
@@ -425,6 +438,9 @@ fn pack_buckets(items: Vec<BucketItem>) -> Vec<RangeBucket> {
     buckets
 }
 
+/// A bucket member: the segment it lies on, its point and its claim.
+pub type Member<'a, F> = (&'a BucketNode, Vec<F>, F);
+
 impl RangeBucket {
     /// The bucket's committed polynomials: its digit columns.
     pub fn committed_polys(&self) -> Vec<CommittedPoly> {
@@ -436,24 +452,19 @@ impl RangeBucket {
         1 << self.log_t
     }
 
-    /// The packed range check's input claim `Σ_m γ_m·claim_m` and cycle weight, from the
-    /// openings the members' nodes bound ([`RangeClaim::evaluate`]). `Err` if the accumulator
-    /// lacks a claim a member reads, or a member's claims are not at one point.
-    pub fn remainder_inputs<F: JoltField>(
+    /// The bucket's members: for each node's segment, in layout order, each claim the
+    /// accumulator holds on the segment's values, with its point. A segment has the one
+    /// claim its node bound ([`RangeClaim::evaluate`]); the segment of a node's output
+    /// ([`Remainder::Output`]) has, after that claim at the node's own point, every claim a
+    /// consumer appended on the output, each offset as the output is. `Err` if the accumulator
+    /// lacks a claim a member reads, a member's claims are not at one point, or a point is not
+    /// of the segment's size.
+    pub fn members<F: JoltField>(
         &self,
-        gammas: &[F],
         accumulator: &dyn OpeningAccumulator<F>,
-    ) -> Result<(F, CycleWeight<F>), ProofVerifyError> {
-        if gammas.len() != self.nodes.len() {
-            return Err(ProofVerifyError::Malformed(format!(
-                "{} batching coefficients for a bucket of {} members",
-                gammas.len(),
-                self.nodes.len()
-            )));
-        }
-        let mut input_claim = F::zero();
-        let mut segments = Vec::with_capacity(self.nodes.len());
-        for (n, gamma) in self.nodes.iter().zip(gammas) {
+    ) -> Result<Vec<Member<'_, F>>, ProofVerifyError> {
+        let mut members = Vec::with_capacity(self.nodes.len());
+        for n in &self.nodes {
             let range_claim = n.claim.ok_or_else(|| {
                 ProofVerifyError::Malformed(format!(
                     "node {} is in a remainder bucket without a range claim",
@@ -461,6 +472,14 @@ impl RangeBucket {
                 ))
             })?;
             let (r, claim) = range_claim.evaluate(n.idx, accumulator)?;
+            members.push((n, r, claim));
+            if range_claim.remainder == Remainder::Output {
+                for (r, out) in accumulator.node_output_claims(n.idx) {
+                    members.push((n, r, out + F::from_u64(OUTPUT_OFFSET)));
+                }
+            }
+        }
+        for (n, r, _) in &members {
             if r.len() != n.log_t {
                 return Err(ProofVerifyError::Malformed(format!(
                     "node {} remainder point has {} coordinates, expected {}",
@@ -469,6 +488,27 @@ impl RangeBucket {
                     n.log_t
                 )));
             }
+        }
+        Ok(members)
+    }
+
+    /// The packed range check's input claim `Σ_m γ_m·claim_m` and cycle weight over
+    /// `members` ([`Self::members`]). `Err` unless there is one coefficient per member.
+    pub fn remainder_inputs<F: JoltField>(
+        &self,
+        gammas: &[F],
+        members: Vec<Member<'_, F>>,
+    ) -> Result<(F, CycleWeight<F>), ProofVerifyError> {
+        if gammas.len() != members.len() {
+            return Err(ProofVerifyError::Malformed(format!(
+                "{} batching coefficients for a bucket of {} members",
+                gammas.len(),
+                members.len()
+            )));
+        }
+        let mut input_claim = F::zero();
+        let mut segments = Vec::with_capacity(members.len());
+        for ((n, r, claim), gamma) in members.into_iter().zip(gammas) {
             input_claim += *gamma * claim;
             segments.push(PackedSegment {
                 gamma: *gamma,

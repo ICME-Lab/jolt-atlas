@@ -177,8 +177,9 @@ pub fn remainder_value_params<F: JoltField, T: Transcript>(
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Result<ValueParams<F>, ProofVerifyError> {
-    let gammas: Vec<F> = transcript.challenge_scalar_powers(bucket.nodes.len());
-    let (input_claim, cycle) = bucket.remainder_inputs(&gammas, accumulator)?;
+    let members = bucket.members(accumulator)?;
+    let gammas: Vec<F> = transcript.challenge_scalar_powers(members.len());
+    let (input_claim, cycle) = bucket.remainder_inputs(&gammas, members)?;
     Ok(ValueParams {
         bucket_idx: bucket.idx,
         digits: remainder_digit_polys(bucket),

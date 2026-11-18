@@ -299,6 +299,8 @@ enum Prepared<F: JoltField, T: ProvingTranscript> {
     OneHot(Box<RaOneHotParams<F>>, Vec<usize>),
     /// A range bucket's value sumcheck parameters.
     RemainderValue(ValueParams<F>, usize),
+    /// An op relation set up, whose witness is built from the trace alone.
+    Op(Box<RelationParams<F, OpRel<F>>>),
 }
 
 /// The span a deferred relation's witness build runs under, so a batch's time stays
@@ -358,6 +360,16 @@ fn prepare<F: JoltField, T: ProvingTranscript>(
             .expect(expect),
             bucket.idx,
         ),
+        OpRelation::Op(relation)
+            if !matches!(relation.kind, OpRelKind::Gather | OpRelKind::SmallTable) =>
+        {
+            Prepared::Op(Box::new(op_rel_params(
+                relation,
+                &prover.trace,
+                &mut prover.accumulator,
+                &mut prover.transcript,
+            )))
+        }
         other => Prepared::Ready(relation_witnesses(other, prover)),
     };
     (kind, prepared)
@@ -369,7 +381,7 @@ fn build_all<F: JoltField, T: ProvingTranscript>(
     prover: &Prover<F, T>,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     let build = tracing::span!(tracing::Level::INFO, "deferred::build").entered();
-    let buckets = &prover.buckets;
+    let (buckets, trace) = (&prover.buckets, &prover.trace);
     prepared
         .into_par_iter()
         .flat_map_iter(|(kind, p)| match p {
@@ -382,7 +394,7 @@ fn build_all<F: JoltField, T: ProvingTranscript>(
                     kind
                 )
                 .entered();
-                build_one(p, buckets)
+                build_one(p, buckets, trace)
             }
         })
         .collect()
@@ -392,9 +404,11 @@ fn build_all<F: JoltField, T: ProvingTranscript>(
 fn build_one<F: JoltField, T: ProvingTranscript>(
     prepared: Prepared<F, T>,
     buckets: &crate::onnx_proof::range_bucket::BucketWitnesses,
+    trace: &Trace,
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     match prepared {
         Prepared::Ready(witnesses) => witnesses,
+        Prepared::Op(params) => vec![op_rel_prover(*params, trace, None)],
         Prepared::OneHot(params, indices) => {
             shout::prover::ra_onehot_provers_from_params::<F, T>(*params, &indices).into()
         }
@@ -442,7 +456,11 @@ pub fn relation_witnesses<F: JoltField, T: ProvingTranscript>(
             if let (Some(indices), Some(ra)) = (addresses, relation.produced.first()) {
                 prover.leave_addresses(Addresses(*ra), node.idx, indices);
             }
-            vec![op_rel_prover(params, &prover.trace, &prover.accumulator)]
+            vec![op_rel_prover(
+                params,
+                &prover.trace,
+                Some(&prover.accumulator),
+            )]
         }
         OpRelation::TableRead(read) => {
             let (witness, indices) = lookup::table_read_prover(
@@ -637,23 +655,24 @@ pub fn op_rel_tie_claims<F: JoltField>(
 }
 
 /// The prover of an op relation set up as `params`: its specialized witness, or the engine's
-/// over its witnesses.
+/// over its witnesses. A gather's and a small-table read's also read the accumulator; every
+/// other kind's is built from the trace and the setup alone, and takes none.
 pub fn op_rel_prover<F: JoltField, T: ProvingTranscript>(
     params: RelationParams<F, OpRel<F>>,
     trace: &Trace,
-    accumulator: &dyn OpeningAccumulator<F>,
+    accumulator: Option<&dyn OpeningAccumulator<F>>,
 ) -> Box<dyn DynRelationWitness<F, T>> {
+    let held =
+        || accumulator.expect("a gather or a small-table read is built with the accumulator");
     match params.relation().kind {
         OpRelKind::MeanOfSquares => {
             Box::new(MeanOfSquaresReductionProver::initialize(trace, params))
         }
         OpRelKind::Contraction => Box::new(EinsumDotProver::initialize(trace, params)),
-        OpRelKind::Gather => Box::new(GatherProver::initialize(trace, params, accumulator)),
-        OpRelKind::SmallTable => Box::new(lookup::SmallTableProver::initialize(
-            trace,
-            params,
-            accumulator,
-        )),
+        OpRelKind::Gather => Box::new(GatherProver::initialize(trace, params, held())),
+        OpRelKind::SmallTable => {
+            Box::new(lookup::SmallTableProver::initialize(trace, params, held()))
+        }
         OpRelKind::And
         | OpRelKind::Mul
         | OpRelKind::Square

@@ -6,7 +6,7 @@ use crate::onnx_proof::ops::einsum::dot::{EinsumFold, Folded};
 use atlas_algebra::{
     field::JoltField,
     poly::{
-        compact::{run_sum_unreduced, UNREDUCED_LOW_VARS},
+        compact::{LimbTable, UNREDUCED_LOW_VARS},
         eq::EqPolynomial,
         multilinear::MultilinearPolynomial,
         point::{OpeningPoint, BIG_ENDIAN},
@@ -42,6 +42,7 @@ impl<F: JoltField> EinsumFold<F> for MkKnMnLayout {
         let low_vars = r_n.r.len().min(UNREDUCED_LOW_VARS);
         let (r_high, r_low) = r_n.r.split_at(r_n.r.len() - low_vars);
         let (eq_high, eq_low) = (EqPolynomial::evals(r_high), EqPolynomial::evals(r_low));
+        let table = LimbTable::new(&eq_low);
         let right_data = right_operand.data();
         let right: Vec<F> = (0..k)
             .into_par_iter()
@@ -49,7 +50,7 @@ impl<F: JoltField> EinsumFold<F> for MkKnMnLayout {
                 let row = &right_data[j * n..(j + 1) * n];
                 row.chunks_exact(eq_low.len())
                     .zip(&eq_high)
-                    .map(|(run, &high)| high * run_sum_unreduced(run, &eq_low))
+                    .map(|(run, &high)| high * table.sum(run))
                     .sum()
             })
             .collect();

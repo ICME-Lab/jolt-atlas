@@ -14,6 +14,18 @@ pub trait SmallScalar: Copy + Ord + Sync + Allocative {
     fn narrow(self) -> Option<i64> {
         None
     }
+    /// The value as an `i32`, for a scalar type whose every value is one: such values are
+    /// summed against the limbs of field weights with 32-bit multiply-adds
+    /// ([`crate::poly::compact::LimbTable`]). `None` for the other types.
+    #[inline]
+    fn narrow_i32(self) -> Option<i32> {
+        None
+    }
+    /// `values` as `i32`s without a copy, for the scalar type that is `i32`.
+    #[inline]
+    fn as_i32_slice(_values: &[Self]) -> Option<&[i32]> {
+        None
+    }
     /// Fused absolute-difference then multiply by a field element: returns |self - other| * r.
     /// Implementations should choose the most efficient mul (prefer mul_u64 where possible).
     fn diff_mul_field<F: JoltField>(self, other: Self, r: F) -> F {
@@ -54,6 +66,10 @@ impl SmallScalar for bool {
     fn narrow(self) -> Option<i64> {
         Some(self as i64)
     }
+    #[inline]
+    fn narrow_i32(self) -> Option<i32> {
+        Some(self as i32)
+    }
 }
 
 impl SmallScalar for u8 {
@@ -73,6 +89,10 @@ impl SmallScalar for u8 {
     fn narrow(self) -> Option<i64> {
         Some(self as i64)
     }
+    #[inline]
+    fn narrow_i32(self) -> Option<i32> {
+        Some(self as i32)
+    }
 }
 impl SmallScalar for u16 {
     #[inline]
@@ -90,6 +110,10 @@ impl SmallScalar for u16 {
     #[inline]
     fn narrow(self) -> Option<i64> {
         Some(self as i64)
+    }
+    #[inline]
+    fn narrow_i32(self) -> Option<i32> {
+        Some(self as i32)
     }
 }
 impl SmallScalar for u32 {
@@ -144,6 +168,14 @@ impl SmallScalar for i32 {
     #[inline]
     fn narrow(self) -> Option<i64> {
         Some(self as i64)
+    }
+    #[inline]
+    fn narrow_i32(self) -> Option<i32> {
+        Some(self)
+    }
+    #[inline]
+    fn as_i32_slice(values: &[Self]) -> Option<&[i32]> {
+        Some(values)
     }
 }
 impl SmallScalar for i64 {

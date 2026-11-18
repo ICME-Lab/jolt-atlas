@@ -367,8 +367,8 @@ const UNREDUCED_MIN_VARS: usize = 12;
 
 /// `Σ_i eq_high[i / L]·eq_low[i mod L]·coeffs[i]` for scalars of at most 32 bits
 /// ([`SmallScalar::narrow`]), with `L = eq_low.len()` at most `2^UNREDUCED_LOW_VARS`: each
-/// run of `L` coefficients is summed against `eq_low` without reducing and multiplied by its
-/// `eq_high` entry once, and a run of zeros costs its comparisons. `coeffs.len()` must be
+/// run of `L` coefficients is summed against `eq_low` without reducing
+/// ([`LimbTable::sum`]) and multiplied by its `eq_high` entry once. `coeffs.len()` must be
 /// `eq_high.len() * eq_low.len()`.
 pub fn split_eq_sum_unreduced<T: SmallScalar, F: JoltField>(
     coeffs: &[T],
@@ -376,30 +376,166 @@ pub fn split_eq_sum_unreduced<T: SmallScalar, F: JoltField>(
     eq_low: &[F],
 ) -> F {
     assert_eq!(coeffs.len(), eq_high.len() * eq_low.len());
-    assert!(eq_low.len() <= 1 << UNREDUCED_LOW_VARS);
+    let table = LimbTable::new(eq_low);
     coeffs
         .par_chunks(eq_low.len())
         .zip(eq_high.par_iter())
         .with_min_len(RUNS_PER_TASK)
-        .map(|(run, &high)| high * run_sum_unreduced(run, eq_low))
+        .map(|(run, &high)| high * table.sum(run))
         .reduce(|| F::zero(), |acc, value| acc + value)
 }
 
 /// The fewest runs a task of [`split_eq_sum_unreduced`] takes.
 const RUNS_PER_TASK: usize = 16;
 
-/// `Σ_i weights[i]·run[i]` for scalars of at most 32 bits, reduced once.
+/// `Σ_i values[i]·limbs[k][i]` in `i64` for each limb `k`: one pass over the values with
+/// widening multiply-adds of `i32` lanes. Every `limbs[k]` is at least as long as `values`.
 #[inline]
-pub fn run_sum_unreduced<T: SmallScalar, F: JoltField>(run: &[T], weights: &[F]) -> F {
-    let mut sum = SmallAccumS::<F>::zero();
-    for (&value, weight) in run.iter().zip(weights) {
-        let value = value.narrow().unwrap_or_default();
-        sum.fmadd(weight, &value);
+fn limb_dots(values: &[i32], limbs: &[Vec<i32>]) -> [i64; LIMBS] {
+    debug_assert!(limbs.iter().all(|limb| limb.len() >= values.len()));
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe { neon::limb_dots(values, limbs) }
     }
-    if sum.is_zero() {
-        F::zero()
-    } else {
-        sum.barrett_reduce()
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        std::array::from_fn(|k| {
+            values
+                .iter()
+                .zip(&limbs[k])
+                .map(|(&x, &y)| i64::from(x) * i64::from(y))
+                .sum()
+        })
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+mod neon {
+    use super::LIMBS;
+    use core::arch::aarch64::{
+        int64x2_t, vaddvq_s64, vdupq_n_s64, vget_low_s32, vld1q_s32, vmlal_high_s32, vmlal_s32,
+    };
+
+    /// [`super::limb_dots`]: four values at a time, each limb's products accumulated in two
+    /// lanes of `i64` per half of the four.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn limb_dots(values: &[i32], limbs: &[Vec<i32>]) -> [i64; LIMBS] {
+        let quads = values.len() / 4;
+        let limb_ptrs: [*const i32; LIMBS] = std::array::from_fn(|k| limbs[k].as_ptr());
+        let mut low: [int64x2_t; LIMBS] = [vdupq_n_s64(0); LIMBS];
+        let mut high: [int64x2_t; LIMBS] = [vdupq_n_s64(0); LIMBS];
+        for quad in 0..quads {
+            // SAFETY: `4·quad + 3 < values.len()`, and every limb is at least as long.
+            unsafe {
+                let v = vld1q_s32(values.as_ptr().add(4 * quad));
+                let v_low = vget_low_s32(v);
+                for k in 0..LIMBS {
+                    let w = vld1q_s32(limb_ptrs[k].add(4 * quad));
+                    low[k] = vmlal_s32(low[k], v_low, vget_low_s32(w));
+                    high[k] = vmlal_high_s32(high[k], v, w);
+                }
+            }
+        }
+        std::array::from_fn(|k| {
+            let tail: i64 = values[4 * quads..]
+                .iter()
+                .zip(&limbs[k][4 * quads..])
+                .map(|(&x, &y)| i64::from(x) * i64::from(y))
+                .sum();
+            vaddvq_s64(low[k]) + vaddvq_s64(high[k]) + tail
+        })
+    }
+}
+
+/// The bits of one limb of a weight in a [`LimbTable`].
+const LIMB_BITS: usize = 22;
+/// The limbs of a weight: `6·22 = 132` bits hold a canonical value below `2^128`.
+const LIMBS: usize = 6;
+
+/// Field weights, each also split into [`LIMBS`] limbs of [`LIMB_BITS`] bits of its canonical
+/// integer, so that a run of 32-bit values is summed against them with integer multiply-adds
+/// alone ([`Self::sum`]). A table holds at most `2^UNREDUCED_LOW_VARS` weights.
+pub struct LimbTable<F: JoltField> {
+    weights: Vec<F>,
+    /// Limb `k` of every weight, for each `k` from the least significant; empty for a field
+    /// wider than 128 bits.
+    limbs: Vec<Vec<i32>>,
+    /// `2^(k·LIMB_BITS)` for each limb `k`.
+    powers: [F; LIMBS],
+}
+
+impl<F: JoltField> LimbTable<F> {
+    /// The table of `weights`. Panics if there are more than `2^UNREDUCED_LOW_VARS`.
+    pub fn new(weights: &[F]) -> Self {
+        assert!(weights.len() <= 1 << UNREDUCED_LOW_VARS);
+        let bytes = <F as JoltField>::NUM_BYTES;
+        let limbs = if bytes <= 16 {
+            let values: Vec<u128> = weights
+                .iter()
+                .map(|weight| {
+                    let mut buffer = [0u8; 16];
+                    weight.to_bytes_le(&mut buffer[..bytes]);
+                    u128::from_le_bytes(buffer)
+                })
+                .collect();
+            (0..LIMBS)
+                .map(|k| {
+                    values
+                        .iter()
+                        .map(|value| {
+                            ((value >> (k * LIMB_BITS)) & ((1u128 << LIMB_BITS) - 1)) as i32
+                        })
+                        .collect()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Self {
+            weights: weights.to_vec(),
+            limbs,
+            powers: std::array::from_fn(|k| F::pow2(k * LIMB_BITS)),
+        }
+    }
+
+    /// `Σ_i weights[i]·run[i]` for scalars of at most 32 bits, reduced once. A run of values
+    /// that are all `i32` ([`SmallScalar::narrow_i32`]) is summed limb by limb: each product
+    /// of a value and a limb is below `2^53` in magnitude, so a run of at most
+    /// `2^UNREDUCED_LOW_VARS` sums into an `i64` per limb exactly. Other runs are summed into
+    /// an unreduced field accumulator.
+    #[inline]
+    pub fn sum<T: SmallScalar>(&self, run: &[T]) -> F {
+        debug_assert!(run.len() <= self.weights.len());
+        if !self.limbs.is_empty() && run.first().is_some_and(|v| v.narrow_i32().is_some()) {
+            let acc = match T::as_i32_slice(run) {
+                Some(values) => limb_dots(values, &self.limbs),
+                None => {
+                    let mut buffer = [0i32; 1 << UNREDUCED_LOW_VARS];
+                    let values = &mut buffer[..run.len()];
+                    for (slot, &value) in values.iter_mut().zip(run) {
+                        *slot = value.narrow_i32().unwrap_or(0);
+                    }
+                    limb_dots(values, &self.limbs)
+                }
+            };
+            if acc == [0; LIMBS] {
+                return F::zero();
+            }
+            return acc
+                .iter()
+                .zip(&self.powers)
+                .fold(F::zero(), |sum, (&a, &power)| sum + F::from_i64(a) * power);
+        }
+        let mut sum = SmallAccumS::<F>::zero();
+        for (&value, weight) in run.iter().zip(&self.weights) {
+            sum.fmadd(weight, &value.narrow().unwrap_or_default());
+        }
+        if sum.is_zero() {
+            F::zero()
+        } else {
+            sum.barrett_reduce()
+        }
     }
 }
 
@@ -457,5 +593,41 @@ mod tests {
             let zeros = vec![0i32; len];
             assert_eq!(evaluate_mle::<_, Fp128, _>(&zeros, &r), Fp128::from(0u128));
         }
+    }
+
+    /// A limb table's sums are the field's, for `i32` runs (summed limb by limb, the extreme
+    /// values and every limb's top bit included), for a type copied into `i32`s, for a type
+    /// that is not, and for a run shorter than the table.
+    #[test]
+    fn limb_sums_are_the_field_sums() {
+        let weights: Vec<Fp128> = (0..512u128)
+            .map(|i| -Fp128::from(0x9e37_79b9_7f4a_7c15u128 * (i + 1)))
+            .collect();
+        let table = LimbTable::new(&weights);
+        let field_sum = |values: &[i64]| -> Fp128 {
+            values
+                .iter()
+                .zip(&weights)
+                .fold(Fp128::from(0u128), |acc, (&v, &w)| {
+                    acc + w * <Fp128 as crate::field::Ring>::from_i64(v)
+                })
+        };
+        let mut signed: Vec<i32> = (0..512)
+            .map(|i| ((i as i64 * 2_654_435_761) % 4_000_001 - 2_000_000) as i32)
+            .collect();
+        signed[..256].fill(i32::MIN);
+        signed[256..300].fill(i32::MAX);
+        let as_i64 = |v: &[i32]| v.iter().map(|&x| x as i64).collect::<Vec<_>>();
+        assert_eq!(table.sum(&signed), field_sum(&as_i64(&signed)));
+        assert_eq!(
+            table.sum(&signed[..101]),
+            field_sum(&as_i64(&signed[..101]))
+        );
+        let bytes: Vec<u8> = (0..512).map(|i| (i * 31 % 251) as u8).collect();
+        let wide: Vec<i64> = bytes.iter().map(|&b| b as i64).collect();
+        assert_eq!(table.sum(&bytes), field_sum(&wide));
+        let words: Vec<u32> = (0..512).map(|i| u32::MAX - i).collect();
+        let wide: Vec<i64> = words.iter().map(|&w| w as i64).collect();
+        assert_eq!(table.sum(&words), field_sum(&wide));
     }
 }

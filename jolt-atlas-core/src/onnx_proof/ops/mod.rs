@@ -139,7 +139,7 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
             .relation(*id)
             .expect("a finished schedule names its own relations")
     };
-    let mut set_up: Vec<Option<Witnesses<F, T>>> =
+    let mut set_up: Vec<Option<(&'static str, Prepared<F, T>)>> =
         schedule.relations().iter().map(|_| None).collect();
     // The span of the node whose steps are running: a node's turn starts with its reduction
     // or with a sumcheck of its own, and ends at a sumcheck over several nodes' relations.
@@ -182,9 +182,7 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
             }
             Step::Open(open) => prove_open(open, prover),
             Step::Setup(id) => {
-                let relation = relation(id);
-                let _span = witness_span(relation).entered();
-                set_up[id.0] = Some(relation_witnesses(relation.clone(), prover));
+                set_up[id.0] = Some(prepare(relation(id).clone(), prover));
             }
             Step::Sumcheck {
                 members,
@@ -216,9 +214,10 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
                 .entered();
                 let prepared: Vec<(&'static str, Prepared<F, T>)> = members
                     .iter()
-                    .map(|id| match set_up[id.0].take() {
-                        Some(witnesses) => ("ready", Prepared::Ready(witnesses)),
-                        None => prepare(relation(id).clone(), prover),
+                    .map(|id| {
+                        set_up[id.0]
+                            .take()
+                            .unwrap_or_else(|| prepare(relation(id).clone(), prover))
                     })
                     .collect();
                 let witnesses = build_all(prepared, prover);
@@ -299,14 +298,9 @@ enum Prepared<F: JoltField, T: ProvingTranscript> {
     OneHot(Box<RaOneHotParams<F>>, Vec<usize>),
     /// A range bucket's value sumcheck parameters.
     RemainderValue(ValueParams<F>, usize),
-    /// An op relation set up, whose witness is built from the trace alone.
-    Op(Box<RelationParams<F, OpRel<F>>>),
-}
-
-/// The span a deferred relation's witness build runs under, so a batch's time stays
-/// attributable to the kinds of relation in it.
-fn witness_span<F: JoltField>(relation: &OpRelation<F>) -> tracing::Span {
-    kind_span(witness_kind(relation))
+    /// An op relation set up, whose witness is built from the trace, with the input claim
+    /// its build is checked against ([`op_params`]).
+    Op(Box<RelationParams<F, OpRel<F>>>, Option<F>),
 }
 
 fn kind_span(kind: &'static str) -> tracing::Span {
@@ -360,15 +354,9 @@ fn prepare<F: JoltField, T: ProvingTranscript>(
             .expect(expect),
             bucket.idx,
         ),
-        OpRelation::Op(relation)
-            if !matches!(relation.kind, OpRelKind::Gather | OpRelKind::SmallTable) =>
-        {
-            Prepared::Op(Box::new(op_rel_params(
-                relation,
-                &prover.trace,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            )))
+        OpRelation::Op(relation) => {
+            let (params, input_claim) = op_params(relation, prover);
+            Prepared::Op(Box::new(params), input_claim)
         }
         other => Prepared::Ready(relation_witnesses(other, prover)),
     };
@@ -408,7 +396,7 @@ fn build_one<F: JoltField, T: ProvingTranscript>(
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     match prepared {
         Prepared::Ready(witnesses) => witnesses,
-        Prepared::Op(params) => vec![op_rel_prover(*params, trace, None)],
+        Prepared::Op(params, input_claim) => vec![op_rel_prover(*params, trace, input_claim)],
         Prepared::OneHot(params, indices) => {
             shout::prover::ra_onehot_provers_from_params::<F, T>(*params, &indices).into()
         }
@@ -422,6 +410,48 @@ fn build_one<F: JoltField, T: ProvingTranscript>(
     }
 }
 
+/// The sequential part of an op relation's prover: its setup. A read through committed
+/// address chunks leaves its addresses for their one-hot checks, under its read-address
+/// opening. In a test build the setup comes with the relation's input claim, which the
+/// specialized provers that sum their own witness check it against.
+fn op_params<F: JoltField, T: ProvingTranscript>(
+    relation: OpRel<F>,
+    prover: &mut Prover<F, T>,
+) -> (RelationParams<F, OpRel<F>>, Option<F>) {
+    let params = op_rel_params(
+        relation,
+        &prover.trace,
+        &mut prover.accumulator,
+        &mut prover.transcript,
+    );
+    let relation = params.relation();
+    let node = &relation.node;
+    let addresses = if relation.kind == OpRelKind::SmallTable {
+        let def = relation
+            .small_table()
+            .expect("the relation was built for a small table");
+        Some(lookup::small_table_lookup_indices(node, def, &prover.trace))
+    } else if relation.kind == OpRelKind::Gather
+        && matches!(node.operator, atlas_trace::Op::GatherLarge(_))
+    {
+        Some(gather::large::gather_lookup_indices(node, &prover.trace))
+    } else {
+        None
+    };
+    if let (Some(indices), Some(ra)) = (addresses, relation.produced.first()) {
+        prover.leave_addresses(Addresses(*ra), node.idx, indices);
+    }
+    let input_claim = cfg!(test).then(|| {
+        crate::onnx_proof::relation::relation_input_claim(
+            relation,
+            params.setup(),
+            &prover.accumulator,
+        )
+        .expect("the prover holds every claim it reads")
+    });
+    (params, input_claim)
+}
+
 /// The provers of a schedule's relation (one, or the several of a stage or a one-hot check), set up
 /// against the prover's accumulator and transcript. A lookup leaves its read addresses on the
 /// prover for the one-hot checks that follow it.
@@ -431,36 +461,8 @@ pub fn relation_witnesses<F: JoltField, T: ProvingTranscript>(
 ) -> Vec<Box<dyn DynRelationWitness<F, T>>> {
     match relation {
         OpRelation::Op(relation) => {
-            let params = op_rel_params(
-                relation,
-                &prover.trace,
-                &mut prover.accumulator,
-                &mut prover.transcript,
-            );
-            // A read through committed address chunks leaves its addresses for their
-            // one-hot checks, under its read-address opening.
-            let relation = params.relation();
-            let node = &relation.node;
-            let addresses = if relation.kind == OpRelKind::SmallTable {
-                let def = relation
-                    .small_table()
-                    .expect("the relation was built for a small table");
-                Some(lookup::small_table_lookup_indices(node, def, &prover.trace))
-            } else if relation.kind == OpRelKind::Gather
-                && matches!(node.operator, atlas_trace::Op::GatherLarge(_))
-            {
-                Some(gather::large::gather_lookup_indices(node, &prover.trace))
-            } else {
-                None
-            };
-            if let (Some(indices), Some(ra)) = (addresses, relation.produced.first()) {
-                prover.leave_addresses(Addresses(*ra), node.idx, indices);
-            }
-            vec![op_rel_prover(
-                params,
-                &prover.trace,
-                Some(&prover.accumulator),
-            )]
+            let (params, input_claim) = op_params(relation, prover);
+            vec![op_rel_prover(params, &prover.trace, input_claim)]
         }
         OpRelation::TableRead(read) => {
             let (witness, indices) = lookup::table_read_prover(
@@ -655,24 +657,24 @@ pub fn op_rel_tie_claims<F: JoltField>(
 }
 
 /// The prover of an op relation set up as `params`: its specialized witness, or the engine's
-/// over its witnesses. A gather's and a small-table read's also read the accumulator; every
-/// other kind's is built from the trace and the setup alone, and takes none.
+/// over its witnesses, built from the trace and the setup. A gather's and a small-table
+/// read's check the sum of their witness against `input_claim` when given one.
 pub fn op_rel_prover<F: JoltField, T: ProvingTranscript>(
     params: RelationParams<F, OpRel<F>>,
     trace: &Trace,
-    accumulator: Option<&dyn OpeningAccumulator<F>>,
+    input_claim: Option<F>,
 ) -> Box<dyn DynRelationWitness<F, T>> {
-    let held =
-        || accumulator.expect("a gather or a small-table read is built with the accumulator");
     match params.relation().kind {
         OpRelKind::MeanOfSquares => {
             Box::new(MeanOfSquaresReductionProver::initialize(trace, params))
         }
         OpRelKind::Contraction => Box::new(EinsumDotProver::initialize(trace, params)),
-        OpRelKind::Gather => Box::new(GatherProver::initialize(trace, params, held())),
-        OpRelKind::SmallTable => {
-            Box::new(lookup::SmallTableProver::initialize(trace, params, held()))
-        }
+        OpRelKind::Gather => Box::new(GatherProver::initialize(trace, params, input_claim)),
+        OpRelKind::SmallTable => Box::new(lookup::SmallTableProver::initialize(
+            trace,
+            params,
+            input_claim,
+        )),
         OpRelKind::And
         | OpRelKind::Mul
         | OpRelKind::Square

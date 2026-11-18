@@ -33,7 +33,7 @@ use atlas_lookup_tables::{
 };
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
 use atlas_sumcheck::{
-    opening_proof::{prover::ProverOpeningAccumulator, OpeningAccumulator},
+    opening_proof::prover::ProverOpeningAccumulator,
     ps_shout::prover::ps_read_raf_prover,
     relation::prover::{DynRelationWitness, RelationWitness},
 };
@@ -142,7 +142,7 @@ impl<F: JoltField> SmallTableProver<F> {
     pub fn initialize(
         trace: &Trace,
         params: RelationParams<F, OpRel<F>>,
-        accumulator: &dyn OpeningAccumulator<F>,
+        input_claim: Option<F>,
     ) -> Self {
         let (relation, setup) = params.into_parts();
         crate::onnx_proof::relation::note_dispatch(&relation);
@@ -178,10 +178,7 @@ impl<F: JoltField> SmallTableProver<F> {
         };
 
         #[cfg(test)]
-        {
-            let input_claim =
-                crate::onnx_proof::relation::relation_input_claim(&relation, &setup, accumulator)
-                    .expect("the prover holds every claim it reads");
+        if let Some(input_claim) = input_claim {
             let claim = (0..input_onehot.len())
                 .map(|i| {
                     let address = match &identity {
@@ -193,10 +190,10 @@ impl<F: JoltField> SmallTableProver<F> {
                     input_onehot.get_bound_coeff(i) * (table.get_bound_coeff(i) + gamma * address)
                 })
                 .sum();
-            crate::onnx_proof::testing::probe::probe_assert_eq!(input_claim, claim)
+            crate::onnx_proof::testing::probe::probe_assert_eq!(input_claim, claim);
         }
         #[cfg(not(test))]
-        let _ = accumulator;
+        let _ = input_claim;
 
         Self {
             relation,

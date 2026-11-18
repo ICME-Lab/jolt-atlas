@@ -16,7 +16,7 @@ use atlas_algebra::{
 };
 use atlas_claims::SymbolicSumcheck;
 use atlas_sumcheck::engine::{prover::ProveRounds, SumcheckError};
-use atlas_sumcheck::{opening_proof::OpeningAccumulator, relation::prover::RelationWitness};
+use atlas_sumcheck::relation::prover::RelationWitness;
 use atlas_trace::{trace::LayerData, Op, Tensor, Trace};
 use common::parallel::par_enabled;
 pub use jolt_atlas_verifier::onnx_proof::ops::gather::*;
@@ -52,7 +52,7 @@ impl<F: JoltField> GatherProver<F> {
     pub fn initialize(
         trace: &Trace,
         params: RelationParams<F, OpRel<F>>,
-        accumulator: &dyn OpeningAccumulator<F>,
+        input_claim: Option<F>,
     ) -> Self {
         let (relation, setup) = params.into_parts();
         crate::onnx_proof::relation::note_dispatch(&relation);
@@ -81,10 +81,7 @@ impl<F: JoltField> GatherProver<F> {
         let identity = IdentityPolynomial::new(num_words.log_2());
 
         #[cfg(test)]
-        {
-            let input_claim =
-                crate::onnx_proof::relation::relation_input_claim(&relation, &setup, accumulator)
-                    .expect("the prover holds every claim it reads");
+        if let Some(input_claim) = input_claim {
             let claim = (0..index_onehot.len())
                 .map(|i| {
                     let a = index_onehot.get_bound_coeff(i);
@@ -93,10 +90,10 @@ impl<F: JoltField> GatherProver<F> {
                     a * (b + gamma * int)
                 })
                 .sum();
-            crate::onnx_proof::testing::probe::probe_assert_eq!(input_claim, claim)
+            crate::onnx_proof::testing::probe::probe_assert_eq!(input_claim, claim);
         }
         #[cfg(not(test))]
-        let _ = accumulator;
+        let _ = input_claim;
         Self {
             relation,
             setup,

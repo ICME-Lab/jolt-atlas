@@ -39,7 +39,10 @@ largest nodes), `--trace` (Chrome Tracing JSON, view in `chrome://tracing`) or
 
 Models execute in exact fixed-point arithmetic over `i32`: a sum, difference, negation or
 rescaled product outside `i32` is an execution error (`WitnessOverflow`), never a clamped
-value, and such an execution has no proof.
+value, and such an execution has no proof. A chain of products (a projection, a gate
+multiply, the next projection) is computed exactly and rounded once, where the chain ends,
+not after each product: the importer places the rescales
+(`specs/deferred-rescale.md`).
 
 ### The model zoo (`models/`)
 

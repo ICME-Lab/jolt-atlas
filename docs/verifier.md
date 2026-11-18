@@ -82,6 +82,14 @@ The crate has no prover code. Three mechanisms hold that:
    the fused Mul, Square and Cube) whose output is not public is a range claim in the same
    buckets: `out + 2^31 ∈ [0, 2^32)`, read from the node's reduced output opening. A model
    output, or a node a model output is a reshape of, is a public `i32` tensor and has no claim.
+   A *wide* node (a deferred product, or a sum or reshape of one: `atlas_trace::Model::level`
+   above 1) has no claim either and no commitment: its value is an exact function of checked
+   operands, so the only claim on it is the one its consumers' relations produce and its own
+   relation consumes. What keeps the relations over it integer identities is its magnitude
+   bound, below `2^125`, which `Schedule::compile` recomputes from the model's graph and
+   constants (`Model::check_levels`): the bound is part of the trust perimeter. `Rescale`
+   (`ops/rescale.rs`) is the tie `wide(r) = out(r)·2^B + rem(r)` that takes a wide value back
+   to an `i32`, with `rem` and `out` range claims in the buckets.
 5. **The proof**: `proof.rs`. `ONNXProof` is the NARG byte string of the prover's transcript,
    with no field, key or format of its own; its doc lists the order of the stream. Under it,
    `atlas_transcript::sponge` (`SpongeVerifier`'s reads) and

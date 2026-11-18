@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-18                     |
-| Status      | proposed                       |
+| Status      | implemented (stages 1 and 3)   |
 | PR          |                                |
 | Depends on  | `specs/one-clamp.md`, `specs/one-range-check.md`, `specs/wave-schedule.md` |
 | Supersedes  | `docs/prover-plan.md` section B, item 3 (as a plan item) |
@@ -309,6 +309,52 @@ Decisions taken in review (2026-11-18): wide values are real node outputs, stage
 `i64`; deferral is per value; the lowering is free to change outputs for the sake of proving
 and verifying cost, with correctness held by the exact-chain test and no compatibility with
 the previous lowering.
+
+## As built
+
+Stages 1 and 3 landed together; stage 2 is not built.
+
+- **The wide type is `i128` from the start.** The stage-1 plan had `i64`, but the gate
+  multiply of Qwen's MLP accumulates about 75 bits, so `i64` reached only products read by a
+  sum. A deferred contraction of level-1 operands still accumulates in `i64` and is bounded
+  below `2^62`; everything else is `i128` under the `2^125` limit.
+- **The ops keep their `i32` kernels.** A wide form is three more methods on `OpSpec`
+  (`level`, `eval_wide`, `wide_bound`) with defaults that reject a wide operand, and the
+  trace keeps `node_outputs` as `i32` tensors with a wide node's value in `Trace::wide` (its
+  `i32` entry holds no data). `Einsum` and `Mul` have a `deferred` flag; `Add`, `Sub` and
+  `Reshape` take wide operands as they are.
+- **Placement is in `atlas_trace::defer`**, run by the importer on the lowered graph before
+  compilation, not in `passes::run_all`: it needs the constants' entries and the op methods.
+  It looks through reshapes, takes a two-operand sum as a reader, and defers a product only
+  when the bits its rescale would commit exceed what its absence adds to its readers'
+  remainders (so the RMSNorm gain multiply, which feeds two 8,192-wide projections, still
+  rescales).
+- **The verifier's change is small**: the `Rescale` tie, lifting coefficients in the Add/Sub
+  tie, zero rescale bits for a deferred contraction, `is_wide` in the digit-backed
+  predicate, and `Model::check_levels` in `Schedule::compile`.
+
+Measured on the benchmark machine (32 cores, 2026-11-18, 16 tokens, `bench/gate.sh` medians
+of three against the commit before):
+
+| | Qwen | GPT-2 |
+|---|---|---|
+| range-bucket bits | 801M to 474M (−41%) | 262M to 175M (−33%) |
+| prove | 4.82 s to 4.43 s (−8.1%) | 1.82 s to 1.75 s (−3.8%) |
+| openings | 1.91 s to 1.40 s (−26.7%) | 0.73 s to 0.65 s (−12.1%) |
+| commit | 0.52 s to 0.51 s | 0.15 s to 0.14 s |
+| sumchecks | 1.80 s to 1.77 s | 0.65 s to 0.68 s (+4.9%) |
+| peak memory | 8.5 GB to 7.5 GB (−12%) | 3.0 GB to 2.7 GB (−11%) |
+| verify, proof size | level | level |
+
+At 64 tokens (single runs) Qwen goes from 14.3 s to 13.2 s and 25.2 GB to 20.2 GB, GPT-2
+from 4.62 s to 4.36 s and 8.1 GB to 7.1 GB.
+
+Against the criteria: the bit count is met (41% against 30%); the prove-time bar of 10% on
+Qwen is missed (8.1%), because the commit stage did not follow the bits and the sumcheck
+stage gained two waves; verify and proof size are within bounds. GPT-2's sumcheck stage is
+4.9% slower. The exact-chain test is `atlas-trace/tests/deferred.rs` on hand-built graphs,
+not on the zoo models. Not built: deferred `Square` and `Cube`, wide `Sum` and `Neg`, and a
+wide second operand of a contraction.
 
 ## References
 

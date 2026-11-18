@@ -9,18 +9,18 @@ with 61 GB after, and each table says which.
 
 ## 1. Where the time goes (measured)
 
-**At 16 tokens** (32 cores, `bench/gate.sh`, medians of three, commit `a63c55dbc`):
+**At 16 tokens** (32 cores, `bench/gate.sh`, medians of three, commit `bb50ed8c3`):
 
 | | GPT-2 | Qwen |
 |---|---|---|
-| prove | 1.84 s | 4.89 s |
-| trace execution | 0.27 s | 0.54 s |
-| commit | 0.16 s | 0.53 s |
-| sumchecks (`iop`) | 0.65 s | 1.80 s |
-| openings | 0.76 s | 1.94 s |
+| prove | 1.75 s | 4.43 s |
+| trace execution | about 0.27 s | about 0.55 s |
+| commit | 0.14 s | 0.51 s |
+| sumchecks (`iop`) | 0.68 s | 1.77 s |
+| openings | 0.65 s | 1.40 s |
 | verify | 0.14 s | 0.33 s |
-| proof | 1.33 MiB | 1.76 MiB |
-| peak memory | 3.0 GB | 8.5 GB |
+| proof | 1.33 MiB | 1.77 MiB |
+| peak memory | 2.7 GB | 7.5 GB |
 
 Huge pages for the allocator take a further 16% off Qwen on this machine (5.82 s to 4.90 s
 on an earlier commit, kernel time halved) and are not in these numbers (`CLAUDE.md`, "Remote
@@ -132,10 +132,15 @@ a minimum task size of 128 for the shared parallel loops, which had split to sin
 queried rows added in place; the grand product's small layers; the tracer kernel reshaped,
 its rescale passes fused, and its tables generated once and beside the execution.
 
+Then to 4.43 s and 1.75 s with `specs/deferred-rescale.md`: a chain of products keeps its
+exact accumulation as a wide value and is rescaled once. The range buckets hold 41% fewer
+bits on Qwen and 33% fewer on GPT-2, the openings stage is 27% and 12% faster, and peak
+memory is 12% and 11% lower.
+
 ## 3. What is left
 
 **Targets (set 2026-11-17).** GPT-2 at 16 tokens in about 1 s and Qwen in about 3 s on the
-benchmark machine. Today 1.8 s and 4.9 s on 32 cores.
+benchmark machine. Today 1.75 s and 4.4 s on 32 cores.
 
 Every step is gated by `bench/gate.sh` on GPT-2 and Qwen (`--model models/qwen`) against the
 commit it lands on: stage times within 3%, peak memory within 5%, unless a spec states
@@ -182,11 +187,9 @@ time and 7% off peak memory at 64 tokens.
    fraction of them. Prototype first as a standalone relation test on one wide einsum
    output, with the negative test that draws the combinations before the remainder
    commitment.
-3. **Fewer rescales.** Bias fused into the einsum's rebase removes one checked node per
-   linear layer on GPT-2 (72 pairs, 2^22.8 output cells at 64 tokens; none on Qwen). One
-   rescale per linear chain is the general form and changes outputs (`SemVersion`). Fused
-   LayerNorm with one Rsqrt relation (`out²·x ≤ S³ < (out+1)²·x`) removes the widest
-   quotients in the models.
+3. **Fewer rescales: landed** (`specs/deferred-rescale.md`) for products read by products
+   or sums. Left: deferred `Square` and `Cube`, wide axis sums, a fused LayerNorm with one
+   Rsqrt relation, and why the commit stage did not follow a 41% fall in bucket bits.
 4. **Dropping the output check of Add, Sub and Sum.** Their outputs are exact functions of
    checked operands. Worth it on GPT-2 (about 40% of checked cells), not on Qwen (an
    eighth); needs a statement of what bound consumers then rely on.

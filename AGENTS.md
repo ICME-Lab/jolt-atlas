@@ -230,7 +230,13 @@ byte for byte the arkworks compressed encoding the format was defined with.
 
 ### The atlas-trace Behavioral Contract
 
-- Quantized values are `i32` at one global power-of-two scale: `q` represents `q / 2^scale`.
+- A node's value is an integer at a level `j` of one global power-of-two scale: `q` represents
+  `q / 2^(j·scale)`. A level-1 value is an `i32`. A deferred product (einsum, mul) or a sum of
+  one keeps its exact accumulation as a wide value (`i128`) at the sum of its operands' levels,
+  with a magnitude bound below `2^125` computed at compile time from the model's constants;
+  `Rescale` takes it back to level 1 by one Euclidean split, quotient in `i32`, remainder
+  captured. The importer places one rescale per chain of products
+  (`atlas_trace::defer`, `specs/deferred-rescale.md`).
 - Fused-rescale ops (einsum, mul, square, cube, mean-of-squares) accumulate in `i64`, split
   `acc = quotient·D + remainder` (Euclidean, `remainder ∈ [0, D)`), and emit the quotient,
   which must lie in `i32`. Quotient and remainder are captured in the trace for the prover.

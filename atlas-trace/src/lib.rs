@@ -5,8 +5,14 @@
 //!
 //! ## The behavioral contract
 //!
-//! - Quantized values are `i32` at one global power-of-two scale
-//!   ([`id::Scale`]): `q` represents `q / 2^scale`.
+//! - A node's value is an integer at a level `j` of one global power-of-two scale
+//!   ([`id::Scale`]): `q` represents `q / 2^(j·scale)`. A level-1 value is an `i32`. A
+//!   deferred product (einsum, mul) or a sum of one keeps its exact accumulation as a *wide*
+//!   value at the sum of its operands' levels, held as `i128`; every wide value has a
+//!   magnitude bound, computed when the model compiles from its constants, below `2^125`
+//!   ([`Model::level`], [`Model::bound`], [`defer`]).
+//! - `Rescale` takes a wide value at level `j` to level 1: `wide = quotient·2^((j−1)·scale)
+//!   + remainder` (Euclidean), the quotient in `i32`, the remainder captured.
 //! - Fused-rescale ops (einsum, mul, square, cube, mean-of-squares)
 //!   accumulate in `i64`, then split `acc = quotient·D + remainder`
 //!   (Euclidean, `remainder ∈ [0, D)`) and emit the quotient, which must lie in

@@ -353,17 +353,17 @@ pub fn inverses(values: &[Gf128]) -> Option<Vec<Gf128>> {
     Some(out)
 }
 
-/// `out_i = low_i + r·(low_i + high_i)`: the linear function through `low_i` at zero and
-/// `high_i` at one, at `r`.
-pub fn fold_pairs(out: &mut [Gf128], low: &[Gf128], high: &[Gf128], r: Gf128) {
-    assert!(low.len() == out.len() && high.len() == out.len());
+/// `low_i ← low_i + r·(low_i + high_i)`: the linear function through `low_i` at zero and
+/// `high_i` at one, at `r`, written over `low`.
+pub fn fold_into_low(low: &mut [Gf128], high: &[Gf128], r: Gf128) {
+    assert_eq!(low.len(), high.len());
     #[cfg(target_arch = "aarch64")]
     if cfg!(target_feature = "aes") || std::arch::is_aarch64_feature_detected!("aes") {
         // SAFETY: the `aes` feature, which provides `PMULL`, is present on this CPU.
-        return unsafe { neon::fold_pairs(out, low, high, r) };
+        return unsafe { neon::fold_into_low(low, high, r) };
     }
-    for ((o, &x), &y) in out.iter_mut().zip(low).zip(high) {
-        *o = x + r * (x + y);
+    for (x, &y) in low.iter_mut().zip(high) {
+        *x += r * (*x + y);
     }
 }
 
@@ -539,13 +539,13 @@ mod neon {
     }
 
     #[target_feature(enable = "neon,aes")]
-    pub(super) unsafe fn fold_pairs(out: &mut [Gf128], low: &[Gf128], high: &[Gf128], r: Gf128) {
+    pub(super) unsafe fn fold_into_low(low: &mut [Gf128], high: &[Gf128], r: Gf128) {
         // SAFETY: this function has `PMULL`.
         unsafe {
             let r = load(&r);
-            for i in 0..out.len() {
-                let (x, y) = (load(&low[i]), load(&high[i]));
-                store(&mut out[i], veorq_u64(x, mul(r, veorq_u64(x, y))));
+            for (x, y) in low.iter_mut().zip(high) {
+                let (a, b) = (load(x), load(y));
+                store(x, veorq_u64(a, mul(r, veorq_u64(a, b))));
             }
         }
     }
@@ -604,8 +604,8 @@ mod tests {
             assert!(n == 0 || inverses(&[w[0], Gf128::ZERO]).is_none());
 
             let r = random_elements(&mut rng, 1)[0];
-            let mut folded = vec![Gf128::ZERO; n];
-            fold_pairs(&mut folded, &p0, &p1, r);
+            let mut folded = p0.clone();
+            fold_into_low(&mut folded, &p1, r);
             let mut products = vec![Gf128::ZERO; n];
             mul_pairs(&mut products, &q0, &q1);
             for i in 0..n {

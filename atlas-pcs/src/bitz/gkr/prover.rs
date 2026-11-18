@@ -16,7 +16,7 @@
 
 use super::{draw_combine, draw_output_point, round_pow_bits, LayerProof, Proof};
 use crate::bitz::gf128::{
-    add_products, fold_pairs, inverses, mul_pairs, product_sums, scale_pairs, Gf128, WideSum,
+    add_products, fold_into_low, inverses, mul_pairs, product_sums, scale_pairs, Gf128, WideSum,
 };
 use crate::bitz::multilinear::{eq_table, fold_first};
 use atlas_transcript::Transcript;
@@ -189,79 +189,77 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
     }
 
     /// Runs the rounds of the row variables on a stored layer: for each row index, the run of
-    /// `P` over the live columns, then the run of `Q`. A round pairs two adjacent row indices.
+    /// `P` over the live columns, then the run of `Q`. A round pairs two adjacent row indices
+    /// and folds the pair into the first of the two, so the layer is folded where it lies:
+    /// after `j` rounds the rows left are every `2^j`-th run. The first pass gives every `P`
+    /// its column's weight, which the rounds, linear in `P`, carry: no term multiplies by a
+    /// weight, and the weights are divided out of what is returned.
+    ///
     /// `idle` is the weight of the columns that are not live: their `P` and `Q` are one, so
     /// they add `idle` to every round's `t(0)` and nothing to its leading coefficient.
     /// Returns `P` and `Q` over the live columns alone.
     fn bind_rows(
         &mut self,
-        mut layer: Vec<Gf128>,
+        layer: &mut [Gf128],
         row_point: &[Gf128],
         column_weights: &[Gf128],
         idle: Gf128,
     ) -> (Vec<Gf128>, Vec<Gf128>) {
         let columns = column_weights.len();
-        debug_assert_eq!(layer.len(), (2 * columns) << row_point.len());
-        // The sums of a pair of row indices, given as the runs `[P0, Q0, P1, Q1]`.
-        let pair_sums = |pair: &[Gf128]| -> RoundSums {
-            let (first, second) = pair.split_at(2 * columns);
-            let ((p0, q0), (p1, q1)) = (first.split_at(columns), second.split_at(columns));
+        let run = 2 * columns;
+        debug_assert_eq!(layer.len(), run << row_point.len());
+        let children = |row: &[Gf128]| (row[..columns].to_vec(), row[columns..run].to_vec());
+        let Some((&first, later)) = row_point.split_first() else {
+            return children(layer);
+        };
+        // The sums of a pair of rows, each `[P, Q]`.
+        let pair_sums = |low: &[Gf128], high: &[Gf128]| -> RoundSums {
+            let ((p0, q0), (p1, q1)) = (low.split_at(columns), high.split_at(columns));
             let [at_zero, leading] = product_sums(p0, p1, q0, q1);
             (at_zero, leading)
         };
-        let Some((&first, later)) = row_point.split_first() else {
-            let high = layer.split_off(columns);
-            return (layer, high);
-        };
-        // Every `P` carries its column's weight through the rounds, which are linear in it,
-        // so no term multiplies by a weight; the weights are divided out of what is returned.
-        layer
-            .par_chunks_mut(2 * columns)
-            .for_each(|runs| scale_pairs(&mut runs[..columns], column_weights));
         #[allow(clippy::expect_used)]
         let unweight = inverses(column_weights).expect("the point's challenges are not bits");
         let mut coordinate = first;
         let mut sums = eq_table(later)
             .par_iter()
-            .zip(layer.par_chunks_exact(4 * columns))
-            .map(|(&weight, pair)| scale_sums(weight, pair_sums(pair)))
+            .zip(layer.par_chunks_exact_mut(2 * run))
+            .map(|(&weight, pair)| {
+                let (low, high) = pair.split_at_mut(run);
+                scale_pairs(&mut low[..columns], column_weights);
+                scale_pairs(&mut high[..columns], column_weights);
+                scale_sums(weight, pair_sums(low, high))
+            })
             .reduce(|| NO_SUMS, add_sums);
         sums.0 += idle;
         let mut rest = later;
+        // The rows left are the runs at multiples of `stride`.
+        let mut stride = 1usize;
         loop {
             let r = self.round(coordinate, sums);
-            let fold = |out: &mut [Gf128], pair: &[Gf128]| {
-                let (low, high) = pair.split_at(2 * columns);
-                fold_pairs(out, low, high, r);
+            let fold = |pair: &mut [Gf128]| {
+                let (low, high) = pair.split_at_mut(stride * run);
+                fold_into_low(&mut low[..run], &high[..run], r);
             };
-            let mut folded = Gf128::zeros(layer.len() / 2);
             let Some((&next, later)) = rest.split_first() else {
-                folded
-                    .par_chunks_mut(2 * columns)
-                    .zip(layer.par_chunks_exact(4 * columns))
-                    .for_each(|(out, pair)| fold(out, pair));
-                let high = folded.split_off(columns);
-                scale_pairs(&mut folded, &unweight);
-                return (folded, high);
+                fold(layer);
+                let (mut p, q) = children(layer);
+                scale_pairs(&mut p, &unweight);
+                return (p, q);
             };
             // Fold two pairs and take the next round's sums of the result in one pass.
             sums = eq_table(later)
                 .par_iter()
-                .zip(
-                    folded
-                        .par_chunks_mut(4 * columns)
-                        .zip(layer.par_chunks_exact(8 * columns)),
-                )
-                .map(|(&weight, (out, pairs))| {
-                    let (out_low, out_high) = out.split_at_mut(2 * columns);
-                    let (low, high) = pairs.split_at(4 * columns);
-                    fold(out_low, low);
-                    fold(out_high, high);
-                    scale_sums(weight, pair_sums(out))
+                .zip(layer.par_chunks_exact_mut(4 * stride * run))
+                .map(|(&weight, pairs)| {
+                    let (low, high) = pairs.split_at_mut(2 * stride * run);
+                    fold(low);
+                    fold(high);
+                    scale_sums(weight, pair_sums(&low[..run], &high[..run]))
                 })
                 .reduce(|| NO_SUMS, add_sums);
             sums.0 += idle;
-            layer = folded;
+            stride *= 2;
             coordinate = next;
             rest = later;
         }
@@ -332,23 +330,22 @@ impl<'a> TableLayer<'a> {
     /// For every byte position and every value of the byte, the sum of the byte's nodes of
     /// each child: entry `position << 8 | value` holds `[child 0, child 1]`. A node lies
     /// inside one byte since `depth ≤ 3`.
-    fn byte_sums(&self) -> Vec<[Gf128; 2]> {
+    /// Written over `table`, whose buffer the rounds of a proof share.
+    fn byte_sums(&self, table: &mut Vec<[Gf128; 2]>) {
         let nodes_per_byte = 8usize >> self.depth;
         let pattern_bits = 1usize << self.depth;
         let pattern_mask = (1usize << pattern_bits) - 1;
-        (0..self.bytes.positions() << 8)
-            .into_par_iter()
-            .map(|index| {
-                let (position, value) = (index >> 8, index & 0xff);
-                let mut sums = [Gf128::ZERO; 2];
-                for j in 0..nodes_per_byte {
-                    let node = position * nodes_per_byte + j;
-                    let pattern = (value >> (j * pattern_bits)) & pattern_mask;
-                    sums[node & 1] += self.scaled[node << pattern_bits | pattern];
-                }
-                sums
-            })
-            .collect()
+        table.resize(self.bytes.positions() << 8, [Gf128::ZERO; 2]);
+        table.par_iter_mut().enumerate().for_each(|(index, entry)| {
+            let (position, value) = (index >> 8, index & 0xff);
+            let mut sums = [Gf128::ZERO; 2];
+            for j in 0..nodes_per_byte {
+                let node = position * nodes_per_byte + j;
+                let pattern = (value >> (j * pattern_bits)) & pattern_mask;
+                sums[node & 1] += self.scaled[node << pattern_bits | pattern];
+            }
+            *entry = sums;
+        });
     }
 
     /// A round whose block is at most a byte: the two products of a term depend only on
@@ -403,14 +400,19 @@ impl<'a> TableLayer<'a> {
     /// The first child's entries carry their row index's weight, so a term is two products
     /// with no weight in them. The products of a column are summed unreduced over a run of
     /// row indices and meet the column's weight once per run.
-    fn byte_round(&self, rest_weights: &[Gf128], column_weights: &[Gf128]) -> RoundSums {
+    fn byte_round(
+        &self,
+        rest_weights: &[Gf128],
+        column_weights: &[Gf128],
+        sums_table: &mut Vec<[Gf128; 2]>,
+    ) -> RoundSums {
         let bytes_per_half = 1usize << (self.log_block() - 4);
-        let mut sums_table = self.byte_sums();
+        self.byte_sums(sums_table);
         sums_table
             .par_chunks_mut((2 * bytes_per_half) << 8)
             .zip(rest_weights)
             .for_each(|(entries, &weight)| entries.iter_mut().for_each(|entry| entry[0] *= weight));
-        let sums_table = &sums_table;
+        let sums_table = &*sums_table;
         let rests: Vec<usize> = (0..rest_weights.len()).collect();
         column_weights
             .par_chunks(COLUMN_TILE)
@@ -464,23 +466,38 @@ impl<'a> TableLayer<'a> {
 
     /// The round's two sums for the next row variable, whose remaining row indices have the
     /// weights `rest_weights`.
-    fn round(&self, rest_weights: &[Gf128], column_weights: &[Gf128]) -> RoundSums {
+    fn round(
+        &self,
+        rest_weights: &[Gf128],
+        column_weights: &[Gf128],
+        sums_table: &mut Vec<[Gf128; 2]>,
+    ) -> RoundSums {
         if self.log_block() <= 3 {
             self.bucketed_round(rest_weights, column_weights)
         } else {
-            self.byte_round(rest_weights, column_weights)
+            self.byte_round(rest_weights, column_weights, sums_table)
         }
     }
 
-    /// The two children with the bound variables fixed, stored: for each remaining row index,
-    /// the run of the first child over the columns, then the run of the second. A node's rows
-    /// are then `2^(depth + bound + 1)`, whole bytes.
-    fn materialize(&self, rest_vars: usize) -> Vec<Gf128> {
-        let sums_table = self.byte_sums();
+    /// The two children with the bound variables fixed, stored at the front of `arena`: for
+    /// each remaining row index, the run of the first child over the columns, then the run of
+    /// the second. A node's rows are then `2^(depth + bound + 1)`, whole bytes. Returns the
+    /// length written; the arena grows only if it is shorter.
+    fn materialize(
+        &self,
+        rest_vars: usize,
+        arena: &mut Vec<Gf128>,
+        sums_table: &mut Vec<[Gf128; 2]>,
+    ) -> usize {
+        self.byte_sums(sums_table);
+        let sums_table = &*sums_table;
         let bytes_per_node = 1usize << (self.depth + self.bound + 1 - 3);
         let columns = self.bytes.columns();
-        let mut layer = Gf128::zeros((2 * columns) << rest_vars);
-        layer
+        let len = (2 * columns) << rest_vars;
+        if arena.len() < len {
+            arena.resize(len, Gf128::ZERO);
+        }
+        arena[..len]
             .par_chunks_mut(2 * columns)
             .enumerate()
             .for_each(|(rest, children)| {
@@ -491,12 +508,17 @@ impl<'a> TableLayer<'a> {
                     let values = self.bytes.row(position);
                     for ((p, q), &value) in low.iter_mut().zip(high.iter_mut()).zip(values) {
                         let entry = entries[value as usize];
-                        *p += entry[0];
-                        *q += entry[1];
+                        // The first byte overwrites what the arena held.
+                        if k == 0 {
+                            (*p, *q) = (entry[0], entry[1]);
+                        } else {
+                            *p += entry[0];
+                            *q += entry[1];
+                        }
                     }
                 }
             });
-        layer
+        len
     }
 }
 
@@ -592,6 +614,10 @@ pub fn prove<T: Transcript>(
         .fold(Gf128::ZERO, |acc, (&w, &y)| acc + w * y);
 
     let mut layers = Vec::with_capacity(log_rows);
+    // The buffer the table layers are stored in (the largest stored layer's, once that layer
+    // is folded), and the one their per-byte tables are built in.
+    let mut arena: Vec<Gf128> = Vec::new();
+    let mut sums_table: Vec<[Gf128; 2]> = Vec::new();
     for row_vars in 0..log_rows {
         // The layer below has `row_vars` row variables after its child bit.
         let depth = log_rows - row_vars - 1;
@@ -601,20 +627,30 @@ pub fn prove<T: Transcript>(
         let mut sumcheck = Sumcheck::new(claim, target_bits, transcript);
         let (p, q) = if depth >= TABLE_DEPTH {
             // A stored layer is its two children's runs, alternating.
-            let below = std::mem::take(&mut stored[row_vars + 1]);
-            sumcheck.bind_rows(below, row_point, &column_weights, idle)
+            let mut below = std::mem::take(&mut stored[row_vars + 1]);
+            let children = sumcheck.bind_rows(&mut below, row_point, &column_weights, idle);
+            if below.len() > arena.len() {
+                arena = below;
+            }
+            children
         } else {
             let table = node_table(factors, depth);
             let streamed = (TABLE_DEPTH - depth + EXTRA_TABLE_ROUNDS).min(row_vars);
             for bound in 0..streamed {
                 let layer = TableLayer::new(&bytes, &table, depth, &sumcheck.challenges);
                 let rest_weights = eq_table(&row_point[bound + 1..]);
-                let (at_zero, leading) = layer.round(&rest_weights, &column_weights);
+                let (at_zero, leading) =
+                    layer.round(&rest_weights, &column_weights, &mut sums_table);
                 sumcheck.round(row_point[bound], (at_zero + idle, leading));
             }
             let layer = TableLayer::new(&bytes, &table, depth, &sumcheck.challenges);
-            let below = layer.materialize(row_vars - streamed);
-            sumcheck.bind_rows(below, &row_point[streamed..], &column_weights, idle)
+            let len = layer.materialize(row_vars - streamed, &mut arena, &mut sums_table);
+            sumcheck.bind_rows(
+                &mut arena[..len],
+                &row_point[streamed..],
+                &column_weights,
+                idle,
+            )
         };
         let (low, high) = sumcheck.finish(spread(&p), spread(&q), column_point);
         let Sumcheck {

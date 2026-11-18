@@ -5,6 +5,10 @@
 use super::gf128::Gf128;
 use rayon::prelude::*;
 
+/// The fewest field elements a parallel pass gives one task: below it a task costs more to
+/// hand out than to run.
+pub const PAR_MIN_LEN: usize = 1 << 10;
+
 /// `eq(point, b)` for every `b` in the cube: the product over variables of `point_j` where
 /// `b_j = 1` and `1 + point_j` where `b_j = 0`.
 pub fn eq_table(point: &[Gf128]) -> Vec<Gf128> {
@@ -16,6 +20,7 @@ pub fn eq_table(point: &[Gf128]) -> Vec<Gf128> {
         let (low, high) = table.split_at_mut(len);
         low.par_iter_mut()
             .zip(high.par_iter_mut())
+            .with_min_len(PAR_MIN_LEN)
             .for_each(|(lo, hi)| {
                 *hi = *lo * coordinate;
                 *lo += *hi;
@@ -29,6 +34,7 @@ pub fn inner_product(a: &[Gf128], b: &[Gf128]) -> Gf128 {
     debug_assert_eq!(a.len(), b.len());
     a.par_iter()
         .zip(b.par_iter())
+        .with_min_len(PAR_MIN_LEN)
         .map(|(&x, &y)| x * y)
         .reduce(|| Gf128::ZERO, |x, y| x + y)
 }
@@ -37,6 +43,7 @@ pub fn inner_product(a: &[Gf128], b: &[Gf128]) -> Gf128 {
 pub fn fold_first(values: &[Gf128], r: Gf128) -> Vec<Gf128> {
     values
         .par_chunks_exact(2)
+        .with_min_len(PAR_MIN_LEN)
         .map(|pair| pair[0] + r * (pair[0] + pair[1]))
         .collect()
 }

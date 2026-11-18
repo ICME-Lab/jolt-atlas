@@ -18,7 +18,7 @@ use super::{draw_combine, draw_output_point, round_pow_bits, LayerProof, Proof};
 use crate::bitz::gf128::{
     add_products, fold_into_low, inverses, mul_pairs, product_sums, scale_pairs, Gf128, WideSum,
 };
-use crate::bitz::multilinear::{eq_table, fold_first};
+use crate::bitz::multilinear::{eq_table, fold_first, PAR_MIN_LEN};
 use atlas_transcript::Transcript;
 use rayon::prelude::*;
 
@@ -297,6 +297,7 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
             let sums = rest
                 .par_iter()
                 .zip(p.par_chunks_exact(2).zip(q.par_chunks_exact(2)))
+                .with_min_len(PAR_MIN_LEN)
                 .map(|(&w, (p, q))| scale_sums(w, term([p[0], p[1]], [q[0], q[1]])))
                 .reduce(|| NO_SUMS, add_sums);
             let r = self.round(coordinate, sums);

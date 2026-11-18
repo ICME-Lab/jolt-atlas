@@ -17,7 +17,10 @@ mod structural;
 pub use activation::SmoothReluForm;
 pub use einsum::EinsumEq;
 
-use std::{fmt, sync::OnceLock};
+use std::{
+    fmt,
+    sync::{Arc, OnceLock},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -75,12 +78,13 @@ pub trait OpSpec: fmt::Display {
 /// per model. Cloning yields a fresh (empty) cache.
 #[derive(Default)]
 pub struct TableCache {
-    cells: [OnceLock<ActivationTable>; 8],
+    cells: [OnceLock<Arc<ActivationTable>>; 8],
     softmax: OnceLock<SoftmaxTables>,
 }
 
 impl TableCache {
-    /// The table for `kind`, generated on first use.
+    /// The table for `kind`: the process's shared one, so a table the prover also reads is
+    /// generated once.
     pub fn get(&self, kind: TableKind, scale: Scale, version: SemVersion) -> &ActivationTable {
         let slot = match kind {
             TableKind::Tanh => 0,
@@ -92,7 +96,7 @@ impl TableCache {
             TableKind::GeluTanh => 6,
             TableKind::Silu => 7,
         };
-        self.cells[slot].get_or_init(|| tables::table(kind, scale, version))
+        self.cells[slot].get_or_init(|| tables::shared_table(kind, scale, version))
     }
 
     /// The log-partition softmax tables, generated on first use.

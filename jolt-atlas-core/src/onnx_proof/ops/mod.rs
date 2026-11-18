@@ -165,6 +165,7 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
                 .copied()
                 .unwrap_or(steps.len());
             prepare_wave_reductions(prover, &steps[at..end], &mut reductions);
+            prepare_wave_reads(schedule, prover, &steps[at..end]);
         }
         let step_node = match step {
             Step::Reduce { node } | Step::Point { node, .. } => Some(Some(*node)),
@@ -316,6 +317,32 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
             }
         }
     }
+}
+
+/// The trace-reading part of every table read a wave's `steps` set up, computed side by side
+/// into the prover's `read_inputs`: it depends on nothing the transcript decides.
+fn prepare_wave_reads<F: JoltField, T: ProvingTranscript>(
+    schedule: &Schedule<F>,
+    prover: &mut Prover<F, T>,
+    steps: &[Step],
+) {
+    let _span = tracing::info_span!("wave_reads").entered();
+    let reads: Vec<&lookup::TableRead> = steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Setup(id) => match schedule.relation(*id) {
+                Ok(OpRelation::TableRead(read)) => Some(read),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let trace = &prover.trace;
+    let inputs: Vec<(OpeningId, lookup::TableReadInputs)> = reads
+        .into_par_iter()
+        .map(|read| (read.operand, lookup::TableReadInputs::new(read, trace)))
+        .collect();
+    prover.read_inputs.extend(inputs);
 }
 
 /// A node's reduction, its witness-reading part done.
@@ -519,9 +546,13 @@ fn table_read_setup<F: JoltField, T: ProvingTranscript>(
     read: &lookup::TableRead,
     prover: &mut Prover<F, T>,
 ) -> lookup::DeferredWitness<F, T> {
+    let inputs = prover
+        .read_inputs
+        .remove(&read.operand)
+        .unwrap_or_else(|| lookup::TableReadInputs::new(read, &prover.trace));
     let (build, indices) = lookup::table_read_prover(
         read,
-        &prover.trace,
+        inputs,
         &mut prover.accumulator,
         &mut prover.transcript,
     );

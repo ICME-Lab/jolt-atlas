@@ -321,28 +321,27 @@ where
 /// The operand values a prefix-suffix read's table is read at, over the node's padded cells:
 /// the period remainder for a trig op's downscale, the address `u = c − x` for softmax's
 /// clamp, the node's first operand for the others.
-pub fn table_read_operand(read: &TableRead, trace: &Trace) -> Tensor<i64> {
+pub fn table_read_operand(read: &TableRead, trace: &Trace) -> Tensor<i32> {
     let node = &read.node;
     match read.table {
-        PrefixSuffixTable::RightShift => TraceView::trig_period_advice(trace, node)
-            .remainder
-            .map(|v| v as i64),
+        PrefixSuffixTable::RightShift => {
+            TraceView::trig_period_advice(trace, node).remainder.clone()
+        }
         PrefixSuffixTable::SoftmaxClamp => {
             let witness = trace
                 .softmax_witness(node.idx)
                 .expect("softmax node has a softmax witness in the trace");
-            softmax_last_axis::addresses(node, witness).map(|v| v as i64)
+            softmax_last_axis::addresses(node, witness)
         }
         PrefixSuffixTable::Relu
         | PrefixSuffixTable::ActivationClamp
-        | PrefixSuffixTable::SiluClamp => TraceView::operand_tensors(trace, node)[0]
-            .padded_pow2()
-            .map(|v| v as i64),
+        | PrefixSuffixTable::SiluClamp => TraceView::operand_tensors(trace, node)[0].padded_pow2(),
     }
 }
 
 /// The table address of each operand value of a prefix-suffix read: its `XLEN`-bit encoding.
-fn table_read_addresses(read: &TableRead, operand: &Tensor<i64>) -> Vec<LookupBits> {
+/// A period remainder is non-negative and is its own address.
+fn table_read_addresses(read: &TableRead, operand: &Tensor<i32>) -> Vec<LookupBits> {
     match read.table {
         PrefixSuffixTable::RightShift => operand
             .iter()
@@ -351,7 +350,30 @@ fn table_read_addresses(read: &TableRead, operand: &Tensor<i64>) -> Vec<LookupBi
         PrefixSuffixTable::Relu
         | PrefixSuffixTable::ActivationClamp
         | PrefixSuffixTable::SiluClamp
-        | PrefixSuffixTable::SoftmaxClamp => compute_lookup_indices(&operand.map(|v| v as i32)),
+        | PrefixSuffixTable::SoftmaxClamp => compute_lookup_indices(operand),
+    }
+}
+
+/// The part of a prefix-suffix read's prover that reads the trace and neither the accumulator
+/// nor the transcript: its operand, and the operand's table addresses as bits and as indices.
+/// The reads of a wave are prepared side by side ([`table_read_prover`]).
+pub struct TableReadInputs {
+    operand: Tensor<i32>,
+    addresses: Vec<LookupBits>,
+    indices: Vec<usize>,
+}
+
+impl TableReadInputs {
+    /// The inputs of `read` from `trace`.
+    pub fn new(read: &TableRead, trace: &Trace) -> Self {
+        let operand = table_read_operand(read, trace);
+        let addresses = table_read_addresses(read, &operand);
+        let indices = addresses.iter().map(|&x| x.into()).collect();
+        Self {
+            operand,
+            addresses,
+            indices,
+        }
     }
 }
 
@@ -382,18 +404,20 @@ where
 /// checks.
 pub fn table_read_prover<F: JoltField, T: ProvingTranscript>(
     read: &TableRead,
-    trace: &Trace,
+    inputs: TableReadInputs,
     accumulator: &mut ProverOpeningAccumulator<F>,
     transcript: &mut T,
 ) -> (DeferredWitness<F, T>, Vec<usize>) {
-    let operand = table_read_operand(read, trace);
+    let TableReadInputs {
+        operand,
+        addresses,
+        indices,
+    } = inputs;
     let r_cycle = read
         .cycle_point(&*accumulator)
         .expect("the prover holds every claim it reads");
     let claim = operand.evaluate_mle(&r_cycle.r);
     accumulator.append_virtual(transcript, read.operand, r_cycle, claim);
-    let addresses = table_read_addresses(read, &operand);
-    let indices: Vec<usize> = addresses.iter().map(|&x| x.into()).collect();
     let prover: DeferredWitness<F, T> = match read.table {
         PrefixSuffixTable::Relu => deferred(ps_read_raf_setup::<F, T, ReluTable<XLEN>, XLEN>(
             read,

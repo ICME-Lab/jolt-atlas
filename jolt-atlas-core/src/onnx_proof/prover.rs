@@ -51,6 +51,9 @@ pub struct Prover<F: JoltField, T: ProvingTranscript> {
     pub transcript: T,
     /// The read addresses each lookup left for its one-hot checks, by lookup and node.
     pub lookup_addresses: BTreeMap<(Addresses, usize), Vec<usize>>,
+    /// The trace-reading part of the table reads of the wave being proven, by operand
+    /// opening, prepared where the wave starts.
+    pub read_inputs: BTreeMap<OpeningId, crate::onnx_proof::lookup::TableReadInputs>,
     /// The packed buckets' witnesses, built with the prover (before the commitment) and read by
     /// the commitment and the buckets' sumcheck steps.
     pub buckets: BucketWitnesses,
@@ -70,6 +73,7 @@ impl<F: JoltField, T: ProvingTranscript> Prover<F, T> {
             accumulator: ProverOpeningAccumulator::new(),
             transcript: T::new(b"ONNXProof"),
             lookup_addresses: BTreeMap::new(),
+            read_inputs: BTreeMap::new(),
         }
     }
 

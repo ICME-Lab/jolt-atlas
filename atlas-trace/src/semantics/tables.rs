@@ -111,7 +111,7 @@ impl ActivationTable {
 /// This function IS the proof spec for the nonlinear operators: any change
 /// to any entry for any input requires a new [`SemVersion`].
 pub fn table(kind: TableKind, scale: Scale, version: SemVersion) -> ActivationTable {
-    match version {
+    match table_revision(version) {
         SemVersion::V1 | SemVersion::V2 | SemVersion::V3 => {}
     }
     match kind {
@@ -126,8 +126,17 @@ pub fn table(kind: TableKind, scale: Scale, version: SemVersion) -> ActivationTa
     }
 }
 
-/// [`table`], generated once per process for each `(kind, scale, version)` and shared: a
-/// table is a pure function of the three, and one model reads the same table at many nodes.
+/// The first version whose tables are `version`'s: the activation tables have not changed
+/// since [`SemVersion::V1`]. A version that changes an entry is its own revision.
+fn table_revision(version: SemVersion) -> SemVersion {
+    match version {
+        SemVersion::V1 | SemVersion::V2 | SemVersion::V3 => SemVersion::V1,
+    }
+}
+
+/// [`table`], generated once per process for each `(kind, scale)` and table revision of
+/// `version`, and shared: a table is a pure function of the three, and one model reads the
+/// same table at many nodes.
 pub fn shared_table(kind: TableKind, scale: Scale, version: SemVersion) -> Arc<ActivationTable> {
     type Cache = Mutex<HashMap<(TableKind, Scale, SemVersion), Arc<ActivationTable>>>;
     static TABLES: OnceLock<Cache> = OnceLock::new();
@@ -136,9 +145,10 @@ pub fn shared_table(kind: TableKind, scale: Scale, version: SemVersion) -> Arc<A
     let mut tables = tables
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let revision = table_revision(version);
     tables
-        .entry((kind, scale, version))
-        .or_insert_with(|| Arc::new(table(kind, scale, version)))
+        .entry((kind, scale, revision))
+        .or_insert_with(|| Arc::new(table(kind, scale, revision)))
         .clone()
 }
 
@@ -348,6 +358,12 @@ mod tests {
                 &shared,
                 &shared_table(kind, s14(), SemVersion::V1)
             ));
+            // A later version with the same tables shares it, and generates the same one.
+            assert!(Arc::ptr_eq(
+                &shared,
+                &shared_table(kind, s14(), SemVersion::V3)
+            ));
+            assert_eq!(*shared, table(kind, s14(), SemVersion::V3));
         }
         let other = shared_table(TableKind::Tanh, Scale::new(8).unwrap(), SemVersion::V1);
         assert_eq!(

@@ -522,6 +522,7 @@ fn main() {
         model: shared.model().clone(),
         input_descriptors: descriptors,
         pass_reports: vec![],
+        deferral: Default::default(),
     };
     let inputs = match &ids {
         Some(ids) => inputs_with_ids(&imported, ids, GOLDEN_SEED),

@@ -63,14 +63,18 @@ pub struct ImportedModel {
     pub input_descriptors: Vec<InputDescriptor>,
     /// Rewrites applied per pass (diagnostics).
     pub pass_reports: Vec<PassReport>,
+    /// The products lowered deferred and the rescales placed.
+    pub deferral: atlas_trace::defer::DeferReport,
 }
 
 /// Import an ONNX file end to end: decode → normalize → analyze (shapes +
-/// constant folding) → rewrite passes → lower → compile.
+/// constant folding) → rewrite passes → lower → place rescales → compile.
 pub fn load(path: &Path, opts: &LoadOptions) -> Result<ImportedModel, ImportError> {
     let lowered = load_graph(path, opts)?;
+    // Products whose consumers read their exact accumulation rescale once per chain.
+    let (graph, deferral) = atlas_trace::defer::defer_rescales(lowered.graph, opts.scale);
     let model = Model::compile(
-        lowered.graph,
+        graph,
         CompileOptions {
             scale: opts.scale,
             pad_pow2: opts.pad_pow2,
@@ -81,6 +85,7 @@ pub fn load(path: &Path, opts: &LoadOptions) -> Result<ImportedModel, ImportErro
         model,
         input_descriptors: lowered.input_descriptors,
         pass_reports: lowered.pass_reports,
+        deferral,
     })
 }
 

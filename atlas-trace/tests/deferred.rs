@@ -199,3 +199,68 @@ fn bounds_are_checked_at_compile() {
     assert_eq!(model.bound(z), 4 * (1u128 << 31) * largest);
     assert_eq!(model.bound(out), 1u128 << 31);
 }
+
+/// The placement pass on `down(relu(gate(x)) · up(x))` followed by a table read: the gate
+/// projection stays fused (a ReLU reads it), the up projection, the multiply and the down
+/// projection are deferred, and one rescale follows the down projection. The result is the
+/// exact chain value rounded once.
+#[test]
+fn the_placement_pass_rescales_a_chain_once() {
+    use atlas_trace::{Scale, defer::defer_rescales};
+    let (m, k, h, n) = (2usize, 4, 8, 4);
+    let weights = [
+        tensor(1, &[k, h], 20_000),
+        tensor(2, &[k, h], 20_000),
+        tensor(3, &[h, n], 20_000),
+    ];
+    let fused_mul = Op::Mul(op::Mul {
+        rebase: true,
+        deferred: false,
+    });
+    let mut b = GraphBuilder::new();
+    let x = b.input(&[m, k]);
+    let [w_gate, w_up, w_down] = weights.clone().map(|w| b.constant(w));
+    let gate = b.push(einsum(false), &[x, w_gate]);
+    let gate = b.push(Op::ReLU(op::ReLU), &[gate]);
+    let up = b.push(einsum(false), &[x, w_up]);
+    let gated = b.push(fused_mul, &[up, gate]);
+    let down = b.push(einsum(false), &[gated, w_down]);
+    let out = b.push(Op::ReLU(op::ReLU), &[down]);
+    b.output(out);
+    let (graph, report) = defer_rescales(b.build_graph().unwrap(), Scale::new(14).unwrap());
+    assert_eq!((report.deferred, report.rescales), (3, 1));
+    let forms: Vec<String> = graph.nodes.iter().map(|node| node.op.to_string()).collect();
+    assert_eq!(
+        forms[4..],
+        [
+            "Einsum(mk,kn->mn)",
+            "ReLU",
+            "Einsum(mk,kn->mn, deferred)",
+            "Mul(deferred)",
+            "Einsum(mk,kn->mn, deferred)",
+            "Rescale",
+            "ReLU",
+        ]
+    );
+    let model = atlas_trace::Model::compile(graph, CompileOptions::default()).unwrap();
+    let x_in = tensor(7, &[m, k], 2_000_000);
+    let got = model.forward(std::slice::from_ref(&x_in)).unwrap();
+    let scale = 1i128 << SCALE;
+    for i in 0..m {
+        for c in 0..n {
+            let exact: i128 = (0..h)
+                .map(|j| {
+                    let dot = |w: &Tensor<i32>| -> i128 {
+                        (0..k)
+                            .map(|a| x_in.data()[i * k + a] as i128 * w.data()[a * h + j] as i128)
+                            .sum()
+                    };
+                    let gate = dot(&weights[0]).div_euclid(scale).max(0);
+                    dot(&weights[1]) * gate * weights[2].data()[j * n + c] as i128
+                })
+                .sum();
+            let want = exact.div_euclid(scale * scale * scale).max(0);
+            assert_eq!(got[0].data()[i * n + c] as i128, want);
+        }
+    }
+}

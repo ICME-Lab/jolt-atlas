@@ -9,7 +9,7 @@ use crate::{
 
 use super::{
     Broadcast, Concat, Constant, Eval, EvalCtx, GatherLarge, GatherSmall, Identity, Input,
-    MoveAxis, OpSpec, PadBehavior, PadCtx, Reshape, Slice, same_dims,
+    MoveAxis, OpSpec, Operand, PadBehavior, PadCtx, Reshape, Slice, same_dims,
 };
 
 /// Pad each dim to its next power of two.
@@ -182,6 +182,33 @@ impl OpSpec for Reshape {
             });
         }
         Ok(self.shape.clone())
+    }
+
+    /// A reshape moves no element: it keeps its operand's level.
+    fn level(&self, operands: &[u8]) -> Result<u8, String> {
+        match operands {
+            [level] => Ok(*level),
+            _ => Err(format!("a reshape has one operand, not {}", operands.len())),
+        }
+    }
+
+    fn eval_wide(
+        &self,
+        inputs: &[Operand<'_>],
+        levels: &[u8],
+        _ctx: &EvalCtx<'_>,
+    ) -> Result<Eval, KernelError> {
+        match inputs {
+            [Operand::Wide(wide)] => Ok(Eval::wide((*wide).clone().reshape(&self.shape)?)),
+            _ => Err(KernelError::NoWideForm {
+                op: "reshape",
+                levels: levels.to_vec(),
+            }),
+        }
+    }
+
+    fn wide_bound(&self, operands: &[u128], _dims: &[&[usize]]) -> u128 {
+        operands.first().copied().unwrap_or(u128::MAX)
     }
 
     fn padding(&self) -> PadBehavior {

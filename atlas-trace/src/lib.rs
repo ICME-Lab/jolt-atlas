@@ -33,6 +33,7 @@
 
 #[cfg(any(test, feature = "test-util"))]
 pub mod builder;
+pub mod defer;
 pub mod error;
 mod exec;
 pub mod graph;

@@ -24,13 +24,18 @@ pub(super) fn rebase_eval(
     divisor: i64,
     op: &'static str,
 ) -> Result<Eval, KernelError> {
-    let mut quotient = Vec::with_capacity(acc.len());
-    let mut remainder = Vec::with_capacity(acc.len());
-    for &v in acc.data() {
-        let (q, r) = rebase(v, divisor);
-        quotient.push(q);
-        remainder.push(r);
-    }
+    #[cfg(feature = "rayon")]
+    let (quotient, remainder): (Vec<i64>, Vec<i32>) = {
+        use rayon::prelude::*;
+        acc.data()
+            .par_iter()
+            .with_min_len(crate::tensor::PAR_MIN_LEN)
+            .map(|&v| rebase(v, divisor))
+            .unzip()
+    };
+    #[cfg(not(feature = "rayon"))]
+    let (quotient, remainder): (Vec<i64>, Vec<i32>) =
+        acc.data().iter().map(|&v| rebase(v, divisor)).unzip();
     let dims = acc.dims();
     let quotient = Tensor::new(quotient, dims).expect("same length");
     Ok(Eval {

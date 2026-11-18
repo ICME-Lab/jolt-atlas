@@ -24,6 +24,11 @@ pub fn narrow_i32(v: i64) -> Option<i32> {
 /// prover.
 pub fn rebase(acc: i64, divisor: i64) -> (i64, i32) {
     debug_assert!(divisor > 0);
+    // For a power of two the Euclidean split is the arithmetic shift and the low bits.
+    if divisor & (divisor - 1) == 0 {
+        let shift = divisor.trailing_zeros();
+        return (acc >> shift, (acc & (divisor - 1)) as i32);
+    }
     (acc.div_euclid(divisor), acc.rem_euclid(divisor) as i32)
 }
 
@@ -120,6 +125,32 @@ mod tests {
             let (q, r) = rebase(acc, d);
             assert_eq!(q * d + r as i64, acc);
             assert!((0..d).contains(&(r as i64)));
+        }
+    }
+
+    /// The split by a power of two is the Euclidean one, at the ends of `i64` too.
+    #[test]
+    fn rebase_by_a_power_of_two_is_euclidean() {
+        let values = [
+            0,
+            1,
+            -1,
+            15,
+            16,
+            17,
+            -15,
+            -16,
+            -17,
+            i64::MAX,
+            i64::MIN,
+            i64::MIN + 1,
+        ];
+        for shift in [0u32, 1, 4, 14, 30] {
+            let d = 1i64 << shift;
+            for &acc in &values {
+                let want = (acc.div_euclid(d), acc.rem_euclid(d) as i32);
+                assert_eq!(rebase(acc, d), want, "{acc} by {d}");
+            }
         }
     }
 

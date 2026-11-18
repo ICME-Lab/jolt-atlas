@@ -21,11 +21,30 @@ pub(super) fn narrow(
     op: &'static str,
     what: &'static str,
 ) -> Result<Tensor<i32>, KernelError> {
-    let data = wide
-        .data()
-        .iter()
-        .map(|&value| narrow_i32(value).ok_or(KernelError::WitnessOverflow { op, what, value }))
-        .collect::<Result<Vec<i32>, _>>()?;
+    let overflow = |value: &i64| narrow_i32(*value).is_none();
+    #[cfg(feature = "rayon")]
+    let (first, data): (Option<&i64>, Vec<i32>) = {
+        use rayon::prelude::*;
+        let values = wide
+            .data()
+            .par_iter()
+            .with_min_len(crate::tensor::PAR_MIN_LEN);
+        match values.clone().find_first(|value| overflow(value)) {
+            Some(value) => (Some(value), Vec::new()),
+            None => (None, values.map(|&value| value as i32).collect()),
+        }
+    };
+    #[cfg(not(feature = "rayon"))]
+    let (first, data): (Option<&i64>, Vec<i32>) = match wide.data().iter().find(|v| overflow(v)) {
+        Some(value) => (Some(value), Vec::new()),
+        None => (
+            None,
+            wide.data().iter().map(|&value| value as i32).collect(),
+        ),
+    };
+    if let Some(&value) = first {
+        return Err(KernelError::WitnessOverflow { op, what, value });
+    }
     Ok(Tensor::new(data, wide.dims())?)
 }
 
@@ -34,7 +53,7 @@ pub(super) fn narrow(
 fn checked_chain(
     inputs: &[&Tensor<i32>],
     op: &'static str,
-    combine: impl Fn(i64, i64) -> i64,
+    combine: impl Fn(i64, i64) -> i64 + Sync,
 ) -> Result<Tensor<i32>, KernelError> {
     let mut acc = inputs[0].clone();
     for rhs in &inputs[1..] {

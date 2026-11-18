@@ -14,6 +14,10 @@ use std::sync::Arc;
 
 use crate::error::ShapeError;
 
+/// The fewest elements a parallel elementwise pass gives one task.
+#[cfg(feature = "rayon")]
+pub(crate) const PAR_MIN_LEN: usize = 1 << 12;
+
 /// Element types a [`Tensor`] may hold.
 pub trait Element:
     Copy + Clone + Default + PartialEq + std::fmt::Debug + Send + Sync + 'static
@@ -168,7 +172,7 @@ impl<T: Element> Tensor<T> {
     pub fn zip_map<U: Element, V: Element>(
         &self,
         rhs: &Tensor<U>,
-        f: impl Fn(T, U) -> V,
+        f: impl Fn(T, U) -> V + Sync,
     ) -> Result<Tensor<V>, ShapeError> {
         if self.dims != rhs.dims {
             return Err(ShapeError::BroadcastIncompatible {
@@ -176,14 +180,25 @@ impl<T: Element> Tensor<T> {
                 rhs: rhs.dims.clone(),
             });
         }
+        #[cfg(feature = "rayon")]
+        let data: Vec<V> = {
+            use rayon::prelude::*;
+            self.data
+                .par_iter()
+                .zip(rhs.data.par_iter())
+                .with_min_len(PAR_MIN_LEN)
+                .map(|(&a, &b)| f(a, b))
+                .collect()
+        };
+        #[cfg(not(feature = "rayon"))]
+        let data: Vec<V> = self
+            .data
+            .iter()
+            .zip(rhs.data.iter())
+            .map(|(&a, &b)| f(a, b))
+            .collect();
         Ok(Tensor {
-            data: Arc::new(
-                self.data
-                    .iter()
-                    .zip(rhs.data.iter())
-                    .map(|(&a, &b)| f(a, b))
-                    .collect(),
-            ),
+            data: Arc::new(data),
             dims: self.dims.clone(),
         })
     }

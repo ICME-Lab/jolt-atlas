@@ -197,21 +197,24 @@ fn columns(values: &[i32], run: usize, start: usize, width: usize, j: usize) -> 
     &values[j * run + start..j * run + start + width]
 }
 
-/// The bytes of output a column tile of [`scaled_rows_acc_i64`] holds: a quarter of a megabyte,
+/// The bytes of output one task of [`scaled_rows_acc_i64`] holds: a quarter of a megabyte,
 /// inside a second-level cache.
 const TILE_BYTES: usize = 1 << 18;
 /// The fewest columns in a tile, so that a run of the second operand is worth a loop.
 const MIN_TILE: usize = 64;
+/// The fewest rows of the second operand one task takes.
+const MIN_PART: usize = 16;
 
 /// The contraction when the second operand is laid out summed letters first and the output is
 /// the first operand's kept letters followed by the second's (`mk,kn->mn`): an output row is
 /// the sum of the second operand's rows scaled by the first operand's entries, read in place.
 /// `None` if the equation is not of that form.
 ///
-/// The output's columns are taken in tiles. Within a tile each row of the second operand is
-/// read once and added to every output row, so the second operand is read from memory once
-/// whatever the number of output rows, and the tile's outputs stay in cache. An output is
-/// the same `i64` sum of `i32` products in either loop order.
+/// A task takes a tile of the output's columns, narrow enough that its outputs stay in
+/// cache, and a run of the second operand's rows, which it reads once, in order, adding each
+/// to every output row. The tasks of one tile sum into blocks of their own, which are added
+/// up at the end. The second operand is read from memory once whatever the number of output
+/// rows, and an output is the same `i64` sum of `i32` products in any order.
 fn scaled_rows_acc_i64(
     eq: &EinsumEq,
     inputs: &[&Tensor<i32>],
@@ -247,25 +250,26 @@ fn scaled_rows_acc_i64(
     #[cfg(feature = "rayon")]
     let threads = rayon::current_num_threads();
     #[cfg(not(feature = "rayon"))]
-    let threads = 1;
-    let cached = (TILE_BYTES / (rows * size_of::<i64>())).max(MIN_TILE);
-    let tile = run.div_ceil(4 * threads).clamp(MIN_TILE, cached);
+    let threads = 1usize;
+    let tile = run.min((TILE_BYTES / (rows * size_of::<i64>())).max(MIN_TILE));
+    let tiles = run.div_ceil(tile);
+    // About two tasks a thread: the second operand's rows are split when the tiles are few.
+    let parts = (2 * threads)
+        .div_ceil(tiles)
+        .clamp(1, sum_total.div_ceil(MIN_PART));
+    let part = sum_total.div_ceil(parts).next_multiple_of(4);
+    let parts = sum_total.div_ceil(part);
 
-    // `tiles[t][row]`: the columns of tile `t` in output row `row`.
-    let mut tiles: Vec<Vec<&mut [i64]>> = (0..run.div_ceil(tile))
-        .map(|_| Vec::with_capacity(rows))
-        .collect();
-    for row in out.chunks_mut(run) {
-        for (columns, tile) in row.chunks_mut(tile).zip(&mut tiles) {
-            tile.push(columns);
-        }
-    }
     // Four rows of the second operand at a time: an output run is read and written once for
     // the four, and a group whose scales are all zero (padding, mostly) is skipped.
-    let fill = |(index, mut outputs): (usize, Vec<&mut [i64]>)| {
-        let start = index * tile;
-        let width = outputs[0].len();
-        for (values, scales) in b.chunks(4 * run).zip(a.chunks(4 * rows)) {
+    let block = |task: usize| -> Vec<i64> {
+        let (tile_index, part_index) = (task / parts, task % parts);
+        let start = tile_index * tile;
+        let width = tile.min(run - start);
+        let (first, last) = (part_index * part, ((part_index + 1) * part).min(sum_total));
+        let (values, scales) = (&b[first * run..last * run], &a[first * rows..last * rows]);
+        let mut block = vec![0i64; rows * width];
+        for (values, scales) in values.chunks(4 * run).zip(scales.chunks(4 * rows)) {
             if scales.len() == 4 * rows {
                 let (v0, v1) = (
                     columns(values, run, start, width, 0),
@@ -275,7 +279,7 @@ fn scaled_rows_acc_i64(
                     columns(values, run, start, width, 2),
                     columns(values, run, start, width, 3),
                 );
-                for (row, output) in outputs.iter_mut().enumerate() {
+                for (row, output) in block.chunks_exact_mut(width).enumerate() {
                     let s = [0, 1, 2, 3].map(|j| scales[j * rows + row]);
                     if s == [0; 4] {
                         continue;
@@ -292,15 +296,26 @@ fn scaled_rows_acc_i64(
             } else {
                 for (j, scales) in scales.chunks_exact(rows).enumerate() {
                     let values = columns(values, run, start, width, j);
-                    for (output, &scale) in outputs.iter_mut().zip(scales) {
+                    for (output, &scale) in block.chunks_exact_mut(width).zip(scales) {
                         if scale == 0 {
                             continue;
                         }
-                        let scale = scale as i64;
                         for (o, &value) in output.iter_mut().zip(values) {
-                            *o += scale * value as i64;
+                            *o += scale as i64 * value as i64;
                         }
                     }
+                }
+            }
+        }
+        block
+    };
+    // An output row is, tile by tile, the sum of the tile's blocks' rows.
+    let gather = |blocks: &[Vec<i64>], (row, out): (usize, &mut [i64])| {
+        for (tile_blocks, out) in blocks.chunks(parts).zip(out.chunks_mut(tile)) {
+            for block in tile_blocks {
+                let width = out.len();
+                for (o, &value) in out.iter_mut().zip(&block[row * width..(row + 1) * width]) {
+                    *o += value;
                 }
             }
         }
@@ -308,10 +323,18 @@ fn scaled_rows_acc_i64(
     #[cfg(feature = "rayon")]
     {
         use rayon::prelude::*;
-        tiles.into_par_iter().enumerate().for_each(fill);
+        let blocks: Vec<Vec<i64>> = (0..tiles * parts).into_par_iter().map(block).collect();
+        out.par_chunks_mut(run)
+            .enumerate()
+            .for_each(|row| gather(&blocks, row));
     }
     #[cfg(not(feature = "rayon"))]
-    tiles.into_iter().enumerate().for_each(fill);
+    {
+        let blocks: Vec<Vec<i64>> = (0..tiles * parts).map(block).collect();
+        out.chunks_mut(run)
+            .enumerate()
+            .for_each(|row| gather(&blocks, row));
+    }
     Some(out)
 }
 
@@ -627,13 +650,17 @@ mod tests {
         }
     }
 
-    /// A matrix product whose columns span several tiles, the last one partial, with a row of
-    /// zero scales, against the sum written out; and the one-column and one-row products.
+    /// A matrix product against the sum written out, with a row of zero scales: one whose
+    /// columns span several tiles, the last one partial (many output rows make a tile
+    /// narrow); one whose summed axis splits into several parts, the last one short of four
+    /// rows; and the one-column and one-row products.
     #[test]
     fn tiled_matmul_matches_the_sum() {
         let eq: EinsumEq = "mk,kn->mn".parse().unwrap();
+        let many_rows = TILE_BYTES / (MIN_TILE * size_of::<i64>()) + 1;
         for (dm, dk, dn) in [
-            (3usize, 5usize, 5 * MIN_TILE + 17),
+            (many_rows, 6usize, 2 * MIN_TILE + 17),
+            (2, 4 * MIN_PART + 3, 9),
             (4, 3, 1),
             (1, 7, MIN_TILE),
         ] {

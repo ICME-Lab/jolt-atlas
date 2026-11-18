@@ -3,8 +3,8 @@
 //! The four layers nearest the leaves are never stored: a node there is a product of at most
 //! eight adjacent rows of one column, so it is read from a table indexed by the node and the
 //! column's bits under it. A sumcheck on such a layer runs its first rounds on those tables and
-//! stores the layer only once enough row variables are bound for it to be a small fraction of
-//! the bit count. Layers above are stored.
+//! stores the layer once enough row variables are bound for it to be a sixteenth of the bit
+//! count. Layers above are stored.
 //!
 //! Everything is laid out for sequential passes. The bits are copied once into bytes ordered
 //! by row, then column, so a pass over one byte position reads one table row and the columns'
@@ -24,11 +24,6 @@ use rayon::prelude::*;
 
 /// Layers within this many levels of the leaves are read from tables.
 const TABLE_DEPTH: usize = 4;
-
-/// A sumcheck on a table layer runs this many rounds on the tables beyond the ones that bring
-/// the layer to a sixteenth of the bit count: a table round is one pass over the bits, and
-/// each halves what is then stored.
-const EXTRA_TABLE_ROUNDS: usize = 2;
 
 /// A table round takes the columns this many at a time, so the children it accumulates for
 /// them stay in the first-level cache.
@@ -635,7 +630,9 @@ pub fn prove<T: Transcript>(
             children
         } else {
             let table = node_table(factors, depth);
-            let streamed = (TABLE_DEPTH - depth + EXTRA_TABLE_ROUNDS).min(row_vars);
+            // Rounds on the tables until the layer is a sixteenth of the bit count: the size
+            // of the largest stored layer, whose buffer it is then stored in.
+            let streamed = (TABLE_DEPTH - depth).min(row_vars);
             for bound in 0..streamed {
                 let layer = TableLayer::new(&bytes, &table, depth, &sumcheck.challenges);
                 let rest_weights = eq_table(&row_point[bound + 1..]);

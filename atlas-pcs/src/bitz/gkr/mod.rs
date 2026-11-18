@@ -197,9 +197,25 @@ mod tests {
     }
 
     fn instance(log_rows: usize, log_columns: usize, seed: u64) -> Instance {
+        instance_with(log_rows, log_columns, seed, |_| false)
+    }
+
+    /// An instance whose columns `empty` selects have no bit set.
+    fn instance_with(
+        log_rows: usize,
+        log_columns: usize,
+        seed: u64,
+        empty: impl Fn(usize) -> bool,
+    ) -> Instance {
         let mut rng = StdRng::seed_from_u64(seed);
         let n = log_rows + log_columns;
-        let words: Vec<u64> = (0..1usize << (n - 6)).map(|_| rng.next_u64()).collect();
+        let mut words: Vec<u64> = (0..1usize << (n - 6)).map(|_| rng.next_u64()).collect();
+        let words_per_column = (1usize << log_rows) / 64;
+        for (column, column_words) in words.chunks_mut(words_per_column).enumerate() {
+            if empty(column) {
+                column_words.fill(0);
+            }
+        }
         let factors: Vec<Gf128> = (0..1usize << log_rows).map(|_| random(&mut rng)).collect();
         // Each column's product, one row at a time.
         let outputs: Vec<Gf128> = (0..1usize << log_columns)
@@ -249,6 +265,28 @@ mod tests {
             let (point, value) = check(&instance, &instance.outputs, &instance.proof)
                 .unwrap_or_else(|e| panic!("{log_rows} x {log_columns}: {e}"));
             assert_eq!(point.len(), log_rows + log_columns);
+            assert_eq!(value, evaluate_bits(&instance.words, &point));
+        }
+    }
+
+    /// Columns with no bit set have the product one and leave the claim on the bits true:
+    /// some empty, all but one empty, and all empty.
+    #[test]
+    fn empty_columns_verify() {
+        type Empty = fn(usize) -> bool;
+        let cases: [(usize, usize, Empty); 4] = [
+            (8, 5, |column| column % 3 != 1),
+            (10, 6, |column| column != 17),
+            (9, 4, |_| true),
+            (7, 0, |_| true),
+        ];
+        for (log_rows, log_columns, empty) in cases {
+            let instance = instance_with(log_rows, log_columns, 5, empty);
+            for (column, &output) in instance.outputs.iter().enumerate() {
+                assert!(!empty(column) || output == Gf128::ONE);
+            }
+            let (point, value) = check(&instance, &instance.outputs, &instance.proof)
+                .unwrap_or_else(|e| panic!("{log_rows} x {log_columns}: {e}"));
             assert_eq!(value, evaluate_bits(&instance.words, &point));
         }
     }

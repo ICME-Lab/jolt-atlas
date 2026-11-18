@@ -39,40 +39,42 @@ const COLUMN_RUN: usize = 256;
 const COLUMN_TILE: usize = 4096;
 const REST_RUN: usize = 64;
 
-/// The bit matrix as bytes: the byte at `position << log_columns | column` holds the eight
-/// rows `8·position ..` of `column`, low row in the low bit.
+/// The live columns of the bit matrix as bytes: the byte at `position · columns + i` holds
+/// the eight rows `8·position ..` of the `i`-th live column, low row in the low bit. A column
+/// with no bit set is not live: every node of its product tree is one, so it is never read.
 struct ByteMatrix {
     bytes: Vec<u8>,
     log_rows: usize,
-    log_columns: usize,
+    columns: usize,
 }
 
 impl ByteMatrix {
-    /// From the word-packed bits, bit `(row, column)` at index `row + 2^log_rows · column`.
-    fn new(words: &[u64], log_rows: usize, log_columns: usize) -> Self {
-        let columns = 1usize << log_columns;
+    /// From the word-packed bits, bit `(row, column)` at index `row + 2^log_rows · column`,
+    /// keeping the columns `live`.
+    fn new(words: &[u64], log_rows: usize, live: &[usize]) -> Self {
+        let columns = live.len();
         let words_per_column = (1usize << log_rows) / 64;
-        let mut bytes = vec![0u8; words.len() * 8];
+        let mut bytes = vec![0u8; words_per_column * 8 * columns];
         bytes
             .par_chunks_mut(8 * columns)
             .enumerate()
             .for_each(|(word_index, rows)| {
-                for column in 0..columns {
+                for (at, &column) in live.iter().enumerate() {
                     let word = words[column * words_per_column + word_index];
                     for (k, byte) in word.to_le_bytes().into_iter().enumerate() {
-                        rows[k * columns + column] = byte;
+                        rows[k * columns + at] = byte;
                     }
                 }
             });
         Self {
             bytes,
             log_rows,
-            log_columns,
+            columns,
         }
     }
 
     fn columns(&self) -> usize {
-        1 << self.log_columns
+        self.columns
     }
 
     /// The number of byte positions in a column.
@@ -80,9 +82,9 @@ impl ByteMatrix {
         (1 << self.log_rows) / 8
     }
 
-    /// Every column's byte at `position`.
+    /// Every live column's byte at `position`.
     fn row(&self, position: usize) -> &[u8] {
-        &self.bytes[position << self.log_columns..(position + 1) << self.log_columns]
+        &self.bytes[position * self.columns..(position + 1) * self.columns]
     }
 }
 
@@ -187,13 +189,16 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
     }
 
     /// Runs the rounds of the row variables on a stored layer: for each row index, the run of
-    /// `P` over the columns, then the run of `Q`. A round pairs two adjacent row indices.
-    /// Returns `P` and `Q` over the columns alone.
+    /// `P` over the live columns, then the run of `Q`. A round pairs two adjacent row indices.
+    /// `idle` is the weight of the columns that are not live: their `P` and `Q` are one, so
+    /// they add `idle` to every round's `t(0)` and nothing to its leading coefficient.
+    /// Returns `P` and `Q` over the live columns alone.
     fn bind_rows(
         &mut self,
         mut layer: Vec<Gf128>,
         row_point: &[Gf128],
         column_weights: &[Gf128],
+        idle: Gf128,
     ) -> (Vec<Gf128>, Vec<Gf128>) {
         let columns = column_weights.len();
         debug_assert_eq!(layer.len(), (2 * columns) << row_point.len());
@@ -221,6 +226,7 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
             .zip(layer.par_chunks_exact(4 * columns))
             .map(|(&weight, pair)| scale_sums(weight, pair_sums(pair)))
             .reduce(|| NO_SUMS, add_sums);
+        sums.0 += idle;
         let mut rest = later;
         loop {
             let r = self.round(coordinate, sums);
@@ -254,6 +260,7 @@ impl<'t, T: Transcript> Sumcheck<'t, T> {
                     scale_sums(weight, pair_sums(out))
                 })
                 .reduce(|| NO_SUMS, add_sums);
+            sums.0 += idle;
             layer = folded;
             coordinate = next;
             rest = later;
@@ -509,8 +516,39 @@ pub fn prove<T: Transcript>(
         "a column is whole bytes of whole table nodes"
     );
     assert_eq!(words.len() * 64, 1 << (log_rows + log_columns), "bit count");
-    let columns = 1usize << log_columns;
-    let bytes = ByteMatrix::new(words, log_rows, log_columns);
+    // The columns with a bit set. With none, the first column stands in: its tree is all ones
+    // like any other's.
+    let words_per_column = (1usize << log_rows) / 64;
+    let mut live: Vec<usize> = (0..1usize << log_columns)
+        .into_par_iter()
+        .filter(|&column| {
+            words[column * words_per_column..(column + 1) * words_per_column]
+                .iter()
+                .any(|&word| word != 0)
+        })
+        .collect();
+    if live.is_empty() {
+        live.push(0);
+    }
+    let live = &live;
+    let columns = live.len();
+    // `values` over the live columns as a vector over all columns, one elsewhere.
+    let spread = |values: &[Gf128]| -> Vec<Gf128> {
+        let mut all = vec![Gf128::ONE; 1 << log_columns];
+        for (&column, &value) in live.iter().zip(values) {
+            all[column] = value;
+        }
+        all
+    };
+    // The weights of the live columns, and the summed weight of the rest: an `eq` table sums
+    // to one.
+    let live_weights = |column_point: &[Gf128]| -> (Vec<Gf128>, Gf128) {
+        let all = eq_table(column_point);
+        let weights: Vec<Gf128> = live.iter().map(|&column| all[column]).collect();
+        let idle = weights.iter().fold(Gf128::ONE, |acc, &w| acc + w);
+        (weights, idle)
+    };
+    let bytes = ByteMatrix::new(words, log_rows, live);
 
     // The stored layers, `stored[i] = L_i` for `i ≤ log_rows − TABLE_DEPTH`, each indexed by
     // column, then node.
@@ -542,7 +580,7 @@ pub fn prove<T: Transcript>(
             });
         stored[i] = above;
     }
-    let outputs = stored[0].clone();
+    let outputs = spread(&stored[0]);
     drop(span);
 
     #[allow(clippy::expect_used)]
@@ -559,26 +597,26 @@ pub fn prove<T: Transcript>(
         let depth = log_rows - row_vars - 1;
         let _span = tracing::info_span!("gkr_layer", depth).entered();
         let (row_point, column_point) = point.split_at(row_vars);
-        let column_weights = eq_table(column_point);
+        let (column_weights, idle) = live_weights(column_point);
         let mut sumcheck = Sumcheck::new(claim, target_bits, transcript);
         let (p, q) = if depth >= TABLE_DEPTH {
             // A stored layer is its two children's runs, alternating.
             let below = std::mem::take(&mut stored[row_vars + 1]);
-            sumcheck.bind_rows(below, row_point, &column_weights)
+            sumcheck.bind_rows(below, row_point, &column_weights, idle)
         } else {
             let table = node_table(factors, depth);
             let streamed = (TABLE_DEPTH - depth + EXTRA_TABLE_ROUNDS).min(row_vars);
             for bound in 0..streamed {
                 let layer = TableLayer::new(&bytes, &table, depth, &sumcheck.challenges);
                 let rest_weights = eq_table(&row_point[bound + 1..]);
-                let sums = layer.round(&rest_weights, &column_weights);
-                sumcheck.round(row_point[bound], sums);
+                let (at_zero, leading) = layer.round(&rest_weights, &column_weights);
+                sumcheck.round(row_point[bound], (at_zero + idle, leading));
             }
             let layer = TableLayer::new(&bytes, &table, depth, &sumcheck.challenges);
             let below = layer.materialize(row_vars - streamed);
-            sumcheck.bind_rows(below, &row_point[streamed..], &column_weights)
+            sumcheck.bind_rows(below, &row_point[streamed..], &column_weights, idle)
         };
-        let (low, high) = sumcheck.finish(p, q, column_point);
+        let (low, high) = sumcheck.finish(spread(&p), spread(&q), column_point);
         let Sumcheck {
             rounds, challenges, ..
         } = sumcheck;
@@ -596,7 +634,7 @@ pub fn prove<T: Transcript>(
     // over the rows of eq · (y + 1) · bits(·, column point).
     let _span = tracing::info_span!("gkr_leaves").entered();
     let (row_point, column_point) = point.split_at(log_rows);
-    let column_weights = eq_table(column_point);
+    let (column_weights, _) = live_weights(column_point);
     let bits_at_columns: Vec<Gf128> = (0..bytes.positions())
         .into_par_iter()
         .flat_map_iter(|position| {

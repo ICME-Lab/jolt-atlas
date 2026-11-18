@@ -20,14 +20,19 @@ impl Drop for ParallelFlagGuard {
     }
 }
 
+/// The fewest items a parallel loop gives one task when parallel execution is enabled.
+/// Most of the loops that use it run a few field operations per item, and a task costs more
+/// to hand out than a few items cost to run; a loop whose items are large passes its own
+/// length with [`par_enabled_with`].
+pub const PAR_MIN_LEN: usize = 128;
+
 /// Returns the shared minimum parallel chunk length.
 ///
-/// When parallel execution is enabled, this returns `1`, which is effectively
-/// Rayon default behavior. When disabled, this returns `usize::MAX`, which
-/// prevents further splitting for indexed iterators.
+/// When parallel execution is enabled, this returns [`PAR_MIN_LEN`]. When disabled, this
+/// returns `usize::MAX`, which prevents further splitting for indexed iterators.
 pub fn par_enabled() -> usize {
     if PAR_DISABLE_DEPTH.load(Ordering::SeqCst) == 0 {
-        1
+        PAR_MIN_LEN
     } else {
         usize::MAX
     }
@@ -47,7 +52,7 @@ pub fn par_enabled_with(enabled_min_len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{PAR_DISABLE_DEPTH, ParallelFlagGuard, par_enabled, par_enabled_with};
+    use super::{PAR_DISABLE_DEPTH, PAR_MIN_LEN, ParallelFlagGuard, par_enabled, par_enabled_with};
     use std::sync::atomic::Ordering;
     use std::sync::{Mutex, MutexGuard};
 
@@ -66,7 +71,7 @@ mod tests {
         let _lock = test_lock();
         reset_depth();
 
-        assert_eq!(par_enabled(), 1);
+        assert_eq!(par_enabled(), PAR_MIN_LEN);
         assert_eq!(par_enabled_with(4096), 4096);
 
         let _guard = ParallelFlagGuard::disabled();
@@ -84,7 +89,7 @@ mod tests {
             assert_eq!(par_enabled(), usize::MAX);
         }
 
-        assert_eq!(par_enabled(), 1);
+        assert_eq!(par_enabled(), PAR_MIN_LEN);
         assert_eq!(par_enabled_with(4096), 4096);
     }
 
@@ -103,6 +108,6 @@ mod tests {
 
         assert_eq!(par_enabled(), usize::MAX);
         drop(outer);
-        assert_eq!(par_enabled(), 1);
+        assert_eq!(par_enabled(), PAR_MIN_LEN);
     }
 }

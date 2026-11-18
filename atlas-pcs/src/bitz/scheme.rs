@@ -652,7 +652,7 @@ mod tests {
         }])
         .is_none());
         assert!(Layout::new(&[Shape {
-            num_vars: 31,
+            num_vars: MAX_VARS as u8,
             bits: 2,
             signed: false
         }])

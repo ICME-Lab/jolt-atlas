@@ -9,9 +9,10 @@
 use super::ligerito::Schedule;
 use super::pack::LOG_PACKING;
 
-/// The fewest and most variables of a committed bit vector.
+/// The fewest and most variables of a committed bit vector. Every parameter is derived from
+/// the size, so the upper end is a bound on memory, 8 GiB of bits, and not on the scheme.
 pub const MIN_VARS: usize = 12;
-pub const MAX_VARS: usize = 31;
+pub const MAX_VARS: usize = 36;
 
 /// The bits of Fp128's modulus.
 const FIELD_BITS: u32 = 128;

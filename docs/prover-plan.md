@@ -9,16 +9,16 @@ with 61 GB after, and each table says which.
 
 ## 1. Where the time goes (measured)
 
-**At 16 tokens** (32 cores, `bench/gate.sh`, medians of three, commit `5f30bbf2a`):
+**At 16 tokens** (32 cores, `bench/gate.sh`, medians of three, commit `a63c55dbc`):
 
 | | GPT-2 | Qwen |
 |---|---|---|
-| prove | 2.22 s | 5.55 s |
-| trace execution | about 0.35 s | about 0.77 s |
-| commit | 0.18 s | 0.55 s |
-| sumchecks (`iop`) | 0.81 s | 2.05 s |
-| openings | 0.87 s | 2.10 s |
-| verify | 0.24 s | 0.54 s |
+| prove | 1.84 s | 4.89 s |
+| trace execution | 0.27 s | 0.54 s |
+| commit | 0.16 s | 0.53 s |
+| sumchecks (`iop`) | 0.65 s | 1.80 s |
+| openings | 0.76 s | 1.94 s |
+| verify | 0.14 s | 0.33 s |
 | proof | 1.33 MiB | 1.76 MiB |
 | peak memory | 3.0 GB | 8.5 GB |
 
@@ -26,7 +26,8 @@ Huge pages for the allocator take a further 16% off Qwen on this machine (5.82 s
 on an earlier commit, kernel time halved) and are not in these numbers (`CLAUDE.md`, "Remote
 runs").
 
-**By sequence length** (32 cores, single runs, commit `5f30bbf2a`):
+**By sequence length** (32 cores, single runs, commit `5f30bbf2a`, about 10% before the
+table above):
 
 | Model | Tokens | Prove | Verify | Proof | Peak memory |
 |---|---|---|---|---|---|
@@ -124,10 +125,17 @@ committed witness polynomials built side by side; and one unreduced split-eq ker
 evaluating a tensor of at most 32-bit values at a point, which the matrix product's fold, the
 prover's constant ties and the verifier share (steps 3 and 5).
 
+Then to 4.89 s and 1.84 s, with verify at 0.33 s and 0.14 s: a wave's points drawn before
+their claims, so its output and remainder claims are computed together (a protocol change);
+a minimum task size of 128 for the shared parallel loops, which had split to single items
+(verify 37 to 39% faster from this alone); Ligerito's folds in reused buffers and its
+queried rows added in place; the grand product's small layers; the tracer kernel reshaped,
+its rescale passes fused, and its tables generated once and beside the execution.
+
 ## 3. What is left
 
 **Targets (set 2026-11-17).** GPT-2 at 16 tokens in about 1 s and Qwen in about 3 s on the
-benchmark machine. Today 2.2 s and 5.6 s on 32 cores.
+benchmark machine. Today 1.8 s and 4.9 s on 32 cores.
 
 Every step is gated by `bench/gate.sh` on GPT-2 and Qwen (`--model models/qwen`) against the
 commit it lands on: stage times within 3%, peak memory within 5%, unless a spec states
@@ -137,19 +145,20 @@ tighter bounds. Gains below are estimates until a gate replaces them.
 
 Found by the 4-against-32-thread comparison of section 1; largest first.
 
-1. **The per-node steps that stay serial** (about 0.5 s on Qwen): ties, claim reductions,
-   the fresh-point evaluations of digit-backed nodes and the opens run one node at a time
-   because each sends a claim before the next challenge is drawn. Drawing a wave's points
-   before sending its claims would let them run together; it reorders the transcript.
-2. **The opening's non-scaling parts** (about 0.9 s): the grand product, the reduction
-   sumcheck, Ligerito and the ring switch.
-3. **The allocator.** Every change that moved work onto worker threads slowed the openings
+1. **The allocator.** Every change that moved work onto worker threads slowed the openings
    stage by 3 to 4% with an identical transcript, and huge pages are worth 16%. Fewer and
    reused large buffers, or an allocator that keeps and reuses them, is the fix; nothing is
    in code yet.
-4. **The einsum spec's remaining step:** the other layouts' folds on the shared kernel
-   (small on GPT-2 and Qwen). The tracer's matrix product is 2.3x faster against a target
-   of 4x.
+2. **The opening's parts that do not scale** (about 0.8 s on Qwen): the grand product's
+   large layers scale 5.5x from 4 to 32 threads, which is memory bandwidth; the reduction
+   sumcheck pays about 7 ms a round over some 900 small instances.
+3. **The per-node steps still serial** (about 0.35 s on Qwen): claim reductions, mostly of
+   axis permutations, table-read setup, and the structural ties that chain one node's claim
+   to the next.
+4. **The projection's proof of work** is a search whose length is random per proof, 80 to
+   240 ms on Qwen, as large as most single optimisations now. A cheaper hash for it, or a
+   smaller difficulty from a larger prime interval, would cut both its mean and its spread;
+   it changes the protocol.
 5. **The grand product's remainder:** write the stored layer already folded, keep the
    accumulators in registers, a prepared fold multiplier.
 

@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | @Forpee                        |
 | Created     | 2026-11-18                     |
-| Status      | proposed                       |
+| Status      | implemented                    |
 | PR          |                                |
 | Depends on  | —                              |
 | Supersedes  | —                              |
@@ -207,6 +207,40 @@ row.
 6. Measurements and `docs/prover-plan.md`.
 
 Each step is independently mergeable; step 2 carries most of the gain.
+
+## As built
+
+Measured on the benchmark machine (32 cores, 2026-11-18, Qwen, per-op timer and gate):
+
+| | Baseline | Built | Criterion |
+|---|---|---|---|
+| einsum in the trace, 16 tokens | 1.06 s | 0.29 s (3.7x) | 0.27 s, missed |
+| einsum in the trace, 64 tokens | 2.54 s | 0.95 s (2.7x) | 0.64 s, missed |
+| trace execution, 16 tokens | 1.43 s | 0.54 s | — |
+| op-batch witness build, 16 tokens | 0.34 s | 0.24 s | 0.25 s, met |
+| verify, 16 tokens | 0.88 s | 0.33 s | 0.3 s outside the sumchecks, met |
+| prove, 16 tokens | 7.06 s | 4.89 s | 10% lower, met |
+
+- **The tracer kernel** differs from the design: a task takes a column tile and a contiguous
+  run of weight rows into a block of its own, and a tile's blocks are added up. Tiling the
+  columns alone left small outputs with one task and read every weight row in short strided
+  pieces. Four weight rows are applied per pass over an output run, with the scales kept
+  32-bit so the multiply widens in vectors; the baseline kernel was not vectorised, which
+  was as much of its cost as the memory traffic the summary describes.
+- **Around the kernel**, found while measuring it: the rescale split, the narrowing to `i32`
+  (one fused pass), the elementwise map and softmax's rows run in parallel; the rescale by a
+  power of two is a shift and a mask; a table is shared across the versions that do not
+  change it, and an execution's tables are generated beside it.
+- **The fold kernel** is `atlas_algebra::poly::compact::{split_eq_sum_unreduced,
+  run_sum_unreduced}`, taken by `evaluate_mle` for scalars of at most 32 bits; the matrix
+  product's right fold, the prover's constant ties and the verifier's constant evaluation
+  use it (steps 3 and 5).
+- **Not built: step 4.** The left fold of `mk,kn->mn` and the folds of `k,nk->n` and
+  `abmk,abnk->abmn` still sum column by column with a reduction per element. Their operands
+  are activations of a few thousand cells, and no time shows for them in the profile of
+  either model; the criterion "every layout's fold calls the shared kernel" is not met.
+- **The 4x criterion is missed** at both lengths. What is left in an einsum node is the
+  blocks' allocation and the passes after the accumulation, not the multiply-adds.
 
 ## References
 

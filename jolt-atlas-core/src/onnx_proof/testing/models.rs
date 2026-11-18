@@ -44,8 +44,8 @@ pub(crate) fn probe_models_alt() -> Vec<ProbeModel> {
 }
 
 /// Deferred products with one rescale per chain: `down(gate · up(x))` through levels 2, 3
-/// and 4, where the gate is a ReLU of a fused projection, and a single deferred projection
-/// rescaled from level 2. The two level-1 results are summed into one output.
+/// and 4, where the gate is a ReLU of a fused projection, and a deferred projection with a
+/// bias added and a constant it is subtracted from, rescaled from level 2. The two level-1 results are summed into one output.
 fn deferred_chains(seed: u64) -> ProbeModel {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut b = ModelBuilder::new();
@@ -60,7 +60,12 @@ fn deferred_chains(seed: u64) -> ProbeModel {
     let gated = b.mul_deferred(up, gate);
     let down = b.einsum_deferred("mk,kn->mn", vec![gated, w_down], vec![4, 8]);
     let chain = b.rescale(down);
+    // A projection plus a bias and less a constant, both lifted to the projection's level.
     let side = b.einsum_deferred("mk,kn->mn", vec![x, w_side], vec![4, 8]);
+    let bias = b.constant(Tensor::random_small(&mut rng, &[4, 8]));
+    let side = b.add(side, bias);
+    let offset = b.constant(Tensor::random_small(&mut rng, &[4, 8]));
+    let side = b.sub(offset, side);
     let side = b.rescale(side);
     let out = b.add(chain, side);
     b.mark_output(out);

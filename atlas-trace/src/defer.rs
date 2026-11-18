@@ -11,7 +11,7 @@
 use crate::{
     graph::{Graph, Node},
     id::{NodeId, Scale},
-    op::{self, MAX_LEVEL, Op, WIDE_LIMIT},
+    op::{self, MAX_LEVEL, Op, WIDE_LIMIT, WideShape, lifted_bound},
 };
 
 /// What [`defer_rescales`] did.
@@ -31,14 +31,7 @@ pub struct DeferReport {
 /// constant, `2^31` otherwise. The rule of `Model::compile`.
 fn narrow_bound(node: &Node) -> u128 {
     match &node.op {
-        Op::Constant(constant) => constant
-            .0
-            .data()
-            .iter()
-            .map(|v| v.unsigned_abs() as u128)
-            .max()
-            .unwrap_or(0)
-            .max(1),
+        Op::Constant(constant) => crate::model::largest_entry(&constant.0),
         _ => 1u128 << 31,
     }
 }
@@ -56,6 +49,17 @@ fn deferred_form(op: &Op) -> Option<Op> {
         })),
         _ => None,
     }
+}
+
+/// Whether `node` is a two-operand `Add` or `Sub`, which reads wide operands as they are.
+fn is_sum(node: &Node) -> bool {
+    matches!(node.op, Op::Add(_) | Op::Sub(_)) && node.inputs.len() == 2
+}
+
+/// Whether `node`'s value is at level 1 whatever the pass decides: it is not a product, a
+/// sum or a reshape.
+fn always_narrow(node: &Node) -> bool {
+    deferred_form(&node.op).is_none() && !is_sum(node) && !matches!(node.op, Op::Reshape(_))
 }
 
 /// The node a chain of reshapes ending at `index` reshapes.
@@ -94,7 +98,8 @@ fn value_readers(
 /// deferred product, and place a `Rescale` after the last product of each chain.
 ///
 /// A product stays wide when every consumer of its value, looking through reshapes, is a
-/// fused `Mul`, or the first operand of a fused `mk,kn->mn` contraction against a constant, such that the consumer's level stays
+/// fused `Mul`, a two-operand `Add` or `Sub` (which lifts its other operand), or the first
+/// operand of a fused `mk,kn->mn` contraction against a constant, such that the consumer's level stays
 /// within [`MAX_LEVEL`] and its magnitude bound within [`WIDE_LIMIT`], and when the bits a
 /// rescale of the product would commit exceed the bits its absence adds to the remainders of
 /// its consumers' rescales. Dims are taken padded to powers of two, as the compiled graph
@@ -130,7 +135,16 @@ pub fn defer_rescales(graph: Graph, scale: Scale) -> (Graph, DeferReport) {
         if node.op.spec().rebase_divisor(scale).is_some() {
             report.cells_before += cells(node);
         }
-        let Some(form) = deferred_form(&node.op) else {
+        let in_levels: Vec<u8> = node.inputs.iter().map(|x| level[x.index()]).collect();
+        let wide_operand = in_levels.iter().any(|&l| l > 1);
+        // A product in its deferred form, or a sum that reads a wide operand: the nodes whose
+        // value may be wide.
+        let form = match deferred_form(&node.op) {
+            Some(form) => Some(form),
+            None if is_sum(node) && wide_operand => Some(node.op.clone()),
+            None => None,
+        };
+        let Some(form) = form else {
             if node.op.spec().rebase_divisor(scale).is_some() {
                 report.cells_after += cells(node);
             }
@@ -141,7 +155,7 @@ pub fn defer_rescales(graph: Graph, scale: Scale) -> (Graph, DeferReport) {
             }
             continue;
         };
-        let in_levels: Vec<u8> = node.inputs.iter().map(|x| level[x.index()]).collect();
+        let product = deferred_form(&node.op).is_some();
         let in_bounds: Vec<u128> = node.inputs.iter().map(|x| bound[x.index()]).collect();
         let in_dims: Vec<Vec<usize>> = node
             .inputs
@@ -149,9 +163,15 @@ pub fn defer_rescales(graph: Graph, scale: Scale) -> (Graph, DeferReport) {
             .map(|x| padded(&graph.nodes[x.index()]))
             .collect();
         let in_dims: Vec<&[usize]> = in_dims.iter().map(Vec::as_slice).collect();
-        let wide_operand = in_levels.iter().any(|&l| l > 1);
         let out_level = form.spec().level(&in_levels).ok();
-        let wide_bound = form.spec().wide_bound(&in_bounds, &in_dims);
+        let wide_bound = form.spec().wide_bound(
+            &in_bounds,
+            &WideShape {
+                levels: &in_levels,
+                dims: &in_dims,
+                scale,
+            },
+        );
         let fits = out_level.is_some_and(|l| l <= MAX_LEVEL)
             && wide_bound < 1u128 << form.spec().wide_limit(&in_levels);
         let out_level = out_level.unwrap_or(1);
@@ -192,15 +212,33 @@ pub fn defer_rescales(graph: Graph, scale: Scale) -> (Graph, DeferReport) {
                             wide_bound.saturating_mul(bound[other]),
                         )
                     } else {
-                        // Not yet placed: a level-1 value unless it is a product.
+                        // Not yet placed: a level-1 value unless it may be wide.
                         let other = &graph.nodes[other];
-                        deferred_form(&other.op).is_none()
-                            && !matches!(other.op, Op::Reshape(_))
+                        always_narrow(other)
                             && within(
                                 out_level + 1,
                                 wide_bound.saturating_mul(narrow_bound(other)),
                             )
                     }
+                }
+                // A sum lifts its lower operand to the level of its higher one.
+                _ if is_sum(reader_node) => {
+                    let other = reader_node.inputs[1 - position].index();
+                    let (other_level, other_bound) = if source(&graph, other) == index {
+                        (out_level, wide_bound)
+                    } else if other < index {
+                        (level[other], bound[other])
+                    } else if always_narrow(&graph.nodes[other]) {
+                        (1, narrow_bound(&graph.nodes[other]))
+                    } else {
+                        return false;
+                    };
+                    let top = out_level.max(other_level);
+                    within(
+                        top,
+                        lifted_bound(wide_bound, out_level, top, scale)
+                            .saturating_add(lifted_bound(other_bound, other_level, top, scale)),
+                    )
                 }
                 _ => false,
             }
@@ -210,8 +248,10 @@ pub fn defer_rescales(graph: Graph, scale: Scale) -> (Graph, DeferReport) {
         let rescale_bits = cells(node) * ((out_level as usize - 1) * scale_bits + 32);
         let stays_wide = fits
             && readers.as_ref().is_some_and(|readers| {
+                // A sum that reads it trades its own output's range claim for the rescale's.
                 let added_bits: usize = readers
                     .iter()
+                    .filter(|&&(reader, _)| !is_sum(&graph.nodes[reader]))
                     .map(|&(reader, _)| {
                         cells(&graph.nodes[reader]) * (out_level as usize - 1) * scale_bits
                     })
@@ -220,12 +260,9 @@ pub fn defer_rescales(graph: Graph, scale: Scale) -> (Graph, DeferReport) {
             });
 
         if wide_operand {
-            assert!(
-                fits,
-                "a product was given a wide operand it has no form for"
-            );
+            assert!(fits, "a node was given a wide operand it has no form for");
         }
-        if wide_operand || stays_wide {
+        if product && (wide_operand || stays_wide) {
             deferred[index] = true;
             report.deferred += 1;
         }

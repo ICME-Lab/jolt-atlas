@@ -264,3 +264,42 @@ fn the_placement_pass_rescales_a_chain_once() {
         }
     }
 }
+
+/// A deferred contraction plus a bias, less a level-1 value, rescaled: the sums lift their
+/// level-1 operands by the scale, and the result is the exact value rounded once.
+#[test]
+fn a_wide_sum_lifts_its_narrow_operand() {
+    let (m, k, n) = (2usize, 4, 4);
+    let (w, bias, offset) = (
+        tensor(1, &[k, n], 30_000),
+        tensor(2, &[m, n], 500_000),
+        tensor(3, &[m, n], 500_000),
+    );
+    let mut b = GraphBuilder::new();
+    let x = b.input(&[m, k]);
+    let [w_id, bias_id, offset_id] =
+        [w.clone(), bias.clone(), offset.clone()].map(|t| b.constant(t));
+    let wide = b.push(einsum(true), &[x, w_id]);
+    let plus = b.push(Op::Add(op::Add), &[wide, bias_id]);
+    let less = b.push(Op::Sub(op::Sub), &[offset_id, plus]);
+    let out = b.push(Op::Rescale(op::Rescale), &[less]);
+    b.output(out);
+    let model = b.build(CompileOptions::default()).unwrap();
+    assert_eq!(
+        [wide, plus, less, out].map(|id| model.level(id)),
+        [2, 2, 2, 1]
+    );
+    let x_in = tensor(7, &[m, k], 3_000_000);
+    let got = model.forward(std::slice::from_ref(&x_in)).unwrap();
+    let scale = 1i128 << SCALE;
+    for i in 0..m {
+        for c in 0..n {
+            let dot: i128 = (0..k)
+                .map(|a| x_in.data()[i * k + a] as i128 * w.data()[a * n + c] as i128)
+                .sum();
+            let exact = offset.data()[i * n + c] as i128 * scale
+                - (dot + bias.data()[i * n + c] as i128 * scale);
+            assert_eq!(got[0].data()[i * n + c] as i128, exact.div_euclid(scale));
+        }
+    }
+}

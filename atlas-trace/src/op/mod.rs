@@ -111,9 +111,9 @@ pub trait OpSpec: fmt::Display {
         WIDE_LIMIT
     }
 
-    /// A bound on the magnitude of a wide output's entries, given bounds on the operands'
-    /// and the operands' dims. Asked only of an op whose output is wide.
-    fn wide_bound(&self, _operands: &[u128], _dims: &[&[usize]]) -> u128 {
+    /// A bound on the magnitude of a wide output's entries, given bounds on the operands',
+    /// with the operands' levels and dims. Asked only of an op whose output is wide.
+    fn wide_bound(&self, _operands: &[u128], _shape: &WideShape<'_>) -> u128 {
         u128::MAX
     }
 }
@@ -125,6 +125,26 @@ pub const WIDE_LIMIT: u32 = 125;
 
 /// The highest level a value has: three deferred products of level-1 operands.
 pub const MAX_LEVEL: u8 = 4;
+
+/// What a wide output's bound depends on besides its operands' bounds.
+pub struct WideShape<'a> {
+    /// The operands' levels.
+    pub levels: &'a [u8],
+    /// The operands' dims.
+    pub dims: &'a [&'a [usize]],
+    /// The model's scale.
+    pub scale: Scale,
+}
+
+/// `bound · 2^((to − from)·S)`: the bound of a value lifted from level `from` to level `to`.
+pub fn lifted_bound(bound: u128, from: u8, to: u8, scale: Scale) -> u128 {
+    let bits = u32::from(to.saturating_sub(from)) * scale.log2();
+    if bits >= bound.leading_zeros() {
+        u128::MAX
+    } else {
+        bound << bits
+    }
+}
 
 /// An operand as a kernel with a wide form reads it.
 #[derive(Clone, Copy, Debug)]

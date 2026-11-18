@@ -13,7 +13,9 @@ use crate::{
     tensor::{Tensor, row_major_strides as strides},
 };
 
-use super::{Einsum, Eval, EvalCtx, OpSpec, Operand, PadBehavior, WIDE_LIMIT, fused::rebase_eval};
+use super::{
+    Einsum, Eval, EvalCtx, OpSpec, Operand, PadBehavior, WIDE_LIMIT, WideShape, fused::rebase_eval,
+};
 
 /// A parsed, validated einsum equation (`"mk,kn->mn"`).
 ///
@@ -614,10 +616,10 @@ impl OpSpec for Einsum {
     }
 
     /// `|Σ L·R| ≤ |L|·|R|` times the number of terms a contraction sums.
-    fn wide_bound(&self, operands: &[u128], dims: &[&[usize]]) -> u128 {
+    fn wide_bound(&self, operands: &[u128], shape: &WideShape<'_>) -> u128 {
         let terms = self
             .equation
-            .letter_sizes(dims)
+            .letter_sizes(shape.dims)
             .map(|sizes| {
                 self.equation
                     .contracted()

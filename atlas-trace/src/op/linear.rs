@@ -10,8 +10,8 @@ use crate::{
 };
 
 use super::{
-    Add, And, Eval, EvalCtx, Iff, IsNan, Neg, OpSpec, PadBehavior, ReLU, Rsqrt, ScalarConstDiv,
-    Sub, Sum, same_dims,
+    Add, And, Eval, EvalCtx, Iff, IsNan, Neg, OpSpec, Operand, PadBehavior, ReLU, Rsqrt,
+    ScalarConstDiv, Sub, Sum, WideShape, lifted_bound, same_dims,
 };
 
 /// Narrow every element of an `i64` result to `i32`; the first element outside the range is
@@ -63,6 +63,59 @@ fn checked_chain(
     Ok(acc)
 }
 
+/// `left·2^(lift₀) + sign·right·2^(lift₁)` over operands at levels `levels`, each lifted to
+/// the higher of the two: a wide value.
+fn wide_sum(
+    inputs: &[Operand<'_>],
+    levels: &[u8],
+    ctx: &EvalCtx<'_>,
+    sign: i128,
+    op: &'static str,
+) -> Result<Eval, KernelError> {
+    let ([left, right], [left_level, right_level]) = (inputs, levels) else {
+        return Err(KernelError::NoWideForm {
+            op,
+            levels: levels.to_vec(),
+        });
+    };
+    if left.dims() != right.dims() {
+        return Err(ShapeError::BroadcastIncompatible {
+            lhs: left.dims().to_vec(),
+            rhs: right.dims().to_vec(),
+        }
+        .into());
+    }
+    let top = *left_level.max(right_level);
+    let lift = |level: u8| 1i128 << (u32::from(top - level) * ctx.scale.log2());
+    let (left_lift, right_lift) = (lift(*left_level), sign * lift(*right_level));
+    let len: usize = left.dims().iter().product();
+    let entry = |i: usize| left.at(i) * left_lift + right.at(i) * right_lift;
+    #[cfg(feature = "rayon")]
+    let data: Vec<i128> = {
+        use rayon::prelude::*;
+        (0..len)
+            .into_par_iter()
+            .with_min_len(crate::tensor::PAR_MIN_LEN)
+            .map(entry)
+            .collect()
+    };
+    #[cfg(not(feature = "rayon"))]
+    let data: Vec<i128> = (0..len).map(entry).collect();
+    Ok(Eval::wide(Tensor::new(data, left.dims())?))
+}
+
+/// The bound of a wide sum or difference: the operands' bounds, each lifted to the highest
+/// level, added.
+fn wide_sum_bound(operands: &[u128], shape: &WideShape<'_>) -> u128 {
+    let top = shape.levels.iter().copied().max().unwrap_or(1);
+    operands
+        .iter()
+        .zip(shape.levels)
+        .fold(0u128, |acc, (&bound, &level)| {
+            acc.saturating_add(lifted_bound(bound, level, top, shape.scale))
+        })
+}
+
 impl fmt::Display for Add {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Add")
@@ -86,6 +139,32 @@ impl OpSpec for Add {
 
     fn checks_output(&self) -> bool {
         true
+    }
+
+    /// A sum of operands at different levels is at the highest: a lower operand is lifted,
+    /// exactly, by the scale to the power of the difference.
+    fn level(&self, operands: &[u8]) -> Result<u8, String> {
+        match operands {
+            [a, b] => Ok(*a.max(b)),
+            _ if operands.iter().all(|&level| level == 1) => Ok(1),
+            _ => Err(format!(
+                "a wide add has two operands, not {}",
+                operands.len()
+            )),
+        }
+    }
+
+    fn eval_wide(
+        &self,
+        inputs: &[Operand<'_>],
+        levels: &[u8],
+        ctx: &EvalCtx<'_>,
+    ) -> Result<Eval, KernelError> {
+        wide_sum(inputs, levels, ctx, 1, "add")
+    }
+
+    fn wide_bound(&self, operands: &[u128], shape: &WideShape<'_>) -> u128 {
+        wide_sum_bound(operands, shape)
     }
 
     fn padding(&self) -> PadBehavior {
@@ -116,6 +195,32 @@ impl OpSpec for Sub {
 
     fn checks_output(&self) -> bool {
         true
+    }
+
+    /// A sum of operands at different levels is at the highest: a lower operand is lifted,
+    /// exactly, by the scale to the power of the difference.
+    fn level(&self, operands: &[u8]) -> Result<u8, String> {
+        match operands {
+            [a, b] => Ok(*a.max(b)),
+            _ if operands.iter().all(|&level| level == 1) => Ok(1),
+            _ => Err(format!(
+                "a wide sub has two operands, not {}",
+                operands.len()
+            )),
+        }
+    }
+
+    fn eval_wide(
+        &self,
+        inputs: &[Operand<'_>],
+        levels: &[u8],
+        ctx: &EvalCtx<'_>,
+    ) -> Result<Eval, KernelError> {
+        wide_sum(inputs, levels, ctx, -1, "sub")
+    }
+
+    fn wide_bound(&self, operands: &[u128], shape: &WideShape<'_>) -> u128 {
+        wide_sum_bound(operands, shape)
     }
 
     fn padding(&self) -> PadBehavior {

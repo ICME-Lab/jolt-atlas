@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     Cube, Eval, EvalCtx, MAX_LEVEL, MeanOfSquares, Mul, OpSpec, Operand, PadBehavior, Rescale,
-    Square, same_dims,
+    Square, WideShape, same_dims,
 };
 
 /// Split an i64 accumulation tensor by `divisor`, producing the output (the quotient, which
@@ -169,7 +169,7 @@ impl OpSpec for Mul {
         Ok(Eval::wide(Tensor::new(data, a.dims())?))
     }
 
-    fn wide_bound(&self, operands: &[u128], _dims: &[&[usize]]) -> u128 {
+    fn wide_bound(&self, operands: &[u128], _shape: &WideShape<'_>) -> u128 {
         operands.iter().fold(1u128, |acc, &b| acc.saturating_mul(b))
     }
 }

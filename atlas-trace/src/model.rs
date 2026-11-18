@@ -8,7 +8,8 @@ use crate::{
     error::CompileError,
     graph::{Graph, Node},
     id::{NodeId, Scale, SemVersion},
-    op::{Op, PadCtx, TableCache},
+    op::{Op, PadCtx, TableCache, WideShape},
+    tensor::Tensor,
 };
 
 /// A compiled, analyzed, immutable model.
@@ -56,7 +57,7 @@ impl Model {
             check_shapes(&graph)?;
         }
 
-        let (levels, bounds) = levels_and_bounds(&graph)?;
+        let (levels, bounds) = levels_and_bounds(&graph, opts.scale)?;
         Ok(Model {
             graph,
             levels,
@@ -91,7 +92,7 @@ impl Model {
     /// Recompute every node's level and magnitude bound from the graph and require them to be
     /// the ones the model holds: a model that was deserialized, not compiled, is checked here.
     pub fn check_levels(&self) -> Result<(), CompileError> {
-        let (levels, bounds) = levels_and_bounds(&self.graph)?;
+        let (levels, bounds) = levels_and_bounds(&self.graph, self.scale)?;
         if levels == self.levels && bounds == self.bounds {
             return Ok(());
         }
@@ -146,9 +147,27 @@ impl Model {
     }
 }
 
+/// The largest absolute entry of a constant, at least one.
+pub(crate) fn largest_entry(tensor: &Tensor<i32>) -> u128 {
+    let magnitude = |v: &i32| v.unsigned_abs();
+    #[cfg(feature = "rayon")]
+    let largest = {
+        use rayon::prelude::*;
+        tensor
+            .data()
+            .par_iter()
+            .with_min_len(crate::tensor::PAR_MIN_LEN)
+            .map(magnitude)
+            .max()
+    };
+    #[cfg(not(feature = "rayon"))]
+    let largest = tensor.data().iter().map(magnitude).max();
+    u128::from(largest.unwrap_or(0).max(1))
+}
+
 /// Every node's level and magnitude bound, in node order. `Err` if an op has no form for its
 /// operands' levels, a graph output is wide, or a wide value's bound reaches its op's limit.
-fn levels_and_bounds(graph: &Graph) -> Result<(Vec<u8>, Vec<u128>), CompileError> {
+fn levels_and_bounds(graph: &Graph, scale: Scale) -> Result<(Vec<u8>, Vec<u128>), CompileError> {
     let mut levels: Vec<u8> = Vec::with_capacity(graph.nodes.len());
     let mut bounds: Vec<u128> = Vec::with_capacity(graph.nodes.len());
     for (i, node) in graph.nodes.iter().enumerate() {
@@ -170,7 +189,12 @@ fn levels_and_bounds(graph: &Graph) -> Result<(Vec<u8>, Vec<u128>), CompileError
                 .iter()
                 .map(|x| graph.node(*x).output_dims.as_slice())
                 .collect();
-            let bound = node.op.spec().wide_bound(&operand_bounds, &dims);
+            let shape = WideShape {
+                levels: &operand_levels,
+                dims: &dims,
+                scale,
+            };
+            let bound = node.op.spec().wide_bound(&operand_bounds, &shape);
             let limit = node.op.spec().wide_limit(&operand_levels);
             if bound >= 1u128 << limit {
                 return Err(CompileError::Bound {
@@ -182,14 +206,7 @@ fn levels_and_bounds(graph: &Graph) -> Result<(Vec<u8>, Vec<u128>), CompileError
             }
             bound
         } else if let Op::Constant(constant) = &node.op {
-            constant
-                .0
-                .data()
-                .iter()
-                .map(|v| v.unsigned_abs() as u128)
-                .max()
-                .unwrap_or(0)
-                .max(1)
+            largest_entry(&constant.0)
         } else {
             1u128 << 31
         };

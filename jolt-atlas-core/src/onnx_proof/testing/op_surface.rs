@@ -361,6 +361,23 @@ fn deferred_chain(
     (b.build(), inputs)
 }
 
+/// A deferred contraction plus a constant (or a constant less it), rescaled.
+fn deferred_bias(rng: &mut StdRng, subtract: bool) -> (Model, Vec<Tensor<i32>>) {
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![16, 32]);
+    let w = b.constant(Tensor::random_small(rng, &[32, 32]));
+    let wide = b.einsum_deferred("mk,kn->mn", vec![x, w], vec![16, 32]);
+    let bias = b.constant(Tensor::random_small(rng, &[16, 32]));
+    let wide = if subtract {
+        b.sub(bias, wide)
+    } else {
+        b.add(wide, bias)
+    };
+    let out = b.rescale(wide);
+    b.mark_output(out);
+    (b.build(), vec![Tensor::random_small(rng, &[16, 32])])
+}
+
 /// One deferred product of `input` by the constant `weight`, rescaled.
 fn deferred_const(input: i32, weight: i32) -> (Model, Vec<Tensor<i32>>) {
     let mut b = ModelBuilder::new();
@@ -601,6 +618,10 @@ op_surface! {
     /// Contraction, multiply, contraction, rescaled from level 4: 42 bits.
     rescale_level_4: Rescale => |rng| deferred_chain(rng, 16, 32, 3);
     rescale_one_row: Rescale => |rng| deferred_chain(rng, 1, 16, 3);
+    /// A deferred contraction plus a level-1 bias, lifted to it, rescaled once.
+    rescale_after_a_bias: Rescale => |rng| deferred_bias(rng, false);
+    /// A level-1 value less a deferred contraction.
+    rescale_after_a_difference: Rescale => |rng| deferred_bias(rng, true);
     #[should_panic(expected = "WitnessOverflow")]
     rescale_saturates_pos: Rescale => |_| deferred_const(i32::MAX, 1 << S);
     #[should_panic(expected = "WitnessOverflow")]

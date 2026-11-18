@@ -9,7 +9,7 @@ use crate::{
 
 use super::{
     Broadcast, Concat, Constant, Eval, EvalCtx, GatherLarge, GatherSmall, Identity, Input,
-    MoveAxis, OpSpec, Operand, PadBehavior, PadCtx, Reshape, Slice, same_dims,
+    MoveAxis, OpSpec, Operand, PadBehavior, PadCtx, Reshape, Slice, WideShape, same_dims,
 };
 
 /// Pad each dim to its next power of two.
@@ -207,7 +207,7 @@ impl OpSpec for Reshape {
         }
     }
 
-    fn wide_bound(&self, operands: &[u128], _dims: &[&[usize]]) -> u128 {
+    fn wide_bound(&self, operands: &[u128], _shape: &WideShape<'_>) -> u128 {
         operands.first().copied().unwrap_or(u128::MAX)
     }
 

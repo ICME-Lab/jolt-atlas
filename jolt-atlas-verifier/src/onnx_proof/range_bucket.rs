@@ -272,7 +272,14 @@ pub fn checks_its_output(node: &ComputationNode) -> bool {
 /// its relation fresh from the transcript and every claim on its output is a member of the
 /// bucket's value sumcheck.
 pub fn is_digit_backed(model: &Model, node: &ComputationNode) -> bool {
-    checks_its_output(node) && !is_public_output(model, node.idx)
+    checks_its_output(node) && !is_wide(model, node.idx) && !is_public_output(model, node.idx)
+}
+
+/// Whether node `idx`'s value is wide (`atlas_trace::Model::level` above 1): an exact
+/// accumulation its op determines from checked operands, which no range claim bounds. A sum
+/// of a wide operand is one, though its op checks a level-1 output.
+pub fn is_wide(model: &Model, idx: usize) -> bool {
+    idx < model.graph().nodes.len() && model.level(NodeId(idx as u32)) > 1
 }
 
 /// Whether the output of node `idx` is public: it is a model output, or a reshape of it is. A

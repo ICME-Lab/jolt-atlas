@@ -18,10 +18,9 @@ impl OpPlan for Sub {
     fn plan<F: atlas_algebra::field::JoltField>(
         &self,
         node: &ComputationNode,
-        _model: &Model,
+        model: &Model,
         schedule: &mut ScheduleBuilder<F>,
     ) -> Result<(), ProofVerifyError> {
-        accumulation_plan(node, OpRelKind::SubAccumulation, schedule);
-        Ok(())
+        accumulation_plan(model, node, OpRelKind::SubAccumulation, schedule)
     }
 }

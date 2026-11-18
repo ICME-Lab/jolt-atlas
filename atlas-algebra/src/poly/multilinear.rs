@@ -724,36 +724,14 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
             MultilinearPolynomial::BoolScalars(poly) => {
-                let m = r.len() / 2;
-                let (r2, r1) = r.split_at(m);
-                let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
-
-                poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
+                super::compact::evaluate_mle(&poly.coeffs, r)
             }
-            MultilinearPolynomial::U8Scalars(poly) => {
-                let m = r.len() / 2;
-                let (r2, r1) = r.split_at(m);
-                let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
-
-                poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
-            }
+            MultilinearPolynomial::U8Scalars(poly) => super::compact::evaluate_mle(&poly.coeffs, r),
             MultilinearPolynomial::U16Scalars(poly) => {
-                let m = r.len() / 2;
-                let (r2, r1) = r.split_at(m);
-                let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
-
-                poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
+                super::compact::evaluate_mle(&poly.coeffs, r)
             }
             MultilinearPolynomial::U32Scalars(poly) => {
-                let m = r.len() / 2;
-                let (r2, r1) = r.split_at(m);
-                let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
-
-                poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
+                super::compact::evaluate_mle(&poly.coeffs, r)
             }
             MultilinearPolynomial::U64Scalars(poly) => {
                 let m = r.len() / 2;
@@ -764,12 +742,7 @@ impl<F: JoltField> PolynomialEvaluation<F> for MultilinearPolynomial<F> {
                 poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
             }
             MultilinearPolynomial::I32Scalars(poly) => {
-                let m = r.len() / 2;
-                let (r2, r1) = r.split_at(m);
-                let (eq_one, eq_two) =
-                    rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
-
-                poly.split_eq_evaluate(r.len(), &eq_one, &eq_two)
+                super::compact::evaluate_mle(&poly.coeffs, r)
             }
             MultilinearPolynomial::I64Scalars(poly) => {
                 let m = r.len() / 2;

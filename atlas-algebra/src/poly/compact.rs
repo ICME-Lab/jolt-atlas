@@ -1,11 +1,14 @@
 use super::eq::EqPolynomial;
 use super::multilinear::{BindingOrder, PolynomialBinding};
+use crate::field::{BarrettReduce, FMAdd};
+use crate::utils::accumulation::SmallAccumS;
 use crate::{
     field::{ChallengeFieldOps, FieldChallengeOps, JoltField, OptimizedMul},
     utils::{math::Math, small_scalar::SmallScalar},
 };
 use allocative::Allocative;
 use common::parallel::{par_enabled, par_enabled_with};
+use num_traits::Zero;
 use rayon::prelude::*;
 use std::{cmp::Ordering, ops::Index};
 
@@ -342,8 +345,117 @@ where
         coeffs.len(),
         r.len()
     );
+    if r.len() >= UNREDUCED_MIN_VARS && coeffs.first().is_some_and(|c| c.narrow().is_some()) {
+        let (r_high, r_low) = r.split_at(r.len() - UNREDUCED_LOW_VARS);
+        let (eq_high, eq_low) = rayon::join(
+            || EqPolynomial::evals(r_high),
+            || EqPolynomial::evals(r_low),
+        );
+        return split_eq_sum_unreduced(coeffs, &eq_high, &eq_low);
+    }
     let m = r.len() / 2;
     let (r2, r1) = r.split_at(m);
     let (eq_one, eq_two) = rayon::join(|| EqPolynomial::evals(r2), || EqPolynomial::evals(r1));
     split_eq_evaluate_coeffs(coeffs, r.len(), &eq_one, &eq_two)
+}
+
+/// The variables of the low `eq` table of [`split_eq_sum_unreduced`]: 512 entries, which
+/// stay in the first-level cache and whose products with 32-bit values sum unreduced.
+pub const UNREDUCED_LOW_VARS: usize = 9;
+/// The fewest variables [`evaluate_mle`] takes the unreduced path for.
+const UNREDUCED_MIN_VARS: usize = 12;
+
+/// `Σ_i eq_high[i / L]·eq_low[i mod L]·coeffs[i]` for scalars of at most 32 bits
+/// ([`SmallScalar::narrow`]), with `L = eq_low.len()` at most `2^UNREDUCED_LOW_VARS`: each
+/// run of `L` coefficients is summed against `eq_low` without reducing and multiplied by its
+/// `eq_high` entry once, and a run of zeros costs its comparisons. `coeffs.len()` must be
+/// `eq_high.len() * eq_low.len()`.
+pub fn split_eq_sum_unreduced<T: SmallScalar, F: JoltField>(
+    coeffs: &[T],
+    eq_high: &[F],
+    eq_low: &[F],
+) -> F {
+    assert_eq!(coeffs.len(), eq_high.len() * eq_low.len());
+    assert!(eq_low.len() <= 1 << UNREDUCED_LOW_VARS);
+    coeffs
+        .par_chunks(eq_low.len())
+        .zip(eq_high.par_iter())
+        .with_min_len(RUNS_PER_TASK)
+        .map(|(run, &high)| high * run_sum_unreduced(run, eq_low))
+        .reduce(|| F::zero(), |acc, value| acc + value)
+}
+
+/// The fewest runs a task of [`split_eq_sum_unreduced`] takes.
+const RUNS_PER_TASK: usize = 16;
+
+/// `Σ_i weights[i]·run[i]` for scalars of at most 32 bits, reduced once.
+#[inline]
+pub fn run_sum_unreduced<T: SmallScalar, F: JoltField>(run: &[T], weights: &[F]) -> F {
+    let mut sum = SmallAccumS::<F>::zero();
+    for (&value, weight) in run.iter().zip(weights) {
+        let value = value.narrow().unwrap_or_default();
+        sum.fmadd(weight, &value);
+    }
+    if sum.is_zero() {
+        F::zero()
+    } else {
+        sum.barrett_reduce()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::field::fp128::Fp128;
+
+    /// The borrowed evaluation is the sum over the cube written out, on both of its paths: below and above
+    /// the size the unreduced sum starts at, for signed and unsigned scalars, with runs of
+    /// zeros and with the extreme values.
+    #[test]
+    fn evaluate_mle_is_the_polynomial_evaluation() {
+        let point = |vars: usize| -> Vec<Fp128> {
+            (0..vars)
+                .map(|i| Fp128::from(0x9e37_79b9_7f4a_7c15u128 * (i as u128 + 3) + 1))
+                .collect()
+        };
+        for vars in [
+            5,
+            UNREDUCED_MIN_VARS - 1,
+            UNREDUCED_MIN_VARS,
+            UNREDUCED_MIN_VARS + 3,
+        ] {
+            let len = 1usize << vars;
+            let r = point(vars);
+            let mut signed: Vec<i32> = (0..len)
+                .map(|i| ((i as i64 * 2_654_435_761) % 4_000_003 - 2_000_001) as i32)
+                .collect();
+            signed[..len / 4].fill(0);
+            signed[len / 2] = i32::MIN;
+            signed[len / 2 + 1] = i32::MAX;
+            let eq = EqPolynomial::<Fp128>::evals(&r);
+            let want = signed
+                .iter()
+                .zip(&eq)
+                .fold(Fp128::from(0u128), |acc, (&v, &e)| {
+                    acc + e * v.to_field::<Fp128>()
+                });
+            assert_eq!(
+                evaluate_mle::<_, Fp128, _>(&signed, &r),
+                want,
+                "i32, {vars}"
+            );
+
+            let bytes: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+            let want = bytes
+                .iter()
+                .zip(&eq)
+                .fold(Fp128::from(0u128), |acc, (&v, &e)| {
+                    acc + e * v.to_field::<Fp128>()
+                });
+            assert_eq!(evaluate_mle::<_, Fp128, _>(&bytes, &r), want, "u8, {vars}");
+
+            let zeros = vec![0i32; len];
+            assert_eq!(evaluate_mle::<_, Fp128, _>(&zeros, &r), Fp128::from(0u128));
+        }
+    }
 }

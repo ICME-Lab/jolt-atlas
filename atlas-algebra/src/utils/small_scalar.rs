@@ -8,6 +8,12 @@ pub trait SmallScalar: Copy + Ord + Sync + Allocative {
     fn field_mul<F: JoltField>(&self, n: F) -> F;
     /// Converts a small scalar into a (potentially Montgomery form) `JoltField` type
     fn to_field<F: JoltField>(self) -> F;
+    /// The value as an `i64`, for a scalar type of at most 32 bits: such values are summed
+    /// against field weights unreduced. `None` for the wider types.
+    #[inline]
+    fn narrow(self) -> Option<i64> {
+        None
+    }
     /// Fused absolute-difference then multiply by a field element: returns |self - other| * r.
     /// Implementations should choose the most efficient mul (prefer mul_u64 where possible).
     fn diff_mul_field<F: JoltField>(self, other: Self, r: F) -> F {
@@ -44,6 +50,10 @@ impl SmallScalar for bool {
             F::zero()
         }
     }
+    #[inline]
+    fn narrow(self) -> Option<i64> {
+        Some(self as i64)
+    }
 }
 
 impl SmallScalar for u8 {
@@ -59,6 +69,10 @@ impl SmallScalar for u8 {
     fn diff_mul_field<F: JoltField>(self, other: Self, r: F) -> F {
         r.mul_u64(self.abs_diff(other) as u64)
     }
+    #[inline]
+    fn narrow(self) -> Option<i64> {
+        Some(self as i64)
+    }
 }
 impl SmallScalar for u16 {
     #[inline]
@@ -73,6 +87,10 @@ impl SmallScalar for u16 {
     fn diff_mul_field<F: JoltField>(self, other: Self, r: F) -> F {
         r.mul_u64(self.abs_diff(other) as u64)
     }
+    #[inline]
+    fn narrow(self) -> Option<i64> {
+        Some(self as i64)
+    }
 }
 impl SmallScalar for u32 {
     #[inline]
@@ -86,6 +104,10 @@ impl SmallScalar for u32 {
     #[inline]
     fn diff_mul_field<F: JoltField>(self, other: Self, r: F) -> F {
         r.mul_u64(self.abs_diff(other) as u64)
+    }
+    #[inline]
+    fn narrow(self) -> Option<i64> {
+        Some(self as i64)
     }
 }
 impl SmallScalar for u64 {
@@ -118,6 +140,10 @@ impl SmallScalar for i32 {
     #[inline]
     fn diff_mul_field<F: JoltField>(self, other: Self, r: F) -> F {
         r.mul_u64(self.abs_diff(other) as u64)
+    }
+    #[inline]
+    fn narrow(self) -> Option<i64> {
+        Some(self as i64)
     }
 }
 impl SmallScalar for i64 {

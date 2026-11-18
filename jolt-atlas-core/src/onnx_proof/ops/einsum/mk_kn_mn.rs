@@ -4,21 +4,18 @@ pub use jolt_atlas_verifier::onnx_proof::ops::einsum::mk_kn_mn::*;
 
 use crate::onnx_proof::ops::einsum::dot::{EinsumFold, Folded};
 use atlas_algebra::{
-    field::{BarrettReduce, FMAdd, JoltField},
+    field::JoltField,
     poly::{
+        compact::{run_sum_unreduced, UNREDUCED_LOW_VARS},
         eq::EqPolynomial,
         multilinear::MultilinearPolynomial,
         point::{OpeningPoint, BIG_ENDIAN},
     },
-    utils::{accumulation::SmallAccumS, math::Math},
+    utils::math::Math,
 };
 use atlas_trace::Tensor;
 use common::parallel::par_enabled;
-use num_traits::Zero;
 use rayon::prelude::*;
-
-/// The variables of the low `eq` table a right-operand row is read against: 512 entries.
-const LOW_VARS: usize = 9;
 
 impl<F: JoltField> EinsumFold<F> for MkKnMnLayout {
     fn fold(
@@ -42,7 +39,7 @@ impl<F: JoltField> EinsumFold<F> for MkKnMnLayout {
         // right[j] = Σ_h eq(r_n, h)·R[j, h], with eq split as eq_high ⊗ eq_low: a row is
         // read against a low table that stays in cache, each run of it summed unreduced, and
         // a run of zeros (the padding, mostly) costs nothing.
-        let low_vars = r_n.r.len().min(LOW_VARS);
+        let low_vars = r_n.r.len().min(UNREDUCED_LOW_VARS);
         let (r_high, r_low) = r_n.r.split_at(r_n.r.len() - low_vars);
         let (eq_high, eq_low) = (EqPolynomial::evals(r_high), EqPolynomial::evals(r_low));
         let right_data = right_operand.data();
@@ -52,17 +49,7 @@ impl<F: JoltField> EinsumFold<F> for MkKnMnLayout {
                 let row = &right_data[j * n..(j + 1) * n];
                 row.chunks_exact(eq_low.len())
                     .zip(&eq_high)
-                    .map(|(run, &high)| {
-                        let mut sum = SmallAccumS::<F>::zero();
-                        for (&value, weight) in run.iter().zip(&eq_low) {
-                            sum.fmadd(weight, &(value as i64));
-                        }
-                        if sum.is_zero() {
-                            F::zero()
-                        } else {
-                            high * sum.barrett_reduce()
-                        }
-                    })
+                    .map(|(run, &high)| high * run_sum_unreduced(run, &eq_low))
                     .sum()
             })
             .collect();

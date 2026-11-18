@@ -138,20 +138,26 @@ pub fn read_prover<F: JoltField, T: ProvingTranscript>(
     trace: &Trace,
     accumulator: &ProverOpeningAccumulator<F>,
     transcript: &mut T,
-) -> (Box<dyn DynRelationWitness<F, T>>, Vec<usize>) {
+) -> (crate::onnx_proof::lookup::DeferredWitness<F, T>, Vec<usize>) {
     let w = witness(shape, trace);
-    let read = tables();
     let indices = table_addresses(&shape.node, w);
-    let prover = shout::prover::read_raf_prover(
+    let params = shout::prover::read_raf_params(
         &ReadProvider {
             shape: shape.clone(),
         },
-        &indices,
-        &[&read.tables.out, &read.tables.sum, &read.sum_prev],
         accumulator,
         transcript,
     );
-    (prover, indices)
+    let build_indices = indices.clone();
+    let build: crate::onnx_proof::lookup::DeferredWitness<F, T> = Box::new(move || {
+        let read = tables();
+        Box::new(shout::prover::ReadRafProver::initialize(
+            &build_indices,
+            &[&read.tables.out, &read.tables.sum, &read.sum_prev],
+            params,
+        )) as Box<dyn DynRelationWitness<F, T>>
+    });
+    (build, indices)
 }
 
 /// The claim of an [`address_link`]: the operand at the reads' point.

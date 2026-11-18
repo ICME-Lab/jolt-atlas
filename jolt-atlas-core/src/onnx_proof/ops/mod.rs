@@ -486,6 +486,7 @@ fn prepare<F: JoltField, T: ProvingTranscript>(
             Prepared::Op(Box::new(params), input_claim)
         }
         OpRelation::TableRead(read) => Prepared::Deferred(table_read_setup(&read, prover)),
+        OpRelation::SoftmaxRead(shape) => Prepared::Deferred(softmax_read_setup(&shape, prover)),
         other => Prepared::Ready(relation_witnesses(other, prover)),
     };
     (kind, prepared)
@@ -563,6 +564,23 @@ fn table_read_setup<F: JoltField, T: ProvingTranscript>(
     build
 }
 
+/// The sequential part of a softmax read's prover: its challenge drawn and claims read. It
+/// leaves its addresses for its one-hot checks.
+fn softmax_read_setup<F: JoltField, T: ProvingTranscript>(
+    shape: &softmax_last_axis::SoftmaxShape,
+    prover: &mut Prover<F, T>,
+) -> lookup::DeferredWitness<F, T> {
+    let (build, indices) = softmax_last_axis::read_prover(
+        shape,
+        &prover.trace,
+        &prover.accumulator,
+        &mut prover.transcript,
+    );
+    let ra = softmax_last_axis::read_ra_encoding(&shape.node).ra_source;
+    prover.leave_addresses(Addresses(ra), shape.idx(), indices);
+    build
+}
+
 /// The sequential part of an op relation's prover: its setup. A read through committed
 /// address chunks leaves its addresses for their one-hot checks, under its read-address
 /// opening. In a test build the setup comes with the relation's input claim, which the
@@ -634,18 +652,7 @@ pub fn relation_witnesses<F: JoltField, T: ProvingTranscript>(
                 &mut prover.transcript,
             ))]
         }
-        OpRelation::SoftmaxRead(shape) => {
-            let node_idx = shape.idx();
-            let (witness, indices) = softmax_last_axis::read_prover(
-                &shape,
-                &prover.trace,
-                &prover.accumulator,
-                &mut prover.transcript,
-            );
-            let ra = softmax_last_axis::read_ra_encoding(&shape.node).ra_source;
-            prover.leave_addresses(Addresses(ra), node_idx, indices);
-            vec![witness]
-        }
+        OpRelation::SoftmaxRead(shape) => vec![softmax_read_setup(&shape, prover)()],
         one_hot @ (OpRelation::OneHot(_) | OpRelation::RemainderBucketValue(_)) => {
             let prepared = prepare(one_hot, prover);
             build_all(vec![prepared], prover)

@@ -27,9 +27,19 @@ pub fn read_raf_prover<F: JoltField, T: ProvingTranscript>(
     accumulator: &dyn OpeningAccumulator<F>,
     transcript: &mut T,
 ) -> Box<dyn DynRelationWitness<F, T>> {
-    let params = ReadRafParams::new(provider, accumulator, transcript)
-        .expect("the prover holds the lookup's claims");
+    let params = read_raf_params(provider, accumulator, transcript);
     Box::new(ReadRafProver::initialize(lookup_indices, tables, params))
+}
+
+/// The setup of [`read_raf_prover`]: its challenge drawn and its claims read. The prover is
+/// built from it alone ([`ReadRafProver::initialize`]).
+pub fn read_raf_params<F: JoltField, T: ProvingTranscript>(
+    provider: &impl ReadRafProvider<F>,
+    accumulator: &dyn OpeningAccumulator<F>,
+    transcript: &mut T,
+) -> ReadRafParams<F> {
+    ReadRafParams::new(provider, accumulator, transcript)
+        .expect("the prover holds the lookup's claims")
 }
 
 /// Prover state for lookups into small tables.

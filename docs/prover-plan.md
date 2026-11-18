@@ -1,398 +1,198 @@
 # Prover plan
 
-One document for where the proving time goes, what we will do about it, in what order, and
-which strategic questions stay open. It condenses `docs/optimization-roadmap.md` and
-`docs/research-directions.md` (both removed; their full text is in git history and their sources
-are `reports/` and `research_notes/`) after the measurements of `docs/measurement-plan.md`
-Phases 1–3 replaced the estimates they were built on. Numbers marked *measured* are from those
-phases on an M3 (11 cores, 18 GB), commit `25c7218f1`; everything else is an estimate and says so.
+One document for where the proving time goes, what has been done about it, what is left and in
+what order, and which strategic questions stay open. Numbers marked *measured* are from the
+benchmark machine (`scripts/remote.sh`, a 16-core Graviton with 30 GB) on 2026-11-18 unless a
+line says otherwise; everything else is an estimate and says so. Timings are comparable only
+within one machine and session.
 
 ## 1. Where the time goes (measured)
 
-GPT-2, 16 tokens, 40.2 s to prove (±1.2% over four runs), 2.24 s to verify, 2.38 MiB proof:
-
-| stage | s | share |
-|---|---|---|
-| trace execution (unspanned) | ~3 | 7% |
-| witness generation | 0.8 | 2% |
-| Akita commit | 23.6 | 59% |
-| IOP: op sumchecks, of which deferred lookup sumchecks | 5.7 (3.1) | 14% |
-| opening reduction sumcheck (1,833 claims) | 1.8 | 4% |
-| per-class Akita openings | 5.0 | 12% |
-
-Everything scales linearly in context (74 / 145 / 286 s at 32 / 64 / 128 tokens); the commit's
-share rises to 72% at 128 tokens, and trace execution to 9%. bge-small (16.9 s) is the other
-regime: 27 small one-hot classes, 4,902 commitments, and the opening stage (7.4 s, 44%) exceeds
-the commit.
-
-**What is committed.** Only one-hot digit polynomials (K = 16, 4 bits per digit): nothing else.
-On GPT-2 at 64 tokens, by committed digit rows (one row = one cycle of one one-hot polynomial;
-empty columns are free, see below):
-
-| family | share of rows | what it is |
-|---|---|---|
-| clamp output chunks (`OUT = out + 2^31`, 8 per element, `range_check.rs`) | ~71% | the clamped output of every einsum, Add, Sub, Sum, Mul, Cube, MeanOfSquares |
-| rescale remainders (14 bits = 4 chunks; 28 for Cube) | ~22% | `acc mod 2^S` |
-| Tanh (GELU) lookups | ~3% | the activation's clamp and table address |
-| softmax | ~1.5% | clamp, exp digits, two remainders |
-| rsqrt, MeanOfSquares, gather | < 0.3% | — |
-
-The clamp buckets also carry `w/4` slack chunks per static width `w ∈ {40, …, 64}`, nonzero only
-on saturated rows (2 elements in all of GPT-2); they are committed as empty columns and cost
-nothing.
-
-**Three facts that set the plan.**
-
-1. **Akita charges ~144 ns per committed one-hot row and ~12 ns per dense value.** A K = 16
-   one-hot column costs 143 ns per digit; a dense column of the same digits in [0, 16) 12 ns,
-   two base-4 columns 25–37 ns, four Boolean columns 57–69 ns; an empty one-hot column costs
-   nothing (`atlas-pcs/examples/commit_bench.rs`). The one-hot encoding pays about 12x for
-   spreading each digit over 16 cells, and row sparsity cannot help because every row holds a
-   digit.
-2. **Every clamped element commits 8 output chunks plus 4 remainder chunks, whatever its
-   width.** The traced quotients on real text need 13–29 bits (residual Adds 17–23, einsum
-   outputs 16–24, the LayerNorm chain 27–29); one node in GPT-2 saturates (a Cube, 2 elements).
-   A declared per-op width can take the 8 output chunks to `⌈w'/4⌉`: 1.47x at per-node observed
-   widths, 1.29x at a uniform 24 bits (112 nodes excepted). The static 40–64-bit widths size only
-   the free slack chunks.
-3. **92% of the clamp output chunks sit on rows at least 1,024 wide, 63% on rows of 4,096**
-   (GPT-2); 48% on rows of 1,024 for bge-small. A per-row check amortises over them.
-
-The July 2026 HyperKZG profile, which found sumcheck work dominant per lookup, does not transfer
-to Akita. Digits are the cost.
-
-## 2. Thesis and strategy
-
-**On our stack, proving inference is proving values are small, and we prove it in the most
-expensive encoding available.** The arithmetic (Thaler's matmul sumcheck, virtual intermediates)
-commits nothing; 93% of what we commit exists to range-check rounding and clamping (the clamp
-output chunks and the remainders), and it is committed in the one-hot encoding Shout needs for
-lookup addresses, at 12x the cost of a dense digit, when a range check needs no lookup at all
-(the clamp buckets already run none: a split sumcheck and a Booleanity chunk check).
-
-The strategy that follows, in order of leverage:
-
-- **Range checks become dense digit decompositions, not lookups** (section 3, items 1–2). A
-  value `v` is committed as base-4 or Boolean digit columns with a zero-check (degree 4 or 2 in
-  the digit) and
-  the linear recomposition `v = Σ 4^i d_i`; no read-raf, no Hamming weight, no ra-virtualization.
-  SuperNeo (ePrint 2026/242) is the published, security-proved form (the commitment is relaxed
-  binding; the range comes from the zero-check, which is what Akita needs, since it certifies no
-  range itself).
-- **Wide rows get the row check** on top (item 3): 128 random ternary combinations per row, shared
-  across rows, each range-checked instead of every element. Exact lemma (LNS 2020/1448 2.5):
-  slack 2, error 2^-n, no field condition; completeness can be perfect at one extra digit.
-- **Widths are declared per op** (item 4): 1.3–1.5x on the output chunks, and what the row check
-  needs (it cannot reproduce a saturating clamp).
-- **One-hot columns remain only where a table is read** (Tanh, softmax, gather: 7% of rows), or
-  are virtualised from the digits.
-- **The commitment scheme stays Akita** (decided 2026-11-10): the encoding change above is a
-  4x on the commit with no scheme change, and keeps zero knowledge (upstream's Whiteout stack),
-  recursion (the Akita verifier guest) and small proofs. BitZ is kept in view as the future
-  option for the range digits (section 5); the FlashProve-style hash architecture is declined
-  (section 4).
-
-The estimated ceiling, with the measured per-row costs and today's chunk counts: items 1–4 take
-the 23.6 s commit to roughly 5–7 s on GPT-2 at 16 tokens (output chunks ÷ 3.8–5.7 by the
-encoding, ÷ 1.3–1.5 by declared widths, and ÷ ~10 on wide rows by the row check; remainders ÷
-3.8–5.7), i.e. the prover from 40 s to the low 20s before anything is done to the IOP or the
-openings, which then become half of what is left. These are estimates; the first prototype
-measures them.
-
-## 3. The plan, in order
-
-Each item names its measured target, the mechanism, and what it needs. Items 1–4 change the
-range-check protocol only; outputs and golden hashes do not move unless the item says so.
-
-### 1. Dense-digit encoding for the clamp output chunks (roadmap D3) — 71% of rows, 3.8–5.7x on them
-
-**Implemented on `dev`** (spec `specs/clamp-dense-digit-range-check.md`): `OUT` is 16 base-4
-`U8Scalars` digit columns under `atlas_sumcheck::digit_range`, and the Booleanity check keeps the
-slack chunks only. The base is the one constant `range_check::DIGIT_BASE`. Not yet measured: the
-Phase 1 gate run and decision 3 below are pending. A first GPT-2 run (16 tokens) proved in
-34.5 s against the 40.2 s baseline, verified in 2.20 s, with a 2.24 MiB proof; the stage split
-is not yet measured.
-
-Today each bucket commits `OUT = out + 2^31` as 8 one-hot chunks per row plus empty slack chunks,
-checked by a split sumcheck and the Booleanity chunk check with a linear term
-(`range_check.rs`); there is no lookup on the buckets already. Replace the one-hot chunks by
-base-4 digit columns (`U8Scalars` in [0, 4), sixteen per element) with a batched zero-check
-`d(d−1)(d−2)(d−3) = 0` (degree 4 in the digit, 5 with the eq factor) in place of Booleanity and the same linear recomposition of
-`OUT` and `S`; the split sumcheck keeps its shape. Measured commit cost 25–37 ns per 4-bit digit
-against 143. Decide base 4 against Booleans (57–69 ns; `d(d−1) = 0`, degree 3 with eq) in the prototype by
-total time, not commit time alone. Needs: new witness columns in
-`range_bucket.rs`/`range_check.rs`, a model-level bucket relation (no `type Spec`; those are
-node-level), the soundness sweeps over the new columns, zoo
-tests, one real-model run. Prototype on `gpt2-tiny` in the test profile first.
-
-### 2. The same for the rescale remainders — 22% of rows, 3.8–5.7x on them
-
-**Implemented on `dev`**: each remainder bucket commits `⌈w/2⌉` base-4 `U8Scalars` digit columns
-under the same `digit_range` relation, which also tightens the bound to `R < 2^w` (the 4-bit
-one-hot chunks proved `R < 2^{4⌈w/4⌉}`).
-
-Items 1 and 2 together, GPT-2 at 16 tokens: 33.2 s to prove (two runs, ±0.1%), 2.29 s to
-verify, 2.25 MiB proof, 11.3 GB peak RSS (6.0 GB at baseline). Stages against the baseline:
-commit 23.6 → 7.3 s, deferred sumchecks 3.1 → 6.5 s (4.5 s of it the parallel relation
-batch that carries the digit-range sumchecks), openings 5.0 → 13.0 s (the 2^28 digit class's opening alone is 5.3 s). This
-needs dense classes capped at 2^28 coefficients (`akita::MAX_DENSE_CLASS_NUM_VARS`): upstream's
-dense commit falls off a cliff at 2^29, where the 272 digit columns took 1587 s in one class.
-
-A 14-bit remainder is seven base-4 digits with the same zero-check; the 28-bit Cube remainders
-fourteen. Same machinery as item 1, same PR or the next. (Celer-style grand products on virtual
-keys, the former D4, are superseded: they only beat one-hot digits, not dense ones.)
-
-### 3. Row check on wide rows (roadmap D1) — ~10x on 63–92% of the clamp output chunks (estimate)
-
-Per row width, after every commitment the tensor depends on, draw n = 128 + ⌈log₂ rows⌉
-combinations with coefficients 0 (p = 1/2) and ±1 (p = 1/4 each). The prover commits the digits
-of each combination (5 at honest values < 2^7, 7 at < 2^16, 11 at full i32; one more for perfect
-completeness) through item 1's range check, and one degree-2 eq-weighted sumcheck over rows and
-columns links the combinations to the tensor's evaluation claim. Element digits disappear on
-those rows; remainders stay exact (item 2). Break-even row width 80–176; at width 1,024 the
-saving is 6–13x, at 4,096 23–51x. The prototype is a standalone relation test on one 3,072-wide
-GPT-2 einsum output with the **negative test** that draws the matrix before the remainder
-commitment (the prover can then steer the tensor into its kernel). The check bounds and does
-not saturate, which is the semantics in force (decision 2): an output is exact or the
-execution does not exist.
-
-### 4. Per-op declared clamp widths (roadmap D2) — 1.3–1.5x on the clamp output chunks, exact
-
-Every checked output carries one range claim at a uniform 32 bits (16 base-4 digits). Replace
-it by a per-op width declared at compile time (observed + margin), part of the model and so of
-the statement. On the three GPT-2 texts and bge-small every output stays inside its observed
-width, so this is output-identical on those inputs; what is traded is the range an execution
-may use, under the partial-function semantics of decision 2 (as FlashProve and Sable use), with
-the tracer asserting the declared width. Compile-time overflow bounds
-from weight ℓ1 norms (zkAgent) are the stronger form where they apply. At scale 2^14 the honest
-values need 17–29 bits, so "12–16-bit activations" is a change of scale, not of width, and is
-not pursued (section 6).
-
-### 5. Fusions that remove clamps (roadmap C1, new LayerNorm item, B4) — up to ~15% of rows
-
-- **Bias into the einsum rebase (C1):** 72 einsum → constant-Add pairs on GPT-2, 12% of the
-  clamp output chunks; `acc' = Σ L·R + b·2^S` leaves the remainder unchanged and the quotient `q + b`,
-  so one checked node disappears per linear layer. Under decision 2 the outputs are equal
-  wherever both forms execute: the fused form no longer requires the un-biased quotient to lie
-  in `i32`, so it accepts a superset of executions and needs no new `SemVersion`. Nothing on
-  the encoder models.
-- **One rescale per linear chain (the general form of C1):** an unrescaled accumulation is not
-  a free witness. Its relation fixes it as an exact function of operands that are already
-  range-checked, so it needs no range claim of its own, only a static magnitude bound for the
-  no-wrap note of the relation that consumes it. A fused product followed by Add, Sub or Sum
-  with any operand (a residual, not only a constant) can therefore carry the wide value,
-  taking the other operand times `2^S`, and rescale once at the end of the chain: one
-  remainder claim and one output claim fewer per element at every interior node. Unlike C1
-  this rounds once where today's chain rounds at each product, so outputs change and it needs
-  a `SemVersion`. The chain ends before a second multiplication (31-bit operands give a 62-bit
-  product; a product of two of those is at the field's width) and before every table read,
-  which needs a narrow index. Not yet counted: the fused product → non-constant Add, Sub or
-  Sum pairs on GPT-2, bge-small and Qwen, taken from the lowered graph in step 5's session.
-  It is worth a spec only if that count is material next to C1's 72 pairs.
-- **Fused LayerNorm:** each norm is nine lowered ops, eight of them clamped, holding the widest
-  quotients in the model (27–29 bits). One op with per-row range checks (VerInf, DeepProve) and
-  the rsqrt relation of item 7 removes most of them. Needs an importer pass and a tracer op.
-- **Structural ops as ties (B4):** Reshape, aligned Slice and Concat as zero-round ties are
-  implemented (`specs/structural-ops-as-ties.md`); unaligned ones no longer compile. Open:
-  MoveAxis chains merged, IsNaN rewritten to constant zero and the dead Iff folded. Small
-  prover gain; verifier time and code.
-
-### 6. Activations and softmax (roadmap B2, C2–C4, B3, B5) — 7% of rows, more at long context
-
-Softmax and the attention-score einsum grow with the square of the sequence length and are small
-at 16 tokens; measure at 256–512 tokens before sizing this group.
-
-- **Activation clamp fused into the table lookup (B2):** the table's address digits already
-  prove the clamped value is in range; drop the separate clamp (8 digits → 5).
-- **Rebase digits as lookup addresses (C2) and GELU as one table op (C4):** when an activation
-  consumes an einsum output, read the table through the output's digits (after item 1 these are
-  base-4 digits: virtualise the one-hot address from them at degree 4, or keep a one-hot copy
-  for lookup ops only). On GPT-2 no activation reads an einsum directly today because the bias
-  Add sits between; C1 first.
-- **Fused attention (C3):** scores emitted as `z = max − score` unrescaled, one table for the
-  range check, exp and causal mask on the digits of `z`, normalisation in the `·V` einsum's
-  per-row divisor, committed argmax one-hot and a public mask selector (B5). FlashProve has this
-  working at ~16-bit addresses with 12-bit operands and a coarse shift; our `z` width on real
-  models is measured by the census (half of GPT-2's exp lookups already sit at the saturated end,
-  `max − x ≥ 2^17`). Supersedes B3 (one lookup on `z`). Needs a spec.
-
-### 7. Per-node range checks onto the shared mechanism (roadmap B1) — few rows, removes 64-bit read-rafs
-
-**The range-check half is implemented** (`specs/one-range-check.md`): every remainder bound,
-softmax's and ScalarConstDiv's included, is a range claim (`R`, or the slack `B − 1 − R`) in the
-packed remainder buckets; the `UnsignedLessThan` read-rafs and the identity range check are gone.
-The single Rsqrt relation below is still open.
-
-Rsqrt, Div, MeanOfSquares, Sin and Cos committed per node and ran 64-bit `UnsignedLessThan`
-read-rafs with degree-17 ra-virtualization. Rsqrt becomes one relation,
-`out²·x ≤ S³ < (out+1)²·x`, with its two slacks range-checked by item 1's mechanism; the others
-become `R` and `B − 1 − R` checks. Never table rsqrt: fixed-grid tables destroy 7B+ RMSNorm
-models (Bits Under ZK-LLM).
-
-### 8. Openings (17%, 44% on bge-small): one commitment, one opening
-
-Per-class Akita openings scale with the class count. After items 1–2 the classes change shape
-anyway; lay every committed polynomial on an aligned subcube of as few classes as the catalog
-allows (upstream's one-native-group layout, a16z/jolt #2012; `atlas-pcs/src/akita/mod.rs` already uses aligned
-subcubes within a class). JaggedPCS is a different construction and would cost 0.4–0.6 s under
-our padding. The reduction sumcheck (1.8 s, 1,833 claims) shrinks with the IOP item below.
-
-### 9. The IOP: the digits are the trace (own analysis)
-
-After item 1 every op output that is clamped is committed as its digit columns, so a consumer
-relation can define its input as the recomposition `Σ 4^i d_i` of the producer's digits instead
-of taking a claim from the producer's sumcheck. Then every op relation is independent: all
-relations of all layers go into one batched sumcheck (upstream's per-round degree schedule,
-a16z/jolt #2336), same-shape instances stack across layers (twelve copies of one matmul become
-one instance with a layer axis; the weights one MLE the verifier evaluates once per shape), the
-evaluation-reduction stage disappears, and the lookup tables join one tagged instance. No
-committed volume changes; the targets are the IOP, the reduction, proof size, verifier time and
-memory: 7.5 s of 40 s today, about half of what is left after items 1–4. Softmax and table
-outputs are not digit-decomposed and keep a short local chain or gain a decomposition. No
-shipped transformer prover does this (FlashProve runs ~2,000 sumchecks per request). Needs a
-relation compiler from the ONNX graph; a Phase 4 candidate after the range-check items.
-
-### 10. Engine (roadmap A, E) and the upstream kernel port
-
-- Port upstream's field and commit kernels and re-run the baseline first. Nothing is vendored
-  any more (`docs/roadmap.md`): the field is `atlas-algebra::field`, taken from `jolt-field` at
-  `f3265b5a`, so upstream's kernel work since then (#2255, #2211, #2191, #2145, #2188) is a
-  port into our crate with `docs/upstream-inventory.md` as the diff base, and the open modulus
-  change (#2379) would be one too. The `akita-*` crates are still a git dependency (rev
-  `dfdbd767`); bumping that rev on a branch picks up the commit-side work. Together these are
-  the cheapest speedup available.
-- Einsum dot engine on `GruenSplitEqPolynomial`, `LowToHigh`, unreduced accumulation (A1), the
-  row-major unreduced fold over unpadded extents (A2), a parallel allocation-free evaluation
-  reduction (A3). Estimated 2–4x on their kernels, which are inside the 5.7 s IOP.
-- Four-factor virtual selectors (upstream #2188, 38–44% off ra-virtualization), balanced product
-  trees (1.2–1.6x on Fp128, our estimate from 2026/587's BN254 numbers), small-value sumcheck
-  (~2–3x on Fp128, estimate) and univariate skip (1.11–1.24x, Jolt's default) for what remains
-  high-degree after items 1–7. Microbenchmark on Fp128 before writing any into the prover;
-  every published number is BN254.
-
-### 11. The tracer
-
-Trace execution is 3 s at 16 tokens and 12.8 s at 64 (7–9% of the prover, linear in context),
-inside `prove` and unspanned. Profile its i64 einsum and LayerNorm kernels; the prover's own
-witness generation over the same data takes 0.8 s.
-
-### Order and gates
-
-The work is carried by specs; this is the one order. Each spec names the items it implements
-and rewrites their text here when it lands. Every step is gated by `bench/gate.sh` on
-`gpt2 --seq-len 16` and `bge-small-en-v1.5` on the benchmark machine, against the commit it
-lands on: stage times within 3%, peak memory within 5%, unless the spec states tighter bounds.
-Qwen joins the gate at step 1 below.
-
-**Targets (set 2026-11-17).** GPT-2 at 16 tokens in about 1 s and Qwen in about 3 s. Today
-GPT-2 proves in about 9.5 s and Qwen in about 30 s on a developer laptop; GPT-2 is at about
-the same on the benchmark machine. Qwen's target assumes it scales as GPT-2 does; step 1
-checks that.
-
-**Landed on `dev`:**
-
-| Spec | Items |
-|---|---|
-| `clamp-dense-digit-range-check` | 1 and 2 |
-| `one-range-check` | 7, the range-check half |
-| `no-scalar-special-cases` | one-element nodes join the buckets (no item) |
-| `post-loop-batches` | every lookup in two post-loop batches (no item) |
-| `structural-ops-as-ties` | 5, the Reshape, Slice and Concat part of B4 |
-| `log-partition-softmax` | 6, the softmax line |
-| `fused-gelu` | 6, C4 |
-| `one-clamp` | decision 2; item 4 reduces to widths below 32 bits |
-| `stream-proof` | the proof is the transcript; the verifier walks one schedule (no item) |
-| `bitz-commitment` | decision 1: BitZ replaces Akita; item 8 and the `akita-*` bump are dropped; the digit-range and Booleanity sumchecks are gone |
-| `digits-as-trace` stage 1 | 9: a digit-backed output's claims are checked against its digits, at a point of the node's own |
-| `wave-schedule` | 9, stage 2: the schedule runs in waves, one batched sumcheck per wave (9 sumchecks for GPT-2 and for Qwen) |
-
-**Measured on the benchmark machine, 2026-11-18** (`bench/gate.sh`, 16 tokens, medians of
-three; the table and the route below are from 2026-11-17 and are kept as written):
+**At 16 tokens** (`bench/gate.sh`, medians of five runs for GPT-2 and three for Qwen, commit
+`0205a49ec`):
 
 | | GPT-2 | Qwen |
 |---|---|---|
-| prove | 3.26 s | 10.20 s |
-| trace execution | about 0.45 s | about 1.4 s |
+| prove | 2.88 s | 7.94 s |
+| trace execution | about 0.45 s | about 1.5 s |
 | commit | 0.25 s | 0.83 s |
-| sumchecks (`iop`) | 1.20 s | 3.44 s |
-| openings | 1.37 s | 4.41 s |
-| verify | 0.34 s | 1.04 s |
+| sumchecks (`iop`) | 1.13 s | 3.06 s |
+| openings | 1.05 s | 2.52 s |
+| verify | 0.35 s | 1.05 s |
+| proof | 1.33 MiB | 1.76 MiB |
+| peak memory | 2.9 GB | 8.2 GB |
 
-What moved since the 9.1 s table: the tracer's einsum and constants (route step 2), the
-opening reduction (step 4, now about 0.2 s on GPT-2), the grand product's field arithmetic
-(part of step 3), the cached activation tables, and the two specs above (step 7's first
-half). Qwen is profiled (step 1) and is in the gate by hand (`--model models/qwen`).
-Huge pages for the allocator are worth a further 17 to 22% on Linux and are not in these
-numbers (`CLAUDE.md`, "Remote runs"). What is left, largest first on Qwen: the BitZ grand
-product (about 2.7 s), the serial per-node steps between waves (about 1.2 s, over half of it
-lookup witness setup), the op batches (1.3 s) and the bucket-value batch (0.7 s).
+Huge pages for the allocator take a further 17 to 22% off on Linux (Qwen 7.5 s, GPT-2 2.6 s
+when measured) and are not in these numbers (`CLAUDE.md`, "Remote runs").
 
-`bitz-commitment` took GPT-2 from 24.4 s to 9.1 s on the benchmark machine
-(`docs/measurement-plan.md`).
+**By sequence length** (single runs, commit `1dedd8911`, before the public reshaped output):
 
-**Where GPT-2's 9.1 s is** (benchmark machine, after `bitz-commitment`), and what each part
-has to become for 1 s. The targets are estimates of what the work below can reach, not
-measurements.
+| Model | Tokens | Prove | Verify | Proof | Peak memory |
+|---|---|---|---|---|---|
+| GPT-2 | 32 | 4.34 s | 0.36 s | 1.62 MiB | 4.5 GB |
+| GPT-2 | 64 | 8.50 s | 0.37 s | 2.30 MiB | 9.1 GB |
+| GPT-2 | 128 | 17.85 s | 0.39 s | 2.38 MiB | 17.7 GB |
+| Qwen | 16 | 7.51 s | 1.04 s | 1.76 MiB | 8.5 GB |
+| Qwen | 32 | 13.05 s | 1.07 s | 2.40 MiB | 13.9 GB |
+| Qwen | 64 | 24.96 s | 1.09 s | 2.49 MiB | 25.8 GB |
 
-| Part | Now s | Target s | Steps |
+Proving is close to linear in context: about 140 ms and 140 MB per token on GPT-2 (7 tokens a
+second), about 370 ms and 370 MB per token on Qwen (2.7 tokens a second). The fixed cost is
+small, so a longer context amortises almost nothing. Verify time and proof size are nearly
+flat. Memory is the limit on context: Qwen at 128 tokens and GPT-2 at 256 do not fit in 30 GB.
+
+**Where the growth is** (Qwen, traced single runs, 16 against 64 tokens):
+
+| Stage | 16 tokens | 64 tokens | Growth |
 |---|---|---|---|
-| Trace execution and witness generation | 3.6 | 0.25 | 2 |
-| Sumchecks over the model (`iop`) | 2.35 | 0.35 | 5, 6, 7 |
-| Opening-reduction sumcheck | 1.3 | 0.1 | 4 |
-| BitZ commit and opening | 1.8 | 0.3 | 3, 6 |
-| **Total** | **9.1** | **about 1.0** | |
+| sumchecks | 3.05 s | 7.96 s | 2.6x |
+| openings | 2.54 s | 10.20 s | 4.0x |
+| trace | 1.48 s | 4.19 s | 2.8x |
+| commit | 0.82 s | 2.92 s | 3.6x |
 
-**The route, in order.** Each step states the GPT-2 time it is expected to leave; the
-expectations are estimates and each step's gate replaces its own.
+At 64 tokens the commit and the openings are half of the time, and they scale with the
+committed bits. Inside the openings at 64 tokens: the grand product 4.4 s, Ligerito 1.5 s,
+building the opening's inputs 1.25 s, the projection 1.0 s, the reduction sumcheck 0.8 s.
+Inside the sumchecks at 16 tokens: the op batches 1.3 s, the serial steps between waves
+1.15 s (0.66 s of it lookup witness setup), the bucket-value batch 0.67 s, the one-hot
+checks 0.28 s.
 
-1. **Profile Qwen.** Put Qwen on the benchmark machine (a `scripts/remote.sh` subcommand that
-   downloads a model there), take the same per-stage table, and add Qwen to the gate. Qwen
-   has four times GPT-2's weights, 24 identical blocks, RMSNorm (Rsqrt), SiLU and grouped
-   attention heads (small gathers); the profile says whether the steps below serve it in the
-   same order or it needs work of its own (the Rsqrt relation of item 7 and fused attention
-   are the candidates). Also here: `digits-as-trace` stage 1, already specified.
-2. **The tracer (item 11).** Trace execution and witness generation are the largest part and
-   unoptimised: a float forward pass of either model takes a fraction of a second. Integer
-   einsum and normalisation kernels, parallel over rows. Expected: GPT-2 about 6 s. It
-   scales with the weights, so it is the largest step for Qwen.
-3. **BitZ to its reference speed.** Our grand product is about four times the
-   proof-of-concept's (1.2 s against 0.3 s at the same size): joint case tables in its
-   bottom rounds, fused generation of the first stored layer, and no work on all-zero
-   columns. Expected: about 5 s.
-4. **The opening reduction.** Every digit column is already opened at one point, the output
-   of the buckets' value sumcheck, and they are 93% of committed rows: hand that point to
-   the opening and reduce only the one-hot claims. Measure the reduction's split by member
-   kind first. Making the one-hot claims share a point is open: it lengthens their
-   sumchecks and needs a spec. Expected: about 4 s.
-5. **The sumcheck engine (item 10).** The einsum dot engine on the split-eq polynomial with
-   unreduced accumulation, the row-major fold, the parallel evaluation reduction.
-   Microbenchmark on Fp128 first. Expected: about 3 s.
-6. **Committed volume (items 3 and 4).** The row check on wide rows and declared widths
-   below 32 bits shrink the range buckets, and with them the BitZ opening and the buckets'
-   sumcheck. Item 3's standalone relation test with the negative test comes first.
-7. **One sumcheck for the model (`digits-as-trace` stages 2 and 3, item 9).** Digit-backed
-   relations leave the node loop and stack across identical layers (twelve in GPT-2,
-   twenty-four in Qwen), then the relation compiler. Needs a memory plan. Expected with
-   step 6: about 1.5 s.
-8. **The last factor.** What is left after step 7 is passes of field arithmetic over the
-   weights. Closing 1.5 s to 1 s on sixteen cores is not planned work; more cores, or the
-   GPU backend, is.
+**What is committed** (`prove --census` at 64 tokens, before the public reshaped output):
 
-Still open and unordered: item 5's bias fusion (C1) and fused LayerNorm with item 7's Rsqrt
-relation; item 6's B2, C2 and C3. Step 1's Qwen profile decides where they go.
+| | Qwen | GPT-2 |
+|---|---|---|
+| range-check digit columns | 91.1% of rows | 92.4% |
+| of which 32-bit outputs | 62% | 76% |
+| activation lookups | 7.7% | 6.0% |
+| softmax, gathers, the rest | 1.2% | 1.6% |
+
+A rescaled product commits 46 bits: a 14-bit remainder and a 32-bit output. The values are
+far narrower than their columns. On Qwen 36% of einsum outputs are exactly zero (padding
+included; the trace stores tensors padded, so the two are not separated), 83% fit in 16 bits
+and 99.8% in 20; no value in either model needs more than 29 bits. Add, Sub and Sum outputs
+are an eighth of Qwen's checked cells and about 40% of GPT-2's.
+
+**The projection's proof of work is a lottery per proof.** The grind before the prime is
+drawn is 23 to 26 bits, and how long the search runs is fixed by the transcript: a protocol
+change that alters the transcript moves it by up to 100 ms either way on GPT-2 with no change
+in work (70 ms to 165 ms across the public reshaped output, while every other part of the
+opening got faster). Read an openings change of that size against the sub-stage spans before
+calling it a regression.
+
+## 2. How we got here
+
+The plan's first measurements were 40.2 s for GPT-2 at 16 tokens on an M3 under Akita, with
+59% of it the commit of one-hot digit columns. The thesis then was that proving inference on
+this stack is proving values are small, in the most expensive encoding available. What
+followed, by spec:
+
+| Spec | What it did |
+|---|---|
+| `clamp-dense-digit-range-check`, `one-range-check`, `no-scalar-special-cases` | range checks as dense base-4 digits in packed buckets; every remainder bound on one mechanism |
+| `one-clamp` | a result outside `i32` is an execution error; nothing saturates |
+| `post-loop-batches`, `structural-ops-as-ties`, `log-partition-softmax`, `fused-gelu` | lookups in two batches; Reshape, Slice and Concat as zero-round ties; softmax and GELU as single table ops |
+| `stream-proof`, `verification-schedule`, `relations-as-values` | the proof is the transcript; the verifier walks one compiled schedule |
+| `bitz-commitment` | BitZ replaces Akita: one commitment of bits, one opening. GPT-2 24.4 s to 9.1 s on the benchmark machine |
+| `digits-as-trace` stage 1 | a digit-backed output's claims are checked against its digits, at a point of the node's own |
+| `wave-schedule` | the schedule runs in waves, one batched sumcheck per wave (9 for GPT-2 and for Qwen at 16 tokens) |
+
+Without a spec, from 9.1 s to 2.9 s on GPT-2 and 13.1 s to 7.9 s on Qwen: the tracer's einsum
+kernels and shared constants; dense groups in the opening reduction; the grand product
+(NEON slice kernels, byte tables, in-place folds, a stored layer at a sixteenth of the bits,
+skipped empty columns, per-layer histograms); the split-eq unreduced fold for `mk,kn->mn`;
+cached activation tables; the output of a node a model output is a reshape of taken as public
+(Qwen 6.7% at 64 tokens); the BitZ size cap raised from 2^31 to 2^36 bits.
+
+## 3. What is left
+
+**Targets (set 2026-11-17).** GPT-2 at 16 tokens in about 1 s and Qwen in about 3 s on the
+benchmark machine. Today 2.9 s and 7.9 s.
+
+Every step is gated by `bench/gate.sh` on GPT-2 and Qwen (`--model models/qwen`) against the
+commit it lands on: stage times within 3%, peak memory within 5%, unless a spec states
+tighter bounds. Gains below are estimates until a gate replaces them.
+
+### A. Engineering on the current protocol (no spec; about 10 to 15% together)
+
+1. **Lookup witnesses built in batch.** The serial steps between waves are 1.15 s on Qwen,
+   0.66 s of it lookup witness setup that could run in parallel with the wave before it.
+2. **Ties in parallel**, and the split-eq unreduced fold for the einsum layouts that do not
+   have it (`mk,kn->mn` does), and for the verifier's weight evaluation.
+3. **The grand product's remainder:** write the stored layer already folded, keep the
+   accumulators in registers, a prepared fold multiplier.
+4. **The tracer:** cache the transposed weights across runs of a model, skip padded extents.
+
+### B. Committed volume (each needs a spec; this is where long contexts are won)
+
+Commit and openings are half the time at 64 tokens and follow the committed bits; so does
+memory. One measured point for sizing: removing 14% of Qwen's bits took 6.7% off the prove
+time and 7% off peak memory at 64 tokens.
+
+1. **Per-node output widths** (`specs/per-node-output-widths.md`, proposed, parked). A width
+   below 32 bits stated per node at compile time, enforced by the tracer. 15 to 18% fewer
+   committed bits on Qwen with classes and margin, 23% at exact widths: an estimated 7 to 9%
+   of prove time at 64 tokens. It changes the contract (a value above its node's width is an
+   execution error) and needs a calibration tool; parked because the gain does not justify
+   that on time alone.
+2. **The row check on wide rows.** After every commitment a tensor depends on, draw
+   128 + ⌈log₂ rows⌉ combinations of each row with coefficients 0 and ±1, commit the digits
+   of the combinations and range-check those in place of every element (LNS 2020/1448,
+   lemma 2.5: slack 2, error 2^-n). Element digits disappear on wide rows; remainders stay
+   exact. It is the one known change that removes most of the 32-bit columns and not a
+   fraction of them. Prototype first as a standalone relation test on one wide einsum
+   output, with the negative test that draws the combinations before the remainder
+   commitment.
+3. **Fewer rescales.** Bias fused into the einsum's rebase removes one checked node per
+   linear layer on GPT-2 (72 pairs, 2^22.8 output cells at 64 tokens; none on Qwen). One
+   rescale per linear chain is the general form and changes outputs (`SemVersion`). Fused
+   LayerNorm with one Rsqrt relation (`out²·x ≤ S³ < (out+1)²·x`) removes the widest
+   quotients in the models.
+4. **Dropping the output check of Add, Sub and Sum.** Their outputs are exact functions of
+   checked operands. Worth it on GPT-2 (about 40% of checked cells), not on Qwen (an
+   eighth); needs a statement of what bound consumers then rely on.
+5. **Activations and softmax.** The activation clamp fused into the table lookup, rebase
+   digits as lookup addresses, fused attention. Lookups are 6 to 8% of rows at 64 tokens;
+   softmax grows with the square of the sequence length, so measure at 256 tokens before
+   sizing this.
+
+### C. One sumcheck for the model (`digits-as-trace` stages 2 and 3)
+
+Digit-backed relations stack across identical layers (twelve in GPT-2, twenty-four in Qwen):
+one instance with a layer axis per shape, the weights one polynomial the verifier evaluates
+once. Targets the op batches and the bucket-value batch (2 s of Qwen's 3.1 s), proof size and
+verifier time. Needs a memory plan and a relation compiler.
+
+### D. Beyond the current machine
+
+- **Memory per token.** 370 MB per token on Qwen caps the context before time does.
+  Nothing is planned yet; the committed-volume items help in proportion.
+- **A GPU backend.** Estimated 5 to 10x end to end on one H100 against the sixteen cores
+  (Qwen about 15 to 25 tokens a second, GPT-2 40 to 70): the trace and the hashing gain the
+  most, the binary-field arithmetic of the opening the least (no carry-less multiply on a
+  GPU), the many small nodes and the transcript little. Nothing measured. The first step is
+  one kernel, the grand product's inner loop, on a small NVIDIA instance behind a feature
+  flag; CUDA and not Metal, since a Mac's numbers say little about a deployment.
+- **Sumcheck research** is not expected to give 2x by itself: the stage is a third of the
+  time, and half of it is not round arithmetic. A cheaper rescale argument (fewer than 46
+  committed bits per product) is the research question that would.
+
+### Order
+
+A1 and A2 first (no decision needed). Then the prototype of B2, since it decides whether B1
+is worth its contract change at all. C after B. D's GPU kernel whenever an instance exists.
 
 ## 4. Positions (research, condensed)
 
 - **Magnetar** (Setty, ePrint 2026/2423): binary field, packed bits, constraints instead of
   lookups, one commitment and one opening. Its field cannot count, so its arithmetisation does
   not transfer; its layout discipline (commit once, derive everything; one opening) does, and is
-  items 8–9. Folding the Hamming-weight check into read-raf transfers for read-only lookups.
+  what `bitz-commitment` and `digits-as-trace` took. Folding the Hamming-weight check into read-raf transfers for read-only lookups.
 - **FlashProve** (Anthropic/EPFL, Nov 2026): Goldilocks with a cubic extension, Reed–Solomon at
-  rate 0.104, committed byte-cell trace, per-row approximate range check (item 3's source),
-  exact rounding by one 2^16 lookup on a virtual key, fused attention (item 6), partial-function
+  rate 0.104, committed byte-cell trace, per-row approximate range check (B2's source),
+  exact rounding by one 2^16 lookup on a virtual key, fused attention (B5), partial-function
   semantics, 12-bit activations, 6.8–9.4% top-token divergence, 18.78 MB proofs, 21 s verifier,
   Llama 4 Maverick at 111 tok/s on an H100 at batch 24. Hardware explains 10–100x of the ~10^4
-  gap in parameters × tokens/s; the rest is encoding, which items 1–4 address.
+  gap in parameters × tokens/s; the rest is encoding and precision.
 - **Sable** (MoonMath, 3 Nov 2026): KoalaBear + LogUp-GKR, BaseFold/BLAKE3, every rounding exact
   at one committed element plus 2–3 lookups, Qwen2.5-32B at 4K in 92.5 s with 135 MiB proofs,
   partial semantics, not ZK. **Attestable:** no paper or code; ZK, ~5 MiB proofs, within ~1.3x of
@@ -412,45 +212,27 @@ relation; item 6's B2, C2 and C3. Step 1's Qwen profile decides where they go.
 
 ## 5. Decisions and open points
 
-1. **Decided: Akita now, BitZ in view.** Akita after item 1 is ~37 ns per digit; BitZ's paper
-   number is ~2 ns, from a proof-of-concept prover that is hash-based and not zero-knowledge.
-   Staying on the lattice keeps zero knowledge, recursion and small proofs and takes the 4x that
-   needs no scheme change. Revisit BitZ when item 1 has landed and the commit is measured again,
-   or when BitZ ships a maintained prover with a zero-knowledge variant. The proof-of-concept is
-   checked out at `/Users/kg/swe/icme/scratch/BitZ-PoC` with the run commands in the measurement
-   plan, Phase 3, for whenever that comparison is wanted; it is not on the critical path.
-
-   **Reopened 2026-11-16.** Zero knowledge is set aside for now, which removes the main reason
-   above for staying on the lattice, and the Akita dependency (LayerZero's `akita-*` crates,
-   about 275,000 lines behind a 10,000-line adapter) is a cost of its own. The direction is an
-   owned BitZ implementation behind `CommitmentScheme` in place of Akita, conditional on the
-   BitZ arm of the measurement plan (Phase 3): commit and opening together on our digit volumes,
-   against the dense base-4 Akita numbers of items 1–2, not the one-hot ones. Akita stays the
-   scheme in the tree until that run and a spec. Recursion and proof size are not yet weighed.
-   The candidate measured is BitZ under Magnetar's MosaicPCS layout, not BitZ per class: every
-   committed column on an aligned subcube of one bit polynomial, one commitment, claims lifted
-   by appending the subcube's suffix, one degree-2 batching sumcheck, one opening. The layout
-   is what removes the per-class openings; BitZ is what makes one 2^30 polynomial committable
-   (Akita's dense commit is capped at 2^28 coefficients).
-2. **Semantics of a result outside `i32`: decided, partial-function.** A sum, difference,
-   negation, axis sum or rescaled quotient outside `i32` is an execution error
-   (`SemVersion::V3`, `specs/one-clamp.md`); nothing saturates, and the proof bounds each such
-   output by one 32-bit range claim. A narrower declared width (item 4) keeps this form: the
-   tracer asserts the width.
-3. **Base 4 or Booleans** for item 1, by measured total time. Open: item 1 ships base 4 on
-   `dev`; switching to Booleans is the one constant `range_check::DIGIT_BASE = 2`. Decided by
-   the Phase 1 gate run, not yet made.
+1. **Decided 2026-11-16: BitZ, owned, in place of Akita** (`specs/bitz-commitment.md`). Every
+   committed column is bit planes of one vector, with one commitment and one opening. Zero
+   knowledge is set aside; it returns, if it does, as an in-house construction. Recursion is
+   not weighed.
+2. **Decided: a result outside `i32` is an execution error** (`SemVersion::V3`,
+   `specs/one-clamp.md`). A narrower declared width (B1) keeps this form.
+3. **Base 4 digits.** Under BitZ a digit column is committed at two bits a coefficient, so
+   the base no longer sets the commit cost; it sets the number of columns in the value
+   sumcheck. Not reopened.
+4. **Open: whether an operator-stated width is an acceptable contract** (B1), and whether the
+   row check's bound without saturation is enough for every op that checks its output (B2).
 
 ## 6. Not pursuing
 
 - Lowering the global scale or 12–16-bit activations (the honest values need 17–29 bits at
-  2^14; the saving is in the encoding, not the scale); 8-bit one-hot digits; range bounds from
-  the Akita commitment (it gives none).
+  2^14; the saving is in the encoding, not the scale); 8-bit one-hot digits.
 - A FlashProve-like committed-trace hash architecture for general ONNX: it means leaving Fp128,
   megabyte proofs and exact semantics, in a space several teams occupied within weeks.
 - Grand products on virtual keys for the remainders (D4): dominated by dense digits.
 - Small-value sumcheck, univariate skip or Toom-Cook inside the einsum contraction; committing
-  weights; Freivalds-style projections; cross-node batching of contractions (item 9 does this
+  weights; Freivalds-style projections; cross-node batching of contractions (C does this
   structurally instead).
 - Piecewise-polynomial or holonomic activations, half-tables, mantissa or Newton rsqrt, tabled
   rsqrt, base-2 or polynomial softmax, prover-chosen softmax shifts: exactness and uniqueness of
@@ -461,7 +243,7 @@ relation; item 6's B2, C2 and C3. Step 1's Qwen profile decides where they go.
   remainder is a separate free value and needs its own bound; the claims are already proved
   together in the post-loop buckets, and what is paid per node is the committed digits.
 - No rescaling. Values at twice the scale cannot be multiplied again inside the field, and
-  every table read needs its index at the model's scale. Rescaling less often is item 5.
+  every table read needs its index at the model's scale. Rescaling less often is B3.
 
 ## 7. Reads still owed
 

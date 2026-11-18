@@ -106,7 +106,7 @@ scripts/remote.sh fetch bench/runs/gate                 # copy the raw logs back
 ```
 
 Timings are comparable only between commits measured on the same machine in the same session;
-`docs/prover-plan.md`'s tables are from an M3 and are not comparable to the remote's.
+`docs/prover-plan.md`'s tables are from the remote and are not comparable to a laptop's.
 
 The remote gives huge pages only to memory that asks for them
 (`/sys/kernel/mm/transparent_hugepage/enabled` is `madvise`), and the prover streams over

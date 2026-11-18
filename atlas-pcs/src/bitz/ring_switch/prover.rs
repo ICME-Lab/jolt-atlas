@@ -25,6 +25,10 @@ fn byte_tables(images: &[Gf128]) -> Vec<[Gf128; 256]> {
         .collect()
 }
 
+/// The fewest packed elements one task of [`reduce`]'s byte sums takes: a task starts from
+/// sixteen tables of 256 sums, which it must fill to be worth merging.
+const ELEMENTS_PER_TASK: usize = 1 << 14;
+
 /// Reduces the claim `f(point) = a` on the bit polynomial packed as `packed`: the columns to
 /// send, the weight `A` on the packed polynomial, and the claim `Σ_w A(w)·t'(w)`.
 pub fn reduce<T: Transcript>(
@@ -42,6 +46,7 @@ pub fn reduce<T: Transcript>(
     let sums = packed
         .par_iter()
         .zip(eq_high.par_iter())
+        .with_min_len(ELEMENTS_PER_TASK)
         .fold(
             || vec![[Gf128::ZERO; 256]; BYTES],
             |mut acc, (element, &weight)| {

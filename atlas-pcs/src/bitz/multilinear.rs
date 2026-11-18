@@ -48,6 +48,15 @@ pub fn fold_first(values: &[Gf128], r: Gf128) -> Vec<Gf128> {
         .collect()
 }
 
+/// [`fold_first`] written into `out`, whose allocation is kept.
+pub fn fold_first_into(values: &[Gf128], r: Gf128, out: &mut Vec<Gf128>) {
+    values
+        .par_chunks_exact(2)
+        .with_min_len(PAR_MIN_LEN)
+        .map(|pair| pair[0] + r * (pair[0] + pair[1]))
+        .collect_into_vec(out);
+}
+
 /// The vector `⊗_j (1, factors_j)`: entry `i` is the product of the factors at the set bits
 /// of `i`.
 pub fn tensor_expand(factors: &[Gf128]) -> Vec<Gf128> {

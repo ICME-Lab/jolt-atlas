@@ -4,7 +4,7 @@ use super::{Proof, RowOpening, Schedule};
 use crate::bitz::gf128::Gf128;
 use crate::bitz::grinding;
 use crate::bitz::merkle::{Digest, Tree};
-use crate::bitz::multilinear::{fold_first, tensor_expand};
+use crate::bitz::multilinear::{fold_first_into, tensor_expand};
 use crate::bitz::rs::Code;
 use atlas_transcript::Transcript;
 use rayon::prelude::*;
@@ -60,6 +60,8 @@ pub fn prove<T: Transcript>(
     assert_eq!(weights.len(), values.len(), "weight size");
     let (mut values, mut weights) = (values, weights);
     // The level being opened: the caller's first, then each one committed here.
+    // The buffers a fold writes into: the ones the fold before it read.
+    let (mut spare_values, mut spare_weights) = (Vec::new(), Vec::new());
     let mut later: Option<Level> = None;
     let mut proof = Proof {
         roots: Vec::new(),
@@ -78,8 +80,10 @@ pub fn prove<T: Transcript>(
             transcript.append_serializable(&message);
             proof.nonces.push(grinding::prove(pow_bits, transcript));
             let r = Gf128(transcript.challenge_u128());
-            values = fold_first(&values, r);
-            weights = fold_first(&weights, r);
+            fold_first_into(&values, r, &mut spare_values);
+            std::mem::swap(&mut values, &mut spare_values);
+            fold_first_into(&weights, r, &mut spare_weights);
+            std::mem::swap(&mut weights, &mut spare_weights);
             proof.rounds.push(message);
         }
         let next = if let Some(&next_fold) = schedule.folds.get(index + 1) {
@@ -116,32 +120,35 @@ pub fn prove<T: Transcript>(
                 coefficients.push(power);
                 power *= beta;
             }
+            // Each queried row adds its coefficient times a generator row, the tensor
+            // `⊗_j (1, factor_j)`, to the weights. A row is the outer product of the tensors
+            // of its high and of its low factors, so the weights are updated a block of the
+            // low tensor's length at a time, in place, with every row's two small tensors
+            // made once.
             let code = &level.code;
-            let rows = queried
+            let low_vars = weights.len().trailing_zeros() as usize / 2;
+            let tensors: Vec<(Vec<Gf128>, Vec<Gf128>)> = queried
                 .par_iter()
                 .zip(coefficients.par_iter())
-                .fold(
-                    || vec![Gf128::ZERO; weights.len()],
-                    |mut acc, (&row, &coefficient)| {
-                        let generator_row = tensor_expand(&code.row_factors(row));
-                        for (a, g) in acc.iter_mut().zip(&generator_row) {
-                            *a += coefficient * *g;
+                .map(|(&row, &coefficient)| {
+                    let factors = code.row_factors(row);
+                    let (low, high) = factors.split_at(low_vars);
+                    let mut high = tensor_expand(high);
+                    high.iter_mut().for_each(|h| *h *= coefficient);
+                    (tensor_expand(low), high)
+                })
+                .collect();
+            weights
+                .par_chunks_mut(1 << low_vars)
+                .enumerate()
+                .for_each(|(block, weights)| {
+                    for (low, high) in &tensors {
+                        let scale = high[block];
+                        for (w, &g) in weights.iter_mut().zip(low) {
+                            *w += scale * g;
                         }
-                        acc
-                    },
-                )
-                .reduce(
-                    || vec![Gf128::ZERO; weights.len()],
-                    |mut a, b| {
-                        for (x, y) in a.iter_mut().zip(&b) {
-                            *x += *y;
-                        }
-                        a
-                    },
-                );
-            for (w, row) in weights.iter_mut().zip(&rows) {
-                *w += *row;
-            }
+                    }
+                });
             later = Some(next);
         }
     }

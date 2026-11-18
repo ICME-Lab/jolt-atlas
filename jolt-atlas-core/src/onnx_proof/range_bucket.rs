@@ -130,7 +130,7 @@ fn range_claim_bits(
             .into_iter()
             .map(|out| out + OUTPUT_OFFSET as i64)
             .collect(),
-        Remainder::Rescale => padded(&rebase_remainder(node, trace)),
+        Remainder::Rescale => rebase_remainder(node, trace).into_data(),
         Remainder::ScalarConstDiv => padded(TraceView::division_remainder(trace, node)),
         Remainder::RsqrtDiv => padded(&TraceView::rsqrt_advice(trace, node).div_remainder),
         Remainder::RsqrtSqrt => padded(&TraceView::rsqrt_advice(trace, node).sqrt_remainder),

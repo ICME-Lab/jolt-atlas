@@ -8,7 +8,7 @@ use crate::{
     graph::Node,
     id::NodeId,
     model::Model,
-    op::{Eval, EvalCtx, Op},
+    op::{Eval, EvalCtx, Op, Operand},
     tensor::Tensor,
     trace::Trace,
 };
@@ -45,6 +45,7 @@ impl Model {
     ) -> Result<Trace, ExecError> {
         let graph = self.graph();
         let mut outputs: Vec<Tensor<i32>> = Vec::with_capacity(graph.nodes.len());
+        let mut wide: BTreeMap<NodeId, Tensor<i128>> = BTreeMap::new();
         let mut aux = BTreeMap::new();
         for (i, node) in graph.nodes.iter().enumerate() {
             let id = NodeId(i as u32);
@@ -53,9 +54,12 @@ impl Model {
                     .remove(&id)
                     .expect("validated against graph.inputs")
             } else {
-                let eval = eval_node(id, node, &outputs, ctx)?;
+                let eval = self.eval_node(id, node, &outputs, &wide, ctx)?;
                 if let Some(a) = eval.aux {
                     aux.insert(id, a);
+                }
+                if let Some(value) = eval.wide {
+                    wide.insert(id, value);
                 }
                 eval.output
             };
@@ -65,6 +69,7 @@ impl Model {
 
         Ok(Trace {
             node_outputs: outputs,
+            wide,
             aux,
             scale: self.scale(),
             version: self.version(),
@@ -128,26 +133,43 @@ impl Model {
     }
 }
 
-/// Evaluate one non-input node against the outputs of the nodes before it.
-fn eval_node(
-    id: NodeId,
-    node: &Node,
-    outputs: &[Tensor<i32>],
-    ctx: &EvalCtx<'_>,
-) -> Result<Eval, ExecError> {
-    let operand_refs: Vec<&Tensor<i32>> = node
-        .inputs
-        .iter()
-        .map(|&input| &outputs[input.index()])
-        .collect();
-    node.op
-        .spec()
-        .eval(&operand_refs, ctx)
-        .map_err(|source| ExecError::Kernel {
+impl Model {
+    /// Evaluate one non-input node against the values of the nodes before it: by its kernel
+    /// when it and its operands are at level 1, by its wide kernel otherwise.
+    fn eval_node(
+        &self,
+        id: NodeId,
+        node: &Node,
+        outputs: &[Tensor<i32>],
+        wide: &BTreeMap<NodeId, Tensor<i128>>,
+        ctx: &EvalCtx<'_>,
+    ) -> Result<Eval, ExecError> {
+        let levels: Vec<u8> = node.inputs.iter().map(|&input| self.level(input)).collect();
+        let narrow = self.level(id) == 1 && levels.iter().all(|&level| level == 1);
+        let eval = if narrow {
+            let operands: Vec<&Tensor<i32>> = node
+                .inputs
+                .iter()
+                .map(|&input| &outputs[input.index()])
+                .collect();
+            node.op.spec().eval(&operands, ctx)
+        } else {
+            let operands: Vec<Operand<'_>> = node
+                .inputs
+                .iter()
+                .map(|input| match wide.get(input) {
+                    Some(value) => Operand::Wide(value),
+                    None => Operand::Narrow(&outputs[input.index()]),
+                })
+                .collect();
+            node.op.spec().eval_wide(&operands, &levels, ctx)
+        };
+        eval.map_err(|source| ExecError::Kernel {
             node: id,
             op: node.op.to_string(),
             source,
         })
+    }
 }
 
 /// The kernel's output must land on the declared dims; a mismatch is an

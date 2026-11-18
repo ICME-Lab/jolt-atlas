@@ -86,6 +86,7 @@ macro_rules! impl_activation {
             ) -> Result<Eval, KernelError> {
                 let table = ctx.tables.get($kind, ctx.scale, ctx.version);
                 Ok(Eval {
+                    wide: None,
                     output: inputs[0].map(|x| table.lookup(x)),
                     aux: trig_period_advice(table.index, inputs[0]),
                 })

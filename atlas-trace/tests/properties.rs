@@ -75,7 +75,10 @@ fn build_graph(spec: &GraphSpec) -> Graph {
             2 => (Op::Neg(op::Neg), vec![tip], dims.clone()),
             3 => (Op::ReLU(op::ReLU), vec![tip], dims.clone()),
             4 => (
-                Op::Mul(op::Mul { rebase: true }),
+                Op::Mul(op::Mul {
+                    rebase: true,
+                    deferred: false,
+                }),
                 vec![tip, b],
                 dims.clone(),
             ),

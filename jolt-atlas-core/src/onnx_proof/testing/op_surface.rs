@@ -334,6 +334,44 @@ fn einsum_model(
     (b.build(), vec![Tensor::random_small(rng, lhs)])
 }
 
+/// `x` contracted with constants through `products` deferred products (a multiply by a
+/// second input between two contractions when there are three) and rescaled once.
+fn deferred_chain(
+    rng: &mut StdRng,
+    rows: usize,
+    width: usize,
+    products: usize,
+) -> (Model, Vec<Tensor<i32>>) {
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![rows, width]);
+    let w = b.constant(Tensor::random_small(rng, &[width, width]));
+    let mut wide = b.einsum_deferred("mk,kn->mn", vec![x, w], vec![rows, width]);
+    let mut inputs = vec![Tensor::random_small(rng, &[rows, width])];
+    if products > 1 {
+        let gate = b.input(vec![rows, width]);
+        inputs.push(Tensor::random_small(rng, &[rows, width]));
+        wide = b.mul_deferred(wide, gate);
+    }
+    if products > 2 {
+        let w = b.constant(Tensor::random_small(rng, &[width, width]));
+        wide = b.einsum_deferred("mk,kn->mn", vec![wide, w], vec![rows, width]);
+    }
+    let out = b.rescale(wide);
+    b.mark_output(out);
+    (b.build(), inputs)
+}
+
+/// One deferred product of `input` by the constant `weight`, rescaled.
+fn deferred_const(input: i32, weight: i32) -> (Model, Vec<Tensor<i32>>) {
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![2, 2]);
+    let w = b.constant(vec_of(weight, &[2, 2]));
+    let wide = b.einsum_deferred("mk,kn->mn", vec![x, w], vec![2, 2]);
+    let out = b.rescale(wide);
+    b.mark_output(out);
+    (b.build(), vec![vec_of(input, &[2, 2])])
+}
+
 fn einsum_const(
     eq: &str,
     lhs: &[usize],
@@ -554,6 +592,19 @@ op_surface! {
     iff_random_1k: Iff => |rng| iff_model(rng, T);
     #[ignore = "non-power-of-two iff path not supported"]
     iff_non_pow2_1000: Iff => |rng| iff_model(rng, T_ODD);
+
+    // Rescale, and the deferred products it ends a chain of
+    /// One deferred contraction, rescaled from level 2: a 14-bit remainder.
+    rescale_level_2: Rescale => |rng| deferred_chain(rng, 16, 32, 1);
+    /// A deferred contraction times a level-1 value, rescaled from level 3: 28 bits.
+    rescale_level_3: Rescale => |rng| deferred_chain(rng, 16, 32, 2);
+    /// Contraction, multiply, contraction, rescaled from level 4: 42 bits.
+    rescale_level_4: Rescale => |rng| deferred_chain(rng, 16, 32, 3);
+    rescale_one_row: Rescale => |rng| deferred_chain(rng, 1, 16, 3);
+    #[should_panic(expected = "WitnessOverflow")]
+    rescale_saturates_pos: Rescale => |_| deferred_const(i32::MAX, 1 << S);
+    #[should_panic(expected = "WitnessOverflow")]
+    rescale_saturates_neg: Rescale => |_| deferred_const(i32::MIN, 1 << S);
 
     // Rsqrt
     rsqrt_scale8_1k: Rsqrt => |rng| rsqrt_model(rng, T, 8, 1..MAX_INPUT);

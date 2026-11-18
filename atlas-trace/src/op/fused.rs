@@ -14,7 +14,10 @@ use crate::{
     trace::{FusedIntermediates, NodeAux},
 };
 
-use super::{Cube, Eval, EvalCtx, MeanOfSquares, Mul, OpSpec, PadBehavior, Square, same_dims};
+use super::{
+    Cube, Eval, EvalCtx, MAX_LEVEL, MeanOfSquares, Mul, OpSpec, Operand, PadBehavior, Rescale,
+    Square, same_dims,
+};
 
 /// Split an i64 accumulation tensor by `divisor`, producing the output (the quotient, which
 /// must fit `i32`) and the captured intermediates. The single implementation of the fused
@@ -60,6 +63,7 @@ pub(super) fn rebase_eval(
     }
     let dims = acc.dims();
     Ok(Eval {
+        wide: None,
         output: Tensor::new(quotient, dims).expect("same length"),
         aux: Some(NodeAux::Fused(FusedIntermediates {
             remainder: Tensor::new(remainder, dims).expect("same length"),
@@ -69,7 +73,11 @@ pub(super) fn rebase_eval(
 
 impl fmt::Display for Mul {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(if self.rebase { "Mul" } else { "Mul(raw)" })
+        f.write_str(match (self.rebase, self.deferred) {
+            (true, _) => "Mul",
+            (false, true) => "Mul(deferred)",
+            (false, false) => "Mul(raw)",
+        })
     }
 }
 
@@ -92,6 +100,13 @@ impl OpSpec for Mul {
         same_dims(inputs, Some(2))
     }
 
+    fn validate(&self) -> Result<(), String> {
+        if self.rebase && self.deferred {
+            return Err("a product is rescaled or deferred, not both".to_string());
+        }
+        Ok(())
+    }
+
     fn checks_output(&self) -> bool {
         self.rebase
     }
@@ -102,6 +117,152 @@ impl OpSpec for Mul {
 
     fn rebase_divisor(&self, scale: Scale) -> Option<i64> {
         self.rebase.then(|| scale.denom_i64())
+    }
+
+    /// A deferred product is at the sum of its operands' levels.
+    fn level(&self, operands: &[u8]) -> Result<u8, String> {
+        if self.deferred {
+            return Ok(operands.iter().sum());
+        }
+        if operands.iter().all(|&level| level == 1) {
+            Ok(1)
+        } else {
+            Err(format!(
+                "only a deferred product takes operands at levels {operands:?}"
+            ))
+        }
+    }
+
+    fn eval_wide(
+        &self,
+        inputs: &[Operand<'_>],
+        _levels: &[u8],
+        _ctx: &EvalCtx<'_>,
+    ) -> Result<Eval, KernelError> {
+        let [a, b] = inputs else {
+            return Err(ShapeError::WrongArity {
+                expected: 2,
+                got: inputs.len(),
+            }
+            .into());
+        };
+        if a.dims() != b.dims() {
+            return Err(ShapeError::BroadcastIncompatible {
+                lhs: a.dims().to_vec(),
+                rhs: b.dims().to_vec(),
+            }
+            .into());
+        }
+        let len: usize = a.dims().iter().product();
+        let product = |i: usize| a.at(i) * b.at(i);
+        #[cfg(feature = "rayon")]
+        let data: Vec<i128> = {
+            use rayon::prelude::*;
+            (0..len)
+                .into_par_iter()
+                .with_min_len(crate::tensor::PAR_MIN_LEN)
+                .map(product)
+                .collect()
+        };
+        #[cfg(not(feature = "rayon"))]
+        let data: Vec<i128> = (0..len).map(product).collect();
+        Ok(Eval::wide(Tensor::new(data, a.dims())?))
+    }
+
+    fn wide_bound(&self, operands: &[u128], _dims: &[&[usize]]) -> u128 {
+        operands.iter().fold(1u128, |acc, &b| acc.saturating_mul(b))
+    }
+}
+
+impl fmt::Display for Rescale {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Rescale")
+    }
+}
+
+impl OpSpec for Rescale {
+    fn eval(&self, _inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
+        Err(KernelError::NoWideForm {
+            op: "rescale",
+            levels: vec![1],
+        })
+    }
+
+    fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
+        same_dims(inputs, Some(1))
+    }
+
+    /// The quotient is an `i32` the proof must show in range.
+    fn checks_output(&self) -> bool {
+        true
+    }
+
+    fn padding(&self) -> PadBehavior {
+        PadBehavior::ZeroPreserving
+    }
+
+    fn level(&self, operands: &[u8]) -> Result<u8, String> {
+        match operands {
+            [level] if (2..=MAX_LEVEL).contains(level) => Ok(1),
+            _ => Err(format!(
+                "a rescale takes one wide operand of level at most {MAX_LEVEL}, not {operands:?}"
+            )),
+        }
+    }
+
+    fn eval_wide(
+        &self,
+        inputs: &[Operand<'_>],
+        levels: &[u8],
+        ctx: &EvalCtx<'_>,
+    ) -> Result<Eval, KernelError> {
+        let ([Operand::Wide(wide)], [level]) = (inputs, levels) else {
+            return Err(KernelError::NoWideForm {
+                op: "rescale",
+                levels: levels.to_vec(),
+            });
+        };
+        let divisor = 1i128 << ((*level as u32 - 1) * ctx.scale.log2());
+        // One pass: the quotient narrowed and the remainder, with a flag if a quotient does
+        // not fit, in which case the first one in order is the error.
+        let overflowed = std::sync::atomic::AtomicBool::new(false);
+        let split = |&v: &i128| {
+            let quotient = v.div_euclid(divisor);
+            if i32::try_from(quotient).is_err() {
+                overflowed.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            (quotient as i32, v.rem_euclid(divisor) as i64)
+        };
+        #[cfg(feature = "rayon")]
+        let (quotient, remainder): (Vec<i32>, Vec<i64>) = {
+            use rayon::prelude::*;
+            wide.data()
+                .par_iter()
+                .with_min_len(crate::tensor::PAR_MIN_LEN)
+                .map(split)
+                .unzip()
+        };
+        #[cfg(not(feature = "rayon"))]
+        let (quotient, remainder): (Vec<i32>, Vec<i64>) = wide.data().iter().map(split).unzip();
+        if overflowed.into_inner() {
+            let value = wide
+                .data()
+                .iter()
+                .map(|&v| v.div_euclid(divisor))
+                .find(|&quotient| i32::try_from(quotient).is_err())
+                .expect("a quotient was flagged");
+            return Err(KernelError::WitnessOverflow {
+                op: "rescale",
+                what: "quotient",
+                value: value.clamp(i64::MIN as i128, i64::MAX as i128) as i64,
+            });
+        }
+        let dims = wide.dims();
+        Ok(Eval {
+            output: Tensor::new(quotient, dims)?,
+            wide: None,
+            aux: Some(NodeAux::RescaleRemainder(Tensor::new(remainder, dims)?)),
+        })
     }
 }
 

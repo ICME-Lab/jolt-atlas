@@ -26,6 +26,7 @@ pub trait Element:
 
 impl Element for i32 {}
 impl Element for i64 {}
+impl Element for i128 {}
 impl Element for u32 {}
 impl Element for bool {}
 impl Element for f64 {}
@@ -146,6 +147,15 @@ impl<T: Element> Tensor<T> {
     pub fn par_iter(&self) -> rayon::slice::Iter<'_, T> {
         use rayon::prelude::*;
         self.data.par_iter()
+    }
+
+    /// A tensor of `dims` that holds no data: the `i32` entry of a node whose value is wide
+    /// ([`crate::Trace::wide`]). Reading an element of it is a bug and fails.
+    pub(crate) fn absent(dims: &[usize]) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            dims: dims.to_vec(),
+        }
     }
 
     /// Construct from owned data and dims, panicking on length mismatch

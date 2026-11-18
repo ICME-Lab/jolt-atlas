@@ -112,6 +112,7 @@ mod tests {
         let mm = b.push(
             Op::Einsum(op::Einsum {
                 equation: "mk,kn->mn".parse().unwrap(),
+                deferred: false,
             }),
             &[x, w],
         );

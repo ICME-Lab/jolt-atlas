@@ -157,6 +157,8 @@ pub enum RelationId {
     Gather,
     /// A trig op's period reduction: the input is `P·q + rem`.
     TrigPeriod,
+    /// A rescale: the wide operand is `out·2^B + rem`.
+    Rescale,
     /// Softmax: the output claim and the two row sums reduced to the table reads.
     SoftmaxSums,
     /// Softmax: the clamp lookup's operand is the shift minus the logit.

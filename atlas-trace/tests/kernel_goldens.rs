@@ -76,7 +76,13 @@ fn exact_class_golden() {
     let sub = b.push(Op::Sub(op::Sub), &[add, y]);
     let neg = b.push(Op::Neg(op::Neg), &[sub]);
     let relu = b.push(Op::ReLU(op::ReLU), &[neg]);
-    let mul = b.push(Op::Mul(op::Mul { rebase: true }), &[relu, y]);
+    let mul = b.push(
+        Op::Mul(op::Mul {
+            rebase: true,
+            deferred: false,
+        }),
+        &[relu, y],
+    );
     let square = b.push(Op::Square(op::Square { rebase: true }), &[mul]);
     let cube = b.push(Op::Cube(op::Cube { rebase: true }), &[square]);
     let scd = b.push(
@@ -111,6 +117,7 @@ fn structural_and_einsum_golden() {
     let matmul = b.push(
         Op::Einsum(op::Einsum {
             equation: "mk,kn->mn".parse().unwrap(),
+            deferred: false,
         }),
         &[x, w],
     );
@@ -153,6 +160,7 @@ fn structural_and_einsum_golden() {
     let q = b.push(
         Op::Einsum(op::Einsum {
             equation: "mk,nk->mn".parse().unwrap(),
+            deferred: false,
         }),
         &[gather, gather],
     );

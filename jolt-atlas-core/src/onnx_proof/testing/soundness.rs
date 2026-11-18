@@ -295,6 +295,11 @@ enum WitnessSite {
         node: usize,
         elem: usize,
     },
+    /// One element of a wide node's exact value.
+    Wide {
+        node: usize,
+        elem: usize,
+    },
     FusedRemainder {
         node: usize,
         elem: usize,
@@ -394,6 +399,14 @@ fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
             sites.push(WitnessSite::NodeOutput { node, elem });
         }
     }
+    for (id, wide) in &trace.wide {
+        for elem in probe_elems(wide.data().len(), all) {
+            sites.push(WitnessSite::Wide {
+                node: id.index(),
+                elem,
+            });
+        }
+    }
     for (id, aux) in &trace.aux {
         let node = id.index();
         match aux {
@@ -412,7 +425,8 @@ fn witness_sites(model: &Model, trace: &Trace, all: bool) -> Vec<WitnessSite> {
             }
             atlas_trace::trace::NodeAux::Remainder(_)
             | atlas_trace::trace::NodeAux::Rsqrt(_)
-            | atlas_trace::trace::NodeAux::TrigPeriod(_) => {
+            | atlas_trace::trace::NodeAux::TrigPeriod(_)
+            | atlas_trace::trace::NodeAux::RescaleRemainder(_) => {
                 let len = trace.node_outputs[node].data().len();
                 for &field in advice_fields(aux) {
                     for elem in probe_elems(len, all) {
@@ -432,6 +446,7 @@ fn advice_fields(aux: &atlas_trace::trace::NodeAux) -> &'static [&'static str] {
         NodeAux::Remainder(_) => &["remainder"],
         NodeAux::Rsqrt(_) => &["quotient", "div_remainder", "sqrt_remainder"],
         NodeAux::TrigPeriod(_) => &["trig_period_quotient", "trig_period_remainder"],
+        NodeAux::RescaleRemainder(_) => &["rescale_remainder"],
         NodeAux::Fused(_) | NodeAux::Softmax(_) => &[],
     }
 }
@@ -450,6 +465,10 @@ fn bump_advice(aux: &mut atlas_trace::trace::NodeAux, field: &str, elem: usize, 
         (NodeAux::Rsqrt(a), "sqrt_remainder") => bump(a.sqrt_remainder.data_mut()),
         (NodeAux::TrigPeriod(a), "trig_period_quotient") => bump(a.quotient.data_mut()),
         (NodeAux::TrigPeriod(a), "trig_period_remainder") => bump(a.remainder.data_mut()),
+        (NodeAux::RescaleRemainder(r), "rescale_remainder") => {
+            let d = r.data_mut();
+            d[elem] = d[elem].wrapping_add(delta);
+        }
         (_, field) => panic!("no advice field `{field}` on this node"),
     }
 }
@@ -458,6 +477,14 @@ fn apply_witness(trace: &mut Trace, site: &WitnessSite) {
     match site {
         WitnessSite::NodeOutput { node, elem } => {
             let d = trace.node_outputs[*node].data_mut();
+            d[*elem] = d[*elem].wrapping_add(1);
+        }
+        WitnessSite::Wide { node, elem } => {
+            let d = trace
+                .wide
+                .get_mut(&NodeId(*node as u32))
+                .expect("the site was enumerated from this node's wide value")
+                .data_mut();
             d[*elem] = d[*elem].wrapping_add(1);
         }
         WitnessSite::FusedRemainder { node, elem } => {
@@ -601,6 +628,7 @@ fn witness_tamper_sweep_for<PCS: CommitmentScheme>() {
             let divergences = probe::take_divergences();
             let class: &'static str = match site {
                 WitnessSite::NodeOutput { .. } => "NodeOutput",
+                WitnessSite::Wide { .. } => "Wide",
                 WitnessSite::FusedRemainder { .. } => "FusedRemainder",
                 WitnessSite::Softmax { .. } => "Softmax",
                 WitnessSite::Advice { .. } => "Advice",
@@ -610,6 +638,7 @@ fn witness_tamper_sweep_for<PCS: CommitmentScheme>() {
             row.0 += 1;
             let node = match site {
                 WitnessSite::NodeOutput { node, .. }
+                | WitnessSite::Wide { node, .. }
                 | WitnessSite::FusedRemainder { node, .. }
                 | WitnessSite::Softmax { node, .. }
                 | WitnessSite::Advice { node, .. }
@@ -675,6 +704,7 @@ fn witness_tamper_sweep_for<PCS: CommitmentScheme>() {
                     }
                     let dead_cell = match site {
                         WitnessSite::NodeOutput { node, elem }
+                        | WitnessSite::Wide { node, elem }
                         | WitnessSite::FusedRemainder { node, elem }
                         | WitnessSite::Advice { node, elem, .. } => {
                             live[*node].get(*elem).is_some_and(|&cell| !cell)
@@ -910,6 +940,54 @@ fn binding_padded_input_lane_tamper_rejected() {
         matches!(outcome, Outcome::Rejected(_)),
         "padded input lane tamper accepted: {outcome:?}"
     );
+}
+
+/// A rescale's split is the Euclidean one: a remainder one divisor higher with the quotient
+/// one lower satisfies the tie (`wide = out·2^B + rem` still holds) and must be rejected by
+/// the remainder's range claim.
+#[test]
+#[serial]
+fn rescale_remainder_shifted_by_the_divisor_rejected() {
+    let probe = super::models::probe_models()
+        .into_iter()
+        .find(|probe| probe.name == "deferred_chains")
+        .expect("the deferred-chain probe model");
+    let model = probe.model.clone();
+    let h = honest::<Pcs>(probe);
+    let rescales: Vec<NodeId> = model
+        .nodes()
+        .filter(|(_, node)| matches!(node.op, Op::Rescale(_)))
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(rescales.len(), 2);
+    for &id in &rescales {
+        let level = u32::from(model.level(model.node(id).inputs[0]));
+        let divisor = 1i64 << ((level - 1) * MODEL_SCALE as u32);
+        let (tampered, res) = prove_tampered::<Pcs>(&h.prover_pp, &h.inputs, &mut |trace| {
+            let Some(atlas_trace::NodeAux::RescaleRemainder(remainder)) = trace.aux.get_mut(&id)
+            else {
+                panic!("a rescale node captures its remainder")
+            };
+            remainder.data_mut()[0] += divisor;
+            trace.node_outputs[id.index()].data_mut()[0] -= 1;
+        });
+        let _ = probe::take_divergences();
+        // The tie's identity is intact on the tampered trace.
+        let wide = tampered.wide(model.node(id).inputs[0]).unwrap().data()[0];
+        let out = i128::from(tampered.node_outputs[id.index()].data()[0]);
+        let rem = i128::from(tampered.rescale_remainder(id).unwrap().data()[0]);
+        assert_eq!(wide, out * i128::from(divisor) + rem);
+        match res {
+            Err(panic) => panic!("the prover refused the shifted split: {panic}"),
+            Ok((proof, io)) => {
+                let outcome = run_verify(&proof, &h.verifier_pp, &io);
+                assert!(
+                    matches!(outcome, Outcome::Rejected(_)),
+                    "node {id}: a remainder outside [0, 2^B) accepted: {outcome:?}"
+                );
+            }
+        }
+    }
 }
 
 // ── known gaps (must fail today; flip green when fixed) ──────────────────

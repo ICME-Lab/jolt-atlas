@@ -79,6 +79,78 @@ pub trait OpSpec: fmt::Display {
     fn rebase_divisor(&self, _scale: Scale) -> Option<i64> {
         None
     }
+
+    /// The level of the output given the operands' levels: a value at level `j` represents
+    /// `v / 2^(j·S)`, level 1 is an `i32` and a higher level is wide. `Err` if the op has no
+    /// form for operands at these levels; by default an op takes level-1 operands and gives
+    /// a level-1 value.
+    fn level(&self, operands: &[u8]) -> Result<u8, String> {
+        if operands.iter().all(|&level| level == 1) {
+            Ok(1)
+        } else {
+            Err(format!("no form for operands at levels {operands:?}"))
+        }
+    }
+
+    /// The kernel when an operand or the output is wide ([`Self::level`]).
+    fn eval_wide(
+        &self,
+        _inputs: &[Operand<'_>],
+        levels: &[u8],
+        _ctx: &EvalCtx<'_>,
+    ) -> Result<Eval, KernelError> {
+        Err(KernelError::NoWideForm {
+            op: "op",
+            levels: levels.to_vec(),
+        })
+    }
+
+    /// `log₂` of the magnitude a wide output of operands at these levels must stay below
+    /// ([`WIDE_LIMIT`], or less where the kernel accumulates in a narrower integer).
+    fn wide_limit(&self, _operands: &[u8]) -> u32 {
+        WIDE_LIMIT
+    }
+
+    /// A bound on the magnitude of a wide output's entries, given bounds on the operands'
+    /// and the operands' dims. Asked only of an op whose output is wide.
+    fn wide_bound(&self, _operands: &[u128], _dims: &[&[usize]]) -> u128 {
+        u128::MAX
+    }
+}
+
+/// `log₂` of the magnitude every wide value stays below: under it both sides of a relation
+/// over wide values are integers of magnitude below half the 128-bit field's modulus, so
+/// their equality in the field is their equality over the integers.
+pub const WIDE_LIMIT: u32 = 125;
+
+/// The highest level a value has: three deferred products of level-1 operands.
+pub const MAX_LEVEL: u8 = 4;
+
+/// An operand as a kernel with a wide form reads it.
+#[derive(Clone, Copy, Debug)]
+pub enum Operand<'a> {
+    /// A level-1 value.
+    Narrow(&'a Tensor<i32>),
+    /// A wide value.
+    Wide(&'a Tensor<i128>),
+}
+
+impl Operand<'_> {
+    /// The operand's dims.
+    pub fn dims(&self) -> &[usize] {
+        match self {
+            Operand::Narrow(tensor) => tensor.dims(),
+            Operand::Wide(tensor) => tensor.dims(),
+        }
+    }
+
+    /// Entry `index`, exactly.
+    pub fn at(&self, index: usize) -> i128 {
+        match self {
+            Operand::Narrow(tensor) => tensor.data()[index] as i128,
+            Operand::Wide(tensor) => tensor.data()[index],
+        }
+    }
 }
 
 /// Memoized activation tables for one `(scale, version)` pair. Generation is
@@ -128,8 +200,10 @@ impl fmt::Debug for TableCache {
 /// Result of evaluating an operator: the output tensor plus any auxiliary
 /// witness captured for the prover.
 pub struct Eval {
-    /// The node's quantized output.
+    /// The node's quantized output; without data when the value is wide.
     pub output: Tensor<i32>,
+    /// The node's exact value, when it is wide.
+    pub wide: Option<Tensor<i128>>,
     /// The advice the op captures for the prover, if any: fused-rescale intermediates, the
     /// softmax witness, a division remainder, the rsqrt or trig-period intermediates.
     pub aux: Option<NodeAux>,
@@ -138,7 +212,20 @@ pub struct Eval {
 impl Eval {
     /// An evaluation with no auxiliary witness.
     pub fn plain(output: Tensor<i32>) -> Self {
-        Eval { output, aux: None }
+        Eval {
+            output,
+            wide: None,
+            aux: None,
+        }
+    }
+
+    /// The evaluation of a node whose value is wide.
+    pub fn wide(value: Tensor<i128>) -> Self {
+        Eval {
+            output: Tensor::absent(value.dims()),
+            wide: Some(value),
+            aux: None,
+        }
     }
 }
 
@@ -294,8 +381,9 @@ define_ops! {
     Neg,
     /// Fused element-wise product: i64 accumulate, floor-rescale by `2^s`; a
     /// quotient outside `i32` is an execution error. `rebase: false` is the raw
-    /// building-block product (no rescale, wrapping).
-    Mul { rebase: bool },
+    /// building-block product (no rescale, wrapping). `deferred` is the exact product as a
+    /// wide value, of operands at any levels, with no rescale.
+    Mul { rebase: bool, deferred: bool },
     /// Fused element-wise square (`rebase` as in [`Mul`]).
     Square { rebase: bool },
     /// Fused element-wise cube; rescales by `2^(2s)` (`rebase` as in [`Mul`]).
@@ -303,8 +391,12 @@ define_ops! {
     /// Floor division by a constant scalar.
     ScalarConstDiv { divisor: i32 },
     /// Fused tensor contraction: i64 accumulate, floor-rescale by `2^s`; a
-    /// quotient outside `i32` is an execution error.
-    Einsum { equation: EinsumEq },
+    /// quotient outside `i32` is an execution error. `deferred` is the exact contraction as
+    /// a wide value, with no rescale.
+    Einsum { equation: EinsumEq, deferred: bool },
+    /// A wide value at level `j` taken to level 1: the Euclidean quotient by `2^((j−1)·s)`,
+    /// which must lie in `i32`, with the remainder captured.
+    Rescale,
     /// Sum over axes (i64 accumulate); a sum outside `i32` is an execution error.
     Sum { axes: Vec<usize> },
     /// Fused mean of squares over axes: `Σx²` in i64, floor-divide by

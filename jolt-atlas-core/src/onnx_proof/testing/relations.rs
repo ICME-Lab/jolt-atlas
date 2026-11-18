@@ -139,6 +139,7 @@ fn disposition(kind: OpKind) -> Disposition {
         | OpKind::Sum
         | OpKind::MeanOfSquares
         | OpKind::Rsqrt
+        | OpKind::Rescale
         | OpKind::Iff
         | OpKind::And
         | OpKind::IsNan

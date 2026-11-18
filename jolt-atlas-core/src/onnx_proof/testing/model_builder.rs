@@ -108,13 +108,27 @@ impl ModelBuilder {
     /// Fused rescaling multiplication.
     pub fn mul(&mut self, a: Wire, b: Wire) -> Wire {
         let d = self.dims(a);
-        self.push(Op::Mul(op::Mul { rebase: true }), vec![a, b], d)
+        self.push(
+            Op::Mul(op::Mul {
+                rebase: true,
+                deferred: false,
+            }),
+            vec![a, b],
+            d,
+        )
     }
 
     /// Raw (un-rescaled) product, the building block of decompositions.
     pub fn mul_raw(&mut self, a: Wire, b: Wire) -> Wire {
         let d = self.dims(a);
-        self.push(Op::Mul(op::Mul { rebase: false }), vec![a, b], d)
+        self.push(
+            Op::Mul(op::Mul {
+                rebase: false,
+                deferred: false,
+            }),
+            vec![a, b],
+            d,
+        )
     }
 
     /// Floor division by a constant.
@@ -169,12 +183,58 @@ impl ModelBuilder {
         )
     }
 
+    /// Deferred einsum contraction: the exact accumulation, a wide value.
+    pub fn einsum_deferred(
+        &mut self,
+        equation: &str,
+        inputs: Vec<Wire>,
+        output_dims: Vec<usize>,
+    ) -> Wire {
+        let equation = equation
+            .parse()
+            .unwrap_or_else(|e| panic!("einsum {equation:?}: {e}"));
+        self.push(
+            Op::Einsum(op::Einsum {
+                equation,
+                deferred: true,
+            }),
+            inputs,
+            output_dims,
+        )
+    }
+
+    /// Deferred multiplication: the exact product, a wide value.
+    pub fn mul_deferred(&mut self, a: Wire, b: Wire) -> Wire {
+        let d = self.dims(a);
+        self.push(
+            Op::Mul(op::Mul {
+                rebase: false,
+                deferred: true,
+            }),
+            vec![a, b],
+            d,
+        )
+    }
+
+    /// A wide value taken to level 1.
+    pub fn rescale(&mut self, input: Wire) -> Wire {
+        let d = self.dims(input);
+        self.push(Op::Rescale(op::Rescale), vec![input], d)
+    }
+
     /// Fused einsum contraction.
     pub fn einsum(&mut self, equation: &str, inputs: Vec<Wire>, output_dims: Vec<usize>) -> Wire {
         let equation = equation
             .parse()
             .unwrap_or_else(|e| panic!("einsum {equation:?}: {e}"));
-        self.push(Op::Einsum(op::Einsum { equation }), inputs, output_dims)
+        self.push(
+            Op::Einsum(op::Einsum {
+                equation,
+                deferred: false,
+            }),
+            inputs,
+            output_dims,
+        )
     }
 
     /// Reshape.

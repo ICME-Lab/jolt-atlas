@@ -26,6 +26,7 @@ pub(crate) fn probe_models() -> Vec<ProbeModel> {
         relation_flows(0x5EED_0004),
         scalars(0x5EED_0006),
         smooth_relus(0x5EED_0007),
+        deferred_chains(0x5EED_0008),
     ]
 }
 
@@ -38,7 +39,41 @@ pub(crate) fn probe_models_alt() -> Vec<ProbeModel> {
         relation_flows(0xA17_0004),
         scalars(0xA17_0006),
         smooth_relus(0xA17_0007),
+        deferred_chains(0xA17_0008),
     ]
+}
+
+/// Deferred products with one rescale per chain: `down(gate · up(x))` through levels 2, 3
+/// and 4, where the gate is a ReLU of a fused projection, and a single deferred projection
+/// rescaled from level 2. The two level-1 results are summed into one output.
+fn deferred_chains(seed: u64) -> ProbeModel {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut b = ModelBuilder::new();
+    let x = b.input(vec![4, 8]);
+    let w_gate = b.constant(Tensor::random_small(&mut rng, &[8, 16]));
+    let w_up = b.constant(Tensor::random_small(&mut rng, &[8, 16]));
+    let w_down = b.constant(Tensor::random_small(&mut rng, &[16, 8]));
+    let w_side = b.constant(Tensor::random_small(&mut rng, &[8, 8]));
+    let gate = b.einsum("mk,kn->mn", vec![x, w_gate], vec![4, 16]);
+    let gate = b.relu(gate);
+    let up = b.einsum_deferred("mk,kn->mn", vec![x, w_up], vec![4, 16]);
+    let gated = b.mul_deferred(up, gate);
+    let down = b.einsum_deferred("mk,kn->mn", vec![gated, w_down], vec![4, 8]);
+    let chain = b.rescale(down);
+    let side = b.einsum_deferred("mk,kn->mn", vec![x, w_side], vec![4, 8]);
+    let side = b.rescale(side);
+    let out = b.add(chain, side);
+    b.mark_output(out);
+    let inputs = vec![Tensor::random_range(
+        &mut rng,
+        &[4, 8],
+        -(1 << 12)..(1 << 12),
+    )];
+    ProbeModel {
+        name: "deferred_chains",
+        model: b.build(),
+        inputs,
+    }
 }
 
 /// einsum → add → relu (consumed twice: fan-out) → softmax → scalar_const_div → reshape →

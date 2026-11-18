@@ -39,7 +39,7 @@ use common::VirtualPoly;
 pub fn op_rebase_bits(op: &Op, scale: u8) -> Option<i32> {
     let scale = i32::from(scale);
     match op {
-        Op::Einsum(_) => Some(scale),
+        Op::Einsum(e) => Some(if e.deferred { 0 } else { scale }),
         Op::Mul(m) => Some(if m.rebase { scale } else { 0 }),
         Op::Square(s) => Some(if s.rebase { scale } else { 0 }),
         Op::Cube(c) => Some(if c.rebase { scale * 2 } else { 0 }),

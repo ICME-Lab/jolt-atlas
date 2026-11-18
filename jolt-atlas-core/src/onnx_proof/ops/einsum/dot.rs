@@ -32,7 +32,7 @@ use crate::onnx_proof::trace_view::TraceView;
 pub use jolt_atlas_verifier::onnx_proof::ops::einsum::dot::*;
 use std::array;
 
-use atlas_trace::{trace::LayerData, Tensor, Trace};
+use atlas_trace::{trace::LayerData, NodeId, Tensor, Trace};
 
 use super::{abmk_abnk_abmn::AbmkAbnkAbmnLayout, k_nk_n::KNkNLayout, mk_kn_mn::MkKnMnLayout};
 use crate::onnx_proof::relation::{
@@ -42,6 +42,7 @@ use atlas_algebra::poly::univariate::UnivariatePoly;
 use atlas_algebra::{
     field::JoltField,
     poly::{
+        eq::EqPolynomial,
         multilinear::{
             BindingOrder, MultilinearPolynomial, PolynomialBinding, PolynomialEvaluation,
         },
@@ -80,8 +81,25 @@ impl<F: JoltField> EinsumDotProver<F> {
             panic!("Expected two operands for einsum operation")
         };
         let r_node_output = OpeningPoint::new(setup.incoming_point.clone());
-        let Folded { left, right, eq } =
-            fold_operands(&relation, left_operand, right_operand, &r_node_output);
+        // A wide left operand has no `i32` tensor: the layout folds zeros in its place, and
+        // its fold is taken from its exact value.
+        let wide_left = trace.wide(NodeId(relation.node.inputs[0] as u32));
+        let zeros;
+        let narrow_left = match wide_left {
+            Some(_) => {
+                zeros = Tensor::zeros(left_operand.dims());
+                &zeros
+            }
+            None => left_operand,
+        };
+        let Folded {
+            mut left,
+            right,
+            eq,
+        } = fold_operands(&relation, narrow_left, right_operand, &r_node_output);
+        if let Some(wide) = wide_left {
+            left = MultilinearPolynomial::from(fold_wide_left(&relation, wide, &r_node_output));
+        }
         let schedule = layout.schedule();
         let eq_bound_claim = match schedule {
             EqSchedule::High { log_eq: 0, .. } => {
@@ -250,6 +268,30 @@ pub trait EinsumFold<F: JoltField> {
         right_operand: &Tensor<i32>,
         r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
     ) -> Folded<F>;
+}
+
+/// The left operand of `mk,kn->mn` folded at the output point's row coordinates, from its
+/// wide value: `left[j] = Σ_i eq(r_m, i)·L[i, j]`. Only that equation takes a wide operand
+/// (`atlas_trace::op::Einsum::level`).
+fn fold_wide_left<F: JoltField>(
+    relation: &OpRel<F>,
+    wide: &Tensor<i128>,
+    r_node_output: &OpeningPoint<BIG_ENDIAN, F>,
+) -> Vec<F> {
+    let dims = super::dims(relation).expect("the relation holds its contraction dims");
+    let layout = MkKnMnLayout::new(&dims).expect("a wide operand is a matrix product's");
+    let (m, k) = (layout.m, layout.k);
+    let wide = wide.padded_pow2();
+    let (r_m, _) = r_node_output.split_at(m.trailing_zeros() as usize);
+    let eq_r_m = EqPolynomial::<F>::evals(&r_m.r);
+    (0..k)
+        .into_par_iter()
+        .map(|j| {
+            (0..m)
+                .map(|i| eq_r_m[i].mul_i128(wide.data()[i * k + j]))
+                .sum()
+        })
+        .collect()
 }
 
 /// Fold `relation`'s operands with its canonical equation's layout.

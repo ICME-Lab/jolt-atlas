@@ -1,10 +1,9 @@
-use atlas_trace::trace::LayerData;
 pub use jolt_atlas_verifier::onnx_proof::ops::eval_reduction::*;
 
 use crate::node_view::ComputationNode;
 use crate::onnx_proof::trace_view::TraceView;
 use crate::onnx_proof::Prover;
-use atlas_algebra::{field::JoltField, poly::multilinear::MultilinearPolynomial};
+use atlas_algebra::field::JoltField;
 use atlas_sumcheck::evaluation_reduction::{EvalReductionProtocol, ReducedInstance};
 use atlas_transcript::ProvingTranscript;
 
@@ -36,11 +35,7 @@ impl NodeEvalReductionProve for NodeEvalReduction {
             let (r, claim) = (openings[0].0.clone(), openings[0].1);
             ReducedInstance { r: r.r, claim }
         } else {
-            let LayerData {
-                operands: _,
-                output,
-            } = TraceView::layer_data(&prover.trace, computation_node);
-            let output_mle = MultilinearPolynomial::from(output.padded_pow2());
+            let output_mle = TraceView::value_poly(&prover.trace, computation_node.idx);
             EvalReductionProtocol::prove(&openings, output_mle, &mut prover.transcript)
                 .expect("Proving evaluation reduction should not fail")
         };

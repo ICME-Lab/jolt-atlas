@@ -31,7 +31,11 @@
 //! Bucket capacity is the largest member's (padded) size, so no bucket polynomial is larger
 //! than a node's output. The layout is a pure function of the model, so prover and verifier
 //! derive it independently.
-use super::{fused_rebase::rebase_bits, ops::mean_of_squares::mos_divisor, range_check};
+use super::{
+    fused_rebase::rebase_bits,
+    ops::{mean_of_squares::mos_divisor, rescale::rescale_bits},
+    range_check,
+};
 use crate::node_view::ComputationNode;
 use crate::node_view::ModelView;
 use atlas_algebra::utils::errors::ProofVerifyError;
@@ -293,7 +297,7 @@ pub fn node_range_claims(
     node: &ComputationNode,
 ) -> Result<Vec<(RangeClaim, usize)>, ProofVerifyError> {
     let mut claims = Vec::new();
-    for (remainder, bound) in node_remainders(node)? {
+    for (remainder, bound) in node_remainders(model, node)? {
         claims.extend(range_claims(remainder, bound));
     }
     if is_digit_backed(model, node) {
@@ -311,6 +315,7 @@ pub fn node_range_claims(
 /// The remainders `node`'s relations leave to be bounded, each with its bound. `Err` for a
 /// node whose constant bound cannot be range-checked.
 pub fn node_remainders(
+    model: &Model,
     node: &ComputationNode,
 ) -> Result<Vec<(Remainder, Bound)>, ProofVerifyError> {
     let malformed =
@@ -326,6 +331,10 @@ pub fn node_remainders(
             Some(bits) if bits > 0 => vec![(Remainder::Rescale, Bound::Const(1i64 << bits))],
             _ => vec![],
         },
+        Op::Rescale(_) => vec![(
+            Remainder::Rescale,
+            Bound::Const(1i64 << rescale_bits(model, node)?),
+        )],
         Op::MeanOfSquares(op) => {
             let divisor = mos_divisor(op, node.scale);
             if i32::try_from(divisor).is_err() {

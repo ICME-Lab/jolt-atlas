@@ -73,6 +73,8 @@ pub mod mul;
 pub mod neg;
 /// ReLU activation function.
 pub mod relu;
+/// Rescale: a wide value taken to the model's scale.
+pub mod rescale;
 /// Reshape tensor dimensions.
 pub mod reshape;
 /// Reciprocal square root operation.
@@ -122,6 +124,7 @@ macro_rules! dispatch_operator {
             atlas_trace::Op::Mul($inner) => $body,
             atlas_trace::Op::Neg($inner) => $body,
             atlas_trace::Op::ReLU($inner) => $body,
+            atlas_trace::Op::Rescale($inner) => $body,
             atlas_trace::Op::SmoothRelu($inner) => $body,
             atlas_trace::Op::Reshape($inner) => $body,
             atlas_trace::Op::Rsqrt($inner) => $body,

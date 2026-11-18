@@ -18,6 +18,13 @@ pub struct Model {
     scale: Scale,
     version: SemVersion,
     io: IoDims,
+    /// Each node's level: its value `v` represents `v / 2^(level·scale)`. Level 1 is an
+    /// `i32`; a higher level is a wide value ([`crate::Trace::wide`]).
+    levels: Vec<u8>,
+    /// A bound on the magnitude of each node's entries: the largest absolute entry of a
+    /// constant, `2^31` for any other level-1 value, and for a wide value what its op gives
+    /// from its operands' bounds.
+    bounds: Vec<u128>,
     /// Memoized activation tables (regenerated on demand; not serialized).
     #[serde(skip)]
     pub(crate) tables: TableCache,
@@ -49,8 +56,11 @@ impl Model {
             check_shapes(&graph)?;
         }
 
+        let (levels, bounds) = levels_and_bounds(&graph)?;
         Ok(Model {
             graph,
+            levels,
+            bounds,
             scale: opts.scale,
             version: opts.version,
             io,
@@ -78,6 +88,39 @@ impl Model {
         &self.io
     }
 
+    /// Recompute every node's level and magnitude bound from the graph and require them to be
+    /// the ones the model holds: a model that was deserialized, not compiled, is checked here.
+    pub fn check_levels(&self) -> Result<(), CompileError> {
+        let (levels, bounds) = levels_and_bounds(&self.graph)?;
+        if levels == self.levels && bounds == self.bounds {
+            return Ok(());
+        }
+        let node = (0..levels.len())
+            .find(|&i| {
+                self.levels.get(i) != Some(&levels[i]) || self.bounds.get(i) != Some(&bounds[i])
+            })
+            .unwrap_or(levels.len());
+        Err(CompileError::Level {
+            node: NodeId(node as u32),
+            op: self
+                .graph
+                .nodes
+                .get(node)
+                .map_or_else(String::new, |n| n.op.to_string()),
+            reason: "the model's levels or bounds are not its graph's".to_string(),
+        })
+    }
+
+    /// The level of node `id`'s value.
+    pub fn level(&self, id: NodeId) -> u8 {
+        self.levels[id.index()]
+    }
+
+    /// The bound on the magnitude of node `id`'s entries.
+    pub fn bound(&self, id: NodeId) -> u128 {
+        self.bounds[id.index()]
+    }
+
     /// The node `id`.
     pub fn node(&self, id: NodeId) -> &Node {
         self.graph.node(id)
@@ -101,6 +144,66 @@ impl Model {
             .enumerate()
             .map(|(i, n)| (NodeId(i as u32), n))
     }
+}
+
+/// Every node's level and magnitude bound, in node order. `Err` if an op has no form for its
+/// operands' levels, a graph output is wide, or a wide value's bound reaches its op's limit.
+fn levels_and_bounds(graph: &Graph) -> Result<(Vec<u8>, Vec<u128>), CompileError> {
+    let mut levels: Vec<u8> = Vec::with_capacity(graph.nodes.len());
+    let mut bounds: Vec<u128> = Vec::with_capacity(graph.nodes.len());
+    for (i, node) in graph.nodes.iter().enumerate() {
+        let id = NodeId(i as u32);
+        let operand_levels: Vec<u8> = node.inputs.iter().map(|x| levels[x.index()]).collect();
+        let level =
+            node.op
+                .spec()
+                .level(&operand_levels)
+                .map_err(|reason| CompileError::Level {
+                    node: id,
+                    op: node.op.to_string(),
+                    reason,
+                })?;
+        let bound = if level > 1 {
+            let operand_bounds: Vec<u128> = node.inputs.iter().map(|x| bounds[x.index()]).collect();
+            let dims: Vec<&[usize]> = node
+                .inputs
+                .iter()
+                .map(|x| graph.node(*x).output_dims.as_slice())
+                .collect();
+            let bound = node.op.spec().wide_bound(&operand_bounds, &dims);
+            let limit = node.op.spec().wide_limit(&operand_levels);
+            if bound >= 1u128 << limit {
+                return Err(CompileError::Bound {
+                    node: id,
+                    op: node.op.to_string(),
+                    log2: u128::BITS - bound.leading_zeros(),
+                    limit,
+                });
+            }
+            bound
+        } else if let Op::Constant(constant) = &node.op {
+            constant
+                .0
+                .data()
+                .iter()
+                .map(|v| v.unsigned_abs() as u128)
+                .max()
+                .unwrap_or(0)
+                .max(1)
+        } else {
+            1u128 << 31
+        };
+        levels.push(level);
+        bounds.push(bound);
+    }
+    if let Some(&id) = graph.outputs.iter().find(|id| levels[id.index()] != 1) {
+        return Err(CompileError::Level {
+            node: id,
+            op: graph.node(id).op.to_string(),
+            reason: "a graph output is a level-1 value".to_string(),
+        });
+    }
+    Ok((levels, bounds))
 }
 
 /// Infer every node's shape from its operands and compare with the declared
@@ -248,7 +351,13 @@ mod tests {
         );
         let inv = b.push(Op::Rsqrt(op::Rsqrt), &[var]);
         let inv_b = b.push(Op::Broadcast(op::Broadcast { shape: vec![2, 4] }), &[inv]);
-        let y = b.push(Op::Mul(op::Mul { rebase: true }), &[x, inv_b]);
+        let y = b.push(
+            Op::Mul(op::Mul {
+                rebase: true,
+                deferred: false,
+            }),
+            &[x, inv_b],
+        );
         b.output(y);
         let model = b.build(CompileOptions::default()).unwrap();
 

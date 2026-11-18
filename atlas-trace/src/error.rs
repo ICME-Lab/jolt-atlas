@@ -167,6 +167,28 @@ pub enum CompileError {
         /// Why padding failed.
         reason: String,
     },
+    /// An op cannot take its operands at their levels, or a level-1 value is required.
+    #[error("node {node} ({op}): {reason}")]
+    Level {
+        /// Offending node.
+        node: NodeId,
+        /// Operator display name.
+        op: String,
+        /// What is wrong.
+        reason: String,
+    },
+    /// A wide value's magnitude bound reaches the limit below which it cannot wrap.
+    #[error("node {node} ({op}): a wide value bounded by 2^{log2} reaches the limit 2^{limit}")]
+    Bound {
+        /// Offending node.
+        node: NodeId,
+        /// Operator display name.
+        op: String,
+        /// `⌈log₂⌉` of the node's magnitude bound.
+        log2: u32,
+        /// `log₂` of the limit.
+        limit: u32,
+    },
 }
 
 /// Errors raised while executing a compiled model.
@@ -237,5 +259,13 @@ pub enum KernelError {
         what: &'static str,
         /// The overflowing value.
         value: i64,
+    },
+    /// The op has no kernel for operands at these levels.
+    #[error("{op} has no form for operands at levels {levels:?}")]
+    NoWideForm {
+        /// Operator name.
+        op: &'static str,
+        /// The operands' levels.
+        levels: Vec<u8>,
     },
 }

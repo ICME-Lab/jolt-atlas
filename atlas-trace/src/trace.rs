@@ -13,8 +13,12 @@ use crate::{
 /// included), plus sparse per-node witnesses.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Trace {
-    /// Output tensor per node, indexed by [`NodeId`].
+    /// Output tensor per node, indexed by [`NodeId`]. The entry of a node whose value is wide
+    /// holds no data; its value is in [`Self::wide`].
     pub node_outputs: Vec<Tensor<i32>>,
+    /// The exact value of each wide node ([`crate::Model::level`] above 1).
+    #[serde(default)]
+    pub wide: BTreeMap<NodeId, Tensor<i128>>,
     /// Sparse auxiliary witnesses (fused intermediates, softmax).
     pub aux: BTreeMap<NodeId, NodeAux>,
     /// The scale the trace was produced at.
@@ -85,6 +89,19 @@ impl Trace {
                 .collect(),
             input_indices: graph.inputs.iter().map(|id| id.index()).collect(),
             output_indices: graph.outputs.iter().map(|id| id.index()).collect(),
+        }
+    }
+
+    /// The value of a wide node.
+    pub fn wide(&self, id: NodeId) -> Option<&Tensor<i128>> {
+        self.wide.get(&id)
+    }
+
+    /// The remainder of a `Rescale` node.
+    pub fn rescale_remainder(&self, id: NodeId) -> Option<&Tensor<i64>> {
+        match self.aux.get(&id)? {
+            NodeAux::RescaleRemainder(remainder) => Some(remainder),
+            _ => None,
         }
     }
 
@@ -172,6 +189,8 @@ pub enum NodeAux {
     Rsqrt(RsqrtAdvice),
     /// The period reduction of a `Sin` or `Cos` input.
     TrigPeriod(TrigPeriodAdvice),
+    /// The remainder of a `Rescale`: `wide = out·2^((j−1)·S) + remainder`, in `[0, 2^((j−1)·S))`.
+    RescaleRemainder(Tensor<i64>),
 }
 
 /// The intermediates of `rsqrt(x) = ⌊√⌊S³ / x⌋⌋` for `x > 0`:

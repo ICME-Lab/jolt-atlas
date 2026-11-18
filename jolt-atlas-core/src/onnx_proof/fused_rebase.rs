@@ -17,7 +17,7 @@
 //! prover's side of the plan is in `ops::prove_schedule`; this module holds the trace
 //! intermediates it reads.
 
-use atlas_trace::{Tensor, Trace};
+use atlas_trace::{NodeId, Tensor, Trace};
 pub use jolt_atlas_verifier::onnx_proof::fused_rebase::*;
 
 use crate::node_view::ComputationNode;
@@ -26,7 +26,10 @@ use crate::onnx_proof::trace_view::TraceView;
 /// The operator's rescaling remainder `R = acc mod D`, padded to the node-output
 /// cycle domain, where `D` is the operator-specific divisor (usually `2^S`, but
 /// e.g. `MeanOfSquares` uses `N·2^S`), as the trace captured it.
-pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<i32> {
+pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<i64> {
+    if let Some(remainder) = trace.rescale_remainder(NodeId(node.idx as u32)) {
+        return remainder.padded_pow2();
+    }
     trace
         .fused_intermediates(node.idx)
         .unwrap_or_else(|| {
@@ -37,4 +40,5 @@ pub(crate) fn rebase_remainder(node: &ComputationNode, trace: &Trace) -> Tensor<
         })
         .remainder
         .padded_pow2()
+        .map(i64::from)
 }

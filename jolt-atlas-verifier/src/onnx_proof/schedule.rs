@@ -281,6 +281,11 @@ impl<F: JoltField> std::fmt::Display for Schedule<F> {
 impl<F: JoltField> Schedule<F> {
     /// The schedule of `model`. `Err` if a node does not have the shape its operator proves.
     pub fn compile(model: &Model) -> Result<Self, ProofVerifyError> {
+        // The relations over wide values rest on the levels and magnitude bounds the model
+        // states: they are recomputed from its graph here.
+        model
+            .check_levels()
+            .map_err(|e| ProofVerifyError::Malformed(format!("model: {e}")))?;
         let mut builder = ScheduleBuilder::new();
         let views = model.views();
         let mut plans: Vec<NodePlan> = Vec::with_capacity(views.len());

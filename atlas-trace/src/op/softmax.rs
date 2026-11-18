@@ -122,6 +122,7 @@ impl OpSpec for SoftmaxLastAxis {
         w.address = address;
 
         Ok(Eval {
+            wide: None,
             output: Tensor::new(output, dims)?,
             aux: Some(NodeAux::Softmax(Box::new(w))),
         })

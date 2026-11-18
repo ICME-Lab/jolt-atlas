@@ -67,6 +67,9 @@ pub mod moveaxis;
 pub mod mul;
 /// Element-wise negation operation.
 pub mod neg;
+/// Sin and Cos.
+/// Rescale: a wide value taken to the model's scale.
+pub mod rescale;
 /// Reshape tensor dimensions.
 pub mod reshape;
 /// Reciprocal square root operation.
@@ -79,7 +82,6 @@ pub mod slice;
 pub mod softmax_last_axis;
 /// Sum reduction along axes.
 pub mod sum;
-/// Sin and Cos.
 pub mod trig;
 
 use atlas_algebra::{
@@ -667,6 +669,7 @@ pub fn op_rel_witnesses<F: JoltField>(
         | OpRelKind::Slice
         | OpRelKind::Concat
         | OpRelKind::TrigPeriod
+        | OpRelKind::Rescale
         | OpRelKind::SoftmaxAddressLink => {
             panic!("{:?} is a tie: it has no round witnesses", relation.kind)
         }
@@ -698,6 +701,7 @@ pub fn op_rel_tie_claims<F: JoltField>(
         OpRelKind::Slice => slice::subcube_select_claims(relation, trace, &setup.incoming_point),
         OpRelKind::Concat => concat::subcube_tiling_claims(relation, trace, &setup.incoming_point),
         OpRelKind::TrigPeriod => trig::trig_period_claims(node, accumulator),
+        OpRelKind::Rescale => rescale::rescale_claims(node, trace, &setup.incoming_point),
         OpRelKind::SoftmaxAddressLink => {
             softmax_last_axis::address_link_claims(node, trace, &setup.incoming_point)
         }
@@ -760,6 +764,7 @@ pub fn op_rel_prover<F: JoltField, T: ProvingTranscript>(
         | OpRelKind::Slice
         | OpRelKind::Concat
         | OpRelKind::TrigPeriod
+        | OpRelKind::Rescale
         | OpRelKind::SoftmaxAddressLink => Box::new(RelationProver::initialize(trace, params)),
     }
 }
@@ -798,6 +803,7 @@ pub fn op_rel_setup_claims<F: JoltField>(
         | OpRelKind::Slice
         | OpRelKind::Concat
         | OpRelKind::TrigPeriod
+        | OpRelKind::Rescale
         | OpRelKind::SoftmaxAddressLink => {
             panic!("{:?} has no setup opens", relation.kind)
         }

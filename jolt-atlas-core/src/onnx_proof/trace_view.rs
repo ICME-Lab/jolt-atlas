@@ -6,6 +6,8 @@
 //! ever built.
 
 use crate::node_view::ComputationNode;
+use atlas_algebra::field::JoltField;
+use atlas_algebra::poly::multilinear::{EvaluateMle, MultilinearPolynomial, PolynomialEvaluation};
 use atlas_trace::{
     trace::{FusedIntermediates, LayerData},
     NodeId, RsqrtAdvice, SoftmaxWitness, Tensor, Trace, TrigPeriodAdvice,
@@ -27,6 +29,11 @@ pub trait TraceView {
     fn layer_data<'a>(&'a self, n: &ComputationNode) -> LayerData<'a>;
     /// Operand tensors of a node.
     fn operand_tensors<'a>(&'a self, n: &ComputationNode) -> Vec<&'a Tensor<i32>>;
+    /// The value of node `idx` over its padded cells as a polynomial: its wide value if it
+    /// has one, its `i32` output otherwise.
+    fn value_poly<F: JoltField>(&self, idx: usize) -> MultilinearPolynomial<F>;
+    /// The multilinear extension of node `idx`'s value at `point`.
+    fn value_at<F: JoltField>(&self, idx: usize, point: &[F]) -> F;
 }
 
 impl TraceView for Trace {
@@ -74,5 +81,19 @@ impl TraceView for Trace {
 
     fn operand_tensors<'a>(&'a self, n: &ComputationNode) -> Vec<&'a Tensor<i32>> {
         n.inputs.iter().map(|&i| &self.node_outputs[i]).collect()
+    }
+
+    fn value_poly<F: JoltField>(&self, idx: usize) -> MultilinearPolynomial<F> {
+        match self.wide(NodeId(idx as u32)) {
+            Some(wide) => MultilinearPolynomial::from(wide.padded_pow2().into_data()),
+            None => MultilinearPolynomial::from(self.node_outputs[idx].padded_pow2()),
+        }
+    }
+
+    fn value_at<F: JoltField>(&self, idx: usize, point: &[F]) -> F {
+        match self.wide(NodeId(idx as u32)) {
+            Some(_) => self.value_poly::<F>(idx).evaluate(point),
+            None => self.node_outputs[idx].evaluate_mle(point),
+        }
     }
 }

@@ -13,7 +13,7 @@ use crate::{
     tensor::{Tensor, row_major_strides as strides},
 };
 
-use super::{Einsum, Eval, EvalCtx, OpSpec, PadBehavior, fused::rebase_eval};
+use super::{Einsum, Eval, EvalCtx, OpSpec, Operand, PadBehavior, WIDE_LIMIT, fused::rebase_eval};
 
 /// A parsed, validated einsum equation (`"mk,kn->mn"`).
 ///
@@ -519,7 +519,11 @@ fn einsum_acc_i64(eq: &EinsumEq, inputs: &[&Tensor<i32>]) -> Result<Tensor<i64>,
 
 impl fmt::Display for Einsum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Einsum({})", self.equation)
+        if self.deferred {
+            write!(f, "Einsum({}, deferred)", self.equation)
+        } else {
+            write!(f, "Einsum({})", self.equation)
+        }
     }
 }
 
@@ -543,7 +547,7 @@ impl OpSpec for Einsum {
     }
 
     fn checks_output(&self) -> bool {
-        true
+        !self.deferred
     }
 
     fn padding(&self) -> PadBehavior {
@@ -552,8 +556,107 @@ impl OpSpec for Einsum {
     }
 
     fn rebase_divisor(&self, scale: Scale) -> Option<i64> {
-        Some(scale.denom_i64())
+        (!self.deferred).then(|| scale.denom_i64())
     }
+
+    /// A deferred contraction is at the sum of its operands' levels. Its second operand is
+    /// at level 1, and a wide first operand is taken by `mk,kn->mn` alone.
+    fn level(&self, operands: &[u8]) -> Result<u8, String> {
+        match (self.deferred, operands) {
+            (false, [1, 1]) => Ok(1),
+            (true, [1, 1]) => Ok(2),
+            (true, [left, 1]) if self.equation.to_string() == "mk,kn->mn" => Ok(left + 1),
+            _ => Err(format!(
+                "{self} has no form for operands at levels {operands:?}"
+            )),
+        }
+    }
+
+    fn eval_wide(
+        &self,
+        inputs: &[Operand<'_>],
+        levels: &[u8],
+        _ctx: &EvalCtx<'_>,
+    ) -> Result<Eval, KernelError> {
+        let no_form = || KernelError::NoWideForm {
+            op: "einsum",
+            levels: levels.to_vec(),
+        };
+        match inputs {
+            // Level-1 operands: the contraction is the fused form's accumulation.
+            [Operand::Narrow(a), Operand::Narrow(b)] if self.deferred => {
+                let acc = einsum_acc_i64(&self.equation, &[a, b])?;
+                Ok(Eval::wide(acc.map(|v| v as i128)))
+            }
+            [Operand::Wide(a), Operand::Narrow(b)] if self.deferred => {
+                let ([rows, sum], [sum_b, run]) = (a.dims(), b.dims()) else {
+                    return Err(no_form());
+                };
+                if sum != sum_b || self.equation.to_string() != "mk,kn->mn" {
+                    return Err(no_form());
+                }
+                Ok(Eval::wide(Tensor::new(
+                    wide_rows_acc(a.data(), b.data(), *rows, *sum, *run),
+                    &[*rows, *run],
+                )?))
+            }
+            _ => Err(no_form()),
+        }
+    }
+
+    /// A contraction of level-1 operands accumulates in `i64`.
+    fn wide_limit(&self, operands: &[u8]) -> u32 {
+        if operands.iter().all(|&level| level == 1) {
+            62
+        } else {
+            WIDE_LIMIT
+        }
+    }
+
+    /// `|Σ L·R| ≤ |L|·|R|` times the number of terms a contraction sums.
+    fn wide_bound(&self, operands: &[u128], dims: &[&[usize]]) -> u128 {
+        let terms = self
+            .equation
+            .letter_sizes(dims)
+            .map(|sizes| {
+                self.equation
+                    .contracted()
+                    .iter()
+                    .map(|letter| sizes[letter] as u128)
+                    .product::<u128>()
+            })
+            .unwrap_or(u128::MAX);
+        operands
+            .iter()
+            .fold(terms, |acc, &bound| acc.saturating_mul(bound))
+    }
+}
+
+/// `out[i][c] = Σ_j a[i][j]·b[j][c]` for a wide `a` (`rows × sum`) and a level-1 `b`
+/// (`sum × run`), exactly. A zero entry of `a` (padding, mostly) is skipped.
+fn wide_rows_acc(a: &[i128], b: &[i32], rows: usize, sum: usize, run: usize) -> Vec<i128> {
+    let mut out = vec![0i128; rows * run];
+    let fill = |(row, out): (usize, &mut [i128])| {
+        for (&scale, values) in a[row * sum..(row + 1) * sum]
+            .iter()
+            .zip(b.chunks_exact(run))
+        {
+            if scale == 0 {
+                continue;
+            }
+            for (o, &value) in out.iter_mut().zip(values) {
+                *o += scale * value as i128;
+            }
+        }
+    };
+    #[cfg(feature = "rayon")]
+    {
+        use rayon::prelude::*;
+        out.par_chunks_mut(run.max(1)).enumerate().for_each(fill);
+    }
+    #[cfg(not(feature = "rayon"))]
+    out.chunks_mut(run.max(1)).enumerate().for_each(fill);
+    out
 }
 
 #[cfg(test)]
@@ -591,7 +694,10 @@ mod tests {
         let eq: EinsumEq = "mk,kn->mn".parse().unwrap();
         let a = t(&[16, 32, 48, 64, 80, 96], &[2, 3]); // 1,2,3;4,5,6 at S=16
         let b = t(&[16, 0, 0, 16, 16, 16], &[3, 2]);
-        let op = Einsum { equation: eq };
+        let op = Einsum {
+            equation: eq,
+            deferred: false,
+        };
         let cache = TableCache::default();
         let out = op.eval(&[&a, &b], &ctx(&cache)).unwrap();
         // real A = [[1,2,3],[4,5,6]], B = [[1,0],[0,1],[1,1]]
@@ -684,7 +790,10 @@ mod tests {
     #[test]
     fn batched_contraction_shape() {
         let eq: EinsumEq = "abmk,abnk->abmn".parse().unwrap();
-        let op = Einsum { equation: eq };
+        let op = Einsum {
+            equation: eq,
+            deferred: false,
+        };
         let shape = op.infer_shape(&[&[2, 3, 4, 5], &[2, 3, 6, 5]]).unwrap();
         assert_eq!(shape, vec![2, 3, 4, 6]);
         // Conflicting letter size errors out.
@@ -694,7 +803,10 @@ mod tests {
     #[test]
     fn dot_product_scalar_output() {
         let eq: EinsumEq = "k,k->".parse().unwrap();
-        let op = Einsum { equation: eq };
+        let op = Einsum {
+            equation: eq,
+            deferred: false,
+        };
         assert_eq!(op.infer_shape(&[&[8], &[8]]).unwrap(), vec![1]);
     }
 }

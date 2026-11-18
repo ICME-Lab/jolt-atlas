@@ -231,13 +231,31 @@ impl<'g> Lowerer<'g> {
         let id = match node.op.as_str() {
             "Add" => elementwise(self, Op::Add(op::Add))?,
             "Sub" => elementwise(self, Op::Sub(op::Sub))?,
-            "Mul" => elementwise(self, Op::Mul(op::Mul { rebase: scaled }))?,
+            "Mul" => elementwise(
+                self,
+                Op::Mul(op::Mul {
+                    rebase: scaled,
+                    deferred: false,
+                }),
+            )?,
             // Raw product by construction (cast_policy's ×2^scale rescale).
-            "atlas.RawMul" => elementwise(self, Op::Mul(op::Mul { rebase: false }))?,
+            "atlas.RawMul" => elementwise(
+                self,
+                Op::Mul(op::Mul {
+                    rebase: false,
+                    deferred: false,
+                }),
+            )?,
             // Rebased regardless of dtype: norm_fusion's 1/N reciprocal
             // multiply, whose scaled constant times a possibly-raw sum must
             // divide by 2^scale to stay in the operand's domain.
-            "atlas.ScaledMul" => elementwise(self, Op::Mul(op::Mul { rebase: true }))?,
+            "atlas.ScaledMul" => elementwise(
+                self,
+                Op::Mul(op::Mul {
+                    rebase: true,
+                    deferred: false,
+                }),
+            )?,
             "Neg" => direct(self, Op::Neg(op::Neg))?,
             "Relu" => direct(self, Op::ReLU(op::ReLU))?,
             "Tanh" => direct(self, Op::Tanh(op::Tanh))?,
@@ -414,7 +432,13 @@ impl<'g> Lowerer<'g> {
                     )));
                 }
                 let equation = eq.parse::<op::EinsumEq>().map_err(attr_err)?;
-                direct(self, Op::Einsum(op::Einsum { equation }))?
+                direct(
+                    self,
+                    Op::Einsum(op::Einsum {
+                        equation,
+                        deferred: false,
+                    }),
+                )?
             }
             _ => return Err(unlowered()),
         };

@@ -231,6 +231,7 @@ impl fmt::Display for ScalarConstDiv {
 impl OpSpec for ScalarConstDiv {
     fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
         Ok(Eval {
+            wide: None,
             output: inputs[0].map(|x| floor_div(x, self.divisor)),
             aux: Some(NodeAux::Remainder(
                 inputs[0].map(|x| rem_floor(x, self.divisor)),
@@ -289,6 +290,7 @@ impl OpSpec for Rsqrt {
             .collect();
         let dims = input.dims();
         Ok(Eval {
+            wide: None,
             aux: Some(NodeAux::Rsqrt(RsqrtAdvice {
                 quotient: Tensor::new(quotient, dims)?,
                 div_remainder: Tensor::new(div_remainder, dims)?,
@@ -523,7 +525,10 @@ mod tests {
         );
 
         // A fused product: the rescaled quotient must fit, not the `i64` accumulation.
-        let mul = crate::op::Mul { rebase: true };
+        let mul = crate::op::Mul {
+            rebase: true,
+            deferred: false,
+        };
         let big = t(vec![1 << 30]);
         assert!(overflow(mul.eval(&[&big, &big], &ctx)));
         let fits = t(vec![1 << 22]);

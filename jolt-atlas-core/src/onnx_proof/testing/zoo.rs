@@ -226,6 +226,7 @@ fn relation_kinds_all_exercised() {
             Gather,
             SoftmaxSums,
             TrigPeriod,
+            Rescale,
             SoftmaxAddressLink,
             SmallTable,
         ];
@@ -234,7 +235,7 @@ fn relation_kinds_all_exercised() {
                 And | Mul | Square | Cube | AddAccumulation | SubAccumulation | Iff
                 | ConstantDivision | Rsqrt | Identity | Neg | ZeroOutput | Constant | Input
                 | AxisPermutation | Broadcast | Reshape | Slice | Concat | SumAxis
-                | MeanOfSquares | Contraction | Gather | SoftmaxSums | TrigPeriod
+                | MeanOfSquares | Contraction | Gather | SoftmaxSums | TrigPeriod | Rescale
                 | SoftmaxAddressLink | SmallTable => {}
             }
         }

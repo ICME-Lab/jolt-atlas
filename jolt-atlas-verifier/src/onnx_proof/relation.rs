@@ -156,6 +156,8 @@ pub enum OpRelKind {
     SoftmaxSums,
     /// `Sin` / `Cos`: the period reduction, the input is `P·q + r`.
     TrigPeriod,
+    /// `Rescale`: the wide operand is `out·2^B + rem`.
+    Rescale,
     /// `SoftmaxLastAxis`: the clamp lookup's operand is the shift minus the logit.
     SoftmaxAddressLink,
     /// A small public table read through one-hot addresses (a clamped activation, a smooth
@@ -186,6 +188,7 @@ impl OpRelKind {
             Self::Gather => RelationId::Gather,
             Self::SoftmaxSums => RelationId::SoftmaxSums,
             Self::TrigPeriod => RelationId::TrigPeriod,
+            Self::Rescale => RelationId::Rescale,
             Self::SoftmaxAddressLink => RelationId::SoftmaxAddressLink,
             Self::SmallTable => RelationId::SmallTable,
         }
@@ -220,6 +223,7 @@ impl OpRelKind {
             Self::Gather => matches!(op, Op::GatherSmall(_) | Op::GatherLarge(_)),
             Self::SoftmaxSums => matches!(op, Op::SoftmaxLastAxis(_)),
             Self::TrigPeriod => matches!(op, Op::Sin(_) | Op::Cos(_)),
+            Self::Rescale => matches!(op, Op::Rescale(_)),
             Self::SoftmaxAddressLink => matches!(op, Op::SoftmaxLastAxis(_)),
             Self::SmallTable => matches!(
                 op,

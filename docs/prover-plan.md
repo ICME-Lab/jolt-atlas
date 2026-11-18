@@ -2,46 +2,58 @@
 
 One document for where the proving time goes, what has been done about it, what is left and in
 what order, and which strategic questions stay open. Numbers marked *measured* are from the
-benchmark machine (`scripts/remote.sh`, a 16-core Graviton with 30 GB) on 2026-11-18 unless a
-line says otherwise; everything else is an estimate and says so. Timings are comparable only
-within one machine and session.
+benchmark machine (`scripts/remote.sh`) on 2026-11-18 unless a line says otherwise; everything
+else is an estimate and says so. Timings are comparable only within one machine and session:
+the machine was a 16-core Graviton with 30 GB until midday on 2026-11-18 and a 32-core one
+with 61 GB after, and each table says which.
 
 ## 1. Where the time goes (measured)
 
-**At 16 tokens** (`bench/gate.sh`, medians of five runs for GPT-2 and three for Qwen, commit
-`0205a49ec`):
+**At 16 tokens** (32 cores, `bench/gate.sh`, medians of three, commit `5f30bbf2a`):
 
 | | GPT-2 | Qwen |
 |---|---|---|
-| prove | 2.88 s | 7.94 s |
-| trace execution | about 0.45 s | about 1.5 s |
-| commit | 0.25 s | 0.83 s |
-| sumchecks (`iop`) | 1.13 s | 3.06 s |
-| openings | 1.05 s | 2.52 s |
-| verify | 0.35 s | 1.05 s |
+| prove | 2.22 s | 5.55 s |
+| trace execution | about 0.35 s | about 0.77 s |
+| commit | 0.18 s | 0.55 s |
+| sumchecks (`iop`) | 0.81 s | 2.05 s |
+| openings | 0.87 s | 2.10 s |
+| verify | 0.24 s | 0.54 s |
 | proof | 1.33 MiB | 1.76 MiB |
-| peak memory | 2.9 GB | 8.2 GB |
+| peak memory | 3.0 GB | 8.5 GB |
 
-Huge pages for the allocator take a further 17 to 22% off on Linux (Qwen 7.5 s, GPT-2 2.6 s
-when measured) and are not in these numbers (`CLAUDE.md`, "Remote runs").
+Huge pages for the allocator take a further 16% off Qwen on this machine (5.82 s to 4.90 s
+on an earlier commit, kernel time halved) and are not in these numbers (`CLAUDE.md`, "Remote
+runs").
 
-**By sequence length** (single runs, commit `1dedd8911`, before the public reshaped output):
+**By sequence length** (32 cores, single runs, commit `5f30bbf2a`):
 
 | Model | Tokens | Prove | Verify | Proof | Peak memory |
 |---|---|---|---|---|---|
-| GPT-2 | 32 | 4.34 s | 0.36 s | 1.62 MiB | 4.5 GB |
-| GPT-2 | 64 | 8.50 s | 0.37 s | 2.30 MiB | 9.1 GB |
-| GPT-2 | 128 | 17.85 s | 0.39 s | 2.38 MiB | 17.7 GB |
-| Qwen | 16 | 7.51 s | 1.04 s | 1.76 MiB | 8.5 GB |
-| Qwen | 32 | 13.05 s | 1.07 s | 2.40 MiB | 13.9 GB |
-| Qwen | 64 | 24.96 s | 1.09 s | 2.49 MiB | 25.8 GB |
+| GPT-2 | 32 | 3.14 s | 0.25 s | 1.62 MiB | 4.6 GB |
+| GPT-2 | 64 | 5.41 s | 0.24 s | 1.66 MiB | 8.0 GB |
+| GPT-2 | 128 | 13.34 s | 0.26 s | 2.38 MiB | 17.6 GB |
+| Qwen | 32 | 8.34 s | 0.54 s | 2.40 MiB | 13.8 GB |
+| Qwen | 64 | 15.62 s | 0.53 s | 2.49 MiB | 25.1 GB |
+| Qwen | 128 | 32.29 s | 0.62 s | 3.55 MiB | 46.5 GB |
 
-Proving is close to linear in context: about 140 ms and 140 MB per token on GPT-2 (7 tokens a
-second), about 370 ms and 370 MB per token on Qwen (2.7 tokens a second). The fixed cost is
+Proving is close to linear in context: about 100 ms and 140 MB per token on GPT-2 (10 tokens
+a second), about 250 ms and 360 MB per token on Qwen (4 tokens a second). The fixed cost is
 small, so a longer context amortises almost nothing. Verify time and proof size are nearly
-flat. Memory is the limit on context: Qwen at 128 tokens and GPT-2 at 256 do not fit in 30 GB.
+flat. Memory is the limit on context.
 
-**Where the growth is** (Qwen, traced single runs, 16 against 64 tokens):
+**The cores are not the limit; the serial part is.** Qwen at 16 tokens, by thread count
+(32-core machine, before the changes of the afternoon of 2026-11-18): 10.9 s at 8 threads,
+7.51 s at 16, 6.57 s at 32. Doubling the cores from 16 to 32 bought 14%, and the proof used
+about 18 of the 32 on average, with 14% of its CPU time in the kernel (page faults and
+memory mapping). Comparing every span at 4 and at 32 threads gives the part of it that does
+not shrink (`serial ≈ (8·t32 − t4)/7`); at commit `8b9fb9a79` that estimate was 3.9 s of a
+5.4 s proof: sumchecks 1.5 s, openings 1.4 s (the grand product 0.54 s, the reduction
+sumcheck 0.29 s, Ligerito 0.21 s), trace 0.63 s, commit 0.40 s. This comparison is how the
+next serial piece is found.
+
+**Where the growth is** (16 cores, commit `1dedd8911`; Qwen, traced single runs, 16 against
+64 tokens):
 
 | Stage | 16 tokens | 64 tokens | Growth |
 |---|---|---|---|
@@ -103,24 +115,43 @@ skipped empty columns, per-layer histograms); the split-eq unreduced fold for `m
 cached activation tables; the output of a node a model output is a reshape of taken as public
 (Qwen 6.7% at 64 tokens); the BitZ size cap raised from 2^31 to 2^36 bits.
 
+On the 32-core machine, from 7.06 s to 5.55 s on Qwen and 2.63 s to 2.22 s on GPT-2, with
+verify from 0.88 s to 0.54 s and 0.35 s to 0.24 s: the tracer's matrix product tiled over
+columns and vectorised, and its rescale, narrowing and elementwise passes in parallel
+(`specs/einsum-kernels.md`, step 2); witnesses of set-up relations and table reads built with
+their batch; a small table's one-hot scatter sized to its cells; bucket weights and the
+committed witness polynomials built side by side; and one unreduced split-eq kernel for
+evaluating a tensor of at most 32-bit values at a point, which the matrix product's fold, the
+prover's constant ties and the verifier share (steps 3 and 5).
+
 ## 3. What is left
 
 **Targets (set 2026-11-17).** GPT-2 at 16 tokens in about 1 s and Qwen in about 3 s on the
-benchmark machine. Today 2.9 s and 7.9 s.
+benchmark machine. Today 2.2 s and 5.6 s on 32 cores.
 
 Every step is gated by `bench/gate.sh` on GPT-2 and Qwen (`--model models/qwen`) against the
 commit it lands on: stage times within 3%, peak memory within 5%, unless a spec states
 tighter bounds. Gains below are estimates until a gate replaces them.
 
-### A. Engineering on the current protocol (no spec; about 10 to 15% together)
+### A. Engineering on the current protocol (no spec)
 
-1. **Lookup witnesses built in batch.** The serial steps between waves are 1.15 s on Qwen,
-   0.66 s of it lookup witness setup that could run in parallel with the wave before it.
-2. **Ties in parallel**, and the split-eq unreduced fold for the einsum layouts that do not
-   have it (`mk,kn->mn` does), and for the verifier's weight evaluation.
-3. **The grand product's remainder:** write the stored layer already folded, keep the
+Found by the 4-against-32-thread comparison of section 1; largest first.
+
+1. **The per-node steps that stay serial** (about 0.5 s on Qwen): ties, claim reductions,
+   the fresh-point evaluations of digit-backed nodes and the opens run one node at a time
+   because each sends a claim before the next challenge is drawn. Drawing a wave's points
+   before sending its claims would let them run together; it reorders the transcript.
+2. **The opening's non-scaling parts** (about 0.9 s): the grand product, the reduction
+   sumcheck, Ligerito and the ring switch.
+3. **The allocator.** Every change that moved work onto worker threads slowed the openings
+   stage by 3 to 4% with an identical transcript, and huge pages are worth 16%. Fewer and
+   reused large buffers, or an allocator that keeps and reuses them, is the fix; nothing is
+   in code yet.
+4. **The einsum spec's remaining step:** the other layouts' folds on the shared kernel
+   (small on GPT-2 and Qwen). The tracer's matrix product is 2.3x faster against a target
+   of 4x.
+5. **The grand product's remainder:** write the stored layer already folded, keep the
    accumulators in registers, a prepared fold multiplier.
-4. **The tracer:** cache the transposed weights across runs of a model, skip padded extents.
 
 ### B. Committed volume (each needs a spec; this is where long contexts are won)
 
@@ -167,7 +198,7 @@ verifier time. Needs a memory plan and a relation compiler.
 - **Memory per token.** 370 MB per token on Qwen caps the context before time does.
   Nothing is planned yet; the committed-volume items help in proportion.
 - **A GPU backend.** Estimated 5 to 10x end to end on one H100 against the sixteen cores
-  (Qwen about 15 to 25 tokens a second, GPT-2 40 to 70): the trace and the hashing gain the
+  (estimated when Qwen proved 2.7 tokens a second on 16 cores): the trace and the hashing gain the
   most, the binary-field arithmetic of the opening the least (no carry-less multiply on a
   GPU), the many small nodes and the transcript little. Nothing measured. The first step is
   one kernel, the grand product's inner loop, on a small NVIDIA instance behind a feature
@@ -178,7 +209,7 @@ verifier time. Needs a memory plan and a relation compiler.
 
 ### Order
 
-A1 and A2 first (no decision needed). Then the prototype of B2, since it decides whether B1
+A in its listed order, as far as each needs no decision. Then the prototype of B2, since it decides whether B1
 is worth its contract change at all. C after B. D's GPU kernel whenever an instance exists.
 
 ## 4. Positions (research, condensed)

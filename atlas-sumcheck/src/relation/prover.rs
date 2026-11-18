@@ -320,9 +320,23 @@ impl<F: JoltField> RoundScheduler<F> for InstanceRounds {
         #[cfg(not(target_arch = "wasm32"))]
         print_current_memory_usage(format!("Sumcheck round {}", self.round).as_str());
         self.round += 1;
-        for item in work.iter_mut() {
-            if let Some(bind) = item.bind {
-                item.member.bind_shared(bind, item.local_round - 1);
+        if self.parallel {
+            // Shared state is bound by whichever of its members reaches it first, the rest
+            // finding it bound: a batch with many members sharing little binds side by side.
+            work.iter_mut()
+                .map(SendRound)
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .for_each(|SendRound(item)| {
+                    if let Some(bind) = item.bind {
+                        item.member.bind_shared(bind, item.local_round - 1);
+                    }
+                });
+        } else {
+            for item in work.iter_mut() {
+                if let Some(bind) = item.bind {
+                    item.member.bind_shared(bind, item.local_round - 1);
+                }
             }
         }
         if self.parallel {
@@ -340,9 +354,21 @@ impl<F: JoltField> RoundScheduler<F> for InstanceRounds {
         &mut self,
         finishes: &mut [MemberFinish<'_, F>],
     ) -> Result<(), SumcheckError<F>> {
-        for item in finishes.iter_mut() {
-            let last_round = item.member.num_rounds() - 1;
-            item.member.bind_shared(item.bind, last_round);
+        if self.parallel {
+            finishes
+                .iter_mut()
+                .map(SendRound)
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .for_each(|SendRound(item)| {
+                    let last_round = item.member.num_rounds() - 1;
+                    item.member.bind_shared(item.bind, last_round);
+                });
+        } else {
+            for item in finishes.iter_mut() {
+                let last_round = item.member.num_rounds() - 1;
+                item.member.bind_shared(item.bind, last_round);
+            }
         }
         if self.parallel {
             finishes

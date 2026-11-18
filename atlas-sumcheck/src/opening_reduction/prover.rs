@@ -191,17 +191,21 @@ impl<F: JoltField> DensePolynomialProverOpening<F> {
 
     #[tracing::instrument(skip_all, name = "DensePolynomialProverOpening::bind")]
     pub fn bind(&mut self, r_j: F::Challenge, round: usize) {
-        let mut shared_eq = self.eq_poly.write().unwrap();
-        if shared_eq.num_variables_bound <= round {
-            shared_eq.D.bind(r_j.into());
-            shared_eq.num_variables_bound += 1;
+        // A lock held by another member means that member is binding it this round
+        // ([`ProveRounds::bind_shared`]): leave it to that member.
+        if let Ok(mut shared_eq) = self.eq_poly.try_write() {
+            if shared_eq.num_variables_bound <= round {
+                shared_eq.D.bind(r_j.into());
+                shared_eq.num_variables_bound += 1;
+            }
         }
 
         let shared_poly_ref = self.polynomial.as_mut().unwrap();
-        let mut shared_poly = shared_poly_ref.write().unwrap();
-        if shared_poly.num_variables_bound <= round {
-            shared_poly.poly.bind_parallel(r_j, BindingOrder::HighToLow);
-            shared_poly.num_variables_bound += 1;
+        if let Ok(mut shared_poly) = shared_poly_ref.try_write() {
+            if shared_poly.num_variables_bound <= round {
+                shared_poly.poly.bind_parallel(r_j, BindingOrder::HighToLow);
+                shared_poly.num_variables_bound += 1;
+            }
         }
     }
 
@@ -387,20 +391,22 @@ impl<F: JoltField> OneHotPolynomialProverOpening<F> {
 
     /// Bind the eq tables the member shares, unless a member bound them this round already.
     pub fn bind_shared(&mut self, r: F::Challenge, round: usize) {
-        let mut shared_eq_address = self.eq_address_state.write().unwrap();
-        let mut shared_eq_cycle = self.eq_cycle_state.write().unwrap();
+        // The address rounds come first and bind the address table, the cycle rounds the
+        // cycle table; a lock held by another member means that member is binding it this
+        // round: leave it to that member.
         let log_K = self.K.log_2();
-        let num_variables_bound =
-            shared_eq_address.num_variables_bound + shared_eq_cycle.num_variables_bound;
-        if num_variables_bound <= round {
-            if round < log_K {
-                shared_eq_address
-                    .B
-                    .bind_parallel(r, BindingOrder::HighToLow);
-
-                shared_eq_address.F.update(r);
-                shared_eq_address.num_variables_bound += 1;
-            } else {
+        if round < log_K {
+            if let Ok(mut shared_eq_address) = self.eq_address_state.try_write() {
+                if shared_eq_address.num_variables_bound <= round {
+                    shared_eq_address
+                        .B
+                        .bind_parallel(r, BindingOrder::HighToLow);
+                    shared_eq_address.F.update(r);
+                    shared_eq_address.num_variables_bound += 1;
+                }
+            }
+        } else if let Ok(mut shared_eq_cycle) = self.eq_cycle_state.try_write() {
+            if shared_eq_cycle.num_variables_bound + log_K <= round {
                 shared_eq_cycle.D.bind(r.into());
                 shared_eq_cycle.num_variables_bound += 1;
             }

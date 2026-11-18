@@ -44,6 +44,14 @@ pub trait OpSpec: fmt::Display {
     /// dim-uniform, so the same function serves padded and unpadded graphs.
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError>;
 
+    /// Whether the kernel reads a generated table ([`Self::warm_tables`]).
+    fn reads_tables(&self) -> bool {
+        false
+    }
+
+    /// Generate the tables the kernel reads, so that an execution does not wait for them.
+    fn warm_tables(&self, _ctx: &EvalCtx<'_>) {}
+
     /// Validate the op's static parameters (axis ranges, equation form, …).
     /// Runs once at graph validation.
     fn validate(&self) -> Result<(), String> {

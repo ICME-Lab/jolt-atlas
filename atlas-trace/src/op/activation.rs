@@ -52,6 +52,14 @@ impl OpSpec for SmoothRelu {
         Ok(Eval::plain(inputs[0].map(|x| x.max(0) + table.lookup(x))))
     }
 
+    fn reads_tables(&self) -> bool {
+        true
+    }
+
+    fn warm_tables(&self, ctx: &EvalCtx<'_>) {
+        ctx.tables.get(self.form.table(), ctx.scale, ctx.version);
+    }
+
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
         same_dims(inputs, Some(1))
     }
@@ -81,6 +89,14 @@ macro_rules! impl_activation {
                     output: inputs[0].map(|x| table.lookup(x)),
                     aux: trig_period_advice(table.index, inputs[0]),
                 })
+            }
+
+            fn reads_tables(&self) -> bool {
+                true
+            }
+
+            fn warm_tables(&self, ctx: &EvalCtx<'_>) {
+                ctx.tables.get($kind, ctx.scale, ctx.version);
             }
 
             fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {

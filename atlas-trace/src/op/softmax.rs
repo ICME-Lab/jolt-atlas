@@ -127,6 +127,16 @@ impl OpSpec for SoftmaxLastAxis {
         })
     }
 
+    fn reads_tables(&self) -> bool {
+        true
+    }
+
+    fn warm_tables(&self, ctx: &EvalCtx<'_>) {
+        if ctx.version != SemVersion::V1 {
+            ctx.tables.softmax_tables(ctx.scale, ctx.version);
+        }
+    }
+
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
         let dims = same_dims(inputs, Some(1))?;
         if dims.is_empty() {

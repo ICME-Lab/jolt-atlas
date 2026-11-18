@@ -1,7 +1,7 @@
 //! The executor: run a compiled [`Model`] over quantized inputs and produce
 //! a [`Trace`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     error::ExecError,
@@ -23,6 +23,27 @@ impl Model {
         let mut padded_inputs = self.pad_inputs(inputs)?;
         let ctx = self.eval_ctx();
 
+        // The tables the ops read are generated beside the execution, one thread a table:
+        // an op that reaches its table first waits for it.
+        std::thread::scope(|scope| {
+            let mut warmed = BTreeSet::new();
+            for node in &graph.nodes {
+                if node.op.spec().reads_tables() && warmed.insert(node.op.to_string()) {
+                    let ctx = &ctx;
+                    scope.spawn(move || node.op.spec().warm_tables(ctx));
+                }
+            }
+            self.run(&mut padded_inputs, &ctx)
+        })
+    }
+
+    /// Execute every node in order.
+    fn run(
+        &self,
+        padded_inputs: &mut BTreeMap<NodeId, Tensor<i32>>,
+        ctx: &EvalCtx<'_>,
+    ) -> Result<Trace, ExecError> {
+        let graph = self.graph();
         let mut outputs: Vec<Tensor<i32>> = Vec::with_capacity(graph.nodes.len());
         let mut aux = BTreeMap::new();
         for (i, node) in graph.nodes.iter().enumerate() {
@@ -32,7 +53,7 @@ impl Model {
                     .remove(&id)
                     .expect("validated against graph.inputs")
             } else {
-                let eval = eval_node(id, node, &outputs, &ctx)?;
+                let eval = eval_node(id, node, &outputs, ctx)?;
                 if let Some(a) = eval.aux {
                     aux.insert(id, a);
                 }

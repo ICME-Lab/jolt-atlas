@@ -24,6 +24,7 @@ use atlas_lookup_tables::{JoltLookupTable, PrefixSuffixDecompositionTrait};
 use atlas_transcript::Transcript;
 use common::{parallel::par_enabled, VirtualPoly};
 use rayon::prelude::*;
+use std::collections::BTreeMap;
 
 #[cfg(test)]
 mod lookup_table_tests;
@@ -86,14 +87,50 @@ impl<F: JoltField> CycleWeight<F> {
             Self::Eq(r) => EqPolynomial::evals(&r.r),
             Self::Packed { log_T, segments } => {
                 let mut w = unsafe_allocate_zero_vec(1 << log_T);
+                // The members of one segment, by segment in cycle order.
+                let mut groups: BTreeMap<(usize, usize), Vec<&PackedSegment<F>>> = BTreeMap::new();
                 for seg in segments {
-                    let e: Vec<F> = EqPolynomial::evals(&seg.r);
                     let offset = seg.prefix << seg.r.len();
-                    w[offset..offset + e.len()]
+                    groups
+                        .entry((offset, 1 << seg.r.len()))
+                        .or_default()
+                        .push(seg);
+                }
+                let add = |slice: &mut [F], seg: &PackedSegment<F>| {
+                    let e: Vec<F> = EqPolynomial::evals_with_scaling(&seg.r, Some(seg.gamma));
+                    slice
                         .par_iter_mut()
                         .zip(e.par_iter())
                         .with_min_len(par_enabled())
-                        .for_each(|(x, y)| *x += seg.gamma * *y);
+                        .for_each(|(x, y)| *x += *y);
+                };
+                let disjoint = groups
+                    .keys()
+                    .zip(groups.keys().skip(1))
+                    .all(|(&(offset, len), &(next, _))| offset + len <= next);
+                if disjoint {
+                    // Segments that do not overlap are filled side by side.
+                    let mut rest = w.as_mut_slice();
+                    let mut cursor = 0;
+                    let mut slices = Vec::with_capacity(groups.len());
+                    for (&(offset, len), members) in &groups {
+                        let (_, tail) = rest.split_at_mut(offset - cursor);
+                        let (slice, tail) = tail.split_at_mut(len);
+                        slices.push((slice, members));
+                        rest = tail;
+                        cursor = offset + len;
+                    }
+                    slices.into_par_iter().for_each(|(slice, members)| {
+                        for seg in members {
+                            add(slice, seg);
+                        }
+                    });
+                } else {
+                    for (&(offset, len), members) in &groups {
+                        for seg in members {
+                            add(&mut w[offset..offset + len], seg);
+                        }
+                    }
                 }
                 w
             }

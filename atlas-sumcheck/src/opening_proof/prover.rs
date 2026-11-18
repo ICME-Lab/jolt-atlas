@@ -47,6 +47,9 @@ where
     pub openings: Openings<F>,
     /// Mapping from reduced source opening keys to evaluation-reduction line restriction `h`.
     pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
+    /// The nodes whose entry in `reduced_evaluations` is a claim at a point of the node's
+    /// own, not a reduction of its consumers' claims: a consumer may append its claim later.
+    pub own_points: BTreeSet<usize>,
     dense_polynomial_map: HashMap<CommittedPoly, Arc<RwLock<SharedDensePolynomial<F>>>>,
     eq_cycle_map: HashMap<Vec<F>, Arc<RwLock<EqCycleState<F>>>>,
     #[cfg(any(test, feature = "test-feature"))]
@@ -157,6 +160,7 @@ where
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
             reduced_evaluations: BTreeMap::new(),
+            own_points: BTreeSet::new(),
             eq_cycle_map: HashMap::new(),
             dense_polynomial_map: HashMap::new(),
             #[cfg(any(test, feature = "test-feature"))]
@@ -389,7 +393,8 @@ where
             .expect("expected virtual polynomial");
         if let VirtualPoly::NodeOutput(node_idx) = virtual_poly {
             debug_assert!(
-                !self.reduced_evaluations.contains_key(&node_idx),
+                !self.reduced_evaluations.contains_key(&node_idx)
+                    || self.own_points.contains(&node_idx),
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }

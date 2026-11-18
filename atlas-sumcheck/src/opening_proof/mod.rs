@@ -14,7 +14,7 @@ use common::{CommittedPoly, VirtualPoly};
 use rayon::prelude::*;
 use std::io::{Read, Write};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub use atlas_algebra::poly::point::{Endianness, OpeningPoint, BIG_ENDIAN, LITTLE_ENDIAN};
 
@@ -80,6 +80,9 @@ where
     openings: Openings<F>,
     /// Mapping for nodes reduced opening points
     pub reduced_evaluations: BTreeMap<usize, ReducedInstance<F>>,
+    /// The nodes whose entry in `reduced_evaluations` is a claim at a point of the node's
+    /// own, not a reduction of its consumers' claims: a consumer may append its claim later.
+    pub own_points: BTreeSet<usize>,
     /// In testing, the Jolt verifier may be provided the prover's openings so that we
     /// can detect any places where the openings don't match up.
     #[cfg(any(test, feature = "test-feature"))]
@@ -216,6 +219,7 @@ where
             sumchecks: BTreeMap::new(),
             openings: BTreeMap::new(),
             reduced_evaluations: BTreeMap::new(),
+            own_points: BTreeSet::new(),
             #[cfg(any(test, feature = "test-feature"))]
             prover_opening_accumulator: None,
         }
@@ -339,7 +343,8 @@ where
             .ok_or_else(|| missing_claim(opening_id))?;
         if let VirtualPoly::NodeOutput(node_idx) = virtual_poly {
             debug_assert!(
-                !self.reduced_evaluations.contains_key(&node_idx),
+                !self.reduced_evaluations.contains_key(&node_idx)
+                    || self.own_points.contains(&node_idx),
                 "cannot append opening for node {node_idx} after evaluation reduction"
             );
         }

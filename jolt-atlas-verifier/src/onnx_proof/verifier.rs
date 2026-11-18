@@ -92,6 +92,7 @@ impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
                     self.accumulator
                         .reduced_evaluations
                         .insert(*node, ReducedInstance { r: point, claim });
+                    self.accumulator.own_points.insert(*node);
                 }
                 Step::Open(open) => open.verify(&mut self.accumulator, &mut self.transcript)?,
                 Step::Setup(id) => {

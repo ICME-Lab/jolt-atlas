@@ -48,7 +48,107 @@ use atlas_sumcheck::{
 use atlas_trace::Model;
 use atlas_transcript::VerifyingTranscript;
 use common::{CommittedPoly, VirtualPoly};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
+
+/// The steps of one node's plan that are not yet in the schedule.
+struct NodePlan {
+    node: usize,
+    /// Whether the node takes its claim at a point of its own ([`Step::Point`]) and so waits
+    /// for no consumer.
+    digit_backed: bool,
+    steps: VecDeque<Step>,
+}
+
+/// The most rows (`Σ 2^rounds` over the members) one batched sumcheck of a wave holds: the
+/// members' witnesses are live together, so a wave with more is proven as several sumchecks.
+/// A relation whose size the schedule does not know is a sumcheck of its own.
+const WAVE_BUDGET: usize = 1 << 24;
+
+/// The nodes' plans as one step list, in waves.
+///
+/// A node is *complete* when every step of its plan is in the list, and *ready* when it is
+/// digit-backed or every consumer of its output is complete: the claims its plan reads then
+/// exist. Each wave takes the nodes ready at its start, in descending order, writes each
+/// one's steps up to its next sumcheck, and then writes those sumchecks as one batched
+/// sumcheck (several, over [`WAVE_BUDGET`]). The nodes of a wave do not read each other's
+/// claims, so their sumchecks share challenges. `Err` if no node is ready while one is
+/// incomplete.
+fn waves<F: JoltField>(
+    mut plans: Vec<NodePlan>,
+    consumers: &[Vec<usize>],
+    relations: &[OpRelation<F>],
+) -> Result<Vec<Step>, ProofVerifyError> {
+    let rows = |id: &RelId| match relations.get(id.0) {
+        Some(OpRelation::Op(relation)) => 1usize << relation.rounds.min(usize::BITS as usize - 1),
+        _ => WAVE_BUDGET,
+    };
+    let mut complete = vec![false; consumers.len()];
+    let mut steps = Vec::new();
+    while plans.iter().any(|plan| !plan.steps.is_empty()) || complete.iter().any(|done| !done) {
+        let is_ready = |plan: &NodePlan| {
+            let waits_for_nobody = plan.digit_backed
+                || consumers.get(plan.node).is_none_or(|readers| {
+                    readers
+                        .iter()
+                        .all(|&reader| complete.get(reader).copied().unwrap_or(true))
+                });
+            waits_for_nobody && !complete.get(plan.node).copied().unwrap_or(true)
+        };
+        let ready: Vec<usize> = (0..plans.len())
+            .filter(|&at| plans.get(at).is_some_and(is_ready))
+            .collect();
+        if ready.is_empty() {
+            return Err(ProofVerifyError::Malformed(
+                "schedule: a node waits for a consumer that waits for it".to_string(),
+            ));
+        }
+        let mut members: Vec<RelId> = Vec::new();
+        for &at in &ready {
+            let Some(plan) = plans.get_mut(at) else {
+                continue;
+            };
+            while let Some(step) = plan.steps.pop_front() {
+                match step {
+                    Step::Sumcheck { members: own, .. } => {
+                        members.extend(own);
+                        break;
+                    }
+                    other => steps.push(other),
+                }
+            }
+        }
+        let mut batch: Vec<RelId> = Vec::new();
+        let mut filled = 0usize;
+        for id in members {
+            let size = rows(&id);
+            if !batch.is_empty() && filled.saturating_add(size) > WAVE_BUDGET {
+                steps.push(Step::Sumcheck {
+                    members: std::mem::take(&mut batch),
+                    batched: true,
+                });
+                filled = 0;
+            }
+            filled = filled.saturating_add(size);
+            batch.push(id);
+        }
+        if !batch.is_empty() {
+            steps.push(Step::Sumcheck {
+                members: batch,
+                batched: true,
+            });
+        }
+        for &at in &ready {
+            if let Some(plan) = plans.get(at) {
+                if plan.steps.is_empty() {
+                    if let Some(done) = complete.get_mut(plan.node) {
+                        *done = true;
+                    }
+                }
+            }
+        }
+    }
+    Ok(steps)
+}
 
 /// The name of a relation in a schedule: its index in the schedule's relation table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -154,9 +254,12 @@ impl<F: JoltField> Schedule<F> {
     /// The schedule of `model`. `Err` if a node does not have the shape its operator proves.
     pub fn compile(model: &Model) -> Result<Self, ProofVerifyError> {
         let mut builder = ScheduleBuilder::new();
-        for node in model.views().iter().rev() {
+        let views = model.views();
+        let mut plans: Vec<NodePlan> = Vec::with_capacity(views.len());
+        for node in views.iter().rev() {
             builder.enter_node(node.idx);
-            if is_digit_backed(model, node) {
+            let digit_backed = is_digit_backed(model, node);
+            if digit_backed {
                 builder.fresh_point(node.pow2_padded_num_output_elements().log_2());
             }
             crate::dispatch_operator!(node, |inner| OpPlan::plan(
@@ -165,7 +268,22 @@ impl<F: JoltField> Schedule<F> {
                 model,
                 &mut builder
             ))?;
+            plans.push(NodePlan {
+                node: node.idx,
+                digit_backed,
+                steps: std::mem::take(&mut builder.steps).into(),
+            });
         }
+        // Who reads each node's output.
+        let mut consumers: Vec<Vec<usize>> = vec![Vec::new(); views.len()];
+        for node in views.iter() {
+            for &operand in &node.inputs {
+                if let Some(readers) = consumers.get_mut(operand) {
+                    readers.push(node.idx);
+                }
+            }
+        }
+        builder.steps = waves(plans, &consumers, &builder.relations)?;
         builder.finish(range_buckets(model)?)
     }
 

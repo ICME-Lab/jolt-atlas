@@ -41,7 +41,7 @@ fn assert_schedule_pin(name: &str, pin: &str) {
 fn schedule_pin_op_gauntlet() {
     assert_schedule_pin(
         "op_gauntlet",
-        "17ef81ef128938c80dbb2c75e3dd6aeaef3f427d0457e2fb523e1054c70dc824",
+        "ec0c675df29c6fea4fa3c3bbc34e1f3c9946e0e1f37a4b5f97b183150f1fd1c3",
     );
 }
 
@@ -49,7 +49,7 @@ fn schedule_pin_op_gauntlet() {
 fn schedule_pin_gpt2_tiny() {
     assert_schedule_pin(
         "gpt2-tiny",
-        "589f3e785b2b18ba61d18597106f76697c7a4108753e16b790207b6c041724e6",
+        "2705bff414a86885bd1c2fed3c9fe013c98e469154423c8f0c653ac71f74adbc",
     );
 }
 
@@ -57,7 +57,7 @@ fn schedule_pin_gpt2_tiny() {
 fn schedule_pin_qwen2_tiny() {
     assert_schedule_pin(
         "qwen2-tiny",
-        "82641ac0d8d74257755594f3e046d94ff7a98289dee96e16e2cfbfb6e4452c72",
+        "2f80002a082d5c2f6e964924065367c590200614b42bebd0b903ce0bb5e874b6",
     );
 }
 
@@ -65,7 +65,7 @@ fn schedule_pin_qwen2_tiny() {
 fn schedule_pin_bge_tiny() {
     assert_schedule_pin(
         "bge-tiny",
-        "2f09db4b9c45f3b1b29a85cf46adf57e77260a92f8a7163f84005a91f2e7aecb",
+        "0940eef8d92f069095a99e022128ef5584dd2a15449872e2f33006fd6c40ecfb",
     );
 }
 

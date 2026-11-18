@@ -178,6 +178,7 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
                     .accumulator
                     .reduced_evaluations
                     .insert(*node, ReducedInstance { r: point, claim });
+                prover.accumulator.own_points.insert(*node);
             }
             Step::Open(open) => prove_open(open, prover),
             Step::Setup(id) => {

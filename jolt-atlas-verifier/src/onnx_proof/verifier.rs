@@ -79,15 +79,25 @@ impl<F: JoltField, T: VerifyingTranscript> Verifier<'_, F, T> {
     pub fn run(&mut self, schedule: &Schedule<F>) -> Result<(), ProofVerifyError> {
         let mut set_up: Vec<Option<Verifiers<F, T>>> =
             schedule.relations().iter().map(|_| None).collect();
+        // The points drawn whose claims are not yet read, by node.
+        let mut drawn: BTreeMap<usize, Vec<F>> = BTreeMap::new();
         for step in schedule.steps() {
             match step {
                 Step::Reduce { node } => NodeEvalReduction::verify(self, *node)
                     .inspect_err(|e| tracing::debug!(node, ?e, "evaluation reduction failed"))?,
-                Step::Point { node, vars } => {
+                Step::Draw { node, vars } => {
                     let point: Vec<F> = self
                         .transcript
                         .challenge_vector_optimized::<F>(*vars)
                         .into_opening();
+                    drawn.insert(*node, point);
+                }
+                Step::Point { node, .. } => {
+                    let point = drawn.remove(node).ok_or_else(|| {
+                        ProofVerifyError::Malformed(format!(
+                            "schedule: node {node}'s claim is read at a point not drawn"
+                        ))
+                    })?;
                     let claim = self.transcript.read_scalar()?;
                     self.accumulator
                         .reduced_evaluations

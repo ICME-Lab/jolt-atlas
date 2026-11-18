@@ -48,7 +48,7 @@ use atlas_sumcheck::{
 use atlas_trace::Model;
 use atlas_transcript::VerifyingTranscript;
 use common::{CommittedPoly, VirtualPoly};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// The steps of one node's plan that are not yet in the schedule.
 struct NodePlan {
@@ -101,6 +101,22 @@ fn waves<F: JoltField>(
             return Err(ProofVerifyError::Malformed(
                 "schedule: a node waits for a consumer that waits for it".to_string(),
             ));
+        }
+        // The points of the wave's digit-backed nodes, before any step that reads a claim.
+        for &at in &ready {
+            let Some(plan) = plans.get(at) else {
+                continue;
+            };
+            for step in &plan.steps {
+                match step {
+                    Step::Sumcheck { .. } => break,
+                    Step::Point { node, vars } => steps.push(Step::Draw {
+                        node: *node,
+                        vars: *vars,
+                    }),
+                    _ => {}
+                }
+            }
         }
         let mut members: Vec<RelId> = Vec::new();
         for &at in &ready {
@@ -162,9 +178,20 @@ pub enum Step {
         /// The node whose output claims are reduced.
         node: usize,
     },
-    /// Take the claim of a digit-backed node's output at a point drawn here
-    /// ([`is_digit_backed`]): the node's relation runs on that claim, and the bucket holding
-    /// the output's digits checks it with every claim the node's consumers appended.
+    /// Draw the point a digit-backed node's output is opened at ([`is_digit_backed`]). A
+    /// wave draws the points of all its digit-backed nodes before any of their claims is
+    /// read: the outputs are committed, as their buckets' digits, before any point is drawn,
+    /// so a claim at one point is fixed whatever the other points are, and the prover may
+    /// compute the wave's claims together.
+    Draw {
+        /// The node whose output is opened.
+        node: usize,
+        /// The number of coordinates of the point: log₂ of the node's padded output size.
+        vars: usize,
+    },
+    /// Take the claim of a digit-backed node's output at the point its [`Step::Draw`] drew:
+    /// the node's relation runs on that claim, and the bucket holding the output's digits
+    /// checks it with every claim the node's consumers appended.
     Point {
         /// The node whose output is opened.
         node: usize,
@@ -222,6 +249,7 @@ impl<F: JoltField> std::fmt::Display for Schedule<F> {
         for step in &self.steps {
             match step {
                 Step::Reduce { node } => writeln!(f, "n{node} Reduce")?,
+                Step::Draw { node, .. } => writeln!(f, "n{node} Draw")?,
                 Step::Point { node, .. } => writeln!(f, "n{node} Point")?,
                 Step::Open(open) => writeln!(f, "n{} Open [{}]", open.node(), open.name())?,
                 Step::Setup(id) => writeln!(f, "{} Setup [{}]", at(node(id)), name(id))?,
@@ -363,9 +391,10 @@ impl<F: JoltField> Schedule<F> {
 
     /// Every relation is the target of at most one `Setup`, and a member of exactly one
     /// `Sumcheck` or the target of exactly one `Tie`; a `Setup` precedes the `Sumcheck` that
-    /// holds its relation; no `Sumcheck` is empty; and no step appends a claim on a node's
-    /// output after that node's `Reduce` ([`OpRelation::appended_outputs`]), whatever order
-    /// the steps were written in.
+    /// holds its relation; no `Sumcheck` is empty; a `Point` reads the claim of a node whose
+    /// point one earlier `Draw` drew, with the same variables, and every `Draw` has its
+    /// `Point`; and no step appends a claim on a node's output after that node's `Reduce`
+    /// ([`OpRelation::appended_outputs`]), whatever order the steps were written in.
     fn validate(&self) -> Result<(), ProofVerifyError> {
         let malformed =
             |what: String| Err(ProofVerifyError::Malformed(format!("schedule: {what}")));
@@ -383,6 +412,8 @@ impl<F: JoltField> Schedule<F> {
         // The nodes whose output claims have been reduced to one: no claim may be appended on
         // one of them afterwards.
         let mut reduced = BTreeSet::new();
+        // The points drawn whose claims are not yet read, by node, with their variables.
+        let mut drawn: BTreeMap<usize, usize> = BTreeMap::new();
         let appended_late = |reduced: &BTreeSet<usize>, id: RelId, at_setup: bool| {
             self.relations.get(id.0).and_then(|relation| {
                 relation
@@ -401,7 +432,19 @@ impl<F: JoltField> Schedule<F> {
                 Step::Reduce { node } => {
                     reduced.insert(*node);
                 }
-                Step::Point { .. } | Step::Open(_) => {}
+                Step::Draw { node, vars } => {
+                    if drawn.insert(*node, *vars).is_some() {
+                        return malformed(format!("node {node}'s point is drawn twice"));
+                    }
+                }
+                Step::Point { node, vars } => {
+                    if drawn.remove(node) != Some(*vars) {
+                        return malformed(format!(
+                            "node {node}'s claim is read at a point not drawn for it"
+                        ));
+                    }
+                }
+                Step::Open(_) => {}
                 Step::Setup(id) => {
                     if let Some(node) = appended_late(&reduced, *id, true) {
                         return late(node);
@@ -449,6 +492,11 @@ impl<F: JoltField> Schedule<F> {
                     }
                 }
             }
+        }
+        if let Some((node, _)) = drawn.first_key_value() {
+            return malformed(format!(
+                "node {node}'s point is drawn and its claim never read"
+            ));
         }
         match verified.iter().position(|verified| !verified) {
             Some(id) => malformed(format!("relation {id} is never verified")),

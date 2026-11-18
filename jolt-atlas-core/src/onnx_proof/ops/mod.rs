@@ -37,6 +37,7 @@
 
 use crate::onnx_proof::ops::eval_reduction::NodeEvalReductionProve;
 pub use jolt_atlas_verifier::onnx_proof::ops::*;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The clamped activations Erf, Sigmoid and Tanh.
 pub mod activation_clamped;
@@ -144,11 +145,17 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
     // The span of the node whose steps are running: a node's turn starts with its reduction
     // or with a sumcheck of its own, and ends at a sumcheck over several nodes' relations.
     let mut turn: Option<(usize, tracing::span::EnteredSpan)> = None;
-    for step in schedule.steps() {
+    // The points drawn whose claims are not yet sent, and the claims computed at them: each
+    // node's output, and its rescale remainder where the wave opens one.
+    let mut drawn: BTreeMap<usize, Vec<F>> = BTreeMap::new();
+    let mut output_claims: BTreeMap<usize, F> = BTreeMap::new();
+    let mut remainder_claims: BTreeMap<usize, F> = BTreeMap::new();
+    let steps = schedule.steps();
+    for (at, step) in steps.iter().enumerate() {
         let step_node = match step {
             Step::Reduce { node } | Step::Point { node, .. } => Some(Some(*node)),
             Step::Sumcheck { members, .. } => Some(schedule.sumcheck_node(members)),
-            Step::Open(_) | Step::Setup(_) | Step::Tie(_) => None,
+            Step::Draw { .. } | Step::Open(_) | Step::Setup(_) | Step::Tie(_) => None,
         };
         if let Some(node) = step_node.filter(|node| turn.as_ref().map(|turn| turn.0) != *node) {
             drop(turn.take());
@@ -165,14 +172,49 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
                 let node = prover.preprocessing.model().view(*node);
                 NodeEvalReduction::prove(prover, &node);
             }
-            Step::Point { node, vars } => {
-                let view = prover.preprocessing.model().view(*node);
+            Step::Draw { node, vars } => {
                 let point: Vec<F> = prover
                     .transcript
                     .challenge_vector_optimized::<F>(*vars)
                     .into_opening();
-                let output = TraceView::layer_data(&prover.trace, &view).output;
-                let claim: F = output.padded_pow2().data().evaluate_mle(&point);
+                drawn.insert(*node, point);
+                // The last point of a wave is drawn: every claim at the wave's points is
+                // computed here, side by side, and sent at its own step.
+                if !matches!(steps.get(at + 1), Some(Step::Draw { .. })) {
+                    let _span = tracing::info_span!("wave_claims").entered();
+                    let (model, trace) = (prover.preprocessing.model(), &prover.trace);
+                    let remainders: BTreeSet<usize> = steps[at + 1..]
+                        .iter()
+                        .take_while(|step| !matches!(step, Step::Sumcheck { batched: true, .. }))
+                        .filter_map(|step| match step {
+                            Step::Open(OpOpen::RescaleRemainder(node)) => Some(node.idx),
+                            _ => None,
+                        })
+                        .collect();
+                    let claims: Vec<(usize, F, Option<F>)> = drawn
+                        .par_iter()
+                        .map(|(&node, point)| {
+                            let view = model.view(node);
+                            let output = TraceView::layer_data(trace, &view).output;
+                            let claim: F = output.evaluate_mle(point);
+                            let remainder = remainders
+                                .contains(&node)
+                                .then(|| rebase_remainder(&view, trace).evaluate_mle(point));
+                            (node, claim, remainder)
+                        })
+                        .collect();
+                    for (node, claim, remainder) in claims {
+                        output_claims.insert(node, claim);
+                        if let Some(remainder) = remainder {
+                            remainder_claims.insert(node, remainder);
+                        }
+                    }
+                }
+            }
+            Step::Point { node, .. } => {
+                let expect = "a point step follows its draw";
+                let point = drawn.remove(node).expect(expect);
+                let claim = output_claims.remove(node).expect(expect);
                 prover.transcript.send_scalar(&claim);
                 prover
                     .accumulator
@@ -180,7 +222,13 @@ pub fn prove_schedule<F: JoltField, T: ProvingTranscript>(
                     .insert(*node, ReducedInstance { r: point, claim });
                 prover.accumulator.own_points.insert(*node);
             }
-            Step::Open(open) => prove_open(open, prover),
+            Step::Open(open) => {
+                let computed = match open {
+                    OpOpen::RescaleRemainder(node) => remainder_claims.remove(&node.idx),
+                    _ => None,
+                };
+                prove_open(open, prover, computed)
+            }
             Step::Setup(id) => {
                 set_up[id.0] = Some(prepare(relation(id).clone(), prover));
             }
@@ -524,15 +572,20 @@ pub fn relation_witnesses<F: JoltField, T: ProvingTranscript>(
     }
 }
 
-/// Append an open step's claims from the trace.
-fn prove_open<F: JoltField, T: ProvingTranscript>(open: &OpOpen, prover: &mut Prover<F, T>) {
+/// Append an open step's claims from the trace. `computed` is a rescale remainder's claim
+/// where its wave computed it with its point.
+fn prove_open<F: JoltField, T: ProvingTranscript>(
+    open: &OpOpen,
+    prover: &mut Prover<F, T>,
+    computed: Option<F>,
+) {
     let expect = "the prover holds every claim it reads";
     match open {
         OpOpen::RescaleRemainder(node) => {
-            let remainder = rebase_remainder(node, &prover.trace);
             let accessor = AccOpeningAccessor::new(&mut prover.accumulator, node);
             let r0 = accessor.get_reduced_opening().expect(expect).0;
-            let eval = remainder.evaluate_mle(&r0.r);
+            let eval = computed
+                .unwrap_or_else(|| rebase_remainder(node, &prover.trace).evaluate_mle(&r0.r));
             accessor
                 .into_provider(&mut prover.transcript, r0)
                 .append_advice(VirtualPoly::RescaleRemainder, eval);

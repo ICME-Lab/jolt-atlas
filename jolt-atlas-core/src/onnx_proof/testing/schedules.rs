@@ -175,9 +175,14 @@ fn digit_backed_nodes_take_a_point_and_no_reduction() {
             .collect();
         assert!(!digit_backed.is_empty(), "{name}: a digit-backed node");
         let mut pointed = BTreeSet::new();
+        let mut drawn = BTreeSet::new();
         for step in schedule.steps() {
             match step {
-                Step::Point { node, .. } => assert!(pointed.insert(*node), "{name}: n{node}"),
+                Step::Draw { node, .. } => assert!(drawn.insert(*node), "{name}: n{node}"),
+                Step::Point { node, .. } => {
+                    assert!(drawn.contains(node), "{name}: n{node} has no point drawn");
+                    assert!(pointed.insert(*node), "{name}: n{node}")
+                }
                 Step::Reduce { node } => {
                     assert!(!digit_backed.contains(node), "{name}: n{node} is reduced")
                 }
@@ -210,4 +215,55 @@ fn a_reshaped_model_output_has_no_output_claim() {
         .inputs
         .iter()
         .all(|&input| !is_public_output(&model, input)));
+}
+
+/// A wave draws the points of its digit-backed nodes before it reads any of their claims, and
+/// a schedule that reads a claim at a point never drawn, draws one twice or leaves one unread
+/// is not a schedule.
+#[test]
+fn a_wave_draws_its_points_before_their_claims() {
+    let model = zoo("qwen2-tiny", 16).model;
+    let schedule = Schedule::<Fp128>::compile(&model).expect("the model has a schedule");
+    let steps = schedule.steps();
+    // Between two batched sumchecks, no draw follows a point.
+    let mut point_seen = false;
+    let mut draws = 0;
+    for step in steps {
+        match step {
+            Step::Draw { .. } => {
+                assert!(!point_seen, "a point is drawn after a claim of its wave");
+                draws += 1;
+            }
+            Step::Point { .. } => point_seen = true,
+            Step::Sumcheck { batched: true, .. } => point_seen = false,
+            _ => {}
+        }
+    }
+    assert!(draws > 1);
+
+    let first_draw = steps
+        .iter()
+        .position(|step| matches!(step, Step::Draw { .. }))
+        .expect("a draw");
+    let without = |skip: usize| -> Vec<Step> {
+        let mut steps = steps.to_vec();
+        steps.remove(skip);
+        steps
+    };
+    let twice = {
+        let mut steps = steps.to_vec();
+        steps.insert(first_draw, steps[first_draw].clone());
+        steps
+    };
+    let first_point = steps
+        .iter()
+        .position(|step| matches!(step, Step::Point { .. }))
+        .expect("a point");
+    for (what, steps) in [
+        ("a claim at a point not drawn", without(first_draw)),
+        ("a point drawn twice", twice),
+        ("a point drawn and never read", without(first_point)),
+    ] {
+        assert!(schedule.with_steps(steps).is_err(), "{what} is accepted");
+    }
 }

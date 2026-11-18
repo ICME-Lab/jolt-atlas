@@ -192,10 +192,26 @@ fn permuted<'a>(tensor: &'a Tensor<i32>, order: &[usize]) -> Cow<'a, [i32]> {
     Cow::Owned(out)
 }
 
+/// Row `j` of `values` (rows of `run` entries), from column `start` for `width` columns.
+fn columns(values: &[i32], run: usize, start: usize, width: usize, j: usize) -> &[i32] {
+    &values[j * run + start..j * run + start + width]
+}
+
+/// The bytes of output a column tile of [`scaled_rows_acc_i64`] holds: a quarter of a megabyte,
+/// inside a second-level cache.
+const TILE_BYTES: usize = 1 << 18;
+/// The fewest columns in a tile, so that a run of the second operand is worth a loop.
+const MIN_TILE: usize = 64;
+
 /// The contraction when the second operand is laid out summed letters first and the output is
 /// the first operand's kept letters followed by the second's (`mk,kn->mn`): an output row is
 /// the sum of the second operand's rows scaled by the first operand's entries, read in place.
 /// `None` if the equation is not of that form.
+///
+/// The output's columns are taken in tiles. Within a tile each row of the second operand is
+/// read once and added to every output row, so the second operand is read from memory once
+/// whatever the number of output rows, and the tile's outputs stay in cache. An output is
+/// the same `i64` sum of `i32` products in either loop order.
 fn scaled_rows_acc_i64(
     eq: &EinsumEq,
     inputs: &[&Tensor<i32>],
@@ -215,31 +231,87 @@ fn scaled_rows_acc_i64(
     if kept_b.is_empty() || !second_in_place || !output_is_rows {
         return None;
     }
+    // The first operand with its summed letters first: the scales of one row of the second
+    // operand, one per output row, are a contiguous run.
     let position = |c: &u8| eq.inputs[0].iter().position(|l| l == c).expect("carried");
-    let order: Vec<usize> = kept_a.iter().chain(sum_letters).map(position).collect();
+    let order: Vec<usize> = sum_letters.iter().chain(&kept_a).map(position).collect();
     let a = permuted(inputs[0], &order);
     let b = inputs[1].data();
     let run = b.len() / sum_total;
-    let fill = |(row, out): (usize, &mut [i64])| {
-        let scales = &a[row * sum_total..(row + 1) * sum_total];
-        for (&scale, values) in scales.iter().zip(b.chunks_exact(run)) {
-            if scale == 0 {
-                continue;
-            }
-            let scale = scale as i64;
-            for (o, &value) in out.iter_mut().zip(values) {
-                *o += scale * value as i64;
+    let rows = a.len() / sum_total;
+    let mut out = vec![0i64; rows * run];
+    if rows == 0 || run == 0 {
+        return Some(out);
+    }
+
+    #[cfg(feature = "rayon")]
+    let threads = rayon::current_num_threads();
+    #[cfg(not(feature = "rayon"))]
+    let threads = 1;
+    let cached = (TILE_BYTES / (rows * size_of::<i64>())).max(MIN_TILE);
+    let tile = run.div_ceil(4 * threads).clamp(MIN_TILE, cached);
+
+    // `tiles[t][row]`: the columns of tile `t` in output row `row`.
+    let mut tiles: Vec<Vec<&mut [i64]>> = (0..run.div_ceil(tile))
+        .map(|_| Vec::with_capacity(rows))
+        .collect();
+    for row in out.chunks_mut(run) {
+        for (columns, tile) in row.chunks_mut(tile).zip(&mut tiles) {
+            tile.push(columns);
+        }
+    }
+    // Four rows of the second operand at a time: an output run is read and written once for
+    // the four, and a group whose scales are all zero (padding, mostly) is skipped.
+    let fill = |(index, mut outputs): (usize, Vec<&mut [i64]>)| {
+        let start = index * tile;
+        let width = outputs[0].len();
+        for (values, scales) in b.chunks(4 * run).zip(a.chunks(4 * rows)) {
+            if scales.len() == 4 * rows {
+                let (v0, v1) = (
+                    columns(values, run, start, width, 0),
+                    columns(values, run, start, width, 1),
+                );
+                let (v2, v3) = (
+                    columns(values, run, start, width, 2),
+                    columns(values, run, start, width, 3),
+                );
+                for (row, output) in outputs.iter_mut().enumerate() {
+                    let s = [0, 1, 2, 3].map(|j| scales[j * rows + row]);
+                    if s == [0; 4] {
+                        continue;
+                    }
+                    for ((((o, &x0), &x1), &x2), &x3) in
+                        output.iter_mut().zip(v0).zip(v1).zip(v2).zip(v3)
+                    {
+                        *o += s[0] as i64 * x0 as i64
+                            + s[1] as i64 * x1 as i64
+                            + s[2] as i64 * x2 as i64
+                            + s[3] as i64 * x3 as i64;
+                    }
+                }
+            } else {
+                for (j, scales) in scales.chunks_exact(rows).enumerate() {
+                    let values = columns(values, run, start, width, j);
+                    for (output, &scale) in outputs.iter_mut().zip(scales) {
+                        if scale == 0 {
+                            continue;
+                        }
+                        let scale = scale as i64;
+                        for (o, &value) in output.iter_mut().zip(values) {
+                            *o += scale * value as i64;
+                        }
+                    }
+                }
             }
         }
     };
-    let mut out = vec![0i64; a.len() / sum_total * run];
     #[cfg(feature = "rayon")]
     {
         use rayon::prelude::*;
-        out.par_chunks_mut(run).enumerate().for_each(fill);
+        tiles.into_par_iter().enumerate().for_each(fill);
     }
     #[cfg(not(feature = "rayon"))]
-    out.chunks_mut(run).enumerate().for_each(fill);
+    tiles.into_iter().enumerate().for_each(fill);
     Some(out)
 }
 
@@ -552,6 +624,33 @@ mod tests {
                 .map(|k| a.data()[m * dk + k] as i64 * b.data()[k * dn + n] as i64)
                 .sum();
             assert_eq!(got, want, "entry {flat}");
+        }
+    }
+
+    /// A matrix product whose columns span several tiles, the last one partial, with a row of
+    /// zero scales, against the sum written out; and the one-column and one-row products.
+    #[test]
+    fn tiled_matmul_matches_the_sum() {
+        let eq: EinsumEq = "mk,kn->mn".parse().unwrap();
+        for (dm, dk, dn) in [
+            (3usize, 5usize, 5 * MIN_TILE + 17),
+            (4, 3, 1),
+            (1, 7, MIN_TILE),
+        ] {
+            let value = |seed: usize| (seed * 7919 % 2003) as i32 - 1001;
+            let mut a: Vec<i32> = (0..dm * dk).map(value).collect();
+            a[..dk].fill(0);
+            let b: Vec<i32> = (0..dk * dn).map(|i| value(i + 11)).collect();
+            let (a, b) = (t(&a, &[dm, dk]), t(&b, &[dk, dn]));
+            let acc = einsum_acc_i64(&eq, &[&a, &b]).unwrap();
+            assert_eq!(acc.dims(), &[dm, dn]);
+            for (flat, &got) in acc.data().iter().enumerate() {
+                let (m, n) = (flat / dn, flat % dn);
+                let want: i64 = (0..dk)
+                    .map(|k| a.data()[m * dk + k] as i64 * b.data()[k * dn + n] as i64)
+                    .sum();
+                assert_eq!(got, want, "{dm}x{dk}x{dn}, entry {flat}");
+            }
         }
     }
 

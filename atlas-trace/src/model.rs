@@ -264,7 +264,8 @@ fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
 /// padded lanes (`Gather` on zero-padded index lanes, the `ConstantFill` activations) is
 /// only correct when something downstream absorbs them (zero-padded weights, a masked
 /// reduction, output cropping). That absorption holds by construction of the importer's
-/// lowering and is checked by nothing.
+/// lowering and is checked by nothing; the `known_gap_*` tests in `padded_lane_gaps` below
+/// pin a reduction that sees them.
 fn pad_graph(graph: &mut Graph) -> Result<(), CompileError> {
     let originals: Vec<Vec<usize>> = graph.nodes.iter().map(|n| n.output_dims.clone()).collect();
 
@@ -505,3 +506,54 @@ mod tests {
     }
 }
 
+/// Padded lanes that ops other than `Broadcast` fill with nonzero values, pinned where a
+/// reduction over the padded axis sees them.
+#[cfg(test)]
+mod padded_lane_gaps {
+    use super::*;
+    use crate::{GraphBuilder, op, tensor::Tensor};
+
+    /// `Sigmoid` is `ConstantFill`: a padded lane holds `sigmoid(0) = S/2`, so a sum over a
+    /// non-power-of-two axis counts it.
+    #[test]
+    #[ignore = "known gap: a ConstantFill activation's padded lane (sigmoid(0) = S/2) is counted \
+                by a sum over the padded axis (4·S/2 for a semantic 3·S/2)"]
+    fn known_gap_constant_fill_padded_lane_inflates_sum() {
+        let mut b = GraphBuilder::new();
+        let x = b.input(&[1, 3]);
+        let s = b.push(Op::Sigmoid(op::Sigmoid), &[x]);
+        let sum = b.push(Op::Sum(op::Sum { axes: vec![1] }), &[s]);
+        b.output(sum);
+        let model = b.build(CompileOptions::default()).unwrap();
+        let trace = model
+            .trace(&[Tensor::new(vec![0, 0, 0], &[1, 3]).unwrap()])
+            .unwrap();
+        let half = 1 << (model.scale().log2() - 1);
+        assert_eq!(trace.output(model.outputs()[0]).data()[0], 3 * half);
+    }
+
+    /// A gather's padded index lane is zero and reads row 0 of the dictionary, so a sum over
+    /// a non-power-of-two index axis counts that row.
+    #[test]
+    #[ignore = "known gap: a gather's padded index lane reads dictionary row 0, which a sum \
+                over the padded axis counts (100 for a semantic 90)"]
+    fn known_gap_gather_padded_lane_inflates_sum() {
+        let mut b = GraphBuilder::new();
+        let dict = b.constant(Tensor::new(vec![10, 20, 30, 40], &[4, 1]).unwrap());
+        let indices = b.input(&[3]);
+        let g = b.push(
+            Op::GatherSmall(op::GatherSmall {
+                axis: 0,
+                dict_len: 4,
+            }),
+            &[dict, indices],
+        );
+        let sum = b.push(Op::Sum(op::Sum { axes: vec![0] }), &[g]);
+        b.output(sum);
+        let model = b.build(CompileOptions::default()).unwrap();
+        let trace = model
+            .trace(&[Tensor::new(vec![1, 2, 3], &[3]).unwrap()])
+            .unwrap();
+        assert_eq!(trace.output(model.outputs()[0]).data()[0], 90);
+    }
+}

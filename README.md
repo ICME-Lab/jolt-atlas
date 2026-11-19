@@ -1,170 +1,187 @@
-# JOLT Atlas
+# Jolt Atlas
 
-JOLT Atlas is a zero-knowledge machine learning (zkML) framework that extends the [JOLT](https://github.com/a16z/jolt) proving system to support ML inference verification from ONNX models. 
+**Fast, exact proofs of neural-network inference.**
 
-Made with ❤️ by [ICME Labs](https://blog.icme.io/).
+[![CI](https://github.com/ICME-Lab/jolt-atlas/actions/workflows/rust.yml/badge.svg)](https://github.com/ICME-Lab/jolt-atlas/actions/workflows/rust.yml)
+![Rust 1.95](https://img.shields.io/badge/rust-1.95-orange)
+![Status: research](https://img.shields.io/badge/status-research%20prototype-yellow)
 
-<img width="983" height="394" alt="icme_labs" src="https://github.com/user-attachments/assets/ffc334ed-c301-4ce6-8ca3-a565328904fe" />
+Jolt Atlas proves that an ONNX model was run correctly on a given input. Give it a model and an
+input, and it returns the output with a proof; anyone holding the model can check that proof in a
+fraction of the time it took to make. It proves transformer models such as Qwen2-0.5B, GPT-2 and
+BGE in seconds on a CPU.
 
-## Overview
+Built by [ICME Labs](https://blog.icme.io/) on the ideas of [Jolt](https://github.com/a16z/jolt):
+sumcheck everywhere, lookups instead of circuits for nonlinear functions, and commitments to
+small values only.
 
-JOLT Atlas enables practical zero-knowledge machine learning by leveraging Just One Lookup Table (JOLT) technology. Traditional circuit-based approaches are prohibitively expensive when representing non-linear functions like ReLU and SoftMax. Lookups eliminate the need for circuit representation entirely.
+<img width="983" height="394" alt="ICME Labs" src="https://github.com/user-attachments/assets/ffc334ed-c301-4ce6-8ca3-a565328904fe" />
 
-In JOLT Atlas, we eliminate the complexity that plagues other approaches: no quotient polynomials, no byte decomposition, no grand products, no permutation checks, and most importantly — no complicated circuits.
+> [!WARNING]
+> Jolt Atlas is a research prototype. It has not been audited, its proof format changes without
+> notice, and proofs are **not zero-knowledge** yet: the model, its input and its output are all
+> public to the verifier. Do not rely on it to protect anything of value.
 
-Our core ethos is to reduce commitment costs via sumcheck while committing only to small-value polynomials.
+## Performance
 
-## Examples
+Prove and verify on one machine, 16 tokens, the whole proof (trace execution, commitment,
+sumchecks and the opening proof):
 
-One example, `prove`, proves and verifies any model in the zoo and prints
-timings and proof size:
+| Model | Parameters | Prove | Verify | Proof size | Peak memory |
+| ----- | ---------: | ----: | -----: | ---------: | ----------: |
+| [Qwen2-0.5B](https://huggingface.co/Qwen/Qwen2-0.5B) | 494 M | 2.71 s | 230 ms | 1.77 MiB | 8.2 GB |
+| [GPT-2](https://huggingface.co/openai-community/gpt2) | 124 M | 1.16 s | 106 ms | 1.33 MiB | 2.8 GB |
+| [BGE-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) | 33 M | 0.83 s | 90 ms | 1.28 MiB | 1.0 GB |
+
+AWS c7g.8xlarge (32 Graviton3 cores, 64 GB), median of three runs, commit `d8fe08fde`
+(2026-11-19). The proof system targets 128 bits of security. To reproduce, see
+[Benchmarking](#benchmarking).
+
+## Quickstart
+
+You need a Rust toolchain ([rustup](https://rustup.rs) installs the pinned 1.95 from
+`rust-toolchain.toml`). Three small models are checked in, so the first proof needs no download:
 
 ```bash
-# Checked-in stand-ins (no download needed)
+git clone https://github.com/ICME-Lab/jolt-atlas && cd jolt-atlas
 cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen2-tiny
-cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2-tiny
+```
 
-# Real models (see "Getting Started" for the downloads)
+It imports the model, runs it, proves the run, verifies the proof and prints the timings and
+the proof size, ending with `Proof verified successfully!`.
+
+### Real models
+
+The full-size models come from Hugging Face and are exported to ONNX with a pinned toolchain
+(Python 3.11):
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+python scripts/download_gpt2.py                 # → models/gpt2
+python scripts/download_bge_small_en_v1_5.py    # → models/bge-small-en-v1.5
+python scripts/download_qwen.py                 # → models/qwen (2.5 GB)
+
 cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
 cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen \
-    --input "The quick brown fox jumps over the lazy dog" --use-cache
+    --input "The quick brown fox jumps over the lazy dog"
 ```
 
-The commitment scheme is BitZ: bit commitments over `F_{2^128}`, opened for claims over the
-128-bit Solinas field. Options: `--seq-len N` (default
-16), `--input "<text>"` (tokenizes with the model's `tokenizer.json`), `--use-cache` (reuse the
-shared preprocessing across runs), `--stats` (the model, its packed range buckets and its
-largest nodes), `--trace` (Chrome Tracing JSON, view in `chrome://tracing`) or
-`--trace-terminal` (timings on the terminal).
+`prove` options:
 
-Models execute in exact fixed-point arithmetic over `i32`: a sum, difference, negation or
-rescaled product outside `i32` is an execution error (`WitnessOverflow`), never a clamped
-value, and such an execution has no proof. A chain of products (a projection, a gate
-multiply, the next projection) is computed exactly and rounded once, where the chain ends,
-not after each product: the importer places the rescales
-(`specs/deferred-rescale.md`).
+| Option | Effect |
+| ------ | ------ |
+| `--seq-len N` | sequence length (default 16) |
+| `--input "<text>"` | tokenize with the model's `tokenizer.json`; the length is the token count |
+| `--use-cache` | reuse the model's preprocessing across runs |
+| `--trace-terminal` | per-stage timings on the terminal |
+| `--trace` | a Chrome trace (open in `chrome://tracing` or [Perfetto](https://ui.perfetto.dev)) |
+| `--stats` | the model, its range checks and its largest nodes |
+| `--schedule` | print the verification schedule and exit |
 
-### The model zoo (`models/`)
+## How it works
 
-| Model | Source | In CI |
-| ----- | ------ | ----- |
-| `op_gauntlet` | `scripts/gen_test_models.py`: one synthetic block covering the lowerable op surface | every run |
-| `gpt2-tiny`, `qwen2-tiny`, `bge-tiny` | `scripts/gen_tiny_models.py`: random-init GPT-2 / Qwen2 / BERT with the production architectures (GQA ratio 7, RoPE, native LayerNormalization, fused QKV split, Erf GELU, …), exported with the same `optimum` flags as the real models, under 1 MB each | every run |
-| `reject_slice`, `reject_concat` | `scripts/gen_test_models.py`: fixtures the importer must reject | every run |
-| `gpt2`, `bge-small-en-v1.5`, `qwen` | `scripts/download_*.py` (Hugging Face Optimum exports; gitignored) | main, nightly, PRs labelled `ci:heavy` |
-
-Regenerating any fixture changes its weights (and, with a different exporter,
-possibly its graph), so the pinned forward-pass hashes in
-`atlas-onnx-import/tests/golden_zoo.rs` must be re-pinned afterwards. Use the
-pinned toolchain:
-
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r scripts/requirements-models.txt
-.venv/bin/python scripts/gen_tiny_models.py          # all three, or name one
-cargo test -p atlas-onnx-import --test golden_zoo    # prints the new hashes on mismatch
+```mermaid
+flowchart LR
+    A[ONNX model] -->|atlas-onnx-import| B[fixed-point model]
+    B -->|atlas-trace| C[execution trace]
+    C -->|jolt-atlas-core| D[proof]
+    D -->|jolt-atlas-verifier| E{accept / reject}
+    B -.->|model and public IO| E
 ```
 
-## Benchmarks
+1. **Import.** A tract-free ONNX frontend decodes the graph, infers static shapes, folds
+   constants, quantizes the weights and lowers every node to a small closed set of integer ops.
+2. **Execute.** The model runs in exact fixed-point arithmetic. Every value is an integer at a
+   power-of-two scale; a chain of products is computed exactly and rounded once at its end;
+   an overflow is an error, never a clamped value. Nonlinear functions are lookup tables
+   generated by integer arithmetic, so the prover and the trace agree bit for bit. There is no
+   floating point anywhere.
+3. **Prove.** Every op is a sumcheck relation. Matrix products are sumchecks over the weights;
+   activations, softmax and range checks are reads of structured lookup tables. Relations that
+   are ready at the same time are batched into one sumcheck. The committed polynomials, all of
+   small values, are bit-packed into a single [BitZ](specs/bitz-commitment.md) commitment over
+   `F_{2^128}`, opened once at the end with a GKR grand product, ring switching and a
+   Ligerito proof. Hash-based, no trusted setup, no
+   elliptic curves.
+4. **Verify.** The verifier compiles the same schedule from the model alone and reads the
+   proof once, front to back. It never trusts the prover for anything the trace semantics
+   define.
 
-**System specs:** MacBook Pro M3, 16GB RAM
+### Supported ops
 
-### GPT-2 (125M params)
+The importer lowers ONNX graphs to 34 ops: arithmetic (`Add`, `Sub`, `Mul`, `Neg`, `Square`,
+`Cube`, division by a constant), contractions (`Einsum`, which covers `MatMul` and `Gemm`, and
+`Sum`), normalization (`MeanOfSquares`, `Rsqrt`), activations (`ReLU`, `Tanh`, `Sigmoid`, `Erf`,
+GELU and SiLU as one fused op), `Sin` and `Cos`, softmax over the last axis, gathers, `Where`,
+and the shape ops (`Reshape`, `Slice`, `Concat`, `Broadcast`, transposes). Convolutions, pooling,
+`Exp` and `Log` are not supported yet; [docs/op-roadmap.md](docs/op-roadmap.md) ranks what comes
+next.
 
-GPT-2 is a 125-million-parameter transformer model from OpenAI.
+## Repository layout
 
-**JOLT Atlas** (BitZ commitment, claims over the 128-bit Solinas field)
+| Crate | Role |
+| ----- | ---- |
+| [`atlas-onnx-import`](atlas-onnx-import) | ONNX decoding, shape inference, constant folding, quantization, lowering |
+| [`atlas-trace`](atlas-trace) | the fixed-point IR, op semantics and lookup-table generation, the executor |
+| [`jolt-atlas-core`](jolt-atlas-core) | the prover, its test suite and the `prove` example |
+| [`jolt-atlas-verifier`](jolt-atlas-verifier) | the proof format and all verification; no prover code |
+| [`atlas-sumcheck`](atlas-sumcheck) | the batched sumcheck engine, relations, opening reduction, lookup arguments |
+| [`atlas-pcs`](atlas-pcs) | the BitZ polynomial commitment scheme |
+| [`atlas-claims`](atlas-claims) | symbolic sumcheck relations: the verifier is derived from them |
+| [`atlas-algebra`](atlas-algebra) | the 128-bit Solinas field, multilinear polynomials |
+| [`atlas-transcript`](atlas-transcript) | the Fiat–Shamir transcript; the proof is its byte string |
+| [`atlas-lookup-tables`](atlas-lookup-tables) | prefix-suffix decomposable lookup tables |
+| [`common`](common) | shared constants, serialization and allocator helpers |
 
-| Stage | Wall clock |
-| ----- | ---------- |
-| Witness + commitment phase (`commit_witness_polynomials`) | 0.25 s |
-| IOP proving (`iop`) | 1.20 s |
-| Opening reduction sumcheck + BitZ opening (`prove_reduced_openings`) | 1.37 s |
-| Proof time (`prove`) | 3.26 s |
-| Verify time (`verify`) | 0.34 s |
-
-Medians of three `--trace-terminal` runs at 16 tokens on a 16-core arm64 machine (AWS
-c7g.4xlarge, 30 GB), from `bench/gate.sh`; the proof is 1.33 MiB (9 sumcheck proofs) and peak
-memory 3.2 GB. The rest of the proof time is trace execution. The last commit on the Akita
-lattice scheme (tag `akita-last`) proved the same model in 24.4 s on the same machine (commit
-7.3 s, openings 9.7 s), with a 1.27 MiB proof and 14.4 GB peak memory.
-
-### How to reproduce locally
-
-```bash
-# from repo root
-cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
-```
-
-Add `-- --trace` for Chrome Tracing JSON output (view in `chrome://tracing`), or `-- --trace-terminal` for timing printed to the terminal.
-
-## Getting Started
-
-### GPT-2 (first run)
-
-GPT-2 uses a Hugging Face–hosted ONNX model that is **not** checked into the
-repo. A helper script downloads and prepares it automatically.
-
-1. Clone the repository.
-2. Install Rust and Cargo.
-3. Download the model:
-
-```bash
-# Create a virtual environment (one-time)
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Run the download script (installs the pinned export toolchain)
-python scripts/download_gpt2.py
-```
-
-This exports GPT-2 via [Hugging Face Optimum](https://huggingface.co/docs/optimum/index)
-into `models/gpt2/` and renames `model.onnx` → `network.onnx`. The same
-pattern gets `scripts/download_bge_small_en_v1_5.py` and
-`scripts/download_qwen.py` (2.5 GB).
-
-4. Inspect the imported model (no proof):
-
-```bash
-cargo run --release --package atlas-onnx-import --example dump_lowered_ops -- \
-    models/gpt2/network.onnx batch_size=1 sequence_length=16 past_sequence_length=0
-```
-
-You should see the lowered op inventory and the canonical einsum equations.
-
-5. Prove & verify GPT-2:
-
-```bash
-cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
-```
-
-A successful run prints `Proof verified successfully!`.
+`models/` holds the model zoo: the checked-in fixtures (`op_gauntlet`, which covers every
+lowerable op, and random-weight `gpt2-tiny`, `qwen2-tiny` and `bge-tiny` with the production
+architectures) and, once downloaded, the real models.
 
 ## Testing
 
 ```bash
-cargo nextest run --workspace                       # everything CI runs on a PR (~2 min)
-cargo nextest run -p jolt-atlas-core -E 'test(op_surface)'   # the exhaustive single-op table
-cargo nextest run -p jolt-atlas-core -E 'test(soundness)'    # mutation / tamper / forgery sweeps
-cargo nextest run -p jolt-atlas-core -E 'test(zoo)'          # end-to-end models
-cargo nextest run -p jolt-atlas-core --run-ignored ignored-only -E 'test(known_gap)'  # pinned gaps
+cargo nextest run --workspace     # what CI runs on every push (about a minute once built)
 ```
 
-`jolt-atlas-core/src/onnx_proof/testing/` holds the whole suite:
+The suite lives in [`jolt-atlas-core/src/onnx_proof/testing/`](jolt-atlas-core/src/onnx_proof/testing):
 
-* `op_surface.rs` is a table with one case per `atlas_trace::Op` variant (plus
-  overflow rejection, tiny-tensor, non-power-of-two, padded and rejection cases).
-  Adding an op variant fails to compile until the table declares a stance for it.
-* `soundness.rs` attacks the proof system generically: every value the verifier
-  reads from a finished proof is perturbed (`proof_mutation_sweep`), the execution trace is
-  tampered before proving (`witness_tamper_sweep`), and every opening claim is
-  forged at the accumulator (`opening_forgery_sweep`). Set
-  `JOLT_SOUNDNESS_EXHAUSTIVE=1` for every site instead of the sampled default
-  (CI runs that nightly).
-* `zoo.rs` proves the checked-in models on every run and the real downloads
-  behind `#[ignore]` (the heavy CI job).
-* Tests named `known_gap_*` are `#[ignore]`d pins of open issues; each fails
-  today for the reason in its `#[ignore]` message and turns green when fixed.
+- **Op surface:** one proving case for each op variant. A new variant does not compile until it
+  has one.
+- **Soundness sweeps:** every value the verifier reads is mutated, the execution trace is
+  tampered before proving, and every opening claim is forged; each must be rejected. Set
+  `JOLT_SOUNDNESS_EXHAUSTIVE=1` to try every site (CI does nightly).
+- **Model zoo:** the checked-in models end to end on every run; the real models in the heavy
+  job (`--profile heavy --run-ignored ignored-only`).
+- **Known gaps:** open issues are pinned as `#[ignore]`d `known_gap_*` tests that fail today
+  and pass once fixed.
+
+## Benchmarking
+
+```bash
+cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen --trace-terminal
+```
+
+On Linux, `prove` asks the kernel for transparent huge pages on large buffers, worth about 15%
+of prove time; it has no effect on macOS. `bench/gate.sh` compares commits: it builds `prove` at
+each one, interleaves the runs and reports per-stage medians. Compare timings only between runs
+on the same machine.
+
+## Documentation
+
+- [docs/verifier.md](docs/verifier.md): the trust perimeter and the order to audit it in
+- [docs/prover-plan.md](docs/prover-plan.md): where prover time goes and what is planned
+- [docs/op-roadmap.md](docs/op-roadmap.md): op coverage and what to add next
+- [specs/](specs): the design of every large change, frozen when it merged
+- [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/pull-requests.md](docs/pull-requests.md): how to
+  contribute
+
+## License
+
+Jolt Atlas is **not open source**. It is licensed by ICME for internal testing and evaluation;
+see [LICENSE](LICENSE) for the terms.
 
 ## Acknowledgments
 
-Thanks to the Jolt team for their foundational work. We are standing on the shoulders of giants.
+Jolt Atlas builds on [Jolt](https://github.com/a16z/jolt) by a16z crypto, whose sumcheck,
+lookup and transcript designs it adapts; [docs/upstream-inventory.md](docs/upstream-inventory.md)
+records what came from where. Thanks to the Jolt team for their foundational work.

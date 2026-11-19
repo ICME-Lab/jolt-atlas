@@ -259,15 +259,12 @@ fn check_shapes(graph: &Graph) -> Result<(), CompileError> {
 /// Pad every dimension to the next power of two: rewrite each op's
 /// shape-carrying fields, then pad the node's output dims.
 ///
-/// KNOWN GAP: this pass does not verify that padded lanes stay inert. An op
-/// that writes live values into padded lanes (`Broadcast` expanding a
-/// non-power-of-two axis, `Gather` on zero-padded index lanes, the
-/// `ConstantFill` activations) is only sound when something downstream
-/// absorbs them (zero-padded weights, a masked reduction, output cropping).
-/// Today that absorption holds by construction of the importer's lowering
-/// and is checked by nothing; a per-axis padded-lane analysis is the
-/// designed fix (see the ignored `broadcast_fill_inflates_padded_reduction`
-/// test below, which pins the failing case).
+/// `Broadcast` keeps the padded lanes of an axis it expands zero (its `extent`). This pass
+/// does not verify that other padded lanes stay inert: an op that writes nonzero values into
+/// padded lanes (`Gather` on zero-padded index lanes, the `ConstantFill` activations) is
+/// only correct when something downstream absorbs them (zero-padded weights, a masked
+/// reduction, output cropping). That absorption holds by construction of the importer's
+/// lowering and is checked by nothing.
 fn pad_graph(graph: &mut Graph) -> Result<(), CompileError> {
     let originals: Vec<Vec<usize>> = graph.nodes.iter().map(|n| n.output_dims.clone()).collect();
 
@@ -342,11 +339,6 @@ mod tests {
     use super::*;
     use crate::tensor::Tensor;
 
-    // Pins the padding-soundness gap documented on `pad_graph`: Broadcast of
-    // a size-1 axis to a non-power-of-two extent fills the padded lanes with
-    // the live value, so a reduction over that axis counts the padded lanes.
-    // The assertion states the CORRECT (semantic) result; un-ignore it when
-    // the padded-lane analysis (or a masked Broadcast) lands.
     /// Pins `rsqrt`'s totality at the kernel level: a zero-variance row
     /// traces to zero output instead of a panic. Note this is the *tracer*
     /// contract only — the prover's rsqrt division witness needs a positive
@@ -367,7 +359,7 @@ mod tests {
             &[x],
         );
         let inv = b.push(Op::Rsqrt(op::Rsqrt), &[var]);
-        let inv_b = b.push(Op::Broadcast(op::Broadcast { shape: vec![2, 4] }), &[inv]);
+        let inv_b = b.push(Op::Broadcast(op::Broadcast::new(vec![2, 4])), &[inv]);
         let y = b.push(
             Op::Mul(op::Mul {
                 rebase: true,
@@ -494,21 +486,22 @@ mod tests {
         );
     }
 
+    /// Broadcasting a size-1 axis to a non-power-of-two extent leaves the padded lanes zero,
+    /// so a reduction over that axis sees only the live ones.
     #[test]
-    #[ignore = "known padding-soundness gap: broadcast fills padded lanes with live values"]
-    fn broadcast_fill_inflates_padded_reduction() {
+    fn broadcast_padded_lanes_stay_out_of_a_reduction() {
         use crate::{GraphBuilder, op};
         let mut b = GraphBuilder::new();
         let x = b.input(&[2, 1]);
-        let bc = b.push(Op::Broadcast(op::Broadcast { shape: vec![2, 3] }), &[x]);
+        let bc = b.push(Op::Broadcast(op::Broadcast::new(vec![2, 3])), &[x]);
         let sum = b.push(Op::Sum(op::Sum { axes: vec![1] }), &[bc]);
         b.output(sum);
         let model = b.build(CompileOptions::default()).unwrap();
         let input = Tensor::new(vec![5, 7], &[2, 1]).unwrap();
         let trace = model.trace(&[input]).unwrap();
         let out = trace.output(model.outputs()[0]);
-        // Semantic result: 3·v per row. Today the padded 4th lane also holds
-        // v, so the trace (and the proof, which agrees with it) yields 4·v.
+        // 3·v per row: the padded 4th lane is zero.
         assert_eq!(&out.data()[..2], &[15, 21]);
     }
 }
+

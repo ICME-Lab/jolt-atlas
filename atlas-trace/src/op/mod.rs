@@ -266,11 +266,11 @@ pub struct EvalCtx<'a> {
 /// a property the padding pass enforces: [`crate::model`]'s `pad_graph`
 /// rewrites shapes via [`OpSpec::apply_padding`] but never consults this
 /// variant. Each `NeedsMask` op masks itself (softmax via `active_len`,
-/// mean-of-squares via `count`); `ConstantFill` and the non-zero padded
-/// lanes a `Broadcast`/`Gather` can produce rely on downstream absorption
+/// mean-of-squares via `count`), and `Broadcast` zeroes the padded lanes of
+/// the axes it expands (its `extent`); `ConstantFill` and the non-zero
+/// padded lanes a `Gather` can produce rely on downstream absorption
 /// (zero-padded weights, output cropping) that no analysis currently
-/// verifies — see the ignored `broadcast_fill_...` test in `model.rs` for
-/// the known gap.
+/// verifies.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum PadBehavior {
     /// Zero inputs in padded lanes produce zero outputs in padded lanes
@@ -463,8 +463,10 @@ define_ops! {
     Concat { axis: usize },
     /// Reinterpret dims (same element count).
     Reshape { shape: Vec<usize> },
-    /// Broadcast-expand to `shape` (NumPy semantics).
-    Broadcast { shape: Vec<usize> },
+    /// Broadcast-expand to `shape` (NumPy semantics). `extent` is the target shape before
+    /// padding: on an expanded axis, the lanes at or past its extent are zero, as every
+    /// padded lane is.
+    Broadcast { shape: Vec<usize>, extent: Vec<usize> },
     /// Move one axis to a new position.
     MoveAxis { source: usize, destination: usize },
 }

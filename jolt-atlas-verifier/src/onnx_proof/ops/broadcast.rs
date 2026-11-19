@@ -28,7 +28,9 @@ impl OpPlan for Broadcast {
 }
 
 /// `Broadcast` as a tie: the output at `r` is the operand at the non-broadcast coordinates of
-/// `r`, times the all-ones replication tensor at the broadcast coordinates.
+/// `r`, times the replication tensor at the broadcast coordinates: one on the lanes of each
+/// broadcast axis below its extent (the axis's length before padding), zero on its padded
+/// lanes.
 ///
 /// ```text
 /// input claim   out(r)                 (the reduced output opening)
@@ -38,8 +40,9 @@ impl OpPlan for Broadcast {
 /// The relation's [`dims`](OpRel::dims) are the operand's. `Err` if the node's operand is not
 /// a node of the model.
 ///
-/// **S ⊆ R.** Broadcasting replicates each operand element along the broadcast axes, so the
-/// output tensor is the operand's tensor product with an all-ones tensor.
+/// **S ⊆ R.** Broadcasting replicates each operand element along the broadcast axes and
+/// leaves their padded lanes zero, so the output tensor is the operand's tensor product with
+/// the replication tensor.
 pub fn broadcast<F: JoltField>(
     model: &Model,
     node: &ComputationNode,
@@ -74,8 +77,8 @@ pub fn split<F: JoltField>(
     r_output: &[F],
 ) -> Result<(Vec<F>, Vec<F>), ProofVerifyError> {
     let output_dims = &relation.node.output_dims;
-    let ones = build_broadcast_tensor(relation.dims_at(0)?, output_dims)?;
-    split_broadcast_vars(output_dims, ones.dims(), r_output)
+    let broadcast_dims = get_broadcast_dims(relation.dims_at(0)?, output_dims)?;
+    split_broadcast_vars(output_dims, &broadcast_dims, r_output)
 }
 
 /// The operand's point of a [`broadcast`]: the non-broadcast coordinates of the incoming point.
@@ -87,8 +90,8 @@ fn operand_point<F: JoltField>(
     Ok(vec![split(relation, &setup.incoming_point)?.0])
 }
 
-/// [`RelationDerived::BroadcastOnes`] of a [`broadcast`]: the all-ones replication tensor's
-/// MLE at the broadcast coordinates of the incoming point.
+/// [`RelationDerived::BroadcastOnes`] of a [`broadcast`]: the replication tensor's MLE at the
+/// broadcast coordinates of the incoming point.
 fn ones_at_broadcast_coordinates<F: JoltField>(
     relation: &OpRel<F>,
     id: &RelationDerived,
@@ -97,7 +100,14 @@ fn ones_at_broadcast_coordinates<F: JoltField>(
 ) -> Result<F, ProofVerifyError> {
     Ok(match id {
         RelationDerived::BroadcastOnes => {
-            let ones = build_broadcast_tensor(relation.dims_at(0)?, &relation.node.output_dims)?;
+            let atlas_trace::Op::Broadcast(op) = &relation.node.operator else {
+                return Err(unsupported("the node is not a broadcast"));
+            };
+            let ones = build_broadcast_tensor(
+                relation.dims_at(0)?,
+                &relation.node.output_dims,
+                &op.extent,
+            )?;
             ones.evaluate_mle(&split(relation, &setup.incoming_point)?.1)
         }
         other => return Err(not_derived(other)),
@@ -108,18 +118,33 @@ fn unsupported(what: impl std::fmt::Display) -> ProofVerifyError {
     ProofVerifyError::Malformed(format!("model: broadcast: {what}"))
 }
 
-/// Builds a unit tensor used for broadcast operation
-///
-/// # Returns
-/// A tensor of dimensions equal to the broadcasted dimensions, filled with ones; `Err` if the
-/// input dims do not broadcast to the target dims.
+/// The replication tensor of a broadcast: over the broadcast dimensions, one at the lanes
+/// below each broadcast axis's `extent` and zero past it. `Err` if the input dims do not
+/// broadcast to the target dims or `extent` is not of the target's rank.
 fn build_broadcast_tensor(
     input_dims: &[usize],
     target_dims: &[usize],
+    extent: &[usize],
 ) -> Result<Tensor<i32>, ProofVerifyError> {
     let bc_dims = get_broadcast_dims(input_dims, target_dims)?;
+    if extent.len() != bc_dims.len() {
+        return Err(unsupported("the extent is not of the output's rank"));
+    }
+    // Row-major: entry `flat` is live iff every broadcast coordinate is below its extent.
     let num_elems: usize = bc_dims.iter().product();
-    Tensor::from_slice(&vec![1i32; num_elems], &bc_dims).map_err(unsupported)
+    let mut values = vec![1i32; num_elems];
+    let mut stride = num_elems;
+    for (&dim, &live) in bc_dims.iter().zip(extent) {
+        stride /= dim.max(1);
+        if dim > 1 && live < dim {
+            for (flat, value) in values.iter_mut().enumerate() {
+                if flat / stride % dim >= live {
+                    *value = 0;
+                }
+            }
+        }
+    }
+    Tensor::from_slice(&values, &bc_dims).map_err(unsupported)
 }
 
 /// Computes the broadcast dimensions

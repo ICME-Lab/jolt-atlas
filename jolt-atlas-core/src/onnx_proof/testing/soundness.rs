@@ -990,59 +990,50 @@ fn rescale_remainder_shifted_by_the_divisor_rejected() {
     }
 }
 
-// ── known gaps (must fail today; flip green when fixed) ──────────────────
+/// Broadcasting a size-1 axis to a non-power-of-two extent leaves the padded lanes zero, so a
+/// sum over that axis proves the semantic `3·v`, not `4·v`.
+#[test]
+fn broadcast_padded_lanes_stay_out_of_a_sum() {
+    let x = Tensor::from_slice(&[5, 7], &[2, 1]).unwrap();
+    let h = prove_verify_pair(padded_broadcast_sum_model(), std::slice::from_ref(&x));
+    assert_eq!(
+        &h.io.outputs[0].data()[..2],
+        &[15, 21],
+        "the proven output must be the semantic row sum"
+    );
+}
 
-mod known_gaps {
-    use super::*;
-
-    /// `pad_graph` never consults `PadBehavior`: broadcasting a size-1 axis to
-    /// a non-power-of-two extent fills the padded lanes with live values, so
-    /// the downstream sum proves `4·v` where the semantics say `3·v`, and the
-    /// verifier accepts that false statement. Cross-reference:
-    /// `atlas-trace/src/model.rs::broadcast_fill_inflates_padded_reduction`.
-    #[test]
-    #[ignore = "known gap: Broadcast into padded lanes inflates a downstream reduction \
-                (proves 4·v for a semantic 3·v); see atlas-trace model.rs::broadcast_fill_inflates_padded_reduction"]
-    fn known_gap_broadcast_padded_lane_inflates_sum() {
-        let x = Tensor::from_slice(&[5, 7], &[2, 1]).unwrap();
-        let h = prove_verify_pair(padded_broadcast_sum_model(), std::slice::from_ref(&x));
-        assert_eq!(
-            &h.io.outputs[0].data()[..2],
-            &[15, 21],
-            "the proven output must be the semantic row sum"
-        );
-    }
-
-    /// The completeness side of the same gap: the semantically correct
-    /// witness (padded lanes zeroed, sums `3·v`) is rejected today because
-    /// the broadcast relation is checked over all padded lanes.
-    #[test]
-    #[ignore = "known gap: the semantically correct padded-lane witness for Broadcast→Sum is rejected; \
-                see known_gap_broadcast_padded_lane_inflates_sum"]
-    fn known_gap_broadcast_padded_lane_zeroed_witness_rejected() {
-        let _probe = ProbeGuard::enter();
-        let model = padded_broadcast_sum_model();
-        let shared = AtlasSharedPreprocessing::preprocess(model);
-        let prover_pp =
-            AtlasProverPreprocessing::<<Pcs as CommitmentScheme>::Field, Pcs>::new(shared);
-        let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
-        let x = Tensor::from_slice(&[5, 7], &[2, 1]).unwrap();
-        let (_, res) = prove_tampered::<Pcs>(&prover_pp, &[x], &mut |t| {
-            // node 1 = Broadcast output [2,4] padded: zero lane 3 of each row.
-            let bc = t.node_outputs[1].data_mut();
-            bc[3] = 0;
-            bc[7] = 0;
-            // node 2 = Sum output: the semantic sums.
-            let s = t.node_outputs[2].data_mut();
-            s[0] = 15;
-            s[1] = 21;
-        });
-        let (proof, io) = res.expect("prover accepts the corrected witness");
-        let outcome = run_verify(&proof, &verifier_pp, &io);
-        assert!(
-            matches!(outcome, Outcome::Accepted),
-            "the semantically correct witness must verify: {outcome:?}"
-        );
+/// A witness that fills a broadcast's padded lanes with the live value, and sums them, is
+/// rejected: the broadcast's tie holds its padded lanes at zero.
+#[test]
+#[serial]
+fn broadcast_filled_padded_lanes_rejected() {
+    let _probe = ProbeGuard::enter();
+    let model = padded_broadcast_sum_model();
+    let shared = AtlasSharedPreprocessing::preprocess(model);
+    let prover_pp = AtlasProverPreprocessing::<<Pcs as CommitmentScheme>::Field, Pcs>::new(shared);
+    let verifier_pp = AtlasVerifierPreprocessing::from(&prover_pp);
+    let x = Tensor::from_slice(&[5, 7], &[2, 1]).unwrap();
+    let (_, res) = prove_tampered::<Pcs>(&prover_pp, &[x], &mut |t| {
+        // node 1 = Broadcast output [2,4] padded: fill lane 3 of each row.
+        let bc = t.node_outputs[1].data_mut();
+        bc[3] = 5;
+        bc[7] = 7;
+        // node 2 = Sum output: the sums over all four lanes.
+        let s = t.node_outputs[2].data_mut();
+        s[0] = 20;
+        s[1] = 28;
+    });
+    let _ = probe::take_divergences();
+    match res {
+        Err(panic) => panic!("the prover refused the filled lanes: {panic}"),
+        Ok((proof, io)) => {
+            let outcome = run_verify(&proof, &verifier_pp, &io);
+            assert!(
+                matches!(outcome, Outcome::Rejected(_)),
+                "filled padded lanes accepted: {outcome:?}"
+            );
+        }
     }
 }
 

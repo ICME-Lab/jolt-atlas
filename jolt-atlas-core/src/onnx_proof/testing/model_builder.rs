@@ -160,9 +160,7 @@ impl ModelBuilder {
     /// Broadcast-expand to `target_dims`.
     pub fn broadcast(&mut self, input: Wire, target_dims: Vec<usize>) -> Wire {
         self.push(
-            Op::Broadcast(op::Broadcast {
-                shape: target_dims.clone(),
-            }),
+            Op::Broadcast(op::Broadcast::new(target_dims.clone())),
             vec![input],
             target_dims,
         )

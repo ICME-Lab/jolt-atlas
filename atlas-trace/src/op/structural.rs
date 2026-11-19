@@ -239,6 +239,23 @@ impl OpSpec for Reshape {
     }
 }
 
+impl Broadcast {
+    /// Broadcast-expand to `shape`, before padding.
+    pub fn new(shape: Vec<usize>) -> Self {
+        Self {
+            extent: shape.clone(),
+            shape,
+        }
+    }
+
+    /// Whether axis `axis` of the output is expanded from a unit axis of an operand with
+    /// dims `input`, or added in front of them.
+    pub fn expands(&self, input: &[usize], axis: usize) -> bool {
+        let offset = self.shape.len().saturating_sub(input.len());
+        axis < offset || (input[axis - offset] == 1 && self.shape[axis] != 1)
+    }
+}
+
 impl fmt::Display for Broadcast {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Broadcast{:?}", self.shape)
@@ -247,7 +264,26 @@ impl fmt::Display for Broadcast {
 
 impl OpSpec for Broadcast {
     fn eval(&self, inputs: &[&Tensor<i32>], _ctx: &EvalCtx<'_>) -> Result<Eval, KernelError> {
-        Ok(Eval::plain(inputs[0].expand(&self.shape)?))
+        let mut out = inputs[0].expand(&self.shape)?;
+        // The lanes of an expanded axis past its extent are padding: zero them.
+        let cut: Vec<(usize, usize)> = (0..self.shape.len())
+            .filter(|&axis| {
+                self.extent[axis] < self.shape[axis] && self.expands(inputs[0].dims(), axis)
+            })
+            .map(|axis| (axis, self.extent[axis]))
+            .collect();
+        if !cut.is_empty() {
+            let strides = tensor::row_major_strides(&self.shape);
+            for (flat, value) in out.data_mut().iter_mut().enumerate() {
+                if cut
+                    .iter()
+                    .any(|&(axis, extent)| flat / strides[axis] % self.shape[axis] >= extent)
+                {
+                    *value = 0;
+                }
+            }
+        }
+        Ok(Eval::plain(out))
     }
 
     fn infer_shape(&self, inputs: &[&[usize]]) -> Result<Vec<usize>, ShapeError> {
@@ -259,6 +295,8 @@ impl OpSpec for Broadcast {
                 .rev()
                 .zip(self.shape.iter().rev())
                 .any(|(&src, &dst)| src != dst && src != 1)
+            || self.extent.len() != self.shape.len()
+            || self.extent.iter().zip(&self.shape).any(|(&e, &d)| e > d)
         {
             return Err(ShapeError::ExpandIncompatible {
                 from: input,

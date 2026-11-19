@@ -177,9 +177,7 @@ impl<'g> Lowerer<'g> {
             return Ok(id);
         }
         Ok(self.push(
-            Op::Broadcast(op::Broadcast {
-                shape: target.to_vec(),
-            }),
+            Op::Broadcast(op::Broadcast::new(target.to_vec())),
             vec![id],
             target.to_vec(),
         ))
@@ -296,7 +294,7 @@ impl<'g> Lowerer<'g> {
                     }),
                 )?
             }
-            "atlas.Broadcast" => direct(self, Op::Broadcast(op::Broadcast { shape: out.clone() }))?,
+            "atlas.Broadcast" => direct(self, Op::Broadcast(op::Broadcast::new(out.clone())))?,
             "Reshape" => direct(self, Op::Reshape(op::Reshape { shape: out.clone() }))?,
             "Concat" => {
                 let rank = out.len();

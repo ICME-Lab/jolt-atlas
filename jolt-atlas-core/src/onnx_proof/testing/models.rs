@@ -312,7 +312,7 @@ pub(crate) fn padded_add_model(rng: &mut StdRng) -> Model {
     b.build_padded()
 }
 
-/// `[2,1] → Broadcast [2,3] → Sum(axis 1)`, padded: the known padded-lane gap.
+/// `[2,1] → Broadcast [2,3] → Sum(axis 1)`, padded: a broadcast into padded lanes.
 pub(crate) fn padded_broadcast_sum_model() -> Model {
     let mut b = ModelBuilder::new();
     let i = b.input(vec![2, 1]);

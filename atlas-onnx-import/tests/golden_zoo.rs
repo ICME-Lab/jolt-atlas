@@ -47,6 +47,54 @@ fn model_output_hash(name: &str) -> Result<u64, String> {
     Ok(fnv(outputs.iter().flat_map(|t| t.data().iter().copied())))
 }
 
+/// The model's outputs on the golden inputs, imported with or without power-of-two padding.
+fn outputs(name: &str, pad_pow2: bool) -> Vec<atlas_trace::Tensor<i32>> {
+    let path = zoo_dir().join(name).join("network.onnx");
+    let opts = LoadOptions {
+        bindings: standard_bindings(16),
+        pad_pow2,
+        ..Default::default()
+    };
+    let imported = atlas_onnx_import::load(&path, &opts).expect("the model imports");
+    let inputs = synth_inputs(&imported, GOLDEN_SEED);
+    imported.model.forward(&inputs).expect("the model runs")
+}
+
+/// Padding is invisible: each present model's outputs are the same padded or not.
+fn assert_padding_preserves_outputs(names: &[&str]) {
+    for &name in names {
+        if !zoo_dir().join(name).join("network.onnx").exists() {
+            println!("SKIP {name}: model not present");
+            continue;
+        }
+        let (padded, unpadded) = (outputs(name, true), outputs(name, false));
+        let differing: usize = padded
+            .iter()
+            .zip(&unpadded)
+            .map(|(p, u)| {
+                p.data()
+                    .iter()
+                    .zip(u.data())
+                    .filter(|(a, b)| a != b)
+                    .count()
+            })
+            .sum();
+        println!("{name}: {differing} output entries differ");
+        assert_eq!(padded, unpadded, "{name}: padding changed the outputs");
+    }
+}
+
+#[test]
+fn padding_preserves_the_zoo_outputs() {
+    assert_padding_preserves_outputs(&["op_gauntlet", "gpt2-tiny", "qwen2-tiny", "bge-tiny"]);
+}
+
+#[test]
+#[ignore = "requires the downloaded models (scripts/download_*.py)"]
+fn padding_preserves_the_big_zoo_outputs() {
+    assert_padding_preserves_outputs(&["gpt2", "qwen", "bge-small-en-v1.5"]);
+}
+
 /// The checked-in zoo: the synthetic op gauntlet plus the tiny random-init
 /// stand-ins for the real architectures (`scripts/gen_tiny_models.py`).
 const GOLDENS: &[(&str, u64)] = &[

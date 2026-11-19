@@ -129,7 +129,7 @@ fn structural_and_einsum_golden() {
         }),
         &[matmul],
     );
-    let bcast = b.push(Op::Broadcast(op::Broadcast { shape: vec![4, 4] }), &[mos]);
+    let bcast = b.push(Op::Broadcast(op::Broadcast::new(vec![4, 4])), &[mos]);
     let reshape = b.push(Op::Reshape(op::Reshape { shape: vec![2, 8] }), &[bcast]);
     let moveaxis = b.push(
         Op::MoveAxis(op::MoveAxis {

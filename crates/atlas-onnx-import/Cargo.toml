@@ -3,7 +3,7 @@ name = "atlas-onnx-import"
 version = "0.1.0"
 edition = "2024"
 description = "Tract-free ONNX importer: protobuf decode, shape inference, lowering to atlas-trace IR."
-license-file = "../LICENSE"
+license-file = "../../LICENSE"
 
 [dependencies]
 atlas-trace.workspace = true

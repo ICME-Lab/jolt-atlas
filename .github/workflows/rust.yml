@@ -111,7 +111,7 @@ jobs:
         # atlas-algebra owns the polynomial library and the field.
         run: |
           if grep -rnE '\b(jolt_akita|akita_[a-z_]+|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|jolt_poly|jolt_utils|jolt_field|ark_ff|ark_serialize|ark_std|ark_ec|ark_bn254|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
-              common atlas-* jolt-atlas-* --include='*.rs'; then
+              common crates jolt-atlas-* --include='*.rs'; then
             echo "an atlas source names a deleted vendored crate or an upstream facade" >&2
             exit 1
           fi

@@ -283,7 +283,7 @@ merges.
 from stage 2 at `0e3faf07` and bumped at stage 3): `algebra.rs`, `extension.rs`,
 `fp128_accumulators.rs`, `limbs.rs`, `ops.rs`, `packed.rs`, `schedules.rs`, `signed.rs`,
 `unreduced.rs` and `solinas/`, with the fp128 assembly bodies the kernels `include_str!` under
-`atlas-algebra/asm/`. Against that base each file differs only by deletions, module paths and
+`crates/atlas-algebra/asm/`. Against that base each file differs only by deletions, module paths and
 resolved `cfg`s:
 
 - every feature `cfg` is resolved to the build atlas runs: `solinas`, `asm` and `parallel` on;

@@ -10,7 +10,7 @@ seconds instead of minutes.
 
 Regenerating changes the weights (and, with a different toolchain, possibly
 the graph), which invalidates the pinned goldens in
-``atlas-onnx-import/tests/golden_zoo.rs``. Run from the pinned toolchain:
+``crates/atlas-onnx-import/tests/golden_zoo.rs``. Run from the pinned toolchain:
 
     python -m venv .venv && .venv/bin/pip install -r scripts/requirements-models.txt
     .venv/bin/python scripts/gen_tiny_models.py [gpt2-tiny|qwen2-tiny|bge-tiny ...]

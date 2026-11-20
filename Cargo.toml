@@ -18,28 +18,28 @@ keywords = ["SNARK", "cryptography", "proofs", "zkML"]
 members = [
     "jolt-atlas-core",
     "jolt-atlas-verifier",
-    "atlas-trace",
-    "atlas-onnx-import",
+    "crates/atlas-trace",
+    "crates/atlas-onnx-import",
     "common",
-    "atlas-algebra",
-    "atlas-transcript",
-    "atlas-lookup-tables",
-    "atlas-sumcheck",
-    "atlas-claims",
-    "atlas-pcs",
+    "crates/atlas-algebra",
+    "crates/atlas-transcript",
+    "crates/atlas-lookup-tables",
+    "crates/atlas-sumcheck",
+    "crates/atlas-claims",
+    "crates/atlas-pcs",
 ]
 
 [workspace.dependencies]
 # Internal
-atlas-trace = { path = "./atlas-trace" }
-atlas-onnx-import = { path = "./atlas-onnx-import" }
+atlas-trace = { path = "./crates/atlas-trace" }
+atlas-onnx-import = { path = "./crates/atlas-onnx-import" }
 common = { path = "./common" }
-atlas-algebra = { path = "./atlas-algebra", default-features = false }
-atlas-transcript = { path = "./atlas-transcript", default-features = false }
-atlas-lookup-tables = { path = "./atlas-lookup-tables", default-features = false }
-atlas-sumcheck = { path = "./atlas-sumcheck", default-features = false }
-atlas-claims = { path = "./atlas-claims" }
-atlas-pcs = { path = "./atlas-pcs", default-features = false }
+atlas-algebra = { path = "./crates/atlas-algebra", default-features = false }
+atlas-transcript = { path = "./crates/atlas-transcript", default-features = false }
+atlas-lookup-tables = { path = "./crates/atlas-lookup-tables", default-features = false }
+atlas-sumcheck = { path = "./crates/atlas-sumcheck", default-features = false }
+atlas-claims = { path = "./crates/atlas-claims" }
+atlas-pcs = { path = "./crates/atlas-pcs", default-features = false }
 jolt-atlas-verifier = { path = "./jolt-atlas-verifier" }
 
 # Cryptography and Math

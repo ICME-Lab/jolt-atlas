@@ -20,7 +20,7 @@ from that set:
 - **No convolution, pooling or runtime comparison ops.** `Less`, `Greater` and `Equal` exist in
   the importer only for constant folding and mask handling.
 
-One experiment informs the ranking. `atlas-lookup-tables/src/piecewise_linear.rs` (commit
+One experiment informs the ranking. `crates/atlas-lookup-tables/src/piecewise_linear.rs` (commit
 `267e942ec`, read by no op) holds piecewise-linear tables for tanh, erf, sigmoid, sin and cos:
 the function's value at every 256-input segment boundary, interpolated and kept unrounded.
 Measured at scale 14:

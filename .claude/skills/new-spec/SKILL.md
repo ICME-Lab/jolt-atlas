@@ -39,7 +39,7 @@ types, modules, and boundaries if unclear.
 #### Intent: Invariants
 
 Before asking the user anything, form a hypothesis from the Summary and Goal:
-1. Read the behavioral contract at the top of `atlas-trace/src/lib.rs`. For each clause, judge
+1. Read the behavioral contract at the top of `crates/atlas-trace/src/lib.rs`. For each clause, judge
    whether this feature relies on it, preserves it, or changes it.
 2. If the feature touches the prover, list the op protocols under
    `jolt-atlas-core/src/onnx_proof/ops/` it affects, their rows in

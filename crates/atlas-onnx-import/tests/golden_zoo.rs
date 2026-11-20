@@ -20,7 +20,7 @@ use atlas_onnx_import::LoadOptions;
 use atlas_onnx_import::fixtures::{GOLDEN_SEED, standard_bindings, synth_inputs};
 
 fn zoo_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../models")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models")
 }
 
 fn fnv(values: impl IntoIterator<Item = i32>) -> u64 {

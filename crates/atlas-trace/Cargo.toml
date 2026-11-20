@@ -3,7 +3,7 @@ name = "atlas-trace"
 version = "0.1.0"
 edition = "2024"
 description = "Deterministic fixed-point IR, semantics, and trace engine for jolt-atlas zkML."
-license-file = "../LICENSE"
+license-file = "../../LICENSE"
 
 [dependencies]
 serde = { workspace = true, default-features = true, features = ["rc"] }

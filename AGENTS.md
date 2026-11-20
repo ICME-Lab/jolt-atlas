@@ -79,7 +79,7 @@ cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2 --
 cargo run --release -p jolt-atlas-core --example prove -- --model models/op_gauntlet --schedule  # the verification schedule, one line per step
 cargo run --release -p atlas-onnx-import --example dump_lowered_ops -- <model.onnx>
 
-# Regenerating the tiny fixtures (changes weights → re-pin atlas-onnx-import/tests/golden_zoo.rs)
+# Regenerating the tiny fixtures (changes weights → re-pin crates/atlas-onnx-import/tests/golden_zoo.rs)
 .venv/bin/python scripts/gen_tiny_models.py
 ```
 
@@ -119,7 +119,8 @@ runs with it only against runs with it. It has no effect on macOS.
 
 ### Crate Map
 
-Workspace members, in dependency order:
+Workspace members, in dependency order. The `atlas-*` crates are under `crates/`; `common`,
+`jolt-atlas-verifier` and `jolt-atlas-core` are at the repository root.
 
 - **common** — shared constants and parallel helpers.
 - The proof-system toolkit inherited from Jolt, in dependency order:
@@ -305,7 +306,7 @@ byte for byte the arkworks compressed encoding the format was defined with.
 ## Development Guidelines
 
 - Performance is the product. Profile before optimizing; the sumcheck inner loops dominate
-  prover time, and small regressions in `atlas-algebra/src/poly` multiply across every round.
+  prover time, and small regressions in `crates/atlas-algebra/src/poly` multiply across every round.
 - Prefer `x.evaluate_mle(&r)` over building a polynomial from a clone just to evaluate it.
 - Tests assert against independent ground truth: the trace semantics, golden hashes, or
   algebraic properties. Never a second implementation of the rule under test.

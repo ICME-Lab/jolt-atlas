@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the committed fixed-point constants in atlas-trace/src/semantics/coeffs.rs.
+"""Generate the committed fixed-point constants in crates/atlas-trace/src/semantics/coeffs.rs.
 
 Uses only the Python standard library (decimal at 60 significant digits).
 Each constant is `round(value * 2^frac_bits)` computed in arbitrary precision.

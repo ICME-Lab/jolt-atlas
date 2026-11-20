@@ -20,9 +20,9 @@ cargo-fuzz needs a nightly toolchain (the repo pins stable), so run it with
 Coverage is far better starting from real models:
 
 ```sh
-cd atlas-onnx-import
+cd crates/atlas-onnx-import
 mkdir -p fuzz/corpus/import
-for f in ../models/*/network.onnx; do
+for f in ../../models/*/network.onnx; do
   cp "$f" "fuzz/corpus/import/$(basename "$(dirname "$f")").onnx"
 done
 ```
@@ -33,7 +33,7 @@ done
 ## Run
 
 ```sh
-cd atlas-onnx-import
+cd crates/atlas-onnx-import
 cargo +nightly fuzz run import -- -timeout=10 -rss_limit_mb=4096 -max_len=262144
 ```
 

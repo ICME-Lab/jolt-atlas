@@ -1340,6 +1340,7 @@ dependencies = [
 name = "jolt-atlas-core"
 version = "0.1.0"
 dependencies = [
+ "allocative",
  "atlas-algebra",
  "atlas-claims",
  "atlas-lookup-tables",
@@ -1375,6 +1376,8 @@ dependencies = [
  "atlas-sumcheck",
  "atlas-trace",
  "atlas-transcript",
+ "bincode",
+ "blake3",
  "common",
  "serde",
  "tracing",

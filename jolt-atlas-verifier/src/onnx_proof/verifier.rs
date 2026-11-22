@@ -275,13 +275,32 @@ pub fn verify_output_claim<F: JoltField, T: VerifyingTranscript>(
     model: &Model,
     verifier: &mut Verifier<'_, F, T>,
 ) -> Result<(), ProofVerifyError> {
-    let (Some(&output_index), Some(output)) =
-        (model.output_indices().first(), verifier.io.outputs.first())
-    else {
+    let Some(&output_index) = model.output_indices().first() else {
         return Err(ProofVerifyError::Malformed(
-            "the model has no output".to_string(),
+            "the model has no output".into(),
         ));
     };
+    verify_output_claim_at(
+        model,
+        verifier,
+        output_index,
+        0,
+        SumcheckId::NodeExecution(output_index + 1),
+    )
+}
+
+pub(super) fn verify_output_claim_at<F: JoltField, T: VerifyingTranscript>(
+    model: &Model,
+    verifier: &mut Verifier<'_, F, T>,
+    output_index: usize,
+    output_position: usize,
+    sumcheck: SumcheckId,
+) -> Result<(), ProofVerifyError> {
+    let output = verifier
+        .io
+        .outputs
+        .get(output_position)
+        .ok_or_else(|| ProofVerifyError::Malformed("missing public output tensor".into()))?;
     let output_computation_node = &model.view(output_index);
     let r_node_output = verifier.transcript.challenge_vector_optimized::<F>(
         output_computation_node
@@ -293,9 +312,7 @@ pub fn verify_output_claim<F: JoltField, T: VerifyingTranscript>(
 
     let output_opening_id = OpeningId::new(
         VirtualPoly::NodeOutput(output_computation_node.idx),
-        // We add a NodeOutput claim for the model output. We use idx+1 as the execution,
-        // since some nodes add a claim during their own execution that would otherwise collide with the output claim.
-        SumcheckId::NodeExecution(output_computation_node.idx + 1),
+        sumcheck,
     );
 
     let mut provider = AccOpeningAccessor::new(&mut verifier.accumulator, output_computation_node)

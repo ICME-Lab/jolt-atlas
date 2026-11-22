@@ -13,6 +13,10 @@ use atlas_transcript::{Transcript, VerifyingTranscript};
 
 // ── Submodules ───────────────────────────────────────────────────────────
 
+#[cfg(feature = "akita")]
+pub mod akita;
+#[cfg(feature = "akita")]
+pub mod coefficient_checks;
 pub mod fused_rebase;
 pub mod lookup;
 pub mod ops;
@@ -54,13 +58,21 @@ pub use verifier::Verifier;
 /// at a transcript-derived point and the IOP ties the output to the trace), so
 /// only inputs need binding here.
 pub fn append_inputs_to_transcript<T: Transcript>(transcript: &mut T, io: &ModelExecutionIO) {
-    transcript.append_message(b"model_inputs");
-    transcript.append_u64(io.inputs.len() as u64);
-    transcript.append_u64(io.input_indices.len() as u64);
+    append_model_tensors(transcript, b"model_inputs", &io.input_indices, &io.inputs);
+}
 
-    // Bind all inputs (and all indices) even if a malformed `ModelExecutionIO` is provided.
-    for (i, tensor) in io.inputs.iter().enumerate() {
-        let node_idx = io.input_indices.get(i).copied().unwrap_or(usize::MAX);
+fn append_model_tensors<T: Transcript>(
+    transcript: &mut T,
+    label: &'static [u8],
+    indices: &[usize],
+    tensors: &[atlas_trace::Tensor<i32>],
+) {
+    transcript.append_message(label);
+    transcript.append_u64(tensors.len() as u64);
+    transcript.append_u64(indices.len() as u64);
+
+    for (i, tensor) in tensors.iter().enumerate() {
+        let node_idx = indices.get(i).copied().unwrap_or(usize::MAX);
         transcript.append_u64(node_idx as u64);
 
         let dims = tensor.dims();
@@ -78,7 +90,7 @@ pub fn append_inputs_to_transcript<T: Transcript>(transcript: &mut T, io: &Model
     }
 
     // Ensure any extra indices also perturb the transcript.
-    for node_idx in io.input_indices.iter().skip(io.inputs.len()) {
+    for node_idx in indices.iter().skip(tensors.len()) {
         transcript.append_u64(*node_idx as u64);
         transcript.append_message(b"missing_tensor");
     }

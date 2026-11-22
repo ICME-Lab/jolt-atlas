@@ -24,6 +24,8 @@
 //! This module is a descendant of `onnx_proof` so tests can reach the
 //! prover and verifier helpers without widening any visibility.
 
+#[cfg(feature = "akita")]
+mod akita;
 mod digests;
 pub(crate) mod harness;
 pub(crate) mod model_builder;

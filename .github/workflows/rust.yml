@@ -151,6 +151,11 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Workspace tests
         run: cargo nextest run --workspace --profile ci
+      - name: Akita adapter and model proof tests
+        run: >
+          cargo nextest run --locked -p atlas-pcs -p jolt-atlas-core
+          --features jolt-atlas-core/akita --profile ci
+          -E 'test(akita::) | test(coefficient_checks::)'
       - name: Full-zoo import gates (checked-in models)
         run: >
           cargo nextest run -p atlas-onnx-import --profile ci

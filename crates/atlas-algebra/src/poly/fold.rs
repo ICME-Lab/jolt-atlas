@@ -19,7 +19,9 @@ pub fn fold_pairs_in_place<T: Copy + Send + Sync>(
     let n = values.len() / 2;
     let first = n.min(FIRST_RUN);
     let head: Vec<T> = values[..2 * first]
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| fold(pair[0], pair[1]))
         .collect();
     values[..first].copy_from_slice(&head);
@@ -54,7 +56,12 @@ mod tests {
             let values: Vec<u64> = (0..2 * half as u64)
                 .map(|i| i * 2_654_435_761 % 1_000_003)
                 .collect();
-            let want: Vec<u64> = values.chunks_exact(2).map(|p| p[0] * 3 + p[1]).collect();
+            let want: Vec<u64> = values
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|p| p[0] * 3 + p[1])
+                .collect();
             let mut got = values.clone();
             fold_pairs_in_place(&mut got, |a, b| a * 3 + b);
             assert_eq!(&got[..half], &want[..]);

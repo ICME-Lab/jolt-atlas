@@ -413,8 +413,11 @@ pub fn decode_tensor(t: &proto::TensorProto, model_dir: &Path) -> Result<ConstTe
     let (dtype, data) = match dtype {
         DataType::Float => {
             let v: Vec<f32> = if has_raw_data {
-                raw.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().expect("chunk of 4")))
+                raw.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(f32::from_le_bytes)
                     .collect()
             } else {
                 t.float_data.clone()
@@ -423,8 +426,11 @@ pub fn decode_tensor(t: &proto::TensorProto, model_dir: &Path) -> Result<ConstTe
         }
         DataType::Int64 => {
             let v: Vec<i64> = if has_raw_data {
-                raw.chunks_exact(8)
-                    .map(|c| i64::from_le_bytes(c.try_into().expect("chunk of 8")))
+                raw.as_chunks::<8>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(i64::from_le_bytes)
                     .collect()
             } else {
                 t.int64_data.clone()
@@ -433,8 +439,10 @@ pub fn decode_tensor(t: &proto::TensorProto, model_dir: &Path) -> Result<ConstTe
         }
         DataType::Int32 => {
             let v: Vec<i64> = if has_raw_data {
-                raw.chunks_exact(4)
-                    .map(|c| i32::from_le_bytes(c.try_into().expect("chunk of 4")) as i64)
+                raw.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&bytes| i64::from(i32::from_le_bytes(bytes)))
                     .collect()
             } else {
                 t.int32_data.iter().map(|&v| v as i64).collect()

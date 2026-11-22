@@ -701,7 +701,7 @@ mod tests {
         let values = samples();
         let mut wide = WideSum::ZERO;
         let mut expected = Gf128::ZERO;
-        for pair in values.chunks_exact(2) {
+        for pair in values.as_chunks::<2>().0 {
             wide.add_product(pair[0], pair[1]);
             expected += mul_reference(pair[0], pair[1]);
         }

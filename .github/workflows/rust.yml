@@ -105,25 +105,21 @@ jobs:
             fi
           done
           exit $status
-      - name: No deleted vendored crate or upstream facade named in atlas sources
+      - name: Keep Jolt dependencies at the Akita adapters
         # atlas-pcs owns the commitment scheme (CommitmentScheme is the one scheme trait);
         # atlas-sumcheck owns the sumcheck engine; atlas-transcript owns the transcript;
         # atlas-algebra owns the polynomial library and the field.
         run: |
           if grep -rnE '\b(jolt_akita|akita_[a-z_]+|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|jolt_poly|jolt_utils|jolt_field|ark_ff|ark_serialize|ark_std|ark_ec|ark_bn254|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
-              common crates jolt-atlas-* --include='*.rs'; then
-            echo "an atlas source names a deleted vendored crate or an upstream facade" >&2
+              common crates jolt-atlas-* --include='*.rs' \
+              | grep -vE '^crates/(atlas-algebra/src/field/akita\.rs:|atlas-pcs/src/akita(\.rs:|/))'; then
+            echo "an Atlas source outside the Akita adapters names a Jolt dependency" >&2
             exit 1
           fi
-      - name: No arkworks crate in any member's dependency graph
-        # common::serialize owns the proof encoding and atlas-algebra::field the big integers
-        # (specs/drop-arkworks.md); no ark-* crate may come back.
+      - name: No arkworks crate in the default dependency graph
+        # The optional Akita graph shares this lockfile with the default build.
         run: |
           status=0
-          if grep -q '^name = "ark-' Cargo.lock; then
-            echo "Cargo.lock holds an ark-* crate" >&2
-            status=1
-          fi
           for name in $(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].name'); do
             if cargo tree -p "$name" -e normal,build,dev --prefix none | grep -qE '^ark-'; then
               echo "$name resolves an ark-* crate" >&2

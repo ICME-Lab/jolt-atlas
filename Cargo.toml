@@ -43,6 +43,11 @@ atlas-pcs = { path = "./crates/atlas-pcs", default-features = false }
 jolt-atlas-verifier = { path = "./jolt-atlas-verifier" }
 
 # Cryptography and Math
+jolt-akita = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a", default-features = false, features = ["parallel"] }
+jolt-field = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a", default-features = false, features = ["solinas"] }
+jolt-poly = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a", default-features = false }
+jolt-openings = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a", default-features = false }
+jolt-transcript = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a", default-features = false, features = ["transcript-keccak"] }
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
 
 # Numeric
@@ -114,3 +119,12 @@ debug = false
 
 [patch.crates-io]
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
+ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
+
+# LayerZero pins these crates to a different Jolt revision. Use the adapter's
+# revision for both sides so the field, polynomial and transcript types agree.
+# The GitHub redirect hostname gives Cargo a distinct patch source for the same repo.
+[patch."https://github.com/a16z/jolt"]
+jolt-field = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a" }
+jolt-poly = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a" }
+jolt-transcript = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a" }

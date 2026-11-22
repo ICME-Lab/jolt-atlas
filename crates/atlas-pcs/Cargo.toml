@@ -4,11 +4,36 @@ version = "0.1.0"
 edition = "2021"
 description = "The atlas polynomial commitment interface and the BitZ scheme."
 
+[features]
+akita = [
+    "atlas-algebra/akita",
+    "atlas-sumcheck/akita",
+    "dep:jolt-akita",
+    "dep:jolt-openings",
+    "dep:jolt-poly",
+    "dep:jolt-transcript",
+]
+akita-schedule-generator = ["akita", "dep:akita-config", "dep:akita-params", "dep:akita-planner"]
+
+[[bin]]
+name = "generate_akita_schedules"
+path = "src/akita/generate_akita_schedules.rs"
+required-features = ["akita-schedule-generator"]
+
 [dependencies]
 # Internal
 common.workspace = true
 atlas-algebra.workspace = true
 atlas-transcript.workspace = true
+jolt-akita = { workspace = true, optional = true }
+jolt-openings = { workspace = true, optional = true }
+jolt-poly = { workspace = true, optional = true }
+jolt-transcript = { workspace = true, optional = true }
+
+# Match the Akita revision selected by jolt-akita.
+akita-config = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "d50f700fb1a292395a717cef0e6f437c7ce2cdb1", default-features = false, optional = true }
+akita-params = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "d50f700fb1a292395a717cef0e6f437c7ce2cdb1", default-features = false, optional = true }
+akita-planner = { git = "https://github.com/LayerZero-Labs/akita.git", rev = "d50f700fb1a292395a717cef0e6f437c7ce2cdb1", default-features = false, optional = true }
 
 # The Merkle tree of the BitZ commitment.
 blake3.workspace = true
@@ -20,6 +45,7 @@ rayon.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+atlas-sumcheck.workspace = true
 rand.workspace = true
 tracing-subscriber.workspace = true
 atlas-transcript = { workspace = true, features = ["prover", "test-feature"] }

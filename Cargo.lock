@@ -26,6 +26,249 @@ dependencies = [
 ]
 
 [[package]]
+name = "akita-algebra"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-error",
+ "akita-serialization",
+ "jolt-field",
+ "jolt-poly",
+ "rand_core 0.6.4",
+ "rayon",
+ "tracing",
+]
+
+[[package]]
+name = "akita-challenges"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-error",
+ "akita-transcript",
+ "jolt-field",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
+name = "akita-config"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-challenges",
+ "akita-error",
+ "akita-params",
+ "akita-schedules",
+ "akita-serialization",
+ "akita-transcript",
+ "akita-types",
+ "jolt-field",
+]
+
+[[package]]
+name = "akita-cpu-backend"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-algebra",
+ "akita-challenges",
+ "akita-config",
+ "akita-error",
+ "akita-params",
+ "akita-prover",
+ "akita-serialization",
+ "akita-sumcheck",
+ "akita-transcript",
+ "akita-types",
+ "jolt-field",
+ "jolt-poly",
+ "rayon",
+ "tracing",
+]
+
+[[package]]
+name = "akita-error"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "akita-params"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-algebra",
+ "akita-challenges",
+ "akita-error",
+ "akita-serialization",
+ "akita-sumcheck",
+ "akita-transcript",
+ "jolt-field",
+ "jolt-transcript",
+ "serde",
+ "sha3",
+]
+
+[[package]]
+name = "akita-pcs"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-algebra",
+ "akita-challenges",
+ "akita-config",
+ "akita-cpu-backend",
+ "akita-error",
+ "akita-params",
+ "akita-prover",
+ "akita-serialization",
+ "akita-setup",
+ "akita-transcript",
+ "akita-types",
+ "akita-verifier",
+ "jolt-field",
+ "rayon",
+ "tracing",
+]
+
+[[package]]
+name = "akita-planner"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-challenges",
+ "akita-error",
+ "akita-params",
+ "akita-schedules",
+ "libm",
+]
+
+[[package]]
+name = "akita-prover"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-algebra",
+ "akita-challenges",
+ "akita-config",
+ "akita-error",
+ "akita-params",
+ "akita-serialization",
+ "akita-sumcheck",
+ "akita-transcript",
+ "akita-types",
+ "jolt-field",
+ "jolt-poly",
+ "tracing",
+]
+
+[[package]]
+name = "akita-schedules"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-challenges",
+ "akita-error",
+ "akita-params",
+ "postcard",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+]
+
+[[package]]
+name = "akita-serialization"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "jolt-field",
+ "jolt-poly",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "akita-setup"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-config",
+ "akita-cpu-backend",
+ "akita-error",
+ "akita-params",
+ "akita-serialization",
+ "akita-types",
+ "jolt-field",
+ "tracing",
+]
+
+[[package]]
+name = "akita-sumcheck"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-algebra",
+ "akita-error",
+ "akita-serialization",
+ "akita-transcript",
+ "jolt-field",
+ "jolt-poly",
+]
+
+[[package]]
+name = "akita-transcript"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-error",
+ "jolt-field",
+ "jolt-transcript",
+ "sha3",
+ "spongefish",
+]
+
+[[package]]
+name = "akita-types"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-algebra",
+ "akita-challenges",
+ "akita-error",
+ "akita-params",
+ "akita-serialization",
+ "akita-sumcheck",
+ "akita-transcript",
+ "jolt-field",
+ "jolt-poly",
+ "rand_core 0.6.4",
+ "shake",
+ "tracing",
+]
+
+[[package]]
+name = "akita-verifier"
+version = "0.1.0"
+source = "git+https://github.com/LayerZero-Labs/akita.git?rev=d50f700fb1a292395a717cef0e6f437c7ce2cdb1#d50f700fb1a292395a717cef0e6f437c7ce2cdb1"
+dependencies = [
+ "akita-algebra",
+ "akita-challenges",
+ "akita-config",
+ "akita-error",
+ "akita-params",
+ "akita-serialization",
+ "akita-sumcheck",
+ "akita-transcript",
+ "akita-types",
+ "jolt-field",
+ "jolt-poly",
+ "rayon",
+ "tracing",
+]
+
+[[package]]
 name = "allocative"
 version = "0.3.4"
 source = "git+https://github.com/facebookexperimental/allocative?rev=85b773d85d526d068ce94724ff7a7b81203fc95e#85b773d85d526d068ce94724ff7a7b81203fc95e"
@@ -101,6 +344,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
+name = "ark-serialize"
+version = "0.5.0"
+source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
+dependencies = [
+ "ark-serialize-derive",
+ "ark-std",
+ "arrayvec",
+ "digest 0.10.7",
+ "num-bigint",
+]
+
+[[package]]
+name = "ark-serialize-derive"
+version = "0.5.0"
+source = "git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout#b8f0f5129501c42c8a934f4832746d335c8f8ca1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "ark-std"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "246a225cc6131e9ee4f24619af0f19d67761fff15d7ccc22e42b80846e69449a"
+dependencies = [
+ "num-traits",
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -116,6 +391,7 @@ dependencies = [
  "bincode",
  "common",
  "inferno",
+ "jolt-field",
  "memory-stats",
  "num",
  "num-traits",
@@ -124,8 +400,8 @@ dependencies = [
  "rand_core 0.6.4",
  "rayon",
  "serde",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
@@ -154,8 +430,8 @@ dependencies = [
  "rand 0.8.5",
  "rayon",
  "serde",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "tracing",
  "tracing-subscriber",
 ]
@@ -175,10 +451,18 @@ dependencies = [
 name = "atlas-pcs"
 version = "0.1.0"
 dependencies = [
+ "akita-config",
+ "akita-params",
+ "akita-planner",
  "atlas-algebra",
+ "atlas-sumcheck",
  "atlas-transcript",
  "blake3",
  "common",
+ "jolt-akita",
+ "jolt-openings",
+ "jolt-poly",
+ "jolt-transcript",
  "rand 0.8.5",
  "rayon",
  "tracing",
@@ -339,6 +623,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
@@ -472,6 +757,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "cobs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -501,6 +795,12 @@ dependencies = [
  "serde",
  "static_assertions",
 ]
+
+[[package]]
+name = "const-oid"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
 
 [[package]]
 name = "constant_time_eq"
@@ -723,8 +1023,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer 0.12.1",
+ "const-oid",
  "crypto-common 0.2.2",
  "ctutils",
+ "zeroize",
 ]
 
 [[package]]
@@ -732,6 +1034,18 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "embedded-io"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
+
+[[package]]
+name = "embedded-io"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "env_filter"
@@ -970,6 +1284,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
+name = "jolt-akita"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "akita-algebra",
+ "akita-challenges",
+ "akita-config",
+ "akita-error",
+ "akita-params",
+ "akita-pcs",
+ "akita-planner",
+ "akita-prover",
+ "akita-schedules",
+ "akita-transcript",
+ "akita-types",
+ "akita-verifier",
+ "jolt-claims",
+ "jolt-crypto",
+ "jolt-field",
+ "jolt-openings",
+ "jolt-platform",
+ "jolt-poly",
+ "jolt-transcript",
+ "rayon",
+ "serde",
+ "serde_bytes",
+ "tracing",
+]
+
+[[package]]
+name = "jolt-algebra"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "cc",
+ "jolt-utils",
+ "num-traits",
+ "rand_core 0.6.4",
+ "rayon",
+ "serde",
+ "spongefish",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "jolt-atlas"
 version = "0.1.0"
 dependencies = [
@@ -999,8 +1358,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "tokenizers",
  "tracing",
 ]
@@ -1019,6 +1378,156 @@ dependencies = [
  "common",
  "serde",
  "tracing",
+]
+
+[[package]]
+name = "jolt-claim-expr"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "jolt-algebra",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jolt-claims"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "derive_more",
+ "jolt-claim-expr",
+ "jolt-claims-derive",
+ "jolt-field",
+ "jolt-lookup-tables",
+ "jolt-openings",
+ "jolt-poly",
+ "jolt-r1cs",
+ "jolt-riscv",
+ "jolt-transcript",
+ "jolt-utils",
+ "serde",
+ "sha3",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jolt-claims-derive"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "jolt-crypto"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "jolt-field",
+ "jolt-poly",
+ "jolt-transcript",
+ "rand_core 0.6.4",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "jolt-field"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "jolt-algebra",
+]
+
+[[package]]
+name = "jolt-lookup-tables"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "jolt-field",
+ "jolt-riscv",
+ "serde",
+ "strum 0.28.0",
+]
+
+[[package]]
+name = "jolt-openings"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "jolt-crypto",
+ "jolt-field",
+ "jolt-poly",
+ "jolt-transcript",
+ "serde",
+ "spongefish",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "jolt-platform"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+
+[[package]]
+name = "jolt-poly"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "jolt-field",
+ "jolt-transcript",
+ "jolt-utils",
+ "num-traits",
+ "rand_core 0.6.4",
+ "rayon",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "jolt-r1cs"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "jolt-field",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jolt-riscv"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "ark-serialize",
+ "serde",
+ "strum 0.28.0",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jolt-transcript"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "getrandom 0.4.3",
+ "jolt-field",
+ "sha3",
+ "shake",
+ "spongefish",
+]
+
+[[package]]
+name = "jolt-utils"
+version = "0.1.0"
+source = "git+https://www.github.com/a16z/jolt?rev=fe1cc674aa40a6036ff7310ee2344644bb45093a#fe1cc674aa40a6036ff7310ee2344644bb45093a"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -1337,6 +1846,18 @@ name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
+
+[[package]]
+name = "postcard"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5431b3dcfdf6d1985c87d11f267a171c0dec0a8cd544c6727b747d36365f1fca"
+dependencies = [
+ "cobs",
+ "embedded-io 0.4.0",
+ "embedded-io 0.6.1",
+ "serde",
+]
 
 [[package]]
 name = "ppv-lite86"
@@ -1700,6 +2221,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1759,6 +2290,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha3"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
+dependencies = [
+ "digest 0.11.3",
+ "keccak",
+ "sponge-cursor",
+]
+
+[[package]]
 name = "shake"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1813,6 +2355,9 @@ name = "sponge-cursor"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "spongefish"
@@ -1822,6 +2367,7 @@ checksum = "62560b5029264a655fc461a0ecadc4d24862799190897d3225b3272b7a3f13b7"
 dependencies = [
  "digest 0.11.3",
  "getrandom 0.4.3",
+ "keccak",
  "shake",
  "turboshake",
  "zeroize",
@@ -1852,6 +2398,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
 
 [[package]]
+name = "strum"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
+dependencies = [
+ "strum_macros 0.28.0",
+]
+
+[[package]]
 name = "strum_macros"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1861,6 +2416,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

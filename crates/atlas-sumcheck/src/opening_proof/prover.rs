@@ -459,7 +459,7 @@ where
         let _enter = prepare_span.enter();
 
         // Populate dense_polynomial_map
-        for (_, sumcheck) in self.sumchecks.iter() {
+        for sumcheck in self.sumchecks.values() {
             // A dense polynomial opened alone is shared by its openings; a group of them is
             // folded into a polynomial of the group's own.
             if let (ProverOpening::Dense(_), [poly_id]) =

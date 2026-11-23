@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+akita = ["atlas-pcs/akita", "atlas-sumcheck/akita", "jolt-atlas-verifier/akita", "dep:allocative"]
 # The `verify` fuzz target's driver (`onnx_proof::fuzz`), for the cargo-fuzz harness in `fuzz/`.
 fuzz = ["atlas-onnx-import/test-util"]
 
@@ -19,6 +20,7 @@ atlas-sumcheck.workspace = true
 atlas-pcs.workspace = true
 jolt-atlas-verifier.workspace = true
 atlas-claims.workspace = true
+allocative = { workspace = true, optional = true }
 
 # Cryptography and Math
 

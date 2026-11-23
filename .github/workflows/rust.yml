@@ -54,6 +54,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - run: cargo clippy --workspace --all-targets
+      - run: cargo clippy --locked --workspace --all-targets --features jolt-atlas-core/akita
 
   verifier-isolation:
     # The verifier crate must build alone and never depend on the prover.
@@ -70,12 +71,16 @@ jobs:
           save-if: false
           cache-on-failure: true
       - run: cargo check -p jolt-atlas-verifier
+      - run: cargo check --locked -p jolt-atlas-verifier --features akita
       - name: No jolt-atlas-core in the verifier's dependency tree
         run: |
-          if cargo tree -p jolt-atlas-verifier -e normal,build --prefix none | grep -q '^jolt-atlas-core '; then
-            echo "jolt-atlas-verifier depends on jolt-atlas-core" >&2
-            exit 1
-          fi
+          for features in "" "--features akita"; do
+            tree=$(cargo tree -p jolt-atlas-verifier -e normal,build --prefix none $features)
+            if grep -q '^jolt-atlas-core ' <<< "$tree"; then
+              echo "jolt-atlas-verifier depends on jolt-atlas-core" >&2
+              exit 1
+            fi
+          done
       - name: No prover module paths in the verifier's sources
         # The backstop for prover items that jolt-atlas-verifier/clippy.toml's list misses.
         run: |
@@ -105,25 +110,21 @@ jobs:
             fi
           done
           exit $status
-      - name: No deleted vendored crate or upstream facade named in atlas sources
+      - name: Keep Jolt dependencies at the Akita adapters
         # atlas-pcs owns the commitment scheme (CommitmentScheme is the one scheme trait);
         # atlas-sumcheck owns the sumcheck engine; atlas-transcript owns the transcript;
         # atlas-algebra owns the polynomial library and the field.
         run: |
           if grep -rnE '\b(jolt_akita|akita_[a-z_]+|jolt_openings|jolt_crypto|jolt_sumcheck|jolt_transcript|jolt_poly|jolt_utils|jolt_field|ark_ff|ark_serialize|ark_std|ark_ec|ark_bn254|UpstreamScheme|upstream_sumcheck|FacadeTranscript)\b' \
-              common crates jolt-atlas-* --include='*.rs'; then
-            echo "an atlas source names a deleted vendored crate or an upstream facade" >&2
+              common crates jolt-atlas-* --include='*.rs' \
+              | grep -vE '^crates/(atlas-algebra/src/field/akita\.rs:|atlas-pcs/src/akita(\.rs:|/))'; then
+            echo "an Atlas source outside the Akita adapters names a Jolt dependency" >&2
             exit 1
           fi
-      - name: No arkworks crate in any member's dependency graph
-        # common::serialize owns the proof encoding and atlas-algebra::field the big integers
-        # (specs/drop-arkworks.md); no ark-* crate may come back.
+      - name: No arkworks crate in the default dependency graph
+        # The optional Akita graph shares this lockfile with the default build.
         run: |
           status=0
-          if grep -q '^name = "ark-' Cargo.lock; then
-            echo "Cargo.lock holds an ark-* crate" >&2
-            status=1
-          fi
           for name in $(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].name'); do
             if cargo tree -p "$name" -e normal,build,dev --prefix none | grep -qE '^ark-'; then
               echo "$name resolves an ark-* crate" >&2
@@ -155,6 +156,11 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Workspace tests
         run: cargo nextest run --workspace --profile ci
+      - name: Akita adapter and model proof tests
+        run: >
+          cargo nextest run --locked -p atlas-pcs -p jolt-atlas-core -p jolt-atlas-verifier
+          --features jolt-atlas-core/akita --profile ci
+          -E 'test(akita::) | test(coefficient_checks::)'
       - name: Full-zoo import gates (checked-in models)
         run: >
           cargo nextest run -p atlas-onnx-import --profile ci

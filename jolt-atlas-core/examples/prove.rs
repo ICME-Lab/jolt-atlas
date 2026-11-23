@@ -9,9 +9,14 @@
 //! cargo run --release -p jolt-atlas-core --example prove -- --model models/gpt2
 //! cargo run --release -p jolt-atlas-core --example prove -- --model models/qwen \
 //!     --input "The quick brown fox jumps over the lazy dog" --use-cache
+//!
+//! # Akita CPU
+//! cargo run --release -p jolt-atlas-core --features akita --example prove -- \
+//!     --pcs akita --model models/bge-small-en-v1.5
 //! ```
 //!
 //! Options:
+//! * `--pcs bitz|akita`       commitment scheme (default bitz; akita requires the Cargo feature)
 //! * `--model <dir>`          directory holding `network.onnx` (required)
 //! * `--seq-len N`            sequence length binding (default 16; ignored with `--input`)
 //! * `--input "<text>"`       tokenize with `<dir>/tokenizer.json`; sequence length = token count
@@ -25,7 +30,9 @@
 //! `0..n` (scaled when the model expects fixed point), token types zero.
 use std::{collections::HashMap, path::PathBuf, time::Instant};
 
-use atlas_algebra::poly::multilinear::MultilinearPolynomial;
+#[cfg(feature = "akita")]
+use atlas_algebra::field::akita::AkitaField;
+use atlas_algebra::{field::JoltField, poly::multilinear::MultilinearPolynomial};
 use atlas_onnx_import::fixtures::{inputs_with_ids, standard_bindings, synth_inputs, GOLDEN_SEED};
 use atlas_onnx_import::{ImportedModel, InputDescriptor, InputKind};
 use atlas_trace::{Model, Tensor};
@@ -33,13 +40,22 @@ use bincode::config::standard;
 use common::utils::logging::setup_tracing;
 use jolt_atlas_core::loader::{load_imported, RunArgs};
 use jolt_atlas_core::node_view::ModelView;
+#[cfg(feature = "akita")]
+use jolt_atlas_core::onnx_proof::akita;
 use jolt_atlas_core::onnx_proof::{
-    prove, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing, AtlasVerifierPreprocessing,
-    BitzScheme, Blake2bProver, Blake2bVerifier, Fp128,
+    prove, schedule::Schedule, verify, AtlasProverPreprocessing, AtlasSharedPreprocessing,
+    AtlasVerifierPreprocessing, BitzScheme, Blake2bProver, Blake2bVerifier, Fp128,
 };
+
+enum Pcs {
+    Bitz,
+    #[cfg(feature = "akita")]
+    Akita,
+}
 
 struct Args {
     model_dir: PathBuf,
+    pcs: Pcs,
     seq_len: usize,
     input: Option<String>,
     use_cache: bool,
@@ -53,19 +69,37 @@ fn parse_args() -> Args {
     let value = |flag: &str| -> Option<String> {
         argv.iter().position(|a| a == flag).map(|i| {
             argv.get(i + 1)
-                .unwrap_or_else(|| panic!("{flag} needs a value"))
+                .unwrap_or_else(|| {
+                    eprintln!("{flag} needs a value");
+                    std::process::exit(2);
+                })
                 .clone()
         })
     };
+    let pcs = match value("--pcs").as_deref() {
+        None | Some("bitz") => Pcs::Bitz,
+        #[cfg(feature = "akita")]
+        Some("akita") => Pcs::Akita,
+        #[cfg(not(feature = "akita"))]
+        Some("akita") => {
+            eprintln!("--pcs akita requires building with --features akita");
+            std::process::exit(2);
+        }
+        Some(name) => {
+            eprintln!("unknown PCS {name:?}; expected bitz or akita");
+            std::process::exit(2);
+        }
+    };
     let model_dir = PathBuf::from(value("--model").unwrap_or_else(|| {
         eprintln!(
-            "usage: prove --model <dir> [--seq-len N] [--input TEXT] [--use-cache] [--stats] \
+            "usage: prove --model <dir> [--pcs bitz|akita] [--seq-len N] [--input TEXT] [--use-cache] [--stats] \
              [--census] [--schedule] [--trace|--trace-terminal]"
         );
         std::process::exit(2);
     }));
     Args {
         model_dir,
+        pcs,
         seq_len: value("--seq-len").map_or(16, |v| v.parse().expect("--seq-len N")),
         input: value("--input"),
         use_cache: argv.iter().any(|a| a == "--use-cache"),
@@ -92,9 +126,8 @@ fn needed_bits(q: &[i32]) -> usize {
 
 /// Committed-digit census and value-magnitude audit from one trace, without
 /// proving (Phase 2 of `docs/measurement-plan.md`).
-fn census(model: &Model, inputs: &[Tensor<i32>]) {
+fn census<F: JoltField>(model: &Model, inputs: &[Tensor<i32>]) {
     use common::CommittedPoly;
-    use jolt_atlas_core::onnx_proof::schedule::Schedule;
     use jolt_atlas_core::onnx_proof::trace_view::TraceView;
     use std::collections::BTreeMap;
 
@@ -132,7 +165,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
         rows: usize,
         nonzeros: usize,
     }
-    let count = |fam: &mut Fam, poly: &MultilinearPolynomial<Fp128>| {
+    let count = |fam: &mut Fam, poly: &MultilinearPolynomial<F>| {
         fam.polys += 1;
         match poly {
             MultilinearPolynomial::OneHot(oh) => {
@@ -149,7 +182,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     let mut by_fam: BTreeMap<String, Fam> = BTreeMap::new();
     for (p, poly) in
         jolt_atlas_core::onnx_proof::range_bucket::BucketWitnesses::build(model, &trace)
-            .committed_polys::<Fp128>(model)
+            .committed_polys::<F>(model)
     {
         let name = format!("{p:?}");
         let fam = name.split('(').next().unwrap().to_string();
@@ -159,7 +192,7 @@ fn census(model: &Model, inputs: &[Tensor<i32>]) {
     let mut node_rows = 0usize;
     // The polynomials the schedule opens besides the buckets' digits: each names its node
     // first.
-    let committed = Schedule::<Fp128>::compile(model)
+    let committed = Schedule::<F>::compile(model)
         .expect("the model has a schedule")
         .committed();
     for p in &committed {
@@ -464,7 +497,7 @@ fn load(args: &Args, run_args: &RunArgs) -> (AtlasSharedPreprocessing, Vec<Input
 }
 
 /// Prove + verify, reporting timings and proof size.
-fn run(shared: AtlasSharedPreprocessing, inputs: &[Tensor<i32>]) {
+fn run_bitz(shared: AtlasSharedPreprocessing, inputs: &[Tensor<i32>]) {
     let t = Instant::now();
     let prover_pp = AtlasProverPreprocessing::<Fp128, BitzScheme>::new(shared);
     println!("prover setup: {:.2?}", t.elapsed());
@@ -485,6 +518,36 @@ fn run(shared: AtlasSharedPreprocessing, inputs: &[Tensor<i32>]) {
         .expect("verification failed");
     println!("verify: {:.2?}", t.elapsed());
     println!("Proof verified successfully!");
+}
+
+#[cfg(feature = "akita")]
+fn run_akita(model: &Model, inputs: &[Tensor<i32>]) {
+    println!("PCS: Akita (CPU)");
+    let t = Instant::now();
+    let preprocessing = akita::ProverPreprocessing::new(model).expect("Akita setup failed");
+    println!("prover setup: {:.2?}", t.elapsed());
+
+    let t = Instant::now();
+    let (proof, io) = preprocessing.prove(inputs).expect("Akita proving failed");
+    println!("prove: {:.2?}", t.elapsed());
+    println!(
+        "proof size: {:.2} MiB",
+        proof.0.len() as f64 / (1024.0 * 1024.0)
+    );
+
+    let t = Instant::now();
+    preprocessing
+        .verifier()
+        .verify(&proof, &io)
+        .expect("verification failed");
+    println!("verify: {:.2?}", t.elapsed());
+    println!("Proof verified successfully!");
+}
+
+fn print_schedule<F: JoltField>(model: &Model) {
+    let schedule =
+        Schedule::<F>::compile(model).expect("the model's nodes have the shapes their ops prove");
+    print!("{schedule}");
 }
 
 /// Large buffers on huge pages where the kernel gives them only on request.
@@ -514,10 +577,11 @@ fn main() {
 
     let (shared, descriptors) = load(&args, &run_args);
     if args.schedule {
-        use jolt_atlas_core::onnx_proof::schedule::Schedule;
-        let schedule = Schedule::<Fp128>::compile(shared.model())
-            .expect("the model's nodes have the shapes their ops prove");
-        print!("{schedule}");
+        match args.pcs {
+            Pcs::Bitz => print_schedule::<Fp128>(shared.model()),
+            #[cfg(feature = "akita")]
+            Pcs::Akita => print_schedule::<AkitaField>(shared.model()),
+        }
         return;
     }
     // `synth_inputs` only needs the model for the gather dictionary bound;
@@ -537,8 +601,16 @@ fn main() {
     }
 
     if args.census {
-        census(shared.model(), &inputs);
+        match args.pcs {
+            Pcs::Bitz => census::<Fp128>(shared.model(), &inputs),
+            #[cfg(feature = "akita")]
+            Pcs::Akita => census::<AkitaField>(shared.model(), &inputs),
+        }
         return;
     }
-    run(shared, &inputs);
+    match args.pcs {
+        Pcs::Bitz => run_bitz(shared, &inputs),
+        #[cfg(feature = "akita")]
+        Pcs::Akita => run_akita(shared.model(), &inputs),
+    }
 }

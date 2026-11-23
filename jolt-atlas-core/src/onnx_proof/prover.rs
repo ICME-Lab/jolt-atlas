@@ -131,8 +131,15 @@ pub(super) fn commit_witness_polynomials<
 }
 
 pub(crate) fn output_claim<F: JoltField, T: ProvingTranscript>(prover: &mut Prover<F, T>) {
-    // Construct output polynomial
-    let output_index = prover.preprocessing.model().output_indices()[0];
+    let index = prover.preprocessing.model().output_indices()[0];
+    output_claim_at(prover, index, SumcheckId::NodeExecution(index + 1));
+}
+
+pub(crate) fn output_claim_at<F: JoltField, T: ProvingTranscript>(
+    prover: &mut Prover<F, T>,
+    output_index: usize,
+    sumcheck: SumcheckId,
+) {
     let output_computation_node = &prover.preprocessing.model().view(output_index);
     let LayerData {
         operands: _,
@@ -151,9 +158,7 @@ pub(crate) fn output_claim<F: JoltField, T: ProvingTranscript>(prover: &mut Prov
 
     let output_opening_id = OpeningId::new(
         VirtualPoly::NodeOutput(output_computation_node.idx),
-        // We add a NodeOutput claim for the model output. We use idx+1 as the execution,
-        // since some nodes add a claim during their own execution that would otherwise collide with the output
-        SumcheckId::NodeExecution(output_computation_node.idx + 1),
+        sumcheck,
     );
 
     let mut provider = AccOpeningAccessor::new(&mut prover.accumulator, output_computation_node)

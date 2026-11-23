@@ -5,6 +5,7 @@ edition = "2021"
 description = "The jolt-atlas proof and its verifier, with no prover dependency."
 
 [features]
+akita = ["atlas-pcs/akita", "atlas-sumcheck/akita", "dep:bincode", "dep:blake3"]
 # `&mut` accessors to the verifier's accumulator and transcript for tests. Inert unless called.
 test-util = []
 
@@ -18,4 +19,6 @@ atlas-sumcheck.workspace = true
 atlas-pcs.workspace = true
 atlas-claims.workspace = true
 serde.workspace = true
+bincode = { workspace = true, optional = true }
+blake3 = { workspace = true, optional = true }
 tracing.workspace = true

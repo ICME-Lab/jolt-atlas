@@ -227,7 +227,7 @@ fn gather_norm(g: &mut IGraph) -> Result<usize, ImportError> {
             node: name.clone(),
             reason,
         };
-        let axis = crate::shape_fns::norm_axis(axis_attr, rank).map_err(&fail)?;
+        let axis = crate::shape_fns::norm_axis(axis_attr, rank).map_err(fail)?;
         if axis as i64 != axis_attr {
             let node = g.nodes[idx].as_mut().expect("live");
             node.attrs.insert("axis".into(), Attr::Int(axis as i64));
@@ -257,7 +257,7 @@ fn gather_norm(g: &mut IGraph) -> Result<usize, ImportError> {
                 }
             })
             .collect::<Result<_, _>>()
-            .map_err(&fail)?;
+            .map_err(fail)?;
         // The index constant may feed other nodes; rebase on a fresh edge.
         let re = g.fresh_edge(
             &format!("{name}/indices"),

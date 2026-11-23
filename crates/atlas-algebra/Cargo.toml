@@ -5,6 +5,7 @@ edition = "2021"
 description = "Atlas fields, multilinear polynomials and shared utilities."
 
 [features]
+akita = ["dep:jolt-field"]
 allocative = ["dep:inferno"]
 test-feature = []
 
@@ -12,6 +13,7 @@ test-feature = []
 # Internal
 common.workspace = true
 atlas-trace.workspace = true
+jolt-field = { workspace = true, optional = true }
 
 # Serialization
 serde.workspace = true

@@ -19,6 +19,10 @@ use atlas_transcript::{ProvingTranscript, VerifyingTranscript};
 
 // ── Submodules ───────────────────────────────────────────────────────────
 
+#[cfg(feature = "akita")]
+pub mod akita;
+#[cfg(feature = "akita")]
+mod coefficient_checks;
 pub mod fused_rebase;
 #[cfg(any(test, feature = "fuzz"))]
 pub mod fuzz;

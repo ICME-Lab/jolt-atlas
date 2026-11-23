@@ -23,7 +23,9 @@ pub fn pack(words: &[u64]) -> Vec<Gf128> {
         "a packed bit vector is whole elements"
     );
     words
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| Gf128(pair[0] as u128 | (pair[1] as u128) << 64))
         .collect()
 }

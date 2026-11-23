@@ -107,6 +107,12 @@ pub enum RelationChallenge {
 /// The names relations are registered under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RelationId {
+    /// The Akita path's check that lookup coefficients are 0 or 1.
+    #[cfg(feature = "akita")]
+    AkitaBooleanity,
+    /// The Akita path's check that range-bucket coefficients are base-four digits.
+    #[cfg(feature = "akita")]
+    AkitaDigitRange,
     /// Element-wise product of operands (`Mul`, `Square`, `Cube`, and `And` on booleans).
     Product,
     /// The fused reciprocal square root.

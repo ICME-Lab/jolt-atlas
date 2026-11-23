@@ -5,6 +5,7 @@ edition = "2021"
 description = "Atlas sumcheck instances, the opening accumulators and the one-hot subprotocols."
 
 [features]
+akita = []
 allocative = ["atlas-algebra/allocative"]
 test-feature = ["atlas-algebra/test-feature", "atlas-transcript/test-feature"]
 

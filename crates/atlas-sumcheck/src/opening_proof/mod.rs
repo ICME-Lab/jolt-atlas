@@ -501,6 +501,10 @@ pub enum SumcheckId {
     RLC(usize),
     /// Eval-shift sumcheck used in the trig ops
     NTEvalShift,
+    #[cfg(feature = "akita")]
+    AkitaBooleanity,
+    #[cfg(feature = "akita")]
+    AkitaDigitRange,
 }
 
 impl Canonical for SumcheckId {
@@ -520,6 +524,10 @@ impl Canonical for SumcheckId {
                 idx.encode(&mut writer)?;
             }
             Self::NTEvalShift => 9u8.encode(&mut writer)?,
+            #[cfg(feature = "akita")]
+            Self::AkitaBooleanity => 10u8.encode(&mut writer)?,
+            #[cfg(feature = "akita")]
+            Self::AkitaDigitRange => 11u8.encode(&mut writer)?,
         }
         Ok(())
     }
@@ -548,6 +556,10 @@ impl Canonical for SumcheckId {
                 Ok(Self::RLC(idx))
             }
             9 => Ok(Self::NTEvalShift),
+            #[cfg(feature = "akita")]
+            10 => Ok(Self::AkitaBooleanity),
+            #[cfg(feature = "akita")]
+            11 => Ok(Self::AkitaDigitRange),
             _ => Err(Error::InvalidData),
         }
     }
@@ -800,5 +812,10 @@ mod guardrail_tests {
         assert!(acc.openings.contains_key(&key));
     }
 }
+
+#[cfg(feature = "akita")]
+mod akita;
+#[cfg(feature = "akita")]
+pub use akita::AkitaOpeningPadding;
 
 pub mod prover;

@@ -41,7 +41,7 @@ pub trait Packed:
     #[inline]
     fn pack_slice(buf: &[Self::Scalar]) -> Vec<Self> {
         assert_eq!(buf.len() % Self::WIDTH, 0, "length not divisible by width");
-        buf.chunks_exact(Self::WIDTH)
+        buf.chunks(Self::WIDTH)
             .map(|chunk| Self::from_fn(|i| chunk[i]))
             .collect()
     }

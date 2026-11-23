@@ -54,6 +54,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - run: cargo clippy --workspace --all-targets
+      - run: cargo clippy --locked --workspace --all-targets --features jolt-atlas-core/akita
 
   verifier-isolation:
     # The verifier crate must build alone and never depend on the prover.
@@ -70,12 +71,16 @@ jobs:
           save-if: false
           cache-on-failure: true
       - run: cargo check -p jolt-atlas-verifier
+      - run: cargo check --locked -p jolt-atlas-verifier --features akita
       - name: No jolt-atlas-core in the verifier's dependency tree
         run: |
-          if cargo tree -p jolt-atlas-verifier -e normal,build --prefix none | grep -q '^jolt-atlas-core '; then
-            echo "jolt-atlas-verifier depends on jolt-atlas-core" >&2
-            exit 1
-          fi
+          for features in "" "--features akita"; do
+            tree=$(cargo tree -p jolt-atlas-verifier -e normal,build --prefix none $features)
+            if grep -q '^jolt-atlas-core ' <<< "$tree"; then
+              echo "jolt-atlas-verifier depends on jolt-atlas-core" >&2
+              exit 1
+            fi
+          done
       - name: No prover module paths in the verifier's sources
         # The backstop for prover items that jolt-atlas-verifier/clippy.toml's list misses.
         run: |
@@ -153,7 +158,7 @@ jobs:
         run: cargo nextest run --workspace --profile ci
       - name: Akita adapter and model proof tests
         run: >
-          cargo nextest run --locked -p atlas-pcs -p jolt-atlas-core
+          cargo nextest run --locked -p atlas-pcs -p jolt-atlas-core -p jolt-atlas-verifier
           --features jolt-atlas-core/akita --profile ci
           -E 'test(akita::) | test(coefficient_checks::)'
       - name: Full-zoo import gates (checked-in models)

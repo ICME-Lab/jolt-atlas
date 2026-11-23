@@ -17,7 +17,8 @@ pub struct PlannedGroup {
 /// The layout identifies the dense or one-hot family, one-hot column count and arity.
 /// Polynomials keep their relative order within a layout. On ties, the larger group
 /// goes first. Both sides use the same layout order and catalog to get the same plan.
-pub fn plan_groups(
+#[cfg(test)]
+fn plan_groups(
     layouts: &[GroupLayout],
     artifacts: &AkitaScheduleArtifacts,
 ) -> Result<Vec<PlannedGroup>, OpeningsError> {

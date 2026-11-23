@@ -1,7 +1,9 @@
 //! CPU verification of Atlas model proofs with Akita commitments.
 
 mod plan;
+mod wire;
 pub use plan::{CommitmentGroup, CommitmentPlan, WitnessShape};
+use wire::{decode_commitment, decode_opening_proof};
 
 use super::{
     append_inputs_to_transcript, append_model_tensors, schedule::Schedule, verifier, ONNXProof,
@@ -14,8 +16,8 @@ use atlas_algebra::{
     utils::errors::ProofVerifyError,
 };
 use atlas_pcs::akita::{
-    protocol_tag, schedule_artifacts, verifier_transcript, verify_opening, AkitaBatchProof,
-    AkitaCommitment, AkitaScheduleArtifacts, Keccak,
+    protocol_tag, schedule_artifacts, verifier_transcript, verify_opening, AkitaScheduleArtifacts,
+    Keccak,
 };
 use atlas_sumcheck::{opening_proof::SumcheckId, relation::verify_relation};
 use atlas_trace::{trace::ModelExecutionIO, Model};
@@ -106,7 +108,7 @@ impl<'a> Preprocessing<'a> {
 /// Bind a Jolt Akita transcript to the current state of the Atlas transcript.
 pub fn opening_seed(transcript: &mut impl Transcript) -> [u8; 32] {
     let mut seed = [0; 32];
-    for chunk in seed.chunks_exact_mut(16) {
+    for chunk in seed.as_chunks_mut::<16>().0 {
         chunk.copy_from_slice(&transcript.challenge_u128().to_le_bytes());
     }
     seed
@@ -215,10 +217,10 @@ fn verify_preprocessed(
     let mut encoded = commitment_bytes.as_slice();
     let mut commitments = Vec::with_capacity(plan.groups.len());
     for group in &plan.groups {
-        let (commitment, used): (AkitaCommitment, _) =
-            bincode::serde::decode_from_slice(encoded, bincode::config::standard())
-                .map_err(opening_error)?;
-        encoded = &encoded[used..];
+        let (commitment, used) = decode_commitment(encoded)?;
+        encoded = encoded
+            .get(used..)
+            .ok_or_else(|| opening_error("invalid Akita commitment length"))?;
         group.validate_commitment(&commitment)?;
         commitments.push(commitment);
     }
@@ -252,12 +254,7 @@ fn verify_preprocessed(
         let values = verifier.transcript.read_scalars(group.polynomials.len())?;
         let seed = opening_seed(&mut verifier.transcript);
         let AkitaMessage(bytes) = verifier.transcript.read_serializable()?;
-        let (proof, used): (AkitaBatchProof, _) =
-            bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
-                .map_err(opening_error)?;
-        if used != bytes.len() {
-            return Err(opening_error("trailing Akita opening proof bytes"));
-        }
+        let proof = decode_opening_proof(&bytes)?;
         let setup = group.verifier_setup()?;
         let tag = protocol_tag(OPENING_TAG);
         let mut opening = verifier_transcript::<Keccak>(&tag, &seed, &[]);

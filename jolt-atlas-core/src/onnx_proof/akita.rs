@@ -3,8 +3,6 @@
 use super::coefficient_checks::{BooleanityProver, DigitRangeProver};
 use super::{
     prover::{iop, output_claim_at, polynomial_map},
-    range_bucket::BucketWitnesses,
-    schedule::Schedule,
     AtlasSharedPreprocessing, ONNXProof, Prover,
 };
 use atlas_algebra::{
@@ -13,63 +11,22 @@ use atlas_algebra::{
     utils::errors::ProofVerifyError,
 };
 use atlas_pcs::akita::{
-    protocol_tag, prover_transcript, schedule_artifacts, AkitaProverSetup, AkitaScheme,
-    CommitmentScheme, Group, GroupLayout, Keccak,
+    protocol_tag, prover_transcript, AkitaProverSetup, AkitaScheme, CommitmentScheme, Group,
+    GroupLayout, Keccak,
 };
-use atlas_sumcheck::{opening_proof::AkitaOpeningPadding, relation::prover::prove_relation};
+use atlas_sumcheck::relation::prover::prove_relation;
 use atlas_trace::{trace::ModelExecutionIO, Model, Tensor};
 use atlas_transcript::{Blake2bProver, ProvingTranscript};
 use common::CommittedPoly;
 use jolt_atlas_verifier::onnx_proof::akita::{
-    opening_error, opening_seed, AkitaMessage, CommitmentGroup, CommitmentPlan, WitnessShape,
-    OPENING_TAG, OUTPUT_SUMCHECK,
+    opening_error, opening_seed, AkitaMessage, CommitmentGroup, WitnessShape, OPENING_TAG,
+    OUTPUT_SUMCHECK,
 };
 pub use jolt_atlas_verifier::onnx_proof::akita::{verify, Preprocessing as VerifierPreprocessing};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
-
-/// A commitment layout and the witness polynomials assigned to it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WitnessGroup {
-    /// The shared polynomial representation and arity.
-    pub layout: GroupLayout,
-    /// Witness identifiers in commitment order.
-    pub polynomials: Vec<CommittedPoly>,
-    /// The original and committed domains for witnesses that need padding.
-    pub padding: BTreeMap<CommittedPoly, AkitaOpeningPadding>,
-}
-
-/// Execute a model and plan groups for the witness used by Atlas's proof schedule.
-pub fn plan_witness_groups(
-    model: &Model,
-    inputs: &[Tensor<i32>],
-) -> Result<Vec<WitnessGroup>, ProofVerifyError> {
-    let schedule = Schedule::<AkitaField>::compile(model)?;
-    let trace = model
-        .trace(inputs)
-        .map_err(|error| ProofVerifyError::Malformed(error.to_string()))?;
-    let buckets = BucketWitnesses::build(model, &trace);
-    let polynomials = polynomial_map(&schedule, model, &trace, &buckets);
-    let plan = CommitmentPlan::new(
-        &witness_shapes(&polynomials)?,
-        schedule_artifacts().map_err(opening_error)?,
-    )?;
-    Ok(plan
-        .groups
-        .iter()
-        .map(|group| WitnessGroup {
-            layout: group.layout,
-            padding: group
-                .polynomials
-                .iter()
-                .filter_map(|id| plan.padding.get(id).map(|&pad| (*id, pad)))
-                .collect(),
-            polynomials: group.polynomials.clone(),
-        })
-        .collect())
-}
 
 fn witness_shapes(
     polynomials: &BTreeMap<CommittedPoly, MultilinearPolynomial<AkitaField>>,
@@ -262,6 +219,51 @@ fn prove_preprocessed(
 mod tests {
     use super::*;
     use crate::onnx_proof::testing::ModelBuilder;
+    use crate::onnx_proof::{range_bucket::BucketWitnesses, schedule::Schedule};
+    use atlas_pcs::akita::schedule_artifacts;
+    use atlas_sumcheck::opening_proof::AkitaOpeningPadding;
+    use jolt_atlas_verifier::onnx_proof::akita::CommitmentPlan;
+
+    /// A commitment layout and the witness polynomials assigned to it.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct WitnessGroup {
+        /// The shared polynomial representation and arity.
+        layout: GroupLayout,
+        /// Witness identifiers in commitment order.
+        polynomials: Vec<CommittedPoly>,
+        /// The original and committed domains for witnesses that need padding.
+        padding: BTreeMap<CommittedPoly, AkitaOpeningPadding>,
+    }
+
+    /// Execute a model and plan groups for the witness used by Atlas's proof schedule.
+    fn plan_witness_groups(
+        model: &Model,
+        inputs: &[Tensor<i32>],
+    ) -> Result<Vec<WitnessGroup>, ProofVerifyError> {
+        let schedule = Schedule::<AkitaField>::compile(model)?;
+        let trace = model
+            .trace(inputs)
+            .map_err(|error| ProofVerifyError::Malformed(error.to_string()))?;
+        let buckets = BucketWitnesses::build(model, &trace);
+        let polynomials = polynomial_map(&schedule, model, &trace, &buckets);
+        let plan = CommitmentPlan::new(
+            &witness_shapes(&polynomials)?,
+            schedule_artifacts().map_err(opening_error)?,
+        )?;
+        Ok(plan
+            .groups
+            .iter()
+            .map(|group| WitnessGroup {
+                layout: group.layout,
+                padding: group
+                    .polynomials
+                    .iter()
+                    .filter_map(|id| plan.padding.get(id).map(|&pad| (*id, pad)))
+                    .collect(),
+                polynomials: group.polynomials.clone(),
+            })
+            .collect())
+    }
 
     #[test]
     fn proves_and_verifies_a_model_with_padded_one_hot_groups() {
@@ -306,6 +308,15 @@ mod tests {
         let setups = preprocessing.setups.lock().unwrap();
         assert_eq!(setups.len(), 1);
         assert!(Arc::ptr_eq(setups.values().next().unwrap(), &first_setup));
+        let mut malformed = io.clone();
+        let mut serialized = serde_json::to_value(&malformed.outputs[0]).unwrap();
+        serialized["data"].as_array_mut().unwrap().pop();
+        malformed.outputs[0] = serde_json::from_value(serialized).unwrap();
+        assert!(matches!(
+            verify(&proof, &model, &malformed),
+            Err(ProofVerifyError::Malformed(_))
+        ));
+
         let mut truncated = proof;
         truncated.0.pop();
         assert!(verify(&truncated, &model, &io).is_err());

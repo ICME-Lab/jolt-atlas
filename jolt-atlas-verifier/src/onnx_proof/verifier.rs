@@ -266,6 +266,13 @@ pub fn check_io_shape(model: &Model, io: &ModelExecutionIO) -> Result<(), ProofV
         if tensor.dims() != model.view(idx).output_dims.as_slice() {
             return malformed("a tensor does not have its node's dims");
         }
+        let elements = tensor
+            .dims()
+            .iter()
+            .try_fold(1usize, |count, &dim| count.checked_mul(dim));
+        if elements != Some(tensor.data().len()) {
+            return malformed("tensor data length does not match its dims");
+        }
     }
     Ok(())
 }

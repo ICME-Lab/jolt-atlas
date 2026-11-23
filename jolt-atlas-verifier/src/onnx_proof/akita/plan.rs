@@ -102,7 +102,9 @@ impl CommitmentGroup {
             .len()
             .checked_sub(self.layout.num_vars())
             .ok_or_else(|| opening_error("Akita group exceeds the batch opening arity"))?;
-        Ok(&point[prefix..])
+        point
+            .get(prefix..)
+            .ok_or_else(|| opening_error("invalid Akita opening point"))
     }
 
     pub(super) fn zero_extension_scale(
@@ -110,10 +112,10 @@ impl CommitmentGroup {
         point: &[AkitaField],
     ) -> Result<AkitaField, ProofVerifyError> {
         let len = self.point(point)?.len();
-        Ok(point[..point.len() - len]
-            .iter()
-            .map(|&r| AkitaField::one() - r)
-            .product())
+        let prefix = point
+            .get(..point.len() - len)
+            .ok_or_else(|| opening_error("invalid Akita opening point"))?;
+        Ok(prefix.iter().map(|&r| AkitaField::one() - r).product())
     }
 
     pub(super) fn validate_commitment(
@@ -163,14 +165,24 @@ impl CommitmentPlan {
         {
             let mut digest = [0; 32];
             digest[..8].copy_from_slice(&(index as u64).to_le_bytes());
-            let polynomials: Vec<_> = group.polynomial_indices.iter().map(|&i| ids[i]).collect();
+            let polynomials = group
+                .polynomial_indices
+                .iter()
+                .map(|&i| {
+                    ids.get(i)
+                        .copied()
+                        .ok_or_else(|| opening_error("invalid Akita witness index"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             let count = polynomials.len();
             let vars = group.layout.num_vars();
             let width = group.layout.one_hot_width();
             let address_vars = width.map(|k| k.ilog2() as usize);
             for p in &polynomials {
-                if let Some(pad) = AkitaOpeningPadding::new(address_vars, shapes[p].num_vars, vars)
-                {
+                let shape = shapes
+                    .get(p)
+                    .ok_or_else(|| opening_error("missing Akita witness shape"))?;
+                if let Some(pad) = AkitaOpeningPadding::new(address_vars, shape.num_vars, vars) {
                     padding.insert(*p, pad);
                 }
             }

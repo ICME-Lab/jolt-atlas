@@ -119,7 +119,6 @@ debug = false
 
 [patch.crates-io]
 allocative = { git = "https://github.com/facebookexperimental/allocative", rev = "85b773d85d526d068ce94724ff7a7b81203fc95e" }
-ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "dev/twist-shout" }
 
 # LayerZero pins these crates to a different Jolt revision. Use the adapter's
 # revision for both sides so the field, polynomial and transcript types agree.
@@ -128,3 +127,8 @@ ark-serialize = { git = "https://github.com/a16z/arkworks-algebra", branch = "de
 jolt-field = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a" }
 jolt-poly = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a" }
 jolt-transcript = { git = "https://www.github.com/a16z/jolt", rev = "fe1cc674aa40a6036ff7310ee2344644bb45093a" }
+
+# Jolt declares this dependency by branch. Keep the serialization crates at the
+# audited revision, using a distinct Cargo patch source.
+[patch."https://github.com/a16z/arkworks-algebra"]
+ark-serialize = { git = "https://www.github.com/a16z/arkworks-algebra", rev = "b8f0f5129501c42c8a934f4832746d335c8f8ca1" }

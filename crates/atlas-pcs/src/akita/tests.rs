@@ -310,4 +310,18 @@ fn padded_one_hot_uses_one_point_after_the_atlas_batch_sumcheck() {
     )
     .unwrap();
     opening_verifier.check_eof().unwrap();
+
+    let mut different_evaluations = evaluations;
+    different_evaluations[0] += AkitaField::from_u64(1);
+    let mut opening_verifier = verifier_transcript::<Keccak>(&session, &digest, &[]);
+    assert!(verify_opening(
+        &vk,
+        group.layout(),
+        &commitment,
+        point,
+        &different_evaluations,
+        &proof,
+        &mut opening_verifier,
+    )
+    .is_err());
 }

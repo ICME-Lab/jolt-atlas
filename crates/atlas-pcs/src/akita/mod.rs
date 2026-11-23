@@ -21,7 +21,7 @@ use std::borrow::Cow;
 
 mod grouping;
 mod schedules;
-pub use grouping::{plan_groups, plan_groups_with_padding, PlannedGroup};
+pub use grouping::{plan_groups_with_padding, PlannedGroup};
 pub use schedules::schedule_artifacts;
 
 /// Arity and coordinate order of an Atlas polynomial group.

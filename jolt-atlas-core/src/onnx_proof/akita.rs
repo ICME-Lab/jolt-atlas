@@ -66,7 +66,12 @@ impl<'a> ProverPreprocessing<'a> {
         &self,
         inputs: &[Tensor<i32>],
     ) -> Result<(ONNXProof, ModelExecutionIO), ProofVerifyError> {
-        prove_preprocessed(self, inputs)
+        prove_preprocessed(
+            self,
+            inputs,
+            #[cfg(test)]
+            None,
+        )
     }
 
     /// The public preprocessing used by this prover.
@@ -95,9 +100,23 @@ pub fn prove(
     ProverPreprocessing::new(model)?.prove(inputs)
 }
 
+#[cfg(test)]
+#[derive(Default)]
+struct ProofSections {
+    commitments: std::ops::Range<usize>,
+    openings: Vec<OpeningSections>,
+}
+
+#[cfg(test)]
+struct OpeningSections {
+    evaluations: std::ops::Range<usize>,
+    proof: std::ops::Range<usize>,
+}
+
 fn prove_preprocessed(
     preprocessing: &ProverPreprocessing<'_>,
     inputs: &[Tensor<i32>],
+    #[cfg(test)] mut sections: Option<&mut ProofSections>,
 ) -> Result<(ONNXProof, ModelExecutionIO), ProofVerifyError> {
     let model = preprocessing.verifier.model();
     let schedule = preprocessing.verifier.schedule();
@@ -146,9 +165,15 @@ fn prove_preprocessed(
         padded.extend(polynomials);
         commitments.push((witness, setup, commitment, hint));
     }
+    #[cfg(test)]
+    let commitment_start = prover.transcript.narg().len();
     prover
         .transcript
         .send_serializable(&AkitaMessage(commitment_bytes));
+    #[cfg(test)]
+    if let Some(sections) = sections.as_deref_mut() {
+        sections.commitments = commitment_start..prover.transcript.narg().len();
+    }
 
     let mut claimed = BTreeSet::new();
     for &node in model.outputs() {
@@ -201,7 +226,11 @@ fn prove_preprocessed(
                 .iter()
                 .map(|id| padded[id].evaluate(point))
                 .collect();
+            #[cfg(test)]
+            let evaluations_start = prover.transcript.narg().len();
             prover.transcript.send_scalars(&values);
+            #[cfg(test)]
+            let evaluations_end = prover.transcript.narg().len();
             let seed = opening_seed(&mut prover.transcript);
             let mut opening = prover_transcript::<Keccak>(&tag, &seed);
             let proof = witness
@@ -209,7 +238,16 @@ fn prove_preprocessed(
                 .map_err(opening_error)?;
             let bytes = bincode::serde::encode_to_vec(&proof, bincode::config::standard())
                 .map_err(opening_error)?;
+            #[cfg(test)]
+            let proof_start = prover.transcript.narg().len();
             prover.transcript.send_serializable(&AkitaMessage(bytes));
+            #[cfg(test)]
+            if let Some(sections) = sections.as_deref_mut() {
+                sections.openings.push(OpeningSections {
+                    evaluations: evaluations_start..evaluations_end,
+                    proof: proof_start..prover.transcript.narg().len(),
+                });
+            }
         }
     }
     Ok((ONNXProof(prover.transcript.into_narg()), prover.io))
@@ -284,7 +322,8 @@ mod tests {
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].padding.len(), 1);
         let preprocessing = ProverPreprocessing::new(&model).unwrap();
-        let (proof, io) = preprocessing.prove(&inputs).unwrap();
+        let mut sections = ProofSections::default();
+        let (proof, io) = prove_preprocessed(&preprocessing, &inputs, Some(&mut sections)).unwrap();
         preprocessing.verifier().verify(&proof, &io).unwrap();
         let first_setup = preprocessing
             .setups
@@ -300,11 +339,47 @@ mod tests {
                 vec![rows],
             )
         });
-        let (second_proof, second_io) = preprocessing.prove(&second_inputs).unwrap();
-        preprocessing
-            .verifier()
-            .verify(&second_proof, &second_io)
-            .unwrap();
+        let mut second_sections = ProofSections::default();
+        let (second_proof, second_io) =
+            prove_preprocessed(&preprocessing, &second_inputs, Some(&mut second_sections)).unwrap();
+        let verifier = preprocessing.verifier();
+        verifier.verify(&second_proof, &second_io).unwrap();
+
+        let [opening] = sections.openings.as_slice() else {
+            panic!("expected one padded commitment group");
+        };
+        let [second_opening] = second_sections.openings.as_slice() else {
+            panic!("expected one padded commitment group in the second proof");
+        };
+        for (label, first_range, second_range) in [
+            (
+                "commitments",
+                sections.commitments,
+                second_sections.commitments,
+            ),
+            (
+                "opening proof",
+                opening.proof.clone(),
+                second_opening.proof.clone(),
+            ),
+            (
+                "evaluations",
+                opening.evaluations.clone(),
+                second_opening.evaluations.clone(),
+            ),
+        ] {
+            let replacement = &second_proof.0[second_range];
+            assert_ne!(&proof.0[first_range.clone()], replacement, "{label}");
+            let mut mismatched = proof.clone();
+            mismatched
+                .0
+                .splice(first_range, replacement.iter().copied());
+            assert!(
+                verifier.verify(&mismatched, &io).is_err(),
+                "accepted different {label}"
+            );
+        }
+
         let setups = preprocessing.setups.lock().unwrap();
         assert_eq!(setups.len(), 1);
         assert!(Arc::ptr_eq(setups.values().next().unwrap(), &first_setup));

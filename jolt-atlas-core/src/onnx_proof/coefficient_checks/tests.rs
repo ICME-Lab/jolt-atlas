@@ -1,10 +1,11 @@
 use super::*;
 use atlas_algebra::{
-    field::akita::AkitaField,
+    field::{akita::AkitaField, Ring},
     poly::{
         multilinear::{MultilinearPolynomial, PolynomialEvaluation},
         one_hot::OneHotPolynomial,
     },
+    utils::errors::ProofVerifyError,
 };
 use atlas_sumcheck::{
     opening_proof::{
@@ -65,6 +66,50 @@ fn digit_range_checks_columns_without_a_packed_value_opening() {
             .unwrap();
         assert_eq!(point.r.len(), 3);
         assert_eq!(claim, poly.evaluate(&point.r));
+    }
+}
+
+#[test]
+fn verifier_rejects_coefficients_outside_their_domains() {
+    // A one-entry polynomial has zero variables, so the final opening is
+    // the coefficient itself and the verifier checks domain membership directly.
+    let checks = [
+        (
+            CoefficientCheck::one_hot(vec![CommittedPoly::GatherRa(0)], 0, 0).unwrap(),
+            1,
+            2,
+        ),
+        (
+            CoefficientCheck::base_four(vec![CommittedPoly::GlobalRemainderDigit(0, 0)], 0)
+                .unwrap(),
+            3,
+            4,
+        ),
+    ];
+    let tag = b"akita-coefficient-domain";
+    for (check, valid, invalid) in checks {
+        for (coefficient, allowed) in [(valid, true), (invalid, false)] {
+            let mut prover = Blake2bProver::new(tag);
+            let _: RelationSetup<AkitaField> = check.draw(&mut prover);
+            prover.send_scalar(&AkitaField::from_u64(coefficient));
+
+            let mut verifier = Blake2bVerifier::new(tag, prover.into_narg());
+            let setup = check.draw(&mut verifier);
+            let result = verify_relation(
+                &check.clone().into_verifier(setup),
+                &mut VerifierOpeningAccumulator::<AkitaField>::new(),
+                &mut verifier,
+            );
+            if allowed {
+                result.unwrap();
+                verifier.finish().unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ProofVerifyError::SumcheckVerificationError)
+                ));
+            }
+        }
     }
 }
 

@@ -1,6 +1,8 @@
 //! Flat slots for range bits and fixed-table addresses.
 
 use jolt_field::{CanonicalEncoding, Ring, Zero};
+#[cfg(feature = "bitz")]
+use jolt_poly::MultilinearPoly;
 use jolt_poly::OneHotPolynomial;
 use jolt_transcript::{
     prover_transcript, verifier_transcript, Keccak, ProverState, Transcript, VerifierState,
@@ -124,6 +126,33 @@ impl Advice {
             return Err("duplicate advice");
         }
         self.0[slot.id] = Some(part);
+        Ok(())
+    }
+
+    #[cfg(feature = "bitz")]
+    fn fill_bits<F: ProofField>(&self, slot: Slot, mut set: impl FnMut(usize)) -> Result<()> {
+        match (slot.kind, self.0[slot.id].as_ref()) {
+            (Kind::Bits { planes }, Some(Part::Bits(bits))) if bits.len() == 1 << slot.vars() => {
+                let used = planes << slot.cell_vars;
+                if bits[used..].iter().any(|&bit| bit != 0) {
+                    return Err("nonzero padding in advice bits");
+                }
+                for (i, &bit) in bits[..used].iter().enumerate() {
+                    match bit {
+                        0 => (),
+                        1 => set(i),
+                        _ => return Err("invalid advice bit"),
+                    }
+                }
+            }
+            (Kind::Lookup { .. }, Some(Part::Lookup(poly)))
+                if poly.indices().len() == 1 << slot.cell_vars
+                    && poly.num_vars() == slot.vars() =>
+            {
+                <OneHotPolynomial as MultilinearPoly<F>>::for_each_one(poly, &mut set);
+            }
+            _ => return Err("invalid advice shape"),
+        }
         Ok(())
     }
 
@@ -294,3 +323,8 @@ pub(crate) fn bind_i32(t: &mut impl Transcript, values: &[i32]) {
 mod akita;
 #[cfg(feature = "akita")]
 pub use akita::AkitaAdviceSetup;
+
+#[cfg(feature = "bitz")]
+mod bitz;
+#[cfg(feature = "bitz")]
+pub use bitz::BitzScheme;

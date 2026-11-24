@@ -15,3 +15,6 @@ pub use tensor::Shape;
 pub use top_k::{Candidate, TopKConfig};
 
 pub type Result<T> = std::result::Result<T, &'static str>;
+
+#[cfg(feature = "bitz")]
+pub use pcs::BitzScheme;

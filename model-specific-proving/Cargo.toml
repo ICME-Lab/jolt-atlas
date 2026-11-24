@@ -8,6 +8,7 @@ resolver = "2"
 
 [features]
 akita = ["dep:jolt-akita", "dep:akita-config", "dep:akita-schedules"]
+bitz = ["dep:world-common", "dep:world-field", "dep:world-pcs", "dep:world-prover", "dep:world-verifier", "dep:world-transcript", "dep:crypto-primitives", "dep:num-traits", "dep:rand_core", "dep:serde"]
 safetensors-weights = ["dep:safetensors", "dep:half", "dep:atlas-trace", "dep:libm", "dep:serde", "dep:serde_json"]
 
 [[bin]]
@@ -15,6 +16,15 @@ name = "prove-gpt2"
 required-features = ["akita", "safetensors-weights"]
 
 [dependencies]
+world-common = { package = "common", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
+world-field = { package = "field", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
+world-pcs = { package = "pcs", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
+world-prover = { package = "prover", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
+world-verifier = { package = "verifier", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
+world-transcript = { package = "transcript", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
+crypto-primitives = { git = "https://github.com/NethermindEth/crypto-primitives.git", rev = "b744c74", optional = true }
+num-traits = { version = "0.2", optional = true }
+rand_core = { version = "0.6", optional = true }
 akita-config = { git = "https://github.com/GUJustin/akita.git", rev = "5668262bcc0e8ddef005051fa66ad84255431294", default-features = false, optional = true }
 akita-schedules = { git = "https://github.com/GUJustin/akita.git", rev = "5668262bcc0e8ddef005051fa66ad84255431294", default-features = false, optional = true }
 safetensors = { version = "0.8", optional = true }

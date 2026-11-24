@@ -1,0 +1,41 @@
+{
+  "architectures": [
+    "Qwen3ForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": 1022,
+  "dtype": "float32",
+  "eos_token_id": 1023,
+  "head_dim": 16,
+  "hidden_act": "silu",
+  "hidden_size": 64,
+  "initializer_range": 0.02,
+  "intermediate_size": 160,
+  "layer_types": [
+    "full_attention",
+    "full_attention",
+    "full_attention",
+    "full_attention",
+    "full_attention",
+    "full_attention",
+    "full_attention",
+    "full_attention"
+  ],
+  "max_position_embeddings": 128,
+  "max_window_layers": 28,
+  "model_type": "qwen3",
+  "num_attention_heads": 4,
+  "num_hidden_layers": 8,
+  "num_key_value_heads": 2,
+  "pad_token_id": 0,
+  "rms_norm_eps": 1e-06,
+  "rope_scaling": null,
+  "rope_theta": 1000000.0,
+  "sliding_window": null,
+  "tie_word_embeddings": true,
+  "transformers_version": "4.57.6",
+  "use_cache": false,
+  "use_sliding_window": false,
+  "vocab_size": 1024
+}

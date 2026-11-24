@@ -784,34 +784,43 @@ impl ProveRounds<F> for GroupFold<'_> {
         claim: F,
     ) -> std::result::Result<UnivariatePoly<F>, SumcheckError<F>> {
         if round <= ADDRESS_BITS {
-            if let Some(r) = bind.take() {
+            if let Some(r) = bind {
                 for fold in &mut self.packed {
                     fold.bind_address(r, ADDRESS_BITS - round);
                 }
             }
-            if round < ADDRESS_BITS {
-                let mut samples = [F::zero(); 4];
-                for fold in &self.packed {
-                    for (sum, value) in samples.iter_mut().zip(fold.address_samples(round)) {
-                        *sum += value;
+            let samples = self
+                .packed
+                .par_iter()
+                .map(|fold| {
+                    if round < ADDRESS_BITS {
+                        fold.address_samples(round)
+                    } else {
+                        fold.row_samples()
                     }
-                }
-                return Ok(UnivariatePoly::from_evals(&samples));
-            }
+                })
+                .reduce(
+                    || [F::zero(); 4],
+                    |a, b| std::array::from_fn(|i| a[i] + b[i]),
+                );
+            return Ok(UnivariatePoly::from_evals(&samples));
+        }
+        if round == ADDRESS_BITS + 1 {
+            let challenge = bind.take().expect("first row challenge");
             self.rows = self
                 .packed
                 .drain(..)
                 .map(|fold| {
                     Fold::new(
-                        fold.row_columns().map(Column::owned),
-                        self.rounds - ADDRESS_BITS,
+                        fold.bind_rows(challenge).map(Column::owned),
+                        self.rounds - ADDRESS_BITS - 1,
                         3,
                         equation as fn(&[F]) -> F,
                     )
                 })
                 .collect();
         }
-        let round = round - ADDRESS_BITS;
+        let round = round - ADDRESS_BITS - 1;
         self.rows
             .par_iter_mut()
             .map(|fold| fold.prove_round(bind, round, claim))

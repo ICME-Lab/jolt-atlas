@@ -100,7 +100,7 @@ SPECS = {
     ),
 }
 
-KEEP_FILES = {"network.onnx", "config.json"}
+KEEP_FILES = {"network.onnx", "model.safetensors", "config.json"}
 
 
 def build_model(kind: str, config: dict):
@@ -139,6 +139,7 @@ def generate(name: str):
         # A minimal tokenizer config lets optimum resolve the task without a
         # real tokenizer; the tiny models are driven with synthetic ids.
         export_onnx(tmp, out_dir, *spec["export"])
+        shutil.copyfile(Path(tmp) / "model.safetensors", out_dir / "model.safetensors")
 
     if keep := spec.get("keep_output"):
         keep_single_output(out_dir / "model.onnx", keep)

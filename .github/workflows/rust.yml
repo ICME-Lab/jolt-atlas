@@ -166,6 +166,23 @@ jobs:
           cargo nextest run -p atlas-onnx-import --profile ci
           --run-ignored ignored-only -E 'not test(golden_zoo_big)'
 
+  model-specific-proving:
+    name: Model-specific proofs
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+          cache: false
+      - uses: taiki-e/install-action@nextest
+      - run: cargo fmt --manifest-path model-specific-proving/Cargo.toml --check
+      - run: >
+          cargo nextest run --manifest-path model-specific-proving/Cargo.toml
+          --config-file .config/nextest.toml --locked --profile ci --features akita,bitz,safetensors-weights
+
   heavy-models:
     # Real GPT-2, BGE and Qwen2-0.5B: main, nightly, workflow_dispatch, and
     # PRs labelled `ci:heavy`; not `dev` pushes.

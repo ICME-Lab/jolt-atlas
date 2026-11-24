@@ -1,0 +1,59 @@
+[package]
+name = "model-specific-proving"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+resolver = "2"
+
+[features]
+akita = ["dep:jolt-akita", "dep:akita-config", "dep:akita-schedules"]
+safetensors-weights = ["dep:safetensors", "dep:half", "dep:atlas-trace", "dep:libm", "dep:serde", "dep:serde_json"]
+
+[[bin]]
+name = "prove-gpt2"
+required-features = ["akita", "safetensors-weights"]
+
+[dependencies]
+akita-config = { git = "https://github.com/GUJustin/akita.git", rev = "5668262bcc0e8ddef005051fa66ad84255431294", default-features = false, optional = true }
+akita-schedules = { git = "https://github.com/GUJustin/akita.git", rev = "5668262bcc0e8ddef005051fa66ad84255431294", default-features = false, optional = true }
+safetensors = { version = "0.8", optional = true }
+half = { version = "2", optional = true }
+atlas-trace = { path = "../crates/atlas-trace", optional = true }
+rayon = "1.10"
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
+jolt-akita = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["parallel"], optional = true }
+libm = { version = "0.2", optional = true }
+jolt-field = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["solinas"] }
+jolt-openings = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false }
+jolt-poly = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false }
+jolt-sumcheck = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["prover"] }
+jolt-transcript = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["transcript-keccak", "prover-grinding"] }
+
+[profile.test]
+opt-level = 3
+lto = "off"
+
+[profile.release]
+debug = 1
+overflow-checks = true
+lto = "fat"
+
+[profile.build-fast]
+inherits = "release"
+incremental = true
+lto = "off"
+overflow-checks = true
+
+# LayerZero pins these crates to a different Jolt revision. Use the adapter's
+# revision for both sides so the field, polynomial and transcript types agree.
+[patch."https://github.com/a16z/jolt"]
+jolt-field = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0" }
+jolt-poly = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0" }
+jolt-transcript = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0" }
+
+# Jolt declares this dependency by branch. Keep the serialization crates at the
+# audited revision, using a distinct Cargo patch source.
+[patch."https://github.com/a16z/arkworks-algebra"]
+ark-serialize = { git = "https://www.github.com/a16z/arkworks-algebra", rev = "b8f0f5129501c42c8a934f4832746d335c8f8ca1" }

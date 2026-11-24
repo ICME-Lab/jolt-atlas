@@ -8,6 +8,7 @@ resolver = "2"
 
 [features]
 akita = ["dep:jolt-akita", "dep:akita-config", "dep:akita-schedules"]
+akita-metal = ["akita", "jolt-akita/metal", "dep:jolt-metal"]
 bitz = ["dep:world-common", "dep:world-field", "dep:world-pcs", "dep:world-prover", "dep:world-verifier", "dep:world-transcript", "dep:crypto-primitives", "dep:num-traits", "dep:rand_core", "dep:serde"]
 safetensors-weights = ["dep:safetensors", "dep:half", "dep:atlas-trace", "dep:libm", "dep:serde", "dep:serde_json"]
 
@@ -41,6 +42,9 @@ jolt-poly = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38c
 jolt-sumcheck = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["prover"] }
 jolt-transcript = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["transcript-keccak", "prover-grinding"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+jolt-metal = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", optional = true }
+
 [profile.test]
 opt-level = 3
 lto = "off"
@@ -61,9 +65,14 @@ overflow-checks = true
 [patch."https://github.com/a16z/jolt"]
 jolt-field = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0" }
 jolt-poly = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0" }
+jolt-metal = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0" }
 jolt-transcript = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0" }
 
 # Jolt declares this dependency by branch. Keep the serialization crates at the
 # audited revision, using a distinct Cargo patch source.
 [patch."https://github.com/a16z/arkworks-algebra"]
 ark-serialize = { git = "https://www.github.com/a16z/arkworks-algebra", rev = "b8f0f5129501c42c8a934f4832746d335c8f8ca1" }
+
+[dev-dependencies]
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }

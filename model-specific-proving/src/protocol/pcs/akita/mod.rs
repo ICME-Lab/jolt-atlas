@@ -26,6 +26,8 @@ use jolt_transcript::{FieldTranscript, ProverTranscript, VerifierTranscript};
 use rayon::prelude::*;
 
 use super::*;
+#[cfg(all(test, feature = "akita-metal", target_os = "macos"))]
+mod metal;
 mod packed;
 use packed::PackedFold;
 
@@ -65,6 +67,8 @@ impl Key {
 /// Schedule artifacts and reusable setup data for grouped model advice.
 /// The same public configuration is used for both proving and verifying.
 pub struct AkitaAdviceSetup {
+    #[cfg(all(feature = "akita-metal", target_os = "macos"))]
+    metal: bool,
     dense_profile: AkitaChunkProfile,
     full_dense: Vec<u8>,
     dense_catalog: Vec<u8>,
@@ -99,6 +103,8 @@ impl AkitaAdviceSetup {
             widths.dedup();
         }
         Ok(Self {
+            #[cfg(all(feature = "akita-metal", target_os = "macos"))]
+            metal: false,
             dense_profile: artifacts.dense_profile(),
             full_dense: artifacts
                 .full_dense_catalog()
@@ -112,12 +118,43 @@ impl AkitaAdviceSetup {
         })
     }
 
+    /// Use Jolt’s Metal kernels for supported Akita commitment and opening operations.
+    #[cfg(all(feature = "akita-metal", target_os = "macos"))]
+    pub fn with_metal(mut self) -> std::result::Result<Self, jolt_metal::MetalError> {
+        jolt_metal::runtime::Device::system_default()?;
+        self.metal = true;
+        Ok(self)
+    }
+
     fn setup(&self, key: Key) -> Result<Arc<AkitaProverSetup>> {
         cached(&self.prover, key, || {
             let (pk, _) =
                 AkitaScheme::setup(self.params(key)?).map_err(|_| "Akita prover setup failed")?;
+            #[cfg(all(feature = "akita-metal", target_os = "macos"))]
+            if self.native_metal(key) {
+                return pk
+                    .with_trace_compute_kernel(|expanded| {
+                        Ok(Arc::new(jolt_akita::MetalTraceCompute::new(expanded)?))
+                    })
+                    .map_err(|_| "Akita Metal commitment setup failed");
+            }
             Ok(pk)
         })
+    }
+
+    #[cfg(all(feature = "akita-metal", target_os = "macos"))]
+    fn native_metal(&self, key: Key) -> bool {
+        self.metal
+            && key.count <= 64
+            && self.one_hot_catalog.rows().any(|row| {
+                let profiles = row.profiles();
+                let group = profiles.final_group;
+                profiles.precommitteds.is_empty()
+                    && group.group.num_vars() == key.rounds
+                    && group.group.num_polynomials() == key.count
+                    && group.inner.matrix.ring_dimension() == 512
+                    && group.blocks.live_ring_elements_per_claim >= group.blocks.positions_per_block
+            })
     }
 
     fn commit_group(

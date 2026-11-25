@@ -45,7 +45,7 @@ impl ModelPcs for BitzScheme {
 
     fn commit(
         layout: &Layout,
-        advice: &Advice,
+        advice: &mut Advice,
         (offsets, _, pcs): &Self::AdvicePlan,
         _: &(),
     ) -> Result<([u8; 32], Self::AdviceState)> {

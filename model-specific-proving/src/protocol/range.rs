@@ -61,7 +61,8 @@ impl Ranges {
         }
         let cells = 1 << self.shape.vars();
         let stride = self.shape.width.next_power_of_two();
-        let mut bits = vec![0; 1 << self.slot.vars()];
+        let lanes = self.slot.bits_per_digit();
+        let mut digits = vec![0; (1 << self.slot.vars()) / lanes];
         let mut plane = 0;
         for (range, &values) in self.ranges.iter().zip(values) {
             if range.bits == 0 && values.is_empty() {
@@ -72,17 +73,34 @@ impl Ranges {
             if codes.clone().any(|v| v < 0 || v >= 1i128 << range.bits) {
                 return Err("integer exceeds declared range");
             }
-            for b in 0..range.bits {
-                let dst = &mut bits[plane * cells..][..cells];
-                dst.fill(((range.offset >> b) & 1) as u8);
-                for (i, value) in codes.clone().enumerate() {
-                    dst[i / self.shape.width * stride + i % self.shape.width] =
-                        ((value >> b) & 1) as u8;
+            let mut bit = 0;
+            while bit < range.bits {
+                let shift = plane % lanes;
+                let count = (lanes - shift).min(range.bits - bit);
+                let mask = (1 << count) - 1;
+                let encode = |value: i128| (((value >> bit) as u8) & mask) << shift;
+                let dst = &mut digits[plane / lanes * cells..][..cells];
+                let pad = encode(range.offset);
+                for (row, values) in dst
+                    .chunks_exact_mut(stride)
+                    .zip(values.chunks_exact(self.shape.width))
+                {
+                    let (used, padding) = row.split_at_mut(self.shape.width);
+                    for (digit, &value) in used.iter_mut().zip(values) {
+                        *digit |= encode(value.into() + range.offset);
+                    }
+                    for digit in padding {
+                        *digit |= pad;
+                    }
                 }
-                plane += 1;
+                for digit in &mut dst[self.shape.rows * stride..] {
+                    *digit |= pad;
+                }
+                bit += count;
+                plane += count;
             }
         }
-        advice.put(self.slot, Part::Bits(bits))
+        advice.put(self.slot, Part::Digits(digits))
     }
 
     pub(crate) fn check<F: ProofField, V: AsRef<[F]>>(

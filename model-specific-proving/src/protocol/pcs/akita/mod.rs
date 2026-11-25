@@ -267,34 +267,12 @@ impl Digits {
         Ok(Self {
             planes,
             cell_vars: slot.cell_vars,
-            lane_vars: (slot.vars() - slot.cell_vars).min(2),
+            lane_vars: slot.bits_per_digit().ilog2() as usize,
         })
     }
 
     fn lane_count(self) -> usize {
         1 << self.lane_vars
-    }
-
-    fn encode(self, bits: &[u8], out: &mut [Option<u8>]) -> Result<()> {
-        let lanes = self.lane_count();
-        let cells = 1 << self.cell_vars;
-        if bits.len() != out.len() * lanes {
-            return Err("invalid digit dimensions");
-        }
-        for (i, index) in out.iter_mut().enumerate() {
-            let (digit, cell) = (i / cells, i % cells);
-            let mut value = 0;
-            for lane in 0..lanes {
-                let plane = digit * lanes + lane;
-                let bit = bits[plane * cells + cell];
-                if bit > 1 || (plane >= self.planes && bit != 0) {
-                    return Err("invalid digit bit");
-                }
-                value |= bit << lane;
-            }
-            *index = Some(value);
-        }
-        Ok(())
     }
 
     fn reads(self, start: usize, q: Opening<F>, scale: F, reads: &mut Vec<Read>) {
@@ -469,7 +447,7 @@ impl ModelPcs for AkitaScheme {
 
     fn commit(
         layout: &Layout,
-        advice: &Advice,
+        advice: &mut Advice,
         _: &(),
         setup: &AkitaAdviceSetup,
     ) -> Result<(Self::AdviceCommitments, AkitaState)> {
@@ -483,9 +461,23 @@ impl ModelPcs for AkitaScheme {
                 for block in blocks {
                     let slot = layout.slots[block.leaf];
                     let rows = &mut indices[block.start..][..block.cycles];
-                    match (slot.kind, advice.0[slot.id].as_ref()) {
-                        (Kind::Bits { .. }, Some(Part::Bits(bits))) => {
-                            Digits::new(slot)?.encode(bits, rows)?
+                    match (slot.kind, advice.0[slot.id].as_mut()) {
+                        (Kind::Bits { .. }, Some(Part::Digits(digits)))
+                            if digits.len() == rows.len() =>
+                        {
+                            for (dst, digit) in rows.iter_mut().zip(std::mem::take(digits)) {
+                                *dst = Some(digit);
+                            }
+                        }
+                        (Kind::Bits { planes: 1 }, Some(Part::Bits(bits)))
+                            if bits.len() == rows.len() =>
+                        {
+                            for (dst, &bit) in rows.iter_mut().zip(bits.iter()) {
+                                if bit > 1 {
+                                    return Err("invalid advice bit");
+                                }
+                                *dst = Some(bit);
+                            }
                         }
                         (Kind::Lookup { .. }, Some(Part::Lookup(poly)))
                             if poly.indices().len() == rows.len() =>

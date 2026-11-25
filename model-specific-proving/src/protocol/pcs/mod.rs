@@ -34,6 +34,10 @@ impl Slot {
                 Kind::Lookup { address_vars } => address_vars,
             }
     }
+
+    pub(crate) fn bits_per_digit(self) -> usize {
+        1 << (self.vars() - self.cell_vars).min(2)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -115,6 +119,7 @@ impl Layout {
 
 pub(crate) enum Part {
     Bits(Vec<u8>),
+    Digits(Vec<u8>),
     Lookup(OneHotPolynomial),
 }
 
@@ -130,8 +135,8 @@ impl Advice {
     }
 
     #[cfg(feature = "bitz")]
-    fn fill_bits<F: ProofField>(&self, slot: Slot, mut set: impl FnMut(usize)) -> Result<()> {
-        match (slot.kind, self.0[slot.id].as_ref()) {
+    fn fill_bits<F: ProofField>(&mut self, slot: Slot, mut set: impl FnMut(usize)) -> Result<()> {
+        match (slot.kind, self.0[slot.id].as_mut()) {
             (Kind::Bits { planes }, Some(Part::Bits(bits))) if bits.len() == 1 << slot.vars() => {
                 let used = planes << slot.cell_vars;
                 if bits[used..].iter().any(|&bit| bit != 0) {
@@ -142,6 +147,28 @@ impl Advice {
                         0 => (),
                         1 => set(i),
                         _ => return Err("invalid advice bit"),
+                    }
+                }
+            }
+            (Kind::Bits { planes }, Some(Part::Digits(digits)))
+                if digits.len() == (1 << slot.vars()) / slot.bits_per_digit() =>
+            {
+                let cells = 1 << slot.cell_vars;
+                let lanes = slot.bits_per_digit();
+                let digits = std::mem::take(digits);
+                for (digit, rows) in digits.chunks_exact(cells).enumerate() {
+                    let first = digit * lanes;
+                    let used = planes.saturating_sub(first).min(lanes);
+                    for (cell, &code) in rows.iter().enumerate() {
+                        if code >= 1 << used {
+                            return Err("invalid range digit");
+                        }
+                        let mut remaining = code;
+                        while remaining != 0 {
+                            let bit = remaining.trailing_zeros() as usize;
+                            set((first + bit) * cells + cell);
+                            remaining &= remaining - 1;
+                        }
                     }
                 }
             }
@@ -159,14 +186,14 @@ impl Advice {
     pub(crate) fn bits(&self, slot: Slot) -> &[u8] {
         match self.0[slot.id].as_ref().expect("declared advice") {
             Part::Bits(bits) => bits,
-            Part::Lookup(_) => unreachable!("expected bit planes"),
+            _ => unreachable!("expected bit planes"),
         }
     }
 
     pub(crate) fn polynomial(&self, slot: Slot) -> &OneHotPolynomial {
         match self.0[slot.id].as_ref().expect("declared advice") {
             Part::Lookup(poly) => poly,
-            Part::Bits(_) => unreachable!("expected lookup"),
+            _ => unreachable!("expected lookup"),
         }
     }
 }
@@ -175,6 +202,36 @@ pub struct Opening<F> {
     pub(crate) slot: usize,
     pub(crate) claim: Claim<F>,
     pub(crate) planes: Option<Vec<F>>,
+}
+
+#[cfg(test)]
+#[test]
+fn range_digits_preserve_plane_order_and_padding() {
+    use crate::protocol::{
+        range::{Range, Ranges},
+        tensor::Shape,
+    };
+
+    let mut layout = Layout::default();
+    let ranges = Ranges::new(
+        &mut layout,
+        Shape { rows: 3, width: 3 },
+        [Range::signed(3), Range::unsigned(4)],
+    )
+    .unwrap();
+    let signed = [-4, -3, -2, -1, 0, 1, 2, 3, 0];
+    let unsigned = [0, 1, 2, 3, 4, 5, 6, 7, 15];
+    let mut advice = layout.witness();
+    ranges.record(&mut advice, &[&signed, &unsigned]).unwrap();
+    let Some(Part::Digits(digits)) = &advice.0[ranges.slot.id] else {
+        panic!("expected range digits");
+    };
+    let mut expected = [4u8; 16];
+    for (i, (&signed, &unsigned)) in signed.iter().zip(&unsigned).enumerate() {
+        expected[i / 3 * 4 + i % 3] = (signed + 4 + (unsigned << 3)) as u8;
+    }
+    assert_eq!(&digits[..16], &expected.map(|v| v & 15));
+    assert_eq!(&digits[16..], &expected.map(|v| v >> 4));
 }
 
 impl<F> Opening<F> {
@@ -204,7 +261,7 @@ pub trait ModelPcs {
     #[doc(hidden)]
     fn commit(
         layout: &Layout,
-        advice: &Advice,
+        advice: &mut Advice,
         plan: &Self::AdvicePlan,
         setup: &Self::AdviceProverSetup,
     ) -> Result<(Self::AdviceCommitments, Self::AdviceState)>;
@@ -243,14 +300,15 @@ impl<C: ModelPcs> Proof<C> {
     pub(crate) fn prove<W>(
         domain: &[u8; 32],
         layout: &Layout,
-        witness: W,
-        advice: impl FnOnce(&W) -> &Advice,
+        mut witness: W,
+        advice: impl FnOnce(&mut W) -> &mut Advice,
         plan: &C::AdvicePlan,
         setup: &C::AdviceProverSetup,
         public: impl FnOnce(&mut ProverState<Keccak>),
         reverse: impl FnOnce(W, &mut Session<'_, '_, C::Field>) -> Result<()>,
     ) -> Result<Self> {
-        let (commitments, state) = <C as ModelPcs>::commit(layout, advice(&witness), plan, setup)?;
+        let (commitments, state) =
+            <C as ModelPcs>::commit(layout, advice(&mut witness), plan, setup)?;
         let mut transcript = prover_transcript::<Keccak>(domain, b"");
         public(&mut transcript);
         C::bind(&commitments, &mut transcript);

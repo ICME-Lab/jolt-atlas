@@ -43,6 +43,33 @@ model (section 6).
 - A *tensor* is an integer array whose index set is a hypercube; other shapes are padded
   with zeros.
 
+### 1.1 Why this field, and what else would do
+
+The field has two jobs, and they pull apart.
+
+- **Its size carries the soundness.** Every challenge must come from about `2^120` values or
+  more. A small prime meets that with an extension: degree 4 over a 31-bit prime, degree 2
+  over a 61-bit one.
+- **Its characteristic carries the integers.** Proposition 1 needs both sides of every
+  equation to be integers smaller than half the characteristic. An extension does not help:
+  it has the characteristic of its base field. A sum of 11,008 products of an 8-bit weight
+  and a 16-bit activation is a 38-bit integer, which a 31-bit prime cannot hold; each such
+  sum would have to be split into limbs that are committed and range-checked.
+
+A 31-bit prime is the fastest field on a GPU for work that stays in the base field. Little of
+ours does: after a sumcheck's first fold every value is a full challenge-sized element, and
+arithmetic on those costs about the same number of machine multiplications whether the 124
+to 127 bits are one prime or an extension of a smaller one. The commitment's arithmetic is
+modulo `q`, and is unaffected by this choice.
+
+So `2^127 − 1` is chosen for the room in its characteristic and for needing no extension, not
+because it is the fastest multiply. The alternative worth measuring is `2^61 − 1` with a
+quadratic extension: its characteristic holds the sums above with 20 bits to spare, its base
+multiply is one 64-bit multiply, and it splits in the ring of section 4 into six factors, so
+the analogue of Lemma 3 holds for coefficients well beyond 7 (by the same argument; not
+written out). It leaves less headroom, and claims would live in the extension. Which is
+faster on the GPU is a measurement, listed in section 7.
+
 ## 2. The statement
 
 ### 2.1 The model
@@ -423,6 +450,8 @@ hardness of SIS over `R` at the stated norm.
    committed is enough; its form is not designed.
 7. **Committing every tensor.** It is what makes one batched sumcheck suffice. The
    alternative proves the layers in sequence and commits less.
+8. **The field.** `2^127 − 1` against `2^61 − 1` with a quadratic extension (section 1.1):
+   the GPU rate of a small value times a field element, and of a full multiply, in each.
 
 ## References
 

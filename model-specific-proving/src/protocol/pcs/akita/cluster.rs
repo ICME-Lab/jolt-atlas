@@ -460,6 +460,7 @@ fn receive<T: DeserializeOwned>(input: &mut impl Read) -> io::Result<T> {
 #[derive(Serialize, Deserialize)]
 struct SumJob<R, B, M> {
     rounds: usize,
+    sparse_rounds: usize,
     reads: R,
     check: B,
     mix: M,
@@ -477,6 +478,7 @@ impl Workers {
         rounds: usize,
         polys: &[Indices],
         queries: &GroupQueries,
+        sparse_rounds: usize,
     ) -> io::Result<RemoteFold> {
         let chunk = polys.len().div_ceil(self.0.len());
         let jobs = polys.chunks(chunk).zip(&self.0).enumerate();
@@ -490,6 +492,7 @@ impl Workers {
                 &mut out,
                 &SumJob {
                     rounds,
+                    sparse_rounds,
                     reads: &queries.reads[start..][..polys.len()],
                     check: &queries.bit_check,
                     mix: &queries.bit_mix[start..][..polys.len()],
@@ -570,6 +573,7 @@ fn serve_sumcheck(
     let job: Job = receive(reader)?;
     if job.rounds <= ADDRESS_BITS
         || job.rounds >= usize::BITS as usize
+        || !(1..=super::packed::SPARSE_ROUNDS).contains(&job.sparse_rounds)
         || job.check.len() != job.rounds
         || job.mix.is_empty()
         || job.reads.len() != job.mix.len()
@@ -599,7 +603,9 @@ fn serve_sumcheck(
             .iter()
             .zip(&job.reads)
             .zip(&job.mix)
-            .map(|((poly, reads), &mix)| PackedFold::new(poly, reads, &job.check, mix))
+            .map(|((poly, reads), &mix)| {
+                PackedFold::new(poly, reads, &job.check, mix).with_sparse_rounds(job.sparse_rounds)
+            })
             .collect(),
     };
     for round in 0..job.rounds {
@@ -737,7 +743,7 @@ mod tests {
             .workers
             .as_ref()
             .unwrap()
-            .sumcheck(key.rounds, &indices, &queries)
+            .sumcheck(key.rounds, &indices, &queries, 1)
             .unwrap();
         let mut previous = None;
         for round in 0..key.rounds {

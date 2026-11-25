@@ -79,6 +79,7 @@ pub struct AkitaAdviceSetup {
     one_hot_catalog: ValidatedScheduleCatalog,
     sparse: BTreeMap<usize, Vec<usize>>,
     max_group_rows: usize,
+    sparse_rounds: usize,
     prover: Mutex<BTreeMap<Key, Arc<AkitaProverSetup>>>,
     verifier: Mutex<BTreeMap<Key, Arc<AkitaVerifierSetup>>>,
 }
@@ -119,6 +120,7 @@ impl AkitaAdviceSetup {
                 .map_err(|_| "invalid Akita full-width dense schedules")?,
             sparse: shapes,
             max_group_rows: usize::MAX,
+            sparse_rounds: packed::SPARSE_ROUNDS,
             dense_catalog,
             one_hot_catalog: sparse,
             prover: Mutex::default(),
@@ -133,6 +135,15 @@ impl AkitaAdviceSetup {
             return Err("empty Akita group row limit");
         }
         self.max_group_rows = rows;
+        Ok(self)
+    }
+
+    /// Number of row rounds to keep packed before expanding each polynomial.
+    pub fn with_sparse_rounds(mut self, rounds: usize) -> Result<Self> {
+        if !(1..=packed::SPARSE_ROUNDS).contains(&rounds) {
+            return Err("invalid Akita sparse round count");
+        }
+        self.sparse_rounds = rounds;
         Ok(self)
     }
 
@@ -931,7 +942,10 @@ fn prove_group(
                 .iter()
                 .zip(&queries.reads)
                 .zip(&queries.bit_mix)
-                .map(|((poly, reads), &mix)| PackedFold::new(poly, reads, &queries.bit_check, mix))
+                .map(|((poly, reads), &mix)| {
+                    PackedFold::new(poly, reads, &queries.bit_check, mix)
+                        .with_sparse_rounds(setup.sparse_rounds)
+                })
                 .collect(),
         };
         let (reduction, reduced) =
@@ -944,7 +958,12 @@ fn prove_group(
     let (reduction, reduced, evaluations) = match &setup.workers {
         Some(workers) => {
             let mut fold = workers
-                .sumcheck(key.rounds, &witness.polynomials, &queries)
+                .sumcheck(
+                    key.rounds,
+                    &witness.polynomials,
+                    &queries,
+                    setup.sparse_rounds,
+                )
                 .map_err(|_| "Akita worker sumcheck setup failed")?;
             let (reduction, reduced) =
                 prove_single(&mut fold, &instance(queries.sum, key.rounds, 3), t)

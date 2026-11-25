@@ -75,10 +75,23 @@ fn native_metal_commitment_and_opening_verify_on_cpu() {
         .iter()
         .map(|poly| poly.evaluate(&point))
         .collect();
+    let packed: Arc<[_]> = polynomials
+        .iter()
+        .map(|poly| {
+            let mut indices = super::Indices::new(poly.num_rows());
+            for (row, &column) in poly.indices().iter().enumerate() {
+                if let Some(column) = column {
+                    indices.insert(row, column);
+                }
+            }
+            indices
+        })
+        .collect::<Vec<_>>()
+        .into();
     for (setup, expected_dispatches) in [(&cpu, 4), (&gpu, 3)] {
         dispatches.store(0, Ordering::Relaxed);
         let pk = setup.setup(key).unwrap();
-        let (commitment, hint) = setup.commit_group(key, &polynomials).unwrap();
+        let (commitment, hint) = setup.commit_group(key, &packed).unwrap();
         assert_eq!(commitment, expected);
         let statement = opening_statement(&commitment, &point, &values);
         let mut prover = prover_transcript::<Keccak>(&[1; 32], b"");

@@ -121,7 +121,7 @@ impl<'a> Softmax<'a> {
             previous,
             rows,
             excess,
-            lookup: Lookup::with_digit_bits(layout, shape.vars(), len, 2)?,
+            lookup: Lookup::new(layout, shape.vars(), len)?,
         })
     }
 

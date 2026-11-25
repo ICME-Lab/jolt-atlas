@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::protocol::{
-    session::{bind_halves, instance, Column, Fold},
+    session::{bind_halves, instance},
     tensor::{eq, weights},
 };
 use akita_config::CommitmentConfig;
@@ -29,7 +29,7 @@ use super::*;
 #[cfg(all(test, feature = "akita-metal", target_os = "macos"))]
 mod metal;
 mod packed;
-use packed::PackedFold;
+use packed::{Indices, PackedFold};
 
 fn equation(v: &[F]) -> F {
     v[0] * (v[1] + v[2] * (v[0] - F::one()))
@@ -172,7 +172,7 @@ impl AkitaAdviceSetup {
     fn commit_group(
         &self,
         key: Key,
-        polynomials: &Arc<[OneHotPolynomial]>,
+        polynomials: &Arc<[Indices]>,
     ) -> Result<(AkitaCommitment, AkitaProverHint)> {
         let pk = self.setup(key)?;
         AkitaScheme::commit_trace_one_hot(
@@ -369,22 +369,22 @@ pub struct AkitaState {
     groups: Vec<CommittedGroup>,
 }
 struct CommittedGroup {
-    polynomials: Arc<[OneHotPolynomial]>,
+    polynomials: Arc<[Indices]>,
     hint: AkitaProverHint,
 }
 
 struct GroupRows {
-    polynomials: Arc<[OneHotPolynomial]>,
+    polynomials: Arc<[Indices]>,
     prefix: usize,
 }
 
 impl GroupRows {
-    fn new(polynomials: Arc<[OneHotPolynomial]>) -> Self {
+    fn new(polynomials: Arc<[Indices]>) -> Self {
         let prefix = polynomials
             .iter()
-            .filter_map(|poly| poly.indices().iter().rposition(Option::is_some))
+            .map(|poly| poly.prefix)
             .max()
-            .map_or(0, |last| last + 1);
+            .unwrap_or(0);
         Self {
             polynomials,
             prefix,
@@ -394,7 +394,7 @@ impl GroupRows {
 
 impl jolt_akita::TraceOneHotRows for GroupRows {
     fn num_rows(&self) -> usize {
-        self.polynomials[0].indices().len()
+        self.polynomials[0].len()
     }
 
     fn num_columns(&self) -> usize {
@@ -407,7 +407,7 @@ impl jolt_akita::TraceOneHotRows for GroupRows {
 
     fn fill_row(&self, row: usize, selected: &mut [u8]) {
         for (value, poly) in selected.iter_mut().zip(self.polynomials.iter()) {
-            *value = poly.indices()[row].unwrap_or(jolt_akita::no_selected_row());
+            *value = poly.get(row).unwrap_or(jolt_akita::no_selected_row());
         }
     }
 
@@ -416,7 +416,7 @@ impl jolt_akita::TraceOneHotRows for GroupRows {
             .iter()
             .enumerate()
             .fold(0, |mask, (column, poly)| {
-                mask | (u64::from(poly.indices()[row] == Some(0)) << column)
+                mask | (u64::from(poly.get(row) == Some(0)) << column)
             })
     }
 }
@@ -452,20 +452,26 @@ impl ModelPcs for AkitaScheme {
         for group in &plan.0 {
             let mut polynomials = Vec::with_capacity(group.key.count);
             for blocks in &group.polynomials {
-                let mut indices = vec![None; 1 << (group.key.rounds - ADDRESS_BITS)];
+                let mut indices = Indices::new(1 << (group.key.rounds - ADDRESS_BITS));
                 for block in blocks {
                     let slot = layout.slots[block.leaf];
-                    let rows = &mut indices[block.start..][..block.cycles];
                     match slot.kind {
                         Kind::Bits { .. } => {
-                            for (dst, &digit) in rows.iter_mut().zip(advice.digits(slot)?.iter()) {
-                                *dst = Some(digit);
+                            for (row, &digit) in advice.digits(slot)?.iter().enumerate() {
+                                indices.insert(block.start + row, digit);
                             }
                         }
-                        Kind::Lookup { .. } => rows.copy_from_slice(advice.lookup(slot)?.indices()),
+                        Kind::Lookup { .. } => {
+                            for (row, &column) in advice.lookup(slot)?.indices().iter().enumerate()
+                            {
+                                if let Some(column) = column {
+                                    indices.insert(block.start + row, column);
+                                }
+                            }
+                        }
                     }
                 }
-                polynomials.push(OneHotPolynomial::new(K, indices));
+                polynomials.push(indices);
             }
             let polynomials: Arc<[_]> = polynomials.into();
             let (commitment, hint) = setup.commit_group(group.key, &polynomials)?;
@@ -731,12 +737,9 @@ impl GroupQueries {
     }
 }
 
-type RowFold = Fold<[Column<'static, F>; 3], fn(&[F]) -> F>;
-
 struct GroupFold<'a> {
     rounds: usize,
     packed: Vec<PackedFold<'a>>,
-    rows: Vec<RowFold>,
 }
 
 impl ProveRounds<F> for GroupFold<'_> {
@@ -746,61 +749,38 @@ impl ProveRounds<F> for GroupFold<'_> {
 
     fn prove_round(
         &mut self,
-        mut bind: Option<F>,
+        bind: Option<F>,
         round: usize,
-        claim: F,
+        _: F,
     ) -> std::result::Result<UnivariatePoly<F>, SumcheckError<F>> {
-        if round <= ADDRESS_BITS {
-            if let Some(r) = bind {
-                for fold in &mut self.packed {
-                    fold.bind_address(r, ADDRESS_BITS - round);
-                }
-            }
-            let samples = self
-                .packed
-                .par_iter()
-                .map(|fold| {
-                    if round < ADDRESS_BITS {
-                        fold.address_samples(round)
-                    } else {
-                        fold.row_samples()
-                    }
-                })
-                .reduce(
-                    || [F::zero(); 4],
-                    |a, b| std::array::from_fn(|i| a[i] + b[i]),
-                );
-            return Ok(UnivariatePoly::from_evals(&samples));
-        }
-        if round == ADDRESS_BITS + 1 {
-            let challenge = bind.take().expect("first row challenge");
-            self.rows = self
-                .packed
-                .drain(..)
-                .map(|fold| {
-                    Fold::new(
-                        fold.bind_rows(challenge).map(Column::owned),
-                        self.rounds - ADDRESS_BITS - 1,
-                        3,
-                        equation as fn(&[F]) -> F,
-                    )
-                })
-                .collect();
-        }
-        let round = round - ADDRESS_BITS - 1;
-        self.rows
+        let samples = self
+            .packed
             .par_iter_mut()
-            .map(|fold| fold.prove_round(bind, round, claim))
-            .try_reduce(
-                || UnivariatePoly::from_evals(&[F::zero(); 4]),
-                |mut sum, message| {
-                    sum += &message;
-                    Ok(sum)
-                },
-            )
+            .map(|fold| {
+                if let Some(r) = bind {
+                    if round <= ADDRESS_BITS {
+                        fold.bind_address(r, ADDRESS_BITS - round);
+                    } else {
+                        fold.bind_row(r);
+                    }
+                }
+                if round < ADDRESS_BITS {
+                    fold.address_samples(round)
+                } else {
+                    fold.row_samples()
+                }
+            })
+            .reduce(
+                || [F::zero(); 4],
+                |a, b| std::array::from_fn(|i| a[i] + b[i]),
+            );
+        Ok(UnivariatePoly::from_evals(&samples))
     }
 
-    fn finish_rounds(&mut self, _: F) -> std::result::Result<(), SumcheckError<F>> {
+    fn finish_rounds(&mut self, last: F) -> std::result::Result<(), SumcheckError<F>> {
+        for fold in &mut self.packed {
+            fold.bind_row(last);
+        }
         Ok(())
     }
 }
@@ -838,26 +818,19 @@ fn prove_group(
     let queries = GroupQueries::read(layout, group, claims, t)?;
     let mut fold = GroupFold {
         rounds: key.rounds,
-        rows: Vec::new(),
         packed: witness
             .polynomials
             .iter()
             .zip(&queries.reads)
             .zip(&queries.bit_mix)
-            .map(|((poly, reads), &mix)| {
-                PackedFold::new(poly.indices(), reads, &queries.bit_check, mix)
-            })
+            .map(|((poly, reads), &mix)| PackedFold::new(poly, reads, &queries.bit_check, mix))
             .collect(),
     };
     let (reduction, reduced) = prove_single(&mut fold, &instance(queries.sum, key.rounds, 3), t)
         .map_err(|_| "Akita lookup group reduction failed")?;
+    let evaluations: Vec<_> = fold.packed.iter().map(|fold| fold.value(0)).collect();
     drop(fold);
     let point = group_point(&reduced.challenges);
-    let evaluations: Vec<_> = witness
-        .polynomials
-        .iter()
-        .map(|poly| poly.evaluate(&point))
-        .collect();
     t.append_values(&evaluations);
     let polynomials = witness
         .polynomials

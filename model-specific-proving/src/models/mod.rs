@@ -173,7 +173,17 @@ impl<'a> Model<'a> {
             };
             let attention =
                 AttentionPlan::new(&mut layout, shape, bits.into(), p.attention, input_bound)?;
-            let mlp = MlpPlan::new(&mut layout, shape, bits.into(), p.mlp)?;
+            let mlp_norm = match &architecture {
+                Architecture::Decoder { .. } => p.mlp_norm,
+                Architecture::Encoder { .. } => p.attention_norm,
+            };
+            let mlp = MlpPlan::new(
+                &mut layout,
+                shape,
+                bits.into(),
+                p.mlp,
+                mlp_norm.output_bound(shape.width, bits),
+            )?;
             let attention_norm = Norm::new(&mut layout, shape, bits.into(), p.attention_norm)?;
             let mlp_norm = Norm::new(&mut layout, shape, bits.into(), p.mlp_norm)?;
             let attention_sum = Ranges::new(&mut layout, shape, [I32])?;

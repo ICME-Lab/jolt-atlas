@@ -44,10 +44,18 @@ impl<F> MlpTrace<F> {
 }
 
 impl<'a> MlpPlan<'a> {
-    pub(crate) fn new(layout: &mut Layout, input: Shape, bits: usize, p: Mlp<'a>) -> Result<Self> {
-        let activation_input = Linear::new(layout, input, p.gate.unwrap_or(p.up), bits, false)?;
+    pub(crate) fn new(
+        layout: &mut Layout,
+        input: Shape,
+        bits: usize,
+        p: Mlp<'a>,
+        input_bound: Option<u128>,
+    ) -> Result<Self> {
+        let projection = p.gate.unwrap_or(p.up);
+        let activation_input = Linear::new(layout, input, projection, bits, false)?;
         let shape = activation_input.shape();
-        let activation = Activate::new(layout, shape, p.activation)?;
+        let bound = input_bound.map(|bound| projection.output_bound(input.width, bound, 1 << bits));
+        let activation = Activate::new(layout, shape, p.activation, bound)?;
         let multiplier = p
             .gate
             .map(|_| -> Result<_> {

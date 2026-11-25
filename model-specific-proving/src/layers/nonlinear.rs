@@ -23,32 +23,65 @@ pub struct Activation<'a> {
 pub(crate) struct Activate<'a> {
     shape: Shape,
     table: Activation<'a>,
-    ranges: Ranges,
-    sign: Slot,
+    proof: ActivationProof,
     lookup: Lookup,
+}
+
+enum ActivationProof {
+    Direct(Box<[i32]>),
+    Clamp { ranges: Ranges, sign: Slot },
 }
 
 pub(crate) struct ActivationTrace<F> {
     pub(crate) output: Vec<i32>,
-    columns: [Vec<F>; 5],
     indices: Arc<Vec<u32>>,
+    clamp: Option<ClampTrace<F>>,
+}
+
+struct ClampTrace<F> {
+    columns: [Vec<F>; 5],
     signs: Arc<Vec<u8>>,
 }
 
 impl<'a> Activate<'a> {
-    pub(crate) fn new(layout: &mut Layout, shape: Shape, table: Activation<'a>) -> Result<Self> {
+    pub(crate) fn new(
+        layout: &mut Layout,
+        shape: Shape,
+        table: Activation<'a>,
+        input_bound: Option<u128>,
+    ) -> Result<Self> {
         let lookup = Lookup::new(layout, shape.vars(), table.correction.len())?;
         let upper = i64::from(table.lower) + (table.correction.len() - 1) as i64;
         if upper > i64::from(i32::MAX) {
             return Err("invalid activation bounds");
         }
-        let ranges = Ranges::new(layout, shape, [Range::unsigned(32); 2])?;
-        let sign = layout.add(shape.vars(), Kind::Bits { planes: 1 })?;
+        let direct = input_bound
+            .filter(|&bound| {
+                i128::from(table.lower) <= -(bound as i128) && bound as i128 <= i128::from(upper)
+            })
+            .and_then(|_| {
+                table
+                    .correction
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &correction)| {
+                        let input = i64::from(table.lower) + index as i64;
+                        i32::try_from(input.max(0) + i64::from(correction))
+                    })
+                    .collect::<std::result::Result<Box<[_]>, _>>()
+                    .ok()
+            });
+        let proof = match direct {
+            Some(values) => ActivationProof::Direct(values),
+            None => ActivationProof::Clamp {
+                ranges: Ranges::new(layout, shape, [Range::unsigned(32); 2])?,
+                sign: layout.add(shape.vars(), Kind::Bits { planes: 1 })?,
+            },
+        };
         Ok(Self {
             shape,
             table,
-            ranges,
-            sign,
+            proof,
             lookup,
         })
     }
@@ -56,6 +89,7 @@ impl<'a> Activate<'a> {
     pub(crate) fn bind(&self, t: &mut impl Transcript) {
         t.append(&(i64::from(self.table.lower) as u64));
         bind_i32(t, self.table.correction);
+        t.append(&u64::from(matches!(self.proof, ActivationProof::Direct(_))));
     }
 
     pub(crate) fn execute<F: ProofField>(
@@ -66,6 +100,30 @@ impl<'a> Activate<'a> {
         self.shape.check(x)?;
         let lower = i64::from(self.table.lower);
         let upper = lower + (self.table.correction.len() - 1) as i64;
+        let (ranges, sign) = match &self.proof {
+            ActivationProof::Direct(table) => {
+                let zero = (-lower) as u32;
+                let stride = self.shape.width.next_power_of_two();
+                let mut indices = vec![zero; 1 << self.shape.vars()];
+                let mut output = Vec::with_capacity(x.len());
+                for (row, input) in x.chunks_exact(self.shape.width).enumerate() {
+                    for (col, &value) in input.iter().enumerate() {
+                        let index = usize::try_from(i64::from(value) - lower)
+                            .map_err(|_| "activation input below table")?;
+                        output.push(*table.get(index).ok_or("activation input above table")?);
+                        indices[row * stride + col] = index as u32;
+                    }
+                }
+                let indices = Arc::new(indices);
+                self.lookup.record(a, Arc::clone(&indices))?;
+                return Ok(ActivationTrace {
+                    output,
+                    indices,
+                    clamp: None,
+                });
+            }
+            ActivationProof::Clamp { ranges, sign } => (ranges, *sign),
+        };
         let mut output = Vec::new();
         let mut magnitude = Vec::new();
         let mut excess = Vec::new();
@@ -96,16 +154,15 @@ impl<'a> Activate<'a> {
         if lower > 0 || upper < 0 {
             return Err("activation domain must contain zero");
         }
-        self.ranges.record(a, &[&magnitude, &excess])?;
+        ranges.record(a, &[&magnitude, &excess])?;
         let signs = Arc::new(signs);
-        a.put(self.sign, Part::Digits(Arc::clone(&signs)))?;
+        a.put(sign, Part::Digits(Arc::clone(&signs)))?;
         let indices = Arc::new(indices);
         self.lookup.record(a, Arc::clone(&indices))?;
         Ok(ActivationTrace {
             output,
-            columns,
             indices,
-            signs,
+            clamp: Some(ClampTrace { columns, signs }),
         })
     }
 
@@ -117,6 +174,46 @@ impl<'a> Activate<'a> {
 
         lookups: &mut Batches<'s, 'w, F>,
     ) -> Result<Claim<F>> {
+        let (ranges, sign) = match &self.proof {
+            ActivationProof::Direct(table) => {
+                let (row, col) = q.point.split_at(self.shape.row_vars());
+                let rows = weights(row);
+                let cols = weights(col);
+                let active = rows.iter().take(self.shape.rows).copied().sum::<F>()
+                    * cols.iter().take(self.shape.width).copied().sum::<F>();
+                let [address] = io.values(|| {
+                    [dot(
+                        trace().indices.chunks_exact(cols.len()).map(|indices| {
+                            dot(
+                                indices.iter().map(|&i| F::from_u64(u64::from(i))),
+                                cols.iter().copied(),
+                            )
+                        }),
+                        rows.iter().copied(),
+                    )]
+                })?;
+                // Tensor claims have zero padding; the table evaluates padded
+                // cells at input zero, which can have a nonzero table output.
+                let at_zero = table[(-i64::from(self.table.lower)) as usize];
+                let output = q.value + (F::one() - active) * F::from_i32(at_zero);
+                let claim = Claim {
+                    point: q.point.clone(),
+                    value: address + F::from_i32(self.table.lower),
+                };
+                lookups.push(
+                    &[Table::Slice(table)],
+                    &self.lookup,
+                    Read {
+                        cell: q.point,
+                        address,
+                        output: Box::new([output]),
+                        witness: io.proving().then(|| trace().indices.as_slice()),
+                    },
+                );
+                return Ok(claim);
+            }
+            ActivationProof::Clamp { ranges, sign } => (ranges, *sign),
+        };
         let vars = self.shape.vars();
         io.pow(vars + 3)?;
         let mix = io.challenge(3)?;
@@ -141,7 +238,7 @@ impl<'a> Activate<'a> {
         let (point, v) = io.relation(
             instance(q.value, vars, 4),
             || {
-                let trace = trace();
+                let trace = trace().clamp.as_ref().expect("activation clamp witness");
                 let [x, a, c, m, e] = &trace.columns;
                 [
                     Column::borrowed(x),
@@ -161,9 +258,9 @@ impl<'a> Activate<'a> {
                     + eq(&random, p) * clamp(v)
             },
         )?;
-        self.ranges.check(&[(&point, [v[3], v[5]])], io)?;
+        ranges.check(&[(&point, [v[3], v[5]])], io)?;
         io.openings.push(Opening::new(
-            self.sign,
+            sign,
             Claim {
                 point: point.clone(),
                 value: v[4],

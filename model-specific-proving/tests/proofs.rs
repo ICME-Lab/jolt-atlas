@@ -69,7 +69,7 @@ fn fixture(decoder: bool, rows: usize, layers: usize, gated: bool) -> Model<'sta
                 },
                 activation: Activation {
                     lower: -2,
-                    correction: &[0; 4],
+                    correction: if gated { &[0; 4] } else { &[1, 2, 3, 4] },
                 },
             },
             attention_norm: norm,

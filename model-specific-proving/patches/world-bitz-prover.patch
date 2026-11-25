@@ -1,0 +1,901 @@
+diff --git a/crates/gkr/src/bounded.rs b/crates/gkr/src/bounded.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/gkr/src/bounded.rs
+@@ -0,0 +1,327 @@
++//! Evaluate early sumcheck rounds from the packed table and materialize only the folded suffix.
++
++use super::*;
++
++/// At most 256 MiB for the two dense child buffers in one relation.
++pub(super) const DENSE_NODES: usize = 1 << 24;
++const TILE: usize = 1 << 12;
++
++impl LutLayers {
++    pub(super) fn nibble(&self, index: usize) -> usize {
++        ((self.words()[index / NIBBLES_IN_WORD] >> (NIBBLE_BITS * (index % NIBBLES_IN_WORD))) & 15)
++            as usize
++    }
++
++    fn child(&self, level: usize, index: usize) -> Field {
++        if level >= 3 {
++            let n = self.nodes::<LAYER2>() / 2;
++            let len = n >> (level - 3);
++            return (0..n / len)
++                .map(|i| {
++                    let low = index + i * len;
++                    let high = low + n;
++                    self.luts[low >> self.log_trees][self.nibble(low)]
++                        * self.luts[high >> self.log_trees][self.nibble(high)]
++                })
++                .reduce(|a, b| a * b)
++                .expect("a tree node has children");
++        }
++        let nodes = self.nodes::<LAYER2>() << (LAYER2 - level);
++        let stride = nodes / 4;
++        let part = index / stride;
++        let position = index % stride + STREAM[level][part] * stride;
++        self.luts[position >> self.log_trees][self.nibble(position) & MASK[level][part]]
++    }
++}
++
++pub(super) fn build(
++    row_images: &[Field],
++    table: &BitTable,
++    dense_nodes: usize,
++) -> (Vec<Field>, LayerWitnesses) {
++    let lut_layers = LutLayers::new(table.as_matrix(), row_images);
++    let n = lut_layers.nodes::<LAYER2>() / 2;
++    let columns = table.shape().columns();
++    let mut count = n;
++    let mut level = 3;
++    while count > dense_nodes && count > columns {
++        count /= 2;
++        level += 1;
++    }
++
++    let first = if level == 3 {
++        layer3(&lut_layers)
++    } else {
++        (0..count)
++            .into_par_iter()
++            .with_min_len(PARALLEL_MIN_LANES)
++            .map(|i| lut_layers.child(level, i))
++            .collect()
++    };
++    let (output, upper_nodes) = fold_layers(first, columns);
++    (
++        output,
++        LayerWitnesses {
++            lut_layers,
++            upper_nodes,
++            first_level: level,
++        },
++    )
++}
++
++pub(super) fn prove(
++    ps: &mut ProverState,
++    mut point: Vec<Field>,
++    witness: LayerWitnesses,
++    security: SecurityLevel,
++    dense_nodes: usize,
++) -> (Vec<Field>, Field) {
++    let LayerWitnesses {
++        lut_layers,
++        upper_nodes,
++        first_level,
++    } = witness;
++    for mut children in upper_nodes.into_iter().rev() {
++        let half = children.len() / 2;
++        let (left, right) = children.split_at_mut(half);
++        (point, _) = prove_relation(
++            ps,
++            &point,
++            security,
++            dense_nodes,
++            Some((left, right)),
++            None,
++            |_| unreachable!("dense children supplied"),
++        );
++    }
++    let mut value = Field::ZERO;
++    for level in (0..first_level).rev() {
++        (point, value) = prove_relation(
++            ps,
++            &point,
++            security,
++            dense_nodes,
++            None,
++            (level <= 2).then_some((&lut_layers, level)),
++            |index| lut_layers.child(level, index),
++        );
++    }
++    (point, value)
++}
++
++fn factored_sum(
++    point: &[Field],
++    work: impl Fn(Range<usize>, &[Field]) -> (Wide256, Wide256) + Sync,
++) -> (Wide256, Wide256) {
++    let low_vars = point.len().min(TILE.ilog2() as usize);
++    let (low, high) = point.split_at(low_vars);
++    let lo = poly::eq_table(low);
++    let hi = poly::eq_table(high);
++    hi.par_iter()
++        .enumerate()
++        .map(|(i, &weight)| {
++            let start = i * lo.len();
++            let (b, inf) = work(start..start + lo.len(), &lo);
++            if hi.len() == 1 {
++                (b, inf)
++            } else {
++                (
++                    Wide256::mul(b.reduce(), weight),
++                    Wide256::mul(inf.reduce(), weight),
++                )
++            }
++        })
++        .reduce(
++            || (Wide256::zero(), Wide256::zero()),
++            |(a, b), (c, d)| (a + c, b + d),
++        )
++}
++
++fn send_round(
++    ps: &mut ProverState,
++    eq_bound: &mut Field,
++    sum: (Wide256, Wide256),
++    z: Field,
++    security: SecurityLevel,
++) -> Field {
++    let (b, inf) = sum;
++    ps.prover_message(&[*eq_bound * b.reduce(), *eq_bound * inf.reduce()]);
++    ps.grind(CUBIC_GRINDING_LABEL, security.grinding_bits(3));
++    let r = ps.verifier_message();
++    *eq_bound *= eq_factor(r, z);
++    r
++}
++
++fn prove_relation(
++    ps: &mut ProverState,
++    point: &[Field],
++    security: SecurityLevel,
++    dense_nodes: usize,
++    dense: Option<(&mut [Field], &mut [Field])>,
++    source_lut: Option<(&LutLayers, usize)>,
++    source: impl Fn(usize) -> Field + Sync,
++) -> (Vec<Field>, Field) {
++    let n = point.len();
++    let mut challenges = vec![Field::ZERO; n + 1];
++    let mut eq_bound = Field::ONE;
++    let mut remaining = n;
++
++    let mut left_owned;
++    let mut right_owned;
++    let (mut left, mut right) = match dense {
++        Some(pair) => pair,
++        None => {
++            let side = 1 << n;
++            let mut prefix = vec![Field::ONE];
++            let bound = |side_start, local: usize, stride, weights: &[Field]| {
++                if weights.len() == 1 {
++                    return source(side_start + local);
++                }
++                let mut sum = Wide256::zero();
++                for (i, &weight) in weights.iter().enumerate() {
++                    sum += Wide256::mul(source(side_start + i * stride + local), weight);
++                }
++                sum.reduce()
++            };
++            while (2 << remaining) > dense_nodes {
++                let i = remaining - 1;
++                let stride = 1 << remaining;
++                let half = 1 << i;
++                let at_one = sends_one(point[i]);
++                let projected = source_lut.map(|(lut, level)| {
++                    packed_round::PackedRound::new(lut, level, stride, &prefix)
++                });
++                let mut sums = factored_sum(&point[..i], |range, eq| {
++                    if let Some(projected) = &projected {
++                        let mut buf = vec![Field::ZERO; 4 * range.len()];
++                        let mut parts = buf.chunks_exact_mut(range.len());
++                        let [l0, l1, r0, r1] = std::array::from_fn(|_| parts.next().unwrap());
++                        for (start, out) in [
++                            (0, l0.as_mut()),
++                            (half, l1.as_mut()),
++                            (side, r0.as_mut()),
++                            (side + half, r1.as_mut()),
++                        ] {
++                            projected.fill(start + range.start, out);
++                        }
++                        let mut b = Wide256::zero();
++                        let mut inf = Wide256::zero();
++                        for j in 0..range.len() {
++                            let (l, r) = if at_one {
++                                (l1[j], r1[j])
++                            } else {
++                                (l0[j], r0[j])
++                            };
++                            if l != Field::ZERO || r != Field::ZERO {
++                                b += Wide256::mul(eq[j], l + r + l * r);
++                            }
++                            let dl = l1[j] + l0[j];
++                            let dr = r1[j] + r0[j];
++                            if dl != Field::ZERO && dr != Field::ZERO {
++                                inf += Wide256::mul(eq[j] * dl, dr);
++                            }
++                        }
++                        return (b, inf);
++                    }
++
++                    let mut b = Wide256::zero();
++                    let mut inf = Wide256::zero();
++                    for (j, &weight) in range.zip(eq) {
++                        let l0 = bound(0, j, stride, &prefix);
++                        let l1 = bound(0, j + half, stride, &prefix);
++                        let r0 = bound(side, j, stride, &prefix);
++                        let r1 = bound(side, j + half, stride, &prefix);
++                        let (left, right) = if at_one { (l1, r1) } else { (l0, r0) };
++                        b += Wide256::mul(weight * left, right);
++                        inf += Wide256::mul(weight * (l1 - l0), r1 - r0);
++                    }
++                    (b, inf)
++                });
++                if projected.is_some() {
++                    sums.0 += Wide256::mul(Field::ONE, Field::ONE);
++                }
++                let r = send_round(ps, &mut eq_bound, sums, point[i], security);
++                challenges[i] = r;
++                prefix = prefix
++                    .into_iter()
++                    .flat_map(|value| {
++                        let high = value * r;
++                        [value - high, high]
++                    })
++                    .collect();
++                remaining -= 1;
++            }
++            let len = 1 << remaining;
++            let projected = source_lut
++                .map(|(lut, level)| packed_round::PackedRound::new(lut, level, len, &prefix));
++            if let Some(projected) = projected {
++                let materialize = |start| {
++                    let mut values = Field::zeroed_vec(len);
++                    values
++                        .par_chunks_mut(TILE)
++                        .enumerate()
++                        .for_each(|(i, chunk)| {
++                            projected.fill(start + i * TILE, chunk);
++                            for v in chunk {
++                                *v += Field::ONE;
++                            }
++                        });
++                    values
++                };
++                (left_owned, right_owned) = rayon::join(|| materialize(0), || materialize(side));
++            } else {
++                (left_owned, right_owned) = rayon::join(
++                    || {
++                        (0..len)
++                            .into_par_iter()
++                            .with_min_len(TILE)
++                            .map(|j| bound(0, j, len, &prefix))
++                            .collect::<Vec<_>>()
++                    },
++                    || {
++                        (0..len)
++                            .into_par_iter()
++                            .with_min_len(TILE)
++                            .map(|j| bound(side, j, len, &prefix))
++                            .collect::<Vec<_>>()
++                    },
++                );
++            }
++            (left_owned.as_mut_slice(), right_owned.as_mut_slice())
++        }
++    };
++
++    for i in (0..remaining).rev() {
++        let half = 1 << i;
++        let (l0, l1) = left.split_at_mut(half);
++        let (r0, r1) = right.split_at_mut(half);
++        let sums = factored_sum(&point[..i], |range, weights| {
++            if sends_one(point[i]) {
++                round_sums::<true>(
++                    &l0[range.clone()],
++                    &l1[range.clone()],
++                    &r0[range.clone()],
++                    &r1[range],
++                    weights,
++                )
++            } else {
++                round_sums::<false>(
++                    &l0[range.clone()],
++                    &l1[range.clone()],
++                    &r0[range.clone()],
++                    &r1[range],
++                    weights,
++                )
++            }
++        });
++        let r = send_round(ps, &mut eq_bound, sums, point[i], security);
++        challenges[i] = r;
++        bind(r, l0, l1, r0, r1);
++        (left, right) = (l0, r0);
++    }
++
++    ps.prover_message(&[left[0], right[0]]);
++    let t = ps.verifier_message();
++    challenges[n] = t;
++    (challenges, interpolate(left[0], right[0], t))
++}
+diff --git a/crates/gkr/src/lib.rs b/crates/gkr/src/lib.rs
+--- a/crates/gkr/src/lib.rs
++++ b/crates/gkr/src/lib.rs
+@@ -4,6 +4,9 @@
+ use rayon::prelude::*;
+ use std::ops::Range;
+ use transcript::{ProverState, VerifierState};
++
++mod bounded;
++mod packed_round;
+ 
+ pub type Field = F128;
+ 
+@@ -24,23 +27,30 @@
+ pub fn gpgkr_prove(
+     ps: &mut ProverState,
+     point: &[Field],
+-    // Every layer below the output: layer 3 and up in full, layers 0 to 2 in
+-    // their lookup tables.
++    // Retained upper layers and the packed source for the remaining layers.
+     witnesses: LayerWitnesses,
+     security: SecurityLevel,
+ ) -> (Vec<Field>, Field) {
+-    let mut point = point.to_owned();
++    assert_eq!(
++        point.len(),
++        witnesses.lut_layers.log_trees,
++        "the output has one value per tree, so the point has a coordinate per tree bit"
++    );
++    if witnesses.lut_layers.nodes::<LAYER1>() > bounded::DENSE_NODES {
++        return bounded::prove(
++            ps,
++            point.to_vec(),
++            witnesses,
++            security,
++            bounded::DENSE_NODES,
++        );
++    }
++    let mut point = point.to_vec();
+     let LayerWitnesses {
+         lut_layers,
+         upper_nodes,
++        ..
+     } = witnesses;
+-    // Every layer below adds a coordinate, so this fixes the length of every
+-    // point after it.
+-    assert_eq!(
+-        point.len(),
+-        lut_layers.log_trees,
+-        "the output has one value per tree, so the point has a coordinate per tree bit"
+-    );
+     // The leaves' sumcheck has the largest point, a coordinate per index bit
+     // of its parent, layer 1.
+     let mut eq_memory = EqTables::alloc_storage(lut_layers.nodes::<LAYER1>());
+@@ -788,17 +798,7 @@
+         bittable.shape().rows(),
+         "one image per row of the table"
+     );
+-    let lut_layers = LutLayers::new(bittable.as_matrix(), row_images);
+-    let layer3 = layer3(&lut_layers);
+-    let (output, upper_nodes) = fold_layers(layer3, 1 << lut_layers.log_trees);
+-
+-    (
+-        output,
+-        LayerWitnesses {
+-            lut_layers,
+-            upper_nodes,
+-        },
+-    )
++    bounded::build(row_images, bittable, bounded::DENSE_NODES)
+ }
+ 
+ const NIBBLE_BITS: usize = 4;
+@@ -899,7 +899,8 @@
+ pub struct LayerWitnesses {
+     /// Layers 0 to 2, in their lookup tables.
+     lut_layers: LutLayers,
+-    /// Layer 3 and up, layer 3 first.
++    first_level: usize,
++    /// Materialized layers, starting at `first_level`.
+     upper_nodes: Vec<Vec<Field>>,
+ }
+ 
+@@ -1140,6 +1141,38 @@
+                 gpgkr_verify(&mut verifier, claim + Field::ONE, &point, layers, Bits100).is_none()
+             );
+         }
++    }
++
++    #[test]
++    fn bounded_prover_matches_dense_transcript() {
++        let (shape, packed, row_images) = instance(SMALLEST, Bits::Drawn, 7);
++        let table = table(shape, &packed);
++        let dense_limit = shape.columns() * 4;
++        let (expected, dense) = grand_product(&row_images, &table);
++        let (output, compact) = bounded::build(&row_images, &table, dense_limit);
++        assert_eq!(expected, output);
++
++        let mut point = vec![Field::from(5u128); shape.log_columns()];
++        point[0] = Field::ZERO;
++        let mut old = transcript::build_prover("bounded-gkr", &point);
++        let mut new = transcript::build_prover("bounded-gkr", &point);
++        let old_result = gpgkr_prove(&mut old, &point, dense, Bits100);
++        let new_result = bounded::prove(&mut new, point.clone(), compact, Bits100, dense_limit);
++        assert_eq!(old_result, new_result);
++        let new_proof = new.finish();
++        assert_eq!(old.finish(), new_proof);
++        let mut verifier = transcript::build_verifier("bounded-gkr", &point, &new_proof);
++        assert_eq!(
++            gpgkr_verify(
++                &mut verifier,
++                mle(&output, &point),
++                &point,
++                shape.log_rows(),
++                Bits100
++            ),
++            Some(new_result)
++        );
++        verifier.check_eof().unwrap();
+     }
+ 
+     /// Proves the smallest shape from a point of `len(s)` coordinates, `s`
+diff --git a/crates/gkr/src/packed_round.rs b/crates/gkr/src/packed_round.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/gkr/src/packed_round.rs
+@@ -0,0 +1,78 @@
++use super::*;
++
++/// Tables of weighted deviations from one. A zero nibble contributes nothing.
++pub(super) struct PackedRound<'a> {
++    source: &'a LutLayers,
++    level: usize,
++    stride: usize,
++    unit: usize,
++    columns: usize,
++    groups: Vec<[Field; 16]>,
++    bindings: usize,
++}
++
++impl<'a> PackedRound<'a> {
++    pub(super) fn new(
++        source: &'a LutLayers,
++        level: usize,
++        stride: usize,
++        weights: &[Field],
++    ) -> Self {
++        let nodes = source.nodes::<LAYER2>() << (LAYER2 - level);
++        let columns = nodes / 4;
++        let unit = stride.min(1 << source.log_trees).min(columns);
++        let groups = (0..nodes / unit)
++            .map(|group| {
++                let index = group * unit;
++                let part = index / columns;
++                let position = index % columns + STREAM[level][part] * columns;
++                let lut = &source.luts[position >> source.log_trees];
++                let weight = weights[index / stride % weights.len()];
++                std::array::from_fn(|n| (lut[n & MASK[level][part]] - Field::ONE) * weight)
++            })
++            .collect();
++        Self {
++            source,
++            level,
++            stride,
++            unit,
++            columns,
++            groups,
++            bindings: weights.len(),
++        }
++    }
++
++    /// Fill one aligned tile with the folded values minus one.
++    pub(super) fn fill(&self, start: usize, dst: &mut [Field]) {
++        dst.fill(Field::ZERO);
++        for k in 0..self.bindings {
++            let mut index = start + k * self.stride;
++            let mut output = &mut *dst;
++            while !output.is_empty() {
++                let size = (self.unit - index % self.unit).min(output.len());
++                let lut = &self.groups[index / self.unit];
++                let position =
++                    index % self.columns + STREAM[self.level][index / self.columns] * self.columns;
++                let (block, rest) = output.split_at_mut(size);
++                if position.is_multiple_of(NIBBLES_IN_WORD) && size.is_multiple_of(NIBBLES_IN_WORD)
++                {
++                    let words = &self.source.words()[position / NIBBLES_IN_WORD..];
++                    for (bits, chunk) in words.iter().zip(block.chunks_exact_mut(NIBBLES_IN_WORD)) {
++                        let mut word = *bits;
++                        while word != 0 {
++                            let lane = word.trailing_zeros() as usize / 4;
++                            chunk[lane] += lut[((word >> (4 * lane)) & 15) as usize];
++                            word &= !(15u64 << (4 * lane));
++                        }
++                    }
++                } else {
++                    for (offset, value) in block.iter_mut().enumerate() {
++                        *value += lut[self.source.nibble(position + offset)];
++                    }
++                }
++                index += size;
++                output = rest;
++            }
++        }
++    }
++}
+diff --git a/crates/post_gkr/src/bounded.rs b/crates/post_gkr/src/bounded.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/post_gkr/src/bounded.rs
+@@ -0,0 +1,164 @@
++//! Fold packed low coordinates on demand before the dense sumcheck tail.
++
++use super::*;
++use field::Wide256;
++
++const WORD_LOG: usize = ELEMENT_BITS.ilog2() as usize;
++
++struct PackedFold<'a> {
++    packed: &'a [F128],
++    bits: usize,
++    bytes: Vec<[F128; 256]>,
++}
++
++impl<'a> PackedFold<'a> {
++    fn new(packed: &'a [F128], bound: &[F128]) -> Self {
++        let weights = poly::eq_table(bound);
++        // One lookup per input byte adds the weights selected by that byte.
++        let bytes = weights
++            .chunks(8)
++            .map(|weights| {
++                let mut sums = [F128::ZERO; 256];
++                for (i, &weight) in weights.iter().enumerate() {
++                    for j in 0..1 << i {
++                        sums[(1 << i) + j] = sums[j] + weight;
++                    }
++                }
++                sums
++            })
++            .collect();
++        Self {
++            packed,
++            bits: bound.len(),
++            bytes,
++        }
++    }
++
++    #[inline]
++    fn value(&self, index: usize) -> F128 {
++        if self.bits <= WORD_LOG {
++            let position = index << self.bits;
++            let mut word = self.packed[position >> WORD_LOG].to_u128() >> (position % ELEMENT_BITS);
++            if self.bits < 3 {
++                word &= (1u128 << (1 << self.bits)) - 1;
++            }
++            let mut sum = F128::ZERO;
++            for table in &self.bytes {
++                sum += table[word as u8 as usize];
++                word >>= 8;
++            }
++            return sum;
++        }
++        let words = 1 << (self.bits - WORD_LOG);
++        self.packed[index * words..][..words]
++            .iter()
++            .flat_map(|word| word.to_u128().to_le_bytes())
++            .zip(&self.bytes)
++            .fold(F128::ZERO, |sum, (byte, table)| sum + table[byte as usize])
++    }
++}
++
++pub(super) fn prove(
++    factors: Factors<'_>,
++    packed: &[F128],
++    first: F128,
++    running: F128,
++    security: SecurityLevel,
++    transcript: &mut ProverState,
++    dense_entries: usize,
++) -> OpeningQuery {
++    let rows = sumcheck::folded(factors.rows, first);
++    finish(
++        rows,
++        factors.columns,
++        packed,
++        vec![first],
++        running,
++        security,
++        transcript,
++        dense_entries,
++    )
++}
++
++pub(super) fn finish(
++    mut rows: Vec<F128>,
++    column_weights: &[F128],
++    packed: &[F128],
++    mut point: Vec<F128>,
++    mut running: F128,
++    security: SecurityLevel,
++    transcript: &mut ProverState,
++    dense_entries: usize,
++) -> OpeningQuery {
++    let mut columns = std::borrow::Cow::Borrowed(column_weights);
++
++    while rows.len() * columns.len() > dense_entries {
++        let read = PackedFold::new(packed, &point);
++        let pair = |i: usize| {
++            let w = |j: usize| rows[j & (rows.len() - 1)] * columns[j / rows.len()];
++            let a = i * 2;
++            let (w0, w1) = (w(a), w(a + 1));
++            let (v0, v1) = (read.value(a), read.value(a + 1));
++            (Wide256::mul(w0, v0), Wide256::mul(w0 + w1, v0 + v1))
++        };
++        let reduce = |(a0, a2): (Wide256, Wide256), (b0, b2)| (a0 + b0, a2 + b2);
++        let identity = || (Wide256::zero(), Wide256::zero());
++        let pairs = 0..rows.len() * columns.len() / 2;
++        #[cfg(feature = "parallel")]
++        let (a0, a2) = pairs
++            .into_par_iter()
++            .with_min_len(4096)
++            .map(pair)
++            .reduce(identity, reduce);
++        #[cfg(not(feature = "parallel"))]
++        let (a0, a2) = pairs.map(pair).fold(identity(), reduce);
++
++        let message = [a0.reduce(), a2.reduce()];
++        transcript.prover_message(&message);
++        transcript.grind(GRINDING_LABEL, security.grinding_bits(2));
++        let challenge = transcript.verifier_message();
++        running = advance(running, message, challenge);
++        point.push(challenge);
++        if rows.len() > 1 {
++            rows = sumcheck::folded(&rows, challenge);
++        } else {
++            columns = std::borrow::Cow::Owned(sumcheck::folded(&columns, challenge));
++        }
++    }
++
++    let read = PackedFold::new(packed, &point);
++    let len = rows.len() * columns.len();
++    let value = |i| read.value(i);
++    let weight = |i: usize| rows[i & (rows.len() - 1)] * columns[i / rows.len()];
++    #[cfg(feature = "parallel")]
++    let (weights, values) = rayon::join(
++        || {
++            (0..len)
++                .into_par_iter()
++                .with_min_len(4096)
++                .map(weight)
++                .collect()
++        },
++        || {
++            (0..len)
++                .into_par_iter()
++                .with_min_len(4096)
++                .map(value)
++                .collect()
++        },
++    );
++    #[cfg(not(feature = "parallel"))]
++    let (weights, values) = (
++        (0..len).map(weight).collect(),
++        (0..len).map(value).collect(),
++    );
++
++    let (rest, target) = sumcheck::prove(
++        &mut Pair::new(weights, values),
++        running,
++        security,
++        transcript,
++    );
++    point.extend(rest);
++    OpeningQuery::Mle { point, target }
++}
+diff --git a/crates/post_gkr/src/lib.rs b/crates/post_gkr/src/lib.rs
+--- a/crates/post_gkr/src/lib.rs
++++ b/crates/post_gkr/src/lib.rs
+@@ -31,6 +31,8 @@
+ //! calls the sumcheck. The round count derives from the claim and is not
+ //! absorbed either.
+ 
++mod bounded;
++mod projected;
+ mod sumcheck;
+ #[cfg(test)]
+ mod test_util;
+@@ -126,9 +128,24 @@
+     security: SecurityLevel,
+     transcript: &mut ProverState,
+ ) -> Result<OpeningQuery, ProveError> {
++    prove_factors_with_cap(rows, columns, target, packed, security, transcript, 1 << 23)
++}
++
++fn prove_factors_with_cap(
++    rows: &[F128],
++    columns: &[F128],
++    target: F128,
++    packed: &[F128],
++    security: SecurityLevel,
++    transcript: &mut ProverState,
++    dense_entries: usize,
++) -> Result<OpeningQuery, ProveError> {
+     let factors = Factors { rows, columns };
+     if packed.len() != factors.packed_len() {
+         return Err(ProveError::WitnessLengthMismatch);
++    }
++    if (128..=512).contains(&rows.len()) && packed.len() * (ELEMENT_BITS / 2) > dense_entries {
++        return projected::prove(factors, packed, target, security, transcript, dense_entries);
+     }
+     if factors.weighted_sum(packed) != target {
+         return Err(ProveError::ClaimDoesNotHold);
+@@ -139,6 +156,17 @@
+     transcript.grind(GRINDING_LABEL, security.grinding_bits(2));
+     let challenge: F128 = transcript.verifier_message();
+     let running = advance(target, message, challenge);
++    if rows.len() * columns.len() / 2 > dense_entries {
++        return Ok(bounded::prove(
++            factors,
++            packed,
++            challenge,
++            running,
++            security,
++            transcript,
++            dense_entries,
++        ));
++    }
+     let mut pair = Pair::new(factors.fold(challenge), bind_first(packed, challenge));
+     let (rest, target) = sumcheck::prove(&mut pair, running, security, transcript);
+     let mut point = vec![challenge];
+@@ -302,6 +330,42 @@
+     use crate::test_util::{Leaf, random, rng};
+     use poly::f128::inner_product;
+ 
++    #[test]
++    fn bounded_prover_matches_dense_transcript() {
++        let rows = vec![F128::from(5u128); 256];
++        let columns = vec![F128::from(7u128); 64];
++        let packed = (0..128)
++            .map(|i| F128::from(i as u128 + 1))
++            .collect::<Vec<_>>();
++        let target = Factors {
++            rows: &rows,
++            columns: &columns,
++        }
++        .weighted_sum(&packed);
++        let mut dense = build_prover("bounded-post-gkr", &b"");
++        let mut compact = build_prover("bounded-post-gkr", &b"");
++        let expected = prove_factors_with_cap(
++            &rows,
++            &columns,
++            target,
++            &packed,
++            Bits100,
++            &mut dense,
++            usize::MAX,
++        )
++        .unwrap();
++        let actual =
++            prove_factors_with_cap(&rows, &columns, target, &packed, Bits100, &mut compact, 8)
++                .unwrap();
++        assert_eq!(mle(&expected), mle(&actual));
++        let proof = compact.finish();
++        assert_eq!(dense.finish(), proof);
++        let mut verifier = build_verifier("bounded-post-gkr", &b"", &proof);
++        let verified = verify_factors(&rows, &columns, target, Bits100, &mut verifier).unwrap();
++        assert_eq!(mle(&actual), mle(&verified));
++        verifier.check_eof().unwrap();
++    }
++
+     /// The evaluation claim's parts.
+     fn mle(query: &OpeningQuery) -> (&[F128], F128) {
+         let OpeningQuery::Mle { point, target } = query else {
+diff --git a/crates/post_gkr/src/projected.rs b/crates/post_gkr/src/projected.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/post_gkr/src/projected.rs
+@@ -0,0 +1,80 @@
++//! Project columns once for the row rounds, then fold the packed rows at their challenges.
++use super::*;
++
++pub(super) fn prove(
++    factors: Factors<'_>,
++    packed: &[F128],
++    target: F128,
++    security: SecurityLevel,
++    transcript: &mut ProverState,
++    dense_entries: usize,
++) -> Result<OpeningQuery, ProveError> {
++    let rows = factors.rows.len();
++    let words = rows / ELEMENT_BITS;
++    let project = |sums: &mut [F128], (col, bits): (usize, &[F128])| {
++        for (chunk, word) in sums.chunks_exact_mut(ELEMENT_BITS).zip(bits) {
++            for row in iter_over_set_bits(word.to_u128()) {
++                chunk[row] += factors.columns[col];
++            }
++        }
++    };
++
++    #[cfg(feature = "parallel")]
++    let sums = packed
++        .par_chunks_exact(words)
++        .enumerate()
++        .with_min_len(4096)
++        .fold(
++            || vec![F128::ZERO; rows],
++            |mut sums, item| {
++                project(&mut sums, item);
++                sums
++            },
++        )
++        .reduce(
++            || vec![F128::ZERO; rows],
++            |mut left, right| {
++                for (dst, src) in left.iter_mut().zip(right) {
++                    *dst += src;
++                }
++                left
++            },
++        );
++    #[cfg(not(feature = "parallel"))]
++    let sums = {
++        let mut sums = vec![F128::ZERO; rows];
++        for item in packed.chunks_exact(words).enumerate() {
++            project(&mut sums, item);
++        }
++        sums
++    };
++    if factors
++        .rows
++        .iter()
++        .zip(&sums)
++        .map(|(&w, &v)| w * v)
++        .sum::<F128>()
++        != target
++    {
++        return Err(ProveError::ClaimDoesNotHold);
++    }
++    let mut pair = Pair::new(factors.rows.to_vec(), sums);
++    let (point, running) = sumcheck::prove_rounds(
++        &mut pair,
++        rows.ilog2() as usize,
++        target,
++        security,
++        transcript,
++    );
++    let scale = poly::f128::evaluate(factors.rows, &point);
++    Ok(bounded::finish(
++        vec![scale],
++        factors.columns,
++        packed,
++        point,
++        running,
++        security,
++        transcript,
++        dense_entries,
++    ))
++}
+diff --git a/crates/post_gkr/src/sumcheck.rs b/crates/post_gkr/src/sumcheck.rs
+--- a/crates/post_gkr/src/sumcheck.rs
++++ b/crates/post_gkr/src/sumcheck.rs
+@@ -123,7 +123,7 @@
+ 
+ /// Runs `rounds` rounds over `pair`, folding it in place. Returns the
+ /// challenges in the order they were drawn and the running claim.
+-fn prove_rounds(
++pub(super) fn prove_rounds(
+     pair: &mut Pair,
+     rounds: usize,
+     mut claim: F128,

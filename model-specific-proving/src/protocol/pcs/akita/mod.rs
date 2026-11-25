@@ -290,8 +290,15 @@ impl Slot {
         let (plane, cell) = q.claim.point.split_at(q.claim.point.len() - self.cell_vars);
         let lane_vars = self.digit_vars();
         if let Some(weights) = q.planes {
+            let Kind::Bits { planes } = self.kind else {
+                unreachable!("range slot is a bit slot");
+            };
             // All digit terms share the opening's one random coefficient.
-            for (i, lane) in weights.chunks_exact(1 << lane_vars).enumerate() {
+            for (i, lane) in weights
+                .chunks_exact(1 << lane_vars)
+                .take(self.digit_count(planes))
+                .enumerate()
+            {
                 reads.push(Read::new(
                     start + (i << self.cell_vars),
                     cell,
@@ -685,15 +692,15 @@ impl GroupQueries {
         let (mass_check, random) = random.split_at(row_vars);
         let (bit_mix, random) = random.split_at(key.count);
         let (valid_mix, random) = random.split_at(key.count);
-        let (mass_mix, mut weights) = random.split_at(key.count);
+        let (mass_mix, mut request_weights) = random.split_at(key.count);
         let valid_address = address_weights(&valid_check[..ADDRESS_BITS]);
         let valid_rows = &valid_check[ADDRESS_BITS..];
 
         let mut groups = Vec::with_capacity(key.count);
         let mut sum = F::zero();
         for (i, (requests, blocks)) in claims.into_iter().zip(&group.polynomials).enumerate() {
-            let (mix, rest) = weights.split_at(requests.len());
-            weights = rest;
+            let (mix, rest) = request_weights.split_at(requests.len());
+            request_weights = rest;
             let mut reads = Vec::new();
             for (Request { start, opening }, &mix) in requests.into_iter().zip(mix) {
                 sum += opening.claim.value * mix;
@@ -713,11 +720,27 @@ impl GroupQueries {
                 }
             }
 
+            // Used digits contain one selector. Unused digit positions and
+            // group padding have mass zero and contain no selectors.
             let occupied: F = blocks
                 .iter()
                 .map(|block| {
-                    let prefix = fixed_prefix(row_vars, block.start, block.cycles.ilog2() as usize);
-                    eq(&mass_check[..prefix.len()], &prefix)
+                    let block_vars = block.cycles.ilog2() as usize;
+                    let prefix = fixed_prefix(row_vars, block.start, block_vars);
+                    let block_weight = eq(&mass_check[..prefix.len()], &prefix);
+                    let slot = layout.slots[block.leaf];
+                    match slot.kind {
+                        Kind::Bits { planes } => {
+                            let digit_vars = block_vars - slot.cell_vars;
+                            let digit_point = &mass_check[prefix.len()..][..digit_vars];
+                            block_weight
+                                * weights(digit_point)
+                                    .into_iter()
+                                    .take(slot.digit_count(planes))
+                                    .sum::<F>()
+                        }
+                        Kind::Lookup { .. } => block_weight,
+                    }
                 })
                 .sum();
             sum += mass_mix[i] * occupied;
@@ -730,7 +753,7 @@ impl GroupQueries {
                 };
                 let cells = 1 << leaf.cell_vars;
                 let lanes = 1 << leaf.digit_vars();
-                for digit in 0..block.cycles / cells {
+                for digit in 0..leaf.digit_count(planes) {
                     let bits = planes.saturating_sub(digit * lanes).min(lanes);
                     if bits == ADDRESS_BITS {
                         continue;

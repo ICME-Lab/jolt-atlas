@@ -62,7 +62,10 @@ impl Ranges {
         let cells = 1 << self.shape.vars();
         let stride = self.shape.width.next_power_of_two();
         let lanes = 1 << self.slot.digit_vars();
-        let mut digits = vec![0; (1 << self.slot.vars()) / lanes];
+        let Kind::Bits { planes } = self.slot.kind else {
+            unreachable!("range slot is a bit slot");
+        };
+        let mut digits = vec![0; self.slot.digit_count(planes) * cells];
         let mut plane = 0;
         for (range, &values) in self.ranges.iter().zip(values) {
             if range.bits == 0 && values.is_empty() {

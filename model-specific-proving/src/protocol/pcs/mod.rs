@@ -37,6 +37,10 @@ impl Slot {
     pub(crate) fn digit_vars(self) -> usize {
         (self.vars() - self.cell_vars).min(2)
     }
+
+    pub(crate) fn digit_count(self, planes: usize) -> usize {
+        planes.div_ceil(1 << self.digit_vars()).max(1)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -137,9 +141,12 @@ impl Advice {
 
     #[cfg(any(feature = "akita", feature = "bitz"))]
     fn digits(&mut self, slot: Slot) -> Result<Arc<Vec<u8>>> {
+        let Kind::Bits { planes } = slot.kind else {
+            return Err("invalid digit slot");
+        };
         match self.0[slot.id].take() {
             Some(Part::Digits(digits))
-                if digits.len() == 1 << (slot.vars() - slot.digit_vars()) =>
+                if digits.len() == slot.digit_count(planes) << slot.cell_vars =>
             {
                 Ok(digits)
             }

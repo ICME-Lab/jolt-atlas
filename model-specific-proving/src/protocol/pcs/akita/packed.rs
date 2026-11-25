@@ -11,15 +11,71 @@ pub(super) struct Indices {
     pub(super) bytes: Vec<u8>,
     len: usize,
     pub(super) prefix: usize,
+    shared: Vec<(usize, SharedRows)>,
+}
+
+enum SharedRows {
+    Lookup(Arc<Addresses>, usize, u32),
+    Digits(Arc<Vec<u8>>, usize, usize),
 }
 
 impl Indices {
+    #[cfg(any(test, feature = "akita-cluster"))]
     pub(super) fn new(len: usize) -> Self {
         Self {
             bytes: vec![0; (len * 5).div_ceil(8) + 1],
             len,
             prefix: 0,
+            shared: Vec::new(),
         }
+    }
+
+    pub(super) fn shared(len: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            len,
+            prefix: 0,
+            shared: Vec::new(),
+        }
+    }
+
+    pub(super) fn attach(&mut self, row: usize, source: (Arc<Addresses>, usize, u32)) {
+        let (data, shift, mask) = source;
+        self.prefix = self.prefix.max(row + data.len());
+        self.shared
+            .push((row, SharedRows::Lookup(data, shift, mask)));
+    }
+
+    pub(super) fn attach_digits(
+        &mut self,
+        row: usize,
+        data: Arc<Vec<u8>>,
+        offset: usize,
+        len: usize,
+    ) {
+        if len != 0 {
+            self.prefix = self.prefix.max(row + len);
+            self.shared
+                .push((row, SharedRows::Digits(data, offset, len)));
+        }
+    }
+
+    pub(super) fn prepare(&mut self) {
+        self.shared.sort_unstable_by_key(|s| s.0);
+    }
+
+    #[cfg(feature = "akita-cluster")]
+    pub(super) fn wire_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
+        if self.shared.is_empty() && self.bytes.len() == (self.len * 5).div_ceil(8) + 1 {
+            return self.bytes.as_slice().into();
+        }
+        let mut packed = Self::new(self.len);
+        for row in 0..self.prefix {
+            if let Some(col) = self.get(row) {
+                packed.insert(row, col);
+            }
+        }
+        packed.bytes.into()
     }
 
     pub(super) fn insert(&mut self, row: usize, column: u8) {
@@ -27,6 +83,9 @@ impl Indices {
         let offset = row * 5;
         let code = u16::from(column + 1) << (offset % 8);
         let [low, high] = code.to_le_bytes();
+        if self.bytes.len() < offset / 8 + 2 {
+            self.bytes.resize(offset / 8 + 2, 0);
+        }
         self.bytes[offset / 8] |= low;
         self.bytes[offset / 8 + 1] |= high;
         self.prefix = self.prefix.max(row + 1);
@@ -39,6 +98,24 @@ impl Indices {
     #[inline]
     pub(super) fn get(&self, row: usize) -> Option<u8> {
         let offset = row * 5;
+        if let Some((start, source)) = self
+            .shared
+            .partition_point(|block| block.0 <= row)
+            .checked_sub(1)
+            .map(|i| &self.shared[i])
+        {
+            let i = row - start;
+            match source {
+                SharedRows::Lookup(data, shift, mask) if i < data.len() => {
+                    return Some(data.digit(i, *shift, *mask));
+                }
+                SharedRows::Digits(data, offset, len) if i < *len => return Some(data[offset + i]),
+                _ => (),
+            }
+        }
+        if offset / 8 + 1 >= self.bytes.len() {
+            return None;
+        }
         let pair = u16::from_le_bytes([self.bytes[offset / 8], self.bytes[offset / 8 + 1]]);
         (((pair >> (offset % 8)) as u8) & 31).checked_sub(1)
     }

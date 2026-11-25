@@ -19,16 +19,103 @@ use super::{
     Result,
 };
 
+pub(crate) enum Addresses {
+    Words(Vec<u32>),
+    Packed {
+        bytes: Vec<u8>,
+        len: usize,
+        bits: usize,
+    },
+}
+
+impl Addresses {
+    pub(crate) fn zeros(len: usize, bits: usize) -> Self {
+        if bits == 32 {
+            Self::Words(vec![0; len])
+        } else {
+            Self::Packed {
+                bytes: vec![0; (len * bits).div_ceil(8) + 4],
+                len,
+                bits,
+            }
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Words(values) => values.len(),
+            Self::Packed { len, .. } => *len,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn get(&self, i: usize) -> u32 {
+        match self {
+            Self::Words(values) => values[i],
+            Self::Packed { bytes, bits, .. } => {
+                let offset = i * bits;
+                let start = offset / 8;
+                let word = u64::from_le_bytes([
+                    bytes[start],
+                    bytes[start + 1],
+                    bytes[start + 2],
+                    bytes[start + 3],
+                    bytes[start + 4],
+                    0,
+                    0,
+                    0,
+                ]);
+                ((word >> (offset % 8)) as u32) & ((1u32 << bits) - 1)
+            }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn digit(&self, i: usize, shift: usize, mask: u32) -> u8 {
+        match self {
+            Self::Words(values) => ((values[i] >> shift) & mask) as u8,
+            Self::Packed { bytes, bits, .. } => {
+                let offset = i * bits + shift;
+                let start = offset / 8;
+                let word = u16::from_le_bytes([bytes[start], bytes[start + 1]]);
+                ((u32::from(word) >> (offset % 8)) & mask) as u8
+            }
+        }
+    }
+
+    pub(crate) fn set(&mut self, i: usize, value: u32) {
+        match self {
+            Self::Words(values) => values[i] = value,
+            Self::Packed { bytes, bits, .. } => {
+                let offset = i * *bits;
+                debug_assert!(value < 1 << *bits);
+                let value = (u64::from(value) << (offset % 8)).to_le_bytes();
+                for (dst, v) in bytes[offset / 8..][..(*bits + offset % 8).div_ceil(8)]
+                    .iter_mut()
+                    .zip(value)
+                {
+                    *dst |= v;
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Table<'a> {
     Slice(&'a [i32]),
     Prepend(i32, &'a [i32]),
+    SoftmaxSums {
+        sums: &'a [i32],
+        first: i32,
+        radix: u128,
+    },
 }
 
 impl Table<'_> {
     fn len(self) -> usize {
         match self {
-            Self::Slice(values) => values.len(),
+            Self::Slice(values) | Self::SoftmaxSums { sums: values, .. } => values.len(),
             Self::Prepend(_, tail) => 1 + tail.len(),
         }
     }
@@ -38,10 +125,26 @@ impl Table<'_> {
             Self::Slice(values) => values[index],
             Self::Prepend(first, _) if index == 0 => first,
             Self::Prepend(_, tail) => tail[index - 1],
+            Self::SoftmaxSums { .. } => unreachable!("combined table is a field value"),
+        }
+    }
+
+    pub(crate) fn field_at<F: ProofField>(self, index: usize) -> F {
+        match self {
+            Self::SoftmaxSums { sums, first, radix } => {
+                let prev = if index == 0 { first } else { sums[index - 1] };
+                F::from_u128(sums[index] as u128 + radix * prev as u128)
+            }
+            _ => F::from_i32(self.at(index)),
         }
     }
 
     fn evaluate<F: ProofField>(self, rows: &[F], cols: &[F]) -> F {
+        if let Self::SoftmaxSums { sums, first, radix } = self {
+            return Self::Slice(sums).evaluate(rows, cols)
+                + F::from_u128(radix)
+                    * Self::Prepend(first, &sums[..sums.len() - 1]).evaluate(rows, cols);
+        }
         let evaluate_row =
             |row: &[i32]| dot(row.iter().copied().map(F::from_i32), cols.iter().copied());
         match self {
@@ -62,6 +165,7 @@ impl Table<'_> {
                         rows[1..].iter().copied(),
                     )
             }
+            Self::SoftmaxSums { .. } => unreachable!(),
         }
     }
 }
@@ -75,11 +179,11 @@ pub(crate) struct Read<'w, F> {
     pub(crate) cell: Vec<F>,
     pub(crate) address: F,
     pub(crate) output: Box<[F]>,
-    pub(crate) witness: Option<&'w [u32]>,
+    pub(crate) witness: Option<&'w Addresses>,
 }
 
 impl<'w, F> Read<'w, F> {
-    fn witness(&self) -> &'w [u32] {
+    fn witness(&self) -> &'w Addresses {
         self.witness.expect("prover lookup witness")
     }
 }
@@ -147,7 +251,7 @@ impl Lookup {
             .collect()
     }
 
-    pub(crate) fn record(&self, advice: &mut Advice, indices: Arc<Vec<u32>>) -> Result<()> {
+    pub(crate) fn record(&self, advice: &mut Advice, indices: Arc<Addresses>) -> Result<()> {
         let mut shift = self.address_vars;
         for &slot in &self.cols {
             let n = slot.vars() - slot.cell_vars;
@@ -184,7 +288,7 @@ impl Lookup {
         let table = |i| {
             mix[0] * F::from_u64(i as u64)
                 + dot(
-                    tables.iter().map(|col| F::from_i32(col.at(i))),
+                    tables.iter().map(|col| col.field_at(i)),
                     mix[1..].iter().copied(),
                 )
         };
@@ -206,13 +310,12 @@ impl Lookup {
                         let mut bins = vec![F::zero(); size];
                         for ((_, q), &coefficient) in queries.iter().zip(coefficients) {
                             let weights = TensorEqTable::new_with_scaling(&q.cell, coefficient);
-                            for (addresses, &outer) in q
-                                .witness()
-                                .chunks_exact(weights.e_in().len())
-                                .zip(weights.e_out())
-                            {
-                                for (&address, &inner) in addresses.iter().zip(weights.e_in()) {
-                                    bins[address as usize] += outer * inner;
+                            let addresses = q.witness();
+                            let inner = weights.e_in();
+                            for (block, &outer) in weights.e_out().iter().enumerate() {
+                                for (i, &weight) in inner.iter().enumerate() {
+                                    bins[addresses.get(block * inner.len() + i) as usize] +=
+                                        outer * weight;
                                 }
                             }
                         }
@@ -230,7 +333,8 @@ impl Lookup {
                 let mut reads = BTreeMap::new();
                 for ((_, q), &w) in queries.iter().zip(&batch) {
                     let weights = TensorEqTable::new_with_scaling(&q.cell, w);
-                    for (i, &address) in q.witness().iter().enumerate() {
+                    for i in 0..q.witness().len() {
+                        let address = q.witness().get(i);
                         *reads.entry(address as usize).or_insert_with(F::zero) +=
                             weights.evaluate_index(i);
                     }
@@ -293,7 +397,7 @@ impl Lookup {
                     let sum = if let Some(weights) = &address_weights {
                         let cells = cols.last().expect("lookup cell weights");
                         dot(
-                            addresses.iter().map(|&address| weights[address as usize]),
+                            (0..addresses.len()).map(|i| weights[addresses.get(i) as usize]),
                             (0..addresses.len()).map(|i| cells.at(i)),
                         )
                     } else {

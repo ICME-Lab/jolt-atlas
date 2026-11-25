@@ -152,6 +152,17 @@ impl<F> Witness<F> {
     }
 }
 
+type ClipSpec = crate::layers::softmax::ClipSpec;
+type ClipPlans = Vec<Vec<Option<crate::layers::softmax::ClipPlan>>>;
+
+fn bind_clips(t: &mut impl Transcript, specs: &[Vec<ClipSpec>]) {
+    for layer in specs {
+        for head in layer {
+            head.bind(t);
+        }
+    }
+}
+
 impl<'a> Model<'a> {
     pub fn new(
         rows: usize,
@@ -364,6 +375,7 @@ impl<'a> Model<'a> {
         &self,
         input: &[i32],
         output: &[i32],
+        clipping: &ClipPlans,
         witness: impl Fn() -> &'w Witness<F> + Sync,
         io: &mut Session<'_, '_, F>,
     ) -> Result<()> {
@@ -378,13 +390,14 @@ impl<'a> Model<'a> {
             )?,
             Head::Encoder(_) => point(self.shape, output, io)?,
         };
-        self.reverse_layers(input, vec![claim], witness, io)
+        self.reverse_layers(input, vec![claim], clipping, witness, io)
     }
 
     fn reverse_layers<'w, F: ProofField>(
         &self,
         input: &[i32],
         mut claims: Vec<Claim<F>>,
+        clipping: &ClipPlans,
         witness: impl Fn() -> &'w Witness<F> + Sync,
         io: &mut Session<'_, '_, F>,
     ) -> Result<()> {
@@ -446,9 +459,13 @@ impl<'a> Model<'a> {
                     x()
                 }
             };
-            claims =
-                p.attention
-                    .reverse(branch, || (source(), &w().attention), io, &mut lookups)?;
+            claims = p.attention.reverse(
+                branch,
+                &clipping[i],
+                || (source(), &w().attention),
+                io,
+                &mut lookups,
+            )?;
             if pre {
                 claims =
                     vec![p
@@ -477,6 +494,37 @@ impl<'a> Model<'a> {
         self.embeddings.select(tokens, segments)
     }
 
+    fn clip_plan(&self, layout: &mut Layout, specs: &[Vec<ClipSpec>]) -> Result<ClipPlans> {
+        if specs.len() != self.layers.len() {
+            return Err("invalid Softmax clip layer count");
+        }
+        self.layers
+            .iter()
+            .zip(specs)
+            .map(|(layer, s)| layer.attention.clip_plan(layout, s))
+            .collect()
+    }
+
+    fn prepare_clip<F>(
+        &self,
+        layout: &mut Layout,
+        w: &mut Witness<F>,
+    ) -> Result<(Vec<Vec<ClipSpec>>, ClipPlans)> {
+        let specs: Vec<_> = self
+            .layers
+            .iter()
+            .zip(&w.layers)
+            .map(|(p, w)| p.attention.clip_specs(&w.attention))
+            .collect();
+        let plans = self.clip_plan(layout, &specs)?;
+        w.advice.extend(layout);
+        for ((p, layer), plans) in self.layers.iter().zip(&w.layers).zip(&plans) {
+            p.attention
+                .record_clip(plans, &layer.attention, &mut w.advice)?;
+        }
+        Ok((specs, plans))
+    }
+
     pub fn prove<C: ModelPcs>(
         &self,
         tokens: &[usize],
@@ -484,19 +532,25 @@ impl<'a> Model<'a> {
         setup: &C::AdviceProverSetup,
     ) -> Result<(Vec<i32>, Proof<C>)> {
         let input = self.input(tokens, segments)?;
-        let prepared = advice_plan::<C>(&self.layout)?;
-        let w = self.forward::<C::Field>(&input, &self.layout, true)?;
+        let mut w = self.forward::<C::Field>(&input, &self.layout, true)?;
+        let mut layout = self.layout.clone();
+        let (specs, clipping) = self.prepare_clip(&mut layout, &mut w)?;
+        let prepared = advice_plan::<C>(&layout)?;
         let output = w.output().to_vec();
-        let proof = Proof::prove(
+        let mut proof = Proof::prove(
             &self.domain(),
-            &self.layout,
+            &layout,
             w,
             |w| &mut w.advice,
             &prepared,
             setup,
-            |t| self.bind(t, tokens, segments, &output),
-            |w, io| self.reverse(&input, &output, || &w, io),
+            |t| {
+                self.bind(t, tokens, segments, &output);
+                bind_clips(t, &specs);
+            },
+            |w, io| self.reverse(&input, &output, &clipping, || &w, io),
         )?;
+        proof.clipping = specs;
         Ok((output, proof))
     }
 
@@ -513,12 +567,17 @@ impl<'a> Model<'a> {
             Head::Decoder { logits, .. } => logits.shape().check(output)?,
             Head::Encoder(_) => self.shape.check(output)?,
         }
+        let mut layout = self.layout.clone();
+        let clipping = self.clip_plan(&mut layout, &proof.clipping)?;
         proof.verify(
             &self.domain(),
-            &self.layout,
+            &layout,
             setup,
-            |t| self.bind(t, tokens, segments, output),
-            |io| self.reverse(&input, output, || unreachable!(), io),
+            |t| {
+                self.bind(t, tokens, segments, output);
+                bind_clips(t, &proof.clipping);
+            },
+            |io| self.reverse(&input, output, &clipping, || unreachable!(), io),
         )
     }
 }
@@ -530,6 +589,7 @@ impl Model<'_> {
         plan: &TopKPlan,
         cfg: &TopKConfig,
         candidates: &[Vec<Candidate>],
+        clipping: &ClipPlans,
         witness: impl Fn() -> &'w Witness<F> + Sync,
         io: &mut Session<'_, '_, F>,
     ) -> Result<()> {
@@ -544,7 +604,7 @@ impl Model<'_> {
             || &witness().norm.output,
             io,
         )?;
-        self.reverse_layers(input, claims, witness, io)
+        self.reverse_layers(input, claims, clipping, witness, io)
     }
 
     fn top_k_plan(&self, cfg: &TopKConfig) -> Result<TopKPlan> {
@@ -579,7 +639,6 @@ impl Model<'_> {
     ) -> Result<(Vec<Vec<Candidate>>, Proof<C>)> {
         let input = self.input(tokens, None)?;
         let plan = self.top_k_plan(cfg)?;
-        let prepared = advice_plan::<C>(&plan.layout)?;
         let mut witness = self.forward::<C::Field>(&input, &plan.layout, false)?;
         let norm = &witness.norm;
         let public = self.embeddings.tokens;
@@ -593,16 +652,23 @@ impl Model<'_> {
             width,
             &mut witness.advice,
         )?;
-        let proof = Proof::prove(
+        let mut layout = plan.layout.clone();
+        let (specs, clipping) = self.prepare_clip(&mut layout, &mut witness)?;
+        let prepared = advice_plan::<C>(&layout)?;
+        let mut proof = Proof::prove(
             &protocol_tag(b"atlas/model-specific/top-k/v2"),
-            &plan.layout,
+            &layout,
             witness,
             |w| &mut w.advice,
             &prepared,
             setup,
-            |t| self.bind_top_k(t, tokens, cfg, &candidates),
-            |w, io| self.reverse_top_k(&input, &plan, cfg, &candidates, || &w, io),
+            |t| {
+                self.bind_top_k(t, tokens, cfg, &candidates);
+                bind_clips(t, &specs);
+            },
+            |w, io| self.reverse_top_k(&input, &plan, cfg, &candidates, &clipping, || &w, io),
         )?;
+        proof.clipping = specs;
         Ok((candidates, proof))
     }
 
@@ -617,12 +683,27 @@ impl Model<'_> {
         let input = self.input(tokens, None)?;
         let plan = self.top_k_plan(cfg)?;
         plan.candidates(cfg, candidates)?;
+        let mut layout = plan.layout.clone();
+        let clipping = self.clip_plan(&mut layout, &proof.clipping)?;
         proof.verify(
             &protocol_tag(b"atlas/model-specific/top-k/v2"),
-            &plan.layout,
+            &layout,
             setup,
-            |t| self.bind_top_k(t, tokens, cfg, candidates),
-            |io| self.reverse_top_k(&input, &plan, cfg, candidates, || unreachable!(), io),
+            |t| {
+                self.bind_top_k(t, tokens, cfg, candidates);
+                bind_clips(t, &proof.clipping);
+            },
+            |io| {
+                self.reverse_top_k(
+                    &input,
+                    &plan,
+                    cfg,
+                    candidates,
+                    &clipping,
+                    || unreachable!(),
+                    io,
+                )
+            },
         )
     }
 }

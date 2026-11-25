@@ -17,9 +17,27 @@ fn setup() -> AkitaAdviceSetup {
 }
 
 fn fixture(decoder: bool, rows: usize, layers: usize, gated: bool) -> Model<'static> {
+    fixture_with_scores(decoder, rows, layers, gated, false)
+}
+
+fn fixture_with_scores(
+    decoder: bool,
+    rows: usize,
+    layers: usize,
+    gated: bool,
+    varied: bool,
+) -> Model<'static> {
     let zero = Projection {
         weights: &[0; 4],
         bias: &[0; 2],
+    };
+    let qk = if varied {
+        Projection {
+            weights: &[16, 0, 0, 0],
+            bias: &[0, 0],
+        }
+    } else {
+        zero
     };
     let norm = NormalizationParameters {
         kind: NormalizationKind::Layer,
@@ -30,8 +48,8 @@ fn fixture(decoder: bool, rows: usize, layers: usize, gated: bool) -> Model<'sta
     let layers = (0..layers)
         .map(|_| Layer {
             attention: Attention {
-                queries: vec![zero],
-                groups: vec![[zero, zero]],
+                queries: vec![qk],
+                groups: vec![[qk, zero]],
                 output: zero,
                 rotary: None,
                 factor: 1,
@@ -112,14 +130,16 @@ fn proves_two_decoder_layers_with_grouped_advice() {
 
 #[test]
 fn proves_causal_attention_across_lookup_tile_boundary() {
-    let model = fixture(true, 65, 1, false);
-    let tokens: Vec<_> = (0..65).map(|i| i % 6).collect();
     let setup = setup();
-    let (output, proof) = model.prove::<AkitaScheme>(&tokens, None, &setup).unwrap();
-    assert_eq!(output.len(), tokens.len() * 6);
-    model
-        .verify(&tokens, None, &output, &proof, &setup)
-        .unwrap();
+    for (rows, varied) in [(65, false), (128, false), (128, true)] {
+        let model = fixture_with_scores(true, rows, 1, false, varied);
+        let tokens: Vec<_> = (0..rows).map(|i| i % 6).collect();
+        let (output, proof) = model.prove::<AkitaScheme>(&tokens, None, &setup).unwrap();
+        assert_eq!(output.len(), tokens.len() * 6);
+        model
+            .verify(&tokens, None, &output, &proof, &setup)
+            .unwrap();
+    }
 }
 
 #[test]

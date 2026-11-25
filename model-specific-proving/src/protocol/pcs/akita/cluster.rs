@@ -499,7 +499,7 @@ impl Workers {
                 },
             )?;
             for poly in polys {
-                out.write_all(&poly.bytes)?;
+                out.write_all(&poly.wire_bytes())?;
             }
             out.flush()?;
             drop(out);

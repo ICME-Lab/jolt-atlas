@@ -210,6 +210,27 @@ impl<'a, F: ProofField> Session<'a, '_, F> {
         endpoint_count: usize,
         expression: impl Fn(&[F]) -> F + Sync,
     ) -> Result<(SingleReduction<F>, Vec<[F; N]>)> {
+        self.fold_weighted_masked(
+            stmt,
+            mix,
+            None,
+            columns,
+            endpoints,
+            endpoint_count,
+            expression,
+        )
+    }
+
+    pub(crate) fn fold_weighted_masked<'w, const N: usize, C: AsMut<[Column<'w, F>]> + Send>(
+        &mut self,
+        stmt: SingleInstance<F>,
+        mix: &[F],
+        mask: Option<[usize; 2]>,
+        columns: impl FnOnce() -> Vec<C>,
+        endpoints: [usize; N],
+        endpoint_count: usize,
+        expression: impl Fn(&[F]) -> F + Sync,
+    ) -> Result<(SingleReduction<F>, Vec<[F; N]>)> {
         let mut values = Vec::new();
         let end = self.reduce(&stmt, |t| {
             let mut batch = BatchFold(
@@ -217,7 +238,9 @@ impl<'a, F: ProofField> Session<'a, '_, F> {
                     .into_iter()
                     .zip(mix)
                     .map(|(columns, &w)| {
-                        (w, Fold::new(columns, stmt.rounds, stmt.degree, &expression))
+                        let mut fold = Fold::new(columns, stmt.rounds, stmt.degree, &expression);
+                        fold.mask = mask;
+                        (w, fold)
                     })
                     .collect(),
             );
@@ -410,7 +433,7 @@ pub(crate) enum Column<'a, F: JoltField> {
     Bits(&'a [u8], usize),
     Source(Box<dyn Fn(usize) -> F + Send + Sync + 'a>, usize, Option<F>),
     Lookup {
-        addresses: &'a [u32],
+        addresses: &'a super::lookup::Addresses,
         shift: usize,
         width: usize,
         len: usize,
@@ -439,7 +462,11 @@ impl<'a, F: JoltField> Column<'a, F> {
         Self::Source(Box::new(read), len, None)
     }
 
-    pub(crate) fn lookup(addresses: &'a [u32], shift: usize, weights: Vec<F>) -> Self {
+    pub(crate) fn lookup(
+        addresses: &'a super::lookup::Addresses,
+        shift: usize,
+        weights: Vec<F>,
+    ) -> Self {
         Self::Lookup {
             addresses,
             shift,
@@ -485,7 +512,8 @@ impl<'a, F: JoltField> Column<'a, F> {
                 .chunks_exact(*width)
                 .enumerate()
                 .map(|(prefix, table)| {
-                    let digit = (addresses[prefix * len + i] as usize >> shift) & (width - 1);
+                    let digit =
+                        usize::from(addresses.digit(prefix * len + i, *shift, (*width - 1) as u32));
                     table[digit]
                 })
                 .sum(),
@@ -615,6 +643,7 @@ pub(crate) struct Fold<C, E> {
     expression: E,
     rounds: usize,
     degree: usize,
+    mask: Option<[usize; 2]>,
 }
 
 impl<C, E> Fold<C, E> {
@@ -624,6 +653,7 @@ impl<C, E> Fold<C, E> {
             rounds,
             degree,
             expression,
+            mask: None,
         }
     }
 }
@@ -642,12 +672,24 @@ impl<C, E> Fold<C, E> {
         }
         let columns = &*self.columns.as_mut();
         let half = columns[0].len() / 2;
+        let masks = if columns[0].len() >= 1 << self.rounds.saturating_sub(1) {
+            self.mask.map(|indices| indices.map(|i| &columns[i]))
+        } else {
+            None
+        };
         let zeros = || vec![F::zero(); self.degree + 1];
         let sum = |start: usize, end: usize| {
             let mut deltas = vec![F::zero(); columns.len()];
             let mut values = vec![F::zero(); columns.len()];
             let mut samples = zeros();
             for i in start..end {
+                if masks.is_some_and(|masks| {
+                    masks
+                        .iter()
+                        .all(|m| m.at(i).is_zero() && m.at(i + half).is_zero())
+                }) {
+                    continue;
+                }
                 for ((v, delta), col) in values.iter_mut().zip(&mut deltas).zip(columns) {
                     *v = col.at(i);
                     *delta = col.at(i + half) - *v;
@@ -765,7 +807,8 @@ fn lookup_and_equality_columns_match_dense_folding() {
     let addresses: Vec<_> = (0..128).map(|i| (i * 17) % 251).collect();
     let digits = [3, 1, 8, 5].map(F::from_u64);
     let point = [7, 1, 11, 0, 4, 2, 3].map(F::from_u64);
-    let mut lookup = Column::lookup(&addresses, 2, digits.to_vec());
+    let packed = super::lookup::Addresses::Words(addresses.clone());
+    let mut lookup = Column::lookup(&packed, 2, digits.to_vec());
     let mut equality = Column::equality(&point);
     let mut dense_digits: Vec<_> = addresses
         .iter()

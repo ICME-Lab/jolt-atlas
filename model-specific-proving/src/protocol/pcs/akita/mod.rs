@@ -361,6 +361,22 @@ impl Plan {
                 .or_default()
                 .push((slot.id, 0, 1 << local));
         }
+        // The small lookup buckets can amortize an opening over more tiles. Only
+        // grow a bucket when the larger shape fits the memory limit and its tail.
+        let larger: usize = 20;
+        let capacity = 1 << (larger - ADDRESS_BITS);
+        if setup.max_group_rows >= 56 * capacity
+            && setup
+                .sparse
+                .get(&larger)
+                .is_some_and(|shapes| shapes.contains(&56))
+            && buckets.get(&16).is_some_and(|slots| {
+                slots.iter().map(|&(_, _, rows)| rows).sum::<usize>() >= 2 * 56 * capacity
+            })
+        {
+            let small = buckets.remove(&16).expect("checked small bucket");
+            buckets.entry(larger).or_default().extend(small);
+        }
         let mut groups = Vec::new();
         for (minimum, slots) in buckets {
             let mut pieces = Vec::new();
@@ -527,7 +543,7 @@ impl ModelPcs for AkitaScheme {
         let mut groups = Vec::with_capacity(plan.0.len());
         for group in &plan.0 {
             let mut polynomials: Vec<_> = (0..group.key.count)
-                .map(|_| Indices::new(1 << (group.key.rounds - ADDRESS_BITS)))
+                .map(|_| Indices::shared(1 << (group.key.rounds - ADDRESS_BITS)))
                 .collect();
             let mut slots = BTreeMap::<_, Vec<_>>::new();
             for (i, blocks) in group.polynomials.iter().enumerate() {
@@ -540,11 +556,22 @@ impl ModelPcs for AkitaScheme {
                 match slot.kind {
                     Kind::Bits { .. } => {
                         let digits = advice.digits(slot)?;
+                        let share = Arc::strong_count(&digits) > 1;
                         for (i, block) in blocks {
-                            for (row, &digit) in
-                                digits[block.offset..].iter().take(block.cycles).enumerate()
-                            {
-                                polynomials[i].insert(block.start + row, digit);
+                            let rows = digits.len().saturating_sub(block.offset).min(block.cycles);
+                            if share {
+                                polynomials[i].attach_digits(
+                                    block.start,
+                                    Arc::clone(&digits),
+                                    block.offset,
+                                    rows,
+                                );
+                            } else {
+                                for (row, &digit) in
+                                    digits.iter().skip(block.offset).take(rows).enumerate()
+                                {
+                                    polynomials[i].insert(block.start + row, digit);
+                                }
                             }
                         }
                     }
@@ -552,12 +579,11 @@ impl ModelPcs for AkitaScheme {
                         let [(i, block)] = blocks.as_slice() else {
                             unreachable!("lookup slot is kept in one block");
                         };
-                        for (row, column) in advice.take_lookup(slot)?.enumerate() {
-                            polynomials[*i].insert(block.start + row, column);
-                        }
+                        polynomials[*i].attach(block.start, advice.take_lookup(slot)?);
                     }
                 }
             }
+            polynomials.iter_mut().for_each(Indices::prepare);
             let polynomials: Arc<[_]> = polynomials.into();
             let (commitment, hint) = setup.commit_group(group.key, &polynomials)?;
             commitments.push(commitment);

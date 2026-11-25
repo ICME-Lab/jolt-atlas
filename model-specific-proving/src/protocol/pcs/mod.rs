@@ -8,6 +8,7 @@ use jolt_transcript::{
 };
 
 use super::{
+    lookup::Addresses,
     session::{Claim, Messages, ProofField, Session},
     Result,
 };
@@ -82,6 +83,10 @@ impl Layout {
         Ok((size.ilog2() as usize, offsets))
     }
 
+    pub(crate) fn replace_bits(&mut self, slot: Slot) {
+        self.slots[slot.id] = slot;
+    }
+
     pub(crate) fn remove_last(&mut self) -> Result<()> {
         self.slots.pop().map(|_| ()).ok_or("empty advice layout")
     }
@@ -123,7 +128,7 @@ impl Layout {
 pub(crate) enum Part {
     Digits(Arc<Vec<u8>>),
     Lookup {
-        addresses: Arc<Vec<u32>>,
+        addresses: Arc<Addresses>,
         shift: usize,
     },
 }
@@ -131,6 +136,21 @@ pub(crate) enum Part {
 pub struct Advice(Vec<Option<Part>>);
 
 impl Advice {
+    pub(crate) fn extend(&mut self, layout: &Layout) {
+        self.0.resize_with(layout.slots.len(), || None);
+    }
+
+    pub(crate) fn replace_digits(&mut self, slot: Slot, digits: Arc<Vec<u8>>) {
+        self.0[slot.id] = Some(Part::Digits(digits));
+    }
+
+    pub(crate) fn range_digits(&self, slot: Slot) -> Arc<Vec<u8>> {
+        let Some(Part::Digits(digits)) = &self.0[slot.id] else {
+            unreachable!("recorded range")
+        };
+        Arc::clone(digits)
+    }
+
     pub(crate) fn put(&mut self, slot: Slot, part: Part) -> Result<()> {
         if self.0[slot.id].is_some() {
             return Err("duplicate advice");
@@ -179,7 +199,9 @@ impl Advice {
             }
             Kind::Lookup { .. } => {
                 let cells = 1 << slot.cell_vars;
-                for (cell, digit) in self.take_lookup(slot)?.enumerate() {
+                let (addresses, shift, mask) = self.take_lookup(slot)?;
+                for cell in 0..addresses.len() {
+                    let digit = addresses.digit(cell, shift, mask);
                     set(usize::from(digit) * cells + cell);
                 }
             }
@@ -188,14 +210,14 @@ impl Advice {
     }
 
     #[cfg(any(feature = "akita", feature = "bitz"))]
-    fn take_lookup(&mut self, slot: Slot) -> Result<impl Iterator<Item = u8> + use<>> {
+    fn take_lookup(&mut self, slot: Slot) -> Result<(Arc<Addresses>, usize, u32)> {
         let Kind::Lookup { address_vars } = slot.kind else {
             return Err("not a lookup advice slot");
         };
         match self.0[slot.id].take() {
             Some(Part::Lookup { addresses, shift }) if addresses.len() == 1 << slot.cell_vars => {
                 let mask = (1 << address_vars) - 1;
-                Ok((0..addresses.len()).map(move |i| ((addresses[i] >> shift) & mask) as u8))
+                Ok((addresses, shift, mask))
             }
             _ => Err("invalid lookup advice shape"),
         }
@@ -294,6 +316,7 @@ pub trait ModelPcs {
 }
 
 pub struct Proof<C: ModelPcs> {
+    pub(crate) clipping: Vec<Vec<crate::layers::softmax::ClipSpec>>,
     commitments: C::AdviceCommitments,
     messages: Messages<C::Field>,
     opening: C::AdviceOpening,
@@ -331,6 +354,7 @@ impl<C: ModelPcs> Proof<C> {
             &mut transcript,
         )?;
         Ok(Self {
+            clipping: Vec::new(),
             commitments,
             messages,
             opening,

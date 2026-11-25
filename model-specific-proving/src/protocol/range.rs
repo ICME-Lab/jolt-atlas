@@ -51,6 +51,19 @@ impl Ranges {
         })
     }
 
+    pub(crate) fn suffix(&self, first: usize) -> Self {
+        let mut slot = self.slot;
+        let ranges = self.ranges[first..].to_vec().into_boxed_slice();
+        slot.kind = Kind::Bits {
+            planes: ranges.iter().map(|r| r.bits).sum(),
+        };
+        Self {
+            slot,
+            ranges,
+            shape: self.shape,
+        }
+    }
+
     pub(crate) fn record<T: Copy + Into<i128>>(
         &self,
         advice: &mut Advice,

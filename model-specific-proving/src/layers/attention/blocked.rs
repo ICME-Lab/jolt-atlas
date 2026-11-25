@@ -347,7 +347,7 @@ impl<'a> Block<'a> {
             .iter()
             .map(|head| {
                 Ok(Head {
-                    score: Product::new(
+                    score: Some(Product::new(
                         &mut layout,
                         Shape::new(rows, attention.key.rows)?,
                         bits * 2,
@@ -356,7 +356,8 @@ impl<'a> Block<'a> {
                             transpose: true,
                             factor: attention.factor,
                         },
-                    )?,
+                    )?),
+                    causal: None,
                     softmax: head.softmax.block(&mut layout, start, rows)?,
                     value: Product::new(
                         &mut layout,
@@ -398,9 +399,11 @@ impl<'a> Block<'a> {
         let mut trace = Vec::with_capacity(self.heads.len());
         for (i, head) in self.heads.iter().enumerate() {
             let (k, v) = &projected.groups[i / p.group_size];
-            let score = head
-                .score
-                .execute(self.query(p, projected, i), k.output(), &mut advice)?;
+            let score = head.score.as_ref().expect("blocked QK").execute(
+                self.query(p, projected, i),
+                k.output(),
+                &mut advice,
+            )?;
             let softmax = head.softmax.execute(&score.output, &mut advice)?;
             let value = head.value.execute_matrix(
                 head.softmax.probabilities(&softmax),
@@ -408,7 +411,8 @@ impl<'a> Block<'a> {
                 &mut advice,
             )?;
             trace.push(HeadTrace {
-                score,
+                score: Some(score),
+                remainders: Vec::new(),
                 softmax,
                 value,
             });
@@ -436,23 +440,38 @@ impl<'a> Block<'a> {
                 |point| head.softmax.bind_probabilities(&wt().softmax, point),
                 io,
             )?;
-            let mut scores =
-                head.softmax
-                    .reverse(&[prob], |_| (&wt().softmax, &wt().score.output), io)?;
+            let mut scores = head.softmax.reverse(
+                &[prob],
+                &[],
+                |_| {
+                    (
+                        &wt().softmax,
+                        Some(
+                            wt().score
+                                .as_ref()
+                                .expect("blocked QK trace")
+                                .output
+                                .as_slice(),
+                        ),
+                    )
+                },
+                io,
+            )?;
             let (score, read) = scores.pop().ok_or("missing attention score")?;
-            let [q, k] = head.score.reverse(
+            let [q, k] = head.score.as_ref().expect("blocked QK").reverse(
                 score,
                 || {
                     (
                         self.query(p, projected(), i),
                         projected().groups[group].0.output(),
-                        &wt().score,
+                        wt().score.as_ref().expect("blocked QK trace"),
                     )
                 },
                 io,
             )?;
             Softmax::defer(
                 vec![(&head.softmax, read)],
+                &[],
                 |_| &wt().softmax,
                 io,
                 &mut lookups,
@@ -514,21 +533,25 @@ mod tests {
             }
         };
         let input = [4, 2, 4, -2, -2, 3, 2, 0, 2, 1];
-        let mut layout = Layout::default();
-        let reference =
-            AttentionPlan::new(&mut layout, Shape::new(5, 2).unwrap(), 2, config(), None).unwrap();
-        let expected = reference
-            .execute::<F>(&input, &mut layout.witness())
-            .unwrap();
         let artifacts: Arc<_> =
             AkitaScheduleArtifacts::shared_from_default_directory(AkitaChunkProfile::new(8, 2));
         let setup = AkitaAdviceSetup::new(artifacts)
             .unwrap()
             .with_group_row_limit(512)
             .unwrap();
-        let plan = BlockedAttention::new(5, 2, 2, 2, config()).unwrap();
-        let (output, proof) = plan.prove(&input, &setup).unwrap();
-        assert_eq!(output, expected.output());
-        plan.verify(&input, &output, &proof, &setup).unwrap();
+        for rows in [4, 5] {
+            let input = &input[..rows * 2];
+            let mut layout = Layout::default();
+            let reference =
+                AttentionPlan::new(&mut layout, Shape::new(rows, 2).unwrap(), 2, config(), None)
+                    .unwrap();
+            let expected = reference
+                .execute::<F>(input, &mut layout.witness())
+                .unwrap();
+            let plan = BlockedAttention::new(rows, 2, 2, 2, config()).unwrap();
+            let (output, proof) = plan.prove(input, &setup).unwrap();
+            assert_eq!(output, expected.output());
+            plan.verify(input, &output, &proof, &setup).unwrap();
+        }
     }
 }

@@ -12,13 +12,15 @@ use crate::protocol::{
 
 use super::{
     linear::{Linear, Product, ProductKind, Projection, Rotary, Rotate, Rounded},
-    softmax::{Softmax, SoftmaxMask, SoftmaxTables, SoftmaxTrace},
+    softmax::{ClipPlan, ClipSpec, Softmax, SoftmaxMask, SoftmaxTables, SoftmaxTrace},
 };
 
 #[cfg(feature = "akita")]
 mod blocked;
+mod causal;
 #[cfg(feature = "akita")]
 pub use blocked::{BlockedAttention, BlockedAttentionProof};
+use causal::{Causal, Remainders};
 
 pub struct Attention<'a> {
     pub queries: Vec<Projection<'a>>,
@@ -117,12 +119,14 @@ impl<'a> Project<'a> {
 }
 
 struct Head<'a> {
-    score: Product,
+    score: Option<Product>,
+    causal: Option<Causal>,
     softmax: Softmax<'a>,
     value: Product,
 }
 struct HeadTrace<F> {
-    score: Rounded,
+    score: Option<Rounded>,
+    remainders: Remainders,
     softmax: SoftmaxTrace<F>,
     value: Rounded,
 }
@@ -237,21 +241,34 @@ impl<'a> AttentionPlan<'a> {
         };
         let heads = (0..queries.len())
             .map(|_| {
-                let softmax = Softmax::new(head_layout, square, p.mask, p.tables, score_bound)?;
+                let compact = !blocked
+                    && matches!(p.mask, SoftmaxMask::Causal)
+                    && input.rows.is_power_of_two();
+                let softmax =
+                    Softmax::new(head_layout, square, p.mask, p.tables, score_bound, compact)?;
+                let causal = compact
+                    .then(|| Causal::new(head_layout, key, bits * 2, p.factor, &softmax))
+                    .transpose()?;
                 Ok(Head {
                     // Without clipping, Softmax binds the integer score to its
                     // bounded row shift and table index at every used position.
-                    score: Product::with_output_range(
-                        head_layout,
-                        square,
-                        bits * 2,
-                        ProductKind::Matrix {
-                            inner: key.width,
-                            transpose: true,
-                            factor: p.factor,
-                        },
-                        softmax.has_excess(),
-                    )?,
+                    score: causal
+                        .is_none()
+                        .then(|| {
+                            Product::with_output_range(
+                                head_layout,
+                                square,
+                                bits * 2,
+                                ProductKind::Matrix {
+                                    inner: key.width,
+                                    transpose: true,
+                                    factor: p.factor,
+                                },
+                                softmax.has_excess(),
+                            )
+                        })
+                        .transpose()?,
+                    causal,
                     softmax,
                     value: Product::new(
                         head_layout,
@@ -326,13 +343,31 @@ impl<'a> AttentionPlan<'a> {
             .enumerate()
             .map(|(i, h)| {
                 let (k, v) = &groups[i / self.group_size];
-                let score = h.score.execute(queries[i].output(), k.output(), a)?;
-                let softmax = h.softmax.execute(&score.output, a)?;
+                let (score, remainders, softmax) = if let Some(causal) = &h.causal {
+                    let (scores, mut remainders) =
+                        causal.execute(queries[i].output(), k.output(), a)?;
+                    let softmax = h
+                        .softmax
+                        .execute_causal(|r| &scores[r * (r + 1) / 2..][..r + 1], a)?;
+                    if h.softmax.narrow_score(&softmax) {
+                        causal.narrow(a, &mut remainders);
+                    }
+                    (None, remainders, softmax)
+                } else {
+                    let score = h.score.as_ref().expect("full QK").execute(
+                        queries[i].output(),
+                        k.output(),
+                        a,
+                    )?;
+                    let softmax = h.softmax.execute(&score.output, a)?;
+                    (Some(score), Vec::new(), softmax)
+                };
                 let value =
                     h.value
                         .execute_matrix(h.softmax.probabilities(&softmax), v.output(), a)?;
                 Ok(HeadTrace {
                     score,
+                    remainders,
                     softmax,
                     value,
                 })
@@ -356,9 +391,56 @@ impl<'a> AttentionPlan<'a> {
         })
     }
 
+    pub(crate) fn clip_specs<F>(&self, trace: &AttentionTrace<F>) -> Vec<ClipSpec> {
+        self.heads
+            .iter()
+            .zip(&trace.heads)
+            .map(|(h, t)| h.softmax.clip_spec(&t.softmax))
+            .collect()
+    }
+
+    pub(crate) fn clip_plan(
+        &self,
+        layout: &mut Layout,
+        specs: &[ClipSpec],
+    ) -> Result<Vec<Option<ClipPlan>>> {
+        if self.heads.len() != specs.len() {
+            return Err("invalid Softmax clip head count");
+        }
+        self.heads
+            .iter()
+            .zip(specs)
+            .map(|(h, s)| {
+                let plan = h.softmax.clip_plan(layout, s)?;
+                if s.narrow_score {
+                    h.causal
+                        .as_ref()
+                        .ok_or("invalid causal score plan")?
+                        .narrow_layout(layout);
+                }
+                Ok(plan)
+            })
+            .collect()
+    }
+
+    pub(crate) fn record_clip<F>(
+        &self,
+        plans: &[Option<ClipPlan>],
+        trace: &AttentionTrace<F>,
+        advice: &mut Advice,
+    ) -> Result<()> {
+        for ((head, plan), w) in self.heads.iter().zip(plans).zip(&trace.heads) {
+            if let Some(plan) = plan {
+                head.softmax.record_clip(plan, &w.softmax, advice)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn reverse<'s, 'w, F: ProofField>(
         &'s self,
         q: Claim<F>,
+        clips: &[Option<ClipPlan>],
         trace: impl Fn() -> (&'w [i32], &'w AttentionTrace<F>) + Sync,
         io: &mut Session<'_, '_, F>,
 
@@ -401,29 +483,70 @@ impl<'a> AttentionPlan<'a> {
         }
         let softmax = self.heads[0].softmax.reverse(
             &probabilities,
+            clips,
             |i| {
                 let head = &t().heads[i];
-                (&head.softmax, head.score.output.as_slice())
+                (
+                    &head.softmax,
+                    head.score.as_ref().map(|score| score.output.as_slice()),
+                )
             },
             io,
         )?;
         let mut reads = Vec::with_capacity(self.heads.len());
-        for (i, (h, (score, read))) in self.heads.iter().zip(softmax).enumerate() {
-            let group = i / self.group_size;
-            let [q, k] = h.score.reverse(
-                score,
-                || {
-                    (
-                        t().queries[i].output(),
-                        t().groups[group].0.output(),
-                        &t().heads[i].score,
-                    )
-                },
-                io,
-            )?;
-            inputs.push(self.queries[i].reverse(q, || (trace().0, &t().queries[i]), io)?);
-            keys[group].push(k);
-            reads.push((&h.softmax, read));
+        let mut scores = softmax.into_iter();
+        for group in 0..self.groups.len() {
+            let start = group * self.group_size;
+            let heads = &self.heads[start..][..self.group_size];
+            if let Some(causal) = &heads[0].causal {
+                let mut raw = Vec::with_capacity(heads.len());
+                for (index, h) in heads.iter().enumerate() {
+                    let i = start + index;
+                    let (score, read) = scores.next().expect("head score claim");
+                    raw.push(
+                        h.causal.as_ref().expect("causal head").reverse(
+                            score,
+                            clips
+                                .get(i)
+                                .and_then(Option::as_ref)
+                                .is_some_and(ClipPlan::narrows_score),
+                            || &t().heads[i].remainders,
+                            io,
+                        )?,
+                    );
+                    reads.push((&h.softmax, read));
+                }
+                let (queries, key) = causal.product(
+                    &raw,
+                    |i| t().queries[start + i].output(),
+                    || t().groups[group].0.output(),
+                    io,
+                )?;
+                keys[group].push(key);
+                for (index, q) in queries.into_iter().enumerate() {
+                    let i = start + index;
+                    inputs.push(self.queries[i].reverse(q, || (trace().0, &t().queries[i]), io)?);
+                }
+            } else {
+                for (index, h) in heads.iter().enumerate() {
+                    let i = start + index;
+                    let (score, read) = scores.next().expect("head score claim");
+                    let [q, k] = h.score.as_ref().expect("full QK").reverse(
+                        score,
+                        || {
+                            (
+                                t().queries[i].output(),
+                                t().groups[group].0.output(),
+                                t().heads[i].score.as_ref().expect("full QK trace"),
+                            )
+                        },
+                        io,
+                    )?;
+                    inputs.push(self.queries[i].reverse(q, || (trace().0, &t().queries[i]), io)?);
+                    keys[group].push(k);
+                    reads.push((&h.softmax, read));
+                }
+            }
         }
         for (i, (k, v)) in self.groups.iter().enumerate() {
             let g = || &t().groups[i];
@@ -436,7 +559,7 @@ impl<'a> AttentionPlan<'a> {
             inputs.push(k.reverse(kc, || (trace().0, &g().0), io)?);
             inputs.push(v.reverse(vc, || (trace().0, &g().1), io)?);
         }
-        Softmax::defer(reads, |i| &t().heads[i].softmax, io, lookups)?;
+        Softmax::defer(reads, clips, |i| &t().heads[i].softmax, io, lookups)?;
         Ok(inputs)
     }
 }

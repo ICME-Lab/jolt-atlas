@@ -6,7 +6,7 @@ use jolt_poly::MultilinearPoly;
 use jolt_transcript::Transcript;
 
 use crate::protocol::{
-    lookup::{Batches, Lookup, Read, Table},
+    lookup::{Addresses, Batches, Lookup, Read, Table},
     pcs::{bind_i32, Advice, Kind, Layout, Opening, Part, Slot},
     range::{Range, Ranges, I32},
     session::{instance, query_column, query_weight, Claim, Column, ProofField, Session},
@@ -34,7 +34,7 @@ enum ActivationProof {
 
 pub(crate) struct ActivationTrace<F> {
     pub(crate) output: Vec<i32>,
-    indices: Arc<Vec<u32>>,
+    indices: Arc<Addresses>,
     clamp: Option<ClampTrace<F>>,
 }
 
@@ -114,7 +114,7 @@ impl<'a> Activate<'a> {
                         indices[row * stride + col] = index as u32;
                     }
                 }
-                let indices = Arc::new(indices);
+                let indices = Arc::new(Addresses::Words(indices));
                 self.lookup.record(a, Arc::clone(&indices))?;
                 return Ok(ActivationTrace {
                     output,
@@ -157,7 +157,7 @@ impl<'a> Activate<'a> {
         ranges.record(a, &[&magnitude, &excess])?;
         let signs = Arc::new(signs);
         a.put(sign, Part::Digits(Arc::clone(&signs)))?;
-        let indices = Arc::new(indices);
+        let indices = Arc::new(Addresses::Words(indices));
         self.lookup.record(a, Arc::clone(&indices))?;
         Ok(ActivationTrace {
             output,
@@ -183,9 +183,13 @@ impl<'a> Activate<'a> {
                     * cols.iter().take(self.shape.width).copied().sum::<F>();
                 let [address] = io.values(|| {
                     [dot(
-                        trace().indices.chunks_exact(cols.len()).map(|indices| {
+                        (0..rows.len()).map(|row| {
                             dot(
-                                indices.iter().map(|&i| F::from_u64(u64::from(i))),
+                                (0..cols.len()).map(|col| {
+                                    F::from_u64(u64::from(
+                                        trace().indices.get(row * cols.len() + col),
+                                    ))
+                                }),
                                 cols.iter().copied(),
                             )
                         }),
@@ -207,7 +211,7 @@ impl<'a> Activate<'a> {
                         cell: q.point,
                         address,
                         output: Box::new([output]),
-                        witness: io.proving().then(|| trace().indices.as_slice()),
+                        witness: io.proving().then(|| trace().indices.as_ref()),
                     },
                 );
                 return Ok(claim);
@@ -273,7 +277,7 @@ impl<'a> Activate<'a> {
                 cell: point.clone(),
                 address: v[1],
                 output: Box::new([v[2]]),
-                witness: io.proving().then(|| trace().indices.as_slice()),
+                witness: io.proving().then(|| trace().indices.as_ref()),
             },
         );
         Ok(Claim { point, value: v[0] })

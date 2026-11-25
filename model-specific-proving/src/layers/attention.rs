@@ -11,7 +11,7 @@ use crate::protocol::{
 };
 
 use super::{
-    linear::{Linear, Product, ProductKind, Projection, Rotary, Rotate, Rounded},
+    linear::{Linear, Product, ProductKind, Projection, Rotary, Rotate, Rounded, ValueColumns},
     nonlinear::{Norm, NormTrace, NormalizationParameters},
     softmax::{ClipPlan, ClipSpec, Softmax, SoftmaxMask, SoftmaxTables, SoftmaxTrace},
 };
@@ -354,12 +354,12 @@ impl<'a> AttentionPlan<'a> {
             .iter()
             .map(|(k, v)| Ok((k.execute(x, a)?, v.execute(x, a)?)))
             .collect::<Result<Vec<_>>>()?;
-        let heads = self
-            .heads
-            .iter()
-            .enumerate()
-            .map(|(i, h)| {
-                let (k, v) = &groups[i / self.group_size];
+        let mut heads = Vec::with_capacity(self.heads.len());
+        for (group, (k, v)) in groups.iter().enumerate() {
+            let columns = ValueColumns::new(v.output(), self.value);
+            let start = group * self.group_size;
+            for (offset, h) in self.heads[start..][..self.group_size].iter().enumerate() {
+                let i = start + offset;
                 let (score, remainders, softmax) = if let Some(causal) = &h.causal {
                     let (scores, mut remainders) =
                         causal.execute(queries[i].output(), k.output(), a)?;
@@ -381,15 +381,15 @@ impl<'a> AttentionPlan<'a> {
                 };
                 let value =
                     h.value
-                        .execute_matrix(h.softmax.probabilities(&softmax), v.output(), a)?;
-                Ok(HeadTrace {
+                        .execute_values(h.softmax.probabilities(&softmax), &columns, a)?;
+                heads.push(HeadTrace {
                     score,
                     remainders,
                     softmax,
                     value,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+                });
+            }
+        }
         let mut joined = Vec::with_capacity(self.joined.rows * self.joined.width);
         for row in 0..self.joined.rows {
             for h in &heads {
@@ -480,23 +480,27 @@ impl<'a> AttentionPlan<'a> {
             return Err("invalid head concatenation");
         }
         let mut keys: Vec<Vec<_>> = self.groups.iter().map(|_| Vec::new()).collect();
-        let mut vals: Vec<Vec<_>> = self.groups.iter().map(|_| Vec::new()).collect();
+        let mut vals = Vec::with_capacity(self.groups.len());
         let mut inputs = Vec::new();
         let mut probabilities = Vec::with_capacity(self.heads.len());
-        for (i, (h, value)) in self.heads.iter().zip(values).enumerate() {
-            let group = i / self.group_size;
-            let hw = || &t().heads[i];
-            let [p, v] = h.value.reverse_matrix(
-                Claim {
-                    point: point.clone(),
-                    value,
+        for (group, heads) in self.heads.chunks_exact(self.group_size).enumerate() {
+            let start = group * self.group_size;
+            let products: Vec<_> = heads.iter().map(|h| &h.value).collect();
+            let (claims, value) = Product::reverse_values(
+                &products,
+                &point,
+                &values[start..][..self.group_size],
+                |i| &t().heads[start + i].value,
+                || t().groups[group].1.output(),
+                |i, point| {
+                    heads[i]
+                        .softmax
+                        .bind_probabilities(&t().heads[start + i].softmax, point)
                 },
-                || (t().groups[group].1.output(), &hw().value),
-                |point| h.softmax.bind_probabilities(&hw().softmax, point),
                 io,
             )?;
-            probabilities.push(p);
-            vals[group].push(v);
+            probabilities.extend(claims);
+            vals.push(value);
         }
         let softmax = self.heads[0].softmax.reverse(
             &probabilities,
@@ -565,13 +569,10 @@ impl<'a> AttentionPlan<'a> {
                 }
             }
         }
-        for (i, (k, v)) in self.groups.iter().enumerate() {
+        for (i, ((k, v), vc)) in self.groups.iter().zip(vals).enumerate() {
             let g = || &t().groups[i];
             let kc = io.merge(&keys[i], || {
                 self.key.padded(g().0.output(), F::zero(), F::from_i32)
-            })?;
-            let vc = io.merge(&vals[i], || {
-                self.value.padded(g().1.output(), F::zero(), F::from_i32)
             })?;
             inputs.push(k.reverse(kc, || (trace().0, &g().0), io)?);
             inputs.push(v.reverse(vc, || (trace().0, &g().1), io)?);

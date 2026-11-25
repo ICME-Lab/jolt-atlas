@@ -11,7 +11,7 @@ use jolt_transcript::{
     VerifierTranscript,
 };
 use rayon::prelude::*;
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use super::{
     pcs::Opening,
@@ -431,11 +431,33 @@ impl<F: JoltField> Equality<F> {
     }
 }
 
+pub(crate) enum SourceReader<'a, F> {
+    Single(Box<dyn Fn(usize) -> F + Send + Sync + 'a>),
+    Shared {
+        read: Arc<dyn Fn(usize) -> [F; 5] + Send + Sync + 'a>,
+        index: usize,
+        width: usize,
+    },
+}
+
+impl<F: Copy> SourceReader<'_, F> {
+    fn at(&self, index: usize) -> F {
+        match self {
+            Self::Single(read) => read(index),
+            Self::Shared {
+                read,
+                index: column,
+                ..
+            } => read(index)[*column],
+        }
+    }
+}
+
 pub(crate) enum Column<'a, F: JoltField> {
     Field(Cow<'a, [F]>, usize, usize),
     Bits(&'a [u8], usize),
     Source {
-        read: Box<dyn Fn(usize) -> F + Send + Sync + 'a>,
+        read: SourceReader<'a, F>,
         len: usize,
         weights: Vec<F>,
         rounds: usize,
@@ -468,11 +490,65 @@ impl<'a, F: JoltField> Column<'a, F> {
 
     pub(crate) fn source(len: usize, read: impl Fn(usize) -> F + Send + Sync + 'a) -> Self {
         Self::Source {
-            read: Box::new(read),
+            read: SourceReader::Single(Box::new(read)),
             len,
             weights: vec![F::one()],
             rounds: 1,
         }
+    }
+
+    /// Columns read together during the replay rounds, in this order at the head of a fold.
+    pub(crate) fn shared_source(
+        len: usize,
+        width: usize,
+        read: impl Fn(usize) -> [F; 5] + Send + Sync + 'a,
+    ) -> impl Iterator<Item = Self> + 'a {
+        let read = Arc::new(read);
+        (0..width).map(move |index| Self::Source {
+            read: SourceReader::Shared {
+                read: read.clone(),
+                index,
+                width,
+            },
+            len,
+            weights: vec![F::one()],
+            rounds: 1,
+        })
+    }
+
+    fn shared_pair(&self, i: usize, half: usize) -> Option<(usize, [F; 5], [F; 5])> {
+        let Self::Source {
+            read:
+                SourceReader::Shared {
+                    read,
+                    index: 0,
+                    width,
+                },
+            len,
+            weights,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let bound = |i| match weights.as_slice() {
+            [_] => read(i),
+            [_, r] => {
+                let a = read(i);
+                let b = read(i + len);
+                std::array::from_fn(|j| a[j] + *r * (b[j] - a[j]))
+            }
+            weights => {
+                let mut values = [F::zero(); 5];
+                for (prefix, &weight) in weights.iter().enumerate() {
+                    for (value, sample) in values.iter_mut().zip(read(prefix * len + i)) {
+                        *value = weight.mul_add(sample, *value);
+                    }
+                }
+                values
+            }
+        };
+        Some((*width, bound(i), bound(i + half)))
     }
 
     pub(crate) fn replay(mut self, replay_rounds: usize) -> Self {
@@ -551,16 +627,16 @@ impl<'a, F: JoltField> Column<'a, F> {
             Self::Source {
                 read, len, weights, ..
             } => match weights.as_slice() {
-                [_] => read(i),
+                [_] => read.at(i),
                 [_, r] => {
-                    let low = read(i);
-                    low + *r * (read(i + len) - low)
+                    let low = read.at(i);
+                    low + *r * (read.at(i + len) - low)
                 }
                 _ => weights
                     .iter()
                     .enumerate()
                     .fold(F::zero(), |sum, (prefix, &weight)| {
-                        weight.mul_add(read(prefix * len + i), sum)
+                        weight.mul_add(read.at(prefix * len + i), sum)
                     }),
             },
         }
@@ -700,6 +776,50 @@ impl<C, E> Fold<C, E> {
 }
 
 impl<C, E> Fold<C, E> {
+    fn bind_columns<'a, F>(columns: &mut [Column<'a, F>], r: F)
+    where
+        F: JoltField + 'a,
+    {
+        let mut start = 0;
+        if let Column::Source {
+            read: SourceReader::Shared {
+                index: 0, width, ..
+            },
+            len,
+            rounds: 0,
+            ..
+        } = columns[0]
+        {
+            let half = len / 2;
+            let mut values: [Vec<F>; 5] =
+                std::array::from_fn(|j| vec![F::zero(); if j < width { half } else { 0 }]);
+            let [a, b, c, d, e] = &mut values;
+            let read = |i| {
+                let (_, low, high) = columns[0].shared_pair(i, half).expect("shared columns");
+                std::array::from_fn(|j| low[j] + r * (high[j] - low[j]))
+            };
+            let rows = a.par_iter_mut().zip(b).zip(c).zip(d).enumerate();
+            if width == 4 {
+                rows.for_each(|(i, (((a, b), c), d))| {
+                    let [p, q, u, v, _] = read(i);
+                    (*a, *b, *c, *d) = (p, q, u, v);
+                });
+            } else {
+                rows.zip(e).for_each(|((i, (((a, b), c), d)), e)| {
+                    let [p, q, u, v, w] = read(i);
+                    (*a, *b, *c, *d, *e) = (p, q, u, v, w);
+                });
+            }
+            for (column, values) in columns.iter_mut().zip(values).take(width) {
+                *column = Column::owned(values);
+            }
+            start = width;
+        }
+        for column in &mut columns[start..] {
+            column.bind(r);
+        }
+    }
+
     fn samples<'a, F>(&mut self, previous: Option<F>) -> Vec<F>
     where
         F: JoltField + 'a,
@@ -707,9 +827,7 @@ impl<C, E> Fold<C, E> {
         E: Fn(&[F]) -> F + Sync,
     {
         if let Some(r) = previous {
-            for column in self.columns.as_mut() {
-                column.bind(r);
-            }
+            Self::bind_columns(self.columns.as_mut(), r);
         }
         let columns = &*self.columns.as_mut();
         let half = columns[0].len() / 2;
@@ -731,7 +849,19 @@ impl<C, E> Fold<C, E> {
                 }) {
                     continue;
                 }
-                for ((v, delta), col) in values.iter_mut().zip(&mut deltas).zip(columns) {
+                let mut first = 0;
+                if let Some((width, low, high)) = columns[0].shared_pair(i, half) {
+                    first = width;
+                    values[..width].copy_from_slice(&low[..width]);
+                    for j in 0..width {
+                        deltas[j] = high[j] - low[j];
+                    }
+                }
+                for ((v, delta), col) in values[first..]
+                    .iter_mut()
+                    .zip(&mut deltas[first..])
+                    .zip(&columns[first..])
+                {
                     *v = col.at(i);
                     *delta = col.at(i + half) - *v;
                 }

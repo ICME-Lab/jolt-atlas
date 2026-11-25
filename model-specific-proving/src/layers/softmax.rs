@@ -1,6 +1,6 @@
 use jolt_transcript::Transcript;
 use rayon::prelude::*;
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 
 use crate::protocol::{
     lookup::{Addresses, Batches, Lookup, Read, Table},
@@ -487,20 +487,14 @@ impl<'a> Softmax<'a> {
             .map_or(0, |(tile, offset)| trace.indices[tile].get(offset) as usize)
     }
 
-    pub(super) fn probabilities<'s, F>(
+    pub(super) fn probabilities<'s, F: Sync>(
         &'s self,
         trace: &'s SoftmaxTrace<F>,
-    ) -> impl Iterator<Item = Cow<'s, [i32]>> + 's
-    where
-        F: 's,
-    {
-        (0..self.shape.rows).map(move |row| {
-            let active = self.active(row);
-            let mut output = vec![0; self.shape.width];
-            for col in active {
-                output[col] = self.tables.probabilities[self.index(trace, row, col)];
-            }
-            Cow::Owned(output)
+    ) -> impl IndexedParallelIterator<Item = Vec<i32>> + 's {
+        (0..self.shape.rows).into_par_iter().map(move |row| {
+            self.active(row)
+                .map(|col| self.tables.probabilities[self.index(trace, row, col)])
+                .collect()
         })
     }
 
@@ -716,27 +710,30 @@ impl<'a> Softmax<'a> {
                 }
             };
             let size = 1 << vars;
-            let address = move |i: usize| self.index(t, i / stride, i % stride);
-            std::array::from_fn::<_, 13, _>(|j| match j {
-                0 => Column::source(size, move |i| F::from_i64(score(i / stride, i % stride))),
-                1 => Column::source(size, move |i| F::from_u64(address(i) as u64)),
-                2 => Column::source(size, move |i| {
-                    F::from_i32(self.tables.probabilities[address(i)])
-                }),
-                3 => Column::source(size, move |i| self.combined.field_at(address(i))),
-                4 if self.excess.is_none()
-                    && !matches!(clips.get(i), Some(Some(ClipPlan::Overflow(_)))) =>
+            let clipped =
+                self.excess.is_some() || matches!(clips.get(i), Some(Some(ClipPlan::Overflow(_))));
+            let mut shared = Column::shared_source(size, if clipped { 5 } else { 4 }, move |i| {
+                let (row, col) = (i / stride, i % stride);
+                let address = self.index(t, row, col);
+                let score = score(row, col);
+                let excess = if clipped && row < self.shape.rows && self.active(row).contains(&col)
                 {
-                    Column::repeat(vec![F::zero()].into(), size)
-                }
-                4 => Column::source(size, move |i| {
-                    let (row, col) = (i / stride, i % stride);
-                    if row < self.shape.rows && self.active(row).contains(&col) {
-                        F::from_i64(t.shifts[row] - score(row, col) - address(i) as i64)
-                    } else {
-                        F::zero()
-                    }
-                }),
+                    F::from_i64(t.shifts[row] - score - address as i64)
+                } else {
+                    F::zero()
+                };
+                [
+                    F::from_i64(score),
+                    F::from_u64(address as u64),
+                    F::from_i32(self.tables.probabilities[address]),
+                    self.combined.field_at(address),
+                    excess,
+                ]
+            });
+            std::array::from_fn::<_, 13, _>(|j| match j {
+                0..=4 => shared
+                    .next()
+                    .unwrap_or_else(|| Column::repeat(vec![F::zero()].into(), size)),
                 5..=7 => Column::rows(t.rows[j - 5].as_slice().into(), stride),
                 8 => Column::source(size, |i| {
                     let row = i / stride;

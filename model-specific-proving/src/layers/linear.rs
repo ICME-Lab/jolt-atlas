@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+use jolt_poly::MultilinearPoly;
 use jolt_transcript::Transcript;
 use rayon::prelude::*;
 
@@ -18,7 +19,7 @@ pub(crate) struct Rounded {
     remainder: Vec<i32>,
 }
 
-fn quotient_remainder(raw: i128, bits: usize) -> Result<(i32, i32)> {
+pub(super) fn quotient_remainder(raw: i128, bits: usize) -> Result<(i32, i32)> {
     let output = i32::try_from(raw >> bits).map_err(|_| "fixed-point overflow")?;
     let remainder = (raw & ((1i128 << bits) - 1)) as i32;
     Ok((output, remainder))
@@ -114,7 +115,7 @@ impl Projection<'_> {
     }
 }
 
-fn narrow_dot(left: &[i32], right: &[i32]) -> i64 {
+pub(super) fn narrow_dot(left: &[i32], right: &[i32]) -> i64 {
     let mut lanes = [0i64; 8];
     let mut left = left.chunks_exact(8);
     let mut right = right.chunks_exact(8);
@@ -241,6 +242,26 @@ pub(crate) struct Product {
     rounding: Rounding,
 }
 
+pub(super) struct ValueColumns {
+    values: Vec<i32>,
+    max_abs: u128,
+}
+
+impl ValueColumns {
+    pub(super) fn new(values: &[i32], shape: Shape) -> Self {
+        let mut transposed = vec![0; values.len()];
+        for (row, values) in values.chunks_exact(shape.width).enumerate() {
+            for (col, &value) in values.iter().enumerate() {
+                transposed[col * shape.rows + row] = value;
+            }
+        }
+        Self {
+            values: transposed,
+            max_abs: u128::from(values.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0)),
+        }
+    }
+}
+
 impl Product {
     pub(crate) fn new(
         layout: &mut Layout,
@@ -347,6 +368,135 @@ impl Product {
                 })
             }),
         )
+    }
+
+    pub(super) fn execute_values(
+        &self,
+        left: impl IndexedParallelIterator<Item = Vec<i32>>,
+        right: &ValueColumns,
+        advice: &mut Advice,
+    ) -> Result<Rounded> {
+        let shape = self.rounding.shape;
+        let ProductKind::Matrix {
+            inner,
+            transpose: false,
+            factor,
+        } = self.kind
+        else {
+            return Err("expected an attention value product");
+        };
+        let mut output = vec![0; shape.rows * shape.width];
+        let mut remainder = vec![0; output.len()];
+        left.zip(output.par_chunks_mut(shape.width))
+            .zip(remainder.par_chunks_mut(shape.width))
+            .try_for_each(|((row, output), remainder)| -> Result<()> {
+                let norm: u128 = row.iter().map(|v| u128::from(v.unsigned_abs())).sum();
+                let narrow = norm * right.max_abs <= i64::MAX as u128;
+                for ((out, rem), values) in output
+                    .iter_mut()
+                    .zip(remainder)
+                    .zip(right.values.chunks_exact(inner))
+                {
+                    let values = &values[..row.len()];
+                    let dot = if narrow {
+                        i128::from(narrow_dot(&row, values))
+                    } else {
+                        integer_dot(&row, values)
+                    };
+                    (*out, *rem) =
+                        quotient_remainder(dot * i128::from(factor), self.rounding.bits)?;
+                }
+                Ok(())
+            })?;
+        self.rounding.record(advice, Rounded { output, remainder })
+    }
+
+    pub(super) fn reverse_values<'w, F: ProofField>(
+        products: &[&Self],
+        point: &[F],
+        claims: &[F],
+        trace: impl Fn(usize) -> &'w Rounded,
+        values: impl FnOnce() -> &'w [i32],
+        probabilities: impl Fn(usize, &[F]) -> Vec<F> + Sync,
+        io: &mut Session<'_, '_, F>,
+    ) -> Result<(Vec<Claim<F>>, Claim<F>)> {
+        let first = products[0];
+        let shape = first.rounding.shape;
+        let ProductKind::Matrix {
+            inner,
+            transpose: false,
+            factor,
+        } = first.kind
+        else {
+            return Err("expected an attention value product");
+        };
+        let (row, col) = point.split_at(shape.row_vars());
+        let raw: Vec<_> = products
+            .iter()
+            .zip(claims)
+            .enumerate()
+            .map(|(i, (product, &value))| {
+                product.rounding.reverse(
+                    &Claim {
+                        point: point.to_vec(),
+                        value,
+                    },
+                    || trace(i),
+                    io,
+                )
+            })
+            .collect::<Result<_>>()?;
+        let mix = if raw.len() == 1 {
+            vec![F::one()]
+        } else {
+            io.point(raw.len())?
+        };
+        let sum = dot(raw, mix.iter().copied());
+        let scale = F::from_i32(factor);
+        let size = inner.next_power_of_two();
+        let mut columns = Vec::new();
+        let (end, [value]) = io.fold(
+            instance(sum, size.ilog2() as usize, 2),
+            || {
+                columns = (0..products.len())
+                    .into_par_iter()
+                    .map(|i| probabilities(i, row))
+                    .collect();
+                let mut mixed = vec![F::zero(); size];
+                for (column, &weight) in columns.iter().zip(&mix) {
+                    for (out, &entry) in mixed.iter_mut().zip(column) {
+                        *out += weight * entry;
+                    }
+                }
+                let w = weights::<F>(col);
+                let mut v = vec![F::zero(); size];
+                for (out, row) in v.iter_mut().zip(values().chunks_exact(shape.width)) {
+                    *out = dot(row.iter().copied().map(F::from_i32), w.iter().copied());
+                }
+                [Column::owned(v), Column::owned(mixed)]
+            },
+            [0],
+            |v| scale * v[0] * v[1],
+        )?;
+        let probabilities = (0..products.len())
+            .map(|i| {
+                let [value] = io.values(|| [columns[i].evaluate(&end.challenges)])?;
+                Ok(Claim {
+                    point: [row, &end.challenges].concat(),
+                    value,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        io.check_value(&end, || {
+            scale * value * dot(probabilities.iter().map(|q| q.value), mix)
+        })?;
+        Ok((
+            probabilities,
+            Claim {
+                point: [&end.challenges, col].concat(),
+                value,
+            },
+        ))
     }
 
     pub(crate) fn reverse<'w, F: ProofField>(

@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
+use super::super::linear::{narrow_dot, quotient_remainder};
 use super::Softmax;
 use crate::protocol::{
     pcs::{Advice, Layout},
     range::{Range, Ranges, I32},
     session::{instance, Claim, Column, ProofField, Session},
-    tensor::{dot, eq, weights, Shape},
+    tensor::{dot, eq, integer_dot, weights, Shape},
     Result,
 };
 
@@ -76,7 +77,7 @@ impl Causal {
         self.key.check(query)?;
         self.key.check(key)?;
         let size = self.key.rows;
-        let scale = 1i128 << self.bits;
+        let max_key = u128::from(key.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0));
         let mut scores = vec![0; size * (size + 1) / 2];
         let mut digits = Vec::with_capacity(self.tiles.len());
         for tile in &self.tiles {
@@ -89,18 +90,20 @@ impl Causal {
             for r in 0..tile.shape.rows {
                 let row = tile.row + r;
                 let q = &query[row * self.key.width..][..self.key.width];
+                let norm: u128 = q.iter().map(|v| u128::from(v.unsigned_abs())).sum();
+                let narrow = norm * max_key <= i64::MAX as u128;
                 for c in 0..tile.shape.width.min(row + 1 - tile.col) {
                     let col = tile.col + c;
                     let k = &key[col * self.key.width..][..self.key.width];
-                    let raw = i128::from(self.factor)
-                        * q.iter()
-                            .zip(k)
-                            .map(|(&a, &b)| i128::from(a) * i128::from(b))
-                            .sum::<i128>();
-                    let score =
-                        i32::try_from(raw.div_euclid(scale)).map_err(|_| "fixed-point overflow")?;
+                    let dot = if narrow {
+                        i128::from(narrow_dot(q, k))
+                    } else {
+                        integer_dot(q, k)
+                    };
+                    let (score, remainder) =
+                        quotient_remainder(dot * i128::from(self.factor), self.bits)?;
                     let index = r * tile.shape.width + c;
-                    remainders[index] = raw.rem_euclid(scale) as i32;
+                    remainders[index] = remainder;
                     if self.check_score {
                         checked[index] = score;
                     }

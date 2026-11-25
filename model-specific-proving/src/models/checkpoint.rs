@@ -6,8 +6,8 @@ use crate::protocol::pcs::ProofSection;
 impl Model<'_> {
     fn checkpoint_domain(&self) -> [u8; 32] {
         match self.head {
-            Head::Decoder { .. } => protocol_tag(b"atlas/decoder/layer-openings/v1"),
-            Head::Encoder(_) => protocol_tag(b"atlas/encoder/layer-openings/v1"),
+            Head::Decoder { .. } => protocol_tag(b"atlas/decoder/layer-openings/v2"),
+            Head::Encoder(_) => protocol_tag(b"atlas/encoder/layer-openings/v2"),
         }
     }
 

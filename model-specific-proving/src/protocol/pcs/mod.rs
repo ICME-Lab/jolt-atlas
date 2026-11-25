@@ -462,8 +462,13 @@ pub(crate) fn plan<C: ModelPcs>(layout: &Layout) -> Result<C::AdvicePlan> {
 
 pub(crate) fn bind_i32(t: &mut impl Transcript, values: &[i32]) {
     t.append(&(values.len() as u64));
-    let bytes: Vec<_> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-    t.append_bytes(&bytes);
+    let mut bytes = [0; 16 * 1024];
+    for values in values.chunks(bytes.len() / 4) {
+        for (dst, value) in bytes.chunks_exact_mut(4).zip(values) {
+            dst.copy_from_slice(&value.to_le_bytes());
+        }
+        t.append_bytes(&bytes[..values.len() * 4]);
+    }
 }
 
 #[cfg(feature = "akita")]

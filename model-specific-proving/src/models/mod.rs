@@ -1,6 +1,8 @@
 //! The fixed decoder and encoder proof flows.
 
-use jolt_transcript::{protocol_tag, Transcript};
+use std::sync::OnceLock;
+
+use jolt_transcript::{protocol_tag, prover_transcript, Keccak, Transcript};
 
 use crate::{
     layers::{
@@ -105,6 +107,7 @@ pub enum Architecture<'a> {
 }
 
 pub struct Model<'a> {
+    digest: OnceLock<[u8; 32]>,
     shape: Shape,
     bits: u8,
     embeddings: PublicEmbeddings<'a>,
@@ -255,6 +258,7 @@ impl<'a> Model<'a> {
             }
         };
         Ok(Self {
+            digest: OnceLock::new(),
             shape,
             bits,
             embeddings,
@@ -271,9 +275,35 @@ impl<'a> Model<'a> {
 
     fn domain(&self) -> [u8; 32] {
         match self.head {
-            Head::Decoder { .. } => protocol_tag(b"atlas/model-specific/decoder/v2"),
-            Head::Encoder(_) => protocol_tag(b"atlas/model-specific/encoder/v2"),
+            Head::Decoder { .. } => protocol_tag(b"atlas/model-specific/decoder/v3"),
+            Head::Encoder(_) => protocol_tag(b"atlas/model-specific/encoder/v3"),
         }
+    }
+
+    fn model_digest(&self) -> &[u8; 32] {
+        self.digest.get_or_init(|| {
+            let domain = protocol_tag(b"atlas/model-parameters/v1");
+            let mut t = prover_transcript::<Keccak>(&domain, b"");
+            t.append(&[
+                self.shape.rows as u64,
+                self.shape.width as u64,
+                u64::from(self.bits),
+                self.layers.len() as u64,
+                u64::from(matches!(self.head, Head::Decoder { .. })),
+            ]);
+            self.embeddings.bind(&mut t);
+            for layer in &self.layers {
+                layer.attention.bind(&mut t);
+                layer.attention_norm.bind(&mut t);
+                layer.mlp.bind(&mut t);
+                layer.mlp_norm.bind(&mut t);
+            }
+            match &self.head {
+                Head::Decoder { norm, .. } => norm.bind(&mut t),
+                Head::Encoder(norm) => norm.bind(&mut t),
+            }
+            t.verifier_message_as(32, |bytes| bytes.try_into().expect("32 digest bytes"))
+        })
     }
 
     fn bind(
@@ -283,15 +313,7 @@ impl<'a> Model<'a> {
         segments: Option<&[usize]>,
         output: &[i32],
     ) {
-        for value in [
-            self.shape.rows,
-            self.shape.width,
-            self.bits.into(),
-            self.layers.len(),
-        ] {
-            t.append(&(value as u64));
-        }
-        self.embeddings.bind(t);
+        t.append_bytes(self.model_digest());
         for &token in tokens {
             t.append(&(token as u64));
         }
@@ -300,16 +322,6 @@ impl<'a> Model<'a> {
             for &s in segments {
                 t.append(&(s as u64));
             }
-        }
-        for layer in &self.layers {
-            layer.attention.bind(t);
-            layer.attention_norm.bind(t);
-            layer.mlp.bind(t);
-            layer.mlp_norm.bind(t);
-        }
-        match &self.head {
-            Head::Decoder { norm, .. } => norm.bind(t),
-            Head::Encoder(norm) => norm.bind(t),
         }
         bind_i32(t, output);
     }
@@ -705,7 +717,7 @@ impl Model<'_> {
         let (specs, clipping) = self.prepare_clip(&mut layout, &mut witness)?;
         let prepared = advice_plan::<C>(&layout)?;
         let mut proof = Proof::prove(
-            &protocol_tag(b"atlas/model-specific/top-k/v2"),
+            &protocol_tag(b"atlas/model-specific/top-k/v3"),
             &layout,
             witness,
             |w| &mut w.advice,
@@ -735,7 +747,7 @@ impl Model<'_> {
         let mut layout = plan.layout.clone();
         let clipping = self.clip_plan(&mut layout, &proof.clipping)?;
         proof.verify(
-            &protocol_tag(b"atlas/model-specific/top-k/v2"),
+            &protocol_tag(b"atlas/model-specific/top-k/v3"),
             &layout,
             setup,
             |t| {

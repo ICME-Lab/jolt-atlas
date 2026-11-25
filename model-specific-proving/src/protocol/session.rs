@@ -1,7 +1,7 @@
 //! Shared transcript and Sumcheck execution, with one statement per relation.
 
 use jolt_field::JoltField;
-use jolt_poly::{MultilinearPoly, UnivariatePoly};
+use jolt_poly::{BindingOrder, GruenSplitEqPolynomial, MultilinearPoly, UnivariatePoly};
 use jolt_sumcheck::{
     prove_single, round_pow_bits, verify_single, ProveRounds, SingleFormat, SingleInstance,
     SingleReduction, SingleSumcheckProof, SumcheckError,
@@ -15,7 +15,7 @@ use std::borrow::Cow;
 
 use super::{
     pcs::Opening,
-    tensor::{eq, weights},
+    tensor::{eq, weights, Shape},
     Result,
 };
 
@@ -353,7 +353,59 @@ pub(crate) fn query_weight<F: JoltField>(claims: &[Claim<F>], mix: &[F], point: 
         .sum()
 }
 
-pub(crate) enum Column<'a, F: Clone> {
+/// Cached factors for a high-to-low equality column. The current coordinate
+/// is multiplied into the high table once per round, outside the row scan.
+pub(crate) struct Equality<F: JoltField> {
+    split: GruenSplitEqPolynomial<F>,
+    high: Vec<F>,
+    len: usize,
+}
+
+impl<F: JoltField> Equality<F> {
+    pub(crate) fn new(point: &[F]) -> Self {
+        let mut result = Self {
+            split: GruenSplitEqPolynomial::new(point, BindingOrder::HighToLow),
+            high: Vec::new(),
+            len: 1 << point.len(),
+        };
+        result.refresh();
+        result
+    }
+
+    fn refresh(&mut self) {
+        self.high.clear();
+        if self.len == 1 {
+            self.high.push(self.split.current_scalar());
+        } else {
+            let (lo, hi) = self.split.current_linear_evals();
+            for scale in [lo, hi] {
+                self.high
+                    .extend(self.split.e_in_current().iter().map(|&v| scale * v));
+            }
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn bind(&mut self, challenge: F) {
+        self.split.bind(challenge);
+        self.len /= 2;
+        self.refresh();
+    }
+
+    pub(crate) fn factors(&self) -> (&[F], &[F]) {
+        (&self.high, self.split.e_out_current())
+    }
+
+    fn at(&self, i: usize) -> F {
+        let (high, low) = self.factors();
+        high[i >> low.len().trailing_zeros()] * low[i & (low.len() - 1)]
+    }
+}
+
+pub(crate) enum Column<'a, F: JoltField> {
     Field(Cow<'a, [F]>, usize, usize),
     Bits(&'a [u8], usize),
     Source(Box<dyn Fn(usize) -> F + Send + Sync + 'a>, usize, Option<F>),
@@ -364,12 +416,9 @@ pub(crate) enum Column<'a, F: Clone> {
         len: usize,
         weights: Vec<F>,
     },
-    Equality {
-        point: &'a [F],
-        scale: F,
-        high: Vec<F>,
-        low: Vec<F>,
-    },
+    Equality(Equality<F>),
+    Integer(&'a [i32], Shape),
+    Prefix(Vec<F>, usize),
 }
 
 impl<'a, F: JoltField> Column<'a, F> {
@@ -400,14 +449,12 @@ impl<'a, F: JoltField> Column<'a, F> {
         }
     }
 
-    pub(crate) fn equality(point: &'a [F]) -> Self {
-        let (prefix, suffix) = point.split_at(point.len() / 2);
-        Self::Equality {
-            point,
-            scale: F::one(),
-            high: weights(prefix),
-            low: weights(suffix),
-        }
+    pub(crate) fn equality(point: &[F]) -> Self {
+        Self::Equality(Equality::new(point))
+    }
+
+    pub(crate) fn integer(values: &'a [i32], shape: Shape) -> Self {
+        Self::Integer(values, shape)
     }
 
     fn len(&self) -> usize {
@@ -415,7 +462,9 @@ impl<'a, F: JoltField> Column<'a, F> {
             Self::Field(v, width, copies) => v.len() * width * copies,
             Self::Bits(v, copies) => v.len() * copies,
             Self::Source(_, len, _) | Self::Lookup { len, .. } => *len,
-            Self::Equality { point, .. } => 1 << point.len(),
+            Self::Equality(weights) => weights.len(),
+            Self::Integer(_, shape) => 1 << shape.vars(),
+            Self::Prefix(_, len) => *len,
         }
     }
 
@@ -440,7 +489,17 @@ impl<'a, F: JoltField> Column<'a, F> {
                     table[digit]
                 })
                 .sum(),
-            Self::Equality { high, low, .. } => high[i / low.len()] * low[i % low.len()],
+            Self::Equality(weights) => weights.at(i),
+            Self::Integer(values, shape) => {
+                let width = shape.width.next_power_of_two();
+                let (row, col) = (i / width, i % width);
+                if row < shape.rows && col < shape.width {
+                    F::from_i32(values[row * shape.width + col])
+                } else {
+                    F::zero()
+                }
+            }
+            Self::Prefix(values, _) => values.get(i).copied().unwrap_or_else(F::zero),
             Self::Source(read, _, None) => read(i),
             Self::Source(read, half, Some(r)) => {
                 let low = read(i);
@@ -469,17 +528,48 @@ impl<'a, F: JoltField> Column<'a, F> {
                 *weights = next;
                 *len /= 2;
             }
-            Self::Equality {
-                point,
-                scale,
-                high,
-                low,
-            } => {
-                *scale *= eq(&point[..1], &[r]);
-                *point = &point[1..];
-                let (prefix, suffix) = point.split_at(point.len() / 2);
-                *high = weights(prefix).into_iter().map(|w| w * *scale).collect();
-                *low = weights(suffix);
+            Self::Equality(weights) => weights.bind(r),
+            Self::Integer(_, shape) => {
+                let half = 1 << (shape.vars() - 1);
+                let end = (shape.rows - 1) * shape.width.next_power_of_two() + shape.width;
+                let bind = |i| {
+                    let low = self.at(i);
+                    r.mul_add(self.at(i + half) - low, low)
+                };
+                // The untouched suffix is zero under high-to-low binding.
+                let prefix = half.min(end);
+                let values = if prefix >= PARALLEL_ROUND_SIZE {
+                    (0..prefix)
+                        .into_par_iter()
+                        .with_min_len(ROUND_CHUNK_SIZE)
+                        .map(bind)
+                        .collect()
+                } else {
+                    (0..prefix).map(bind).collect()
+                };
+                *self = Self::Prefix(values, half);
+            }
+            Self::Prefix(values, len) => {
+                *len /= 2;
+                if values.len() == *len * 2 {
+                    bind_halves(values, r);
+                } else {
+                    let split = (*len).min(values.len());
+                    let (lo, hi) = values.split_at_mut(split);
+                    let bind = |(i, value): (usize, &mut F)| {
+                        let other = hi.get(i).copied().unwrap_or_else(F::zero);
+                        *value = r.mul_add(other - *value, *value);
+                    };
+                    if lo.len() >= PARALLEL_ROUND_SIZE {
+                        lo.par_iter_mut()
+                            .with_min_len(ROUND_CHUNK_SIZE)
+                            .enumerate()
+                            .for_each(bind);
+                    } else {
+                        lo.iter_mut().enumerate().for_each(bind);
+                    }
+                    values.truncate(*len);
+                }
             }
             Self::Source(_, len, first @ None) => {
                 *first = Some(r);
@@ -538,21 +628,17 @@ impl<C, E> Fold<C, E> {
     }
 }
 
-impl<'a, F: JoltField + 'a, E: Fn(&[F]) -> F + Sync, C: AsMut<[Column<'a, F>]>> ProveRounds<F>
-    for Fold<C, E>
-{
-    fn num_rounds(&self) -> usize {
-        self.rounds
-    }
-
-    fn prove_round(
-        &mut self,
-        previous: Option<F>,
-        _: usize,
-        _: F,
-    ) -> std::result::Result<UnivariatePoly<F>, SumcheckError<F>> {
+impl<C, E> Fold<C, E> {
+    fn samples<'a, F>(&mut self, previous: Option<F>) -> Vec<F>
+    where
+        F: JoltField + 'a,
+        C: AsMut<[Column<'a, F>]>,
+        E: Fn(&[F]) -> F + Sync,
+    {
         if let Some(r) = previous {
-            self.finish_rounds(r)?;
+            for column in self.columns.as_mut() {
+                column.bind(r);
+            }
         }
         let columns = &*self.columns.as_mut();
         let half = columns[0].len() / 2;
@@ -567,7 +653,10 @@ impl<'a, F: JoltField + 'a, E: Fn(&[F]) -> F + Sync, C: AsMut<[Column<'a, F>]>> 
                     *delta = col.at(i + half) - *v;
                 }
                 samples[0] += (self.expression)(&values);
-                for sample in &mut samples[1..] {
+                for (v, &delta) in values.iter_mut().zip(&deltas) {
+                    *v += delta;
+                }
+                for sample in &mut samples[2..] {
                     for (v, &delta) in values.iter_mut().zip(&deltas) {
                         *v += delta;
                     }
@@ -576,7 +665,7 @@ impl<'a, F: JoltField + 'a, E: Fn(&[F]) -> F + Sync, C: AsMut<[Column<'a, F>]>> 
             }
             samples
         };
-        let samples = if half >= PARALLEL_ROUND_SIZE {
+        if half >= PARALLEL_ROUND_SIZE {
             let chunk = half
                 .div_ceil(rayon::current_num_threads())
                 .max(ROUND_CHUNK_SIZE);
@@ -592,7 +681,25 @@ impl<'a, F: JoltField + 'a, E: Fn(&[F]) -> F + Sync, C: AsMut<[Column<'a, F>]>> 
                 })
         } else {
             sum(0, half)
-        };
+        }
+    }
+}
+
+impl<'a, F: JoltField + 'a, E: Fn(&[F]) -> F + Sync, C: AsMut<[Column<'a, F>]>> ProveRounds<F>
+    for Fold<C, E>
+{
+    fn num_rounds(&self) -> usize {
+        self.rounds
+    }
+
+    fn prove_round(
+        &mut self,
+        previous: Option<F>,
+        _: usize,
+        claim: F,
+    ) -> std::result::Result<UnivariatePoly<F>, SumcheckError<F>> {
+        let mut samples = self.samples(previous);
+        samples[1] = claim - samples[0];
         Ok(UnivariatePoly::from_evals(&samples))
     }
 
@@ -618,14 +725,28 @@ impl<'a, F: JoltField + 'a, C: AsMut<[Column<'a, F>]> + Send, E: Fn(&[F]) -> F +
     fn prove_round(
         &mut self,
         previous: Option<F>,
-        round: usize,
-        _: F,
+        _: usize,
+        claim: F,
     ) -> core::result::Result<UnivariatePoly<F>, SumcheckError<F>> {
-        self.0
+        let mut samples = self
+            .0
             .par_iter_mut()
-            .map(|(w, fold)| fold.prove_round(previous, round, F::zero()).map(|p| p * *w))
-            .try_reduce_with(|a, b| Ok(a + b))
-            .expect("nonempty Sumcheck batch")
+            .map(|(w, fold)| {
+                let mut samples = fold.samples(previous);
+                for value in &mut samples {
+                    *value *= *w;
+                }
+                samples
+            })
+            .reduce_with(|mut a, b| {
+                for (value, next) in a.iter_mut().zip(b) {
+                    *value += next;
+                }
+                a
+            })
+            .expect("nonempty Sumcheck batch");
+        samples[1] = claim - samples[0];
+        Ok(UnivariatePoly::from_evals(&samples))
     }
 
     fn finish_rounds(&mut self, last: F) -> core::result::Result<(), SumcheckError<F>> {
@@ -639,7 +760,7 @@ impl<'a, F: JoltField + 'a, C: AsMut<[Column<'a, F>]> + Send, E: Fn(&[F]) -> F +
 #[test]
 fn lookup_and_equality_columns_match_dense_folding() {
     use jolt_akita::AkitaField as F;
-    use jolt_field::Ring;
+    use jolt_field::{Ring, Zero};
 
     let addresses: Vec<_> = (0..128).map(|i| (i * 17) % 251).collect();
     let digits = [3, 1, 8, 5].map(F::from_u64);
@@ -651,15 +772,22 @@ fn lookup_and_equality_columns_match_dense_folding() {
         .map(|&i| digits[((i >> 2) & 3) as usize])
         .collect();
     let mut dense_eq = weights(&point);
+    let shape = Shape::new(5, 11).unwrap();
+    let integers: Vec<_> = (-35..20).collect();
+    let mut integer = Column::integer(&integers, shape);
+    let mut dense_integer = shape.padded(&integers, F::zero(), F::from_i32);
     for round in 0..=point.len() {
         for i in 0..dense_eq.len() {
             assert_eq!(lookup.at(i), dense_digits[i]);
             assert_eq!(equality.at(i), dense_eq[i]);
+            assert_eq!(integer.at(i), dense_integer[i]);
         }
         if round < point.len() {
             let r = F::from_u64(if round == 3 { 0 } else { round as u64 + 13 });
             lookup.bind(r);
             equality.bind(r);
+            integer.bind(r);
+            bind_halves(&mut dense_integer, r);
             bind_halves(&mut dense_digits, r);
             bind_halves(&mut dense_eq, r);
         }

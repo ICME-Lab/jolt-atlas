@@ -3,9 +3,11 @@
 use rayon::prelude::*;
 use std::{collections::BTreeMap, sync::Arc};
 
-use jolt_poly::UnivariatePoly;
+use jolt_poly::{TensorEqTable, UnivariatePoly};
 use jolt_sumcheck::prove_single;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
+
+const MAX_HISTOGRAM_SIZE: usize = 1 << 19;
 
 use super::{
     pcs::{Advice, Kind, Layout, Opening, Part, Slot},
@@ -195,13 +197,46 @@ impl Lookup {
             .sum();
         let stmt = instance(sum, n, 2);
         let end = io.reduce(&stmt, |t| {
-            let mut reads = BTreeMap::new();
-            for ((_, q), &w) in queries.iter().zip(&batch) {
-                for (&address, cell) in q.witness().iter().zip(weights(&q.cell)) {
-                    *reads.entry(address as usize).or_insert_with(F::zero) += w * cell;
+            let mut fold = if size <= MAX_HISTOGRAM_SIZE {
+                let chunk = queries.len().div_ceil(rayon::current_num_threads());
+                let histogram = queries
+                    .par_chunks(chunk)
+                    .zip(batch.par_chunks(chunk))
+                    .map(|(queries, coefficients)| {
+                        let mut bins = vec![F::zero(); size];
+                        for ((_, q), &coefficient) in queries.iter().zip(coefficients) {
+                            let weights = TensorEqTable::new_with_scaling(&q.cell, coefficient);
+                            for (addresses, &outer) in q
+                                .witness()
+                                .chunks_exact(weights.e_in().len())
+                                .zip(weights.e_out())
+                            {
+                                for (&address, &inner) in addresses.iter().zip(weights.e_in()) {
+                                    bins[address as usize] += outer * inner;
+                                }
+                            }
+                        }
+                        bins
+                    })
+                    .reduce_with(|mut left, right| {
+                        for (left, right) in left.iter_mut().zip(right) {
+                            *left += right;
+                        }
+                        left
+                    })
+                    .expect("nonempty lookup batch");
+                TableFold::from_histogram(histogram, table)
+            } else {
+                let mut reads = BTreeMap::new();
+                for ((_, q), &w) in queries.iter().zip(&batch) {
+                    let weights = TensorEqTable::new_with_scaling(&q.cell, w);
+                    for (i, &address) in q.witness().iter().enumerate() {
+                        *reads.entry(address as usize).or_insert_with(F::zero) +=
+                            weights.evaluate_index(i);
+                    }
                 }
-            }
-            let mut fold = TableFold::new(size, reads, table);
+                TableFold::new(size, reads, table)
+            };
             prove_single(&mut fold, &stmt, t).map_err(|_| "Sumcheck failed")
         })?;
         let address = first.0.link(queries, &end.challenges, &batch, io)?;
@@ -243,6 +278,8 @@ impl Lookup {
                     (shift, weights(p))
                 })
                 .collect();
+            let address_weights =
+                (1 << address.len() <= MAX_HISTOGRAM_SIZE).then(|| weights(address));
             let (sums, prepared): (Vec<_>, Vec<_>) = queries
                 .par_iter()
                 .zip(mix)
@@ -253,9 +290,17 @@ impl Lookup {
                         .map(|(shift, weights)| Column::lookup(addresses, *shift, weights.clone()))
                         .chain(std::iter::once(Column::equality(&q.cell)))
                         .collect();
-                    let sum = (0..addresses.len())
-                        .map(|i| cols.iter().map(|c| c.at(i)).product::<F>())
-                        .sum::<F>();
+                    let sum = if let Some(weights) = &address_weights {
+                        let cells = cols.last().expect("lookup cell weights");
+                        dot(
+                            addresses.iter().map(|&address| weights[address as usize]),
+                            (0..addresses.len()).map(|i| cells.at(i)),
+                        )
+                    } else {
+                        (0..addresses.len())
+                            .map(|i| cols.iter().map(|c| c.at(i)).product::<F>())
+                            .sum::<F>()
+                    };
                     (w * sum, cols)
                 })
                 .unzip();
@@ -331,6 +376,33 @@ impl<F: ProofField, T: Fn(usize) -> F> TableFold<F, T> {
             fold.materialize();
         }
         fold
+    }
+
+    fn from_histogram(histogram: Vec<F>, table: T) -> Self {
+        let size = histogram.len();
+        if histogram
+            .iter()
+            .filter(|&value| !value.is_zero())
+            .take(size.div_ceil(8))
+            .count()
+            < size.div_ceil(8)
+        {
+            let reads = histogram
+                .into_iter()
+                .enumerate()
+                .filter(|(_, v)| !v.is_zero())
+                .collect();
+            return Self::new(size, reads, table);
+        }
+        let values = (0..size).map(&table).collect();
+        Self {
+            table,
+            sparse: BTreeMap::new(),
+            size,
+            rounds: size.ilog2() as usize,
+            prefix: Vec::new(),
+            dense: Some([histogram, values]),
+        }
     }
 
     fn at(&self, i: usize) -> F {

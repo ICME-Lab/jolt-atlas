@@ -151,8 +151,8 @@ impl<'a> Activate<'a> {
                     Column::Bits(&trace.signs, 1),
                     Column::borrowed(e),
                     Column::borrowed(&active),
-                    Column::owned(weights(&q.point)),
-                    Column::owned(weights(&random)),
+                    Column::equality(&q.point),
+                    Column::equality(&random),
                 ]
             },
             |v| v[6] * v[7] * (v[4] * v[3] + v[2]) + v[8] * clamp(v),
@@ -416,7 +416,7 @@ impl<'a> Norm<'a> {
                 let col = |v| Column::repeat(v, rows);
                 let row = |v| Column::rows(v, width);
                 let mut cols = vec![
-                    Column::owned(shape.padded(input, F::zero(), F::from_i32)),
+                    Column::integer(input, shape),
                     col(active_col.as_slice().into()),
                     col(first.as_slice().into()),
                     row(mask.as_slice().into()),
@@ -429,7 +429,7 @@ impl<'a> Norm<'a> {
                             .collect(),
                     ),
                     Column::owned(query_column(claims, &batch)),
-                    Column::owned(weights(&query)),
+                    Column::equality(&query),
                 ];
                 cols.extend(trace.cells.iter().map(|c| Column::borrowed(c)));
                 cols.extend(trace.rows[..stats].iter().map(|r| row(r.as_slice().into())));

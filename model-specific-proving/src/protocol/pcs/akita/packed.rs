@@ -1,9 +1,10 @@
 //! Reduce sparse addresses and pairs of rows before allocating field columns.
 
 use super::*;
+use crate::protocol::session::Equality;
 
 const ROW_CHUNK: usize = 512;
-const SPARSE_ROUNDS: usize = 3;
+const SPARSE_ROUNDS: usize = 4;
 
 /// Row-major K=16 indices. Code zero is an empty row; 1 through 16 select a column.
 pub(super) struct Indices {
@@ -200,7 +201,7 @@ impl<'a> PackedFold<'a> {
         samples
     }
 
-    /// Evaluate a folded row from its original indices until the third row bind.
+    /// Evaluate a folded row from its original indices until the fourth row bind.
     #[inline]
     pub(super) fn value(&self, row: usize) -> F {
         if let Some(values) = &self.values {
@@ -273,11 +274,12 @@ impl<'a> PackedFold<'a> {
 
     pub(super) fn bind_row(&mut self, challenge: F) {
         let half = self.remaining / 2;
-        self.bit_mix *= self.bit_rows.bind(challenge);
+        self.bit_rows.0.bind(challenge);
         for read in &mut self.reads {
             // An aligned interval either spans the whole axis or lies in one half.
             let weight = if read.rows.len() == self.remaining {
-                read.rows.bind(challenge)
+                read.rows.0.bind(challenge);
+                F::one()
             } else if read.start < half {
                 F::one() - challenge
             } else {
@@ -314,52 +316,37 @@ impl<'a> PackedFold<'a> {
 }
 
 // An equality weight factors into one value per row block and one per offset.
-struct RowWeights {
-    point: Vec<F>,
-    blocks: Vec<F>,
-    offsets: Vec<F>,
-}
+struct RowWeights(Equality<F>);
 
 impl RowWeights {
     fn new(point: &[F]) -> Self {
-        let (high, low) = point.split_at(point.len() / 2);
-        Self {
-            point: point.to_vec(),
-            blocks: weights(high),
-            offsets: weights(low),
-        }
+        Self(Equality::new(point))
     }
 
     fn len(&self) -> usize {
-        self.blocks.len() * self.offsets.len()
+        self.0.len()
     }
 
     fn scaled_range(&self, scale: F, start: usize, len: usize) -> impl Iterator<Item = F> + '_ {
-        let width = self.offsets.len();
+        let (blocks, offsets) = self.0.factors();
+        let width = offsets.len();
         let end = start + len;
         (start / width..end.div_ceil(width)).flat_map(move |block| {
             let base = block * width;
             let lo = start.saturating_sub(base);
             let hi = width.min(end - base);
-            let scale = scale * self.blocks[block];
-            self.offsets[lo..hi]
-                .iter()
-                .map(move |&offset| scale * offset)
+            let scale = scale * blocks[block];
+            offsets[lo..hi].iter().map(move |&offset| scale * offset)
         })
-    }
-
-    fn bind(&mut self, challenge: F) -> F {
-        let coefficient = eq(&self.point[..1], &[challenge]);
-        *self = Self::new(&self.point[1..]);
-        coefficient
     }
 
     fn by_address(&self, indices: &Indices, start: usize) -> [F; K] {
         let mut totals = [F::zero(); K];
-        let width = self.offsets.len();
-        for (i, &block) in self.blocks.iter().enumerate() {
+        let (blocks, offsets) = self.0.factors();
+        let width = offsets.len();
+        for (i, &block) in blocks.iter().enumerate() {
             let mut local = [F::zero(); K];
-            for (offset, &weight) in self.offsets.iter().enumerate() {
+            for (offset, &weight) in offsets.iter().enumerate() {
                 if let Some(address) = indices.get(start + i * width + offset) {
                     local[usize::from(address)] += weight;
                 }
@@ -411,29 +398,29 @@ mod tests {
             sparse.bind_address(F::from_u64((bit + 3) as u64), bit);
         }
 
-        let values = indices
+        let values: Vec<_> = indices
             .iter()
             .map(|index| index.map_or(F::zero(), |a| sparse.hot_weights[usize::from(a)]))
             .collect();
         let mut combined = vec![F::zero(); indices.len()];
         for read in &sparse.reads {
-            for (value, weight) in
-                combined[read.start..]
-                    .iter_mut()
-                    .zip(read.rows.blocks.iter().flat_map(|&block| {
-                        read.rows
-                            .offsets
-                            .iter()
-                            .map(move |&offset| read.address[0] * block * offset)
-                    }))
+            for (value, weight) in combined[read.start..]
+                .iter_mut()
+                .zip(read.rows.scaled_range(read.address[0], 0, read.rows.len()))
             {
                 *value += weight;
             }
         }
-        let bits = weights(&point[ADDRESS_BITS..])
+        let bits: Vec<_> = weights(&point[ADDRESS_BITS..])
             .into_iter()
             .map(|v| v * mix * sparse.bit_address[0])
             .collect();
+        let mut claim = values
+            .iter()
+            .zip(&combined)
+            .zip(&bits)
+            .map(|((&value, &weight), &bit)| equation(&[value, weight, bit]))
+            .sum();
         let mut dense = Fold::new(
             [values, combined, bits].map(Column::owned),
             rows,
@@ -442,9 +429,10 @@ mod tests {
         );
         let mut challenge = None;
         for round in 0..rows {
-            let expected = dense.prove_round(challenge, round, F::zero()).unwrap();
+            let expected = dense.prove_round(challenge, round, claim).unwrap();
             assert_eq!(UnivariatePoly::from_evals(&sparse.row_samples()), expected);
             let next = F::from_u64(if round == 4 { 0 } else { round as u64 + 11 });
+            claim = expected.evaluate(next);
             sparse.bind_row(next);
             challenge = Some(next);
             assert_eq!(

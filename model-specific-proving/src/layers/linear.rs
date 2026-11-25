@@ -250,9 +250,9 @@ impl Product {
                     instance(sum, shape.vars(), 3),
                     || {
                         [
-                            Column::owned(shape.padded(trace().0, F::zero(), F::from_i32)),
-                            Column::owned(shape.padded(trace().1, F::zero(), F::from_i32)),
-                            Column::owned(weights(&q.point)),
+                            Column::integer(trace().0, shape),
+                            Column::integer(trace().1, shape),
+                            Column::equality(&q.point),
                         ]
                     },
                     |v| v[0] * v[1] * v[2],

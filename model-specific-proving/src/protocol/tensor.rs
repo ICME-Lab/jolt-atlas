@@ -1,4 +1,4 @@
-use jolt_field::JoltField;
+use jolt_field::{Accumulator, JoltField};
 use jolt_poly::EqPolynomial;
 
 use super::Result;
@@ -76,7 +76,11 @@ pub(crate) fn dot<F: JoltField>(
     a: impl IntoIterator<Item = F>,
     b: impl IntoIterator<Item = F>,
 ) -> F {
-    a.into_iter().zip(b).map(|(a, b)| a * b).sum()
+    let mut total = F::Accumulator::default();
+    for (a, b) in a.into_iter().zip(b) {
+        total.fmadd(a, b);
+    }
+    total.reduce()
 }
 
 pub(crate) fn bind_rows<F: JoltField, T: Copy + Into<i64>>(

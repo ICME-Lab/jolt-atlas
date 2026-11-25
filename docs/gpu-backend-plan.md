@@ -280,8 +280,9 @@ already has.
 
 **What the reading leaves standing.** Nothing read commits small values more cheaply than
 packed bits at 120 bits with a small proof, and nothing read has a cheaper bridge than
-BitZ's. The incumbent of decision 3 stands on paper. What is open is the bridge, and that is
-now a question for our own design and for measurement on the GPU, not for more reading.
+BitZ's. Among published schemes taken as they are, the incumbent of decision 3 stands. That
+is a comparison with what we have, and it does not show the incumbent is right for committed
+weights: section 5.6 starts from the job instead and reaches a different hypothesis.
 
 **Two findings about the bridge.** Both are ours, from our own code and not from a paper.
 Neither is reviewed, and the first is not written out as a protocol.
@@ -314,11 +315,86 @@ Neither is reviewed, and the first is not written out as a protocol.
    is to be measured, not inferred. A free split, as the Mersenne pair gives, trades proof
    bytes for verifier exponentiations but keeps their product.
 
-**Next.** Write the Mersenne pair out as a protocol and check it; read Quasar, and the BitZ
-paper again for the earlier scheme; then the GPU rates of 5.6 for `F_{2^127}` and
-`F_{2^128}` multiplication, the 127-bit Mersenne field, and the hash tree.
+**Next.** Write the hypothesis of 5.6 out as a protocol with its soundness argument, for
+review; beside it the Mersenne pair, as the packed-bit alternative for the witness; read
+Quasar, and the BitZ paper again for the earlier scheme; then the GPU rates of 5.7 for each
+candidate's arithmetic and for the hash tree.
 
-### 5.6 The floor, and measuring against it
+### 5.6 The commitment from first principles
+
+Section 5.5 compares published schemes with the one we have. This section starts from the
+job instead and assumes no scheme. It is a derivation of ours, written on 2026-11-25. Its
+conclusion is a hypothesis, to be written out and sent for outside review before it decides
+anything.
+
+**The job.** Bind the prover to a vector of small integers. Later, for a point `r` drawn
+after the binding, convince the verifier of one linear claim `Σ c_i·v_i = y` over the large
+prime field the sumchecks run in, where the `c_i` are the tensor of `r`. Nothing else is
+asked of a commitment here: one claim per proof, no zero knowledge, no recursion.
+
+**Two kinds of data ask for different things.**
+
+| | Weights | Witness |
+|---|---|---|
+| Size (7B model) | 6.7×10^9 values of about 8 bits | about 2×10^9 values per 1,000 tokens, plus lookups |
+| Bound | once per model, offline | in every proof |
+| Opened | in every proof, at a fresh point | in every proof |
+| Must be proven in range | no: whatever was committed is the model, and a range can be shown once when it is committed | yes: remainders, digits and addresses are sound only in range |
+| What its cost is | the opening, since the binding is paid once | the binding and the opening |
+
+**The work nobody avoids.** One pass over the witness to bind it, and one pass over each
+vector to form the claim: a multiply of a small value by a field element per value. All else
+is the price of a design choice.
+
+**How a prover can be bound.** Two ways are known at this scale.
+
+- *Hash a redundant encoding.* The code must be linear in one characteristic, and that
+  forces a choice. In characteristic 2 a bit costs a bit, but the claim is in the wrong
+  field and a bridge pays for it, per bit, in every proof. Over a small prime there is no
+  bridge, but an 8-bit value costs a 31-bit symbol. Over the integers the symbols grow
+  (Zinc+). These are BitZ, the commodity stack and Zinc+: the three corners of one trade.
+- *A compressing linear map that only short vectors can collide under* (a lattice
+  commitment). The prover opens a short integer combination of its vector in the clear, and
+  the verifier checks it against the commitment by linearity. What is opened is true over
+  the integers, so it speaks every modulus at once: no bridge, no encoding, no hash tree.
+  The modulus of the map is free of the claim's field and can be tiny (LaBinius uses primes
+  of 14 and 15 bits, a GPU's own word size). The prices: a hardness assumption, not hashes
+  alone; a commitment and proof that grow as the square root; and no range for free.
+
+**Where the incumbent's habits do not follow from the job.**
+
+1. *Paying per bit is the wrong unit for the weights.* A bridge runs over every committed
+   bit in every proof: 5.4×10^10 bits of weights, against 6.7×10^9 weights. BitZ was chosen
+   when the weights were public and only the witness was committed.
+2. *One commitment and one opening* (criterion 6) came with the packed-bit layout. Committed
+   weights already make two commitments, one per model and one per proof, and nothing says
+   they must be the same scheme.
+3. *Range for free* is worth something only for the witness.
+
+**The hypothesis.**
+
+- **Weights under a linear-map commitment, opened in one shot.** Per proof: one pass forming
+  the claim in the large field and one pass forming a short combination in machine words,
+  with nothing recomputed from the binding. At 6.7×10^9 weights the proof would be a few
+  megabytes and the verifier's work a few matrix products over a small modulus. That is at
+  the floor of 5.7 for the weight pass.
+- **Witness: undecided between two.** The same commitment with a range sumcheck over its
+  bits, or packed bits with a bridge. Both pay a few field multiplications per bit for the
+  range; which is cheaper on the GPU is a measurement.
+
+**What is not known.**
+
+- LaBinius proves this mechanism for claims modulo 2 only, and says its extraction extends
+  to other primes under two conditions on the ring and the challenge set. A large prime is
+  new work, and it is the piece to send for review.
+- Parameters at 120 bits for 8-bit coefficients: the paper's are for bits at 100.
+- Every rate on a GPU. Akita, a lattice scheme, lost to BitZ on our CPU by 14 to 15 times.
+  The differences claimed here (a tiny modulus, a one-shot opening, binding done offline)
+  must be measured, not argued.
+- Whether the assumption is acceptable. Criterion 4 says provable, and the bar of 5.4 is
+  security from standard hashes alone.
+
+### 5.7 The floor, and measuring against it
 
 A protocol that met every criterion of 5.5 perfectly would still have to do five things. Each
 is a pass over data that can be timed with no protocol at all:
@@ -364,7 +440,7 @@ Each phase ends at a gate. A phase's specs are written when it starts.
 
 **Phase 0: measure and decide.** No protocol code.
 - GPU instance up; the gate harness runs on it.
-- The floor suite and calculator of 5.6. This is the first code in `gpu/`, and it turns
+- The floor suite and calculator of 5.7. This is the first code in `gpu/`, and it turns
   every assumed rate in this plan into a measured one.
 - The search of 5.5: each candidate read in full, then dropped on paper or prototyped.
 - Kernel microbenchmarks on that GPU for what survives: `F_{2^128}` multiplication with

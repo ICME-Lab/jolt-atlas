@@ -194,9 +194,10 @@ and MosaicPCS over Ligerito for the one commitment. On 12 cores of an M4 Max it 
 
 **What we take:**
 
-- **One commitment and one opening.** Every committed vector sits on an aligned subcube of
-  one bit polynomial, so a claim on a part lifts to a claim on the whole by appending fixed
-  coordinates, with no adapter sumcheck. `specs/bitz-commitment.md` already took this.
+- **One polynomial for everything committed together.** Every committed vector sits on an
+  aligned subcube of one polynomial, so a claim on a part lifts to a claim on the whole by
+  appending fixed coordinates, with no adapter sumcheck. `specs/bitz-commitment.md` already
+  took this. For us that is one polynomial for the weights and one for the witness (4.2).
 - **Commit only what nothing else establishes.** A segment another argument proves correct is
   read through an evaluation claim and never committed. For us this would mean no
   intermediate tensor between layers is committed; whether we take it is open decision 9,
@@ -239,7 +240,9 @@ The search runs in phase 0 and is judged against these, in order:
 4. **120 bits or more, provable**, with losses that grow with the logarithm of the instance.
 5. **A fast verifier and a small proof.** This is where the commodity stack is weakest and
    where we mean to differ.
-6. **One commitment and one opening**, with the weights committed once per model.
+6. **Two commitments and one opening** (4.2): the weights once per model, the witness once
+   per proof, and one joint opening for both. Two openings are accepted only if committing
+   the two differently is measured to be faster overall (5.6).
 
 **The bar** (the commodity stack on one GPU): Sable proves 4,096 tokens of Qwen2.5-32B in
 92.5 s on an RTX PRO 6000, at a soundness error of 2^-103, not zero-knowledge, with a verifier
@@ -416,9 +419,10 @@ is the price of a design choice.
 1. *Paying per bit is the wrong unit for the weights.* A bridge runs over every committed
    bit in every proof: 5.4×10^10 bits of weights, against 6.7×10^9 weights. BitZ was chosen
    when the weights were public and only the witness was committed.
-2. *One commitment and one opening* (criterion 6) came with the packed-bit layout. Committed
-   weights already make two commitments, one per model and one per proof, and nothing says
-   they must be the same scheme.
+2. *One commitment and one opening* came with the packed-bit layout. Committed weights
+   already make two commitments, one per model and one per proof (criterion 6 now says so),
+   and nothing in the job says they must be the same scheme; only a measured gain justifies
+   the second opening that two schemes cost.
 3. *Range for free* is worth something only for the witness.
 
 **The hypothesis.**

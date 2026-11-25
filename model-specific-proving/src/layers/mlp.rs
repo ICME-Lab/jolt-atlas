@@ -110,13 +110,11 @@ impl<'a> MlpPlan<'a> {
         &'s self,
         q: Claim<F>,
         x: impl Fn() -> &'w [i32],
-        trace: impl Fn() -> (&'w MlpTrace<F>, &'w Advice) + Sync,
+        t: impl Fn() -> &'w MlpTrace<F> + Sync,
         io: &mut Session<'_, '_, F>,
 
         lookups: &mut Batches<'s, 'w, F>,
     ) -> Result<Claim<F>> {
-        let t = || trace().0;
-        let a = || trace().1;
         let g = || t().multiplier.as_ref().expect("gate trace");
         let q = self.down.reverse(
             q,
@@ -140,7 +138,7 @@ impl<'a> MlpPlan<'a> {
         };
         let q = self
             .activation
-            .reverse(q, || (&t().activation, a()), io, lookups)?;
+            .reverse(q, || &t().activation, io, lookups)?;
         let source = self
             .activation_input
             .reverse(q, || (x(), &t().activation_input), io)?;

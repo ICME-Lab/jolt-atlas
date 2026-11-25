@@ -455,7 +455,7 @@ impl<'a> Block<'a> {
             )?;
             Softmax::defer(
                 vec![(&head.softmax, read)],
-                |_| (&wt().softmax, witness().0),
+                |_| &wt().softmax,
                 io,
                 &mut lookups,
             )?;

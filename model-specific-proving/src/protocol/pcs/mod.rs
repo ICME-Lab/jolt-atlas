@@ -3,9 +3,6 @@
 use std::sync::Arc;
 
 use jolt_field::{CanonicalEncoding, Ring, Zero};
-#[cfg(feature = "bitz")]
-use jolt_poly::MultilinearPoly;
-use jolt_poly::OneHotPolynomial;
 use jolt_transcript::{
     prover_transcript, verifier_transcript, Keccak, ProverState, Transcript, VerifierState,
 };
@@ -121,7 +118,10 @@ impl Layout {
 
 pub(crate) enum Part {
     Digits(Arc<Vec<u8>>),
-    Lookup(OneHotPolynomial),
+    Lookup {
+        addresses: Arc<Vec<u32>>,
+        shift: usize,
+    },
 }
 
 pub struct Advice(Vec<Option<Part>>);
@@ -148,7 +148,7 @@ impl Advice {
     }
 
     #[cfg(feature = "bitz")]
-    fn fill_bits<F: ProofField>(&mut self, slot: Slot, mut set: impl FnMut(usize)) -> Result<()> {
+    fn fill_bits(&mut self, slot: Slot, mut set: impl FnMut(usize)) -> Result<()> {
         match slot.kind {
             Kind::Bits { planes } => {
                 let cells = 1 << slot.cell_vars;
@@ -171,30 +171,26 @@ impl Advice {
                 }
             }
             Kind::Lookup { .. } => {
-                let poly = self.lookup(slot)?;
-                <OneHotPolynomial as MultilinearPoly<F>>::for_each_one(poly, &mut set);
+                let cells = 1 << slot.cell_vars;
+                for (cell, digit) in self.take_lookup(slot)?.enumerate() {
+                    set(usize::from(digit) * cells + cell);
+                }
             }
         }
         Ok(())
     }
 
     #[cfg(any(feature = "akita", feature = "bitz"))]
-    fn lookup(&self, slot: Slot) -> Result<&OneHotPolynomial> {
-        match &self.0[slot.id] {
-            Some(Part::Lookup(poly))
-                if poly.indices().len() == 1 << slot.cell_vars
-                    && poly.num_vars() == slot.vars() =>
-            {
-                Ok(poly)
+    fn take_lookup(&mut self, slot: Slot) -> Result<impl Iterator<Item = u8> + use<>> {
+        let Kind::Lookup { address_vars } = slot.kind else {
+            return Err("not a lookup advice slot");
+        };
+        match self.0[slot.id].take() {
+            Some(Part::Lookup { addresses, shift }) if addresses.len() == 1 << slot.cell_vars => {
+                let mask = (1 << address_vars) - 1;
+                Ok((0..addresses.len()).map(move |i| ((addresses[i] >> shift) & mask) as u8))
             }
             _ => Err("invalid lookup advice shape"),
-        }
-    }
-
-    pub(crate) fn polynomial(&self, slot: Slot) -> &OneHotPolynomial {
-        match self.0[slot.id].as_ref().expect("declared advice") {
-            Part::Lookup(poly) => poly,
-            _ => unreachable!("expected lookup"),
         }
     }
 }

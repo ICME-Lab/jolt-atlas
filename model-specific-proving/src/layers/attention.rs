@@ -317,12 +317,11 @@ impl<'a> AttentionPlan<'a> {
     pub(crate) fn reverse<'s, 'w, F: ProofField>(
         &'s self,
         q: Claim<F>,
-        trace: impl Fn() -> (&'w [i32], &'w AttentionTrace<F>, &'w Advice) + Sync,
+        trace: impl Fn() -> (&'w [i32], &'w AttentionTrace<F>) + Sync,
         io: &mut Session<'_, '_, F>,
 
         lookups: &mut Batches<'s, 'w, F>,
     ) -> Result<Vec<Claim<F>>> {
-        let a = || trace().2;
         let t = || trace().1;
         let claim = self
             .output
@@ -400,7 +399,7 @@ impl<'a> AttentionPlan<'a> {
             inputs.push(k.reverse(kc, || (trace().0, &g().0), io)?);
             inputs.push(v.reverse(vc, || (trace().0, &g().1), io)?);
         }
-        Softmax::defer(reads, |i| (&t().heads[i].softmax, a()), io, lookups)?;
+        Softmax::defer(reads, |i| &t().heads[i].softmax, io, lookups)?;
         Ok(inputs)
     }
 }

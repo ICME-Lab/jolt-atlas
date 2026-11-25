@@ -207,6 +207,7 @@ impl<'a, F: ProofField> Session<'a, '_, F> {
         mix: &[F],
         columns: impl FnOnce() -> Vec<C>,
         endpoints: [usize; N],
+        endpoint_count: usize,
         expression: impl Fn(&[F]) -> F + Sync,
     ) -> Result<(SingleReduction<F>, Vec<[F; N]>)> {
         let mut values = Vec::new();
@@ -222,7 +223,7 @@ impl<'a, F: ProofField> Session<'a, '_, F> {
             );
             let reduced =
                 prove_single(&mut batch, &stmt, t).map_err(|_| "batched Sumcheck failed")?;
-            if N != 0 {
+            if endpoint_count != 0 {
                 values = batch
                     .0
                     .iter_mut()
@@ -231,11 +232,11 @@ impl<'a, F: ProofField> Session<'a, '_, F> {
             }
             Ok(reduced)
         })?;
-        let values = if N == 0 {
+        let values = if endpoint_count == 0 {
             Vec::new()
         } else {
             (0..mix.len())
-                .map(|i| self.values(|| values[i]))
+                .map(|i| self.values_prefix(endpoint_count, || values[i]))
                 .collect::<Result<_>>()?
         };
         Ok((end, values))
@@ -356,6 +357,19 @@ pub(crate) enum Column<'a, F: Clone> {
     Field(Cow<'a, [F]>, usize, usize),
     Bits(&'a [u8], usize),
     Source(Box<dyn Fn(usize) -> F + Send + Sync + 'a>, usize, Option<F>),
+    Lookup {
+        addresses: &'a [u32],
+        shift: usize,
+        width: usize,
+        len: usize,
+        weights: Vec<F>,
+    },
+    Equality {
+        point: &'a [F],
+        scale: F,
+        high: Vec<F>,
+        low: Vec<F>,
+    },
 }
 
 impl<'a, F: JoltField> Column<'a, F> {
@@ -376,21 +390,32 @@ impl<'a, F: JoltField> Column<'a, F> {
         Self::Source(Box::new(read), len, None)
     }
 
-    pub(crate) fn equality(point: &[F]) -> Self {
+    pub(crate) fn lookup(addresses: &'a [u32], shift: usize, weights: Vec<F>) -> Self {
+        Self::Lookup {
+            addresses,
+            shift,
+            width: weights.len(),
+            len: addresses.len(),
+            weights,
+        }
+    }
+
+    pub(crate) fn equality(point: &'a [F]) -> Self {
         let (prefix, suffix) = point.split_at(point.len() / 2);
-        let high = weights(prefix);
-        let low = weights(suffix);
-        let width = low.len();
-        Self::source(high.len() * width, move |i| {
-            high[i / width] * low[i % width]
-        })
+        Self::Equality {
+            point,
+            scale: F::one(),
+            high: weights(prefix),
+            low: weights(suffix),
+        }
     }
 
     fn len(&self) -> usize {
         match self {
             Self::Field(v, width, copies) => v.len() * width * copies,
             Self::Bits(v, copies) => v.len() * copies,
-            Self::Source(_, len, _) => *len,
+            Self::Source(_, len, _) | Self::Lookup { len, .. } => *len,
+            Self::Equality { point, .. } => 1 << point.len(),
         }
     }
 
@@ -401,6 +426,21 @@ impl<'a, F: JoltField> Column<'a, F> {
             Self::Field(v, _, _) => v[i & (v.len() - 1)],
             Self::Bits(v, 1) => F::from_bool(v[i] != 0),
             Self::Bits(v, _) => F::from_bool(v[i & (v.len() - 1)] != 0),
+            Self::Lookup {
+                addresses,
+                shift,
+                width,
+                len,
+                weights,
+            } => weights
+                .chunks_exact(*width)
+                .enumerate()
+                .map(|(prefix, table)| {
+                    let digit = (addresses[prefix * len + i] as usize >> shift) & (width - 1);
+                    table[digit]
+                })
+                .sum(),
+            Self::Equality { high, low, .. } => high[i / low.len()] * low[i % low.len()],
             Self::Source(read, _, None) => read(i),
             Self::Source(read, half, Some(r)) => {
                 let low = read(i);
@@ -414,6 +454,33 @@ impl<'a, F: JoltField> Column<'a, F> {
             Self::Field(_, _, copies) | Self::Bits(_, copies) if *copies > 1 => *copies /= 2,
             Self::Field(values, width, _) if values.len() == 1 => *width /= 2,
             Self::Field(values, _, _) => bind_halves(values.to_mut(), r),
+            Self::Lookup {
+                width,
+                len,
+                weights,
+                ..
+            } if weights.len() < 4 * *width => {
+                // Keep two bound coordinates in the digit weights before allocating a column.
+                let mut next = Vec::with_capacity(weights.len() * 2);
+                for table in weights.chunks_exact(*width) {
+                    next.extend(table.iter().map(|&w| w * (F::one() - r)));
+                    next.extend(table.iter().map(|&w| w * r));
+                }
+                *weights = next;
+                *len /= 2;
+            }
+            Self::Equality {
+                point,
+                scale,
+                high,
+                low,
+            } => {
+                *scale *= eq(&point[..1], &[r]);
+                *point = &point[1..];
+                let (prefix, suffix) = point.split_at(point.len() / 2);
+                *high = weights(prefix).into_iter().map(|w| w * *scale).collect();
+                *low = weights(suffix);
+            }
             Self::Source(_, len, first @ None) => {
                 *first = Some(r);
                 *len /= 2;
@@ -565,5 +632,36 @@ impl<'a, F: JoltField + 'a, C: AsMut<[Column<'a, F>]> + Send, E: Fn(&[F]) -> F +
         self.0
             .par_iter_mut()
             .try_for_each(|(_, fold)| fold.finish_rounds(last))
+    }
+}
+
+#[cfg(all(test, feature = "akita"))]
+#[test]
+fn lookup_and_equality_columns_match_dense_folding() {
+    use jolt_akita::AkitaField as F;
+    use jolt_field::Ring;
+
+    let addresses: Vec<_> = (0..128).map(|i| (i * 17) % 251).collect();
+    let digits = [3, 1, 8, 5].map(F::from_u64);
+    let point = [7, 1, 11, 0, 4, 2, 3].map(F::from_u64);
+    let mut lookup = Column::lookup(&addresses, 2, digits.to_vec());
+    let mut equality = Column::equality(&point);
+    let mut dense_digits: Vec<_> = addresses
+        .iter()
+        .map(|&i| digits[((i >> 2) & 3) as usize])
+        .collect();
+    let mut dense_eq = weights(&point);
+    for round in 0..=point.len() {
+        for i in 0..dense_eq.len() {
+            assert_eq!(lookup.at(i), dense_digits[i]);
+            assert_eq!(equality.at(i), dense_eq[i]);
+        }
+        if round < point.len() {
+            let r = F::from_u64(if round == 3 { 0 } else { round as u64 + 13 });
+            lookup.bind(r);
+            equality.bind(r);
+            bind_halves(&mut dense_digits, r);
+            bind_halves(&mut dense_eq, r);
+        }
     }
 }

@@ -462,11 +462,8 @@ impl ModelPcs for AkitaScheme {
                             }
                         }
                         Kind::Lookup { .. } => {
-                            for (row, &column) in advice.lookup(slot)?.indices().iter().enumerate()
-                            {
-                                if let Some(column) = column {
-                                    indices.insert(block.start + row, column);
-                                }
+                            for (row, column) in advice.take_lookup(slot)?.enumerate() {
+                                indices.insert(block.start + row, column);
                             }
                         }
                     }

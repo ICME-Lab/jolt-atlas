@@ -52,7 +52,7 @@ impl ModelPcs for BitzScheme {
         let mut packed = F128::zeroed_vec(pcs.packed_len());
         for &slot in &layout.slots {
             let cells = 1 << slot.cell_vars;
-            advice.fill_bits::<F>(slot, |i| {
+            advice.fill_bits(slot, |i| {
                 let i = offsets[slot.id] + i / cells * cells.max(ROWS) + i % cells;
                 let word = &mut packed[i / ROWS];
                 *word = F128::from(word.to_u128() | (1 << (i % ROWS)));

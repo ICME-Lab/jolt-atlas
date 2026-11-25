@@ -1,9 +1,9 @@
 //! Read fixed public tables using sparse chunk indices.
 
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
-use jolt_poly::{MultilinearPoly, OneHotIndexOrder, OneHotPolynomial, UnivariatePoly};
+use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::prove_single;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 
@@ -67,18 +67,17 @@ impl Table<'_> {
 pub(crate) struct Lookup {
     cols: Vec<Slot>,
     address_vars: usize,
-    digit_bits: usize,
 }
 
 pub(crate) struct Read<'w, F> {
     pub(crate) cell: Vec<F>,
     pub(crate) address: F,
     pub(crate) output: Box<[F]>,
-    pub(crate) witness: Option<(&'w [usize], &'w Advice)>,
+    pub(crate) witness: Option<&'w [u32]>,
 }
 
 impl<'w, F> Read<'w, F> {
-    fn witness(&self) -> (&'w [usize], &'w Advice) {
+    fn witness(&self) -> &'w [u32] {
         self.witness.expect("prover lookup witness")
     }
 }
@@ -118,32 +117,20 @@ impl<'a, 'w, F: ProofField> Batches<'a, 'w, F> {
 
 impl Lookup {
     pub(crate) fn new(layout: &mut Layout, cells: usize, size: usize) -> Result<Self> {
-        Self::with_digit_bits(layout, cells, size, 4)
-    }
-
-    pub(crate) fn with_digit_bits(
-        layout: &mut Layout,
-        cells: usize,
-        size: usize,
-        digit_bits: usize,
-    ) -> Result<Self> {
-        if size < 2 || !size.is_power_of_two() {
+        const DIGIT_BITS: usize = 4;
+        if size < 2 || !size.is_power_of_two() || size.ilog2() > u32::BITS {
             return Err("invalid lookup table size");
         }
         let address_vars = size.ilog2() as usize;
-        let first = (address_vars - 1) % digit_bits + 1;
+        let first = (address_vars - 1) % DIGIT_BITS + 1;
         let sizes = std::iter::once(first).chain(std::iter::repeat_n(
-            digit_bits,
-            (address_vars - first) / digit_bits,
+            DIGIT_BITS,
+            (address_vars - first) / DIGIT_BITS,
         ));
         let cols = sizes
             .map(|address_vars| layout.add(cells, Kind::Lookup { address_vars }))
             .collect::<Result<_>>()?;
-        Ok(Self {
-            cols,
-            address_vars,
-            digit_bits,
-        })
+        Ok(Self { cols, address_vars })
     }
 
     fn parts<'a, F>(&self, point: &'a [F]) -> Vec<&'a [F]> {
@@ -158,23 +145,17 @@ impl Lookup {
             .collect()
     }
 
-    pub(crate) fn record(&self, advice: &mut Advice, indices: &[usize]) -> Result<()> {
+    pub(crate) fn record(&self, advice: &mut Advice, indices: Arc<Vec<u32>>) -> Result<()> {
         let mut shift = self.address_vars;
         for &slot in &self.cols {
             let n = slot.vars() - slot.cell_vars;
             shift -= n;
-            let width = 1 << n;
-            let digits = indices
-                .iter()
-                .map(|&i| Some(((i >> shift) & (width - 1)) as u8))
-                .collect();
             advice.put(
                 slot,
-                Part::Lookup(OneHotPolynomial::new_with_index_order(
-                    width,
-                    digits,
-                    OneHotIndexOrder::ColumnMajor,
-                )),
+                Part::Lookup {
+                    addresses: Arc::clone(&indices),
+                    shift,
+                },
             )?;
         }
         Ok(())
@@ -216,8 +197,8 @@ impl Lookup {
         let end = io.reduce(&stmt, |t| {
             let mut reads = BTreeMap::new();
             for ((_, q), &w) in queries.iter().zip(&batch) {
-                for (&address, cell) in q.witness().0.iter().zip(weights(&q.cell)) {
-                    *reads.entry(address).or_insert_with(F::zero) += w * cell;
+                for (&address, cell) in q.witness().iter().zip(weights(&q.cell)) {
+                    *reads.entry(address as usize).or_insert_with(F::zero) += w * cell;
                 }
             }
             let mut fold = TableFold::new(size, reads, table);
@@ -241,7 +222,7 @@ impl Lookup {
     }
 
     fn parts_fit(&self, other: &Self) -> bool {
-        (self.address_vars, self.digit_bits) == (other.address_vars, other.digit_bits)
+        self.address_vars == other.address_vars
     }
 
     fn link<F: ProofField>(
@@ -266,16 +247,10 @@ impl Lookup {
                 .par_iter()
                 .zip(mix)
                 .map(|((_, q), &w)| {
-                    let addresses = q.witness().0;
+                    let addresses = q.witness();
                     let cols: Vec<_> = digits
                         .iter()
-                        .map(|(shift, weights)| {
-                            let shift = *shift;
-                            let weights = weights.clone();
-                            Column::source(addresses.len(), move |i| {
-                                weights[(addresses[i] >> shift) & (weights.len() - 1)]
-                            })
-                        })
+                        .map(|(shift, weights)| Column::lookup(addresses, *shift, weights.clone()))
                         .chain(std::iter::once(Column::equality(&q.cell)))
                         .collect();
                     let sum = (0..addresses.len())
@@ -288,11 +263,13 @@ impl Lookup {
             [sums.into_iter().sum()]
         })?;
         // The table Sumcheck needs this same weighted sum of address evaluations.
-        let (end, _) = io.fold_weighted(
+        let endpoints = std::array::from_fn::<_, 8, _>(|i| i.min(parts.len() - 1));
+        let (end, evaluations) = io.fold_weighted(
             instance(value, queries[0].1.cell.len(), parts.len() + 1),
             mix,
             || columns,
-            [],
+            endpoints,
+            parts.len(),
             |v: &[F]| v.iter().copied().product(),
         )?;
         let half = F::from_u64(2).inverse().expect("odd field");
@@ -301,14 +278,19 @@ impl Lookup {
             .map(|p| (vec![half; p.len()], (0..p.len()).map(|_| half).product()))
             .collect();
         let mut actual = F::zero();
-        for ((lookup, q), &weight) in queries.iter().zip(mix) {
+        for (((lookup, q), &weight), values) in queries.iter().zip(mix).zip(evaluations) {
             let mut term = weight * eq(&q.cell, &end.challenges);
-            for ((&slot, part), (selector, value)) in lookup.cols.iter().zip(&parts).zip(&ones) {
-                let point = [*part, &end.challenges].concat();
-                let [v] = io.values(|| [q.witness().1.polynomial(slot).evaluate(&point)])?;
-                term *= v;
-                io.openings
-                    .push(Opening::new(slot, Claim { point, value: v }));
+            for (((&slot, part), (selector, value)), evaluation) in
+                lookup.cols.iter().zip(&parts).zip(&ones).zip(values)
+            {
+                term *= evaluation;
+                io.openings.push(Opening::new(
+                    slot,
+                    Claim {
+                        point: [*part, &end.challenges].concat(),
+                        value: evaluation,
+                    },
+                ));
                 let point = [selector.as_slice(), &q.cell].concat();
                 io.openings.push(Opening::new(
                     slot,

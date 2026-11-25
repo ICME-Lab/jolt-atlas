@@ -31,7 +31,7 @@ pub(crate) struct Activate<'a> {
 pub(crate) struct ActivationTrace<F> {
     pub(crate) output: Vec<i32>,
     columns: [Vec<F>; 5],
-    indices: Vec<usize>,
+    indices: Arc<Vec<u32>>,
     signs: Arc<Vec<u8>>,
 }
 
@@ -77,7 +77,7 @@ impl<'a> Activate<'a> {
             let index = x.clamp(lower, upper) - lower;
             let correction = i64::from(self.table.correction[index as usize]);
             let outside = (x - upper).max(0) + (lower - x).max(0);
-            indices.push(index as usize);
+            indices.push(index as u32);
             let real = i / stride < self.shape.rows && i % stride < self.shape.width;
             signs.push(u8::from(real && x >= 0));
             let values = [x, index, correction, x.abs(), outside];
@@ -99,7 +99,8 @@ impl<'a> Activate<'a> {
         self.ranges.record(a, &[&magnitude, &excess])?;
         let signs = Arc::new(signs);
         a.put(self.sign, Part::Digits(Arc::clone(&signs)))?;
-        self.lookup.record(a, &indices)?;
+        let indices = Arc::new(indices);
+        self.lookup.record(a, Arc::clone(&indices))?;
         Ok(ActivationTrace {
             output,
             columns,
@@ -111,7 +112,7 @@ impl<'a> Activate<'a> {
     pub(crate) fn reverse<'s, 'w, F: ProofField>(
         &'s self,
         q: Claim<F>,
-        trace: impl Fn() -> (&'w ActivationTrace<F>, &'w Advice) + Sync,
+        trace: impl Fn() -> &'w ActivationTrace<F> + Sync,
         io: &mut Session<'_, '_, F>,
 
         lookups: &mut Batches<'s, 'w, F>,
@@ -140,7 +141,7 @@ impl<'a> Activate<'a> {
         let (point, v) = io.relation(
             instance(q.value, vars, 4),
             || {
-                let trace = trace().0;
+                let trace = trace();
                 let [x, a, c, m, e] = &trace.columns;
                 [
                     Column::borrowed(x),
@@ -175,10 +176,7 @@ impl<'a> Activate<'a> {
                 cell: point.clone(),
                 address: v[1],
                 output: Box::new([v[2]]),
-                witness: io.proving().then(|| {
-                    let (trace, advice) = trace();
-                    (trace.indices.as_slice(), advice)
-                }),
+                witness: io.proving().then(|| trace().indices.as_slice()),
             },
         );
         Ok(Claim { point, value: v[0] })

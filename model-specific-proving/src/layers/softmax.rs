@@ -1,5 +1,6 @@
 use jolt_transcript::Transcript;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 use crate::protocol::{
     lookup::{Batches, Lookup, Read, Table},
@@ -39,7 +40,7 @@ pub(crate) struct SoftmaxTrace<F> {
     pub(crate) output: Vec<i32>,
     shifts: Vec<i64>,
     rows: [Vec<F>; 3],
-    indices: Vec<usize>,
+    indices: Arc<Vec<u32>>,
 }
 
 pub(crate) struct SoftmaxRead<F> {
@@ -208,11 +209,12 @@ impl<'a> Softmax<'a> {
                 let index = difference.min(last) as usize;
                 let prob = self.tables.probabilities[index];
                 output.push(if real { prob } else { 0 });
-                indices[r * stride + i] = index;
+                indices[r * stride + i] = index as u32;
                 excess.push(difference - index as i64);
             }
         }
-        self.lookup.record(advice, &indices)?;
+        let indices = Arc::new(indices);
+        self.lookup.record(advice, Arc::clone(&indices))?;
         self.rows
             .record(advice, &raw_rows.each_ref().map(Vec::as_slice))?;
         self.excess.record(advice, &[&excess])?;
@@ -267,10 +269,14 @@ impl<'a> Softmax<'a> {
                 0 => Column::source(size, move |i| F::from_i64(score(i / stride, i % stride))),
                 1 => Column::source(size, move |i| F::from_u64(t.indices[i] as u64)),
                 2 => Column::source(size, move |i| {
-                    F::from_i32(self.tables.probabilities[t.indices[i]])
+                    F::from_i32(self.tables.probabilities[t.indices[i] as usize])
                 }),
-                3 => Column::source(size, move |i| F::from_i32(self.tables.sums[t.indices[i]])),
-                4 => Column::source(size, move |i| F::from_i32(self.previous.at(t.indices[i]))),
+                3 => Column::source(size, move |i| {
+                    F::from_i32(self.tables.sums[t.indices[i] as usize])
+                }),
+                4 => Column::source(size, move |i| {
+                    F::from_i32(self.previous.at(t.indices[i] as usize))
+                }),
                 5 => Column::source(size, move |i| {
                     let (row, col) = (i / stride, i % stride);
                     if row < self.shape.rows && self.active(row).contains(&col) {
@@ -298,6 +304,7 @@ impl<'a> Softmax<'a> {
             &batch,
             || (0..claims.len()).into_par_iter().map(columns).collect(),
             [0, 1, 2, 3, 4, 5, 6, 7, 8],
+            9,
             expression,
         )?;
         let point = &end.challenges;
@@ -344,7 +351,7 @@ impl<'a> Softmax<'a> {
 
     pub(crate) fn defer<'s, 'w, F: ProofField>(
         reads: Vec<(&'s Self, SoftmaxRead<F>)>,
-        trace: impl Fn(usize) -> (&'w SoftmaxTrace<F>, &'w Advice),
+        trace: impl Fn(usize) -> &'w SoftmaxTrace<F>,
         io: &mut Session<'_, '_, F>,
 
         lookups: &mut Batches<'s, 'w, F>,
@@ -364,10 +371,7 @@ impl<'a> Softmax<'a> {
                     cell: read.cell,
                     address: read.address,
                     output: Box::new(read.values),
-                    witness: io.proving().then(|| {
-                        let (trace, advice) = trace(i);
-                        (trace.indices.as_slice(), advice)
-                    }),
+                    witness: io.proving().then(|| trace(i).indices.as_slice()),
                 },
             );
         }

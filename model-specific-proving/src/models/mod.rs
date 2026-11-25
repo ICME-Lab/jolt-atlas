@@ -376,7 +376,6 @@ impl<'a> Model<'a> {
         let shape = self.shape;
         let pre = matches!(self.head, Head::Decoder { .. });
         let norm_trace = || &witness().norm;
-        let advice = || &witness().advice;
         if let Head::Decoder { norm, .. } = &self.head {
             let last = || &witness().layers.last().expect("model layers").mlp_sum[..];
             claims = vec![norm.reverse(&claims, || (last(), norm_trace()), io)?];
@@ -406,9 +405,9 @@ impl<'a> Model<'a> {
                     &w().attention_norm.output
                 }
             };
-            let branch =
-                p.mlp
-                    .reverse(branch, source, || (&w().mlp, advice()), io, &mut lookups)?;
+            let branch = p
+                .mlp
+                .reverse(branch, source, || &w().mlp, io, &mut lookups)?;
             let (skip, branch) = if pre {
                 let q =
                     p.mlp_norm
@@ -432,12 +431,9 @@ impl<'a> Model<'a> {
                     x()
                 }
             };
-            claims = p.attention.reverse(
-                branch,
-                || (source(), &w().attention, advice()),
-                io,
-                &mut lookups,
-            )?;
+            claims =
+                p.attention
+                    .reverse(branch, || (source(), &w().attention), io, &mut lookups)?;
             if pre {
                 claims =
                     vec![p

@@ -2,7 +2,7 @@ diff --git a/crates/gkr/src/bounded.rs b/crates/gkr/src/bounded.rs
 new file mode 100644
 --- /dev/null
 +++ b/crates/gkr/src/bounded.rs
-@@ -0,0 +1,327 @@
+@@ -0,0 +1,395 @@
 +//! Evaluate early sumcheck rounds from the packed table and materialize only the folded suffix.
 +
 +use super::*;
@@ -193,10 +193,32 @@ new file mode 100644
 +                let stride = 1 << remaining;
 +                let half = 1 << i;
 +                let at_one = sends_one(point[i]);
-+                let projected = source_lut.map(|(lut, level)| {
++                // After binding one coordinate, a pair of nibbles determines both children.
++                let paired = source_lut.and_then(|(lut, level)| {
++                    (level == LEAVES && prefix.len() == 2 && half >= NIBBLES_IN_WORD).then_some(lut)
++                });
++                let projected = source_lut.filter(|_| paired.is_none()).map(|(lut, level)| {
 +                    packed_round::PackedRound::new(lut, level, stride, &prefix)
 +                });
 +                let mut sums = factored_sum(&point[..i], |range, eq| {
++                    if let Some(lut) = paired {
++                        let group = 1 << lut.log_trees;
++                        let mut sums = (Wide256::zero(), Wide256::zero());
++                        for (block, weights) in eq.chunks(group).enumerate() {
++                            let start = range.start + block * group;
++                            let (b, inf) = leaf_pair_sums(
++                                lut,
++                                start,
++                                weights,
++                                half,
++                                challenges[i + 1],
++                                at_one,
++                            );
++                            sums.0 += b;
++                            sums.1 += inf;
++                        }
++                        return sums;
++                    }
 +                    if let Some(projected) = &projected {
 +                        let mut buf = vec![Field::ZERO; 4 * range.len()];
 +                        let mut parts = buf.chunks_exact_mut(range.len());
@@ -329,6 +351,52 @@ new file mode 100644
 +    let t = ps.verifier_message();
 +    challenges[n] = t;
 +    (challenges, interpolate(left[0], right[0], t))
++}
++
++/// Round two pairs nibbles from two row groups. Only the eq weights depend on the column.
++fn leaf_pair_sums(
++    lut: &LutLayers,
++    start: usize,
++    eq: &[Field],
++    half: usize,
++    first: Field,
++    at_one: bool,
++) -> (Wide256, Wide256) {
++    let children = [start, start + half].map(|start| {
++        let images = &lut.luts[start >> lut.log_trees];
++        let left: [Field; 4] =
++            std::array::from_fn(|k| interpolate(images[k & 1], images[k & 2], first));
++        let right: [Field; 4] =
++            std::array::from_fn(|k| interpolate(images[(k & 1) << 2], images[(k & 2) << 2], first));
++        (left, right)
++    });
++    let mut weights = [Field::ZERO; 256];
++    let words = lut.words();
++    let start = start / NIBBLES_IN_WORD;
++    let stride = half / NIBBLES_IN_WORD;
++    for (i, lanes) in eq.chunks_exact(NIBBLES_IN_WORD).enumerate() {
++        let mut a = words[start + i];
++        let mut b = words[start + i + stride];
++        for &weight in lanes {
++            weights[((a & 15) | ((b & 15) << 4)) as usize] += weight;
++            a >>= 4;
++            b >>= 4;
++        }
++    }
++    let mut sums = (Wide256::zero(), Wide256::zero());
++    for (key, w) in weights.into_iter().enumerate() {
++        if w == Field::ZERO {
++            continue;
++        }
++        let [(l0, r0), (l1, r1)] = std::array::from_fn(|i| {
++            let k = key >> (4 * i);
++            (children[i].0[k & 3], children[i].1[(k >> 2) & 3])
++        });
++        let (l, r) = if at_one { (l1, r1) } else { (l0, r0) };
++        sums.0 += Wide256::mul(w, l * r);
++        sums.1 += Wide256::mul(w, (l0 + l1) * (r0 + r1));
++    }
++    sums
 +}
 diff --git a/crates/gkr/src/lib.rs b/crates/gkr/src/lib.rs
 --- a/crates/gkr/src/lib.rs

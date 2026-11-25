@@ -1,5 +1,7 @@
 //! Matrix and pointwise products, with shared Euclidean remainder checks.
 
+use std::borrow::Cow;
+
 use jolt_transcript::Transcript;
 
 use crate::protocol::{
@@ -245,39 +247,53 @@ impl Product {
                         .map(|(&a, &b)| i128::from(a) * i128::from(b)),
                 )
             }
-            ProductKind::Matrix {
-                inner,
-                transpose,
-                factor,
-            } => {
+            ProductKind::Matrix { inner, .. } => {
                 Shape::new(shape.rows, inner)?.check(left)?;
-                if transpose {
-                    Shape::new(shape.width, inner)?.check(right)?;
-                } else {
-                    Shape::new(inner, shape.width)?.check(right)?;
-                }
-                self.rounding.execute(
-                    advice,
-                    left.chunks_exact(inner).flat_map(|row| {
-                        (0..shape.width).map(move |j| {
-                            let sum: i128 = row
-                                .iter()
-                                .enumerate()
-                                .map(|(k, &x)| {
-                                    let index = if transpose {
-                                        j * inner + k
-                                    } else {
-                                        k * shape.width + j
-                                    };
-                                    i128::from(x) * i128::from(right[index])
-                                })
-                                .sum();
-                            i128::from(factor) * sum
-                        })
-                    }),
-                )
+                self.execute_matrix(left.chunks_exact(inner).map(Cow::Borrowed), right, advice)
             }
         }
+    }
+
+    pub(super) fn execute_matrix<'a>(
+        &self,
+        left: impl Iterator<Item = Cow<'a, [i32]>>,
+        right: &[i32],
+        advice: &mut Advice,
+    ) -> Result<Rounded> {
+        let shape = self.rounding.shape;
+        let ProductKind::Matrix {
+            inner,
+            transpose,
+            factor,
+        } = self.kind
+        else {
+            return Err("expected a matrix product");
+        };
+        if transpose {
+            Shape::new(shape.width, inner)?.check(right)?;
+        } else {
+            Shape::new(inner, shape.width)?.check(right)?;
+        }
+        self.rounding.execute(
+            advice,
+            left.flat_map(|row| {
+                (0..shape.width).map(move |j| {
+                    let sum: i128 = row
+                        .iter()
+                        .enumerate()
+                        .map(|(k, &x)| {
+                            let index = if transpose {
+                                j * inner + k
+                            } else {
+                                k * shape.width + j
+                            };
+                            i128::from(x) * i128::from(right[index])
+                        })
+                        .sum();
+                    i128::from(factor) * sum
+                })
+            }),
+        )
     }
 
     pub(crate) fn reverse<'w, F: ProofField>(
@@ -286,10 +302,10 @@ impl Product {
         trace: impl Fn() -> (&'w [i32], &'w [i32], &'w Rounded),
         io: &mut Session<'_, '_, F>,
     ) -> Result<[Claim<F>; 2]> {
-        let sum = self.rounding.reverse(&q, || trace().2, io)?;
         let shape = self.rounding.shape;
         match self.kind {
             ProductKind::Pointwise => {
+                let sum = self.rounding.reverse(&q, || trace().2, io)?;
                 io.pow(shape.vars())?;
                 let (point, [left, right]) = io.relation(
                     instance(sum, shape.vars(), 3),
@@ -314,50 +330,69 @@ impl Product {
                     },
                 ])
             }
-            ProductKind::Matrix {
-                inner,
-                transpose,
-                factor,
-            } => {
-                let (row, col) = q.point.split_at(shape.row_vars());
-                let scale = F::from_i32(factor);
-                let (point, [left, right]) = io.relation(
-                    instance(sum, inner.next_power_of_two().ilog2() as usize, 2),
-                    || {
-                        let (a, b, ..) = trace();
-                        let a = bind_rows(inner, a, row);
-                        let b = if transpose {
-                            bind_rows(inner, b, col)
-                        } else {
-                            let w = weights::<F>(col);
-                            let mut out = vec![F::zero(); inner.next_power_of_two()];
-                            for (x, row) in out.iter_mut().zip(b.chunks_exact(shape.width)) {
-                                *x = dot(row.iter().copied().map(F::from_i32), w.iter().copied());
-                            }
-                            out
-                        };
-                        [Column::owned(a), Column::owned(b)]
-                    },
-                    |v| scale * v[0] * v[1],
-                    |_, &[a, b]| scale * a * b,
-                )?;
-                let rhs = if transpose {
-                    [col, &point].concat()
-                } else {
-                    [&point, col].concat()
-                };
-                Ok([
-                    Claim {
-                        point: [row, &point].concat(),
-                        value: left,
-                    },
-                    Claim {
-                        point: rhs,
-                        value: right,
-                    },
-                ])
-            }
+            ProductKind::Matrix { inner, .. } => self.reverse_matrix(
+                q,
+                || (trace().1, trace().2),
+                |row| bind_rows(inner, trace().0, row),
+                io,
+            ),
         }
+    }
+
+    pub(super) fn reverse_matrix<'w, F: ProofField>(
+        &self,
+        q: Claim<F>,
+        trace: impl Fn() -> (&'w [i32], &'w Rounded),
+        bind_left: impl FnOnce(&[F]) -> Vec<F>,
+        io: &mut Session<'_, '_, F>,
+    ) -> Result<[Claim<F>; 2]> {
+        let ProductKind::Matrix {
+            inner,
+            transpose,
+            factor,
+        } = self.kind
+        else {
+            return Err("expected a matrix product");
+        };
+        let sum = self.rounding.reverse(&q, || trace().1, io)?;
+        let shape = self.rounding.shape;
+        let (row, col) = q.point.split_at(shape.row_vars());
+        let scale = F::from_i32(factor);
+        let (point, [left, right]) = io.relation(
+            instance(sum, inner.next_power_of_two().ilog2() as usize, 2),
+            || {
+                let a = bind_left(row);
+                let b = trace().0;
+                let b = if transpose {
+                    bind_rows(inner, b, col)
+                } else {
+                    let w = weights::<F>(col);
+                    let mut out = vec![F::zero(); inner.next_power_of_two()];
+                    for (x, row) in out.iter_mut().zip(b.chunks_exact(shape.width)) {
+                        *x = dot(row.iter().copied().map(F::from_i32), w.iter().copied());
+                    }
+                    out
+                };
+                [Column::owned(a), Column::owned(b)]
+            },
+            |v| scale * v[0] * v[1],
+            |_, &[a, b]| scale * a * b,
+        )?;
+        let rhs = if transpose {
+            [col, &point].concat()
+        } else {
+            [&point, col].concat()
+        };
+        Ok([
+            Claim {
+                point: [row, &point].concat(),
+                value: left,
+            },
+            Claim {
+                point: rhs,
+                value: right,
+            },
+        ])
     }
 }
 

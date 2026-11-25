@@ -328,7 +328,9 @@ impl<'a> AttentionPlan<'a> {
                 let (k, v) = &groups[i / self.group_size];
                 let score = h.score.execute(queries[i].output(), k.output(), a)?;
                 let softmax = h.softmax.execute(&score.output, a)?;
-                let value = h.value.execute(&softmax.output, v.output(), a)?;
+                let value =
+                    h.value
+                        .execute_matrix(h.softmax.probabilities(&softmax), v.output(), a)?;
                 Ok(HeadTrace {
                     score,
                     softmax,
@@ -385,18 +387,13 @@ impl<'a> AttentionPlan<'a> {
         for (i, (h, value)) in self.heads.iter().zip(values).enumerate() {
             let group = i / self.group_size;
             let hw = || &t().heads[i];
-            let [p, v] = h.value.reverse(
+            let [p, v] = h.value.reverse_matrix(
                 Claim {
                     point: point.clone(),
                     value,
                 },
-                || {
-                    (
-                        &hw().softmax.output,
-                        t().groups[group].1.output(),
-                        &hw().value,
-                    )
-                },
+                || (t().groups[group].1.output(), &hw().value),
+                |point| h.softmax.bind_probabilities(&hw().softmax, point),
                 io,
             )?;
             probabilities.push(p);

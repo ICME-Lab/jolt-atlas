@@ -79,7 +79,7 @@ fn fixture(decoder: bool, rows: usize, layers: usize, gated: bool) -> Model<'sta
     let embeddings = PublicEmbeddings {
         width: 2,
         tokens: &[5, -4, -1, 8, 8, -1, 1, 3, -4, 5, 10, 1],
-        positions: Some(&[-1, 0, 1, 0, 0, 0]),
+        positions: (rows <= 3).then_some(&[-1, 0, 1, 0, 0, 0]),
         segments: (!decoder).then_some(&[0, 0, 8, -8]),
     };
     let arch = if decoder {
@@ -108,6 +108,18 @@ fn proves_two_decoder_layers_with_grouped_advice() {
     assert!(model
         .verify(&[0, 2, 2], None, &output, &proof, &setup)
         .is_err());
+}
+
+#[test]
+fn proves_causal_attention_across_lookup_tile_boundary() {
+    let model = fixture(true, 65, 1, false);
+    let tokens: Vec<_> = (0..65).map(|i| i % 6).collect();
+    let setup = setup();
+    let (output, proof) = model.prove::<AkitaScheme>(&tokens, None, &setup).unwrap();
+    assert_eq!(output.len(), tokens.len() * 6);
+    model
+        .verify(&tokens, None, &output, &proof, &setup)
+        .unwrap();
 }
 
 #[test]

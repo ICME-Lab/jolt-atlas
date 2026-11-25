@@ -402,9 +402,11 @@ impl<'a> Block<'a> {
                 .score
                 .execute(self.query(p, projected, i), k.output(), &mut advice)?;
             let softmax = head.softmax.execute(&score.output, &mut advice)?;
-            let value = head
-                .value
-                .execute(&softmax.output, v.output(), &mut advice)?;
+            let value = head.value.execute_matrix(
+                head.softmax.probabilities(&softmax),
+                v.output(),
+                &mut advice,
+            )?;
             trace.push(HeadTrace {
                 score,
                 softmax,
@@ -428,15 +430,10 @@ impl<'a> Block<'a> {
             let projected = || witness().2;
             let group = i / p.group_size;
             let y = fresh(shape, || &wt().value.output, io)?;
-            let [prob, v] = head.value.reverse(
+            let [prob, v] = head.value.reverse_matrix(
                 y.clone(),
-                || {
-                    (
-                        &wt().softmax.output,
-                        projected().groups[group].1.output(),
-                        &wt().value,
-                    )
-                },
+                || (projected().groups[group].1.output(), &wt().value),
+                |point| head.softmax.bind_probabilities(&wt().softmax, point),
                 io,
             )?;
             let mut scores =
